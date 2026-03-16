@@ -2844,6 +2844,7 @@ export default function DashTanstackPivot(props) {
                 theme={theme} styles={styles}
                 filters={filters} setFilters={setFilters}
                 onSaveView={handleSaveView}
+                pivotTitle={props.pivotTitle}
             />
         <PivotErrorBoundary key={dataVersion}>
             <div style={{display:'flex', flex:1, overflow:'hidden'}}>
@@ -2949,6 +2950,7 @@ export default function DashTanstackPivot(props) {
 DashTanstackPivot.propTypes = {
     id: PropTypes.string,
     table: PropTypes.string,
+    pivotTitle: PropTypes.string,
         data: PropTypes.arrayOf(PropTypes.object),
         setProps: PropTypes.func,
         style: PropTypes.object,

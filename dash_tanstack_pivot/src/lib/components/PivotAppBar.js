@@ -25,6 +25,7 @@ export function PivotAppBar({
     theme, styles,
     filters, setFilters,
     onSaveView,
+    pivotTitle,
 }) {
 
     return (
@@ -33,7 +34,7 @@ export function PivotAppBar({
                 <button onClick={() => setSidebarOpen(!sidebarOpen)} style={{border:'none', background:'transparent', cursor:'pointer', padding:'4px', borderRadius:'4px', display:'flex', color: theme.textSec}}>
                     <Icons.Menu />
                 </button>
-                <div style={{fontWeight:500,fontSize:'16px',color:theme.primary}}>Analytics Pivot</div>
+                <div style={{fontWeight:500,fontSize:'16px',color:theme.primary}}>{pivotTitle || 'Analytics Pivot'}</div>
             </div>
             <div style={styles.searchBox}>
                 <Icons.Search />
