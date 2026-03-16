@@ -120,7 +120,7 @@ function RowFormatPopover({ theme, styles, rowFormatRules, setRowFormatRules, ho
             marginTop: '4px',
         }}>
             <div style={{fontWeight: 600, fontSize: '13px', color: theme.text, marginBottom: '10px'}}>
-                Format Row{pathCount > 1 ? ` (${pathCount} rows)` : ''}
+                Format Cell{pathCount > 1 ? ` (${pathCount} rows)` : ''}
             </div>
             <div style={{marginBottom: '8px'}}>
                 <label style={{fontSize: '11px', color: theme.textSec, display: 'block', marginBottom: '3px'}}>
@@ -238,6 +238,16 @@ export function PivotAppBar({
         color: '#fff',
         border: `1px solid ${theme.primary}`,
     };
+    // Save View: animated shimmer gradient (same keyframe as skeleton loader)
+    const btnSaveView = {
+        ...btnBase,
+        background: 'linear-gradient(90deg, rgba(75,139,245,0.15) 0%, rgba(120,175,255,0.38) 45%, rgba(75,139,245,0.15) 100%)',
+        backgroundSize: '220% 100%',
+        border: `1px solid rgba(75,139,245,0.45)`,
+        color: theme.primary,
+        animation: 'pivot-skeleton-shimmer 2.8s linear infinite',
+        fontWeight: 600,
+    };
 
     const sep = <div style={{width:'1px', height:'18px', background: theme.border, flexShrink: 0}} />;
 
@@ -273,7 +283,7 @@ export function PivotAppBar({
             {/* Controls */}
             <div style={{display:'flex', gap:'4px', flexWrap:'wrap', alignItems:'center'}}>
                 {/* Row # toggle */}
-                <button style={showRowNumbers ? btnActive : btnGhost} onClick={() => setShowRowNumbers(!showRowNumbers)} title="Toggle row numbers">Row #</button>
+                <button style={showRowNumbers ? btnActive : btnSubtle} onClick={() => setShowRowNumbers(!showRowNumbers)} title="Toggle row numbers">Row #</button>
 
                 {sep}
 
@@ -297,9 +307,9 @@ export function PivotAppBar({
                 {sep}
 
                 {/* View toggles */}
-                <button style={showFloatingFilters ? btnActive : btnGhost} onClick={() => setShowFloatingFilters(!showFloatingFilters)}>Filters</button>
-                <button style={showRowTotals ? btnActive : btnGhost} onClick={() => setShowRowTotals(!showRowTotals)}>Row ∑</button>
-                <button style={showColTotals ? btnActive : btnGhost} onClick={() => setShowColTotals(!showColTotals)}>Col ∑</button>
+                <button style={showFloatingFilters ? btnActive : btnSubtle} onClick={() => setShowFloatingFilters(!showFloatingFilters)}>Filters</button>
+                <button style={showRowTotals ? btnActive : btnSubtle} onClick={() => setShowRowTotals(!showRowTotals)}>Row Total</button>
+                <button style={showColTotals ? btnActive : btnSubtle} onClick={() => setShowColTotals(!showColTotals)}>Col Total</button>
 
                 {sep}
 
@@ -308,7 +318,7 @@ export function PivotAppBar({
                     <Icons.Spacing/> {spacingLabels[spacingMode]}
                 </button>
                 <button style={btnSubtle} onClick={() => setLayoutMode(prev => prev === 'hierarchy' ? 'outline' : prev === 'outline' ? 'tabular' : 'hierarchy')} title="Cycle layout mode">
-                    {layoutMode === 'hierarchy' ? '⊞ Hierarchy' : layoutMode === 'outline' ? '⊟ Outline' : '⊠ Tabular'}
+                    {layoutMode === 'hierarchy' ? 'Hierarchy' : layoutMode === 'outline' ? 'Outline' : 'Tabular'}
                 </button>
 
                 {sep}
@@ -353,15 +363,15 @@ export function PivotAppBar({
 
                 {sep}
 
-                {/* Format Row */}
+                {/* Format Cell */}
                 <div style={{position:'relative'}}>
                     <button
                         ref={rowFmtBtnRef}
                         style={rowFmtOpen || Object.keys(rowFormatRules || {}).length > 0 ? btnActive : btnSubtle}
                         onClick={() => setRowFmtOpen(o => !o)}
-                        title="Format Row"
+                        title="Format Cell"
                     >
-                        Format Row{Object.keys(rowFormatRules || {}).length > 0 ? ` (${Object.keys(rowFormatRules).length})` : ''}
+                        Format Cell{Object.keys(rowFormatRules || {}).length > 0 ? ` (${Object.keys(rowFormatRules).length})` : ''}
                     </button>
                     {rowFmtOpen && (
                         <RowFormatPopover
@@ -377,7 +387,7 @@ export function PivotAppBar({
                     )}
                 </div>
 
-                <button style={btnSubtle} onClick={onSaveView}>💾 Save View</button>
+                <button style={btnSaveView} onClick={onSaveView}><Icons.Save /> Save View</button>
 
                 {sep}
 

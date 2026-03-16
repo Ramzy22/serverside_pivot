@@ -82,9 +82,7 @@ export function useRenderHelpers({
              }
         }
 
-        const rowBackground = rowBg
-            ? rowBg
-            : (row.original && row.original._isTotal)
+        const themeBackground = (row.original && row.original._isTotal)
             ? (isDarkTheme(theme) ? '#1a2e1a' : '#f0f7f0')
             : (isDarkTheme(theme) ? '#212121' : '#fff');
         const condStyle = getConditionalStyle(
@@ -93,10 +91,11 @@ export function useRenderHelpers({
             row.original,
             row.id
         );
-        const stickyBaseStyle = mergeStateStyles(
-            { background: rowBackground },
-            condStyle
-        );
+        // Row format background takes priority over color-scale/conditional style;
+        // when no rowBg, conditional style overrides the theme default.
+        const stickyBaseStyle = rowBg
+            ? mergeStateStyles(condStyle, { background: rowBg })
+            : mergeStateStyles({ background: themeBackground }, condStyle);
         const stickyStyle = getStickyStyle(cell.column, stickyBaseStyle.background);
         const selectedOverlayStyle = isSelected
             ? {
