@@ -8,7 +8,7 @@ version = "0.0.2"
 description = "A Dash component library for enterprise-grade pivot tables built with TanStack Table v8"
 license = {text = "MIT"}
 authors = [
-    {name = "Ramzy22"}
+    {name = "Ramzy"}
 ]
 classifiers = [
     "Framework :: Dash",
