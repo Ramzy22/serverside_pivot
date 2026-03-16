@@ -516,7 +516,9 @@ class TanStackPivotAdapter:
         pivot_filters = []
         if request.filters:
             for field_name, filter_obj in request.filters.items():
-                if field_name in ('__request_unique__', '__row_number__', 'hierarchy'):
+                if not field_name or field_name in ('__request_unique__', '__row_number__', 'hierarchy'):
+                    continue
+                if filter_obj is None:
                     continue
 
                 # Global search: convert to OR-contains across all row dimension fields
@@ -559,6 +561,22 @@ class TanStackPivotAdapter:
                             'value': filter_obj.get('value'),
                             'caseSensitive': filter_obj.get('caseSensitive', False)
                         })
+                elif isinstance(filter_obj, list):
+                    # TanStack sometimes sends an array of condition objects directly
+                    conditions = [
+                        {
+                            'field': field_name,
+                            'op': self._map_tanstack_operator(item.get('type', 'eq')),
+                            'value': item.get('value'),
+                            'caseSensitive': item.get('caseSensitive', False)
+                        }
+                        for item in filter_obj
+                        if isinstance(item, dict) and item.get('value') not in (None, '')
+                    ]
+                    if len(conditions) == 1:
+                        pivot_filters.append(conditions[0])
+                    elif len(conditions) > 1:
+                        pivot_filters.append({'op': 'AND', 'conditions': conditions})
                 elif isinstance(filter_obj, str) and filter_obj.strip() != '':
                     # Support simple string filters (e.g. from quick input)
                     pivot_filters.append({
