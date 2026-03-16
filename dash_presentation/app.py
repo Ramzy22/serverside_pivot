@@ -54,6 +54,29 @@ def load_initial_data(adapter):
     adapter.controller.materialized_hierarchy_manager.create_materialized_hierarchy(default_spec)
     if _DEBUG_OUTPUT:
         print("Hierarchy materialized.")
+
+    # Small demo table for tenor sorting + weighted average.
+    tenor_table = pa.Table.from_pydict(
+        {
+            "book": [
+                "FI", "FI", "FI", "FI", "FI",
+                "FX", "FX", "FX", "FX", "FX",
+            ],
+            "tenor": [
+                "1M", "2W", "1D", "6Y", "3M",
+                "1M", "2W", "1D", "6Y", "10Y",
+            ],
+            "rate": [
+                0.0310, 0.0280, 0.0250, 0.0450, 0.0340,
+                0.0290, 0.0270, 0.0240, 0.0430, 0.0510,
+            ],
+            "notional": [
+                120.0, 80.0, 150.0, 60.0, 100.0,
+                90.0, 110.0, 130.0, 70.0, 50.0,
+            ],
+        }
+    )
+    adapter.controller.load_data_from_arrow("tenor_data", tenor_table)
     # Example: load Polars directly (no manual Arrow conversion required)
     # import polars as pl
     # df = pl.read_parquet("sales_data.parquet")
@@ -134,7 +157,51 @@ app.layout = html.Div([
             # },
         ),
         style={'padding': '0 16px'}
-    )
+    ),
+    html.Hr(style={"margin": "16px 16px 8px 16px"}),
+    html.Div(
+        [
+            html.Div(
+                "Tenor Sort + Weighted Average Example",
+                style={"padding": "0 16px 8px 16px", "fontWeight": 600},
+            ),
+            DashTanstackPivot(
+                id="tenor-pivot-grid",
+                style={"height": "420px", "width": "100%"},
+                table="tenor_data",
+                serverSide=True,
+                # Tenor will sort as 1D < 2W < 1M < 3M < 6Y < 10Y (not lexical).
+                rowFields=["tenor"],
+                colFields=[],
+                valConfigs=[
+                    {"field": "notional", "agg": "sum", "format": "fixed:2"},
+                    {
+                        "field": "rate",
+                        "agg": "weighted_avg",
+                        "weightField": "notional",
+                        "format": "fixed:4",
+                    },
+                ],
+                # Explicit semantic sort hint (also works without it when field name is tenor).
+                sorting=[{"id": "tenor", "desc": False, "semanticType": "tenor"}],
+                filters={},
+                expanded={},
+                showRowTotals=False,
+                showColTotals=False,
+                columns=[
+                    {"id": "book"},
+                    {"id": "tenor"},
+                    {"id": "rate"},
+                    {"id": "notional"},
+                ],
+                availableFieldList=["book", "tenor", "rate", "notional"],
+                data=[],
+                rowCount=0,
+                filterOptions={},
+            ),
+        ],
+        style={"padding": "0 16px 16px 16px"},
+    ),
 ])
 
 # Capture saved view emitted by the component into Dash state (Store).
@@ -164,6 +231,7 @@ def restore_saved_view(_clicks, saved_view):
 
 # --- 4. Pivot wiring (one line) ---
 register_pivot_app(app, adapter_getter=get_adapter, pivot_id="pivot-grid")
+register_pivot_app(app, adapter_getter=get_adapter, pivot_id="tenor-pivot-grid")
 
 if __name__ == "__main__":
     app.run(debug=True, port=8050)
