@@ -199,7 +199,7 @@ export function PivotAppBar({
     pivotTitle,
     fontFamily, setFontFamily,
     fontSize, setFontSize,
-    decimalPlaces, setDecimalPlaces,
+    displayDecimal, onDecimalChange, hasSelection,
     rowFormatRules, setRowFormatRules,
     hoveredRowPath,
     selectedRowPaths,
@@ -207,32 +207,56 @@ export function PivotAppBar({
     const [rowFmtOpen, setRowFmtOpen] = useState(false);
     const rowFmtBtnRef = useRef(null);
 
-    const decBtnStyle = {
+    // Base styles for different button variants
+    const btnBase = {
         ...styles.btn,
+        borderRadius: '6px',
+        padding: '4px 10px',
+        fontSize: '12px',
+        fontWeight: 500,
+        lineHeight: 1.5,
+    };
+    const btnGhost = {
+        ...btnBase,
+        background: 'transparent',
+        border: `1px solid transparent`,
+    };
+    const btnSubtle = {
+        ...btnBase,
         background: theme.hover,
-        fontFamily: 'monospace',
-        fontSize: '11px',
-        minWidth: '34px',
-        padding: '3px 5px',
-        lineHeight: 1.2,
-        display: 'flex',
-        alignItems: 'center',
-        gap: '1px',
+        border: `1px solid ${theme.border}`,
+    };
+    const btnActive = {
+        ...btnBase,
+        background: theme.select,
+        border: `1px solid ${theme.primary}`,
+        color: theme.primary,
+    };
+    const btnPrimary = {
+        ...btnBase,
+        background: theme.primary,
+        color: '#fff',
+        border: `1px solid ${theme.primary}`,
     };
 
+    const sep = <div style={{width:'1px', height:'18px', background: theme.border, flexShrink: 0}} />;
+
     return (
-        <div style={styles.appBar}>
-            <div style={{display:'flex', alignItems:'center', gap:'12px'}}>
-                <button onClick={() => setSidebarOpen(!sidebarOpen)} style={{border:'none', background:'transparent', cursor:'pointer', padding:'4px', borderRadius:'4px', display:'flex', color: theme.textSec}}>
+        <div style={{...styles.appBar, height: 'auto', minHeight: '48px', padding: '6px 12px', gap: '6px', flexWrap: 'wrap'}}>
+            {/* Left: sidebar toggle + title */}
+            <div style={{display:'flex', alignItems:'center', gap:'8px', flexShrink: 0}}>
+                <button onClick={() => setSidebarOpen(!sidebarOpen)} style={{...btnGhost, padding:'5px', color: theme.textSec}}>
                     <Icons.Menu />
                 </button>
-                <div style={{fontWeight:500,fontSize:'16px',color:theme.primary}}>{pivotTitle || 'Analytics Pivot'}</div>
+                <div style={{fontWeight:600, fontSize:'14px', color:theme.primary, whiteSpace:'nowrap'}}>{pivotTitle || 'Analytics Pivot'}</div>
             </div>
-            <div style={styles.searchBox}>
+
+            {/* Search */}
+            <div style={{...styles.searchBox, flex:'1', minWidth:'120px', maxWidth:'220px', borderRadius:'6px', border:`1px solid ${theme.border}`}}>
                 <Icons.Search />
                 <input
-                    style={{border:'none',background:'transparent',marginLeft:'8px',outline:'none',width:'100%', color: theme.text}}
-                    placeholder="Global Search..."
+                    style={{border:'none',background:'transparent',marginLeft:'6px',outline:'none',width:'100%', color: theme.text, fontSize:'12px'}}
+                    placeholder="Search…"
                     value={(filters && filters.global) || ''}
                     onChange={e => {
                         const val = e.target.value;
@@ -245,68 +269,67 @@ export function PivotAppBar({
                     }}
                 />
             </div>
-            <div style={{display:'flex',gap:'8px',flexWrap:'wrap',alignItems:'center'}}>
-                <button style={{...styles.btn, background: showRowNumbers ? theme.select : 'transparent'}} onClick={() => setShowRowNumbers(!showRowNumbers)}>Row #</button>
 
-                {/* Decimal place controls — immediately right of Row # */}
-                <div style={{display:'flex', alignItems:'center', gap:'1px'}}>
+            {/* Controls */}
+            <div style={{display:'flex', gap:'4px', flexWrap:'wrap', alignItems:'center'}}>
+                {/* Row # toggle */}
+                <button style={showRowNumbers ? btnActive : btnGhost} onClick={() => setShowRowNumbers(!showRowNumbers)} title="Toggle row numbers">Row #</button>
+
+                {sep}
+
+                {/* Decimal controls */}
+                <div style={{display:'flex', alignItems:'center', gap:'2px', background: theme.hover, border:`1px solid ${theme.border}`, borderRadius:'6px', padding:'2px 4px'}}>
                     <button
-                        title="Decrease decimal places (like Excel)"
-                        style={{...decBtnStyle, opacity: decimalPlaces <= DECIMAL_MIN ? 0.4 : 1}}
-                        onClick={() => setDecimalPlaces(p => Math.max(DECIMAL_MIN, p - 1))}
-                        disabled={decimalPlaces <= DECIMAL_MIN}
-                    >
-                        <span style={{fontSize:'10px'}}>←</span><span>.0</span>
-                    </button>
-                    <span style={{fontSize:'11px', color: theme.textSec, minWidth:'16px', textAlign:'center', padding:'0 2px'}}>{decimalPlaces}</span>
+                        title={hasSelection ? 'Decrease decimals for selected cells' : 'Decrease decimal places'}
+                        style={{...btnGhost, padding:'2px 6px', fontFamily:'monospace', fontSize:'11px', minWidth:'28px', opacity: displayDecimal <= DECIMAL_MIN ? 0.35 : 1}}
+                        onClick={() => onDecimalChange(-1)}
+                        disabled={displayDecimal <= DECIMAL_MIN}
+                    >.0←</button>
+                    <span style={{fontSize:'11px', color: hasSelection ? theme.primary : theme.textSec, minWidth:'14px', textAlign:'center', fontWeight: hasSelection ? 700 : 400}}>{displayDecimal}</span>
                     <button
-                        title="Increase decimal places (like Excel)"
-                        style={{...decBtnStyle, opacity: decimalPlaces >= DECIMAL_MAX ? 0.4 : 1}}
-                        onClick={() => setDecimalPlaces(p => Math.min(DECIMAL_MAX, p + 1))}
-                        disabled={decimalPlaces >= DECIMAL_MAX}
-                    >
-                        <span>.00</span><span style={{fontSize:'10px'}}>→</span>
-                    </button>
+                        title={hasSelection ? 'Increase decimals for selected cells' : 'Increase decimal places'}
+                        style={{...btnGhost, padding:'2px 6px', fontFamily:'monospace', fontSize:'11px', minWidth:'28px', opacity: displayDecimal >= DECIMAL_MAX ? 0.35 : 1}}
+                        onClick={() => onDecimalChange(1)}
+                        disabled={displayDecimal >= DECIMAL_MAX}
+                    >.00→</button>
                 </div>
 
-                <button style={{...styles.btn, background: showFloatingFilters ? theme.select : 'transparent'}} onClick={() => setShowFloatingFilters(!showFloatingFilters)}>Filters</button>
-                <button style={{...styles.btn, background: showRowTotals ? theme.select : 'transparent'}} onClick={() => setShowRowTotals(!showRowTotals)}>Row Totals</button>
-                <button style={{...styles.btn, background: showColTotals ? theme.select : 'transparent'}} onClick={() => setShowColTotals(!showColTotals)}>Col Totals</button>
-                <button style={{...styles.btn, background: theme.hover}} onClick={() => setSpacingMode((spacingMode + 1) % 3)}>
+                {sep}
+
+                {/* View toggles */}
+                <button style={showFloatingFilters ? btnActive : btnGhost} onClick={() => setShowFloatingFilters(!showFloatingFilters)}>Filters</button>
+                <button style={showRowTotals ? btnActive : btnGhost} onClick={() => setShowRowTotals(!showRowTotals)}>Row ∑</button>
+                <button style={showColTotals ? btnActive : btnGhost} onClick={() => setShowColTotals(!showColTotals)}>Col ∑</button>
+
+                {sep}
+
+                {/* Spacing & layout */}
+                <button style={btnSubtle} onClick={() => setSpacingMode((spacingMode + 1) % 3)} title="Cycle row density">
                     <Icons.Spacing/> {spacingLabels[spacingMode]}
                 </button>
-                <button style={{...styles.btn, background: theme.hover}} onClick={() => setLayoutMode(prev => prev === 'hierarchy' ? 'outline' : prev === 'outline' ? 'tabular' : 'hierarchy')}>
-                    {layoutMode === 'hierarchy' ? 'Hierarchy' : layoutMode === 'outline' ? 'Outline' : 'Tabular'}
+                <button style={btnSubtle} onClick={() => setLayoutMode(prev => prev === 'hierarchy' ? 'outline' : prev === 'outline' ? 'tabular' : 'hierarchy')} title="Cycle layout mode">
+                    {layoutMode === 'hierarchy' ? '⊞ Hierarchy' : layoutMode === 'outline' ? '⊟ Outline' : '⊠ Tabular'}
                 </button>
+
+                {sep}
+
+                {/* Color scale */}
                 <select
                     value={colorScaleMode}
                     onChange={e => setColorScaleMode(e.target.value)}
-                    title="Color scale mode"
-                    style={{
-                        ...styles.btn,
-                        background: colorScaleMode !== 'off' ? theme.select : theme.hover,
-                        outline: 'none',
-                        cursor: 'pointer',
-                        padding: '4px 8px',
-                    }}
+                    title="Color scale"
+                    style={{...btnSubtle, outline:'none', cursor:'pointer', ...(colorScaleMode !== 'off' ? {background: theme.select, border:`1px solid ${theme.primary}`, color: theme.primary} : {})}}
                 >
                     <option value="off">Color: Off</option>
-                    <option value="row">Color: By Row</option>
-                    <option value="col">Color: By Column</option>
-                    <option value="table">Color: By Table</option>
+                    <option value="row">By Row</option>
+                    <option value="col">By Col</option>
+                    <option value="table">By Table</option>
                 </select>
                 {colorScaleMode !== 'off' && (
                     <select
                         value={colorPalette}
                         onChange={e => setColorPalette(e.target.value)}
-                        title="Color palette"
-                        style={{
-                            ...styles.btn,
-                            background: theme.select,
-                            outline: 'none',
-                            cursor: 'pointer',
-                            padding: '4px 8px',
-                        }}
+                        style={{...btnSubtle, outline:'none', cursor:'pointer', background: theme.select, border:`1px solid ${theme.primary}`, color: theme.primary}}
                     >
                         {COLOR_PALETTE_OPTIONS.map(opt => (
                             <option key={opt.value} value={opt.value}>{opt.label}</option>
@@ -314,55 +337,31 @@ export function PivotAppBar({
                     </select>
                 )}
 
-                {/* Font family selector */}
-                <select
-                    value={fontFamily}
-                    onChange={e => setFontFamily(e.target.value)}
-                    title="Font family"
-                    style={{
-                        ...styles.btn,
-                        background: theme.hover,
-                        outline: 'none',
-                        cursor: 'pointer',
-                        padding: '4px 8px',
-                        fontFamily: fontFamily,
-                    }}
-                >
+                {sep}
+
+                {/* Font controls */}
+                <select value={fontFamily} onChange={e => setFontFamily(e.target.value)} title="Font family"
+                    style={{...btnSubtle, outline:'none', cursor:'pointer', fontFamily}}>
                     {FONT_FAMILY_OPTIONS.map(opt => (
                         <option key={opt.value} value={opt.value} style={{fontFamily: opt.value}}>{opt.label}</option>
                     ))}
                 </select>
-
-                {/* Font size selector */}
-                <select
-                    value={fontSize}
-                    onChange={e => setFontSize(e.target.value)}
-                    title="Font size"
-                    style={{
-                        ...styles.btn,
-                        background: theme.hover,
-                        outline: 'none',
-                        cursor: 'pointer',
-                        padding: '4px 8px',
-                    }}
-                >
-                    {FONT_SIZE_OPTIONS.map(s => (
-                        <option key={s} value={s}>{s}</option>
-                    ))}
+                <select value={fontSize} onChange={e => setFontSize(e.target.value)} title="Font size"
+                    style={{...btnSubtle, outline:'none', cursor:'pointer'}}>
+                    {FONT_SIZE_OPTIONS.map(s => <option key={s} value={s}>{s}</option>)}
                 </select>
 
-                {/* Format Row button */}
-                <div style={{position: 'relative'}}>
+                {sep}
+
+                {/* Format Row */}
+                <div style={{position:'relative'}}>
                     <button
                         ref={rowFmtBtnRef}
-                        style={{
-                            ...styles.btn,
-                            background: rowFmtOpen || Object.keys(rowFormatRules || {}).length > 0 ? theme.select : theme.hover
-                        }}
+                        style={rowFmtOpen || Object.keys(rowFormatRules || {}).length > 0 ? btnActive : btnSubtle}
                         onClick={() => setRowFmtOpen(o => !o)}
                         title="Format Row"
                     >
-                        Format Row {Object.keys(rowFormatRules || {}).length > 0 ? `(${Object.keys(rowFormatRules).length})` : ''}
+                        Format Row{Object.keys(rowFormatRules || {}).length > 0 ? ` (${Object.keys(rowFormatRules).length})` : ''}
                     </button>
                     {rowFmtOpen && (
                         <RowFormatPopover
@@ -378,23 +377,18 @@ export function PivotAppBar({
                     )}
                 </div>
 
-                <button style={{...styles.btn, background: theme.hover}} onClick={onSaveView}>Save View</button>
+                <button style={btnSubtle} onClick={onSaveView}>💾 Save View</button>
 
-                <div style={{width: '1px', height: '20px', background: theme.border, margin: '0 4px'}} />
-                <select value={themeName} onChange={e => setThemeName(e.target.value)} style={{...styles.btn, background: theme.hover, padding: '4px 8px', outline: 'none'}}>
+                {sep}
+
+                {/* Theme */}
+                <select value={themeName} onChange={e => setThemeName(e.target.value)}
+                    style={{...btnSubtle, outline:'none', cursor:'pointer'}}>
                     {Object.keys(themes).map(t => <option key={t} value={t}>{t.charAt(0).toUpperCase() + t.slice(1)}</option>)}
                 </select>
 
-                <button style={{
-                    ...styles.btn,
-                    background: theme.primary,
-                    color: '#fff',
-                    border: `1px solid ${theme.primary}`,
-                    '&:hover': {
-                        background: theme.primary,
-                        filter: 'brightness(1.1)'
-                    }
-                }} onClick={exportPivot}>
+                {/* Export */}
+                <button style={btnPrimary} onClick={exportPivot}>
                     <Icons.Export/> {(rowCount || 0) > 500000 ? 'Export CSV' : 'Export'}
                 </button>
             </div>

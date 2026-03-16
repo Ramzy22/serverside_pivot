@@ -55,12 +55,16 @@ export function useColumnDefs({
     toggleCol,
     pendingRowTransitions,
     decimalPlaces,
+    columnDecimalOverrides,
     rowFormatRules,
 }) {
     return useMemo(() => {
         // Helper: render a numeric cell value with decimal precision and negative-red coloring
-        const renderNumericCell = (value, fmt, rowPath) => {
-            const formatted = formatValue(value, fmt, decimalPlaces);
+        const renderNumericCell = (value, fmt, rowPath, colId) => {
+            const cellDec = colId !== undefined && columnDecimalOverrides && columnDecimalOverrides[colId] !== undefined
+                ? columnDecimalOverrides[colId]
+                : decimalPlaces;
+            const formatted = formatValue(value, fmt, cellDec);
             const isNegative = typeof value === 'number' && value < 0;
             const rowFmt = rowFormatRules && rowPath ? rowFormatRules[rowPath] : null;
             const color = rowFmt && rowFmt.color ? rowFmt.color : (isNegative ? 'red' : undefined);
@@ -295,7 +299,7 @@ export function useColumnDefs({
                 sortingFn,
                 cell: info => {
                     const rowPath = info.row.original && info.row.original._path;
-                    const { formatted, extraStyle } = renderNumericCell(info.getValue(), c.format, rowPath);
+                    const { formatted, extraStyle } = renderNumericCell(info.getValue(), c.format, rowPath, info.column.id);
                     return (
                         <div style={{width:'100%', height:'100%', display:'flex', alignItems:'center', justifyContent:'flex-end', paddingRight:'8px', ...extraStyle}} onContextMenu={e => handleContextMenu(e, info.getValue(), info.column.id, info.row)}>
                             {formatted}
@@ -357,7 +361,7 @@ export function useColumnDefs({
                                 for (const c of valConfigs) { if (k.includes(c.field)) { fmt = c.format; break; } }
                             }
                             const rowPath = info.row.original && info.row.original._path;
-                            const { formatted, extraStyle } = renderNumericCell(v, fmt, rowPath);
+                            const { formatted, extraStyle } = renderNumericCell(v, fmt, rowPath, info.column.id);
                             return (
                                 <div style={{width:'100%', height:'100%', display:'flex', alignItems:'center', justifyContent:'flex-end', paddingRight:'8px', ...extraStyle}} onContextMenu={e => handleContextMenu(e, v, info.column.id, info.row)}>
                                     {formatted}
@@ -479,7 +483,7 @@ export function useColumnDefs({
                                               c.cell = info => {
                                                  const config = valConfigs.find(v => c.id.includes(v.field));
                                                  const rowPath = info.row.original && info.row.original._path;
-                                                 const { formatted, extraStyle } = renderNumericCell(info.getValue(), config ? config.format : null, rowPath);
+                                                 const { formatted, extraStyle } = renderNumericCell(info.getValue(), config ? config.format : null, rowPath, info.column.id);
                                                  return (
                                                      <div style={{width:'100%', height:'100%', display:'flex', alignItems:'center', justifyContent:'flex-end', paddingRight:'8px', fontWeight:'bold', ...extraStyle}} onContextMenu={e => handleContextMenu(e, info.getValue(), info.column.id, info.row)}>
                                                          {formatted}
@@ -511,5 +515,5 @@ export function useColumnDefs({
     // cachedColSchema and filteredData changes on every viewport scroll, causing the entire column
     // tree to rebuild. filteredData is used only as a last-resort fallback (client-side, no schema).
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    }, [rowFields, colFields, valConfigs, minMax, colorScaleMode, colExpanded, serverSide, layoutMode, showRowNumbers, isRowSelecting, rowDragStart, props.columns, cachedColSchema, decimalPlaces, rowFormatRules]);
+    }, [rowFields, colFields, valConfigs, minMax, colorScaleMode, colExpanded, serverSide, layoutMode, showRowNumbers, isRowSelecting, rowDragStart, props.columns, cachedColSchema, decimalPlaces, columnDecimalOverrides, rowFormatRules]);
 }

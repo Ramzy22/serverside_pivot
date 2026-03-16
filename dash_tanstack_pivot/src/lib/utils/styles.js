@@ -254,17 +254,21 @@ export const getStyles = (theme) => ({
         position: 'relative'
     },
     btn: {
-        padding: '6px 12px',
-        borderRadius: '4px',
-        border: `1px solid ${theme.border}`,
+        padding: '4px 10px',
+        borderRadius: '6px',
+        border: `1px solid transparent`,
         background: 'transparent',
         cursor: 'pointer',
         fontSize: '12px',
-        display: 'flex',
+        display: 'inline-flex',
         alignItems: 'center',
-        gap: '6px',
+        gap: '5px',
         fontWeight: 500,
-        color: theme.text
+        color: theme.text,
+        whiteSpace: 'nowrap',
+        lineHeight: 1.5,
+        transition: 'background 120ms ease, border-color 120ms ease, box-shadow 120ms ease',
+        userSelect: 'none',
     },
     dropLine: {
         position: 'absolute',
