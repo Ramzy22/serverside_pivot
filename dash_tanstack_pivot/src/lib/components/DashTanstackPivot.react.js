@@ -490,20 +490,82 @@ export default function DashTanstackPivot(props) {
 
         const visibleLeafColumns = visibleLeafColumnsAll;
 
-        if ((e.ctrlKey || e.metaKey) && e.key === 'ArrowDown') {
-            // Jump to last row in same column
-            nextRow = visibleRowsAll.length - 1;
-        } else if ((e.ctrlKey || e.metaKey) && e.key === 'ArrowUp') {
-            nextRow = 0;
-        } else if ((e.ctrlKey || e.metaKey) && e.key === 'ArrowRight') {
-            nextCol = visibleLeafColumns.length - 1;
-        } else if ((e.ctrlKey || e.metaKey) && e.key === 'ArrowLeft') {
-            nextCol = 0;
-        } else if (e.key === 'ArrowUp') nextRow = Math.max(0, rowIndex - 1);
-        else if (e.key === 'ArrowDown') nextRow = Math.min(visibleRowsAll.length - 1, rowIndex + 1);
-        else if (e.key === 'ArrowLeft') nextCol = Math.max(0, colIndex - 1);
-        else if (e.key === 'ArrowRight') nextCol = Math.min(visibleLeafColumns.length - 1, colIndex + 1);
-        else if (e.key === 'Tab') {
+        // Helper: Excel-style Ctrl+Arrow — jumps to edge of contiguous data block.
+        // Rules (mirroring Excel):
+        //   - current cell empty  → jump to next non-empty in direction (or edge if all empty)
+        //   - current non-empty, next is empty → jump to next non-empty past the gap (or edge)
+        //   - current non-empty, next is non-empty → jump to last non-empty before a gap (end of block)
+        const ctrlArrowRow = (dir) => {
+            const colId = visibleLeafColumns[colIndex]?.id;
+            if (!colId) return dir > 0 ? visibleRowsAll.length - 1 : 0;
+            const isEmpty = (r) => { const v = r?.getValue(colId); return v === null || v === undefined || v === ''; };
+            const curEmpty = isEmpty(visibleRowsAll[rowIndex]);
+            if (curEmpty) {
+                // jump to next non-empty
+                for (let i = rowIndex + dir; dir > 0 ? i < visibleRowsAll.length : i >= 0; i += dir) {
+                    if (!isEmpty(visibleRowsAll[i])) return i;
+                }
+                return dir > 0 ? visibleRowsAll.length - 1 : 0;
+            }
+            const nextIdx = rowIndex + dir;
+            if (nextIdx < 0 || nextIdx >= visibleRowsAll.length) return dir > 0 ? visibleRowsAll.length - 1 : 0;
+            if (isEmpty(visibleRowsAll[nextIdx])) {
+                // next is empty — jump past gap to next non-empty
+                for (let i = nextIdx + dir; dir > 0 ? i < visibleRowsAll.length : i >= 0; i += dir) {
+                    if (!isEmpty(visibleRowsAll[i])) return i;
+                }
+                return dir > 0 ? visibleRowsAll.length - 1 : 0;
+            }
+            // next is non-empty — find end of contiguous block
+            let last = rowIndex;
+            for (let i = rowIndex + dir; dir > 0 ? i < visibleRowsAll.length : i >= 0; i += dir) {
+                if (isEmpty(visibleRowsAll[i])) break;
+                last = i;
+            }
+            return last;
+        };
+
+        const ctrlArrowCol = (dir) => {
+            const rowObj = visibleRowsAll[rowIndex];
+            if (!rowObj) return dir > 0 ? visibleLeafColumns.length - 1 : 0;
+            const isEmpty = (c) => { const v = rowObj.getValue(c?.id); return v === null || v === undefined || v === ''; };
+            const curEmpty = isEmpty(visibleLeafColumns[colIndex]);
+            if (curEmpty) {
+                for (let i = colIndex + dir; dir > 0 ? i < visibleLeafColumns.length : i >= 0; i += dir) {
+                    if (!isEmpty(visibleLeafColumns[i])) return i;
+                }
+                return dir > 0 ? visibleLeafColumns.length - 1 : 0;
+            }
+            const nextIdx = colIndex + dir;
+            if (nextIdx < 0 || nextIdx >= visibleLeafColumns.length) return dir > 0 ? visibleLeafColumns.length - 1 : 0;
+            if (isEmpty(visibleLeafColumns[nextIdx])) {
+                for (let i = nextIdx + dir; dir > 0 ? i < visibleLeafColumns.length : i >= 0; i += dir) {
+                    if (!isEmpty(visibleLeafColumns[i])) return i;
+                }
+                return dir > 0 ? visibleLeafColumns.length - 1 : 0;
+            }
+            let last = colIndex;
+            for (let i = colIndex + dir; dir > 0 ? i < visibleLeafColumns.length : i >= 0; i += dir) {
+                if (isEmpty(visibleLeafColumns[i])) break;
+                last = i;
+            }
+            return last;
+        };
+
+        if (e.key.startsWith('Arrow')) {
+            e.preventDefault();
+            if (e.ctrlKey || e.metaKey) {
+                if (e.key === 'ArrowDown')  nextRow = ctrlArrowRow(1);
+                else if (e.key === 'ArrowUp')   nextRow = ctrlArrowRow(-1);
+                else if (e.key === 'ArrowRight') nextCol = ctrlArrowCol(1);
+                else if (e.key === 'ArrowLeft')  nextCol = ctrlArrowCol(-1);
+            } else {
+                if (e.key === 'ArrowUp')    nextRow = Math.max(0, rowIndex - 1);
+                else if (e.key === 'ArrowDown')  nextRow = Math.min(visibleRowsAll.length - 1, rowIndex + 1);
+                else if (e.key === 'ArrowLeft')  nextCol = Math.max(0, colIndex - 1);
+                else if (e.key === 'ArrowRight') nextCol = Math.min(visibleLeafColumns.length - 1, colIndex + 1);
+            }
+        } else if (e.key === 'Tab') {
             e.preventDefault();
             nextCol = e.shiftKey ? Math.max(0, colIndex - 1) : Math.min(visibleLeafColumns.length - 1, colIndex + 1);
         } else {

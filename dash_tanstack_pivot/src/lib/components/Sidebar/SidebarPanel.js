@@ -4,7 +4,7 @@ import SidebarFilterItem from './SidebarFilterItem';
 import ToolPanelSection from './ToolPanelSection';
 import ColumnTreeItem from './ColumnTreeItem';
 import Icons from '../Icons';
-import { isGroupColumn, getAllLeafIdsFromColumn } from '../../utils/helpers';
+import { isGroupColumn, getAllLeafIdsFromColumn, hasChildrenInZone } from '../../utils/helpers';
 
 export function SidebarPanel({
     sidebarTab, setSidebarTab,

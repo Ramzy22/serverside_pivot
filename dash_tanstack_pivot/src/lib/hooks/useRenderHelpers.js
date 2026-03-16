@@ -63,7 +63,7 @@ export function useRenderHelpers({
     getHeaderStickyStyle,
 }) {
     // --- Helper to Render a single Cell with useCallback ---
-    const renderCell = useCallback((cell, virtualRowIndex, isVirtualRow = false) => {
+    const renderCell = useCallback((cell, virtualRowIndex, isVirtualRow = false, rowBg = null) => {
         if (!cell) return null;
 
         const row = cell.row;
@@ -82,7 +82,9 @@ export function useRenderHelpers({
              }
         }
 
-        const rowBackground = (row.original && row.original._isTotal)
+        const rowBackground = rowBg
+            ? rowBg
+            : (row.original && row.original._isTotal)
             ? (isDarkTheme(theme) ? '#1a2e1a' : '#f0f7f0')
             : (isDarkTheme(theme) ? '#212121' : '#fff');
         const condStyle = getConditionalStyle(
