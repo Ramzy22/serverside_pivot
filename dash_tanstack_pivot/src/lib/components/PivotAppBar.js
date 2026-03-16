@@ -13,33 +13,50 @@ const COLOR_PALETTE_OPTIONS = [
 const FONT_FAMILY_OPTIONS = [
     { value: 'system-ui', label: 'System UI' },
     { value: 'Arial, sans-serif', label: 'Arial' },
+    { value: 'Helvetica, sans-serif', label: 'Helvetica' },
     { value: 'Georgia, serif', label: 'Georgia' },
+    { value: '"Times New Roman", serif', label: 'Times New Roman' },
     { value: '"Courier New", monospace', label: 'Courier New' },
     { value: '"Trebuchet MS", sans-serif', label: 'Trebuchet MS' },
+    { value: 'Verdana, sans-serif', label: 'Verdana' },
+    { value: 'Tahoma, sans-serif', label: 'Tahoma' },
+    { value: '"Palatino Linotype", serif', label: 'Palatino Linotype' },
+    { value: '"Book Antiqua", serif', label: 'Book Antiqua' },
+    { value: '"Comic Sans MS", cursive', label: 'Comic Sans MS' },
+    { value: 'Impact, fantasy', label: 'Impact' },
+    { value: '"Lucida Console", monospace', label: 'Lucida Console' },
+    { value: '"Lucida Sans Unicode", sans-serif', label: 'Lucida Sans Unicode' },
+    { value: '"MS Sans Serif", sans-serif', label: 'MS Sans Serif' },
 ];
 
-const FONT_SIZE_OPTIONS = ['11px', '12px', '13px', '14px', '16px'];
+const FONT_SIZE_OPTIONS = ['8px', '9px', '10px', '11px', '12px', '13px', '14px', '15px', '16px', '18px', '20px', '24px'];
 
 const DECIMAL_MIN = 0;
 const DECIMAL_MAX = 6;
 
-function RowFormatPopover({ theme, styles, rowFormatRules, setRowFormatRules, hoveredRowPath, onClose, anchorRef }) {
-    const [path, setPath] = useState(hoveredRowPath || '');
-    const current = (path && rowFormatRules[path]) || {};
+function RowFormatPopover({ theme, styles, rowFormatRules, setRowFormatRules, hoveredRowPath, selectedRowPaths, onClose, anchorRef }) {
+    // Pre-populate path from selectedRowPaths if available, else hoveredRowPath
+    const initialPath = selectedRowPaths && selectedRowPaths.length > 0
+        ? selectedRowPaths.join('\n')
+        : (hoveredRowPath || '');
+    const [path, setPath] = useState(initialPath);
+    // Use first path for reading current rule
+    const firstPath = path.split('\n').map(s => s.trim()).filter(Boolean)[0] || '';
+    const current = (firstPath && rowFormatRules[firstPath]) || {};
     const [bg, setBg] = useState(current.bg || '#ffffff');
     const [color, setColor] = useState(current.color || '#000000');
     const [bold, setBold] = useState(current.bold || false);
     const [italic, setItalic] = useState(current.italic || false);
     const popoverRef = useRef(null);
 
-    // Update local state when path changes
+    // Update local state when firstPath changes
     useEffect(() => {
-        const rule = (path && rowFormatRules[path]) || {};
+        const rule = (firstPath && rowFormatRules[firstPath]) || {};
         setBg(rule.bg || '#ffffff');
         setColor(rule.color || '#000000');
         setBold(rule.bold || false);
         setItalic(rule.italic || false);
-    }, [path, rowFormatRules]);
+    }, [firstPath, rowFormatRules]);
 
     // Close on outside click
     useEffect(() => {
@@ -53,19 +70,24 @@ function RowFormatPopover({ theme, styles, rowFormatRules, setRowFormatRules, ho
         return () => document.removeEventListener('mousedown', handleOutside);
     }, [onClose, anchorRef]);
 
+    const getPaths = () => path.split('\n').map(s => s.trim()).filter(Boolean);
+
     const apply = () => {
-        if (!path) return;
-        setRowFormatRules(prev => ({
-            ...prev,
-            [path]: { bg, color, bold, italic }
-        }));
+        const paths = getPaths();
+        if (paths.length === 0) return;
+        setRowFormatRules(prev => {
+            const next = { ...prev };
+            paths.forEach(p => { next[p] = { bg, color, bold, italic }; });
+            return next;
+        });
     };
 
     const clear = () => {
-        if (!path) return;
+        const paths = getPaths();
+        if (paths.length === 0) return;
         setRowFormatRules(prev => {
             const next = { ...prev };
-            delete next[path];
+            paths.forEach(p => { delete next[p]; });
             return next;
         });
     };
@@ -81,6 +103,8 @@ function RowFormatPopover({ theme, styles, rowFormatRules, setRowFormatRules, ho
         boxSizing: 'border-box',
     };
 
+    const pathCount = getPaths().length;
+
     return (
         <div ref={popoverRef} style={{
             position: 'absolute',
@@ -95,21 +119,25 @@ function RowFormatPopover({ theme, styles, rowFormatRules, setRowFormatRules, ho
             minWidth: '240px',
             marginTop: '4px',
         }}>
-            <div style={{fontWeight: 600, fontSize: '13px', color: theme.text, marginBottom: '10px'}}>Format Row</div>
+            <div style={{fontWeight: 600, fontSize: '13px', color: theme.text, marginBottom: '10px'}}>
+                Format Row{pathCount > 1 ? ` (${pathCount} rows)` : ''}
+            </div>
             <div style={{marginBottom: '8px'}}>
-                <label style={{fontSize: '11px', color: theme.textSec, display: 'block', marginBottom: '3px'}}>Row Path</label>
-                <input
-                    style={inputStyle}
+                <label style={{fontSize: '11px', color: theme.textSec, display: 'block', marginBottom: '3px'}}>
+                    Row Path(s) — one per line
+                </label>
+                <textarea
+                    style={{...inputStyle, minHeight: '52px', resize: 'vertical', fontFamily: 'monospace'}}
                     value={path}
                     onChange={e => setPath(e.target.value)}
-                    placeholder="e.g. North|Electronics"
+                    placeholder={'e.g. North|Electronics\nSouth|Furniture'}
                 />
-                {hoveredRowPath && hoveredRowPath !== path && (
+                {hoveredRowPath && !path.includes(hoveredRowPath) && (
                     <button
-                        onClick={() => setPath(hoveredRowPath)}
+                        onClick={() => setPath(p => p ? p + '\n' + hoveredRowPath : hoveredRowPath)}
                         style={{...styles.btn, background: 'transparent', fontSize: '11px', color: theme.primary, padding: '2px 0', marginTop: '3px'}}
                     >
-                        Use last clicked: {hoveredRowPath}
+                        + Add last clicked: {hoveredRowPath}
                     </button>
                 )}
             </div>
@@ -144,7 +172,9 @@ function RowFormatPopover({ theme, styles, rowFormatRules, setRowFormatRules, ho
                 ><em>I</em></button>
             </div>
             <div style={{display: 'flex', gap: '6px'}}>
-                <button onClick={apply} style={{...styles.btn, background: theme.primary, color: '#fff', flex: 1}}>Apply</button>
+                <button onClick={apply} style={{...styles.btn, background: theme.primary, color: '#fff', flex: 1}}>
+                    Apply{pathCount > 1 ? ` (${pathCount})` : ''}
+                </button>
                 <button onClick={clear} style={{...styles.btn, background: theme.hover, flex: 1}}>Clear</button>
             </div>
         </div>
@@ -172,9 +202,23 @@ export function PivotAppBar({
     decimalPlaces, setDecimalPlaces,
     rowFormatRules, setRowFormatRules,
     hoveredRowPath,
+    selectedRowPaths,
 }) {
     const [rowFmtOpen, setRowFmtOpen] = useState(false);
     const rowFmtBtnRef = useRef(null);
+
+    const decBtnStyle = {
+        ...styles.btn,
+        background: theme.hover,
+        fontFamily: 'monospace',
+        fontSize: '11px',
+        minWidth: '34px',
+        padding: '3px 5px',
+        lineHeight: 1.2,
+        display: 'flex',
+        alignItems: 'center',
+        gap: '1px',
+    };
 
     return (
         <div style={styles.appBar}>
@@ -203,6 +247,28 @@ export function PivotAppBar({
             </div>
             <div style={{display:'flex',gap:'8px',flexWrap:'wrap',alignItems:'center'}}>
                 <button style={{...styles.btn, background: showRowNumbers ? theme.select : 'transparent'}} onClick={() => setShowRowNumbers(!showRowNumbers)}>Row #</button>
+
+                {/* Decimal place controls — immediately right of Row # */}
+                <div style={{display:'flex', alignItems:'center', gap:'1px'}}>
+                    <button
+                        title="Decrease decimal places (like Excel)"
+                        style={{...decBtnStyle, opacity: decimalPlaces <= DECIMAL_MIN ? 0.4 : 1}}
+                        onClick={() => setDecimalPlaces(p => Math.max(DECIMAL_MIN, p - 1))}
+                        disabled={decimalPlaces <= DECIMAL_MIN}
+                    >
+                        <span style={{fontSize:'10px'}}>←</span><span>.0</span>
+                    </button>
+                    <span style={{fontSize:'11px', color: theme.textSec, minWidth:'16px', textAlign:'center', padding:'0 2px'}}>{decimalPlaces}</span>
+                    <button
+                        title="Increase decimal places (like Excel)"
+                        style={{...decBtnStyle, opacity: decimalPlaces >= DECIMAL_MAX ? 0.4 : 1}}
+                        onClick={() => setDecimalPlaces(p => Math.min(DECIMAL_MAX, p + 1))}
+                        disabled={decimalPlaces >= DECIMAL_MAX}
+                    >
+                        <span>.00</span><span style={{fontSize:'10px'}}>→</span>
+                    </button>
+                </div>
+
                 <button style={{...styles.btn, background: showFloatingFilters ? theme.select : 'transparent'}} onClick={() => setShowFloatingFilters(!showFloatingFilters)}>Filters</button>
                 <button style={{...styles.btn, background: showRowTotals ? theme.select : 'transparent'}} onClick={() => setShowRowTotals(!showRowTotals)}>Row Totals</button>
                 <button style={{...styles.btn, background: showColTotals ? theme.select : 'transparent'}} onClick={() => setShowColTotals(!showColTotals)}>Col Totals</button>
@@ -285,23 +351,6 @@ export function PivotAppBar({
                     ))}
                 </select>
 
-                {/* Decimal place controls */}
-                <div style={{display:'flex', alignItems:'center', gap:'2px'}}>
-                    <button
-                        title="Decrease decimal places"
-                        style={{...styles.btn, background: theme.hover, fontFamily: 'monospace', minWidth: '32px'}}
-                        onClick={() => setDecimalPlaces(p => Math.max(DECIMAL_MIN, p - 1))}
-                        disabled={decimalPlaces <= DECIMAL_MIN}
-                    >.0</button>
-                    <span style={{fontSize:'11px', color: theme.textSec, minWidth:'16px', textAlign:'center'}}>{decimalPlaces}</span>
-                    <button
-                        title="Increase decimal places"
-                        style={{...styles.btn, background: theme.hover, fontFamily: 'monospace', minWidth: '32px'}}
-                        onClick={() => setDecimalPlaces(p => Math.min(DECIMAL_MAX, p + 1))}
-                        disabled={decimalPlaces >= DECIMAL_MAX}
-                    >.00</button>
-                </div>
-
                 {/* Format Row button */}
                 <div style={{position: 'relative'}}>
                     <button
@@ -322,6 +371,7 @@ export function PivotAppBar({
                             rowFormatRules={rowFormatRules}
                             setRowFormatRules={setRowFormatRules}
                             hoveredRowPath={hoveredRowPath}
+                            selectedRowPaths={selectedRowPaths}
                             onClose={() => setRowFmtOpen(false)}
                             anchorRef={rowFmtBtnRef}
                         />

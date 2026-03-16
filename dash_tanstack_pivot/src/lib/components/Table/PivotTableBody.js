@@ -64,6 +64,8 @@ export function PivotTableBody({
     selectedCells,
     rowCount,
     isRequestPending,
+    // Row formatting
+    rowFormatRules,
 }) {
     return (
         <div style={styles.main}>
@@ -413,6 +415,9 @@ export function PivotTableBody({
                               ? (row.id || String(virtualRow.index))
                               : String(virtualRow.index);
 
+                          const _rowPath = row.original && row.original._path;
+                          const _rowFmtBg = rowFormatRules && _rowPath ? (rowFormatRules[_rowPath] && rowFormatRules[_rowPath].bg) : undefined;
+
                           return (
                               <React.Fragment key={stableRowKey}>
                                   <div
@@ -423,7 +428,7 @@ export function PivotTableBody({
                                       height: virtualRow.size,
                                       top: `${virtualRow.start + topOffset}px`,
                                       width: `${totalLayoutWidth}px`,
-                                      background: (row.original && row.original._isTotal) ? (isDarkTheme(theme) ? '#1a2e1a' : '#f0f7f0') : theme.background,
+                                      background: _rowFmtBg || ((row.original && row.original._isTotal) ? (isDarkTheme(theme) ? '#1a2e1a' : '#f0f7f0') : theme.background),
                                       borderBottom: `1px solid ${theme.border}`,
                                       transition: rowVirtualizer.isScrolling ? 'none' : 'background-color 0.2s'
                                   }}>

@@ -279,6 +279,23 @@ export default function DashTanstackPivot(props) {
     const [decimalPlaces, setDecimalPlaces] = useState(2);
     const [rowFormatRules, setRowFormatRules] = useState({});
     const [hoveredRowPath, setHoveredRowPath] = useState(null);
+
+    // Derive unique row paths from current selection for Format Row pre-population
+    const selectedRowPaths = useMemo(() => {
+        const keys = Object.keys(selectedCells);
+        if (keys.length === 0) return [];
+        const paths = new Set();
+        const visibleRows = tableRef.current ? tableRef.current.getRowModel().rows : [];
+        const rowIdToPath = {};
+        visibleRows.forEach(r => {
+            if (r.original && r.original._path) rowIdToPath[r.id] = r.original._path;
+        });
+        keys.forEach(key => {
+            const rowId = key.split(':')[0];
+            if (rowIdToPath[rowId]) paths.add(rowIdToPath[rowId]);
+        });
+        return Array.from(paths);
+    }, [selectedCells]);
     const [spacingMode, setSpacingMode] = useState(0);
     const spacingLabels = gridDimensionTokens.density.spacingLabels;
     const rowHeights = gridDimensionTokens.density.rowHeights;
@@ -432,30 +449,68 @@ export default function DashTanstackPivot(props) {
     };
 
     const handleKeyDown = (e) => {
+        const visibleLeafColumnsAll = (tableRef.current && tableRef.current.getVisibleLeafColumns) ? tableRef.current.getVisibleLeafColumns() : [];
+        const visibleRowsAll = (tableRef.current && tableRef.current.getRowModel) ? tableRef.current.getRowModel().rows : rows;
+
+        // Ctrl+A: select all visible rows and columns
+        if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'a') {
+            e.preventDefault();
+            const allSelection = {};
+            visibleRowsAll.forEach(r => {
+                visibleLeafColumnsAll.forEach(c => {
+                    allSelection[`${r.id}:${c.id}`] = r.getValue(c.id);
+                });
+            });
+            setSelectedCells(allSelection);
+            if (visibleRowsAll.length > 0 && visibleLeafColumnsAll.length > 0) {
+                setLastSelected({ rowIndex: 0, colIndex: 0 });
+                setDragStart({ rowIndex: 0, colIndex: 0 });
+            }
+            return;
+        }
+
+        // Ctrl+C: copy selected cells as TSV
+        if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'c') {
+            const keys = Object.keys(selectedCells);
+            if (keys.length === 0) return;
+            e.preventDefault();
+            const data = getSelectedData(false);
+            if (data) {
+                copyToClipboard(data);
+                showNotification('Copied!', 'success');
+            }
+            return;
+        }
+
         if (!lastSelected) return;
 
         const { rowIndex, colIndex } = lastSelected;
         let nextRow = rowIndex;
         let nextCol = colIndex;
 
-        // Get visibleLeafColumns from tableRef
-        const visibleLeafColumns = (tableRef.current && tableRef.current.getVisibleLeafColumns) ? tableRef.current.getVisibleLeafColumns() : [];
+        const visibleLeafColumns = visibleLeafColumnsAll;
 
-        if (e.key === 'ArrowUp') nextRow = Math.max(0, rowIndex - 1);
-        else if (e.key === 'ArrowDown') nextRow = Math.min(rows.length - 1, rowIndex + 1);
+        if ((e.ctrlKey || e.metaKey) && e.key === 'ArrowDown') {
+            // Jump to last row in same column
+            nextRow = visibleRowsAll.length - 1;
+        } else if ((e.ctrlKey || e.metaKey) && e.key === 'ArrowUp') {
+            nextRow = 0;
+        } else if ((e.ctrlKey || e.metaKey) && e.key === 'ArrowRight') {
+            nextCol = visibleLeafColumns.length - 1;
+        } else if ((e.ctrlKey || e.metaKey) && e.key === 'ArrowLeft') {
+            nextCol = 0;
+        } else if (e.key === 'ArrowUp') nextRow = Math.max(0, rowIndex - 1);
+        else if (e.key === 'ArrowDown') nextRow = Math.min(visibleRowsAll.length - 1, rowIndex + 1);
         else if (e.key === 'ArrowLeft') nextCol = Math.max(0, colIndex - 1);
         else if (e.key === 'ArrowRight') nextCol = Math.min(visibleLeafColumns.length - 1, colIndex + 1);
         else if (e.key === 'Tab') {
             e.preventDefault();
             nextCol = e.shiftKey ? Math.max(0, colIndex - 1) : Math.min(visibleLeafColumns.length - 1, colIndex + 1);
-        } else if ((e.ctrlKey || e.metaKey) && e.key === 'c') {
-             // Handled by another useEffect, but can be here too
-             return;
         } else {
             return;
         }
 
-        const nextRowObj = rows[nextRow];
+        const nextRowObj = visibleRowsAll[nextRow];
         const nextColObj = visibleLeafColumns[nextCol];
 
         if (nextRowObj && nextColObj) {
@@ -662,18 +717,23 @@ export default function DashTanstackPivot(props) {
         return () => window.removeEventListener('mouseup', handleMouseUp);
     }, [isDragging, isFilling, fillRange, dragStart]);
     
+    // Global Ctrl+C is handled inside handleKeyDown (attached to table container)
+    // This window-level listener acts as fallback when the table isn't focused
     useEffect(() => {
-        const handleKeyDown = (e) => {
+        const handleGlobalCopy = (e) => {
             if ((e.ctrlKey || e.metaKey) && e.key === 'c') {
                 const keys = Object.keys(selectedCells);
                 if (keys.length === 0) return;
                 e.preventDefault();
                 const data = getSelectedData(false);
-                if (data) copyToClipboard(data);
+                if (data) {
+                    copyToClipboard(data);
+                    showNotification('Copied!', 'success');
+                }
             }
         };
-        window.addEventListener('keydown', handleKeyDown);
-        return () => window.removeEventListener('keydown', handleKeyDown);
+        window.addEventListener('keydown', handleGlobalCopy);
+        return () => window.removeEventListener('keydown', handleGlobalCopy);
     }, [selectedCells]);
 
     const toggleCol = (key) => {
@@ -1772,7 +1832,8 @@ export default function DashTanstackPivot(props) {
         if (serverSide) return { byCol: {}, byRow: {}, table: null };
         const metaKeys = new Set([
             '_id', '_path', '_isTotal', 'depth', '_depth', '_level', '_expanded',
-            '_parentPath', '_has_children', '_is_expanded', 'subRows', 'uuid', '__virtualIndex'
+            '_parentPath', '_has_children', '_is_expanded', 'subRows', 'uuid', '__virtualIndex',
+            '__colPending', '__isGrandTotal__'
         ]);
         rowFields.forEach(f => metaKeys.add(f));
         colFields.forEach(f => metaKeys.add(f));
@@ -1782,7 +1843,9 @@ export default function DashTanstackPivot(props) {
         let tableMin = Number.POSITIVE_INFINITY;
         let tableMax = Number.NEGATIVE_INFINITY;
 
-        tableData.forEach((row, idx) => {
+        // Use filteredData (not tableData) so grand total synthetic row is never included
+        const sourceData = filteredData.length > 0 ? filteredData : nodes;
+        sourceData.forEach((row, idx) => {
             if (!row || typeof row !== 'object') return;
             // Skip all total rows
             if (row._isTotal || row._path === '__grand_total__' || row._id === 'Grand Total') return;
@@ -1820,7 +1883,7 @@ export default function DashTanstackPivot(props) {
                 ? { min: tableMin, max: tableMax }
                 : null,
         };
-    }, [tableData, rowFields, colFields, serverSide]);
+    }, [filteredData, nodes, rowFields, colFields, serverSide]);
 
     // Use server-provided stats in server mode, client-computed stats otherwise
     const colorScaleStats = serverSide && serverColorScaleStats ? serverColorScaleStats : clientColorScaleStats;
@@ -2870,6 +2933,7 @@ export default function DashTanstackPivot(props) {
                 decimalPlaces={decimalPlaces} setDecimalPlaces={setDecimalPlaces}
                 rowFormatRules={rowFormatRules} setRowFormatRules={setRowFormatRules}
                 hoveredRowPath={hoveredRowPath}
+                selectedRowPaths={selectedRowPaths}
             />
         <PivotErrorBoundary key={dataVersion}>
             <div style={{display:'flex', flex:1, overflow:'hidden', fontFamily: fontFamily, fontSize: fontSize}}>
@@ -2947,6 +3011,7 @@ export default function DashTanstackPivot(props) {
                     selectedCells={selectedCells}
                     rowCount={statusRowCount}
                     isRequestPending={isRequestPending}
+                    rowFormatRules={rowFormatRules}
                 />
             </div>
             {contextMenu && <ContextMenu {...contextMenu} onClose={() => setContextMenu(null)} />}
