@@ -1,0 +1,50 @@
+{
+  "name": "dash_tanstack_pivot",
+  "version": "0.0.2",
+  "description": "A Dash component built with TanStack Table v8",
+  "main": "build/index.js",
+  "scripts": {
+    "start": "webpack-dev-server --config ./webpack.serve.config.js --open",
+    "build:js": "webpack --mode production",
+    "build:py": "python -m dash.development.component_generator ./src/lib/components dash_tanstack_pivot -p package-info.json",
+    "build": "npm run build:js && npm run build:py"
+  },
+  "author": "Gemini",
+  "license": "MIT",
+  "dependencies": {
+    "@tanstack/react-table": "^8.10.7",
+    "@tanstack/react-virtual": "^3.0.0",
+    "file-saver": "^2.0.5",
+    "ramda": "^0.26.1",
+    "xlsx": "^0.18.5"
+  },
+  "devDependencies": {
+    "@babel/core": "^7.5.4",
+    "@babel/plugin-proposal-nullish-coalescing-operator": "^7.18.6",
+    "@babel/plugin-proposal-object-rest-spread": "^7.5.4",
+    "@babel/plugin-proposal-optional-chaining": "^7.21.0",
+    "@babel/preset-env": "^7.5.4",
+    "@babel/preset-react": "^7.0.0",
+    "@plotly/webpack-dash-dynamic-import": "^1.2.0",
+    "babel-loader": "^8.0.6",
+    "css-loader": "^7.1.2",
+    "npm": "^11.7.0",
+    "prop-types": "^15.7.2",
+    "react": "^16.8.6",
+    "react-docgen": "^4.1.1",
+    "react-dom": "^16.8.6",
+    "style-loader": "^0.23.1",
+    "styled-components": "^5.3.11",
+    "webpack": "^5.104.1",
+    "webpack-cli": "^6.0.1",
+    "webpack-dev-server": "^5.0.0"
+  },
+  "peerDependencies": {
+    "react": ">=16.8.6",
+    "react-dom": ">=16.8.6"
+  },
+  "engines": {
+    "node": ">=8.11.0",
+    "npm": ">=6.1.0"
+  }
+}
