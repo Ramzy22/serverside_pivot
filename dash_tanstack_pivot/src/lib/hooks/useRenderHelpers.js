@@ -61,6 +61,8 @@ export function useRenderHelpers({
     filters,
     selectedCols,
     getHeaderStickyStyle,
+    dataBarsColumns,
+    colorScaleStats,
 }) {
     // --- Helper to Render a single Cell with useCallback ---
     const renderCell = useCallback((cell, virtualRowIndex, isVirtualRow = false, rowBg = null) => {
@@ -157,6 +159,41 @@ export function useRenderHelpers({
             }
         }
 
+        // Data bars
+        const rawNumValue = cell.getValue();
+        const isDataBar = !isHierarchy
+            && dataBarsColumns && dataBarsColumns.has(col.id)
+            && typeof rawNumValue === 'number'
+            && !Number.isNaN(rawNumValue)
+            && !(row.original && row.original._isTotal);
+        let dataBarEl = null;
+        if (isDataBar) {
+            const stats = colorScaleStats && colorScaleStats.byCol && colorScaleStats.byCol[col.id];
+            if (stats) {
+                const range = stats.max - stats.min;
+                const pct = range > 0 ? Math.max(0, Math.min(1, (rawNumValue - stats.min) / range)) : 0;
+                const barColor = isDarkTheme(theme)
+                    ? 'rgba(100,180,255,0.22)'
+                    : 'rgba(37,99,235,0.13)';
+                const barBorder = isDarkTheme(theme)
+                    ? 'rgba(100,180,255,0.6)'
+                    : 'rgba(37,99,235,0.45)';
+                dataBarEl = (
+                    <div style={{
+                        position: 'absolute',
+                        left: 0,
+                        top: 0,
+                        bottom: 0,
+                        width: `${pct * 100}%`,
+                        background: barColor,
+                        borderRight: pct > 0.01 ? `2px solid ${barBorder}` : 'none',
+                        pointerEvents: 'none',
+                        zIndex: 0,
+                    }} />
+                );
+            }
+        }
+
         return (
             <div
                 key={cell.id}
@@ -179,7 +216,8 @@ export function useRenderHelpers({
                 }}
                 onContextMenu={e => handleContextMenu(e, cell.getValue(), cell.column.id, row)}
             >
-                {cellContent}
+                {dataBarEl}
+                <span style={dataBarEl ? { position: 'relative', zIndex: 1 } : undefined}>{cellContent}</span>
                 {isLastSelected && Object.keys(selectedCells).length === 1 && isSelected && (
                     <div
                         onMouseDown={handleFillMouseDown}
@@ -214,6 +252,8 @@ export function useRenderHelpers({
         lastSelected,
         styles,
         getConditionalStyle,
+        dataBarsColumns,
+        colorScaleStats,
     ]);
 
     // NEW: Render Header Cell for Split Sections

@@ -62,6 +62,23 @@ export const themes = {
         background: '#fff',
         sidebarBg: '#fafafa',
         pinnedBoundaryShadow: 'rgba(15,23,42,0.22)'
+    },
+    flash: {
+        name: 'flash',
+        primary: '#18181b',
+        border: '#e4e4e7',
+        headerBg: '#fafafa',
+        sortedHeaderBg: '#f4f4f5',
+        sortedHeaderBorder: '#18181b',
+        sortedHeaderText: '#09090b',
+        text: '#09090b',
+        textSec: '#71717a',
+        hover: '#f4f4f5',
+        select: '#e4e4e7',
+        background: '#ffffff',
+        sidebarBg: '#fafafa',
+        pinnedBoundaryShadow: 'rgba(9,9,11,0.08)',
+        radius: '6px',
     }
 };
 
@@ -103,7 +120,9 @@ export const mergeStateStyles = (...layers) =>
 
 export const isDarkTheme = (theme) => theme && theme.name === 'dark';
 
-export const getStyles = (theme) => ({
+export const getStyles = (theme) => {
+    const r = theme.radius || '4px';
+    return ({
     root: {
         display: 'flex',
         flexDirection: 'column',
@@ -111,7 +130,7 @@ export const getStyles = (theme) => ({
         height: '100%',
         background: theme.background,
         border: `1px solid ${theme.border}`,
-        borderRadius: '4px',
+        borderRadius: r,
         overflow: 'hidden',
         fontSize: '13px',
         color: theme.text
@@ -130,7 +149,7 @@ export const getStyles = (theme) => ({
         display: 'flex',
         alignItems: 'center',
         background: theme.text === '#fff' ? '#424242' : '#f5f5f5',
-        borderRadius: '4px',
+        borderRadius: r,
         padding: '4px 8px',
         width: '200px'
     },
@@ -155,7 +174,7 @@ export const getStyles = (theme) => ({
     chip: {
         background: theme.text === '#fff' ? '#424242' : '#fff',
         border: `1px solid ${theme.border}`,
-        borderRadius: '4px',
+        borderRadius: r,
         padding: '6px 8px',
         marginBottom: '6px',
         display: 'flex',
@@ -169,7 +188,7 @@ export const getStyles = (theme) => ({
     dropZone: {
         minHeight: '40px',
         border: `1px dashed ${theme.border}`,
-        borderRadius: '4px',
+        borderRadius: r,
         padding: '8px',
         background: 'rgba(0,0,0,0.02)'
     },
@@ -316,4 +335,4 @@ export const getStyles = (theme) => ({
         position: 'relative',
         userSelect: 'none'
     }
-});
+}); };

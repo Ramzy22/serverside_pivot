@@ -11,6 +11,7 @@ const COLOR_PALETTE_OPTIONS = [
 ];
 
 const FONT_FAMILY_OPTIONS = [
+    { value: "'Inter', system-ui, sans-serif", label: 'Inter' },
     { value: 'system-ui', label: 'System UI' },
     { value: 'Arial, sans-serif', label: 'Arial' },
     { value: 'Helvetica, sans-serif', label: 'Helvetica' },
@@ -203,6 +204,8 @@ export function PivotAppBar({
     rowFormatRules, setRowFormatRules,
     hoveredRowPath,
     selectedRowPaths,
+    dataBarsColumns, setDataBarsColumns,
+    selectedCols,
 }) {
     const [rowFmtOpen, setRowFmtOpen] = useState(false);
     const rowFmtBtnRef = useRef(null);
@@ -346,6 +349,35 @@ export function PivotAppBar({
                         ))}
                     </select>
                 )}
+
+                {/* Data Bars */}
+                {(() => {
+                    const hasBars = selectedCols && [...selectedCols].some(id => dataBarsColumns && dataBarsColumns.has(id));
+                    const hasColSel = selectedCols && selectedCols.size > 0;
+                    const anyBars = dataBarsColumns && dataBarsColumns.size > 0;
+                    const isActive = hasBars || (!hasColSel && anyBars);
+                    return (
+                        <button
+                            title={hasColSel ? 'Toggle data bars for selected columns' : 'Data Bars (select columns first)'}
+                            style={isActive ? btnActive : btnSubtle}
+                            onClick={() => {
+                                if (!setDataBarsColumns) return;
+                                if (hasColSel) {
+                                    setDataBarsColumns(prev => {
+                                        const next = new Set(prev);
+                                        const allOn = [...selectedCols].every(id => next.has(id));
+                                        selectedCols.forEach(id => allOn ? next.delete(id) : next.add(id));
+                                        return next;
+                                    });
+                                } else {
+                                    setDataBarsColumns(new Set());
+                                }
+                            }}
+                        >
+                            📊 Data Bars{anyBars ? ` (${dataBarsColumns.size})` : ''}
+                        </button>
+                    );
+                })()}
 
                 {sep}
 

@@ -68,6 +68,7 @@ const createClientInstanceId = (componentId = 'pivot-grid') => {
 };
 
 const loadingAnimationStyles = `
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap');
 @keyframes pivot-row-loader-enter {
     from { opacity: 0; transform: translateY(-6px); }
     to { opacity: 1; transform: translateY(0); }
@@ -152,7 +153,7 @@ export default function DashTanstackPivot(props) {
         }, [data, props.columns, serverSide, availableFieldList]);
 
         // Theme State
-        const [themeName, setThemeName] = useState('light');
+        const [themeName, setThemeName] = useState('flash');
         const theme = useMemo(() => themes[themeName], [themeName]);
         const styles = useMemo(() => getStyles(theme), [theme]);
         const loadingCssVars = useMemo(() => {
@@ -272,9 +273,10 @@ export default function DashTanstackPivot(props) {
 
     const [colorScaleMode, setColorScaleMode] = useState('off');
     const [colorPalette, setColorPalette] = useState('redGreen');
+    const [dataBarsColumns, setDataBarsColumns] = useState(new Set());
 
     // Font / display controls
-    const [fontFamily, setFontFamily] = useState('system-ui');
+    const [fontFamily, setFontFamily] = useState("'Inter', system-ui, sans-serif");
     const [fontSize, setFontSize] = useState('13px');
     const [decimalPlaces, setDecimalPlaces] = useState(2);
     const [columnDecimalOverrides, setColumnDecimalOverrides] = useState({});
@@ -3012,6 +3014,8 @@ export default function DashTanstackPivot(props) {
         filters,
         selectedCols,
         getHeaderStickyStyle,
+        dataBarsColumns,
+        colorScaleStats,
     });
     
     const srOnly = {
@@ -3063,6 +3067,8 @@ export default function DashTanstackPivot(props) {
                 rowFormatRules={rowFormatRules} setRowFormatRules={setRowFormatRules}
                 hoveredRowPath={hoveredRowPath}
                 selectedRowPaths={selectedRowPaths}
+                dataBarsColumns={dataBarsColumns} setDataBarsColumns={setDataBarsColumns}
+                selectedCols={selectedCols}
             />
         <PivotErrorBoundary key={dataVersion}>
             <div style={{display:'flex', flex:1, overflow:'hidden', fontFamily: fontFamily, fontSize: fontSize}}>
