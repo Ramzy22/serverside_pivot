@@ -1,0 +1,61 @@
+import { useVirtualizer } from '@tanstack/react-virtual';
+import { useMemo } from 'react';
+
+export const useColumnVirtualizer = ({
+    parentRef,
+    table,
+    estimateColumnWidth
+}) => {
+    const leftCols = table.getLeftLeafColumns();
+    const rightCols = table.getRightLeafColumns();
+    const centerCols = table.getCenterLeafColumns();
+
+    const columnVirtualizer = useVirtualizer({
+        horizontal: true,
+        count: centerCols.length,
+        getScrollElement: () => parentRef.current,
+        estimateSize: (index) => centerCols[index].getSize(),
+        // Strict visible-only column virtualization: no horizontal prefetch.
+        overscan: 0
+    });
+
+    const virtualCenterCols = columnVirtualizer.getVirtualItems();
+    const centerTotalWidth = columnVirtualizer.getTotalSize();
+
+    // Calculate spacers for virtualized center
+    const [beforeWidth, afterWidth] = useMemo(() => {
+        if (virtualCenterCols.length > 0) {
+            return [
+                Math.max(0, virtualCenterCols[0].start),
+                Math.max(0, centerTotalWidth - virtualCenterCols[virtualCenterCols.length - 1].end)
+            ];
+        }
+        return [0, 0];
+    }, [virtualCenterCols, centerTotalWidth]);
+
+    const totalLayoutWidth = useMemo(() => {
+        const leftWidth = leftCols.reduce((acc, col) => acc + col.getSize(), 0);
+        const rightWidth = rightCols.reduce((acc, col) => acc + col.getSize(), 0);
+        return leftWidth + centerTotalWidth + rightWidth;
+    }, [leftCols, rightCols, centerTotalWidth]);
+
+    const visibleColRange = useMemo(() => {
+        if (virtualCenterCols.length === 0) return { start: 0, end: 0 };
+        return {
+            start: virtualCenterCols[0].index,
+            end: virtualCenterCols[virtualCenterCols.length - 1].index
+        };
+    }, [virtualCenterCols]);
+
+    return {
+        columnVirtualizer,
+        virtualCenterCols,
+        beforeWidth,
+        afterWidth,
+        totalLayoutWidth,
+        leftCols,
+        rightCols,
+        centerCols,
+        visibleColRange
+    };
+};
