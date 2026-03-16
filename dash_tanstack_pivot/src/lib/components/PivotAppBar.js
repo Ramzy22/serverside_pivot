@@ -37,29 +37,23 @@ const FONT_SIZE_OPTIONS = ['8px', '9px', '10px', '11px', '12px', '13px', '14px',
 const DECIMAL_MIN = 0;
 const DECIMAL_MAX = 6;
 
-function RowFormatPopover({ theme, styles, rowFormatRules, setRowFormatRules, hoveredRowPath, selectedRowPaths, onClose, anchorRef }) {
-    // Pre-populate path from selectedRowPaths if available, else hoveredRowPath
-    const initialPath = selectedRowPaths && selectedRowPaths.length > 0
-        ? selectedRowPaths.join('\n')
-        : (hoveredRowPath || '');
-    const [path, setPath] = useState(initialPath);
-    // Use first path for reading current rule
-    const firstPath = path.split('\n').map(s => s.trim()).filter(Boolean)[0] || '';
-    const current = (firstPath && rowFormatRules[firstPath]) || {};
+function CellFormatPopover({ theme, styles, cellFormatRules, setCellFormatRules, selectedCellKeys, onClose, anchorRef }) {
+    const firstKey = selectedCellKeys && selectedCellKeys.length > 0 ? selectedCellKeys[0] : null;
+    const current = (firstKey && cellFormatRules && cellFormatRules[firstKey]) || {};
     const [bg, setBg] = useState(current.bg || '#ffffff');
     const [color, setColor] = useState(current.color || '#000000');
     const [bold, setBold] = useState(current.bold || false);
     const [italic, setItalic] = useState(current.italic || false);
     const popoverRef = useRef(null);
 
-    // Update local state when firstPath changes
+    // Sync local state when selection changes
     useEffect(() => {
-        const rule = (firstPath && rowFormatRules[firstPath]) || {};
+        const rule = (firstKey && cellFormatRules && cellFormatRules[firstKey]) || {};
         setBg(rule.bg || '#ffffff');
         setColor(rule.color || '#000000');
         setBold(rule.bold || false);
         setItalic(rule.italic || false);
-    }, [firstPath, rowFormatRules]);
+    }, [firstKey, cellFormatRules]);
 
     // Close on outside click
     useEffect(() => {
@@ -73,40 +67,25 @@ function RowFormatPopover({ theme, styles, rowFormatRules, setRowFormatRules, ho
         return () => document.removeEventListener('mousedown', handleOutside);
     }, [onClose, anchorRef]);
 
-    const getPaths = () => path.split('\n').map(s => s.trim()).filter(Boolean);
+    const cellCount = selectedCellKeys ? selectedCellKeys.length : 0;
 
     const apply = () => {
-        const paths = getPaths();
-        if (paths.length === 0) return;
-        setRowFormatRules(prev => {
+        if (cellCount === 0) return;
+        setCellFormatRules(prev => {
             const next = { ...prev };
-            paths.forEach(p => { next[p] = { bg, color, bold, italic }; });
+            selectedCellKeys.forEach(k => { next[k] = { bg, color, bold, italic }; });
             return next;
         });
     };
 
     const clear = () => {
-        const paths = getPaths();
-        if (paths.length === 0) return;
-        setRowFormatRules(prev => {
+        if (cellCount === 0) return;
+        setCellFormatRules(prev => {
             const next = { ...prev };
-            paths.forEach(p => { delete next[p]; });
+            selectedCellKeys.forEach(k => { delete next[k]; });
             return next;
         });
     };
-
-    const inputStyle = {
-        border: `1px solid ${theme.border}`,
-        borderRadius: '4px',
-        padding: '3px 6px',
-        background: theme.bg || theme.surface || '#fff',
-        color: theme.text,
-        fontSize: '12px',
-        width: '100%',
-        boxSizing: 'border-box',
-    };
-
-    const pathCount = getPaths().length;
 
     return (
         <div ref={popoverRef} style={{
@@ -114,72 +93,55 @@ function RowFormatPopover({ theme, styles, rowFormatRules, setRowFormatRules, ho
             top: '100%',
             right: 0,
             zIndex: 9999,
-            background: theme.bg || theme.surface || '#fff',
+            background: theme.background || '#fff',
             border: `1px solid ${theme.border}`,
             borderRadius: '6px',
             boxShadow: '0 4px 16px rgba(0,0,0,0.18)',
             padding: '12px',
-            minWidth: '240px',
+            minWidth: '220px',
             marginTop: '4px',
         }}>
-            <div style={{fontWeight: 600, fontSize: '13px', color: theme.text, marginBottom: '10px'}}>
-                Format Cell{pathCount > 1 ? ` (${pathCount} rows)` : ''}
+            <div style={{fontWeight: 600, fontSize: '13px', color: theme.text, marginBottom: '8px'}}>
+                Format Cell{cellCount > 1 ? ` (${cellCount} cells)` : ''}
             </div>
-            <div style={{marginBottom: '8px'}}>
-                <label style={{fontSize: '11px', color: theme.textSec, display: 'block', marginBottom: '3px'}}>
-                    Row Path(s) — one per line
-                </label>
-                <textarea
-                    style={{...inputStyle, minHeight: '52px', resize: 'vertical', fontFamily: 'monospace'}}
-                    value={path}
-                    onChange={e => setPath(e.target.value)}
-                    placeholder={'e.g. North|Electronics\nSouth|Furniture'}
-                />
-                {hoveredRowPath && !path.includes(hoveredRowPath) && (
-                    <button
-                        onClick={() => setPath(p => p ? p + '\n' + hoveredRowPath : hoveredRowPath)}
-                        style={{...styles.btn, background: 'transparent', fontSize: '11px', color: theme.primary, padding: '2px 0', marginTop: '3px'}}
-                    >
-                        + Add last clicked: {hoveredRowPath}
-                    </button>
-                )}
-            </div>
-            <div style={{display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '8px', marginBottom: '8px'}}>
-                <div>
-                    <label style={{fontSize: '11px', color: theme.textSec, display: 'block', marginBottom: '3px'}}>Background</label>
-                    <div style={{display: 'flex', gap: '4px', alignItems: 'center'}}>
-                        <input type="color" value={bg} onChange={e => setBg(e.target.value)}
-                            style={{width: '28px', height: '28px', border: 'none', padding: 0, cursor: 'pointer', borderRadius: '3px'}} />
-                        <span style={{fontSize: '11px', color: theme.textSec}}>{bg}</span>
+            {cellCount === 0 ? (
+                <div style={{fontSize: '12px', color: theme.textSec, marginBottom: '8px'}}>Select cells to format</div>
+            ) : (
+                <>
+                    <div style={{display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '8px', marginBottom: '8px'}}>
+                        <div>
+                            <label style={{fontSize: '11px', color: theme.textSec, display: 'block', marginBottom: '3px'}}>Background</label>
+                            <div style={{display: 'flex', gap: '4px', alignItems: 'center'}}>
+                                <input type="color" value={bg} onChange={e => setBg(e.target.value)}
+                                    style={{width: '28px', height: '28px', border: 'none', padding: 0, cursor: 'pointer', borderRadius: '3px'}} />
+                                <span style={{fontSize: '11px', color: theme.textSec}}>{bg}</span>
+                            </div>
+                        </div>
+                        <div>
+                            <label style={{fontSize: '11px', color: theme.textSec, display: 'block', marginBottom: '3px'}}>Text Color</label>
+                            <div style={{display: 'flex', gap: '4px', alignItems: 'center'}}>
+                                <input type="color" value={color} onChange={e => setColor(e.target.value)}
+                                    style={{width: '28px', height: '28px', border: 'none', padding: 0, cursor: 'pointer', borderRadius: '3px'}} />
+                                <span style={{fontSize: '11px', color: theme.textSec}}>{color}</span>
+                            </div>
+                        </div>
                     </div>
-                </div>
-                <div>
-                    <label style={{fontSize: '11px', color: theme.textSec, display: 'block', marginBottom: '3px'}}>Text Color</label>
-                    <div style={{display: 'flex', gap: '4px', alignItems: 'center'}}>
-                        <input type="color" value={color} onChange={e => setColor(e.target.value)}
-                            style={{width: '28px', height: '28px', border: 'none', padding: 0, cursor: 'pointer', borderRadius: '3px'}} />
-                        <span style={{fontSize: '11px', color: theme.textSec}}>{color}</span>
+                    <div style={{display: 'flex', gap: '8px', marginBottom: '10px'}}>
+                        <button onClick={() => setBold(b => !b)}
+                            style={{...styles.btn, fontWeight: 'bold', background: bold ? theme.select : theme.hover, minWidth: '36px'}}
+                            title="Bold">B</button>
+                        <button onClick={() => setItalic(i => !i)}
+                            style={{...styles.btn, fontStyle: 'italic', background: italic ? theme.select : theme.hover, minWidth: '36px'}}
+                            title="Italic"><em>I</em></button>
                     </div>
-                </div>
-            </div>
-            <div style={{display: 'flex', gap: '8px', marginBottom: '10px'}}>
-                <button
-                    onClick={() => setBold(b => !b)}
-                    style={{...styles.btn, fontWeight: 'bold', background: bold ? theme.select : theme.hover, minWidth: '36px'}}
-                    title="Bold"
-                >B</button>
-                <button
-                    onClick={() => setItalic(i => !i)}
-                    style={{...styles.btn, fontStyle: 'italic', background: italic ? theme.select : theme.hover, minWidth: '36px'}}
-                    title="Italic"
-                ><em>I</em></button>
-            </div>
-            <div style={{display: 'flex', gap: '6px'}}>
-                <button onClick={apply} style={{...styles.btn, background: theme.primary, color: '#fff', flex: 1}}>
-                    Apply{pathCount > 1 ? ` (${pathCount})` : ''}
-                </button>
-                <button onClick={clear} style={{...styles.btn, background: theme.hover, flex: 1}}>Clear</button>
-            </div>
+                    <div style={{display: 'flex', gap: '6px'}}>
+                        <button onClick={apply} style={{...styles.btn, background: theme.primary, color: '#fff', flex: 1}}>
+                            Apply{cellCount > 1 ? ` (${cellCount})` : ''}
+                        </button>
+                        <button onClick={clear} style={{...styles.btn, background: theme.hover, flex: 1}}>Clear</button>
+                    </div>
+                </>
+            )}
         </div>
     );
 }
@@ -203,11 +165,10 @@ export function PivotAppBar({
     fontFamily, setFontFamily,
     fontSize, setFontSize,
     displayDecimal, onDecimalChange, hasSelection,
-    rowFormatRules, setRowFormatRules,
-    hoveredRowPath,
-    selectedRowPaths,
+    cellFormatRules, setCellFormatRules,
+    selectedCellKeys,
     dataBarsColumns, setDataBarsColumns,
-    selectedCols,
+    selectedCellColIds,
 }) {
     const [rowFmtOpen, setRowFmtOpen] = useState(false);
     const rowFmtBtnRef = useRef(null);
@@ -354,21 +315,21 @@ export function PivotAppBar({
 
                 {/* Data Bars */}
                 {(() => {
-                    const hasBars = selectedCols && [...selectedCols].some(id => dataBarsColumns && dataBarsColumns.has(id));
-                    const hasColSel = selectedCols && selectedCols.size > 0;
+                    const hasCellSel = selectedCellColIds && selectedCellColIds.size > 0;
+                    const hasBars = hasCellSel && [...selectedCellColIds].some(id => dataBarsColumns && dataBarsColumns.has(id));
                     const anyBars = dataBarsColumns && dataBarsColumns.size > 0;
-                    const isActive = hasBars || (!hasColSel && anyBars);
+                    const isActive = hasBars || anyBars;
                     return (
                         <button
-                            title={hasColSel ? 'Toggle data bars for selected columns' : 'Data Bars (select columns first)'}
+                            title={hasCellSel ? 'Toggle data bars for selected columns' : 'Data Bars — select cells to target columns'}
                             style={isActive ? btnActive : btnSubtle}
                             onClick={() => {
                                 if (!setDataBarsColumns) return;
-                                if (hasColSel) {
+                                if (hasCellSel) {
                                     setDataBarsColumns(prev => {
                                         const next = new Set(prev);
-                                        const allOn = [...selectedCols].every(id => next.has(id));
-                                        selectedCols.forEach(id => allOn ? next.delete(id) : next.add(id));
+                                        const allOn = [...selectedCellColIds].every(id => next.has(id));
+                                        selectedCellColIds.forEach(id => allOn ? next.delete(id) : next.add(id));
                                         return next;
                                     });
                                 } else {
@@ -401,20 +362,19 @@ export function PivotAppBar({
                 <div style={{position:'relative'}}>
                     <button
                         ref={rowFmtBtnRef}
-                        style={rowFmtOpen || Object.keys(rowFormatRules || {}).length > 0 ? btnActive : btnSubtle}
+                        style={rowFmtOpen || Object.keys(cellFormatRules || {}).length > 0 ? btnActive : btnSubtle}
                         onClick={() => setRowFmtOpen(o => !o)}
-                        title="Format Cell"
+                        title="Format Cell — select cells first"
                     >
-                        Format Cell{Object.keys(rowFormatRules || {}).length > 0 ? ` (${Object.keys(rowFormatRules).length})` : ''}
+                        Format Cell{Object.keys(cellFormatRules || {}).length > 0 ? ` (${Object.keys(cellFormatRules).length})` : ''}
                     </button>
                     {rowFmtOpen && (
-                        <RowFormatPopover
+                        <CellFormatPopover
                             theme={theme}
                             styles={styles}
-                            rowFormatRules={rowFormatRules}
-                            setRowFormatRules={setRowFormatRules}
-                            hoveredRowPath={hoveredRowPath}
-                            selectedRowPaths={selectedRowPaths}
+                            cellFormatRules={cellFormatRules}
+                            setCellFormatRules={setCellFormatRules}
+                            selectedCellKeys={selectedCellKeys}
                             onClose={() => setRowFmtOpen(false)}
                             anchorRef={rowFmtBtnRef}
                         />

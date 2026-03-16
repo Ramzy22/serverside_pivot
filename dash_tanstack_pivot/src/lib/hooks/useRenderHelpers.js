@@ -63,9 +63,10 @@ export function useRenderHelpers({
     getHeaderStickyStyle,
     dataBarsColumns,
     colorScaleStats,
+    cellFormatRules,
 }) {
     // --- Helper to Render a single Cell with useCallback ---
-    const renderCell = useCallback((cell, virtualRowIndex, isVirtualRow = false, rowBg = null) => {
+    const renderCell = useCallback((cell, virtualRowIndex, isVirtualRow = false) => {
         if (!cell) return null;
 
         const row = cell.row;
@@ -84,6 +85,11 @@ export function useRenderHelpers({
              }
         }
 
+        // Per-cell format rule lookup
+        const rowPath = row.original && row.original._path ? row.original._path : row.id;
+        const cellKey = `${rowPath}:::${col.id}`;
+        const cellFmt = cellFormatRules && cellFormatRules[cellKey];
+
         const themeBackground = (row.original && row.original._isTotal)
             ? (isDarkTheme(theme) ? '#1a2e1a' : '#f0f7f0')
             : (isDarkTheme(theme) ? '#212121' : '#fff');
@@ -93,10 +99,9 @@ export function useRenderHelpers({
             row.original,
             row.id
         );
-        // Row format background takes priority over color-scale/conditional style;
-        // when no rowBg, conditional style overrides the theme default.
-        const stickyBaseStyle = rowBg
-            ? mergeStateStyles(condStyle, { background: rowBg })
+        // Cell format background takes priority over color-scale/conditional style
+        const stickyBaseStyle = cellFmt && cellFmt.bg
+            ? mergeStateStyles(condStyle, { background: cellFmt.bg })
             : mergeStateStyles({ background: themeBackground }, condStyle);
         const stickyStyle = getStickyStyle(cell.column, stickyBaseStyle.background);
         const selectedOverlayStyle = isSelected
@@ -208,8 +213,9 @@ export function useRenderHelpers({
                     display: 'flex',
                     alignItems: 'center',
                     justifyContent: isHierarchy ? 'flex-start' : 'flex-end',
-                    fontWeight: (row.original && row.original._isTotal) ? 700 : ((isHierarchy && row.getIsGrouped()) ? 500 : 400),
-                    color: (row.original && row.original._isTotal) ? theme.text : undefined,
+                    fontWeight: cellFmt && cellFmt.bold ? 'bold' : ((row.original && row.original._isTotal) ? 700 : ((isHierarchy && row.getIsGrouped()) ? 500 : 400)),
+                    fontStyle: cellFmt && cellFmt.italic ? 'italic' : undefined,
+                    color: cellFmt && cellFmt.color ? cellFmt.color : ((row.original && row.original._isTotal) ? theme.text : undefined),
                     ...cellStateStyle,
                     userSelect: 'none',
                     position: cellStateStyle.position === 'sticky' ? 'sticky' : 'relative',
@@ -254,6 +260,7 @@ export function useRenderHelpers({
         getConditionalStyle,
         dataBarsColumns,
         colorScaleStats,
+        cellFormatRules,
     ]);
 
     // NEW: Render Header Cell for Split Sections

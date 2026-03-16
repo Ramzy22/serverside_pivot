@@ -56,7 +56,7 @@ export function useColumnDefs({
     pendingRowTransitions,
     decimalPlaces,
     columnDecimalOverrides,
-    rowFormatRules,
+    cellFormatRules,
 }) {
     return useMemo(() => {
         // Helper: render a numeric cell value with decimal precision and negative-red coloring
@@ -66,11 +66,12 @@ export function useColumnDefs({
                 : decimalPlaces;
             const formatted = formatValue(value, fmt, cellDec);
             const isNegative = typeof value === 'number' && value < 0;
-            const rowFmt = rowFormatRules && rowPath ? rowFormatRules[rowPath] : null;
-            const color = rowFmt && rowFmt.color ? rowFmt.color : (isNegative ? 'red' : undefined);
-            const bgColor = rowFmt && rowFmt.bg ? rowFmt.bg : undefined;
-            const fontWeight = rowFmt && rowFmt.bold ? 'bold' : undefined;
-            const fontStyle = rowFmt && rowFmt.italic ? 'italic' : undefined;
+            const cellKey = rowPath && colId ? `${rowPath}:::${colId}` : null;
+            const cellFmt = cellFormatRules && cellKey ? cellFormatRules[cellKey] : null;
+            const color = cellFmt && cellFmt.color ? cellFmt.color : (isNegative ? 'red' : undefined);
+            const bgColor = cellFmt && cellFmt.bg ? cellFmt.bg : undefined;
+            const fontWeight = cellFmt && cellFmt.bold ? 'bold' : undefined;
+            const fontStyle = cellFmt && cellFmt.italic ? 'italic' : undefined;
             const extraStyle = {};
             if (color) extraStyle.color = color;
             if (bgColor) extraStyle.background = bgColor;
@@ -515,5 +516,5 @@ export function useColumnDefs({
     // cachedColSchema and filteredData changes on every viewport scroll, causing the entire column
     // tree to rebuild. filteredData is used only as a last-resort fallback (client-side, no schema).
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    }, [rowFields, colFields, valConfigs, minMax, colorScaleMode, colExpanded, serverSide, layoutMode, showRowNumbers, isRowSelecting, rowDragStart, props.columns, cachedColSchema, decimalPlaces, columnDecimalOverrides, rowFormatRules]);
+    }, [rowFields, colFields, valConfigs, minMax, colorScaleMode, colExpanded, serverSide, layoutMode, showRowNumbers, isRowSelecting, rowDragStart, props.columns, cachedColSchema, decimalPlaces, columnDecimalOverrides, cellFormatRules]);
 }

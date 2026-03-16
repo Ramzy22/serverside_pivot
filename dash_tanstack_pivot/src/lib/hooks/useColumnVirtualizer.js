@@ -6,9 +6,9 @@ export const useColumnVirtualizer = ({
     table,
     estimateColumnWidth
 }) => {
-    const leftCols = table.getLeftLeafColumns();
-    const rightCols = table.getRightLeafColumns();
-    const centerCols = table.getCenterLeafColumns();
+    const leftCols = table.getLeftLeafColumns().filter(c => c.getIsVisible());
+    const rightCols = table.getRightLeafColumns().filter(c => c.getIsVisible());
+    const centerCols = table.getCenterLeafColumns().filter(c => c.getIsVisible());
 
     const columnVirtualizer = useVirtualizer({
         horizontal: true,

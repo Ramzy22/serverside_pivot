@@ -280,31 +280,42 @@ export default function DashTanstackPivot(props) {
     const [fontSize, setFontSize] = useState('13px');
     const [decimalPlaces, setDecimalPlaces] = useState(2);
     const [columnDecimalOverrides, setColumnDecimalOverrides] = useState({});
-    const [rowFormatRules, setRowFormatRules] = useState({});
+    const [cellFormatRules, setCellFormatRules] = useState({});
     const [hoveredRowPath, setHoveredRowPath] = useState(null);
 
-    // Derive unique row paths from current selection for Format Row pre-population
-    const selectedRowPaths = useMemo(() => {
+    // Derive per-cell keys ("rowPath:::colId") for Format Cell popover
+    const selectedCellKeys = useMemo(() => {
         const keys = Object.keys(selectedCells || {});
         if (keys.length === 0) return [];
-        const paths = new Set();
         const visibleRows = tableRef.current ? tableRef.current.getRowModel().rows : [];
         const rowIdToPath = {};
         visibleRows.forEach(r => {
             if (r.original && r.original._path) rowIdToPath[r.id] = r.original._path;
         });
-        keys.forEach(key => {
-            const rowId = key.split(':')[0];
-            if (rowIdToPath[rowId]) paths.add(rowIdToPath[rowId]);
+        return keys.map(key => {
+            const colonIdx = key.indexOf(':');
+            const rowId = key.substring(0, colonIdx);
+            const colId = key.substring(colonIdx + 1);
+            const rowPath = rowIdToPath[rowId] || rowId;
+            return `${rowPath}:::${colId}`;
         });
-        return Array.from(paths);
     }, [selectedCells]);
 
-    // Decimal formatting: apply +/- only to selected cells' columns; falls back to global default
+    // Column IDs of currently selected cells (for Data Bars)
+    const selectedCellColIds = useMemo(() => {
+        const ids = new Set();
+        Object.keys(selectedCells || {}).forEach(key => {
+            const idx = key.indexOf(':');
+            if (idx >= 0) ids.add(key.substring(idx + 1));
+        });
+        return ids;
+    }, [selectedCells]);
+
+    // Decimal formatting: apply +/- only to selected cells' columns (column-level only)
     const handleDecimalChange = useCallback((delta) => {
         const keys = Object.keys(selectedCells || {});
         if (keys.length === 0) {
-            setDecimalPlaces(p => Math.max(0, Math.min(6, p + delta)));
+            // No selection: do nothing (decimals are column-level only)
             return;
         }
         const colIds = [...new Set(keys.map(k => {
@@ -408,7 +419,7 @@ export default function DashTanstackPivot(props) {
         if (restored.colExpanded && typeof restored.colExpanded === 'object') setColExpanded(restored.colExpanded);
         if (typeof restored.decimalPlaces === 'number') setDecimalPlaces(restored.decimalPlaces);
         if (restored.columnDecimalOverrides && typeof restored.columnDecimalOverrides === 'object') setColumnDecimalOverrides(restored.columnDecimalOverrides);
-        if (restored.rowFormatRules && typeof restored.rowFormatRules === 'object') setRowFormatRules(restored.rowFormatRules);
+        if (restored.cellFormatRules && typeof restored.cellFormatRules === 'object') setCellFormatRules(restored.cellFormatRules);
 
         if (viewState.viewport && typeof viewState.viewport === 'object') {
             latestViewportRef.current = {
@@ -1068,7 +1079,7 @@ export default function DashTanstackPivot(props) {
                 colExpanded,
                 decimalPlaces,
                 columnDecimalOverrides,
-                rowFormatRules,
+                cellFormatRules,
                 scroll: parentRef.current
                     ? { top: parentRef.current.scrollTop, left: parentRef.current.scrollLeft }
                     : null,
@@ -1101,7 +1112,7 @@ export default function DashTanstackPivot(props) {
         colExpanded,
         decimalPlaces,
         columnDecimalOverrides,
-        rowFormatRules,
+        cellFormatRules,
     ]);
 
     const handleSaveView = useCallback(() => {
@@ -1868,7 +1879,7 @@ export default function DashTanstackPivot(props) {
         pendingRowTransitions,
         decimalPlaces,
         columnDecimalOverrides,
-        rowFormatRules,
+        cellFormatRules,
     });
 
     // Auto-size new columns to fit their header text on spawn
@@ -3016,8 +3027,9 @@ export default function DashTanstackPivot(props) {
         getHeaderStickyStyle,
         dataBarsColumns,
         colorScaleStats,
+        cellFormatRules,
     });
-    
+
     const srOnly = {
         position: 'absolute',
         width: '1px',
@@ -3064,11 +3076,10 @@ export default function DashTanstackPivot(props) {
                 fontSize={fontSize} setFontSize={setFontSize}
                 displayDecimal={displayDecimal} onDecimalChange={handleDecimalChange}
                 hasSelection={Object.keys(selectedCells).length > 0}
-                rowFormatRules={rowFormatRules} setRowFormatRules={setRowFormatRules}
-                hoveredRowPath={hoveredRowPath}
-                selectedRowPaths={selectedRowPaths}
+                cellFormatRules={cellFormatRules} setCellFormatRules={setCellFormatRules}
+                selectedCellKeys={selectedCellKeys}
                 dataBarsColumns={dataBarsColumns} setDataBarsColumns={setDataBarsColumns}
-                selectedCols={selectedCols}
+                selectedCellColIds={selectedCellColIds}
             />
         <PivotErrorBoundary key={dataVersion}>
             <div style={{display:'flex', flex:1, overflow:'hidden', fontFamily: fontFamily, fontSize: fontSize}}>
@@ -3146,7 +3157,6 @@ export default function DashTanstackPivot(props) {
                     selectedCells={selectedCells}
                     rowCount={statusRowCount}
                     isRequestPending={isRequestPending}
-                    rowFormatRules={rowFormatRules}
                 />
             </div>
             {contextMenu && <ContextMenu {...contextMenu} onClose={() => setContextMenu(null)} />}

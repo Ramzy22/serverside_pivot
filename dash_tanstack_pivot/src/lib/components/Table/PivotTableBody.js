@@ -64,8 +64,6 @@ export function PivotTableBody({
     selectedCells,
     rowCount,
     isRequestPending,
-    // Row formatting
-    rowFormatRules,
 }) {
     return (
         <div style={styles.main}>
@@ -415,10 +413,6 @@ export function PivotTableBody({
                               ? (row.id || String(virtualRow.index))
                               : String(virtualRow.index);
 
-                          const _rowPath = row.original && row.original._path;
-                          const _rowFmt = rowFormatRules && _rowPath ? rowFormatRules[_rowPath] : undefined;
-                          const _rowFmtBg = _rowFmt && _rowFmt.bg;
-
                           return (
                               <React.Fragment key={stableRowKey}>
                                   <div
@@ -429,18 +423,18 @@ export function PivotTableBody({
                                       height: virtualRow.size,
                                       top: `${virtualRow.start + topOffset}px`,
                                       width: `${totalLayoutWidth}px`,
-                                      background: _rowFmtBg || ((row.original && row.original._isTotal) ? (isDarkTheme(theme) ? '#1a2e1a' : '#f0f7f0') : theme.background),
+                                      background: (row.original && row.original._isTotal) ? (isDarkTheme(theme) ? '#1a2e1a' : '#f0f7f0') : theme.background,
                                       borderBottom: `1px solid ${theme.border}`,
                                       transition: rowVirtualizer.isScrolling ? 'none' : 'background-color 0.2s'
                                   }}>
-                                      {row.getLeftVisibleCells().map((cell) => renderCell(cell, virtualRow.index, true, _rowFmtBg))}
+                                      {row.getLeftVisibleCells().map((cell) => renderCell(cell, virtualRow.index, true))}
                                       <div style={{ width: beforeWidth, flexShrink: 0 }} />
                                       {virtualCenterCols.map(virtualCol => {
                                           const cell = row.getCenterVisibleCells()[virtualCol.index];
-                                          return renderCell(cell, virtualRow.index, true, _rowFmtBg);
+                                          return renderCell(cell, virtualRow.index, true);
                                       })}
                                       <div style={{ width: afterWidth, flexShrink: 0 }} />
-                                      {row.getRightVisibleCells().map((cell) => renderCell(cell, virtualRow.index, true, _rowFmtBg))}
+                                      {row.getRightVisibleCells().map((cell) => renderCell(cell, virtualRow.index, true))}
                                   </div>
                                   {showRowTransitionLoader && (
                                       <div
