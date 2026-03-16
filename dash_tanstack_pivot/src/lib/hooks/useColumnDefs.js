@@ -54,8 +54,27 @@ export function useColumnDefs({
     isColExpanded,
     toggleCol,
     pendingRowTransitions,
+    decimalPlaces,
+    rowFormatRules,
 }) {
     return useMemo(() => {
+        // Helper: render a numeric cell value with decimal precision and negative-red coloring
+        const renderNumericCell = (value, fmt, rowPath) => {
+            const formatted = formatValue(value, fmt, decimalPlaces);
+            const isNegative = typeof value === 'number' && value < 0;
+            const rowFmt = rowFormatRules && rowPath ? rowFormatRules[rowPath] : null;
+            const color = rowFmt && rowFmt.color ? rowFmt.color : (isNegative ? 'red' : undefined);
+            const bgColor = rowFmt && rowFmt.bg ? rowFmt.bg : undefined;
+            const fontWeight = rowFmt && rowFmt.bold ? 'bold' : undefined;
+            const fontStyle = rowFmt && rowFmt.italic ? 'italic' : undefined;
+            const extraStyle = {};
+            if (color) extraStyle.color = color;
+            if (bgColor) extraStyle.background = bgColor;
+            if (fontWeight) extraStyle.fontWeight = fontWeight;
+            if (fontStyle) extraStyle.fontStyle = fontStyle;
+            return { formatted, extraStyle };
+        };
+
         // Enhanced Sorting Logic (Tree-aware + Natural + Customization)
         const customSortingFn = (rowA, rowB, columnId) => {
             try {
@@ -274,11 +293,15 @@ export function useColumnDefs({
                 size: defaultColumnWidths.measure,
                 enablePinning: true,
                 sortingFn,
-                cell: info => (
-                    <div style={{width:'100%', height:'100%', display:'flex', alignItems:'center', justifyContent:'flex-end', paddingRight:'8px'}} onContextMenu={e => handleContextMenu(e, info.getValue(), info.column.id, info.row)}>
-                        {formatValue(info.getValue(), c.format)}
-                    </div>
-                )
+                cell: info => {
+                    const rowPath = info.row.original && info.row.original._path;
+                    const { formatted, extraStyle } = renderNumericCell(info.getValue(), c.format, rowPath);
+                    return (
+                        <div style={{width:'100%', height:'100%', display:'flex', alignItems:'center', justifyContent:'flex-end', paddingRight:'8px', ...extraStyle}} onContextMenu={e => handleContextMenu(e, info.getValue(), info.column.id, info.row)}>
+                            {formatted}
+                        </div>
+                    );
+                }
             }));
         } else if (serverSide) {
             // Authoritative center-column order must come from backend __col_schema.
@@ -333,9 +356,11 @@ export function useColumnDefs({
                             if (valConfigs) {
                                 for (const c of valConfigs) { if (k.includes(c.field)) { fmt = c.format; break; } }
                             }
+                            const rowPath = info.row.original && info.row.original._path;
+                            const { formatted, extraStyle } = renderNumericCell(v, fmt, rowPath);
                             return (
-                                <div style={{width:'100%', height:'100%', display:'flex', alignItems:'center', justifyContent:'flex-end', paddingRight:'8px'}} onContextMenu={e => handleContextMenu(e, v, info.column.id, info.row)}>
-                                    {formatValue(v, fmt)}
+                                <div style={{width:'100%', height:'100%', display:'flex', alignItems:'center', justifyContent:'flex-end', paddingRight:'8px', ...extraStyle}} onContextMenu={e => handleContextMenu(e, v, info.column.id, info.row)}>
+                                    {formatted}
                                 </div>
                             );
                         }
@@ -453,9 +478,11 @@ export function useColumnDefs({
                          }
                                               c.cell = info => {
                                                  const config = valConfigs.find(v => c.id.includes(v.field));
+                                                 const rowPath = info.row.original && info.row.original._path;
+                                                 const { formatted, extraStyle } = renderNumericCell(info.getValue(), config ? config.format : null, rowPath);
                                                  return (
-                                                     <div style={{width:'100%', height:'100%', display:'flex', alignItems:'center', justifyContent:'flex-end', paddingRight:'8px', fontWeight:'bold'}} onContextMenu={e => handleContextMenu(e, info.getValue(), info.column.id, info.row)}>
-                                                         {formatValue(info.getValue(), config ? config.format : null)}
+                                                     <div style={{width:'100%', height:'100%', display:'flex', alignItems:'center', justifyContent:'flex-end', paddingRight:'8px', fontWeight:'bold', ...extraStyle}} onContextMenu={e => handleContextMenu(e, info.getValue(), info.column.id, info.row)}>
+                                                         {formatted}
                                                      </div>
                                                  );
                                               };                         dataCols.push(c);
@@ -484,5 +511,5 @@ export function useColumnDefs({
     // cachedColSchema and filteredData changes on every viewport scroll, causing the entire column
     // tree to rebuild. filteredData is used only as a last-resort fallback (client-side, no schema).
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    }, [rowFields, colFields, valConfigs, minMax, colorScaleMode, colExpanded, serverSide, layoutMode, showRowNumbers, isRowSelecting, rowDragStart, props.columns, cachedColSchema]);
+    }, [rowFields, colFields, valConfigs, minMax, colorScaleMode, colExpanded, serverSide, layoutMode, showRowNumbers, isRowSelecting, rowDragStart, props.columns, cachedColSchema, decimalPlaces, rowFormatRules]);
 }

@@ -272,6 +272,13 @@ export default function DashTanstackPivot(props) {
 
     const [colorScaleMode, setColorScaleMode] = useState('off');
     const [colorPalette, setColorPalette] = useState('redGreen');
+
+    // Font / display controls
+    const [fontFamily, setFontFamily] = useState('system-ui');
+    const [fontSize, setFontSize] = useState('13px');
+    const [decimalPlaces, setDecimalPlaces] = useState(2);
+    const [rowFormatRules, setRowFormatRules] = useState({});
+    const [hoveredRowPath, setHoveredRowPath] = useState(null);
     const [spacingMode, setSpacingMode] = useState(0);
     const spacingLabels = gridDimensionTokens.density.spacingLabels;
     const rowHeights = gridDimensionTokens.density.rowHeights;
@@ -581,6 +588,13 @@ export default function DashTanstackPivot(props) {
         setIsDragging(true);
         setDragStart({ rowIndex, colIndex });
         setLastSelected({ rowIndex, colIndex });
+        // Track hovered row path for Format Row feature
+        const clickedRow = tableRef.current && tableRef.current.getRowModel
+            ? tableRef.current.getRowModel().rows[rowIndex]
+            : null;
+        if (clickedRow && clickedRow.original && clickedRow.original._path) {
+            setHoveredRowPath(clickedRow.original._path);
+        }
 
         const key = `${rowId}:${colId}`;
         if (e.ctrlKey || e.metaKey) {
@@ -1371,6 +1385,10 @@ export default function DashTanstackPivot(props) {
     const handleContextMenu = (e, value, colId, row) => {
         e.preventDefault();
         const rowId = row ? row.id : null;
+        // Track the row path for "Format Row" feature
+        if (row && row.original && row.original._path) {
+            setHoveredRowPath(row.original._path);
+        }
         
         // Check if clicked cell is already in selection
         const key = `${rowId}:${colId}`;
@@ -1682,6 +1700,8 @@ export default function DashTanstackPivot(props) {
         isColExpanded,
         toggleCol,
         pendingRowTransitions,
+        decimalPlaces,
+        rowFormatRules,
     });
 
 
@@ -2845,9 +2865,14 @@ export default function DashTanstackPivot(props) {
                 filters={filters} setFilters={setFilters}
                 onSaveView={handleSaveView}
                 pivotTitle={props.pivotTitle}
+                fontFamily={fontFamily} setFontFamily={setFontFamily}
+                fontSize={fontSize} setFontSize={setFontSize}
+                decimalPlaces={decimalPlaces} setDecimalPlaces={setDecimalPlaces}
+                rowFormatRules={rowFormatRules} setRowFormatRules={setRowFormatRules}
+                hoveredRowPath={hoveredRowPath}
             />
         <PivotErrorBoundary key={dataVersion}>
-            <div style={{display:'flex', flex:1, overflow:'hidden'}}>
+            <div style={{display:'flex', flex:1, overflow:'hidden', fontFamily: fontFamily, fontSize: fontSize}}>
                 {sidebarOpen && (
                     <SidebarPanel
                         sidebarTab={sidebarTab} setSidebarTab={setSidebarTab}

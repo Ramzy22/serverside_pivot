@@ -2,23 +2,55 @@ import React from 'react';
 
 export const getKey = (prefix, field, agg) => prefix ? `${prefix}_${field}_${agg}` : `${field}_${agg}`;
 
-export const formatValue = (value, fmt) => {
+export const formatValue = (value, fmt, decimalPlaces) => {
     if (value === null || value === undefined) return '';
     if (typeof value !== 'number') return value;
-    if (!fmt) return value.toLocaleString();
-    
+    if (!fmt) {
+        if (decimalPlaces !== undefined && decimalPlaces !== null) {
+            return value.toLocaleString(undefined, {
+                minimumFractionDigits: decimalPlaces,
+                maximumFractionDigits: decimalPlaces,
+            });
+        }
+        return value.toLocaleString();
+    }
+
     try {
-        if (fmt === 'currency') return new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD' }).format(value);
-        if (fmt === 'accounting') return new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD', currencySign: 'accounting' }).format(value);
-        if (fmt === 'percent') return new Intl.NumberFormat('en-US', { style: 'percent', maximumFractionDigits: 2 }).format(value);
-        if (fmt === 'scientific') return value.toExponential(2);
+        if (fmt === 'currency') {
+            const opts = { style: 'currency', currency: 'USD' };
+            if (decimalPlaces !== undefined && decimalPlaces !== null) {
+                opts.minimumFractionDigits = decimalPlaces;
+                opts.maximumFractionDigits = decimalPlaces;
+            }
+            return new Intl.NumberFormat('en-US', opts).format(value);
+        }
+        if (fmt === 'accounting') {
+            const opts = { style: 'currency', currency: 'USD', currencySign: 'accounting' };
+            if (decimalPlaces !== undefined && decimalPlaces !== null) {
+                opts.minimumFractionDigits = decimalPlaces;
+                opts.maximumFractionDigits = decimalPlaces;
+            }
+            return new Intl.NumberFormat('en-US', opts).format(value);
+        }
+        if (fmt === 'percent') {
+            const opts = { style: 'percent', maximumFractionDigits: decimalPlaces !== undefined && decimalPlaces !== null ? decimalPlaces : 2 };
+            if (decimalPlaces !== undefined && decimalPlaces !== null) opts.minimumFractionDigits = decimalPlaces;
+            return new Intl.NumberFormat('en-US', opts).format(value);
+        }
+        if (fmt === 'scientific') return value.toExponential(decimalPlaces !== undefined && decimalPlaces !== null ? decimalPlaces : 2);
         if (fmt.startsWith('fixed')) {
             const parts = fmt.split(':');
-            const decimals = parts.length > 1 ? parseInt(parts[1]) : 2;
+            const decimals = decimalPlaces !== undefined && decimalPlaces !== null ? decimalPlaces : (parts.length > 1 ? parseInt(parts[1]) : 2);
             return value.toFixed(decimals);
         }
     } catch (e) {
         console.warn('Format error', e);
+    }
+    if (decimalPlaces !== undefined && decimalPlaces !== null) {
+        return value.toLocaleString(undefined, {
+            minimumFractionDigits: decimalPlaces,
+            maximumFractionDigits: decimalPlaces,
+        });
     }
     return value.toLocaleString();
 };
