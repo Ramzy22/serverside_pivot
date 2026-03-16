@@ -2081,7 +2081,7 @@ export default function DashTanstackPivot(props) {
         const darkText = clamped <= 0.5 ? darkLow : darkHigh;
 
         const heatStyle = {
-            backgroundColor: `rgba(${r},${g},${b},${alpha.toFixed(3)})`,
+            background: `rgba(${r},${g},${b},${alpha.toFixed(3)})`,
             color: alpha > 0.55 ? darkText : undefined,
         };
         return { ...heatStyle, ...ruleStyle };

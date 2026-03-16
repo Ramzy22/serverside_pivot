@@ -273,10 +273,7 @@ export function PivotTableBody({
                              }}>
                                  {row.getLeftVisibleCells().map((cell) => renderCell(cell, i, false))}
                                  <div style={{ width: beforeWidth, flexShrink: 0 }} />
-                                 {virtualCenterCols.map(virtualCol => {
-                                     const cell = row.getCenterVisibleCells()[virtualCol.index];
-                                     return renderCell(cell, i, false);
-                                 })}
+                                 {(() => { const m = new Map(row.getCenterVisibleCells().map(c=>[c.column.id,c])); return virtualCenterCols.map(virtualCol => { const cell = m.get(centerCols[virtualCol.index]?.id); return renderCell(cell, i, false); }); })()}
                                  <div style={{ width: afterWidth, flexShrink: 0 }} />
                                  {row.getRightVisibleCells().map((cell) => renderCell(cell, i, false))}
                              </div>
@@ -429,10 +426,7 @@ export function PivotTableBody({
                                   }}>
                                       {row.getLeftVisibleCells().map((cell) => renderCell(cell, virtualRow.index, true))}
                                       <div style={{ width: beforeWidth, flexShrink: 0 }} />
-                                      {virtualCenterCols.map(virtualCol => {
-                                          const cell = row.getCenterVisibleCells()[virtualCol.index];
-                                          return renderCell(cell, virtualRow.index, true);
-                                      })}
+                                      {(() => { const m = new Map(row.getCenterVisibleCells().map(c=>[c.column.id,c])); return virtualCenterCols.map(virtualCol => { const cell = m.get(centerCols[virtualCol.index]?.id); return renderCell(cell, virtualRow.index, true); }); })()}
                                       <div style={{ width: afterWidth, flexShrink: 0 }} />
                                       {row.getRightVisibleCells().map((cell) => renderCell(cell, virtualRow.index, true))}
                                   </div>
@@ -518,10 +512,7 @@ export function PivotTableBody({
                              }}>
                                  {row.getLeftVisibleCells().map((cell) => renderCell(cell, i, false))}
                                  <div style={{ width: beforeWidth, flexShrink: 0 }} />
-                                 {virtualCenterCols.map(virtualCol => {
-                                     const cell = row.getCenterVisibleCells()[virtualCol.index];
-                                     return renderCell(cell, i, false);
-                                 })}
+                                 {(() => { const m = new Map(row.getCenterVisibleCells().map(c=>[c.column.id,c])); return virtualCenterCols.map(virtualCol => { const cell = m.get(centerCols[virtualCol.index]?.id); return renderCell(cell, i, false); }); })()}
                                  <div style={{ width: afterWidth, flexShrink: 0 }} />
                                  {row.getRightVisibleCells().map((cell) => renderCell(cell, i, false))}
                              </div>
