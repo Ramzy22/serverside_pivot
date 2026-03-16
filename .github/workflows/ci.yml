@@ -26,6 +26,9 @@ jobs:
           python -m pip install --upgrade pip "setuptools<71"
           python -m pip install duckdb pyarrow "ibis-framework[duckdb]" pandas dash pytest tomli redis "python-jose[cryptography]"
 
+      - name: Install pivot-engine (backend)
+        run: pip install git+https://github.com/Ramzy22/pivot_engine.git
+
       - name: Install serverside-pivot (editable)
         run: pip install -e dash_tanstack_pivot/
 
