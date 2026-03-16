@@ -1,5 +1,8 @@
 import React, { useMemo } from 'react';
 
+const fmt = (n, decimals = 2) =>
+    new Intl.NumberFormat('en-US', { maximumFractionDigits: decimals }).format(n).replace(/,/g, '\u202F');
+
 const StatusBar = ({ selectedCells, rowCount, visibleRowsCount, theme, isLoading = false }) => {
     const stats = useMemo(() => {
         const values = Object.values(selectedCells).map(v => parseFloat(v)).filter(v => !isNaN(v));
@@ -38,19 +41,19 @@ const StatusBar = ({ selectedCells, rowCount, visibleRowsCount, theme, isLoading
                         Loading...
                     </span>
                 )}
-                {rowCount ? `Total: ${rowCount.toLocaleString()}` : 'Total: --'} 
+                {rowCount ? `Total: ${fmt(rowCount, 0)}` : 'Total: --'}
                 {visibleRowsCount && ` | Visible: ${visibleRowsCount}`}
             </div>
             <div style={{display: 'flex', gap: '16px', overflowX: 'auto'}}>
                 <span>Count: {stats.count}</span>
                 {stats.sum !== undefined && (
                     <>
-                        <span>Sum: {stats.sum.toLocaleString(undefined, {maximumFractionDigits: 2})}</span>
-                        <span>Avg: {stats.avg.toLocaleString(undefined, {maximumFractionDigits: 2})}</span>
-                        <span>Min: {stats.min.toLocaleString(undefined, {maximumFractionDigits: 2})}</span>
-                        <span>Max: {stats.max.toLocaleString(undefined, {maximumFractionDigits: 2})}</span>
-                        <span>Var: {stats.variance.toLocaleString(undefined, {maximumFractionDigits: 2})}</span>
-                        <span>StdDev: {stats.stdDev.toLocaleString(undefined, {maximumFractionDigits: 2})}</span>
+                        <span>Sum: {fmt(stats.sum)}</span>
+                        <span>Avg: {fmt(stats.avg)}</span>
+                        <span>Min: {fmt(stats.min)}</span>
+                        <span>Max: {fmt(stats.max)}</span>
+                        <span>Var: {fmt(stats.variance)}</span>
+                        <span>StdDev: {fmt(stats.stdDev)}</span>
                     </>
                 )}
             </div>

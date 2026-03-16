@@ -2,17 +2,20 @@ import React from 'react';
 
 export const getKey = (prefix, field, agg) => prefix ? `${prefix}_${field}_${agg}` : `${field}_${agg}`;
 
+// Replace thousands commas with narrow non-breaking spaces (ISO 80000-1 convention)
+const spaceGroups = (str) => str.replace(/,/g, '\u202F');
+
 export const formatValue = (value, fmt, decimalPlaces) => {
     if (value === null || value === undefined) return '';
     if (typeof value !== 'number') return value;
     if (!fmt) {
         if (decimalPlaces !== undefined && decimalPlaces !== null) {
-            return value.toLocaleString(undefined, {
+            return spaceGroups(new Intl.NumberFormat('en-US', {
                 minimumFractionDigits: decimalPlaces,
                 maximumFractionDigits: decimalPlaces,
-            });
+            }).format(value));
         }
-        return value.toLocaleString();
+        return spaceGroups(new Intl.NumberFormat('en-US').format(value));
     }
 
     try {
@@ -22,7 +25,7 @@ export const formatValue = (value, fmt, decimalPlaces) => {
                 opts.minimumFractionDigits = decimalPlaces;
                 opts.maximumFractionDigits = decimalPlaces;
             }
-            return new Intl.NumberFormat('en-US', opts).format(value);
+            return spaceGroups(new Intl.NumberFormat('en-US', opts).format(value));
         }
         if (fmt === 'accounting') {
             const opts = { style: 'currency', currency: 'USD', currencySign: 'accounting' };
@@ -30,12 +33,12 @@ export const formatValue = (value, fmt, decimalPlaces) => {
                 opts.minimumFractionDigits = decimalPlaces;
                 opts.maximumFractionDigits = decimalPlaces;
             }
-            return new Intl.NumberFormat('en-US', opts).format(value);
+            return spaceGroups(new Intl.NumberFormat('en-US', opts).format(value));
         }
         if (fmt === 'percent') {
             const opts = { style: 'percent', maximumFractionDigits: decimalPlaces !== undefined && decimalPlaces !== null ? decimalPlaces : 2 };
             if (decimalPlaces !== undefined && decimalPlaces !== null) opts.minimumFractionDigits = decimalPlaces;
-            return new Intl.NumberFormat('en-US', opts).format(value);
+            return spaceGroups(new Intl.NumberFormat('en-US', opts).format(value));
         }
         if (fmt === 'scientific') return value.toExponential(decimalPlaces !== undefined && decimalPlaces !== null ? decimalPlaces : 2);
         if (fmt.startsWith('fixed')) {
@@ -47,12 +50,12 @@ export const formatValue = (value, fmt, decimalPlaces) => {
         console.warn('Format error', e);
     }
     if (decimalPlaces !== undefined && decimalPlaces !== null) {
-        return value.toLocaleString(undefined, {
+        return spaceGroups(new Intl.NumberFormat('en-US', {
             minimumFractionDigits: decimalPlaces,
             maximumFractionDigits: decimalPlaces,
-        });
+        }).format(value));
     }
-    return value.toLocaleString();
+    return spaceGroups(new Intl.NumberFormat('en-US').format(value));
 };
 
 export const Sparkline = ({ data = [], width = 100, height = 30, color = '#1976d2' }) => {
