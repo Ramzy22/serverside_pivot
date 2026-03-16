@@ -282,7 +282,7 @@ export default function DashTanstackPivot(props) {
 
     // Derive unique row paths from current selection for Format Row pre-population
     const selectedRowPaths = useMemo(() => {
-        const keys = Object.keys(selectedCells);
+        const keys = Object.keys(selectedCells || {});
         if (keys.length === 0) return [];
         const paths = new Set();
         const visibleRows = tableRef.current ? tableRef.current.getRowModel().rows : [];

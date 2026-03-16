@@ -416,7 +416,8 @@ export function PivotTableBody({
                               : String(virtualRow.index);
 
                           const _rowPath = row.original && row.original._path;
-                          const _rowFmtBg = rowFormatRules && _rowPath ? (rowFormatRules[_rowPath] && rowFormatRules[_rowPath].bg) : undefined;
+                          const _rowFmt = rowFormatRules && _rowPath ? rowFormatRules[_rowPath] : undefined;
+                          const _rowFmtBg = _rowFmt && _rowFmt.bg;
 
                           return (
                               <React.Fragment key={stableRowKey}>
@@ -432,14 +433,14 @@ export function PivotTableBody({
                                       borderBottom: `1px solid ${theme.border}`,
                                       transition: rowVirtualizer.isScrolling ? 'none' : 'background-color 0.2s'
                                   }}>
-                                      {row.getLeftVisibleCells().map((cell) => renderCell(cell, virtualRow.index, true))}
+                                      {row.getLeftVisibleCells().map((cell) => renderCell(cell, virtualRow.index, true, _rowFmtBg))}
                                       <div style={{ width: beforeWidth, flexShrink: 0 }} />
                                       {virtualCenterCols.map(virtualCol => {
                                           const cell = row.getCenterVisibleCells()[virtualCol.index];
-                                          return renderCell(cell, virtualRow.index, true);
+                                          return renderCell(cell, virtualRow.index, true, _rowFmtBg);
                                       })}
                                       <div style={{ width: afterWidth, flexShrink: 0 }} />
-                                      {row.getRightVisibleCells().map((cell) => renderCell(cell, virtualRow.index, true))}
+                                      {row.getRightVisibleCells().map((cell) => renderCell(cell, virtualRow.index, true, _rowFmtBg))}
                                   </div>
                                   {showRowTransitionLoader && (
                                       <div
