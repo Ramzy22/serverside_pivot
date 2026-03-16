@@ -38,7 +38,7 @@ const FilterPopover = ({ column, anchorEl, onClose, onFilter, currentFilter, opt
             }
             return { top, left };
         });
-    }, [anchorEl, column, currentFilter, options.length]);
+    }, [anchorEl, column]);
 
     if (!position) {
         return null;

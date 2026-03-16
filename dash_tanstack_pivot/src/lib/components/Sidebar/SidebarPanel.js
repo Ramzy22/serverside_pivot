@@ -112,11 +112,13 @@ export function SidebarPanel({
                             {sidebarTab === 'fields' && (
                                 <div>
                                     <div style={styles.sectionTitle}>Available Fields</div>
-                                    {availableFields.map(f => (
-                                        <div key={f} draggable onDragStart={e=>onDragStart(e,f,'pool')} style={styles.chip}>
-                                            <div style={{display:'flex',gap:'6px'}}><Icons.DragIndicator/> {f}</div>
-                                        </div>
-                                    ))}
+                                    <div style={{maxHeight: '160px', overflowY: 'auto'}}>
+                                        {availableFields.map(f => (
+                                            <div key={f} draggable onDragStart={e=>onDragStart(e,f,'pool')} style={styles.chip}>
+                                                <div style={{display:'flex',gap:'6px'}}><Icons.DragIndicator/> {f}</div>
+                                            </div>
+                                        ))}
+                                    </div>
                                 </div>
                             )}
                             {[{id:'rows', label:'Rows'}, {id:'cols', label:'Columns'}, {id:'vals', label:'Values'}, {id:'filter', label:'Filters'}].map(zone => (

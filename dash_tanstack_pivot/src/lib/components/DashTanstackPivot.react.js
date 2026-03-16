@@ -153,7 +153,7 @@ export default function DashTanstackPivot(props) {
         }, [data, props.columns, serverSide, availableFieldList]);
 
         // Theme State
-        const [themeName, setThemeName] = useState('flash');
+        const [themeName, setThemeName] = useState('balham');
         const theme = useMemo(() => themes[themeName], [themeName]);
         const styles = useMemo(() => getStyles(theme), [theme]);
         const loadingCssVars = useMemo(() => {

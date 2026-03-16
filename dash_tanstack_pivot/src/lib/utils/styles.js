@@ -258,6 +258,8 @@ export const getStyles = (theme) => {
     },
     dropZone: {
         minHeight: '40px',
+        maxHeight: '140px',
+        overflowY: 'auto',
         border: `1px dashed ${theme.border}`,
         borderRadius: r,
         padding: '8px',
