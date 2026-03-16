@@ -17,6 +17,7 @@ export const themes = {
     },
     dark: {
         name: 'dark',
+        isDark: true,
         primary: '#90caf9',
         border: '#424242',
         headerBg: '#333',
@@ -79,6 +80,76 @@ export const themes = {
         sidebarBg: '#fafafa',
         pinnedBoundaryShadow: 'rgba(9,9,11,0.08)',
         radius: '6px',
+    },
+    strata: {
+        name: 'strata',
+        isDark: true,
+        primary: '#00f2ff',
+        border: 'rgba(255,255,255,0.08)',
+        headerBg: 'rgba(12,12,18,0.98)',
+        sortedHeaderBg: 'rgba(0,242,255,0.08)',
+        sortedHeaderBorder: '#00f2ff',
+        sortedHeaderText: '#00f2ff',
+        text: '#e0e0e6',
+        textSec: '#8a8a98',
+        hover: 'rgba(255,255,255,0.04)',
+        select: 'rgba(0,242,255,0.12)',
+        background: '#0d0d12',
+        sidebarBg: '#0a0a10',
+        pinnedBoundaryShadow: 'rgba(0,0,0,0.7)',
+        radius: '8px',
+    },
+    crystal: {
+        name: 'crystal',
+        isDark: true,
+        primary: '#00f2ff',
+        border: 'rgba(255,255,255,0.08)',
+        headerBg: 'rgba(3,7,18,0.92)',
+        sortedHeaderBg: 'rgba(0,242,255,0.08)',
+        sortedHeaderBorder: '#00f2ff',
+        sortedHeaderText: '#00f2ff',
+        text: '#f9fafb',
+        textSec: '#9ca3af',
+        hover: 'rgba(255,255,255,0.03)',
+        select: 'rgba(0,242,255,0.1)',
+        background: '#030712',
+        sidebarBg: '#050b1a',
+        pinnedBoundaryShadow: 'rgba(0,0,0,0.8)',
+        radius: '8px',
+    },
+    alabaster: {
+        name: 'alabaster',
+        primary: '#2563eb',
+        border: 'rgba(0,0,0,0.06)',
+        headerBg: '#fcfcfc',
+        sortedHeaderBg: 'rgba(37,99,235,0.05)',
+        sortedHeaderBorder: '#2563eb',
+        sortedHeaderText: '#1e40af',
+        text: '#0a0a0a',
+        textSec: '#666666',
+        hover: 'rgba(37,99,235,0.04)',
+        select: 'rgba(37,99,235,0.08)',
+        background: '#ffffff',
+        sidebarBg: '#fcfcfc',
+        pinnedBoundaryShadow: 'rgba(0,0,0,0.06)',
+        radius: '8px',
+    },
+    satin: {
+        name: 'satin',
+        primary: '#0f172a',
+        border: 'rgba(0,0,0,0.04)',
+        headerBg: 'rgba(255,255,255,0.8)',
+        sortedHeaderBg: '#f1f5f9',
+        sortedHeaderBorder: '#0f172a',
+        sortedHeaderText: '#0f172a',
+        text: '#0f172a',
+        textSec: '#64748b',
+        hover: 'rgba(248,250,252,0.8)',
+        select: '#f1f5f9',
+        background: '#ffffff',
+        sidebarBg: '#fdfdfd',
+        pinnedBoundaryShadow: 'rgba(0,0,0,0.04)',
+        radius: '12px',
     }
 };
 
@@ -118,7 +189,7 @@ export const mergeStateStyles = (...layers) =>
         return merged;
     }, {});
 
-export const isDarkTheme = (theme) => theme && theme.name === 'dark';
+export const isDarkTheme = (theme) => theme && (theme.name === 'dark' || theme.isDark === true);
 
 export const getStyles = (theme) => {
     const r = theme.radius || '4px';
@@ -148,7 +219,7 @@ export const getStyles = (theme) => {
     searchBox: {
         display: 'flex',
         alignItems: 'center',
-        background: theme.text === '#fff' ? '#424242' : '#f5f5f5',
+        background: theme.isDark ? 'rgba(255,255,255,0.08)' : '#f5f5f5',
         borderRadius: r,
         padding: '4px 8px',
         width: '200px'
@@ -172,7 +243,7 @@ export const getStyles = (theme) => {
         marginBottom: '8px'
     },
     chip: {
-        background: theme.text === '#fff' ? '#424242' : '#fff',
+        background: theme.isDark ? 'rgba(255,255,255,0.07)' : '#fff',
         border: `1px solid ${theme.border}`,
         borderRadius: r,
         padding: '6px 8px',

@@ -12,6 +12,8 @@ const COLOR_PALETTE_OPTIONS = [
 
 const FONT_FAMILY_OPTIONS = [
     { value: "'Inter', system-ui, sans-serif", label: 'Inter' },
+    { value: "'JetBrains Mono', monospace", label: 'JetBrains Mono' },
+    { value: "'Plus Jakarta Sans', sans-serif", label: 'Plus Jakarta Sans' },
     { value: 'system-ui', label: 'System UI' },
     { value: 'Arial, sans-serif', label: 'Arial' },
     { value: 'Helvetica, sans-serif', label: 'Helvetica' },

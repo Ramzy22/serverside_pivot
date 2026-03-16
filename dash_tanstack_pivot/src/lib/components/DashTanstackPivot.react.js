@@ -68,7 +68,7 @@ const createClientInstanceId = (componentId = 'pivot-grid') => {
 };
 
 const loadingAnimationStyles = `
-@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap');
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@300;500&family=Plus+Jakarta+Sans:wght@300;500;800&display=swap');
 @keyframes pivot-row-loader-enter {
     from { opacity: 0; transform: translateY(-6px); }
     to { opacity: 1; transform: translateY(0); }
