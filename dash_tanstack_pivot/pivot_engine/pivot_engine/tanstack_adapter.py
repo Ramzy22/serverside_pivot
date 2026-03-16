@@ -506,6 +506,7 @@ class TanStackPivotAdapter:
                     field=col.get('aggregationField', col['id']),
                     agg=col.get('aggregationFn', 'sum'),
                     alias=col['id'],
+                    weighted_field=col.get('weightField'),
                     window_func=planner_window_fn
                 ))
             elif col['id'] not in hierarchy_cols and col['id'] not in ('_id', 'depth', 'hierarchy', 'subRows'):
@@ -595,10 +596,24 @@ class TanStackPivotAdapter:
             col_id = sort_spec['id']
             if col_id == 'hierarchy' and request.grouping:
                 col_id = request.grouping[0]
-            pivot_sort.append({
+
+            semantic_type = sort_spec.get("semanticType") or sort_spec.get("sortSemantic")
+            if not semantic_type and isinstance(col_id, str):
+                # Safe heuristic fallback so common tenor fields sort naturally without
+                # forcing every caller to send explicit semantic metadata.
+                lower_col = col_id.lower()
+                if any(token in lower_col for token in ("tenor", "maturity", "term")):
+                    semantic_type = "tenor"
+
+            sort_item = {
                 'field': col_id,
                 'order': 'asc' if sort_spec.get('desc', False) is False else 'desc'
-            })
+            }
+            if semantic_type:
+                sort_item["semanticType"] = semantic_type
+            if sort_spec.get("nulls"):
+                sort_item["nulls"] = sort_spec.get("nulls")
+            pivot_sort.append(sort_item)
         
         # Handle pagination
         offset = 0

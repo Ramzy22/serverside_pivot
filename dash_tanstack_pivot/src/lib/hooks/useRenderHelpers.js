@@ -73,7 +73,10 @@ export function useRenderHelpers({
         const col = cell.column;
         const colIndex = visibleLeafColIndexMap.get(col.id) ?? -1;
         const isHierarchy = cell.column.id === 'hierarchy';
-        const isSelected = selectedCells[`${row.id}:${cell.column.id}`] !== undefined;
+        const isSelected = Object.prototype.hasOwnProperty.call(
+            selectedCells || {},
+            `${row.id}:${cell.column.id}`
+        );
         const isLastSelected = lastSelected && lastSelected.rowIndex === virtualRowIndex && lastSelected.colIndex === colIndex; // Approximate check
         // Check for fill handle selection
         let isFillSelected = false;

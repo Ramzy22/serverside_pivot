@@ -17,6 +17,7 @@ class Measure:
     field: Optional[str]
     agg: str
     alias: str
+    weighted_field: Optional[str] = None
     expression: Optional[str] = None
     percentile: Optional[float] = None
     separator: Optional[str] = None

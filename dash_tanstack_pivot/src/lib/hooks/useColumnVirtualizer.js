@@ -19,7 +19,14 @@ export const useColumnVirtualizer = ({
         overscan: 0
     });
 
-    const virtualCenterCols = columnVirtualizer.getVirtualItems();
+    const rawVirtualCenterCols = columnVirtualizer.getVirtualItems();
+    // TanStack can briefly report stale indices after a fast center-column count shrink
+    // (e.g. collapsing a pivot group near the right edge). Filter them out so we
+    // never address non-existent center cells.
+    const virtualCenterCols = useMemo(
+        () => rawVirtualCenterCols.filter(item => item.index >= 0 && item.index < centerCols.length),
+        [rawVirtualCenterCols, centerCols.length]
+    );
     const centerTotalWidth = columnVirtualizer.getTotalSize();
 
     // Calculate spacers for virtualized center

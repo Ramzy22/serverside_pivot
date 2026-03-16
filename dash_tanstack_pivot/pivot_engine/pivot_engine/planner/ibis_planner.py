@@ -417,6 +417,26 @@ class IbisPlanner:
             if (m.agg or "").lower() in {"avg", "mean"}:
                 count_alias = f"__count_{m.alias}"
                 ibis_aggregations.append(filtered_table[m.field].count().name(count_alias))
+            elif (m.agg or "").lower() in {"weighted_avg", "wavg", "weighted_mean"}:
+                if not m.weighted_field:
+                    raise ValueError(
+                        f"Weighted average measure '{m.alias}' requires a weight field."
+                    )
+                if m.weighted_field not in filtered_table.columns:
+                    raise ValueError(
+                        f"Weighted average measure '{m.alias}' references unknown weight field '{m.weighted_field}'."
+                    )
+                value_col = filtered_table[m.field]
+                weight_col = filtered_table[m.weighted_field]
+                valid_mask = value_col.notnull() & weight_col.notnull()
+                weighted_sum_alias = f"__sumxw_{m.alias}"
+                total_weight_alias = f"__sumw_{m.alias}"
+                ibis_aggregations.append(
+                    (value_col * weight_col).where(valid_mask).sum().name(weighted_sum_alias)
+                )
+                ibis_aggregations.append(
+                    weight_col.where(valid_mask).sum().name(total_weight_alias)
+                )
 
         # Add hidden base measures for window functions if needed
         for wm in window_measures:
@@ -494,6 +514,12 @@ class IbisPlanner:
                         weighted_sum = (inner_agg[m.alias] * inner_agg[count_alias]).sum()
                         total_count = inner_agg[count_alias].sum()
                         outer_aggs.append((weighted_sum / total_count.nullif(0)).name(m.alias))
+                    elif agg_type in ('weighted_avg', 'wavg', 'weighted_mean'):
+                        weighted_sum_alias = f"__sumxw_{m.alias}"
+                        total_weight_alias = f"__sumw_{m.alias}"
+                        weighted_sum = inner_agg[weighted_sum_alias].sum()
+                        total_weight = inner_agg[total_weight_alias].sum()
+                        outer_aggs.append((weighted_sum / total_weight.nullif(0)).name(m.alias))
                     elif agg_type == 'min':
                         outer_aggs.append(inner_agg[m.alias].min().name(m.alias))
                     elif agg_type == 'max':
@@ -878,6 +904,21 @@ class IbisPlanner:
                     pivot_aggs.append(cond_col.count().name(alias))
                 elif agg_type in ['count_distinct', 'distinct_count']:
                     pivot_aggs.append(cond_col.nunique().name(alias))
+                elif agg_type in ['weighted_avg', 'wavg', 'weighted_mean']:
+                    if not m.weighted_field:
+                        raise ValueError(
+                            f"Weighted average measure '{m.alias}' requires a weight field."
+                        )
+                    if m.weighted_field not in base_table.columns:
+                        raise ValueError(
+                            f"Weighted average measure '{m.alias}' references unknown weight field '{m.weighted_field}'."
+                        )
+                    weight_expr = base_table[m.weighted_field]
+                    cond_weight = match_expr.ifelse(weight_expr, ibis.null())
+                    valid_mask = cond_col.notnull() & cond_weight.notnull()
+                    weighted_sum = (cond_col * cond_weight).where(valid_mask).sum()
+                    total_weight = cond_weight.where(valid_mask).sum()
+                    pivot_aggs.append((weighted_sum / total_weight.nullif(0)).name(alias))
                 else:
                     pass
 
@@ -899,6 +940,20 @@ class IbisPlanner:
                     pivot_aggs.append(col_expr.count().name(alias))
                 elif agg_type in ['count_distinct', 'distinct_count']:
                     pivot_aggs.append(col_expr.nunique().name(alias))
+                elif agg_type in ['weighted_avg', 'wavg', 'weighted_mean']:
+                    if not m.weighted_field:
+                        raise ValueError(
+                            f"Weighted average measure '{m.alias}' requires a weight field."
+                        )
+                    if m.weighted_field not in base_table.columns:
+                        raise ValueError(
+                            f"Weighted average measure '{m.alias}' references unknown weight field '{m.weighted_field}'."
+                        )
+                    weight_expr = base_table[m.weighted_field]
+                    valid_mask = col_expr.notnull() & weight_expr.notnull()
+                    weighted_sum = (col_expr * weight_expr).where(valid_mask).sum()
+                    total_weight = weight_expr.where(valid_mask).sum()
+                    pivot_aggs.append((weighted_sum / total_weight.nullif(0)).name(alias))
 
         row_dims = spec.rows
         

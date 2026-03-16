@@ -226,9 +226,38 @@ class IbisExpressionBuilder:
 
             order = (s.get("order") or "asc").lower()
             nulls = (s.get("nulls") or "").lower()
+            semantic_type = str(
+                s.get("semanticType") or s.get("semantic") or s.get("sortSemantic") or ""
+            ).lower()
 
             col = table[field]
             sort_expr = None
+
+            if semantic_type == "tenor":
+                # Parse text values like 1D, 2W, 1M, 6Y into a numeric key.
+                # Valid tenor values are always ordered before non-parsable values.
+                tenor_text = col.cast("string")
+                pattern = r"^\s*([0-9]+(?:\.[0-9]+)?)\s*([A-Za-z])\s*$"
+                numeric_text = tenor_text.re_extract(pattern, 1)
+                unit_text = tenor_text.re_extract(pattern, 2).lower()
+                numeric_value = numeric_text.nullif("").cast("float64")
+                unit_factor = (unit_text == "d").ifelse(
+                    1.0,
+                    (unit_text == "w").ifelse(
+                        7.0,
+                        (unit_text == "m").ifelse(
+                            30.4375,
+                            (unit_text == "y").ifelse(365.25, ibis.null()),
+                        ),
+                    ),
+                )
+                tenor_key = numeric_value * unit_factor
+                is_valid_tenor = numeric_value.notnull() & unit_factor.notnull()
+
+                ibis_sorts.append(is_valid_tenor.desc())
+                ibis_sorts.append(tenor_key.asc() if order == "asc" else tenor_key.desc())
+                ibis_sorts.append(tenor_text.asc() if order == "asc" else tenor_text.desc())
+                continue
 
             if order == 'asc':
                 sort_expr = col.asc
@@ -317,6 +346,30 @@ class IbisExpressionBuilder:
                 filter_expr = self.build_filter_expression(table, [measure.filter_condition])
                 if filter_expr is not None:
                     col = col.where(filter_expr)
+
+        if agg_type in {"weighted_avg", "wavg", "weighted_mean"}:
+            if col is None:
+                raise ValueError(f"Weighted average requires a value field for measure '{measure.alias}'")
+            if not measure.weighted_field:
+                raise ValueError(
+                    f"Weighted average measure '{measure.alias}' requires 'weighted_field' (or valConfig weightField)"
+                )
+            if measure.weighted_field not in table.columns:
+                raise ValueError(
+                    f"Weighted average measure '{measure.alias}' references unknown weight field '{measure.weighted_field}'"
+                )
+
+            weight_col = table[measure.weighted_field]
+            if measure.filter_condition:
+                filter_expr = self.build_filter_expression(table, [measure.filter_condition])
+                if filter_expr is not None:
+                    weight_col = weight_col.where(filter_expr)
+
+            # Ignore rows where value or weight is null.
+            valid_mask = col.notnull() & weight_col.notnull()
+            weighted_sum = (col * weight_col).where(valid_mask).sum()
+            total_weight = weight_col.where(valid_mask).sum()
+            return (weighted_sum / total_weight.nullif(0)).name(measure.alias)
 
         if agg_type == 'sum':
             return col.sum().name(measure.alias)

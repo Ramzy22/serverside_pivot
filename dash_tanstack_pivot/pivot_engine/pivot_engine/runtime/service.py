@@ -48,11 +48,17 @@ class PivotRuntimeService:
         if state.filters and "__request_unique__" in state.filters:
             target_unique_col = state.filters["__request_unique__"]
 
-        tanstack_sorting = [
-            {"id": s.get("id"), "desc": bool(s.get("desc", False))}
-            for s in (state.sorting or [])
-            if isinstance(s, dict) and s.get("id") is not None
-        ]
+        tanstack_sorting = []
+        for s in (state.sorting or []):
+            if not isinstance(s, dict) or s.get("id") is None:
+                continue
+
+            sort_item = {"id": s.get("id"), "desc": bool(s.get("desc", False))}
+            # Preserve optional semantic hints for backend ordering (e.g. tenor sort).
+            for key in ("semanticType", "sortSemantic", "nulls"):
+                if key in s:
+                    sort_item[key] = s.get(key)
+            tanstack_sorting.append(sort_item)
 
         request_columns = self._build_request_columns(state.row_fields, state.col_fields, state.val_configs)
         pagination_info = self._build_pagination(context)
@@ -197,6 +203,7 @@ class PivotRuntimeService:
                     "aggregationField": field,
                     "aggregationFn": agg,
                     "windowFn": measure.get("windowFn"),
+                    "weightField": measure.get("weightField"),
                 }
             )
         return columns

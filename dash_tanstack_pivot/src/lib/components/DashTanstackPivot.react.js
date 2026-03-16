@@ -1273,8 +1273,8 @@ export default function DashTanstackPivot(props) {
         navigator.clipboard.writeText(text);
     };
 
-    const getSelectedData = (withHeaders = false) => {
-        const keys = Object.keys(selectedCells);
+    const getSelectedData = (withHeaders = false, selectionMap = selectedCells) => {
+        const keys = Object.keys(selectionMap || {});
         if (keys.length === 0) return null;
 
         const visibleRows = table.getRowModel().rows;
@@ -1290,7 +1290,10 @@ export default function DashTanstackPivot(props) {
         const selectedGrid = {};
 
         keys.forEach(key => {
-            const [rid, cid] = key.split(':');
+            const separatorIndex = key.lastIndexOf(':');
+            if (separatorIndex <= 0) return;
+            const rid = key.slice(0, separatorIndex);
+            const cid = key.slice(separatorIndex + 1);
             const rIdx = rowIdMap[rid];
             const cIdx = colIdMap[cid];
             
@@ -1300,7 +1303,7 @@ export default function DashTanstackPivot(props) {
                 minC = Math.min(minC, cIdx);
                 maxC = Math.max(maxC, cIdx);
                 if (!selectedGrid[rIdx]) selectedGrid[rIdx] = {};
-                selectedGrid[rIdx][cIdx] = selectedCells[key];
+                selectedGrid[rIdx][cIdx] = selectionMap[key];
             }
         });
 
@@ -1326,6 +1329,138 @@ export default function DashTanstackPivot(props) {
         }
         return tsv;
     };
+
+    const hasSelectionKey = useCallback((selectionMap, selectionKey) => {
+        if (!selectionMap || !selectionKey) return false;
+        return Object.prototype.hasOwnProperty.call(selectionMap, selectionKey);
+    }, []);
+
+    const getSelectedColumnIds = useCallback((selectionMap = selectedCells) => {
+        const colIds = new Set();
+        Object.keys(selectionMap || {}).forEach((selectionKey) => {
+            const separatorIndex = selectionKey.lastIndexOf(':');
+            if (separatorIndex <= 0) return;
+            const colId = selectionKey.slice(separatorIndex + 1);
+            if (colId) colIds.add(colId);
+        });
+        return Array.from(colIds);
+    }, [selectedCells]);
+
+    const getSelectedMeasureIndexes = useCallback((selectedColIds) => {
+        const matchedIndexes = [];
+        valConfigs.forEach((cfg, idx) => {
+            const suffix = `_${cfg.field}_${cfg.agg}`;
+            const matches = selectedColIds.some(colId => (
+                colId === cfg.field ||
+                colId.endsWith(suffix) ||
+                colId.includes(`_${cfg.field}_`)
+            ));
+            if (matches) matchedIndexes.push(idx);
+        });
+        return matchedIndexes;
+    }, [valConfigs]);
+
+    const getDefaultFormatForSelection = useCallback((selectionMap) => {
+        const selectedColIds = getSelectedColumnIds(selectionMap)
+            .filter(id => id !== 'hierarchy' && id !== '__row_number__');
+        const matchedIndexes = getSelectedMeasureIndexes(selectedColIds);
+        if (matchedIndexes.length === 0) return 'fixed:2';
+
+        const formats = matchedIndexes
+            .map(idx => valConfigs[idx] && valConfigs[idx].format)
+            .filter(fmt => typeof fmt === 'string' && fmt.trim() !== '')
+            .map(fmt => fmt.trim());
+        const uniqueFormats = Array.from(new Set(formats));
+        if (uniqueFormats.length === 1) return uniqueFormats[0];
+        return 'fixed:2';
+    }, [getSelectedColumnIds, getSelectedMeasureIndexes, valConfigs]);
+
+    const applyDataBarsFromSelection = useCallback((selectionMap, mode = 'col') => {
+        const selectedColIds = getSelectedColumnIds(selectionMap)
+            .filter(id => id !== 'hierarchy' && id !== '__row_number__');
+        if (selectedColIds.length === 0) {
+            showNotification('Select at least one value cell first.', 'warning');
+            return;
+        }
+
+        if (mode === 'off') {
+            setDataBarsColumns(new Set());
+            setColorScaleMode('off');
+            showNotification('Data bars disabled.', 'info');
+            return;
+        }
+
+        setColorScaleMode(mode);
+        setDataBarsColumns(prev => {
+            const next = new Set(prev || []);
+            selectedColIds.forEach(colId => next.add(colId));
+            return next;
+        });
+        if (mode === 'row') {
+            showNotification('Data bars enabled (row mode).', 'success');
+        } else if (mode === 'table') {
+            showNotification('Data bars enabled (table mode).', 'success');
+        } else {
+            showNotification('Data bars enabled (column mode).', 'success');
+        }
+    }, [getSelectedColumnIds, setColorScaleMode, setDataBarsColumns, showNotification]);
+
+    const applyFormatToSelection = useCallback((selectionMap, formatOverride = null) => {
+        const selectedColIds = getSelectedColumnIds(selectionMap)
+            .filter(id => id !== 'hierarchy' && id !== '__row_number__');
+        if (selectedColIds.length === 0) {
+            showNotification('Select at least one value cell first.', 'warning');
+            return;
+        }
+
+        let normalizedFormat = '';
+        if (formatOverride !== null && formatOverride !== undefined) {
+            normalizedFormat = String(formatOverride).trim();
+        } else {
+            const promptDefault = getDefaultFormatForSelection(selectionMap);
+            const formatInput = window.prompt(
+                'Format selected values.\nExamples: fixed:2, currency, percent, compact',
+                promptDefault
+            );
+            if (formatInput === null) return;
+            normalizedFormat = String(formatInput).trim();
+        }
+
+        setValConfigs(prev => {
+            let matchedAny = false;
+            const matchedIndexes = [];
+            prev.forEach((cfg, idx) => {
+                const suffix = `_${cfg.field}_${cfg.agg}`;
+                const matches = selectedColIds.some(colId => (
+                    colId === cfg.field ||
+                    colId.endsWith(suffix) ||
+                    colId.includes(`_${cfg.field}_`)
+                ));
+                if (matches) matchedIndexes.push(idx);
+            });
+            const next = prev.map((cfg, idx) => {
+                const matches = matchedIndexes.includes(idx);
+                if (!matches) return cfg;
+                matchedAny = true;
+                if (!normalizedFormat) {
+                    const { format, ...rest } = cfg;
+                    return rest;
+                }
+                return { ...cfg, format: normalizedFormat };
+            });
+            if (!matchedAny) {
+                showNotification('No value columns matched the current selection.', 'warning');
+                return prev;
+            }
+            return next;
+        });
+
+        if (!normalizedFormat) {
+            showNotification('Format cleared for selected values.', 'info');
+        } else {
+            showNotification(`Format applied: ${normalizedFormat}`, 'success');
+        }
+    }, [getSelectedColumnIds, getDefaultFormatForSelection, setValConfigs, showNotification]);
 
     const getPinningState = (colId) => {
         const { left, right } = columnPinning;
@@ -1562,16 +1697,26 @@ export default function DashTanstackPivot(props) {
     const handleContextMenu = (e, value, colId, row) => {
         e.preventDefault();
         const rowId = row ? row.id : null;
+        const key = rowId ? `${rowId}:${colId}` : null;
         // Track the row path for "Format Row" feature
         if (row && row.original && row.original._path) {
             setHoveredRowPath(row.original._path);
         }
-        
-        // Check if clicked cell is already in selection
-        const key = `${rowId}:${colId}`;
-        const isSelected = selectedCells[key] !== undefined;
-        
-        const hasSelection = Object.keys(selectedCells).length > 0;
+
+        // Right-click should operate on the clicked cell immediately.
+        // If it was not selected yet, promote it to the active selection.
+        let selectionForMenu = selectedCells;
+        if (rowId && key && !hasSelectionKey(selectedCells, key)) {
+            selectionForMenu = { [key]: value };
+            setSelectedCells(selectionForMenu);
+            const visibleCols = table.getVisibleLeafColumns();
+            const colIndex = visibleCols.findIndex(c => c.id === colId);
+            if (row && typeof row.index === 'number' && colIndex >= 0) {
+                setLastSelected({ rowIndex: row.index, colIndex });
+            }
+        }
+
+        const hasSelection = Object.keys(selectionForMenu).length > 0;
         
         const getTableData = (withHeaders) => {
             const visibleRows = table.getRowModel().rows;
@@ -1598,13 +1743,55 @@ export default function DashTanstackPivot(props) {
         if (hasSelection) {
             actions.push('separator');
             actions.push({ label: 'Copy Selection', onClick: () => {
-                const data = getSelectedData(false);
+                const data = getSelectedData(false, selectionForMenu);
                 if (data) copyToClipboard(data);
             }});
             actions.push({ label: 'Copy Selection with Headers', onClick: () => {
-                const data = getSelectedData(true);
+                const data = getSelectedData(true, selectionForMenu);
                 if (data) copyToClipboard(data);
             }});
+            actions.push('separator');
+            actions.push({
+                label: 'Format Selected Cells...',
+                onClick: () => applyFormatToSelection(selectionForMenu)
+            });
+            actions.push({
+                label: 'Format: Number (2)',
+                onClick: () => applyFormatToSelection(selectionForMenu, 'fixed:2')
+            });
+            actions.push({
+                label: 'Format: Currency',
+                onClick: () => applyFormatToSelection(selectionForMenu, 'currency')
+            });
+            actions.push({
+                label: 'Format: Percent',
+                onClick: () => applyFormatToSelection(selectionForMenu, 'percent')
+            });
+            actions.push({
+                label: 'Format: Compact',
+                onClick: () => applyFormatToSelection(selectionForMenu, 'compact')
+            });
+            actions.push({
+                label: 'Format: Clear',
+                onClick: () => applyFormatToSelection(selectionForMenu, '')
+            });
+            actions.push('separator');
+            actions.push({
+                label: `${colorScaleMode === 'off' ? '[x]' : '[ ]'} Data Bars: Off`,
+                onClick: () => applyDataBarsFromSelection(selectionForMenu, 'off')
+            });
+            actions.push({
+                label: `${colorScaleMode === 'col' ? '[x]' : '[ ]'} Data Bars: By Column`,
+                onClick: () => applyDataBarsFromSelection(selectionForMenu, 'col')
+            });
+            actions.push({
+                label: `${colorScaleMode === 'row' ? '[x]' : '[ ]'} Data Bars: By Row`,
+                onClick: () => applyDataBarsFromSelection(selectionForMenu, 'row')
+            });
+            actions.push({
+                label: `${colorScaleMode === 'table' ? '[x]' : '[ ]'} Data Bars: By Table`,
+                onClick: () => applyDataBarsFromSelection(selectionForMenu, 'table')
+            });
         }
 
         actions.push('separator');
@@ -2634,6 +2821,22 @@ export default function DashTanstackPivot(props) {
         parentRef,
         table
     });
+
+    useLayoutEffect(() => {
+        if (!parentRef.current || !columnVirtualizer) return;
+        // Keep horizontal virtualization in sync after pivot group collapse/expand.
+        // Without this clamp, right-edge stale indices can point past center columns
+        // and render blank numeric cells.
+        columnVirtualizer.measure();
+        const scrollEl = parentRef.current;
+        const maxScrollLeft = Math.max(0, scrollEl.scrollWidth - scrollEl.clientWidth);
+        if (scrollEl.scrollLeft > maxScrollLeft) {
+            scrollEl.scrollLeft = maxScrollLeft;
+            if (columnVirtualizer.scrollToOffset) {
+                columnVirtualizer.scrollToOffset(maxScrollLeft);
+            }
+        }
+    }, [columnVirtualizer, centerCols.length, totalLayoutWidth]);
 
     // Memoized lookup structures for the header render path.
     // centerColIndexMap: O(1) id→index lookup; only rebuilt when the column list changes.
