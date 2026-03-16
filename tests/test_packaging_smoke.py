@@ -78,12 +78,12 @@ def test_manifest_declares_only_existing_artifacts():
 
 
 def test_pyproject_toml_name():
-    """pyproject.toml must declare name = 'pivot-engine'."""
+    """pyproject.toml must declare name = 'serverside-pivot'."""
     pyproject = PKG_DIR / "pyproject.toml"
     assert pyproject.exists(), "pyproject.toml is missing from dash_tanstack_pivot/"
     data = tomllib.loads(pyproject.read_text(encoding="utf-8"))
-    assert data["project"]["name"] == "pivot-engine", (
-        f"Expected project name 'pivot-engine', got '{data['project']['name']}'"
+    assert data["project"]["name"] == "serverside-pivot", (
+        f"Expected project name 'serverside-pivot', got '{data['project']['name']}'"
     )
 
 
@@ -95,7 +95,7 @@ def test_pyproject_toml_redis_extra():
     optional = data["project"].get("optional-dependencies", {})
     assert "redis" in optional, (
         "optional-dependencies.redis is not declared in pyproject.toml. "
-        "Consumers need 'pip install pivot-engine[redis]' to be valid."
+        "Consumers need 'pip install serverside-pivot[redis]' to be valid."
     )
     assert optional["redis"], "optional-dependencies.redis list is empty."
 
