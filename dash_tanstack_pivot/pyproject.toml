@@ -24,14 +24,14 @@ classifiers = [
 ]
 keywords = ["dash", "pivot", "tanstack", "table", "analytics"]
 requires-python = ">=3.8"
+dependencies = [
+    "dash>=2.0.0",
+]
 
 [project.urls]
 Homepage = "https://github.com/Ramzy22/serverside_pivot"
 Repository = "https://github.com/Ramzy22/serverside_pivot.git"
 Issues = "https://github.com/Ramzy22/serverside_pivot/issues"
-dependencies = [
-    "dash>=2.0.0",
-]
 
 [project.optional-dependencies]
 redis = [
