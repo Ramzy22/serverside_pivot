@@ -1,12 +1,9 @@
 """
 app.py - Enterprise Grade Server-Side Pivot Table
-Integrates DashTanstackPivot with ScalablePivotEngine.
+Integrates DashTanstackPivot (serverside-pivot) with pivot-engine backend.
 """
 import os
 import sys
-
-# Add the parent directory's pivot_engine folder to sys.path to ensure we can import the package
-sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..', 'pivot_engine')))
 
 import pyarrow as pa
 from dash import Dash, Input, Output, State, dcc, html, no_update

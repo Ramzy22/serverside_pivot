@@ -1,7 +1,7 @@
 """
 example_dash_hierarchical.py
 -----------------------------
-Multi-level hierarchical pivot example for dash-tanstack-pivot.
+Multi-level hierarchical pivot example for serverside-pivot.
 
 Demonstrates:
 - Three-level row hierarchy (region -> country -> city)

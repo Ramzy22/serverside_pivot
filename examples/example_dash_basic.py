@@ -1,7 +1,7 @@
 """
 example_dash_basic.py
 ---------------------
-Single-instance DataFrame quickstart for dash-tanstack-pivot.
+Single-instance DataFrame quickstart for serverside-pivot.
 
 Run:
     python examples/example_dash_basic.py

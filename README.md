@@ -1,4 +1,4 @@
-# pivot-engine
+# serverside-pivot
 
 An enterprise-grade pivot table Dash component powered by TanStack Table v8 and a high-performance Ibis backend. Add a fully interactive, server-side pivot table to any Dash application in under 10 lines of code — no JavaScript, no database configuration, no performance tuning required.
 
@@ -7,13 +7,13 @@ An enterprise-grade pivot table Dash component powered by TanStack Table v8 and 
 ## Installation
 
 ```bash
-pip install pivot-engine
+pip install serverside-pivot
 ```
 
 For Redis-backed caching in production:
 
 ```bash
-pip install "pivot-engine[redis]"
+pip install "serverside-pivot[redis]"
 ```
 
 ---
@@ -90,7 +90,7 @@ if __name__ == "__main__":
 
 ## Multi-instance Safety Contract
 
-`pivot-engine` is designed to run **multiple pivot instances in a single Dash layout** with full state isolation. This section defines the guarantees and required wiring.
+`serverside-pivot` is designed to run **multiple pivot instances in a single Dash layout** with full state isolation. This section defines the guarantees and required wiring.
 
 ### Identity Keys
 
@@ -155,4 +155,4 @@ python -m pytest tests/test_runtime_service.py tests/test_session_request_gate.p
 
 ## License
 
-MIT (c) 2025 Pivot Engine Contributors
+MIT (c) 2025 Ramzy22
