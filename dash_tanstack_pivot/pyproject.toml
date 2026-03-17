@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "serverside-pivot"
-version = "0.0.34"
+version = "0.0.35"
 description = "A Dash component library for enterprise-grade pivot tables built with TanStack Table v8"
 license = {text = "MIT"}
 authors = [
@@ -42,9 +42,22 @@ dev = [
     "build>=0.10.0",
 ]
 
-[tool.setuptools.packages.find]
-where = ["."]
-include = ["dash_tanstack_pivot*", "pivot_engine*"]
+[tool.setuptools]
+packages = [
+    "dash_tanstack_pivot",
+    "dash_tanstack_pivot.dash_tanstack_pivot",
+    "pivot_engine",
+    "pivot_engine.cache",
+    "pivot_engine.cdc",
+    "pivot_engine.common",
+    "pivot_engine.diff",
+    "pivot_engine.planner",
+    "pivot_engine.runtime",
+    "pivot_engine.streaming",
+]
+
+[tool.setuptools.package-dir]
+pivot_engine = "pivot_engine/pivot_engine"
 
 [tool.setuptools.package-data]
 dash_tanstack_pivot = [
