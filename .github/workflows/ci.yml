@@ -27,7 +27,7 @@ jobs:
           python -m pip install duckdb pyarrow "ibis-framework[duckdb]" pandas fastapi "uvicorn[standard]" dash pytest tomli redis "python-jose[cryptography]"
 
       - name: Install pivot-engine (backend)
-        run: pip install git+https://github.com/Ramzy22/pivot_engine.git
+        run: pip install -e dash_tanstack_pivot/pivot_engine/
 
       - name: Install serverside-pivot (editable)
         run: pip install -e dash_tanstack_pivot/
