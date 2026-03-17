@@ -124,7 +124,14 @@ export default function DashTanstackPivot(props) {
         viewState = null,
     } = props;
 
-
+    // Register sortOptions with Dash's callback State store on mount.
+    // Without this, State(id, "sortOptions") returns None in Python callbacks
+    // because Dash only stores prop values that were explicitly pushed via setProps.
+    useEffect(() => {
+        if (setProps && sortOptions && Object.keys(sortOptions).length > 0) {
+            setProps({ sortOptions });
+        }
+    }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
     // --- Persistence Helper ---
     const { load: loadPersistedState, save: savePersistedState } = usePersistence(id, persistence, persistence_type);
