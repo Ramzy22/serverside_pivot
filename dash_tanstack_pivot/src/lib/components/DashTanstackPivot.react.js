@@ -993,7 +993,7 @@ export default function DashTanstackPivot(props) {
 
     const colRequestEnd = (serverSide && cachedColSchema && !needsColSchema && totalCenterCols !== null)
         ? Math.min(totalCenterCols - 1,
-            visibleColRange.end)
+            visibleColRange.end + 2)
         : null;
 
     // Keep refs in sync for use in field-zone effect closures
@@ -2115,7 +2115,6 @@ export default function DashTanstackPivot(props) {
 
     // Client-side stats (non-server mode): exclude totals and row/col fields
     const clientColorScaleStats = useMemo(() => {
-        if (serverSide) return { byCol: {}, byRow: {}, table: null };
         const metaKeys = new Set([
             '_id', '_path', '_isTotal', 'depth', '_depth', '_level', '_expanded',
             '_parentPath', '_has_children', '_is_expanded', 'subRows', 'uuid', '__virtualIndex',
@@ -2171,8 +2170,19 @@ export default function DashTanstackPivot(props) {
         };
     }, [filteredData, nodes, rowFields, colFields, serverSide]);
 
-    // Use server-provided stats in server mode, client-computed stats otherwise
-    const colorScaleStats = serverSide && serverColorScaleStats ? serverColorScaleStats : clientColorScaleStats;
+    // Use server-provided stats when available; fallback to client-computed stats
+    // (needed for data bars in server-side virtual scroll mode where server may not emit stats)
+    const colorScaleStats = useMemo(() => {
+        if (serverColorScaleStats && clientColorScaleStats) {
+            // Merge: server stats take priority, client fills gaps (e.g. data bars columns)
+            return {
+                byCol: { ...clientColorScaleStats.byCol, ...serverColorScaleStats.byCol },
+                byRow: { ...clientColorScaleStats.byRow, ...(serverColorScaleStats.byRow || {}) },
+                table: serverColorScaleStats.table || clientColorScaleStats.table,
+            };
+        }
+        return serverColorScaleStats || clientColorScaleStats;
+    }, [serverColorScaleStats, clientColorScaleStats]);
 
     const getConditionalStyle = useCallback((colId, value, rowData, rowId) => {
         const ruleStyle = getRuleBasedStyle(colId, value);
