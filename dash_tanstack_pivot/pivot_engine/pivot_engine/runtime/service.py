@@ -55,7 +55,17 @@ class PivotRuntimeService:
             if isinstance(sort_options.get("columnOptions"), dict)
             else {}
         )
-        for s in (state.sorting or []):
+        # Auto-inject a default ascending sort for the first row field that has
+        # a sortKeyField in columnOptions when the frontend sends no explicit sort.
+        effective_sorting = list(state.sorting or [])
+        if not effective_sorting and state.row_fields and column_sort_options:
+            for rf in (state.row_fields or []):
+                col_opts = column_sort_options.get(rf)
+                if isinstance(col_opts, dict) and col_opts.get("sortKeyField"):
+                    effective_sorting.append({"id": rf, "desc": False})
+                    break
+
+        for s in effective_sorting:
             if not isinstance(s, dict) or s.get("id") is None:
                 continue
 
