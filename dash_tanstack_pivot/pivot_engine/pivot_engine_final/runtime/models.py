@@ -23,6 +23,7 @@ class PivotViewState:
     val_configs: List[Dict[str, Any]] = field(default_factory=list)
     filters: Dict[str, Any] = field(default_factory=dict)
     sorting: List[Dict[str, Any]] = field(default_factory=list)
+    sort_options: Dict[str, Any] = field(default_factory=dict)
     expanded: Any = field(default_factory=dict)
     show_row_totals: bool = False
     show_col_totals: bool = True
