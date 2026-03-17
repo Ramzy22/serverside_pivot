@@ -487,16 +487,16 @@ class IbisPlanner:
         # 5. Perform Aggregation
         # Deduplicate group columns while preserving order
         group_cols = list(dict.fromkeys(list(spec.rows) + list(spec.columns)))
-        hidden_sort_group_cols = []
+        hidden_sort_keys = []
+        
+        # Identify sort keys that are not already dimensions
         for sort_spec in (spec.sort or []):
             if not isinstance(sort_spec, dict):
                 continue
-            sort_type = str(sort_spec.get("sortType") or "").strip().lower()
             sort_key_field = sort_spec.get("sortKeyField")
             sort_field = sort_spec.get("field")
-            # Include hidden sort key if the sort field OR any group col
-            # is the dimension it belongs to.
-            # We check for exact match or the standard __sortkey__ prefix.
+            
+            # Check if this sort spec applies to a visible dimension
             sort_key_matches_group = (
                 not sort_field
                 or sort_field in group_cols
@@ -505,6 +505,7 @@ class IbisPlanner:
                     (sort_key_field.startswith("__sortkey__") and sort_key_field[11:] in group_cols)
                 ))
             )
+            
             if (
                 isinstance(sort_key_field, str)
                 and sort_key_field
@@ -512,13 +513,22 @@ class IbisPlanner:
                 and sort_key_matches_group
                 and sort_key_field not in group_cols
             ):
-                hidden_sort_group_cols.append(sort_key_field)
-        aggregation_group_cols = list(dict.fromkeys(group_cols + hidden_sort_group_cols))
+                hidden_sort_keys.append(sort_key_field)
+        
+        # Deduplicate hidden keys
+        hidden_sort_keys = list(dict.fromkeys(hidden_sort_keys))
+
+        # Add hidden sort keys as MIN() aggregations
+        # This prevents breaking the grain of the pivot table with dirty data
+        for key in hidden_sort_keys:
+            ibis_aggregations.append(filtered_table[key].min().name(key))
+
+        aggregation_group_cols = list(dict.fromkeys(group_cols))
         
         # Determine the most granular grouping for the current spec (Visual Totals basis)
         # Use full_rows if available to ensure parent totals match child sums deep in the tree
         all_hierarchy_dims = list(
-            dict.fromkeys(list(spec.full_rows or spec.rows) + list(spec.columns) + hidden_sort_group_cols)
+            dict.fromkeys(list(spec.full_rows or spec.rows) + list(spec.columns))
         )
         
         if post_filters and len(all_hierarchy_dims) > len(group_cols):
@@ -536,6 +546,11 @@ class IbisPlanner:
             # We must sum/min/max the already aggregated values. 
             # Note: This works for SUM, COUNT, MIN, MAX. For AVG it's more complex (not handled here).
             outer_aggs = []
+            
+            # Pass through hidden sort keys using MIN aggregation rollup
+            for key in hidden_sort_keys:
+                outer_aggs.append(inner_agg[key].min().name(key))
+
             for m in spec.measures:
                 if not m.ratio_numerator and not m.expression:
                     # Map aggregation type to appropriate roll-up function
@@ -602,7 +617,7 @@ class IbisPlanner:
         # 7. Final Projection and Ordering.
         # Include hidden sort-key group columns so ORDER BY can reference them,
         # then the adapter strips those keys from the transport payload.
-        projection_group_cols = list(dict.fromkeys(group_cols + hidden_sort_group_cols))
+        projection_group_cols = list(dict.fromkeys(group_cols + hidden_sort_keys))
         projection = []
         for col in projection_group_cols:
             projection.append(aggregated_table[col])
@@ -991,7 +1006,7 @@ class IbisPlanner:
                     pivot_aggs.append((weighted_sum / total_weight.nullif(0)).name(alias))
 
         row_dims = list(spec.rows or [])
-        hidden_sort_group_cols = []
+        hidden_sort_keys = []
         for sort_spec in (spec.sort or []):
             if not isinstance(sort_spec, dict):
                 continue
@@ -1012,9 +1027,16 @@ class IbisPlanner:
                 and sort_key_matches_group
                 and sort_key_field not in row_dims
             ):
-                hidden_sort_group_cols.append(sort_key_field)
+                hidden_sort_keys.append(sort_key_field)
         
-        aggregation_group_cols = list(dict.fromkeys(row_dims + hidden_sort_group_cols))
+        # Deduplicate
+        hidden_sort_keys = list(dict.fromkeys(hidden_sort_keys))
+
+        aggregation_group_cols = list(dict.fromkeys(row_dims))
+
+        # Add hidden sort keys as MIN aggregations
+        for key in hidden_sort_keys:
+            pivot_aggs.append(base_table[key].min().name(key))
 
         if aggregation_group_cols:
             result_expr = base_table.group_by(aggregation_group_cols).aggregate(pivot_aggs)
@@ -1081,7 +1103,7 @@ class IbisPlanner:
             group_cols = []
             
         # Handle hidden sort keys for the target dimension
-        hidden_sort_group_cols = []
+        hidden_sort_keys = []
         if target_dim:
             for sort_spec in (spec.sort or []):
                 if not isinstance(sort_spec, dict):
@@ -1104,12 +1126,19 @@ class IbisPlanner:
                     and sort_key_field in base_table.columns
                     and sort_key_field != target_dim
                 ):
-                    hidden_sort_group_cols.append(sort_key_field)
+                    hidden_sort_keys.append(sort_key_field)
+        
+        # Deduplicate hidden keys
+        hidden_sort_keys = list(dict.fromkeys(hidden_sort_keys))
 
-        aggregation_group_cols = list(dict.fromkeys(group_cols + hidden_sort_group_cols))
+        aggregation_group_cols = list(dict.fromkeys(group_cols))
 
         base_measures = [m for m in spec.measures if not m.ratio_numerator]
         aggs = [self.builder.build_measure_aggregation(base_table, m) for m in base_measures]
+        
+        # Add hidden sort keys as MIN aggregations
+        for key in hidden_sort_keys:
+            aggs.append(base_table[key].min().name(key))
         
         if aggregation_group_cols:
             result_expr = base_table.group_by(aggregation_group_cols).aggregate(aggs)
@@ -1123,6 +1152,10 @@ class IbisPlanner:
             
         for m in base_measures:
             final_projection.append(result_expr[m.alias])
+            
+        # Also project the hidden sort key aggregations
+        for key in hidden_sort_keys:
+            final_projection.append(result_expr[key])
             
         result_expr = result_expr.select(final_projection)
 
