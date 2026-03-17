@@ -568,6 +568,21 @@ class HierarchicalVirtualScrollManager:
         union_expressions = []
         con = self.planner.con
         all_dims = spec.rows
+        column_sort_options = spec.column_sort_options or {}
+        hidden_sort_fields = []
+        for dim in all_dims:
+            dim_opts = column_sort_options.get(dim) if isinstance(column_sort_options, dict) else None
+            if not isinstance(dim_opts, dict):
+                continue
+            sort_type = str(dim_opts.get("sortType") or "").strip().lower()
+            sort_key_field = dim_opts.get("sortKeyField")
+            if (
+                sort_type == "curve_pillar_tenor"
+                and isinstance(sort_key_field, str)
+                and sort_key_field
+                and sort_key_field not in hidden_sort_fields
+            ):
+                hidden_sort_fields.append(sort_key_field)
         # Initial standard measures
         all_measures_aliases = [m.alias for m in spec.measures]
 
@@ -683,6 +698,10 @@ class HierarchicalVirtualScrollManager:
                         elif agg_type == 'count': aggs.append(col_expr.count().name(alias))
                         elif agg_type == 'count_distinct': aggs.append(col_expr.nunique().name(alias))
 
+                for sort_key_field in hidden_sort_fields:
+                    if sort_key_field in source_table.columns:
+                        aggs.append(source_table[sort_key_field].min().name(sort_key_field))
+
                 if level_dims:
                     query = source_table.group_by(level_dims).aggregate(aggs)
                 else:
@@ -692,6 +711,9 @@ class HierarchicalVirtualScrollManager:
                 # Standard Aggregation Logic
                 if is_using_base:
                     aggs = [self.planner.builder.build_measure_aggregation(source_table, m) for m in spec.measures]
+                    for sort_key_field in hidden_sort_fields:
+                        if sort_key_field in source_table.columns:
+                            aggs.append(source_table[sort_key_field].min().name(sort_key_field))
                     if level_dims:
                         query = source_table.group_by(level_dims).aggregate(aggs)
                     else:
@@ -719,6 +741,12 @@ class HierarchicalVirtualScrollManager:
                     projection.append(query[m_alias])
                 else:
                     projection.append(ibis.literal(None, type='float64').name(m_alias))
+
+            for sort_key_field in hidden_sort_fields:
+                if sort_key_field in query.columns:
+                    projection.append(query[sort_key_field])
+                else:
+                    projection.append(ibis.literal(None, type='float64').name(sort_key_field))
 
             return query.select(projection)
 
@@ -765,28 +793,48 @@ class HierarchicalVirtualScrollManager:
         # User sort overrides the leaf-level dimension sort only.
         user_sort_field = None
         user_sort_desc = False
+        user_sort_spec = {}
         if spec.sort:
             sort_specs = spec.sort if isinstance(spec.sort, list) else [spec.sort]
             if sort_specs:
-                user_sort_field = sort_specs[0].get('field')
-                user_sort_desc = (sort_specs[0].get('order') or 'asc').lower() == 'desc'
+                user_sort_spec = sort_specs[0] if isinstance(sort_specs[0], dict) else {}
+                user_sort_field = user_sort_spec.get('field')
+                user_sort_desc = (user_sort_spec.get('order') or 'asc').lower() == 'desc'
 
         order_by_cols = []
         available = set(final_expr.columns)
         for i, dim in enumerate(all_dims):
             if dim not in available:
                 continue
-            col = final_expr[dim]
             # Parent-before-children: rows where the NEXT dim is NULL are parents at this level
             if i + 1 < len(all_dims) and all_dims[i + 1] in available:
                 next_col = final_expr[all_dims[i + 1]]
-                # NULL next-dim means this row is the parent → sort it first (DESC on IS NULL)
+                # NULL next-dim means this row is the parent -> sort it first (DESC on IS NULL)
                 order_by_cols.append(next_col.isnull().desc())
-            # Sort this dimension — apply user sort if it targets this field
-            if user_sort_field == dim:
-                order_by_cols.append(col.desc() if user_sort_desc else col.asc())
+
+            dim_sort = {
+                "field": dim,
+                "order": "desc" if (user_sort_field == dim and user_sort_desc) else "asc",
+            }
+            dim_opts = column_sort_options.get(dim) if isinstance(column_sort_options, dict) else None
+            if isinstance(dim_opts, dict):
+                for key in ("sortType", "sortKeyField", "semanticType", "sortSemantic", "nulls"):
+                    if key in dim_opts and dim_opts.get(key) is not None:
+                        dim_sort[key] = dim_opts.get(key)
+            if user_sort_field == dim and isinstance(user_sort_spec, dict):
+                for key in ("sortType", "sortKeyField", "semanticType", "sortSemantic", "nulls"):
+                    if key in user_sort_spec and user_sort_spec.get(key) is not None:
+                        dim_sort[key] = user_sort_spec.get(key)
+
+            dim_sort_exprs = self.planner.builder.build_sort_expressions(final_expr, [dim_sort])
+            if dim_sort_exprs:
+                order_by_cols.extend(dim_sort_exprs)
             else:
-                order_by_cols.append(col.asc(nulls_first=True))
+                col = final_expr[dim]
+                if user_sort_field == dim and user_sort_desc:
+                    order_by_cols.append(col.desc())
+                else:
+                    order_by_cols.append(col.asc(nulls_first=True))
 
         if not order_by_cols:
             order_by_cols = [ibis.asc(dim, nulls_first=True) for dim in all_dims if dim in available]
@@ -899,3 +947,4 @@ class HierarchicalVirtualScrollManager:
 
         # Final conversion to list of dicts (fastest way from Arrow)
         return result_table.to_pylist()
+

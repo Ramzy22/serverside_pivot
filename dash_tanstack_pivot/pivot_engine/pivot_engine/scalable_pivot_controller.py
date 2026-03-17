@@ -257,13 +257,49 @@ class ScalablePivotController(PivotController):
         )
         return result
 
+    # Dimension-specific sort keys that must NOT propagate across levels.
+    _DIM_SORT_KEYS = ("sortKeyField", "semanticType", "sortSemantic", "sortType")
+
     @staticmethod
-    def _build_group_rows_sort(group_rows: List[str], base_sort: Any) -> List[Dict[str, Any]]:
-        """Ensure deterministic ordering for level queries."""
+    def _build_group_rows_sort(
+        group_rows: List[str],
+        base_sort: Any,
+        column_sort_options: Optional[Dict[str, Any]] = None,
+    ) -> List[Dict[str, Any]]:
+        """Ensure deterministic ordering for level queries.
+
+        Adapts the sort to the deepest dimension in *group_rows*,
+        stripping dimension-specific metadata from the base sort and
+        re-applying the correct per-column options for the target
+        dimension from *column_sort_options*.
+        """
+        col_opts = (column_sort_options or {}).get(group_rows[-1], {}) if group_rows else {}
+
         if isinstance(base_sort, list) and base_sort:
+            target_dim = group_rows[-1] if group_rows else None
+            if target_dim:
+                adapted = []
+                for s in base_sort:
+                    item = {"field": target_dim}
+                    for key in ("order", "desc", "nulls"):
+                        if key in s:
+                            item[key] = s[key]
+                    # Apply per-column sort options for the target dimension
+                    for key in ScalablePivotController._DIM_SORT_KEYS:
+                        if key in col_opts and col_opts[key] is not None:
+                            item[key] = col_opts[key]
+                    adapted.append(item)
+                return adapted
             return base_sort
         if isinstance(base_sort, dict) and base_sort:
-            return [base_sort]
+            item = {"field": group_rows[-1]} if group_rows else dict(base_sort)
+            for key in ("order", "desc", "nulls"):
+                if key in base_sort:
+                    item[key] = base_sort[key]
+            for key in ScalablePivotController._DIM_SORT_KEYS:
+                if key in col_opts and col_opts[key] is not None:
+                    item[key] = col_opts[key]
+            return [item]
         return [{"field": dim, "order": "asc"} for dim in group_rows]
 
     @staticmethod
@@ -335,7 +371,8 @@ class ScalablePivotController(PivotController):
         root_spec = spec.copy()
         root_spec.rows = rows[:1]
         root_spec.limit = 100000
-        root_spec.sort = self._build_group_rows_sort(root_spec.rows, spec.sort)
+        col_sort_opts = spec.column_sort_options
+        root_spec.sort = self._build_group_rows_sort(root_spec.rows, spec.sort, col_sort_opts)
         root_spec.totals = bool(spec.totals)
 
         try:
@@ -381,7 +418,7 @@ class ScalablePivotController(PivotController):
             level_spec = spec.copy()
             level_spec.rows = group_rows
             level_spec.limit = 100000
-            level_spec.sort = self._build_group_rows_sort(group_rows, spec.sort)
+            level_spec.sort = self._build_group_rows_sort(group_rows, spec.sort, col_sort_opts)
             # Only root level should carry totals. Deeper totals create duplicate subtotal
             # rows and inflate collapsed row counts.
             level_spec.totals = False

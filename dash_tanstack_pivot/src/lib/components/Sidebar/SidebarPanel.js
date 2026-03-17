@@ -165,8 +165,8 @@ export function SidebarPanel({
                                                                                                                 alignItems:'center',
                                                                                                                 padding: '2px',
                                                                                                                 borderRadius: '4px',
-                                                                                                                background: (filters[label] && (filters[label].conditions?.length > 0 || (typeof filters[label] === 'string' && filters[label].length > 0))) ? theme.select : 'transparent',
-                                                                                                                color: (filters[label] && (filters[label].conditions?.length > 0 || (typeof filters[label] === 'string' && filters[label].length > 0))) ? theme.primary : 'inherit'
+                                                                                                                background: (filters[label] && ((filters[label].conditions && filters[label].conditions.length > 0) || (typeof filters[label] === 'string' && filters[label].length > 0))) ? theme.select : 'transparent',
+                                                                                                                color: (filters[label] && ((filters[label].conditions && filters[label].conditions.length > 0) || (typeof filters[label] === 'string' && filters[label].length > 0))) ? theme.primary : 'inherit'
                                                                                                             }}
                                                                                                         >
                                                                                                             <Icons.Filter />

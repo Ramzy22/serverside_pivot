@@ -85,6 +85,7 @@ class PivotSpec:
     grouping_config: Optional[GroupingConfig] = None
     pivot_config: Optional[PivotConfig] = None
     drill_paths: Optional[List[DrillPath]] = None
+    column_sort_options: Optional[Dict[str, Any]] = None
 
     def copy(self):
         """Deep copy the PivotSpec"""
@@ -113,6 +114,7 @@ class PivotSpec:
             grouping_config=grouping_config,
             pivot_config=pivot_config,
             drill_paths=drill_paths,
+            column_sort_options=d.get("column_sort_options"),
         )
 
     def to_dict(self):
@@ -133,4 +135,5 @@ class PivotSpec:
             "grouping_config": self.grouping_config.__dict__ if self.grouping_config else None,
             "pivot_config": self.pivot_config.__dict__ if self.pivot_config else None,
             "drill_paths": [p.__dict__ for p in self.drill_paths] if self.drill_paths else None,
+            "column_sort_options": self.column_sort_options,
         }

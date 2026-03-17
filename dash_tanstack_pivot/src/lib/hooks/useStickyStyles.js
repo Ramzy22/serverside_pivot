@@ -17,7 +17,7 @@ const getLeafColumns = (column) => {
 };
 
 const getPinnedLeafColumns = (column, side) =>
-    getLeafColumns(column).filter((leaf) => leaf?.getIsPinned?.() === side);
+    getLeafColumns(column).filter((leaf) => (leaf && typeof leaf.getIsPinned === 'function' ? leaf.getIsPinned() : undefined) === side);
 
 const getOffsetLeaf = (column, side) => {
     const pinnedLeaves = getPinnedLeafColumns(column, side);
@@ -51,7 +51,7 @@ const useStickyStyles = (theme, leftCols, rightCols) => {
     }, [leftCols, rightCols]);
 
     const resolvePinnedSide = useCallback((column, renderSection) => {
-        const pinState = column?.getIsPinned?.();
+        const pinState = column && typeof column.getIsPinned === 'function' ? column.getIsPinned() : undefined;
         if (pinState === 'left' || pinState === 'right') {
             return pinState;
         }
@@ -66,13 +66,13 @@ const useStickyStyles = (theme, leftCols, rightCols) => {
         if (!boundaryLeaf) return false;
 
         const boundaryByApi = side === 'left'
-            ? boundaryLeaf.getIsLastColumn?.('left')
-            : boundaryLeaf.getIsFirstColumn?.('right');
+            ? (typeof boundaryLeaf.getIsLastColumn === 'function' ? boundaryLeaf.getIsLastColumn('left') : undefined)
+            : (typeof boundaryLeaf.getIsFirstColumn === 'function' ? boundaryLeaf.getIsFirstColumn('right') : undefined);
         if (typeof boundaryByApi === 'boolean') return boundaryByApi;
 
         return side === 'left'
-            ? leftCols[leftCols.length - 1]?.id === boundaryLeaf.id
-            : rightCols[0]?.id === boundaryLeaf.id;
+            ? (leftCols[leftCols.length - 1] ? leftCols[leftCols.length - 1].id === boundaryLeaf.id : false)
+            : (rightCols[0] ? rightCols[0].id === boundaryLeaf.id : false);
     }, [leftCols, rightCols]);
 
     const getBoundaryStyle = useCallback((side) => ({

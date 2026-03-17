@@ -64,7 +64,16 @@ class PivotRuntimeService:
 
             # Static per-column sort metadata (from sortOptions) is merged first.
             # Dynamic sorting payload keys override these defaults.
-            static_column_sort = column_sort_options.get(sort_id)
+            # The frontend sends id="hierarchy" for the row-group column;
+            # resolve to the actual row field for sortOptions lookup by
+            # checking all row fields for a matching sortOptions entry.
+            lookup_id = sort_id
+            if lookup_id == "hierarchy" and state.row_fields and column_sort_options:
+                for rf in state.row_fields:
+                    if rf in column_sort_options:
+                        lookup_id = rf
+                        break
+            static_column_sort = column_sort_options.get(lookup_id)
             if isinstance(static_column_sort, dict):
                 for key in ("semanticType", "sortSemantic", "nulls", "sortType", "sortKeyField"):
                     if key in static_column_sort and static_column_sort.get(key) is not None:
@@ -95,6 +104,7 @@ class PivotRuntimeService:
             totals=state.show_col_totals,
             row_totals=state.show_row_totals,
             version=context.window_seq,
+            column_sort_options=column_sort_options or None,
         )
 
         trigger_kind = context.trigger_kind

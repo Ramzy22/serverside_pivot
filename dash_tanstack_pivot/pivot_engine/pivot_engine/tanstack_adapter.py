@@ -163,6 +163,7 @@ class TanStackRequest:
     totals: Optional[bool] = True
     row_totals: Optional[bool] = False
     version: Optional[int] = None
+    column_sort_options: Optional[Dict[str, Any]] = None
 
 
 @dataclass
@@ -652,10 +653,11 @@ class TanStackPivotAdapter:
             limit=limit,
             totals=request.totals if request.totals is not None else True,  # Enable totals computation
             pivot_config=PivotConfig(
-                enabled=True, 
+                enabled=True,
                 column_cursor=column_cursor,
                 include_totals_column=request.row_totals if request.row_totals is not None else False
-            )
+            ),
+            column_sort_options=request.column_sort_options,
         )
         return spec
     

@@ -491,9 +491,9 @@ export default function DashTanstackPivot(props) {
         //   - current non-empty, next is empty → jump to next non-empty past the gap (or edge)
         //   - current non-empty, next is non-empty → jump to last non-empty before a gap (end of block)
         const ctrlArrowRow = (dir) => {
-            const colId = visibleLeafColumns[colIndex]?.id;
+            const colId = (visibleLeafColumns[colIndex] && visibleLeafColumns[colIndex].id);
             if (!colId) return dir > 0 ? visibleRowsAll.length - 1 : 0;
-            const isEmpty = (r) => { const v = r?.getValue(colId); return v === null || v === undefined || v === ''; };
+            const isEmpty = (r) => { const v = (r && r.getValue(colId)); return v === null || v === undefined || v === ''; };
             const curEmpty = isEmpty(visibleRowsAll[rowIndex]);
             if (curEmpty) {
                 // jump to next non-empty
@@ -523,7 +523,7 @@ export default function DashTanstackPivot(props) {
         const ctrlArrowCol = (dir) => {
             const rowObj = visibleRowsAll[rowIndex];
             if (!rowObj) return dir > 0 ? visibleLeafColumns.length - 1 : 0;
-            const isEmpty = (c) => { const v = rowObj.getValue(c?.id); return v === null || v === undefined || v === ''; };
+            const isEmpty = (c) => { const v = rowObj.getValue(c && c.id); return v === null || v === undefined || v === ''; };
             const curEmpty = isEmpty(visibleLeafColumns[colIndex]);
             if (curEmpty) {
                 for (let i = colIndex + dir; dir > 0 ? i < visibleLeafColumns.length : i >= 0; i += dir) {
@@ -1139,7 +1139,7 @@ export default function DashTanstackPivot(props) {
                 // no cache entry → they flash with skeleton loaders until a follow-up fetch lands.
                 // pendingExpansionRef.current is already set by onExpandedChange (same event,
                 // before this effect runs), so anchorBlock is available here.
-                const anchorBlockHint = pendingExpansionRef.current?.anchorBlock ?? -1;
+                const anchorBlockHint = (pendingExpansionRef.current && pendingExpansionRef.current.anchorBlock != null ? pendingExpansionRef.current.anchorBlock : -1);
                 const expansionBlockSize = 100; // must match blockSize prop
                 const extendedEnd = anchorBlockHint >= 0
                     ? Math.max(viewportSnapshot.end, (anchorBlockHint + 2) * expansionBlockSize - 1)
@@ -2930,7 +2930,8 @@ export default function DashTanstackPivot(props) {
         // Identify leaf (data) columns from the last header group, excluding
         // internal/UI-only columns that should not appear in the export.
         const SKIP_COL_IDS = new Set(['__row_number__']);
-        const leafHeaders = (headerGroups[headerGroups.length - 1]?.headers ?? [])
+        const lastHeaderGroup = headerGroups[headerGroups.length - 1];
+        const leafHeaders = (lastHeaderGroup && lastHeaderGroup.headers != null ? lastHeaderGroup.headers : [])
             .filter(h => !SKIP_COL_IDS.has(h.column.id) && !h.isPlaceholder);
 
         const leafCount = leafHeaders.length;
@@ -2946,7 +2947,7 @@ export default function DashTanstackPivot(props) {
             let leafPos = 0;
             hg.headers.forEach(h => {
                 if (SKIP_COL_IDS.has(h.column.id)) return;
-                const span = h.colSpan ?? 1;
+                const span = (h.colSpan != null ? h.colSpan : 1);
                 if (!h.isPlaceholder) {
                     // Resolve header text — prefer columnDef.header string, fall back to id
                     const colDef = h.column.columnDef;
@@ -2980,7 +2981,7 @@ export default function DashTanstackPivot(props) {
         // Track max content width per column for auto-sizing.
         const colWidths = leafHeaders.map(h => {
             const colDef = h.column.columnDef;
-            return typeof colDef.header === 'string' ? colDef.header.length : (h.column.id ?? '').length;
+            return typeof colDef.header === 'string' ? colDef.header.length : (h.column.id != null ? h.column.id : '').length;
         });
 
         const dataRows = allRows.map(r => {
@@ -2992,14 +2993,14 @@ export default function DashTanstackPivot(props) {
                 let val;
                 if (colId === 'hierarchy') {
                     // Hierarchy column: indent using spaces to reflect depth
-                    const depth = r.original?.depth ?? r.depth ?? 0;
-                    const label = r.original?._isTotal ? (r.original?._id ?? 'Total') : (r.original?._id ?? '');
+                    const depth = (r.original && r.original.depth != null ? r.original.depth : (r.depth != null ? r.depth : 0));
+                    const label = (r.original && r.original._isTotal) ? ((r.original && r.original._id != null) ? r.original._id : 'Total') : ((r.original && r.original._id != null) ? r.original._id : '');
                     val = '\u00A0\u00A0'.repeat(depth) + label;  // non-breaking spaces for Excel visibility
                 } else if (typeof colDef.accessorFn === 'function') {
                     // Use accessorFn to get the value (same as TanStack does internally)
                     val = colDef.accessorFn(r.original, r.index);
                 } else if (colDef.accessorKey) {
-                    val = r.original?.[colDef.accessorKey];
+                    val = (r.original && r.original[colDef.accessorKey]);
                 } else {
                     val = '';
                 }
@@ -3076,19 +3077,19 @@ export default function DashTanstackPivot(props) {
                     ? `"${s.replace(/"/g, '""')}"` : s;
             };
             const header = leafCols.map(c => {
-                const h = c.columnDef?.header;
-                return escape(typeof h === 'string' ? h : (c.id ?? ''));
+                const h = (c.columnDef && c.columnDef.header);
+                return escape(typeof h === 'string' ? h : (c.id != null ? c.id : ''));
             }).join(',');
             const lines = allRows.map(r =>
                 leafCols.map(c => {
                     if (c.id === 'hierarchy') {
-                        const depth = r.original?.depth ?? r.depth ?? 0;
-                        return escape('  '.repeat(depth) + (r.original?._id ?? ''));
+                        const depth = (r.original && r.original.depth != null ? r.original.depth : (r.depth != null ? r.depth : 0));
+                        return escape('  '.repeat(depth) + (r.original && r.original._id != null ? r.original._id : ''));
                     }
-                    const val = typeof c.columnDef?.accessorFn === 'function'
+                    const val = typeof (c.columnDef && c.columnDef.accessorFn) === 'function'
                         ? c.columnDef.accessorFn(r.original, r.index)
-                        : (c.columnDef?.accessorKey ? r.original?.[c.columnDef.accessorKey] : '');
-                    return escape(val ?? '');
+                        : ((c.columnDef && c.columnDef.accessorKey) ? (r.original && r.original[c.columnDef.accessorKey]) : '');
+                    return escape(val != null ? val : '');
                 }).join(',')
             );
             const blob = new Blob([[header, ...lines].join('\n')], { type: 'text/csv;charset=utf-8;' });

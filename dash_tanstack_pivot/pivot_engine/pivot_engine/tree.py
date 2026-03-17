@@ -389,6 +389,45 @@ class TreeExpansionManager:
             dimension_hierarchy, level, path_cursor_map
         )
 
+    # Keys that are dimension-specific and must NOT be carried across levels.
+    _DIMENSION_SORT_KEYS = ("sortKeyField", "semanticType", "sortSemantic", "sortType")
+
+    def _build_sort_for_dimension(
+        self, dimension: str, base_spec: Dict[str, Any]
+    ) -> List[Dict[str, Any]]:
+        """Return a sort list appropriate for *dimension*.
+
+        * Keeps only direction (order / desc / nulls) from the base sort.
+        * Looks up ``column_sort_options[dimension]`` for per-column metadata
+          (sortKeyField, semanticType, sortType, …).
+        * Falls back to ``[{field: dimension, order: "asc"}]`` when the base
+          spec has no sort at all.
+        """
+        base_sort = base_spec.get("sort", [])
+        col_opts = (base_spec.get("column_sort_options") or {}).get(dimension) or {}
+
+        if not base_sort:
+            item: Dict[str, Any] = {"field": dimension, "order": "asc"}
+            # Apply per-column options even when no explicit sort exists
+            for key in self._DIMENSION_SORT_KEYS:
+                if key in col_opts and col_opts[key] is not None:
+                    item[key] = col_opts[key]
+            return [item]
+
+        adapted = []
+        for s in (base_sort if isinstance(base_sort, list) else [base_sort]):
+            item = {"field": dimension}
+            # Carry over direction-related keys only
+            for key in ("order", "desc", "nulls"):
+                if key in s:
+                    item[key] = s[key]
+            # Apply the *current* dimension's own sort metadata
+            for key in self._DIMENSION_SORT_KEYS:
+                if key in col_opts and col_opts[key] is not None:
+                    item[key] = col_opts[key]
+            adapted.append(item)
+        return adapted
+
     def _create_level_spec(
         self,
         base_spec: Dict[str, Any],
@@ -408,10 +447,10 @@ class TreeExpansionManager:
 
         all_filters = base_spec.get("filters", []) + path_filters
         
-        # Ensure a stable sort order for pagination
-        sort = base_spec.get("sort", [])
-        if not sort:
-            sort = [{"field": dimension, "order": "asc"}]
+        # Build a sort spec appropriate for *this* dimension.
+        # Each hierarchy level must sort by its own corresponding function
+        # (e.g. its own sortKeyField / semanticType), not the root level's.
+        sort = self._build_sort_for_dimension(dimension, base_spec)
 
         return {
             "table": base_spec["table"],
@@ -745,10 +784,8 @@ class TreeExpansionManager:
                 # Group by all parent dims + target
                 group_rows = parent_dims + [target_dim]
                 
-                # Ensure stable sort
-                sort = base_spec.get("sort", [])
-                if not sort:
-                    sort = [{"field": dim, "order": "asc"} for dim in group_rows]
+                # Build sort using the target dimension's own sort metadata
+                sort = self._build_sort_for_dimension(target_dim, base_spec)
 
                 level_spec = {
                     "table": base_spec["table"],
@@ -841,11 +878,9 @@ class TreeExpansionManager:
         # to ensure we can correctly identify which parent each child belongs to.
         group_rows = parent_dims + [target_dim]
         
-        # Ensure stable sort order
-        sort = base_spec.get("sort", [])
-        if not sort:
-            sort = [{"field": dim, "order": "asc"} for dim in group_rows]
-        
+        # Build sort using the target dimension's own sort metadata
+        sort = self._build_sort_for_dimension(target_dim, base_spec)
+
         return {
             "table": base_spec["table"],
             "rows": group_rows,
@@ -853,7 +888,7 @@ class TreeExpansionManager:
             "columns": base_spec.get("columns", []),
             "measures": base_spec.get("measures", []),
             "filters": filters,
-            "sort": sort, 
+            "sort": sort,
             "limit": base_spec.get("limit", 1000) * len(parent_paths),
             "pivot_config": base_spec.get("pivot_config"),
             "grouping_config": base_spec.get("grouping_config"),
@@ -954,10 +989,10 @@ class TreeExpansionManager:
 
         all_filters = base_spec.get("filters", []) + path_filters
 
-        # Ensure a stable sort order for pagination
-        sort = base_spec.get("sort", [])
-        if not sort:
-            sort = [{"field": dimension, "order": "asc"}]
+        # Build a sort spec appropriate for *this* dimension.
+        # Each hierarchy level must sort by its own corresponding function
+        # (e.g. its own sortKeyField / semanticType), not the root level's.
+        sort = self._build_sort_for_dimension(dimension, base_spec)
 
         return {
             "table": base_spec["table"],

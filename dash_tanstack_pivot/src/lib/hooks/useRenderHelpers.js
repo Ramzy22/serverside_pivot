@@ -71,7 +71,7 @@ export function useRenderHelpers({
 
         const row = cell.row;
         const col = cell.column;
-        const colIndex = visibleLeafColIndexMap.get(col.id) ?? -1;
+        const colIndex = visibleLeafColIndexMap.get(col.id) !== undefined ? visibleLeafColIndexMap.get(col.id) : -1;
         const isHierarchy = cell.column.id === 'hierarchy';
         const isSelected = Object.prototype.hasOwnProperty.call(
             selectedCells || {},

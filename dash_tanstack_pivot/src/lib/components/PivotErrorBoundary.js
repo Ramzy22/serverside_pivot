@@ -18,7 +18,7 @@ class PivotErrorBoundary extends React.Component {
 
   render() {
     if (this.state.hasError) {
-      const msg = this.state.error?.message || 'An unexpected error occurred.';
+      const msg = (this.state.error ? this.state.error.message : null) || 'An unexpected error occurred.';
       return (
         <div style={{
           padding: '16px',

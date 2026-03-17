@@ -313,6 +313,6 @@ register_pivot_app(app, adapter_getter=get_adapter, pivot_id="curve-pivot-grid")
 register_pivot_app(app, adapter_getter=get_adapter, pivot_id="tenor-pivot-grid")
 
 if __name__ == "__main__":
-    app.run(debug=True, port=8050)
+    app.run(debug=True, use_reloader=False, port=8050)
 
 

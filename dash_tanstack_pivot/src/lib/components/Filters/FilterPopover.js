@@ -19,8 +19,8 @@ const FilterPopover = ({ column, anchorEl, onClose, onFilter, currentFilter, opt
         const rect = target.getBoundingClientRect();
         const viewportHeight = window.innerHeight;
         const viewportWidth = window.innerWidth;
-        const popoverWidth = popoverRef.current?.offsetWidth || FALLBACK_WIDTH;
-        const popoverHeight = popoverRef.current?.offsetHeight || FALLBACK_HEIGHT;
+        const popoverWidth = (popoverRef.current && popoverRef.current.offsetWidth) || FALLBACK_WIDTH;
+        const popoverHeight = (popoverRef.current && popoverRef.current.offsetHeight) || FALLBACK_HEIGHT;
 
         let top = rect.bottom;
         let left = rect.left;

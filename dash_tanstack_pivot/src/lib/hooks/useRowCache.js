@@ -63,7 +63,7 @@ export const useRowCache = ({ blockSize = 100, maxBlocks = 500 } = {}) => {
      * Returns the version of this request
      */
     const setBlockLoading = useCallback((blockIndex, requestVersion = null, epoch = currentEpochRef.current) => {
-        const version = requestVersion ?? (requestVersionRef.current + 1);
+        const version = (requestVersion !== null && requestVersion !== undefined) ? requestVersion : (requestVersionRef.current + 1);
         requestVersionRef.current = version;
         const cacheKey = makeKey(epoch, blockIndex);
         

@@ -8,9 +8,9 @@ const ContextMenu = ({ x, y, onClose, actions }) => {
         const clampPosition = () => {
             const viewportWidth = window.innerWidth;
             const viewportHeight = window.innerHeight;
-            const rect = menuRef.current?.getBoundingClientRect();
-            const menuWidth = rect?.width || 200;
-            const menuHeight = rect?.height || (actions.length * 32 + 20);
+            const rect = menuRef.current ? menuRef.current.getBoundingClientRect() : null;
+            const menuWidth = rect ? rect.width : 200;
+            const menuHeight = rect ? rect.height : (actions.length * 32 + 20);
             const padding = 8;
 
             let adjustedX = x;

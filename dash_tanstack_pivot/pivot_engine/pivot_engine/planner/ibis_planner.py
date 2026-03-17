@@ -494,11 +494,19 @@ class IbisPlanner:
             sort_type = str(sort_spec.get("sortType") or "").strip().lower()
             sort_key_field = sort_spec.get("sortKeyField")
             sort_field = sort_spec.get("field")
+            # Include hidden sort key if the sort field OR any group col
+            # is the dimension it belongs to (e.g. hierarchy sort resolves
+            # to parent dim but child level groups by the target dim).
+            sort_key_matches_group = (
+                not sort_field
+                or sort_field in group_cols
+                or (isinstance(sort_key_field, str) and any(sort_key_field.endswith(gc) for gc in group_cols if isinstance(gc, str)))
+            )
             if (
                 isinstance(sort_key_field, str)
                 and sort_key_field
                 and sort_key_field in filtered_table.columns
-                and (not sort_field or sort_field in group_cols)
+                and sort_key_matches_group
                 and sort_key_field not in group_cols
             ):
                 hidden_sort_group_cols.append(sort_key_field)

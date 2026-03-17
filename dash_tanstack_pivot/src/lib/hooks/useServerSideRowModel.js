@@ -75,7 +75,7 @@ export const useServerSideRowModel = ({
     // 2. Initialize Virtualizer
     // We use the full rowCount for serverSide
     const rowVirtualizer = useVirtualizer({
-        count: serverSide ? (rowCount || 0) : (data?.length || 0),
+        count: serverSide ? (rowCount || 0) : (data ? data.length : 0),
         getScrollElement: () => parentRef.current,
         estimateSize: estimateRowHeight || (() => rowHeight),
         overscan: 12 // Keep DOM footprint small; block-based prefetch covers further rows
@@ -404,14 +404,14 @@ export const useServerSideRowModel = ({
             const currentInflight = inflightRequestRef.current;
             for (let b = startBlock; b <= endBlock; b++) {
                 const block = getBlock(b, stateEpoch);
-                const isStale = block?.status === 'loading' && (Date.now() - block.timestamp > 1500);
-                const isPartial = block?.status === 'partial';
+                const isStale = block && block.status === 'loading' && (Date.now() - block.timestamp > 1500);
+                const isPartial = block && block.status === 'partial';
                 // A loading block is "orphaned" when the current inflight no longer covers
                 // it (e.g. user scrolled away to a different range). Re-request it so it
                 // doesn't stay stuck for the full stale timeout.
                 const blockStart = b * blockSize;
                 const blockEnd = (b + 1) * blockSize - 1;
-                const isOrphaned = block?.status === 'loading' && !isStale && !(
+                const isOrphaned = block && block.status === 'loading' && !isStale && !(
                     currentInflight &&
                     currentInflight.abortGeneration === abortGeneration &&
                     currentInflight.stateEpoch === stateEpoch &&
@@ -423,13 +423,13 @@ export const useServerSideRowModel = ({
                 // 1. Block was loaded in full-data mode (colEnd=null/undefined) but the
                 //    client is now in windowed mode — needs re-fetch with windowed cols.
                 // 2. Block was loaded in windowed mode with a different col range.
-                const blockHasColMeta = block?.colEnd !== null && block?.colEnd !== undefined;
-                const isColMismatch = block?.status === 'loaded' && colEnd !== null && (
+                const blockHasColMeta = block && block.colEnd !== null && block.colEnd !== undefined;
+                const isColMismatch = block && block.status === 'loaded' && colEnd !== null && (
                     !blockHasColMeta ||
                     block.colStart !== colStart ||
                     block.colEnd !== colEnd
                 );
-                const inflightColMismatch = block?.status === 'loading' && currentInflight && (
+                const inflightColMismatch = block && block.status === 'loading' && currentInflight && (
                     currentInflight.colStart !== colStart ||
                     currentInflight.colEnd !== colEnd
                 );
@@ -456,7 +456,7 @@ export const useServerSideRowModel = ({
                 for (let b = startBlock; b <= endBlock; b++) {
                     if (b >= newInflightMinBlock && b <= newInflightMaxBlock) continue;
                     const bBlock = getBlock(b, stateEpoch);
-                    if (bBlock?.status === 'loading') {
+                    if (bBlock && bBlock.status === 'loading') {
                         blocksNeeded.push(b);
                     }
                 }
@@ -484,11 +484,11 @@ export const useServerSideRowModel = ({
         const currentInflight = inflightRequestRef.current;
         for (let b = startBlock; b <= endBlock; b++) {
             const block = getBlock(b, stateEpoch);
-            const isStale = block?.status === 'loading' && (Date.now() - block.timestamp > 1500);
-            const isPartial = block?.status === 'partial';
+            const isStale = block && block.status === 'loading' && (Date.now() - block.timestamp > 1500);
+            const isPartial = block && block.status === 'partial';
             const blockStart = b * blockSize;
             const blockEnd = (b + 1) * blockSize - 1;
-            const isOrphaned = block?.status === 'loading' && !isStale && !(
+            const isOrphaned = block && block.status === 'loading' && !isStale && !(
                 currentInflight &&
                 currentInflight.abortGeneration === abortGeneration &&
                 currentInflight.stateEpoch === stateEpoch &&
@@ -498,13 +498,13 @@ export const useServerSideRowModel = ({
             // Column window mismatch: block was fetched with a different col range.
             // Also fires when a block has no col metadata at all (fetched before windowing
             // was active) but we're now in windowed mode — treat as mismatch so it re-fetches.
-            const blockHasColMetaReplay = block?.colEnd !== null && block?.colEnd !== undefined;
-            const isColMismatch = block?.status === 'loaded' && colEnd !== null && (
+            const blockHasColMetaReplay = block && block.colEnd !== null && block.colEnd !== undefined;
+            const isColMismatch = block && block.status === 'loaded' && colEnd !== null && (
                 !blockHasColMetaReplay ||
                 block.colStart !== colStart ||
                 block.colEnd !== colEnd
             );
-            const inflightColMismatch = block?.status === 'loading' && currentInflight && (
+            const inflightColMismatch = block && block.status === 'loading' && currentInflight && (
                 currentInflight.colStart !== colStart ||
                 currentInflight.colEnd !== colEnd
             );
@@ -520,7 +520,7 @@ export const useServerSideRowModel = ({
             for (let b = startBlock; b <= endBlock; b++) {
                 if (b >= newInflightMinBlock && b <= newInflightMaxBlock) continue;
                 const bBlock = getBlock(b, stateEpoch);
-                if (bBlock?.status === 'loading') {
+                if (bBlock && bBlock.status === 'loading') {
                     blocksNeeded.push(b);
                 }
             }
