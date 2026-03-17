@@ -1,4 +1,4 @@
-import React, { useState, useRef, useEffect } from 'react';
+import React, { useState, useRef, useEffect, useMemo } from 'react';
 import Icons from './Icons';
 import { themes } from '../utils/styles';
 
@@ -38,7 +38,6 @@ const DECIMAL_MIN = 0;
 const DECIMAL_MAX = 6;
 
 function CellFormatPopover({ theme, styles, cellFormatRules, setCellFormatRules, selectedCellKeys, onClose, anchorRef }) {
-    console.log('[CellFormatPopover] selectedCellKeys:', selectedCellKeys, 'length:', selectedCellKeys ? selectedCellKeys.length : 'null');
     const firstKey = selectedCellKeys && selectedCellKeys.length > 0 ? selectedCellKeys[0] : null;
     const current = (firstKey && cellFormatRules && cellFormatRules[firstKey]) || {};
     const [bg, setBg] = useState(current.bg || '#ffffff');
@@ -165,12 +164,64 @@ export function PivotAppBar({
     pivotTitle,
     fontFamily, setFontFamily,
     fontSize, setFontSize,
-    displayDecimal, onDecimalChange, hasSelection,
+    decimalPlaces, setDecimalPlaces,
+    columnDecimalOverrides, setColumnDecimalOverrides,
     cellFormatRules, setCellFormatRules,
-    selectedCellKeys,
+    selectedCells,
     dataBarsColumns, setDataBarsColumns,
-    selectedCellColIds,
 }) {
+    // Derive all selection-dependent state directly from selectedCells
+    // inside AppBar to avoid stale prop issues from parent renders
+    const selectedCellKeys = useMemo(() => {
+        const keys = Object.keys(selectedCells || {});
+        if (keys.length === 0) return [];
+        return keys.map(key => {
+            const colonIdx = key.indexOf(':');
+            const rowId = key.substring(0, colonIdx);
+            const colId = key.substring(colonIdx + 1);
+            return `${rowId}:::${colId}`;
+        });
+    }, [selectedCells]);
+
+    const selectedCellColIds = useMemo(() => {
+        const ids = new Set();
+        Object.keys(selectedCells || {}).forEach(key => {
+            const idx = key.indexOf(':');
+            if (idx >= 0) ids.add(key.substring(idx + 1));
+        });
+        return ids;
+    }, [selectedCells]);
+
+    const hasSelection = Object.keys(selectedCells || {}).length > 0;
+
+    const handleDecimalChange = (delta) => {
+        const keys = Object.keys(selectedCells || {});
+        if (keys.length === 0) {
+            setDecimalPlaces(prev => Math.max(0, Math.min(6, prev + delta)));
+            return;
+        }
+        const colIds = [...new Set(keys.map(k => {
+            const idx = k.indexOf(':');
+            return idx >= 0 ? k.substring(idx + 1) : k;
+        }))];
+        setColumnDecimalOverrides(prev => {
+            const next = { ...prev };
+            colIds.forEach(colId => {
+                const cur = next[colId] !== undefined ? next[colId] : decimalPlaces;
+                next[colId] = Math.max(0, Math.min(6, cur + delta));
+            });
+            return next;
+        });
+    };
+
+    const displayDecimal = useMemo(() => {
+        const keys = Object.keys(selectedCells || {});
+        if (keys.length === 0) return decimalPlaces;
+        const k = keys[0];
+        const idx = k.indexOf(':');
+        const colId = idx >= 0 ? k.substring(idx + 1) : k;
+        return columnDecimalOverrides[colId] !== undefined ? columnDecimalOverrides[colId] : decimalPlaces;
+    }, [selectedCells, columnDecimalOverrides, decimalPlaces]);
     const [rowFmtOpen, setRowFmtOpen] = useState(false);
     const rowFmtBtnRef = useRef(null);
 
@@ -259,14 +310,14 @@ export function PivotAppBar({
                     <button
                         title={hasSelection ? 'Decrease decimals for selected cells' : 'Decrease decimal places'}
                         style={{...btnGhost, padding:'2px 6px', fontFamily:'monospace', fontSize:'11px', minWidth:'28px', opacity: displayDecimal <= DECIMAL_MIN ? 0.35 : 1}}
-                        onClick={() => onDecimalChange(-1)}
+                        onClick={() => handleDecimalChange(-1)}
                         disabled={displayDecimal <= DECIMAL_MIN}
                     >.0←</button>
                     <span style={{fontSize:'11px', color: hasSelection ? theme.primary : theme.textSec, minWidth:'14px', textAlign:'center', fontWeight: hasSelection ? 700 : 400}}>{displayDecimal}</span>
                     <button
                         title={hasSelection ? 'Increase decimals for selected cells' : 'Increase decimal places'}
                         style={{...btnGhost, padding:'2px 6px', fontFamily:'monospace', fontSize:'11px', minWidth:'28px', opacity: displayDecimal >= DECIMAL_MAX ? 0.35 : 1}}
-                        onClick={() => onDecimalChange(1)}
+                        onClick={() => handleDecimalChange(1)}
                         disabled={displayDecimal >= DECIMAL_MAX}
                     >.00→</button>
                 </div>

@@ -283,68 +283,10 @@ export default function DashTanstackPivot(props) {
     const [cellFormatRules, setCellFormatRules] = useState({});
     const [hoveredRowPath, setHoveredRowPath] = useState(null);
 
-    // Derive per-cell keys ("rowPath:::colId") for Format Cell popover
-    const selectedCellKeys = useMemo(() => {
-        const keys = Object.keys(selectedCells || {});
-        console.log('[selectedCellKeys] selectedCells keys:', keys.length, 'sample:', keys.slice(0, 3));
-        if (keys.length === 0) return [];
-        const visibleRows = tableRef.current ? tableRef.current.getRowModel().rows : [];
-        console.log('[selectedCellKeys] visibleRows:', visibleRows.length);
-        const rowIdToPath = {};
-        visibleRows.forEach(r => {
-            if (r.original && r.original._path) rowIdToPath[r.id] = r.original._path;
-        });
-        const result = keys.map(key => {
-            const colonIdx = key.indexOf(':');
-            const rowId = key.substring(0, colonIdx);
-            const colId = key.substring(colonIdx + 1);
-            const rowPath = rowIdToPath[rowId] || rowId;
-            return `${rowPath}:::${colId}`;
-        });
-        console.log('[selectedCellKeys] result:', result.length, 'sample:', result.slice(0, 3));
-        return result;
-    }, [selectedCells]);
+    // selectedCellKeys and selectedCellColIds are now derived inside PivotAppBar
+    // to avoid stale prop issues between parent and child renders.
 
-    // Column IDs of currently selected cells (for Data Bars)
-    const selectedCellColIds = useMemo(() => {
-        const ids = new Set();
-        Object.keys(selectedCells || {}).forEach(key => {
-            const idx = key.indexOf(':');
-            if (idx >= 0) ids.add(key.substring(idx + 1));
-        });
-        return ids;
-    }, [selectedCells]);
-
-    // Decimal formatting: with selection → adjust per-column overrides; without → adjust global default
-    const handleDecimalChange = useCallback((delta) => {
-        const keys = Object.keys(selectedCells || {});
-        if (keys.length === 0) {
-            setDecimalPlaces(prev => Math.max(0, Math.min(6, prev + delta)));
-            return;
-        }
-        const colIds = [...new Set(keys.map(k => {
-            const idx = k.indexOf(':');
-            return idx >= 0 ? k.substring(idx + 1) : k;
-        }))];
-        setColumnDecimalOverrides(prev => {
-            const next = { ...prev };
-            colIds.forEach(colId => {
-                const cur = next[colId] !== undefined ? next[colId] : decimalPlaces;
-                next[colId] = Math.max(0, Math.min(6, cur + delta));
-            });
-            return next;
-        });
-    }, [selectedCells, decimalPlaces]);
-
-    // Show the decimal value of the first selected column, or global default
-    const displayDecimal = useMemo(() => {
-        const keys = Object.keys(selectedCells || {});
-        if (keys.length === 0) return decimalPlaces;
-        const k = keys[0];
-        const idx = k.indexOf(':');
-        const colId = idx >= 0 ? k.substring(idx + 1) : k;
-        return columnDecimalOverrides[colId] !== undefined ? columnDecimalOverrides[colId] : decimalPlaces;
-    }, [selectedCells, columnDecimalOverrides, decimalPlaces]);
+    // Decimal formatting logic moved to PivotAppBar to use fresh selectedCells
 
     const [spacingMode, setSpacingMode] = useState(0);
     const spacingLabels = gridDimensionTokens.density.spacingLabels;
@@ -989,15 +931,15 @@ export default function DashTanstackPivot(props) {
     const needsColSchema = !cachedColSchema || colSchemaEpochRef.current !== stateEpoch;
     const totalCenterCols = cachedColSchema ? cachedColSchema.total_center_cols : null;
 
-    // Strict visible-only request window: request exactly the currently visible center range.
-    // Before schema is known, request full payload once to populate __col_schema.
+    // Always request all center columns to avoid feedback loop where fewer
+    // columns → smaller table → smaller visible range → even fewer columns.
+    // Column virtualization handles render-side efficiency.
     const colRequestStart = (serverSide && cachedColSchema && !needsColSchema && totalCenterCols !== null)
-        ? Math.max(0, visibleColRange.start)
+        ? 0
         : null;
 
     const colRequestEnd = (serverSide && cachedColSchema && !needsColSchema && totalCenterCols !== null)
-        ? Math.min(totalCenterCols - 1,
-            visibleColRange.end + 2)
+        ? totalCenterCols - 1
         : null;
 
     // Keep refs in sync for use in field-zone effect closures
@@ -3255,12 +3197,11 @@ export default function DashTanstackPivot(props) {
                 pivotTitle={props.pivotTitle}
                 fontFamily={fontFamily} setFontFamily={setFontFamily}
                 fontSize={fontSize} setFontSize={setFontSize}
-                displayDecimal={displayDecimal} onDecimalChange={handleDecimalChange}
-                hasSelection={Object.keys(selectedCells).length > 0}
+                decimalPlaces={decimalPlaces} setDecimalPlaces={setDecimalPlaces}
+                columnDecimalOverrides={columnDecimalOverrides} setColumnDecimalOverrides={setColumnDecimalOverrides}
                 cellFormatRules={cellFormatRules} setCellFormatRules={setCellFormatRules}
-                selectedCellKeys={selectedCellKeys}
+                selectedCells={selectedCells}
                 dataBarsColumns={dataBarsColumns} setDataBarsColumns={setDataBarsColumns}
-                selectedCellColIds={selectedCellColIds}
             />
         <PivotErrorBoundary key={dataVersion}>
             <div style={{display:'flex', flex:1, overflow:'hidden', fontFamily: fontFamily, fontSize: fontSize}}>

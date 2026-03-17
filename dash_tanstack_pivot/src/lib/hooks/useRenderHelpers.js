@@ -178,14 +178,16 @@ export function useRenderHelpers({
         if (isDataBar) {
             const stats = colorScaleStats && colorScaleStats.byCol && colorScaleStats.byCol[col.id];
             if (stats) {
-                const range = stats.max - stats.min;
-                const pct = range > 0 ? Math.max(0, Math.min(1, (rawNumValue - stats.min) / range)) : 0;
-                const barColor = isDarkTheme(theme)
-                    ? 'rgba(100,180,255,0.22)'
-                    : 'rgba(37,99,235,0.13)';
-                const barBorder = isDarkTheme(theme)
-                    ? 'rgba(100,180,255,0.6)'
-                    : 'rgba(37,99,235,0.45)';
+                // Linear scale from zero: bar width = |value| / max(|max|, |min|)
+                const absMax = Math.max(Math.abs(stats.max), Math.abs(stats.min), 1e-9);
+                const pct = Math.min(1, Math.abs(rawNumValue) / absMax);
+                const isNeg = rawNumValue < 0;
+                const barColor = isNeg
+                    ? (isDarkTheme(theme) ? 'rgba(255,100,100,0.18)' : 'rgba(220,38,38,0.12)')
+                    : (isDarkTheme(theme) ? 'rgba(100,180,255,0.22)' : 'rgba(37,99,235,0.13)');
+                const barBorder = isNeg
+                    ? (isDarkTheme(theme) ? 'rgba(255,100,100,0.5)' : 'rgba(220,38,38,0.35)')
+                    : (isDarkTheme(theme) ? 'rgba(100,180,255,0.6)' : 'rgba(37,99,235,0.45)');
                 dataBarEl = (
                     <div style={{
                         position: 'absolute',
@@ -334,8 +336,13 @@ export function useRenderHelpers({
                     header.column.toggleSorting(e.key === 'ArrowDown', e.shiftKey);
                 }
             }}
-            draggable={!isGroupHeader && header.column.id !== '__row_number__'}
+            draggable={!isGroupHeader && header.column.id !== '__row_number__' && !header.column.getIsResizing()}
             onDragStart={(e) => {
+                // Prevent drag when resizing
+                if (header.column.getIsResizing()) {
+                    e.preventDefault();
+                    return;
+                }
                 if (!isGroupHeader && header.column.id !== '__row_number__') {
                     onDragStart(e, header.column.id, 'cols', -1);
                 }
@@ -448,10 +455,10 @@ export function useRenderHelpers({
                     }}
                     style={{
                         position: 'absolute',
-                        right: -4,
+                        right: -6,
                         top: 0,
                         bottom: 0,
-                        width: 10,
+                        width: 14,
                         cursor: 'col-resize',
                         touchAction: 'none',
                         zIndex: 4,
