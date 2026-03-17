@@ -273,7 +273,18 @@ class ScalablePivotController(PivotController):
         applying per-column options from *column_sort_options* as overrides.
         """
         if not base_sort:
-            return [{"field": dim, "order": "asc"} for dim in group_rows]
+            # Even without an explicit sort, apply sortKeyField from column_sort_options
+            # so the planner's ORDER BY uses the hidden key column rather than the raw
+            # dimension string (which would produce lexicographic ordering).
+            result = []
+            for dim in group_rows:
+                sort_item: Dict[str, Any] = {"field": dim, "order": "asc"}
+                col_opts = (column_sort_options or {}).get(dim, {})
+                for key in ScalablePivotController._DIM_SORT_KEYS:
+                    if key in col_opts and col_opts[key] is not None:
+                        sort_item[key] = col_opts[key]
+                result.append(sort_item)
+            return result
 
         # Ensure base_sort is a list
         sort_list = base_sort if isinstance(base_sort, list) else [base_sort]
