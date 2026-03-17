@@ -1080,15 +1080,55 @@ class IbisPlanner:
             target_dim = None
             group_cols = []
             
+        # Handle hidden sort keys for the target dimension
+        hidden_sort_group_cols = []
+        if target_dim:
+            for sort_spec in (spec.sort or []):
+                if not isinstance(sort_spec, dict):
+                    continue
+                sort_key_field = sort_spec.get("sortKeyField")
+                sort_field = sort_spec.get("field")
+                
+                # Check if this sort spec applies to our target dimension
+                is_target_sort = (sort_field == target_dim) or (
+                    isinstance(sort_key_field, str) and (
+                        sort_key_field == target_dim or 
+                        (sort_key_field.startswith("__sortkey__") and sort_key_field[11:] == target_dim)
+                    )
+                )
+                
+                if (
+                    is_target_sort 
+                    and isinstance(sort_key_field, str) 
+                    and sort_key_field 
+                    and sort_key_field in base_table.columns
+                    and sort_key_field != target_dim
+                ):
+                    hidden_sort_group_cols.append(sort_key_field)
+
+        aggregation_group_cols = list(dict.fromkeys(group_cols + hidden_sort_group_cols))
+
         base_measures = [m for m in spec.measures if not m.ratio_numerator]
         aggs = [self.builder.build_measure_aggregation(base_table, m) for m in base_measures]
         
-        if group_cols:
-            result_expr = base_table.group_by(group_cols).aggregate(aggs)
+        if aggregation_group_cols:
+            result_expr = base_table.group_by(aggregation_group_cols).aggregate(aggs)
         else:
             result_expr = base_table.aggregate(aggs)
             
+        # Ensure hidden sort keys are in the projection but distinct
+        final_projection = []
+        for col in aggregation_group_cols:
+            final_projection.append(result_expr[col])
+            
+        for m in base_measures:
+            final_projection.append(result_expr[m.alias])
+            
+        result_expr = result_expr.select(final_projection)
+
         if spec.sort:
+            # We use the generic builder, but we might need to manually handle the sort key if the builder expects it
+            # The builder uses the table columns. Since we projected hidden keys, they are available.
             ibis_sorts = self.builder.build_sort_expressions(result_expr, spec.sort)
             if ibis_sorts:
                 result_expr = result_expr.order_by(ibis_sorts)
