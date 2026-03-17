@@ -227,8 +227,8 @@ class IbisExpressionBuilder:
             sort_type = str(s.get("sortType") or "").strip().lower()
             sort_key_field = s.get("sortKeyField")
             use_hidden_sort_key = (
-                sort_type == "curve_pillar_tenor"
-                and isinstance(sort_key_field, str)
+                isinstance(sort_key_field, str)
+                and sort_key_field
                 and sort_key_field in table.columns
             )
             effective_field = sort_key_field if use_hidden_sort_key else field
