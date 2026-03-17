@@ -495,8 +495,8 @@ class IbisPlanner:
             sort_key_field = sort_spec.get("sortKeyField")
             sort_field = sort_spec.get("field")
             if (
-                sort_type == "curve_pillar_tenor"
-                and isinstance(sort_key_field, str)
+                isinstance(sort_key_field, str)
+                and sort_key_field
                 and sort_key_field in filtered_table.columns
                 and (not sort_field or sort_field in group_cols)
                 and sort_key_field not in group_cols

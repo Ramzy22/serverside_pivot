@@ -5,6 +5,12 @@ Integrates DashTanstackPivot (serverside-pivot) with pivot-engine backend.
 import os
 import sys
 
+# Ensure the local pivot_engine package takes priority over any stale installs.
+_PE_DIR = os.path.join(os.path.dirname(__file__), os.pardir,
+                       "dash_tanstack_pivot", "pivot_engine")
+if os.path.isdir(_PE_DIR) and _PE_DIR not in sys.path:
+    sys.path.insert(0, os.path.abspath(_PE_DIR))
+
 import pyarrow as pa
 from dash import Dash, Input, Output, State, dcc, html, no_update
 
@@ -77,6 +83,34 @@ def load_initial_data(adapter):
         }
     )
     adapter.controller.load_data_from_arrow("tenor_data", tenor_table)
+
+    # Demo table for sortKeyField testing — "Curve Pillar" is a display label,
+    # "__sortkey__Curve Pillar" is a hidden numeric key used for backend sorting.
+    curve_pillar_table = pa.Table.from_pydict(
+        {
+            "desk": [
+                "Rates", "Rates", "Rates", "Rates", "Rates",
+                "Credit", "Credit", "Credit", "Credit", "Credit",
+            ],
+            "Curve Pillar": [
+                "1M", "2W", "1D", "6Y", "3M",
+                "1M", "2W", "1D", "6Y", "10Y",
+            ],
+            "__sortkey__Curve Pillar": [
+                30, 14, 1, 2190, 90,
+                30, 14, 1, 2190, 3650,
+            ],
+            "pv01": [
+                0.12, 0.05, 0.01, 1.80, 0.35,
+                0.10, 0.04, 0.02, 1.60, 2.10,
+            ],
+            "dv01": [
+                0.08, 0.03, 0.005, 1.20, 0.22,
+                0.07, 0.025, 0.01, 1.05, 1.40,
+            ],
+        }
+    )
+    adapter.controller.load_data_from_arrow("curve_data", curve_pillar_table)
     # Example: load Polars directly (no manual Arrow conversion required)
     # import polars as pl
     # df = pl.read_parquet("sales_data.parquet")
@@ -162,6 +196,50 @@ app.layout = html.Div([
     html.Div(
         [
             html.Div(
+                "sortKeyField Example — Curve Pillar sorted by hidden numeric key",
+                style={"padding": "0 16px 8px 16px", "fontWeight": 600},
+            ),
+            DashTanstackPivot(
+                id="curve-pivot-grid",
+                style={"height": "420px", "width": "100%"},
+                table="curve_data",
+                serverSide=True,
+                rowFields=["Curve Pillar"],
+                colFields=[],
+                valConfigs=[
+                    {"field": "pv01", "agg": "sum", "format": "fixed:4"},
+                    {"field": "dv01", "agg": "sum", "format": "fixed:4"},
+                ],
+                sorting=[{"id": "Curve Pillar", "desc": False}],
+                sortOptions={
+                    "columnOptions": {
+                        "Curve Pillar": {
+                            "sortKeyField": "__sortkey__Curve Pillar",
+                        }
+                    }
+                },
+                filters={},
+                expanded={},
+                showRowTotals=False,
+                showColTotals=False,
+                columns=[
+                    {"id": "desk"},
+                    {"id": "Curve Pillar"},
+                    {"id": "pv01"},
+                    {"id": "dv01"},
+                ],
+                availableFieldList=["desk", "Curve Pillar", "pv01", "dv01"],
+                data=[],
+                rowCount=0,
+                filterOptions={},
+            ),
+        ],
+        style={"padding": "0 16px 16px 16px"},
+    ),
+    html.Hr(style={"margin": "16px 16px 8px 16px"}),
+    html.Div(
+        [
+            html.Div(
                 "Tenor Sort + Weighted Average Example",
                 style={"padding": "0 16px 8px 16px", "fontWeight": 600},
             ),
@@ -231,6 +309,7 @@ def restore_saved_view(_clicks, saved_view):
 
 # --- 4. Pivot wiring (one line) ---
 register_pivot_app(app, adapter_getter=get_adapter, pivot_id="pivot-grid")
+register_pivot_app(app, adapter_getter=get_adapter, pivot_id="curve-pivot-grid")
 register_pivot_app(app, adapter_getter=get_adapter, pivot_id="tenor-pivot-grid")
 
 if __name__ == "__main__":
