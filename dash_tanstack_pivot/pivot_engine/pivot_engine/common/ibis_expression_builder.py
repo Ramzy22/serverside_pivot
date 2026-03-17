@@ -277,13 +277,13 @@ class IbisExpressionBuilder:
             elif order == 'desc':
                 sort_expr = col.desc()
 
-            if sort_expr:
+            if sort_expr is not None:
                 if nulls == 'first':
-                    ibis_sorts.append(sort_expr(nulls_first=True))
+                    ibis_sorts.append(sort_expr.nulls_first())
                 elif nulls == 'last':
-                    ibis_sorts.append(sort_expr(nulls_last=True))
+                    ibis_sorts.append(sort_expr.nulls_last())
                 else:
-                    ibis_sorts.append(sort_expr())
+                    ibis_sorts.append(sort_expr)
 
         return ibis_sorts
 

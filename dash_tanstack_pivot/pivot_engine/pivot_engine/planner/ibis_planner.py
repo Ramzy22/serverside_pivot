@@ -611,7 +611,7 @@ class IbisPlanner:
             projection.append(aggregated_table[m.alias])
             
         aggregated_table = aggregated_table.select(projection)
-        
+
         aggregated_table = self._apply_stable_ordering(
             aggregated_table,
             spec.sort,

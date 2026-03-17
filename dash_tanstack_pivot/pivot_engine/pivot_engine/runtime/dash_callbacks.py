@@ -38,7 +38,13 @@ def _get_callback_registry(app: Any) -> Set[str]:
 
 def _debug_print(enabled: bool, *parts: Any) -> None:
     if enabled:
-        print(*parts, flush=True)
+        try:
+            print(*parts, flush=True)
+        except OSError:
+            try:
+                print(*parts)
+            except OSError:
+                pass
 
 
 def _is_bootstrap_without_viewport(triggered_prop: Optional[str], viewport: Any) -> bool:
