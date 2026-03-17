@@ -26,8 +26,8 @@ jobs:
           python -m pip install --upgrade pip "setuptools<71"
           python -m pip install duckdb pyarrow "ibis-framework[duckdb]" pandas fastapi "uvicorn[standard]" dash pytest tomli redis "python-jose[cryptography]"
 
-      - name: Install pivot-engine (backend)
-        run: pip install -e dash_tanstack_pivot/pivot_engine/
+      - name: Add pivot-engine to PYTHONPATH
+        run: echo "PYTHONPATH=$PYTHONPATH:${{ github.workspace }}/dash_tanstack_pivot/pivot_engine" >> $GITHUB_ENV
 
       - name: Install serverside-pivot (editable)
         run: pip install -e dash_tanstack_pivot/
