@@ -614,7 +614,7 @@ class TanStackPivotAdapter:
 
             sort_item = {
                 'field': col_id,
-                'order': 'asc' if sort_spec.get('desc', False) is False else 'desc'
+                'order': 'desc' if sort_spec.get('desc') is True else 'asc'
             }
             if semantic_type:
                 sort_item["semanticType"] = semantic_type
@@ -622,6 +622,16 @@ class TanStackPivotAdapter:
                 sort_item["sortType"] = sort_type
             if isinstance(sort_key_field, str) and sort_key_field:
                 sort_item["sortKeyField"] = sort_key_field
+            
+            # If no sortKeyField was provided but we have a tenor semantic,
+            # we check if a standard __sortkey__ field exists in the schema.
+            # (The planner will then ensure it's in the GROUP BY).
+            if semantic_type == "tenor" and not sort_item.get("sortKeyField"):
+                possible_key = f"__sortkey__{col_id}"
+                # We don't have the table here, so we'll let the planner/builder 
+                # handle the final resolution, but we can pass the hint.
+                sort_item["sortKeyField"] = possible_key
+
             if sort_spec.get("nulls"):
                 sort_item["nulls"] = sort_spec.get("nulls")
             pivot_sort.append(sort_item)

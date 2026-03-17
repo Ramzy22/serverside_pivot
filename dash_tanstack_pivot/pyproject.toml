@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "serverside-pivot"
-version = "0.0.31"
+version = "0.0.32"
 description = "A Dash component library for enterprise-grade pivot tables built with TanStack Table v8"
 license = {text = "MIT"}
 authors = [
