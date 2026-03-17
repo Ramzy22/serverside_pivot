@@ -82,6 +82,7 @@ def register_dash_pivot_transport_callback(
     pivot_id: Any,
     drill_store_id: Optional[Any] = None,
     debug: bool = False,
+    sort_options_default: Optional[Dict] = None,
 ) -> bool:
     """
     Register the main Dash -> runtime transport callback for one pivot component.
@@ -220,7 +221,7 @@ def register_dash_pivot_transport_callback(
             val_configs=val_configs or [],
             filters=filters or {},
             sorting=sorting or [],
-            sort_options=sort_options or {},
+            sort_options=sort_options or sort_options_default or {},
             expanded=expanded,
             show_row_totals=resolved_show_row_totals,
             show_col_totals=resolved_show_col_totals,

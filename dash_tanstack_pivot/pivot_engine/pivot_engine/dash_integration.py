@@ -16,6 +16,36 @@ from typing import Any, Callable, Optional
 from .runtime import PivotRuntimeService, SessionRequestGate, register_dash_pivot_transport_callback
 
 
+def _find_sort_options_in_layout(layout: Any, target_id: Any) -> Optional[dict]:
+    """
+    Recursively walk app.layout to find the component with ``target_id`` and
+    return its ``sortOptions`` prop (or None if not found / not set).
+    """
+    if layout is None or callable(layout):
+        return None
+    try:
+        if getattr(layout, "id", None) == target_id:
+            try:
+                return layout.sortOptions or None
+            except AttributeError:
+                return None
+    except Exception:
+        return None
+    try:
+        children = layout.children
+    except AttributeError:
+        return None
+    if children is None:
+        return None
+    if not isinstance(children, list):
+        children = [children]
+    for child in children:
+        result = _find_sort_options_in_layout(child, target_id)
+        if result is not None:
+            return result
+    return None
+
+
 def register_pivot_app(
     app: Any,
     adapter_getter: Callable[[], Any],
@@ -111,6 +141,16 @@ def register_pivot_app(
                 }
             )
 
+    # Extract sortOptions from the layout at registration time so the callback
+    # always has a reliable fallback when State(pivot_id, "sortOptions") is
+    # None or empty (e.g. before the React component has mounted).
+    _layout_sort_options: Optional[dict] = None
+    try:
+        if hasattr(app, "layout") and app.layout is not None:
+            _layout_sort_options = _find_sort_options_in_layout(app.layout, pivot_id)
+    except Exception:
+        pass
+
     # --- Dash transport callback ---
     register_dash_pivot_transport_callback(
         app,
@@ -118,4 +158,5 @@ def register_pivot_app(
         pivot_id=pivot_id,
         drill_store_id=drill_store_id,
         debug=debug,
+        sort_options_default=_layout_sort_options,
     )
