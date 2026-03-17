@@ -38,6 +38,7 @@ const DECIMAL_MIN = 0;
 const DECIMAL_MAX = 6;
 
 function CellFormatPopover({ theme, styles, cellFormatRules, setCellFormatRules, selectedCellKeys, onClose, anchorRef }) {
+    console.log('[CellFormatPopover] selectedCellKeys:', selectedCellKeys, 'length:', selectedCellKeys ? selectedCellKeys.length : 'null');
     const firstKey = selectedCellKeys && selectedCellKeys.length > 0 ? selectedCellKeys[0] : null;
     const current = (firstKey && cellFormatRules && cellFormatRules[firstKey]) || {};
     const [bg, setBg] = useState(current.bg || '#ffffff');

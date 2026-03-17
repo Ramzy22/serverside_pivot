@@ -286,19 +286,23 @@ export default function DashTanstackPivot(props) {
     // Derive per-cell keys ("rowPath:::colId") for Format Cell popover
     const selectedCellKeys = useMemo(() => {
         const keys = Object.keys(selectedCells || {});
+        console.log('[selectedCellKeys] selectedCells keys:', keys.length, 'sample:', keys.slice(0, 3));
         if (keys.length === 0) return [];
         const visibleRows = tableRef.current ? tableRef.current.getRowModel().rows : [];
+        console.log('[selectedCellKeys] visibleRows:', visibleRows.length);
         const rowIdToPath = {};
         visibleRows.forEach(r => {
             if (r.original && r.original._path) rowIdToPath[r.id] = r.original._path;
         });
-        return keys.map(key => {
+        const result = keys.map(key => {
             const colonIdx = key.indexOf(':');
             const rowId = key.substring(0, colonIdx);
             const colId = key.substring(colonIdx + 1);
             const rowPath = rowIdToPath[rowId] || rowId;
             return `${rowPath}:::${colId}`;
         });
+        console.log('[selectedCellKeys] result:', result.length, 'sample:', result.slice(0, 3));
+        return result;
     }, [selectedCells]);
 
     // Column IDs of currently selected cells (for Data Bars)
