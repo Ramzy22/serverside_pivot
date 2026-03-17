@@ -311,11 +311,11 @@ export default function DashTanstackPivot(props) {
         return ids;
     }, [selectedCells]);
 
-    // Decimal formatting: apply +/- only to selected cells' columns (column-level only)
+    // Decimal formatting: with selection → adjust per-column overrides; without → adjust global default
     const handleDecimalChange = useCallback((delta) => {
         const keys = Object.keys(selectedCells || {});
         if (keys.length === 0) {
-            // No selection: do nothing (decimals are column-level only)
+            setDecimalPlaces(prev => Math.max(0, Math.min(6, prev + delta)));
             return;
         }
         const colIds = [...new Set(keys.map(k => {
@@ -1750,48 +1750,6 @@ export default function DashTanstackPivot(props) {
                 const data = getSelectedData(true, selectionForMenu);
                 if (data) copyToClipboard(data);
             }});
-            actions.push('separator');
-            actions.push({
-                label: 'Format Selected Cells...',
-                onClick: () => applyFormatToSelection(selectionForMenu)
-            });
-            actions.push({
-                label: 'Format: Number (2)',
-                onClick: () => applyFormatToSelection(selectionForMenu, 'fixed:2')
-            });
-            actions.push({
-                label: 'Format: Currency',
-                onClick: () => applyFormatToSelection(selectionForMenu, 'currency')
-            });
-            actions.push({
-                label: 'Format: Percent',
-                onClick: () => applyFormatToSelection(selectionForMenu, 'percent')
-            });
-            actions.push({
-                label: 'Format: Compact',
-                onClick: () => applyFormatToSelection(selectionForMenu, 'compact')
-            });
-            actions.push({
-                label: 'Format: Clear',
-                onClick: () => applyFormatToSelection(selectionForMenu, '')
-            });
-            actions.push('separator');
-            actions.push({
-                label: `${colorScaleMode === 'off' ? '[x]' : '[ ]'} Data Bars: Off`,
-                onClick: () => applyDataBarsFromSelection(selectionForMenu, 'off')
-            });
-            actions.push({
-                label: `${colorScaleMode === 'col' ? '[x]' : '[ ]'} Data Bars: By Column`,
-                onClick: () => applyDataBarsFromSelection(selectionForMenu, 'col')
-            });
-            actions.push({
-                label: `${colorScaleMode === 'row' ? '[x]' : '[ ]'} Data Bars: By Row`,
-                onClick: () => applyDataBarsFromSelection(selectionForMenu, 'row')
-            });
-            actions.push({
-                label: `${colorScaleMode === 'table' ? '[x]' : '[ ]'} Data Bars: By Table`,
-                onClick: () => applyDataBarsFromSelection(selectionForMenu, 'table')
-            });
         }
 
         actions.push('separator');
@@ -2827,15 +2785,21 @@ export default function DashTanstackPivot(props) {
         // Keep horizontal virtualization in sync after pivot group collapse/expand.
         // Without this clamp, right-edge stale indices can point past center columns
         // and render blank numeric cells.
-        columnVirtualizer.measure();
         const scrollEl = parentRef.current;
         const maxScrollLeft = Math.max(0, scrollEl.scrollWidth - scrollEl.clientWidth);
         if (scrollEl.scrollLeft > maxScrollLeft) {
+            // Clamp the DOM scroll position.
             scrollEl.scrollLeft = maxScrollLeft;
-            if (columnVirtualizer.scrollToOffset) {
-                columnVirtualizer.scrollToOffset(maxScrollLeft);
-            }
+            // Synchronously update the virtualizer's internal scrollOffset BEFORE
+            // calling measure(). measure() calls notify() which triggers a React
+            // re-render; if scrollOffset is still the old out-of-bounds value at
+            // that point the re-render will show only the last column (blank
+            // numbers in all others) until the async DOM scroll event fires.
+            // Direct mutation is safe here — scrollOffset is a plain instance
+            // property that getScrollOffset() reads directly.
+            columnVirtualizer.scrollOffset = maxScrollLeft;
         }
+        columnVirtualizer.measure();
     }, [columnVirtualizer, centerCols.length, totalLayoutWidth]);
 
     // Memoized lookup structures for the header render path.

@@ -175,3 +175,65 @@ def test_collapsed_hierarchy_total_rows_counts_only_visible_root_level():
     assert response.total_rows == 3
     assert isinstance(response.data, list)
     assert len(response.data) == 3
+
+
+def test_curve_pillar_tenor_sort_uses_hidden_sort_key_and_keeps_display_field():
+    adapter = create_tanstack_adapter(backend_uri=":memory:")
+    table = pa.Table.from_pydict(
+        {
+            "Curve Pillar": ["1M", "2W", "1D", "1M", "2W", "1D"],
+            "__sortkey__Curve Pillar": [30, 14, 1, 30, 14, 1],
+            "sales": [3, 2, 1, 6, 5, 4],
+        }
+    )
+    adapter.controller.load_data_from_arrow("curve_data", table)
+    service = PivotRuntimeService(adapter_getter=lambda: adapter, session_gate=SessionRequestGate())
+
+    context = PivotRequestContext.from_frontend(
+        table="curve_data",
+        trigger_prop="pivot-grid.viewport",
+        viewport={
+            "start": 0,
+            "end": 20,
+            "window_seq": 1,
+            "state_epoch": 1,
+            "abort_generation": 1,
+            "session_id": "sess-curve-sort",
+            "client_instance": "grid-curve-sort",
+            "intent": "viewport",
+            "include_grand_total": False,
+            "needs_col_schema": True,
+        },
+    )
+    state = PivotViewState(
+        row_fields=["Curve Pillar"],
+        val_configs=[{"field": "sales", "agg": "sum"}],
+        sorting=[{"id": "Curve Pillar", "desc": False}],
+        sort_options={
+            "columnOptions": {
+                "Curve Pillar": {
+                    "sortType": "curve_pillar_tenor",
+                    "sortKeyField": "__sortkey__Curve Pillar",
+                }
+            }
+        },
+        show_row_totals=False,
+        show_col_totals=False,
+    )
+
+    response = service.process(state, context, current_filter_options={})
+
+    assert response.status == "data"
+    assert isinstance(response.data, list)
+
+    ordered_labels = [
+        row.get("Curve Pillar")
+        for row in response.data
+        if isinstance(row, dict) and not row.get("_isTotal")
+    ]
+    assert ordered_labels == ["1D", "2W", "1M"]
+    assert all(
+        "__sortkey__Curve Pillar" not in row
+        for row in response.data
+        if isinstance(row, dict)
+    )

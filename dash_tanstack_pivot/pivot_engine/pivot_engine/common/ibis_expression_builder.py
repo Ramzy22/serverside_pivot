@@ -221,8 +221,22 @@ class IbisExpressionBuilder:
 
         for s in sort_list:
             field = s.get("field")
-            if not field or field not in table.columns:
+            if not field:
                 continue
+
+            sort_type = str(s.get("sortType") or "").strip().lower()
+            sort_key_field = s.get("sortKeyField")
+            use_hidden_sort_key = (
+                sort_type == "curve_pillar_tenor"
+                and isinstance(sort_key_field, str)
+                and sort_key_field in table.columns
+            )
+            effective_field = sort_key_field if use_hidden_sort_key else field
+            if effective_field not in table.columns:
+                if field not in table.columns:
+                    continue
+                effective_field = field
+                use_hidden_sort_key = False
 
             order = (s.get("order") or "asc").lower()
             nulls = (s.get("nulls") or "").lower()
@@ -230,10 +244,10 @@ class IbisExpressionBuilder:
                 s.get("semanticType") or s.get("semantic") or s.get("sortSemantic") or ""
             ).lower()
 
-            col = table[field]
+            col = table[effective_field]
             sort_expr = None
 
-            if semantic_type == "tenor":
+            if semantic_type == "tenor" and not use_hidden_sort_key:
                 # Parse text values like 1D, 2W, 1M, 6Y into a numeric key.
                 # Valid tenor values are always ordered before non-parsable values.
                 tenor_text = col.cast("string")

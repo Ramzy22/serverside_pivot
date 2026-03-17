@@ -49,13 +49,30 @@ class PivotRuntimeService:
             target_unique_col = state.filters["__request_unique__"]
 
         tanstack_sorting = []
+        sort_options = state.sort_options if isinstance(state.sort_options, dict) else {}
+        column_sort_options = (
+            sort_options.get("columnOptions")
+            if isinstance(sort_options.get("columnOptions"), dict)
+            else {}
+        )
         for s in (state.sorting or []):
             if not isinstance(s, dict) or s.get("id") is None:
                 continue
 
-            sort_item = {"id": s.get("id"), "desc": bool(s.get("desc", False))}
-            # Preserve optional semantic hints for backend ordering (e.g. tenor sort).
-            for key in ("semanticType", "sortSemantic", "nulls"):
+            sort_id = s.get("id")
+            sort_item = {"id": sort_id, "desc": bool(s.get("desc", False))}
+
+            # Static per-column sort metadata (from sortOptions) is merged first.
+            # Dynamic sorting payload keys override these defaults.
+            static_column_sort = column_sort_options.get(sort_id)
+            if isinstance(static_column_sort, dict):
+                for key in ("semanticType", "sortSemantic", "nulls", "sortType", "sortKeyField"):
+                    if key in static_column_sort and static_column_sort.get(key) is not None:
+                        sort_item[key] = static_column_sort.get(key)
+
+            # Preserve optional semantic hints for backend ordering (e.g. tenor sort)
+            # and hidden-key directives for deterministic curve-pillar ordering.
+            for key in ("semanticType", "sortSemantic", "nulls", "sortType", "sortKeyField"):
                 if key in s:
                     sort_item[key] = s.get(key)
             tanstack_sorting.append(sort_item)

@@ -325,11 +325,15 @@ class IbisPlanner:
         if sort_specs:
             normalized = sort_specs if isinstance(sort_specs, list) else [sort_specs]
             order_exprs.extend(self.builder.build_sort_expressions(table, normalized))
-            requested_fields = {
-                s.get("field")
-                for s in normalized
-                if isinstance(s, dict) and s.get("field") in table.columns
-            }
+            for s in normalized:
+                if not isinstance(s, dict):
+                    continue
+                field = s.get("field")
+                if field in table.columns:
+                    requested_fields.add(field)
+                sort_key_field = s.get("sortKeyField")
+                if sort_key_field in table.columns:
+                    requested_fields.add(sort_key_field)
 
         for field in (fallback_fields or []):
             if field in table.columns and field not in requested_fields:
@@ -483,10 +487,28 @@ class IbisPlanner:
         # 5. Perform Aggregation
         # Deduplicate group columns while preserving order
         group_cols = list(dict.fromkeys(list(spec.rows) + list(spec.columns)))
+        hidden_sort_group_cols = []
+        for sort_spec in (spec.sort or []):
+            if not isinstance(sort_spec, dict):
+                continue
+            sort_type = str(sort_spec.get("sortType") or "").strip().lower()
+            sort_key_field = sort_spec.get("sortKeyField")
+            sort_field = sort_spec.get("field")
+            if (
+                sort_type == "curve_pillar_tenor"
+                and isinstance(sort_key_field, str)
+                and sort_key_field in filtered_table.columns
+                and (not sort_field or sort_field in group_cols)
+                and sort_key_field not in group_cols
+            ):
+                hidden_sort_group_cols.append(sort_key_field)
+        aggregation_group_cols = list(dict.fromkeys(group_cols + hidden_sort_group_cols))
         
         # Determine the most granular grouping for the current spec (Visual Totals basis)
         # Use full_rows if available to ensure parent totals match child sums deep in the tree
-        all_hierarchy_dims = list(dict.fromkeys(list(spec.full_rows or spec.rows) + list(spec.columns)))
+        all_hierarchy_dims = list(
+            dict.fromkeys(list(spec.full_rows or spec.rows) + list(spec.columns) + hidden_sort_group_cols)
+        )
         
         if post_filters and len(all_hierarchy_dims) > len(group_cols):
             # VISUAL TOTALS MODE: Aggregate from the leaf level up to the parent level.
@@ -528,14 +550,14 @@ class IbisPlanner:
                         # Default to sum for aliases
                         outer_aggs.append(inner_agg[m.alias].sum().name(m.alias))
             
-            if group_cols:
-                aggregated_table = inner_agg.group_by(group_cols).aggregate(outer_aggs)
+            if aggregation_group_cols:
+                aggregated_table = inner_agg.group_by(aggregation_group_cols).aggregate(outer_aggs)
             else:
                 aggregated_table = inner_agg.aggregate(outer_aggs)
         else:
             # STANDARD MODE: Simple one-pass aggregation
-            if group_cols:
-                aggregated_table = filtered_table.group_by(group_cols).aggregate(ibis_aggregations)
+            if aggregation_group_cols:
+                aggregated_table = filtered_table.group_by(aggregation_group_cols).aggregate(ibis_aggregations)
             else:
                 aggregated_table = filtered_table.aggregate(ibis_aggregations)
 
@@ -566,10 +588,12 @@ class IbisPlanner:
             if window_mutations:
                 aggregated_table = aggregated_table.mutate(window_mutations)
 
-        # 7. Final Projection (Select only requested columns)
-        # We need to include grouping columns + requested measures
+        # 7. Final Projection and Ordering.
+        # Include hidden sort-key group columns so ORDER BY can reference them,
+        # then the adapter strips those keys from the transport payload.
+        projection_group_cols = list(dict.fromkeys(group_cols + hidden_sort_group_cols))
         projection = []
-        for col in group_cols:
+        for col in projection_group_cols:
             projection.append(aggregated_table[col])
         
         for m in spec.measures:

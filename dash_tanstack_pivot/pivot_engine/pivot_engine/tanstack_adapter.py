@@ -597,6 +597,8 @@ class TanStackPivotAdapter:
             if col_id == 'hierarchy' and request.grouping:
                 col_id = request.grouping[0]
 
+            sort_type = str(sort_spec.get("sortType") or "").strip().lower()
+            sort_key_field = sort_spec.get("sortKeyField")
             semantic_type = sort_spec.get("semanticType") or sort_spec.get("sortSemantic")
             if not semantic_type and isinstance(col_id, str):
                 # Safe heuristic fallback so common tenor fields sort naturally without
@@ -604,6 +606,10 @@ class TanStackPivotAdapter:
                 lower_col = col_id.lower()
                 if any(token in lower_col for token in ("tenor", "maturity", "term")):
                     semantic_type = "tenor"
+            if not semantic_type and sort_type == "curve_pillar_tenor":
+                # Fallback semantic hint when caller requested curve tenor semantics
+                # but did not provide an explicit semanticType.
+                semantic_type = "tenor"
 
             sort_item = {
                 'field': col_id,
@@ -611,6 +617,10 @@ class TanStackPivotAdapter:
             }
             if semantic_type:
                 sort_item["semanticType"] = semantic_type
+            if sort_type:
+                sort_item["sortType"] = sort_type
+            if isinstance(sort_key_field, str) and sort_key_field:
+                sort_item["sortKeyField"] = sort_key_field
             if sort_spec.get("nulls"):
                 sort_item["nulls"] = sort_spec.get("nulls")
             pivot_sort.append(sort_item)
@@ -671,6 +681,7 @@ class TanStackPivotAdapter:
                                                version: Optional[int] = None) -> TanStackResponse:
         """Convert pivot engine result to TanStack format"""
         import pyarrow as pa
+        hidden_sort_prefix = "__sortkey__"
         
         # Convert from pivot format to TanStack row format
         rows = []
@@ -696,6 +707,19 @@ class TanStackPivotAdapter:
         elif isinstance(pivot_result, list):
             # Already in row format
             rows = pivot_result
+
+        # Hidden sort-key fields are transport-only helpers.
+        # Keep them available for backend ORDER BY, but never expose them to the frontend.
+        if rows:
+            for row in rows:
+                if not isinstance(row, dict):
+                    continue
+                hidden_keys = [
+                    key for key in row.keys()
+                    if isinstance(key, str) and key.startswith(hidden_sort_prefix)
+                ]
+                for key in hidden_keys:
+                    row.pop(key, None)
         
         # Enrich rows for TanStack Hierarchy display
         hierarchy_cols = tanstack_request.grouping or []
@@ -801,6 +825,8 @@ class TanStackPivotAdapter:
             for key in sorted(result_keys):
                 if key in known_ids or key in meta_keys:
                     continue
+                if isinstance(key, str) and key.startswith(hidden_sort_prefix):
+                    continue
 
                 if key.startswith("__RowTotal__"):
                     measure_key = key.replace("__RowTotal__", "")
@@ -823,6 +849,15 @@ class TanStackPivotAdapter:
                 for col in new_columns:
                     if col['id'] not in existing_ids:
                         response_columns.append(col)
+
+        response_columns = [
+            col for col in response_columns
+            if not (
+                isinstance(col, dict)
+                and isinstance(col.get("id"), str)
+                and col.get("id").startswith(hidden_sort_prefix)
+            )
+        ]
 
         return TanStackResponse(
             data=rows,

@@ -138,6 +138,7 @@ def register_dash_pivot_transport_callback(
         Input(pivot_id, "drillThrough"),
         Input(pivot_id, "viewport"),
         State(pivot_id, "table"),
+        State(pivot_id, "sortOptions"),
         State(pivot_id, "columns"),
         State(pivot_id, "filterOptions"),
     )
@@ -154,6 +155,7 @@ def register_dash_pivot_transport_callback(
         drill_through,
         viewport,
         table_name,
+        sort_options,
         current_columns,
         current_filter_options,
     ):
@@ -212,6 +214,7 @@ def register_dash_pivot_transport_callback(
             val_configs=val_configs or [],
             filters=filters or {},
             sorting=sorting or [],
+            sort_options=sort_options or {},
             expanded=expanded,
             show_row_totals=resolved_show_row_totals,
             show_col_totals=resolved_show_col_totals,
