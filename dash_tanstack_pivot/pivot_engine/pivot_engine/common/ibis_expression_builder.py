@@ -40,7 +40,6 @@ class IbisExpressionBuilder:
                         # For post-agg, we assume the field exists in the aggregated table schema
                         # passed in, or we build a dummy expression if needed, but usually 'table'
                         # here IS the aggregated table for HAVING clause.
-                        # If it's truly not in the table, it will fail later, but we shouldn't block it here if is_post_agg is True.
                     
                     expr = self._build_single_filter(
                         table[field],
@@ -274,9 +273,9 @@ class IbisExpressionBuilder:
                 continue
 
             if order == 'asc':
-                sort_expr = col.asc
+                sort_expr = col.asc()
             elif order == 'desc':
-                sort_expr = col.desc
+                sort_expr = col.desc()
 
             if sort_expr:
                 if nulls == 'first':

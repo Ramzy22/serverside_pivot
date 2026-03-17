@@ -269,38 +269,39 @@ class ScalablePivotController(PivotController):
         """Ensure deterministic ordering for level queries.
 
         Adapts the sort to the deepest dimension in *group_rows*,
-        stripping dimension-specific metadata from the base sort and
-        re-applying the correct per-column options for the target
-        dimension from *column_sort_options*.
+        preserving dimension-specific metadata from the base sort and
+        applying per-column options from *column_sort_options* as overrides.
         """
-        col_opts = (column_sort_options or {}).get(group_rows[-1], {}) if group_rows else {}
+        if not base_sort:
+            return [{"field": dim, "order": "asc"} for dim in group_rows]
 
-        if isinstance(base_sort, list) and base_sort:
-            target_dim = group_rows[-1] if group_rows else None
-            if target_dim:
-                adapted = []
-                for s in base_sort:
-                    item = {"field": target_dim}
-                    for key in ("order", "desc", "nulls"):
-                        if key in s:
-                            item[key] = s[key]
-                    # Apply per-column sort options for the target dimension
-                    for key in ScalablePivotController._DIM_SORT_KEYS:
-                        if key in col_opts and col_opts[key] is not None:
-                            item[key] = col_opts[key]
-                    adapted.append(item)
-                return adapted
-            return base_sort
-        if isinstance(base_sort, dict) and base_sort:
-            item = {"field": group_rows[-1]} if group_rows else dict(base_sort)
-            for key in ("order", "desc", "nulls"):
-                if key in base_sort:
-                    item[key] = base_sort[key]
-            for key in ScalablePivotController._DIM_SORT_KEYS:
-                if key in col_opts and col_opts[key] is not None:
-                    item[key] = col_opts[key]
-            return [item]
-        return [{"field": dim, "order": "asc"} for dim in group_rows]
+        # Ensure base_sort is a list
+        sort_list = base_sort if isinstance(base_sort, list) else [base_sort]
+        target_dim = group_rows[-1] if group_rows else None
+        
+        adapted = []
+        for s in sort_list:
+            if not isinstance(s, dict):
+                continue
+            
+            # Start with original item to preserve all metadata (sortKeyField, etc.)
+            item = s.copy()
+            
+            # If target_dim exists, we ensure we are sorting by the CURRENT dimension
+            # in the hierarchy if the original field is part of the hierarchy.
+            original_field = s.get("field")
+            if target_dim and original_field in group_rows:
+                item["field"] = target_dim
+                
+                # Apply per-column sort options for the target dimension as overrides
+                col_opts = (column_sort_options or {}).get(target_dim, {})
+                for key in ScalablePivotController._DIM_SORT_KEYS:
+                    if key in col_opts and col_opts[key] is not None:
+                        item[key] = col_opts[key]
+            
+            adapted.append(item)
+            
+        return adapted
 
     @staticmethod
     def _build_parent_batch_filters(
