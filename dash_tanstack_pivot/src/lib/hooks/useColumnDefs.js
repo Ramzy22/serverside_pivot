@@ -359,7 +359,16 @@ export function useColumnDefs({
                             const v = info.getValue();
                             let fmt = null;
                             if (valConfigs) {
-                                for (const c of valConfigs) { if (k.includes(c.field)) { fmt = c.format; break; } }
+                                for (const c of valConfigs) {
+                                    if (k.includes(c.field)) {
+                                        fmt = c.format;
+                                        // Auto-format percentage window functions as percent
+                                        if (!fmt && c.windowFn && c.windowFn.startsWith('percent_')) {
+                                            fmt = 'percent';
+                                        }
+                                        break;
+                                    }
+                                }
                             }
                             const rowPath = info.row.original && info.row.original._path;
                             const { formatted, extraStyle } = renderNumericCell(v, fmt, rowPath, info.column.id);
