@@ -249,6 +249,12 @@ def register_dash_pivot_transport_callback(
                 "col_end": context.col_end,
                 "needs_col_schema": context.needs_col_schema,
                 "include_grand_total": context.include_grand_total,
+                "row_fields": state.row_fields,
+                "sorting": state.sorting,
+                "sort_options": state.sort_options,
+                "sort_options_default_used": bool(
+                    sort_options_default and not sort_options
+                ),
             },
         )
 
