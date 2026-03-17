@@ -5,7 +5,7 @@ between IbisPlanner, ProgressiveDataLoader, and HierarchicalVirtualScrollManager
 from typing import List, Dict, Any, Optional, Union
 import ibis
 from ibis import BaseBackend as IbisBaseBackend
-from ibis.expr.api import Table as IbisTable, Expr as IbisExpr
+from ibis.expr.api import Table as IbisTable, Expr as IbisExpr, Column as IbisColumn
 from pivot_engine.types.pivot_spec import PivotSpec, Measure
 
 
@@ -17,66 +17,198 @@ class IbisExpressionBuilder:
     def __init__(self, backend: IbisBaseBackend):
         self.backend = backend
 
-    def build_filter_expression(self, table: IbisTable, filters: List[Dict[str, Any]]) -> Optional[IbisExpr]:
-        """Converts a list of filter dictionaries into an Ibis boolean expression."""
+    def build_filter_expression(self, table: IbisTable, filters: List[Dict[str, Any]], is_post_agg: bool = False) -> Optional[IbisExpr]:
+        """Converts a list of filter dictionaries into a single Ibis boolean expression."""
         if not filters:
             return None
 
-        ibis_filters = []
+        all_expressions = []
+
         for f in filters:
-            field = f.get("field")
-            op = (f.get("op") or "=").lower()
-            value = f.get("value")
+            # Case 1: This is a composite filter object like {op: 'AND', conditions: [...]}
+            if ('op' in f or 'operator' in f) and 'conditions' in f:
+                sub_expressions = []
+                for sub_cond in f.get('conditions', []):
+                    field = sub_cond.get("field")
+                    if not field:
+                        continue
+                    
+                    if field not in table.columns:
+                        if not is_post_agg:
+                            print(f"Warning: Filter field '{field}' not found in table columns during sub-expression build.")
+                            continue
+                        # For post-agg, we assume the field exists in the aggregated table schema
+                        # passed in, or we build a dummy expression if needed, but usually 'table'
+                        # here IS the aggregated table for HAVING clause.
+                    
+                    expr = self._build_single_filter(
+                        table[field],
+                        sub_cond.get('op', '='),
+                        sub_cond.get('value'),
+                        sub_cond.get('caseSensitive', False)
+                    )
+                    if expr is not None:
+                        sub_expressions.append(expr)
+                
+                if not sub_expressions:
+                    continue
 
-            if field not in table.columns:
-                print(f"Warning: Filter field '{field}' not found in table during Ibis filter conversion.")
-                continue
+                # Combine the sub-expressions with AND or OR
+                combined_sub = sub_expressions[0]
+                op = (f.get('op') or f.get('operator')).upper()
+                if op == 'AND':
+                    for expr in sub_expressions[1:]:
+                        combined_sub &= expr
+                else: # OR
+                    for expr in sub_expressions[1:]:
+                        combined_sub |= expr
+                all_expressions.append(combined_sub)
 
-            col = table[field]
+            # Case 2: This is a simple filter object like {field: ..., op: ..., value: ...}
+            elif 'field' in f:
+                field = f.get("field")
+                if not field or field not in table.columns:
+                    if not is_post_agg:
+                         print(f"Warning: Filter field '{field}' not found in table columns.")
+                    continue
 
-            if op in ["=", "=="]:
-                ibis_filters.append(col == value)
-            elif op == "!=":
-                ibis_filters.append(col != value)
-            elif op == "<":
-                ibis_filters.append(col < value)
-            elif op == "<=":
-                ibis_filters.append(col <= value)
-            elif op == ">":
-                ibis_filters.append(col > value)
-            elif op == ">=":
-                ibis_filters.append(col >= value)
-            elif op == "in":
-                if isinstance(value, (list, tuple, set)):
-                    ibis_filters.append(col.isin(value))
-                else:
-                    # Treat single value 'in' as equality
-                    ibis_filters.append(col == value)
-            elif op == "between":
-                if isinstance(value, (list, tuple)) and len(value) == 2:
-                    ibis_filters.append(col.between(value[0], value[1]))
-            elif op == "like":
-                ibis_filters.append(col.like(value))
-            elif op == "ilike":
-                ibis_filters.append(col.ilike(value))
-            elif op == "is null":
-                ibis_filters.append(col.isnull())
-            elif op == "is not null":
-                ibis_filters.append(col.notnull())
-            elif op == "starts_with":
-                ibis_filters.append(col.like(f"{value}%"))
-            elif op == "ends_with":
-                ibis_filters.append(col.like(f"%{value}"))
-            elif op == "contains":
-                ibis_filters.append(col.like(f"%{value}%"))
+                expr = self._build_single_filter(
+                    table[field],
+                    f.get('op', '='),
+                    f.get('value'),
+                    f.get('caseSensitive', False)
+                )
+                if expr is not None:
+                    all_expressions.append(expr)
+            else:
+                print(f"Warning: Malformed filter object skipped: {f}")
 
-        if not ibis_filters:
+
+        if not all_expressions:
             return None
 
-        combined_filter = ibis_filters[0]
-        for f_expr in ibis_filters[1:]:
-            combined_filter &= f_expr
-        return combined_filter
+        # AND all the top-level expressions together into a single boolean expression
+        final_expression = all_expressions[0]
+        for expr in all_expressions[1:]:
+            final_expression &= expr
+            
+        return final_expression
+
+    def _build_single_filter(self, col: IbisColumn, op: str, value: Any, case_sensitive: bool = False) -> Optional[IbisExpr]:
+        """Internal helper to build a single condition for a column."""
+        op = op.lower()
+        
+        # Helper to cast value to column type for strict comparisons
+        def cast_val(v, c):
+            if v is None: return v
+            try:
+                col_type = c.type()
+                
+                # Integer handling
+                if col_type.is_integer():
+                    if isinstance(v, (int, float)):
+                        return int(v)
+                    if isinstance(v, str) and v.strip():
+                        # Handle "123.0" -> 123
+                        try:
+                            return int(float(v))
+                        except:
+                            return int(v)
+                
+                # Float/Double/Decimal handling
+                elif col_type.is_floating() or col_type.is_decimal():
+                    if isinstance(v, (int, float, str)):
+                        return float(v)
+                
+                # Boolean handling
+                elif col_type.is_boolean():
+                    if isinstance(v, str):
+                        return v.lower() in ('true', '1', 't', 'yes', 'y')
+                    return bool(v)
+                
+                # String handling (ensure string)
+                elif col_type.is_string() and not isinstance(v, str):
+                    return str(v)
+                
+                # Date/Time handling (let Ibis handle string parsing, but ensure string)
+                elif (col_type.is_date() or col_type.is_timestamp()) and not isinstance(v, (str, int, float)):
+                     # If it's a python date/datetime object, it's fine.
+                     pass
+
+            except Exception:
+                # If casting fails, return original value and let backend complain or handle it
+                pass
+            return v
+
+        if op in ["=", "eq"]:
+            val = cast_val(value, col)
+            if not case_sensitive and isinstance(value, str):
+                try:
+                    if col.type().is_string():
+                        return col.lower() == str(val).lower()
+                except: pass
+            return col == val
+
+        if op in ["!=", "ne"]:
+            val = cast_val(value, col)
+            if not case_sensitive and isinstance(value, str):
+                try:
+                    if col.type().is_string():
+                        return col.lower() != str(val).lower()
+                except: pass
+            return col != val
+
+        if op in ["<", "lt"]:
+            return col < cast_val(value, col)
+        if op in ["<=", "lte"]:
+            return col <= cast_val(value, col)
+        if op in [">", "gt"]:
+            return col > cast_val(value, col)
+        if op in [">=", "gte"]:
+            return col >= cast_val(value, col)
+        
+        # String/Array operations
+        if op == "in":
+            if isinstance(value, (list, tuple, set)):
+                vals = [cast_val(v, col) for v in value]
+                if not case_sensitive:
+                    try:
+                        if col.type().is_string():
+                            # For case-insensitive IN, we can use lower() on col and values
+                            return col.lower().isin([str(v).lower() for v in vals])
+                    except: pass
+                return col.isin(vals)
+            return col == cast_val(value, col) # Fallback for single value
+
+        if op == "between":
+            if isinstance(value, (list, tuple)) and len(value) == 2:
+                return col.between(cast_val(value[0], col), cast_val(value[1], col))
+        
+        # All subsequent operations require casting to string
+        str_col = col.cast('string')
+        
+        if op == "like":
+            return str_col.like(value) if case_sensitive else str_col.ilike(value)
+        if op == "ilike":
+            return str_col.ilike(value) # Always insensitive
+        
+        if op == "starts_with":
+            pat = f"{value}%"
+            return str_col.like(pat) if case_sensitive else str_col.ilike(pat)
+        if op == "ends_with":
+            pat = f"%{value}"
+            return str_col.like(pat) if case_sensitive else str_col.ilike(pat)
+        if op == "contains":
+            pat = f"%{value}%"
+            return str_col.like(pat) if case_sensitive else str_col.ilike(pat)
+        
+        # Null checks
+        if op == "is null":
+            return col.isnull()
+        if op == "is not null":
+            return col.notnull()
+        
+        return None
 
     def build_sort_expressions(self, table: IbisTable, sort_specs: Union[Dict[str, Any], List[Dict[str, Any]]]) -> List[Union[ibis.Column, ibis.Expr]]:
         """Converts sort specifications to a list of Ibis sort expressions."""
@@ -88,14 +220,57 @@ class IbisExpressionBuilder:
 
         for s in sort_list:
             field = s.get("field")
-            if not field or field not in table.columns:
+            if not field:
                 continue
+
+            sort_type = str(s.get("sortType") or "").strip().lower()
+            sort_key_field = s.get("sortKeyField")
+            use_hidden_sort_key = (
+                isinstance(sort_key_field, str)
+                and sort_key_field
+                and sort_key_field in table.columns
+            )
+            effective_field = sort_key_field if use_hidden_sort_key else field
+            if effective_field not in table.columns:
+                if field not in table.columns:
+                    continue
+                effective_field = field
+                use_hidden_sort_key = False
 
             order = (s.get("order") or "asc").lower()
             nulls = (s.get("nulls") or "").lower()
+            semantic_type = str(
+                s.get("semanticType") or s.get("semantic") or s.get("sortSemantic") or ""
+            ).lower()
 
-            col = table[field]
+            col = table[effective_field]
             sort_expr = None
+
+            if semantic_type == "tenor" and not use_hidden_sort_key:
+                # Parse text values like 1D, 2W, 1M, 6Y into a numeric key.
+                # Valid tenor values are always ordered before non-parsable values.
+                tenor_text = col.cast("string")
+                pattern = r"^\s*([0-9]+(?:\.[0-9]+)?)\s*([A-Za-z])\s*$"
+                numeric_text = tenor_text.re_extract(pattern, 1)
+                unit_text = tenor_text.re_extract(pattern, 2).lower()
+                numeric_value = numeric_text.nullif("").cast("float64")
+                unit_factor = (unit_text == "d").ifelse(
+                    1.0,
+                    (unit_text == "w").ifelse(
+                        7.0,
+                        (unit_text == "m").ifelse(
+                            30.4375,
+                            (unit_text == "y").ifelse(365.25, ibis.null()),
+                        ),
+                    ),
+                )
+                tenor_key = numeric_value * unit_factor
+                is_valid_tenor = numeric_value.notnull() & unit_factor.notnull()
+
+                ibis_sorts.append(is_valid_tenor.desc())
+                ibis_sorts.append(tenor_key.asc() if order == "asc" else tenor_key.desc())
+                ibis_sorts.append(tenor_text.asc() if order == "asc" else tenor_text.desc())
+                continue
 
             if order == 'asc':
                 sort_expr = col.asc
@@ -184,6 +359,30 @@ class IbisExpressionBuilder:
                 filter_expr = self.build_filter_expression(table, [measure.filter_condition])
                 if filter_expr is not None:
                     col = col.where(filter_expr)
+
+        if agg_type in {"weighted_avg", "wavg", "weighted_mean"}:
+            if col is None:
+                raise ValueError(f"Weighted average requires a value field for measure '{measure.alias}'")
+            if not measure.weighted_field:
+                raise ValueError(
+                    f"Weighted average measure '{measure.alias}' requires 'weighted_field' (or valConfig weightField)"
+                )
+            if measure.weighted_field not in table.columns:
+                raise ValueError(
+                    f"Weighted average measure '{measure.alias}' references unknown weight field '{measure.weighted_field}'"
+                )
+
+            weight_col = table[measure.weighted_field]
+            if measure.filter_condition:
+                filter_expr = self.build_filter_expression(table, [measure.filter_condition])
+                if filter_expr is not None:
+                    weight_col = weight_col.where(filter_expr)
+
+            # Ignore rows where value or weight is null.
+            valid_mask = col.notnull() & weight_col.notnull()
+            weighted_sum = (col * weight_col).where(valid_mask).sum()
+            total_weight = weight_col.where(valid_mask).sum()
+            return (weighted_sum / total_weight.nullif(0)).name(measure.alias)
 
         if agg_type == 'sum':
             return col.sum().name(measure.alias)
