@@ -990,10 +990,34 @@ class IbisPlanner:
                     total_weight = weight_expr.where(valid_mask).sum()
                     pivot_aggs.append((weighted_sum / total_weight.nullif(0)).name(alias))
 
-        row_dims = spec.rows
+        row_dims = list(spec.rows or [])
+        hidden_sort_group_cols = []
+        for sort_spec in (spec.sort or []):
+            if not isinstance(sort_spec, dict):
+                continue
+            sort_key_field = sort_spec.get("sortKeyField")
+            sort_field = sort_spec.get("field")
+            sort_key_matches_group = (
+                not sort_field
+                or sort_field in row_dims
+                or (isinstance(sort_key_field, str) and (
+                    sort_key_field in row_dims or
+                    (sort_key_field.startswith("__sortkey__") and sort_key_field[11:] in row_dims)
+                ))
+            )
+            if (
+                isinstance(sort_key_field, str)
+                and sort_key_field
+                and sort_key_field in base_table.columns
+                and sort_key_matches_group
+                and sort_key_field not in row_dims
+            ):
+                hidden_sort_group_cols.append(sort_key_field)
         
-        if row_dims:
-            result_expr = base_table.group_by(row_dims).aggregate(pivot_aggs)
+        aggregation_group_cols = list(dict.fromkeys(row_dims + hidden_sort_group_cols))
+
+        if aggregation_group_cols:
+            result_expr = base_table.group_by(aggregation_group_cols).aggregate(pivot_aggs)
         else:
             result_expr = base_table.aggregate(pivot_aggs)
             
@@ -1002,7 +1026,18 @@ class IbisPlanner:
             post_filter_expr = self.builder.build_filter_expression(result_expr, post_filters, is_post_agg=True)
             if post_filter_expr is not None:
                 result_expr = result_expr.filter(post_filter_expr)
+        
+        # Ensure hidden sort keys are in the projection
+        final_projection = []
+        for col in aggregation_group_cols:
+            final_projection.append(result_expr[col])
+        
+        # Add pivot value columns
+        for pivot_col in pivot_aggs:
+            final_projection.append(result_expr[pivot_col.get_name()])
             
+        result_expr = result_expr.select(final_projection)
+
         result_expr = self._apply_stable_ordering(
             result_expr,
             spec.sort,
