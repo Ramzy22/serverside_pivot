@@ -247,28 +247,65 @@ class IbisExpressionBuilder:
             sort_expr = None
 
             if semantic_type == "tenor" and not use_hidden_sort_key:
-                # Parse text values like 1D, 2W, 1M, 6Y into a numeric key.
-                # Valid tenor values are always ordered before non-parsable values.
+                # Parse pillar values into a numeric days key.
+                # Supports: tenor notation (1D, 2W, 6M, 1Y), ISO dates (2025-04-01),
+                # and month-year strings (Jun 2025, June 2025).
                 tenor_text = col.cast("string")
-                pattern = r"^\s*([0-9]+(?:\.[0-9]+)?)\s*([A-Za-z])\s*$"
-                numeric_text = tenor_text.re_extract(pattern, 1)
-                unit_text = tenor_text.re_extract(pattern, 2).lower()
-                numeric_value = numeric_text.nullif("").cast("float64")
-                unit_factor = (unit_text == "d").ifelse(
+
+                # --- Tenor: 1D / 2W / 6M / 1Y ---
+                tenor_pat = r"^\s*([0-9]+(?:\.[0-9]+)?)\s*([A-Za-z])\s*$"
+                num_val = tenor_text.re_extract(tenor_pat, 1).nullif("").cast("float64")
+                unit_str = tenor_text.re_extract(tenor_pat, 2).lower()
+                unit_factor = (unit_str == "d").ifelse(
                     1.0,
-                    (unit_text == "w").ifelse(
+                    (unit_str == "w").ifelse(
                         7.0,
-                        (unit_text == "m").ifelse(
+                        (unit_str == "m").ifelse(
                             30.4375,
-                            (unit_text == "y").ifelse(365.25, ibis.null()),
+                            (unit_str == "y").ifelse(365.25, ibis.null()),
                         ),
                     ),
                 )
-                tenor_key = numeric_value * unit_factor
-                is_valid_tenor = numeric_value.notnull() & unit_factor.notnull()
+                tenor_key = num_val * unit_factor
+                is_tenor = num_val.notnull() & unit_factor.notnull()
 
-                ibis_sorts.append(is_valid_tenor.desc())
-                ibis_sorts.append(tenor_key.asc() if order == "asc" else tenor_key.desc())
+                # --- ISO date: 2025-04-01 ---
+                iso_pat = r"^\s*(\d{4})-(\d{2})-(\d{2})\s*$"
+                iso_y = tenor_text.re_extract(iso_pat, 1).nullif("").cast("float64")
+                iso_m = tenor_text.re_extract(iso_pat, 2).nullif("").cast("float64")
+                iso_d = tenor_text.re_extract(iso_pat, 3).nullif("").cast("float64")
+                iso_key = (iso_y - 1970.0) * 365.25 + (iso_m - 1.0) * 30.4375 + iso_d
+                is_iso = iso_y.notnull()
+
+                # --- Month-year: Jun 2025 / June 2025 (first 3 chars of month name) ---
+                my_pat = r"^\s*([A-Za-z]+)\s+(\d{4})\s*$"
+                mon_abbr = tenor_text.re_extract(my_pat, 1).lower().substr(0, 3)
+                my_year = tenor_text.re_extract(my_pat, 2).nullif("").cast("float64")
+                mon_num = (
+                    (mon_abbr == "jan").ifelse(1.0,
+                    (mon_abbr == "feb").ifelse(2.0,
+                    (mon_abbr == "mar").ifelse(3.0,
+                    (mon_abbr == "apr").ifelse(4.0,
+                    (mon_abbr == "may").ifelse(5.0,
+                    (mon_abbr == "jun").ifelse(6.0,
+                    (mon_abbr == "jul").ifelse(7.0,
+                    (mon_abbr == "aug").ifelse(8.0,
+                    (mon_abbr == "sep").ifelse(9.0,
+                    (mon_abbr == "oct").ifelse(10.0,
+                    (mon_abbr == "nov").ifelse(11.0,
+                    (mon_abbr == "dec").ifelse(12.0, ibis.null())))))))))))))
+                my_key = (my_year - 1970.0) * 365.25 + (mon_num - 1.0) * 30.4375
+                is_my = my_year.notnull() & mon_num.notnull()
+
+                # Combined key: tenor → ISO date → month-year → fallback text
+                sort_key = is_tenor.ifelse(
+                    tenor_key,
+                    is_iso.ifelse(iso_key, is_my.ifelse(my_key, ibis.null())),
+                )
+                is_valid = is_tenor | is_iso | is_my
+
+                ibis_sorts.append(is_valid.desc())
+                ibis_sorts.append(sort_key.asc() if order == "asc" else sort_key.desc())
                 ibis_sorts.append(tenor_text.asc() if order == "asc" else tenor_text.desc())
                 continue
 
