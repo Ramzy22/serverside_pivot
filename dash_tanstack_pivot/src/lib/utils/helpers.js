@@ -19,6 +19,31 @@ export const formatDisplayLabel = (value) => {
         .join(' ');
 };
 
+export const isWeightedAverageAgg = (agg) => {
+    const normalized = String(agg || '').trim().toLowerCase();
+    return normalized === 'weighted_avg' || normalized === 'wavg' || normalized === 'weighted_mean';
+};
+
+export const formatAggLabel = (agg, weightField = null) => {
+    const normalized = String(agg || '').trim().toLowerCase();
+    const labels = {
+        sum: 'Sum',
+        avg: 'Avg',
+        count: 'Cnt',
+        min: 'Min',
+        max: 'Max',
+        weighted_avg: 'Weighted Avg',
+        wavg: 'Weighted Avg',
+        weighted_mean: 'Weighted Avg',
+    };
+
+    const baseLabel = labels[normalized] || formatDisplayLabel(normalized);
+    if (isWeightedAverageAgg(normalized) && weightField) {
+        return `${baseLabel} by ${formatDisplayLabel(weightField)}`;
+    }
+    return baseLabel;
+};
+
 // Replace thousands commas with narrow non-breaking spaces (ISO 80000-1 convention)
 const spaceGroups = (str) => str.replace(/,/g, '\u202F');
 

@@ -2,7 +2,7 @@ import { useMemo } from 'react';
 import React from 'react';
 import Icons from '../components/Icons';
 import EditableCell from '../components/Table/EditableCell';
-import { formatValue, formatDisplayLabel, getKey } from '../utils/helpers';
+import { formatValue, formatDisplayLabel, formatAggLabel, getKey } from '../utils/helpers';
 
 const debugLog = process.env.NODE_ENV !== 'production'
     ? (...args) => console.log('[pivot-grid]', ...args)
@@ -301,7 +301,7 @@ export function useColumnDefs({
             dataCols = valConfigs.map(c => ({
                 id: getKey('', c.field, c.agg),
                 accessorFn: row => row[getKey('', c.field, c.agg)] ,
-                header: `${formatDisplayLabel(c.field)} (${c.agg})`,
+                header: `${formatDisplayLabel(c.field)} (${formatAggLabel(c.agg, c.weightField)})`,
                 size: defaultColumnWidths.measure,
                 enablePinning: true,
                 sortingFn,
@@ -400,7 +400,7 @@ export function useColumnDefs({
                                 const suffix = `_${config.field}_${config.agg}`;
                                 if (key.toLowerCase().endsWith(suffix.toLowerCase())) {
                                     matchedConfig = config;
-                                    measureStr = `${formatDisplayLabel(config.field)} (${config.agg})`;
+                                    measureStr = `${formatDisplayLabel(config.field)} (${formatAggLabel(config.agg, config.weightField)})`;
                                     dimStr = key.substring(0, key.length - suffix.length);
                                     break;
                                 }

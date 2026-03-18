@@ -144,7 +144,23 @@ Keyword arguments:
 
 - table (string; optional)
 
-- valConfigs (list; optional)
+- valConfigs (list of dicts; optional)
+
+    `valConfigs` is a list of dicts with keys:
+
+    - field (string; optional)
+
+    - agg (a value equal to: 'sum', 'avg', 'count', 'min', 'max', 'weighted_avg', 'wavg', 'weighted_mean'; optional)
+
+    - weightField (string; optional)
+
+    - windowFn (a value equal to: 'percent_of_row', 'percent_of_col', 'percent_of_grand_total'; optional)
+
+    - format (string; optional)
+
+    - percentile (number; optional)
+
+    - separator (string; optional)
 
 - validationRules (dict; optional)
 
@@ -155,6 +171,19 @@ Keyword arguments:
     _base_nodes = ['children']
     _namespace = 'dash_tanstack_pivot'
     _type = 'DashTanstackPivot'
+    ValConfigs = TypedDict(
+        "ValConfigs",
+            {
+            "field": NotRequired[str],
+            "agg": NotRequired[Literal["sum", "avg", "count", "min", "max", "weighted_avg", "wavg", "weighted_mean"]],
+            "weightField": NotRequired[str],
+            "windowFn": NotRequired[Literal["percent_of_row", "percent_of_col", "percent_of_grand_total"]],
+            "format": NotRequired[str],
+            "percentile": NotRequired[NumberType],
+            "separator": NotRequired[str]
+        }
+    )
+
     ColumnPinning = TypedDict(
         "ColumnPinning",
             {
@@ -210,7 +239,7 @@ Keyword arguments:
         rowCount: typing.Optional[NumberType] = None,
         rowFields: typing.Optional[typing.Sequence] = None,
         colFields: typing.Optional[typing.Sequence] = None,
-        valConfigs: typing.Optional[typing.Sequence] = None,
+        valConfigs: typing.Optional[typing.Sequence["ValConfigs"]] = None,
         filters: typing.Optional[dict] = None,
         sorting: typing.Optional[typing.Sequence] = None,
         expanded: typing.Optional[typing.Union[dict, bool]] = None,

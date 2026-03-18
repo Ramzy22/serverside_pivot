@@ -5,7 +5,7 @@ import ToolPanelSection from './ToolPanelSection';
 import ColumnTreeItem from './ColumnTreeItem';
 import Icons from '../Icons';
 import { isGroupColumn, getAllLeafIdsFromColumn, hasChildrenInZone } from '../../utils/helpers';
-import { formatDisplayLabel } from '../../utils/helpers';
+import { formatDisplayLabel, isWeightedAverageAgg } from '../../utils/helpers';
 
 export function SidebarPanel({
     sidebarTab, setSidebarTab,
@@ -55,12 +55,60 @@ export function SidebarPanel({
         color: theme.text,
         cursor: 'pointer',
         borderRadius: theme.radiusSm || '8px',
-        fontSize: '10px',
+        fontSize: '9px',
         lineHeight: 1.2,
-        padding: '1px 6px',
-        minHeight: '22px',
+        padding: '1px 4px',
+        minHeight: '20px',
         outline: 'none',
     };
+    const handleValueAggChange = React.useCallback((measureIndex, nextAgg) => {
+        setValConfigs((prev) => {
+            const next = [...prev];
+            const current = next[measureIndex];
+            if (!current) return prev;
+
+            if (isWeightedAverageAgg(nextAgg) && !current.weightField) {
+                const suggestedWeightField = Array.isArray(availableFields) && availableFields.length > 0
+                    ? (availableFields.find((field) => field !== current.field) || availableFields[0])
+                    : '';
+                const promptValue = typeof window !== 'undefined'
+                    ? window.prompt(
+                        `Weight field for weighted average of ${formatDisplayLabel(current.field)}`,
+                        current.weightField || suggestedWeightField || ''
+                    )
+                    : current.weightField || suggestedWeightField || '';
+                const chosenWeightField = typeof promptValue === 'string' ? promptValue.trim() : '';
+
+                if (!chosenWeightField) {
+                    if (showNotification) showNotification('Weighted average requires a weight field.', 'warning');
+                    return prev;
+                }
+                if (Array.isArray(availableFields) && availableFields.length > 0 && !availableFields.includes(chosenWeightField)) {
+                    if (showNotification) showNotification(`Unknown weight field: ${chosenWeightField}`, 'warning');
+                    return prev;
+                }
+
+                next[measureIndex] = { ...current, agg: nextAgg, weightField: chosenWeightField };
+                return next;
+            }
+
+            next[measureIndex] = { ...current, agg: nextAgg };
+            return next;
+        });
+    }, [availableFields, setValConfigs, showNotification]);
+    const handleValueWeightFieldChange = React.useCallback((measureIndex, nextWeightField) => {
+        if (!nextWeightField) {
+            if (showNotification) showNotification('Weighted average requires a weight field.', 'warning');
+            return;
+        }
+        setValConfigs((prev) => {
+            const next = [...prev];
+            const current = next[measureIndex];
+            if (!current) return prev;
+            next[measureIndex] = { ...current, weightField: nextWeightField };
+            return next;
+        });
+    }, [setValConfigs, showNotification]);
     const openSidebarFilter = (e, columnId) => {
         e.stopPropagation();
         if (sidebarRef.current) {
@@ -217,22 +265,33 @@ export function SidebarPanel({
                                         {(zone.id==='filter' ? Object.keys(filters).filter(k=>k!=='global') : zone.id==='rows'?rowFields:zone.id==='cols'?colFields:valConfigs).map((item, idx) => {
                                             const label = zone.id==='vals' ? item.field : item;
                                             const displayLabel = zone.id === 'vals' ? formatDisplayLabel(item.field) : formatDisplayLabel(item);
-                                            const isVal = zone.id === 'vals';
-                                            const chipStyle = styles.chip;
                                             return (
                                                                                         <div key={idx} draggable onDragStart={e=>onDragStart(e,item,zone.id,idx)} onDragOver={e=>onDragOver(e,zone.id,idx)} >
-                                                                                            <div style={chipStyle}>
+                                                                                            <div style={styles.chip}>
                                                                                                 {dropLine && dropLine.zone===zone.id && dropLine.idx===idx && <div style={{...styles.dropLine,top:-2}}/>}
                                                                                                 <div style={{display:'flex',alignItems:'center',gap:'8px', minWidth: 0, flex: 1}}>
                                                                                                     <Icons.DragIndicator/>
-                                                                                                    <b style={{fontWeight:500, marginRight: isVal ? '8px' : 0, whiteSpace:'nowrap', overflow:'hidden', textOverflow:'ellipsis'}}>{displayLabel}</b>
+                                                                                                    <b style={{fontWeight:500, display:'block', minWidth: 0, whiteSpace:'nowrap', overflow:'hidden', textOverflow:'ellipsis'}}>{displayLabel}</b>
                                                                                                 </div>
                                                                                                 {zone.id === 'vals' && (
-                                                                                                    <div style={{display:'flex', alignItems:'center', gap:'6px', marginLeft:'8px', flexWrap:'nowrap', flexShrink: 0}}>
-                                                                                                        <select value={item.agg} onChange={e=>{const n=[...valConfigs];n[idx].agg=e.target.value;setValConfigs(n)}} style={{...valueSelectStyle, width:'56px'}}>
-                                                                                                                <option value="sum">Sum</option><option value="avg">Avg</option><option value="count">Cnt</option><option value="min">Min</option><option value="max">Max</option>
+                                                                                                    <div style={{display:'flex', alignItems:'center', gap:'4px', marginLeft:'8px', flexWrap:'nowrap', flexShrink: 0}}>
+                                                                                                        <select value={item.agg} onChange={e=>handleValueAggChange(idx, e.target.value)} style={{...valueSelectStyle, width:'74px'}} title="Aggregation">
+                                                                                                                <option value="sum">Sum</option><option value="avg">Avg</option><option value="count">Cnt</option><option value="min">Min</option><option value="max">Max</option><option value="weighted_avg">WAvg</option>
                                                                                                         </select>
-                                                                                                        <select value={item.windowFn || 'none'} onChange={e=>{const n=[...valConfigs];n[idx].windowFn=e.target.value==='none'?null:e.target.value;setValConfigs(n)}} style={{...valueSelectStyle, width:'64px'}}>
+                                                                                                        {isWeightedAverageAgg(item.agg) && (
+                                                                                                            <select
+                                                                                                                value={item.weightField || ''}
+                                                                                                                onChange={e => handleValueWeightFieldChange(idx, e.target.value)}
+                                                                                                                style={{...valueSelectStyle, width:'92px'}}
+                                                                                                                title="Weight field"
+                                                                                                            >
+                                                                                                                <option value="" disabled>Weight</option>
+                                                                                                                {availableFields.map((fieldName) => (
+                                                                                                                    <option key={fieldName} value={fieldName}>{formatDisplayLabel(fieldName)}</option>
+                                                                                                                ))}
+                                                                                                            </select>
+                                                                                                        )}
+                                                                                                        <select value={item.windowFn || 'none'} onChange={e=>{const n=[...valConfigs];n[idx].windowFn=e.target.value==='none'?null:e.target.value;setValConfigs(n)}} style={{...valueSelectStyle, width:'56px'}}>
                                                                                                                 <option value="none">Norm</option><option value="percent_of_row">%Row</option><option value="percent_of_col">%Col</option><option value="percent_of_grand_total">%Tot</option>
                                                                                                         </select>
                                                                                                     </div>

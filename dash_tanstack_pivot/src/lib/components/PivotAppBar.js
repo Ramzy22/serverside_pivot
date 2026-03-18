@@ -332,8 +332,11 @@ export function PivotAppBar({
         const colId = idx >= 0 ? k.substring(idx + 1) : k;
         return columnDecimalOverrides[colId] !== undefined ? columnDecimalOverrides[colId] : decimalPlaces;
     }, [selectedCells, columnDecimalOverrides, decimalPlaces]);
+    const [cellFormatOpen, setCellFormatOpen] = useState(false);
+    const cellFormatBtnRef = useRef(null);
     const [themeEditorOpen, setThemeEditorOpen] = useState(false);
     const themeEditorBtnRef = useRef(null);
+    const hasSavedCellFormats = Object.keys(cellFormatRules || {}).length > 0;
     const handleZoomChange = (delta) => {
         setZoomLevel(prev => Math.max(ZOOM_MIN, Math.min(ZOOM_MAX, prev + delta)));
     };
@@ -471,6 +474,27 @@ export function PivotAppBar({
                         onClick={() => handleDecimalChange(1)}
                         disabled={displayDecimal >= DECIMAL_MAX}
                     >+.00</button>
+                </div>
+                <div style={{ position:'relative' }}>
+                    <button
+                        ref={cellFormatBtnRef}
+                        style={cellFormatOpen || hasSelection || hasSavedCellFormats ? btnActive : btnSubtle}
+                        onClick={() => setCellFormatOpen(open => !open)}
+                        title={hasSelection ? 'Format selected cells' : 'Open cell formatting'}
+                    >
+                        Format Cells{hasSelection ? ` (${selectedCellKeys.length})` : ''}
+                    </button>
+                    {cellFormatOpen && (
+                        <CellFormatPopover
+                            theme={theme}
+                            styles={styles}
+                            cellFormatRules={cellFormatRules}
+                            setCellFormatRules={setCellFormatRules}
+                            selectedCellKeys={selectedCellKeys}
+                            onClose={() => setCellFormatOpen(false)}
+                            anchorRef={cellFormatBtnRef}
+                        />
+                    )}
                 </div>
 
                 {sep}
