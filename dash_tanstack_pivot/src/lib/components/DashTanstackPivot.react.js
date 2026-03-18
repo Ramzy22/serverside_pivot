@@ -19,7 +19,7 @@ import Notification from './Notification';
 import useStickyStyles from '../hooks/useStickyStyles';
 import { useServerSideRowModel } from '../hooks/useServerSideRowModel';
 import { useColumnVirtualizer } from '../hooks/useColumnVirtualizer';
-import { formatValue, getAllLeafIdsFromColumn, isGroupColumn } from '../utils/helpers';
+import { formatValue, formatDisplayLabel, getAllLeafIdsFromColumn, isGroupColumn } from '../utils/helpers';
 import ContextMenu from './Table/ContextMenu';
 import { PivotAppBar } from './PivotAppBar';
 import { SidebarPanel } from './Sidebar/SidebarPanel';
@@ -287,10 +287,11 @@ export default function DashTanstackPivot(props) {
     // Font / display controls
     const [fontFamily, setFontFamily] = useState("'Inter', system-ui, sans-serif");
     const [fontSize, setFontSize] = useState('14px');
-    const [decimalPlaces, setDecimalPlaces] = useState(2);
+    const [decimalPlaces, setDecimalPlaces] = useState(0);
     const [columnDecimalOverrides, setColumnDecimalOverrides] = useState({});
     const [cellFormatRules, setCellFormatRules] = useState({});
     const [hoveredRowPath, setHoveredRowPath] = useState(null);
+    const [zoomLevel, setZoomLevel] = useState(100);
 
     // selectedCellKeys and selectedCellColIds are now derived inside PivotAppBar
     // to avoid stale prop issues between parent and child renders.
@@ -374,6 +375,7 @@ export default function DashTanstackPivot(props) {
         if (restored.columnSizing && typeof restored.columnSizing === 'object') setColumnSizing(restored.columnSizing);
         if (restored.colExpanded && typeof restored.colExpanded === 'object') setColExpanded(restored.colExpanded);
         if (typeof restored.decimalPlaces === 'number') setDecimalPlaces(restored.decimalPlaces);
+        if (typeof restored.zoomLevel === 'number') setZoomLevel(Math.max(60, Math.min(160, restored.zoomLevel)));
         if (restored.columnDecimalOverrides && typeof restored.columnDecimalOverrides === 'object') setColumnDecimalOverrides(restored.columnDecimalOverrides);
         if (restored.cellFormatRules && typeof restored.cellFormatRules === 'object') setCellFormatRules(restored.cellFormatRules);
 
@@ -1041,6 +1043,7 @@ export default function DashTanstackPivot(props) {
                 columnSizing,
                 colExpanded,
                 decimalPlaces,
+                zoomLevel,
                 columnDecimalOverrides,
                 cellFormatRules,
                 scroll: parentRef.current
@@ -1075,6 +1078,7 @@ export default function DashTanstackPivot(props) {
         columnSizing,
         colExpanded,
         decimalPlaces,
+        zoomLevel,
         columnDecimalOverrides,
         cellFormatRules,
     ]);
@@ -1801,33 +1805,52 @@ export default function DashTanstackPivot(props) {
 
     const autoSizeColumn = (columnId) => {
         const rows = table.getRowModel().rows;
-        const sampleRows = rows.slice(0, 100); 
+        const sampleRows = rows.slice(0, 250);
         let maxWidth = 0;
-        
+
         const canvas = document.createElement('canvas');
         const context = canvas.getContext('2d');
-        context.font = '13px Roboto, Helvetica, Arial, sans-serif'; 
-        
+        if (!context) return;
+        const bodyFont = `${fontSize || '14px'} ${fontFamily || "'Inter', system-ui, sans-serif"}`;
+        const headerFont = `600 ${fontSize || '14px'} ${fontFamily || "'Inter', system-ui, sans-serif"}`;
+
         const column = table.getColumn(columnId);
+        if (!column) return;
         const header = column.columnDef.header;
-        const headerText = typeof header === 'string' ? header : columnId;
+        const headerText = formatDisplayLabel(typeof header === 'string' ? header : columnId);
+        context.font = headerFont;
         maxWidth = context.measureText(headerText).width + autoSizeBounds.headerPadding;
-        
+
+        context.font = bodyFont;
         sampleRows.forEach(row => {
             const cellValue = row.getValue(columnId);
-            const text = formatValue(cellValue); 
+            let text;
+            if (columnId === 'hierarchy') {
+                const depth = row.original && typeof row.original.depth === 'number' ? row.original.depth : (row.depth || 0);
+                const label = row.original && row.original._id != null ? formatDisplayLabel(String(row.original._id)) : '';
+                text = `${' '.repeat(depth * 2)}${label}`;
+            } else {
+                text = formatValue(cellValue);
+            }
             const width = context.measureText(text).width + autoSizeBounds.cellPadding;
             if (width > maxWidth) maxWidth = width;
         });
-        
+
         maxWidth = Math.min(maxWidth, autoSizeBounds.maxWidth);
         maxWidth = Math.max(maxWidth, autoSizeBounds.minWidth);
-        
+
         table.setColumnSizing(old => ({
             ...old,
             [columnId]: maxWidth
         }));
     };
+
+    const autoSizeVisibleColumns = useCallback(() => {
+        if (!table || !table.getVisibleLeafColumns) return;
+        table.getVisibleLeafColumns().forEach((column) => {
+            autoSizeColumn(column.id);
+        });
+    }, [table, autoSizeColumn]);
 
     const handleFilterClick = (e, columnId) => {
         e.stopPropagation();
@@ -3208,6 +3231,7 @@ export default function DashTanstackPivot(props) {
                 showColTotals={showColTotals} setShowColTotals={setShowColTotals}
                 spacingMode={spacingMode} setSpacingMode={setSpacingMode} spacingLabels={spacingLabels}
                 layoutMode={layoutMode} setLayoutMode={setLayoutMode}
+                onAutoSizeColumns={autoSizeVisibleColumns}
                 colorScaleMode={colorScaleMode} setColorScaleMode={setColorScaleMode}
                 colorPalette={colorPalette} setColorPalette={setColorPalette}
                 rowCount={rowCount} exportPivot={exportPivot}
@@ -3217,6 +3241,7 @@ export default function DashTanstackPivot(props) {
                 pivotTitle={props.pivotTitle}
                 fontFamily={fontFamily} setFontFamily={setFontFamily}
                 fontSize={fontSize} setFontSize={setFontSize}
+                zoomLevel={zoomLevel} setZoomLevel={setZoomLevel}
                 decimalPlaces={decimalPlaces} setDecimalPlaces={setDecimalPlaces}
                 columnDecimalOverrides={columnDecimalOverrides} setColumnDecimalOverrides={setColumnDecimalOverrides}
                 cellFormatRules={cellFormatRules} setCellFormatRules={setCellFormatRules}
@@ -3224,7 +3249,7 @@ export default function DashTanstackPivot(props) {
                 dataBarsColumns={dataBarsColumns} setDataBarsColumns={setDataBarsColumns}
             />
         <PivotErrorBoundary key={dataVersion}>
-            <div style={{display:'flex', flex:1, overflow:'hidden', fontFamily: fontFamily, fontSize: fontSize}}>
+            <div style={{display:'flex', flex:1, overflow:'hidden', fontFamily: fontFamily, fontSize: fontSize, zoom: zoomLevel / 100}}>
                 {sidebarOpen && (
                     <SidebarPanel
                         sidebarTab={sidebarTab} setSidebarTab={setSidebarTab}

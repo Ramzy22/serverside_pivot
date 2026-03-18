@@ -50,6 +50,9 @@ const THEME_LABELS = {
 
 const DECIMAL_MIN = 0;
 const DECIMAL_MAX = 6;
+const ZOOM_MIN = 60;
+const ZOOM_MAX = 160;
+const ZOOM_STEP = 10;
 
 function CellFormatPopover({ theme, styles, cellFormatRules, setCellFormatRules, selectedCellKeys, onClose, anchorRef }) {
     const firstKey = selectedCellKeys && selectedCellKeys.length > 0 ? selectedCellKeys[0] : null;
@@ -257,6 +260,7 @@ export function PivotAppBar({
     showColTotals, setShowColTotals,
     spacingMode, setSpacingMode, spacingLabels,
     layoutMode, setLayoutMode,
+    onAutoSizeColumns,
     colorScaleMode, setColorScaleMode,
     colorPalette, setColorPalette,
     rowCount, exportPivot,
@@ -266,6 +270,7 @@ export function PivotAppBar({
     pivotTitle,
     fontFamily, setFontFamily,
     fontSize, setFontSize,
+    zoomLevel, setZoomLevel,
     decimalPlaces, setDecimalPlaces,
     columnDecimalOverrides, setColumnDecimalOverrides,
     cellFormatRules, setCellFormatRules,
@@ -328,6 +333,9 @@ export function PivotAppBar({
     const rowFmtBtnRef = useRef(null);
     const [themeEditorOpen, setThemeEditorOpen] = useState(false);
     const themeEditorBtnRef = useRef(null);
+    const handleZoomChange = (delta) => {
+        setZoomLevel(prev => Math.max(ZOOM_MIN, Math.min(ZOOM_MAX, prev + delta)));
+    };
 
     // Base styles for different button variants
     const btnBase = {
@@ -385,7 +393,7 @@ export function PivotAppBar({
                 <button onClick={() => setSidebarOpen(!sidebarOpen)} style={{...btnGhost, padding:'5px', color: theme.textSec}}>
                     <Icons.Menu />
                 </button>
-                <div style={{fontWeight:700, fontSize:'15px', color:theme.text, whiteSpace:'nowrap'}}>{pivotTitle || 'Analytics Pivot'}</div>
+                <div style={{fontWeight:700, fontSize:'15px', color:theme.text, whiteSpace:'nowrap'}}>{pivotTitle || ''}</div>
             </div>
 
             {/* Search */}
@@ -446,6 +454,9 @@ export function PivotAppBar({
                 </button>
                 <button style={btnSubtle} onClick={() => setLayoutMode(prev => prev === 'hierarchy' ? 'outline' : prev === 'outline' ? 'tabular' : 'hierarchy')} title="Cycle layout mode">
                     {layoutMode === 'hierarchy' ? 'Hierarchy' : layoutMode === 'outline' ? 'Outline' : 'Tabular'}
+                </button>
+                <button style={btnSubtle} onClick={onAutoSizeColumns} title="Auto size visible columns">
+                    Auto Size
                 </button>
 
                 {sep}
@@ -516,6 +527,25 @@ export function PivotAppBar({
                     style={{...btnSubtle, outline:'none', cursor:'pointer'}}>
                     {FONT_SIZE_OPTIONS.map(s => <option key={s} value={s}>{s}</option>)}
                 </select>
+                <div style={{display:'flex', alignItems:'center', gap:'2px', background: theme.hover, border:`1px solid ${theme.border}`, borderRadius:'6px', padding:'2px 4px'}}>
+                    <button
+                        title="Zoom out"
+                        style={{...btnGhost, padding:'2px 6px', fontSize:'12px', minWidth:'28px', opacity: zoomLevel <= ZOOM_MIN ? 0.35 : 1}}
+                        onClick={() => handleZoomChange(-ZOOM_STEP)}
+                        disabled={zoomLevel <= ZOOM_MIN}
+                    >
+                        -
+                    </button>
+                    <span style={{fontSize:'11px', color: theme.textSec, minWidth:'42px', textAlign:'center', fontWeight: 600}}>{zoomLevel}%</span>
+                    <button
+                        title="Zoom in"
+                        style={{...btnGhost, padding:'2px 6px', fontSize:'12px', minWidth:'28px', opacity: zoomLevel >= ZOOM_MAX ? 0.35 : 1}}
+                        onClick={() => handleZoomChange(ZOOM_STEP)}
+                        disabled={zoomLevel >= ZOOM_MAX}
+                    >
+                        +
+                    </button>
+                </div>
 
                 {sep}
 
