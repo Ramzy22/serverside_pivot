@@ -59,6 +59,13 @@ export function useColumnDefs({
     cellFormatRules,
 }) {
     return useMemo(() => {
+        const getConfigDisplayFormat = (config) => {
+            if (!config) return null;
+            if (config.format) return config.format;
+            if (config.windowFn && String(config.windowFn).startsWith('percent_')) return 'percent';
+            return null;
+        };
+
         // Helper: render a numeric cell value with decimal precision and negative-red coloring
         const renderNumericCell = (value, fmt, rowPath, colId) => {
             const cellDec = colId !== undefined && columnDecimalOverrides && columnDecimalOverrides[colId] !== undefined
@@ -300,7 +307,7 @@ export function useColumnDefs({
                 sortingFn,
                 cell: info => {
                     const rowPath = info.row.original && info.row.original._path;
-                    const { formatted, extraStyle } = renderNumericCell(info.getValue(), c.format, rowPath, info.column.id);
+                    const { formatted, extraStyle } = renderNumericCell(info.getValue(), getConfigDisplayFormat(c), rowPath, info.column.id);
                     return (
                         <div style={{width:'100%', height:'100%', display:'flex', alignItems:'center', justifyContent:'flex-end', paddingRight:'8px', ...extraStyle}} onContextMenu={e => handleContextMenu(e, info.getValue(), info.column.id, info.row)}>
                             {formatted}
@@ -361,11 +368,7 @@ export function useColumnDefs({
                             if (valConfigs) {
                                 for (const c of valConfigs) {
                                     if (k.includes(c.field)) {
-                                        fmt = c.format;
-                                        // Auto-format percentage window functions as percent
-                                        if (!fmt && c.windowFn && c.windowFn.startsWith('percent_')) {
-                                            fmt = 'percent';
-                                        }
+                                        fmt = getConfigDisplayFormat(c);
                                         break;
                                     }
                                 }
@@ -493,7 +496,7 @@ export function useColumnDefs({
                                               c.cell = info => {
                                                  const config = valConfigs.find(v => c.id.includes(v.field));
                                                  const rowPath = info.row.original && info.row.original._path;
-                                                 const { formatted, extraStyle } = renderNumericCell(info.getValue(), config ? config.format : null, rowPath, info.column.id);
+                                                 const { formatted, extraStyle } = renderNumericCell(info.getValue(), getConfigDisplayFormat(config), rowPath, info.column.id);
                                                  return (
                                                      <div style={{width:'100%', height:'100%', display:'flex', alignItems:'center', justifyContent:'flex-end', paddingRight:'8px', fontWeight:'bold', ...extraStyle}} onContextMenu={e => handleContextMenu(e, info.getValue(), info.column.id, info.row)}>
                                                          {formatted}

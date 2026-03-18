@@ -1392,8 +1392,8 @@ class TanStackPivotAdapter:
         if filter_expr is not None:
             table = table.filter(filter_expr)
             
-        # Get distinct
-        query = table.select(column_id).distinct().limit(spec.limit)
+        # Get distinct values in stable sorted order for the filter list UI.
+        query = table.select(column_id).distinct().order_by(column_id).limit(spec.limit)
         result = query.execute()
         return result[column_id].tolist()
 

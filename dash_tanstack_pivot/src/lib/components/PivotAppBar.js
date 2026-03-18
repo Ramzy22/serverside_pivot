@@ -3,11 +3,11 @@ import Icons from './Icons';
 import { themes } from '../utils/styles';
 
 const COLOR_PALETTE_OPTIONS = [
-    { value: 'redGreen',   label: 'Red → Green' },
-    { value: 'greenRed',   label: 'Green → Red' },
-    { value: 'blueWhite',  label: 'Blue → White' },
-    { value: 'yellowBlue', label: 'Yellow → Blue' },
-    { value: 'orangePurp', label: 'Orange → Purple' },
+    { value: 'redGreen',   label: 'Red to Green' },
+    { value: 'greenRed',   label: 'Green to Red' },
+    { value: 'blueWhite',  label: 'Blue to White' },
+    { value: 'yellowBlue', label: 'Yellow to Blue' },
+    { value: 'orangePurp', label: 'Orange to Purple' },
 ];
 
 const FONT_FAMILY_OPTIONS = [
@@ -256,6 +256,7 @@ export function PivotAppBar({
     themeOverrides, setThemeOverrides,
     showRowNumbers, setShowRowNumbers,
     showFloatingFilters, setShowFloatingFilters,
+    stickyHeaders, setStickyHeaders,
     showRowTotals, setShowRowTotals,
     showColTotals, setShowColTotals,
     spacingMode, setSpacingMode, spacingLabels,
@@ -329,8 +330,6 @@ export function PivotAppBar({
         const colId = idx >= 0 ? k.substring(idx + 1) : k;
         return columnDecimalOverrides[colId] !== undefined ? columnDecimalOverrides[colId] : decimalPlaces;
     }, [selectedCells, columnDecimalOverrides, decimalPlaces]);
-    const [rowFmtOpen, setRowFmtOpen] = useState(false);
-    const rowFmtBtnRef = useRef(null);
     const [themeEditorOpen, setThemeEditorOpen] = useState(false);
     const themeEditorBtnRef = useRef(null);
     const handleZoomChange = (delta) => {
@@ -384,39 +383,72 @@ export function PivotAppBar({
         boxShadow: theme.shadowInset || 'none',
     };
 
-    const sep = <div style={{width:'1px', height:'18px', background: theme.border, flexShrink: 0}} />;
+    const sep = null;
+    const bigSep = null;
 
     return (
-        <div style={{...styles.appBar, height: 'auto', minHeight: '64px', padding: '10px 16px', gap: '8px', flexWrap: 'wrap'}}>
-            {/* Left: sidebar toggle + title */}
-            <div style={{display:'flex', alignItems:'center', gap:'8px', flexShrink: 0}}>
-                <button onClick={() => setSidebarOpen(!sidebarOpen)} style={{...btnGhost, padding:'5px', color: theme.textSec}}>
+        <div style={{
+            ...styles.appBar, 
+            height: 'auto', 
+            minHeight: '64px', 
+            padding: '12px 20px', 
+            gap: '12px 16px', 
+            flexWrap: 'wrap', 
+            overflowX: 'visible',
+            overflowY: 'visible',
+            justifyContent: 'flex-start',
+            alignContent: 'flex-start',
+            alignItems: 'center'
+        }}>
+            {/* 1. Navigation Section: Menu + Title */}
+            <div style={{display:'flex', alignItems:'center', gap:'12px', rowGap:'8px', flexWrap:'wrap', flex:'0 1 auto', minWidth: 0}}>
+                <button 
+                    onClick={() => setSidebarOpen(!sidebarOpen)} 
+                    style={{...btnGhost, padding:'6px 10px', color: theme.text, display: 'flex', alignItems: 'center', gap: '8px'}}
+                >
                     <Icons.Menu />
+                    <span style={{fontSize: '13px', fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.04em'}}>Menu</span>
                 </button>
-                <div style={{fontWeight:700, fontSize:'15px', color:theme.text, whiteSpace:'nowrap'}}>{pivotTitle || ''}</div>
+                <div style={{fontWeight:800, fontSize:'16px', color:theme.text, whiteSpace:'nowrap', opacity: 0.9}}>
+                    {pivotTitle || ''}
+                </div>
             </div>
 
-            {/* Search */}
-            <div style={{...styles.searchBox, flex:'1', minWidth:'180px', maxWidth:'280px', borderRadius:theme.radiusSm || '10px', border:`1px solid ${theme.border}`}}>
-                <Icons.Search />
-                <input
-                    style={{border:'none',background:'transparent',marginLeft:'6px',outline:'none',width:'100%', color: theme.text, fontSize:'12px'}}
-                    placeholder="Search…"
-                    value={(filters && filters.global) || ''}
-                    onChange={e => {
-                        const val = e.target.value;
-                        setFilters(p => {
-                            const next = {...p};
-                            if (val) next.global = val;
-                            else delete next.global;
-                            return next;
-                        });
-                    }}
-                />
+            {bigSep}
+
+            {/* 2. Search Section */}
+            <div style={{display:'flex', alignItems:'center', flex:'0 1 300px', minWidth:'240px'}}>
+                <div style={{
+                    ...styles.searchBox, 
+                    width:'100%',
+                    maxWidth:'320px',
+                    borderRadius:theme.radiusSm || '10px', 
+                    border:`1px solid ${theme.border}`,
+                    height: '36px',
+                    padding: '0 12px'
+                }}>
+                    <Icons.Search />
+                    <input
+                        style={{border:'none',background:'transparent',marginLeft:'8px',outline:'none',width:'100%', color: theme.text, fontSize:'13px'}}
+                        placeholder="Search records..."
+                        value={(filters && filters.global) || ''}
+                        onChange={e => {
+                            const val = e.target.value;
+                            setFilters(p => {
+                                const next = {...p};
+                                if (val) next.global = val;
+                                else delete next.global;
+                                return next;
+                            });
+                        }}
+                    />
+                </div>
             </div>
 
-            {/* Controls */}
-            <div style={{display:'flex', gap:'4px', flexWrap:'wrap', alignItems:'center'}}>
+            {bigSep}
+
+            {/* 3. Controls Section */}
+            <div style={{display:'flex', gap:'6px', rowGap:'8px', alignItems:'center', flexWrap:'wrap', flex:'1 1 520px', minWidth: '320px'}}>
                 {/* Row # toggle */}
                 <button style={showRowNumbers ? btnActive : btnSubtle} onClick={() => setShowRowNumbers(!showRowNumbers)} title="Toggle row numbers">Row #</button>
 
@@ -429,19 +461,20 @@ export function PivotAppBar({
                         style={{...btnGhost, padding:'2px 6px', fontFamily:'monospace', fontSize:'11px', minWidth:'28px', opacity: displayDecimal <= DECIMAL_MIN ? 0.35 : 1}}
                         onClick={() => handleDecimalChange(-1)}
                         disabled={displayDecimal <= DECIMAL_MIN}
-                    >.0←</button>
+                    >-.0</button>
                     <span style={{fontSize:'11px', color: hasSelection ? theme.primary : theme.textSec, minWidth:'14px', textAlign:'center', fontWeight: hasSelection ? 700 : 400}}>{displayDecimal}</span>
                     <button
                         title={hasSelection ? 'Increase decimals for selected cells' : 'Increase decimal places'}
                         style={{...btnGhost, padding:'2px 6px', fontFamily:'monospace', fontSize:'11px', minWidth:'28px', opacity: displayDecimal >= DECIMAL_MAX ? 0.35 : 1}}
                         onClick={() => handleDecimalChange(1)}
                         disabled={displayDecimal >= DECIMAL_MAX}
-                    >.00→</button>
+                    >+.00</button>
                 </div>
 
                 {sep}
 
                 {/* View toggles */}
+                <button style={stickyHeaders ? btnActive : btnSubtle} onClick={() => setStickyHeaders(!stickyHeaders)}>Sticky Header</button>
                 <button style={showFloatingFilters ? btnActive : btnSubtle} onClick={() => setShowFloatingFilters(!showFloatingFilters)}>Filters</button>
                 <button style={showRowTotals ? btnActive : btnSubtle} onClick={() => setShowRowTotals(!showRowTotals)}>Row Total</button>
                 <button style={showColTotals ? btnActive : btnSubtle} onClick={() => setShowColTotals(!showColTotals)}>Col Total</button>
@@ -493,7 +526,7 @@ export function PivotAppBar({
                     const isActive = hasBars || anyBars;
                     return (
                         <button
-                            title={hasCellSel ? 'Toggle data bars for selected columns' : 'Data Bars — select cells to target columns'}
+                            title={hasCellSel ? 'Toggle data bars for selected columns' : 'Data Bars - select cells to target columns'}
                             style={isActive ? btnActive : btnSubtle}
                             onClick={() => {
                                 if (!setDataBarsColumns) return;
@@ -509,7 +542,7 @@ export function PivotAppBar({
                                 }
                             }}
                         >
-                            📊 Data Bars{anyBars ? ` (${dataBarsColumns.size})` : ''}
+                            <><Icons.DataBars /> Data Bars{anyBars ? ` (${dataBarsColumns.size})` : ''}</>
                         </button>
                     );
                 })()}
@@ -545,31 +578,6 @@ export function PivotAppBar({
                     >
                         +
                     </button>
-                </div>
-
-                {sep}
-
-                {/* Format Cell */}
-                <div style={{position:'relative'}}>
-                    <button
-                        ref={rowFmtBtnRef}
-                        style={rowFmtOpen || Object.keys(cellFormatRules || {}).length > 0 ? btnActive : btnSubtle}
-                        onClick={() => setRowFmtOpen(o => !o)}
-                        title="Format Cell — select cells first"
-                    >
-                        Format Cell{Object.keys(cellFormatRules || {}).length > 0 ? ` (${Object.keys(cellFormatRules).length})` : ''}
-                    </button>
-                    {rowFmtOpen && (
-                        <CellFormatPopover
-                            theme={theme}
-                            styles={styles}
-                            cellFormatRules={cellFormatRules}
-                            setCellFormatRules={setCellFormatRules}
-                            selectedCellKeys={selectedCellKeys}
-                            onClose={() => setRowFmtOpen(false)}
-                            anchorRef={rowFmtBtnRef}
-                        />
-                    )}
                 </div>
 
                 <button style={btnSaveView} onClick={onSaveView}><Icons.Save /> Save View</button>

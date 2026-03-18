@@ -24,11 +24,11 @@ const ColumnFilter = ({ column, onFilter, currentFilter, options = [], theme, on
     const isDate = (leaf.columnDef && leaf.columnDef.meta && leaf.columnDef.meta.type === 'date') || colId.includes('date') || colId.includes('time');
     const isNumeric = (leaf.columnDef && leaf.columnDef.meta && leaf.columnDef.meta.type === 'number') || colId.includes('sales') || colId.includes('cost') || colId.includes('amount') || colId.includes('price');
 
-    const [tab, setTab] = useState('condition'); // condition, values, smart
+    const [tab, setTab] = useState('condition');
 
     // Auto-select tab based on available options
     useEffect(() => {
-        if (options && options.length > 0 && tab === 'condition') {
+        if (tab === 'condition' && options && options.length > 0) {
             setTab('values');
         } else if (isDate && tab === 'condition') {
              setTab('date');
@@ -95,7 +95,7 @@ const ColumnFilter = ({ column, onFilter, currentFilter, options = [], theme, on
                 <span>Filter: {column.header}</span>
                 <div style={{display: 'flex', background: '#f5f5f5', borderRadius: '4px', padding: '2px'}}>
                     <div onClick={() => setTab('condition')} style={{padding:'2px 8px', fontSize:'10px', cursor:'pointer', borderRadius:'3px', background: tab==='condition'?'#fff':'transparent', boxShadow: tab==='condition'?'0 1px 2px rgba(0,0,0,0.1)':'none'}}>Rules</div>
-                    {options.length > 0 && <div onClick={() => setTab('values')} style={{padding:'2px 8px', fontSize:'10px', cursor:'pointer', borderRadius:'3px', background: tab==='values'?'#fff':'transparent', boxShadow: tab==='values'?'0 1px 2px rgba(0,0,0,0.1)':'none'}}>List</div>}
+                    <div onClick={() => setTab('values')} style={{padding:'2px 8px', fontSize:'10px', cursor:'pointer', borderRadius:'3px', background: tab==='values'?'#fff':'transparent', boxShadow: tab==='values'?'0 1px 2px rgba(0,0,0,0.1)':'none'}}>List</div>
                     {isDate && <div onClick={() => setTab('date')} style={{padding:'2px 8px', fontSize:'10px', cursor:'pointer', borderRadius:'3px', background: tab==='date'?'#fff':'transparent', boxShadow: tab==='date'?'0 1px 2px rgba(0,0,0,0.1)':'none'}}>Date</div>}
                     {isNumeric && <div onClick={() => setTab('numeric')} style={{padding:'2px 8px', fontSize:'10px', cursor:'pointer', borderRadius:'3px', background: tab==='numeric'?'#fff':'transparent', boxShadow: tab==='numeric'?'0 1px 2px rgba(0,0,0,0.1)':'none'}}>Range</div>}
                 </div>
@@ -103,7 +103,7 @@ const ColumnFilter = ({ column, onFilter, currentFilter, options = [], theme, on
             
             <div style={{maxHeight: '300px', overflowY: 'auto', display: 'flex', flexDirection: 'column', gap: '8px'}}>
                 {tab === 'values' && (
-                    <MultiSelectFilter options={options} onFilter={onFilter} currentFilter={currentFilter} />
+                    <MultiSelectFilter options={options} onFilter={onFilter} currentFilter={currentFilter} onClose={onClose} theme={theme} />
                 )}
 
                 {tab === 'date' && (

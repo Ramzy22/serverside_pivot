@@ -1,9 +1,9 @@
 import { useMemo, useCallback } from 'react';
 
-const BODY_PINNED_Z_INDEX = 10;
-const BODY_PINNED_EDGE_Z_INDEX = 11;
-const HEADER_PINNED_Z_INDEX = 30;
-const HEADER_PINNED_EDGE_Z_INDEX = 31;
+const BODY_PINNED_Z_INDEX = 60;
+const BODY_PINNED_EDGE_Z_INDEX = 61;
+const HEADER_PINNED_Z_INDEX = 110;
+const HEADER_PINNED_EDGE_Z_INDEX = 111;
 
 const getLeafColumns = (column) => {
     if (!column) return [];

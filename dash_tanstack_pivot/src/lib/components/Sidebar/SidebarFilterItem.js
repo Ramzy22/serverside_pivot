@@ -3,9 +3,16 @@ import Icons from '../Icons';
 import ColumnFilter from '../Filters/ColumnFilter';
 import { formatDisplayLabel } from '../../utils/helpers';
 
-const SidebarFilterItem = ({ column, theme, styles, onFilter, currentFilter, options }) => {
+const SidebarFilterItem = ({ column, theme, styles, onFilter, currentFilter, options, onOpen }) => {
     const [expanded, setExpanded] = useState(false);
     const hasFilter = currentFilter && (currentFilter.conditions || currentFilter.value);
+    const handleToggle = () => {
+        const nextExpanded = !expanded;
+        setExpanded(nextExpanded);
+        if (nextExpanded && typeof onOpen === 'function') {
+            onOpen(column.id);
+        }
+    };
 
     return (
         <div style={{display: 'flex', flexDirection: 'column'}}>
@@ -16,7 +23,7 @@ const SidebarFilterItem = ({ column, theme, styles, onFilter, currentFilter, opt
                     background: expanded ? theme.select : 'transparent',
                     borderLeft: hasFilter ? `3px solid ${theme.primary}` : '3px solid transparent'
                 }}
-                onClick={() => setExpanded(!expanded)}
+                onClick={handleToggle}
             >
                 <span style={{marginRight: '8px', opacity: 0.7, display: 'flex'}}>
                     {expanded ? <Icons.ChevronDown/> : <Icons.ChevronRight/>}

@@ -6,9 +6,21 @@ const isGrandTotalRow = (row) => (
     !!row && (row._isTotal || row._path === '__grand_total__' || row._id === 'Grand Total')
 );
 
-const debugLog = process.env.NODE_ENV !== 'production'
-    ? (...args) => console.log('[pivot-client]', ...args)
-    : () => {};
+const debugLog = (...args) => {
+    const buildDebugEnabled = process.env.NODE_ENV !== 'production';
+    let runtimeDebugEnabled = false;
+
+    if (typeof window !== 'undefined') {
+        try {
+            runtimeDebugEnabled = window.__PIVOT_DEBUG__ === true || window.localStorage.getItem('pivot-debug') === '1';
+        } catch (error) {
+            runtimeDebugEnabled = window.__PIVOT_DEBUG__ === true;
+        }
+    }
+
+    if (!buildDebugEnabled && !runtimeDebugEnabled) return;
+    console.log('[pivot-client]', ...args);
+};
 
 /**
  * Hook to manage server-side virtualization with caching.
@@ -297,6 +309,26 @@ export const useServerSideRowModel = ({
 
         const newVersion = requestVersionRef.current + 1;
         requestVersionRef.current = newVersion;
+        const previousColStart = lastRequestedColStartRef.current;
+        const previousColEnd = lastRequestedColEndRef.current;
+        const hasColumnWindow = colStart !== null && colEnd !== null;
+        const columnRangeChanged = hasColumnWindow && (
+            previousColStart !== colStart ||
+            previousColEnd !== colEnd
+        );
+        const visibleColumnCount = hasColumnWindow ? Math.max(0, colEnd - colStart + 1) : 0;
+        const overlapStart = hasColumnWindow && previousColStart !== null && previousColEnd !== null
+            ? Math.max(previousColStart, colStart)
+            : null;
+        const overlapEnd = hasColumnWindow && previousColStart !== null && previousColEnd !== null
+            ? Math.min(previousColEnd, colEnd)
+            : null;
+        const overlapCount = overlapStart !== null && overlapEnd !== null && overlapEnd >= overlapStart
+            ? overlapEnd - overlapStart + 1
+            : 0;
+        const columnDeltaCount = columnRangeChanged
+            ? Math.max(1, visibleColumnCount - overlapCount)
+            : 0;
 
         // Always update the block version, even when it is already loading.
         // If we skip setBlockLoading for loading blocks, the block retains its
@@ -321,7 +353,17 @@ export const useServerSideRowModel = ({
             stateEpoch
         };
         if (typeof onViewportRequest === 'function') {
-            onViewportRequest(newVersion);
+            onViewportRequest({
+                version: newVersion,
+                reqStart,
+                reqEnd,
+                colStart,
+                colEnd,
+                hasColumnWindow,
+                columnRangeChanged,
+                columnDeltaCount,
+                visibleColumnCount,
+            });
         }
 
         // Stamp the col range into refs BEFORE setProps so the data-sync effect
@@ -355,6 +397,14 @@ export const useServerSideRowModel = ({
             blocksNeeded,
             reqStart,
             reqEnd,
+            previousColStart,
+            previousColEnd,
+            colStart,
+            colEnd,
+            columnRangeChanged,
+            columnDeltaCount,
+            visibleColumnCount,
+            needsColSchema,
             version: newVersion,
             stateEpoch,
             abortGeneration

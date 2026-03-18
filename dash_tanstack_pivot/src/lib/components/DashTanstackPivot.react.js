@@ -12,9 +12,21 @@ import * as XLSX from 'xlsx';
 import { saveAs } from 'file-saver';
 import { themes, getStyles, isDarkTheme, gridDimensionTokens } from '../utils/styles';
 import Icons from './Icons';
-const debugLog = process.env.NODE_ENV !== 'production'
-    ? (...args) => console.log('[pivot-grid]', ...args)
-    : () => {};
+const debugLog = (...args) => {
+    const buildDebugEnabled = process.env.NODE_ENV !== 'production';
+    let runtimeDebugEnabled = false;
+
+    if (typeof window !== 'undefined') {
+        try {
+            runtimeDebugEnabled = window.__PIVOT_DEBUG__ === true || window.localStorage.getItem('pivot-debug') === '1';
+        } catch (error) {
+            runtimeDebugEnabled = window.__PIVOT_DEBUG__ === true;
+        }
+    }
+
+    if (!buildDebugEnabled && !runtimeDebugEnabled) return;
+    console.log('[pivot-grid]', ...args);
+};
 import Notification from './Notification';
 import useStickyStyles from '../hooks/useStickyStyles';
 import { useServerSideRowModel } from '../hooks/useServerSideRowModel';
@@ -86,6 +98,45 @@ const loadingAnimationStyles = `
 const getStickyHeaderHeight = (headerGroupCount, rowHeight, showFloatingFilters) =>
     (headerGroupCount * rowHeight) + (showFloatingFilters ? rowHeight : 0);
 
+const GRAND_TOTAL_ROW_ID = '__grand_total__';
+const MISSING_PERSISTED_VALUE = Symbol('missing-persisted-value');
+
+const normalizeRowPinningState = (value) => ({
+    top: Array.isArray(value && value.top) ? value.top : [],
+    bottom: Array.isArray(value && value.bottom) ? value.bottom : [],
+});
+
+const getPinnedSideForRow = (rowPinning, rowId) => {
+    const normalized = normalizeRowPinningState(rowPinning);
+    if (normalized.top.includes(rowId)) return 'top';
+    if (normalized.bottom.includes(rowId)) return 'bottom';
+    return null;
+};
+
+const sanitizeGrandTotalPinOverride = (value) => (
+    value === 'top' || value === 'bottom' || value === false ? value : null
+);
+
+const resolveGrandTotalPinState = (showColTotals, grandTotalPosition, grandTotalPinOverride) => {
+    if (!showColTotals) return false;
+    if (grandTotalPinOverride === false || grandTotalPinOverride === 'top' || grandTotalPinOverride === 'bottom') {
+        return grandTotalPinOverride;
+    }
+    return grandTotalPosition === 'bottom' ? 'bottom' : 'top';
+};
+
+const applyRowPinning = (rowPinning, rowId, pinState) => {
+    const normalized = normalizeRowPinningState(rowPinning);
+    const next = {
+        ...normalized,
+        top: normalized.top.filter(id => id !== rowId),
+        bottom: normalized.bottom.filter(id => id !== rowId),
+    };
+    if (pinState === 'top') next.top.push(rowId);
+    if (pinState === 'bottom') next.bottom.push(rowId);
+    return next;
+};
+
 export default function DashTanstackPivot(props) {
     const { 
         id, 
@@ -123,6 +174,7 @@ export default function DashTanstackPivot(props) {
         dataVersion = 0,
         drillEndpoint = '/api/drill-through',
         viewState = null,
+        saveViewTrigger = null,
     } = props;
 
     // Register sortOptions with Dash's callback State store on mount.
@@ -194,6 +246,14 @@ export default function DashTanstackPivot(props) {
         const [expanded, setExpanded] = useState(initialExpanded);
         const [columnPinning, setColumnPinning] = useState(() => loadPersistedState('columnPinning', initialColumnPinning));
         const [rowPinning, setRowPinning] = useState(() => loadPersistedState('rowPinning', initialRowPinning));
+        const [grandTotalPinOverride, setGrandTotalPinOverride] = useState(() => {
+            const persistedOverride = loadPersistedState('grandTotalPinOverride', MISSING_PERSISTED_VALUE);
+            if (persistedOverride !== MISSING_PERSISTED_VALUE) {
+                return sanitizeGrandTotalPinOverride(persistedOverride);
+            }
+            const persistedRowPinning = loadPersistedState('rowPinning', initialRowPinning);
+            return getPinnedSideForRow(persistedRowPinning, GRAND_TOTAL_ROW_ID);
+        });
         const [layoutMode, setLayoutMode] = useState('hierarchy'); // hierarchy, tabular
         const [columnVisibility, setColumnVisibility] = useState(() => loadPersistedState('columnVisibility', initialColumnVisibility));
         const [columnSizing, setColumnSizing] = useState(() => loadPersistedState('columnSizing', {}));
@@ -201,6 +261,58 @@ export default function DashTanstackPivot(props) {
         const [drillModal, setDrillModal] = useState(null);
         // drillModal shape: { loading, rows, page, totalRows, path, sortCol, sortDir, filterText } | null
         const tableRef = useRef(null);
+        const displayRowsRef = useRef([]);
+        const displayRowIndexRef = useRef(new Map());
+        const pinnedDisplayMetaRef = useRef({ topCount: 0, centerCount: 0 });
+        const activeRowVirtualizerRef = useRef(null);
+        const pinnedRowCacheRef = useRef(new Map());
+        const columnVirtualizerRef = useRef(null);
+        const pinnedColumnMetaRef = useRef({ leftCount: 0, centerCount: 0, rightCount: 0 });
+        const previousRowFieldsRef = useRef(initialRowFields);
+        const pendingServerFilterOptionsRef = useRef(null);
+
+        const getDisplayRows = useCallback(() => {
+            if (displayRowsRef.current.length > 0) return displayRowsRef.current;
+            if (tableRef.current && tableRef.current.getRowModel) {
+                return tableRef.current.getRowModel().rows || [];
+            }
+            return [];
+        }, []);
+
+        const resolveDisplayRowIndex = useCallback((rowId, fallbackIndex = 0) => {
+            const mappedIndex = displayRowIndexRef.current.get(rowId);
+            return mappedIndex !== undefined ? mappedIndex : fallbackIndex;
+        }, []);
+
+        const scrollToDisplayRow = useCallback((displayIndex) => {
+            const currentRowVirtualizer = activeRowVirtualizerRef.current;
+            if (!currentRowVirtualizer || !currentRowVirtualizer.scrollToIndex) return;
+            const { topCount, centerCount } = pinnedDisplayMetaRef.current;
+            if (displayIndex < topCount) {
+                if (parentRef.current) parentRef.current.scrollTop = 0;
+                return;
+            }
+            if (displayIndex >= topCount + centerCount) {
+                currentRowVirtualizer.scrollToIndex(Math.max(centerCount - 1, 0));
+                return;
+            }
+            currentRowVirtualizer.scrollToIndex(Math.max(displayIndex - topCount, 0));
+        }, [parentRef]);
+
+        const scrollToDisplayColumn = useCallback((displayIndex) => {
+            const currentColumnVirtualizer = columnVirtualizerRef.current;
+            if (!currentColumnVirtualizer || !currentColumnVirtualizer.scrollToIndex) return;
+            const { leftCount, centerCount } = pinnedColumnMetaRef.current;
+            if (displayIndex < leftCount) {
+                if (parentRef.current) parentRef.current.scrollLeft = 0;
+                return;
+            }
+            if (displayIndex >= leftCount + centerCount) {
+                currentColumnVirtualizer.scrollToIndex(Math.max(centerCount - 1, 0));
+                return;
+            }
+            currentColumnVirtualizer.scrollToIndex(Math.max(displayIndex - leftCount, 0));
+        }, [parentRef]);
 
     // Reset Effect
     useEffect(() => {
@@ -213,6 +325,7 @@ export default function DashTanstackPivot(props) {
             setExpanded({});
             setColumnPinning(initialColumnPinning);
             setRowPinning(initialRowPinning);
+            setGrandTotalPinOverride(getPinnedSideForRow(initialRowPinning, GRAND_TOTAL_ROW_ID));
             setColumnVisibility({});
             setColumnSizing({});
 
@@ -239,9 +352,10 @@ export default function DashTanstackPivot(props) {
             if (!persistence) return;
             savePersistedState('columnPinning', columnPinning);
             savePersistedState('rowPinning', rowPinning);
+            savePersistedState('grandTotalPinOverride', grandTotalPinOverride);
             savePersistedState('columnVisibility', columnVisibility);
             savePersistedState('columnSizing', columnSizing);
-        }, [id, columnPinning, rowPinning, columnVisibility, columnSizing, persistence, persistence_type]);
+        }, [id, columnPinning, rowPinning, grandTotalPinOverride, columnVisibility, columnSizing, persistence, persistence_type]);
 
         useEffect(() => {
             const handleResize = () => {
@@ -256,12 +370,20 @@ export default function DashTanstackPivot(props) {
 
     const [showRowTotals, setShowRowTotals] = useState(initialShowRowTotals);
     const [showColTotals, setShowColTotals] = useState(initialShowColTotals);
+    const effectiveGrandTotalPinState = useMemo(
+        () => resolveGrandTotalPinState(showColTotals, grandTotalPosition, grandTotalPinOverride),
+        [showColTotals, grandTotalPosition, grandTotalPinOverride]
+    );
+    const serverSidePinsGrandTotal = serverSide && showColTotals && (
+        effectiveGrandTotalPinState === 'top' || effectiveGrandTotalPinState === 'bottom'
+    );
     const [showRowNumbers, setShowRowNumbers] = useState(false);
     const [sidebarOpen, setSidebarOpen] = useState(true);
     const [activeFilterCol, setActiveFilterCol] = useState(null);
     const [filterAnchorEl, setFilterAnchorEl] = useState(null);
     const [sidebarTab, setSidebarTab] = useState('fields'); // 'fields', 'columns'
     const [showFloatingFilters, setShowFloatingFilters] = useState(false);
+    const [stickyHeaders, setStickyHeaders] = useState(true);
     const [colSearch, setColSearch] = useState('');
     const [colTypeFilter, setColTypeFilter] = useState('all');
     const [selectedCols, setSelectedCols] = useState(new Set());
@@ -362,6 +484,7 @@ export default function DashTanstackPivot(props) {
         if (typeof restored.sidebarOpen === 'boolean') setSidebarOpen(restored.sidebarOpen);
         if (typeof restored.sidebarTab === 'string') setSidebarTab(restored.sidebarTab);
         if (typeof restored.showFloatingFilters === 'boolean') setShowFloatingFilters(restored.showFloatingFilters);
+        if (typeof restored.stickyHeaders === 'boolean') setStickyHeaders(restored.stickyHeaders);
         if (typeof restored.colSearch === 'string') setColSearch(restored.colSearch);
         if (typeof restored.colTypeFilter === 'string') setColTypeFilter(restored.colTypeFilter);
         if (typeof restored.themeName === 'string' && themes[restored.themeName]) setThemeName(restored.themeName);
@@ -370,7 +493,15 @@ export default function DashTanstackPivot(props) {
         if (typeof restored.colorScaleMode === 'string') setColorScaleMode(restored.colorScaleMode);
         if (typeof restored.spacingMode === 'number') setSpacingMode(restored.spacingMode);
         if (restored.columnPinning && typeof restored.columnPinning === 'object') setColumnPinning(restored.columnPinning);
-        if (restored.rowPinning && typeof restored.rowPinning === 'object') setRowPinning(restored.rowPinning);
+        const restoredRowPinning = restored.rowPinning && typeof restored.rowPinning === 'object'
+            ? restored.rowPinning
+            : null;
+        if (restoredRowPinning) setRowPinning(restoredRowPinning);
+        if (Object.prototype.hasOwnProperty.call(restored, 'grandTotalPinOverride')) {
+            setGrandTotalPinOverride(sanitizeGrandTotalPinOverride(restored.grandTotalPinOverride));
+        } else {
+            setGrandTotalPinOverride(getPinnedSideForRow(restoredRowPinning, GRAND_TOTAL_ROW_ID));
+        }
         if (restored.columnVisibility && typeof restored.columnVisibility === 'object') setColumnVisibility(restored.columnVisibility);
         if (restored.columnSizing && typeof restored.columnSizing === 'object') setColumnSizing(restored.columnSizing);
         if (restored.colExpanded && typeof restored.colExpanded === 'object') setColExpanded(restored.colExpanded);
@@ -402,6 +533,21 @@ export default function DashTanstackPivot(props) {
         }
     }, [defaultTheme]);
 
+    useEffect(() => {
+        const previousRowFields = previousRowFieldsRef.current || [];
+        if (JSON.stringify(previousRowFields) === JSON.stringify(rowFields)) return;
+
+        previousRowFieldsRef.current = rowFields;
+        pinnedRowCacheRef.current.clear();
+        setRowPinning(prev => {
+            const normalized = normalizeRowPinningState(prev);
+            if (normalized.top.length === 0 && normalized.bottom.length === 0) {
+                return prev;
+            }
+            return { top: [], bottom: [] };
+        });
+    }, [rowFields]);
+
     // Clipboard Paste
     useEffect(() => {
         const handlePaste = (e) => {
@@ -412,7 +558,7 @@ export default function DashTanstackPivot(props) {
 
             if (setPropsRef.current && lastSelected.rowIndex !== undefined && lastSelected.colIndex !== undefined) {
                 const visibleLeafColumns = (tableRef.current && tableRef.current.getVisibleLeafColumns) ? tableRef.current.getVisibleLeafColumns() : [];
-                const visibleRows = (tableRef.current && tableRef.current.getRowModel) ? (tableRef.current.getRowModel().rows || []) : [];
+                const visibleRows = getDisplayRows();
 
                 const startRow = visibleRows[lastSelected.rowIndex];
                 const startCol = visibleLeafColumns[lastSelected.colIndex];
@@ -463,7 +609,7 @@ export default function DashTanstackPivot(props) {
 
     const handleKeyDown = (e) => {
         const visibleLeafColumnsAll = (tableRef.current && tableRef.current.getVisibleLeafColumns) ? tableRef.current.getVisibleLeafColumns() : [];
-        const visibleRowsAll = (tableRef.current && tableRef.current.getRowModel) ? tableRef.current.getRowModel().rows : rows;
+        const visibleRowsAll = getDisplayRows();
 
         // Ctrl+A: select all visible rows and columns
         if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'a') {
@@ -602,8 +748,8 @@ export default function DashTanstackPivot(props) {
             setLastSelected({ rowIndex: nextRow, colIndex: nextCol });
 
             // Scroll into view if needed
-            if (rowVirtualizer.scrollToIndex) rowVirtualizer.scrollToIndex(nextRow);
-            if (columnVirtualizer.scrollToIndex) columnVirtualizer.scrollToIndex(nextCol);
+            scrollToDisplayRow(nextRow);
+            scrollToDisplayColumn(nextCol);
         }
     };
 
@@ -613,7 +759,7 @@ export default function DashTanstackPivot(props) {
         const cStart = Math.min(start.colIndex, end.colIndex);
         const cEnd = Math.max(start.colIndex, end.colIndex);
 
-        const visibleRows = table.getRowModel().rows;
+        const visibleRows = getDisplayRows();
         const visibleCols = table.getVisibleLeafColumns();
         const newSelection = {};
 
@@ -645,7 +791,7 @@ export default function DashTanstackPivot(props) {
     const handleRowRangeSelect = useCallback((startIdx, endIdx) => {
         if (!tableRef.current) return;
         const visibleCols = tableRef.current.getVisibleLeafColumns();
-        const rows = tableRef.current.getRowModel().rows;
+        const rows = getDisplayRows();
         const min = Math.min(startIdx, endIdx);
         const max = Math.max(startIdx, endIdx);
         
@@ -661,12 +807,13 @@ export default function DashTanstackPivot(props) {
         // Merge with existing if ctrl held? No, drag usually replaces or extends from anchor.
         // For simplicity, let's just set selection to this range.
         setSelectedCells(rangeSelection);
-    }, []);
+    }, [getDisplayRows]);
 
     const handleRowSelect = useCallback((row, isShift, isCtrl) => {
         if (!tableRef.current) return;
         const visibleCols = tableRef.current.getVisibleLeafColumns();
         const rowId = row.id;
+        const displayRowIndex = resolveDisplayRowIndex(rowId, row.index);
         const newSelection = {};
         
         visibleCols.forEach((col) => {
@@ -675,11 +822,11 @@ export default function DashTanstackPivot(props) {
 
         if (isCtrl) {
             setSelectedCells(prev => ({...prev, ...newSelection}));
-            setLastSelected({ rowIndex: row.index, colIndex: 0 });
+            setLastSelected({ rowIndex: displayRowIndex, colIndex: 0 });
         } else if (isShift && lastSelected) {
              const startRowIndex = lastSelected.rowIndex;
-             const endRowIndex = row.index;
-             const rows = tableRef.current.getRowModel().rows;
+             const endRowIndex = displayRowIndex;
+             const rows = getDisplayRows();
              const min = Math.min(startRowIndex, endRowIndex);
              const max = Math.max(startRowIndex, endRowIndex);
              
@@ -695,9 +842,9 @@ export default function DashTanstackPivot(props) {
              setSelectedCells(rangeSelection);
         } else {
             setSelectedCells(newSelection);
-            setLastSelected({ rowIndex: row.index, colIndex: 0 });
+            setLastSelected({ rowIndex: displayRowIndex, colIndex: 0 });
         }
-    }, [lastSelected]);
+    }, [getDisplayRows, lastSelected, resolveDisplayRowIndex]);
 
     const handleCellMouseDown = useCallback((e, rowIndex, colIndex, rowId, colId, value) => {
         if (e.button === 2) return; // Ignore right-click
@@ -719,9 +866,17 @@ export default function DashTanstackPivot(props) {
         setDragStart({ rowIndex, colIndex });
         setLastSelected({ rowIndex, colIndex });
         // Track hovered row path for Format Row feature
-        const clickedRow = tableRef.current && tableRef.current.getRowModel
-            ? tableRef.current.getRowModel().rows[rowIndex]
-            : null;
+        let clickedRow = null;
+        if (tableRef.current && typeof tableRef.current.getRow === 'function') {
+            try {
+                clickedRow = tableRef.current.getRow(rowId, true);
+            } catch (err) {
+                clickedRow = null;
+            }
+        }
+        if (!clickedRow && tableRef.current && tableRef.current.getRowModel) {
+            clickedRow = getDisplayRows()[rowIndex] || null;
+        }
         if (clickedRow && clickedRow.original && clickedRow.original._path) {
             setHoveredRowPath(clickedRow.original._path);
         }
@@ -735,7 +890,7 @@ export default function DashTanstackPivot(props) {
             // Clear and start new
             setSelectedCells({ [key]: value });
         }
-    }, [lastSelected, selectedCells]);
+    }, [getDisplayRows, lastSelected, selectedCells]);
 
     const handleCellMouseEnter = (rowIndex, colIndex) => {
         if (isDragging && dragStart) {
@@ -759,9 +914,11 @@ export default function DashTanstackPivot(props) {
 
     const handleFillMouseUp = () => {
         if (isFilling && fillRange && setProps) {
-            const startValue = table.getRowModel().rows[dragStart.rowIndex].getVisibleCells()[dragStart.colIndex].getValue();
+            const displayRows = getDisplayRows();
+            const startRow = displayRows[dragStart.rowIndex];
+            const startValue = startRow ? startRow.getVisibleCells()[dragStart.colIndex].getValue() : undefined;
             const updates = [];
-            const visibleRows = table.getRowModel().rows;
+            const visibleRows = displayRows;
             const visibleCols = table.getVisibleLeafColumns();
             for (let r = fillRange.rStart; r <= fillRange.rEnd; r++) {
                 for (let c = fillRange.cStart; c <= fillRange.cEnd; c++) {
@@ -844,12 +1001,33 @@ export default function DashTanstackPivot(props) {
     const [structuralInFlight, setStructuralInFlight] = useState(false);
     const [pendingRowTransitions, setPendingRowTransitions] = useState(() => new Map());
     const [pendingColumnSkeletonCount, setPendingColumnSkeletonCount] = useState(0);
+    const pendingHorizontalRequestVersionsRef = useRef(new Set());
+    const [pendingHorizontalColumnCount, setPendingHorizontalColumnCount] = useState(0);
+    const [isHorizontalColumnRequestPending, setIsHorizontalColumnRequestPending] = useState(false);
     const [isRequestPending, setIsRequestPending] = useState(false);
 
-    const markRequestPending = useCallback((version) => {
-        const numericVersion = Number(version);
+    const markRequestPending = useCallback((requestMeta) => {
+        const normalizedMeta = requestMeta && typeof requestMeta === 'object'
+            ? requestMeta
+            : { version: requestMeta };
+        const numericVersion = Number(normalizedMeta.version);
         if (Number.isFinite(numericVersion)) {
             pendingRequestVersionsRef.current.add(numericVersion);
+        }
+        if (
+            Number.isFinite(numericVersion) &&
+            normalizedMeta.columnRangeChanged &&
+            normalizedMeta.hasColumnWindow
+        ) {
+            pendingHorizontalRequestVersionsRef.current.add(numericVersion);
+            setIsHorizontalColumnRequestPending(true);
+            setPendingHorizontalColumnCount(Math.max(
+                1,
+                Math.min(
+                    normalizedMeta.columnDeltaCount || normalizedMeta.visibleColumnCount || 1,
+                    Math.max(normalizedMeta.visibleColumnCount || 1, 6)
+                )
+            ));
         }
         if (isRequestPending || loadingDelayTimerRef.current !== null) return;
         loadingDelayTimerRef.current = setTimeout(() => {
@@ -872,12 +1050,21 @@ export default function DashTanstackPivot(props) {
                 pendingRequestVersionsRef.current.delete(pendingVersion);
             }
         }
+        for (const pendingVersion of Array.from(pendingHorizontalRequestVersionsRef.current)) {
+            if (pendingVersion <= numericVersion) {
+                pendingHorizontalRequestVersionsRef.current.delete(pendingVersion);
+            }
+        }
         if (pendingRequestVersionsRef.current.size === 0) {
             if (loadingDelayTimerRef.current !== null) {
                 clearTimeout(loadingDelayTimerRef.current);
                 loadingDelayTimerRef.current = null;
             }
             setIsRequestPending(false);
+        }
+        if (pendingHorizontalRequestVersionsRef.current.size === 0) {
+            setIsHorizontalColumnRequestPending(false);
+            setPendingHorizontalColumnCount(0);
         }
     }, [dataVersion]);
 
@@ -894,10 +1081,20 @@ export default function DashTanstackPivot(props) {
         if (!isRequestPending) return;
         const timeoutId = setTimeout(() => {
             pendingRequestVersionsRef.current.clear();
+            pendingHorizontalRequestVersionsRef.current.clear();
             setIsRequestPending(false);
+            setIsHorizontalColumnRequestPending(false);
+            setPendingHorizontalColumnCount(0);
         }, 15000);
         return () => clearTimeout(timeoutId);
     }, [isRequestPending]);
+
+    useEffect(() => {
+        if (!serverSide) return;
+        pendingHorizontalRequestVersionsRef.current.clear();
+        setIsHorizontalColumnRequestPending(false);
+        setPendingHorizontalColumnCount(0);
+    }, [serverSide, stateEpoch]);
 
     // Clear schema on structural change so we re-derive from fresh data
     useEffect(() => {
@@ -953,11 +1150,14 @@ export default function DashTanstackPivot(props) {
     // columns → smaller table → smaller visible range → even fewer columns.
     // Column virtualization handles render-side efficiency.
     const colRequestStart = (serverSide && cachedColSchema && !needsColSchema && totalCenterCols !== null)
-        ? 0
+        ? Math.max(0, Math.min(visibleColRange.start, Math.max(totalCenterCols - 1, 0)))
         : null;
 
     const colRequestEnd = (serverSide && cachedColSchema && !needsColSchema && totalCenterCols !== null)
-        ? totalCenterCols - 1
+        ? Math.max(
+            Math.max(0, Math.min(visibleColRange.start, Math.max(totalCenterCols - 1, 0))),
+            Math.max(0, Math.min(visibleColRange.end, Math.max(totalCenterCols - 1, 0)))
+        )
         : null;
 
     // Keep refs in sync for use in field-zone effect closures
@@ -1030,6 +1230,7 @@ export default function DashTanstackPivot(props) {
                 sidebarOpen,
                 sidebarTab,
                 showFloatingFilters,
+                stickyHeaders,
                 colSearch,
                 colTypeFilter,
                 themeName,
@@ -1039,6 +1240,7 @@ export default function DashTanstackPivot(props) {
                 spacingMode,
                 columnPinning,
                 rowPinning,
+                grandTotalPinOverride,
                 columnVisibility,
                 columnSizing,
                 colExpanded,
@@ -1065,6 +1267,7 @@ export default function DashTanstackPivot(props) {
         sidebarOpen,
         sidebarTab,
         showFloatingFilters,
+        stickyHeaders,
         colSearch,
         colTypeFilter,
         themeName,
@@ -1074,6 +1277,7 @@ export default function DashTanstackPivot(props) {
         spacingMode,
         columnPinning,
         rowPinning,
+        grandTotalPinOverride,
         columnVisibility,
         columnSizing,
         colExpanded,
@@ -1091,6 +1295,18 @@ export default function DashTanstackPivot(props) {
         showNotification('View snapshot saved', 'success');
     }, [buildCurrentViewState, showNotification]);
 
+    const saveViewTriggerRef = useRef(saveViewTrigger);
+    useEffect(() => {
+        if (saveViewTrigger === null || saveViewTrigger === undefined) {
+            saveViewTriggerRef.current = saveViewTrigger;
+            return;
+        }
+        if (saveViewTrigger !== saveViewTriggerRef.current) {
+            saveViewTriggerRef.current = saveViewTrigger;
+            handleSaveView();
+        }
+    }, [saveViewTrigger, handleSaveView]);
+
     const lastPropsRef = useRef({
         rowFields: initialRowFields,
         colFields: initialColFields,
@@ -1102,6 +1318,8 @@ export default function DashTanstackPivot(props) {
         showColTotals: initialShowColTotals,
         columnPinning: initialColumnPinning,
         rowPinning: initialRowPinning,
+        grandTotalPinOverride,
+        serverSidePinsGrandTotal,
         columnVisibility: {},
         columnSizing: {}
     });
@@ -1111,10 +1329,15 @@ export default function DashTanstackPivot(props) {
             rowFields, colFields, valConfigs, filters, sorting, expanded,
             showRowTotals, showColTotals, columnPinning, rowPinning, columnVisibility, columnSizing
         };
+        const nextSyncState = {
+            ...nextProps,
+            grandTotalPinOverride,
+            serverSidePinsGrandTotal,
+        };
         const colFieldsChanged = JSON.stringify(nextProps.colFields) !== JSON.stringify(lastPropsRef.current.colFields);
 
-        const changedKeys = Object.keys(nextProps).filter(key => {
-            const val = nextProps[key];
+        const changedKeys = Object.keys(nextSyncState).filter(key => {
+            const val = nextSyncState[key];
             const lastVal = lastPropsRef.current[key];
             return JSON.stringify(val) !== JSON.stringify(lastVal);
         });
@@ -1127,19 +1350,16 @@ export default function DashTanstackPivot(props) {
             // In that case we keep the existing cache (no stateEpoch bump) so rows
             // remain visible. A loading row appears below the expanded row via
             // pendingRowTransitions, and the viewport snaps in place.
-            const structuralKeys = ['rowFields', 'colFields', 'valConfigs', 'filters', 'sorting',
-                'showRowTotals', 'showColTotals', 'columnPinning', 'rowPinning', 'columnVisibility', 'columnSizing'];
-            const uiOnlyKeys = new Set(['columnPinning', 'rowPinning', 'columnVisibility', 'columnSizing']);
-            const isExpansionOnly = serverSide && structuralKeys.every(
-                key => JSON.stringify(nextProps[key]) === JSON.stringify(lastPropsRef.current[key])
-            );
+            const uiOnlyKeys = new Set(['columnPinning', 'rowPinning', 'grandTotalPinOverride', 'columnVisibility', 'columnSizing']);
+            const isExpansionOnly = serverSide && changedKeys.length > 0 && changedKeys.every(key => key === 'expanded');
             const isUiOnlyChange = changedKeys.length > 0 && changedKeys.every(key => uiOnlyKeys.has(key));
+            const grandTotalPinModeChanged = JSON.stringify(serverSidePinsGrandTotal) !== JSON.stringify(lastPropsRef.current.serverSidePinsGrandTotal);
 
-            lastPropsRef.current = nextProps;
+            lastPropsRef.current = nextSyncState;
 
             // Column resize/pin/visibility are local UI concerns and should not
             // trigger backend loading or viewport fetches.
-            if (isUiOnlyChange) {
+            if (isUiOnlyChange && !grandTotalPinModeChanged) {
                 setPropsRef.current(nextProps);
                 return;
             }
@@ -1193,7 +1413,7 @@ export default function DashTanstackPivot(props) {
                         col_start: colRequestStartRef.current !== null ? colRequestStartRef.current : undefined,
                         col_end: colRequestEndRef.current !== null ? colRequestEndRef.current : undefined,
                         needs_col_schema: needsColSchemaRef.current && serverSide || undefined,
-                        include_grand_total: (serverSide && showColTotals) || undefined,
+                        include_grand_total: serverSidePinsGrandTotal || undefined,
                     }
                 });
                 return;
@@ -1225,11 +1445,11 @@ export default function DashTanstackPivot(props) {
                     abort_generation: tx.abortGeneration,
                     intent: 'structural',
                     needs_col_schema: serverSide || undefined,
-                    include_grand_total: (serverSide && showColTotals) || undefined,
+                    include_grand_total: serverSidePinsGrandTotal || undefined,
                 }
             });
         }
-    }, [rowFields, colFields, valConfigs, filters, sorting, expanded, showRowTotals, showColTotals, columnPinning, rowPinning, columnVisibility, columnSizing, beginStructuralTransaction, beginExpansionRequest, serverSide, tableName]);
+    }, [rowFields, colFields, valConfigs, filters, sorting, expanded, showRowTotals, showColTotals, columnPinning, rowPinning, grandTotalPinOverride, columnVisibility, columnSizing, beginStructuralTransaction, beginExpansionRequest, serverSide, tableName, serverSidePinsGrandTotal]);
 
     useEffect(() => {
         const handleClick = () => setContextMenu(null);
@@ -1245,7 +1465,7 @@ export default function DashTanstackPivot(props) {
         const keys = Object.keys(selectionMap || {});
         if (keys.length === 0) return null;
 
-        const visibleRows = table.getRowModel().rows;
+        const visibleRows = getDisplayRows();
         const visibleCols = table.getVisibleLeafColumns();
         
         // Map indices
@@ -1477,14 +1697,10 @@ export default function DashTanstackPivot(props) {
 
 
     const handlePinRow = (rowId, pinState) => {
-        setRowPinning(prev => {
-            const next = { ...prev, top: [...prev.top], bottom: [...prev.bottom] };
-            next.top = next.top.filter(d => d !== rowId);
-            next.bottom = next.bottom.filter(d => d !== rowId);
-            if (pinState === 'top') next.top.push(rowId);
-            if (pinState === 'bottom') next.bottom.push(rowId);
-            return next;
-        });
+        if (rowId === GRAND_TOTAL_ROW_ID) {
+            setGrandTotalPinOverride(pinState === 'top' || pinState === 'bottom' ? pinState : false);
+        }
+        setRowPinning(prev => applyRowPinning(prev, rowId, pinState));
 
         // Fire Pinning Event
         if (setProps) {
@@ -1679,15 +1895,16 @@ export default function DashTanstackPivot(props) {
             setSelectedCells(selectionForMenu);
             const visibleCols = table.getVisibleLeafColumns();
             const colIndex = visibleCols.findIndex(c => c.id === colId);
-            if (row && typeof row.index === 'number' && colIndex >= 0) {
-                setLastSelected({ rowIndex: row.index, colIndex });
+            const displayRowIndex = row ? resolveDisplayRowIndex(row.id, row.index) : -1;
+            if (row && displayRowIndex >= 0 && colIndex >= 0) {
+                setLastSelected({ rowIndex: displayRowIndex, colIndex });
             }
         }
 
         const hasSelection = Object.keys(selectionForMenu).length > 0;
         
         const getTableData = (withHeaders) => {
-            const visibleRows = table.getRowModel().rows;
+            const visibleRows = getDisplayRows();
             const visibleCols = table.getVisibleLeafColumns();
             let tsv = "";
             if (withHeaders) {
@@ -1756,8 +1973,11 @@ export default function DashTanstackPivot(props) {
 
         actions.push('separator');
         if (rowId) {
-            const isPinnedTop = rowPinning.top.includes(rowId);
-            const isPinnedBottom = rowPinning.bottom.includes(rowId);
+            const currentPinState = rowId === GRAND_TOTAL_ROW_ID
+                ? effectiveGrandTotalPinState
+                : getPinnedSideForRow(rowPinning, rowId);
+            const isPinnedTop = currentPinState === 'top';
+            const isPinnedBottom = currentPinState === 'bottom';
 
             actions.push({ label: 'Pin Row Top', onClick: () => handlePinRow(rowId, 'top') });
             actions.push({ label: 'Pin Row Bottom', onClick: () => handlePinRow(rowId, 'bottom') });
@@ -1856,12 +2076,35 @@ export default function DashTanstackPivot(props) {
         e.stopPropagation();
         setActiveFilterCol(columnId);
         setFilterAnchorEl(e.currentTarget);
-        if (setProps) {
-            setProps({
+        if (setPropsRef.current) {
+            setPropsRef.current({
                 filters: { ...filters, '__request_unique__': columnId }
             });
         }
     };
+
+    const requestFilterOptions = useCallback((columnId) => {
+        if (!columnId || !setPropsRef.current) return;
+        setPropsRef.current({
+            filters: { ...filters, '__request_unique__': columnId }
+        });
+    }, [filters]);
+
+    useEffect(() => {
+        if (!serverSide || !activeFilterCol) {
+            pendingServerFilterOptionsRef.current = null;
+            return;
+        }
+        if (filterOptions && filterOptions[activeFilterCol]) {
+            pendingServerFilterOptionsRef.current = null;
+            return;
+        }
+        if (pendingServerFilterOptionsRef.current === activeFilterCol) {
+            return;
+        }
+        pendingServerFilterOptionsRef.current = activeFilterCol;
+        requestFilterOptions(activeFilterCol);
+    }, [serverSide, activeFilterCol, filterOptions, requestFilterOptions]);
 
     const closeFilterPopover = () => {
         setActiveFilterCol(null);
@@ -1942,7 +2185,6 @@ export default function DashTanstackPivot(props) {
         valConfigs,
     }), [sorting, filters, rowFields, colFields, valConfigs]);
 
-    const serverSidePinsGrandTotal = serverSide && showColTotals;
     const effectiveRowCount = serverSidePinsGrandTotal && rowCount ? Math.max(rowCount - 1, 0) : rowCount;
     const statusRowCount = serverSidePinsGrandTotal && rowCount ? Math.max(rowCount - 1, 0) : rowCount;
 
@@ -2062,18 +2304,48 @@ export default function DashTanstackPivot(props) {
         return () => clearTimeout(timeoutId);
     }, [serverSide, structuralInFlight, stateEpoch]);
 
+    const getStableDataRowId = useCallback((row) => {
+        if (!row) return null;
+        if (row._isTotal || row._path === '__grand_total__' || row._id === 'Grand Total') {
+            return '__grand_total__';
+        }
+        if (row._path) return row._path;
+        if (row.id) return row.id;
+        if (typeof row.__virtualIndex === 'number') return String(row.__virtualIndex);
+        return null;
+    }, []);
+
     const tableData = useMemo(() => {
         if (serverSide) {
              const centerData = renderedData.filter(row => (
                  row &&
-                 !row._isTotal &&
-                 row._path !== '__grand_total__' &&
-                 row._id !== 'Grand Total'
+                 (
+                     (row._isTotal || row._path === GRAND_TOTAL_ROW_ID || row._id === 'Grand Total')
+                         ? !serverSidePinsGrandTotal
+                         : !row._isTotal
+                 )
              ));
-             if (showColTotals && grandTotalRow) {
-                 return [...centerData, grandTotalRow];
+             const seenIds = new Set(centerData.map(getStableDataRowId).filter(Boolean));
+             const pinnedIds = Array.from(new Set([
+                 ...((rowPinning && rowPinning.top) || []),
+                 ...((rowPinning && rowPinning.bottom) || []),
+             ]));
+             const pinnedData = pinnedIds
+                 .map((rowId) => {
+                     const cachedRow = pinnedRowCacheRef.current.get(rowId);
+                     return cachedRow && cachedRow.original ? cachedRow.original : null;
+                 })
+                 .filter((row) => {
+                     const stableId = getStableDataRowId(row);
+                     if (!stableId || seenIds.has(stableId)) return false;
+                     seenIds.add(stableId);
+                     return true;
+                 });
+             const nextData = [...centerData, ...pinnedData];
+             if (serverSidePinsGrandTotal && showColTotals && grandTotalRow && !seenIds.has(GRAND_TOTAL_ROW_ID)) {
+                 nextData.push(grandTotalRow);
              }
-             return centerData;
+             return nextData;
         }
 
         let baseData = (filteredData.length ? [...nodes] : []);
@@ -2089,7 +2361,18 @@ export default function DashTanstackPivot(props) {
         }
 
         return baseData;
-    }, [nodes, total, filteredData, serverSide, showColTotals, renderedData, grandTotalRow]);
+    }, [
+        nodes,
+        total,
+        filteredData,
+        serverSide,
+        showColTotals,
+        renderedData,
+        grandTotalRow,
+        rowPinning,
+        getStableDataRowId,
+        serverSidePinsGrandTotal,
+    ]);
 
     // Color scale palettes: [lowColor, highColor, darkTextLow, darkTextHigh]
     const COLOR_PALETTES = {
@@ -2285,45 +2568,25 @@ export default function DashTanstackPivot(props) {
     }, [expanded, serverSide]);
 
     const tableState = useMemo(() => {
-        // Automatically pin Grand Total to top or bottom based on grandTotalPosition prop
-        let finalRowPinning = rowPinning;
-        const grandTotalId = '__grand_total__';
-        const pinToBottom = grandTotalPosition === 'bottom';
+        const availableRowIds = new Set((tableData || []).map(getStableDataRowId).filter(Boolean));
+        let finalRowPinning = {
+            ...normalizeRowPinningState(rowPinning),
+            top: ((rowPinning && rowPinning.top) || []).filter(id => availableRowIds.has(id)),
+            bottom: ((rowPinning && rowPinning.bottom) || []).filter(id => availableRowIds.has(id)),
+        };
+        const topWithoutGrandTotal = (finalRowPinning.top || []).filter(id => id !== GRAND_TOTAL_ROW_ID);
+        const bottomWithoutGrandTotal = (finalRowPinning.bottom || []).filter(id => id !== GRAND_TOTAL_ROW_ID);
+        const hasGrandTotalRow = availableRowIds.has(GRAND_TOTAL_ROW_ID);
 
-        // Find the actual Grand Total row in the data and get its real ID
-        let actualGrandTotalRowId = null;
-        if (tableData) {
-            for (const row of tableData) {
-                if (!row) continue;
-                if (row.__isGrandTotal__ || row._path === '__grand_total__' || row._id === 'Grand Total') {
-                    if (row._isTotal || row._path === '__grand_total__' || row._id === 'Grand Total') {
-                        actualGrandTotalRowId = '__grand_total__';
-                        break;
-                    }
-                }
-            }
-        }
-
-        if (actualGrandTotalRowId) {
-            const topWithoutGrandTotal = (rowPinning.top || []).filter(id => id !== actualGrandTotalRowId);
-            const bottomWithoutGrandTotal = (rowPinning.bottom || []).filter(id => id !== actualGrandTotalRowId);
-
-            finalRowPinning = {
-                ...rowPinning,
-                top: pinToBottom ? topWithoutGrandTotal : [...topWithoutGrandTotal, actualGrandTotalRowId],
-                bottom: pinToBottom ? [...bottomWithoutGrandTotal, actualGrandTotalRowId] : bottomWithoutGrandTotal,
-            };
-        } else {
-            // If GT is NOT in data, ensure it is NOT pinned (to avoid crash)
-            const cleanPinning = {
-                top: (rowPinning.top || []).filter(id => id !== grandTotalId),
-                bottom: (rowPinning.bottom || []).filter(id => id !== grandTotalId),
-            };
-            if (cleanPinning.top.length !== (rowPinning.top || []).length ||
-                cleanPinning.bottom.length !== (rowPinning.bottom || []).length) {
-                finalRowPinning = { ...rowPinning, ...cleanPinning };
-            }
-        }
+        finalRowPinning = {
+            ...finalRowPinning,
+            top: effectiveGrandTotalPinState === 'top' && hasGrandTotalRow
+                ? [...topWithoutGrandTotal, GRAND_TOTAL_ROW_ID]
+                : topWithoutGrandTotal,
+            bottom: effectiveGrandTotalPinState === 'bottom' && hasGrandTotalRow
+                ? [...bottomWithoutGrandTotal, GRAND_TOTAL_ROW_ID]
+                : bottomWithoutGrandTotal,
+        };
 
         return {
             sorting,
@@ -2334,7 +2597,18 @@ export default function DashTanstackPivot(props) {
             columnVisibility,
             columnSizing
         };
-    }, [sorting, expanded, columnPinning, rowPinning, rowFields, columnVisibility, columnSizing, tableData, grandTotalPosition]);
+    }, [
+        sorting,
+        expanded,
+        columnPinning,
+        rowPinning,
+        rowFields,
+        columnVisibility,
+        columnSizing,
+        tableData,
+        effectiveGrandTotalPinState,
+        getStableDataRowId,
+    ]);
 
 
 
@@ -2550,9 +2824,31 @@ export default function DashTanstackPivot(props) {
     }, [activeFilterCol, filterOptions, table]);
 
     const { rows } = table.getRowModel();
-    const topRows = table.getTopRows();
-    const bottomRows = table.getBottomRows();
-    const centerRows = table.getCenterRows();
+    let topRows = [];
+    let bottomRows = [];
+    let centerRows = rows;
+    try {
+        topRows = table.getTopRows();
+        bottomRows = table.getBottomRows();
+        centerRows = table.getCenterRows();
+    } catch (error) {
+        if (process.env.NODE_ENV !== 'production') {
+            console.warn('[pivot-client] row pinning fallback', {
+                error,
+                rowPinning: tableState.rowPinning,
+                tableDataSize: tableData.length,
+            });
+        }
+        const rowLookup = new Map(rows.map((row) => [row.id, row]));
+        topRows = ((tableState.rowPinning && tableState.rowPinning.top) || [])
+            .map((id) => rowLookup.get(id))
+            .filter(Boolean);
+        bottomRows = ((tableState.rowPinning && tableState.rowPinning.bottom) || [])
+            .map((id) => rowLookup.get(id))
+            .filter(Boolean);
+        const pinnedIds = new Set([...topRows, ...bottomRows].map((row) => row.id));
+        centerRows = rows.filter((row) => !pinnedIds.has(row.id));
+    }
     const lastStableRowModelRef = useRef({
         topRows: [],
         centerRows: [],
@@ -2566,6 +2862,14 @@ export default function DashTanstackPivot(props) {
             lastStableRowModelRef.current = { topRows, centerRows, bottomRows };
         }
     }, [serverSide, topRows, centerRows, bottomRows]);
+
+    useEffect(() => {
+        [...topRows, ...centerRows, ...bottomRows].forEach((row) => {
+            if (row && row.id) {
+                pinnedRowCacheRef.current.set(row.id, row);
+            }
+        });
+    }, [topRows, centerRows, bottomRows]);
 
     useEffect(() => {
         if (!serverSide) return;
@@ -2632,15 +2936,53 @@ export default function DashTanstackPivot(props) {
         };
     }, [serverSide, hasRenderedData, centerRows.length, topRows.length, bottomRows.length, renderedOffset, dataVersion, rowVirtualizer]);
 
-    const effectiveTopRows = (serverSide && hasRenderedData && topRows.length === 0 && centerRows.length === 0)
+    const appliedRowPinning = tableState.rowPinning || { top: [], bottom: [] };
+
+    const resolvedTopRows = useMemo(() => {
+        if (!(appliedRowPinning.top && appliedRowPinning.top.length > 0)) return topRows;
+        return appliedRowPinning.top
+            .map((id) =>
+                topRows.find((row) => row && row.id === id) ||
+                centerRows.find((row) => row && row.id === id) ||
+                bottomRows.find((row) => row && row.id === id) ||
+                pinnedRowCacheRef.current.get(id)
+            )
+            .filter(Boolean);
+    }, [appliedRowPinning.top, topRows, centerRows, bottomRows]);
+    const resolvedBottomRows = useMemo(() => {
+        if (!(appliedRowPinning.bottom && appliedRowPinning.bottom.length > 0)) return bottomRows;
+        return appliedRowPinning.bottom
+            .map((id) =>
+                bottomRows.find((row) => row && row.id === id) ||
+                centerRows.find((row) => row && row.id === id) ||
+                topRows.find((row) => row && row.id === id) ||
+                pinnedRowCacheRef.current.get(id)
+            )
+            .filter(Boolean);
+    }, [appliedRowPinning.bottom, topRows, centerRows, bottomRows]);
+    const effectiveTopRows = (serverSide && hasRenderedData && resolvedTopRows.length === 0 && centerRows.length === 0)
         ? lastStableRowModelRef.current.topRows
-        : topRows;
+        : resolvedTopRows;
     const effectiveCenterRows = (serverSide && hasRenderedData && centerRows.length === 0)
         ? lastStableRowModelRef.current.centerRows
         : centerRows;
-    const effectiveBottomRows = (serverSide && hasRenderedData && centerRows.length === 0 && bottomRows.length === 0)
+    const effectiveBottomRows = (serverSide && hasRenderedData && centerRows.length === 0 && resolvedBottomRows.length === 0)
         ? lastStableRowModelRef.current.bottomRows
-        : bottomRows;
+        : resolvedBottomRows;
+    const clientRowVirtualizer = useVirtualizer({
+        count: effectiveCenterRows.length,
+        getScrollElement: () => parentRef.current,
+        estimateSize: () => rowHeight,
+        overscan: 12,
+    });
+    const activeRowVirtualizer = serverSide ? rowVirtualizer : clientRowVirtualizer;
+    activeRowVirtualizerRef.current = activeRowVirtualizer;
+
+    useLayoutEffect(() => {
+        if (serverSide) return;
+        activeRowVirtualizer.measure();
+    }, [serverSide, activeRowVirtualizer, effectiveCenterRows.length, rowHeight]);
+
     const rowModelLookup = useMemo(() => {
         const lookup = new Map();
         [...effectiveTopRows, ...effectiveCenterRows, ...effectiveBottomRows].forEach(row => {
@@ -2649,6 +2991,20 @@ export default function DashTanstackPivot(props) {
             }
         });
         return lookup;
+    }, [effectiveTopRows, effectiveCenterRows, effectiveBottomRows]);
+
+    useEffect(() => {
+        const orderedRows = [...effectiveTopRows, ...effectiveCenterRows, ...effectiveBottomRows];
+        displayRowsRef.current = orderedRows;
+        displayRowIndexRef.current = new Map(
+            orderedRows
+                .filter((row) => row && row.id)
+                .map((row, index) => [row.id, index])
+        );
+        pinnedDisplayMetaRef.current = {
+            topCount: effectiveTopRows.length,
+            centerCount: effectiveCenterRows.length
+        };
     }, [effectiveTopRows, effectiveCenterRows, effectiveBottomRows]);
 
     // Progressive subtree expansion: each time the backend returns new data,
@@ -2745,8 +3101,12 @@ export default function DashTanstackPivot(props) {
     const visibleLeafColumns = table.getVisibleLeafColumns();
 
     // 1. Row Virtualizer (Managed by useServerSideRowModel)
-    const virtualRows = rowVirtualizer.getVirtualItems();
-    const showColumnLoadingSkeletons = serverSide && (structuralInFlight || isRequestPending) && pendingColumnSkeletonCount > 0;
+    const virtualRows = activeRowVirtualizer.getVirtualItems();
+    const activeColumnSkeletonCount = Math.max(pendingColumnSkeletonCount, pendingHorizontalColumnCount);
+    const showColumnLoadingSkeletons = serverSide && (
+        (structuralInFlight && pendingColumnSkeletonCount > 0) ||
+        (isHorizontalColumnRequestPending && pendingHorizontalColumnCount > 0)
+    );
     const columnSkeletonWidth = defaultColumnWidths.schemaFallback;
     const stickyHeaderHeight = getStickyHeaderHeight(table.getHeaderGroups().length, rowHeight, showFloatingFilters);
     const bodyRowsTopOffset = stickyHeaderHeight + (effectiveTopRows.length * rowHeight);
@@ -2776,6 +3136,12 @@ export default function DashTanstackPivot(props) {
         parentRef,
         table
     });
+    columnVirtualizerRef.current = columnVirtualizer;
+    pinnedColumnMetaRef.current = {
+        leftCount: leftCols.length,
+        centerCount: centerCols.length,
+        rightCount: rightCols.length
+    };
 
     useLayoutEffect(() => {
         if (!parentRef.current || !columnVirtualizer) return;
@@ -2829,6 +3195,46 @@ export default function DashTanstackPivot(props) {
             return { start: newStart, end: newEnd };
         });
     }, [virtualCenterCols]);
+
+    useEffect(() => {
+        if (!serverSide || virtualCenterCols.length === 0) return;
+        debugLog('horizontal-scroll-state', {
+            scrollLeft: parentRef.current ? parentRef.current.scrollLeft : null,
+            visibleColRange,
+            virtualRange: {
+                start: virtualCenterCols[0].index,
+                end: virtualCenterCols[virtualCenterCols.length - 1].index,
+                count: virtualCenterCols.length,
+            },
+            requestedColRange: {
+                start: colRequestStart,
+                end: colRequestEnd,
+                needsColSchema,
+            },
+            totalCenterCols,
+            pendingColumnSkeletonCount,
+            pendingHorizontalColumnCount,
+            showColumnLoadingSkeletons,
+            isHorizontalColumnRequestPending,
+            isRequestPending,
+            structuralInFlight,
+        });
+    }, [
+        serverSide,
+        virtualCenterCols,
+        visibleColRange,
+        colRequestStart,
+        colRequestEnd,
+        needsColSchema,
+        totalCenterCols,
+        pendingColumnSkeletonCount,
+        pendingHorizontalColumnCount,
+        showColumnLoadingSkeletons,
+        isHorizontalColumnRequestPending,
+        isRequestPending,
+        structuralInFlight,
+        parentRef,
+    ]);
 
     // Use the custom hook
     const { getHeaderStickyStyle, getStickyStyle } = useStickyStyles(
@@ -3227,6 +3633,7 @@ export default function DashTanstackPivot(props) {
                 themeOverrides={themeOverrides} setThemeOverrides={setThemeOverrides}
                 showRowNumbers={showRowNumbers} setShowRowNumbers={setShowRowNumbers}
                 showFloatingFilters={showFloatingFilters} setShowFloatingFilters={setShowFloatingFilters}
+                stickyHeaders={stickyHeaders} setStickyHeaders={setStickyHeaders}
                 showRowTotals={showRowTotals} setShowRowTotals={setShowRowTotals}
                 showColTotals={showColTotals} setShowColTotals={setShowColTotals}
                 spacingMode={spacingMode} setSpacingMode={setSpacingMode} spacingLabels={spacingLabels}
@@ -3272,6 +3679,7 @@ export default function DashTanstackPivot(props) {
                         onDragStart={onDragStart} onDragOver={onDragOver} onDrop={onDrop}
                         handleHeaderFilter={handleHeaderFilter}
                         handleFilterClick={handleFilterClick}
+                        requestFilterOptions={requestFilterOptions}
                         handleExpandAllRows={handleExpandAllRows}
                         handlePinColumn={handlePinColumn}
                         toggleAllColumnsPinned={toggleAllColumnsPinned}
@@ -3296,7 +3704,7 @@ export default function DashTanstackPivot(props) {
                     effectiveCenterRows={effectiveCenterRows}
                     virtualRows={virtualRows}
                     virtualCenterCols={virtualCenterCols}
-                    rowVirtualizer={rowVirtualizer}
+                    rowVirtualizer={activeRowVirtualizer}
                     rowModelLookup={rowModelLookup}
                     getRow={getRow}
                     serverSide={serverSide}
@@ -3310,10 +3718,11 @@ export default function DashTanstackPivot(props) {
                     visibleLeafIndexSet={visibleLeafIndexSet}
                     rowHeight={rowHeight}
                     showFloatingFilters={showFloatingFilters}
+                    stickyHeaders={stickyHeaders}
                     showColTotals={showColTotals}
                     grandTotalPosition={grandTotalPosition}
                     showColumnLoadingSkeletons={showColumnLoadingSkeletons}
-                    pendingColumnSkeletonCount={pendingColumnSkeletonCount}
+                    pendingColumnSkeletonCount={activeColumnSkeletonCount}
                     columnSkeletonWidth={columnSkeletonWidth}
                     theme={theme}
                     styles={styles}
@@ -3377,6 +3786,7 @@ DashTanstackPivot.propTypes = {
     drillThrough: PropTypes.object,
     drillEndpoint: PropTypes.string,
     viewState: PropTypes.object,
+    saveViewTrigger: PropTypes.any,
     savedView: PropTypes.object,
     conditionalFormatting: PropTypes.arrayOf(PropTypes.object),
     validationRules: PropTypes.object,

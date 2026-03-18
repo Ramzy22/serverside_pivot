@@ -20,6 +20,7 @@ const Icons = {
     Filter: () => <svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor"><path d="M10 18h4v-2h-4v2zM3 6v2h18V6H3zm3 7h12v-2H6v2z"/></svg>,
     Menu: () => <svg width="18" height="18" viewBox="0 0 24 24" fill="currentColor"><path d="M3 18h18v-2H3v2zm0-5h18v-2H3v2zm0-7v2h18V6H3z"/></svg>,
     MoreVert: () => <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor"><path d="M12 8c1.1 0 2-.9 2-2s-.9-2-2-2-2 .9-2 2 .9 2 2 2zm0 2c-1.1 0-2 .9-2 2s.9 2 2 2 2-.9 2-2-.9-2-2-2zm0 6c-1.1 0-2 .9-2 2s.9 2 2 2 2-.9 2-2-.9-2-2-2z"/></svg>,
+    DataBars: () => <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor"><path d="M4 19h16v1H4v-1zm2-2h3V9H6v8zm5 0h3V5h-3v12zm5 0h3v-6h-3v6z"/></svg>,
     PinLeft: () => <svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor"><path d="M13 12H7v1.5L4.5 11 7 8.5V10h6v2zm6.41-7.12l-1.42-1.41-4.83 4.83c-.37-.13-.77-.21-1.19-.21-1.91 0-3.47 1.55-3.47 3.47 0 1.92 1.56 3.47 3.47 3.47 1.92 0 3.47-1.55 3.47-3.47 0-.42-.08-.82-.21-1.19l4.83-4.83-1.42-1.41z"/></svg>,
     PinRight: () => <svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor"><path d="M11 12h6v-1.5l2.5 2.5-2.5 2.5V14h-6v-2zm-6.41 7.12l1.42 1.41 4.83-4.83c.37.13.77.21 1.19.21 1.91 0 3.47-1.55 3.47-3.47 0-1.92-1.56-3.47-3.47-3.47-1.92 0-3.47 1.55-3.47 3.47 0 .42.08.82.21 1.19l-4.83 4.83 1.42 1.41z"/></svg>,
     Unpin: () => <svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor"><path d="M16 9V4l1 1V3H7v1l1-1v5c0 1.66-1.34 3-3 3v2h5.97v7l1 1 1-1v-7H19v-2c-1.66 0-3-1.34-3-3z"/></svg>,

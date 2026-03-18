@@ -25,14 +25,66 @@ export function SidebarPanel({
     colTypeFilter, setColTypeFilter,
     selectedCols, setSelectedCols,
     dropLine, onDragStart, onDragOver, onDrop,
-    handleHeaderFilter, handleFilterClick,
+    handleHeaderFilter, handleFilterClick, requestFilterOptions,
     handleExpandAllRows, handlePinColumn,
     toggleAllColumnsPinned,
     activeFilterCol, closeFilterPopover, filterOptions,
     data,
 }) {
+    const [sidebarFilterState, setSidebarFilterState] = React.useState({ columnId: null, anchorEl: null });
+    const sidebarRef = React.useRef(null);
+    const sidebarScrollTopRef = React.useRef(0);
+    const getFilterOptionsForColumn = React.useCallback((columnId) => {
+        if (filterOptions && filterOptions[columnId]) return filterOptions[columnId];
+        if (!table || !table.getColumn) return [];
+        const col = table.getColumn(columnId);
+        if (!col) return [];
+
+        const unique = new Set();
+        const rows = table.getCoreRowModel ? table.getCoreRowModel().rows : [];
+        rows.forEach((row) => {
+            const val = row.getValue(columnId);
+            if (val !== null && val !== undefined && val !== '') unique.add(val);
+        });
+
+        return Array.from(unique).sort();
+    }, [filterOptions, table]);
+    const valueSelectStyle = {
+        border: `1px solid ${theme.border}`,
+        background: theme.headerSubtleBg || theme.surfaceInset || theme.background,
+        color: theme.text,
+        cursor: 'pointer',
+        borderRadius: theme.radiusSm || '8px',
+        fontSize: '10px',
+        lineHeight: 1.2,
+        padding: '1px 6px',
+        minHeight: '22px',
+        outline: 'none',
+    };
+    const openSidebarFilter = (e, columnId) => {
+        e.stopPropagation();
+        if (sidebarRef.current) {
+            sidebarScrollTopRef.current = sidebarRef.current.scrollTop;
+        }
+        setSidebarFilterState((prev) => (
+            prev.columnId === columnId
+                ? { columnId: null, anchorEl: null }
+                : { columnId, anchorEl: e.currentTarget }
+        ));
+        if (requestFilterOptions) {
+            requestFilterOptions(columnId);
+        }
+    };
+    const closeSidebarFilter = () => setSidebarFilterState({ columnId: null, anchorEl: null });
+
+    React.useEffect(() => {
+        if (!sidebarRef.current) return;
+        if (!sidebarFilterState.columnId) return;
+        sidebarRef.current.scrollTop = sidebarScrollTopRef.current;
+    }, [filterOptions, sidebarFilterState.columnId]);
+
     return (
-                <div style={styles.sidebar} role="complementary" aria-label="Tool Panel">
+                <div ref={sidebarRef} style={styles.sidebar} role="complementary" aria-label="Tool Panel">
                     <div style={{display: 'flex', borderBottom: `1px solid ${theme.border}`, marginBottom: '16px'}}>
                         <div 
                             onClick={() => setSidebarTab('fields')}
@@ -101,7 +153,8 @@ export function SidebarPanel({
                                                 styles={styles}
                                                 onFilter={(val) => handleHeaderFilter(col.id, val)}
                                                 currentFilter={filters[col.id]}
-                                                options={[]}
+                                                options={getFilterOptionsForColumn(col.id)}
+                                                onOpen={requestFilterOptions}
                                             />
                                         ))}
                                     </div>
@@ -170,20 +223,24 @@ export function SidebarPanel({
                                                                                         <div key={idx} draggable onDragStart={e=>onDragStart(e,item,zone.id,idx)} onDragOver={e=>onDragOver(e,zone.id,idx)} >
                                                                                             <div style={chipStyle}>
                                                                                                 {dropLine && dropLine.zone===zone.id && dropLine.idx===idx && <div style={{...styles.dropLine,top:-2}}/>}
-                                                                                                <div style={{display:'flex',alignItems:'center',gap:'6px'}}><Icons.DragIndicator/> <b style={{fontWeight:500}}>{displayLabel}</b></div>
+                                                                                                <div style={{display:'flex',alignItems:'center',gap:'8px', minWidth: 0, flex: 1}}>
+                                                                                                    <Icons.DragIndicator/>
+                                                                                                    <b style={{fontWeight:500, marginRight: isVal ? '8px' : 0, whiteSpace:'nowrap', overflow:'hidden', textOverflow:'ellipsis'}}>{displayLabel}</b>
+                                                                                                </div>
                                                                                                 {zone.id === 'vals' && (
-                                                                                                    <div style={{display:'flex',flexDirection:'column', gap:2}}>
-                                                                                                        <div style={{display:'flex', gap:2}}>
-                                                                                                            <select value={item.agg} onChange={e=>{const n=[...valConfigs];n[idx].agg=e.target.value;setValConfigs(n)}} style={{border:'none',background:'transparent',color:theme.totalTextStrong || theme.primary,cursor:'pointer',maxWidth:'50px',fontSize:'11px'}}><option value="sum">Sum</option><option value="avg">Avg</option><option value="count">Cnt</option><option value="min">Min</option><option value="max">Max</option></select>
-                                                                                                            <select value={item.windowFn || 'none'} onChange={e=>{const n=[...valConfigs];n[idx].windowFn=e.target.value==='none'?null:e.target.value;setValConfigs(n)}} style={{border:'none',background:'transparent',color:theme.totalTextStrong || theme.primary,cursor:'pointer',maxWidth:'60px',fontSize:'11px'}}><option value="none">Norm</option><option value="percent_of_row">%Row</option><option value="percent_of_col">%Col</option><option value="percent_of_grand_total">%Tot</option></select>
-                                                                                                        </div>
-                                                                                                        <input placeholder="Fmt (currency)" value={item.format || ''} onChange={e=>{const n=[...valConfigs];n[idx].format=e.target.value;setValConfigs(n)}} style={{border:'1px solid #eee', fontSize:'10px', padding:'2px', width:'100%'}}/>
+                                                                                                    <div style={{display:'flex', alignItems:'center', gap:'6px', marginLeft:'8px', flexWrap:'nowrap', flexShrink: 0}}>
+                                                                                                        <select value={item.agg} onChange={e=>{const n=[...valConfigs];n[idx].agg=e.target.value;setValConfigs(n)}} style={{...valueSelectStyle, width:'56px'}}>
+                                                                                                                <option value="sum">Sum</option><option value="avg">Avg</option><option value="count">Cnt</option><option value="min">Min</option><option value="max">Max</option>
+                                                                                                        </select>
+                                                                                                        <select value={item.windowFn || 'none'} onChange={e=>{const n=[...valConfigs];n[idx].windowFn=e.target.value==='none'?null:e.target.value;setValConfigs(n)}} style={{...valueSelectStyle, width:'64px'}}>
+                                                                                                                <option value="none">Norm</option><option value="percent_of_row">%Row</option><option value="percent_of_col">%Col</option><option value="percent_of_grand_total">%Tot</option>
+                                                                                                        </select>
                                                                                                     </div>
                                                                                                 )}
                                                                                                 <div style={{display:'flex', gap:'4px', marginLeft:'auto', alignItems: 'center'}}>
                                                                                                     {zone.id==='filter' && (
                                                                                                         <div 
-                                                                                                            onClick={(e) => handleFilterClick(e, label)} 
+                                                                                                            onClick={(e) => openSidebarFilter(e, label)} 
                                                                                                             style={{
                                                                                                                 cursor:'pointer', 
                                                                                                                 display:'flex', 
@@ -204,14 +261,14 @@ export function SidebarPanel({
                                                                                                         if (zone.id==='vals') setValConfigs(p=>p.filter((_,i)=>i!==idx))
                                                                                                     }} style={{cursor:'pointer', color:'#9CA3AF', display:'flex', alignItems:'center'}}><Icons.Close/></span>
                                                                                                 </div>
-                                                                                                                                                {zone.id === 'filter' && activeFilterCol === label && (
+                                                                                                                                                {zone.id === 'filter' && sidebarFilterState.columnId === label && (
                                                                                                                     <FilterPopover 
                                                                                                                         column={{header: displayLabel, id: label}} 
-                                                                                                                        anchorEl={filterAnchorEl}
-                                                                                                                        onClose={closeFilterPopover}
+                                                                                                                        anchorEl={sidebarFilterState.anchorEl}
+                                                                                                                        onClose={closeSidebarFilter}
                                                                                                                         onFilter={(filterValue) => handleHeaderFilter(label, filterValue)}
                                                                                                                         currentFilter={filters[label]}
-                                                                                                                        options={filterOptions[label] || []}
+                                                                                                                        options={getFilterOptionsForColumn(label)}
                                                                                                                         theme={theme}
                                                                                                                     />
                                                                                                                                                 )}

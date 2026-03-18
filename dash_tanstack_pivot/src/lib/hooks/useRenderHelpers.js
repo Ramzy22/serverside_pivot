@@ -67,8 +67,9 @@ export function useRenderHelpers({
     cellFormatRules,
 }) {
     // --- Helper to Render a single Cell with useCallback ---
-    const renderCell = useCallback((cell, virtualRowIndex, isVirtualRow = false) => {
+    const renderCell = useCallback((cell, virtualRowIndex, isVirtualRow = false, renderOptions = {}) => {
         if (!cell) return null;
+        const disableSticky = !!renderOptions.disableSticky;
 
         const row = cell.row;
         const col = cell.column;
@@ -114,7 +115,9 @@ export function useRenderHelpers({
         const stickyBaseStyle = cellFmt && cellFmt.bg
             ? mergeStateStyles(condStyle, { background: cellFmt.bg })
             : mergeStateStyles({ background: themeBackground }, condStyle);
-        const stickyStyle = getStickyStyle(cell.column, stickyBaseStyle.background);
+        const stickyStyle = disableSticky
+            ? { background: stickyBaseStyle.background }
+            : getStickyStyle(cell.column, stickyBaseStyle.background);
         const selectedOverlayStyle = isSelected
             ? {
                 background: theme.select,
@@ -143,7 +146,7 @@ export function useRenderHelpers({
         if (cell.column.id === '__row_number__' && isVirtualRow) {
             cellContent = (row.original && typeof row.original.__virtualIndex === 'number')
                 ? row.original.__virtualIndex + 1
-                : virtualRowIndex + 1;
+                : (typeof row.index === 'number' ? row.index + 1 : virtualRowIndex + 1);
         } else {
             const rowData = row.original || {};
             const hasFetchedColumn = Object.prototype.hasOwnProperty.call(rowData, cell.column.id);
@@ -233,7 +236,7 @@ export function useRenderHelpers({
                     color: cellFmt && cellFmt.color ? cellFmt.color : (isHierarchy ? undefined : ((isGrandTotalRow || isTotalCol) ? (theme.totalTextStrong || theme.primary) : theme.textSec)),
                     ...cellStateStyle,
                     userSelect: 'none',
-                    position: cellStateStyle.position === 'sticky' ? 'sticky' : 'relative',
+                    position: !disableSticky && cellStateStyle.position === 'sticky' ? 'sticky' : 'relative',
                 }}
                 onContextMenu={e => handleContextMenu(e, cell.getValue(), cell.column.id, row)}
             >
@@ -281,7 +284,7 @@ export function useRenderHelpers({
     // NEW: Render Header Cell for Split Sections
     // overrideWidth: when set, replaces the computed section width (used for partially-visible
     // group headers during center-column virtualization so the width matches only the visible leaves).
-    const renderHeaderCell = (header, level, renderSection = 'center', overrideWidth = null) => {
+    const renderHeaderCell = (header, level, renderSection = 'center', overrideWidth = null, disableSticky = false) => {
         const isGroupHeader = header.column.columns && header.column.columns.length > 0;
         const isMeasureSubHeader = !isGroupHeader && header.column.id !== 'hierarchy' && header.column.id !== '__row_number__';
         const headerText = typeof header.column.columnDef.header === 'string' ? header.column.columnDef.header : '';
@@ -317,12 +320,14 @@ export function useRenderHelpers({
         const sortIconColor = isSorted ? (theme.sortedHeaderText || theme.primary) : theme.textSec;
 
         // Calculate sticky style for pinned headers using the hook
-        const stickyStyle = getHeaderStickyStyle(
-            header,
-            level,
-            renderSection,
-            mergeStateStyles({ background: theme.headerBg }, sortedHeaderStyle).background
-        );
+        const stickyStyle = disableSticky
+            ? { background: mergeStateStyles({ background: theme.headerBg }, sortedHeaderStyle).background }
+            : getHeaderStickyStyle(
+                header,
+                level,
+                renderSection,
+                mergeStateStyles({ background: theme.headerBg }, sortedHeaderStyle).background
+            );
         const headerStateStyle = mergeStateStyles(
             styles.headerCell,
             sortedHeaderStyle,

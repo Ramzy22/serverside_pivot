@@ -141,7 +141,7 @@ export const themes = {
         background: '#0F1319',
         sidebarBg: '#10151D',
         totalBg: 'rgba(245,158,11,0.16)',
-        totalBgStrong: 'rgba(245,158,11,0.26)',
+        totalBgStrong: '#F59E0B',
         totalText: '#111111',
         totalTextStrong: '#000000',
         shadowSm: '0 1px 2px rgba(0,0,0,0.35)',
@@ -415,7 +415,7 @@ export const getStyles = (theme) => {
         boxShadow: theme.shadowInset || 'none',
         borderTopLeftRadius: r,
         borderTopRightRadius: r,
-        overflow: 'hidden'
+        overflow: 'visible'
     },
     headerRow: {
         display: 'flex',
