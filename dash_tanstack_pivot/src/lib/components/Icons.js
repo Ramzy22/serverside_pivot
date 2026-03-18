@@ -15,6 +15,7 @@ const Icons = {
     Database: () => <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor"><path d="M12 2C6.48 2 2 4.02 2 6.5v11C2 19.98 6.48 22 12 22s10-2.02 10-4.5v-11C22 4.02 17.52 2 12 2zm0 2c4.42 0 8 1.57 8 3.5S16.42 9 12 9 4 7.43 4 6.5 7.58 4 12 4zm0 16c-4.42 0-8-1.57-8-3.5v-2.05c1.77 1.28 4.71 2.05 8 2.05s6.23-.77 8-2.05V16.5c0 1.93-3.58 3.5-8 3.5zm0-5c-4.42 0-8-1.57-8-3.5V9.45c1.77 1.28 4.71 2.05 8 2.05s6.23-.77 8-2.05V11.5c0 1.93-3.58 3.5-8 3.5z"/></svg>,
     Close: () => <svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor"><path d="M19 6.41L17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12z"/></svg>,
     Spacing: () => <svg width="18" height="18" viewBox="0 0 24 24" fill="currentColor"><path d="M3 13h2v-2H3v2zm0 4h2v-2H3v2zm0-8h2V7H3v2zm4 4h14v-2H7v2zm0 4h14v-2H7v2zM7 7v2h14V7H7z"/></svg>,
+    Transpose: () => <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor"><path d="M4 7h10.17l-2.58-2.59L13 3l5 5-5 5-1.41-1.41L14.17 9H4V7zm16 10H9.83l2.58 2.59L11 21l-5-5 5-5 1.41 1.41L9.83 15H20v2z"/></svg>,
     ColExpand: () => <svg width="12" height="12" viewBox="0 0 24 24" fill="currentColor"><path d="M19 13h-6v6h-2v-6H5v-2h6V5h2v6h6v2z"/></svg>,
     ColCollapse: () => <svg width="12" height="12" viewBox="0 0 24 24" fill="currentColor"><path d="M19 13H5v-2h14v2z"/></svg>,
     Filter: () => <svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor"><path d="M10 18h4v-2h-4v2zM3 6v2h18V6H3zm3 7h12v-2H6v2z"/></svg>,

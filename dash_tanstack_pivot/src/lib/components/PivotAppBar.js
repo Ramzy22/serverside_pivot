@@ -265,6 +265,8 @@ export function PivotAppBar({
     colorScaleMode, setColorScaleMode,
     colorPalette, setColorPalette,
     rowCount, exportPivot,
+    onTransposePivot,
+    canTranspose,
     theme, styles,
     filters, setFilters,
     onSaveView,
@@ -478,6 +480,14 @@ export function PivotAppBar({
                 <button style={showFloatingFilters ? btnActive : btnSubtle} onClick={() => setShowFloatingFilters(!showFloatingFilters)}>Filters</button>
                 <button style={showRowTotals ? btnActive : btnSubtle} onClick={() => setShowRowTotals(!showRowTotals)}>Row Total</button>
                 <button style={showColTotals ? btnActive : btnSubtle} onClick={() => setShowColTotals(!showColTotals)}>Col Total</button>
+                <button
+                    style={canTranspose ? btnSubtle : { ...btnSubtle, opacity: 0.45, cursor: 'not-allowed' }}
+                    onClick={onTransposePivot}
+                    title="Swap row fields and column fields"
+                    disabled={!canTranspose}
+                >
+                    <Icons.Transpose /> Transpose
+                </button>
 
                 {sep}
 

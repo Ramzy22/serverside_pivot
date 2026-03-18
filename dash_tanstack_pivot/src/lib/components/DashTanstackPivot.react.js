@@ -491,7 +491,9 @@ export default function DashTanstackPivot(props) {
         if (restored.themeOverrides && typeof restored.themeOverrides === 'object') setThemeOverrides(restored.themeOverrides);
         if (typeof restored.layoutMode === 'string') setLayoutMode(restored.layoutMode);
         if (typeof restored.colorScaleMode === 'string') setColorScaleMode(restored.colorScaleMode);
+        if (typeof restored.colorPalette === 'string') setColorPalette(restored.colorPalette);
         if (typeof restored.spacingMode === 'number') setSpacingMode(restored.spacingMode);
+        if (Array.isArray(restored.dataBarsColumns)) setDataBarsColumns(new Set(restored.dataBarsColumns));
         if (restored.columnPinning && typeof restored.columnPinning === 'object') setColumnPinning(restored.columnPinning);
         const restoredRowPinning = restored.rowPinning && typeof restored.rowPinning === 'object'
             ? restored.rowPinning
@@ -1237,7 +1239,9 @@ export default function DashTanstackPivot(props) {
                 themeOverrides,
                 layoutMode,
                 colorScaleMode,
+                colorPalette,
                 spacingMode,
+                dataBarsColumns: Array.from(dataBarsColumns || []).sort(),
                 columnPinning,
                 rowPinning,
                 grandTotalPinOverride,
@@ -1274,7 +1278,9 @@ export default function DashTanstackPivot(props) {
         themeOverrides,
         layoutMode,
         colorScaleMode,
+        colorPalette,
         spacingMode,
+        dataBarsColumns,
         columnPinning,
         rowPinning,
         grandTotalPinOverride,
@@ -2162,6 +2168,45 @@ export default function DashTanstackPivot(props) {
     // would race with (and stale-reject) the expansion request.
     const pendingExpansionRef = useRef(null);
     const rowHeight = rowHeights[spacingMode] || rowHeights[0];
+
+    const handleTransposePivot = useCallback(() => {
+        const nextRowFields = [...colFields];
+        const nextColFields = [...rowFields];
+
+        closeFilterPopover();
+        setContextMenu(null);
+        setExpanded({});
+        setSorting([]);
+        setColExpanded({});
+        setSelectedCells({});
+        setLastSelected(null);
+        setSelectedCols(new Set());
+        setHistory([]);
+        setFuture([]);
+        setDragStart(null);
+        setFillRange(null);
+        setIsDragging(false);
+        setIsFilling(false);
+        setShowRowTotals(showColTotals);
+        setShowColTotals(showRowTotals);
+        setGrandTotalPinOverride(null);
+        setRowFields(nextRowFields);
+        setColFields(nextColFields);
+
+        if (parentRef.current) {
+            parentRef.current.scrollTop = 0;
+            parentRef.current.scrollLeft = 0;
+        }
+
+        showNotification('Pivot transposed', 'success');
+    }, [
+        closeFilterPopover,
+        colFields,
+        rowFields,
+        showColTotals,
+        showRowTotals,
+        showNotification,
+    ]);
 
     // Cache key: only structural changes that require a full cache wipe.
     // Expansion and rowCount are intentionally excluded — expansion uses targeted
@@ -3639,6 +3684,8 @@ export default function DashTanstackPivot(props) {
                 spacingMode={spacingMode} setSpacingMode={setSpacingMode} spacingLabels={spacingLabels}
                 layoutMode={layoutMode} setLayoutMode={setLayoutMode}
                 onAutoSizeColumns={autoSizeVisibleColumns}
+                onTransposePivot={handleTransposePivot}
+                canTranspose={rowFields.length > 0 || colFields.length > 0}
                 colorScaleMode={colorScaleMode} setColorScaleMode={setColorScaleMode}
                 colorPalette={colorPalette} setColorPalette={setColorPalette}
                 rowCount={rowCount} exportPivot={exportPivot}
