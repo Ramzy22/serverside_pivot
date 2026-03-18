@@ -1,7 +1,9 @@
 import React from 'react';
-import { isDarkTheme } from '../../utils/styles';
 import SkeletonRow from '../SkeletonRow';
 import StatusBar from './StatusBar';
+
+const getTotalRowBackground = (theme) =>
+    theme.totalBg || theme.select || theme.background;
 
 /**
  * PivotTableBody — the main scroll container and virtual-scroll table body.
@@ -106,7 +108,14 @@ export function PivotTableBody({
                 aria-rowcount={rows.length}
                 aria-colcount={visibleLeafColumns.length}
             >
-                 <div style={{width: `${totalLayoutWidth}px`, minWidth:'100%', height: `${rowVirtualizer.getTotalSize() + stickyHeaderHeight + (effectiveTopRows.length + effectiveBottomRows.length) * rowHeight}px`, position: 'relative'}}>
+                 <div style={{
+                     width: `${totalLayoutWidth}px`,
+                     minWidth:'100%',
+                     height: `${rowVirtualizer.getTotalSize() + stickyHeaderHeight + (effectiveTopRows.length + effectiveBottomRows.length) * rowHeight}px`,
+                     position: 'relative',
+                     borderRadius: `0 0 ${theme.radius || '16px'} ${theme.radius || '16px'}`,
+                     overflow: 'hidden'
+                 }}>
                      {/* Sticky Header */}
                      <div style={{...styles.headerSticky, width: 'fit-content', display: 'flex'}} role="rowgroup">
                          {/* Left Section */}
@@ -280,7 +289,7 @@ export function PivotTableBody({
                                  position: 'sticky',
                                  top: headerHeight + (i * rowHeight),
                                  zIndex: 50, // Increased for top rows
-                                 background: (row.original && row.original._isTotal) ? (isDarkTheme(theme) ? '#1a2e1a' : '#f0f7f0') : theme.background,
+                                 background: (row.original && row.original._isTotal) ? getTotalRowBackground(theme) : (theme.surfaceBg || theme.background),
                                  borderBottom: `1px solid ${theme.border}`,
                                  boxShadow: isLastPinnedTop ? `0 2px 4px -2px ${theme.border}80` : 'none'
                              }}>
@@ -346,7 +355,7 @@ export function PivotTableBody({
                                          top: `${virtualRow.start + topOffset}px`,
                                          width: `${totalLayoutWidth}px`,
                                          position: 'absolute',
-                                         background: theme.background,
+                                         background: theme.surfaceBg || theme.background,
                                          borderBottom: `1px solid ${theme.border}`,
                                          display: 'flex', alignItems: 'center'
                                      }}>
@@ -400,7 +409,7 @@ export function PivotTableBody({
                                      top: `${virtualRow.start + topOffset}px`,
                                      width: `${totalLayoutWidth}px`,
                                      position: 'absolute',
-                                     background: (row && row.original && row.original._isTotal) ? (isDarkTheme(theme) ? '#1a2e1a' : '#f0f7f0') : theme.background,
+                                     background: (row && row.original && row.original._isTotal) ? getTotalRowBackground(theme) : (theme.surfaceBg || theme.background),
                                      borderBottom: `1px solid ${theme.border}`,
                                      display: 'flex', alignItems: 'center'
                                  }}>
@@ -433,7 +442,7 @@ export function PivotTableBody({
                                       height: virtualRow.size,
                                       top: `${virtualRow.start + topOffset}px`,
                                       width: `${totalLayoutWidth}px`,
-                                      background: (row.original && row.original._isTotal) ? (isDarkTheme(theme) ? '#1a2e1a' : '#f0f7f0') : theme.background,
+                                      background: (row.original && row.original._isTotal) ? getTotalRowBackground(theme) : (theme.surfaceBg || theme.background),
                                       borderBottom: `1px solid ${theme.border}`,
                                       transition: rowVirtualizer.isScrolling ? 'none' : 'background-color 0.2s'
                                   }}>
@@ -519,9 +528,9 @@ export function PivotTableBody({
                                  position: 'sticky',
                                  bottom: ((effectiveBottomRows.length - 1 - i) * rowHeight),
                                  zIndex: 50, // Increased for bottom rows
-                                 background: (row.original && row.original._isTotal) ? (isDarkTheme(theme) ? '#1a2e1a' : '#f0f7f0') : theme.background,
+                                 background: (row.original && row.original._isTotal) ? (theme.totalBgStrong || getTotalRowBackground(theme)) : (theme.surfaceBg || theme.background),
                                  borderBottom: `1px solid ${theme.border}`,
-                                 boxShadow: isFirstPinnedBottom ? `0 -2px 4px -2px ${theme.border}80` : 'none'
+                                 boxShadow: isFirstPinnedBottom ? `0 -4px 6px -1px rgba(15,23,42,0.06), 0 0 0 1px ${theme.border}` : 'none'
                              }}>
                                  {row.getLeftVisibleCells().map((cell) => renderCell(cell, i, false))}
                                  <div style={{ width: beforeWidth, flexShrink: 0 }} />

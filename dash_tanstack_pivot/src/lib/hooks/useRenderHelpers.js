@@ -4,6 +4,7 @@ import Icons from '../components/Icons';
 import FilterPopover from '../components/Filters/FilterPopover';
 import { flexRender } from '@tanstack/react-table';
 import { mergeStateStyles } from '../utils/styles';
+import { formatDisplayLabel } from '../utils/helpers';
 
 /**
  * useRenderHelpers — extracts renderCell and renderHeaderCell from DashTanstackPivot.
@@ -73,6 +74,8 @@ export function useRenderHelpers({
         const col = cell.column;
         const colIndex = visibleLeafColIndexMap.get(col.id) !== undefined ? visibleLeafColIndexMap.get(col.id) : -1;
         const isHierarchy = cell.column.id === 'hierarchy';
+        const colParentHeader = col.parent && typeof col.parent.columnDef?.header === 'string' ? col.parent.columnDef.header : '';
+        const isTotalCol = !isHierarchy && (colParentHeader === 'Grand Total' || colParentHeader.startsWith('Grand Total'));
         const isSelected = Object.prototype.hasOwnProperty.call(
             selectedCells || {},
             `${row.id}:${cell.column.id}`
@@ -93,9 +96,14 @@ export function useRenderHelpers({
         const cellKey = `${rowPath}:::${col.id}`;
         const cellFmt = cellFormatRules && cellFormatRules[cellKey];
 
-        const themeBackground = (row.original && row.original._isTotal)
-            ? (isDarkTheme(theme) ? '#1a2e1a' : '#f0f7f0')
-            : (isDarkTheme(theme) ? '#212121' : '#fff');
+        const isGrandTotalRow = !!(row.original && row.original._isTotal);
+        const themeBackground = isGrandTotalRow
+            ? (theme.totalBg || theme.select || theme.background)
+            : isTotalCol
+                ? (theme.totalBg || theme.select || theme.background)
+                : isHierarchy
+                    ? (isDarkTheme(theme) ? '#212121' : (theme.hierarchyBg || theme.surfaceInset || theme.surfaceBg || '#fff'))
+                    : (isDarkTheme(theme) ? '#212121' : (theme.surfaceBg || '#fff'));
         const condStyle = getConditionalStyle(
             cell.column.id,
             cell.getValue(),
@@ -218,9 +226,11 @@ export function useRenderHelpers({
                     display: 'flex',
                     alignItems: 'center',
                     justifyContent: isHierarchy ? 'flex-start' : 'flex-end',
-                    fontWeight: cellFmt && cellFmt.bold ? 'bold' : ((row.original && row.original._isTotal) ? 700 : ((isHierarchy && row.getIsGrouped()) ? 500 : 400)),
+                    fontFamily: "'Inter', ui-sans-serif, system-ui, sans-serif",
+                    fontVariantNumeric: isHierarchy ? undefined : 'tabular-nums',
+                    fontWeight: cellFmt && cellFmt.bold ? 'bold' : (isGrandTotalRow ? 700 : isTotalCol ? 600 : ((isHierarchy && row.getIsGrouped()) ? 500 : 400)),
                     fontStyle: cellFmt && cellFmt.italic ? 'italic' : undefined,
-                    color: cellFmt && cellFmt.color ? cellFmt.color : ((row.original && row.original._isTotal) ? theme.text : undefined),
+                    color: cellFmt && cellFmt.color ? cellFmt.color : (isHierarchy ? undefined : ((isGrandTotalRow || isTotalCol) ? (theme.totalTextStrong || theme.primary) : theme.textSec)),
                     ...cellStateStyle,
                     userSelect: 'none',
                     position: cellStateStyle.position === 'sticky' ? 'sticky' : 'relative',
@@ -273,6 +283,11 @@ export function useRenderHelpers({
     // group headers during center-column virtualization so the width matches only the visible leaves).
     const renderHeaderCell = (header, level, renderSection = 'center', overrideWidth = null) => {
         const isGroupHeader = header.column.columns && header.column.columns.length > 0;
+        const isMeasureSubHeader = !isGroupHeader && header.column.id !== 'hierarchy' && header.column.id !== '__row_number__';
+        const headerText = typeof header.column.columnDef.header === 'string' ? header.column.columnDef.header : '';
+        const parentText = header.column.parent && typeof header.column.parent.columnDef?.header === 'string' ? header.column.parent.columnDef.header : '';
+        const isTotalGroupHeader = isGroupHeader && (headerText === 'Grand Total' || headerText.startsWith('Grand Total'));
+        const isUnderTotalGroup = isMeasureSubHeader && (parentText === 'Grand Total' || parentText.startsWith('Grand Total'));
         const isSorted = header.column.getIsSorted();
         const sortIndex = header.column.getSortIndex();
         const isMultiSort = table.getState().sorting.length > 1;
@@ -324,11 +339,26 @@ export function useRenderHelpers({
                 height: rowHeight,
                 cursor: 'pointer',
                 // Position is handled by getHeaderStickyStyle or parent container
-                position: headerStateStyle.position || 'relative'
+                position: headerStateStyle.position || 'relative',
+                ...(isTotalGroupHeader ? {
+                    background: theme.totalBgStrong || (theme.totalBg || theme.select),
+                    color: theme.totalTextStrong || theme.primary,
+                    fontWeight: 700,
+                } : isGroupHeader && !isSorted ? {
+                    background: isDarkTheme(theme) ? theme.headerBg : (theme.headerSubtleBg || '#F9FAFB'),
+                } : {}),
+                ...(isMeasureSubHeader ? {
+                    fontSize: '11px',
+                    fontWeight: isUnderTotalGroup ? 700 : 500,
+                    textTransform: 'uppercase',
+                    letterSpacing: '0.04em',
+                    color: isUnderTotalGroup ? (theme.totalTextStrong || theme.primary) : theme.textSec,
+                    background: isUnderTotalGroup ? (theme.totalBgStrong || theme.totalBg || theme.select) : undefined,
+                } : {})
             }}
             role="columnheader"
             aria-sort={isSorted || 'none'}
-            aria-label={`${typeof header.column.columnDef.header === 'string' ? header.column.columnDef.header : header.column.id}. Click or press Alt+Up/Down to sort.`}
+            aria-label={`${formatDisplayLabel(typeof header.column.columnDef.header === 'string' ? header.column.columnDef.header : header.column.id)}. Click or press Alt+Up/Down to sort.`}
             tabIndex={0}
             onKeyDown={(e) => {
                 if (e.altKey && (e.key === 'ArrowUp' || e.key === 'ArrowDown')) {
@@ -362,7 +392,7 @@ export function useRenderHelpers({
                     alignItems:'center',
                     gap: '4px',
                     width: '100%',
-                    justifyContent: header.column.id === 'hierarchy' ? 'flex-start' : 'center',
+                    justifyContent: header.column.id === 'hierarchy' ? 'flex-start' : isMeasureSubHeader ? 'flex-end' : 'center',
                     padding: '0 4px',
                     overflow: 'hidden',
                     minWidth: autoSizeBounds.minWidth
@@ -374,7 +404,9 @@ export function useRenderHelpers({
                     flex: 1,
                     minWidth: 0
                 }}>
-                    {header.isPlaceholder ? null : flexRender(header.column.columnDef.header, header.getContext())}
+                    {header.isPlaceholder ? null : (typeof header.column.columnDef.header === 'string'
+                        ? formatDisplayLabel(header.column.columnDef.header)
+                        : flexRender(header.column.columnDef.header, header.getContext()))}
                 </span>
 
                 {!isGroupHeader && header.column.id !== 'hierarchy' && !header.isPlaceholder && (

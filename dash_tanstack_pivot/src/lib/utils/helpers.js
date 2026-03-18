@@ -2,6 +2,23 @@ import React from 'react';
 
 export const getKey = (prefix, field, agg) => prefix ? `${prefix}_${field}_${agg}` : `${field}_${agg}`;
 
+export const formatDisplayLabel = (value) => {
+    if (value === null || value === undefined) return '';
+    const raw = String(value).trim();
+    if (!raw) return '';
+
+    return raw
+        .replace(/[_]+/g, ' ')
+        .replace(/\s+/g, ' ')
+        .split(' ')
+        .map((word) => {
+            if (!word) return word;
+            if (/^[A-Z0-9]+$/.test(word)) return word;
+            return word.charAt(0).toUpperCase() + word.slice(1);
+        })
+        .join(' ');
+};
+
 // Replace thousands commas with narrow non-breaking spaces (ISO 80000-1 convention)
 const spaceGroups = (str) => str.replace(/,/g, '\u202F');
 

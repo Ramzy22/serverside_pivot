@@ -58,6 +58,8 @@ Keyword arguments:
 
 - dataVersion (number; optional)
 
+- defaultTheme (string; optional)
+
 - drillEndpoint (string; optional)
 
 - drillThrough (dict; optional)
@@ -238,15 +240,16 @@ Keyword arguments:
         pinningPresets: typing.Optional[typing.Sequence["PinningPresets"]] = None,
         sortOptions: typing.Optional["SortOptions"] = None,
         sortLock: typing.Optional[bool] = None,
+        defaultTheme: typing.Optional[str] = None,
         sortEvent: typing.Optional[dict] = None,
         availableFieldList: typing.Optional[typing.Sequence[str]] = None,
         dataOffset: typing.Optional[NumberType] = None,
         dataVersion: typing.Optional[NumberType] = None,
         **kwargs
     ):
-        self._prop_names = ['id', 'availableFieldList', 'cellUpdate', 'cellUpdates', 'colFields', 'columnPinned', 'columnPinning', 'columnSizing', 'columnVisibility', 'columns', 'conditionalFormatting', 'data', 'dataOffset', 'dataVersion', 'drillEndpoint', 'drillThrough', 'expanded', 'filterOptions', 'filters', 'grandTotalPosition', 'persistence', 'persistence_type', 'pinningOptions', 'pinningPresets', 'pivotTitle', 'reset', 'rowCount', 'rowFields', 'rowMove', 'rowPinned', 'rowPinning', 'savedView', 'serverSide', 'showColTotals', 'showRowTotals', 'sortEvent', 'sortLock', 'sortOptions', 'sorting', 'style', 'table', 'valConfigs', 'validationRules', 'viewState', 'viewport']
+        self._prop_names = ['id', 'availableFieldList', 'cellUpdate', 'cellUpdates', 'colFields', 'columnPinned', 'columnPinning', 'columnSizing', 'columnVisibility', 'columns', 'conditionalFormatting', 'data', 'dataOffset', 'dataVersion', 'defaultTheme', 'drillEndpoint', 'drillThrough', 'expanded', 'filterOptions', 'filters', 'grandTotalPosition', 'persistence', 'persistence_type', 'pinningOptions', 'pinningPresets', 'pivotTitle', 'reset', 'rowCount', 'rowFields', 'rowMove', 'rowPinned', 'rowPinning', 'savedView', 'serverSide', 'showColTotals', 'showRowTotals', 'sortEvent', 'sortLock', 'sortOptions', 'sorting', 'style', 'table', 'valConfigs', 'validationRules', 'viewState', 'viewport']
         self._valid_wildcard_attributes =            []
-        self.available_properties = ['id', 'availableFieldList', 'cellUpdate', 'cellUpdates', 'colFields', 'columnPinned', 'columnPinning', 'columnSizing', 'columnVisibility', 'columns', 'conditionalFormatting', 'data', 'dataOffset', 'dataVersion', 'drillEndpoint', 'drillThrough', 'expanded', 'filterOptions', 'filters', 'grandTotalPosition', 'persistence', 'persistence_type', 'pinningOptions', 'pinningPresets', 'pivotTitle', 'reset', 'rowCount', 'rowFields', 'rowMove', 'rowPinned', 'rowPinning', 'savedView', 'serverSide', 'showColTotals', 'showRowTotals', 'sortEvent', 'sortLock', 'sortOptions', 'sorting', 'style', 'table', 'valConfigs', 'validationRules', 'viewState', 'viewport']
+        self.available_properties = ['id', 'availableFieldList', 'cellUpdate', 'cellUpdates', 'colFields', 'columnPinned', 'columnPinning', 'columnSizing', 'columnVisibility', 'columns', 'conditionalFormatting', 'data', 'dataOffset', 'dataVersion', 'defaultTheme', 'drillEndpoint', 'drillThrough', 'expanded', 'filterOptions', 'filters', 'grandTotalPosition', 'persistence', 'persistence_type', 'pinningOptions', 'pinningPresets', 'pivotTitle', 'reset', 'rowCount', 'rowFields', 'rowMove', 'rowPinned', 'rowPinning', 'savedView', 'serverSide', 'showColTotals', 'showRowTotals', 'sortEvent', 'sortLock', 'sortOptions', 'sorting', 'style', 'table', 'valConfigs', 'validationRules', 'viewState', 'viewport']
         self.available_wildcard_properties =            []
         _explicit_args = kwargs.pop('_explicit_args')
         _locals = locals()

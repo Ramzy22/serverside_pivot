@@ -1,6 +1,7 @@
 import React, { useState } from 'react';
 import Icons from '../Icons';
 import { getAllLeafColumns, getAllLeafIdsFromColumn, hasChildrenInZone } from '../../utils/helpers';
+import { formatDisplayLabel } from '../../utils/helpers';
 
 const ColumnTreeItem = ({ column, level, theme, styles, handlePinColumn, colSearch, selectedCols, setSelectedCols, onDrop, sectionId }) => {
     const [expanded, setExpanded] = useState(level < 1); // Only expand root level by default
@@ -19,6 +20,7 @@ const ColumnTreeItem = ({ column, level, theme, styles, handlePinColumn, colSear
     if (column.headerVal) {
         label = column.headerVal;
     }
+    label = formatDisplayLabel(label);
     
     const pin = column.getIsPinned();
     const isVisible = column.getIsVisible();

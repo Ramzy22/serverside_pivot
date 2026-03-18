@@ -1,6 +1,7 @@
 import React, { useState } from 'react';
 import Icons from '../Icons';
 import ColumnFilter from '../Filters/ColumnFilter';
+import { formatDisplayLabel } from '../../utils/helpers';
 
 const SidebarFilterItem = ({ column, theme, styles, onFilter, currentFilter, options }) => {
     const [expanded, setExpanded] = useState(false);
@@ -22,7 +23,7 @@ const SidebarFilterItem = ({ column, theme, styles, onFilter, currentFilter, opt
                 </span>
                 <span style={{flex: 1, fontWeight: 500, display: 'flex', alignItems: 'center', gap: '6px'}}>
                     {hasFilter && <Icons.Filter style={{fontSize: '12px', color: theme.primary}}/>}
-                    {typeof column.header === 'string' ? column.header : (column.columnDef && typeof column.columnDef.header === 'string' ? column.columnDef.header : column.id)}
+                    {formatDisplayLabel(typeof column.header === 'string' ? column.header : (column.columnDef && typeof column.columnDef.header === 'string' ? column.columnDef.header : column.id))}
                 </span>
             </div>
             {expanded && (

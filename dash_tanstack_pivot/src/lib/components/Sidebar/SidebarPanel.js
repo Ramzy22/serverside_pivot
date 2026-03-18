@@ -5,6 +5,7 @@ import ToolPanelSection from './ToolPanelSection';
 import ColumnTreeItem from './ColumnTreeItem';
 import Icons from '../Icons';
 import { isGroupColumn, getAllLeafIdsFromColumn, hasChildrenInZone } from '../../utils/helpers';
+import { formatDisplayLabel } from '../../utils/helpers';
 
 export function SidebarPanel({
     sidebarTab, setSidebarTab,
@@ -84,7 +85,7 @@ export function SidebarPanel({
                                 const colsForDisplay = allFields.map(field => {
                                     const tableCol = table.getColumn(field);
                                     if (tableCol) return tableCol;
-                                    return { id: field, header: field, columnDef: { header: field } };
+                                    return { id: field, header: formatDisplayLabel(field), columnDef: { header: formatDisplayLabel(field) } };
                                 });
                                 const filtered = colsForDisplay.filter(col => {
                                     const header = (col.columnDef && typeof col.columnDef.header === 'string') ? col.columnDef.header : (typeof col.header === 'string' ? col.header : col.id);
@@ -111,19 +112,40 @@ export function SidebarPanel({
                         <>
                             {sidebarTab === 'fields' && (
                                 <div>
-                                    <div style={styles.sectionTitle}>Available Fields</div>
-                                    <div style={{maxHeight: '160px', overflowY: 'auto'}}>
+                                    <div style={styles.sectionTitleSm}><Icons.Database/> Available Fields</div>
+                                    <div style={{maxHeight: '160px', overflowY: 'auto', display:'flex', flexWrap:'wrap', gap:'4px', paddingTop:'2px'}}>
                                         {availableFields.map(f => (
-                                            <div key={f} draggable onDragStart={e=>onDragStart(e,f,'pool')} style={styles.chip}>
-                                                <div style={{display:'flex',gap:'6px'}}><Icons.DragIndicator/> {f}</div>
+                                            <div key={f} draggable onDragStart={e=>onDragStart(e,f,'pool')} style={{
+                                                padding: '8px 12px',
+                                                fontSize: '12px',
+                                                lineHeight: 1.2,
+                                                fontWeight: 500,
+                                                fontFamily: "'Inter', ui-sans-serif, system-ui, sans-serif",
+                                                borderRadius: theme.radiusSm || theme.radius || '10px',
+                                                border: `1px solid ${theme.isDark ? theme.border : '#D7DDEA'}`,
+                                                background: theme.isDark ? theme.background : (theme.surfaceInset || '#ffffff'),
+                                                color: theme.isDark ? theme.text : '#334155',
+                                                display: 'inline-flex',
+                                                alignItems: 'center',
+                                                boxShadow: theme.isDark ? 'none' : (theme.shadowInset || '0 1px 2px rgba(0,0,0,0.04)'),
+                                                cursor: 'grab',
+                                                userSelect: 'none',
+                                                minHeight: '34px',
+                                            }}>
+                                                {formatDisplayLabel(f)}
                                             </div>
                                         ))}
                                     </div>
                                 </div>
                             )}
-                            {[{id:'rows', label:'Rows'}, {id:'cols', label:'Columns'}, {id:'vals', label:'Values'}, {id:'filter', label:'Filters'}].map(zone => (
-                                <div key={zone.id}>
-                                    <div style={styles.sectionTitle}>{zone.label}</div>
+                            {[
+                                {id:'rows', label:'Rows', icon: <Icons.List/>},
+                                {id:'cols', label:'Columns', icon: <Icons.Columns/>},
+                                {id:'vals', label:'Values', icon: <Icons.Sigma/>},
+                                {id:'filter', label:'Filters', icon: <Icons.Filter/>}
+                            ].map(zone => (
+                                <div key={zone.id} style={{marginBottom: '20px'}}>
+                                    <div style={styles.sectionTitle}>{zone.icon}{zone.label}</div>
                                     {zone.id === 'rows' && rowFields.length > 0 && (
                                         <div style={{display:'flex', gap:'4px', padding:'0 4px 6px 4px'}}>
                                             <button
@@ -141,16 +163,19 @@ export function SidebarPanel({
                                     <div style={styles.dropZone} onDragOver={e=>e.preventDefault()} onDrop={e=>onDrop(e, zone.id)}>
                                         {(zone.id==='filter' ? Object.keys(filters).filter(k=>k!=='global') : zone.id==='rows'?rowFields:zone.id==='cols'?colFields:valConfigs).map((item, idx) => {
                                             const label = zone.id==='vals' ? item.field : item;
+                                            const displayLabel = zone.id === 'vals' ? formatDisplayLabel(item.field) : formatDisplayLabel(item);
+                                            const isVal = zone.id === 'vals';
+                                            const chipStyle = styles.chip;
                                             return (
                                                                                         <div key={idx} draggable onDragStart={e=>onDragStart(e,item,zone.id,idx)} onDragOver={e=>onDragOver(e,zone.id,idx)} >
-                                                                                            <div style={styles.chip}>
+                                                                                            <div style={chipStyle}>
                                                                                                 {dropLine && dropLine.zone===zone.id && dropLine.idx===idx && <div style={{...styles.dropLine,top:-2}}/>}
-                                                                                                <div style={{display:'flex',gap:'6px'}}><Icons.DragIndicator/> <b>{label}</b></div>
+                                                                                                <div style={{display:'flex',alignItems:'center',gap:'6px'}}><Icons.DragIndicator/> <b style={{fontWeight:500}}>{displayLabel}</b></div>
                                                                                                 {zone.id === 'vals' && (
                                                                                                     <div style={{display:'flex',flexDirection:'column', gap:2}}>
                                                                                                         <div style={{display:'flex', gap:2}}>
-                                                                                                            <select value={item.agg} onChange={e=>{const n=[...valConfigs];n[idx].agg=e.target.value;setValConfigs(n)}} style={{border:'none',background:'transparent',color:theme.primary,cursor:'pointer',maxWidth:'50px',fontSize:'11px'}}><option value="sum">Sum</option><option value="avg">Avg</option><option value="count">Cnt</option><option value="min">Min</option><option value="max">Max</option></select>
-                                                                                                            <select value={item.windowFn || 'none'} onChange={e=>{const n=[...valConfigs];n[idx].windowFn=e.target.value==='none'?null:e.target.value;setValConfigs(n)}} style={{border:'none',background:'transparent',color:theme.primary,cursor:'pointer',maxWidth:'60px',fontSize:'11px'}}><option value="none">Norm</option><option value="percent_of_row">%Row</option><option value="percent_of_col">%Col</option><option value="percent_of_grand_total">%Tot</option></select>
+                                                                                                            <select value={item.agg} onChange={e=>{const n=[...valConfigs];n[idx].agg=e.target.value;setValConfigs(n)}} style={{border:'none',background:'transparent',color:theme.totalTextStrong || theme.primary,cursor:'pointer',maxWidth:'50px',fontSize:'11px'}}><option value="sum">Sum</option><option value="avg">Avg</option><option value="count">Cnt</option><option value="min">Min</option><option value="max">Max</option></select>
+                                                                                                            <select value={item.windowFn || 'none'} onChange={e=>{const n=[...valConfigs];n[idx].windowFn=e.target.value==='none'?null:e.target.value;setValConfigs(n)}} style={{border:'none',background:'transparent',color:theme.totalTextStrong || theme.primary,cursor:'pointer',maxWidth:'60px',fontSize:'11px'}}><option value="none">Norm</option><option value="percent_of_row">%Row</option><option value="percent_of_col">%Col</option><option value="percent_of_grand_total">%Tot</option></select>
                                                                                                         </div>
                                                                                                         <input placeholder="Fmt (currency)" value={item.format || ''} onChange={e=>{const n=[...valConfigs];n[idx].format=e.target.value;setValConfigs(n)}} style={{border:'1px solid #eee', fontSize:'10px', padding:'2px', width:'100%'}}/>
                                                                                                     </div>
@@ -177,11 +202,11 @@ export function SidebarPanel({
                                                                                                         if (zone.id==='rows') setRowFields(p=>p.filter(x=>x!==label))
                                                                                                         if (zone.id==='cols') setColFields(p=>p.filter(x=>x!==label))
                                                                                                         if (zone.id==='vals') setValConfigs(p=>p.filter((_,i)=>i!==idx))
-                                                                                                    }} style={{cursor:'pointer'}}><Icons.Close/></span>
+                                                                                                    }} style={{cursor:'pointer', color:'#9CA3AF', display:'flex', alignItems:'center'}}><Icons.Close/></span>
                                                                                                 </div>
                                                                                                                                                 {zone.id === 'filter' && activeFilterCol === label && (
                                                                                                                     <FilterPopover 
-                                                                                                                        column={{header: label, id: label}} 
+                                                                                                                        column={{header: displayLabel, id: label}} 
                                                                                                                         anchorEl={filterAnchorEl}
                                                                                                                         onClose={closeFilterPopover}
                                                                                                                         onFilter={(filterValue) => handleHeaderFilter(label, filterValue)}

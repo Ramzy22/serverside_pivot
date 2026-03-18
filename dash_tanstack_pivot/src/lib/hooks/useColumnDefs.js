@@ -2,7 +2,7 @@ import { useMemo } from 'react';
 import React from 'react';
 import Icons from '../components/Icons';
 import EditableCell from '../components/Table/EditableCell';
-import { formatValue, getKey } from '../utils/helpers';
+import { formatValue, formatDisplayLabel, getKey } from '../utils/helpers';
 
 const debugLog = process.env.NODE_ENV !== 'production'
     ? (...args) => console.log('[pivot-grid]', ...args)
@@ -153,10 +153,10 @@ export function useColumnDefs({
                             display: 'flex',
                             alignItems: 'center',
                             justifyContent: 'center',
-                            background: '#f5f5f5',
+                            background: theme.headerSubtleBg || '#f5f5f5',
                             cursor: 'pointer',
                             fontSize: '11px',
-                            color: '#666',
+                            color: theme.textSec,
                             borderRight: `1px solid ${theme.border}`,
                             userSelect: 'none'
                         }}
@@ -186,7 +186,7 @@ export function useColumnDefs({
                 hierarchyCols.push({
                     id: 'hierarchy',
                     accessorFn: row => row._id,
-                    header: rowFields.join(' > '),
+                    header: rowFields.map(formatDisplayLabel).join(' > '),
                     size: defaultColumnWidths.hierarchy,
                     sortingFn, // Apply sort
                     cell: ({ row }) => {
@@ -212,7 +212,7 @@ export function useColumnDefs({
                                             row.getToggleExpandedHandler()(e);
                                         }}
                                         onMouseDown={(e) => e.stopPropagation()}
-                                        style={{border:'none',background:'none',cursor:'pointer',padding:0,marginRight:'6px',color:'#757575',display:'flex'}}
+                                        style={{border:'none',background:'none',cursor:'pointer',padding:0,marginRight:'6px',color:theme.textSec,display:'flex'}}
                                     >
                                         {row.getIsExpanded() ? <Icons.ChevronDown/> : <Icons.ChevronRight/>}
                                         {pendingRowTransitions.has(row.id) && (
@@ -231,7 +231,7 @@ export function useColumnDefs({
                 hierarchyCols.push({
                     id: field,
                     accessorKey: field,
-                    header: field,
+                    header: formatDisplayLabel(field),
                     size: defaultColumnWidths.dimension,
                     enablePinning: true,
                     sortingFn,
@@ -273,7 +273,7 @@ export function useColumnDefs({
                                             row.getToggleExpandedHandler()(e);
                                         }}
                                         onMouseDown={(e) => e.stopPropagation()}
-                                        style={{border:'none',background:'none',cursor:'pointer',padding:0,marginRight:'6px',color:'#757575',display:'flex'}}
+                                        style={{border:'none',background:'none',cursor:'pointer',padding:0,marginRight:'6px',color:theme.textSec,display:'flex'}}
                                     >
                                         {row.getIsExpanded() ? <Icons.ChevronDown/> : <Icons.ChevronRight/>}
                                         {pendingRowTransitions.has(row.id) && (
@@ -294,7 +294,7 @@ export function useColumnDefs({
             dataCols = valConfigs.map(c => ({
                 id: getKey('', c.field, c.agg),
                 accessorFn: row => row[getKey('', c.field, c.agg)] ,
-                header: `${c.field} (${c.agg})`,
+                header: `${formatDisplayLabel(c.field)} (${c.agg})`,
                 size: defaultColumnWidths.measure,
                 enablePinning: true,
                 sortingFn,
@@ -397,7 +397,7 @@ export function useColumnDefs({
                                 const suffix = `_${config.field}_${config.agg}`;
                                 if (key.toLowerCase().endsWith(suffix.toLowerCase())) {
                                     matchedConfig = config;
-                                    measureStr = `${config.field} (${config.agg})`;
+                                    measureStr = `${formatDisplayLabel(config.field)} (${config.agg})`;
                                     dimStr = key.substring(0, key.length - suffix.length);
                                     break;
                                 }
@@ -427,10 +427,10 @@ export function useColumnDefs({
                             if (!node) {
                                 node = {
                                     id: `group_${currentPathKey}`,
-                                    headerVal: val,
+                                    headerVal: formatDisplayLabel(val),
                                     header: (
                                         <div style={{display:'flex', alignItems:'center', gap:4, width:'100%', overflow:'hidden'}}>
-                                            <span style={{flex:1, overflow:'hidden', textOverflow:'ellipsis', whiteSpace:'nowrap'}} title={val}>{val}</span>
+                                            <span style={{flex:1, overflow:'hidden', textOverflow:'ellipsis', whiteSpace:'nowrap'}} title={formatDisplayLabel(val)}>{formatDisplayLabel(val)}</span>
                                             <span onClick={(e) => { e.stopPropagation(); toggleCol(currentPathKey); }} style={{cursor:'pointer', display:'flex', opacity:0.6, flexShrink:0}}>
                                                 {isColExpanded(currentPathKey) ? <Icons.ColCollapse/> : <Icons.ColExpand/>}
                                             </span>

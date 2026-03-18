@@ -33,6 +33,7 @@ const FONT_FAMILY_OPTIONS = [
 ];
 
 const FONT_SIZE_OPTIONS = ['8px', '9px', '10px', '11px', '12px', '13px', '14px', '15px', '16px', '18px', '20px', '24px'];
+const THEME_ORDER = ['flash', 'dark', 'blooomberg'];
 
 const DECIMAL_MIN = 0;
 const DECIMAL_MAX = 6;
@@ -146,9 +147,97 @@ function CellFormatPopover({ theme, styles, cellFormatRules, setCellFormatRules,
     );
 }
 
+const THEME_COLOR_FIELDS = [
+    { key: 'primary', label: 'Primary' },
+    { key: 'pageBg', label: 'Page Bg' },
+    { key: 'surfaceBg', label: 'Surface Bg' },
+    { key: 'surfaceInset', label: 'Inset Bg' },
+    { key: 'headerBg', label: 'Header Bg' },
+    { key: 'headerSubtleBg', label: 'Soft Header' },
+    { key: 'border', label: 'Border' },
+    { key: 'text', label: 'Text' },
+    { key: 'textSec', label: 'Muted Text' },
+    { key: 'totalBgStrong', label: 'Total Bg' },
+];
+
+function ThemeEditorPopover({ theme, themeName, themeOverrides, setThemeOverrides, onClose, anchorRef }) {
+    const popoverRef = useRef(null);
+
+    useEffect(() => {
+        const handleOutside = (e) => {
+            if (popoverRef.current && !popoverRef.current.contains(e.target) &&
+                anchorRef.current && !anchorRef.current.contains(e.target)) {
+                onClose();
+            }
+        };
+        document.addEventListener('mousedown', handleOutside);
+        return () => document.removeEventListener('mousedown', handleOutside);
+    }, [onClose, anchorRef]);
+
+    const resetField = (key) => {
+        setThemeOverrides(prev => {
+            const next = { ...prev };
+            delete next[key];
+            return next;
+        });
+    };
+
+    const clearAll = () => setThemeOverrides({});
+
+    return (
+        <div ref={popoverRef} style={{
+            position: 'absolute',
+            top: '100%',
+            right: 0,
+            zIndex: 9999,
+            background: theme.surfaceBg || '#fff',
+            border: `1px solid ${theme.border}`,
+            borderRadius: theme.radiusSm || '10px',
+            boxShadow: theme.shadowMd || '0 12px 28px rgba(0,0,0,0.12)',
+            padding: '12px',
+            minWidth: '280px',
+            marginTop: '6px',
+        }}>
+            <div style={{ fontWeight: 700, fontSize: '13px', color: theme.text, marginBottom: '4px' }}>Theme Colors</div>
+            <div style={{ fontSize: '11px', color: theme.textSec, marginBottom: '10px' }}>{themeName} with saved overrides</div>
+            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '8px' }}>
+                {THEME_COLOR_FIELDS.map(({ key, label }) => (
+                    <div key={key} style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
+                        <label style={{ fontSize: '11px', color: theme.textSec }}>{label}</label>
+                        <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+                            <input
+                                type="color"
+                                value={theme[key] || '#000000'}
+                                onChange={(e) => setThemeOverrides(prev => ({ ...prev, [key]: e.target.value }))}
+                                style={{ width: '28px', height: '28px', border: 'none', padding: 0, background: 'transparent', cursor: 'pointer' }}
+                            />
+                            <button onClick={() => resetField(key)} style={{
+                                border: `1px solid ${theme.border}`,
+                                background: theme.headerSubtleBg || theme.hover,
+                                color: theme.textSec,
+                                borderRadius: '8px',
+                                fontSize: '10px',
+                                padding: '5px 6px',
+                                cursor: 'pointer'
+                            }}>
+                                Reset
+                            </button>
+                        </div>
+                    </div>
+                ))}
+            </div>
+            <div style={{ display: 'flex', gap: '8px', marginTop: '12px' }}>
+                <button onClick={clearAll} style={{ border: `1px solid ${theme.border}`, background: theme.headerSubtleBg || theme.hover, color: theme.text, borderRadius: '8px', padding: '7px 10px', cursor: 'pointer', flex: 1 }}>Clear Overrides</button>
+                <button onClick={onClose} style={{ border: `1px solid ${theme.primary}`, background: theme.primary, color: '#fff', borderRadius: '8px', padding: '7px 10px', cursor: 'pointer', flex: 1 }}>Done</button>
+            </div>
+        </div>
+    );
+}
+
 export function PivotAppBar({
     sidebarOpen, setSidebarOpen,
     themeName, setThemeName,
+    themeOverrides, setThemeOverrides,
     showRowNumbers, setShowRowNumbers,
     showFloatingFilters, setShowFloatingFilters,
     showRowTotals, setShowRowTotals,
@@ -224,15 +313,18 @@ export function PivotAppBar({
     }, [selectedCells, columnDecimalOverrides, decimalPlaces]);
     const [rowFmtOpen, setRowFmtOpen] = useState(false);
     const rowFmtBtnRef = useRef(null);
+    const [themeEditorOpen, setThemeEditorOpen] = useState(false);
+    const themeEditorBtnRef = useRef(null);
 
     // Base styles for different button variants
     const btnBase = {
         ...styles.btn,
-        borderRadius: '6px',
-        padding: '4px 10px',
+        borderRadius: theme.radiusSm || '10px',
+        padding: '7px 12px',
         fontSize: '12px',
-        fontWeight: 500,
+        fontWeight: 600,
         lineHeight: 1.5,
+        minHeight: '36px',
     };
     const btnGhost = {
         ...btnBase,
@@ -241,46 +333,50 @@ export function PivotAppBar({
     };
     const btnSubtle = {
         ...btnBase,
-        background: theme.hover,
+        background: theme.headerSubtleBg || theme.hover,
         border: `1px solid ${theme.border}`,
+        boxShadow: theme.shadowInset || 'none',
     };
     const btnActive = {
         ...btnBase,
         background: theme.select,
         border: `1px solid ${theme.primary}`,
         color: theme.primary,
+        boxShadow: theme.shadowInset || 'none',
     };
     const btnPrimary = {
         ...btnBase,
         background: theme.primary,
         color: '#fff',
         border: `1px solid ${theme.primary}`,
+        boxShadow: '0 8px 18px rgba(79,70,229,0.18)',
     };
     // Save View: animated shimmer gradient (same keyframe as skeleton loader)
     const btnSaveView = {
         ...btnBase,
-        background: 'linear-gradient(90deg, rgba(75,139,245,0.15) 0%, rgba(120,175,255,0.38) 45%, rgba(75,139,245,0.15) 100%)',
+        background: 'linear-gradient(90deg, rgba(79,70,229,0.10) 0%, rgba(129,140,248,0.30) 45%, rgba(79,70,229,0.10) 100%)',
         backgroundSize: '220% 100%',
-        border: `1px solid rgba(75,139,245,0.45)`,
+        border: `1px solid rgba(99,102,241,0.28)`,
         color: theme.primary,
         animation: 'pivot-skeleton-shimmer 2.8s linear infinite',
         fontWeight: 600,
+        boxShadow: theme.shadowInset || 'none',
     };
 
     const sep = <div style={{width:'1px', height:'18px', background: theme.border, flexShrink: 0}} />;
 
     return (
-        <div style={{...styles.appBar, height: 'auto', minHeight: '48px', padding: '6px 12px', gap: '6px', flexWrap: 'wrap'}}>
+        <div style={{...styles.appBar, height: 'auto', minHeight: '64px', padding: '10px 16px', gap: '8px', flexWrap: 'wrap'}}>
             {/* Left: sidebar toggle + title */}
             <div style={{display:'flex', alignItems:'center', gap:'8px', flexShrink: 0}}>
                 <button onClick={() => setSidebarOpen(!sidebarOpen)} style={{...btnGhost, padding:'5px', color: theme.textSec}}>
                     <Icons.Menu />
                 </button>
-                <div style={{fontWeight:600, fontSize:'14px', color:theme.primary, whiteSpace:'nowrap'}}>{pivotTitle || 'Analytics Pivot'}</div>
+                <div style={{fontWeight:700, fontSize:'15px', color:theme.text, whiteSpace:'nowrap'}}>{pivotTitle || 'Analytics Pivot'}</div>
             </div>
 
             {/* Search */}
-            <div style={{...styles.searchBox, flex:'1', minWidth:'120px', maxWidth:'220px', borderRadius:'6px', border:`1px solid ${theme.border}`}}>
+            <div style={{...styles.searchBox, flex:'1', minWidth:'180px', maxWidth:'280px', borderRadius:theme.radiusSm || '10px', border:`1px solid ${theme.border}`}}>
                 <Icons.Search />
                 <input
                     style={{border:'none',background:'transparent',marginLeft:'6px',outline:'none',width:'100%', color: theme.text, fontSize:'12px'}}
@@ -438,9 +534,30 @@ export function PivotAppBar({
                 {sep}
 
                 {/* Theme */}
+                <div style={{ position:'relative' }}>
+                    <button
+                        ref={themeEditorBtnRef}
+                        style={Object.keys(themeOverrides || {}).length > 0 ? btnActive : btnSubtle}
+                        onClick={() => setThemeEditorOpen(open => !open)}
+                        title="Edit theme colors"
+                    >
+                        Theme Colors{Object.keys(themeOverrides || {}).length > 0 ? ` (${Object.keys(themeOverrides).length})` : ''}
+                    </button>
+                    {themeEditorOpen && (
+                        <ThemeEditorPopover
+                            theme={theme}
+                            themeName={themeName}
+                            themeOverrides={themeOverrides}
+                            setThemeOverrides={setThemeOverrides}
+                            onClose={() => setThemeEditorOpen(false)}
+                            anchorRef={themeEditorBtnRef}
+                        />
+                    )}
+                </div>
                 <select value={themeName} onChange={e => setThemeName(e.target.value)}
                     style={{...btnSubtle, outline:'none', cursor:'pointer'}}>
-                    {Object.keys(themes).map(t => <option key={t} value={t}>{t.charAt(0).toUpperCase() + t.slice(1)}</option>)}
+                    {[...THEME_ORDER, ...Object.keys(themes).filter(t => !THEME_ORDER.includes(t))]
+                        .map(t => <option key={t} value={t}>{t.charAt(0).toUpperCase() + t.slice(1)}</option>)}
                 </select>
 
                 {/* Export */}

@@ -23,7 +23,18 @@ const StatusBar = ({ selectedCells, rowCount, visibleRowsCount, theme, isLoading
     }, [selectedCells]);
 
     return (
-        <div style={{ height: '32px', borderTop: `1px solid ${theme.border}`, background: theme.headerBg, display: 'flex', alignItems: 'center', padding: '0 16px', justifyContent: 'space-between', fontSize: '12px', color: theme.textSec }}>
+        <div style={{
+            height: '36px',
+            borderTop: `1px solid ${theme.border}`,
+            background: theme.headerBg,
+            display: 'flex',
+            alignItems: 'center',
+            padding: '0 16px',
+            justifyContent: 'space-between',
+            fontSize: '12px',
+            color: theme.textSec,
+            boxShadow: theme.shadowInset || 'none'
+        }}>
             <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
                 {isLoading && (
                     <span style={{ display: 'inline-flex', alignItems: 'center', gap: '6px', color: theme.primary, fontWeight: 600 }}>

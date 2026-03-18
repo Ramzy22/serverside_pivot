@@ -116,6 +116,7 @@ export default function DashTanstackPivot(props) {
         columnVisibility: initialColumnVisibility = {},
         reset,
         sortLock = false,
+        defaultTheme = 'flash',
         availableFieldList,
         table: tableName,
         dataOffset = 0,
@@ -160,8 +161,9 @@ export default function DashTanstackPivot(props) {
         }, [data, props.columns, serverSide, availableFieldList]);
 
         // Theme State
-        const [themeName, setThemeName] = useState('balham');
-        const theme = useMemo(() => themes[themeName], [themeName]);
+        const [themeName, setThemeName] = useState(() => (themes[defaultTheme] ? defaultTheme : 'flash'));
+        const [themeOverrides, setThemeOverrides] = useState({});
+        const theme = useMemo(() => ({ ...themes[themeName], ...themeOverrides }), [themeName, themeOverrides]);
         const styles = useMemo(() => getStyles(theme), [theme]);
         const loadingCssVars = useMemo(() => {
             if (isDarkTheme(theme)) {
@@ -284,7 +286,7 @@ export default function DashTanstackPivot(props) {
 
     // Font / display controls
     const [fontFamily, setFontFamily] = useState("'Inter', system-ui, sans-serif");
-    const [fontSize, setFontSize] = useState('13px');
+    const [fontSize, setFontSize] = useState('14px');
     const [decimalPlaces, setDecimalPlaces] = useState(2);
     const [columnDecimalOverrides, setColumnDecimalOverrides] = useState({});
     const [cellFormatRules, setCellFormatRules] = useState({});
@@ -295,7 +297,7 @@ export default function DashTanstackPivot(props) {
 
     // Decimal formatting logic moved to PivotAppBar to use fresh selectedCells
 
-    const [spacingMode, setSpacingMode] = useState(0);
+    const [spacingMode, setSpacingMode] = useState(1);
     const spacingLabels = gridDimensionTokens.density.spacingLabels;
     const rowHeights = gridDimensionTokens.density.rowHeights;
     const defaultColumnWidths = gridDimensionTokens.columnWidths;
@@ -362,6 +364,7 @@ export default function DashTanstackPivot(props) {
         if (typeof restored.colSearch === 'string') setColSearch(restored.colSearch);
         if (typeof restored.colTypeFilter === 'string') setColTypeFilter(restored.colTypeFilter);
         if (typeof restored.themeName === 'string' && themes[restored.themeName]) setThemeName(restored.themeName);
+        if (restored.themeOverrides && typeof restored.themeOverrides === 'object') setThemeOverrides(restored.themeOverrides);
         if (typeof restored.layoutMode === 'string') setLayoutMode(restored.layoutMode);
         if (typeof restored.colorScaleMode === 'string') setColorScaleMode(restored.colorScaleMode);
         if (typeof restored.spacingMode === 'number') setSpacingMode(restored.spacingMode);
@@ -390,6 +393,12 @@ export default function DashTanstackPivot(props) {
             });
         }
     }, [viewState]);
+
+    useEffect(() => {
+        if (themes[defaultTheme]) {
+            setThemeName(defaultTheme);
+        }
+    }, [defaultTheme]);
 
     // Clipboard Paste
     useEffect(() => {
@@ -1022,6 +1031,7 @@ export default function DashTanstackPivot(props) {
                 colSearch,
                 colTypeFilter,
                 themeName,
+                themeOverrides,
                 layoutMode,
                 colorScaleMode,
                 spacingMode,
@@ -1055,6 +1065,7 @@ export default function DashTanstackPivot(props) {
         colSearch,
         colTypeFilter,
         themeName,
+        themeOverrides,
         layoutMode,
         colorScaleMode,
         spacingMode,
@@ -3190,6 +3201,7 @@ export default function DashTanstackPivot(props) {
             <PivotAppBar
                 sidebarOpen={sidebarOpen} setSidebarOpen={setSidebarOpen}
                 themeName={themeName} setThemeName={setThemeName}
+                themeOverrides={themeOverrides} setThemeOverrides={setThemeOverrides}
                 showRowNumbers={showRowNumbers} setShowRowNumbers={setShowRowNumbers}
                 showFloatingFilters={showFloatingFilters} setShowFloatingFilters={setShowFloatingFilters}
                 showRowTotals={showRowTotals} setShowRowTotals={setShowRowTotals}
@@ -3374,6 +3386,7 @@ DashTanstackPivot.propTypes = {
         columnOptions: PropTypes.object
     }),
     sortLock: PropTypes.bool,
+    defaultTheme: PropTypes.string,
     sortEvent: PropTypes.object,
     availableFieldList: PropTypes.arrayOf(PropTypes.string),
     dataOffset: PropTypes.number,
