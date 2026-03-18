@@ -102,8 +102,8 @@ export function useRenderHelpers({
             : isTotalCol
                 ? (theme.totalBg || theme.select || theme.background)
                 : isHierarchy
-                    ? (isDarkTheme(theme) ? '#212121' : (theme.hierarchyBg || theme.surfaceInset || theme.surfaceBg || '#fff'))
-                    : (isDarkTheme(theme) ? '#212121' : (theme.surfaceBg || '#fff'));
+                    ? (theme.hierarchyBg || theme.surfaceInset || theme.surfaceBg || theme.background || '#fff')
+                    : (theme.surfaceBg || theme.background || '#fff');
         const condStyle = getConditionalStyle(
             cell.column.id,
             cell.getValue(),

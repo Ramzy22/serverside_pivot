@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useLayoutEffect, useRef } from 'react';
 
-const ContextMenu = ({ x, y, onClose, actions }) => {
+const ContextMenu = ({ x, y, onClose, actions, theme }) => {
     const [adjustedPosition, setAdjustedPosition] = useState({ x, y });
     const menuRef = useRef(null);
 
@@ -48,25 +48,32 @@ const ContextMenu = ({ x, y, onClose, actions }) => {
             position: 'fixed',
             top: adjustedPosition.y,
             left: adjustedPosition.x,
-            background: '#fff',
-            border: '1px solid #ccc',
-            boxShadow: '0 4px 20px rgba(0,0,0,0.15)',
+            background: theme?.surfaceBg || theme?.background || '#fff',
+            border: `1px solid ${theme?.border || '#ccc'}`,
+            boxShadow: theme?.shadowMd || '0 4px 20px rgba(0,0,0,0.15)',
             zIndex: 10001, // Above notifications
             padding: '6px 0',
-            borderRadius: '6px',
+            borderRadius: theme?.radiusSm || '8px',
             fontSize: '13px',
             minWidth: '180px',
-            maxWidth: '300px'
+            maxWidth: '300px',
+            color: theme?.text || '#111'
         }}>
             {actions.map((action, i) => {
                 if (action === 'separator') {
-                    return <div key={i} style={{height: '1px', background: '#e0e0e0', margin: '4px 0'}} />;
+                    return <div key={i} style={{height: '1px', background: theme?.border || '#e0e0e0', margin: '4px 0'}} />;
                 }
                 return (
                     <div key={i} onClick={() => { action.onClick(); onClose(); }} style={{
-                        padding: '8px 16px', cursor: 'pointer', backgroundColor: '#fff', display: 'flex', alignItems: 'center', gap: '8px'
-                    }} onMouseEnter={e => e.currentTarget.style.backgroundColor = '#f5f5f5'} onMouseLeave={e => e.currentTarget.style.backgroundColor = '#fff'}>
-                        {action.icon && <span style={{color: '#757575'}}>{action.icon}</span>}
+                        padding: '8px 16px',
+                        cursor: 'pointer',
+                        backgroundColor: theme?.surfaceBg || theme?.background || '#fff',
+                        display: 'flex',
+                        alignItems: 'center',
+                        gap: '8px',
+                        color: theme?.text || '#111'
+                    }} onMouseEnter={e => e.currentTarget.style.backgroundColor = theme?.hover || '#f5f5f5'} onMouseLeave={e => e.currentTarget.style.backgroundColor = theme?.surfaceBg || theme?.background || '#fff'}>
+                        {action.icon && <span style={{color: theme?.textSec || '#757575'}}>{action.icon}</span>}
                         {action.label}
                     </div>
                 );

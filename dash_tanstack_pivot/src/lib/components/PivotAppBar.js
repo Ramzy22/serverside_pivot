@@ -33,7 +33,20 @@ const FONT_FAMILY_OPTIONS = [
 ];
 
 const FONT_SIZE_OPTIONS = ['8px', '9px', '10px', '11px', '12px', '13px', '14px', '15px', '16px', '18px', '20px', '24px'];
-const THEME_ORDER = ['flash', 'dark', 'blooomberg'];
+const THEME_ORDER = ['flash', 'dark', 'bloomblerg_black', 'blooomberg'];
+const THEME_LABELS = {
+    flash: 'Flash',
+    dark: 'Dark',
+    bloomblerg_black: 'Bloomblerg Black',
+    blooomberg: 'Blooomberg',
+    light: 'Light',
+    material: 'Material',
+    balham: 'Balham',
+    strata: 'Strata',
+    crystal: 'Crystal',
+    alabaster: 'Alabaster',
+    satin: 'Satin',
+};
 
 const DECIMAL_MIN = 0;
 const DECIMAL_MAX = 6;
@@ -557,7 +570,7 @@ export function PivotAppBar({
                 <select value={themeName} onChange={e => setThemeName(e.target.value)}
                     style={{...btnSubtle, outline:'none', cursor:'pointer'}}>
                     {[...THEME_ORDER, ...Object.keys(themes).filter(t => !THEME_ORDER.includes(t))]
-                        .map(t => <option key={t} value={t}>{t.charAt(0).toUpperCase() + t.slice(1)}</option>)}
+                        .map(t => <option key={t} value={t}>{THEME_LABELS[t] || t.replace(/_/g, ' ').replace(/\b\w/g, c => c.toUpperCase())}</option>)}
                 </select>
 
                 {/* Export */}

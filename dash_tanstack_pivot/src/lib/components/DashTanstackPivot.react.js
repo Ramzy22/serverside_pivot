@@ -3301,7 +3301,7 @@ export default function DashTanstackPivot(props) {
                     isRequestPending={isRequestPending}
                 />
             </div>
-            {contextMenu && <ContextMenu {...contextMenu} onClose={() => setContextMenu(null)} />}
+            {contextMenu && <ContextMenu {...contextMenu} theme={theme} onClose={() => setContextMenu(null)} />}
             {notification && <Notification message={notification.message} type={notification.type} onClose={() => setNotification(null)} />}
             <DrillThroughModal
                 drillState={drillModal}
