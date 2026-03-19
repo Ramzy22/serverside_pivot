@@ -6,6 +6,7 @@ import asyncio
 import ibis
 from ibis.expr.api import Table as IbisTable
 from pivot_engine.types.pivot_spec import PivotSpec
+import pandas as pd
 
 class UserPatternAnalyzer:
     def __init__(self, cache):
@@ -68,7 +69,6 @@ class IntelligentPrefetchManager:
         # Debounce/Throttle check (optional implementation detail, but good for "Progressive Loading")
         # For now, we trust the caller to not spam this method too frequently.
         
-        import asyncio
         loop = asyncio.get_running_loop()
         
         def fetch():
@@ -140,12 +140,13 @@ class IntelligentPrefetchManager:
         """
         if not parent_paths:
             return []
-            
+        
+        loop = asyncio.get_running_loop()
+        
         try:
             t = self.backend.table(table_name)
             
             # Construct OR filter: (dim1=v1 AND dim2=v2) OR (...)
-            # For Ibis, we can build this expression
             
             # Optimization: If only 1 parent dim, use ISIN
             if len(parent_dims) == 1:
@@ -182,7 +183,6 @@ class IntelligentPrefetchManager:
                 
                 # 2. Apply Window Function to rank children within each parent group
                 # Order by target_dim (alphabetical/numeric) for deterministic results
-                # In future, we could order by a metric (e.g. Sales) if passed
                 w = ibis.window(group_by=parent_dims, order_by=ibis.asc(target_dim))
                 
                 # ibis.row_number() is standard
@@ -194,14 +194,12 @@ class IntelligentPrefetchManager:
                 # 4. Final selection
                 final_query = filtered_ranked.select(selection)
                 
-                # Execute
-                if hasattr(self.backend, 'execute'):
-                     result = final_query.execute()
-                else:
-                     result = final_query.execute()
+                # Execute asynchronously
+                result = await loop.run_in_executor(None, final_query.execute)
                 
                 # Process result to list of (parent_tuple, child_val)
                 output = []
+                # Ensure result is treated as DataFrame-like
                 if hasattr(result, 'to_dict'):
                      records = result.to_dict('records')
                      for row in records:
@@ -213,15 +211,11 @@ class IntelligentPrefetchManager:
                 return output
 
             except Exception as e:
-                print(f"Window function prefetch failed (fallback to global limit): {e}")
-                # Fallback to simple query with global limit if window functions fail (e.g. backend support)
+                # Fallback to simple query with global limit if window functions fail
                 selection = parent_dims + [target_dim]
                 fallback_query = query.select(selection).distinct().limit(limit_per_parent * len(parent_paths) * 2)
                 
-                if hasattr(self.backend, 'execute'):
-                     result = fallback_query.execute()
-                else:
-                     result = fallback_query.execute()
+                result = await loop.run_in_executor(None, fallback_query.execute)
                      
                 output = []
                 if hasattr(result, 'to_dict'):
@@ -240,7 +234,7 @@ class IntelligentPrefetchManager:
         """
         Legacy method kept for reference or single-path fallback.
         """
-        # Using Ibis to construct the query
+        loop = asyncio.get_running_loop()
         try:
             t = self.backend.table(table_name)
             
@@ -250,19 +244,17 @@ class IntelligentPrefetchManager:
                 query = query.filter(t[dim] == val)
             
             # Select distinct target dimension values
-            # Optimization: In a real scenario, we might order by a measure (e.g., top sales)
-            # For now, just distinct values
             query = query.select(target_dim).distinct().limit(limit)
             
-            # Execute
-            # Note: This is synchronous in standard Ibis, but wrapped in async loop in controller if needed.
-            # Here we assume we can call it. If backend supports async, use it.
+            # Execute asynchronously
             if hasattr(self.backend, 'execute'):
-                 # Standard Ibis
-                 result = query.execute()
-                 return result[target_dim].tolist()
+                 result = await loop.run_in_executor(None, query.execute)
+                 if hasattr(result, 'tolist'): # Series/Array
+                     return result.tolist()
+                 elif hasattr(result, '__getitem__'): # DataFrame
+                     return result[target_dim].tolist()
+                 return []
             else:
-                 # Fallback
                  return []
         except Exception as e:
             # print(f"Prefetch query failed: {e}")

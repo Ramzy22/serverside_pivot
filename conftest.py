@@ -6,4 +6,5 @@
 import sys
 import os
 
-sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "pivot_engine"))
+# The pivot_engine lives in dash_tanstack_pivot/pivot_engine/
+sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "dash_tanstack_pivot", "pivot_engine"))

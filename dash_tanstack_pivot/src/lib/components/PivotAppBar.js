@@ -279,6 +279,9 @@ export function PivotAppBar({
     cellFormatRules, setCellFormatRules,
     selectedCells,
     dataBarsColumns, setDataBarsColumns,
+    canCreateSelectionChart,
+    onCreateSelectionChart,
+    onAddChartPane,
 }) {
     // Derive all selection-dependent state directly from selectedCells
     // inside AppBar to avoid stale prop issues from parent renders
@@ -336,9 +339,18 @@ export function PivotAppBar({
     const cellFormatBtnRef = useRef(null);
     const [themeEditorOpen, setThemeEditorOpen] = useState(false);
     const themeEditorBtnRef = useRef(null);
+    const [openToolbarSections, setOpenToolbarSections] = useState({
+        view: true,
+        format: false,
+        charts: true,
+        theme: false,
+    });
     const hasSavedCellFormats = Object.keys(cellFormatRules || {}).length > 0;
     const handleZoomChange = (delta) => {
         setZoomLevel(prev => Math.max(ZOOM_MIN, Math.min(ZOOM_MAX, prev + delta)));
+    };
+    const toggleToolbarSection = (sectionId) => {
+        setOpenToolbarSections(prev => ({ ...prev, [sectionId]: !prev[sectionId] }));
     };
 
     // Base styles for different button variants
@@ -388,25 +400,286 @@ export function PivotAppBar({
         boxShadow: theme.shadowInset || 'none',
     };
 
-    const sep = null;
-    const bigSep = null;
+    const firstLineStyle = {
+        display: 'flex',
+        alignItems: 'center',
+        gap: '10px',
+        rowGap: '8px',
+        flexWrap: 'wrap',
+        width: '100%',
+        minHeight: '40px',
+    };
+    const innerDividerStyle = {
+        width: '1px',
+        alignSelf: 'center',
+        minHeight: '24px',
+        background: theme.border,
+        opacity: 0.8,
+        flexShrink: 0,
+    };
+    const secondLineStyle = {
+        display: 'flex',
+        alignItems: 'center',
+        gap: '12px',
+        rowGap: '8px',
+        flexWrap: 'wrap',
+        width: '100%',
+        paddingTop: '8px',
+        borderTop: `1px solid ${theme.border}`,
+    };
+    const sectionBlockStyle = (isLast = false) => ({
+        display: 'flex',
+        alignItems: 'center',
+        gap: '8px',
+        rowGap: '8px',
+        flexWrap: 'wrap',
+        minHeight: '36px',
+        paddingRight: isLast ? 0 : '12px',
+        marginRight: isLast ? 0 : '2px',
+        borderRight: isLast ? 'none' : `1px solid ${theme.border}`,
+    });
+    const sectionLabelStyle = {
+        fontSize: '10px',
+        fontWeight: 800,
+        letterSpacing: '0.08em',
+        textTransform: 'uppercase',
+        color: theme.textSec,
+        whiteSpace: 'nowrap',
+        paddingRight: '4px',
+        display: 'inline-flex',
+        alignItems: 'center',
+    };
+    const compactSelectStyle = {
+        ...btnSubtle,
+        outline: 'none',
+        cursor: 'pointer',
+    };
+    const sectionToggleButtonStyle = (active) => (active ? btnActive : btnSubtle);
+
+    const viewControls = (
+        <>
+            <button style={showRowNumbers ? btnActive : btnSubtle} onClick={() => setShowRowNumbers(!showRowNumbers)} title="Toggle row numbers">Row #</button>
+            <button style={stickyHeaders ? btnActive : btnSubtle} onClick={() => setStickyHeaders(!stickyHeaders)}>Sticky Header</button>
+            <button style={showFloatingFilters ? btnActive : btnSubtle} onClick={() => setShowFloatingFilters(!showFloatingFilters)}>Filters</button>
+            <button style={showRowTotals ? btnActive : btnSubtle} onClick={() => setShowRowTotals(!showRowTotals)}>Row Total</button>
+            <button style={showColTotals ? btnActive : btnSubtle} onClick={() => setShowColTotals(!showColTotals)}>Col Total</button>
+            <button
+                style={canTranspose ? btnSubtle : { ...btnSubtle, opacity: 0.45, cursor: 'not-allowed' }}
+                onClick={onTransposePivot}
+                title="Swap row fields and column fields"
+                disabled={!canTranspose}
+            >
+                <Icons.Transpose /> Transpose
+            </button>
+            <button style={btnSubtle} onClick={() => setSpacingMode((spacingMode + 1) % 3)} title="Cycle row density">
+                <Icons.Spacing/> {spacingLabels[spacingMode]}
+            </button>
+            <button style={btnSubtle} onClick={() => setLayoutMode(prev => prev === 'hierarchy' ? 'outline' : prev === 'outline' ? 'tabular' : 'hierarchy')} title="Cycle layout mode">
+                {layoutMode === 'hierarchy' ? 'Hierarchy' : layoutMode === 'outline' ? 'Outline' : 'Tabular'}
+            </button>
+            <button style={btnSubtle} onClick={onAutoSizeColumns} title="Auto size visible columns">
+                Auto Size
+            </button>
+        </>
+    );
+
+    const formatControls = (
+        <>
+            <div style={{display:'flex', alignItems:'center', gap:'2px', background: theme.hover, border:`1px solid ${theme.border}`, borderRadius:'6px', padding:'2px 4px'}}>
+                <button
+                    title={hasSelection ? 'Decrease decimals for selected cells' : 'Decrease decimal places'}
+                    style={{...btnGhost, padding:'2px 6px', fontFamily:'monospace', fontSize:'11px', minWidth:'28px', opacity: displayDecimal <= DECIMAL_MIN ? 0.35 : 1}}
+                    onClick={() => handleDecimalChange(-1)}
+                    disabled={displayDecimal <= DECIMAL_MIN}
+                >-.0</button>
+                <span style={{fontSize:'11px', color: hasSelection ? theme.primary : theme.textSec, minWidth:'14px', textAlign:'center', fontWeight: hasSelection ? 700 : 400}}>{displayDecimal}</span>
+                <button
+                    title={hasSelection ? 'Increase decimals for selected cells' : 'Increase decimal places'}
+                    style={{...btnGhost, padding:'2px 6px', fontFamily:'monospace', fontSize:'11px', minWidth:'28px', opacity: displayDecimal >= DECIMAL_MAX ? 0.35 : 1}}
+                    onClick={() => handleDecimalChange(1)}
+                    disabled={displayDecimal >= DECIMAL_MAX}
+                >+.00</button>
+            </div>
+            <div style={{ position:'relative' }}>
+                <button
+                    ref={cellFormatBtnRef}
+                    style={cellFormatOpen || hasSelection || hasSavedCellFormats ? btnActive : btnSubtle}
+                    onClick={() => setCellFormatOpen(open => !open)}
+                    title={hasSelection ? 'Format selected cells' : 'Open cell formatting'}
+                >
+                    Format Cells{hasSelection ? ` (${selectedCellKeys.length})` : ''}
+                </button>
+                {cellFormatOpen && (
+                    <CellFormatPopover
+                        theme={theme}
+                        styles={styles}
+                        cellFormatRules={cellFormatRules}
+                        setCellFormatRules={setCellFormatRules}
+                        selectedCellKeys={selectedCellKeys}
+                        onClose={() => setCellFormatOpen(false)}
+                        anchorRef={cellFormatBtnRef}
+                    />
+                )}
+            </div>
+            <select
+                value={colorScaleMode}
+                onChange={e => setColorScaleMode(e.target.value)}
+                title="Color scale"
+                style={{...compactSelectStyle, ...(colorScaleMode !== 'off' ? {background: theme.select, border:`1px solid ${theme.primary}`, color: theme.primary} : {})}}
+            >
+                <option value="off">Color: Off</option>
+                <option value="row">By Row</option>
+                <option value="col">By Col</option>
+                <option value="table">By Table</option>
+            </select>
+            {colorScaleMode !== 'off' && (
+                <select
+                    value={colorPalette}
+                    onChange={e => setColorPalette(e.target.value)}
+                    style={{...compactSelectStyle, background: theme.select, border:`1px solid ${theme.primary}`, color: theme.primary}}
+                >
+                    {COLOR_PALETTE_OPTIONS.map(opt => (
+                        <option key={opt.value} value={opt.value}>{opt.label}</option>
+                    ))}
+                </select>
+            )}
+            {(() => {
+                const hasCellSel = selectedCellColIds && selectedCellColIds.size > 0;
+                const hasBars = hasCellSel && [...selectedCellColIds].some(id => dataBarsColumns && dataBarsColumns.has(id));
+                const anyBars = dataBarsColumns && dataBarsColumns.size > 0;
+                const isActive = hasBars || anyBars;
+                return (
+                    <button
+                        title={hasCellSel ? 'Toggle data bars for selected columns' : 'Data Bars - select cells to target columns'}
+                        style={isActive ? btnActive : btnSubtle}
+                        onClick={() => {
+                            if (!setDataBarsColumns) return;
+                            if (hasCellSel) {
+                                setDataBarsColumns(prev => {
+                                    const next = new Set(prev);
+                                    const allOn = [...selectedCellColIds].every(id => next.has(id));
+                                    selectedCellColIds.forEach(id => allOn ? next.delete(id) : next.add(id));
+                                    return next;
+                                });
+                            } else {
+                                setDataBarsColumns(new Set());
+                            }
+                        }}
+                    >
+                        <><Icons.DataBars /> Data Bars{anyBars ? ` (${dataBarsColumns.size})` : ''}</>
+                    </button>
+                );
+            })()}
+            <select value={fontFamily} onChange={e => setFontFamily(e.target.value)} title="Font family"
+                style={{...compactSelectStyle, fontFamily}}>
+                {FONT_FAMILY_OPTIONS.map(opt => (
+                    <option key={opt.value} value={opt.value} style={{fontFamily: opt.value}}>{opt.label}</option>
+                ))}
+            </select>
+            <select value={fontSize} onChange={e => setFontSize(e.target.value)} title="Font size"
+                style={compactSelectStyle}>
+                {FONT_SIZE_OPTIONS.map(s => <option key={s} value={s}>{s}</option>)}
+            </select>
+            <div style={{display:'flex', alignItems:'center', gap:'2px', background: theme.hover, border:`1px solid ${theme.border}`, borderRadius:'6px', padding:'2px 4px'}}>
+                <button
+                    title="Zoom out"
+                    style={{...btnGhost, padding:'2px 6px', fontSize:'12px', minWidth:'28px', opacity: zoomLevel <= ZOOM_MIN ? 0.35 : 1}}
+                    onClick={() => handleZoomChange(-ZOOM_STEP)}
+                    disabled={zoomLevel <= ZOOM_MIN}
+                >
+                    -
+                </button>
+                <span style={{fontSize:'11px', color: theme.textSec, minWidth:'42px', textAlign:'center', fontWeight: 600}}>{zoomLevel}%</span>
+                <button
+                    title="Zoom in"
+                    style={{...btnGhost, padding:'2px 6px', fontSize:'12px', minWidth:'28px', opacity: zoomLevel >= ZOOM_MAX ? 0.35 : 1}}
+                    onClick={() => handleZoomChange(ZOOM_STEP)}
+                    disabled={zoomLevel >= ZOOM_MAX}
+                >
+                    +
+                </button>
+            </div>
+        </>
+    );
+
+    const chartControls = (
+        <>
+            <button
+                style={canCreateSelectionChart ? { ...btnSubtle, display: 'inline-flex', alignItems: 'center', gap: '6px' } : { ...btnSubtle, display: 'inline-flex', alignItems: 'center', gap: '6px', opacity: 0.45, cursor: 'not-allowed' }}
+                onClick={onCreateSelectionChart}
+                title={canCreateSelectionChart ? 'Create a range chart from the current cell selection' : 'Select cells to create a range chart'}
+                disabled={!canCreateSelectionChart}
+            >
+                <Icons.Chart /> Range Chart
+            </button>
+            {typeof onAddChartPane === 'function' ? (
+                <button
+                    style={{ ...btnSubtle, display: 'inline-flex', alignItems: 'center', gap: '6px' }}
+                    onClick={onAddChartPane}
+                    title="Add a resizable chart pane beside the pivot table"
+                >
+                    <Icons.Columns /> New Chart Pane
+                </button>
+            ) : null}
+        </>
+    );
+
+    const themeControls = (
+        <>
+            <div style={{ position:'relative' }}>
+                <button
+                    ref={themeEditorBtnRef}
+                    style={Object.keys(themeOverrides || {}).length > 0 ? btnActive : btnSubtle}
+                    onClick={() => setThemeEditorOpen(open => !open)}
+                    title="Edit theme colors"
+                >
+                    Theme Colors{Object.keys(themeOverrides || {}).length > 0 ? ` (${Object.keys(themeOverrides).length})` : ''}
+                </button>
+                {themeEditorOpen && (
+                    <ThemeEditorPopover
+                        theme={theme}
+                        themeName={themeName}
+                        themeOverrides={themeOverrides}
+                        setThemeOverrides={setThemeOverrides}
+                        onClose={() => setThemeEditorOpen(false)}
+                        anchorRef={themeEditorBtnRef}
+                    />
+                )}
+            </div>
+            <select value={themeName} onChange={e => setThemeName(e.target.value)}
+                style={compactSelectStyle}>
+                {[...THEME_ORDER, ...Object.keys(themes).filter(t => !THEME_ORDER.includes(t))]
+                    .map(t => <option key={t} value={t}>{THEME_LABELS[t] || t.replace(/_/g, ' ').replace(/\b\w/g, c => c.toUpperCase())}</option>)}
+            </select>
+            <button style={btnSaveView} onClick={onSaveView}><Icons.Save /> Save View</button>
+            <button style={btnPrimary} onClick={exportPivot}>
+                <Icons.Export/> {(rowCount || 0) > 500000 ? 'Export CSV' : 'Export'}
+            </button>
+        </>
+    );
+
+    const activeSections = [
+        openToolbarSections.view ? { id: 'view', label: 'View', controls: viewControls } : null,
+        openToolbarSections.format ? { id: 'format', label: 'Format', controls: formatControls } : null,
+        openToolbarSections.charts ? { id: 'charts', label: 'Charts', controls: chartControls } : null,
+        openToolbarSections.theme ? { id: 'theme', label: 'Theme', controls: themeControls } : null,
+    ].filter(Boolean);
 
     return (
         <div style={{
-            ...styles.appBar, 
-            height: 'auto', 
-            minHeight: '64px', 
-            padding: '12px 20px', 
-            gap: '12px 16px', 
-            flexWrap: 'wrap', 
+            ...styles.appBar,
+            height: 'auto',
+            minHeight: '64px',
+            padding: '12px 20px',
+            gap: '10px',
+            flexDirection: 'column',
             overflowX: 'visible',
             overflowY: 'visible',
             justifyContent: 'flex-start',
-            alignContent: 'flex-start',
-            alignItems: 'center'
+            alignContent: 'stretch',
+            alignItems: 'stretch'
         }}>
-            {/* 1. Navigation Section: Menu + Title */}
-            <div style={{display:'flex', alignItems:'center', gap:'12px', rowGap:'8px', flexWrap:'wrap', flex:'0 1 auto', minWidth: 0}}>
+            <div style={firstLineStyle}>
                 <button 
                     onClick={() => setSidebarOpen(!sidebarOpen)} 
                     style={{...btnGhost, padding:'6px 10px', color: theme.text, display: 'flex', alignItems: 'center', gap: '8px'}}
@@ -414,242 +687,53 @@ export function PivotAppBar({
                     <Icons.Menu />
                     <span style={{fontSize: '13px', fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.04em'}}>Menu</span>
                 </button>
-                <div style={{fontWeight:800, fontSize:'16px', color:theme.text, whiteSpace:'nowrap', opacity: 0.9}}>
+                <div style={{fontWeight:800, fontSize:'15px', color:theme.text, whiteSpace:'nowrap', opacity: 0.92, minWidth: 0}}>
                     {pivotTitle || ''}
                 </div>
-            </div>
-
-            {bigSep}
-
-            {/* 2. Search Section */}
-            <div style={{display:'flex', alignItems:'center', flex:'0 1 300px', minWidth:'240px'}}>
-                <div style={{
-                    ...styles.searchBox, 
-                    width:'100%',
-                    maxWidth:'320px',
-                    borderRadius:theme.radiusSm || '10px', 
-                    border:`1px solid ${theme.border}`,
-                    height: '36px',
-                    padding: '0 12px'
-                }}>
-                    <Icons.Search />
-                    <input
-                        style={{border:'none',background:'transparent',marginLeft:'8px',outline:'none',width:'100%', color: theme.text, fontSize:'13px'}}
-                        placeholder="Search records..."
-                        value={(filters && filters.global) || ''}
-                        onChange={e => {
-                            const val = e.target.value;
-                            setFilters(p => {
-                                const next = {...p};
-                                if (val) next.global = val;
-                                else delete next.global;
-                                return next;
-                            });
-                        }}
-                    />
-                </div>
-            </div>
-
-            {bigSep}
-
-            {/* 3. Controls Section */}
-            <div style={{display:'flex', gap:'6px', rowGap:'8px', alignItems:'center', flexWrap:'wrap', flex:'1 1 520px', minWidth: '320px'}}>
-                {/* Row # toggle */}
-                <button style={showRowNumbers ? btnActive : btnSubtle} onClick={() => setShowRowNumbers(!showRowNumbers)} title="Toggle row numbers">Row #</button>
-
-                {sep}
-
-                {/* Decimal controls */}
-                <div style={{display:'flex', alignItems:'center', gap:'2px', background: theme.hover, border:`1px solid ${theme.border}`, borderRadius:'6px', padding:'2px 4px'}}>
-                    <button
-                        title={hasSelection ? 'Decrease decimals for selected cells' : 'Decrease decimal places'}
-                        style={{...btnGhost, padding:'2px 6px', fontFamily:'monospace', fontSize:'11px', minWidth:'28px', opacity: displayDecimal <= DECIMAL_MIN ? 0.35 : 1}}
-                        onClick={() => handleDecimalChange(-1)}
-                        disabled={displayDecimal <= DECIMAL_MIN}
-                    >-.0</button>
-                    <span style={{fontSize:'11px', color: hasSelection ? theme.primary : theme.textSec, minWidth:'14px', textAlign:'center', fontWeight: hasSelection ? 700 : 400}}>{displayDecimal}</span>
-                    <button
-                        title={hasSelection ? 'Increase decimals for selected cells' : 'Increase decimal places'}
-                        style={{...btnGhost, padding:'2px 6px', fontFamily:'monospace', fontSize:'11px', minWidth:'28px', opacity: displayDecimal >= DECIMAL_MAX ? 0.35 : 1}}
-                        onClick={() => handleDecimalChange(1)}
-                        disabled={displayDecimal >= DECIMAL_MAX}
-                    >+.00</button>
-                </div>
-                <div style={{ position:'relative' }}>
-                    <button
-                        ref={cellFormatBtnRef}
-                        style={cellFormatOpen || hasSelection || hasSavedCellFormats ? btnActive : btnSubtle}
-                        onClick={() => setCellFormatOpen(open => !open)}
-                        title={hasSelection ? 'Format selected cells' : 'Open cell formatting'}
-                    >
-                        Format Cells{hasSelection ? ` (${selectedCellKeys.length})` : ''}
-                    </button>
-                    {cellFormatOpen && (
-                        <CellFormatPopover
-                            theme={theme}
-                            styles={styles}
-                            cellFormatRules={cellFormatRules}
-                            setCellFormatRules={setCellFormatRules}
-                            selectedCellKeys={selectedCellKeys}
-                            onClose={() => setCellFormatOpen(false)}
-                            anchorRef={cellFormatBtnRef}
-                        />
-                    )}
-                </div>
-
-                {sep}
-
-                {/* View toggles */}
-                <button style={stickyHeaders ? btnActive : btnSubtle} onClick={() => setStickyHeaders(!stickyHeaders)}>Sticky Header</button>
-                <button style={showFloatingFilters ? btnActive : btnSubtle} onClick={() => setShowFloatingFilters(!showFloatingFilters)}>Filters</button>
-                <button style={showRowTotals ? btnActive : btnSubtle} onClick={() => setShowRowTotals(!showRowTotals)}>Row Total</button>
-                <button style={showColTotals ? btnActive : btnSubtle} onClick={() => setShowColTotals(!showColTotals)}>Col Total</button>
-                <button
-                    style={canTranspose ? btnSubtle : { ...btnSubtle, opacity: 0.45, cursor: 'not-allowed' }}
-                    onClick={onTransposePivot}
-                    title="Swap row fields and column fields"
-                    disabled={!canTranspose}
-                >
-                    <Icons.Transpose /> Transpose
-                </button>
-
-                {sep}
-
-                {/* Spacing & layout */}
-                <button style={btnSubtle} onClick={() => setSpacingMode((spacingMode + 1) % 3)} title="Cycle row density">
-                    <Icons.Spacing/> {spacingLabels[spacingMode]}
-                </button>
-                <button style={btnSubtle} onClick={() => setLayoutMode(prev => prev === 'hierarchy' ? 'outline' : prev === 'outline' ? 'tabular' : 'hierarchy')} title="Cycle layout mode">
-                    {layoutMode === 'hierarchy' ? 'Hierarchy' : layoutMode === 'outline' ? 'Outline' : 'Tabular'}
-                </button>
-                <button style={btnSubtle} onClick={onAutoSizeColumns} title="Auto size visible columns">
-                    Auto Size
-                </button>
-
-                {sep}
-
-                {/* Color scale */}
-                <select
-                    value={colorScaleMode}
-                    onChange={e => setColorScaleMode(e.target.value)}
-                    title="Color scale"
-                    style={{...btnSubtle, outline:'none', cursor:'pointer', ...(colorScaleMode !== 'off' ? {background: theme.select, border:`1px solid ${theme.primary}`, color: theme.primary} : {})}}
-                >
-                    <option value="off">Color: Off</option>
-                    <option value="row">By Row</option>
-                    <option value="col">By Col</option>
-                    <option value="table">By Table</option>
-                </select>
-                {colorScaleMode !== 'off' && (
-                    <select
-                        value={colorPalette}
-                        onChange={e => setColorPalette(e.target.value)}
-                        style={{...btnSubtle, outline:'none', cursor:'pointer', background: theme.select, border:`1px solid ${theme.primary}`, color: theme.primary}}
-                    >
-                        {COLOR_PALETTE_OPTIONS.map(opt => (
-                            <option key={opt.value} value={opt.value}>{opt.label}</option>
-                        ))}
-                    </select>
-                )}
-
-                {/* Data Bars */}
-                {(() => {
-                    const hasCellSel = selectedCellColIds && selectedCellColIds.size > 0;
-                    const hasBars = hasCellSel && [...selectedCellColIds].some(id => dataBarsColumns && dataBarsColumns.has(id));
-                    const anyBars = dataBarsColumns && dataBarsColumns.size > 0;
-                    const isActive = hasBars || anyBars;
-                    return (
-                        <button
-                            title={hasCellSel ? 'Toggle data bars for selected columns' : 'Data Bars - select cells to target columns'}
-                            style={isActive ? btnActive : btnSubtle}
-                            onClick={() => {
-                                if (!setDataBarsColumns) return;
-                                if (hasCellSel) {
-                                    setDataBarsColumns(prev => {
-                                        const next = new Set(prev);
-                                        const allOn = [...selectedCellColIds].every(id => next.has(id));
-                                        selectedCellColIds.forEach(id => allOn ? next.delete(id) : next.add(id));
-                                        return next;
-                                    });
-                                } else {
-                                    setDataBarsColumns(new Set());
-                                }
+                <div style={innerDividerStyle} />
+                <div style={{display:'flex', alignItems:'center', flex:'1 1 250px', minWidth:'220px', maxWidth:'360px'}}>
+                    <div style={{
+                        ...styles.searchBox,
+                        width:'100%',
+                        borderRadius:theme.radiusSm || '10px',
+                        border:`1px solid ${theme.border}`,
+                        height: '36px',
+                        padding: '0 12px'
+                    }}>
+                        <Icons.Search />
+                        <input
+                            style={{border:'none',background:'transparent',marginLeft:'8px',outline:'none',width:'100%', color: theme.text, fontSize:'13px'}}
+                            placeholder="Search records..."
+                            value={(filters && filters.global) || ''}
+                            onChange={e => {
+                                const val = e.target.value;
+                                setFilters(p => {
+                                    const next = {...p};
+                                    if (val) next.global = val;
+                                    else delete next.global;
+                                    return next;
+                                });
                             }}
-                        >
-                            <><Icons.DataBars /> Data Bars{anyBars ? ` (${dataBarsColumns.size})` : ''}</>
-                        </button>
-                    );
-                })()}
-
-                {sep}
-
-                {/* Font controls */}
-                <select value={fontFamily} onChange={e => setFontFamily(e.target.value)} title="Font family"
-                    style={{...btnSubtle, outline:'none', cursor:'pointer', fontFamily}}>
-                    {FONT_FAMILY_OPTIONS.map(opt => (
-                        <option key={opt.value} value={opt.value} style={{fontFamily: opt.value}}>{opt.label}</option>
-                    ))}
-                </select>
-                <select value={fontSize} onChange={e => setFontSize(e.target.value)} title="Font size"
-                    style={{...btnSubtle, outline:'none', cursor:'pointer'}}>
-                    {FONT_SIZE_OPTIONS.map(s => <option key={s} value={s}>{s}</option>)}
-                </select>
-                <div style={{display:'flex', alignItems:'center', gap:'2px', background: theme.hover, border:`1px solid ${theme.border}`, borderRadius:'6px', padding:'2px 4px'}}>
-                    <button
-                        title="Zoom out"
-                        style={{...btnGhost, padding:'2px 6px', fontSize:'12px', minWidth:'28px', opacity: zoomLevel <= ZOOM_MIN ? 0.35 : 1}}
-                        onClick={() => handleZoomChange(-ZOOM_STEP)}
-                        disabled={zoomLevel <= ZOOM_MIN}
-                    >
-                        -
-                    </button>
-                    <span style={{fontSize:'11px', color: theme.textSec, minWidth:'42px', textAlign:'center', fontWeight: 600}}>{zoomLevel}%</span>
-                    <button
-                        title="Zoom in"
-                        style={{...btnGhost, padding:'2px 6px', fontSize:'12px', minWidth:'28px', opacity: zoomLevel >= ZOOM_MAX ? 0.35 : 1}}
-                        onClick={() => handleZoomChange(ZOOM_STEP)}
-                        disabled={zoomLevel >= ZOOM_MAX}
-                    >
-                        +
-                    </button>
-                </div>
-
-                <button style={btnSaveView} onClick={onSaveView}><Icons.Save /> Save View</button>
-
-                {sep}
-
-                {/* Theme */}
-                <div style={{ position:'relative' }}>
-                    <button
-                        ref={themeEditorBtnRef}
-                        style={Object.keys(themeOverrides || {}).length > 0 ? btnActive : btnSubtle}
-                        onClick={() => setThemeEditorOpen(open => !open)}
-                        title="Edit theme colors"
-                    >
-                        Theme Colors{Object.keys(themeOverrides || {}).length > 0 ? ` (${Object.keys(themeOverrides).length})` : ''}
-                    </button>
-                    {themeEditorOpen && (
-                        <ThemeEditorPopover
-                            theme={theme}
-                            themeName={themeName}
-                            themeOverrides={themeOverrides}
-                            setThemeOverrides={setThemeOverrides}
-                            onClose={() => setThemeEditorOpen(false)}
-                            anchorRef={themeEditorBtnRef}
                         />
-                    )}
+                    </div>
                 </div>
-                <select value={themeName} onChange={e => setThemeName(e.target.value)}
-                    style={{...btnSubtle, outline:'none', cursor:'pointer'}}>
-                    {[...THEME_ORDER, ...Object.keys(themes).filter(t => !THEME_ORDER.includes(t))]
-                        .map(t => <option key={t} value={t}>{THEME_LABELS[t] || t.replace(/_/g, ' ').replace(/\b\w/g, c => c.toUpperCase())}</option>)}
-                </select>
-
-                {/* Export */}
-                <button style={btnPrimary} onClick={exportPivot}>
-                    <Icons.Export/> {(rowCount || 0) > 500000 ? 'Export CSV' : 'Export'}
-                </button>
+                <div style={innerDividerStyle} />
+                <button style={sectionToggleButtonStyle(openToolbarSections.view)} onClick={() => toggleToolbarSection('view')}>View</button>
+                <button style={sectionToggleButtonStyle(openToolbarSections.format)} onClick={() => toggleToolbarSection('format')}>Format</button>
+                <button style={sectionToggleButtonStyle(openToolbarSections.charts)} onClick={() => toggleToolbarSection('charts')}>Charts</button>
+                <button style={sectionToggleButtonStyle(openToolbarSections.theme)} onClick={() => toggleToolbarSection('theme')}>Theme</button>
             </div>
+
+            {activeSections.length > 0 ? (
+                <div style={secondLineStyle}>
+                    {activeSections.map((section, index) => (
+                        <div key={section.id} style={sectionBlockStyle(index === activeSections.length - 1)}>
+                            <span style={sectionLabelStyle}>{section.label}</span>
+                            {section.controls}
+                        </div>
+                    ))}
+                </div>
+            ) : null}
         </div>
     );
 }

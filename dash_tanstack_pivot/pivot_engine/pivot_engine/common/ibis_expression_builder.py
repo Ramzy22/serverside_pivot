@@ -309,18 +309,18 @@ class IbisExpressionBuilder:
                 ibis_sorts.append(tenor_text.asc() if order == "asc" else tenor_text.desc())
                 continue
 
+            if nulls == 'first':
+                ibis_sorts.append(col.isnull().desc())
+            elif nulls == 'last':
+                ibis_sorts.append(col.isnull().asc())
+
             if order == 'asc':
                 sort_expr = col.asc()
             elif order == 'desc':
                 sort_expr = col.desc()
 
             if sort_expr is not None:
-                if nulls == 'first':
-                    ibis_sorts.append(sort_expr.nulls_first())
-                elif nulls == 'last':
-                    ibis_sorts.append(sort_expr.nulls_last())
-                else:
-                    ibis_sorts.append(sort_expr)
+                ibis_sorts.append(sort_expr)
 
         return ibis_sorts
 

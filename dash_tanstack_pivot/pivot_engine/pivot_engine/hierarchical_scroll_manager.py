@@ -132,7 +132,7 @@ class HierarchicalVirtualScrollManager:
             try:
                 # Only pass dimension filters (pre_filters) to column discovery
                 col_query = self.planner._build_column_values_query(
-                    spec.table, spec.columns, pre_filters, top_n, col_order_measure
+                    spec.table, spec.columns, pre_filters, top_n, col_order_measure, None, spec.column_sort_options
                 )
                 col_data = self._to_pyarrow(col_query)
                 pivot_col_values = col_data['_col_key'].to_pylist()
@@ -834,10 +834,17 @@ class HierarchicalVirtualScrollManager:
                 if user_sort_field == dim and user_sort_desc:
                     order_by_cols.append(col.desc())
                 else:
-                    order_by_cols.append(col.asc(nulls_first=True))
+                    order_by_cols.append(col.isnull().desc())
+                    order_by_cols.append(col.asc())
 
         if not order_by_cols:
-            order_by_cols = [ibis.asc(dim, nulls_first=True) for dim in all_dims if dim in available]
+            order_by_cols = []
+            for dim in all_dims:
+                if dim not in available:
+                    continue
+                col = final_expr[dim]
+                order_by_cols.append(col.isnull().desc())
+                order_by_cols.append(col.asc())
 
         return final_expr.order_by(order_by_cols).limit(limit, offset=offset)
     

@@ -32,6 +32,30 @@ Keyword arguments:
 
 - cellUpdates (list of dicts; optional)
 
+- chartCanvasPanes (list of dicts; optional)
+
+- chartData (dict; optional)
+
+- chartDefaults (dict; optional)
+
+- chartDefinitions (list of dicts; optional)
+
+- chartEvent (dict; optional)
+
+- chartRequest (dict; optional)
+
+- chartServerWindow (dict; optional)
+
+    `chartServerWindow` is a dict with keys:
+
+    - enabled (boolean; optional)
+
+    - rows (number; optional)
+
+    - columns (number; optional)
+
+    - scope (a value equal to: 'viewport', 'root'; optional)
+
 - colFields (list; optional)
 
 - columnPinned (dict; optional)
@@ -144,6 +168,8 @@ Keyword arguments:
 
 - table (string; optional)
 
+- tableCanvasSize (number; optional)
+
 - valConfigs (list of dicts; optional)
 
     `valConfigs` is a list of dicts with keys:
@@ -181,6 +207,16 @@ Keyword arguments:
             "format": NotRequired[str],
             "percentile": NotRequired[NumberType],
             "separator": NotRequired[str]
+        }
+    )
+
+    ChartServerWindow = TypedDict(
+        "ChartServerWindow",
+            {
+            "enabled": NotRequired[bool],
+            "rows": NotRequired[NumberType],
+            "columns": NotRequired[NumberType],
+            "scope": NotRequired[Literal["viewport", "root"]]
         }
     )
 
@@ -248,6 +284,14 @@ Keyword arguments:
         showColTotals: typing.Optional[bool] = None,
         grandTotalPosition: typing.Optional[Literal["top", "bottom"]] = None,
         filterOptions: typing.Optional[dict] = None,
+        chartData: typing.Optional[dict] = None,
+        chartRequest: typing.Optional[dict] = None,
+        chartEvent: typing.Optional[dict] = None,
+        chartDefinitions: typing.Optional[typing.Sequence[dict]] = None,
+        chartDefaults: typing.Optional[dict] = None,
+        chartCanvasPanes: typing.Optional[typing.Sequence[dict]] = None,
+        tableCanvasSize: typing.Optional[NumberType] = None,
+        chartServerWindow: typing.Optional["ChartServerWindow"] = None,
         viewport: typing.Optional[dict] = None,
         cellUpdate: typing.Optional[dict] = None,
         cellUpdates: typing.Optional[typing.Sequence[dict]] = None,
@@ -279,9 +323,9 @@ Keyword arguments:
         dataVersion: typing.Optional[NumberType] = None,
         **kwargs
     ):
-        self._prop_names = ['id', 'availableFieldList', 'cellUpdate', 'cellUpdates', 'colFields', 'columnPinned', 'columnPinning', 'columnSizing', 'columnVisibility', 'columns', 'conditionalFormatting', 'data', 'dataOffset', 'dataVersion', 'defaultTheme', 'drillEndpoint', 'drillThrough', 'expanded', 'filterOptions', 'filters', 'grandTotalPosition', 'persistence', 'persistence_type', 'pinningOptions', 'pinningPresets', 'pivotTitle', 'reset', 'rowCount', 'rowFields', 'rowMove', 'rowPinned', 'rowPinning', 'saveViewTrigger', 'savedView', 'serverSide', 'showColTotals', 'showRowTotals', 'sortEvent', 'sortLock', 'sortOptions', 'sorting', 'style', 'table', 'valConfigs', 'validationRules', 'viewState', 'viewport']
+        self._prop_names = ['id', 'availableFieldList', 'cellUpdate', 'cellUpdates', 'chartCanvasPanes', 'chartData', 'chartDefaults', 'chartDefinitions', 'chartEvent', 'chartRequest', 'chartServerWindow', 'colFields', 'columnPinned', 'columnPinning', 'columnSizing', 'columnVisibility', 'columns', 'conditionalFormatting', 'data', 'dataOffset', 'dataVersion', 'defaultTheme', 'drillEndpoint', 'drillThrough', 'expanded', 'filterOptions', 'filters', 'grandTotalPosition', 'persistence', 'persistence_type', 'pinningOptions', 'pinningPresets', 'pivotTitle', 'reset', 'rowCount', 'rowFields', 'rowMove', 'rowPinned', 'rowPinning', 'saveViewTrigger', 'savedView', 'serverSide', 'showColTotals', 'showRowTotals', 'sortEvent', 'sortLock', 'sortOptions', 'sorting', 'style', 'table', 'tableCanvasSize', 'valConfigs', 'validationRules', 'viewState', 'viewport']
         self._valid_wildcard_attributes =            []
-        self.available_properties = ['id', 'availableFieldList', 'cellUpdate', 'cellUpdates', 'colFields', 'columnPinned', 'columnPinning', 'columnSizing', 'columnVisibility', 'columns', 'conditionalFormatting', 'data', 'dataOffset', 'dataVersion', 'defaultTheme', 'drillEndpoint', 'drillThrough', 'expanded', 'filterOptions', 'filters', 'grandTotalPosition', 'persistence', 'persistence_type', 'pinningOptions', 'pinningPresets', 'pivotTitle', 'reset', 'rowCount', 'rowFields', 'rowMove', 'rowPinned', 'rowPinning', 'saveViewTrigger', 'savedView', 'serverSide', 'showColTotals', 'showRowTotals', 'sortEvent', 'sortLock', 'sortOptions', 'sorting', 'style', 'table', 'valConfigs', 'validationRules', 'viewState', 'viewport']
+        self.available_properties = ['id', 'availableFieldList', 'cellUpdate', 'cellUpdates', 'chartCanvasPanes', 'chartData', 'chartDefaults', 'chartDefinitions', 'chartEvent', 'chartRequest', 'chartServerWindow', 'colFields', 'columnPinned', 'columnPinning', 'columnSizing', 'columnVisibility', 'columns', 'conditionalFormatting', 'data', 'dataOffset', 'dataVersion', 'defaultTheme', 'drillEndpoint', 'drillThrough', 'expanded', 'filterOptions', 'filters', 'grandTotalPosition', 'persistence', 'persistence_type', 'pinningOptions', 'pinningPresets', 'pivotTitle', 'reset', 'rowCount', 'rowFields', 'rowMove', 'rowPinned', 'rowPinning', 'saveViewTrigger', 'savedView', 'serverSide', 'showColTotals', 'showRowTotals', 'sortEvent', 'sortLock', 'sortOptions', 'sorting', 'style', 'table', 'tableCanvasSize', 'valConfigs', 'validationRules', 'viewState', 'viewport']
         self.available_wildcard_properties =            []
         _explicit_args = kwargs.pop('_explicit_args')
         _locals = locals()

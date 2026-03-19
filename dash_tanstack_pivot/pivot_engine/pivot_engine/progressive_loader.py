@@ -23,7 +23,7 @@ class ProgressiveDataLoader:
     async def load_progressive_chunks(self, spec: PivotSpec, chunk_callback: Optional[Callable] = None):
         """Load data in chunks for progressive rendering"""
         # Determine chunk boundaries based on data size and complexity
-        total_estimated_rows = await self._estimate_total_rows(spec) # Await the async method
+        total_estimated_rows = await self._estimate_total_rows(spec)
         chunk_size = min(self.default_chunk_size, max(self.min_chunk_size, total_estimated_rows // 10))  # Adaptive chunk size
         
         offset = 0
@@ -31,6 +31,8 @@ class ProgressiveDataLoader:
         current_cursor = spec.cursor # Start with spec cursor if any
         use_keyset = bool(spec.sort)
         
+        loop = asyncio.get_running_loop()
+
         while True:
             # Fetch chunk
             if use_keyset:
@@ -40,7 +42,8 @@ class ProgressiveDataLoader:
                 # Fallback to OFFSET
                 chunk_ibis_expr = self._build_chunk_ibis_expression(spec, offset=offset, chunk_size=chunk_size, cursor=None)
             
-            chunk_data = await chunk_ibis_expr.to_pyarrow() # Execute Ibis expression
+            # Execute Ibis expression in executor
+            chunk_data = await loop.run_in_executor(None, chunk_ibis_expr.to_pyarrow)
             
             if chunk_data.num_rows == 0:
                 break
@@ -95,11 +98,12 @@ class ProgressiveDataLoader:
     async def load_hierarchical_progressive(self, spec: PivotSpec, expanded_paths: List[List[str]], level_callback: Optional[Callable] = None):
         """Load hierarchical data progressively by levels"""
         result = {'levels': []}
+        loop = asyncio.get_running_loop()
         
         # Load root level first (top-level aggregations)
-        root_ibis_expr = await self._create_level_ibis_expression(spec, [], spec.rows[0] if spec.rows else '')
-        if root_ibis_expr:
-            root_data = await root_ibis_expr.to_pyarrow() # Execute Ibis expression
+        root_ibis_expr = self._create_level_ibis_expression(spec, [], spec.rows[0] if spec.rows else '')
+        if root_ibis_expr is not None:
+            root_data = await loop.run_in_executor(None, root_ibis_expr.to_pyarrow)
             
             level_info = {
                 'level': 0,
@@ -117,9 +121,9 @@ class ProgressiveDataLoader:
         for path in expanded_paths:
             level = len(path)
             if level < len(spec.rows):
-                level_ibis_expr = await self._create_level_ibis_expression(spec, path, spec.rows[level])
-                if level_ibis_expr:
-                    level_data = await level_ibis_expr.to_pyarrow() # Execute Ibis expression
+                level_ibis_expr = self._create_level_ibis_expression(spec, path, spec.rows[level])
+                if level_ibis_expr is not None:
+                    level_data = await loop.run_in_executor(None, level_ibis_expr.to_pyarrow)
                     
                     level_info = {
                         'level': level,
@@ -176,9 +180,11 @@ class ProgressiveDataLoader:
                 filtered_table = filtered_table.filter(filter_expr)
         
         # 2. Execute count query
-        # Future: Use TABLESAMPLE for approximation if count is slow
+        loop = asyncio.get_running_loop()
         try:
-            row_count = await filtered_table.count().execute()
+            # Need to create an expression that returns a scalar, then execute it
+            count_expr = filtered_table.count()
+            row_count = await loop.run_in_executor(None, count_expr.execute)
             return row_count
         except Exception as e:
             print(f"Error estimating row count: {e}")
@@ -242,7 +248,7 @@ class ProgressiveDataLoader:
         
         return agg_expr
     
-    async def _create_level_ibis_expression(self, base_spec: PivotSpec, parent_path: List[str], current_dimension: str) -> Optional[IbisTable]:
+    def _create_level_ibis_expression(self, base_spec: PivotSpec, parent_path: List[str], current_dimension: str) -> Optional[IbisTable]:
         """Create an Ibis expression for a specific level of the hierarchy"""
         if not current_dimension:
             return None
@@ -251,6 +257,9 @@ class ProgressiveDataLoader:
 
         # Build filters based on parent path
         all_filters_dicts = base_spec.filters or []
+        # Need to copy list to avoid modifying original spec in loop
+        all_filters_dicts = list(all_filters_dicts) 
+        
         for i, value in enumerate(parent_path):
             if i < len(base_spec.rows):
                 all_filters_dicts.append({
@@ -280,5 +289,3 @@ class ProgressiveDataLoader:
         agg_expr = agg_expr.limit(1000)
         
         return agg_expr
-    
-    # _build_ibis_filter_expression removed as it is replaced by builder.build_filter_expression

@@ -30,6 +30,7 @@ class PivotViewState:
     cell_update: Optional[Dict[str, Any]] = None
     drill_through: Optional[Dict[str, Any]] = None
     viewport: Dict[str, Any] = field(default_factory=dict)
+    chart_request: Dict[str, Any] = field(default_factory=dict)
 
 
 @dataclass
@@ -67,7 +68,9 @@ class PivotRequestContext:
 
         if original_intent == "expansion":
             intent = "structural"
-        elif original_intent not in {"viewport", "structural"}:
+        elif original_intent == "chart":
+            intent = "chart"
+        elif original_intent not in {"viewport", "structural", "chart"}:
             intent = "viewport" if trigger_prop and trigger_prop.endswith(".viewport") else "structural"
         else:
             intent = original_intent
@@ -111,6 +114,8 @@ class PivotRequestContext:
             return "drill"
         if self.trigger_prop.endswith(".cellUpdate"):
             return "update"
+        if self.trigger_prop.endswith(".chartRequest"):
+            return "chart"
         if self.trigger_prop.endswith(".viewport"):
             return "viewport"
         return "structural"
@@ -130,3 +135,4 @@ class PivotServiceResponse:
     data_version: Optional[int] = None
     message: Optional[str] = None
     color_scale_stats: Optional[Dict[str, Any]] = None
+    chart_data: Optional[Dict[str, Any]] = None

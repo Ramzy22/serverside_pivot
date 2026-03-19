@@ -337,7 +337,8 @@ class IbisPlanner:
 
         for field in (fallback_fields or []):
             if field in table.columns and field not in requested_fields:
-                order_exprs.append(table[field].asc(nulls_first=True))
+                order_exprs.append(table[field].isnull().desc())
+                order_exprs.append(table[field].asc())
 
         if order_exprs:
             return table.order_by(order_exprs)
@@ -364,17 +365,23 @@ class IbisPlanner:
         
         if spec.filters:
             for f in spec.filters:
-                # Determine the target field for this filter object
+                # Helper to check if a single condition refers to a measure
+                def is_measure_cond(cond):
+                    field = cond.get('field')
+                    if not field: return False
+                    return field in measure_aliases or any(field.endswith(f"_{alias}") for alias in measure_aliases)
+
+                # Determine if this filter (or any of its conditions) refers to a measure
+                has_measure = False
                 target_field = f.get('field')
+                if target_field:
+                    has_measure = is_measure_cond(f)
+                elif 'conditions' in f:
+                    # For composite filters, if ANY condition refers to a measure, we must treat it as a post-filter
+                    # especially if it's an OR filter. For AND, it could be split, but safer to treat as post.
+                    has_measure = any(is_measure_cond(c) for c in f.get('conditions', []))
                 
-                # If it's a composite filter, check the first condition's field
-                if not target_field and 'conditions' in f and len(f['conditions']) > 0:
-                    target_field = f['conditions'][0].get('field')
-                
-                if target_field in measure_aliases:
-                    post_filters.append(f)
-                elif target_field and any(target_field.endswith(f"_{alias}") for alias in measure_aliases):
-                    # Also treat pivot columns (e.g. 'Laptop_cost_sum') as post-filters
+                if has_measure:
                     post_filters.append(f)
                 else:
                     pre_filters.append(f)
@@ -652,7 +659,7 @@ class IbisPlanner:
         if spec.columns and columns_top_n and columns_top_n > 0:
             col_ibis_expr = self._build_column_values_query(
                 spec.table, spec.columns, spec.filters,
-                columns_top_n, columns_order_by_measure
+                columns_top_n, columns_order_by_measure, None, spec.column_sort_options
             )
             queries.insert(0, col_ibis_expr)
             metadata["needs_column_discovery"] = True
@@ -858,7 +865,7 @@ class IbisPlanner:
         order_measure = spec.measures[0]
         
         col_ibis_expr = self._build_column_values_query(
-            spec.table, spec.columns, spec.filters, top_n, order_measure, column_cursor
+            spec.table, spec.columns, spec.filters, top_n, order_measure, column_cursor, spec.column_sort_options
         )
         
         metadata = {
@@ -888,17 +895,23 @@ class IbisPlanner:
         
         if spec.filters:
             for f in spec.filters:
-                # Determine the target field for this filter object
+                # Helper to check if a single condition refers to a measure
+                def is_measure_cond(cond):
+                    field = cond.get('field')
+                    if not field: return False
+                    return field in measure_aliases or any(field.endswith(f"_{alias}") for alias in measure_aliases)
+
+                # Determine if this filter (or any of its conditions) refers to a measure
+                has_measure = False
                 target_field = f.get('field')
+                if target_field:
+                    has_measure = is_measure_cond(f)
+                elif 'conditions' in f:
+                    # For composite filters, if ANY condition refers to a measure, we must treat it as a post-filter
+                    # especially if it's an OR filter. For AND, it could be split, but safer to treat as post.
+                    has_measure = any(is_measure_cond(c) for c in f.get('conditions', []))
                 
-                # If it's a composite filter, check the first condition's field
-                if not target_field and 'conditions' in f and len(f['conditions']) > 0:
-                    target_field = f['conditions'][0].get('field')
-                
-                if target_field in measure_aliases:
-                    post_filters.append(f)
-                elif target_field and any(target_field.endswith(f"_{alias}") for alias in measure_aliases):
-                    # Also treat pivot columns (e.g. 'Laptop_cost_sum') as post-filters
+                if has_measure:
                     post_filters.append(f)
                 else:
                     pre_filters.append(f)
@@ -1178,7 +1191,8 @@ class IbisPlanner:
 
     def _build_column_values_query(
         self, table_name: str, columns: List[str], filters: List[Dict[str, Any]],
-        top_n: int, order_measure: Optional[Measure], column_cursor: Optional[str] = None
+        top_n: int, order_measure: Optional[Measure], column_cursor: Optional[str] = None,
+        column_sort_options: Optional[Dict[str, Any]] = None,
     ) -> IbisTable:
         """
         Builds an Ibis expression to discover top-N column values with keyset pagination.
@@ -1194,41 +1208,137 @@ class IbisPlanner:
         if not columns:
             raise ValueError("Columns must be non-empty for column values query.")
         
-        if len(columns) == 1:
-            col_expr = filtered_table[columns[0]].cast('string').name('_col_key')
-        else:
-            concat_expr = ibis.literal('')
-            for col_name in columns:
-                concat_expr = concat_expr + filtered_table[col_name].cast('string') + ibis.literal('|')
-            # Use substr instead of slicing for backend compatibility
-            col_expr = concat_expr.substr(0, concat_expr.length() - 1).name('_col_key')
+        sort_options = column_sort_options if isinstance(column_sort_options, dict) else {}
 
-        if order_measure:
-            agg_measure_expr = self.builder.build_measure_aggregation(filtered_table, order_measure)
-            result = filtered_table.group_by(col_expr).aggregate(agg_measure_expr)
-            
-            # Apply cursor filter if present (before order/limit)
-            if column_cursor:
-                # Assuming descending order for measures, so cursor means we want values smaller than cursor value?
-                # Actually, keyset pagination on aggregated values is tricky because the cursor would be the measure value.
-                # If we sort by measure, the cursor should be the measure value of the last item.
-                # Here 'column_cursor' is likely the _col_key itself if we sort by _col_key.
-                # But we sort by measure.
-                # Let's assume standard behavior: if sorting by measure, we need measure-based cursor.
-                # BUT user prompt says "Column-Dimension Pagination".
-                # Usually column headers are strings.
-                # If sorting by measure, pagination is hard without a tuple cursor (measure, col_key).
-                # For simplicity, if sorting by measure, we might skip simple cursor or require (measure, key).
-                # Let's support simple lexicographical cursor on _col_key if NO order_measure is present OR if we assume simple key cursor.
-                pass
-            
-            result = result.order_by(agg_measure_expr.desc())
+        if len(columns) == 1:
+            col_key_expr = lambda table_expr: table_expr[columns[0]].cast('string').name('_col_key')
         else:
-            result = filtered_table.select(col_expr).distinct()
-            if column_cursor:
-                 # Standard keyset on the column key
-                 result = result.filter(col_expr > column_cursor)
-            result = result.order_by(col_expr) # Ensure deterministic order
+            def col_key_expr(table_expr):
+                concat_expr = ibis.literal('')
+                for col_name in columns:
+                    concat_expr = concat_expr + table_expr[col_name].cast('string') + ibis.literal('|')
+                return concat_expr.substr(0, concat_expr.length() - 1).name('_col_key')
+
+        def attach_lookup_column(current_expr: IbisTable, lookup_expr: IbisTable, join_field: str, alias: str) -> IbisTable:
+            joined = current_expr.left_join(lookup_expr, [current_expr[join_field] == lookup_expr[join_field]])
+            projection = [joined[col_name] for col_name in current_expr.columns]
+            if alias in joined.columns:
+                projection.append(joined[alias])
+            return joined.select(projection)
+
+        normalized_column_sort = []
+        for column_index, column_name in enumerate(columns):
+            raw_options = sort_options.get(column_name) if isinstance(sort_options.get(column_name), dict) else {}
+            pivot_sort_mode = str(raw_options.get("pivotSortMode") or "").strip().lower()
+            pivot_direction = str(raw_options.get("pivotDirection") or "").strip().lower()
+
+            if pivot_sort_mode not in {"label", "total"}:
+                if pivot_direction in {"asc", "desc"}:
+                    pivot_sort_mode = "label"
+                elif order_measure is not None:
+                    pivot_sort_mode = "total"
+                else:
+                    pivot_sort_mode = "label"
+
+            if pivot_direction not in {"asc", "desc"}:
+                pivot_direction = "desc" if pivot_sort_mode == "total" and order_measure is not None else "asc"
+
+            normalized_column_sort.append({
+                "field": column_name,
+                "order": pivot_direction,
+                "pivotSortMode": pivot_sort_mode,
+                "sortType": raw_options.get("sortType"),
+                "sortKeyField": raw_options.get("sortKeyField"),
+                "semanticType": raw_options.get("semanticType"),
+                "sortSemantic": raw_options.get("sortSemantic"),
+                "nulls": raw_options.get("nulls"),
+                "_index": column_index,
+            })
+
+        result = filtered_table.select(columns).distinct()
+
+        for sort_spec in normalized_column_sort:
+            field_name = sort_spec["field"]
+            sort_mode = sort_spec.get("pivotSortMode")
+            sort_key_field = sort_spec.get("sortKeyField")
+            sort_index = sort_spec.get("_index", 0)
+
+            if (
+                isinstance(sort_key_field, str)
+                and sort_key_field
+                and sort_key_field in filtered_table.columns
+            ):
+                label_key_alias = f"__pivot_labelkey__{sort_index}"
+                label_lookup = filtered_table.group_by([field_name]).aggregate(
+                    filtered_table[sort_key_field].min().name(label_key_alias)
+                )
+                result = attach_lookup_column(result, label_lookup, field_name, label_key_alias)
+                sort_spec["_labelKeyAlias"] = label_key_alias
+
+            if sort_mode == "total" and order_measure is not None:
+                total_key_alias = f"__pivot_totalsort__{sort_index}"
+                total_lookup = filtered_table.group_by([field_name]).aggregate(
+                    self.builder.build_measure_aggregation(filtered_table, order_measure).name(total_key_alias)
+                )
+                result = attach_lookup_column(result, total_lookup, field_name, total_key_alias)
+                sort_spec["_totalKeyAlias"] = total_key_alias
+
+        result = result.mutate(col_key_expr(result))
+
+        if column_cursor:
+            result = result.filter(result['_col_key'] > column_cursor)
+
+        order_exprs = []
+        for sort_spec in normalized_column_sort:
+            field_name = sort_spec["field"]
+            direction = sort_spec.get("order", "asc")
+            total_key_alias = sort_spec.get("_totalKeyAlias")
+            label_key_alias = sort_spec.get("_labelKeyAlias")
+
+            if total_key_alias and total_key_alias in result.columns:
+                total_col = result[total_key_alias]
+                order_exprs.append(total_col.isnull().asc())
+                total_sort = total_col.desc() if direction == "desc" else total_col.asc()
+                order_exprs.append(total_sort)
+
+                label_tiebreak = {"field": field_name, "order": "asc"}
+                if label_key_alias and label_key_alias in result.columns:
+                    label_tiebreak["sortKeyField"] = label_key_alias
+                else:
+                    for key in ("sortType", "semanticType", "sortSemantic", "nulls"):
+                        if sort_spec.get(key) is not None:
+                            label_tiebreak[key] = sort_spec.get(key)
+                label_exprs = self.builder.build_sort_expressions(result, [label_tiebreak])
+                if label_exprs:
+                    order_exprs.extend(label_exprs)
+                elif field_name in result.columns:
+                    order_exprs.append(result[field_name].isnull().desc())
+                    order_exprs.append(result[field_name].asc())
+                continue
+
+            label_sort = {
+                "field": field_name,
+                "order": direction,
+            }
+            if label_key_alias and label_key_alias in result.columns:
+                label_sort["sortKeyField"] = label_key_alias
+            else:
+                for key in ("sortType", "sortKeyField", "semanticType", "sortSemantic", "nulls"):
+                    if sort_spec.get(key) is not None:
+                        label_sort[key] = sort_spec.get(key)
+            label_exprs = self.builder.build_sort_expressions(result, [label_sort])
+            if label_exprs:
+                order_exprs.extend(label_exprs)
+            elif field_name in result.columns:
+                order_exprs.append(result[field_name].isnull().desc())
+                fallback_sort = result[field_name].desc() if direction == "desc" else result[field_name].asc()
+                order_exprs.append(fallback_sort)
+
+        if '_col_key' in result.columns:
+            order_exprs.append(result['_col_key'].asc())
+
+        if order_exprs:
+            result = result.order_by(order_exprs)
         
         result = result.limit(top_n)
         

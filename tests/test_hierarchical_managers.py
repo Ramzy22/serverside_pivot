@@ -77,7 +77,8 @@ def test_ibis_based_hierarchical_scroll(ibis_planner, mock_cache, materialized_h
 
     # Convert to a more easily verifiable format
     # Expected order: AS, EU, NA, NA-CA, NA-US
-    result_paths = [tuple(row[d] for d in spec.rows if d in row) for row in results]
+    # Use row.get(d) is not None to handle consistent schema (parent rows have None for child dims)
+    result_paths = [tuple(row[d] for d in spec.rows if row.get(d) is not None) for row in results]
     
     # Top-level regions
     assert ("AS",) in result_paths
@@ -90,7 +91,7 @@ def test_ibis_based_hierarchical_scroll(ibis_planner, mock_cache, materialized_h
 
     # Check aggregation values
     for row in results:
-        path = tuple(row[d] for d in spec.rows if d in row)
+        path = tuple(row[d] for d in spec.rows if row.get(d) is not None)
         if path == ("NA",):
             assert row["total_sales"] == 220 # 100 + 50 + 70
         elif path == ("EU",):
@@ -105,13 +106,13 @@ def test_ibis_based_hierarchical_scroll(ibis_planner, mock_cache, materialized_h
     # 5. Test pagination (offset)
     paginated_results = scroll_manager.get_visible_rows_hierarchical(
         spec=spec,
-        start_row=2, # Skip AS, EU
-        end_row=4,   # Get NA, NA-CA
+        start_row=2, # Skip AS, EU (index 0, 1)
+        end_row=3,   # Get NA, NA-CA (index 2, 3)
         expanded_paths=[["NA"]]
     )
 
     assert len(paginated_results) == 2
-    paginated_paths = [tuple(row[d] for d in spec.rows if d in row) for row in paginated_results]
+    paginated_paths = [tuple(row[d] for d in spec.rows if row.get(d) is not None) for row in paginated_results]
     assert paginated_paths[0] == ("NA",)
     assert paginated_paths[1] == ("NA", "CA")
 

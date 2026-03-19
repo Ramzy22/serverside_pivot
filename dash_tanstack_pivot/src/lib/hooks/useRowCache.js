@@ -218,6 +218,18 @@ export const useRowCache = ({ blockSize = 100, maxBlocks = 500 } = {}) => {
         return block.rows[internalIndex];
     }, [blockSize, makeKey]);
 
+    const getLoadedBlocks = useCallback((epoch = currentEpochRef.current) => {
+        const blocks = [];
+        for (const [key, block] of cacheRef.current.entries()) {
+            const { epoch: keyEpoch } = parseKey(String(key));
+            if (keyEpoch !== epoch) continue;
+            if (!block || !Array.isArray(block.rows) || block.rows.length === 0) continue;
+            blocks.push(block);
+        }
+        blocks.sort((left, right) => left.blockIndex - right.blockIndex);
+        return blocks;
+    }, [parseKey]);
+
     return {
         setCurrentEpoch,
         getBlock,
@@ -228,6 +240,7 @@ export const useRowCache = ({ blockSize = 100, maxBlocks = 500 } = {}) => {
         softInvalidateFromBlock,
         pruneToRange,
         getRow,
+        getLoadedBlocks,
         cacheVersion,
         blockSize,
         currentEpochRef

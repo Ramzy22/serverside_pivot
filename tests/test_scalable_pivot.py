@@ -71,9 +71,9 @@ async def test_materialized_hierarchy_creation(controller, sample_data):
     )
     
     # Create materialized hierarchies
-    result = controller.run_materialized_hierarchy(spec)
-    assert result["status"] == "materialized"
-    assert "hierarchy_name" in result
+    result = await controller.run_materialized_hierarchy(spec)
+    assert result["status"] == "pending"
+    assert "job_id" in result
 
 
 @pytest.mark.asyncio
@@ -145,7 +145,7 @@ async def test_hierarchical_pivot_batch_load(controller, sample_data):
     expanded_paths = [["North"], ["South"]]
     
     # Test batch loading
-    result = controller.run_hierarchical_pivot_batch_load(spec.to_dict(), expanded_paths, max_levels=2)
+    result = await controller.run_hierarchical_pivot_batch_load(spec.to_dict(), expanded_paths, max_levels=2)
     assert result is not None
 
 

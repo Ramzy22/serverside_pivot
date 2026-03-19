@@ -245,7 +245,10 @@ class TanStackPivotAdapter:
         _cols_fp = _hashlib.md5(
             _json.dumps(request.columns or [], sort_keys=True, default=str).encode()
         ).hexdigest()[:8]
-        cache_key = (request.table, frozenset(excluded_ids), _filter_fp, _cols_fp)
+        _col_sort_fp = _hashlib.md5(
+            _json.dumps(request.column_sort_options or {}, sort_keys=True, default=str).encode()
+        ).hexdigest()[:8]
+        cache_key = (request.table, frozenset(excluded_ids), _filter_fp, _cols_fp, _col_sort_fp)
 
         if needs_col_schema or cache_key not in self._center_col_ids_cache:
             # Build authoritative center order from response column metadata first.
@@ -819,12 +822,23 @@ class TanStackPivotAdapter:
         if has_column_dimensions and measure_ids:
             response_columns = [c for c in response_columns if c.get('id') not in measure_ids]
 
-        # Detect dynamic columns using all rows in the response window, not only rows[0].
+        # Detect dynamic columns using backend schema order first so pivot column
+        # sorting survives transport and horizontal windowing.
         if rows:
-            result_keys = set()
+            ordered_result_keys = []
+            seen_result_keys = set()
+            if isinstance(pivot_result, pa.Table):
+                for key in (pivot_result.column_names or []):
+                    if key not in seen_result_keys:
+                        ordered_result_keys.append(key)
+                        seen_result_keys.add(key)
             for row in rows:
-                if isinstance(row, dict):
-                    result_keys.update(row.keys())
+                if not isinstance(row, dict):
+                    continue
+                for key in row.keys():
+                    if key not in seen_result_keys:
+                        ordered_result_keys.append(key)
+                        seen_result_keys.add(key)
 
             known_ids = {c['id'] for c in response_columns if isinstance(c, dict) and c.get('id')}
             meta_keys = {
@@ -834,7 +848,7 @@ class TanStackPivotAdapter:
             }
 
             new_columns = []
-            for key in sorted(result_keys):
+            for key in ordered_result_keys:
                 if key in known_ids or key in meta_keys:
                     continue
                 if isinstance(key, str) and key.startswith(hidden_sort_prefix):

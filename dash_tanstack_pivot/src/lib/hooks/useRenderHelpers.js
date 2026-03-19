@@ -382,7 +382,7 @@ export function useRenderHelpers({
                     onDragStart(e, header.column.id, 'cols', -1);
                 }
             }}
-            onContextMenu={(e) => handleHeaderContextMenu(e, header.column.id)}
+            onContextMenu={(e) => handleHeaderContextMenu(e, header.column.id, header, level)}
             onMouseEnter={() => setHoveredHeaderId(header.column.id)}
             onMouseLeave={() => setHoveredHeaderId(current => (current === header.column.id ? null : current))}
             onFocus={() => setFocusedHeaderId(header.column.id)}
@@ -441,7 +441,7 @@ export function useRenderHelpers({
                 )}
 
                 <div
-                    onClick={(e) => { e.stopPropagation(); handleHeaderContextMenu(e, header.column.id); }}
+                    onClick={(e) => { e.stopPropagation(); handleHeaderContextMenu(e, header.column.id, header, level); }}
                     style={{
                         display:'flex',
                         alignItems: 'center',

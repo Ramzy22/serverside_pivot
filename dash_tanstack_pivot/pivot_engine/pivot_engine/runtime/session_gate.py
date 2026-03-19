@@ -57,6 +57,7 @@ class SessionRequestGate:
                 "state_epoch": safe_int(raw.get("state_epoch"), 0),
                 "window_seq": safe_int(raw.get("window_seq"), 0),
                 "structural_seq": safe_int(raw.get("structural_seq"), 0),
+                "chart_seq": safe_int(raw.get("chart_seq"), 0),
                 "abort_generation": safe_int(raw.get("abort_generation"), 0),
                 "updated_at": safe_int(raw.get("updated_at"), self._now()),
             }
@@ -71,6 +72,7 @@ class SessionRequestGate:
                     "state_epoch": 0,
                     "window_seq": 0,
                     "structural_seq": 0,
+                    "chart_seq": 0,
                     "abort_generation": 0,
                     "updated_at": now_ts,
                 },
@@ -81,6 +83,7 @@ class SessionRequestGate:
             "state_epoch": safe_int(state.get("state_epoch"), 0),
             "window_seq": safe_int(state.get("window_seq"), 0),
             "structural_seq": safe_int(state.get("structural_seq"), 0),
+            "chart_seq": safe_int(state.get("chart_seq"), 0),
             "abort_generation": safe_int(state.get("abort_generation"), 0),
             "updated_at": safe_int(state.get("updated_at"), self._now()),
         }
@@ -119,6 +122,7 @@ class SessionRequestGate:
             next_state["state_epoch"] = state_epoch
             next_state["window_seq"] = window_seq
             next_state["structural_seq"] = 0
+            next_state["chart_seq"] = window_seq if intent == "chart" else 0
         elif state_epoch == current["state_epoch"]:
             if intent == "viewport":
                 if window_seq <= current["window_seq"]:
@@ -126,6 +130,10 @@ class SessionRequestGate:
                 if window_seq <= current["structural_seq"]:
                     return False
                 next_state["window_seq"] = window_seq
+            elif intent == "chart":
+                if window_seq <= current.get("chart_seq", 0):
+                    return False
+                next_state["chart_seq"] = window_seq
             else:
                 next_state["structural_seq"] = max(current["structural_seq"], window_seq)
                 next_state["window_seq"] = max(current["window_seq"], window_seq)
@@ -153,4 +161,6 @@ class SessionRequestGate:
         if intent == "viewport":
             structural_seq = current.get("structural_seq", 0)
             return window_seq == current["window_seq"] and window_seq > structural_seq
+        if intent == "chart":
+            return window_seq == current.get("chart_seq", 0)
         return True

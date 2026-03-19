@@ -36,12 +36,258 @@ import ContextMenu from './Table/ContextMenu';
 import { PivotAppBar } from './PivotAppBar';
 import { SidebarPanel } from './Sidebar/SidebarPanel';
 import DrillThroughModal from './Table/DrillThroughModal';
+import {
+    buildPivotChartModel,
+    buildSelectionChartModel,
+    canStackBarLayout,
+    PivotChartModal,
+    PivotChartPanel,
+} from './Charts/PivotCharts';
 import { useColumnDefs } from '../hooks/useColumnDefs';
 import { useRenderHelpers } from '../hooks/useRenderHelpers';
 import { PivotTableBody } from './Table/PivotTableBody';
 import PivotErrorBoundary from './PivotErrorBoundary';
 import { usePersistence } from '../hooks/usePersistence';
 import { useFilteredData } from '../hooks/useFilteredData';
+
+const DEFAULT_CHART_PANEL_ROW_LIMIT = 18;
+const DEFAULT_CHART_PANEL_COLUMN_LIMIT = 4;
+const DEFAULT_CHART_GRAPH_HEIGHT = 320;
+const DEFAULT_FLOATING_CHART_PANEL_HEIGHT = 520;
+const MIN_CHART_PANEL_WIDTH = 280;
+const MAX_CHART_PANEL_WIDTH = 960;
+const MIN_FLOATING_CHART_PANEL_HEIGHT = 280;
+const MIN_TABLE_PANEL_WIDTH = 320;
+const MIN_CHART_CANVAS_PANE_WIDTH = 320;
+const DEFAULT_TABLE_CANVAS_SIZE = 1.4;
+const TABLE_OVERLAY_CHART_PANE_ID = '__table_overlay_chart__';
+const VALID_CHART_TYPES = new Set(['bar', 'line', 'area', 'icicle', 'sunburst', 'sankey']);
+const VALID_CHART_SORT_MODES = new Set(['natural', 'value_desc', 'value_asc', 'label_asc', 'label_desc']);
+const VALID_CHART_INTERACTION_MODES = new Set(['focus', 'filter', 'event']);
+const VALID_CHART_SERVER_SCOPES = new Set(['viewport', 'root']);
+const getPreferredChartOrientation = (columnFields) => (
+    Array.isArray(columnFields) && columnFields.length > 0 ? 'columns' : 'rows'
+);
+
+const sanitizeChartDefinitionName = (value, fallback = 'Chart') => {
+    const text = typeof value === 'string' ? value.trim() : '';
+    return text || fallback;
+};
+
+const createChartDefinitionId = (prefix = 'chart') => `${prefix}-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
+
+const cloneSerializable = (value, fallback = null) => {
+    if (value === undefined) return fallback;
+    try {
+        return JSON.parse(JSON.stringify(value));
+    } catch (error) {
+        return fallback;
+    }
+};
+
+const clampFloatingChartRect = (rect, containerRect) => {
+    const source = rect && typeof rect === 'object' ? rect : {};
+    const rawWidth = Number(source.width);
+    const rawHeight = Number(source.height);
+    const rawLeft = Number(source.left);
+    const rawTop = Number(source.top);
+    const width = Number.isFinite(rawWidth) ? Math.max(MIN_CHART_PANEL_WIDTH, Math.floor(rawWidth)) : 430;
+    const height = Number.isFinite(rawHeight) ? Math.max(MIN_FLOATING_CHART_PANEL_HEIGHT, Math.floor(rawHeight)) : DEFAULT_FLOATING_CHART_PANEL_HEIGHT;
+    const left = Number.isFinite(rawLeft) ? Math.floor(rawLeft) : 24;
+    const top = Number.isFinite(rawTop) ? Math.floor(rawTop) : 24;
+
+    if (!containerRect || !Number.isFinite(containerRect.width) || !Number.isFinite(containerRect.height)) {
+        return { left: Math.max(0, left), top: Math.max(0, top), width, height };
+    }
+
+    const maxWidth = Math.max(MIN_CHART_PANEL_WIDTH, Math.floor(containerRect.width) - 12);
+    const maxHeight = Math.max(MIN_FLOATING_CHART_PANEL_HEIGHT, Math.floor(containerRect.height) - 12);
+    const safeWidth = Math.max(MIN_CHART_PANEL_WIDTH, Math.min(maxWidth, width));
+    const safeHeight = Math.max(MIN_FLOATING_CHART_PANEL_HEIGHT, Math.min(maxHeight, height));
+    const maxLeft = Math.max(0, Math.floor(containerRect.width) - safeWidth);
+    const maxTop = Math.max(0, Math.floor(containerRect.height) - safeHeight);
+
+    return {
+        left: Math.max(0, Math.min(maxLeft, left)),
+        top: Math.max(0, Math.min(maxTop, top)),
+        width: safeWidth,
+        height: safeHeight,
+    };
+};
+
+const normalizeChartDefinition = (value, fallback = {}) => {
+    const source = value && typeof value === 'object' ? value : {};
+    const fallbackSource = fallback && typeof fallback === 'object' ? fallback : {};
+    const chartType = VALID_CHART_TYPES.has(source.chartType) ? source.chartType : (VALID_CHART_TYPES.has(fallbackSource.chartType) ? fallbackSource.chartType : 'bar');
+    const barLayout = source.barLayout === 'stacked' || source.barLayout === 'grouped'
+        ? source.barLayout
+        : (fallbackSource.barLayout === 'stacked' ? 'stacked' : 'grouped');
+    const axisMode = source.axisMode === 'horizontal' || source.axisMode === 'vertical'
+        ? source.axisMode
+        : (fallbackSource.axisMode === 'horizontal' ? 'horizontal' : 'vertical');
+    const orientation = source.orientation === 'columns' || source.orientation === 'rows'
+        ? source.orientation
+        : (fallbackSource.orientation === 'columns' ? 'columns' : 'rows');
+    const interactionMode = VALID_CHART_INTERACTION_MODES.has(source.interactionMode)
+        ? source.interactionMode
+        : (VALID_CHART_INTERACTION_MODES.has(fallbackSource.interactionMode) ? fallbackSource.interactionMode : 'focus');
+    const sortMode = VALID_CHART_SORT_MODES.has(source.sortMode)
+        ? source.sortMode
+        : (VALID_CHART_SORT_MODES.has(fallbackSource.sortMode) ? fallbackSource.sortMode : 'natural');
+    const serverScope = VALID_CHART_SERVER_SCOPES.has(source.serverScope)
+        ? source.serverScope
+        : (VALID_CHART_SERVER_SCOPES.has(fallbackSource.serverScope) ? fallbackSource.serverScope : 'viewport');
+    const hierarchyLevel = source.hierarchyLevel === 'all' || (typeof source.hierarchyLevel === 'number' && source.hierarchyLevel >= 1)
+        ? source.hierarchyLevel
+        : (fallbackSource.hierarchyLevel === 'all' || (typeof fallbackSource.hierarchyLevel === 'number' && fallbackSource.hierarchyLevel >= 1)
+            ? fallbackSource.hierarchyLevel
+            : 'all');
+    const rowLimit = Number.isFinite(Number(source.rowLimit))
+        ? Math.max(1, Math.floor(Number(source.rowLimit)))
+        : (Number.isFinite(Number(fallbackSource.rowLimit)) ? Math.max(1, Math.floor(Number(fallbackSource.rowLimit))) : DEFAULT_CHART_PANEL_ROW_LIMIT);
+    const columnLimit = Number.isFinite(Number(source.columnLimit))
+        ? Math.max(1, Math.floor(Number(source.columnLimit)))
+        : (Number.isFinite(Number(fallbackSource.columnLimit)) ? Math.max(1, Math.floor(Number(fallbackSource.columnLimit))) : DEFAULT_CHART_PANEL_COLUMN_LIMIT);
+    const width = Number.isFinite(Number(source.width))
+        ? Math.max(MIN_CHART_PANEL_WIDTH, Math.min(MAX_CHART_PANEL_WIDTH, Math.floor(Number(source.width))))
+        : (Number.isFinite(Number(fallbackSource.width))
+            ? Math.max(MIN_CHART_PANEL_WIDTH, Math.min(MAX_CHART_PANEL_WIDTH, Math.floor(Number(fallbackSource.width))))
+            : 430);
+    const chartHeight = Number.isFinite(Number(source.chartHeight))
+        ? Math.max(180, Math.floor(Number(source.chartHeight)))
+        : (Number.isFinite(Number(fallbackSource.chartHeight))
+            ? Math.max(180, Math.floor(Number(fallbackSource.chartHeight)))
+            : DEFAULT_CHART_GRAPH_HEIGHT);
+
+    return {
+        id: sanitizeChartDefinitionName(source.id || fallbackSource.id || createChartDefinitionId('chart'), 'chart'),
+        name: sanitizeChartDefinitionName(source.name || fallbackSource.name || 'Live Chart', 'Live Chart'),
+        chartTitle: sanitizeChartDefinitionName(source.chartTitle || fallbackSource.chartTitle || source.name || fallbackSource.name || 'Chart', 'Chart'),
+        source: source.source === 'selection' || source.source === 'pivot'
+            ? source.source
+            : (fallbackSource.source === 'selection' ? 'selection' : 'pivot'),
+        chartType,
+        barLayout,
+        axisMode,
+        orientation,
+        hierarchyLevel,
+        rowLimit,
+        columnLimit,
+        width,
+        chartHeight,
+        sortMode,
+        interactionMode,
+        serverScope,
+    };
+};
+
+const sanitizeChartDefinitions = (definitions, fallbackDefinition) => {
+    const sourceDefinitions = Array.isArray(definitions) ? definitions : [];
+    const normalized = sourceDefinitions
+        .filter((item) => item && typeof item === 'object')
+        .map((item, index) => normalizeChartDefinition(item, {
+            ...fallbackDefinition,
+            id: item.id || `chart-${index + 1}`,
+            name: item.name || `Chart ${index + 1}`,
+        }));
+
+    if (normalized.length > 0) return normalized;
+    return [normalizeChartDefinition(fallbackDefinition, fallbackDefinition)];
+};
+
+const serializeChartColumn = (column) => {
+    if (!column || typeof column !== 'object') return null;
+    return {
+        id: column.id || null,
+        headerVal: column.headerVal !== undefined ? column.headerVal : null,
+        columnDef: column.columnDef
+            ? {
+                header: typeof column.columnDef.header === 'string' ? column.columnDef.header : null,
+                headerVal: column.columnDef.headerVal !== undefined ? column.columnDef.headerVal : null,
+            }
+            : null,
+        parent: column.parent ? serializeChartColumn(column.parent) : null,
+    };
+};
+
+const serializeChartColumns = (columns) => (
+    Array.isArray(columns)
+        ? columns.map((column) => serializeChartColumn(column)).filter(Boolean)
+        : []
+);
+
+const normalizeLockedChartRequest = (value) => {
+    if (!value || typeof value !== 'object') return null;
+    return {
+        request: value.request && typeof value.request === 'object' ? cloneSerializable(value.request, null) : null,
+        stateOverride: value.stateOverride && typeof value.stateOverride === 'object' ? cloneSerializable(value.stateOverride, null) : null,
+        visibleColumns: Array.isArray(value.visibleColumns) ? cloneSerializable(value.visibleColumns, []) : [],
+        requestSignature: typeof value.requestSignature === 'string' ? value.requestSignature : null,
+    };
+};
+
+const normalizeChartCanvasPane = (value, fallbackDefinition, index = 0) => {
+    const source = value && typeof value === 'object' ? value : {};
+    const normalizedDefinition = normalizeChartDefinition(source, {
+        ...fallbackDefinition,
+        id: source.id || `chart-pane-${index + 1}`,
+        name: source.name || `Chart Pane ${index + 1}`,
+    });
+    const numericSize = Number(source.size);
+    return {
+        ...normalizedDefinition,
+        size: Number.isFinite(numericSize) && numericSize > 0 ? numericSize : 1,
+        floating: Boolean(source.floating),
+        floatingRect: clampFloatingChartRect(source.floatingRect, null),
+        locked: Boolean(source.locked),
+        lockedModel: cloneSerializable(source.lockedModel, null),
+        lockedRequest: normalizeLockedChartRequest(source.lockedRequest),
+        cinemaMode: Boolean(source.cinemaMode),
+    };
+};
+
+const sanitizeChartCanvasPanes = (panes, fallbackDefinition) => (
+    Array.isArray(panes)
+        ? panes
+            .filter((pane) => pane && typeof pane === 'object')
+            .map((pane, index) => normalizeChartCanvasPane(pane, fallbackDefinition, index))
+        : []
+);
+
+const getChartPanelWidthBounds = (layoutWidth) => {
+    if (!Number.isFinite(layoutWidth) || layoutWidth <= 0) {
+        return { minWidth: MIN_CHART_PANEL_WIDTH, maxWidth: MAX_CHART_PANEL_WIDTH };
+    }
+
+    const minWidth = Math.min(320, Math.max(MIN_CHART_PANEL_WIDTH, Math.floor(layoutWidth * 0.3)));
+    const maxWidth = Math.min(
+        MAX_CHART_PANEL_WIDTH,
+        Math.max(minWidth, Math.floor(layoutWidth - Math.min(MIN_TABLE_PANEL_WIDTH, layoutWidth * 0.45)))
+    );
+
+    return { minWidth, maxWidth };
+};
+
+const normalizeChartServerWindowConfig = (value) => {
+    if (!value || typeof value !== 'object') {
+        return { enabled: false, rows: null, columns: null, scope: 'viewport' };
+    }
+
+    const normalizedRows = Number(value.rows);
+    const normalizedColumns = Number(value.columns);
+    const rows = Number.isFinite(normalizedRows) && normalizedRows > 0 ? Math.max(1, Math.floor(normalizedRows)) : null;
+    const columns = Number.isFinite(normalizedColumns) && normalizedColumns > 0 ? Math.max(1, Math.floor(normalizedColumns)) : null;
+    const enabled = value.enabled === undefined
+        ? (rows !== null || columns !== null)
+        : Boolean(value.enabled);
+
+    return {
+        enabled,
+        rows: enabled ? rows : null,
+        columns: enabled ? columns : null,
+        scope: VALID_CHART_SERVER_SCOPES.has(value.scope) ? value.scope : 'viewport',
+    };
+};
 
 const getOrCreateSessionId = (componentId = 'pivot-grid') => {
     if (typeof window === 'undefined') {
@@ -172,10 +418,38 @@ export default function DashTanstackPivot(props) {
         table: tableName,
         dataOffset = 0,
         dataVersion = 0,
+        chartData = null,
+        chartServerWindow = null,
+        chartDefinitions = null,
+        chartDefaults = null,
+        chartCanvasPanes: externalChartCanvasPanes = null,
+        tableCanvasSize: externalTableCanvasSize = null,
         drillEndpoint = '/api/drill-through',
         viewState = null,
         saveViewTrigger = null,
     } = props;
+
+    const normalizedInitialChartServerWindow = normalizeChartServerWindowConfig(chartServerWindow);
+    const initialChartDefinition = useMemo(() => normalizeChartDefinition(chartDefaults, {
+        id: 'live-chart-panel',
+        name: 'Live Chart',
+        source: 'pivot',
+        chartType: 'bar',
+        barLayout: 'grouped',
+        axisMode: 'vertical',
+        orientation: getPreferredChartOrientation(initialColFields),
+        hierarchyLevel: 'all',
+        rowLimit: DEFAULT_CHART_PANEL_ROW_LIMIT,
+        columnLimit: DEFAULT_CHART_PANEL_COLUMN_LIMIT,
+        width: 430,
+        sortMode: 'natural',
+        interactionMode: 'focus',
+        serverScope: normalizedInitialChartServerWindow.scope,
+    }), [chartDefaults, initialColFields, normalizedInitialChartServerWindow.scope]);
+    const initialChartDefinitions = useMemo(
+        () => sanitizeChartDefinitions(chartDefinitions, initialChartDefinition),
+        [chartDefinitions, initialChartDefinition]
+    );
 
     // Register sortOptions with Dash's callback State store on mount.
     // Without this, State(id, "sortOptions") returns None in Python callbacks
@@ -257,9 +531,66 @@ export default function DashTanstackPivot(props) {
         const [layoutMode, setLayoutMode] = useState('hierarchy'); // hierarchy, tabular
         const [columnVisibility, setColumnVisibility] = useState(() => loadPersistedState('columnVisibility', initialColumnVisibility));
         const [columnSizing, setColumnSizing] = useState(() => loadPersistedState('columnSizing', {}));
+        const [pivotColumnSorting, setPivotColumnSorting] = useState({});
         const [announcement, setAnnouncement] = useState("");
         const [drillModal, setDrillModal] = useState(null);
         // drillModal shape: { loading, rows, page, totalRows, path, sortCol, sortDir, filterText } | null
+        const [chartPanelOpen, setChartPanelOpen] = useState(false);
+        const [chartPanelSource, setChartPanelSource] = useState(initialChartDefinition.source);
+        const [chartPanelType, setChartPanelType] = useState(initialChartDefinition.chartType);
+        const [chartPanelBarLayout, setChartPanelBarLayout] = useState(initialChartDefinition.barLayout);
+        const [chartPanelAxisMode, setChartPanelAxisMode] = useState(initialChartDefinition.axisMode);
+        const [chartPanelOrientation, setChartPanelOrientation] = useState(initialChartDefinition.orientation);
+        const [chartPanelHierarchyLevel, setChartPanelHierarchyLevel] = useState(initialChartDefinition.hierarchyLevel);
+        const [chartPanelTitle, setChartPanelTitle] = useState(initialChartDefinition.chartTitle);
+        const [chartPanelRowLimit, setChartPanelRowLimit] = useState(initialChartDefinition.rowLimit);
+        const [chartPanelColumnLimit, setChartPanelColumnLimit] = useState(initialChartDefinition.columnLimit);
+        const [chartPanelWidth, setChartPanelWidth] = useState(initialChartDefinition.width);
+        const [chartPanelGraphHeight, setChartPanelGraphHeight] = useState(initialChartDefinition.chartHeight);
+        const [chartPanelFloating, setChartPanelFloating] = useState(() => Boolean(loadPersistedState('chartPanelFloatingLayout', {}).floating));
+        const [chartPanelFloatingRect, setChartPanelFloatingRect] = useState(() => {
+            const persistedLayout = loadPersistedState('chartPanelFloatingLayout', {});
+            return clampFloatingChartRect(persistedLayout.rect, null);
+        });
+        const [chartPanelSortMode, setChartPanelSortMode] = useState(initialChartDefinition.sortMode);
+        const [chartPanelInteractionMode, setChartPanelInteractionMode] = useState(initialChartDefinition.interactionMode);
+        const [chartPanelServerScope, setChartPanelServerScope] = useState(initialChartDefinition.serverScope);
+        const [chartPanelLocked, setChartPanelLocked] = useState(() => Boolean(loadPersistedState('chartPanelLockState', {}).locked));
+        const [chartPanelLockedModel, setChartPanelLockedModel] = useState(() => loadPersistedState('chartPanelLockState', {}).lockedModel || null);
+        const [chartPanelLockedRequest, setChartPanelLockedRequest] = useState(() => normalizeLockedChartRequest(loadPersistedState('chartPanelLockState', {}).lockedRequest));
+        const [isChartPanelResizing, setIsChartPanelResizing] = useState(false);
+        const [chartModal, setChartModal] = useState(null);
+        const chartPanelOrientationAutoRef = useRef(true);
+        const chartLayoutRef = useRef(null);
+        const chartCanvasLayoutRef = useRef(null);
+        const chartCanvasResizeRef = useRef(null);
+        const chartPanelFloatingDragRef = useRef(null);
+        const chartPanelFloatingResizeRef = useRef(null);
+        const chartCanvasFloatingDragRef = useRef(null);
+        const chartCanvasFloatingResizeRef = useRef(null);
+        const chartRequestSeqRef = useRef(0);
+        const [managedChartDefinitions, setManagedChartDefinitions] = useState(initialChartDefinitions);
+        const [activeChartDefinitionId, setActiveChartDefinitionId] = useState(() => initialChartDefinitions[0] ? initialChartDefinitions[0].id : 'live-chart-panel');
+        const [chartCanvasPanes, setChartCanvasPanes] = useState(() => (
+            Array.isArray(externalChartCanvasPanes)
+                ? sanitizeChartCanvasPanes(externalChartCanvasPanes, initialChartDefinition)
+                : sanitizeChartCanvasPanes(loadPersistedState('chartCanvasPanes', []), initialChartDefinition)
+        ));
+        const [tableCanvasSize, setTableCanvasSize] = useState(() => {
+            const externalSize = Number(externalTableCanvasSize);
+            if (Number.isFinite(externalSize) && externalSize > 0) {
+                return externalSize;
+            }
+            const persistedSize = Number(loadPersistedState('tableCanvasSize', DEFAULT_TABLE_CANVAS_SIZE));
+            return Number.isFinite(persistedSize) && persistedSize > 0 ? persistedSize : DEFAULT_TABLE_CANVAS_SIZE;
+        });
+        const [chartPaneDataById, setChartPaneDataById] = useState({});
+        const activeChartRequestRef = useRef(null);
+        const completedChartRequestSignaturesRef = useRef({});
+        const applyingChartDefinitionRef = useRef(false);
+        const lastChartDefinitionsPropRef = useRef(null);
+        const lastChartCanvasPanesPropRef = useRef(null);
+        const lastTableCanvasSizePropRef = useRef(null);
         const tableRef = useRef(null);
         const displayRowsRef = useRef([]);
         const displayRowIndexRef = useRef(new Map());
@@ -270,6 +601,44 @@ export default function DashTanstackPivot(props) {
         const pinnedColumnMetaRef = useRef({ leftCount: 0, centerCount: 0, rightCount: 0 });
         const previousRowFieldsRef = useRef(initialRowFields);
         const pendingServerFilterOptionsRef = useRef(null);
+        const normalizedChartServerWindow = useMemo(
+            () => normalizeChartServerWindowConfig(chartServerWindow),
+            [chartServerWindow]
+        );
+        const effectiveSortOptions = useMemo(() => {
+            const baseOptions = (sortOptions && typeof sortOptions === 'object') ? sortOptions : {};
+            const baseColumnOptions = (baseOptions.columnOptions && typeof baseOptions.columnOptions === 'object')
+                ? baseOptions.columnOptions
+                : {};
+            const mergedColumnOptions = { ...baseColumnOptions };
+
+            Object.entries(pivotColumnSorting || {}).forEach(([field, sortState]) => {
+                if (!field || !sortState || typeof sortState !== 'object') return;
+                const direction = sortState.pivotDirection;
+                const mode = sortState.pivotSortMode;
+                const existing = mergedColumnOptions[field] && typeof mergedColumnOptions[field] === 'object'
+                    ? mergedColumnOptions[field]
+                    : {};
+                if ((direction === 'asc' || direction === 'desc') && (mode === 'label' || mode === 'total')) {
+                    mergedColumnOptions[field] = {
+                        ...existing,
+                        pivotSortMode: mode,
+                        pivotDirection: direction,
+                    };
+                } else if (
+                    Object.prototype.hasOwnProperty.call(existing, 'pivotDirection')
+                    || Object.prototype.hasOwnProperty.call(existing, 'pivotSortMode')
+                ) {
+                    const { pivotDirection, pivotSortMode, ...rest } = existing;
+                    mergedColumnOptions[field] = rest;
+                }
+            });
+
+            return {
+                ...baseOptions,
+                columnOptions: mergedColumnOptions,
+            };
+        }, [sortOptions, pivotColumnSorting]);
 
         const getDisplayRows = useCallback(() => {
             if (displayRowsRef.current.length > 0) return displayRowsRef.current;
@@ -326,8 +695,39 @@ export default function DashTanstackPivot(props) {
             setColumnPinning(initialColumnPinning);
             setRowPinning(initialRowPinning);
             setGrandTotalPinOverride(getPinnedSideForRow(initialRowPinning, GRAND_TOTAL_ROW_ID));
+            setPivotColumnSorting({});
             setColumnVisibility({});
             setColumnSizing({});
+            setChartPanelSource(initialChartDefinition.source);
+            setChartPanelType(initialChartDefinition.chartType);
+            setChartPanelBarLayout(initialChartDefinition.barLayout);
+            setChartPanelAxisMode(initialChartDefinition.axisMode);
+            chartPanelOrientationAutoRef.current = true;
+            setChartPanelOrientation(initialChartDefinition.orientation);
+            setChartPanelHierarchyLevel(initialChartDefinition.hierarchyLevel);
+            setChartPanelTitle(initialChartDefinition.chartTitle);
+            setChartPanelRowLimit(initialChartDefinition.rowLimit);
+            setChartPanelColumnLimit(initialChartDefinition.columnLimit);
+            setChartPanelWidth(initialChartDefinition.width);
+            setChartPanelGraphHeight(initialChartDefinition.chartHeight);
+            setChartPanelFloating(false);
+            setChartPanelFloatingRect(clampFloatingChartRect({
+                width: initialChartDefinition.width,
+                height: DEFAULT_FLOATING_CHART_PANEL_HEIGHT,
+                left: 24,
+                top: 24,
+            }, null));
+            setChartPanelSortMode(initialChartDefinition.sortMode);
+            setChartPanelInteractionMode(initialChartDefinition.interactionMode);
+            setChartPanelServerScope(initialChartDefinition.serverScope);
+            setChartPanelLocked(false);
+            setChartPanelLockedModel(null);
+            setChartPanelLockedRequest(null);
+            setManagedChartDefinitions(initialChartDefinitions);
+            setActiveChartDefinitionId(initialChartDefinitions[0] ? initialChartDefinitions[0].id : 'live-chart-panel');
+            setChartCanvasPanes([]);
+            setTableCanvasSize(DEFAULT_TABLE_CANVAS_SIZE);
+            setChartPaneDataById({});
 
             if (setPropsRef.current) {
                 setPropsRef.current({
@@ -339,13 +739,14 @@ export default function DashTanstackPivot(props) {
                     expanded: {},
                     columnPinning: initialColumnPinning,
                     rowPinning: initialRowPinning,
+                    sortOptions: sortOptions,
                     columnVisibility: {},
                     columnSizing: {},
                     reset: null
                 });
             }
         }
-    }, [reset, initialRowFields, initialColFields, initialValConfigs, initialColumnPinning, initialRowPinning]);
+    }, [reset, initialRowFields, initialColFields, initialValConfigs, initialColumnPinning, initialRowPinning, initialChartDefinition, initialChartDefinitions]);
 
         // Save Persistence
         useEffect(() => {
@@ -355,7 +756,34 @@ export default function DashTanstackPivot(props) {
             savePersistedState('grandTotalPinOverride', grandTotalPinOverride);
             savePersistedState('columnVisibility', columnVisibility);
             savePersistedState('columnSizing', columnSizing);
-        }, [id, columnPinning, rowPinning, grandTotalPinOverride, columnVisibility, columnSizing, persistence, persistence_type]);
+            savePersistedState('chartCanvasPanes', chartCanvasPanes);
+            savePersistedState('tableCanvasSize', tableCanvasSize);
+            savePersistedState('chartPanelFloatingLayout', {
+                floating: chartPanelFloating,
+                rect: chartPanelFloatingRect,
+            });
+            savePersistedState('chartPanelLockState', {
+                locked: chartPanelLocked,
+                lockedModel: chartPanelLockedModel,
+                lockedRequest: chartPanelLockedRequest,
+            });
+        }, [
+            id,
+            columnPinning,
+            rowPinning,
+            grandTotalPinOverride,
+            columnVisibility,
+            columnSizing,
+            chartCanvasPanes,
+            tableCanvasSize,
+            chartPanelFloating,
+            chartPanelFloatingRect,
+            chartPanelLocked,
+            chartPanelLockedModel,
+            chartPanelLockedRequest,
+            persistence,
+            persistence_type,
+        ]);
 
         useEffect(() => {
             const handleResize = () => {
@@ -464,6 +892,15 @@ export default function DashTanstackPivot(props) {
         const restored = (viewState.state && typeof viewState.state === 'object')
             ? viewState.state
             : viewState;
+        const restoredChartDefinitions = Array.isArray(restored.chartDefinitions)
+            ? sanitizeChartDefinitions(restored.chartDefinitions, initialChartDefinition)
+            : null;
+        const restoredActiveChartDefinitionId = typeof restored.activeChartDefinitionId === 'string'
+            ? restored.activeChartDefinitionId
+            : null;
+        const restoredChartDefinition = Array.isArray(restoredChartDefinitions)
+            ? (restoredChartDefinitions.find((definition) => definition.id === restoredActiveChartDefinitionId) || restoredChartDefinitions[0] || null)
+            : null;
 
         const sanitizedFilters = (() => {
             if (!restored.filters || typeof restored.filters !== 'object') return null;
@@ -494,6 +931,7 @@ export default function DashTanstackPivot(props) {
         if (typeof restored.colorPalette === 'string') setColorPalette(restored.colorPalette);
         if (typeof restored.spacingMode === 'number') setSpacingMode(restored.spacingMode);
         if (Array.isArray(restored.dataBarsColumns)) setDataBarsColumns(new Set(restored.dataBarsColumns));
+        if (restored.pivotColumnSorting && typeof restored.pivotColumnSorting === 'object') setPivotColumnSorting(restored.pivotColumnSorting);
         if (restored.columnPinning && typeof restored.columnPinning === 'object') setColumnPinning(restored.columnPinning);
         const restoredRowPinning = restored.rowPinning && typeof restored.rowPinning === 'object'
             ? restored.rowPinning
@@ -511,6 +949,105 @@ export default function DashTanstackPivot(props) {
         if (typeof restored.zoomLevel === 'number') setZoomLevel(Math.max(60, Math.min(160, restored.zoomLevel)));
         if (restored.columnDecimalOverrides && typeof restored.columnDecimalOverrides === 'object') setColumnDecimalOverrides(restored.columnDecimalOverrides);
         if (restored.cellFormatRules && typeof restored.cellFormatRules === 'object') setCellFormatRules(restored.cellFormatRules);
+        if (restoredChartDefinitions) {
+            setManagedChartDefinitions(restoredChartDefinitions);
+            setActiveChartDefinitionId(restoredChartDefinition ? restoredChartDefinition.id : restoredChartDefinitions[0].id);
+        }
+        const restoredChartSource = restored.chartPanelSource !== undefined ? restored.chartPanelSource : (restoredChartDefinition && restoredChartDefinition.source);
+        if (restoredChartSource === 'pivot' || restoredChartSource === 'selection') setChartPanelSource(restoredChartSource);
+        const restoredChartType = restored.chartPanelType !== undefined ? restored.chartPanelType : (restoredChartDefinition && restoredChartDefinition.chartType);
+        if (VALID_CHART_TYPES.has(restoredChartType)) setChartPanelType(restoredChartType);
+        const restoredBarLayout = restored.chartPanelBarLayout !== undefined ? restored.chartPanelBarLayout : (restoredChartDefinition && restoredChartDefinition.barLayout);
+        if (restoredBarLayout === 'grouped' || restoredBarLayout === 'stacked') setChartPanelBarLayout(restoredBarLayout);
+        const restoredAxisMode = restored.chartPanelAxisMode !== undefined ? restored.chartPanelAxisMode : (restoredChartDefinition && restoredChartDefinition.axisMode);
+        if (restoredAxisMode === 'vertical' || restoredAxisMode === 'horizontal') setChartPanelAxisMode(restoredAxisMode);
+        if (restored.chartPanelOrientation === 'rows' || restored.chartPanelOrientation === 'columns') {
+            chartPanelOrientationAutoRef.current = false;
+            setChartPanelOrientation(restored.chartPanelOrientation);
+        } else if (restoredChartDefinition && (restoredChartDefinition.orientation === 'rows' || restoredChartDefinition.orientation === 'columns')) {
+            chartPanelOrientationAutoRef.current = false;
+            setChartPanelOrientation(restoredChartDefinition.orientation);
+        } else {
+            chartPanelOrientationAutoRef.current = true;
+            setChartPanelOrientation(getPreferredChartOrientation(restored.colFields || colFields));
+        }
+        const restoredHierarchyLevel = restored.chartPanelHierarchyLevel !== undefined
+            ? restored.chartPanelHierarchyLevel
+            : (restoredChartDefinition && restoredChartDefinition.hierarchyLevel);
+        if (restoredHierarchyLevel === 'all' || (typeof restoredHierarchyLevel === 'number' && restoredHierarchyLevel >= 1)) {
+            setChartPanelHierarchyLevel(restoredHierarchyLevel);
+        }
+        const restoredChartTitle = restored.chartPanelTitle !== undefined
+            ? restored.chartPanelTitle
+            : (restoredChartDefinition && restoredChartDefinition.chartTitle);
+        if (typeof restoredChartTitle === 'string') {
+            setChartPanelTitle(restoredChartTitle);
+        }
+        const restoredRowLimit = restored.chartPanelRowLimit !== undefined
+            ? restored.chartPanelRowLimit
+            : (restoredChartDefinition && restoredChartDefinition.rowLimit);
+        if (typeof restoredRowLimit === 'number') {
+            setChartPanelRowLimit(Math.max(1, Math.floor(restoredRowLimit)));
+        }
+        const restoredColumnLimit = restored.chartPanelColumnLimit !== undefined
+            ? restored.chartPanelColumnLimit
+            : (restoredChartDefinition && restoredChartDefinition.columnLimit);
+        if (typeof restoredColumnLimit === 'number') {
+            setChartPanelColumnLimit(Math.max(1, Math.floor(restoredColumnLimit)));
+        }
+        const restoredChartWidth = restored.chartPanelWidth !== undefined
+            ? restored.chartPanelWidth
+            : (restoredChartDefinition && restoredChartDefinition.width);
+        if (typeof restoredChartWidth === 'number') {
+            setChartPanelWidth(Math.max(320, Math.min(960, restoredChartWidth)));
+        }
+        const restoredChartGraphHeight = restored.chartPanelGraphHeight !== undefined
+            ? restored.chartPanelGraphHeight
+            : (restoredChartDefinition && restoredChartDefinition.chartHeight);
+        if (typeof restoredChartGraphHeight === 'number') {
+            setChartPanelGraphHeight(Math.max(180, Math.floor(restoredChartGraphHeight)));
+        }
+        const restoredChartSortMode = restored.chartPanelSortMode !== undefined
+            ? restored.chartPanelSortMode
+            : (restoredChartDefinition && restoredChartDefinition.sortMode);
+        if (VALID_CHART_SORT_MODES.has(restoredChartSortMode)) {
+            setChartPanelSortMode(restoredChartSortMode);
+        }
+        const restoredChartInteractionMode = restored.chartPanelInteractionMode !== undefined
+            ? restored.chartPanelInteractionMode
+            : (restoredChartDefinition && restoredChartDefinition.interactionMode);
+        if (VALID_CHART_INTERACTION_MODES.has(restoredChartInteractionMode)) {
+            setChartPanelInteractionMode(restoredChartInteractionMode);
+        }
+        const restoredChartServerScope = restored.chartPanelServerScope !== undefined
+            ? restored.chartPanelServerScope
+            : (restoredChartDefinition && restoredChartDefinition.serverScope);
+        if (VALID_CHART_SERVER_SCOPES.has(restoredChartServerScope)) {
+            setChartPanelServerScope(restoredChartServerScope);
+        }
+        if (typeof restored.chartPanelFloating === 'boolean') {
+            setChartPanelFloating(restored.chartPanelFloating);
+        }
+        if (restored.chartPanelFloatingRect && typeof restored.chartPanelFloatingRect === 'object') {
+            setChartPanelFloatingRect(clampFloatingChartRect(restored.chartPanelFloatingRect, null));
+        }
+        if (typeof restored.chartPanelLocked === 'boolean') {
+            setChartPanelLocked(restored.chartPanelLocked);
+        }
+        if (Object.prototype.hasOwnProperty.call(restored, 'chartPanelLockedModel')) {
+            setChartPanelLockedModel(restored.chartPanelLockedModel && typeof restored.chartPanelLockedModel === 'object'
+                ? restored.chartPanelLockedModel
+                : null);
+        }
+        if (Object.prototype.hasOwnProperty.call(restored, 'chartPanelLockedRequest')) {
+            setChartPanelLockedRequest(normalizeLockedChartRequest(restored.chartPanelLockedRequest));
+        }
+        if (Array.isArray(restored.chartCanvasPanes)) {
+            setChartCanvasPanes(sanitizeChartCanvasPanes(restored.chartCanvasPanes, initialChartDefinition));
+        }
+        if (typeof restored.tableCanvasSize === 'number' && Number.isFinite(restored.tableCanvasSize) && restored.tableCanvasSize > 0) {
+            setTableCanvasSize(restored.tableCanvasSize);
+        }
 
         if (viewState.viewport && typeof viewState.viewport === 'object') {
             latestViewportRef.current = {
@@ -527,7 +1064,7 @@ export default function DashTanstackPivot(props) {
                 if (typeof savedScroll.left === 'number') parentRef.current.scrollLeft = savedScroll.left;
             });
         }
-    }, [viewState]);
+    }, [viewState, initialChartDefinition]);
 
     useEffect(() => {
         if (themes[defaultTheme]) {
@@ -549,6 +1086,600 @@ export default function DashTanstackPivot(props) {
             return { top: [], bottom: [] };
         });
     }, [rowFields]);
+
+    useEffect(() => {
+        setPivotColumnSorting(prev => {
+            const activeFields = new Set(colFields || []);
+            const next = Object.entries(prev || {}).reduce((acc, [field, sortState]) => {
+                if (activeFields.has(field)) acc[field] = sortState;
+                return acc;
+            }, {});
+            return JSON.stringify(next) === JSON.stringify(prev || {}) ? prev : next;
+        });
+    }, [colFields]);
+
+    useEffect(() => {
+        if (chartPanelHierarchyLevel === 'all') return;
+        if (typeof chartPanelHierarchyLevel === 'number' && chartPanelHierarchyLevel <= Math.max(rowFields.length, 0)) return;
+        setChartPanelHierarchyLevel('all');
+    }, [chartPanelHierarchyLevel, rowFields.length]);
+
+    useEffect(() => {
+        if (!chartPanelOrientationAutoRef.current) return;
+        const preferredOrientation = getPreferredChartOrientation(colFields);
+        setChartPanelOrientation(prev => (prev === preferredOrientation ? prev : preferredOrientation));
+    }, [colFields]);
+
+    const handleChartPanelOrientationChange = useCallback((nextOrientation) => {
+        chartPanelOrientationAutoRef.current = false;
+        setChartPanelOrientation(nextOrientation);
+    }, []);
+
+    const currentChartDefinition = useMemo(() => normalizeChartDefinition({
+        id: activeChartDefinitionId || 'live-chart-panel',
+        name: (managedChartDefinitions.find((definition) => definition.id === activeChartDefinitionId) || {}).name || 'Live Chart',
+        chartTitle: chartPanelTitle,
+        source: chartPanelSource,
+        chartType: chartPanelType,
+        barLayout: chartPanelBarLayout,
+        axisMode: chartPanelAxisMode,
+        orientation: chartPanelOrientation,
+        hierarchyLevel: chartPanelHierarchyLevel,
+        rowLimit: chartPanelRowLimit,
+        columnLimit: chartPanelColumnLimit,
+        width: chartPanelWidth,
+        chartHeight: chartPanelGraphHeight,
+        sortMode: chartPanelSortMode,
+        interactionMode: chartPanelInteractionMode,
+        serverScope: chartPanelServerScope,
+    }, initialChartDefinition), [
+        activeChartDefinitionId,
+        managedChartDefinitions,
+        chartPanelTitle,
+        chartPanelSource,
+        chartPanelType,
+        chartPanelBarLayout,
+        chartPanelAxisMode,
+        chartPanelOrientation,
+        chartPanelHierarchyLevel,
+        chartPanelRowLimit,
+        chartPanelColumnLimit,
+        chartPanelWidth,
+        chartPanelGraphHeight,
+        chartPanelSortMode,
+        chartPanelInteractionMode,
+        chartPanelServerScope,
+        initialChartDefinition,
+    ]);
+
+    useEffect(() => {
+        const serializedExternal = JSON.stringify(chartDefinitions || null);
+        if (serializedExternal === lastChartDefinitionsPropRef.current) return;
+        lastChartDefinitionsPropRef.current = serializedExternal;
+        if (!Array.isArray(chartDefinitions) || chartDefinitions.length === 0) return;
+        const nextDefinitions = sanitizeChartDefinitions(chartDefinitions, initialChartDefinition);
+        setManagedChartDefinitions(nextDefinitions);
+        setActiveChartDefinitionId((previousId) => (
+            nextDefinitions.some((definition) => definition.id === previousId)
+                ? previousId
+                : nextDefinitions[0].id
+        ));
+    }, [chartDefinitions, initialChartDefinition]);
+
+    useEffect(() => {
+        if (Array.isArray(chartDefinitions) && chartDefinitions.length > 0) return;
+        setManagedChartDefinitions(initialChartDefinitions);
+        setActiveChartDefinitionId(initialChartDefinitions[0] ? initialChartDefinitions[0].id : 'live-chart-panel');
+    }, [chartDefinitions, initialChartDefinitions]);
+
+    useEffect(() => {
+        const serializedExternal = JSON.stringify(externalChartCanvasPanes || null);
+        if (serializedExternal === lastChartCanvasPanesPropRef.current) return;
+        lastChartCanvasPanesPropRef.current = serializedExternal;
+        if (!Array.isArray(externalChartCanvasPanes)) return;
+        setChartCanvasPanes(sanitizeChartCanvasPanes(externalChartCanvasPanes, initialChartDefinition));
+    }, [externalChartCanvasPanes, initialChartDefinition]);
+
+    useEffect(() => {
+        const normalizedExternalSize = Number(externalTableCanvasSize);
+        if (!Number.isFinite(normalizedExternalSize) || normalizedExternalSize <= 0) return;
+        if (normalizedExternalSize === lastTableCanvasSizePropRef.current) return;
+        lastTableCanvasSizePropRef.current = normalizedExternalSize;
+        setTableCanvasSize(normalizedExternalSize);
+    }, [externalTableCanvasSize]);
+
+    useEffect(() => {
+        const activeDefinition = managedChartDefinitions.find((definition) => definition.id === activeChartDefinitionId);
+        if (!activeDefinition || applyingChartDefinitionRef.current) return;
+        applyingChartDefinitionRef.current = true;
+        setChartPanelSource(activeDefinition.source);
+        setChartPanelType(activeDefinition.chartType);
+        setChartPanelBarLayout(activeDefinition.barLayout);
+        setChartPanelAxisMode(activeDefinition.axisMode);
+        chartPanelOrientationAutoRef.current = false;
+        setChartPanelOrientation(activeDefinition.orientation);
+        setChartPanelHierarchyLevel(activeDefinition.hierarchyLevel);
+        setChartPanelTitle(activeDefinition.chartTitle || activeDefinition.name || 'Chart');
+        setChartPanelRowLimit(activeDefinition.rowLimit);
+        setChartPanelColumnLimit(activeDefinition.columnLimit);
+        setChartPanelWidth(activeDefinition.width);
+        setChartPanelGraphHeight(activeDefinition.chartHeight || DEFAULT_CHART_GRAPH_HEIGHT);
+        setChartPanelSortMode(activeDefinition.sortMode || 'natural');
+        setChartPanelInteractionMode(activeDefinition.interactionMode || 'focus');
+        setChartPanelServerScope(activeDefinition.serverScope || initialChartDefinition.serverScope);
+        requestAnimationFrame(() => {
+            applyingChartDefinitionRef.current = false;
+        });
+    }, [activeChartDefinitionId, managedChartDefinitions, initialChartDefinition.serverScope]);
+
+    useEffect(() => {
+        if (applyingChartDefinitionRef.current) return;
+        setManagedChartDefinitions((previousDefinitions) => {
+            const existingDefinitions = Array.isArray(previousDefinitions) && previousDefinitions.length > 0
+                ? previousDefinitions
+                : [currentChartDefinition];
+            const nextDefinitions = existingDefinitions.map((definition) => (
+                definition.id === currentChartDefinition.id
+                    ? { ...definition, ...currentChartDefinition }
+                    : definition
+            ));
+            if (!nextDefinitions.some((definition) => definition.id === currentChartDefinition.id)) {
+                nextDefinitions.push(currentChartDefinition);
+            }
+            const previousJson = JSON.stringify(existingDefinitions);
+            const nextJson = JSON.stringify(nextDefinitions);
+            if (previousJson === nextJson) return previousDefinitions;
+            if (setPropsRef.current) {
+                setPropsRef.current({ chartDefinitions: nextDefinitions });
+            }
+            return nextDefinitions;
+        });
+    }, [currentChartDefinition]);
+
+    useEffect(() => {
+        if (!setPropsRef.current) return;
+        setPropsRef.current({
+            chartCanvasPanes: chartCanvasPanes.map((pane) => ({ ...pane })),
+            tableCanvasSize,
+        });
+    }, [chartCanvasPanes, tableCanvasSize]);
+
+    const handleCreateChartDefinition = useCallback(() => {
+        const nextDefinition = normalizeChartDefinition({
+            ...currentChartDefinition,
+            id: createChartDefinitionId('chart'),
+            name: `Chart ${managedChartDefinitions.length + 1}`,
+        }, initialChartDefinition);
+        setManagedChartDefinitions((previousDefinitions) => [...previousDefinitions, nextDefinition]);
+        setActiveChartDefinitionId(nextDefinition.id);
+    }, [currentChartDefinition, managedChartDefinitions.length, initialChartDefinition]);
+
+    const handleDuplicateChartDefinition = useCallback(() => {
+        const sourceDefinition = managedChartDefinitions.find((definition) => definition.id === activeChartDefinitionId) || currentChartDefinition;
+        const nextDefinition = normalizeChartDefinition({
+            ...sourceDefinition,
+            id: createChartDefinitionId('chart'),
+            name: `${sourceDefinition.name || 'Chart'} Copy`,
+        }, initialChartDefinition);
+        setManagedChartDefinitions((previousDefinitions) => [...previousDefinitions, nextDefinition]);
+        setActiveChartDefinitionId(nextDefinition.id);
+    }, [activeChartDefinitionId, currentChartDefinition, managedChartDefinitions, initialChartDefinition]);
+
+    const handleDeleteChartDefinition = useCallback(() => {
+        setManagedChartDefinitions((previousDefinitions) => {
+            if (!Array.isArray(previousDefinitions) || previousDefinitions.length <= 1) return previousDefinitions;
+            const nextDefinitions = previousDefinitions.filter((definition) => definition.id !== activeChartDefinitionId);
+            if (nextDefinitions.length > 0) {
+                setActiveChartDefinitionId(nextDefinitions[0].id);
+            }
+            return nextDefinitions;
+        });
+    }, [activeChartDefinitionId]);
+
+    const handleRenameChartDefinition = useCallback((name) => {
+        setManagedChartDefinitions((previousDefinitions) => previousDefinitions.map((definition) => (
+            definition.id === activeChartDefinitionId
+                ? { ...definition, name: sanitizeChartDefinitionName(name, definition.name || 'Chart') }
+                : definition
+        )));
+    }, [activeChartDefinitionId]);
+
+    const clampChartPanelWidth = useCallback((requestedWidth) => {
+        const layoutWidth = chartLayoutRef.current
+            ? chartLayoutRef.current.getBoundingClientRect().width
+            : 0;
+        const { minWidth, maxWidth } = getChartPanelWidthBounds(layoutWidth);
+        return Math.max(minWidth, Math.min(maxWidth, requestedWidth));
+    }, []);
+
+    useEffect(() => {
+        if (!isChartPanelResizing) return undefined;
+
+        const previousUserSelect = document.body.style.userSelect;
+        const previousCursor = document.body.style.cursor;
+        document.body.style.userSelect = 'none';
+        document.body.style.cursor = 'col-resize';
+
+        const handlePointerMove = (event) => {
+            const layoutRect = chartLayoutRef.current
+                ? chartLayoutRef.current.getBoundingClientRect()
+                : null;
+            if (!layoutRect || layoutRect.width <= 0) return;
+            const nextWidth = clampChartPanelWidth(layoutRect.right - event.clientX);
+            setChartPanelWidth(nextWidth);
+        };
+
+        const stopResize = () => {
+            setIsChartPanelResizing(false);
+        };
+
+        window.addEventListener('mousemove', handlePointerMove);
+        window.addEventListener('mouseup', stopResize);
+        window.addEventListener('mouseleave', stopResize);
+        window.addEventListener('blur', stopResize);
+
+        return () => {
+            document.body.style.userSelect = previousUserSelect;
+            document.body.style.cursor = previousCursor;
+            window.removeEventListener('mousemove', handlePointerMove);
+            window.removeEventListener('mouseup', stopResize);
+            window.removeEventListener('mouseleave', stopResize);
+            window.removeEventListener('blur', stopResize);
+        };
+    }, [isChartPanelResizing, clampChartPanelWidth]);
+
+    useLayoutEffect(() => {
+        if (!chartPanelOpen || chartPanelFloating) return undefined;
+
+        const syncWidthToLayout = () => {
+            setChartPanelWidth((prevWidth) => {
+                const nextWidth = clampChartPanelWidth(prevWidth);
+                return nextWidth === prevWidth ? prevWidth : nextWidth;
+            });
+        };
+
+        syncWidthToLayout();
+
+        if (typeof ResizeObserver === 'undefined' || !chartLayoutRef.current) {
+            window.addEventListener('resize', syncWidthToLayout);
+            return () => {
+                window.removeEventListener('resize', syncWidthToLayout);
+            };
+        }
+
+        const observer = new ResizeObserver(syncWidthToLayout);
+        observer.observe(chartLayoutRef.current);
+        return () => {
+            observer.disconnect();
+        };
+    }, [chartPanelOpen, chartPanelFloating, sidebarOpen, clampChartPanelWidth]);
+
+    const handleStartChartCanvasResize = useCallback((leftKey, rightKey, event) => {
+        const containerRect = chartCanvasLayoutRef.current
+            ? chartCanvasLayoutRef.current.getBoundingClientRect()
+            : null;
+        if (!containerRect || containerRect.width <= 0) return;
+        const chartPaneSizes = chartCanvasPanes.reduce((acc, pane) => {
+            acc[pane.id] = pane.size;
+            return acc;
+        }, {});
+        chartCanvasResizeRef.current = {
+            startX: event.clientX,
+            leftKey,
+            rightKey,
+            containerWidth: containerRect.width,
+            totalUnits: tableCanvasSize + chartCanvasPanes.reduce((sum, pane) => sum + pane.size, 0),
+            leftSize: leftKey === 'table' ? tableCanvasSize : (chartPaneSizes[leftKey] || 1),
+            rightSize: rightKey === 'table' ? tableCanvasSize : (chartPaneSizes[rightKey] || 1),
+        };
+    }, [chartCanvasPanes, tableCanvasSize]);
+
+    useEffect(() => {
+        const handlePointerMove = (event) => {
+            const resizeState = chartCanvasResizeRef.current;
+            if (!resizeState) return;
+            const totalUnits = resizeState.totalUnits > 0 ? resizeState.totalUnits : 1;
+            const minSizeUnits = (MIN_CHART_CANVAS_PANE_WIDTH / Math.max(1, resizeState.containerWidth)) * totalUnits;
+            const deltaUnits = ((event.clientX - resizeState.startX) / Math.max(1, resizeState.containerWidth)) * totalUnits;
+            const nextLeftSize = Math.max(minSizeUnits, resizeState.leftSize + deltaUnits);
+            const nextRightSize = Math.max(minSizeUnits, resizeState.rightSize - deltaUnits);
+            const consumed = nextLeftSize + nextRightSize;
+            const targetConsumed = resizeState.leftSize + resizeState.rightSize;
+            const correction = targetConsumed > 0 ? targetConsumed / Math.max(consumed, 0.0001) : 1;
+            const correctedLeft = nextLeftSize * correction;
+            const correctedRight = nextRightSize * correction;
+
+            if (resizeState.leftKey === 'table') {
+                setTableCanvasSize(correctedLeft);
+            } else {
+                setChartCanvasPanes((previousPanes) => previousPanes.map((pane) => (
+                    pane.id === resizeState.leftKey ? { ...pane, size: correctedLeft } : pane
+                )));
+            }
+
+            if (resizeState.rightKey === 'table') {
+                setTableCanvasSize(correctedRight);
+            } else {
+                setChartCanvasPanes((previousPanes) => previousPanes.map((pane) => (
+                    pane.id === resizeState.rightKey ? { ...pane, size: correctedRight } : pane
+                )));
+            }
+        };
+
+        const stopResize = () => {
+            chartCanvasResizeRef.current = null;
+        };
+
+        window.addEventListener('mousemove', handlePointerMove);
+        window.addEventListener('mouseup', stopResize);
+        window.addEventListener('mouseleave', stopResize);
+        window.addEventListener('blur', stopResize);
+
+        return () => {
+            window.removeEventListener('mousemove', handlePointerMove);
+            window.removeEventListener('mouseup', stopResize);
+            window.removeEventListener('mouseleave', stopResize);
+            window.removeEventListener('blur', stopResize);
+        };
+    }, []);
+
+    const handleToggleChartPanelFloating = useCallback(() => {
+        setChartPanelFloating((previousFloating) => {
+            const nextFloating = !previousFloating;
+            if (nextFloating) {
+                const containerRect = chartLayoutRef.current
+                    ? chartLayoutRef.current.getBoundingClientRect()
+                    : null;
+                setChartPanelFloatingRect((previousRect) => clampFloatingChartRect({
+                    left: previousRect && Number.isFinite(previousRect.left) ? previousRect.left : 24,
+                    top: previousRect && Number.isFinite(previousRect.top) ? previousRect.top : 24,
+                    width: previousRect && Number.isFinite(previousRect.width) ? previousRect.width : chartPanelWidth,
+                    height: previousRect && Number.isFinite(previousRect.height) ? previousRect.height : Math.max(DEFAULT_FLOATING_CHART_PANEL_HEIGHT, chartPanelGraphHeight + 180),
+                }, containerRect));
+            } else {
+                setChartPanelWidth((previousWidth) => clampChartPanelWidth(
+                    chartPanelFloatingRect && Number.isFinite(chartPanelFloatingRect.width)
+                        ? chartPanelFloatingRect.width
+                        : previousWidth
+                ));
+            }
+            return nextFloating;
+        });
+    }, [chartPanelFloatingRect, chartPanelGraphHeight, chartPanelWidth, clampChartPanelWidth]);
+
+    const handleStartChartPanelFloatingDrag = useCallback((event) => {
+        if (!chartPanelFloating || !chartLayoutRef.current) return;
+        event.preventDefault();
+        event.stopPropagation();
+        chartPanelFloatingDragRef.current = {
+            startX: event.clientX,
+            startY: event.clientY,
+            rect: chartPanelFloatingRect,
+        };
+    }, [chartPanelFloating, chartPanelFloatingRect]);
+
+    const handleStartChartPanelFloatingResize = useCallback((direction, event) => {
+        if (!chartPanelFloating || !chartLayoutRef.current) return;
+        event.preventDefault();
+        event.stopPropagation();
+        chartPanelFloatingResizeRef.current = {
+            direction,
+            startX: event.clientX,
+            startY: event.clientY,
+            rect: chartPanelFloatingRect,
+        };
+    }, [chartPanelFloating, chartPanelFloatingRect]);
+
+    const handleToggleChartCanvasPaneFloating = useCallback((paneId) => {
+        const containerRect = chartLayoutRef.current
+            ? chartLayoutRef.current.getBoundingClientRect()
+            : null;
+        updateChartCanvasPane(paneId, (pane) => {
+            const nextFloating = !pane.floating;
+            const baseRect = pane.floatingRect || {};
+            return {
+                ...pane,
+                floating: nextFloating,
+                floatingRect: clampFloatingChartRect({
+                    left: Number.isFinite(baseRect.left) ? baseRect.left : 36,
+                    top: Number.isFinite(baseRect.top) ? baseRect.top : 36,
+                    width: Number.isFinite(baseRect.width) ? baseRect.width : pane.width,
+                    height: Number.isFinite(baseRect.height) ? baseRect.height : Math.max(DEFAULT_FLOATING_CHART_PANEL_HEIGHT, (pane.chartHeight || DEFAULT_CHART_GRAPH_HEIGHT) + 180),
+                }, containerRect),
+            };
+        });
+    }, [updateChartCanvasPane]);
+
+    const handleStartChartCanvasPaneFloatingDrag = useCallback((paneId, event) => {
+        if (!chartLayoutRef.current) return;
+        event.preventDefault();
+        event.stopPropagation();
+        const targetPane = chartCanvasPanes.find((pane) => pane.id === paneId);
+        if (!targetPane || !targetPane.floating) return;
+        chartCanvasFloatingDragRef.current = {
+            paneId,
+            startX: event.clientX,
+            startY: event.clientY,
+            rect: targetPane.floatingRect || clampFloatingChartRect({}, null),
+        };
+    }, [chartCanvasPanes]);
+
+    const handleStartChartCanvasPaneFloatingResize = useCallback((paneId, direction, event) => {
+        if (!chartLayoutRef.current) return;
+        event.preventDefault();
+        event.stopPropagation();
+        const targetPane = chartCanvasPanes.find((pane) => pane.id === paneId);
+        if (!targetPane || !targetPane.floating) return;
+        chartCanvasFloatingResizeRef.current = {
+            paneId,
+            direction,
+            startX: event.clientX,
+            startY: event.clientY,
+            rect: targetPane.floatingRect || clampFloatingChartRect({}, null),
+        };
+    }, [chartCanvasPanes]);
+
+    useEffect(() => {
+        const handlePointerMove = (event) => {
+            if (chartPanelFloatingDragRef.current) {
+                const dragState = chartPanelFloatingDragRef.current;
+                const containerRect = chartLayoutRef.current
+                    ? chartLayoutRef.current.getBoundingClientRect()
+                    : null;
+                const nextRect = clampFloatingChartRect({
+                    ...dragState.rect,
+                    left: dragState.rect.left + (event.clientX - dragState.startX),
+                    top: dragState.rect.top + (event.clientY - dragState.startY),
+                }, containerRect);
+                setChartPanelFloatingRect(nextRect);
+                return;
+            }
+
+            if (chartPanelFloatingResizeRef.current) {
+                const resizeState = chartPanelFloatingResizeRef.current;
+                const containerRect = chartLayoutRef.current
+                    ? chartLayoutRef.current.getBoundingClientRect()
+                    : null;
+                const deltaX = event.clientX - resizeState.startX;
+                const deltaY = event.clientY - resizeState.startY;
+                const nextRectDraft = { ...resizeState.rect };
+                if (resizeState.direction === 'right' || resizeState.direction === 'corner') {
+                    nextRectDraft.width = resizeState.rect.width + deltaX;
+                }
+                if (resizeState.direction === 'bottom' || resizeState.direction === 'corner') {
+                    nextRectDraft.height = resizeState.rect.height + deltaY;
+                }
+                const nextRect = clampFloatingChartRect(nextRectDraft, containerRect);
+                setChartPanelFloatingRect(nextRect);
+                setChartPanelWidth(nextRect.width);
+                setChartPanelGraphHeight((previousHeight) => {
+                    const targetHeight = Math.max(180, nextRect.height - 180);
+                    return previousHeight === targetHeight ? previousHeight : targetHeight;
+                });
+                return;
+            }
+
+            if (chartCanvasFloatingDragRef.current) {
+                const dragState = chartCanvasFloatingDragRef.current;
+                const containerRect = chartLayoutRef.current
+                    ? chartLayoutRef.current.getBoundingClientRect()
+                    : null;
+                const nextRect = clampFloatingChartRect({
+                    ...dragState.rect,
+                    left: dragState.rect.left + (event.clientX - dragState.startX),
+                    top: dragState.rect.top + (event.clientY - dragState.startY),
+                }, containerRect);
+                updateChartCanvasPane(dragState.paneId, { floatingRect: nextRect });
+                return;
+            }
+
+            if (chartCanvasFloatingResizeRef.current) {
+                const resizeState = chartCanvasFloatingResizeRef.current;
+                const containerRect = chartLayoutRef.current
+                    ? chartLayoutRef.current.getBoundingClientRect()
+                    : null;
+                const deltaX = event.clientX - resizeState.startX;
+                const deltaY = event.clientY - resizeState.startY;
+                const nextRectDraft = { ...resizeState.rect };
+                if (resizeState.direction === 'right' || resizeState.direction === 'corner') {
+                    nextRectDraft.width = resizeState.rect.width + deltaX;
+                }
+                if (resizeState.direction === 'bottom' || resizeState.direction === 'corner') {
+                    nextRectDraft.height = resizeState.rect.height + deltaY;
+                }
+                const nextRect = clampFloatingChartRect(nextRectDraft, containerRect);
+                updateChartCanvasPane(resizeState.paneId, (pane) => ({
+                    ...pane,
+                    width: nextRect.width,
+                    chartHeight: Math.max(180, nextRect.height - 180),
+                    floatingRect: nextRect,
+                }));
+            }
+        };
+
+        const stopFloatingInteraction = () => {
+            chartPanelFloatingDragRef.current = null;
+            chartPanelFloatingResizeRef.current = null;
+            chartCanvasFloatingDragRef.current = null;
+            chartCanvasFloatingResizeRef.current = null;
+        };
+
+        window.addEventListener('mousemove', handlePointerMove);
+        window.addEventListener('mouseup', stopFloatingInteraction);
+        window.addEventListener('mouseleave', stopFloatingInteraction);
+        window.addEventListener('blur', stopFloatingInteraction);
+
+        return () => {
+            window.removeEventListener('mousemove', handlePointerMove);
+            window.removeEventListener('mouseup', stopFloatingInteraction);
+            window.removeEventListener('mouseleave', stopFloatingInteraction);
+            window.removeEventListener('blur', stopFloatingInteraction);
+        };
+    }, [updateChartCanvasPane]);
+
+    useLayoutEffect(() => {
+        if (!chartPanelFloating) return undefined;
+        const syncFloatingRect = () => {
+            const containerRect = chartLayoutRef.current
+                ? chartLayoutRef.current.getBoundingClientRect()
+                : null;
+            setChartPanelFloatingRect((previousRect) => {
+                const nextRect = clampFloatingChartRect(previousRect, containerRect);
+                const previousJson = JSON.stringify(previousRect);
+                const nextJson = JSON.stringify(nextRect);
+                return previousJson === nextJson ? previousRect : nextRect;
+            });
+        };
+
+        syncFloatingRect();
+
+        if (typeof ResizeObserver === 'undefined' || !chartLayoutRef.current) {
+            window.addEventListener('resize', syncFloatingRect);
+            return () => window.removeEventListener('resize', syncFloatingRect);
+        }
+
+        const observer = new ResizeObserver(syncFloatingRect);
+        observer.observe(chartLayoutRef.current);
+        return () => observer.disconnect();
+    }, [chartPanelFloating]);
+
+    useLayoutEffect(() => {
+        const hasFloatingPane = chartCanvasPanes.some((pane) => pane.floating);
+        if (!hasFloatingPane) return undefined;
+
+        const syncFloatingPanes = () => {
+            const containerRect = chartLayoutRef.current
+                ? chartLayoutRef.current.getBoundingClientRect()
+                : null;
+            setChartCanvasPanes((previousPanes) => {
+                let mutated = false;
+                const nextPanes = previousPanes.map((pane) => {
+                    if (!pane.floating) return pane;
+                    const nextRect = clampFloatingChartRect(pane.floatingRect, containerRect);
+                    const previousRect = pane.floatingRect || {};
+                    const sameRect = previousRect.left === nextRect.left
+                        && previousRect.top === nextRect.top
+                        && previousRect.width === nextRect.width
+                        && previousRect.height === nextRect.height;
+                    if (sameRect) return pane;
+                    mutated = true;
+                    return { ...pane, floatingRect: nextRect };
+                });
+                return mutated ? nextPanes : previousPanes;
+            });
+        };
+
+        syncFloatingPanes();
+
+        if (typeof ResizeObserver === 'undefined' || !chartLayoutRef.current) {
+            window.addEventListener('resize', syncFloatingPanes);
+            return () => window.removeEventListener('resize', syncFloatingPanes);
+        }
+
+        const observer = new ResizeObserver(syncFloatingPanes);
+        observer.observe(chartLayoutRef.current);
+        return () => observer.disconnect();
+    }, [chartCanvasPanes]);
 
     // Clipboard Paste
     useEffect(() => {
@@ -1209,6 +2340,181 @@ export default function DashTanstackPivot(props) {
         setPropsRef.current = setProps;
     }, [setProps]);
 
+    const buildChartStateOverrideSnapshot = useCallback(() => {
+        const normalizedFilters = (() => {
+            const next = { ...(filters || {}) };
+            delete next.__request_unique__;
+            return next;
+        })();
+        return cloneSerializable({
+            rowFields,
+            colFields,
+            valConfigs,
+            filters: normalizedFilters,
+            sorting,
+            sortOptions: effectiveSortOptions,
+            expanded,
+            showRowTotals,
+            showColTotals,
+        }, null);
+    }, [
+        rowFields,
+        colFields,
+        valConfigs,
+        filters,
+        sorting,
+        effectiveSortOptions,
+        expanded,
+        showRowTotals,
+        showColTotals,
+    ]);
+
+    const buildChartRequestBase = useCallback((config, stateOverride = null) => {
+        if (!serverSide || needsColSchema || totalCenterCols === null) return null;
+        const requestedRowLimit = Number(config && config.rowLimit);
+        const requestedColumnLimit = Number(config && config.columnLimit);
+        const serverScope = (config && VALID_CHART_SERVER_SCOPES.has(config.serverScope))
+            ? config.serverScope
+            : (normalizedChartServerWindow.scope || 'viewport');
+        const viewportSnapshot = latestViewportRef.current || {
+            start: 0,
+            end: Math.max((Number.isFinite(requestedRowLimit) ? requestedRowLimit : DEFAULT_CHART_PANEL_ROW_LIMIT) - 1, 0),
+            count: Math.max(Number.isFinite(requestedRowLimit) ? requestedRowLimit : DEFAULT_CHART_PANEL_ROW_LIMIT, 1),
+        };
+        const rowStart = serverScope === 'root'
+            ? 0
+            : Math.max(0, Number.isFinite(viewportSnapshot.start) ? viewportSnapshot.start : 0);
+        const viewportRowCount = Number.isFinite(viewportSnapshot.count)
+            ? Math.max(1, viewportSnapshot.count)
+            : Math.max(1, ((Number(viewportSnapshot.end) || rowStart) - rowStart + 1));
+        const resolvedRowLimit = Math.max(
+            viewportRowCount,
+            Math.max(1, Number.isFinite(requestedRowLimit) ? Math.floor(requestedRowLimit) : DEFAULT_CHART_PANEL_ROW_LIMIT),
+            normalizedChartServerWindow.enabled && normalizedChartServerWindow.rows
+                ? normalizedChartServerWindow.rows
+                : 0
+        );
+        const rowEnd = rowStart + resolvedRowLimit - 1;
+
+        const maxCenterIndex = Math.max(totalCenterCols - 1, 0);
+        const baseColStart = serverScope === 'root'
+            ? 0
+            : colRequestStart !== null
+                ? colRequestStart
+                : Math.max(0, Math.min(visibleColRange.start || 0, maxCenterIndex));
+        const viewportColumnCount = (colRequestStart !== null && colRequestEnd !== null)
+            ? Math.max(1, colRequestEnd - colRequestStart + 1)
+            : Math.max(1, Number.isFinite(requestedColumnLimit) ? Math.floor(requestedColumnLimit) : DEFAULT_CHART_PANEL_COLUMN_LIMIT);
+        const resolvedColumnLimit = Math.max(
+            viewportColumnCount,
+            Math.max(1, Number.isFinite(requestedColumnLimit) ? Math.floor(requestedColumnLimit) : DEFAULT_CHART_PANEL_COLUMN_LIMIT),
+            normalizedChartServerWindow.enabled && normalizedChartServerWindow.columns
+                ? normalizedChartServerWindow.columns
+                : 0
+        );
+        const colStart = Math.max(0, Math.min(baseColStart, maxCenterIndex));
+        const colEnd = Math.max(colStart, Math.min(maxCenterIndex, colStart + resolvedColumnLimit - 1));
+
+        return {
+            table: tableName || undefined,
+            start: rowStart,
+            end: rowEnd,
+            count: resolvedRowLimit,
+            col_start: colStart,
+            col_end: colEnd,
+            include_grand_total: showColTotals || undefined,
+            needs_col_schema: false,
+            row_limit: resolvedRowLimit,
+            column_limit: resolvedColumnLimit,
+            state_override: stateOverride || undefined,
+        };
+    }, [
+        serverSide,
+        needsColSchema,
+        totalCenterCols,
+        normalizedChartServerWindow,
+        colRequestStart,
+        colRequestEnd,
+        visibleColRange.start,
+        tableName,
+        showColTotals,
+    ]);
+
+    const updateChartCanvasPane = useCallback((paneId, updater) => {
+        setChartCanvasPanes((previousPanes) => previousPanes.map((pane) => {
+            if (pane.id !== paneId) return pane;
+            const nextPane = typeof updater === 'function' ? updater(pane) : { ...pane, ...(updater || {}) };
+            return normalizeChartCanvasPane(nextPane, initialChartDefinition);
+        }));
+    }, [initialChartDefinition]);
+
+    const handleAddChartCanvasPane = useCallback(() => {
+        const baseDefinition = normalizeChartDefinition({
+            id: createChartDefinitionId('chart-pane'),
+            name: `Chart Pane ${chartCanvasPanes.length + 1}`,
+            chartTitle: chartPanelTitle,
+            source: chartPanelSource,
+            chartType: chartPanelType,
+            barLayout: chartPanelBarLayout,
+            axisMode: chartPanelAxisMode,
+            orientation: chartPanelOrientation,
+            hierarchyLevel: chartPanelHierarchyLevel,
+            rowLimit: chartPanelRowLimit,
+            columnLimit: chartPanelColumnLimit,
+            width: chartPanelWidth,
+            chartHeight: chartPanelGraphHeight,
+            sortMode: chartPanelSortMode,
+            interactionMode: chartPanelInteractionMode,
+            serverScope: chartPanelServerScope,
+        }, initialChartDefinition);
+        setChartCanvasPanes((previousPanes) => [
+            ...previousPanes,
+            {
+                ...baseDefinition,
+                size: 1,
+                floating: false,
+                floatingRect: clampFloatingChartRect({
+                    width: chartPanelWidth,
+                    height: Math.max(DEFAULT_FLOATING_CHART_PANEL_HEIGHT, chartPanelGraphHeight + 180),
+                    left: 48 + (chartCanvasPanes.length * 24),
+                    top: 48 + (chartCanvasPanes.length * 24),
+                }, null),
+                locked: false,
+                lockedModel: null,
+                lockedRequest: null,
+                cinemaMode: false,
+            },
+        ]);
+    }, [
+        chartCanvasPanes.length,
+        chartPanelTitle,
+        chartPanelSource,
+        chartPanelType,
+        chartPanelBarLayout,
+        chartPanelAxisMode,
+        chartPanelOrientation,
+        chartPanelHierarchyLevel,
+        chartPanelRowLimit,
+        chartPanelColumnLimit,
+        chartPanelWidth,
+        chartPanelGraphHeight,
+        chartPanelSortMode,
+        chartPanelInteractionMode,
+        chartPanelServerScope,
+        initialChartDefinition,
+    ]);
+
+    const handleRemoveChartCanvasPane = useCallback((paneId) => {
+        setChartCanvasPanes((previousPanes) => previousPanes.filter((pane) => pane.id !== paneId));
+        setChartPaneDataById((previousData) => {
+            if (!Object.prototype.hasOwnProperty.call(previousData, paneId)) return previousData;
+            const nextData = { ...previousData };
+            delete nextData[paneId];
+            return nextData;
+        });
+        delete completedChartRequestSignaturesRef.current[paneId];
+    }, []);
+
     const buildCurrentViewState = useCallback(() => {
         const normalizedFilters = (() => {
             const next = { ...(filters || {}) };
@@ -1242,6 +2548,7 @@ export default function DashTanstackPivot(props) {
                 colorPalette,
                 spacingMode,
                 dataBarsColumns: Array.from(dataBarsColumns || []).sort(),
+                pivotColumnSorting,
                 columnPinning,
                 rowPinning,
                 grandTotalPinOverride,
@@ -1252,6 +2559,41 @@ export default function DashTanstackPivot(props) {
                 zoomLevel,
                 columnDecimalOverrides,
                 cellFormatRules,
+                chartPanelOpen,
+                chartPanelSource,
+                chartPanelType,
+                chartPanelBarLayout,
+                chartPanelAxisMode,
+                chartPanelOrientation,
+                chartPanelHierarchyLevel,
+                chartPanelTitle,
+                chartPanelRowLimit,
+                chartPanelColumnLimit,
+                chartPanelWidth,
+                chartPanelGraphHeight,
+                chartPanelFloating,
+                chartPanelFloatingRect,
+                chartPanelSortMode,
+                chartPanelInteractionMode,
+                chartPanelServerScope,
+                chartPanelLocked,
+                chartPanelLockedModel,
+                chartPanelLockedRequest,
+                activeChartDefinitionId,
+                chartDefinitions: managedChartDefinitions.map((definition) => ({
+                    ...definition,
+                    id: definition.id,
+                    name: definition.name,
+                })),
+                chartCanvasPanes: chartCanvasPanes.map((pane) => ({ ...pane })),
+                tableCanvasSize,
+                chartServerWindow: normalizedChartServerWindow.enabled
+                    ? {
+                        rows: normalizedChartServerWindow.rows,
+                        columns: normalizedChartServerWindow.columns,
+                        scope: normalizedChartServerWindow.scope,
+                    }
+                    : null,
                 scroll: parentRef.current
                     ? { top: parentRef.current.scrollTop, left: parentRef.current.scrollLeft }
                     : null,
@@ -1281,6 +2623,7 @@ export default function DashTanstackPivot(props) {
         colorPalette,
         spacingMode,
         dataBarsColumns,
+        pivotColumnSorting,
         columnPinning,
         rowPinning,
         grandTotalPinOverride,
@@ -1291,6 +2634,31 @@ export default function DashTanstackPivot(props) {
         zoomLevel,
         columnDecimalOverrides,
         cellFormatRules,
+        chartPanelOpen,
+        chartPanelSource,
+        chartPanelType,
+        chartPanelBarLayout,
+        chartPanelAxisMode,
+        chartPanelOrientation,
+        chartPanelHierarchyLevel,
+        chartPanelTitle,
+        chartPanelRowLimit,
+        chartPanelColumnLimit,
+        chartPanelWidth,
+        chartPanelGraphHeight,
+        chartPanelFloating,
+        chartPanelFloatingRect,
+        chartPanelSortMode,
+        chartPanelInteractionMode,
+        chartPanelServerScope,
+        chartPanelLocked,
+        chartPanelLockedModel,
+        chartPanelLockedRequest,
+        activeChartDefinitionId,
+        managedChartDefinitions,
+        chartCanvasPanes,
+        tableCanvasSize,
+        normalizedChartServerWindow,
     ]);
 
     const handleSaveView = useCallback(() => {
@@ -1319,6 +2687,7 @@ export default function DashTanstackPivot(props) {
         valConfigs: initialValConfigs,
         filters: {},
         sorting: [],
+        sortOptions: effectiveSortOptions,
         expanded: {},
         showRowTotals: initialShowRowTotals,
         showColTotals: initialShowColTotals,
@@ -1332,7 +2701,7 @@ export default function DashTanstackPivot(props) {
 
     React.useEffect(() => {
         const nextProps = {
-            rowFields, colFields, valConfigs, filters, sorting, expanded,
+            rowFields, colFields, valConfigs, filters, sorting, sortOptions: effectiveSortOptions, expanded,
             showRowTotals, showColTotals, columnPinning, rowPinning, columnVisibility, columnSizing
         };
         const nextSyncState = {
@@ -1455,7 +2824,7 @@ export default function DashTanstackPivot(props) {
                 }
             });
         }
-    }, [rowFields, colFields, valConfigs, filters, sorting, expanded, showRowTotals, showColTotals, columnPinning, rowPinning, grandTotalPinOverride, columnVisibility, columnSizing, beginStructuralTransaction, beginExpansionRequest, serverSide, tableName, serverSidePinsGrandTotal]);
+    }, [rowFields, colFields, valConfigs, filters, sorting, effectiveSortOptions, expanded, showRowTotals, showColTotals, columnPinning, rowPinning, grandTotalPinOverride, columnVisibility, columnSizing, beginStructuralTransaction, beginExpansionRequest, serverSide, tableName, serverSidePinsGrandTotal]);
 
     useEffect(() => {
         const handleClick = () => setContextMenu(null);
@@ -1663,6 +3032,83 @@ export default function DashTanstackPivot(props) {
         return false;
     };
 
+    const getPivotColumnSortField = useCallback((header, level = 0) => {
+        if (!serverSide || !Array.isArray(colFields) || colFields.length === 0 || !header || !header.column) return null;
+        const columnId = header.column.id;
+        if (!columnId || columnId === 'hierarchy' || columnId === '__row_number__' || columnId.startsWith('__RowTotal__')) return null;
+        if (rowFields.includes(columnId)) return null;
+
+        const isGroupHeader = header.column.columns && header.column.columns.length > 0;
+        if (isGroupHeader) {
+            return level >= 0 && level < colFields.length ? colFields[level] : null;
+        }
+        return colFields[colFields.length - 1] || null;
+    }, [serverSide, colFields, rowFields]);
+
+    const getPivotColumnSortState = useCallback((field) => {
+        if (!field) return null;
+        const fieldOptions = effectiveSortOptions
+            && effectiveSortOptions.columnOptions
+            && typeof effectiveSortOptions.columnOptions === 'object'
+            ? effectiveSortOptions.columnOptions[field]
+            : null;
+        const direction = fieldOptions && fieldOptions.pivotDirection;
+        const mode = fieldOptions && fieldOptions.pivotSortMode;
+        if ((direction === 'asc' || direction === 'desc') && (mode === 'label' || mode === 'total')) {
+            return { mode, direction };
+        }
+        if (direction === 'asc' || direction === 'desc') {
+            return { mode: 'label', direction };
+        }
+        return null;
+    }, [effectiveSortOptions]);
+
+    const applyPivotColumnSort = useCallback((field, mode, direction) => {
+        if (!field) return;
+        setPivotColumnSorting(prev => {
+            const next = { ...(prev || {}) };
+            if ((direction === 'asc' || direction === 'desc') && (mode === 'label' || mode === 'total')) {
+                next[field] = {
+                    ...(next[field] || {}),
+                    pivotSortMode: mode,
+                    pivotDirection: direction,
+                };
+            } else {
+                delete next[field];
+            }
+            return next;
+        });
+        if (parentRef.current) {
+            parentRef.current.scrollLeft = 0;
+        }
+        if (columnVirtualizerRef.current && typeof columnVirtualizerRef.current.scrollToIndex === 'function') {
+            columnVirtualizerRef.current.scrollToIndex(0);
+        }
+        setVisibleColRange(prev => {
+            let visibleCount = Math.max(1, prev.end - prev.start + 1);
+            if (columnVirtualizerRef.current && typeof columnVirtualizerRef.current.getVirtualItems === 'function') {
+                const virtualItems = columnVirtualizerRef.current.getVirtualItems() || [];
+                if (virtualItems.length > 0) {
+                    visibleCount = Math.max(visibleCount, virtualItems.length);
+                }
+            }
+            const nextRange = { start: 0, end: Math.max(0, visibleCount - 1) };
+            return prev.start === nextRange.start && prev.end === nextRange.end ? prev : nextRange;
+        });
+        const fieldLabel = formatDisplayLabel(field);
+        if (mode === 'label' && direction === 'asc') {
+            showNotification(`Header order for ${fieldLabel} set to A-Z.`, 'success');
+        } else if (mode === 'label' && direction === 'desc') {
+            showNotification(`Header order for ${fieldLabel} set to Z-A.`, 'success');
+        } else if (mode === 'total' && direction === 'desc') {
+            showNotification(`Header order for ${fieldLabel} set to largest totals first.`, 'success');
+        } else if (mode === 'total' && direction === 'asc') {
+            showNotification(`Header order for ${fieldLabel} set to smallest totals first.`, 'success');
+        } else {
+            showNotification(`Header order cleared for ${fieldLabel}.`, 'info');
+        }
+    }, [parentRef, showNotification]);
+
     const handlePinColumn = useCallback((columnId, side) => {
         const table = tableRef.current;
         if (!table) return;
@@ -1763,7 +3209,7 @@ export default function DashTanstackPivot(props) {
     }, [layoutMode, rowFields.length, showRowNumbers]);
 
     // 4. FIXED: handleHeaderContextMenu with proper group detection
-    const handleHeaderContextMenu = (e, colId) => {
+    const handleHeaderContextMenu = (e, colId, header = null, level = 0) => {
         e.preventDefault();
         const actions = [];
         const column = table.getColumn(colId);
@@ -1805,6 +3251,38 @@ export default function DashTanstackPivot(props) {
                 onClick: () => handleHeaderFilter(colId, null)
             });
 
+            actions.push('separator');
+        }
+
+        const pivotSortField = getPivotColumnSortField(header, level);
+        const pivotSortState = getPivotColumnSortState(pivotSortField);
+        if (pivotSortField) {
+            actions.push({
+                label: 'Header Labels A-Z',
+                icon: <Icons.SortAsc/>,
+                onClick: () => applyPivotColumnSort(pivotSortField, 'label', 'asc')
+            });
+            actions.push({
+                label: 'Header Labels Z-A',
+                icon: <Icons.SortDesc/>,
+                onClick: () => applyPivotColumnSort(pivotSortField, 'label', 'desc')
+            });
+            actions.push({
+                label: 'Column Totals Largest First',
+                icon: <Icons.SortDesc/>,
+                onClick: () => applyPivotColumnSort(pivotSortField, 'total', 'desc')
+            });
+            actions.push({
+                label: 'Column Totals Smallest First',
+                icon: <Icons.SortAsc/>,
+                onClick: () => applyPivotColumnSort(pivotSortField, 'total', 'asc')
+            });
+            if (pivotSortState) {
+                actions.push({
+                    label: 'Clear Header Order',
+                    onClick: () => applyPivotColumnSort(pivotSortField, null, null)
+                });
+            }
             actions.push('separator');
         }
 
@@ -1941,6 +3419,7 @@ export default function DashTanstackPivot(props) {
                 const data = getSelectedData(true, selectionForMenu);
                 if (data) copyToClipboard(data);
             }});
+            actions.push({ label: 'Create Range Chart', icon: <Icons.Chart/>, onClick: () => openSelectionChart(selectionForMenu) });
         }
 
         actions.push('separator');
@@ -2241,7 +3720,7 @@ export default function DashTanstackPivot(props) {
         };
     }, [serverSide]);
 
-    const { rowVirtualizer, getRow, renderedData, renderedOffset, clearCache, invalidateFromBlock, softInvalidateFromBlock, grandTotalRow } = useServerSideRowModel({
+    const { rowVirtualizer, getRow, renderedData, renderedOffset, clearCache, invalidateFromBlock, softInvalidateFromBlock, grandTotalRow, loadedRows } = useServerSideRowModel({
         parentRef,
         serverSide,
         rowCount: effectiveRowCount,
@@ -2267,7 +3746,7 @@ export default function DashTanstackPivot(props) {
     });
 
     const columns = useColumnDefs({
-        sortOptions,
+        sortOptions: effectiveSortOptions,
         serverSide,
         showRowNumbers,
         layoutMode,
@@ -3144,6 +4623,419 @@ export default function DashTanstackPivot(props) {
     // Debug effect removed (finding #10 — hot-path logging).
 
     const visibleLeafColumns = table.getVisibleLeafColumns();
+    const chartDisplayRows = useMemo(
+        () => [...effectiveTopRows, ...effectiveCenterRows, ...effectiveBottomRows],
+        [effectiveTopRows, effectiveCenterRows, effectiveBottomRows]
+    );
+    const liveSelectionChartModel = useMemo(
+        () => buildSelectionChartModel(selectedCells, chartDisplayRows, visibleLeafColumns, {
+            orientation: chartPanelOrientation,
+            hierarchyLevel: chartPanelHierarchyLevel,
+            maxHierarchyLevel: rowFields.length,
+            maxRows: chartPanelRowLimit,
+            maxColumns: chartPanelColumnLimit,
+            rowFields,
+            colFields,
+            sortMode: chartPanelSortMode,
+        }),
+        [selectedCells, chartDisplayRows, visibleLeafColumns, chartPanelOrientation, chartPanelHierarchyLevel, rowFields.length, chartPanelRowLimit, chartPanelColumnLimit, rowFields, colFields, chartPanelSortMode]
+    );
+    const livePivotChartModel = useMemo(
+        () => buildPivotChartModel(
+            serverSide && Array.isArray(loadedRows) && loadedRows.length > 0 ? loadedRows : chartDisplayRows,
+            visibleLeafColumns,
+            {
+            orientation: chartPanelOrientation,
+            hierarchyLevel: chartPanelHierarchyLevel,
+            maxHierarchyLevel: rowFields.length,
+            maxRows: chartPanelRowLimit,
+            maxColumns: chartPanelColumnLimit,
+            rowFields,
+            colFields,
+            sortMode: chartPanelSortMode,
+            }
+        ),
+        [chartDisplayRows, loadedRows, serverSide, visibleLeafColumns, chartPanelOrientation, chartPanelHierarchyLevel, rowFields.length, chartPanelRowLimit, chartPanelColumnLimit, rowFields, colFields, chartPanelSortMode]
+    );
+    const overlayChartData = chartPaneDataById[TABLE_OVERLAY_CHART_PANE_ID] || null;
+    const activeChartPanelModel = useMemo(() => {
+        if (chartPanelLocked) {
+            if (
+                chartPanelSource === 'pivot'
+                && overlayChartData
+                && overlayChartData.requestSignature
+                && chartPanelLockedRequest
+                && overlayChartData.requestSignature === chartPanelLockedRequest.requestSignature
+                && Array.isArray(overlayChartData.rows)
+            ) {
+                return buildPivotChartModel(overlayChartData.rows, (chartPanelLockedRequest.visibleColumns || visibleLeafColumns), {
+                    orientation: chartPanelOrientation,
+                    hierarchyLevel: chartPanelHierarchyLevel,
+                    maxHierarchyLevel: rowFields.length,
+                    maxRows: chartPanelRowLimit,
+                    maxColumns: chartPanelColumnLimit,
+                    rowFields,
+                    colFields,
+                    sortMode: chartPanelSortMode,
+                });
+            }
+            return chartPanelLockedModel || (chartPanelSource === 'selection' ? liveSelectionChartModel : livePivotChartModel);
+        }
+            if (
+                chartPanelSource === 'pivot'
+                && overlayChartData
+                && Array.isArray(overlayChartData.rows)
+            ) {
+                return buildPivotChartModel(overlayChartData.rows, visibleLeafColumns, {
+                    orientation: chartPanelOrientation,
+                hierarchyLevel: chartPanelHierarchyLevel,
+                maxHierarchyLevel: rowFields.length,
+                maxRows: chartPanelRowLimit,
+                maxColumns: chartPanelColumnLimit,
+                rowFields,
+                colFields,
+                sortMode: chartPanelSortMode,
+            });
+        }
+        return chartPanelSource === 'selection' ? liveSelectionChartModel : livePivotChartModel;
+    }, [
+        chartPanelLocked,
+        chartPanelLockedModel,
+        chartPanelLockedRequest,
+        chartPanelSource,
+        chartPanelOrientation,
+        chartPanelHierarchyLevel,
+        chartPanelRowLimit,
+        chartPanelColumnLimit,
+        chartPanelSortMode,
+        colFields,
+        livePivotChartModel,
+        liveSelectionChartModel,
+        overlayChartData,
+        rowFields,
+        visibleLeafColumns,
+    ]);
+    const chartCanvasPaneModels = useMemo(() => {
+        const nextModels = {};
+        chartCanvasPanes.forEach((pane) => {
+            if (!pane || !pane.id) return;
+            if (pane.locked) {
+                if (
+                    pane.source === 'pivot'
+                    && pane.lockedRequest
+                    && pane.lockedRequest.requestSignature
+                    && chartPaneDataById[pane.id]
+                    && chartPaneDataById[pane.id].requestSignature === pane.lockedRequest.requestSignature
+                    && Array.isArray(chartPaneDataById[pane.id].rows)
+                ) {
+                    nextModels[pane.id] = buildPivotChartModel(
+                        chartPaneDataById[pane.id].rows,
+                        (pane.lockedRequest.visibleColumns || visibleLeafColumns),
+                        {
+                            orientation: pane.orientation,
+                            hierarchyLevel: pane.hierarchyLevel,
+                            maxHierarchyLevel: rowFields.length,
+                            maxRows: pane.rowLimit,
+                            maxColumns: pane.columnLimit,
+                            rowFields,
+                            colFields,
+                            sortMode: pane.sortMode,
+                        }
+                    );
+                    return;
+                }
+                nextModels[pane.id] = pane.lockedModel || null;
+                return;
+            }
+
+            if (pane.source === 'selection') {
+                nextModels[pane.id] = buildSelectionChartModel(selectedCells, chartDisplayRows, visibleLeafColumns, {
+                    orientation: pane.orientation,
+                    hierarchyLevel: pane.hierarchyLevel,
+                    maxHierarchyLevel: rowFields.length,
+                    maxRows: pane.rowLimit,
+                    maxColumns: pane.columnLimit,
+                    rowFields,
+                    colFields,
+                    sortMode: pane.sortMode,
+                });
+                return;
+            }
+
+            const paneRows = (
+                serverSide
+                && chartPaneDataById[pane.id]
+                && Array.isArray(chartPaneDataById[pane.id].rows)
+            )
+                ? chartPaneDataById[pane.id].rows
+                : (serverSide && Array.isArray(loadedRows) && loadedRows.length > 0 ? loadedRows : chartDisplayRows);
+
+            nextModels[pane.id] = buildPivotChartModel(paneRows, visibleLeafColumns, {
+                orientation: pane.orientation,
+                hierarchyLevel: pane.hierarchyLevel,
+                maxHierarchyLevel: rowFields.length,
+                maxRows: pane.rowLimit,
+                maxColumns: pane.columnLimit,
+                rowFields,
+                colFields,
+                sortMode: pane.sortMode,
+            });
+        });
+        return nextModels;
+    }, [chartCanvasPanes, chartDisplayRows, chartPaneDataById, colFields, loadedRows, rowFields, selectedCells, serverSide, visibleLeafColumns]);
+    const handleToggleChartPanelLock = useCallback(() => {
+        if (chartPanelLocked) {
+            setChartPanelLocked(false);
+            setChartPanelLockedModel(null);
+            setChartPanelLockedRequest(null);
+            return;
+        }
+        const nextLockedModel = cloneSerializable(activeChartPanelModel, null);
+        const stateOverride = buildChartStateOverrideSnapshot();
+        const lockedRequestBase = (
+            serverSide
+            && chartPanelSource === 'pivot'
+            ? buildChartRequestBase({
+                rowLimit: chartPanelRowLimit,
+                columnLimit: chartPanelColumnLimit,
+                serverScope: chartPanelServerScope,
+            }, stateOverride)
+            : null
+        );
+        const requestSignature = lockedRequestBase
+            ? JSON.stringify({
+                paneId: TABLE_OVERLAY_CHART_PANE_ID,
+                locked: true,
+                request: lockedRequestBase,
+                stateOverride,
+            })
+            : null;
+        setChartPanelLockedModel(nextLockedModel);
+        setChartPanelLockedRequest(lockedRequestBase ? {
+            request: lockedRequestBase,
+            stateOverride,
+            visibleColumns: serializeChartColumns(visibleLeafColumns),
+            requestSignature,
+        } : null);
+        setChartPanelLocked(true);
+    }, [
+        activeChartPanelModel,
+        buildChartRequestBase,
+        buildChartStateOverrideSnapshot,
+        chartPanelColumnLimit,
+        chartPanelLocked,
+        chartPanelRowLimit,
+        chartPanelServerScope,
+        chartPanelSource,
+        serverSide,
+        visibleLeafColumns,
+    ]);
+    const handleToggleChartCanvasPaneLock = useCallback((paneId) => {
+        const targetPane = chartCanvasPanes.find((pane) => pane.id === paneId);
+        if (!targetPane) return;
+        if (targetPane.locked) {
+            updateChartCanvasPane(paneId, {
+                locked: false,
+                lockedModel: null,
+                lockedRequest: null,
+            });
+            return;
+        }
+        const targetModel = cloneSerializable(chartCanvasPaneModels[paneId], null);
+        const stateOverride = buildChartStateOverrideSnapshot();
+        const lockedRequestBase = (
+            serverSide
+            && targetPane.source === 'pivot'
+            ? buildChartRequestBase({
+                rowLimit: targetPane.rowLimit,
+                columnLimit: targetPane.columnLimit,
+                serverScope: targetPane.serverScope,
+            }, stateOverride)
+            : null
+        );
+        const requestSignature = lockedRequestBase
+            ? JSON.stringify({
+                paneId,
+                locked: true,
+                request: lockedRequestBase,
+                stateOverride,
+            })
+            : null;
+        updateChartCanvasPane(paneId, {
+            locked: true,
+            lockedModel: targetModel,
+            lockedRequest: lockedRequestBase ? {
+                request: lockedRequestBase,
+                stateOverride,
+                visibleColumns: serializeChartColumns(visibleLeafColumns),
+                requestSignature,
+            } : null,
+        });
+    }, [
+        buildChartRequestBase,
+        buildChartStateOverrideSnapshot,
+        chartCanvasPaneModels,
+        chartCanvasPanes,
+        serverSide,
+        updateChartCanvasPane,
+        visibleLeafColumns,
+    ]);
+    const applyChartTargetFilters = useCallback((target) => {
+        if (!target || typeof target !== 'object' || !target.fieldValues || typeof target.fieldValues !== 'object') return;
+
+        const targetFields = target.kind === 'column' ? colFields : rowFields;
+        if (!Array.isArray(targetFields) || targetFields.length === 0) return;
+
+        setFilters((previousFilters) => {
+            const nextFilters = { ...(previousFilters || {}) };
+            targetFields.forEach((field) => {
+                if (Object.prototype.hasOwnProperty.call(target.fieldValues, field)) {
+                    nextFilters[field] = {
+                        operator: 'AND',
+                        conditions: [{
+                            type: 'eq',
+                            value: String(target.fieldValues[field]),
+                            caseSensitive: false,
+                        }],
+                    };
+                } else if (nextFilters[field]) {
+                    delete nextFilters[field];
+                }
+            });
+            return nextFilters;
+        });
+    }, [colFields, rowFields]);
+
+    const activateChartCategory = useCallback((source, interactionMode, target) => {
+        if (!target || typeof target !== 'object') return;
+
+        if (setPropsRef.current) {
+            setPropsRef.current({
+                chartEvent: {
+                    type: 'category_activate',
+                    source,
+                    interactionMode,
+                    target,
+                    timestamp: Date.now(),
+                },
+            });
+        }
+
+        if (interactionMode === 'event') return;
+
+        if (interactionMode === 'filter') {
+            applyChartTargetFilters(target);
+            return;
+        }
+
+        if (target.kind === 'column' && target.columnId) {
+            const targetColumnIndex = visibleLeafColumns.findIndex((column) => column.id === target.columnId);
+            if (targetColumnIndex >= 0) {
+                scrollToDisplayColumn(targetColumnIndex);
+            }
+            return;
+        }
+
+        if (target.kind !== 'row') return;
+
+        const displayRows = getDisplayRows();
+        const matchingRow = displayRows.find((row) => {
+            if (!row) return false;
+            const rowPath = row.original && row.original._path ? row.original._path : null;
+            return (
+                (target.rowPath && rowPath === target.rowPath)
+                || (target.rowId && row.id === target.rowId)
+            );
+        });
+
+        if (!matchingRow) {
+            if (serverSide) {
+                showNotification('Chart item is outside the current loaded grid slice.', 'info');
+            }
+            return;
+        }
+
+        handleRowSelect(matchingRow, false, false);
+        scrollToDisplayRow(resolveDisplayRowIndex(matchingRow.id, matchingRow.index || 0));
+    }, [
+        applyChartTargetFilters,
+        getDisplayRows,
+        handleRowSelect,
+        resolveDisplayRowIndex,
+        scrollToDisplayColumn,
+        scrollToDisplayRow,
+        serverSide,
+        showNotification,
+        visibleLeafColumns,
+    ]);
+    const handleChartCategoryActivate = useCallback((target) => {
+        activateChartCategory(chartPanelSource, chartPanelInteractionMode, target);
+    }, [activateChartCategory, chartPanelInteractionMode, chartPanelSource]);
+    useEffect(() => {
+        if (chartPanelBarLayout !== 'stacked') return;
+        const canKeepStacked = chartPanelType === 'area'
+            ? (activeChartPanelModel && Array.isArray(activeChartPanelModel.series) && activeChartPanelModel.series.length > 1)
+            : canStackBarLayout(activeChartPanelModel);
+        if (canKeepStacked) return;
+        setChartPanelBarLayout('grouped');
+    }, [activeChartPanelModel, chartPanelBarLayout, chartPanelType]);
+    const openSelectionChart = useCallback((selectionMap = selectedCells) => {
+        const hasSelection = Object.keys(selectionMap || {}).length > 0;
+        if (!hasSelection) {
+            showNotification('Select a range of value cells first.', 'warning');
+            return;
+        }
+        const buildModel = (orientationValue, hierarchyValue) => buildSelectionChartModel(selectionMap, chartDisplayRows, visibleLeafColumns, {
+            orientation: orientationValue,
+            hierarchyLevel: hierarchyValue,
+            maxHierarchyLevel: rowFields.length,
+            maxRows: chartPanelRowLimit,
+            maxColumns: chartPanelColumnLimit,
+            rowFields,
+            colFields,
+            sortMode: chartPanelSortMode,
+        });
+        const preferredOrientation = chartPanelOrientation === 'columns' ? 'columns' : 'rows';
+        let defaultOrientation = preferredOrientation;
+        let defaultHierarchyLevel = chartPanelHierarchyLevel;
+        let defaultChartModel = buildModel(defaultOrientation, defaultHierarchyLevel);
+
+        if ((!defaultChartModel || !Array.isArray(defaultChartModel.series) || defaultChartModel.series.length === 0) && defaultHierarchyLevel !== 'all') {
+            defaultHierarchyLevel = 'all';
+            defaultChartModel = buildModel(defaultOrientation, defaultHierarchyLevel);
+        }
+        if (!defaultChartModel || !Array.isArray(defaultChartModel.series) || defaultChartModel.series.length === 0) {
+            defaultOrientation = defaultOrientation === 'columns' ? 'rows' : 'columns';
+            defaultChartModel = buildModel(defaultOrientation, defaultHierarchyLevel);
+        }
+        if ((!defaultChartModel || !Array.isArray(defaultChartModel.series) || defaultChartModel.series.length === 0) && defaultHierarchyLevel !== 'all') {
+            defaultHierarchyLevel = 'all';
+            defaultChartModel = buildModel(defaultOrientation, defaultHierarchyLevel);
+        }
+        const modalChartType = (chartPanelType === 'icicle' || chartPanelType === 'sunburst' || chartPanelType === 'sankey')
+            ? 'bar'
+            : chartPanelType;
+        const canOpenStacked = modalChartType === 'area'
+            ? (defaultChartModel && Array.isArray(defaultChartModel.series) && defaultChartModel.series.length > 1)
+            : canStackBarLayout(defaultChartModel);
+        setChartModal({
+            title: 'Range Chart',
+            chartType: modalChartType,
+            barLayout: chartPanelBarLayout === 'stacked' && canOpenStacked ? 'stacked' : 'grouped',
+            axisMode: chartPanelAxisMode,
+            defaultOrientation,
+            defaultHierarchyLevel,
+            selectionMap: { ...(selectionMap || {}) },
+            visibleRows: chartDisplayRows,
+            visibleCols: visibleLeafColumns,
+            maxHierarchyLevel: rowFields.length,
+            rowLimit: chartPanelRowLimit,
+            columnLimit: chartPanelColumnLimit,
+            rowFields,
+            colFields,
+            sortMode: chartPanelSortMode,
+        });
+    }, [selectedCells, chartDisplayRows, visibleLeafColumns, chartPanelType, chartPanelBarLayout, chartPanelAxisMode, chartPanelOrientation, chartPanelHierarchyLevel, rowFields.length, chartPanelRowLimit, chartPanelColumnLimit, rowFields, colFields, chartPanelSortMode, showNotification]);
 
     // 1. Row Virtualizer (Managed by useServerSideRowModel)
     const virtualRows = activeRowVirtualizer.getVirtualItems();
@@ -3166,6 +5058,235 @@ export default function DashTanstackPivot(props) {
             count: Math.max(1, lastRow - firstRow + 1)
         };
     }, [serverSide, virtualRows]);
+
+    const liveChartStateFingerprint = useMemo(
+        () => JSON.stringify(buildChartStateOverrideSnapshot() || {}),
+        [buildChartStateOverrideSnapshot]
+    );
+    const chartRequestCandidates = useMemo(() => {
+        if (!serverSide || structuralInFlight || needsColSchema || totalCenterCols === null) return [];
+        const nextCandidates = [];
+
+        if (chartPanelOpen && chartPanelSource === 'pivot') {
+            if (!(chartPanelLocked && !chartPanelLockedRequest)) {
+                const baseRequest = chartPanelLocked && chartPanelLockedRequest
+                    ? chartPanelLockedRequest.request
+                    : buildChartRequestBase({
+                        rowLimit: chartPanelRowLimit,
+                        columnLimit: chartPanelColumnLimit,
+                        serverScope: chartPanelServerScope,
+                    });
+                if (baseRequest) {
+                    const signature = chartPanelLocked && chartPanelLockedRequest
+                        ? (chartPanelLockedRequest.requestSignature || JSON.stringify({
+                            paneId: TABLE_OVERLAY_CHART_PANE_ID,
+                            locked: true,
+                            request: baseRequest,
+                            stateOverride: chartPanelLockedRequest.stateOverride || null,
+                        }))
+                        : JSON.stringify({
+                            paneId: TABLE_OVERLAY_CHART_PANE_ID,
+                            locked: false,
+                            request: baseRequest,
+                            state: liveChartStateFingerprint,
+                        });
+                    nextCandidates.push({
+                        paneId: TABLE_OVERLAY_CHART_PANE_ID,
+                        signature,
+                        request: {
+                            ...baseRequest,
+                            state_override: chartPanelLocked && chartPanelLockedRequest
+                                ? chartPanelLockedRequest.stateOverride || undefined
+                                : undefined,
+                        },
+                    });
+                }
+            }
+        }
+
+        chartCanvasPanes.forEach((pane) => {
+            if (!pane || pane.source !== 'pivot') return;
+            if (pane.locked && !pane.lockedRequest) return;
+            const baseRequest = pane.locked && pane.lockedRequest
+                ? pane.lockedRequest.request
+                : buildChartRequestBase({
+                    rowLimit: pane.rowLimit,
+                    columnLimit: pane.columnLimit,
+                    serverScope: pane.serverScope,
+                });
+            if (!baseRequest) return;
+            const signature = pane.locked && pane.lockedRequest
+                ? (pane.lockedRequest.requestSignature || JSON.stringify({
+                    paneId: pane.id,
+                    locked: true,
+                    request: baseRequest,
+                    stateOverride: pane.lockedRequest.stateOverride || null,
+                }))
+                : JSON.stringify({
+                    paneId: pane.id,
+                    locked: false,
+                    request: baseRequest,
+                    state: liveChartStateFingerprint,
+                });
+            nextCandidates.push({
+                paneId: pane.id,
+                signature,
+                request: {
+                    ...baseRequest,
+                    state_override: pane.locked && pane.lockedRequest
+                        ? pane.lockedRequest.stateOverride || undefined
+                        : undefined,
+                },
+            });
+        });
+
+        return nextCandidates;
+    }, [
+        buildChartRequestBase,
+        chartCanvasPanes,
+        chartPanelColumnLimit,
+        chartPanelLocked,
+        chartPanelLockedRequest,
+        chartPanelOpen,
+        chartPanelRowLimit,
+        chartPanelServerScope,
+        chartPanelSource,
+        liveChartStateFingerprint,
+        needsColSchema,
+        serverSide,
+        structuralInFlight,
+        totalCenterCols,
+    ]);
+    const previousChartRenderSignaturesRef = useRef({});
+    useEffect(() => {
+        const nextSignatures = {
+            [TABLE_OVERLAY_CHART_PANE_ID]: JSON.stringify({
+                open: chartPanelOpen,
+                source: chartPanelSource,
+                locked: chartPanelLocked,
+                request: chartPanelLockedRequest ? chartPanelLockedRequest.requestSignature : null,
+                rowLimit: chartPanelRowLimit,
+                columnLimit: chartPanelColumnLimit,
+                orientation: chartPanelOrientation,
+                hierarchyLevel: chartPanelHierarchyLevel,
+                sortMode: chartPanelSortMode,
+                serverScope: chartPanelServerScope,
+                state: chartPanelLocked ? null : liveChartStateFingerprint,
+            }),
+        };
+        chartCanvasPanes.forEach((pane) => {
+            nextSignatures[pane.id] = JSON.stringify({
+                source: pane.source,
+                locked: pane.locked,
+                request: pane.lockedRequest ? pane.lockedRequest.requestSignature : null,
+                rowLimit: pane.rowLimit,
+                columnLimit: pane.columnLimit,
+                orientation: pane.orientation,
+                hierarchyLevel: pane.hierarchyLevel,
+                sortMode: pane.sortMode,
+                serverScope: pane.serverScope,
+                state: pane.locked ? null : liveChartStateFingerprint,
+            });
+        });
+
+        const previousSignatures = previousChartRenderSignaturesRef.current || {};
+        const changedPaneIds = Object.keys(nextSignatures).filter((paneId) => previousSignatures[paneId] && previousSignatures[paneId] !== nextSignatures[paneId]);
+        previousChartRenderSignaturesRef.current = nextSignatures;
+        if (changedPaneIds.length === 0) return;
+        setChartPaneDataById((previousData) => {
+            let mutated = false;
+            const nextData = { ...previousData };
+            changedPaneIds.forEach((paneId) => {
+                if (Object.prototype.hasOwnProperty.call(nextData, paneId)) {
+                    delete nextData[paneId];
+                    mutated = true;
+                }
+            });
+            return mutated ? nextData : previousData;
+        });
+    }, [
+        chartCanvasPanes,
+        chartPanelColumnLimit,
+        chartPanelHierarchyLevel,
+        chartPanelLocked,
+        chartPanelLockedRequest,
+        chartPanelOpen,
+        chartPanelOrientation,
+        chartPanelRowLimit,
+        chartPanelServerScope,
+        chartPanelSortMode,
+        chartPanelSource,
+        liveChartStateFingerprint,
+    ]);
+    useEffect(() => {
+        if (!chartData || typeof chartData !== 'object') return;
+        const paneId = chartData.paneId || TABLE_OVERLAY_CHART_PANE_ID;
+        setChartPaneDataById((previousData) => ({
+            ...previousData,
+            [paneId]: chartData,
+        }));
+        if (chartData.requestSignature) {
+            completedChartRequestSignaturesRef.current[paneId] = chartData.requestSignature;
+        }
+        if (
+            activeChartRequestRef.current
+            && activeChartRequestRef.current.paneId === paneId
+            && (
+                !chartData.requestSignature
+                || activeChartRequestRef.current.signature === chartData.requestSignature
+            )
+        ) {
+            activeChartRequestRef.current = null;
+        }
+    }, [chartData]);
+
+    useEffect(() => {
+        if (
+            activeChartRequestRef.current
+            && !chartRequestCandidates.some((candidate) => (
+                candidate.paneId === activeChartRequestRef.current.paneId
+                && candidate.signature === activeChartRequestRef.current.signature
+            ))
+        ) {
+            activeChartRequestRef.current = null;
+        }
+    }, [chartRequestCandidates]);
+
+    useEffect(() => {
+        if (!serverSide || structuralInFlight || !setPropsRef.current || needsColSchema || totalCenterCols === null) return;
+        if (activeChartRequestRef.current) return;
+        const nextCandidate = chartRequestCandidates.find((candidate) => (
+            completedChartRequestSignaturesRef.current[candidate.paneId] !== candidate.signature
+        ));
+        if (!nextCandidate) return;
+        chartRequestSeqRef.current = Math.max(chartRequestSeqRef.current, requestVersionRef.current) + 1;
+        activeChartRequestRef.current = {
+            paneId: nextCandidate.paneId,
+            signature: nextCandidate.signature,
+        };
+        setPropsRef.current({
+            chartRequest: {
+                ...nextCandidate.request,
+                pane_id: nextCandidate.paneId,
+                request_signature: nextCandidate.signature,
+                version: chartRequestSeqRef.current,
+                window_seq: chartRequestSeqRef.current,
+                state_epoch: stateEpoch,
+                session_id: sessionIdRef.current,
+                client_instance: clientInstanceRef.current,
+                abort_generation: abortGeneration,
+                intent: 'chart',
+            },
+        });
+    }, [
+        abortGeneration,
+        chartRequestCandidates,
+        needsColSchema,
+        serverSide,
+        stateEpoch,
+        structuralInFlight,
+        totalCenterCols,
+    ]);
 
     // 2. Column Virtualizer (Extracted)
     const {
@@ -3236,10 +5357,18 @@ export default function DashTanstackPivot(props) {
         const newStart = virtualCenterCols[0].index;
         const newEnd = virtualCenterCols[virtualCenterCols.length - 1].index;
         setVisibleColRange(prev => {
+            // Opening or resizing the chart panel narrows the table viewport, which
+            // can shrink the virtual end index even though the user did not
+            // horizontally navigate. Preserve the wider loaded column window so
+            // server-side chart data and already-loaded cell values do not vanish
+            // simply because the panel consumes layout width.
+            if ((chartPanelOpen || chartCanvasPanes.length > 0) && newStart === prev.start && newEnd < prev.end) {
+                return prev;
+            }
             if (prev.start === newStart && prev.end === newEnd) return prev;
             return { start: newStart, end: newEnd };
         });
-    }, [virtualCenterCols]);
+    }, [virtualCenterCols, chartPanelOpen, chartCanvasPanes.length]);
 
     useEffect(() => {
         if (!serverSide || virtualCenterCols.length === 0) return;
@@ -3664,6 +5793,8 @@ export default function DashTanstackPivot(props) {
         outline: `2px solid ${theme.primary}`,
         outlineOffset: '2px'
     };
+    const dockedChartCanvasPanes = chartCanvasPanes.filter((pane) => !pane.floating);
+    const floatingChartCanvasPanes = chartCanvasPanes.filter((pane) => pane.floating);
 
     return (
         <div id={id} style={{ ...styles.root, ...loadingCssVars, ...style }}>
@@ -3701,6 +5832,9 @@ export default function DashTanstackPivot(props) {
                 cellFormatRules={cellFormatRules} setCellFormatRules={setCellFormatRules}
                 selectedCells={selectedCells}
                 dataBarsColumns={dataBarsColumns} setDataBarsColumns={setDataBarsColumns}
+                canCreateSelectionChart={Object.keys(selectedCells || {}).length > 0}
+                onCreateSelectionChart={() => openSelectionChart()}
+                onAddChartPane={handleAddChartCanvasPane}
             />
         <PivotErrorBoundary key={dataVersion}>
             <div style={{display:'flex', flex:1, overflow:'hidden', fontFamily: fontFamily, fontSize: fontSize, zoom: zoomLevel / 100}}>
@@ -3736,51 +5870,218 @@ export default function DashTanstackPivot(props) {
                         data={data}
                     />
                 )}
-                <PivotTableBody
-                    parentRef={parentRef}
-                    handleKeyDown={handleKeyDown}
-                    rows={rows}
-                    visibleLeafColumns={visibleLeafColumns}
-                    totalLayoutWidth={totalLayoutWidth}
-                    beforeWidth={beforeWidth}
-                    afterWidth={afterWidth}
-                    bodyRowsTopOffset={bodyRowsTopOffset}
-                    stickyHeaderHeight={stickyHeaderHeight}
-                    effectiveTopRows={effectiveTopRows}
-                    effectiveBottomRows={effectiveBottomRows}
-                    effectiveCenterRows={effectiveCenterRows}
-                    virtualRows={virtualRows}
-                    virtualCenterCols={virtualCenterCols}
-                    rowVirtualizer={activeRowVirtualizer}
-                    rowModelLookup={rowModelLookup}
-                    getRow={getRow}
-                    serverSide={serverSide}
-                    serverSidePinsGrandTotal={serverSidePinsGrandTotal}
-                    pendingRowTransitions={pendingRowTransitions}
-                    table={table}
-                    leftCols={leftCols}
-                    centerCols={centerCols}
-                    rightCols={rightCols}
-                    centerColIndexMap={centerColIndexMap}
-                    visibleLeafIndexSet={visibleLeafIndexSet}
-                    rowHeight={rowHeight}
-                    showFloatingFilters={showFloatingFilters}
-                    stickyHeaders={stickyHeaders}
-                    showColTotals={showColTotals}
-                    grandTotalPosition={grandTotalPosition}
-                    showColumnLoadingSkeletons={showColumnLoadingSkeletons}
-                    pendingColumnSkeletonCount={activeColumnSkeletonCount}
-                    columnSkeletonWidth={columnSkeletonWidth}
-                    theme={theme}
-                    styles={styles}
-                    renderCell={renderCell}
-                    renderHeaderCell={renderHeaderCell}
-                    filters={filters}
-                    handleHeaderFilter={handleHeaderFilter}
-                    selectedCells={selectedCells}
-                    rowCount={statusRowCount}
-                    isRequestPending={isRequestPending}
-                />
+                <div ref={chartCanvasLayoutRef} style={{ display:'flex', flex:1, minWidth:0, minHeight:0, overflow:'hidden', position:'relative' }}>
+                    <div
+                        ref={chartLayoutRef}
+                        style={{
+                            display:'flex',
+                            flexDirection:'column',
+                            flexGrow: tableCanvasSize,
+                            flexBasis: 0,
+                            minWidth: `${MIN_TABLE_PANEL_WIDTH}px`,
+                            minHeight: 0,
+                            overflow:'hidden',
+                            position:'relative',
+                        }}
+                    >
+                        <div style={{ display:'flex', flex:1, minWidth:0, minHeight:0, overflow:'hidden' }}>
+                            <PivotTableBody
+                                parentRef={parentRef}
+                                handleKeyDown={handleKeyDown}
+                                rows={rows}
+                                visibleLeafColumns={visibleLeafColumns}
+                                totalLayoutWidth={totalLayoutWidth}
+                                beforeWidth={beforeWidth}
+                                afterWidth={afterWidth}
+                                bodyRowsTopOffset={bodyRowsTopOffset}
+                                stickyHeaderHeight={stickyHeaderHeight}
+                                effectiveTopRows={effectiveTopRows}
+                                effectiveBottomRows={effectiveBottomRows}
+                                effectiveCenterRows={effectiveCenterRows}
+                                virtualRows={virtualRows}
+                                virtualCenterCols={virtualCenterCols}
+                                rowVirtualizer={activeRowVirtualizer}
+                                rowModelLookup={rowModelLookup}
+                                getRow={getRow}
+                                serverSide={serverSide}
+                                serverSidePinsGrandTotal={serverSidePinsGrandTotal}
+                                pendingRowTransitions={pendingRowTransitions}
+                                table={table}
+                                leftCols={leftCols}
+                                centerCols={centerCols}
+                                rightCols={rightCols}
+                                centerColIndexMap={centerColIndexMap}
+                                visibleLeafIndexSet={visibleLeafIndexSet}
+                                rowHeight={rowHeight}
+                                showFloatingFilters={showFloatingFilters}
+                                stickyHeaders={stickyHeaders}
+                                showColTotals={showColTotals}
+                                grandTotalPosition={grandTotalPosition}
+                                showColumnLoadingSkeletons={showColumnLoadingSkeletons}
+                                pendingColumnSkeletonCount={activeColumnSkeletonCount}
+                                columnSkeletonWidth={columnSkeletonWidth}
+                                theme={theme}
+                                styles={styles}
+                                renderCell={renderCell}
+                                renderHeaderCell={renderHeaderCell}
+                                filters={filters}
+                                handleHeaderFilter={handleHeaderFilter}
+                                selectedCells={selectedCells}
+                                rowCount={statusRowCount}
+                                isRequestPending={isRequestPending}
+                            />
+                        </div>
+                    </div>
+                    {dockedChartCanvasPanes.map((pane, index) => (
+                        <React.Fragment key={pane.id}>
+                            <div
+                                onMouseDown={(event) => {
+                                    event.preventDefault();
+                                    handleStartChartCanvasResize(index === 0 ? 'table' : dockedChartCanvasPanes[index - 1].id, pane.id, event);
+                                }}
+                                style={{
+                                    width: '8px',
+                                    cursor: 'col-resize',
+                                    background: 'transparent',
+                                    position: 'relative',
+                                    flexShrink: 0,
+                                }}
+                                title="Resize workspace panes"
+                            >
+                                <div style={{
+                                    position: 'absolute',
+                                    top: '50%',
+                                    left: '50%',
+                                    transform: 'translate(-50%, -50%)',
+                                    width: '3px',
+                                    height: '78px',
+                                    borderRadius: '999px',
+                                    background: theme.border,
+                                    opacity: 0.92,
+                                }} />
+                            </div>
+                            <div
+                                style={{
+                                    display:'flex',
+                                    flexGrow: pane.size,
+                                    flexBasis: 0,
+                                    minWidth: `${MIN_CHART_CANVAS_PANE_WIDTH}px`,
+                                    minHeight: 0,
+                                    overflow:'hidden',
+                                    borderLeft: `1px solid ${theme.border}`,
+                                }}
+                            >
+                                <PivotChartPanel
+                                    open
+                                    onClose={() => handleRemoveChartCanvasPane(pane.id)}
+                                    source={pane.source}
+                                    onSourceChange={(value) => updateChartCanvasPane(pane.id, { source: value })}
+                                    chartType={pane.chartType}
+                                    onChartTypeChange={(value) => updateChartCanvasPane(pane.id, { chartType: value })}
+                                    barLayout={pane.barLayout}
+                                    onBarLayoutChange={(value) => updateChartCanvasPane(pane.id, { barLayout: value })}
+                                    axisMode={pane.axisMode}
+                                    onAxisModeChange={(value) => updateChartCanvasPane(pane.id, { axisMode: value })}
+                                    orientation={pane.orientation}
+                                    onOrientationChange={(value) => updateChartCanvasPane(pane.id, { orientation: value })}
+                                    hierarchyLevel={pane.hierarchyLevel}
+                                    onHierarchyLevelChange={(value) => updateChartCanvasPane(pane.id, { hierarchyLevel: value })}
+                                    chartTitle={pane.chartTitle || pane.name}
+                                    onChartTitleChange={(value) => updateChartCanvasPane(pane.id, { chartTitle: value })}
+                                    rowLimit={pane.rowLimit}
+                                    onRowLimitChange={(value) => updateChartCanvasPane(pane.id, { rowLimit: value })}
+                                    columnLimit={pane.columnLimit}
+                                    onColumnLimitChange={(value) => updateChartCanvasPane(pane.id, { columnLimit: value })}
+                                    chartHeight={pane.chartHeight || DEFAULT_CHART_GRAPH_HEIGHT}
+                                    onChartHeightChange={(value) => {
+                                        const nextHeight = Number(value);
+                                        updateChartCanvasPane(pane.id, {
+                                            chartHeight: Number.isFinite(nextHeight) ? Math.max(180, Math.floor(nextHeight)) : DEFAULT_CHART_GRAPH_HEIGHT,
+                                        });
+                                    }}
+                                    sortMode={pane.sortMode}
+                                    onSortModeChange={(value) => updateChartCanvasPane(pane.id, { sortMode: value })}
+                                    interactionMode={pane.interactionMode}
+                                    onInteractionModeChange={(value) => updateChartCanvasPane(pane.id, { interactionMode: value })}
+                                    serverScope={pane.serverScope}
+                                    onServerScopeChange={(value) => updateChartCanvasPane(pane.id, { serverScope: value })}
+                                    showServerScope={serverSide}
+                                    model={chartCanvasPaneModels[pane.id] || null}
+                                    theme={theme}
+                                    onCategoryActivate={(target) => activateChartCategory(pane.source, pane.interactionMode, target)}
+                                    floating={pane.floating}
+                                    onToggleFloating={() => handleToggleChartCanvasPaneFloating(pane.id)}
+                                    floatingRect={pane.floatingRect}
+                                    onFloatingDragStart={(event) => handleStartChartCanvasPaneFloatingDrag(pane.id, event)}
+                                    onFloatingResizeStart={(direction, event) => handleStartChartCanvasPaneFloatingResize(pane.id, direction, event)}
+                                    standalone
+                                    showResizeHandle={false}
+                                    title={pane.name}
+                                    showDefinitionManager={false}
+                                    locked={pane.locked}
+                                    onToggleLock={() => handleToggleChartCanvasPaneLock(pane.id)}
+                                    cinemaMode={Boolean(pane.cinemaMode)}
+                                    onCinemaModeChange={(value) => updateChartCanvasPane(pane.id, { cinemaMode: Boolean(value) })}
+                                />
+                            </div>
+                        </React.Fragment>
+                    ))}
+                    {floatingChartCanvasPanes.map((pane) => (
+                        <PivotChartPanel
+                            key={pane.id}
+                            open
+                            onClose={() => handleRemoveChartCanvasPane(pane.id)}
+                            source={pane.source}
+                            onSourceChange={(value) => updateChartCanvasPane(pane.id, { source: value })}
+                            chartType={pane.chartType}
+                            onChartTypeChange={(value) => updateChartCanvasPane(pane.id, { chartType: value })}
+                            barLayout={pane.barLayout}
+                            onBarLayoutChange={(value) => updateChartCanvasPane(pane.id, { barLayout: value })}
+                            axisMode={pane.axisMode}
+                            onAxisModeChange={(value) => updateChartCanvasPane(pane.id, { axisMode: value })}
+                            orientation={pane.orientation}
+                            onOrientationChange={(value) => updateChartCanvasPane(pane.id, { orientation: value })}
+                            hierarchyLevel={pane.hierarchyLevel}
+                            onHierarchyLevelChange={(value) => updateChartCanvasPane(pane.id, { hierarchyLevel: value })}
+                            chartTitle={pane.chartTitle || pane.name}
+                            onChartTitleChange={(value) => updateChartCanvasPane(pane.id, { chartTitle: value })}
+                            rowLimit={pane.rowLimit}
+                            onRowLimitChange={(value) => updateChartCanvasPane(pane.id, { rowLimit: value })}
+                            columnLimit={pane.columnLimit}
+                            onColumnLimitChange={(value) => updateChartCanvasPane(pane.id, { columnLimit: value })}
+                            chartHeight={pane.chartHeight || DEFAULT_CHART_GRAPH_HEIGHT}
+                            onChartHeightChange={(value) => {
+                                const nextHeight = Number(value);
+                                updateChartCanvasPane(pane.id, {
+                                    chartHeight: Number.isFinite(nextHeight) ? Math.max(180, Math.floor(nextHeight)) : DEFAULT_CHART_GRAPH_HEIGHT,
+                                });
+                            }}
+                            sortMode={pane.sortMode}
+                            onSortModeChange={(value) => updateChartCanvasPane(pane.id, { sortMode: value })}
+                            interactionMode={pane.interactionMode}
+                            onInteractionModeChange={(value) => updateChartCanvasPane(pane.id, { interactionMode: value })}
+                            serverScope={pane.serverScope}
+                            onServerScopeChange={(value) => updateChartCanvasPane(pane.id, { serverScope: value })}
+                            showServerScope={serverSide}
+                            model={chartCanvasPaneModels[pane.id] || null}
+                            theme={theme}
+                            onCategoryActivate={(target) => activateChartCategory(pane.source, pane.interactionMode, target)}
+                            floating
+                            onToggleFloating={() => handleToggleChartCanvasPaneFloating(pane.id)}
+                            floatingRect={pane.floatingRect}
+                            onFloatingDragStart={(event) => handleStartChartCanvasPaneFloatingDrag(pane.id, event)}
+                            onFloatingResizeStart={(direction, event) => handleStartChartCanvasPaneFloatingResize(pane.id, direction, event)}
+                            standalone
+                            showResizeHandle={false}
+                            title={pane.name}
+                            showDefinitionManager={false}
+                            locked={pane.locked}
+                            onToggleLock={() => handleToggleChartCanvasPaneLock(pane.id)}
+                            cinemaMode={Boolean(pane.cinemaMode)}
+                            onCinemaModeChange={(value) => updateChartCanvasPane(pane.id, { cinemaMode: Boolean(value) })}
+                        />
+                    ))}
+                </div>
             </div>
             {contextMenu && <ContextMenu {...contextMenu} theme={theme} onClose={() => setContextMenu(null)} />}
             {notification && <Notification message={notification.message} type={notification.type} onClose={() => setNotification(null)} />}
@@ -3799,6 +6100,11 @@ export default function DashTanstackPivot(props) {
                     if (!drillModal) return;
                     fetchDrillData(drillModal.path, 0, drillModal.sortCol, drillModal.sortDir, text);
                 }}
+            />
+            <PivotChartModal
+                chartState={chartModal}
+                onClose={() => setChartModal(null)}
+                theme={theme}
             />
         </PivotErrorBoundary>
         </div>
@@ -3847,6 +6153,19 @@ DashTanstackPivot.propTypes = {
     showColTotals: PropTypes.bool,
     grandTotalPosition: PropTypes.oneOf(['top', 'bottom']),
     filterOptions: PropTypes.object,
+    chartData: PropTypes.object,
+    chartRequest: PropTypes.object,
+    chartEvent: PropTypes.object,
+    chartDefinitions: PropTypes.arrayOf(PropTypes.object),
+    chartDefaults: PropTypes.object,
+    chartCanvasPanes: PropTypes.arrayOf(PropTypes.object),
+    tableCanvasSize: PropTypes.number,
+    chartServerWindow: PropTypes.shape({
+        enabled: PropTypes.bool,
+        rows: PropTypes.number,
+        columns: PropTypes.number,
+        scope: PropTypes.oneOf(['viewport', 'root']),
+    }),
     viewport: PropTypes.object,
     cellUpdate: PropTypes.object,
     cellUpdates: PropTypes.arrayOf(PropTypes.object),

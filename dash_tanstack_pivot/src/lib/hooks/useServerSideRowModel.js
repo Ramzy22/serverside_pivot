@@ -62,7 +62,8 @@ export const useServerSideRowModel = ({
         invalidateFromBlock,
         softInvalidateFromBlock,
         pruneToRange,
-        cacheVersion
+        cacheVersion,
+        getLoadedBlocks
     } = useRowCache({ blockSize });
 
     // Request Version Tracking
@@ -661,6 +662,43 @@ export const useServerSideRowModel = ({
         return { data: merged, offset: startOffset };
     }, [virtualRows, getBlock, serverSide, blockSize, data, cacheVersion, stateEpoch, colStart, colEnd]);
 
+    const loadedRows = useMemo(() => {
+        if (!serverSide) return Array.isArray(data) ? data : [];
+
+        const blocks = getLoadedBlocks(stateEpoch);
+        if (blocks.length === 0) return [];
+
+        const mergedRows = [];
+        const seenVirtualIndexes = new Set();
+
+        blocks.forEach((block) => {
+            const blockHasColMeta = block.colEnd !== null && block.colEnd !== undefined;
+            const blockColMismatch = colEnd !== null && (
+                !blockHasColMeta ||
+                block.colStart !== colStart ||
+                block.colEnd !== colEnd
+            );
+            if (blockColMismatch) return;
+
+            block.rows.forEach((row, index) => {
+                const virtualIndex = row && typeof row.__virtualIndex === 'number'
+                    ? row.__virtualIndex
+                    : (block.blockIndex * blockSize) + index;
+                if (seenVirtualIndexes.has(virtualIndex)) return;
+                seenVirtualIndexes.add(virtualIndex);
+                mergedRows.push(row);
+            });
+        });
+
+        mergedRows.sort((left, right) => {
+            const leftIndex = left && typeof left.__virtualIndex === 'number' ? left.__virtualIndex : 0;
+            const rightIndex = right && typeof right.__virtualIndex === 'number' ? right.__virtualIndex : 0;
+            return leftIndex - rightIndex;
+        });
+
+        return mergedRows;
+    }, [serverSide, data, getLoadedBlocks, stateEpoch, cacheVersion, colStart, colEnd, blockSize]);
+
     const getRowInEpoch = useCallback((rowIndex) => getRow(rowIndex, stateEpoch), [getRow, stateEpoch]);
     const invalidateFromCurrentEpoch = useCallback(
         (blockIndex) => invalidateFromBlock(blockIndex, stateEpoch),
@@ -678,6 +716,7 @@ export const useServerSideRowModel = ({
         invalidateFromBlock: invalidateFromCurrentEpoch,
         softInvalidateFromBlock: softInvalidateFromCurrentEpoch,
         grandTotalRow,
+        loadedRows,
         renderedData: renderedDataInfo.data,
         renderedOffset: renderedDataInfo.offset
     };

@@ -146,7 +146,18 @@ class PivotRuntimeService:
         expanded_paths = self._parse_expanded_paths(state.expanded)
 
         try:
-            if context.viewport_active and context.end_row is not None:
+            if trigger_kind == "chart":
+                response = await adapter.handle_virtual_scroll_request(
+                    request,
+                    context.start_row,
+                    context.end_row if context.end_row is not None else context.start_row,
+                    expanded_paths,
+                    col_start=context.col_start,
+                    col_end=context.col_end,
+                    needs_col_schema=bool((state.chart_request or {}).get("needs_col_schema", False)),
+                    include_grand_total=context.include_grand_total,
+                )
+            elif context.viewport_active and context.end_row is not None:
                 response = await adapter.handle_virtual_scroll_request(
                     request,
                     context.start_row,
@@ -184,6 +195,26 @@ class PivotRuntimeService:
             client_instance=context.client_instance,
         ):
             return PivotServiceResponse(status="stale")
+
+        if trigger_kind == "chart":
+            return PivotServiceResponse(
+                status="chart_data",
+                chart_data={
+                    "rows": list(response.data or []),
+                    "rowStart": context.start_row,
+                    "rowEnd": context.end_row,
+                    "colStart": context.col_start,
+                    "colEnd": context.col_end,
+                    "totalRows": response.total_rows,
+                    "dataVersion": response_version,
+                    "stateEpoch": context.state_epoch,
+                    "abortGeneration": context.abort_generation,
+                    "windowSeq": context.window_seq,
+                    "paneId": (state.chart_request or {}).get("pane_id"),
+                    "requestSignature": (state.chart_request or {}).get("request_signature"),
+                },
+                data_version=response_version,
+            )
 
         cols_payload: List[Dict[str, Any]] = list(response.columns or [])
         should_emit_columns = (

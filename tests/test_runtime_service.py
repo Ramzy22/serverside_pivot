@@ -237,3 +237,51 @@ def test_curve_pillar_tenor_sort_uses_hidden_sort_key_and_keeps_display_field():
         for row in response.data
         if isinstance(row, dict)
     )
+
+
+def test_chart_request_returns_chart_data_payload():
+    adapter = _make_adapter()
+    service = PivotRuntimeService(adapter_getter=lambda: adapter, session_gate=SessionRequestGate())
+
+    context = PivotRequestContext.from_frontend(
+        table="sales_data",
+        trigger_prop="pivot-grid.chartRequest",
+        viewport={
+            "start": 0,
+            "end": 10,
+            "col_start": 0,
+            "col_end": 0,
+            "window_seq": 3,
+            "state_epoch": 2,
+            "abort_generation": 2,
+            "session_id": "sess-chart",
+            "client_instance": "grid-chart",
+            "intent": "chart",
+            "include_grand_total": True,
+            "needs_col_schema": False,
+        },
+    )
+    state = PivotViewState(
+        row_fields=["region", "country"],
+        col_fields=[],
+        val_configs=[{"field": "sales", "agg": "sum"}],
+        filters={},
+        sorting=[],
+        expanded={},
+        show_row_totals=False,
+        show_col_totals=True,
+        chart_request={
+            "needs_col_schema": False,
+            "pane_id": "chart-pane-1",
+            "request_signature": "sig-1",
+        },
+    )
+
+    response = service.process(state, context, current_filter_options={})
+
+    assert response.status == "chart_data"
+    assert isinstance(response.chart_data, dict)
+    assert isinstance(response.chart_data.get("rows"), list)
+    assert response.chart_data.get("stateEpoch") == 2
+    assert response.chart_data.get("paneId") == "chart-pane-1"
+    assert response.chart_data.get("requestSignature") == "sig-1"

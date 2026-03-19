@@ -101,6 +101,7 @@ def register_dash_pivot_transport_callback(
         Output(pivot_id, "rowCount"),
         Output(pivot_id, "columns"),
         Output(pivot_id, "filterOptions"),
+        Output(pivot_id, "chartData"),
     ]
     if include_drill_store:
         outputs.append(Output(drill_store_id, "data"))
@@ -116,6 +117,7 @@ def register_dash_pivot_transport_callback(
         row_count_payload,
         columns_payload,
         filter_options_payload,
+        chart_data_payload,
         drill_payload,
         data_offset_payload,
         data_version_payload,
@@ -125,6 +127,7 @@ def register_dash_pivot_transport_callback(
             row_count_payload,
             columns_payload,
             filter_options_payload,
+            chart_data_payload,
         ]
         if include_drill_store:
             response.append(drill_payload)
@@ -143,6 +146,7 @@ def register_dash_pivot_transport_callback(
         Input(pivot_id, "showColTotals"),
         Input(pivot_id, "cellUpdate"),
         Input(pivot_id, "drillThrough"),
+        Input(pivot_id, "chartRequest"),
         Input(pivot_id, "viewport"),
         State(pivot_id, "table"),
         State(pivot_id, "sortOptions"),
@@ -160,6 +164,7 @@ def register_dash_pivot_transport_callback(
         show_col_totals,
         cell_update,
         drill_through,
+        chart_request,
         viewport,
         table_name,
         sort_options,
@@ -196,11 +201,18 @@ def register_dash_pivot_transport_callback(
             if triggered_prop is None:
                 triggered_prop = f"{_normalize_id(pivot_id)}.bootstrap"
 
+        active_request_meta = (
+            chart_request
+            if triggered_prop and triggered_prop.endswith(".chartRequest") and isinstance(chart_request, dict)
+            else viewport
+        )
         viewport_table = viewport.get("table") if isinstance(viewport, dict) else None
-        resolved_table = table_name or viewport_table
+        request_table = active_request_meta.get("table") if isinstance(active_request_meta, dict) else None
+        resolved_table = table_name or request_table or viewport_table
         if not resolved_table:
             _debug_print(debug, "Missing table in request context; skipping update.")
             return _response_tuple(
+                no_update,
                 no_update,
                 no_update,
                 no_update,
@@ -213,21 +225,36 @@ def register_dash_pivot_transport_callback(
         context = PivotRequestContext.from_frontend(
             table=resolved_table,
             trigger_prop=triggered_prop,
-            viewport=viewport,
+            viewport=active_request_meta,
         )
+        chart_state_override = (
+            chart_request.get("state_override")
+            if triggered_prop and triggered_prop.endswith(".chartRequest") and isinstance(chart_request, dict)
+            else None
+        )
+        effective_row_fields = chart_state_override.get("rowFields") if isinstance(chart_state_override, dict) and isinstance(chart_state_override.get("rowFields"), list) else (row_fields or [])
+        effective_col_fields = chart_state_override.get("colFields") if isinstance(chart_state_override, dict) and isinstance(chart_state_override.get("colFields"), list) else (col_fields or [])
+        effective_val_configs = chart_state_override.get("valConfigs") if isinstance(chart_state_override, dict) and isinstance(chart_state_override.get("valConfigs"), list) else (val_configs or [])
+        effective_filters = chart_state_override.get("filters") if isinstance(chart_state_override, dict) and isinstance(chart_state_override.get("filters"), dict) else (filters or {})
+        effective_sorting = chart_state_override.get("sorting") if isinstance(chart_state_override, dict) and isinstance(chart_state_override.get("sorting"), list) else (sorting or [])
+        effective_sort_options = chart_state_override.get("sortOptions") if isinstance(chart_state_override, dict) and isinstance(chart_state_override.get("sortOptions"), dict) else (sort_options or sort_options_default or {})
+        effective_expanded = chart_state_override.get("expanded") if isinstance(chart_state_override, dict) else expanded
+        effective_show_row_totals = chart_state_override.get("showRowTotals") if isinstance(chart_state_override, dict) and chart_state_override.get("showRowTotals") is not None else resolved_show_row_totals
+        effective_show_col_totals = chart_state_override.get("showColTotals") if isinstance(chart_state_override, dict) and chart_state_override.get("showColTotals") is not None else resolved_show_col_totals
         state = PivotViewState(
-            row_fields=row_fields or [],
-            col_fields=col_fields or [],
-            val_configs=val_configs or [],
-            filters=filters or {},
-            sorting=sorting or [],
-            sort_options=sort_options or sort_options_default or {},
-            expanded=expanded,
-            show_row_totals=resolved_show_row_totals,
-            show_col_totals=resolved_show_col_totals,
+            row_fields=effective_row_fields,
+            col_fields=effective_col_fields,
+            val_configs=effective_val_configs,
+            filters=effective_filters,
+            sorting=effective_sorting,
+            sort_options=effective_sort_options,
+            expanded=effective_expanded,
+            show_row_totals=effective_show_row_totals,
+            show_col_totals=effective_show_col_totals,
             cell_update=cell_update,
             drill_through=drill_through,
             viewport=viewport if isinstance(viewport, dict) else {},
+            chart_request=chart_request if isinstance(chart_request, dict) else {},
         )
 
         _debug_print(
@@ -249,6 +276,7 @@ def register_dash_pivot_transport_callback(
                 "col_end": context.col_end,
                 "needs_col_schema": context.needs_col_schema,
                 "include_grand_total": context.include_grand_total,
+                "chart_request": chart_request if isinstance(chart_request, dict) else None,
                 "row_fields": state.row_fields,
                 "sorting": state.sorting,
                 "sort_options": state.sort_options,
@@ -271,6 +299,7 @@ def register_dash_pivot_transport_callback(
             return _response_tuple(
                 [],
                 0,
+                no_update,
                 no_update,
                 no_update,
                 no_update,
@@ -346,10 +375,12 @@ def register_dash_pivot_transport_callback(
                 no_update,
                 no_update,
                 no_update,
+                no_update,
             )
 
         if result.status == "drillthrough":
             return _response_tuple(
+                no_update,
                 no_update,
                 no_update,
                 no_update,
@@ -368,6 +399,19 @@ def register_dash_pivot_transport_callback(
                 no_update,
                 no_update,
                 no_update,
+                no_update,
+            )
+
+        if result.status == "chart_data":
+            return _response_tuple(
+                no_update,
+                no_update,
+                no_update,
+                no_update,
+                (result.chart_data or {}),
+                no_update,
+                no_update,
+                no_update,
             )
 
         if result.status == "data":
@@ -382,6 +426,7 @@ def register_dash_pivot_transport_callback(
                 columns_out,
                 no_update,
                 no_update,
+                no_update,
                 result.data_offset if result.data_offset is not None else no_update,
                 result.data_version if result.data_version is not None else no_update,
             )
@@ -391,6 +436,7 @@ def register_dash_pivot_transport_callback(
         return _response_tuple(
             [],
             0,
+            no_update,
             no_update,
             no_update,
             no_update,
