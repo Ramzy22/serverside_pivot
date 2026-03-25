@@ -56,6 +56,8 @@ Keyword arguments:
 
     - scope (a value equal to: 'viewport', 'root'; optional)
 
+- cinemaMode (boolean; optional)
+
 - colFields (list; optional)
 
 - columnPinned (dict; optional)
@@ -280,6 +282,7 @@ Keyword arguments:
         sorting: typing.Optional[typing.Sequence] = None,
         expanded: typing.Optional[typing.Union[dict, bool]] = None,
         columns: typing.Optional[typing.Sequence] = None,
+        cinemaMode: typing.Optional[bool] = None,
         showRowTotals: typing.Optional[bool] = None,
         showColTotals: typing.Optional[bool] = None,
         grandTotalPosition: typing.Optional[Literal["top", "bottom"]] = None,
@@ -323,9 +326,9 @@ Keyword arguments:
         dataVersion: typing.Optional[NumberType] = None,
         **kwargs
     ):
-        self._prop_names = ['id', 'availableFieldList', 'cellUpdate', 'cellUpdates', 'chartCanvasPanes', 'chartData', 'chartDefaults', 'chartDefinitions', 'chartEvent', 'chartRequest', 'chartServerWindow', 'colFields', 'columnPinned', 'columnPinning', 'columnSizing', 'columnVisibility', 'columns', 'conditionalFormatting', 'data', 'dataOffset', 'dataVersion', 'defaultTheme', 'drillEndpoint', 'drillThrough', 'expanded', 'filterOptions', 'filters', 'grandTotalPosition', 'persistence', 'persistence_type', 'pinningOptions', 'pinningPresets', 'pivotTitle', 'reset', 'rowCount', 'rowFields', 'rowMove', 'rowPinned', 'rowPinning', 'saveViewTrigger', 'savedView', 'serverSide', 'showColTotals', 'showRowTotals', 'sortEvent', 'sortLock', 'sortOptions', 'sorting', 'style', 'table', 'tableCanvasSize', 'valConfigs', 'validationRules', 'viewState', 'viewport']
+        self._prop_names = ['id', 'availableFieldList', 'cellUpdate', 'cellUpdates', 'chartCanvasPanes', 'chartData', 'chartDefaults', 'chartDefinitions', 'chartEvent', 'chartRequest', 'chartServerWindow', 'cinemaMode', 'colFields', 'columnPinned', 'columnPinning', 'columnSizing', 'columnVisibility', 'columns', 'conditionalFormatting', 'data', 'dataOffset', 'dataVersion', 'defaultTheme', 'drillEndpoint', 'drillThrough', 'expanded', 'filterOptions', 'filters', 'grandTotalPosition', 'persistence', 'persistence_type', 'pinningOptions', 'pinningPresets', 'pivotTitle', 'reset', 'rowCount', 'rowFields', 'rowMove', 'rowPinned', 'rowPinning', 'saveViewTrigger', 'savedView', 'serverSide', 'showColTotals', 'showRowTotals', 'sortEvent', 'sortLock', 'sortOptions', 'sorting', 'style', 'table', 'tableCanvasSize', 'valConfigs', 'validationRules', 'viewState', 'viewport']
         self._valid_wildcard_attributes =            []
-        self.available_properties = ['id', 'availableFieldList', 'cellUpdate', 'cellUpdates', 'chartCanvasPanes', 'chartData', 'chartDefaults', 'chartDefinitions', 'chartEvent', 'chartRequest', 'chartServerWindow', 'colFields', 'columnPinned', 'columnPinning', 'columnSizing', 'columnVisibility', 'columns', 'conditionalFormatting', 'data', 'dataOffset', 'dataVersion', 'defaultTheme', 'drillEndpoint', 'drillThrough', 'expanded', 'filterOptions', 'filters', 'grandTotalPosition', 'persistence', 'persistence_type', 'pinningOptions', 'pinningPresets', 'pivotTitle', 'reset', 'rowCount', 'rowFields', 'rowMove', 'rowPinned', 'rowPinning', 'saveViewTrigger', 'savedView', 'serverSide', 'showColTotals', 'showRowTotals', 'sortEvent', 'sortLock', 'sortOptions', 'sorting', 'style', 'table', 'tableCanvasSize', 'valConfigs', 'validationRules', 'viewState', 'viewport']
+        self.available_properties = ['id', 'availableFieldList', 'cellUpdate', 'cellUpdates', 'chartCanvasPanes', 'chartData', 'chartDefaults', 'chartDefinitions', 'chartEvent', 'chartRequest', 'chartServerWindow', 'cinemaMode', 'colFields', 'columnPinned', 'columnPinning', 'columnSizing', 'columnVisibility', 'columns', 'conditionalFormatting', 'data', 'dataOffset', 'dataVersion', 'defaultTheme', 'drillEndpoint', 'drillThrough', 'expanded', 'filterOptions', 'filters', 'grandTotalPosition', 'persistence', 'persistence_type', 'pinningOptions', 'pinningPresets', 'pivotTitle', 'reset', 'rowCount', 'rowFields', 'rowMove', 'rowPinned', 'rowPinning', 'saveViewTrigger', 'savedView', 'serverSide', 'showColTotals', 'showRowTotals', 'sortEvent', 'sortLock', 'sortOptions', 'sorting', 'style', 'table', 'tableCanvasSize', 'valConfigs', 'validationRules', 'viewState', 'viewport']
         self.available_wildcard_properties =            []
         _explicit_args = kwargs.pop('_explicit_args')
         _locals = locals()

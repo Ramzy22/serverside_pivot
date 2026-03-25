@@ -39,6 +39,7 @@ export const useServerSideRowModel = ({
     keyMapper, // function to get a key from a row, if needed
     cacheKey,
     excludeGrandTotal = false,
+    cinemaMode = false,
     stateEpoch = 0,
     sessionId = 'anonymous',
     clientInstance = 'default',
@@ -389,6 +390,7 @@ export const useServerSideRowModel = ({
                 col_end: colEnd !== null ? colEnd : undefined,
                 needs_col_schema: needsColSchema || undefined,
                 include_grand_total: excludeGrandTotal || undefined,
+                cinema_mode: cinemaMode || undefined,
             }
         });
 

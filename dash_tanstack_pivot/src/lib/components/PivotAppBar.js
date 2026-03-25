@@ -251,6 +251,7 @@ function ThemeEditorPopover({ theme, themeName, themeOverrides, setThemeOverride
 }
 
 export function PivotAppBar({
+    cinemaMode, setCinemaMode,
     sidebarOpen, setSidebarOpen,
     themeName, setThemeName,
     themeOverrides, setThemeOverrides,
@@ -722,6 +723,13 @@ export function PivotAppBar({
                 <button style={sectionToggleButtonStyle(openToolbarSections.format)} onClick={() => toggleToolbarSection('format')}>Format</button>
                 <button style={sectionToggleButtonStyle(openToolbarSections.charts)} onClick={() => toggleToolbarSection('charts')}>Charts</button>
                 <button style={sectionToggleButtonStyle(openToolbarSections.theme)} onClick={() => toggleToolbarSection('theme')}>Theme</button>
+                <button
+                    style={cinemaMode ? btnActive : btnSubtle}
+                    onClick={() => setCinemaMode(!cinemaMode)}
+                    title="Cinema Mode — hide all controls and show only the table"
+                >
+                    Cinema
+                </button>
             </div>
 
             {activeSections.length > 0 ? (

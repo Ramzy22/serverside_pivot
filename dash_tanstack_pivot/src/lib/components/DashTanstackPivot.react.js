@@ -50,8 +50,8 @@ import PivotErrorBoundary from './PivotErrorBoundary';
 import { usePersistence } from '../hooks/usePersistence';
 import { useFilteredData } from '../hooks/useFilteredData';
 
-const DEFAULT_CHART_PANEL_ROW_LIMIT = 18;
-const DEFAULT_CHART_PANEL_COLUMN_LIMIT = 4;
+const DEFAULT_CHART_PANEL_ROW_LIMIT = 50;
+const DEFAULT_CHART_PANEL_COLUMN_LIMIT = 10;
 const DEFAULT_CHART_GRAPH_HEIGHT = 320;
 const DEFAULT_FLOATING_CHART_PANEL_HEIGHT = 520;
 const MIN_CHART_PANEL_WIDTH = 280;
@@ -397,6 +397,7 @@ export default function DashTanstackPivot(props) {
         filters: initialFilters = {},
         sorting: initialSorting = [],
         expanded: initialExpanded = {},
+        cinemaMode: initialCinemaMode = false,
         showRowTotals: initialShowRowTotals = true,
         showColTotals: initialShowColTotals = true,
         grandTotalPosition = 'top',
@@ -796,6 +797,7 @@ export default function DashTanstackPivot(props) {
             return () => window.removeEventListener('resize', handleResize);
         }, [columnPinning.right, showNotification]);
 
+    const [cinemaMode, setCinemaMode] = useState(initialCinemaMode);
     const [showRowTotals, setShowRowTotals] = useState(initialShowRowTotals);
     const [showColTotals, setShowColTotals] = useState(initialShowColTotals);
     const effectiveGrandTotalPinState = useMemo(
@@ -915,6 +917,7 @@ export default function DashTanstackPivot(props) {
         if (sanitizedFilters) setFilters(sanitizedFilters);
         if (Array.isArray(restored.sorting)) setSorting(restored.sorting);
         if (restored.expanded && typeof restored.expanded === 'object') setExpanded(restored.expanded);
+        if (typeof restored.cinemaMode === 'boolean') setCinemaMode(restored.cinemaMode);
         if (typeof restored.showRowTotals === 'boolean') setShowRowTotals(restored.showRowTotals);
         if (typeof restored.showColTotals === 'boolean') setShowColTotals(restored.showColTotals);
         if (typeof restored.showRowNumbers === 'boolean') setShowRowNumbers(restored.showRowNumbers);
@@ -2423,6 +2426,7 @@ export default function DashTanstackPivot(props) {
             col_start: colStart,
             col_end: colEnd,
             include_grand_total: showColTotals || undefined,
+            cinema_mode: cinemaMode || undefined,
             needs_col_schema: false,
             row_limit: resolvedRowLimit,
             column_limit: resolvedColumnLimit,
@@ -2702,7 +2706,7 @@ export default function DashTanstackPivot(props) {
     React.useEffect(() => {
         const nextProps = {
             rowFields, colFields, valConfigs, filters, sorting, sortOptions: effectiveSortOptions, expanded,
-            showRowTotals, showColTotals, columnPinning, rowPinning, columnVisibility, columnSizing
+            cinemaMode, showRowTotals, showColTotals, columnPinning, rowPinning, columnVisibility, columnSizing
         };
         const nextSyncState = {
             ...nextProps,
@@ -2821,10 +2825,11 @@ export default function DashTanstackPivot(props) {
                     intent: 'structural',
                     needs_col_schema: serverSide || undefined,
                     include_grand_total: serverSidePinsGrandTotal || undefined,
+                    cinema_mode: cinemaMode || undefined,
                 }
             });
         }
-    }, [rowFields, colFields, valConfigs, filters, sorting, effectiveSortOptions, expanded, showRowTotals, showColTotals, columnPinning, rowPinning, grandTotalPinOverride, columnVisibility, columnSizing, beginStructuralTransaction, beginExpansionRequest, serverSide, tableName, serverSidePinsGrandTotal]);
+    }, [rowFields, colFields, valConfigs, filters, sorting, effectiveSortOptions, expanded, cinemaMode, showRowTotals, showColTotals, columnPinning, rowPinning, grandTotalPinOverride, columnVisibility, columnSizing, beginStructuralTransaction, beginExpansionRequest, serverSide, tableName, serverSidePinsGrandTotal]);
 
     useEffect(() => {
         const handleClick = () => setContextMenu(null);
@@ -3732,6 +3737,7 @@ export default function DashTanstackPivot(props) {
         blockSize: 100,
         cacheKey: serverSideCacheKey,
         excludeGrandTotal: serverSidePinsGrandTotal,
+        cinemaMode,
         stateEpoch,
         sessionId: sessionIdRef.current,
         clientInstance: clientInstanceRef.current,
@@ -5797,13 +5803,35 @@ export default function DashTanstackPivot(props) {
     const floatingChartCanvasPanes = chartCanvasPanes.filter((pane) => pane.floating);
 
     return (
-        <div id={id} style={{ ...styles.root, ...loadingCssVars, ...style }}>
+        <div id={id} style={{ ...styles.root, ...loadingCssVars, position: 'relative', ...style }}>
             <style>{loadingAnimationStyles}</style>
             <div style={srOnly} role="status" aria-live="polite">{announcement}</div>
+            {/* Cinema mode exit button — visible only when cinema mode is active */}
+            {cinemaMode && (
+                <button
+                    onClick={() => setCinemaMode(false)}
+                    title="Exit Cinema Mode"
+                    style={{
+                        position: 'absolute', top: 12, right: 12, zIndex: 9999,
+                        background: 'rgba(0,0,0,0.55)', color: '#fff',
+                        border: 'none', borderRadius: 8, padding: '6px 14px',
+                        cursor: 'pointer', fontSize: 13, fontWeight: 600,
+                        display: 'flex', alignItems: 'center', gap: 6,
+                        backdropFilter: 'blur(4px)',
+                        opacity: 0.7,
+                        transition: 'opacity 0.15s',
+                    }}
+                    onMouseEnter={e => e.currentTarget.style.opacity = 1}
+                    onMouseLeave={e => e.currentTarget.style.opacity = 0.7}
+                >
+                    ✕ Exit Cinema
+                </button>
+            )}
             {/* PivotAppBar is intentionally outside PivotErrorBoundary so that
                 the global search input (and other toolbar controls) are not
                 unmounted on every dataVersion change. */}
-            <PivotAppBar
+            {!cinemaMode && <PivotAppBar
+                cinemaMode={cinemaMode} setCinemaMode={setCinemaMode}
                 sidebarOpen={sidebarOpen} setSidebarOpen={setSidebarOpen}
                 themeName={themeName} setThemeName={setThemeName}
                 themeOverrides={themeOverrides} setThemeOverrides={setThemeOverrides}
@@ -5835,10 +5863,10 @@ export default function DashTanstackPivot(props) {
                 canCreateSelectionChart={Object.keys(selectedCells || {}).length > 0}
                 onCreateSelectionChart={() => openSelectionChart()}
                 onAddChartPane={handleAddChartCanvasPane}
-            />
+            />}
         <PivotErrorBoundary key={dataVersion}>
             <div style={{display:'flex', flex:1, overflow:'hidden', fontFamily: fontFamily, fontSize: fontSize, zoom: zoomLevel / 100}}>
-                {sidebarOpen && (
+                {!cinemaMode && sidebarOpen && (
                     <SidebarPanel
                         sidebarTab={sidebarTab} setSidebarTab={setSidebarTab}
                         rowFields={rowFields} setRowFields={setRowFields}
@@ -6009,7 +6037,7 @@ export default function DashTanstackPivot(props) {
                                     model={chartCanvasPaneModels[pane.id] || null}
                                     theme={theme}
                                     onCategoryActivate={(target) => activateChartCategory(pane.source, pane.interactionMode, target)}
-                                    floating={pane.floating}
+                                    floating={false}
                                     onToggleFloating={() => handleToggleChartCanvasPaneFloating(pane.id)}
                                     floatingRect={pane.floatingRect}
                                     onFloatingDragStart={(event) => handleStartChartCanvasPaneFloatingDrag(pane.id, event)}
@@ -6149,6 +6177,7 @@ DashTanstackPivot.propTypes = {
         expanded: PropTypes.oneOfType([PropTypes.object, PropTypes.bool]),
         columns: PropTypes.array,
     
+    cinemaMode: PropTypes.bool,
     showRowTotals: PropTypes.bool,
     showColTotals: PropTypes.bool,
     grandTotalPosition: PropTypes.oneOf(['top', 'bottom']),

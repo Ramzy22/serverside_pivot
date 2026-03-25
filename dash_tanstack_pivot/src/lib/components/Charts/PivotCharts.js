@@ -2609,8 +2609,12 @@ const ChartSurface = ({
             : (model && model.note);
     const [configOpen, setConfigOpen] = useState(false);
     const chartHeightResizeRef = useRef(null);
+    const cinemaContainerRef = useRef(null);
+    const [cinemaAutoHeight, setCinemaAutoHeight] = useState(null);
     const showChrome = !cinemaMode;
-    const chartHeight = Math.max(180, Number.isFinite(Number(chartHeightProp)) ? Number(chartHeightProp) : (cinemaMode ? 520 : CHART_HEIGHT));
+    const chartHeight = cinemaMode && cinemaAutoHeight
+        ? Math.max(180, cinemaAutoHeight)
+        : Math.max(180, Number.isFinite(Number(chartHeightProp)) ? Number(chartHeightProp) : CHART_HEIGHT);
     const svgRef = useRef(null);
     const maxHierarchyLevel = (model && model.maxHierarchyLevel) || 1;
     const showHierarchySection = typeof onHierarchyLevelChange === 'function' && maxHierarchyLevel > 1;
@@ -2660,6 +2664,18 @@ const ChartSurface = ({
     }, [cinemaMode, configOpen]);
 
     useEffect(() => {
+        if (!cinemaMode) { setCinemaAutoHeight(null); return; }
+        const el = cinemaContainerRef.current;
+        if (!el) return;
+        const update = () => { const h = el.clientHeight; if (h > 0) setCinemaAutoHeight(h); };
+        update();
+        if (typeof ResizeObserver === 'undefined') return;
+        const ro = new ResizeObserver(update);
+        ro.observe(el);
+        return () => ro.disconnect();
+    }, [cinemaMode]);
+
+    useEffect(() => {
         const handlePointerMove = (event) => {
             if (!chartHeightResizeRef.current || typeof onChartHeightChange !== 'function') return;
             const resizeState = chartHeightResizeRef.current;
@@ -2685,7 +2701,7 @@ const ChartSurface = ({
     }, [onChartHeightChange]);
 
     return (
-        <div style={{ display: 'flex', flexDirection: 'column', gap: showChrome ? '14px' : '10px', flex: cinemaMode ? '1 1 auto' : '0 0 auto', minHeight: 0 }}>
+        <div ref={cinemaContainerRef} style={{ display: 'flex', flexDirection: 'column', gap: showChrome ? '14px' : '10px', flex: cinemaMode ? '1 1 auto' : '0 0 auto', minHeight: 0 }}>
             {showChrome ? (
                 <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', gap: '12px' }}>
                     <ChartHeader
@@ -2912,8 +2928,8 @@ const ChartSurface = ({
                     && chartType !== 'sunburst'
                     && chartType !== 'sankey'
                     ? <EmptyChartState message={model.emptyMessage || 'No chart data available.'} theme={theme} chartHeight={chartHeight} />
-                    : <SvgChart model={model} chartType={chartType} barLayout={barLayout} axisMode={axisMode} theme={theme} chartHeight={chartHeight} showLegend={showChrome} onCategoryActivate={onCategoryActivate} svgRef={svgRef} />)}
-            {typeof onChartHeightChange === 'function' ? (
+                    : <SvgChart model={model} chartType={chartType} barLayout={barLayout} axisMode={axisMode} theme={theme} chartHeight={chartHeight} showLegend onCategoryActivate={onCategoryActivate} svgRef={svgRef} />)}
+            {!cinemaMode && typeof onChartHeightChange === 'function' ? (
                 <div
                     onMouseDown={(event) => {
                         event.preventDefault();
@@ -3099,7 +3115,7 @@ export const PivotChartPanel = ({
             ) : null}
             <aside style={{
                 width: fullscreenMode || floating || standalone ? '100%' : `calc(100% - ${showResizeHandle ? 8 : 0}px)`,
-                height: fullscreenMode || floating ? '100%' : 'auto',
+                height: fullscreenMode || floating || standalone ? '100%' : 'auto',
                 minWidth: 0,
                 minHeight: 0,
                 borderLeft: standalone || floating || fullscreenMode ? 'none' : `1px solid ${theme.border}`,
