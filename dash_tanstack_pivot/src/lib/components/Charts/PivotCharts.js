@@ -11,6 +11,9 @@ const CHART_HEIGHT = 320;
 const CHART_WIDTH = 760;
 
 const DEFAULT_COLORS = ['#2563EB', '#F97316', '#0F766E', '#7C3AED', '#DC2626', '#0891B2'];
+const VALID_COMBO_LAYER_TYPES = new Set(['bar', 'line', 'area']);
+const VALID_COMBO_LAYER_AXES = new Set(['left', 'right']);
+const DEFAULT_COMBO_LAYER_SEQUENCE = ['bar', 'line', 'area'];
 const normalizePositiveLimit = (value, fallback) => {
     const numericValue = Number(value);
     if (!Number.isFinite(numericValue) || numericValue < 1) return fallback;
@@ -137,6 +140,95 @@ const buildColumnFieldValues = (column, fields = []) => {
         }
         return acc;
     }, {});
+};
+
+const getChartableColumns = (visibleCols = []) => (
+    (visibleCols || []).filter((column) => column && column.id && !INTERNAL_COL_IDS.has(column.id))
+);
+
+const getComboLayerDefaultName = (column, index = 0) => (
+    column && column.id ? getColumnLabel(column) : `Series ${index + 1}`
+);
+
+export const buildDefaultCartesianLayers = (visibleCols = [], maxLayers = 3) => {
+    const chartableColumns = getChartableColumns(visibleCols).slice(0, Math.max(1, Math.floor(Number(maxLayers) || 1)));
+    return chartableColumns.map((column, index) => ({
+        id: `layer-${index + 1}`,
+        type: DEFAULT_COMBO_LAYER_SEQUENCE[index % DEFAULT_COMBO_LAYER_SEQUENCE.length],
+        columnId: column.id,
+        axis: index === 0 ? 'left' : (index === 1 ? 'right' : 'left'),
+        name: getComboLayerDefaultName(column, index),
+        hidden: false,
+    }));
+};
+
+const buildGroupedChartColumnOptions = (columns = []) => {
+    const resolveColumnLabel = buildColumnLabelResolver(columns);
+    return columns
+        .map((column) => {
+            const segments = getColumnHeaderSegments(column);
+            const leafLabel = segments[segments.length - 1] || getColumnLabel(column);
+            const groupLabel = segments.length > 1 ? segments.slice(0, -1).join(' / ') : 'Measures';
+            const fullLabel = resolveColumnLabel(column);
+            return {
+                id: column.id,
+                column,
+                leafLabel,
+                groupLabel,
+                fullLabel,
+                searchText: [
+                    column.id,
+                    leafLabel,
+                    groupLabel,
+                    fullLabel,
+                    segments.join(' '),
+                ].join(' ').toLowerCase(),
+            };
+        })
+        .sort((left, right) => (
+            left.groupLabel.localeCompare(right.groupLabel, undefined, { numeric: true, sensitivity: 'base' })
+            || left.fullLabel.localeCompare(right.fullLabel, undefined, { numeric: true, sensitivity: 'base' })
+        ));
+};
+
+const normalizeComboLayer = (layer, availableColumns = [], index = 0, fallbackLayer = null) => {
+    const source = layer && typeof layer === 'object' ? layer : {};
+    const fallback = fallbackLayer && typeof fallbackLayer === 'object' ? fallbackLayer : {};
+    const chartableColumns = getChartableColumns(availableColumns);
+    const fallbackColumn = chartableColumns[0] || null;
+    const requestedColumnId = source.columnId || fallback.columnId || (fallbackColumn && fallbackColumn.id) || null;
+    const matchingColumn = chartableColumns.find((column) => column.id === requestedColumnId) || null;
+    return {
+        id: typeof source.id === 'string' && source.id.trim()
+            ? source.id
+            : (typeof fallback.id === 'string' && fallback.id.trim() ? fallback.id : `layer-${index + 1}`),
+        type: VALID_COMBO_LAYER_TYPES.has(source.type)
+            ? source.type
+            : (VALID_COMBO_LAYER_TYPES.has(fallback.type) ? fallback.type : DEFAULT_COMBO_LAYER_SEQUENCE[index % DEFAULT_COMBO_LAYER_SEQUENCE.length]),
+        columnId: matchingColumn ? matchingColumn.id : requestedColumnId,
+        axis: VALID_COMBO_LAYER_AXES.has(source.axis)
+            ? source.axis
+            : (VALID_COMBO_LAYER_AXES.has(fallback.axis) ? fallback.axis : (index === 1 ? 'right' : 'left')),
+        name: typeof source.name === 'string' && source.name.trim()
+            ? source.name.trim()
+            : (typeof fallback.name === 'string' && fallback.name.trim()
+                ? fallback.name.trim()
+                : getComboLayerDefaultName(matchingColumn || fallbackColumn, index)),
+        hidden: Boolean(source.hidden),
+    };
+};
+
+export const normalizeComboLayers = (layers, availableColumns = [], fallbackLayers = []) => {
+    const sourceLayers = Array.isArray(layers) ? layers : [];
+    const normalized = sourceLayers
+        .filter((layer) => layer && typeof layer === 'object')
+        .map((layer, index) => normalizeComboLayer(layer, availableColumns, index, Array.isArray(fallbackLayers) ? fallbackLayers[index] : null));
+
+    if (normalized.length > 0) return normalized;
+    const defaultLayers = Array.isArray(fallbackLayers) && fallbackLayers.length > 0
+        ? fallbackLayers
+        : buildDefaultCartesianLayers(availableColumns);
+    return defaultLayers.map((layer, index) => normalizeComboLayer(layer, availableColumns, index, layer));
 };
 
 const getRowLabel = (row, fallbackIndex = 0) => {
@@ -1208,6 +1300,177 @@ export const buildPivotChartModel = (displayRows, visibleCols, options = {}) => 
     return sortChartModel(rawModel, sortMode);
 };
 
+const buildComboLayersForRows = (layers, chartRows, visibleCols) => {
+    const chartableColumns = getChartableColumns(visibleCols);
+    return normalizeComboLayers(layers, chartableColumns)
+        .map((layer, index) => {
+            const column = chartableColumns.find((candidate) => candidate.id === layer.columnId) || null;
+            if (!column) return null;
+            const values = chartRows.map((row) => parseNumeric(getCellValue(row, column.id)));
+            if (!values.some((value) => value !== null)) return null;
+            return {
+                ...layer,
+                color: getColorForIndex(index, { primary: DEFAULT_COLORS[0] }),
+                name: layer.name || getColumnLabel(column),
+                columnId: column.id,
+                values,
+            };
+        })
+        .filter(Boolean);
+};
+
+const buildComboEmptyModel = (message, hierarchyLevel, maxHierarchyLevel, availableLevels) => ({
+    title: null,
+    subtitle: null,
+    categories: [],
+    categoryTargets: [],
+    categoryBands: [],
+    layers: [],
+    series: [],
+    stackedGroups: [],
+    icicleNodes: [],
+    sunburstNodes: [],
+    sankeyNodes: [],
+    sankeyLinks: [],
+    emptyMessage: message,
+    availableLevels,
+    maxHierarchyLevel,
+    activeHierarchyLevel: hierarchyLevel,
+});
+
+export const buildComboPivotChartModel = (displayRows, visibleCols, options = {}) => {
+    const hierarchyLevel = options.hierarchyLevel === undefined ? 'all' : options.hierarchyLevel;
+    const maxRows = normalizePositiveLimit(options.maxRows, MAX_PANEL_CATEGORIES);
+    const rowFields = Array.isArray(options.rowFields) ? options.rowFields : [];
+    const sortMode = options.sortMode || 'natural';
+    const allVisibleRows = (displayRows || []).filter((row) => !isTotalRow(row));
+    const availableLevels = getAvailableLevels(allVisibleRows);
+    const maxHierarchyLevel = Math.max(
+        Number(options.maxHierarchyLevel) || 0,
+        availableLevels.length > 0 ? Math.max(...availableLevels) : 0,
+        1
+    );
+    const filteredVisibleRows = getHierarchyDisplayRows(allVisibleRows, hierarchyLevel);
+    const chartRows = filteredVisibleRows.slice(0, maxRows);
+    if (chartRows.length === 0) {
+        return buildComboEmptyModel(
+            hierarchyLevel === 'all'
+                ? 'The current pivot view does not have visible rows for a combo chart.'
+                : `No visible rows found at hierarchy level ${hierarchyLevel}.`,
+            hierarchyLevel,
+            maxHierarchyLevel,
+            availableLevels
+        );
+    }
+
+    const modelLayers = buildComboLayersForRows(options.layers, chartRows, visibleCols);
+    if (modelLayers.length === 0) {
+        return buildComboEmptyModel(
+            'No visible numeric columns are available for the combo chart layers.',
+            hierarchyLevel,
+            maxHierarchyLevel,
+            availableLevels
+        );
+    }
+
+    const notes = [];
+    if (filteredVisibleRows.length > chartRows.length) {
+        notes.push(`showing first ${chartRows.length} visible rows`);
+    }
+
+    const rawModel = {
+        title: null,
+        subtitle: null,
+        categories: chartRows.map((row, index) => getRowLabel(row, index)),
+        categoryTargets: chartRows.map((row, index) => buildRowTarget(row, index, rowFields)),
+        categoryBands: buildCategoryBandsForRows(chartRows.map((_, index) => index), chartRows),
+        layers: modelLayers,
+        series: modelLayers.map((layer) => ({ name: layer.name, values: layer.values })),
+        stackedGroups: [],
+        icicleNodes: [],
+        sunburstNodes: [],
+        sankeyNodes: [],
+        sankeyLinks: [],
+        note: notes.length > 0 ? notes.join(', ') : null,
+        availableLevels,
+        maxHierarchyLevel,
+        activeHierarchyLevel: hierarchyLevel,
+    };
+    return sortChartModel(rawModel, sortMode);
+};
+
+export const buildComboSelectionChartModel = (selectionMap, visibleRows, visibleCols, options = {}) => {
+    const hierarchyLevel = options.hierarchyLevel === undefined ? 'all' : options.hierarchyLevel;
+    const maxRows = normalizePositiveLimit(options.maxRows, MAX_SELECTION_CATEGORIES);
+    const rowFields = Array.isArray(options.rowFields) ? options.rowFields : [];
+    const sortMode = options.sortMode || 'natural';
+    const bounds = buildSelectionBounds(selectionMap, visibleRows, visibleCols);
+    if (!bounds) {
+        return buildComboEmptyModel(
+            'Select a range of value cells to build a combo chart.',
+            hierarchyLevel,
+            options.maxHierarchyLevel || 1,
+            []
+        );
+    }
+
+    const { rowIndexes, colIndexes } = bounds;
+    const selectedRows = rowIndexes.map((rowIndex) => visibleRows[rowIndex]).filter(Boolean);
+    const availableLevels = getAvailableLevels(selectedRows);
+    const maxHierarchyLevel = Math.max(
+        Number(options.maxHierarchyLevel) || 0,
+        availableLevels.length > 0 ? Math.max(...availableLevels) : 0,
+        1
+    );
+    const displayRows = getHierarchyDisplayRows(selectedRows, hierarchyLevel);
+    const chartRows = displayRows.slice(0, maxRows);
+    if (chartRows.length === 0) {
+        return buildComboEmptyModel(
+            `No selected rows found at hierarchy level ${hierarchyLevel}.`,
+            hierarchyLevel,
+            maxHierarchyLevel,
+            availableLevels
+        );
+    }
+
+    const selectedColumnIds = new Set(
+        colIndexes
+            .map((index) => visibleCols[index])
+            .filter((column) => column && column.id && !INTERNAL_COL_IDS.has(column.id))
+            .map((column) => column.id)
+    );
+    const selectionColumns = getChartableColumns(visibleCols).filter((column) => selectedColumnIds.has(column.id));
+    const modelLayers = buildComboLayersForRows(options.layers, chartRows, selectionColumns);
+    if (modelLayers.length === 0) {
+        return buildComboEmptyModel(
+            'The selected range does not contain numeric columns that can be layered.',
+            hierarchyLevel,
+            maxHierarchyLevel,
+            availableLevels
+        );
+    }
+
+    const rawModel = {
+        title: null,
+        subtitle: null,
+        categories: chartRows.map((row, index) => getRowLabel(row, index)),
+        categoryTargets: chartRows.map((row, index) => buildRowTarget(row, index, rowFields)),
+        categoryBands: buildCategoryBandsForRows(chartRows.map((_, index) => index), chartRows),
+        layers: modelLayers,
+        series: modelLayers.map((layer) => ({ name: layer.name, values: layer.values })),
+        stackedGroups: [],
+        icicleNodes: [],
+        sunburstNodes: [],
+        sankeyNodes: [],
+        sankeyLinks: [],
+        note: selectedRows.length > chartRows.length ? `showing first ${chartRows.length} selected rows` : null,
+        availableLevels,
+        maxHierarchyLevel,
+        activeHierarchyLevel: hierarchyLevel,
+    };
+    return sortChartModel(rawModel, sortMode);
+};
+
 const buildLinePath = (points, closeToY = null) => {
     const validPoints = points.filter((point) => point && Number.isFinite(point.x) && Number.isFinite(point.y));
     if (validPoints.length === 0) return '';
@@ -1242,6 +1505,26 @@ const buildAreaBandPath = (points) => {
     }
     segments.push('Z');
     return segments.join(' ');
+};
+
+const getAxisMetrics = (values, chartHeight, margin) => {
+    const numericValues = (values || []).filter((value) => typeof value === 'number' && Number.isFinite(value));
+    const minValue = numericValues.length > 0 ? Math.min(...numericValues, 0) : 0;
+    const maxValue = numericValues.length > 0 ? Math.max(...numericValues, 0) : 0;
+    const span = maxValue - minValue || 1;
+    const scaleY = (value) => {
+        const normalized = (value - minValue) / span;
+        return chartHeight - margin.bottom - (normalized * (chartHeight - margin.top - margin.bottom));
+    };
+    const baselineY = scaleY(0);
+    const tickValues = Array.from({ length: 5 }, (_, index) => minValue + ((span / 4) * index));
+    return {
+        minValue,
+        maxValue,
+        scaleY,
+        baselineY,
+        tickValues,
+    };
 };
 
 const layoutIcicleNodes = (nodes, x, width, level, bandHeight, acc = []) => {
@@ -1298,6 +1581,7 @@ const ChartTypeButtons = ({ chartType, onChange, theme, includeHierarchyCharts =
             <button onClick={() => onChange('bar')} style={buttonStyle('bar')}>Bar</button>
             <button onClick={() => onChange('line')} style={buttonStyle('line')}>Line</button>
             <button onClick={() => onChange('area')} style={buttonStyle('area')}>Area</button>
+            <button onClick={() => onChange('combo')} style={buttonStyle('combo')}>Combo</button>
             {includeHierarchyCharts ? (
                 <>
                     <button onClick={() => onChange('icicle')} style={buttonStyle('icicle')}>Icicle</button>
@@ -1431,7 +1715,7 @@ const ChartHeader = ({ title, subtitle, note, theme }) => (
     )
 );
 
-const ChartConfigSection = ({ title, description, theme, children }) => (
+const ChartConfigSection = ({ title, theme, children }) => (
     <div style={{
         display: 'flex',
         flexDirection: 'column',
@@ -1443,47 +1727,43 @@ const ChartConfigSection = ({ title, description, theme, children }) => (
         background: theme.surfaceBg || theme.background || '#fff',
         boxShadow: theme.shadowInset || 'none',
     }}>
-        <div style={{
-            display: 'flex',
-            alignItems: 'center',
-            gap: '6px',
-            paddingBottom: '6px',
-            borderBottom: `1px solid ${theme.border}`,
-        }}>
-            <div style={{
-                fontSize: '10px',
-                fontWeight: 800,
-                letterSpacing: '0.08em',
-                textTransform: 'uppercase',
-                color: theme.textSec,
-            }}>
-                {title}
+        {title ? (
+            <div style={{ paddingBottom: '6px', borderBottom: `1px solid ${theme.border}` }}>
+                <div style={{
+                    fontSize: '10px',
+                    fontWeight: 800,
+                    letterSpacing: '0.08em',
+                    textTransform: 'uppercase',
+                    color: theme.textSec,
+                }}>
+                    {title}
+                </div>
             </div>
-        </div>
+        ) : null}
         <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
             {children}
         </div>
     </div>
 );
 
-const ChartConfigField = ({ label, description, theme, children, controlMinWidth = '180px' }) => (
+const ChartConfigField = ({ label, theme, children, controlMinWidth = '180px' }) => (
     <div style={{
         display: 'flex',
-        alignItems: 'center',
+        alignItems: 'flex-start',
         justifyContent: 'space-between',
-        gap: '8px',
+        gap: '10px',
         flexWrap: 'wrap',
     }}>
-        <div style={{ display: 'flex', alignItems: 'center', flex: '0 0 auto', minWidth: '88px' }}>
-            <div style={{ fontSize: '11px', fontWeight: 700, color: theme.text, whiteSpace: 'nowrap' }}>
+        <div style={{ display: 'flex', flexDirection: 'column', gap: '3px', flex: '1 1 180px', minWidth: '132px' }}>
+            <div style={{ fontSize: '11px', fontWeight: 700, color: theme.text }}>
                 {label}
             </div>
         </div>
         <div style={{
             display: 'flex',
             justifyContent: 'flex-end',
-            alignItems: 'center',
-            flex: '1 1 150px',
+            alignItems: 'flex-start',
+            flex: '1 1 210px',
             minWidth: controlMinWidth,
         }}>
             {children}
@@ -1545,6 +1825,312 @@ const ChartLimitInputs = ({
                     style={inputStyle}
                 />
             </label>
+        </div>
+    );
+};
+
+const ChartLayerEditor = ({
+    layers,
+    onChange,
+    availableColumns,
+    theme,
+}) => {
+    const chartableColumns = getChartableColumns(availableColumns);
+    const normalizedLayers = normalizeComboLayers(layers, chartableColumns);
+    const [searchValue, setSearchValue] = useState('');
+    const columnOptions = useMemo(
+        () => buildGroupedChartColumnOptions(chartableColumns),
+        [chartableColumns]
+    );
+    const optionById = useMemo(
+        () => new Map(columnOptions.map((option) => [option.id, option])),
+        [columnOptions]
+    );
+    const normalizedSearchValue = searchValue.trim().toLowerCase();
+    const filteredOptions = useMemo(
+        () => (
+            normalizedSearchValue
+                ? columnOptions.filter((option) => option.searchText.includes(normalizedSearchValue))
+                : columnOptions
+        ),
+        [columnOptions, normalizedSearchValue]
+    );
+    const groupedFilteredOptions = useMemo(() => {
+        const groups = new Map();
+        filteredOptions.forEach((option) => {
+            if (!groups.has(option.groupLabel)) groups.set(option.groupLabel, []);
+            groups.get(option.groupLabel).push(option);
+        });
+        return Array.from(groups.entries()).map(([label, options]) => ({ label, options }));
+    }, [filteredOptions]);
+    const inputStyle = {
+        border: `1px solid ${theme.border}`,
+        background: theme.surfaceBg || theme.background || '#fff',
+        color: theme.text,
+        borderRadius: theme.radiusSm || '8px',
+        padding: '6px 8px',
+        fontSize: '11px',
+        fontWeight: 700,
+    };
+    const updateLayer = (layerId, patch) => {
+        if (typeof onChange !== 'function') return;
+        onChange(normalizedLayers.map((layer) => (
+            layer.id === layerId ? { ...layer, ...(patch || {}) } : layer
+        )));
+    };
+    const moveLayer = (layerId, direction) => {
+        if (typeof onChange !== 'function') return;
+        const layerIndex = normalizedLayers.findIndex((layer) => layer.id === layerId);
+        const nextIndex = layerIndex + direction;
+        if (layerIndex < 0 || nextIndex < 0 || nextIndex >= normalizedLayers.length) return;
+        const nextLayers = [...normalizedLayers];
+        const [movedLayer] = nextLayers.splice(layerIndex, 1);
+        nextLayers.splice(nextIndex, 0, movedLayer);
+        onChange(nextLayers);
+    };
+    const removeLayer = (layerId) => {
+        if (typeof onChange !== 'function') return;
+        const nextLayers = normalizedLayers.filter((layer) => layer.id !== layerId);
+        onChange(nextLayers.length > 0 ? nextLayers : buildDefaultCartesianLayers(chartableColumns, 1));
+    };
+    const addLayer = () => {
+        if (typeof onChange !== 'function') return;
+        const usedColumnIds = new Set(normalizedLayers.map((layer) => layer.columnId));
+        const nextColumn = chartableColumns.find((column) => !usedColumnIds.has(column.id)) || chartableColumns[0];
+        if (!nextColumn) return;
+        const nextLayer = normalizeComboLayer({
+            id: `layer-${normalizedLayers.length + 1}`,
+            type: DEFAULT_COMBO_LAYER_SEQUENCE[normalizedLayers.length % DEFAULT_COMBO_LAYER_SEQUENCE.length],
+            columnId: nextColumn.id,
+            axis: normalizedLayers.length === 1 ? 'right' : 'left',
+            name: getColumnLabel(nextColumn),
+        }, chartableColumns, normalizedLayers.length);
+        onChange([...normalizedLayers, nextLayer]);
+    };
+
+    if (chartableColumns.length === 0) {
+        return (
+            <div style={{ fontSize: '11px', color: theme.textSec }}>
+                No visible numeric/value columns are available for combo layers.
+            </div>
+        );
+    }
+
+    return (
+        <div style={{ display: 'flex', flexDirection: 'column', gap: '8px', width: '100%' }}>
+            <div style={{
+                display: 'flex',
+                flexWrap: 'wrap',
+                alignItems: 'center',
+                justifyContent: 'space-between',
+                gap: '8px',
+                padding: '10px',
+                border: `1px solid ${theme.border}`,
+                borderRadius: theme.radiusSm || '8px',
+                background: theme.headerSubtleBg || theme.hover,
+            }}>
+                <div style={{ display: 'flex', flexDirection: 'column', gap: '3px', flex: '1 1 240px', minWidth: '220px' }}>
+                    <div style={{ fontSize: '11px', fontWeight: 800, color: theme.text }}>
+                        Measure Search
+                    </div>
+                    <div style={{ fontSize: '10px', color: theme.textSec }}>
+                        Search across all available chart measures and grouped pivot columns.
+                    </div>
+                </div>
+                <div style={{ display: 'flex', alignItems: 'center', gap: '8px', flex: '1 1 320px', minWidth: '240px', justifyContent: 'flex-end' }}>
+                    <input
+                        type="search"
+                        value={searchValue}
+                        onChange={(event) => setSearchValue(event.target.value)}
+                        placeholder="Search measures, groups, or column ids"
+                        style={{ ...inputStyle, width: '100%', maxWidth: '360px' }}
+                    />
+                    <div style={{ fontSize: '10px', fontWeight: 700, color: theme.textSec, whiteSpace: 'nowrap' }}>
+                        {filteredOptions.length} / {columnOptions.length}
+                    </div>
+                </div>
+            </div>
+            {filteredOptions.length === 0 ? (
+                <div style={{ fontSize: '11px', color: theme.textSec, padding: '2px 2px 0 2px' }}>
+                    No measures match the current search. Clear the search to see the full catalog.
+                </div>
+            ) : null}
+            {normalizedLayers.map((layer, layerIndex) => {
+                const selectedOption = optionById.get(layer.columnId) || null;
+                const selectedVisible = groupedFilteredOptions.some((group) => (
+                    group.options.some((option) => option.id === layer.columnId)
+                ));
+                return (
+                <div
+                    key={layer.id}
+                    style={{
+                        display: 'flex',
+                        flexDirection: 'column',
+                        gap: '10px',
+                        width: '100%',
+                        padding: '12px',
+                        border: `1px solid ${theme.border}`,
+                        borderRadius: theme.radiusSm || '8px',
+                        background: theme.surfaceBg || theme.background || '#fff',
+                        boxShadow: theme.shadowInset || 'none',
+                    }}
+                >
+                    <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', gap: '10px', flexWrap: 'wrap' }}>
+                        <div style={{ display: 'flex', flexDirection: 'column', gap: '4px', minWidth: '180px' }}>
+                            <div style={{ fontSize: '11px', fontWeight: 800, color: theme.text }}>
+                                {`Layer ${layerIndex + 1}`}
+                            </div>
+                            <div style={{ fontSize: '11px', color: theme.textSec }}>
+                                {selectedOption ? selectedOption.fullLabel : (layer.name || 'Select a measure')}
+                            </div>
+                            {selectedOption ? (
+                                <div style={{ fontSize: '10px', color: theme.textSec }}>
+                                    {`${selectedOption.groupLabel} | ${selectedOption.id}`}
+                                </div>
+                            ) : null}
+                        </div>
+                        <div style={{ display: 'flex', alignItems: 'center', gap: '6px', flexWrap: 'wrap' }}>
+                            <button
+                                type="button"
+                                onClick={() => moveLayer(layer.id, -1)}
+                                disabled={layerIndex === 0}
+                                style={{
+                                    border: `1px solid ${theme.border}`,
+                                    background: theme.headerSubtleBg || theme.hover,
+                                    color: theme.textSec,
+                                    borderRadius: theme.radiusSm || '8px',
+                                    padding: '6px 8px',
+                                    fontSize: '11px',
+                                    fontWeight: 700,
+                                    cursor: layerIndex === 0 ? 'not-allowed' : 'pointer',
+                                    opacity: layerIndex === 0 ? 0.45 : 1,
+                                }}
+                            >
+                                Up
+                            </button>
+                            <button
+                                type="button"
+                                onClick={() => moveLayer(layer.id, 1)}
+                                disabled={layerIndex === normalizedLayers.length - 1}
+                                style={{
+                                    border: `1px solid ${theme.border}`,
+                                    background: theme.headerSubtleBg || theme.hover,
+                                    color: theme.textSec,
+                                    borderRadius: theme.radiusSm || '8px',
+                                    padding: '6px 8px',
+                                    fontSize: '11px',
+                                    fontWeight: 700,
+                                    cursor: layerIndex === normalizedLayers.length - 1 ? 'not-allowed' : 'pointer',
+                                    opacity: layerIndex === normalizedLayers.length - 1 ? 0.45 : 1,
+                                }}
+                            >
+                                Down
+                            </button>
+                            <button
+                                type="button"
+                                onClick={() => removeLayer(layer.id)}
+                                style={{
+                                    border: `1px solid ${theme.border}`,
+                                    background: theme.headerSubtleBg || theme.hover,
+                                    color: theme.textSec,
+                                    borderRadius: theme.radiusSm || '8px',
+                                    padding: '6px 8px',
+                                    fontSize: '11px',
+                                    fontWeight: 700,
+                                    cursor: 'pointer',
+                                }}
+                            >
+                                Remove
+                            </button>
+                        </div>
+                    </div>
+                    <div style={{
+                        display: 'grid',
+                        gridTemplateColumns: 'repeat(auto-fit, minmax(180px, 1fr))',
+                        gap: '8px',
+                        alignItems: 'start',
+                        width: '100%',
+                    }}>
+                        <label style={{ display: 'flex', flexDirection: 'column', gap: '5px', minWidth: 0 }}>
+                            <span style={{ fontSize: '10px', fontWeight: 800, letterSpacing: '0.06em', textTransform: 'uppercase', color: theme.textSec }}>
+                                Measure
+                            </span>
+                            <select
+                                value={layer.columnId || ''}
+                                onChange={(event) => {
+                                    const nextOption = optionById.get(event.target.value) || null;
+                                    updateLayer(layer.id, {
+                                        columnId: event.target.value,
+                                        name: nextOption ? nextOption.fullLabel : layer.name,
+                                    });
+                                }}
+                                style={inputStyle}
+                            >
+                                {!selectedVisible && selectedOption ? (
+                                    <optgroup label="Current Layer Measure">
+                                        <option value={selectedOption.id}>{selectedOption.fullLabel}</option>
+                                    </optgroup>
+                                ) : null}
+                                {groupedFilteredOptions.map((group) => (
+                                    <optgroup key={group.label} label={`${group.label} (${group.options.length})`}>
+                                        {group.options.map((option) => (
+                                            <option key={option.id} value={option.id}>
+                                                {option.leafLabel}
+                                            </option>
+                                        ))}
+                                    </optgroup>
+                                ))}
+                            </select>
+                        </label>
+                        <label style={{ display: 'flex', flexDirection: 'column', gap: '5px' }}>
+                            <span style={{ fontSize: '10px', fontWeight: 800, letterSpacing: '0.06em', textTransform: 'uppercase', color: theme.textSec }}>
+                                Layer Type
+                            </span>
+                            <select
+                                value={layer.type}
+                                onChange={(event) => updateLayer(layer.id, { type: event.target.value })}
+                                style={inputStyle}
+                            >
+                                <option value="bar">Bar</option>
+                                <option value="line">Line</option>
+                                <option value="area">Area</option>
+                            </select>
+                        </label>
+                        <label style={{ display: 'flex', flexDirection: 'column', gap: '5px' }}>
+                            <span style={{ fontSize: '10px', fontWeight: 800, letterSpacing: '0.06em', textTransform: 'uppercase', color: theme.textSec }}>
+                                Axis
+                            </span>
+                            <select
+                                value={layer.axis}
+                                onChange={(event) => updateLayer(layer.id, { axis: event.target.value })}
+                                style={inputStyle}
+                            >
+                                <option value="left">Left Axis</option>
+                                <option value="right">Right Axis</option>
+                            </select>
+                        </label>
+                    </div>
+                </div>
+                );
+            })}
+            <div>
+                <button
+                    type="button"
+                    onClick={addLayer}
+                    style={{
+                        border: `1px solid ${theme.primary}`,
+                        background: theme.select,
+                        color: theme.primary,
+                        borderRadius: theme.radiusSm || '8px',
+                        padding: '6px 10px',
+                        fontSize: '11px',
+                        fontWeight: 700,
+                        cursor: 'pointer',
+                    }}
+                >
+                    Add Layer
+                </button>
+            </div>
         </div>
     );
 };
@@ -1958,6 +2544,228 @@ const SvgChart = ({
                         ))}
                     </svg>
                 </div>
+            </div>
+        );
+    }
+
+    if (chartType === 'combo') {
+        const comboLayers = (Array.isArray(model && model.layers) ? model.layers : [])
+            .filter((layer) => layer && !layer.hidden && Array.isArray(layer.values) && layer.values.some((value) => value !== null));
+        if (comboLayers.length === 0) {
+            return <EmptyChartState message={model.emptyMessage || 'No combo layers are configured.'} theme={theme} chartHeight={effectiveChartHeight} />;
+        }
+
+        const hasRightAxis = comboLayers.some((layer) => layer.axis === 'right');
+        const margin = { top: 24, right: hasRightAxis ? 76 : 20, bottom: 96, left: 72 };
+        const categoryCount = Math.max(1, Array.isArray(model.categories) ? model.categories.length : 0);
+        const step = Math.max(1, (CHART_WIDTH - margin.left - margin.right) / categoryCount);
+        const groupWidth = Math.max(22, Math.min(72, step * 0.72));
+        const barLayers = comboLayers.filter((layer) => layer.type === 'bar');
+        const areaLayers = comboLayers.filter((layer) => layer.type === 'area');
+        const lineLayers = comboLayers.filter((layer) => layer.type === 'line');
+        const leftMetrics = getAxisMetrics(
+            comboLayers.filter((layer) => layer.axis !== 'right').flatMap((layer) => layer.values),
+            effectiveChartHeight,
+            margin
+        );
+        const rightMetrics = hasRightAxis
+            ? getAxisMetrics(
+                comboLayers.filter((layer) => layer.axis === 'right').flatMap((layer) => layer.values),
+                effectiveChartHeight,
+                margin
+            )
+            : leftMetrics;
+        const categoryTargets = Array.isArray(model.categoryTargets) ? model.categoryTargets : [];
+        const legendItems = comboLayers.map((layer, index) => ({
+            label: layer.name,
+            color: layer.color || getColorForIndex(index, theme),
+        }));
+        const getLayerScale = (layer) => (layer.axis === 'right' ? rightMetrics.scaleY : leftMetrics.scaleY);
+        const getLayerBaseline = (layer) => (layer.axis === 'right' ? rightMetrics.baselineY : leftMetrics.baselineY);
+        const barGap = 4;
+        const barWidth = Math.max(8, (groupWidth - (Math.max(barLayers.length, 1) - 1) * barGap) / Math.max(barLayers.length, 1));
+
+        return (
+            <div style={{ display: 'flex', flexDirection: 'column', gap: '10px' }}>
+                <div style={{ width: '100%', minWidth: 0 }}>
+                    <svg
+                        ref={svgRef}
+                        viewBox={`0 0 ${CHART_WIDTH} ${effectiveChartHeight}`}
+                        preserveAspectRatio="xMidYMid meet"
+                        style={{
+                            width: '100%',
+                            height: 'auto',
+                            display: 'block',
+                            maxWidth: '100%',
+                        }}
+                        role="img"
+                        aria-label={model.title || 'Combo chart'}
+                    >
+                        {leftMetrics.tickValues.map((tickValue, index) => {
+                            const y = leftMetrics.scaleY(tickValue);
+                            return (
+                                <g key={`combo-left-tick-${index}`}>
+                                    <line
+                                        x1={margin.left}
+                                        x2={CHART_WIDTH - margin.right}
+                                        y1={y}
+                                        y2={y}
+                                        stroke={theme.border}
+                                        strokeOpacity="0.7"
+                                        strokeDasharray="4 4"
+                                    />
+                                    <text
+                                        x={margin.left - 10}
+                                        y={y + 4}
+                                        textAnchor="end"
+                                        fontSize="11"
+                                        fill={theme.textSec}
+                                    >
+                                        {formatChartNumber(tickValue)}
+                                    </text>
+                                </g>
+                            );
+                        })}
+
+                        {hasRightAxis ? rightMetrics.tickValues.map((tickValue, index) => {
+                            const y = rightMetrics.scaleY(tickValue);
+                            return (
+                                <text
+                                    key={`combo-right-tick-${index}`}
+                                    x={CHART_WIDTH - margin.right + 10}
+                                    y={y + 4}
+                                    textAnchor="start"
+                                    fontSize="11"
+                                    fill={theme.textSec}
+                                >
+                                    {formatChartNumber(tickValue)}
+                                </text>
+                            );
+                        }) : null}
+
+                        <line
+                            x1={margin.left}
+                            x2={CHART_WIDTH - margin.right}
+                            y1={leftMetrics.baselineY}
+                            y2={leftMetrics.baselineY}
+                            stroke={theme.textSec}
+                            strokeOpacity="0.45"
+                        />
+
+                        {barLayers.map((layer, barLayerIndex) => (
+                            model.categories.map((category, categoryIndex) => {
+                                const value = layer.values[categoryIndex];
+                                if (value === null || value === undefined) return null;
+                                const slotStart = margin.left + (categoryIndex * step) + ((step - groupWidth) / 2);
+                                const scaleY = getLayerScale(layer);
+                                const baselineY = getLayerBaseline(layer);
+                                const y = scaleY(value);
+                                return (
+                                    <rect
+                                        key={`${layer.id}-${category}-${barLayerIndex}`}
+                                        x={slotStart + (barLayerIndex * (barWidth + barGap))}
+                                        y={Math.min(y, baselineY)}
+                                        width={barWidth}
+                                        height={Math.max(1, Math.abs(baselineY - y))}
+                                        rx="3"
+                                        fill={layer.color || getColorForIndex(barLayerIndex, theme)}
+                                        opacity="0.9"
+                                    />
+                                );
+                            })
+                        ))}
+
+                        {areaLayers.map((layer, layerIndex) => {
+                            const points = model.categories.map((_, categoryIndex) => {
+                                const rawValue = layer.values[categoryIndex];
+                                if (rawValue === null || rawValue === undefined) return null;
+                                const x = margin.left + (categoryIndex * step) + (step / 2);
+                                const scaleY = getLayerScale(layer);
+                                return {
+                                    x,
+                                    y: scaleY(rawValue),
+                                    baseY: getLayerBaseline(layer),
+                                };
+                            });
+                            const areaPath = buildAreaBandPath(points);
+                            const linePath = buildLinePath(points);
+                            const color = layer.color || getColorForIndex(barLayers.length + layerIndex, theme);
+                            return (
+                                <g key={`combo-area-${layer.id}`}>
+                                    {areaPath ? <path d={areaPath} fill={color} opacity="0.16" /> : null}
+                                    {linePath ? <path d={linePath} fill="none" stroke={color} strokeWidth="2.5" strokeLinejoin="round" strokeLinecap="round" /> : null}
+                                </g>
+                            );
+                        })}
+
+                        {lineLayers.map((layer, layerIndex) => {
+                            const points = model.categories.map((_, categoryIndex) => {
+                                const rawValue = layer.values[categoryIndex];
+                                if (rawValue === null || rawValue === undefined) return null;
+                                const x = margin.left + (categoryIndex * step) + (step / 2);
+                                return {
+                                    x,
+                                    y: getLayerScale(layer)(rawValue),
+                                };
+                            });
+                            const linePath = buildLinePath(points);
+                            const color = layer.color || getColorForIndex(barLayers.length + areaLayers.length + layerIndex, theme);
+                            return (
+                                <g key={`combo-line-${layer.id}`}>
+                                    {linePath ? <path d={linePath} fill="none" stroke={color} strokeWidth="3" strokeLinejoin="round" strokeLinecap="round" /> : null}
+                                    {points.map((point, pointIndex) => {
+                                        if (!point) return null;
+                                        return (
+                                            <circle
+                                                key={`${layer.id}-point-${pointIndex}`}
+                                                cx={point.x}
+                                                cy={point.y}
+                                                r="4"
+                                                fill={color}
+                                                stroke={theme.surfaceBg || theme.background || '#fff'}
+                                                strokeWidth="2"
+                                            />
+                                        );
+                                    })}
+                                </g>
+                            );
+                        })}
+
+                        {model.categories.map((category, categoryIndex) => {
+                            const x = margin.left + (categoryIndex * step) + (step / 2);
+                            return (
+                                <text
+                                    key={`combo-label-${categoryIndex}`}
+                                    x={x}
+                                    y={effectiveChartHeight - margin.bottom + 28}
+                                    textAnchor="middle"
+                                    fontSize="11"
+                                    fill={theme.textSec}
+                                >
+                                    {truncateChartLabel(category, 18)}
+                                </text>
+                            );
+                        })}
+
+                        {typeof onCategoryActivate === 'function' ? model.categories.map((_, categoryIndex) => {
+                            const target = categoryTargets[categoryIndex];
+                            if (!target) return null;
+                            return (
+                                <rect
+                                    key={`combo-hit-${categoryIndex}`}
+                                    x={margin.left + (categoryIndex * step)}
+                                    y={margin.top}
+                                    width={step}
+                                    height={effectiveChartHeight - margin.top - margin.bottom}
+                                    fill="transparent"
+                                    style={{ cursor: 'pointer' }}
+                                    onClick={() => onCategoryActivate(target)}
+                                />
+                            );
+                        }) : null}
+                    </svg>
+                </div>
+                {showLegend ? <ChartLegend items={legendItems} theme={theme} /> : null}
             </div>
         );
     }
@@ -2564,6 +3372,9 @@ const SvgChart = ({
 const ChartSurface = ({
     model,
     chartType,
+    chartLayers,
+    onChartLayersChange,
+    availableColumns,
     barLayout,
     axisMode,
     onChartTypeChange,
@@ -2597,7 +3408,10 @@ const ChartSurface = ({
     locked = false,
     onToggleLock,
 }) => {
-    const canStack = chartType === 'area'
+    const isComboChart = chartType === 'combo';
+    const canStack = isComboChart
+        ? false
+        : chartType === 'area'
         ? canStackAreaSeries(model)
         : canStackBarLayout(model);
     const resolvedTitle = title !== undefined ? title : (model && model.title);
@@ -2743,187 +3557,225 @@ const ChartSurface = ({
                 </div>
             ) : null}
             {showChrome && configOpen ? (
-                <div style={{
-                    display: 'grid',
-                    gridTemplateColumns: 'repeat(auto-fit, minmax(220px, 1fr))',
-                    gap: '8px',
-                    padding: '8px',
-                    border: `1px solid ${theme.border}`,
-                    borderRadius: theme.radiusSm || '8px',
-                    background: theme.headerSubtleBg || theme.hover,
-                }}>
-                    <ChartConfigSection
-                        title="Basics"
-                        description="Name the chart and control how much source data it pulls into the current view."
-                        theme={theme}
+                <div
+                    onClick={() => setConfigOpen(false)}
+                    style={{
+                        position: 'fixed',
+                        inset: 0,
+                        zIndex: 10060,
+                        background: 'rgba(2, 6, 23, 0.52)',
+                        display: 'flex',
+                        alignItems: 'center',
+                        justifyContent: 'center',
+                        padding: '24px',
+                    }}
+                >
+                    <div
+                        onClick={(event) => event.stopPropagation()}
+                        style={{
+                            width: 'min(1180px, calc(100vw - 32px))',
+                            maxHeight: 'calc(100vh - 48px)',
+                            overflowY: 'auto',
+                            padding: '16px',
+                            border: `1px solid ${theme.border}`,
+                            borderRadius: theme.radius || '16px',
+                            background: theme.surfaceBg || theme.background || '#fff',
+                            boxShadow: theme.shadowMd || '0 18px 40px rgba(2, 6, 23, 0.24)',
+                        }}
                     >
-                        {typeof onTitleChange === 'function' ? (
-                            <ChartConfigField
-                                label="Chart Title"
-                                description="Displayed above the chart panel and in the chart chrome."
-                                theme={theme}
-                                controlMinWidth="220px"
+                        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '12px', marginBottom: '12px' }}>
+                            <div style={{ fontSize: '15px', fontWeight: 800, color: theme.text }}>
+                                {resolvedTitle || 'Settings'}
+                            </div>
+                            <button
+                                type="button"
+                                onClick={() => setConfigOpen(false)}
+                                style={exportButtonStyle}
                             >
-                                <input
-                                    type="text"
-                                    value={resolvedTitle || ''}
-                                    onChange={(event) => onTitleChange(event.target.value)}
-                                    placeholder="Chart title"
-                                    style={{ ...compactInputStyle, minWidth: '220px', width: '100%' }}
-                                />
-                            </ChartConfigField>
-                        ) : null}
-                        {typeof onChartHeightChange === 'function' ? (
-                            <ChartConfigField
-                                label="Chart Height"
-                                description="Changes the plotted graph height without resizing the whole panel."
-                                theme={theme}
-                                controlMinWidth="96px"
-                            >
-                                <input
-                                    type="number"
-                                    min="180"
-                                    step="20"
-                                    value={chartHeight}
-                                    onChange={(event) => onChartHeightChange(event.target.value)}
-                                    style={compactInputStyle}
-                                />
-                            </ChartConfigField>
-                        ) : null}
-                        <ChartConfigField
-                            label="Rows and Columns"
-                            description="Limits how many row categories and column series are included in the chart model."
-                            theme={theme}
-                            controlMinWidth="180px"
-                        >
-                            <ChartLimitInputs
-                                rowLimit={rowLimit}
-                                onRowLimitChange={onRowLimitChange}
-                                columnLimit={columnLimit}
-                                onColumnLimitChange={onColumnLimitChange}
-                                theme={theme}
-                            />
-                        </ChartConfigField>
-                    </ChartConfigSection>
-
-                    <ChartConfigSection
-                        title="Layout"
-                        description="Control how pivot rows and columns are mapped into the chart and how bars are drawn."
-                        theme={theme}
-                    >
-                        {chartType !== 'icicle' && chartType !== 'sunburst' && chartType !== 'sankey' ? (
-                            <ChartConfigField
-                                label="Pivot Mapping"
-                                description="Choose whether chart categories come from pivot rows or from pivot columns."
+                                Close
+                            </button>
+                        </div>
+                        <div style={{
+                            display: 'grid',
+                            gridTemplateColumns: 'repeat(auto-fit, minmax(240px, 1fr))',
+                            gap: '10px',
+                        }}>
+                            <ChartConfigSection
+                                title="General"
                                 theme={theme}
                             >
-                                <ChartOrientationButtons orientation={orientation} onChange={onOrientationChange} theme={theme} />
-                            </ChartConfigField>
-                        ) : null}
-                        {(chartType === 'bar') ? (
-                            <ChartConfigField
-                                label="Bar Direction"
-                                description="Switch between vertical columns and horizontal bars."
-                                theme={theme}
-                            >
-                                <ChartAxisButtons axisMode={axisMode} onChange={onAxisModeChange} theme={theme} />
-                            </ChartConfigField>
-                        ) : null}
-                        {(chartType === 'bar' || chartType === 'area') && (
-                            <ChartConfigField
-                                label="Series Layout"
-                                description={chartType === 'area'
-                                    ? 'Use normal layered areas or stack the visible series.'
-                                    : 'Use grouped bars for comparison or stacked bars for accumulation.'}
-                                theme={theme}
-                            >
-                                <ChartLayoutButtons
-                                    chartType={chartType}
-                                    barLayout={barLayout}
-                                    onChange={onBarLayoutChange}
-                                    canStack={canStack}
+                                {typeof onTitleChange === 'function' ? (
+                                    <ChartConfigField
+                                        label="Title"
+                                        theme={theme}
+                                        controlMinWidth="220px"
+                                    >
+                                        <input
+                                            type="text"
+                                            value={resolvedTitle || ''}
+                                            onChange={(event) => onTitleChange(event.target.value)}
+                                            placeholder="Chart title"
+                                            style={{ ...compactInputStyle, minWidth: '220px', width: '100%' }}
+                                        />
+                                    </ChartConfigField>
+                                ) : null}
+                                {typeof onChartHeightChange === 'function' ? (
+                                    <ChartConfigField
+                                        label="Height"
+                                        theme={theme}
+                                        controlMinWidth="96px"
+                                    >
+                                        <input
+                                            type="number"
+                                            min="180"
+                                            step="20"
+                                            value={chartHeight}
+                                            onChange={(event) => onChartHeightChange(event.target.value)}
+                                            style={compactInputStyle}
+                                        />
+                                    </ChartConfigField>
+                                ) : null}
+                                <ChartConfigField
+                                    label="Limits"
                                     theme={theme}
-                                />
-                            </ChartConfigField>
-                        )}
-                        {typeof onSortModeChange === 'function' ? (
-                            <ChartConfigField
-                                label="Category Order"
-                                description="Sort chart categories by their natural order, labels, or current values."
-                                theme={theme}
-                                controlMinWidth="150px"
-                            >
-                                <ChartSortButtons sortMode={sortMode} onChange={onSortModeChange} theme={theme} />
-                            </ChartConfigField>
-                        ) : null}
-                    </ChartConfigSection>
+                                    controlMinWidth="180px"
+                                >
+                                    <ChartLimitInputs
+                                        rowLimit={rowLimit}
+                                        onRowLimitChange={onRowLimitChange}
+                                        columnLimit={columnLimit}
+                                        onColumnLimitChange={onColumnLimitChange}
+                                        theme={theme}
+                                    />
+                                </ChartConfigField>
+                            </ChartConfigSection>
 
-                    {showHierarchySection ? (
-                        <ChartConfigSection
-                            title="Hierarchy"
-                            description="Decide which hierarchy depth is shown when the pivot contains grouped row levels."
-                            theme={theme}
-                        >
-                            <ChartConfigField
-                                label="Hierarchy Level"
-                                description="Pick a specific level, or use All to chart the current visible frontier."
+                            <ChartConfigSection
+                                title="View"
                                 theme={theme}
                             >
-                                <ChartHierarchyButtons
-                                    level={hierarchyLevel}
-                                    onChange={onHierarchyLevelChange}
-                                    maxLevel={maxHierarchyLevel}
+                                {(chartType !== 'icicle' && chartType !== 'sunburst' && chartType !== 'sankey' && !isComboChart) ? (
+                                    <ChartConfigField
+                                        label="Source"
+                                        theme={theme}
+                                    >
+                                        <ChartOrientationButtons orientation={orientation} onChange={onOrientationChange} theme={theme} />
+                                    </ChartConfigField>
+                                ) : null}
+                                {(chartType === 'bar') ? (
+                                    <ChartConfigField
+                                        label="Direction"
+                                        theme={theme}
+                                    >
+                                        <ChartAxisButtons axisMode={axisMode} onChange={onAxisModeChange} theme={theme} />
+                                    </ChartConfigField>
+                                ) : null}
+                                {(chartType === 'bar' || chartType === 'area') && !isComboChart && (
+                                    <ChartConfigField
+                                        label="Layout"
+                                        theme={theme}
+                                    >
+                                        <ChartLayoutButtons
+                                            chartType={chartType}
+                                            barLayout={barLayout}
+                                            onChange={onBarLayoutChange}
+                                            canStack={canStack}
+                                            theme={theme}
+                                        />
+                                    </ChartConfigField>
+                                )}
+                                {typeof onSortModeChange === 'function' ? (
+                                    <ChartConfigField
+                                        label="Sort"
+                                        theme={theme}
+                                        controlMinWidth="150px"
+                                    >
+                                        <ChartSortButtons sortMode={sortMode} onChange={onSortModeChange} theme={theme} />
+                                    </ChartConfigField>
+                                ) : null}
+                            </ChartConfigSection>
+
+                            {isComboChart ? (
+                                <ChartConfigSection
+                                    title="Layers"
                                     theme={theme}
-                                />
-                            </ChartConfigField>
-                        </ChartConfigSection>
-                    ) : null}
+                                >
+                                    <ChartConfigField
+                                        label="Stack"
+                                        theme={theme}
+                                        controlMinWidth="100%"
+                                    >
+                                        <ChartLayerEditor
+                                            layers={chartLayers}
+                                            onChange={onChartLayersChange}
+                                            availableColumns={availableColumns}
+                                            theme={theme}
+                                        />
+                                    </ChartConfigField>
+                                </ChartConfigSection>
+                            ) : null}
 
-                    <ChartConfigSection
-                        title="Interaction"
-                        description="Control what the chart does when clicked and how much server-side data it uses."
-                        theme={theme}
-                    >
-                        {typeof onInteractionModeChange === 'function' ? (
-                            <ChartConfigField
-                                label="Click Action"
-                                description="Choose whether chart clicks jump the grid, filter it, or only emit an event."
+                            {showHierarchySection ? (
+                                <ChartConfigSection
+                                    title="Level"
+                                    theme={theme}
+                                >
+                                    <ChartConfigField
+                                        label="Level"
+                                        theme={theme}
+                                    >
+                                        <ChartHierarchyButtons
+                                            level={hierarchyLevel}
+                                            onChange={onHierarchyLevelChange}
+                                            maxLevel={maxHierarchyLevel}
+                                            theme={theme}
+                                        />
+                                    </ChartConfigField>
+                                </ChartConfigSection>
+                            ) : null}
+
+                            <ChartConfigSection
+                                title="Actions"
                                 theme={theme}
                             >
-                                <ChartInteractionButtons interactionMode={interactionMode} onChange={onInteractionModeChange} theme={theme} />
-                            </ChartConfigField>
-                        ) : null}
-                        {showServerScope && typeof onServerScopeChange === 'function' ? (
-                            <ChartConfigField
-                                label="Server Scope"
-                                description="Use only the current viewport or fetch chart data from the start of the pivot result."
+                                {typeof onInteractionModeChange === 'function' ? (
+                                    <ChartConfigField
+                                        label="Click"
+                                        theme={theme}
+                                    >
+                                        <ChartInteractionButtons interactionMode={interactionMode} onChange={onInteractionModeChange} theme={theme} />
+                                    </ChartConfigField>
+                                ) : null}
+                                {showServerScope && typeof onServerScopeChange === 'function' ? (
+                                    <ChartConfigField
+                                        label="Scope"
+                                        theme={theme}
+                                    >
+                                        <ChartScopeButtons scope={serverScope} onChange={onServerScopeChange} theme={theme} />
+                                    </ChartConfigField>
+                                ) : null}
+                            </ChartConfigSection>
+
+                            <ChartConfigSection
+                                title="Type"
                                 theme={theme}
                             >
-                                <ChartScopeButtons scope={serverScope} onChange={onServerScopeChange} theme={theme} />
-                            </ChartConfigField>
-                        ) : null}
-                    </ChartConfigSection>
-
-                    <ChartConfigSection
-                        title="Type"
-                        description="Select the visual shape of the chart, including hierarchy-native layouts."
-                        theme={theme}
-                    >
-                        <ChartConfigField
-                            label="Chart Type"
-                            description="Switch between comparison charts and hierarchy charts such as Icicle, Sunburst, or Sankey."
-                            theme={theme}
-                            controlMinWidth="220px"
-                        >
-                            <ChartTypeButtons chartType={chartType} onChange={onChartTypeChange} theme={theme} includeHierarchyCharts={allowHierarchyCharts} />
-                        </ChartConfigField>
-                    </ChartConfigSection>
+                                <ChartConfigField
+                                    label="Type"
+                                    theme={theme}
+                                    controlMinWidth="220px"
+                                >
+                                    <ChartTypeButtons chartType={chartType} onChange={onChartTypeChange} theme={theme} includeHierarchyCharts={allowHierarchyCharts} />
+                                </ChartConfigField>
+                            </ChartConfigSection>
+                        </div>
+                    </div>
                 </div>
             ) : null}
         <div style={{ display: 'flex', flexDirection: 'column', minHeight: 0 }}>
             {!model
                 ? <EmptyChartState message="No chart data available." theme={theme} chartHeight={chartHeight} />
-                : ((!Array.isArray(model.series) || model.series.length === 0)
+                    : ((!Array.isArray(model.series) || model.series.length === 0)
                     && chartType !== 'icicle'
                     && chartType !== 'sunburst'
                     && chartType !== 'sankey'
@@ -2969,6 +3821,9 @@ export const PivotChartPanel = ({
     onSourceChange,
     chartType,
     onChartTypeChange,
+    chartLayers = [],
+    onChartLayersChange,
+    availableColumns = [],
     barLayout,
     onBarLayoutChange,
     axisMode,
@@ -3252,6 +4107,9 @@ export const PivotChartPanel = ({
                 <ChartSurface
                     model={model}
                     chartType={chartType}
+                    chartLayers={chartLayers}
+                    onChartLayersChange={onChartLayersChange}
+                    availableColumns={availableColumns}
                     barLayout={barLayout}
                     axisMode={axisMode}
                     onChartTypeChange={onChartTypeChange}
@@ -3313,6 +4171,7 @@ export const PivotChartModal = ({ chartState, onClose, theme }) => {
     const [rowLimit, setRowLimit] = useState(chartState && chartState.rowLimit ? chartState.rowLimit : MAX_SELECTION_CATEGORIES);
     const [columnLimit, setColumnLimit] = useState(chartState && chartState.columnLimit ? chartState.columnLimit : MAX_SELECTION_SERIES);
     const [sortMode, setSortMode] = useState(chartState && chartState.sortMode ? chartState.sortMode : 'natural');
+    const [chartLayers, setChartLayers] = useState(chartState && Array.isArray(chartState.chartLayers) ? chartState.chartLayers : []);
 
     useEffect(() => {
         setChartType(chartState && chartState.chartType ? chartState.chartType : 'bar');
@@ -3323,11 +4182,40 @@ export const PivotChartModal = ({ chartState, onClose, theme }) => {
         setRowLimit(chartState && chartState.rowLimit ? chartState.rowLimit : MAX_SELECTION_CATEGORIES);
         setColumnLimit(chartState && chartState.columnLimit ? chartState.columnLimit : MAX_SELECTION_SERIES);
         setSortMode(chartState && chartState.sortMode ? chartState.sortMode : 'natural');
+        setChartLayers(chartState && Array.isArray(chartState.chartLayers) ? chartState.chartLayers : []);
+    }, [chartState]);
+
+    const availableColumns = useMemo(() => {
+        if (!chartState || !Array.isArray(chartState.visibleCols)) return [];
+        if (!(chartState.selectionMap && chartState.visibleRows)) {
+            return getChartableColumns(chartState.visibleCols);
+        }
+        const bounds = buildSelectionBounds(chartState.selectionMap, chartState.visibleRows, chartState.visibleCols);
+        if (!bounds) return [];
+        const selectedColumnIds = new Set(
+            (bounds.colIndexes || [])
+                .map((index) => chartState.visibleCols[index])
+                .filter((column) => column && column.id && !INTERNAL_COL_IDS.has(column.id))
+                .map((column) => column.id)
+        );
+        return getChartableColumns(chartState.visibleCols).filter((column) => selectedColumnIds.has(column.id));
     }, [chartState]);
 
     const activeModel = useMemo(() => {
         if (!chartState) return null;
         if (chartState.selectionMap && chartState.visibleRows && chartState.visibleCols) {
+            if (chartType === 'combo') {
+                return buildComboSelectionChartModel(chartState.selectionMap, chartState.visibleRows, chartState.visibleCols, {
+                    hierarchyLevel,
+                    maxHierarchyLevel: chartState.maxHierarchyLevel || 1,
+                    maxRows: rowLimit,
+                    maxColumns: columnLimit,
+                    rowFields: chartState.rowFields || [],
+                    colFields: chartState.colFields || [],
+                    sortMode,
+                    layers: chartLayers,
+                });
+            }
             return buildSelectionChartModel(chartState.selectionMap, chartState.visibleRows, chartState.visibleCols, {
                 orientation,
                 hierarchyLevel,
@@ -3340,10 +4228,14 @@ export const PivotChartModal = ({ chartState, onClose, theme }) => {
             });
         }
         return chartState.model;
-    }, [chartState, hierarchyLevel, orientation, rowLimit, columnLimit, sortMode]);
+    }, [chartLayers, chartState, chartType, hierarchyLevel, orientation, rowLimit, columnLimit, sortMode]);
 
     useEffect(() => {
         if (barLayout !== 'stacked') return;
+        if (chartType === 'combo') {
+            setBarLayout('grouped');
+            return;
+        }
         const canKeepStacked = chartType === 'area'
             ? (activeModel && Array.isArray(activeModel.series) && activeModel.series.length > 1)
             : canStackBarLayout(activeModel);
@@ -3405,6 +4297,9 @@ export const PivotChartModal = ({ chartState, onClose, theme }) => {
                 <ChartSurface
                     model={activeModel}
                     chartType={chartType}
+                    chartLayers={chartLayers}
+                    onChartLayersChange={setChartLayers}
+                    availableColumns={availableColumns}
                     barLayout={barLayout}
                     axisMode={axisMode}
                     onChartTypeChange={setChartType}
@@ -3415,15 +4310,15 @@ export const PivotChartModal = ({ chartState, onClose, theme }) => {
                     hierarchyLevel={hierarchyLevel}
                     onHierarchyLevelChange={setHierarchyLevel}
                     rowLimit={rowLimit}
-                onRowLimitChange={setRowLimit}
-                columnLimit={columnLimit}
-                onColumnLimitChange={setColumnLimit}
-                sortMode={sortMode}
-                onSortModeChange={setSortMode}
-                theme={theme}
-                allowHierarchyCharts={!(chartState.selectionMap && chartState.visibleRows && chartState.visibleCols)}
-            />
-        </div>
+                    onRowLimitChange={setRowLimit}
+                    columnLimit={columnLimit}
+                    onColumnLimitChange={setColumnLimit}
+                    sortMode={sortMode}
+                    onSortModeChange={setSortMode}
+                    theme={theme}
+                    allowHierarchyCharts={!(chartState.selectionMap && chartState.visibleRows && chartState.visibleCols)}
+                />
+            </div>
         </div>
     );
 };

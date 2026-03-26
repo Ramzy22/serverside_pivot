@@ -219,9 +219,10 @@ class TanStackPivotAdapter:
         return ordered
 
     def _apply_col_windowing(self, tanstack_result: 'TanStackResponse', request: 'TanStackRequest',
-                              col_start: int, col_end: Optional[int], needs_col_schema: bool) -> 'TanStackResponse':
+                              col_start: int, col_end: Optional[int], needs_col_schema: bool,
+                              requested_center_ids: Optional[List[str]] = None) -> 'TanStackResponse':
         """Apply column slicing and optionally build col_schema."""
-        if not needs_col_schema and col_end is None:
+        if not needs_col_schema and col_end is None and not requested_center_ids:
             return tanstack_result
 
         row_meta_keys = {
@@ -250,7 +251,7 @@ class TanStackPivotAdapter:
         ).hexdigest()[:8]
         cache_key = (request.table, frozenset(excluded_ids), _filter_fp, _cols_fp, _col_sort_fp)
 
-        if needs_col_schema or cache_key not in self._center_col_ids_cache:
+        if needs_col_schema or cache_key not in self._center_col_ids_cache or requested_center_ids:
             # Build authoritative center order from response column metadata first.
             # This keeps frontend column virtual indices aligned with backend slicing.
             center_col_ids = self._get_center_col_ids_from_columns(
@@ -265,11 +266,70 @@ class TanStackPivotAdapter:
             center_col_ids = self._center_col_ids_cache[cache_key]
 
         if needs_col_schema:
+            column_lookup = {
+                col.get('id'): col
+                for col in (tanstack_result.columns or [])
+                if isinstance(col, dict) and col.get('id')
+            }
             tanstack_result.col_schema = {
                 'total_center_cols': len(center_col_ids),
-                'columns': [{'index': i, 'id': col_id, 'size': 140}
-                            for i, col_id in enumerate(center_col_ids)]
+                'columns': [{
+                    'index': i,
+                    'id': col_id,
+                    'size': 140,
+                    'header': (
+                        column_lookup.get(col_id, {}).get('header')
+                        or column_lookup.get(col_id, {}).get('accessorKey')
+                        or col_id
+                    ),
+                    'headerVal': (
+                        column_lookup.get(col_id, {}).get('headerVal')
+                        if column_lookup.get(col_id, {}).get('headerVal') is not None
+                        else (
+                            column_lookup.get(col_id, {}).get('header')
+                            or column_lookup.get(col_id, {}).get('accessorKey')
+                            or col_id
+                        )
+                    ),
+                } for i, col_id in enumerate(center_col_ids)]
             }
+
+        if requested_center_ids:
+            requested_order = [
+                col_id for col_id in requested_center_ids
+                if isinstance(col_id, str) and col_id in center_col_ids
+            ]
+            requested_ids = set(requested_order)
+            keep_ids = requested_ids | pinned_ids
+
+            tanstack_result.data = [
+                {k: v for k, v in row.items() if k in row_meta_keys or k in keep_ids}
+                for row in tanstack_result.data
+            ]
+
+            if tanstack_result.columns:
+                column_lookup = {
+                    col.get('id'): col
+                    for col in tanstack_result.columns
+                    if isinstance(col, dict) and col.get('id')
+                }
+                ordered_columns = []
+                seen = set()
+                for col_id in list(request.grouping or []) + requested_order:
+                    if col_id in column_lookup and col_id not in seen:
+                        ordered_columns.append(column_lookup[col_id])
+                        seen.add(col_id)
+                for col in tanstack_result.columns:
+                    if not isinstance(col, dict):
+                        continue
+                    col_id = col.get('id')
+                    if not col_id or col_id in seen:
+                        continue
+                    if col_id in keep_ids:
+                        ordered_columns.append(col)
+                        seen.add(col_id)
+                tanstack_result.columns = ordered_columns
+            return tanstack_result
 
         if col_end is not None and center_col_ids:
             safe_end = min(col_end, len(center_col_ids) - 1)
@@ -359,6 +419,106 @@ class TanStackPivotAdapter:
             return float(value)
         return None
 
+    def _apply_formula_columns(self, rows: List[Dict[str, Any]], request: TanStackRequest) -> None:
+        """
+        Apply formula columns (post-aggregation calculated fields) to each row.
+
+        Formula configs arrive in request.columns as entries with isFormula=True and a formulaExpr
+        string like "revenue - cost".  References in the expression are field names (without agg
+        suffix).  At runtime we look for keys of the form <dim_prefix>_<field>_<agg> in each row
+        and evaluate the formula for every matching prefix, writing result back as
+        <dim_prefix>_<formula_id> (or just <formula_id> in flat mode).
+        """
+        if not rows:
+            return
+
+        formula_cols = [
+            col for col in (request.columns or [])
+            if isinstance(col, dict) and col.get("isFormula")
+        ]
+        if not formula_cols:
+            return
+
+        # Gather all row keys once to detect pivot prefixes.
+        all_keys: set = set()
+        for row in rows:
+            if isinstance(row, dict):
+                all_keys.update(row.keys())
+
+        # Build a map: measure_field -> list of agg suffixes present in data (e.g. "sum", "avg")
+        # so we can resolve formula references like "revenue" -> row["revenue_sum"]
+        agg_cols = [
+            col for col in (request.columns or [])
+            if isinstance(col, dict) and col.get("aggregationFn")
+        ]
+        # field -> agg suffix  (pick first match; formula references just the field name)
+        field_agg_map: Dict[str, str] = {}
+        for col in agg_cols:
+            field = col.get("aggregationField") or col.get("id", "")
+            agg = col.get("aggregationFn", "sum")
+            if field and field not in field_agg_map:
+                field_agg_map[field] = agg
+
+        grouping_ids = set(request.grouping or [])
+        has_column_dimensions = any(
+            isinstance(col, dict)
+            and col.get("id") not in grouping_ids
+            and not col.get("aggregationFn")
+            and not col.get("isFormula")
+            for col in (request.columns or [])
+        )
+
+        _safe_builtins: Dict = {}
+
+        for fcol in formula_cols:
+            formula_id = fcol.get("id", "")
+            formula_expr = fcol.get("formulaExpr", "")
+            if not formula_id or not formula_expr:
+                continue
+
+            if has_column_dimensions:
+                # Collect unique dim prefixes across all measure columns.
+                # A pivot key looks like: <dim_prefix>_<field>_<agg>
+                # We need to reconstruct the prefix for each formula reference.
+                dim_prefixes: set = set()
+                for field, agg in field_agg_map.items():
+                    suffix = f"_{field}_{agg}"
+                    for key in all_keys:
+                        if isinstance(key, str) and key.endswith(suffix) and not key.startswith("__RowTotal__"):
+                            prefix = key[: len(key) - len(suffix)]
+                            dim_prefixes.add(prefix)
+
+                for row in rows:
+                    if not isinstance(row, dict):
+                        continue
+                    for prefix in dim_prefixes:
+                        namespace: Dict[str, Any] = {}
+                        for field, agg in field_agg_map.items():
+                            key = f"{prefix}_{field}_{agg}"
+                            val = self._numeric_or_none(row.get(key))
+                            namespace[field] = val if val is not None else float("nan")
+                        result_key = f"{prefix}_{formula_id}"
+                        try:
+                            result = eval(formula_expr, {"__builtins__": _safe_builtins}, namespace)  # noqa: S307
+                            row[result_key] = float(result) if isinstance(result, (int, float)) else None
+                        except Exception:
+                            row[result_key] = None
+            else:
+                # Flat mode: formula key is just the formula_id
+                for row in rows:
+                    if not isinstance(row, dict):
+                        continue
+                    namespace = {}
+                    for field, agg in field_agg_map.items():
+                        key = f"{field}_{agg}"
+                        val = self._numeric_or_none(row.get(key))
+                        namespace[field] = val if val is not None else float("nan")
+                    try:
+                        result = eval(formula_expr, {"__builtins__": _safe_builtins}, namespace)  # noqa: S307
+                        row[formula_id] = float(result) if isinstance(result, (int, float)) else None
+                    except Exception:
+                        row[formula_id] = None
+
     def _apply_pivot_window_functions(self, rows: List[Dict[str, Any]], request: TanStackRequest) -> None:
         """
         Apply pivot-window functions (% row/col/grand-total) on already aggregated pivot rows.
@@ -374,6 +534,7 @@ class TanStackPivotAdapter:
             isinstance(col, dict)
             and col.get("id") not in grouping_ids
             and not col.get("aggregationFn")
+            and not col.get("isFormula")
             for col in (request.columns or [])
         )
 
@@ -500,6 +661,9 @@ class TanStackPivotAdapter:
         value_cols = []
         
         for col in request.columns:
+            if col.get('isFormula'):
+                # Formula columns are post-aggregation; skip from SQL planner
+                continue
             if col.get('aggregationFn'):
                 # This is an aggregation column
                 window_fn = col.get('windowFn')
@@ -796,6 +960,9 @@ class TanStackPivotAdapter:
         # metadata is normalized, so grand-total detection is stable.
         self._apply_pivot_window_functions(rows, tanstack_request)
 
+        # Apply formula columns (post-aggregation calculated fields) after window functions.
+        self._apply_formula_columns(rows, tanstack_request)
+
         # Calculate pagination info if needed
         pagination = None
         if tanstack_request.pagination:
@@ -813,7 +980,7 @@ class TanStackPivotAdapter:
         measure_ids = {c['id'] for c in tanstack_request.columns if c.get('aggregationFn')}
         grouping_ids = set(tanstack_request.grouping or [])
         has_column_dimensions = any(
-            c.get('id') not in grouping_ids and not c.get('aggregationFn')
+            c.get('id') not in grouping_ids and not c.get('aggregationFn') and not c.get('isFormula')
             for c in tanstack_request.columns
         )
 
@@ -1177,7 +1344,8 @@ class TanStackPivotAdapter:
                                           col_start: int = 0,
                                           col_end: Optional[int] = None,
                                           needs_col_schema: bool = False,
-                                          include_grand_total: bool = False) -> TanStackResponse:
+                                          include_grand_total: bool = False,
+                                          requested_center_ids: Optional[List[str]] = None) -> TanStackResponse:
         """Handle virtual scrolling request with start/end row indices"""
         # Convert request to pivot spec
         pivot_spec = self.convert_tanstack_request_to_pivot_spec(request)
@@ -1229,7 +1397,7 @@ class TanStackPivotAdapter:
             )
             if hierarchy_view.get("color_scale_stats"):
                 tanstack_result.color_scale_stats = hierarchy_view["color_scale_stats"]
-            return self._apply_col_windowing(tanstack_result, request, col_start, col_end, needs_col_schema)
+            return self._apply_col_windowing(tanstack_result, request, col_start, col_end, needs_col_schema, requested_center_ids=requested_center_ids)
 
         # Use the controller's virtual scrolling method
         if hasattr(self.controller, 'run_virtual_scroll_hierarchical'):
@@ -1252,7 +1420,7 @@ class TanStackPivotAdapter:
                 # Only deduplicate grand total — do NOT reorder, as _order_hierarchical_rows
                 # uses local first_seen indices that shuffle partial windows incorrectly.
                 tanstack_result.data = _move_grand_total_to_end(_dedup_grand_total(tanstack_result.data))
-                return self._apply_col_windowing(tanstack_result, request, col_start, col_end, needs_col_schema)
+                return self._apply_col_windowing(tanstack_result, request, col_start, col_end, needs_col_schema, requested_center_ids=requested_center_ids)
 
             except Exception as e:
                 print(f"Virtual scroll failed: {e}, falling back to hierarchical load")
@@ -1261,14 +1429,14 @@ class TanStackPivotAdapter:
                 fallback_result.data = _order_hierarchical_rows(
                     _move_grand_total_to_end(_dedup_grand_total(fallback_result.data))
                 )
-                return self._apply_col_windowing(fallback_result, request, col_start, col_end, needs_col_schema)
+                return self._apply_col_windowing(fallback_result, request, col_start, col_end, needs_col_schema, requested_center_ids=requested_center_ids)
         else:
             # Fallback: Use regular hierarchical method
             fallback_result = await self.handle_hierarchical_request(request, expanded_paths)
             fallback_result.data = _order_hierarchical_rows(
                 _move_grand_total_to_end(_dedup_grand_total(fallback_result.data))
             )
-            return self._apply_col_windowing(fallback_result, request, col_start, col_end, needs_col_schema)
+            return self._apply_col_windowing(fallback_result, request, col_start, col_end, needs_col_schema, requested_center_ids=requested_center_ids)
 
     def get_schema_info(self, table_name: str) -> Dict[str, Any]:
         """Get schema information for TanStack column configuration"""

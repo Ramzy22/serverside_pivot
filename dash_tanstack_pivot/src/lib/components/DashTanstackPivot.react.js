@@ -38,6 +38,8 @@ import { SidebarPanel } from './Sidebar/SidebarPanel';
 import DrillThroughModal from './Table/DrillThroughModal';
 import {
     buildPivotChartModel,
+    buildComboPivotChartModel,
+    buildComboSelectionChartModel,
     buildSelectionChartModel,
     canStackBarLayout,
     PivotChartModal,
@@ -61,7 +63,7 @@ const MIN_TABLE_PANEL_WIDTH = 320;
 const MIN_CHART_CANVAS_PANE_WIDTH = 320;
 const DEFAULT_TABLE_CANVAS_SIZE = 1.4;
 const TABLE_OVERLAY_CHART_PANE_ID = '__table_overlay_chart__';
-const VALID_CHART_TYPES = new Set(['bar', 'line', 'area', 'icicle', 'sunburst', 'sankey']);
+const VALID_CHART_TYPES = new Set(['bar', 'line', 'area', 'combo', 'icicle', 'sunburst', 'sankey']);
 const VALID_CHART_SORT_MODES = new Set(['natural', 'value_desc', 'value_asc', 'label_asc', 'label_desc']);
 const VALID_CHART_INTERACTION_MODES = new Set(['focus', 'filter', 'event']);
 const VALID_CHART_SERVER_SCOPES = new Set(['viewport', 'root']);
@@ -178,6 +180,12 @@ const normalizeChartDefinition = (value, fallback = {}) => {
         sortMode,
         interactionMode,
         serverScope,
+        chartLayers: cloneSerializable(
+            Array.isArray(source.chartLayers)
+                ? source.chartLayers
+                : (Array.isArray(fallbackSource.chartLayers) ? fallbackSource.chartLayers : []),
+            []
+        ),
     };
 };
 
@@ -215,6 +223,90 @@ const serializeChartColumns = (columns) => (
         ? columns.map((column) => serializeChartColumn(column)).filter(Boolean)
         : []
 );
+
+const getRequestedChartSeriesColumnIds = (chartType, chartLayers) => (
+    chartType === 'combo'
+        ? Array.from(new Set(
+            (Array.isArray(chartLayers) ? chartLayers : [])
+                .map((layer) => (layer && typeof layer.columnId === 'string' ? layer.columnId.trim() : ''))
+                .filter(Boolean)
+        ))
+        : []
+);
+
+const normalizeChartResponseColumn = (column, fallbackId = null) => {
+    const source = column && typeof column === 'object' ? column : {};
+    const columnId = source.id || (typeof column === 'string' ? column : fallbackId) || null;
+    if (!columnId) return null;
+    const headerVal = source.headerVal !== undefined
+        ? source.headerVal
+        : (source.header !== undefined ? source.header : null);
+    const header = source.columnDef && typeof source.columnDef === 'object'
+        ? (typeof source.columnDef.header === 'string'
+            ? source.columnDef.header
+            : (typeof source.header === 'string' ? source.header : (headerVal !== null && headerVal !== undefined ? String(headerVal) : String(columnId))))
+        : (typeof source.header === 'string' ? source.header : (headerVal !== null && headerVal !== undefined ? String(headerVal) : String(columnId)));
+    return {
+        id: columnId,
+        headerVal,
+        columnDef: {
+            header,
+            headerVal: source.columnDef && source.columnDef.headerVal !== undefined
+                ? source.columnDef.headerVal
+                : headerVal,
+        },
+        parent: source.parent ? normalizeChartResponseColumn(source.parent) : null,
+    };
+};
+
+const normalizeChartResponseColumns = (columns) => (
+    Array.isArray(columns)
+        ? columns.map((column) => normalizeChartResponseColumn(column)).filter(Boolean)
+        : []
+);
+
+const buildChartColumnsFromSchema = (colSchema) => (
+    colSchema && Array.isArray(colSchema.columns)
+        ? colSchema.columns
+            .map((column) => normalizeChartResponseColumn({
+                id: column && column.id ? column.id : null,
+                header: column && typeof column.header === 'string' ? column.header : null,
+                headerVal: column && column.headerVal !== undefined ? column.headerVal : (column && column.id ? column.id : null),
+            }))
+            .filter(Boolean)
+        : []
+);
+
+const resolveChartModelColumns = (chartDataEntry, fallbackColumns = []) => {
+    const responseColumns = normalizeChartResponseColumns(chartDataEntry && chartDataEntry.columns);
+    return responseColumns.length > 0 ? responseColumns : serializeChartColumns(fallbackColumns);
+};
+
+const resolveChartAvailableColumns = (chartDataEntry, fallbackColumns = []) => {
+    const responseColumns = normalizeChartResponseColumns(chartDataEntry && chartDataEntry.columns);
+    const schemaColumns = buildChartColumnsFromSchema(chartDataEntry && chartDataEntry.colSchema);
+    const fallbackSerialized = serializeChartColumns(fallbackColumns);
+    if (schemaColumns.length === 0) {
+        return responseColumns.length > 0 ? responseColumns : fallbackSerialized;
+    }
+    const responseById = new Map(responseColumns.map((column) => [column.id, column]));
+    const fallbackById = new Map(fallbackSerialized.map((column) => [column.id, column]));
+    const merged = schemaColumns.map((column) => responseById.get(column.id) || fallbackById.get(column.id) || column);
+    const knownIds = new Set(merged.map((column) => column.id));
+    responseColumns.forEach((column) => {
+        if (!knownIds.has(column.id)) {
+            merged.push(column);
+            knownIds.add(column.id);
+        }
+    });
+    fallbackSerialized.forEach((column) => {
+        if (!knownIds.has(column.id)) {
+            merged.push(column);
+            knownIds.add(column.id);
+        }
+    });
+    return merged;
+};
 
 const normalizeLockedChartRequest = (value) => {
     if (!value || typeof value !== 'object') return null;
@@ -544,6 +636,7 @@ export default function DashTanstackPivot(props) {
         const [chartPanelOrientation, setChartPanelOrientation] = useState(initialChartDefinition.orientation);
         const [chartPanelHierarchyLevel, setChartPanelHierarchyLevel] = useState(initialChartDefinition.hierarchyLevel);
         const [chartPanelTitle, setChartPanelTitle] = useState(initialChartDefinition.chartTitle);
+        const [chartPanelLayers, setChartPanelLayers] = useState(Array.isArray(initialChartDefinition.chartLayers) ? initialChartDefinition.chartLayers : []);
         const [chartPanelRowLimit, setChartPanelRowLimit] = useState(initialChartDefinition.rowLimit);
         const [chartPanelColumnLimit, setChartPanelColumnLimit] = useState(initialChartDefinition.columnLimit);
         const [chartPanelWidth, setChartPanelWidth] = useState(initialChartDefinition.width);
@@ -809,6 +902,7 @@ export default function DashTanstackPivot(props) {
     );
     const [showRowNumbers, setShowRowNumbers] = useState(false);
     const [sidebarOpen, setSidebarOpen] = useState(true);
+    const [sidebarWidth, setSidebarWidth] = useState(288);
     const [activeFilterCol, setActiveFilterCol] = useState(null);
     const [filterAnchorEl, setFilterAnchorEl] = useState(null);
     const [sidebarTab, setSidebarTab] = useState('fields'); // 'fields', 'columns'
@@ -986,6 +1080,12 @@ export default function DashTanstackPivot(props) {
         if (typeof restoredChartTitle === 'string') {
             setChartPanelTitle(restoredChartTitle);
         }
+        const restoredChartLayers = Array.isArray(restored.chartPanelLayers)
+            ? restored.chartPanelLayers
+            : (restoredChartDefinition && Array.isArray(restoredChartDefinition.chartLayers) ? restoredChartDefinition.chartLayers : null);
+        if (Array.isArray(restoredChartLayers)) {
+            setChartPanelLayers(restoredChartLayers);
+        }
         const restoredRowLimit = restored.chartPanelRowLimit !== undefined
             ? restored.chartPanelRowLimit
             : (restoredChartDefinition && restoredChartDefinition.rowLimit);
@@ -1128,6 +1228,7 @@ export default function DashTanstackPivot(props) {
         axisMode: chartPanelAxisMode,
         orientation: chartPanelOrientation,
         hierarchyLevel: chartPanelHierarchyLevel,
+        chartLayers: chartPanelLayers,
         rowLimit: chartPanelRowLimit,
         columnLimit: chartPanelColumnLimit,
         width: chartPanelWidth,
@@ -1145,6 +1246,7 @@ export default function DashTanstackPivot(props) {
         chartPanelAxisMode,
         chartPanelOrientation,
         chartPanelHierarchyLevel,
+        chartPanelLayers,
         chartPanelRowLimit,
         chartPanelColumnLimit,
         chartPanelWidth,
@@ -1203,6 +1305,7 @@ export default function DashTanstackPivot(props) {
         setChartPanelOrientation(activeDefinition.orientation);
         setChartPanelHierarchyLevel(activeDefinition.hierarchyLevel);
         setChartPanelTitle(activeDefinition.chartTitle || activeDefinition.name || 'Chart');
+        setChartPanelLayers(Array.isArray(activeDefinition.chartLayers) ? activeDefinition.chartLayers : []);
         setChartPanelRowLimit(activeDefinition.rowLimit);
         setChartPanelColumnLimit(activeDefinition.columnLimit);
         setChartPanelWidth(activeDefinition.width);
@@ -2376,6 +2479,11 @@ export default function DashTanstackPivot(props) {
         if (!serverSide || needsColSchema || totalCenterCols === null) return null;
         const requestedRowLimit = Number(config && config.rowLimit);
         const requestedColumnLimit = Number(config && config.columnLimit);
+        const requestedSeriesColumnIds = getRequestedChartSeriesColumnIds(
+            config && config.chartType,
+            config && config.chartLayers
+        );
+        const needsChartColumnCatalog = Boolean(config && (config.needsColumnCatalog || config.chartType === 'combo'));
         const serverScope = (config && VALID_CHART_SERVER_SCOPES.has(config.serverScope))
             ? config.serverScope
             : (normalizedChartServerWindow.scope || 'viewport');
@@ -2427,9 +2535,10 @@ export default function DashTanstackPivot(props) {
             col_end: colEnd,
             include_grand_total: showColTotals || undefined,
             cinema_mode: cinemaMode || undefined,
-            needs_col_schema: false,
+            needs_col_schema: needsChartColumnCatalog || undefined,
             row_limit: resolvedRowLimit,
             column_limit: resolvedColumnLimit,
+            series_column_ids: requestedSeriesColumnIds.length > 0 ? requestedSeriesColumnIds : undefined,
             state_override: stateOverride || undefined,
         };
     }, [
@@ -2459,6 +2568,7 @@ export default function DashTanstackPivot(props) {
             chartTitle: chartPanelTitle,
             source: chartPanelSource,
             chartType: chartPanelType,
+            chartLayers: chartPanelLayers,
             barLayout: chartPanelBarLayout,
             axisMode: chartPanelAxisMode,
             orientation: chartPanelOrientation,
@@ -2494,6 +2604,7 @@ export default function DashTanstackPivot(props) {
         chartPanelTitle,
         chartPanelSource,
         chartPanelType,
+        chartPanelLayers,
         chartPanelBarLayout,
         chartPanelAxisMode,
         chartPanelOrientation,
@@ -2571,6 +2682,7 @@ export default function DashTanstackPivot(props) {
                 chartPanelOrientation,
                 chartPanelHierarchyLevel,
                 chartPanelTitle,
+                chartPanelLayers,
                 chartPanelRowLimit,
                 chartPanelColumnLimit,
                 chartPanelWidth,
@@ -2646,6 +2758,7 @@ export default function DashTanstackPivot(props) {
         chartPanelOrientation,
         chartPanelHierarchyLevel,
         chartPanelTitle,
+        chartPanelLayers,
         chartPanelRowLimit,
         chartPanelColumnLimit,
         chartPanelWidth,
@@ -4634,34 +4747,64 @@ export default function DashTanstackPivot(props) {
         [effectiveTopRows, effectiveCenterRows, effectiveBottomRows]
     );
     const liveSelectionChartModel = useMemo(
-        () => buildSelectionChartModel(selectedCells, chartDisplayRows, visibleLeafColumns, {
-            orientation: chartPanelOrientation,
-            hierarchyLevel: chartPanelHierarchyLevel,
-            maxHierarchyLevel: rowFields.length,
-            maxRows: chartPanelRowLimit,
-            maxColumns: chartPanelColumnLimit,
-            rowFields,
-            colFields,
-            sortMode: chartPanelSortMode,
-        }),
-        [selectedCells, chartDisplayRows, visibleLeafColumns, chartPanelOrientation, chartPanelHierarchyLevel, rowFields.length, chartPanelRowLimit, chartPanelColumnLimit, rowFields, colFields, chartPanelSortMode]
+        () => (
+            chartPanelType === 'combo'
+                ? buildComboSelectionChartModel(selectedCells, chartDisplayRows, visibleLeafColumns, {
+                    hierarchyLevel: chartPanelHierarchyLevel,
+                    maxHierarchyLevel: rowFields.length,
+                    maxRows: chartPanelRowLimit,
+                    maxColumns: chartPanelColumnLimit,
+                    rowFields,
+                    colFields,
+                    sortMode: chartPanelSortMode,
+                    layers: chartPanelLayers,
+                })
+                : buildSelectionChartModel(selectedCells, chartDisplayRows, visibleLeafColumns, {
+                    orientation: chartPanelOrientation,
+                    hierarchyLevel: chartPanelHierarchyLevel,
+                    maxHierarchyLevel: rowFields.length,
+                    maxRows: chartPanelRowLimit,
+                    maxColumns: chartPanelColumnLimit,
+                    rowFields,
+                    colFields,
+                    sortMode: chartPanelSortMode,
+                })
+        ),
+        [selectedCells, chartDisplayRows, visibleLeafColumns, chartPanelType, chartPanelOrientation, chartPanelHierarchyLevel, rowFields.length, chartPanelRowLimit, chartPanelColumnLimit, rowFields, colFields, chartPanelSortMode, chartPanelLayers]
     );
     const livePivotChartModel = useMemo(
-        () => buildPivotChartModel(
-            serverSide && Array.isArray(loadedRows) && loadedRows.length > 0 ? loadedRows : chartDisplayRows,
-            visibleLeafColumns,
-            {
-            orientation: chartPanelOrientation,
-            hierarchyLevel: chartPanelHierarchyLevel,
-            maxHierarchyLevel: rowFields.length,
-            maxRows: chartPanelRowLimit,
-            maxColumns: chartPanelColumnLimit,
-            rowFields,
-            colFields,
-            sortMode: chartPanelSortMode,
-            }
+        () => (
+            chartPanelType === 'combo'
+                ? buildComboPivotChartModel(
+                    serverSide && Array.isArray(loadedRows) && loadedRows.length > 0 ? loadedRows : chartDisplayRows,
+                    visibleLeafColumns,
+                    {
+                        hierarchyLevel: chartPanelHierarchyLevel,
+                        maxHierarchyLevel: rowFields.length,
+                        maxRows: chartPanelRowLimit,
+                        maxColumns: chartPanelColumnLimit,
+                        rowFields,
+                        colFields,
+                        sortMode: chartPanelSortMode,
+                        layers: chartPanelLayers,
+                    }
+                )
+                : buildPivotChartModel(
+                    serverSide && Array.isArray(loadedRows) && loadedRows.length > 0 ? loadedRows : chartDisplayRows,
+                    visibleLeafColumns,
+                    {
+                        orientation: chartPanelOrientation,
+                        hierarchyLevel: chartPanelHierarchyLevel,
+                        maxHierarchyLevel: rowFields.length,
+                        maxRows: chartPanelRowLimit,
+                        maxColumns: chartPanelColumnLimit,
+                        rowFields,
+                        colFields,
+                        sortMode: chartPanelSortMode,
+                    }
+                )
         ),
-        [chartDisplayRows, loadedRows, serverSide, visibleLeafColumns, chartPanelOrientation, chartPanelHierarchyLevel, rowFields.length, chartPanelRowLimit, chartPanelColumnLimit, rowFields, colFields, chartPanelSortMode]
+        [chartDisplayRows, loadedRows, serverSide, visibleLeafColumns, chartPanelType, chartPanelOrientation, chartPanelHierarchyLevel, rowFields.length, chartPanelRowLimit, chartPanelColumnLimit, rowFields, colFields, chartPanelSortMode, chartPanelLayers]
     );
     const overlayChartData = chartPaneDataById[TABLE_OVERLAY_CHART_PANE_ID] || null;
     const activeChartPanelModel = useMemo(() => {
@@ -4674,7 +4817,48 @@ export default function DashTanstackPivot(props) {
                 && overlayChartData.requestSignature === chartPanelLockedRequest.requestSignature
                 && Array.isArray(overlayChartData.rows)
             ) {
-                return buildPivotChartModel(overlayChartData.rows, (chartPanelLockedRequest.visibleColumns || visibleLeafColumns), {
+                return chartPanelType === 'combo'
+                    ? buildComboPivotChartModel(overlayChartData.rows, resolveChartModelColumns(overlayChartData, (chartPanelLockedRequest.visibleColumns || visibleLeafColumns)), {
+                        hierarchyLevel: chartPanelHierarchyLevel,
+                        maxHierarchyLevel: rowFields.length,
+                        maxRows: chartPanelRowLimit,
+                        maxColumns: chartPanelColumnLimit,
+                        rowFields,
+                        colFields,
+                        sortMode: chartPanelSortMode,
+                        layers: chartPanelLayers,
+                    })
+                    : buildPivotChartModel(overlayChartData.rows, resolveChartModelColumns(overlayChartData, (chartPanelLockedRequest.visibleColumns || visibleLeafColumns)), {
+                        orientation: chartPanelOrientation,
+                        hierarchyLevel: chartPanelHierarchyLevel,
+                        maxHierarchyLevel: rowFields.length,
+                        maxRows: chartPanelRowLimit,
+                        maxColumns: chartPanelColumnLimit,
+                        rowFields,
+                        colFields,
+                        sortMode: chartPanelSortMode,
+                    });
+            }
+            return chartPanelLockedModel || (chartPanelSource === 'selection' ? liveSelectionChartModel : livePivotChartModel);
+        }
+        if (
+            chartPanelSource === 'pivot'
+            && overlayChartData
+            && Array.isArray(overlayChartData.rows)
+        ) {
+            const overlayModelColumns = resolveChartModelColumns(overlayChartData, visibleLeafColumns);
+            return chartPanelType === 'combo'
+                ? buildComboPivotChartModel(overlayChartData.rows, overlayModelColumns, {
+                    hierarchyLevel: chartPanelHierarchyLevel,
+                    maxHierarchyLevel: rowFields.length,
+                    maxRows: chartPanelRowLimit,
+                    maxColumns: chartPanelColumnLimit,
+                    rowFields,
+                    colFields,
+                    sortMode: chartPanelSortMode,
+                    layers: chartPanelLayers,
+                })
+                : buildPivotChartModel(overlayChartData.rows, overlayModelColumns, {
                     orientation: chartPanelOrientation,
                     hierarchyLevel: chartPanelHierarchyLevel,
                     maxHierarchyLevel: rowFields.length,
@@ -4684,31 +4868,15 @@ export default function DashTanstackPivot(props) {
                     colFields,
                     sortMode: chartPanelSortMode,
                 });
-            }
-            return chartPanelLockedModel || (chartPanelSource === 'selection' ? liveSelectionChartModel : livePivotChartModel);
-        }
-            if (
-                chartPanelSource === 'pivot'
-                && overlayChartData
-                && Array.isArray(overlayChartData.rows)
-            ) {
-                return buildPivotChartModel(overlayChartData.rows, visibleLeafColumns, {
-                    orientation: chartPanelOrientation,
-                hierarchyLevel: chartPanelHierarchyLevel,
-                maxHierarchyLevel: rowFields.length,
-                maxRows: chartPanelRowLimit,
-                maxColumns: chartPanelColumnLimit,
-                rowFields,
-                colFields,
-                sortMode: chartPanelSortMode,
-            });
         }
         return chartPanelSource === 'selection' ? liveSelectionChartModel : livePivotChartModel;
     }, [
         chartPanelLocked,
+        chartPanelLayers,
         chartPanelLockedModel,
         chartPanelLockedRequest,
         chartPanelSource,
+        chartPanelType,
         chartPanelOrientation,
         chartPanelHierarchyLevel,
         chartPanelRowLimit,
@@ -4734,20 +4902,39 @@ export default function DashTanstackPivot(props) {
                     && chartPaneDataById[pane.id].requestSignature === pane.lockedRequest.requestSignature
                     && Array.isArray(chartPaneDataById[pane.id].rows)
                 ) {
-                    nextModels[pane.id] = buildPivotChartModel(
-                        chartPaneDataById[pane.id].rows,
-                        (pane.lockedRequest.visibleColumns || visibleLeafColumns),
-                        {
-                            orientation: pane.orientation,
-                            hierarchyLevel: pane.hierarchyLevel,
-                            maxHierarchyLevel: rowFields.length,
-                            maxRows: pane.rowLimit,
-                            maxColumns: pane.columnLimit,
-                            rowFields,
-                            colFields,
-                            sortMode: pane.sortMode,
-                        }
+                    const paneModelColumns = resolveChartModelColumns(
+                        chartPaneDataById[pane.id],
+                        (pane.lockedRequest && pane.lockedRequest.visibleColumns) || visibleLeafColumns
                     );
+                    nextModels[pane.id] = pane.chartType === 'combo'
+                        ? buildComboPivotChartModel(
+                            chartPaneDataById[pane.id].rows,
+                            paneModelColumns,
+                            {
+                                hierarchyLevel: pane.hierarchyLevel,
+                                maxHierarchyLevel: rowFields.length,
+                                maxRows: pane.rowLimit,
+                                maxColumns: pane.columnLimit,
+                                rowFields,
+                                colFields,
+                                sortMode: pane.sortMode,
+                                layers: pane.chartLayers,
+                            }
+                        )
+                        : buildPivotChartModel(
+                            chartPaneDataById[pane.id].rows,
+                            paneModelColumns,
+                            {
+                                orientation: pane.orientation,
+                                hierarchyLevel: pane.hierarchyLevel,
+                                maxHierarchyLevel: rowFields.length,
+                                maxRows: pane.rowLimit,
+                                maxColumns: pane.columnLimit,
+                                rowFields,
+                                colFields,
+                                sortMode: pane.sortMode,
+                            }
+                        );
                     return;
                 }
                 nextModels[pane.id] = pane.lockedModel || null;
@@ -4755,16 +4942,27 @@ export default function DashTanstackPivot(props) {
             }
 
             if (pane.source === 'selection') {
-                nextModels[pane.id] = buildSelectionChartModel(selectedCells, chartDisplayRows, visibleLeafColumns, {
-                    orientation: pane.orientation,
-                    hierarchyLevel: pane.hierarchyLevel,
-                    maxHierarchyLevel: rowFields.length,
-                    maxRows: pane.rowLimit,
-                    maxColumns: pane.columnLimit,
-                    rowFields,
-                    colFields,
-                    sortMode: pane.sortMode,
-                });
+                nextModels[pane.id] = pane.chartType === 'combo'
+                    ? buildComboSelectionChartModel(selectedCells, chartDisplayRows, visibleLeafColumns, {
+                        hierarchyLevel: pane.hierarchyLevel,
+                        maxHierarchyLevel: rowFields.length,
+                        maxRows: pane.rowLimit,
+                        maxColumns: pane.columnLimit,
+                        rowFields,
+                        colFields,
+                        sortMode: pane.sortMode,
+                        layers: pane.chartLayers,
+                    })
+                    : buildSelectionChartModel(selectedCells, chartDisplayRows, visibleLeafColumns, {
+                        orientation: pane.orientation,
+                        hierarchyLevel: pane.hierarchyLevel,
+                        maxHierarchyLevel: rowFields.length,
+                        maxRows: pane.rowLimit,
+                        maxColumns: pane.columnLimit,
+                        rowFields,
+                        colFields,
+                        sortMode: pane.sortMode,
+                    });
                 return;
             }
 
@@ -4775,17 +4973,29 @@ export default function DashTanstackPivot(props) {
             )
                 ? chartPaneDataById[pane.id].rows
                 : (serverSide && Array.isArray(loadedRows) && loadedRows.length > 0 ? loadedRows : chartDisplayRows);
+            const paneModelColumns = resolveChartModelColumns(chartPaneDataById[pane.id], visibleLeafColumns);
 
-            nextModels[pane.id] = buildPivotChartModel(paneRows, visibleLeafColumns, {
-                orientation: pane.orientation,
-                hierarchyLevel: pane.hierarchyLevel,
-                maxHierarchyLevel: rowFields.length,
-                maxRows: pane.rowLimit,
-                maxColumns: pane.columnLimit,
-                rowFields,
-                colFields,
-                sortMode: pane.sortMode,
-            });
+            nextModels[pane.id] = pane.chartType === 'combo'
+                ? buildComboPivotChartModel(paneRows, paneModelColumns, {
+                    hierarchyLevel: pane.hierarchyLevel,
+                    maxHierarchyLevel: rowFields.length,
+                    maxRows: pane.rowLimit,
+                    maxColumns: pane.columnLimit,
+                    rowFields,
+                    colFields,
+                    sortMode: pane.sortMode,
+                    layers: pane.chartLayers,
+                })
+                : buildPivotChartModel(paneRows, paneModelColumns, {
+                    orientation: pane.orientation,
+                    hierarchyLevel: pane.hierarchyLevel,
+                    maxHierarchyLevel: rowFields.length,
+                    maxRows: pane.rowLimit,
+                    maxColumns: pane.columnLimit,
+                    rowFields,
+                    colFields,
+                    sortMode: pane.sortMode,
+                });
         });
         return nextModels;
     }, [chartCanvasPanes, chartDisplayRows, chartPaneDataById, colFields, loadedRows, rowFields, selectedCells, serverSide, visibleLeafColumns]);
@@ -4802,6 +5012,8 @@ export default function DashTanstackPivot(props) {
             serverSide
             && chartPanelSource === 'pivot'
             ? buildChartRequestBase({
+                chartType: chartPanelType,
+                chartLayers: chartPanelLayers,
                 rowLimit: chartPanelRowLimit,
                 columnLimit: chartPanelColumnLimit,
                 serverScope: chartPanelServerScope,
@@ -4820,7 +5032,7 @@ export default function DashTanstackPivot(props) {
         setChartPanelLockedRequest(lockedRequestBase ? {
             request: lockedRequestBase,
             stateOverride,
-            visibleColumns: serializeChartColumns(visibleLeafColumns),
+            visibleColumns: resolveChartModelColumns(overlayChartData, visibleLeafColumns),
             requestSignature,
         } : null);
         setChartPanelLocked(true);
@@ -4829,10 +5041,13 @@ export default function DashTanstackPivot(props) {
         buildChartRequestBase,
         buildChartStateOverrideSnapshot,
         chartPanelColumnLimit,
+        chartPanelLayers,
         chartPanelLocked,
         chartPanelRowLimit,
         chartPanelServerScope,
         chartPanelSource,
+        chartPanelType,
+        overlayChartData,
         serverSide,
         visibleLeafColumns,
     ]);
@@ -4853,6 +5068,8 @@ export default function DashTanstackPivot(props) {
             serverSide
             && targetPane.source === 'pivot'
             ? buildChartRequestBase({
+                chartType: targetPane.chartType,
+                chartLayers: targetPane.chartLayers,
                 rowLimit: targetPane.rowLimit,
                 columnLimit: targetPane.columnLimit,
                 serverScope: targetPane.serverScope,
@@ -4873,7 +5090,7 @@ export default function DashTanstackPivot(props) {
             lockedRequest: lockedRequestBase ? {
                 request: lockedRequestBase,
                 stateOverride,
-                visibleColumns: serializeChartColumns(visibleLeafColumns),
+                visibleColumns: resolveChartModelColumns(chartPaneDataById[paneId], visibleLeafColumns),
                 requestSignature,
             } : null,
         });
@@ -4882,6 +5099,7 @@ export default function DashTanstackPivot(props) {
         buildChartStateOverrideSnapshot,
         chartCanvasPaneModels,
         chartCanvasPanes,
+        chartPaneDataById,
         serverSide,
         updateChartCanvasPane,
         visibleLeafColumns,
@@ -4991,16 +5209,32 @@ export default function DashTanstackPivot(props) {
             showNotification('Select a range of value cells first.', 'warning');
             return;
         }
-        const buildModel = (orientationValue, hierarchyValue) => buildSelectionChartModel(selectionMap, chartDisplayRows, visibleLeafColumns, {
-            orientation: orientationValue,
-            hierarchyLevel: hierarchyValue,
-            maxHierarchyLevel: rowFields.length,
-            maxRows: chartPanelRowLimit,
-            maxColumns: chartPanelColumnLimit,
-            rowFields,
-            colFields,
-            sortMode: chartPanelSortMode,
-        });
+        const modalChartType = (chartPanelType === 'icicle' || chartPanelType === 'sunburst' || chartPanelType === 'sankey')
+            ? 'bar'
+            : chartPanelType;
+        const buildModel = (orientationValue, hierarchyValue) => (
+            modalChartType === 'combo'
+                ? buildComboSelectionChartModel(selectionMap, chartDisplayRows, visibleLeafColumns, {
+                    hierarchyLevel: hierarchyValue,
+                    maxHierarchyLevel: rowFields.length,
+                    maxRows: chartPanelRowLimit,
+                    maxColumns: chartPanelColumnLimit,
+                    rowFields,
+                    colFields,
+                    sortMode: chartPanelSortMode,
+                    layers: chartPanelLayers,
+                })
+                : buildSelectionChartModel(selectionMap, chartDisplayRows, visibleLeafColumns, {
+                    orientation: orientationValue,
+                    hierarchyLevel: hierarchyValue,
+                    maxHierarchyLevel: rowFields.length,
+                    maxRows: chartPanelRowLimit,
+                    maxColumns: chartPanelColumnLimit,
+                    rowFields,
+                    colFields,
+                    sortMode: chartPanelSortMode,
+                })
+        );
         const preferredOrientation = chartPanelOrientation === 'columns' ? 'columns' : 'rows';
         let defaultOrientation = preferredOrientation;
         let defaultHierarchyLevel = chartPanelHierarchyLevel;
@@ -5018,15 +5252,13 @@ export default function DashTanstackPivot(props) {
             defaultHierarchyLevel = 'all';
             defaultChartModel = buildModel(defaultOrientation, defaultHierarchyLevel);
         }
-        const modalChartType = (chartPanelType === 'icicle' || chartPanelType === 'sunburst' || chartPanelType === 'sankey')
-            ? 'bar'
-            : chartPanelType;
         const canOpenStacked = modalChartType === 'area'
             ? (defaultChartModel && Array.isArray(defaultChartModel.series) && defaultChartModel.series.length > 1)
             : canStackBarLayout(defaultChartModel);
         setChartModal({
             title: 'Range Chart',
             chartType: modalChartType,
+            chartLayers: cloneSerializable(chartPanelLayers, []),
             barLayout: chartPanelBarLayout === 'stacked' && canOpenStacked ? 'stacked' : 'grouped',
             axisMode: chartPanelAxisMode,
             defaultOrientation,
@@ -5041,7 +5273,7 @@ export default function DashTanstackPivot(props) {
             colFields,
             sortMode: chartPanelSortMode,
         });
-    }, [selectedCells, chartDisplayRows, visibleLeafColumns, chartPanelType, chartPanelBarLayout, chartPanelAxisMode, chartPanelOrientation, chartPanelHierarchyLevel, rowFields.length, chartPanelRowLimit, chartPanelColumnLimit, rowFields, colFields, chartPanelSortMode, showNotification]);
+    }, [selectedCells, chartDisplayRows, visibleLeafColumns, chartPanelType, chartPanelLayers, chartPanelBarLayout, chartPanelAxisMode, chartPanelOrientation, chartPanelHierarchyLevel, rowFields.length, chartPanelRowLimit, chartPanelColumnLimit, rowFields, colFields, chartPanelSortMode, showNotification]);
 
     // 1. Row Virtualizer (Managed by useServerSideRowModel)
     const virtualRows = activeRowVirtualizer.getVirtualItems();
@@ -5078,6 +5310,8 @@ export default function DashTanstackPivot(props) {
                 const baseRequest = chartPanelLocked && chartPanelLockedRequest
                     ? chartPanelLockedRequest.request
                     : buildChartRequestBase({
+                        chartType: chartPanelType,
+                        chartLayers: chartPanelLayers,
                         rowLimit: chartPanelRowLimit,
                         columnLimit: chartPanelColumnLimit,
                         serverScope: chartPanelServerScope,
@@ -5116,6 +5350,8 @@ export default function DashTanstackPivot(props) {
             const baseRequest = pane.locked && pane.lockedRequest
                 ? pane.lockedRequest.request
                 : buildChartRequestBase({
+                    chartType: pane.chartType,
+                    chartLayers: pane.chartLayers,
                     rowLimit: pane.rowLimit,
                     columnLimit: pane.columnLimit,
                     serverScope: pane.serverScope,
@@ -5151,12 +5387,14 @@ export default function DashTanstackPivot(props) {
         buildChartRequestBase,
         chartCanvasPanes,
         chartPanelColumnLimit,
+        chartPanelLayers,
         chartPanelLocked,
         chartPanelLockedRequest,
         chartPanelOpen,
         chartPanelRowLimit,
         chartPanelServerScope,
         chartPanelSource,
+        chartPanelType,
         liveChartStateFingerprint,
         needsColSchema,
         serverSide,
@@ -5169,6 +5407,8 @@ export default function DashTanstackPivot(props) {
             [TABLE_OVERLAY_CHART_PANE_ID]: JSON.stringify({
                 open: chartPanelOpen,
                 source: chartPanelSource,
+                chartType: chartPanelType,
+                seriesColumnIds: getRequestedChartSeriesColumnIds(chartPanelType, chartPanelLayers),
                 locked: chartPanelLocked,
                 request: chartPanelLockedRequest ? chartPanelLockedRequest.requestSignature : null,
                 rowLimit: chartPanelRowLimit,
@@ -5183,6 +5423,8 @@ export default function DashTanstackPivot(props) {
         chartCanvasPanes.forEach((pane) => {
             nextSignatures[pane.id] = JSON.stringify({
                 source: pane.source,
+                chartType: pane.chartType,
+                seriesColumnIds: getRequestedChartSeriesColumnIds(pane.chartType, pane.chartLayers),
                 locked: pane.locked,
                 request: pane.lockedRequest ? pane.lockedRequest.requestSignature : null,
                 rowLimit: pane.rowLimit,
@@ -5214,6 +5456,7 @@ export default function DashTanstackPivot(props) {
         chartCanvasPanes,
         chartPanelColumnLimit,
         chartPanelHierarchyLevel,
+        chartPanelLayers,
         chartPanelLocked,
         chartPanelLockedRequest,
         chartPanelOpen,
@@ -5222,6 +5465,7 @@ export default function DashTanstackPivot(props) {
         chartPanelServerScope,
         chartPanelSortMode,
         chartPanelSource,
+        chartPanelType,
         liveChartStateFingerprint,
     ]);
     useEffect(() => {
@@ -5896,6 +6140,8 @@ export default function DashTanstackPivot(props) {
                         closeFilterPopover={closeFilterPopover}
                         filterOptions={filterOptions}
                         data={data}
+                        sidebarWidth={sidebarWidth}
+                        setSidebarWidth={setSidebarWidth}
                     />
                 )}
                 <div ref={chartCanvasLayoutRef} style={{ display:'flex', flex:1, minWidth:0, minHeight:0, overflow:'hidden', position:'relative' }}>
@@ -6006,6 +6252,9 @@ export default function DashTanstackPivot(props) {
                                     onSourceChange={(value) => updateChartCanvasPane(pane.id, { source: value })}
                                     chartType={pane.chartType}
                                     onChartTypeChange={(value) => updateChartCanvasPane(pane.id, { chartType: value })}
+                                    chartLayers={pane.chartLayers}
+                                    onChartLayersChange={(value) => updateChartCanvasPane(pane.id, { chartLayers: value })}
+                                    availableColumns={resolveChartAvailableColumns(chartPaneDataById[pane.id], visibleLeafColumns)}
                                     barLayout={pane.barLayout}
                                     onBarLayoutChange={(value) => updateChartCanvasPane(pane.id, { barLayout: value })}
                                     axisMode={pane.axisMode}
@@ -6063,6 +6312,9 @@ export default function DashTanstackPivot(props) {
                             onSourceChange={(value) => updateChartCanvasPane(pane.id, { source: value })}
                             chartType={pane.chartType}
                             onChartTypeChange={(value) => updateChartCanvasPane(pane.id, { chartType: value })}
+                            chartLayers={pane.chartLayers}
+                            onChartLayersChange={(value) => updateChartCanvasPane(pane.id, { chartLayers: value })}
+                            availableColumns={resolveChartAvailableColumns(chartPaneDataById[pane.id], visibleLeafColumns)}
                             barLayout={pane.barLayout}
                             onBarLayoutChange={(value) => updateChartCanvasPane(pane.id, { barLayout: value })}
                             axisMode={pane.axisMode}
@@ -6161,6 +6413,7 @@ DashTanstackPivot.propTypes = {
                 'weighted_avg',
                 'wavg',
                 'weighted_mean',
+                'formula',
             ]),
             weightField: PropTypes.string,
             windowFn: PropTypes.oneOf([
@@ -6171,6 +6424,8 @@ DashTanstackPivot.propTypes = {
             format: PropTypes.string,
             percentile: PropTypes.number,
             separator: PropTypes.string,
+            formula: PropTypes.string,
+            label: PropTypes.string,
         })),
         filters: PropTypes.object,
         sorting: PropTypes.array,

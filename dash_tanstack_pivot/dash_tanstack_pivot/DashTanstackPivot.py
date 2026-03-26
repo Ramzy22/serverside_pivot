@@ -178,7 +178,7 @@ Keyword arguments:
 
     - field (string; optional)
 
-    - agg (a value equal to: 'sum', 'avg', 'count', 'min', 'max', 'weighted_avg', 'wavg', 'weighted_mean'; optional)
+    - agg (a value equal to: 'sum', 'avg', 'count', 'min', 'max', 'weighted_avg', 'wavg', 'weighted_mean', 'formula'; optional)
 
     - weightField (string; optional)
 
@@ -189,6 +189,10 @@ Keyword arguments:
     - percentile (number; optional)
 
     - separator (string; optional)
+
+    - formula (string; optional)
+
+    - label (string; optional)
 
 - validationRules (dict; optional)
 
@@ -203,12 +207,14 @@ Keyword arguments:
         "ValConfigs",
             {
             "field": NotRequired[str],
-            "agg": NotRequired[Literal["sum", "avg", "count", "min", "max", "weighted_avg", "wavg", "weighted_mean"]],
+            "agg": NotRequired[Literal["sum", "avg", "count", "min", "max", "weighted_avg", "wavg", "weighted_mean", "formula"]],
             "weightField": NotRequired[str],
             "windowFn": NotRequired[Literal["percent_of_row", "percent_of_col", "percent_of_grand_total"]],
             "format": NotRequired[str],
             "percentile": NotRequired[NumberType],
-            "separator": NotRequired[str]
+            "separator": NotRequired[str],
+            "formula": NotRequired[str],
+            "label": NotRequired[str]
         }
     )
 

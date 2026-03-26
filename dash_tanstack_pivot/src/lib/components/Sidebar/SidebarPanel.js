@@ -7,6 +7,131 @@ import Icons from '../Icons';
 import { isGroupColumn, getAllLeafIdsFromColumn, hasChildrenInZone } from '../../utils/helpers';
 import { formatDisplayLabel, isWeightedAverageAgg } from '../../utils/helpers';
 
+function FormulaChip({ item, idx, valConfigs, setValConfigs, theme, styles, dropLine, zoneId }) {
+    const inputRef = React.useRef(null);
+    const debounceRef = React.useRef(null);
+
+    const nonFormulaVals = valConfigs.filter(v => v.agg !== 'formula');
+
+    const insertAtCursor = (text) => {
+        const el = inputRef.current;
+        if (!el) return;
+        const start = el.selectionStart ?? el.value.length;
+        const end = el.selectionEnd ?? el.value.length;
+        el.value = el.value.slice(0, start) + text + el.value.slice(end);
+        el.focus();
+        const pos = start + text.length;
+        el.setSelectionRange(pos, pos);
+    };
+
+    const commit = () => {
+        const el = inputRef.current;
+        if (!el) return;
+        clearTimeout(debounceRef.current);
+        const val = el.value;
+        setValConfigs(p => { const n = [...p]; if (n[idx]) n[idx] = { ...n[idx], formula: val }; return n; });
+    };
+
+    const opBtnStyle = {
+        border: `1px solid ${theme.border}`,
+        background: theme.headerSubtleBg || theme.background,
+        color: theme.text,
+        borderRadius: '4px',
+        cursor: 'pointer',
+        padding: '2px 7px',
+        fontSize: '12px',
+        fontFamily: 'monospace',
+        lineHeight: '18px',
+        flexShrink: 0,
+    };
+
+    const placeholder = nonFormulaVals.length >= 2
+        ? `${nonFormulaVals[0].field} - ${nonFormulaVals[1].field}`
+        : nonFormulaVals.length === 1
+            ? `${nonFormulaVals[0].field} * 100`
+            : 'expression...';
+
+    return (
+        <div style={{
+            border: `1px solid ${theme.primary}55`,
+            borderRadius: '6px',
+            background: theme.headerBg || theme.background,
+            padding: '8px',
+            margin: '2px 0',
+            position: 'relative',
+        }}>
+            {dropLine && dropLine.zone === zoneId && dropLine.idx === idx && <div style={{ ...styles.dropLine, top: -2 }} />}
+            {/* Header: fx badge + label + delete */}
+            <div style={{ display: 'flex', alignItems: 'center', gap: '6px', marginBottom: '8px' }}>
+                <span style={{ fontSize: '10px', fontWeight: 700, color: theme.primary, background: `${theme.primary}18`, borderRadius: '3px', padding: '1px 5px', letterSpacing: '0.5px', flexShrink: 0 }}>fx</span>
+                <input
+                    value={item.label || ''}
+                    onChange={e => { const n = [...valConfigs]; n[idx] = { ...n[idx], label: e.target.value }; setValConfigs(n); }}
+                    placeholder="Column name..."
+                    style={{ flex: 1, fontWeight: 600, fontSize: '12px', background: 'transparent', border: 'none', borderBottom: `1px solid ${theme.border}`, outline: 'none', color: theme.text, minWidth: 0 }}
+                />
+                <span onClick={() => setValConfigs(p => p.filter((_, i) => i !== idx))} style={{ cursor: 'pointer', color: '#9CA3AF', display: 'flex', alignItems: 'center', flexShrink: 0 }}><Icons.Close /></span>
+            </div>
+            {/* Field pills */}
+            {nonFormulaVals.length > 0 && (
+                <div style={{ marginBottom: '6px' }}>
+                    <div style={{ fontSize: '9px', color: theme.textSec, textTransform: 'uppercase', letterSpacing: '0.6px', marginBottom: '4px' }}>Fields — click to insert</div>
+                    <div style={{ display: 'flex', flexWrap: 'wrap', gap: '4px' }}>
+                        {nonFormulaVals.map(v => (
+                            <button key={v.field} onClick={() => insertAtCursor(v.field)} style={{
+                                border: `1px solid ${theme.primary}88`,
+                                background: `${theme.primary}14`,
+                                color: theme.primary,
+                                borderRadius: '4px',
+                                cursor: 'pointer',
+                                padding: '2px 7px',
+                                fontSize: '11px',
+                                fontFamily: 'monospace',
+                                lineHeight: '18px',
+                            }} title={`Insert: ${v.field}`}>
+                                {formatDisplayLabel(v.field)}
+                            </button>
+                        ))}
+                    </div>
+                </div>
+            )}
+            {/* Operators */}
+            <div style={{ display: 'flex', gap: '3px', marginBottom: '6px', flexWrap: 'wrap' }}>
+                {['+', '-', '*', '/', '(', ')', '* 100'].map(op => (
+                    <button key={op} onClick={() => insertAtCursor(op)} style={opBtnStyle}>{op}</button>
+                ))}
+            </div>
+            {/* Expression input */}
+            <input
+                ref={inputRef}
+                key={item.field}
+                defaultValue={item.formula || ''}
+                onChange={e => {
+                    const val = e.target.value;
+                    clearTimeout(debounceRef.current);
+                    debounceRef.current = setTimeout(() => {
+                        setValConfigs(p => { const n = [...p]; if (n[idx]) n[idx] = { ...n[idx], formula: val }; return n; });
+                    }, 800);
+                }}
+                onKeyDown={e => { if (e.key === 'Enter') commit(); }}
+                onBlur={commit}
+                placeholder={placeholder}
+                style={{
+                    width: '100%', boxSizing: 'border-box',
+                    fontFamily: 'monospace', fontSize: '12px',
+                    padding: '4px 7px',
+                    border: `1px solid ${theme.border}`,
+                    borderRadius: '4px',
+                    background: theme.background,
+                    color: theme.text,
+                    outline: 'none',
+                }}
+            />
+            {dropLine && dropLine.zone === zoneId && dropLine.idx === idx + 1 && <div style={{ ...styles.dropLine, bottom: -2 }} />}
+        </div>
+    );
+}
+
 export function SidebarPanel({
     sidebarTab, setSidebarTab,
     rowFields, setRowFields,
@@ -30,10 +155,33 @@ export function SidebarPanel({
     toggleAllColumnsPinned,
     activeFilterCol, closeFilterPopover, filterOptions,
     data,
+    sidebarWidth, setSidebarWidth,
 }) {
     const [sidebarFilterState, setSidebarFilterState] = React.useState({ columnId: null, anchorEl: null });
     const sidebarRef = React.useRef(null);
     const sidebarScrollTopRef = React.useRef(0);
+    const resizeDragRef = React.useRef(null);
+    const formulaDebounceRef = React.useRef({});
+
+    // Sidebar resize drag handlers
+    const onResizeMouseDown = React.useCallback((e) => {
+        e.preventDefault();
+        const startX = e.clientX;
+        const startWidth = sidebarWidth || 288;
+        resizeDragRef.current = { startX, startWidth };
+        const onMouseMove = (ev) => {
+            const delta = ev.clientX - resizeDragRef.current.startX;
+            const next = Math.max(200, Math.min(520, resizeDragRef.current.startWidth + delta));
+            setSidebarWidth(next);
+        };
+        const onMouseUp = () => {
+            resizeDragRef.current = null;
+            window.removeEventListener('mousemove', onMouseMove);
+            window.removeEventListener('mouseup', onMouseUp);
+        };
+        window.addEventListener('mousemove', onMouseMove);
+        window.addEventListener('mouseup', onMouseUp);
+    }, [sidebarWidth, setSidebarWidth]);
     const getFilterOptionsForColumn = React.useCallback((columnId) => {
         if (filterOptions && filterOptions[columnId]) return filterOptions[columnId];
         if (!table || !table.getColumn) return [];
@@ -131,8 +279,10 @@ export function SidebarPanel({
         sidebarRef.current.scrollTop = sidebarScrollTopRef.current;
     }, [filterOptions, sidebarFilterState.columnId]);
 
+    const w = sidebarWidth || 288;
     return (
-                <div ref={sidebarRef} style={styles.sidebar} role="complementary" aria-label="Tool Panel">
+        <div style={{position:'relative', display:'flex', flexShrink:0}}>
+                <div ref={sidebarRef} style={{...styles.sidebar, width:`${w}px`, minWidth:`${w}px`}} role="complementary" aria-label="Tool Panel">
                     <div style={{display: 'flex', borderBottom: `1px solid ${theme.border}`, marginBottom: '16px'}}>
                         <div 
                             onClick={() => setSidebarTab('fields')}
@@ -264,81 +414,56 @@ export function SidebarPanel({
                                     <div style={styles.dropZone} onDragOver={e=>e.preventDefault()} onDrop={e=>onDrop(e, zone.id)}>
                                         {(zone.id==='filter' ? Object.keys(filters).filter(k=>k!=='global') : zone.id==='rows'?rowFields:zone.id==='cols'?colFields:valConfigs).map((item, idx) => {
                                             const label = zone.id==='vals' ? item.field : item;
-                                            const displayLabel = zone.id === 'vals' ? formatDisplayLabel(item.field) : formatDisplayLabel(item);
+                                            const displayLabel = zone.id === 'vals'
+                                                ? (item.agg === 'formula' ? (item.label || 'Formula') : formatDisplayLabel(item.field))
+                                                : formatDisplayLabel(item);
                                             return (
-                                                                                        <div key={idx} draggable onDragStart={e=>onDragStart(e,item,zone.id,idx)} onDragOver={e=>onDragOver(e,zone.id,idx)} >
-                                                                                            <div style={styles.chip}>
-                                                                                                {dropLine && dropLine.zone===zone.id && dropLine.idx===idx && <div style={{...styles.dropLine,top:-2}}/>}
-                                                                                                <div style={{display:'flex',alignItems:'center',gap:'8px', minWidth: 0, flex: 1}}>
-                                                                                                    <Icons.DragIndicator/>
-                                                                                                    <b style={{fontWeight:500, display:'block', minWidth: 0, whiteSpace:'nowrap', overflow:'hidden', textOverflow:'ellipsis'}}>{displayLabel}</b>
-                                                                                                </div>
-                                                                                                {zone.id === 'vals' && (
-                                                                                                    <div style={{display:'flex', alignItems:'center', gap:'4px', marginLeft:'8px', flexWrap:'nowrap', flexShrink: 0}}>
-                                                                                                        <select value={item.agg} onChange={e=>handleValueAggChange(idx, e.target.value)} style={{...valueSelectStyle, width:'74px'}} title="Aggregation">
-                                                                                                                <option value="sum">Sum</option><option value="avg">Avg</option><option value="count">Cnt</option><option value="min">Min</option><option value="max">Max</option><option value="weighted_avg">WAvg</option>
-                                                                                                        </select>
-                                                                                                        {isWeightedAverageAgg(item.agg) && (
-                                                                                                            <select
-                                                                                                                value={item.weightField || ''}
-                                                                                                                onChange={e => handleValueWeightFieldChange(idx, e.target.value)}
-                                                                                                                style={{...valueSelectStyle, width:'92px'}}
-                                                                                                                title="Weight field"
-                                                                                                            >
-                                                                                                                <option value="" disabled>Weight</option>
-                                                                                                                {availableFields.map((fieldName) => (
-                                                                                                                    <option key={fieldName} value={fieldName}>{formatDisplayLabel(fieldName)}</option>
-                                                                                                                ))}
-                                                                                                            </select>
-                                                                                                        )}
-                                                                                                        <select value={item.windowFn || 'none'} onChange={e=>{const n=[...valConfigs];n[idx].windowFn=e.target.value==='none'?null:e.target.value;setValConfigs(n)}} style={{...valueSelectStyle, width:'56px'}}>
-                                                                                                                <option value="none">Norm</option><option value="percent_of_row">%Row</option><option value="percent_of_col">%Col</option><option value="percent_of_grand_total">%Tot</option>
-                                                                                                        </select>
-                                                                                                    </div>
-                                                                                                )}
-                                                                                                <div style={{display:'flex', gap:'4px', marginLeft:'auto', alignItems: 'center'}}>
-                                                                                                    {zone.id==='filter' && (
-                                                                                                        <div 
-                                                                                                            onClick={(e) => openSidebarFilter(e, label)} 
-                                                                                                            style={{
-                                                                                                                cursor:'pointer', 
-                                                                                                                display:'flex', 
-                                                                                                                alignItems:'center',
-                                                                                                                padding: '2px',
-                                                                                                                borderRadius: '4px',
-                                                                                                                background: (filters[label] && ((filters[label].conditions && filters[label].conditions.length > 0) || (typeof filters[label] === 'string' && filters[label].length > 0))) ? theme.select : 'transparent',
-                                                                                                                color: (filters[label] && ((filters[label].conditions && filters[label].conditions.length > 0) || (typeof filters[label] === 'string' && filters[label].length > 0))) ? theme.primary : 'inherit'
-                                                                                                            }}
-                                                                                                        >
-                                                                                                            <Icons.Filter />
-                                                                                                        </div>
-                                                                                                    )}
-                                                                                                    <span onClick={()=>{
-                                                                                                        if (zone.id==='filter'){const n={...filters};delete n[label];setFilters(n)}
-                                                                                                        if (zone.id==='rows') setRowFields(p=>p.filter(x=>x!==label))
-                                                                                                        if (zone.id==='cols') setColFields(p=>p.filter(x=>x!==label))
-                                                                                                        if (zone.id==='vals') setValConfigs(p=>p.filter((_,i)=>i!==idx))
-                                                                                                    }} style={{cursor:'pointer', color:'#9CA3AF', display:'flex', alignItems:'center'}}><Icons.Close/></span>
-                                                                                                </div>
-                                                                                                                                                {zone.id === 'filter' && sidebarFilterState.columnId === label && (
-                                                                                                                    <FilterPopover 
-                                                                                                                        column={{header: displayLabel, id: label}} 
-                                                                                                                        anchorEl={sidebarFilterState.anchorEl}
-                                                                                                                        onClose={closeSidebarFilter}
-                                                                                                                        onFilter={(filterValue) => handleHeaderFilter(label, filterValue)}
-                                                                                                                        currentFilter={filters[label]}
-                                                                                                                        options={getFilterOptionsForColumn(label)}
-                                                                                                                        theme={theme}
-                                                                                                                    />
-                                                                                                                                                )}
-                                                                                                                                    {dropLine && dropLine.zone===zone.id && dropLine.idx===idx+1 && <div style={{...styles.dropLine,bottom:-2}}/>}
-                                                                                            </div>
-                                                                                                                                        {zone.id ==='filter' && filters[label] && filters[label].conditions && (
-                                                                                                                                            <div style={{fontSize: '10px', color: theme.primary, padding: '0 8px 4px 8px', marginTop: '-4px'}}>
-                                                                                                                                                {filters[label].conditions.map(c => `${c.type}: ${c.value}${c.caseSensitive ? ' (Match Case)' : ''}`).join(` ${filters[label].operator} `)}
-                                                                                                                                            </div>
-                                                                                                                                        )}
-                                                                                                                        </div>
+                                                <div key={idx} draggable onDragStart={e=>onDragStart(e,item,zone.id,idx)} onDragOver={e=>onDragOver(e,zone.id,idx)}>
+                                                    {zone.id === 'vals' && item.agg === 'formula' ? (
+                                                        <FormulaChip item={item} idx={idx} valConfigs={valConfigs} setValConfigs={setValConfigs} theme={theme} styles={styles} dropLine={dropLine} zoneId={zone.id} />
+                                                    ) : (
+                                                        <div style={styles.chip}>
+                                                            {dropLine && dropLine.zone===zone.id && dropLine.idx===idx && <div style={{...styles.dropLine,top:-2}}/>}
+                                                            <div style={{display:'flex',alignItems:'center',gap:'8px', minWidth: 0, flex: 1}}>
+                                                                <Icons.DragIndicator/>
+                                                                <b style={{fontWeight:500, display:'block', minWidth: 0, whiteSpace:'nowrap', overflow:'hidden', textOverflow:'ellipsis'}}>{displayLabel}</b>
+                                                            </div>
+                                                            {zone.id === 'vals' && (
+                                                                <div style={{display:'flex', alignItems:'center', gap:'4px', marginLeft:'8px', flexWrap:'nowrap', flexShrink: 0}}>
+                                                                    <select value={item.agg} onChange={e=>handleValueAggChange(idx, e.target.value)} style={{...valueSelectStyle, width:'74px'}} title="Aggregation">
+                                                                        <option value="sum">Sum</option><option value="avg">Avg</option><option value="count">Cnt</option><option value="min">Min</option><option value="max">Max</option><option value="weighted_avg">WAvg</option>
+                                                                    </select>
+                                                                    {isWeightedAverageAgg(item.agg) && (
+                                                                        <select value={item.weightField || ''} onChange={e => handleValueWeightFieldChange(idx, e.target.value)} style={{...valueSelectStyle, width:'92px'}} title="Weight field">
+                                                                            <option value="" disabled>Weight</option>
+                                                                            {availableFields.map((fieldName) => (
+                                                                                <option key={fieldName} value={fieldName}>{formatDisplayLabel(fieldName)}</option>
+                                                                            ))}
+                                                                        </select>
+                                                                    )}
+                                                                    <select value={item.windowFn || 'none'} onChange={e=>{const n=[...valConfigs];n[idx].windowFn=e.target.value==='none'?null:e.target.value;setValConfigs(n)}} style={{...valueSelectStyle, width:'56px'}}>
+                                                                        <option value="none">Norm</option><option value="percent_of_row">%Row</option><option value="percent_of_col">%Col</option><option value="percent_of_grand_total">%Tot</option>
+                                                                    </select>
+                                                                </div>
+                                                            )}
+                                                            <div style={{display:'flex', gap:'4px', marginLeft:'auto', alignItems: 'center'}}>
+                                                                {zone.id==='filter' && (
+                                                                    <div onClick={(e) => openSidebarFilter(e, label)} style={{cursor:'pointer', display:'flex', alignItems:'center', padding: '2px', borderRadius: '4px'}}><Icons.Filter /></div>
+                                                                )}
+                                                                <span onClick={()=>{ if (zone.id==='filter'){const n={...filters};delete n[label];setFilters(n)} if (zone.id==='rows') setRowFields(p=>p.filter(x=>x!==label)); if (zone.id==='cols') setColFields(p=>p.filter(x=>x!==label)); if (zone.id==='vals') setValConfigs(p=>p.filter((_,i)=>i!==idx)); }} style={{cursor:'pointer', color:'#9CA3AF', display:'flex', alignItems:'center'}}><Icons.Close/></span>
+                                                            </div>
+                                                            {zone.id === 'filter' && sidebarFilterState.columnId === label && (
+                                                                <FilterPopover column={{header: displayLabel, id: label}} anchorEl={sidebarFilterState.anchorEl} onClose={closeSidebarFilter} onFilter={(filterValue) => handleHeaderFilter(label, filterValue)} currentFilter={filters[label]} options={getFilterOptionsForColumn(label)} theme={theme} />
+                                                            )}
+                                                            {dropLine && dropLine.zone===zone.id && dropLine.idx===idx+1 && <div style={{...styles.dropLine,bottom:-2}}/>}
+                                                        </div>
+                                                    )}
+                                                    {zone.id ==='filter' && filters[label] && filters[label].conditions && (
+                                                        <div style={{fontSize: '10px', color: theme.primary, padding: '0 8px 4px 8px', marginTop: '-4px'}}>
+                                                            {filters[label].conditions.map(c => `${c.type}: ${c.value}${c.caseSensitive ? ' (Match Case)' : ''}`).join(` ${filters[label].operator} `)}
+                                                        </div>
+                                                    )}
+                                                </div>
                                             )
                                         })}
                                         {(zone.id==='filter' ? Object.keys(filters).filter(k=>k!=='global') : zone.id==='rows'?rowFields:zone.id==='cols'?colFields:valConfigs).length === 0 && (
@@ -768,5 +893,22 @@ export function SidebarPanel({
                         </div>
                     )}
                 </div>
+            {/* Resize handle */}
+            <div
+                onMouseDown={onResizeMouseDown}
+                style={{
+                    position:'absolute', right:0, top:0, bottom:0, width:'5px',
+                    cursor:'col-resize', zIndex:10,
+                    background:'transparent',
+                }}
+                title="Drag to resize panel"
+            >
+                <div style={{
+                    position:'absolute', right:0, top:0, bottom:0, width:'2px',
+                    background: theme.border,
+                    transition: 'background 0.15s',
+                }} />
+            </div>
+        </div>
     );
 }

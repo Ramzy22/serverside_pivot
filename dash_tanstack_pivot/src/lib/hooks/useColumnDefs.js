@@ -66,6 +66,13 @@ export function useColumnDefs({
             return null;
         };
 
+        // Helper: return the data key for a valConfig (formula cols use field directly)
+        const getValKey = (c) => c.agg === 'formula' ? c.field : getKey('', c.field, c.agg);
+        // Helper: return display header for a valConfig
+        const getValHeader = (c) => c.agg === 'formula'
+            ? (c.label || c.field)
+            : `${formatDisplayLabel(c.field)} (${formatAggLabel(c.agg, c.weightField)})`;
+
         // Helper: render a numeric cell value with decimal precision and negative-red coloring
         const renderNumericCell = (value, fmt, rowPath, colId) => {
             const cellDec = colId !== undefined && columnDecimalOverrides && columnDecimalOverrides[colId] !== undefined
@@ -299,9 +306,9 @@ export function useColumnDefs({
         let dataCols = [];
         if (colFields.length === 0) {
             dataCols = valConfigs.map(c => ({
-                id: getKey('', c.field, c.agg),
-                accessorFn: row => row[getKey('', c.field, c.agg)] ,
-                header: `${formatDisplayLabel(c.field)} (${formatAggLabel(c.agg, c.weightField)})`,
+                id: getValKey(c),
+                accessorFn: row => row[getValKey(c)],
+                header: getValHeader(c),
                 size: defaultColumnWidths.measure,
                 enablePinning: true,
                 sortingFn,
@@ -341,8 +348,8 @@ export function useColumnDefs({
                 const ignoreKeys = new Set(['_id', 'depth', '_isTotal', '_path', 'uuid', ...rowFields, ...colFields]);
 
                 // Helper to determine if a column is relevant for the grid
-                const measureSuffixes = valConfigs.map(v => `_${v.field}_${v.agg}`);
-                const measureIds = new Set(valConfigs.map(v => getKey('', v.field, v.agg)));
+                const measureSuffixes = valConfigs.filter(v => v.agg !== 'formula').map(v => `_${v.field}_${v.agg}`);
+                const measureIds = new Set(valConfigs.map(v => getValKey(v)));
 
                 const flatCols = [];
                 orderedIds.forEach(k => {
@@ -353,6 +360,8 @@ export function useColumnDefs({
                     if (measureIds.has(k)) isRelevant = true;
                     else if (k.startsWith('__RowTotal__')) isRelevant = true;
                     else if (measureSuffixes.some(s => k.endsWith(s))) isRelevant = true;
+                    // Formula columns: <dim_prefix>_<formula_field> or bare formula_field
+                    else if (valConfigs && valConfigs.some(v => v.agg === 'formula' && (k === v.field || k.endsWith(`_${v.field}`)))) isRelevant = true;
 
                     if (!isRelevant) return;
 
@@ -367,7 +376,8 @@ export function useColumnDefs({
                             let fmt = null;
                             if (valConfigs) {
                                 for (const c of valConfigs) {
-                                    if (k.includes(c.field)) {
+                                    const matchKey = c.agg === 'formula' ? c.field : c.field;
+                                    if (k === matchKey || k.includes(matchKey)) {
                                         fmt = getConfigDisplayFormat(c);
                                         break;
                                     }
@@ -397,12 +407,22 @@ export function useColumnDefs({
                         let matchedConfig = null;
                         if (valConfigs) {
                             for (const config of valConfigs) {
-                                const suffix = `_${config.field}_${config.agg}`;
-                                if (key.toLowerCase().endsWith(suffix.toLowerCase())) {
-                                    matchedConfig = config;
-                                    measureStr = `${formatDisplayLabel(config.field)} (${formatAggLabel(config.agg, config.weightField)})`;
-                                    dimStr = key.substring(0, key.length - suffix.length);
-                                    break;
+                                if (config.agg === 'formula') {
+                                    const suffix = `_${config.field}`;
+                                    if (key.toLowerCase().endsWith(suffix.toLowerCase())) {
+                                        matchedConfig = config;
+                                        measureStr = config.label || config.field;
+                                        dimStr = key.substring(0, key.length - suffix.length);
+                                        break;
+                                    }
+                                } else {
+                                    const suffix = `_${config.field}_${config.agg}`;
+                                    if (key.toLowerCase().endsWith(suffix.toLowerCase())) {
+                                        matchedConfig = config;
+                                        measureStr = `${formatDisplayLabel(config.field)} (${formatAggLabel(config.agg, config.weightField)})`;
+                                        dimStr = key.substring(0, key.length - suffix.length);
+                                        break;
+                                    }
                                 }
                             }
                         }

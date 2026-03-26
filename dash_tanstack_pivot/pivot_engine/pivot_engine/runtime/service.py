@@ -147,6 +147,14 @@ class PivotRuntimeService:
 
         try:
             if trigger_kind == "chart":
+                requested_series_ids = (
+                    [
+                        value for value in (state.chart_request or {}).get("series_column_ids", [])
+                        if isinstance(value, str) and value
+                    ]
+                    if isinstance((state.chart_request or {}).get("series_column_ids"), list)
+                    else None
+                )
                 response = await adapter.handle_virtual_scroll_request(
                     request,
                     context.start_row,
@@ -156,6 +164,7 @@ class PivotRuntimeService:
                     col_end=context.col_end,
                     needs_col_schema=bool((state.chart_request or {}).get("needs_col_schema", False)),
                     include_grand_total=context.include_grand_total,
+                    requested_center_ids=requested_series_ids,
                 )
             elif context.viewport_active and context.end_row is not None:
                 response = await adapter.handle_virtual_scroll_request(
@@ -201,6 +210,8 @@ class PivotRuntimeService:
                 status="chart_data",
                 chart_data={
                     "rows": list(response.data or []),
+                    "columns": list(response.columns or []),
+                    "colSchema": response.col_schema,
                     "rowStart": context.start_row,
                     "rowEnd": context.end_row,
                     "colStart": context.col_start,
@@ -264,6 +275,17 @@ class PivotRuntimeService:
             field = measure.get("field")
             agg = measure.get("agg")
             if not field or not agg:
+                continue
+            if agg == "formula":
+                # Formula columns are computed post-aggregation; pass through as metadata only
+                columns.append(
+                    {
+                        "id": field,
+                        "formulaExpr": measure.get("formula", ""),
+                        "formulaLabel": measure.get("label", field),
+                        "isFormula": True,
+                    }
+                )
                 continue
             columns.append(
                 {
