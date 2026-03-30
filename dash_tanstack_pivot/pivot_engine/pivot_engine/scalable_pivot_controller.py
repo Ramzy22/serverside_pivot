@@ -601,6 +601,11 @@ class ScalablePivotController(PivotController):
                 )
 
             grand_total_row = next((dict(row) for row in visible_rows if _is_grand_total(row)), None)
+            grand_total_formula_source_rows = [
+                dict(row)
+                for row in visible_rows
+                if isinstance(row, dict) and not _is_grand_total(row) and row.get("depth") == 0
+            ]
 
             # Compute color scale stats from ALL visible rows (excluding totals and row fields)
             color_scale_stats = self._compute_color_scale_stats(
@@ -616,6 +621,7 @@ class ScalablePivotController(PivotController):
                 "rows": window_rows,
                 "total_rows": total_rows,
                 "grand_total_row": grand_total_row if include_grand_total_row else None,
+                "grand_total_formula_source_rows": grand_total_formula_source_rows if include_grand_total_row else None,
                 "color_scale_stats": color_scale_stats,
             }
 

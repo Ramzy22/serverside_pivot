@@ -11,6 +11,7 @@ import { useVirtualizer } from '@tanstack/react-virtual';
 import * as XLSX from 'xlsx';
 import { saveAs } from 'file-saver';
 import { themes, getStyles, isDarkTheme, gridDimensionTokens } from '../utils/styles';
+import { DEFAULT_FIELD_PANEL_SIZES, sanitizeFieldPanelSizes } from '../utils/fieldPanelLayout';
 import Icons from './Icons';
 const debugLog = (...args) => {
     const buildDebugEnabled = process.env.NODE_ENV !== 'production';
@@ -31,7 +32,16 @@ import Notification from './Notification';
 import useStickyStyles from '../hooks/useStickyStyles';
 import { useServerSideRowModel } from '../hooks/useServerSideRowModel';
 import { useColumnVirtualizer } from '../hooks/useColumnVirtualizer';
-import { formatValue, formatDisplayLabel, getAllLeafIdsFromColumn, isGroupColumn } from '../utils/helpers';
+import {
+    DEFAULT_NUMBER_GROUP_SEPARATOR,
+    formatAggLabel,
+    formatValue,
+    formatDisplayLabel,
+    getAllLeafIdsFromColumn,
+    getKey,
+    isGroupColumn,
+    normalizeNumberGroupSeparator,
+} from '../utils/helpers';
 import ContextMenu from './Table/ContextMenu';
 import { PivotAppBar } from './PivotAppBar';
 import { SidebarPanel } from './Sidebar/SidebarPanel';
@@ -417,6 +427,27 @@ const createClientInstanceId = (componentId = 'pivot-grid') => {
     return `${componentId}-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}`;
 };
 
+const clampSidebarWidth = (value, fallback = 288) => {
+    const normalized = Number(value);
+    return Number.isFinite(normalized)
+        ? Math.max(200, Math.min(520, Math.floor(normalized)))
+        : fallback;
+};
+
+const SUPPORTED_DEFAULT_NUMBER_FORMATS = new Set(['', 'currency', 'accounting', 'percent', 'scientific']);
+
+const clampDecimalPlaces = (value, fallback = 0) => {
+    const normalized = Number(value);
+    if (!Number.isFinite(normalized)) return fallback;
+    return Math.max(0, Math.min(6, Math.floor(normalized)));
+};
+
+const normalizeDefaultValueFormat = (value) => {
+    const normalized = typeof value === 'string' ? value.trim() : '';
+    if (normalized.startsWith('currency:') || normalized.startsWith('accounting:')) return normalized;
+    return SUPPORTED_DEFAULT_NUMBER_FORMATS.has(normalized) ? normalized : '';
+};
+
 const loadingAnimationStyles = `
 @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@300;500&family=Plus+Jakarta+Sans:wght@300;500;800&display=swap');
 @keyframes pivot-row-loader-enter {
@@ -504,6 +535,10 @@ export default function DashTanstackPivot(props) {
         pinningPresets = [],
         sortOptions = {},
         columnVisibility: initialColumnVisibility = {},
+        decimalPlaces: externalDecimalPlaces = 0,
+        fieldPanelSizes: externalFieldPanelSizes = null,
+        defaultValueFormat: externalDefaultValueFormat = '',
+        numberGroupSeparator: externalNumberGroupSeparator = DEFAULT_NUMBER_GROUP_SEPARATOR,
         reset,
         sortLock = false,
         defaultTheme = 'flash',
@@ -542,6 +577,24 @@ export default function DashTanstackPivot(props) {
     const initialChartDefinitions = useMemo(
         () => sanitizeChartDefinitions(chartDefinitions, initialChartDefinition),
         [chartDefinitions, initialChartDefinition]
+    );
+    const normalizedInitialFieldPanelSizes = useMemo(
+        () => sanitizeFieldPanelSizes(externalFieldPanelSizes && typeof externalFieldPanelSizes === 'object'
+            ? externalFieldPanelSizes
+            : DEFAULT_FIELD_PANEL_SIZES),
+        [externalFieldPanelSizes]
+    );
+    const normalizedInitialDecimalPlaces = useMemo(
+        () => clampDecimalPlaces(externalDecimalPlaces, 0),
+        [externalDecimalPlaces]
+    );
+    const normalizedInitialDefaultValueFormat = useMemo(
+        () => normalizeDefaultValueFormat(externalDefaultValueFormat),
+        [externalDefaultValueFormat]
+    );
+    const normalizedInitialNumberGroupSeparator = useMemo(
+        () => normalizeNumberGroupSeparator(externalNumberGroupSeparator),
+        [externalNumberGroupSeparator]
     );
 
     // Register sortOptions with Dash's callback State store on mount.
@@ -608,6 +661,8 @@ export default function DashTanstackPivot(props) {
         const [rowFields, setRowFields] = useState(initialRowFields);
         const [colFields, setColFields] = useState(initialColFields);
         const [valConfigs, setValConfigs] = useState(initialValConfigs);
+        const valConfigsRef = useRef(initialValConfigs);
+        valConfigsRef.current = valConfigs;
         const [filters, setFilters] = useState(initialFilters);
         const [sorting, setSorting] = useState(initialSorting);
         const [expanded, setExpanded] = useState(initialExpanded);
@@ -624,6 +679,7 @@ export default function DashTanstackPivot(props) {
         const [layoutMode, setLayoutMode] = useState('hierarchy'); // hierarchy, tabular
         const [columnVisibility, setColumnVisibility] = useState(() => loadPersistedState('columnVisibility', initialColumnVisibility));
         const [columnSizing, setColumnSizing] = useState(() => loadPersistedState('columnSizing', {}));
+        const [autoSizeIncludesHeaderNext, setAutoSizeIncludesHeaderNext] = useState(false);
         const [pivotColumnSorting, setPivotColumnSorting] = useState({});
         const [announcement, setAnnouncement] = useState("");
         const [drillModal, setDrillModal] = useState(null);
@@ -685,6 +741,15 @@ export default function DashTanstackPivot(props) {
         const lastChartDefinitionsPropRef = useRef(null);
         const lastChartCanvasPanesPropRef = useRef(null);
         const lastTableCanvasSizePropRef = useRef(null);
+        const lastValConfigsPropRef = useRef(null);
+        const lastDecimalPlacesPropRef = useRef(null);
+        const lastFieldPanelSizesPropRef = useRef(null);
+        const lastDefaultValueFormatPropRef = useRef(null);
+        const lastNumberGroupSeparatorPropRef = useRef(null);
+        const didPublishDecimalPlacesRef = useRef(false);
+        const didPublishFieldPanelSizesRef = useRef(false);
+        const didPublishDefaultValueFormatRef = useRef(false);
+        const didPublishNumberGroupSeparatorRef = useRef(false);
         const tableRef = useRef(null);
         const displayRowsRef = useRef([]);
         const displayRowIndexRef = useRef(new Map());
@@ -782,7 +847,12 @@ export default function DashTanstackPivot(props) {
         if (reset) {
             setRowFields(initialRowFields);
             setColFields(initialColFields);
-            setValConfigs(initialValConfigs);
+            // Preserve user-added formula columns through resets (they survive dataframe switches)
+            const formulaColsToPreserve = valConfigsRef.current.filter(c => c && c.agg === 'formula');
+            const resetValConfigs = formulaColsToPreserve.length > 0
+                ? [...initialValConfigs.filter(c => c && c.agg !== 'formula'), ...formulaColsToPreserve]
+                : initialValConfigs;
+            setValConfigs(resetValConfigs);
             setFilters({});
             setSorting([]);
             setExpanded({});
@@ -822,12 +892,23 @@ export default function DashTanstackPivot(props) {
             setChartCanvasPanes([]);
             setTableCanvasSize(DEFAULT_TABLE_CANVAS_SIZE);
             setChartPaneDataById({});
+            setSidebarWidth(288);
+            setFieldPanelSizes(normalizedInitialFieldPanelSizes);
+            setDecimalPlaces(normalizedInitialDecimalPlaces);
+            setDefaultValueFormat(normalizedInitialDefaultValueFormat);
+            setNumberGroupSeparator(normalizedInitialNumberGroupSeparator);
+            setColumnFormatOverrides({});
+            setColumnGroupSeparatorOverrides({});
 
             if (setPropsRef.current) {
                 setPropsRef.current({
                     rowFields: initialRowFields,
                     colFields: initialColFields,
-                    valConfigs: initialValConfigs,
+                    valConfigs: resetValConfigs,
+                    decimalPlaces: normalizedInitialDecimalPlaces,
+                    fieldPanelSizes: normalizedInitialFieldPanelSizes,
+                    defaultValueFormat: normalizedInitialDefaultValueFormat,
+                    numberGroupSeparator: normalizedInitialNumberGroupSeparator,
                     filters: {},
                     sorting: [],
                     expanded: {},
@@ -840,7 +921,7 @@ export default function DashTanstackPivot(props) {
                 });
             }
         }
-    }, [reset, initialRowFields, initialColFields, initialValConfigs, initialColumnPinning, initialRowPinning, initialChartDefinition, initialChartDefinitions]);
+    }, [reset, initialRowFields, initialColFields, initialValConfigs, initialColumnPinning, initialRowPinning, initialChartDefinition, initialChartDefinitions, normalizedInitialFieldPanelSizes, normalizedInitialDecimalPlaces, normalizedInitialDefaultValueFormat, normalizedInitialNumberGroupSeparator]);
 
         // Save Persistence
         useEffect(() => {
@@ -850,6 +931,8 @@ export default function DashTanstackPivot(props) {
             savePersistedState('grandTotalPinOverride', grandTotalPinOverride);
             savePersistedState('columnVisibility', columnVisibility);
             savePersistedState('columnSizing', columnSizing);
+            savePersistedState('sidebarWidth', sidebarWidth);
+            savePersistedState('fieldPanelSizes', fieldPanelSizes);
             savePersistedState('chartCanvasPanes', chartCanvasPanes);
             savePersistedState('tableCanvasSize', tableCanvasSize);
             savePersistedState('chartPanelFloatingLayout', {
@@ -868,6 +951,8 @@ export default function DashTanstackPivot(props) {
             grandTotalPinOverride,
             columnVisibility,
             columnSizing,
+            sidebarWidth,
+            fieldPanelSizes,
             chartCanvasPanes,
             tableCanvasSize,
             chartPanelFloating,
@@ -902,7 +987,12 @@ export default function DashTanstackPivot(props) {
     );
     const [showRowNumbers, setShowRowNumbers] = useState(false);
     const [sidebarOpen, setSidebarOpen] = useState(true);
-    const [sidebarWidth, setSidebarWidth] = useState(288);
+    const [sidebarWidth, setSidebarWidth] = useState(() => clampSidebarWidth(loadPersistedState('sidebarWidth', 288)));
+    const [fieldPanelSizes, setFieldPanelSizes] = useState(() => (
+        externalFieldPanelSizes && typeof externalFieldPanelSizes === 'object'
+            ? normalizedInitialFieldPanelSizes
+            : sanitizeFieldPanelSizes(loadPersistedState('fieldPanelSizes', DEFAULT_FIELD_PANEL_SIZES))
+    ));
     const [activeFilterCol, setActiveFilterCol] = useState(null);
     const [filterAnchorEl, setFilterAnchorEl] = useState(null);
     const [sidebarTab, setSidebarTab] = useState('fields'); // 'fields', 'columns'
@@ -933,8 +1023,12 @@ export default function DashTanstackPivot(props) {
     // Font / display controls
     const [fontFamily, setFontFamily] = useState("'Inter', system-ui, sans-serif");
     const [fontSize, setFontSize] = useState('14px');
-    const [decimalPlaces, setDecimalPlaces] = useState(0);
+    const [decimalPlaces, setDecimalPlaces] = useState(normalizedInitialDecimalPlaces);
+    const [defaultValueFormat, setDefaultValueFormat] = useState(normalizedInitialDefaultValueFormat);
+    const [numberGroupSeparator, setNumberGroupSeparator] = useState(normalizedInitialNumberGroupSeparator);
     const [columnDecimalOverrides, setColumnDecimalOverrides] = useState({});
+    const [columnFormatOverrides, setColumnFormatOverrides] = useState({});
+    const [columnGroupSeparatorOverrides, setColumnGroupSeparatorOverrides] = useState({});
     const [cellFormatRules, setCellFormatRules] = useState({});
     const [hoveredRowPath, setHoveredRowPath] = useState(null);
     const [zoomLevel, setZoomLevel] = useState(100);
@@ -1016,7 +1110,11 @@ export default function DashTanstackPivot(props) {
         if (typeof restored.showColTotals === 'boolean') setShowColTotals(restored.showColTotals);
         if (typeof restored.showRowNumbers === 'boolean') setShowRowNumbers(restored.showRowNumbers);
         if (typeof restored.sidebarOpen === 'boolean') setSidebarOpen(restored.sidebarOpen);
+        if (typeof restored.sidebarWidth === 'number') setSidebarWidth(clampSidebarWidth(restored.sidebarWidth, 288));
         if (typeof restored.sidebarTab === 'string') setSidebarTab(restored.sidebarTab);
+        if (restored.fieldPanelSizes && typeof restored.fieldPanelSizes === 'object') {
+            setFieldPanelSizes(sanitizeFieldPanelSizes(restored.fieldPanelSizes));
+        }
         if (typeof restored.showFloatingFilters === 'boolean') setShowFloatingFilters(restored.showFloatingFilters);
         if (typeof restored.stickyHeaders === 'boolean') setStickyHeaders(restored.stickyHeaders);
         if (typeof restored.colSearch === 'string') setColSearch(restored.colSearch);
@@ -1043,8 +1141,20 @@ export default function DashTanstackPivot(props) {
         if (restored.columnSizing && typeof restored.columnSizing === 'object') setColumnSizing(restored.columnSizing);
         if (restored.colExpanded && typeof restored.colExpanded === 'object') setColExpanded(restored.colExpanded);
         if (typeof restored.decimalPlaces === 'number') setDecimalPlaces(restored.decimalPlaces);
+        if (typeof restored.defaultValueFormat === 'string') {
+            setDefaultValueFormat(normalizeDefaultValueFormat(restored.defaultValueFormat));
+        }
+        if (typeof restored.numberGroupSeparator === 'string') {
+            setNumberGroupSeparator(normalizeNumberGroupSeparator(restored.numberGroupSeparator));
+        }
         if (typeof restored.zoomLevel === 'number') setZoomLevel(Math.max(60, Math.min(160, restored.zoomLevel)));
-        if (restored.columnDecimalOverrides && typeof restored.columnDecimalOverrides === 'object') setColumnDecimalOverrides(restored.columnDecimalOverrides);
+        setColumnDecimalOverrides(restored.columnDecimalOverrides && typeof restored.columnDecimalOverrides === 'object' ? restored.columnDecimalOverrides : {});
+        setColumnFormatOverrides(restored.columnFormatOverrides && typeof restored.columnFormatOverrides === 'object' ? restored.columnFormatOverrides : {});
+        setColumnGroupSeparatorOverrides(
+            restored.columnGroupSeparatorOverrides && typeof restored.columnGroupSeparatorOverrides === 'object'
+                ? restored.columnGroupSeparatorOverrides
+                : {}
+        );
         if (restored.cellFormatRules && typeof restored.cellFormatRules === 'object') setCellFormatRules(restored.cellFormatRules);
         if (restoredChartDefinitions) {
             setManagedChartDefinitions(restoredChartDefinitions);
@@ -1349,6 +1459,82 @@ export default function DashTanstackPivot(props) {
             tableCanvasSize,
         });
     }, [chartCanvasPanes, tableCanvasSize]);
+
+    useEffect(() => {
+        const serializedExternal = JSON.stringify(initialValConfigs || []);
+        if (serializedExternal === lastValConfigsPropRef.current) return;
+        lastValConfigsPropRef.current = serializedExternal;
+        if (!Array.isArray(initialValConfigs)) return;
+        setValConfigs(initialValConfigs);
+    }, [initialValConfigs]);
+
+    useEffect(() => {
+        const normalizedExternal = clampDecimalPlaces(externalDecimalPlaces, 0);
+        if (normalizedExternal === lastDecimalPlacesPropRef.current) return;
+        lastDecimalPlacesPropRef.current = normalizedExternal;
+        setDecimalPlaces(normalizedExternal);
+    }, [externalDecimalPlaces]);
+
+    useEffect(() => {
+        const serializedExternal = externalFieldPanelSizes && typeof externalFieldPanelSizes === 'object'
+            ? JSON.stringify(normalizedInitialFieldPanelSizes)
+            : null;
+        if (serializedExternal === lastFieldPanelSizesPropRef.current) return;
+        lastFieldPanelSizesPropRef.current = serializedExternal;
+        if (!externalFieldPanelSizes || typeof externalFieldPanelSizes !== 'object') return;
+        setFieldPanelSizes(normalizedInitialFieldPanelSizes);
+    }, [externalFieldPanelSizes, normalizedInitialFieldPanelSizes]);
+
+    useEffect(() => {
+        if (!setPropsRef.current) return;
+        if (!didPublishFieldPanelSizesRef.current) {
+            didPublishFieldPanelSizesRef.current = true;
+            return;
+        }
+        setPropsRef.current({ fieldPanelSizes });
+    }, [fieldPanelSizes]);
+
+    useEffect(() => {
+        if (!setPropsRef.current) return;
+        if (!didPublishDecimalPlacesRef.current) {
+            didPublishDecimalPlacesRef.current = true;
+            return;
+        }
+        setPropsRef.current({ decimalPlaces });
+    }, [decimalPlaces]);
+
+    useEffect(() => {
+        const normalizedExternal = normalizeDefaultValueFormat(externalDefaultValueFormat);
+        if (normalizedExternal === lastDefaultValueFormatPropRef.current) return;
+        lastDefaultValueFormatPropRef.current = normalizedExternal;
+        setDefaultValueFormat(normalizedExternal);
+    }, [externalDefaultValueFormat]);
+
+    useEffect(() => {
+        if (!setPropsRef.current) return;
+        if (!didPublishDefaultValueFormatRef.current) {
+            didPublishDefaultValueFormatRef.current = true;
+            return;
+        }
+        setPropsRef.current({ defaultValueFormat });
+    }, [defaultValueFormat]);
+
+    useEffect(() => {
+        const normalizedExternal = normalizeNumberGroupSeparator(externalNumberGroupSeparator);
+        if (normalizedExternal === lastNumberGroupSeparatorPropRef.current) return;
+        lastNumberGroupSeparatorPropRef.current = normalizedExternal;
+        if (typeof externalNumberGroupSeparator !== 'string') return;
+        setNumberGroupSeparator(normalizedExternal);
+    }, [externalNumberGroupSeparator]);
+
+    useEffect(() => {
+        if (!setPropsRef.current) return;
+        if (!didPublishNumberGroupSeparatorRef.current) {
+            didPublishNumberGroupSeparatorRef.current = true;
+            return;
+        }
+        setPropsRef.current({ numberGroupSeparator });
+    }, [numberGroupSeparator]);
 
     const handleCreateChartDefinition = useCallback(() => {
         const nextDefinition = normalizeChartDefinition({
@@ -2346,11 +2532,23 @@ export default function DashTanstackPivot(props) {
     useEffect(() => {
         if (!serverSide || !props.columns) return;
         const schemaEntry = props.columns.find(c => c.id === '__col_schema');
-        if (schemaEntry && schemaEntry.col_schema) {
-            setCachedColSchema(schemaEntry.col_schema);
-            colSchemaEpochRef.current = stateEpoch;
-        }
-    }, [serverSide, props.columns, stateEpoch]);
+        if (!schemaEntry || !schemaEntry.col_schema) return;
+
+        const pendingStructural = structuralPendingVersionRef.current;
+        const numericVersion = Number(dataVersion);
+        const schemaIsFreshForCurrentEpoch = !structuralInFlight
+            || !pendingStructural
+            || (Number.isFinite(numericVersion) && numericVersion >= pendingStructural.version);
+
+        // During a structural row/column change, props.columns still contains the
+        // previous response for one render. Re-applying that stale schema makes the
+        // new layout request window against old center-column ids, which shows
+        // formula headers backed by missing row keys until the next round-trip.
+        if (!schemaIsFreshForCurrentEpoch) return;
+
+        setCachedColSchema(schemaEntry.col_schema);
+        colSchemaEpochRef.current = stateEpoch;
+    }, [serverSide, props.columns, stateEpoch, dataVersion, structuralInFlight]);
 
     // Derive schema from row keys — only used in client-side mode.
     // In server-side mode the authoritative schema always comes from the __col_schema sentinel
@@ -2651,7 +2849,9 @@ export default function DashTanstackPivot(props) {
                 showColTotals,
                 showRowNumbers,
                 sidebarOpen,
+                sidebarWidth,
                 sidebarTab,
+                fieldPanelSizes,
                 showFloatingFilters,
                 stickyHeaders,
                 colSearch,
@@ -2671,8 +2871,12 @@ export default function DashTanstackPivot(props) {
                 columnSizing,
                 colExpanded,
                 decimalPlaces,
+                defaultValueFormat,
+                numberGroupSeparator,
                 zoomLevel,
                 columnDecimalOverrides,
+                columnFormatOverrides,
+                columnGroupSeparatorOverrides,
                 cellFormatRules,
                 chartPanelOpen,
                 chartPanelSource,
@@ -2727,7 +2931,9 @@ export default function DashTanstackPivot(props) {
         showColTotals,
         showRowNumbers,
         sidebarOpen,
+        sidebarWidth,
         sidebarTab,
+        fieldPanelSizes,
         showFloatingFilters,
         stickyHeaders,
         colSearch,
@@ -2747,8 +2953,12 @@ export default function DashTanstackPivot(props) {
         columnSizing,
         colExpanded,
         decimalPlaces,
+        defaultValueFormat,
+        numberGroupSeparator,
         zoomLevel,
         columnDecimalOverrides,
+        columnFormatOverrides,
+        columnGroupSeparatorOverrides,
         cellFormatRules,
         chartPanelOpen,
         chartPanelSource,
@@ -2844,6 +3054,7 @@ export default function DashTanstackPivot(props) {
             // pendingRowTransitions, and the viewport snaps in place.
             const uiOnlyKeys = new Set(['columnPinning', 'rowPinning', 'grandTotalPinOverride', 'columnVisibility', 'columnSizing']);
             const isExpansionOnly = serverSide && changedKeys.length > 0 && changedKeys.every(key => key === 'expanded');
+            const isSortingOnly = serverSide && changedKeys.length > 0 && changedKeys.every(key => key === 'sorting');
             const isUiOnlyChange = changedKeys.length > 0 && changedKeys.every(key => uiOnlyKeys.has(key));
             const grandTotalPinModeChanged = JSON.stringify(serverSidePinsGrandTotal) !== JSON.stringify(lastPropsRef.current.serverSidePinsGrandTotal);
 
@@ -2906,6 +3117,42 @@ export default function DashTanstackPivot(props) {
                         col_end: colRequestEndRef.current !== null ? colRequestEndRef.current : undefined,
                         needs_col_schema: needsColSchemaRef.current && serverSide || undefined,
                         include_grand_total: serverSidePinsGrandTotal || undefined,
+                    }
+                });
+                return;
+            }
+
+            if (isSortingOnly) {
+                expansionScrollRestoreRef.current = null;
+                if (expansionScrollRestoreRafRef.current !== null && typeof cancelAnimationFrame === 'function') {
+                    cancelAnimationFrame(expansionScrollRestoreRafRef.current);
+                    expansionScrollRestoreRafRef.current = null;
+                }
+                if (parentRef.current) {
+                    parentRef.current.scrollTop = 0;
+                }
+
+                const tx = beginExpansionRequest();
+                markRequestPending(tx.version);
+                const initialEnd = 99;
+                setPropsRef.current({
+                    ...nextProps,
+                    viewport: {
+                        table: tableName || undefined,
+                        start: 0,
+                        end: initialEnd,
+                        count: initialEnd + 1,
+                        version: tx.version,
+                        window_seq: tx.version,
+                        state_epoch: tx.stateEpoch,
+                        session_id: sessionIdRef.current,
+                        client_instance: clientInstanceRef.current,
+                        abort_generation: tx.abortGeneration,
+                        intent: 'viewport',
+                        col_start: colRequestStartRef.current !== null ? colRequestStartRef.current : undefined,
+                        col_end: colRequestEndRef.current !== null ? colRequestEndRef.current : undefined,
+                        include_grand_total: serverSidePinsGrandTotal || undefined,
+                        cinema_mode: cinemaMode || undefined,
                     }
                 });
                 return;
@@ -3027,19 +3274,29 @@ export default function DashTanstackPivot(props) {
         return Array.from(colIds);
     }, [selectedCells]);
 
+    const matchesSelectedColumnToValueConfig = useCallback((colId, cfg) => {
+        if (!cfg || typeof colId !== 'string' || !cfg.field) return false;
+        const normalizedColId = colId.toLowerCase();
+        if (cfg.agg === 'formula') {
+            const formulaId = String(cfg.field).toLowerCase();
+            return normalizedColId === formulaId || normalizedColId.endsWith(`_${formulaId}`);
+        }
+        const suffix = `_${cfg.field}_${cfg.agg}`.toLowerCase();
+        return (
+            normalizedColId === String(cfg.field).toLowerCase() ||
+            normalizedColId.endsWith(suffix) ||
+            normalizedColId.includes(`_${String(cfg.field).toLowerCase()}_`)
+        );
+    }, []);
+
     const getSelectedMeasureIndexes = useCallback((selectedColIds) => {
         const matchedIndexes = [];
         valConfigs.forEach((cfg, idx) => {
-            const suffix = `_${cfg.field}_${cfg.agg}`;
-            const matches = selectedColIds.some(colId => (
-                colId === cfg.field ||
-                colId.endsWith(suffix) ||
-                colId.includes(`_${cfg.field}_`)
-            ));
+            const matches = selectedColIds.some((colId) => matchesSelectedColumnToValueConfig(colId, cfg));
             if (matches) matchedIndexes.push(idx);
         });
         return matchedIndexes;
-    }, [valConfigs]);
+    }, [matchesSelectedColumnToValueConfig, valConfigs]);
 
     const getDefaultFormatForSelection = useCallback((selectionMap) => {
         const selectedColIds = getSelectedColumnIds(selectionMap)
@@ -3054,6 +3311,20 @@ export default function DashTanstackPivot(props) {
         const uniqueFormats = Array.from(new Set(formats));
         if (uniqueFormats.length === 1) return uniqueFormats[0];
         return 'fixed:2';
+    }, [getSelectedColumnIds, getSelectedMeasureIndexes, valConfigs]);
+
+    const getCurrentFormatForSelection = useCallback((selectionMap) => {
+        const selectedColIds = getSelectedColumnIds(selectionMap)
+            .filter(id => id !== 'hierarchy' && id !== '__row_number__');
+        const matchedIndexes = getSelectedMeasureIndexes(selectedColIds);
+        if (matchedIndexes.length === 0) return '';
+
+        const formats = matchedIndexes
+            .map(idx => valConfigs[idx] && typeof valConfigs[idx].format === 'string' ? valConfigs[idx].format.trim() : '')
+            .map(fmt => fmt || '')
+            .filter((fmt, idx, arr) => arr.indexOf(fmt) === idx);
+
+        return formats.length === 1 ? formats[0] : '';
     }, [getSelectedColumnIds, getSelectedMeasureIndexes, valConfigs]);
 
     const applyDataBarsFromSelection = useCallback((selectionMap, mode = 'col') => {
@@ -3100,7 +3371,7 @@ export default function DashTanstackPivot(props) {
         } else {
             const promptDefault = getDefaultFormatForSelection(selectionMap);
             const formatInput = window.prompt(
-                'Format selected values.\nExamples: fixed:2, currency, percent, compact',
+                'Format selected values.\nExamples: fixed:2, currency:$, accounting:€, percent, compact',
                 promptDefault
             );
             if (formatInput === null) return;
@@ -3111,12 +3382,7 @@ export default function DashTanstackPivot(props) {
             let matchedAny = false;
             const matchedIndexes = [];
             prev.forEach((cfg, idx) => {
-                const suffix = `_${cfg.field}_${cfg.agg}`;
-                const matches = selectedColIds.some(colId => (
-                    colId === cfg.field ||
-                    colId.endsWith(suffix) ||
-                    colId.includes(`_${cfg.field}_`)
-                ));
+                const matches = selectedColIds.some((colId) => matchesSelectedColumnToValueConfig(colId, cfg));
                 if (matches) matchedIndexes.push(idx);
             });
             const next = prev.map((cfg, idx) => {
@@ -3141,7 +3407,126 @@ export default function DashTanstackPivot(props) {
         } else {
             showNotification(`Format applied: ${normalizedFormat}`, 'success');
         }
-    }, [getSelectedColumnIds, getDefaultFormatForSelection, setValConfigs, showNotification]);
+    }, [getSelectedColumnIds, getDefaultFormatForSelection, matchesSelectedColumnToValueConfig, setValConfigs, showNotification]);
+
+    const selectedValueColumnIds = useMemo(
+        () => getSelectedColumnIds(selectedCells).filter(id => id !== 'hierarchy' && id !== '__row_number__'),
+        [getSelectedColumnIds, selectedCells]
+    );
+    const canApplySelectionValueFormat = useMemo(
+        () => getSelectedMeasureIndexes(selectedValueColumnIds).length > 0,
+        [getSelectedMeasureIndexes, selectedValueColumnIds]
+    );
+    const selectionValueFormat = useMemo(
+        () => getCurrentFormatForSelection(selectedCells),
+        [getCurrentFormatForSelection, selectedCells]
+    );
+    const applySelectionValueFormat = useCallback((formatOverride) => {
+        applyFormatToSelection(selectedCells, formatOverride);
+    }, [applyFormatToSelection, selectedCells]);
+
+    const getDisplayHeaderTextForColumn = useCallback((column) => {
+        if (!column) return '';
+        const columnId = typeof column.id === 'string' ? column.id : '';
+        const matchingValueConfig = Array.isArray(valConfigs)
+            ? (valConfigs.find((config) => matchesSelectedColumnToValueConfig(columnId, config)) || null)
+            : null;
+
+        if (matchingValueConfig) {
+            return matchingValueConfig.agg === 'formula'
+                ? (matchingValueConfig.label || matchingValueConfig.field || columnId)
+                : `${formatDisplayLabel(matchingValueConfig.field)} (${formatAggLabel(matchingValueConfig.agg, matchingValueConfig.weightField)})`;
+        }
+
+        const columnDef = column.columnDef || {};
+        if (typeof columnDef.header === 'string' && columnDef.header.trim()) {
+            return columnDef.header;
+        }
+        if (columnDef.headerVal !== undefined && columnDef.headerVal !== null) {
+            return String(columnDef.headerVal);
+        }
+        if (columnId) {
+            return formatDisplayLabel(columnId.replace(/^group_/, '').replace(/\|\|\|/g, ' > '));
+        }
+        return '';
+    }, [matchesSelectedColumnToValueConfig, valConfigs]);
+    const getDisplayHeaderTextStackForColumn = useCallback((column) => {
+        if (!column) return [];
+        const parts = [];
+        const visited = new Set();
+        let current = column;
+
+        while (current && !visited.has(current.id)) {
+            visited.add(current.id);
+            const text = getDisplayHeaderTextForColumn(current);
+            if (text) parts.unshift(text);
+            current = current.parent || null;
+        }
+
+        return parts;
+    }, [getDisplayHeaderTextForColumn]);
+    const getRenderedHeaderWidthForColumn = useCallback((columnId) => {
+        if (typeof document === 'undefined' || typeof window === 'undefined' || !columnId) return null;
+        const scopedRoot = typeof id === 'string' && id ? document.getElementById(id) : null;
+        const headerElements = Array.from((scopedRoot || document).querySelectorAll('[role="columnheader"][data-header-column-id]'))
+            .filter((element) => element && element.dataset && element.dataset.headerColumnId === String(columnId));
+        if (headerElements.length === 0) return null;
+
+        let maxMeasuredWidth = null;
+        headerElements.forEach((headerElement) => {
+            let naturalContentWidth = 0;
+            const headerContent = headerElement.querySelector('[data-header-content="true"]');
+            if (headerContent) {
+                const contentStyle = window.getComputedStyle(headerContent);
+                const gap = parseFloat(contentStyle.columnGap || contentStyle.gap || '0') || 0;
+                const horizontalPadding = (parseFloat(contentStyle.paddingLeft || '0') || 0)
+                    + (parseFloat(contentStyle.paddingRight || '0') || 0);
+                const childElements = Array.from(headerContent.children || []);
+                const childWidths = childElements.reduce((sum, childElement) => {
+                    if (childElement && childElement.dataset && childElement.dataset.headerText === 'true') {
+                        return sum + Math.ceil(childElement.scrollWidth || childElement.getBoundingClientRect().width || 0);
+                    }
+                    return sum + Math.ceil(childElement.getBoundingClientRect().width || 0);
+                }, 0);
+                naturalContentWidth = childWidths + horizontalPadding + (gap * Math.max(0, childElements.length - 1));
+            }
+
+            const headerStyle = window.getComputedStyle(headerElement);
+            const horizontalChrome = (parseFloat(headerStyle.paddingLeft || '0') || 0)
+                + (parseFloat(headerStyle.paddingRight || '0') || 0)
+                + (parseFloat(headerStyle.borderLeftWidth || '0') || 0)
+                + (parseFloat(headerStyle.borderRightWidth || '0') || 0);
+            const renderedWidth = Math.ceil(headerElement.getBoundingClientRect().width || 0);
+            const candidateWidth = naturalContentWidth > 0
+                ? Math.max(renderedWidth, naturalContentWidth + horizontalChrome + autoSizeBounds.headerOverscan)
+                : Math.max(renderedWidth, headerElement.scrollWidth || 0);
+            maxMeasuredWidth = maxMeasuredWidth === null
+                ? candidateWidth
+                : Math.max(maxMeasuredWidth, candidateWidth);
+        });
+
+        return maxMeasuredWidth;
+    }, [autoSizeBounds.headerOverscan, id]);
+    const queueHeaderFitValidation = useCallback((columnId, measuredWidth) => {
+        if (typeof window === 'undefined' || !columnId || !table || typeof table.setColumnSizing !== 'function') return;
+        const raf = window.requestAnimationFrame || ((callback) => window.setTimeout(callback, 0));
+        raf(() => {
+            raf(() => {
+                const renderedHeaderWidth = getRenderedHeaderWidthForColumn(columnId);
+                if (!Number.isFinite(renderedHeaderWidth)) return;
+                const targetWidth = Math.min(
+                    autoSizeBounds.maxWidth,
+                    Math.max(autoSizeBounds.minWidth, Math.ceil(renderedHeaderWidth + autoSizeBounds.headerOverscan))
+                );
+                if (targetWidth > measuredWidth + 1) {
+                    table.setColumnSizing((old) => ({
+                        ...old,
+                        [columnId]: targetWidth
+                    }));
+                }
+            });
+        });
+    }, [autoSizeBounds.headerOverscan, autoSizeBounds.maxWidth, autoSizeBounds.minWidth, getRenderedHeaderWidthForColumn, table]);
 
     const getPinningState = (colId) => {
         const { left, right } = columnPinning;
@@ -3626,10 +4011,10 @@ export default function DashTanstackPivot(props) {
         });
     };
 
-    const autoSizeColumn = (columnId) => {
+    const autoSizeColumn = (columnId, includeHeader = true) => {
         const rows = table.getRowModel().rows;
         const sampleRows = rows.slice(0, 250);
-        let maxWidth = 0;
+        let maxWidth = autoSizeBounds.minWidth;
 
         const canvas = document.createElement('canvas');
         const context = canvas.getContext('2d');
@@ -3639,10 +4024,20 @@ export default function DashTanstackPivot(props) {
 
         const column = table.getColumn(columnId);
         if (!column) return;
-        const header = column.columnDef.header;
-        const headerText = formatDisplayLabel(typeof header === 'string' ? header : columnId);
-        context.font = headerFont;
-        maxWidth = context.measureText(headerText).width + autoSizeBounds.headerPadding;
+        const matchingValueConfig = Array.isArray(valConfigs)
+            ? (valConfigs.find((config) => matchesSelectedColumnToValueConfig(columnId, config)) || null)
+            : null;
+        const headerTextStack = getDisplayHeaderTextStackForColumn(column);
+        if (includeHeader) {
+            context.font = headerFont;
+            headerTextStack.forEach((headerText) => {
+                maxWidth = Math.max(maxWidth, context.measureText(headerText).width + autoSizeBounds.headerPadding + autoSizeBounds.headerOverscan);
+            });
+            const renderedHeaderWidth = getRenderedHeaderWidthForColumn(columnId);
+            if (Number.isFinite(renderedHeaderWidth)) {
+                maxWidth = Math.max(maxWidth, renderedHeaderWidth);
+            }
+        }
 
         context.font = bodyFont;
         sampleRows.forEach(row => {
@@ -3653,9 +4048,20 @@ export default function DashTanstackPivot(props) {
                 const label = row.original && row.original._id != null ? formatDisplayLabel(String(row.original._id)) : '';
                 text = `${' '.repeat(depth * 2)}${label}`;
             } else {
-                text = formatValue(cellValue);
+                const effectiveDecimalPlaces = columnDecimalOverrides && columnDecimalOverrides[columnId] !== undefined
+                    ? columnDecimalOverrides[columnId]
+                    : decimalPlaces;
+                const effectiveFormat = Object.prototype.hasOwnProperty.call(columnFormatOverrides || {}, columnId)
+                    ? columnFormatOverrides[columnId]
+                    : ((matchingValueConfig && matchingValueConfig.format) || defaultValueFormat || null);
+                const effectiveGroupSeparator = columnGroupSeparatorOverrides && columnGroupSeparatorOverrides[columnId] !== undefined
+                    ? columnGroupSeparatorOverrides[columnId]
+                    : numberGroupSeparator;
+                text = formatValue(cellValue, effectiveFormat, effectiveDecimalPlaces, effectiveGroupSeparator);
             }
-            const width = context.measureText(text).width + autoSizeBounds.cellPadding;
+            const width = context.measureText(text).width
+                + autoSizeBounds.cellPadding
+                + (includeHeader ? 0 : autoSizeBounds.cellOverscan);
             if (width > maxWidth) maxWidth = width;
         });
 
@@ -3666,14 +4072,21 @@ export default function DashTanstackPivot(props) {
             ...old,
             [columnId]: maxWidth
         }));
+        if (includeHeader) {
+            queueHeaderFitValidation(columnId, maxWidth);
+        }
     };
 
-    const autoSizeVisibleColumns = useCallback(() => {
+    const autoSizeVisibleColumns = useCallback((includeHeader = false) => {
         if (!table || !table.getVisibleLeafColumns) return;
         table.getVisibleLeafColumns().forEach((column) => {
-            autoSizeColumn(column.id);
+            autoSizeColumn(column.id, includeHeader);
         });
     }, [table, autoSizeColumn]);
+    const handleAutoSizeToolbarClick = useCallback(() => {
+        autoSizeVisibleColumns(autoSizeIncludesHeaderNext);
+        setAutoSizeIncludesHeaderNext((prev) => !prev);
+    }, [autoSizeVisibleColumns, autoSizeIncludesHeaderNext]);
 
     const handleFilterClick = (e, columnId) => {
         e.stopPropagation();
@@ -3895,7 +4308,11 @@ export default function DashTanstackPivot(props) {
         toggleCol,
         pendingRowTransitions,
         decimalPlaces,
+        defaultValueFormat,
+        numberGroupSeparator,
         columnDecimalOverrides,
+        columnFormatOverrides,
+        columnGroupSeparatorOverrides,
         cellFormatRules,
     });
 
@@ -3906,12 +4323,17 @@ export default function DashTanstackPivot(props) {
         if (visLeafCols.length === 0) return;
         const canvas = document.createElement('canvas');
         const ctx = canvas.getContext('2d');
-        ctx.font = `600 13px system-ui, Arial, sans-serif`;
+        ctx.font = `600 ${fontSize || '14px'} ${fontFamily || "'Inter', system-ui, sans-serif"}`;
         const newSizes = {};
         visLeafCols.forEach(col => {
             if (columnSizing[col.id] !== undefined) return; // already user-set
-            const headerText = typeof col.columnDef.header === 'string' ? col.columnDef.header : col.id;
-            const measured = ctx.measureText(headerText).width + autoSizeBounds.headerPadding;
+            const measuredFromText = getDisplayHeaderTextStackForColumn(col).reduce((maxWidth, headerText) => (
+                Math.max(maxWidth, ctx.measureText(headerText).width + autoSizeBounds.headerPadding + autoSizeBounds.headerOverscan)
+            ), autoSizeBounds.minWidth);
+            const measuredFromDom = getRenderedHeaderWidthForColumn(col.id);
+            const measured = Number.isFinite(measuredFromDom)
+                ? Math.max(measuredFromText, measuredFromDom)
+                : measuredFromText;
             const clamped = Math.min(Math.max(measured, autoSizeBounds.minWidth), 300);
             if (clamped > (col.columnDef.size || autoSizeBounds.minWidth)) {
                 newSizes[col.id] = clamped;
@@ -3919,9 +4341,12 @@ export default function DashTanstackPivot(props) {
         });
         if (Object.keys(newSizes).length > 0) {
             setColumnSizing(prev => ({ ...newSizes, ...prev }));
+            Object.entries(newSizes).forEach(([columnId, width]) => {
+                queueHeaderFitValidation(columnId, width);
+            });
         }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    }, [colFields, valConfigs, rowFields]);
+    }, [colFields, fontFamily, fontSize, getDisplayHeaderTextStackForColumn, getRenderedHeaderWidthForColumn, queueHeaderFitValidation, rowFields, valConfigs]);
 
     useEffect(() => {
         if (!serverSide || !structuralInFlight) return;
@@ -5668,18 +6093,27 @@ export default function DashTanstackPivot(props) {
     );
 
 
+    const matchesValueConfigId = (columnId, valueConfig) => {
+        if (!columnId || !valueConfig || !valueConfig.field) return false;
+        if (valueConfig.agg === 'formula') {
+            return columnId === valueConfig.field || columnId.endsWith(`_${valueConfig.field}`);
+        }
+        const flatMeasureId = `${valueConfig.field}_${valueConfig.agg}`;
+        return columnId === flatMeasureId || columnId.endsWith(`_${valueConfig.field}_${valueConfig.agg}`);
+    };
+
     const getFieldZone = (id) => {
         if (id === 'hierarchy') return 'rows';
         if (rowFields.includes(id)) return 'rows';
         if (colFields.includes(id)) return 'cols';
-        if (valConfigs.find(v => id.includes(v.field))) return 'vals';
+        if (valConfigs.find(v => matchesValueConfigId(id, v))) return 'vals';
         return null;
     };
 
     const getFieldIndex = (id, zone) => {
         if (zone === 'rows') return rowFields.indexOf(id);
         if (zone === 'cols') return colFields.indexOf(id);
-        if (zone === 'vals') return valConfigs.findIndex(v => id.includes(v.field));
+        if (zone === 'vals') return valConfigs.findIndex(v => matchesValueConfigId(id, v));
         return -1;
     };
 
@@ -5687,6 +6121,8 @@ export default function DashTanstackPivot(props) {
         e.preventDefault();
         if (!dragItem) return;
         const { field, zone: srcZone } = dragItem;
+        const draggedValueConfig = typeof field === 'object' && field ? field : null;
+        const isFormulaValue = Boolean(draggedValueConfig && draggedValueConfig.agg === 'formula');
         const fieldName = typeof field === 'string' ? field : field.field;
         
         // Handle dropping on the same column (no-op)
@@ -5697,6 +6133,12 @@ export default function DashTanstackPivot(props) {
 
         const targetZone = getFieldZone(targetColId);
         if (!targetZone) {
+            setDragItem(null);
+            return;
+        }
+
+        if (isFormulaValue) {
+            showNotification('Formula columns can be reordered inside Values only.', 'warning');
             setDragItem(null);
             return;
         }
@@ -5764,17 +6206,25 @@ export default function DashTanstackPivot(props) {
         e.preventDefault();
         if (!dragItem) return;
         const { field, zone: srcZone, idx: srcIdx } = dragItem;
+        const draggedValueConfig = typeof field === 'object' && field ? field : null;
+        const isFormulaValue = Boolean(draggedValueConfig && draggedValueConfig.agg === 'formula');
         const targetIdx = (dropLine && dropLine.idx) || 0;
         const insertItem = (list, idx, item) => { const n = [...list]; n.splice(idx, 0, item); return n; };
         const fieldName = typeof field === 'string' ? field : field.field;
         if (!fieldName || typeof fieldName !== 'string') { setDragItem(null); setDropLine(null); return; }
+        if (isFormulaValue && targetZone !== 'vals') {
+            showNotification('Formula columns can only stay in Values.', 'warning');
+            setDragItem(null);
+            setDropLine(null);
+            return;
+        }
         if (srcZone !== targetZone) {
             if (srcZone==='rows') setRowFields(p=>p.filter(f=>f!==fieldName));
             if (srcZone==='cols') setColFields(p=>p.filter(f=>f!==fieldName));
             if (srcZone==='vals') setValConfigs(p=>p.filter((_,i)=>i!==srcIdx));
             if (targetZone==='rows') setRowFields(p=>p.includes(fieldName) ? p : insertItem(p, targetIdx, fieldName));
             if (targetZone==='cols') setColFields(p=>p.includes(fieldName) ? p : insertItem(p, targetIdx, fieldName));
-            if (targetZone==='vals') setValConfigs(p=>insertItem(p, targetIdx, {field: fieldName, agg:'sum'}));
+            if (targetZone==='vals') setValConfigs(p=>insertItem(p, targetIdx, draggedValueConfig || {field: fieldName, agg:'sum'}));
             if (targetZone==='filter' && !filters.hasOwnProperty(fieldName)) setFilters(p=>({...p, [fieldName]: ''}));
         } else {
             const move = (list, setList) => {
@@ -6071,9 +6521,8 @@ export default function DashTanstackPivot(props) {
                     ✕ Exit Cinema
                 </button>
             )}
-            {/* PivotAppBar is intentionally outside PivotErrorBoundary so that
-                the global search input (and other toolbar controls) are not
-                unmounted on every dataVersion change. */}
+            {/* PivotAppBar stays outside PivotErrorBoundary so toolbar controls
+                remain usable even if the table renderer hits an error state. */}
             {!cinemaMode && <PivotAppBar
                 cinemaMode={cinemaMode} setCinemaMode={setCinemaMode}
                 sidebarOpen={sidebarOpen} setSidebarOpen={setSidebarOpen}
@@ -6086,7 +6535,8 @@ export default function DashTanstackPivot(props) {
                 showColTotals={showColTotals} setShowColTotals={setShowColTotals}
                 spacingMode={spacingMode} setSpacingMode={setSpacingMode} spacingLabels={spacingLabels}
                 layoutMode={layoutMode} setLayoutMode={setLayoutMode}
-                onAutoSizeColumns={autoSizeVisibleColumns}
+                onAutoSizeColumns={handleAutoSizeToolbarClick}
+                autoSizeIncludesHeaderNext={autoSizeIncludesHeaderNext}
                 onTransposePivot={handleTransposePivot}
                 canTranspose={rowFields.length > 0 || colFields.length > 0}
                 colorScaleMode={colorScaleMode} setColorScaleMode={setColorScaleMode}
@@ -6100,15 +6550,22 @@ export default function DashTanstackPivot(props) {
                 fontSize={fontSize} setFontSize={setFontSize}
                 zoomLevel={zoomLevel} setZoomLevel={setZoomLevel}
                 decimalPlaces={decimalPlaces} setDecimalPlaces={setDecimalPlaces}
+                defaultValueFormat={defaultValueFormat} setDefaultValueFormat={setDefaultValueFormat}
+                numberGroupSeparator={numberGroupSeparator} setNumberGroupSeparator={setNumberGroupSeparator}
                 columnDecimalOverrides={columnDecimalOverrides} setColumnDecimalOverrides={setColumnDecimalOverrides}
+                columnFormatOverrides={columnFormatOverrides} setColumnFormatOverrides={setColumnFormatOverrides}
+                columnGroupSeparatorOverrides={columnGroupSeparatorOverrides} setColumnGroupSeparatorOverrides={setColumnGroupSeparatorOverrides}
                 cellFormatRules={cellFormatRules} setCellFormatRules={setCellFormatRules}
                 selectedCells={selectedCells}
+                selectionValueFormat={selectionValueFormat}
+                canApplySelectionValueFormat={canApplySelectionValueFormat}
+                onApplySelectionValueFormat={applySelectionValueFormat}
                 dataBarsColumns={dataBarsColumns} setDataBarsColumns={setDataBarsColumns}
                 canCreateSelectionChart={Object.keys(selectedCells || {}).length > 0}
                 onCreateSelectionChart={() => openSelectionChart()}
                 onAddChartPane={handleAddChartCanvasPane}
             />}
-        <PivotErrorBoundary key={dataVersion}>
+        <PivotErrorBoundary>
             <div style={{display:'flex', flex:1, overflow:'hidden', fontFamily: fontFamily, fontSize: fontSize, zoom: zoomLevel / 100}}>
                 {!cinemaMode && sidebarOpen && (
                     <SidebarPanel
@@ -6142,6 +6599,8 @@ export default function DashTanstackPivot(props) {
                         data={data}
                         sidebarWidth={sidebarWidth}
                         setSidebarWidth={setSidebarWidth}
+                        fieldPanelSizes={fieldPanelSizes}
+                        setFieldPanelSizes={setFieldPanelSizes}
                     />
                 )}
                 <div ref={chartCanvasLayoutRef} style={{ display:'flex', flex:1, minWidth:0, minHeight:0, overflow:'hidden', position:'relative' }}>
@@ -6203,6 +6662,7 @@ export default function DashTanstackPivot(props) {
                                 selectedCells={selectedCells}
                                 rowCount={statusRowCount}
                                 isRequestPending={isRequestPending}
+                                numberGroupSeparator={numberGroupSeparator}
                             />
                         </div>
                     </div>
@@ -6426,6 +6886,7 @@ DashTanstackPivot.propTypes = {
             separator: PropTypes.string,
             formula: PropTypes.string,
             label: PropTypes.string,
+            formulaRef: PropTypes.string,
         })),
         filters: PropTypes.object,
         sorting: PropTypes.array,
@@ -6473,6 +6934,10 @@ DashTanstackPivot.propTypes = {
     rowPinned: PropTypes.object,
     columnVisibility: PropTypes.object,
     columnSizing: PropTypes.object,
+    decimalPlaces: PropTypes.number,
+    defaultValueFormat: PropTypes.string,
+    fieldPanelSizes: PropTypes.object,
+    numberGroupSeparator: PropTypes.oneOf(['comma', 'space', 'thin_space', 'apostrophe', 'none']),
     reset: PropTypes.any,
     persistence: PropTypes.oneOfType([PropTypes.bool, PropTypes.string, PropTypes.number]),
     persistence_type: PropTypes.oneOf(['local', 'session', 'memory']),

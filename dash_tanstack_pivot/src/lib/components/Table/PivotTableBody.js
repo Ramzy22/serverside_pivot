@@ -67,6 +67,7 @@ export function PivotTableBody({
     selectedCells,
     rowCount,
     isRequestPending,
+    numberGroupSeparator,
 }) {
     const pinnedRowIdSet = React.useMemo(() => {
         const ids = new Set();
@@ -792,6 +793,7 @@ export function PivotTableBody({
                 visibleRowsCount={rows.length}
                 theme={theme}
                 isLoading={isRequestPending}
+                numberGroupSeparator={numberGroupSeparator}
             />
         </div>
     );

@@ -6,13 +6,25 @@ from typing import Dict, Any, List, Optional, Callable, Union
 from dataclasses import dataclass
 from enum import Enum
 import asyncio
+from functools import cmp_to_key
 import logging
 import math
+import re
 from .scalable_pivot_controller import ScalablePivotController
 from .types.pivot_spec import PivotSpec, Measure
 from .security import User, apply_rls_to_spec
 
 _adapter_logger = logging.getLogger("pivot_engine.adapter")
+_FORMULA_IDENTIFIER_RE = re.compile(r"\b[A-Za-z_][A-Za-z0-9_]*\b")
+
+
+def _normalize_formula_reference_key(value: Any, fallback: Any = "formula") -> str:
+    base = str(value or "").strip().lower()
+    base = re.sub(r"\s+", "", base)
+    base = re.sub(r"[^a-z0-9_]", "", base)
+    fallback_base = re.sub(r"[^a-z0-9_]", "", str(fallback or "formula").strip().lower()) or "formula"
+    normalized = base or fallback_base
+    return normalized if re.match(r"^[a-z_]", normalized) else f"f_{normalized}"
 
 
 def _is_missing_value(value: Any) -> bool:
@@ -218,6 +230,182 @@ class TanStackPivotAdapter:
             seen.add(col_id)
         return ordered
 
+    def _reorder_materialized_dynamic_ids(
+        self,
+        observed_ids: list,
+        request: "TanStackRequest",
+    ) -> list[str]:
+        """Normalize materialized value/formula column order for flat and pivot payloads.
+
+        Planner output already determines the pivot-prefix sequence for regular
+        measures, but post-aggregation formulas are materialized later from row
+        dicts. Without a canonical reorder pass, those late formula keys drift to
+        the end of the schema in arbitrary set/dict insertion order, which breaks
+        the horizontal window contract expected by the client.
+        """
+        requested_dynamic_ids = [
+            str(col.get("id"))
+            for col in (request.columns or [])
+            if isinstance(col, dict)
+            and col.get("id")
+            and (col.get("aggregationFn") or col.get("isFormula"))
+        ]
+        if not requested_dynamic_ids:
+            return [
+                str(col_id)
+                for col_id in (observed_ids or [])
+                if isinstance(col_id, str)
+            ]
+
+        observed_list = [
+            str(col_id)
+            for col_id in (observed_ids or [])
+            if isinstance(col_id, str)
+        ]
+        observed_set = set(observed_list)
+        ordered: list[str] = []
+        seen: set[str] = set()
+
+        pivot_prefixes: list[str] = []
+        seen_prefixes: set[str] = set()
+        has_pivoted_dynamic = False
+
+        for col_id in observed_list:
+            for dynamic_id in requested_dynamic_ids:
+                suffix = f"_{dynamic_id}"
+                if not col_id.endswith(suffix):
+                    continue
+                has_pivoted_dynamic = True
+                prefix = col_id[: -len(suffix)]
+                if prefix and prefix not in seen_prefixes:
+                    pivot_prefixes.append(prefix)
+                    seen_prefixes.add(prefix)
+                break
+
+        if has_pivoted_dynamic:
+            for prefix in pivot_prefixes:
+                for dynamic_id in requested_dynamic_ids:
+                    candidate = f"{prefix}_{dynamic_id}"
+                    if candidate in observed_set and candidate not in seen:
+                        ordered.append(candidate)
+                        seen.add(candidate)
+        else:
+            for dynamic_id in requested_dynamic_ids:
+                if dynamic_id in observed_set and dynamic_id not in seen:
+                    ordered.append(dynamic_id)
+                    seen.add(dynamic_id)
+
+        for col_id in observed_list:
+            if col_id not in seen:
+                ordered.append(col_id)
+                seen.add(col_id)
+
+        return ordered
+
+    def _synthesize_response_column(
+        self,
+        col_id: str,
+        request_lookup: Dict[str, Dict[str, Any]],
+        formula_labels: Dict[str, str],
+    ) -> Dict[str, Any]:
+        """Build response metadata for a materialized center column id."""
+        request_col = request_lookup.get(col_id)
+        if isinstance(request_col, dict):
+            return dict(request_col)
+
+        if col_id.startswith("__RowTotal__"):
+            measure_key = col_id.replace("__RowTotal__", "")
+            return {
+                "id": col_id,
+                "header": f"Total {measure_key.replace('_', ' ').title()}",
+                "accessorKey": col_id,
+                "isRowTotal": True,
+            }
+
+        formula_label = None
+        for formula_id, label in formula_labels.items():
+            if self._matches_formula_column_id(col_id, formula_id):
+                formula_label = label
+                break
+
+        synthesized = {
+            "id": col_id,
+            "header": formula_label or col_id.replace("_", " ").title(),
+            "accessorKey": col_id,
+        }
+        if formula_label:
+            synthesized["formulaLabel"] = formula_label
+        return synthesized
+
+    def _build_authoritative_response_columns(
+        self,
+        tanstack_result: "TanStackResponse",
+        request: "TanStackRequest",
+        row_meta_keys: set,
+        excluded_ids: set,
+    ) -> tuple[list[str], list[Dict[str, Any]]]:
+        """Return the canonical center-column order and response column manifest.
+
+        The backend may start from request placeholders, but the emitted payload
+        must reflect the columns that are actually materialized after pivot/window
+        processing and formula evaluation. Both response.columns and col_schema are
+        derived from this manifest so they cannot drift apart.
+        """
+        request_lookup = {
+            str(col.get("id")): dict(col)
+            for col in (request.columns or [])
+            if isinstance(col, dict) and col.get("id")
+        }
+        current_lookup = {
+            str(col.get("id")): dict(col)
+            for col in (tanstack_result.columns or [])
+            if isinstance(col, dict) and col.get("id")
+        }
+        formula_labels = {
+            str(col.get("id")): self._formula_label(col)
+            for col in (request.columns or [])
+            if isinstance(col, dict) and col.get("isFormula") and col.get("id")
+        }
+
+        center_col_ids = self._get_center_col_ids_from_columns(
+            tanstack_result.columns, excluded_ids
+        )
+        seen_center_ids = set(center_col_ids)
+        for col_id in self._get_center_col_ids_from_rows(
+            tanstack_result.data, row_meta_keys, excluded_ids
+        ):
+            if col_id not in seen_center_ids:
+                center_col_ids.append(col_id)
+                seen_center_ids.add(col_id)
+        center_col_ids = self._reorder_materialized_dynamic_ids(center_col_ids, request)
+
+        authoritative_columns: list[Dict[str, Any]] = []
+        seen_column_ids = set()
+
+        for col_id in list(request.grouping or []):
+            col = current_lookup.get(col_id) or request_lookup.get(col_id)
+            if not isinstance(col, dict):
+                col = {
+                    "id": col_id,
+                    "header": col_id.replace("_", " ").title(),
+                    "accessorKey": col_id,
+                }
+            if col_id not in seen_column_ids:
+                authoritative_columns.append(col)
+                seen_column_ids.add(col_id)
+
+        for col_id in center_col_ids:
+            col = (
+                current_lookup.get(col_id)
+                or request_lookup.get(col_id)
+                or self._synthesize_response_column(col_id, request_lookup, formula_labels)
+            )
+            if col_id not in seen_column_ids:
+                authoritative_columns.append(col)
+                seen_column_ids.add(col_id)
+
+        return center_col_ids, authoritative_columns
+
     def _apply_col_windowing(self, tanstack_result: 'TanStackResponse', request: 'TanStackRequest',
                               col_start: int, col_end: Optional[int], needs_col_schema: bool,
                               requested_center_ids: Optional[List[str]] = None) -> 'TanStackResponse':
@@ -233,7 +421,7 @@ class TanStackPivotAdapter:
         request_dimension_ids = {
             col.get("id")
             for col in (request.columns or [])
-            if isinstance(col, dict) and not col.get("aggregationFn") and col.get("id")
+            if isinstance(col, dict) and not col.get("aggregationFn") and not col.get("isFormula") and col.get("id")
         }
         excluded_ids = set(row_meta_keys) | pinned_ids | request_dimension_ids
         # Include a stable filter fingerprint so that pivot column sets computed under
@@ -252,18 +440,18 @@ class TanStackPivotAdapter:
         cache_key = (request.table, frozenset(excluded_ids), _filter_fp, _cols_fp, _col_sort_fp)
 
         if needs_col_schema or cache_key not in self._center_col_ids_cache or requested_center_ids:
-            # Build authoritative center order from response column metadata first.
-            # This keeps frontend column virtual indices aligned with backend slicing.
-            center_col_ids = self._get_center_col_ids_from_columns(
-                tanstack_result.columns, excluded_ids
+            center_col_ids, authoritative_columns = self._build_authoritative_response_columns(
+                tanstack_result, request, row_meta_keys, excluded_ids
             )
-            if not center_col_ids:
-                center_col_ids = self._get_center_col_ids_from_rows(
-                    tanstack_result.data, row_meta_keys, excluded_ids
-                )
+            tanstack_result.columns = authoritative_columns
             self._center_col_ids_cache[cache_key] = center_col_ids
         else:
             center_col_ids = self._center_col_ids_cache[cache_key]
+            if tanstack_result.columns:
+                _, authoritative_columns = self._build_authoritative_response_columns(
+                    tanstack_result, request, row_meta_keys, excluded_ids
+                )
+                tanstack_result.columns = authoritative_columns
 
         if needs_col_schema:
             column_lookup = {
@@ -419,6 +607,320 @@ class TanStackPivotAdapter:
             return float(value)
         return None
 
+    @staticmethod
+    def _formula_label(column: Dict[str, Any]) -> str:
+        label = (
+            column.get("formulaLabel")
+            or column.get("header")
+            or column.get("accessorKey")
+            or column.get("id")
+        )
+        return str(label) if label is not None else ""
+
+    @staticmethod
+    def _formula_reference_key(column: Dict[str, Any]) -> str:
+        ref = (
+            column.get("formulaRef")
+            or _normalize_formula_reference_key(
+                column.get("formulaLabel") or column.get("header") or column.get("id"),
+                column.get("id"),
+            )
+            or column.get("id")
+        )
+        return str(ref) if ref is not None else ""
+
+    @staticmethod
+    def _matches_formula_column_id(column_id: Any, formula_id: Any) -> bool:
+        if not isinstance(column_id, str) or not isinstance(formula_id, str):
+            return False
+        return column_id == formula_id or column_id.endswith(f"_{formula_id}")
+
+    @staticmethod
+    def _extract_formula_identifiers(expression: Any) -> List[str]:
+        if not isinstance(expression, str):
+            return []
+        return list(dict.fromkeys(_FORMULA_IDENTIFIER_RE.findall(expression)))
+
+    def _canonicalize_formula_expression(self, expression: Any, alias_map: Dict[str, str]) -> str:
+        if not isinstance(expression, str) or not alias_map:
+            return str(expression or "")
+        normalized = str(expression)
+        for alias, canonical in sorted(alias_map.items(), key=lambda item: len(item[0]), reverse=True):
+            if not alias:
+                continue
+            normalized = re.sub(rf"\b{re.escape(alias)}\b", canonical, normalized, flags=re.IGNORECASE)
+        return normalized
+
+    def _build_formula_evaluation_plan(self, formula_cols: List[Dict[str, Any]]) -> tuple[List[Dict[str, Any]], set[str]]:
+        formula_by_id = {
+            str(col.get("id")): col
+            for col in formula_cols
+            if isinstance(col, dict) and col.get("id")
+        }
+        if not formula_by_id:
+            return [], set()
+
+        formula_alias_to_id: Dict[str, str] = {}
+        for formula_id, col in formula_by_id.items():
+            formula_alias_to_id[formula_id.lower()] = formula_id
+            formula_ref = self._formula_reference_key(col)
+            if formula_ref:
+                formula_alias_to_id[formula_ref.lower()] = formula_id
+
+        dependencies: Dict[str, set[str]] = {}
+        self_referencing: set[str] = set()
+        ordered_formula_ids = [str(col.get("id")) for col in formula_cols if isinstance(col, dict) and col.get("id")]
+
+        for formula_id, col in formula_by_id.items():
+            identifiers = set(self._extract_formula_identifiers(col.get("formulaExpr", "")))
+            canonical_dependencies = {
+                formula_alias_to_id[identifier.lower()]
+                for identifier in identifiers
+                if identifier.lower() in formula_alias_to_id
+            }
+            if formula_id in canonical_dependencies:
+                self_referencing.add(formula_id)
+            dependencies[formula_id] = {identifier for identifier in canonical_dependencies if identifier != formula_id}
+
+        resolved: set[str] = set()
+        plan: List[Dict[str, Any]] = []
+
+        while True:
+            progressed = False
+            for formula_id in ordered_formula_ids:
+                if formula_id in resolved or formula_id in self_referencing:
+                    continue
+                if dependencies.get(formula_id, set()).issubset(resolved):
+                    plan.append(formula_by_id[formula_id])
+                    resolved.add(formula_id)
+                    progressed = True
+            if not progressed:
+                break
+
+        unresolved = (set(formula_by_id.keys()) - resolved) | self_referencing
+        return plan, unresolved
+
+    def _evaluate_formula_expression(self, parser: Any, expression: str, namespace: Dict[str, Any]) -> Optional[float]:
+        try:
+            result = parser.evaluate(expression, namespace)
+        except Exception:
+            return None
+        numeric_result = self._numeric_or_none(result)
+        if numeric_result is None or not math.isfinite(numeric_result):
+            return None
+        return numeric_result
+
+    def _resolved_sort_field(self, sort_spec: Dict[str, Any], request: TanStackRequest) -> Optional[str]:
+        if not isinstance(sort_spec, dict):
+            return None
+        sort_field = sort_spec.get("id")
+        if sort_field == "hierarchy" and request.grouping:
+            sort_field = request.grouping[0]
+        return str(sort_field) if isinstance(sort_field, str) and sort_field else None
+
+    @staticmethod
+    def _formula_ids_from_request(request: TanStackRequest) -> set[str]:
+        return {
+            str(col.get("id"))
+            for col in (request.columns or [])
+            if isinstance(col, dict) and col.get("isFormula") and col.get("id")
+        }
+
+    def _build_formula_rollup_values(self, rows: List[Dict[str, Any]], formula_ids: set[str]) -> Dict[str, Optional[float]]:
+        if not rows or not formula_ids:
+            return {}
+
+        regular_rows = [row for row in rows if isinstance(row, dict) and not _is_grand_total_row(row)]
+        if not regular_rows:
+            return {}
+
+        total_source_rows = [
+            row for row in regular_rows
+            if row.get("depth") == 0
+        ] or regular_rows
+
+        materialized_formula_keys = set()
+        for row in total_source_rows:
+            for key in row.keys():
+                if not isinstance(key, str):
+                    continue
+                if key in formula_ids or key.startswith("__RowTotal__"):
+                    if key in formula_ids or any(
+                        key == f"__RowTotal__{formula_id}" or self._matches_formula_column_id(key, formula_id)
+                        for formula_id in formula_ids
+                    ):
+                        materialized_formula_keys.add(key)
+                        continue
+                if any(self._matches_formula_column_id(key, formula_id) for formula_id in formula_ids):
+                    materialized_formula_keys.add(key)
+
+        rollups: Dict[str, Optional[float]] = {}
+        for key in materialized_formula_keys:
+            values = [
+                numeric_value
+                for numeric_value in (
+                    self._numeric_or_none(row.get(key))
+                    for row in total_source_rows
+                )
+                if numeric_value is not None
+            ]
+            rollups[key] = sum(values) if values else None
+
+        return rollups
+
+    def _has_formula_sort(self, request: TanStackRequest) -> bool:
+        formula_ids = self._formula_ids_from_request(request)
+        if not formula_ids:
+            return False
+        for sort_spec in (request.sorting or []):
+            sort_field = self._resolved_sort_field(sort_spec, request)
+            if not sort_field:
+                continue
+            if any(self._matches_formula_column_id(sort_field, formula_id) for formula_id in formula_ids):
+                return True
+        return False
+
+    def _compare_row_values(self, left_value: Any, right_value: Any, desc: bool = False) -> int:
+        left_missing = _is_missing_value(left_value)
+        right_missing = _is_missing_value(right_value)
+        if left_missing or right_missing:
+            if left_missing and right_missing:
+                return 0
+            return 1 if left_missing else -1
+
+        left_numeric = self._numeric_or_none(left_value)
+        right_numeric = self._numeric_or_none(right_value)
+        if left_numeric is not None and right_numeric is not None:
+            if left_numeric < right_numeric:
+                result = -1
+            elif left_numeric > right_numeric:
+                result = 1
+            else:
+                result = 0
+        else:
+            left_text = str(left_value).casefold()
+            right_text = str(right_value).casefold()
+            if left_text < right_text:
+                result = -1
+            elif left_text > right_text:
+                result = 1
+            else:
+                result = 0
+
+        return -result if desc else result
+
+    def _compare_rows_for_requested_sort(
+        self,
+        left_row: Dict[str, Any],
+        right_row: Dict[str, Any],
+        request: TanStackRequest,
+        original_order: Dict[str, int],
+        left_key: str,
+        right_key: str,
+    ) -> int:
+        for sort_spec in (request.sorting or []):
+            sort_field = self._resolved_sort_field(sort_spec, request)
+            if not sort_field:
+                continue
+            comparison = self._compare_row_values(
+                left_row.get(sort_field),
+                right_row.get(sort_field),
+                desc=bool(sort_spec.get("desc")),
+            )
+            if comparison:
+                return comparison
+        return (original_order.get(left_key, 0) > original_order.get(right_key, 0)) - (
+            original_order.get(left_key, 0) < original_order.get(right_key, 0)
+        )
+
+    def _sort_rows_for_formula_sort(self, rows: List[Dict[str, Any]], request: TanStackRequest) -> List[Dict[str, Any]]:
+        if not rows or not self._has_formula_sort(request):
+            return rows
+
+        grand_total_rows = [row for row in rows if _is_grand_total_row(row)]
+        regular_rows = [row for row in rows if not _is_grand_total_row(row)]
+        if not regular_rows:
+            return rows
+
+        can_preserve_tree = request.grouping and all(
+            isinstance(row, dict) and isinstance(row.get("_path"), str) and row.get("_path")
+            for row in regular_rows
+        )
+
+        if not can_preserve_tree:
+            keyed_rows = [
+                (f"__row_{index}", row)
+                for index, row in enumerate(regular_rows)
+                if isinstance(row, dict)
+            ]
+            original_order = {key: index for index, (key, _) in enumerate(keyed_rows)}
+            sorted_rows = [
+                row
+                for _, row in sorted(
+                    keyed_rows,
+                    key=cmp_to_key(
+                        lambda left, right: self._compare_rows_for_requested_sort(
+                            left[1],
+                            right[1],
+                            request,
+                            original_order,
+                            left[0],
+                            right[0],
+                        )
+                    ),
+                )
+            ]
+            return sorted_rows + grand_total_rows
+
+        path_to_row = {}
+        original_order = {}
+        children_by_parent: Dict[Optional[str], List[str]] = {}
+        root_paths: List[str] = []
+
+        for index, row in enumerate(regular_rows):
+            path = row.get("_path")
+            if not isinstance(path, str) or not path:
+                continue
+            path_to_row[path] = row
+            original_order[path] = index
+
+        for path in path_to_row:
+            parent_path = path.rsplit("|||", 1)[0] if "|||" in path else None
+            if parent_path and parent_path in path_to_row:
+                children_by_parent.setdefault(parent_path, []).append(path)
+            else:
+                root_paths.append(path)
+
+        def sort_paths(paths: List[str]) -> List[str]:
+            return sorted(
+                paths,
+                key=cmp_to_key(
+                    lambda left_path, right_path: self._compare_rows_for_requested_sort(
+                        path_to_row[left_path],
+                        path_to_row[right_path],
+                        request,
+                        original_order,
+                        left_path,
+                        right_path,
+                    )
+                ),
+            )
+
+        sorted_rows: List[Dict[str, Any]] = []
+
+        def append_subtree(path: str) -> None:
+            row = path_to_row.get(path)
+            if row is None:
+                return
+            sorted_rows.append(row)
+            for child_path in sort_paths(children_by_parent.get(path, [])):
+                append_subtree(child_path)
+
+        for root_path in sort_paths(root_paths):
+            append_subtree(root_path)
+
+        return sorted_rows + grand_total_rows
+
     def _apply_formula_columns(self, rows: List[Dict[str, Any]], request: TanStackRequest) -> None:
         """
         Apply formula columns (post-aggregation calculated fields) to each row.
@@ -438,6 +940,25 @@ class TanStackPivotAdapter:
         ]
         if not formula_cols:
             return
+        formula_ids = {
+            str(col.get("id"))
+            for col in formula_cols
+            if isinstance(col, dict) and col.get("id")
+        }
+        formula_plan, unresolved_formula_ids = self._build_formula_evaluation_plan(formula_cols)
+        formula_alias_map = {}
+        for col in formula_cols:
+            if not isinstance(col, dict) or not col.get("id"):
+                continue
+            formula_id = str(col.get("id"))
+            formula_alias_map[formula_id.lower()] = formula_id
+            formula_ref = self._formula_reference_key(col)
+            if formula_ref:
+                formula_alias_map[formula_ref.lower()] = formula_id
+
+        from .planner.expression_parser import SafeExpressionParser
+
+        parser = SafeExpressionParser()
 
         # Gather all row keys once to detect pivot prefixes.
         all_keys: set = set()
@@ -453,11 +974,15 @@ class TanStackPivotAdapter:
         ]
         # field -> agg suffix  (pick first match; formula references just the field name)
         field_agg_map: Dict[str, str] = {}
+        field_measure_id_map: Dict[str, str] = {}
         for col in agg_cols:
             field = col.get("aggregationField") or col.get("id", "")
+            measure_id = col.get("id") or ""
             agg = col.get("aggregationFn", "sum")
             if field and field not in field_agg_map:
                 field_agg_map[field] = agg
+            if field and field not in field_measure_id_map and measure_id:
+                field_measure_id_map[field] = str(measure_id)
 
         grouping_ids = set(request.grouping or [])
         has_column_dimensions = any(
@@ -468,56 +993,114 @@ class TanStackPivotAdapter:
             for col in (request.columns or [])
         )
 
-        _safe_builtins: Dict = {}
+        if has_column_dimensions:
+            # Collect unique dim prefixes across all measure columns.
+            # A pivot key looks like: <dim_prefix>_<field>_<agg>
+            dim_prefixes: set = set()
+            for field, agg in field_agg_map.items():
+                suffix = f"_{field}_{agg}"
+                for key in all_keys:
+                    if isinstance(key, str) and key.endswith(suffix) and not key.startswith("__RowTotal__"):
+                        prefix = key[: len(key) - len(suffix)]
+                        dim_prefixes.add(prefix)
+            row_total_measure_keys = {
+                field: f"__RowTotal__{measure_id}"
+                for field, measure_id in field_measure_id_map.items()
+            }
+            has_row_total_measure_values = bool(row_total_measure_keys) and any(
+                isinstance(row, dict) and any(total_key in row for total_key in row_total_measure_keys.values())
+                for row in rows
+            )
 
-        for fcol in formula_cols:
-            formula_id = fcol.get("id", "")
-            formula_expr = fcol.get("formulaExpr", "")
-            if not formula_id or not formula_expr:
-                continue
-
-            if has_column_dimensions:
-                # Collect unique dim prefixes across all measure columns.
-                # A pivot key looks like: <dim_prefix>_<field>_<agg>
-                # We need to reconstruct the prefix for each formula reference.
-                dim_prefixes: set = set()
-                for field, agg in field_agg_map.items():
-                    suffix = f"_{field}_{agg}"
-                    for key in all_keys:
-                        if isinstance(key, str) and key.endswith(suffix) and not key.startswith("__RowTotal__"):
-                            prefix = key[: len(key) - len(suffix)]
-                            dim_prefixes.add(prefix)
-
-                for row in rows:
-                    if not isinstance(row, dict):
-                        continue
-                    for prefix in dim_prefixes:
-                        namespace: Dict[str, Any] = {}
-                        for field, agg in field_agg_map.items():
-                            key = f"{prefix}_{field}_{agg}"
-                            val = self._numeric_or_none(row.get(key))
-                            namespace[field] = val if val is not None else float("nan")
-                        result_key = f"{prefix}_{formula_id}"
-                        try:
-                            result = eval(formula_expr, {"__builtins__": _safe_builtins}, namespace)  # noqa: S307
-                            row[result_key] = float(result) if isinstance(result, (int, float)) else None
-                        except Exception:
-                            row[result_key] = None
-            else:
-                # Flat mode: formula key is just the formula_id
-                for row in rows:
-                    if not isinstance(row, dict):
-                        continue
-                    namespace = {}
+            for row in rows:
+                if not isinstance(row, dict):
+                    continue
+                for prefix in dim_prefixes:
+                    namespace: Dict[str, Any] = {}
                     for field, agg in field_agg_map.items():
-                        key = f"{field}_{agg}"
+                        key = f"{prefix}_{field}_{agg}"
                         val = self._numeric_or_none(row.get(key))
                         namespace[field] = val if val is not None else float("nan")
-                    try:
-                        result = eval(formula_expr, {"__builtins__": _safe_builtins}, namespace)  # noqa: S307
-                        row[formula_id] = float(result) if isinstance(result, (int, float)) else None
-                    except Exception:
-                        row[formula_id] = None
+
+                    for fcol in formula_plan:
+                        formula_id = fcol.get("id", "")
+                        formula_expr = self._canonicalize_formula_expression(fcol.get("formulaExpr", ""), formula_alias_map)
+                        if not formula_id or not formula_expr:
+                            continue
+                        result_key = f"{prefix}_{formula_id}"
+                        result = self._evaluate_formula_expression(parser, formula_expr, namespace)
+                        row[result_key] = result
+                        namespace[formula_id] = result if result is not None else float("nan")
+                        formula_ref = self._formula_reference_key(fcol)
+                        if formula_ref:
+                            namespace[formula_ref] = result if result is not None else float("nan")
+
+                    for formula_id in unresolved_formula_ids:
+                        row[f"{prefix}_{formula_id}"] = None
+                        namespace[formula_id] = float("nan")
+                        unresolved_col = next((col for col in formula_cols if col.get("id") == formula_id), None)
+                        formula_ref = self._formula_reference_key(unresolved_col or {})
+                        if formula_ref:
+                            namespace[formula_ref] = float("nan")
+
+                if has_row_total_measure_values:
+                    materialized_formula_values: Dict[str, List[float]] = {
+                        str(fcol.get("id")): []
+                        for fcol in formula_plan
+                        if isinstance(fcol, dict) and fcol.get("id")
+                    }
+                    for prefix in dim_prefixes:
+                        for formula_id in materialized_formula_values:
+                            result_value = self._numeric_or_none(row.get(f"{prefix}_{formula_id}"))
+                            if result_value is not None:
+                                materialized_formula_values[formula_id].append(result_value)
+
+                    for fcol in formula_plan:
+                        formula_id = fcol.get("id", "")
+                        if not formula_id:
+                            continue
+                        values = materialized_formula_values.get(str(formula_id), [])
+                        row[f"__RowTotal__{formula_id}"] = sum(values) if values else None
+
+                    for formula_id in unresolved_formula_ids:
+                        row[f"__RowTotal__{formula_id}"] = None
+        else:
+            # Flat mode: formula key is just the formula_id
+            for row in rows:
+                if not isinstance(row, dict):
+                    continue
+                namespace = {}
+                for field, agg in field_agg_map.items():
+                    key = f"{field}_{agg}"
+                    val = self._numeric_or_none(row.get(key))
+                    namespace[field] = val if val is not None else float("nan")
+
+                for fcol in formula_plan:
+                    formula_id = fcol.get("id", "")
+                    formula_expr = self._canonicalize_formula_expression(fcol.get("formulaExpr", ""), formula_alias_map)
+                    if not formula_id or not formula_expr:
+                        continue
+                    result = self._evaluate_formula_expression(parser, formula_expr, namespace)
+                    row[formula_id] = result
+                    namespace[formula_id] = result if result is not None else float("nan")
+                    formula_ref = self._formula_reference_key(fcol)
+                    if formula_ref:
+                        namespace[formula_ref] = result if result is not None else float("nan")
+
+                for formula_id in unresolved_formula_ids:
+                    row[formula_id] = None
+                    namespace[formula_id] = float("nan")
+                    unresolved_col = next((col for col in formula_cols if col.get("id") == formula_id), None)
+                    formula_ref = self._formula_reference_key(unresolved_col or {})
+                    if formula_ref:
+                        namespace[formula_ref] = float("nan")
+
+        grand_total_rows = [row for row in rows if isinstance(row, dict) and _is_grand_total_row(row)]
+        regular_rows = [row for row in rows if isinstance(row, dict) and not _is_grand_total_row(row)]
+        if grand_total_rows and regular_rows and formula_ids:
+            rollup_values = self._build_formula_rollup_values(regular_rows, formula_ids)
+            for grand_total_row in grand_total_rows:
+                grand_total_row.update(rollup_values)
 
     def _apply_pivot_window_functions(self, rows: List[Dict[str, Any]], request: TanStackRequest) -> None:
         """
@@ -962,6 +1545,7 @@ class TanStackPivotAdapter:
 
         # Apply formula columns (post-aggregation calculated fields) after window functions.
         self._apply_formula_columns(rows, tanstack_request)
+        rows = self._sort_rows_for_formula_sort(rows, tanstack_request)
 
         # Calculate pagination info if needed
         pagination = None
@@ -976,8 +1560,14 @@ class TanStackPivotAdapter:
         
         # Dynamic Column Generation for Pivot
         # If we have pivot columns, we need to update the response columns
-        response_columns = tanstack_request.columns
+        response_columns = list(tanstack_request.columns or [])
         measure_ids = {c['id'] for c in tanstack_request.columns if c.get('aggregationFn')}
+        formula_ids = {c['id'] for c in tanstack_request.columns if c.get('isFormula')}
+        formula_labels = {
+            c['id']: self._formula_label(c)
+            for c in tanstack_request.columns
+            if c.get('isFormula') and c.get('id')
+        }
         grouping_ids = set(tanstack_request.grouping or [])
         has_column_dimensions = any(
             c.get('id') not in grouping_ids and not c.get('aggregationFn') and not c.get('isFormula')
@@ -986,8 +1576,9 @@ class TanStackPivotAdapter:
 
         # In pivot mode (column dimensions present), base measure columns are placeholders.
         # Keep only expanded dynamic pivot columns to avoid showing extra plain measures.
-        if has_column_dimensions and measure_ids:
-            response_columns = [c for c in response_columns if c.get('id') not in measure_ids]
+        if has_column_dimensions and (measure_ids or formula_ids):
+            placeholder_ids = measure_ids | formula_ids
+            response_columns = [c for c in response_columns if c.get('id') not in placeholder_ids]
 
         # Detect dynamic columns using backend schema order first so pivot column
         # sorting survives transport and horizontal windowing.
@@ -1014,13 +1605,21 @@ class TanStackPivotAdapter:
                 'subRows', 'uuid', '__virtualIndex'
             }
 
-            new_columns = []
+            materialized_ids = []
             for key in ordered_result_keys:
                 if key in known_ids or key in meta_keys:
                     continue
                 if isinstance(key, str) and key.startswith(hidden_sort_prefix):
                     continue
+                materialized_ids.append(key)
 
+            materialized_ids = self._reorder_materialized_dynamic_ids(
+                materialized_ids,
+                tanstack_request,
+            )
+
+            new_columns = []
+            for key in materialized_ids:
                 if key.startswith("__RowTotal__"):
                     measure_key = key.replace("__RowTotal__", "")
                     header = f"Total {measure_key.replace('_', ' ').title()}"
@@ -1031,11 +1630,20 @@ class TanStackPivotAdapter:
                         'isRowTotal': True
                     })
                 else:
-                    new_columns.append({
+                    formula_label = None
+                    for formula_id, label in formula_labels.items():
+                        if self._matches_formula_column_id(key, formula_id):
+                            formula_label = label
+                            break
+
+                    new_column = {
                         'id': key,
-                        'header': key.replace('_', ' ').title(),
+                        'header': formula_label or key.replace('_', ' ').title(),
                         'accessorKey': key,
-                    })
+                    }
+                    if formula_label:
+                        new_column['formulaLabel'] = formula_label
+                    new_columns.append(new_column)
 
             if new_columns:
                 existing_ids = {c.get('id') for c in response_columns if isinstance(c, dict)}
@@ -1051,6 +1659,13 @@ class TanStackPivotAdapter:
                 and col.get("id").startswith(hidden_sort_prefix)
             )
         ]
+
+        # Apply formula columns here so that all call paths (handle_request,
+        # handle_hierarchical_request, handle_virtual_scroll_request) evaluate
+        # formula columns. handle_request also calls _apply_formula_columns after
+        # window functions, but that second pass is idempotent so it is safe.
+        self._apply_formula_columns(rows, tanstack_request)
+        rows = self._sort_rows_for_formula_sort(rows, tanstack_request)
 
         return TanStackResponse(
             data=rows,
@@ -1347,6 +1962,47 @@ class TanStackPivotAdapter:
                                           include_grand_total: bool = False,
                                           requested_center_ids: Optional[List[str]] = None) -> TanStackResponse:
         """Handle virtual scrolling request with start/end row indices"""
+        if self._has_formula_sort(request):
+            target_paths = expanded_paths or []
+            requires_hierarchy_materialization = bool(request.grouping) and (
+                expanded_paths is True
+                or any(isinstance(path, list) and path for path in target_paths)
+            )
+            full_response = (
+                await self.handle_hierarchical_request(request, expanded_paths or [])
+                if requires_hierarchy_materialization
+                else await self.handle_request(request, user=user)
+            )
+            full_rows = list(full_response.data or [])
+            grand_total_row = next((row for row in full_rows if _is_grand_total_row(row)), None)
+            regular_rows = [row for row in full_rows if not _is_grand_total_row(row)]
+
+            safe_start = max(int(start_row or 0), 0)
+            safe_end = max(int(end_row if end_row is not None else safe_start), safe_start)
+            window_rows = regular_rows[safe_start:safe_end + 1]
+
+            if include_grand_total and request.totals and isinstance(grand_total_row, dict):
+                window_rows = _move_grand_total_to_end(_dedup_grand_total([*window_rows, grand_total_row]))
+
+            response = TanStackResponse(
+                data=window_rows,
+                columns=list(full_response.columns or []),
+                pagination=full_response.pagination,
+                total_rows=full_response.total_rows,
+                grouping=full_response.grouping,
+                version=full_response.version,
+                col_schema=full_response.col_schema,
+                color_scale_stats=full_response.color_scale_stats,
+            )
+            return self._apply_col_windowing(
+                response,
+                request,
+                col_start,
+                col_end,
+                needs_col_schema,
+                requested_center_ids=requested_center_ids,
+            )
+
         # Convert request to pivot spec
         pivot_spec = self.convert_tanstack_request_to_pivot_spec(request)
 
@@ -1381,12 +2037,21 @@ class TanStackPivotAdapter:
 
             if include_grand_total and request.totals:
                 grand_total_row = hierarchy_view.get("grand_total_row")
+                formula_source_rows = hierarchy_view.get("grand_total_formula_source_rows") or []
                 if isinstance(grand_total_row, dict):
                     normalized_total = self.convert_pivot_result_to_tanstack_format(
                         [grand_total_row], request, version=request.version
                     ).data
                     if normalized_total:
                         grand_total_row = normalized_total[0]
+                formula_ids = self._formula_ids_from_request(request)
+                if isinstance(grand_total_row, dict) and formula_source_rows and formula_ids:
+                    source_rows = self.convert_pivot_result_to_tanstack_format(
+                        formula_source_rows,
+                        request,
+                        version=request.version,
+                    ).data
+                    grand_total_row.update(self._build_formula_rollup_values(source_rows, formula_ids))
                 if isinstance(grand_total_row, dict):
                     existing_rows = tanstack_result.data or []
                     if not any(_is_grand_total_row(row) for row in existing_rows):

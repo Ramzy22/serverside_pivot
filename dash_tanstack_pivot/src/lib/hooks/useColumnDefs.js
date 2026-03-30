@@ -55,7 +55,11 @@ export function useColumnDefs({
     toggleCol,
     pendingRowTransitions,
     decimalPlaces,
+    defaultValueFormat,
+    numberGroupSeparator,
     columnDecimalOverrides,
+    columnFormatOverrides,
+    columnGroupSeparatorOverrides,
     cellFormatRules,
 }) {
     return useMemo(() => {
@@ -72,13 +76,35 @@ export function useColumnDefs({
         const getValHeader = (c) => c.agg === 'formula'
             ? (c.label || c.field)
             : `${formatDisplayLabel(c.field)} (${formatAggLabel(c.agg, c.weightField)})`;
+        const matchesValueConfigColumnId = (columnId, config) => {
+            if (!config || typeof columnId !== 'string' || !config.field) return false;
+            const normalizedId = columnId.toLowerCase();
+            if (config.agg === 'formula') {
+                const formulaId = config.field.toLowerCase();
+                return normalizedId === formulaId || normalizedId.endsWith(`_${formulaId}`);
+            }
+            const measureId = getValKey(config).toLowerCase();
+            const measureSuffix = `_${config.field}_${config.agg}`.toLowerCase();
+            return normalizedId === measureId || normalizedId.endsWith(measureSuffix);
+        };
+        const getConfigForColumnId = (columnId) => (
+            Array.isArray(valConfigs)
+                ? (valConfigs.find(config => matchesValueConfigColumnId(columnId, config)) || null)
+                : null
+        );
 
         // Helper: render a numeric cell value with decimal precision and negative-red coloring
         const renderNumericCell = (value, fmt, rowPath, colId) => {
             const cellDec = colId !== undefined && columnDecimalOverrides && columnDecimalOverrides[colId] !== undefined
                 ? columnDecimalOverrides[colId]
                 : decimalPlaces;
-            const formatted = formatValue(value, fmt, cellDec);
+            const effectiveGroupSeparator = colId !== undefined && columnGroupSeparatorOverrides && columnGroupSeparatorOverrides[colId] !== undefined
+                ? columnGroupSeparatorOverrides[colId]
+                : numberGroupSeparator;
+            const effectiveFormat = colId !== undefined && columnFormatOverrides && Object.prototype.hasOwnProperty.call(columnFormatOverrides, colId)
+                ? columnFormatOverrides[colId]
+                : (fmt || defaultValueFormat || null);
+            const formatted = formatValue(value, effectiveFormat, cellDec, effectiveGroupSeparator);
             const isNegative = typeof value === 'number' && value < 0;
             const cellKey = rowPath && colId ? `${rowPath}:::${colId}` : null;
             const cellFmt = cellFormatRules && cellKey ? cellFormatRules[cellKey] : null;
@@ -348,7 +374,6 @@ export function useColumnDefs({
                 const ignoreKeys = new Set(['_id', 'depth', '_isTotal', '_path', 'uuid', ...rowFields, ...colFields]);
 
                 // Helper to determine if a column is relevant for the grid
-                const measureSuffixes = valConfigs.filter(v => v.agg !== 'formula').map(v => `_${v.field}_${v.agg}`);
                 const measureIds = new Set(valConfigs.map(v => getValKey(v)));
 
                 const flatCols = [];
@@ -359,9 +384,7 @@ export function useColumnDefs({
                     let isRelevant = false;
                     if (measureIds.has(k)) isRelevant = true;
                     else if (k.startsWith('__RowTotal__')) isRelevant = true;
-                    else if (measureSuffixes.some(s => k.endsWith(s))) isRelevant = true;
-                    // Formula columns: <dim_prefix>_<formula_field> or bare formula_field
-                    else if (valConfigs && valConfigs.some(v => v.agg === 'formula' && (k === v.field || k.endsWith(`_${v.field}`)))) isRelevant = true;
+                    else if (getConfigForColumnId(k)) isRelevant = true;
 
                     if (!isRelevant) return;
 
@@ -373,16 +396,8 @@ export function useColumnDefs({
                         sortingFn,
                         cell: info => {
                             const v = info.getValue();
-                            let fmt = null;
-                            if (valConfigs) {
-                                for (const c of valConfigs) {
-                                    const matchKey = c.agg === 'formula' ? c.field : c.field;
-                                    if (k === matchKey || k.includes(matchKey)) {
-                                        fmt = getConfigDisplayFormat(c);
-                                        break;
-                                    }
-                                }
-                            }
+                            const matchedConfig = getConfigForColumnId(k);
+                            const fmt = getConfigDisplayFormat(matchedConfig);
                             const rowPath = info.row.original && info.row.original._path;
                             const { formatted, extraStyle } = renderNumericCell(v, fmt, rowPath, info.column.id);
                             return (
@@ -404,27 +419,17 @@ export function useColumnDefs({
                         if (!key) return;
                         let dimStr = key;
                         let measureStr = "";
-                        let matchedConfig = null;
-                        if (valConfigs) {
-                            for (const config of valConfigs) {
-                                if (config.agg === 'formula') {
-                                    const suffix = `_${config.field}`;
-                                    if (key.toLowerCase().endsWith(suffix.toLowerCase())) {
-                                        matchedConfig = config;
-                                        measureStr = config.label || config.field;
-                                        dimStr = key.substring(0, key.length - suffix.length);
-                                        break;
-                                    }
-                                } else {
-                                    const suffix = `_${config.field}_${config.agg}`;
-                                    if (key.toLowerCase().endsWith(suffix.toLowerCase())) {
-                                        matchedConfig = config;
-                                        measureStr = `${formatDisplayLabel(config.field)} (${formatAggLabel(config.agg, config.weightField)})`;
-                                        dimStr = key.substring(0, key.length - suffix.length);
-                                        break;
-                                    }
-                                }
+                        const matchedConfig = getConfigForColumnId(key);
+                        if (matchedConfig) {
+                            const suffix = matchedConfig.agg === 'formula'
+                                ? `_${matchedConfig.field}`
+                                : `_${matchedConfig.field}_${matchedConfig.agg}`;
+                            if (key.toLowerCase().endsWith(suffix.toLowerCase())) {
+                                dimStr = key.substring(0, key.length - suffix.length);
                             }
+                            measureStr = matchedConfig.agg === 'formula'
+                                ? (matchedConfig.label || matchedConfig.field)
+                                : `${formatDisplayLabel(matchedConfig.field)} (${formatAggLabel(matchedConfig.agg, matchedConfig.weightField)})`;
                         }
                         if (!matchedConfig) {
                              const parts = key.split('_');
@@ -487,6 +492,7 @@ export function useColumnDefs({
                                         row={info.row}
                                         column={info.column}
                                         format={matchedConfig.format}
+                                        numberGroupSeparator={numberGroupSeparator}
                                         validationRules={validationRules}
                                         setProps={setProps}
                                         handleContextMenu={handleContextMenu}
@@ -548,5 +554,5 @@ export function useColumnDefs({
     // cachedColSchema and filteredData changes on every viewport scroll, causing the entire column
     // tree to rebuild. filteredData is used only as a last-resort fallback (client-side, no schema).
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    }, [rowFields, colFields, valConfigs, minMax, colorScaleMode, colExpanded, serverSide, layoutMode, showRowNumbers, isRowSelecting, rowDragStart, props.columns, cachedColSchema, decimalPlaces, columnDecimalOverrides, cellFormatRules]);
+    }, [rowFields, colFields, valConfigs, minMax, colorScaleMode, colExpanded, serverSide, layoutMode, showRowNumbers, isRowSelecting, rowDragStart, props.columns, cachedColSchema, decimalPlaces, defaultValueFormat, numberGroupSeparator, columnDecimalOverrides, columnFormatOverrides, columnGroupSeparatorOverrides, cellFormatRules]);
 }

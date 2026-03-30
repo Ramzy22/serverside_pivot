@@ -84,7 +84,11 @@ Keyword arguments:
 
 - dataVersion (number; optional)
 
+- decimalPlaces (number; optional)
+
 - defaultTheme (string; optional)
+
+- defaultValueFormat (string; optional)
 
 - drillEndpoint (string; optional)
 
@@ -92,11 +96,15 @@ Keyword arguments:
 
 - expanded (dict | boolean; optional)
 
+- fieldPanelSizes (dict; optional)
+
 - filterOptions (dict; optional)
 
 - filters (dict; optional)
 
 - grandTotalPosition (a value equal to: 'top', 'bottom'; optional)
+
+- numberGroupSeparator (a value equal to: 'comma', 'space', 'thin_space', 'apostrophe', 'none'; optional)
 
 - persistence (boolean | string | number; optional)
 
@@ -194,6 +202,8 @@ Keyword arguments:
 
     - label (string; optional)
 
+    - formulaRef (string; optional)
+
 - validationRules (dict; optional)
 
 - viewState (dict; optional)
@@ -214,7 +224,8 @@ Keyword arguments:
             "percentile": NotRequired[NumberType],
             "separator": NotRequired[str],
             "formula": NotRequired[str],
-            "label": NotRequired[str]
+            "label": NotRequired[str],
+            "formulaRef": NotRequired[str]
         }
     )
 
@@ -318,6 +329,10 @@ Keyword arguments:
         rowPinned: typing.Optional[dict] = None,
         columnVisibility: typing.Optional[dict] = None,
         columnSizing: typing.Optional[dict] = None,
+        decimalPlaces: typing.Optional[NumberType] = None,
+        defaultValueFormat: typing.Optional[str] = None,
+        fieldPanelSizes: typing.Optional[dict] = None,
+        numberGroupSeparator: typing.Optional[Literal["comma", "space", "thin_space", "apostrophe", "none"]] = None,
         reset: typing.Optional[typing.Any] = None,
         persistence: typing.Optional[typing.Union[bool, str, NumberType]] = None,
         persistence_type: typing.Optional[Literal["local", "session", "memory"]] = None,
@@ -332,9 +347,9 @@ Keyword arguments:
         dataVersion: typing.Optional[NumberType] = None,
         **kwargs
     ):
-        self._prop_names = ['id', 'availableFieldList', 'cellUpdate', 'cellUpdates', 'chartCanvasPanes', 'chartData', 'chartDefaults', 'chartDefinitions', 'chartEvent', 'chartRequest', 'chartServerWindow', 'cinemaMode', 'colFields', 'columnPinned', 'columnPinning', 'columnSizing', 'columnVisibility', 'columns', 'conditionalFormatting', 'data', 'dataOffset', 'dataVersion', 'defaultTheme', 'drillEndpoint', 'drillThrough', 'expanded', 'filterOptions', 'filters', 'grandTotalPosition', 'persistence', 'persistence_type', 'pinningOptions', 'pinningPresets', 'pivotTitle', 'reset', 'rowCount', 'rowFields', 'rowMove', 'rowPinned', 'rowPinning', 'saveViewTrigger', 'savedView', 'serverSide', 'showColTotals', 'showRowTotals', 'sortEvent', 'sortLock', 'sortOptions', 'sorting', 'style', 'table', 'tableCanvasSize', 'valConfigs', 'validationRules', 'viewState', 'viewport']
+        self._prop_names = ['id', 'availableFieldList', 'cellUpdate', 'cellUpdates', 'chartCanvasPanes', 'chartData', 'chartDefaults', 'chartDefinitions', 'chartEvent', 'chartRequest', 'chartServerWindow', 'cinemaMode', 'colFields', 'columnPinned', 'columnPinning', 'columnSizing', 'columnVisibility', 'columns', 'conditionalFormatting', 'data', 'dataOffset', 'dataVersion', 'decimalPlaces', 'defaultTheme', 'defaultValueFormat', 'drillEndpoint', 'drillThrough', 'expanded', 'fieldPanelSizes', 'filterOptions', 'filters', 'grandTotalPosition', 'numberGroupSeparator', 'persistence', 'persistence_type', 'pinningOptions', 'pinningPresets', 'pivotTitle', 'reset', 'rowCount', 'rowFields', 'rowMove', 'rowPinned', 'rowPinning', 'saveViewTrigger', 'savedView', 'serverSide', 'showColTotals', 'showRowTotals', 'sortEvent', 'sortLock', 'sortOptions', 'sorting', 'style', 'table', 'tableCanvasSize', 'valConfigs', 'validationRules', 'viewState', 'viewport']
         self._valid_wildcard_attributes =            []
-        self.available_properties = ['id', 'availableFieldList', 'cellUpdate', 'cellUpdates', 'chartCanvasPanes', 'chartData', 'chartDefaults', 'chartDefinitions', 'chartEvent', 'chartRequest', 'chartServerWindow', 'cinemaMode', 'colFields', 'columnPinned', 'columnPinning', 'columnSizing', 'columnVisibility', 'columns', 'conditionalFormatting', 'data', 'dataOffset', 'dataVersion', 'defaultTheme', 'drillEndpoint', 'drillThrough', 'expanded', 'filterOptions', 'filters', 'grandTotalPosition', 'persistence', 'persistence_type', 'pinningOptions', 'pinningPresets', 'pivotTitle', 'reset', 'rowCount', 'rowFields', 'rowMove', 'rowPinned', 'rowPinning', 'saveViewTrigger', 'savedView', 'serverSide', 'showColTotals', 'showRowTotals', 'sortEvent', 'sortLock', 'sortOptions', 'sorting', 'style', 'table', 'tableCanvasSize', 'valConfigs', 'validationRules', 'viewState', 'viewport']
+        self.available_properties = ['id', 'availableFieldList', 'cellUpdate', 'cellUpdates', 'chartCanvasPanes', 'chartData', 'chartDefaults', 'chartDefinitions', 'chartEvent', 'chartRequest', 'chartServerWindow', 'cinemaMode', 'colFields', 'columnPinned', 'columnPinning', 'columnSizing', 'columnVisibility', 'columns', 'conditionalFormatting', 'data', 'dataOffset', 'dataVersion', 'decimalPlaces', 'defaultTheme', 'defaultValueFormat', 'drillEndpoint', 'drillThrough', 'expanded', 'fieldPanelSizes', 'filterOptions', 'filters', 'grandTotalPosition', 'numberGroupSeparator', 'persistence', 'persistence_type', 'pinningOptions', 'pinningPresets', 'pivotTitle', 'reset', 'rowCount', 'rowFields', 'rowMove', 'rowPinned', 'rowPinning', 'saveViewTrigger', 'savedView', 'serverSide', 'showColTotals', 'showRowTotals', 'sortEvent', 'sortLock', 'sortOptions', 'sorting', 'style', 'table', 'tableCanvasSize', 'valConfigs', 'validationRules', 'viewState', 'viewport']
         self.available_wildcard_properties =            []
         _explicit_args = kwargs.pop('_explicit_args')
         _locals = locals()

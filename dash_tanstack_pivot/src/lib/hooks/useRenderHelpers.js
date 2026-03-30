@@ -361,6 +361,7 @@ export function useRenderHelpers({
                     background: isUnderTotalGroup ? (theme.totalBgStrong || theme.totalBg || theme.select) : undefined,
                 } : {})
             }}
+            data-header-column-id={String(header.column.id)}
             role="columnheader"
             aria-sort={isSorted || 'none'}
             aria-label={`${formatDisplayLabel(typeof header.column.columnDef.header === 'string' ? header.column.columnDef.header : header.column.id)}. Click or press Alt+Up/Down to sort.`}
@@ -401,14 +402,17 @@ export function useRenderHelpers({
                     padding: '0 4px',
                     overflow: 'hidden',
                     minWidth: autoSizeBounds.minWidth
-                }}>
+                }}
+                data-header-content="true"
+                data-header-column-id={String(header.column.id)}>
                 <span style={{
                     overflow:'hidden',
                     textOverflow:'ellipsis',
                     whiteSpace:'nowrap',
                     flex: 1,
                     minWidth: 0
-                }}>
+                }}
+                data-header-text="true">
                     {header.isPlaceholder ? null : (typeof header.column.columnDef.header === 'string'
                         ? formatDisplayLabel(header.column.columnDef.header)
                         : flexRender(header.column.columnDef.header, header.getContext()))}

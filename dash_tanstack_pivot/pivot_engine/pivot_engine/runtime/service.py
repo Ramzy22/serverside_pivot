@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import re
 from typing import Any, Callable, Dict, List, Optional
 
 from ..tanstack_adapter import TanStackOperation, TanStackRequest
@@ -259,6 +260,15 @@ class PivotRuntimeService:
         return asyncio.run(self.process_async(state, context, current_filter_options=current_filter_options))
 
     @staticmethod
+    def _normalize_formula_reference_key(value: Any, fallback: Any = "formula") -> str:
+        base = str(value or "").strip().lower()
+        base = re.sub(r"\s+", "", base)
+        base = re.sub(r"[^a-z0-9_]", "", base)
+        fallback_base = re.sub(r"[^a-z0-9_]", "", str(fallback or "formula").strip().lower()) or "formula"
+        normalized = base or fallback_base
+        return normalized if re.match(r"^[a-z_]", normalized) else f"f_{normalized}"
+
+    @staticmethod
     def _build_request_columns(
         row_fields: Optional[List[str]],
         col_fields: Optional[List[str]],
@@ -278,11 +288,16 @@ class PivotRuntimeService:
                 continue
             if agg == "formula":
                 # Formula columns are computed post-aggregation; pass through as metadata only
+                formula_label = measure.get("label") or field
+                formula_ref = measure.get("formulaRef") or measure.get("referenceKey") or PivotRuntimeService._normalize_formula_reference_key(formula_label, field)
                 columns.append(
                     {
                         "id": field,
+                        "header": formula_label,
+                        "accessorKey": field,
                         "formulaExpr": measure.get("formula", ""),
-                        "formulaLabel": measure.get("label", field),
+                        "formulaRef": formula_ref,
+                        "formulaLabel": formula_label,
                         "isFormula": True,
                     }
                 )

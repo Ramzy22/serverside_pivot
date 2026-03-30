@@ -3,11 +3,8 @@ from __future__ import print_function as _
 import os as _os
 import sys as _sys
 import json
-try:
-    from importlib.metadata import version as _pkg_version
-    __version__ = _pkg_version("pivot-engine")
-except Exception:
-    __version__ = None
+
+__version__ = None
 
 import dash as _dash
 
@@ -28,9 +25,7 @@ with open(_filepath) as f:
     package = json.load(f)
 
 package_name = package['name'].replace(' ', '_').replace('-', '_')
-# __version__ is set at top of file from importlib.metadata; fall back to package-info.json
-if __version__ is None:
-    __version__ = package['version']
+__version__ = package['version']
 
 _current_path = _os.path.dirname(_os.path.abspath(__file__))
 

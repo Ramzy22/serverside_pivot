@@ -274,7 +274,9 @@ export const gridDimensionTokens = Object.freeze({
     }),
     autoSize: Object.freeze({
         headerPadding: 40,
+        headerOverscan: 12,
         cellPadding: 24,
+        cellOverscan: 6,
         minWidth: 60,
         maxWidth: 600
     })

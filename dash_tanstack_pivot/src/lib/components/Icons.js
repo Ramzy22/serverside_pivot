@@ -25,6 +25,12 @@ const Icons = {
     Fullscreen: () => <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor"><path d="M5 5h5v2H7v3H5V5zm9 0h5v5h-2V7h-3V5zM5 14h2v3h3v2H5v-5zm12 3v-3h2v5h-5v-2h3z"/></svg>,
     FullscreenExit: () => <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor"><path d="M5 16h3v3h2v-5H5v2zm3-8H5v2h5V5H8v3zm8 11h-3v2h5v-5h-2v3zm-3-11h5v2h-5V5h3v3z"/></svg>,
     DataBars: () => <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor"><path d="M4 19h16v1H4v-1zm2-2h3V9H6v8zm5 0h3V5h-3v12zm5 0h3v-6h-3v6z"/></svg>,
+    NumberFormat: () => (
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none">
+            <rect x="3.5" y="4.5" width="17" height="15" rx="3" stroke="currentColor" strokeWidth="1.5" />
+            <text x="6.4" y="15.3" fontSize="7.2" fontWeight="700" fill="currentColor" fontFamily="Arial, sans-serif">123</text>
+        </svg>
+    ),
     Chart: () => <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor"><path d="M4 19h16v1H4v-1zm1-2h3V9H5v8zm5 0h3V5h-3v12zm5 0h3v-4h-3v4zm5 0h3V7h-3v10z"/></svg>,
     PinLeft: () => <svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor"><path d="M13 12H7v1.5L4.5 11 7 8.5V10h6v2zm6.41-7.12l-1.42-1.41-4.83 4.83c-.37-.13-.77-.21-1.19-.21-1.91 0-3.47 1.55-3.47 3.47 0 1.92 1.56 3.47 3.47 3.47 1.92 0 3.47-1.55 3.47-3.47 0-.42-.08-.82-.21-1.19l4.83-4.83-1.42-1.41z"/></svg>,
     PinRight: () => <svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor"><path d="M11 12h6v-1.5l2.5 2.5-2.5 2.5V14h-6v-2zm-6.41 7.12l1.42 1.41 4.83-4.83c.37.13.77.21 1.19.21 1.91 0 3.47-1.55 3.47-3.47 0-1.92-1.56-3.47-3.47-3.47-1.92 0-3.47 1.55-3.47 3.47 0 .42.08.82.21 1.19l-4.83 4.83 1.42 1.41z"/></svg>,

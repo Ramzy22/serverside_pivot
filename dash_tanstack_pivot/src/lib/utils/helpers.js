@@ -44,60 +44,118 @@ export const formatAggLabel = (agg, weightField = null) => {
     return baseLabel;
 };
 
-// Replace thousands commas with narrow non-breaking spaces (ISO 80000-1 convention)
-const spaceGroups = (str) => str.replace(/,/g, '\u202F');
+export const DEFAULT_NUMBER_GROUP_SEPARATOR = 'thin_space';
+export const DEFAULT_CURRENCY_SYMBOL = '$';
 
-export const formatValue = (value, fmt, decimalPlaces) => {
+const NUMBER_GROUP_SEPARATOR_CHAR_MAP = Object.freeze({
+    comma: ',',
+    space: '\u00A0',
+    thin_space: '\u202F',
+    apostrophe: '\'',
+    none: '',
+});
+
+export const normalizeNumberGroupSeparator = (value) => (
+    Object.prototype.hasOwnProperty.call(NUMBER_GROUP_SEPARATOR_CHAR_MAP, value)
+        ? value
+        : DEFAULT_NUMBER_GROUP_SEPARATOR
+);
+
+const applyGroupSeparator = (str, groupSeparator = DEFAULT_NUMBER_GROUP_SEPARATOR) => {
+    const normalized = normalizeNumberGroupSeparator(groupSeparator);
+    return str.replace(/,/g, NUMBER_GROUP_SEPARATOR_CHAR_MAP[normalized]);
+};
+
+const formatNumberWithOptions = (value, options = {}, groupSeparator = DEFAULT_NUMBER_GROUP_SEPARATOR) => (
+    applyGroupSeparator(new Intl.NumberFormat('en-US', options).format(value), groupSeparator)
+);
+
+const parseCurrencyFormat = (fmt) => {
+    const normalized = typeof fmt === 'string' ? fmt.trim() : '';
+    if (normalized === 'currency' || normalized === 'accounting') {
+        return {
+            type: normalized,
+            symbol: DEFAULT_CURRENCY_SYMBOL,
+        };
+    }
+    if (normalized.startsWith('currency:')) {
+        return {
+            type: 'currency',
+            symbol: normalized.slice('currency:'.length),
+        };
+    }
+    if (normalized.startsWith('accounting:')) {
+        return {
+            type: 'accounting',
+            symbol: normalized.slice('accounting:'.length),
+        };
+    }
+    return null;
+};
+
+const formatCurrencyWithSymbol = (value, symbol, decimalPlaces, groupSeparator, accounting = false) => {
+    const safeSymbol = symbol || DEFAULT_CURRENCY_SYMBOL;
+    const absFormatted = formatNumberWithOptions(Math.abs(value), {
+        minimumFractionDigits: decimalPlaces !== undefined && decimalPlaces !== null ? decimalPlaces : 2,
+        maximumFractionDigits: decimalPlaces !== undefined && decimalPlaces !== null ? decimalPlaces : 2,
+    }, groupSeparator);
+
+    if (value < 0) {
+        return accounting
+            ? `(${safeSymbol}${absFormatted})`
+            : `-${safeSymbol}${absFormatted}`;
+    }
+    return `${safeSymbol}${absFormatted}`;
+};
+
+export const formatValue = (value, fmt, decimalPlaces, groupSeparator = DEFAULT_NUMBER_GROUP_SEPARATOR) => {
     if (value === null || value === undefined) return '';
     if (typeof value !== 'number') return value;
     if (!fmt) {
         if (decimalPlaces !== undefined && decimalPlaces !== null) {
-            return spaceGroups(new Intl.NumberFormat('en-US', {
+            return formatNumberWithOptions(value, {
                 minimumFractionDigits: decimalPlaces,
                 maximumFractionDigits: decimalPlaces,
-            }).format(value));
+            }, groupSeparator);
         }
-        return spaceGroups(new Intl.NumberFormat('en-US').format(value));
+        return formatNumberWithOptions(value, {}, groupSeparator);
     }
 
     try {
-        if (fmt === 'currency') {
-            const opts = { style: 'currency', currency: 'USD' };
-            if (decimalPlaces !== undefined && decimalPlaces !== null) {
-                opts.minimumFractionDigits = decimalPlaces;
-                opts.maximumFractionDigits = decimalPlaces;
-            }
-            return spaceGroups(new Intl.NumberFormat('en-US', opts).format(value));
-        }
-        if (fmt === 'accounting') {
-            const opts = { style: 'currency', currency: 'USD', currencySign: 'accounting' };
-            if (decimalPlaces !== undefined && decimalPlaces !== null) {
-                opts.minimumFractionDigits = decimalPlaces;
-                opts.maximumFractionDigits = decimalPlaces;
-            }
-            return spaceGroups(new Intl.NumberFormat('en-US', opts).format(value));
+        const currencyFormat = parseCurrencyFormat(fmt);
+        if (currencyFormat) {
+            return formatCurrencyWithSymbol(
+                value,
+                currencyFormat.symbol,
+                decimalPlaces,
+                groupSeparator,
+                currencyFormat.type === 'accounting'
+            );
         }
         if (fmt === 'percent') {
             const opts = { style: 'percent', maximumFractionDigits: decimalPlaces !== undefined && decimalPlaces !== null ? decimalPlaces : 2 };
             if (decimalPlaces !== undefined && decimalPlaces !== null) opts.minimumFractionDigits = decimalPlaces;
-            return spaceGroups(new Intl.NumberFormat('en-US', opts).format(value));
+            return formatNumberWithOptions(value, opts, groupSeparator);
         }
         if (fmt === 'scientific') return value.toExponential(decimalPlaces !== undefined && decimalPlaces !== null ? decimalPlaces : 2);
         if (fmt.startsWith('fixed')) {
             const parts = fmt.split(':');
-            const decimals = decimalPlaces !== undefined && decimalPlaces !== null ? decimalPlaces : (parts.length > 1 ? parseInt(parts[1]) : 2);
-            return value.toFixed(decimals);
+            const decimals = decimalPlaces !== undefined && decimalPlaces !== null ? decimalPlaces : (parts.length > 1 ? parseInt(parts[1], 10) : 2);
+            return formatNumberWithOptions(value, {
+                minimumFractionDigits: decimals,
+                maximumFractionDigits: decimals,
+            }, groupSeparator);
         }
     } catch (e) {
         console.warn('Format error', e);
     }
     if (decimalPlaces !== undefined && decimalPlaces !== null) {
-        return spaceGroups(new Intl.NumberFormat('en-US', {
+        return formatNumberWithOptions(value, {
             minimumFractionDigits: decimalPlaces,
             maximumFractionDigits: decimalPlaces,
-        }).format(value));
+        }, groupSeparator);
     }
-    return spaceGroups(new Intl.NumberFormat('en-US').format(value));
+    return formatNumberWithOptions(value, {}, groupSeparator);
 };
 
 export const Sparkline = ({ data = [], width = 100, height = 30, color = '#1976d2' }) => {

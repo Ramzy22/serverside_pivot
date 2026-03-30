@@ -6,6 +6,7 @@ const EditableCell = ({
     row, 
     column, 
     format, 
+    numberGroupSeparator,
     validationRules,
     setProps,
     handleContextMenu
@@ -123,7 +124,7 @@ const EditableCell = ({
             }}
             title={error || undefined}
         >
-            {formatValue(initialValue, format)}
+            {formatValue(initialValue, format, undefined, numberGroupSeparator)}
         </div>
     );
 };

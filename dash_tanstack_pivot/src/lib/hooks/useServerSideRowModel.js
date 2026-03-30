@@ -6,6 +6,17 @@ const isGrandTotalRow = (row) => (
     !!row && (row._isTotal || row._path === '__grand_total__' || row._id === 'Grand Total')
 );
 
+const blockMatchesColumnWindow = (block, colStart, colEnd) => {
+    if (!block || colEnd === null || colEnd === undefined) return true;
+    const blockHasColMeta = block.colEnd !== null && block.colEnd !== undefined;
+    // Blocks loaded without column metadata come from an unwindowed/full-data
+    // response. That payload is a superset of any later narrower column window,
+    // so it should stay valid instead of triggering an immediate shrink refetch
+    // that blanks cells after the first structural paint.
+    if (!blockHasColMeta) return true;
+    return block.colStart === colStart && block.colEnd === colEnd;
+};
+
 const debugLog = (...args) => {
     const buildDebugEnabled = process.env.NODE_ENV !== 'production';
     let runtimeDebugEnabled = false;
@@ -119,6 +130,8 @@ export const useServerSideRowModel = ({
         if (!serverSide) return;
         setCurrentEpoch(stateEpoch);
         inflightRequestRef.current = null;
+        lastRequestedColStartRef.current = null;
+        lastRequestedColEndRef.current = null;
     }, [serverSide, stateEpoch, setCurrentEpoch]);
 
     useEffect(() => {
@@ -126,6 +139,8 @@ export const useServerSideRowModel = ({
         clearCache();
         inflightRequestRef.current = null;
         pendingViewportRef.current = null;
+        lastRequestedColStartRef.current = null;
+        lastRequestedColEndRef.current = null;
         if (!externalRequestVersionRef) {
             requestVersionRef.current = 0;
         }
@@ -471,17 +486,10 @@ export const useServerSideRowModel = ({
                     currentInflight.start <= blockStart &&
                     currentInflight.end >= blockEnd
                 );
-                // Column window mismatch: block needs a fresh fetch because its col range
-                // doesn't match the current window.  Two cases:
-                // 1. Block was loaded in full-data mode (colEnd=null/undefined) but the
-                //    client is now in windowed mode — needs re-fetch with windowed cols.
-                // 2. Block was loaded in windowed mode with a different col range.
-                const blockHasColMeta = block && block.colEnd !== null && block.colEnd !== undefined;
-                const isColMismatch = block && block.status === 'loaded' && colEnd !== null && (
-                    !blockHasColMeta ||
-                    block.colStart !== colStart ||
-                    block.colEnd !== colEnd
-                );
+                // Column window mismatch only matters for blocks that were already loaded
+                // as a specific window. Full-data blocks remain valid for any narrower
+                // window in the same epoch.
+                const isColMismatch = block && block.status === 'loaded' && !blockMatchesColumnWindow(block, colStart, colEnd);
                 const inflightColMismatch = block && block.status === 'loading' && currentInflight && (
                     currentInflight.colStart !== colStart ||
                     currentInflight.colEnd !== colEnd
@@ -548,15 +556,7 @@ export const useServerSideRowModel = ({
                 currentInflight.start <= blockStart &&
                 currentInflight.end >= blockEnd
             );
-            // Column window mismatch: block was fetched with a different col range.
-            // Also fires when a block has no col metadata at all (fetched before windowing
-            // was active) but we're now in windowed mode — treat as mismatch so it re-fetches.
-            const blockHasColMetaReplay = block && block.colEnd !== null && block.colEnd !== undefined;
-            const isColMismatch = block && block.status === 'loaded' && colEnd !== null && (
-                !blockHasColMetaReplay ||
-                block.colStart !== colStart ||
-                block.colEnd !== colEnd
-            );
+            const isColMismatch = block && block.status === 'loaded' && !blockMatchesColumnWindow(block, colStart, colEnd);
             const inflightColMismatch = block && block.status === 'loading' && currentInflight && (
                 currentInflight.colStart !== colStart ||
                 currentInflight.colEnd !== colEnd
@@ -620,12 +620,7 @@ export const useServerSideRowModel = ({
             const block = getBlock(b, stateEpoch);
             if (block && block.rows) {
                 const offsetInMerged = (b - startBlock) * blockSize;
-                const blockHasColMeta = block.colEnd !== null && block.colEnd !== undefined;
-                const blockColMismatch = colEnd !== null && (
-                    !blockHasColMeta ||
-                    block.colStart !== colStart ||
-                    block.colEnd !== colEnd
-                );
+                const blockColMismatch = !blockMatchesColumnWindow(block, colStart, colEnd);
                 const blockPendingColumns = (
                     block.status === 'loading' ||
                     block.status === 'partial' ||
@@ -674,12 +669,7 @@ export const useServerSideRowModel = ({
         const seenVirtualIndexes = new Set();
 
         blocks.forEach((block) => {
-            const blockHasColMeta = block.colEnd !== null && block.colEnd !== undefined;
-            const blockColMismatch = colEnd !== null && (
-                !blockHasColMeta ||
-                block.colStart !== colStart ||
-                block.colEnd !== colEnd
-            );
+            const blockColMismatch = !blockMatchesColumnWindow(block, colStart, colEnd);
             if (blockColMismatch) return;
 
             block.rows.forEach((row, index) => {

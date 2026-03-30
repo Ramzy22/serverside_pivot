@@ -1,9 +1,10 @@
 import React, { useMemo } from 'react';
+import { formatValue } from '../../utils/helpers';
 
-const fmt = (n, decimals = 2) =>
-    new Intl.NumberFormat('en-US', { maximumFractionDigits: decimals }).format(n).replace(/,/g, '\u202F');
+const fmt = (n, decimals = 2, numberGroupSeparator) =>
+    formatValue(n, null, decimals, numberGroupSeparator);
 
-const StatusBar = ({ selectedCells, rowCount, visibleRowsCount, theme, isLoading = false }) => {
+const StatusBar = ({ selectedCells, rowCount, visibleRowsCount, theme, isLoading = false, numberGroupSeparator }) => {
     const stats = useMemo(() => {
         const values = Object.values(selectedCells).map(v => parseFloat(v)).filter(v => !isNaN(v));
         const count = Object.keys(selectedCells).length;
@@ -52,19 +53,19 @@ const StatusBar = ({ selectedCells, rowCount, visibleRowsCount, theme, isLoading
                         Loading...
                     </span>
                 )}
-                {rowCount ? `Total: ${fmt(rowCount, 0)}` : 'Total: --'}
-                {visibleRowsCount && ` | Visible: ${visibleRowsCount}`}
+                {rowCount ? `Total: ${fmt(rowCount, 0, numberGroupSeparator)}` : 'Total: --'}
+                {visibleRowsCount && ` | Visible: ${fmt(visibleRowsCount, 0, numberGroupSeparator)}`}
             </div>
             <div style={{display: 'flex', gap: '16px', overflowX: 'auto'}}>
-                <span>Count: {stats.count}</span>
+                <span>Count: {fmt(stats.count, 0, numberGroupSeparator)}</span>
                 {stats.sum !== undefined && (
                     <>
-                        <span>Sum: {fmt(stats.sum)}</span>
-                        <span>Avg: {fmt(stats.avg)}</span>
-                        <span>Min: {fmt(stats.min)}</span>
-                        <span>Max: {fmt(stats.max)}</span>
-                        <span>Var: {fmt(stats.variance)}</span>
-                        <span>StdDev: {fmt(stats.stdDev)}</span>
+                        <span>Sum: {fmt(stats.sum, 2, numberGroupSeparator)}</span>
+                        <span>Avg: {fmt(stats.avg, 2, numberGroupSeparator)}</span>
+                        <span>Min: {fmt(stats.min, 2, numberGroupSeparator)}</span>
+                        <span>Max: {fmt(stats.max, 2, numberGroupSeparator)}</span>
+                        <span>Var: {fmt(stats.variance, 2, numberGroupSeparator)}</span>
+                        <span>StdDev: {fmt(stats.stdDev, 2, numberGroupSeparator)}</span>
                     </>
                 )}
             </div>
