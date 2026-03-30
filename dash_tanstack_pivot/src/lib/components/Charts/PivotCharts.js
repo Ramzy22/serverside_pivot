@@ -2327,6 +2327,23 @@ const SvgChart = ({
     const effectiveChartHeight = chartHeight;
     const hierarchyNodes = Array.isArray(model && model.icicleNodes) ? model.icicleNodes : [];
     const icicleDepth = Math.max(1, Number(model && model.icicleDepth) || 1);
+    const chartContainerRef = useRef(null);
+    const [measuredChartWidth, setMeasuredChartWidth] = useState(CHART_WIDTH);
+    const resolvedChartWidth = Math.max(CHART_WIDTH, Number.isFinite(measuredChartWidth) ? Math.floor(measuredChartWidth) : CHART_WIDTH);
+
+    useEffect(() => {
+        const element = chartContainerRef.current;
+        if (!element) return undefined;
+        const updateWidth = () => {
+            const nextWidth = element.clientWidth;
+            if (nextWidth > 0) setMeasuredChartWidth(nextWidth);
+        };
+        updateWidth();
+        if (typeof ResizeObserver === 'undefined') return undefined;
+        const observer = new ResizeObserver(updateWidth);
+        observer.observe(element);
+        return () => observer.disconnect();
+    }, []);
 
     if (chartType === 'icicle') {
         if (hierarchyNodes.length === 0) {
@@ -2334,14 +2351,14 @@ const SvgChart = ({
         }
 
         const bandHeight = effectiveChartHeight / icicleDepth;
-        const layoutNodes = layoutIcicleNodes(hierarchyNodes, 0, CHART_WIDTH, 0, bandHeight, []);
+        const layoutNodes = layoutIcicleNodes(hierarchyNodes, 0, resolvedChartWidth, 0, bandHeight, []);
 
         return (
             <div style={{ display: 'flex', flexDirection: 'column', gap: '10px' }}>
-                <div style={{ width: '100%', minWidth: 0 }}>
+                <div ref={chartContainerRef} style={{ width: '100%', minWidth: 0 }}>
                     <svg
                         ref={svgRef}
-                        viewBox={`0 0 ${CHART_WIDTH} ${effectiveChartHeight}`}
+                        viewBox={`0 0 ${resolvedChartWidth} ${effectiveChartHeight}`}
                         preserveAspectRatio="xMidYMid meet"
                         style={{
                             width: '100%',
@@ -2400,18 +2417,18 @@ const SvgChart = ({
             return <EmptyChartState message="Sunburst charts need hierarchical rows and a numeric measure." theme={theme} chartHeight={effectiveChartHeight} />;
         }
 
-        const radius = Math.min(CHART_WIDTH, effectiveChartHeight) / 2 - 18;
-        const centerX = CHART_WIDTH / 2;
+        const radius = Math.min(resolvedChartWidth, effectiveChartHeight) / 2 - 18;
+        const centerX = resolvedChartWidth / 2;
         const centerY = effectiveChartHeight / 2;
         const ringWidth = radius / Math.max(icicleDepth, 1);
         const layoutNodes = layoutSunburstNodes(hierarchyNodes, -Math.PI / 2, (Math.PI * 3) / 2, 1, ringWidth, []);
 
         return (
             <div style={{ display: 'flex', flexDirection: 'column', gap: '10px' }}>
-                <div style={{ width: '100%', minWidth: 0 }}>
+                <div ref={chartContainerRef} style={{ width: '100%', minWidth: 0 }}>
                     <svg
                         ref={svgRef}
-                        viewBox={`0 0 ${CHART_WIDTH} ${effectiveChartHeight}`}
+                        viewBox={`0 0 ${resolvedChartWidth} ${effectiveChartHeight}`}
                         preserveAspectRatio="xMidYMid meet"
                         style={{
                             width: '100%',
@@ -2474,14 +2491,14 @@ const SvgChart = ({
             return <EmptyChartState message="Sankey charts need expanded hierarchical rows with child flows." theme={theme} chartHeight={effectiveChartHeight} />;
         }
 
-        const sankeyLayout = layoutSankey(sankeyNodes, sankeyLinks, CHART_WIDTH, effectiveChartHeight);
+        const sankeyLayout = layoutSankey(sankeyNodes, sankeyLinks, resolvedChartWidth, effectiveChartHeight);
 
         return (
             <div style={{ display: 'flex', flexDirection: 'column', gap: '10px' }}>
-                <div style={{ width: '100%', minWidth: 0 }}>
+                <div ref={chartContainerRef} style={{ width: '100%', minWidth: 0 }}>
                     <svg
                         ref={svgRef}
-                        viewBox={`0 0 ${CHART_WIDTH} ${effectiveChartHeight}`}
+                        viewBox={`0 0 ${resolvedChartWidth} ${effectiveChartHeight}`}
                         preserveAspectRatio="xMidYMid meet"
                         style={{
                             width: '100%',
@@ -2558,7 +2575,7 @@ const SvgChart = ({
         const hasRightAxis = comboLayers.some((layer) => layer.axis === 'right');
         const margin = { top: 24, right: hasRightAxis ? 76 : 20, bottom: 96, left: 72 };
         const categoryCount = Math.max(1, Array.isArray(model.categories) ? model.categories.length : 0);
-        const step = Math.max(1, (CHART_WIDTH - margin.left - margin.right) / categoryCount);
+        const step = Math.max(1, (resolvedChartWidth - margin.left - margin.right) / categoryCount);
         const groupWidth = Math.max(22, Math.min(72, step * 0.72));
         const barLayers = comboLayers.filter((layer) => layer.type === 'bar');
         const areaLayers = comboLayers.filter((layer) => layer.type === 'area');
@@ -2587,10 +2604,10 @@ const SvgChart = ({
 
         return (
             <div style={{ display: 'flex', flexDirection: 'column', gap: '10px' }}>
-                <div style={{ width: '100%', minWidth: 0 }}>
+                <div ref={chartContainerRef} style={{ width: '100%', minWidth: 0 }}>
                     <svg
                         ref={svgRef}
-                        viewBox={`0 0 ${CHART_WIDTH} ${effectiveChartHeight}`}
+                        viewBox={`0 0 ${resolvedChartWidth} ${effectiveChartHeight}`}
                         preserveAspectRatio="xMidYMid meet"
                         style={{
                             width: '100%',
@@ -2607,7 +2624,7 @@ const SvgChart = ({
                                 <g key={`combo-left-tick-${index}`}>
                                     <line
                                         x1={margin.left}
-                                        x2={CHART_WIDTH - margin.right}
+                                        x2={resolvedChartWidth - margin.right}
                                         y1={y}
                                         y2={y}
                                         stroke={theme.border}
@@ -2632,7 +2649,7 @@ const SvgChart = ({
                             return (
                                 <text
                                     key={`combo-right-tick-${index}`}
-                                    x={CHART_WIDTH - margin.right + 10}
+                                    x={resolvedChartWidth - margin.right + 10}
                                     y={y + 4}
                                     textAnchor="start"
                                     fontSize="11"
@@ -2645,7 +2662,7 @@ const SvgChart = ({
 
                         <line
                             x1={margin.left}
-                            x2={CHART_WIDTH - margin.right}
+                            x2={resolvedChartWidth - margin.right}
                             y1={leftMetrics.baselineY}
                             y2={leftMetrics.baselineY}
                             stroke={theme.textSec}
@@ -2862,7 +2879,7 @@ const SvgChart = ({
         const margin = horizontalBarMode
             ? { top: 24, right: 18, bottom: 42, left: leftMargin }
             : { top: 24, right: 18, bottom: hasHierarchicalBands ? 118 : 84, left: leftMargin };
-        const plotWidth = CHART_WIDTH - margin.left - margin.right;
+        const plotWidth = resolvedChartWidth - margin.left - margin.right;
         const plotHeight = effectiveChartHeight - margin.top - margin.bottom;
         const baseline = chartType === 'bar' ? 0 : Math.min(Math.max(0, minValue), maxValue);
         const safeSpan = maxValue - minValue || 1;
@@ -2891,7 +2908,7 @@ const SvgChart = ({
             hasHierarchicalBands,
             horizontalBarMode,
         };
-    }, [axisMode, model, chartType, stackedAreaMode, stackedChildBarMode, stackedSeriesBarMode, horizontalBarMode, effectiveChartHeight]);
+    }, [axisMode, model, chartType, stackedAreaMode, stackedChildBarMode, stackedSeriesBarMode, horizontalBarMode, effectiveChartHeight, resolvedChartWidth]);
 
     if (!geometry) {
         return <EmptyChartState message="No numeric data available for this chart." theme={theme} chartHeight={effectiveChartHeight} />;
@@ -2942,10 +2959,10 @@ const SvgChart = ({
 
     return (
         <div style={{ display: 'flex', flexDirection: 'column', gap: '10px' }}>
-            <div style={{ width: '100%', minWidth: 0 }}>
+            <div ref={chartContainerRef} style={{ width: '100%', minWidth: 0 }}>
                 <svg
                     ref={svgRef}
-                    viewBox={`0 0 ${CHART_WIDTH} ${effectiveChartHeight}`}
+                    viewBox={`0 0 ${resolvedChartWidth} ${effectiveChartHeight}`}
                     preserveAspectRatio="xMidYMid meet"
                     style={{
                         width: '100%',
@@ -2970,7 +2987,7 @@ const SvgChart = ({
                                     </>
                                 ) : (
                                     <>
-                                        <line x1={geometry.margin.left} y1={y} x2={CHART_WIDTH - geometry.margin.right} y2={y} stroke={theme.border} strokeDasharray="3 4" />
+                                        <line x1={geometry.margin.left} y1={y} x2={resolvedChartWidth - geometry.margin.right} y2={y} stroke={theme.border} strokeDasharray="3 4" />
                                         <text x={geometry.margin.left - 8} y={y + 4} textAnchor="end" fontSize="11" fill={theme.textSec}>
                                             {formatChartNumber(tickValue)}
                                         </text>
@@ -2982,7 +2999,7 @@ const SvgChart = ({
                     <line
                         x1={geometry.horizontalBarMode ? geometry.baselineX : geometry.margin.left}
                         y1={geometry.horizontalBarMode ? geometry.margin.top : geometry.baselineY}
-                        x2={geometry.horizontalBarMode ? geometry.baselineX : CHART_WIDTH - geometry.margin.right}
+                        x2={geometry.horizontalBarMode ? geometry.baselineX : resolvedChartWidth - geometry.margin.right}
                         y2={geometry.horizontalBarMode ? effectiveChartHeight - geometry.margin.bottom : geometry.baselineY}
                         stroke={theme.textSec}
                         strokeWidth="1"
@@ -2998,7 +3015,7 @@ const SvgChart = ({
                                 key={`group-divider-${group.groupKey}-${groupIndex}`}
                                 x1={geometry.horizontalBarMode ? geometry.margin.left : divider}
                                 y1={geometry.horizontalBarMode ? divider : geometry.margin.top}
-                                x2={geometry.horizontalBarMode ? CHART_WIDTH - geometry.margin.right : divider}
+                                x2={geometry.horizontalBarMode ? resolvedChartWidth - geometry.margin.right : divider}
                                 y2={geometry.horizontalBarMode ? divider : effectiveChartHeight - geometry.margin.bottom + 58}
                                 stroke={theme.border}
                                 strokeDasharray="4 4"
@@ -3231,7 +3248,7 @@ const SvgChart = ({
                                     key={`category-hit-horizontal-${categoryIndex}`}
                                     x={geometry.margin.left}
                                     y={geometry.margin.top + (categoryIndex * geometry.step)}
-                                    width={CHART_WIDTH - geometry.margin.left - geometry.margin.right}
+                                    width={resolvedChartWidth - geometry.margin.left - geometry.margin.right}
                                     height={geometry.step}
                                     fill="transparent"
                                     style={{ cursor: 'pointer' }}

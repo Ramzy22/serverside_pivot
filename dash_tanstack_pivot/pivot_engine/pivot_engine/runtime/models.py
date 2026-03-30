@@ -32,6 +32,8 @@ class PivotViewState:
     drill_through: Optional[Dict[str, Any]] = None
     viewport: Dict[str, Any] = field(default_factory=dict)
     chart_request: Dict[str, Any] = field(default_factory=dict)
+    pivot_mode: str = "pivot"
+    report_def: Optional[Dict[str, Any]] = None
 
 
 @dataclass

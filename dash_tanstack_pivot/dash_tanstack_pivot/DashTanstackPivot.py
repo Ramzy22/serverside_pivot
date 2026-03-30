@@ -26,6 +26,8 @@ Keyword arguments:
 
 - id (string; optional)
 
+- activeReportId (string; optional)
+
 - availableFieldList (list of strings; optional)
 
 - cellUpdate (dict; optional)
@@ -100,6 +102,14 @@ Keyword arguments:
 
 - filterOptions (dict; optional)
 
+- filterRequest (dict; optional)
+
+    `filterRequest` is a dict with keys:
+
+    - columnId (string; optional)
+
+    - nonce (number; optional)
+
 - filters (dict; optional)
 
 - grandTotalPosition (a value equal to: 'top', 'bottom'; optional)
@@ -130,7 +140,11 @@ Keyword arguments:
 
     - config (dict; optional)
 
+- pivotMode (a value equal to: 'pivot', 'report'; optional)
+
 - pivotTitle (string; optional)
+
+- reportDef (dict; optional)
 
 - reset (boolean | number | string | dict | list; optional)
 
@@ -151,6 +165,8 @@ Keyword arguments:
     - bottom (list of strings; optional)
 
 - saveViewTrigger (boolean | number | string | dict | list; optional)
+
+- savedReports (list of dicts; optional)
 
 - savedView (dict; optional)
 
@@ -229,6 +245,14 @@ Keyword arguments:
         }
     )
 
+    FilterRequest = TypedDict(
+        "FilterRequest",
+            {
+            "columnId": NotRequired[str],
+            "nonce": NotRequired[NumberType]
+        }
+    )
+
     ChartServerWindow = TypedDict(
         "ChartServerWindow",
             {
@@ -304,6 +328,7 @@ Keyword arguments:
         showColTotals: typing.Optional[bool] = None,
         grandTotalPosition: typing.Optional[Literal["top", "bottom"]] = None,
         filterOptions: typing.Optional[dict] = None,
+        filterRequest: typing.Optional["FilterRequest"] = None,
         chartData: typing.Optional[dict] = None,
         chartRequest: typing.Optional[dict] = None,
         chartEvent: typing.Optional[dict] = None,
@@ -345,11 +370,15 @@ Keyword arguments:
         availableFieldList: typing.Optional[typing.Sequence[str]] = None,
         dataOffset: typing.Optional[NumberType] = None,
         dataVersion: typing.Optional[NumberType] = None,
+        pivotMode: typing.Optional[Literal["pivot", "report"]] = None,
+        reportDef: typing.Optional[dict] = None,
+        savedReports: typing.Optional[typing.Sequence[dict]] = None,
+        activeReportId: typing.Optional[str] = None,
         **kwargs
     ):
-        self._prop_names = ['id', 'availableFieldList', 'cellUpdate', 'cellUpdates', 'chartCanvasPanes', 'chartData', 'chartDefaults', 'chartDefinitions', 'chartEvent', 'chartRequest', 'chartServerWindow', 'cinemaMode', 'colFields', 'columnPinned', 'columnPinning', 'columnSizing', 'columnVisibility', 'columns', 'conditionalFormatting', 'data', 'dataOffset', 'dataVersion', 'decimalPlaces', 'defaultTheme', 'defaultValueFormat', 'drillEndpoint', 'drillThrough', 'expanded', 'fieldPanelSizes', 'filterOptions', 'filters', 'grandTotalPosition', 'numberGroupSeparator', 'persistence', 'persistence_type', 'pinningOptions', 'pinningPresets', 'pivotTitle', 'reset', 'rowCount', 'rowFields', 'rowMove', 'rowPinned', 'rowPinning', 'saveViewTrigger', 'savedView', 'serverSide', 'showColTotals', 'showRowTotals', 'sortEvent', 'sortLock', 'sortOptions', 'sorting', 'style', 'table', 'tableCanvasSize', 'valConfigs', 'validationRules', 'viewState', 'viewport']
+        self._prop_names = ['id', 'activeReportId', 'availableFieldList', 'cellUpdate', 'cellUpdates', 'chartCanvasPanes', 'chartData', 'chartDefaults', 'chartDefinitions', 'chartEvent', 'chartRequest', 'chartServerWindow', 'cinemaMode', 'colFields', 'columnPinned', 'columnPinning', 'columnSizing', 'columnVisibility', 'columns', 'conditionalFormatting', 'data', 'dataOffset', 'dataVersion', 'decimalPlaces', 'defaultTheme', 'defaultValueFormat', 'drillEndpoint', 'drillThrough', 'expanded', 'fieldPanelSizes', 'filterOptions', 'filterRequest', 'filters', 'grandTotalPosition', 'numberGroupSeparator', 'persistence', 'persistence_type', 'pinningOptions', 'pinningPresets', 'pivotMode', 'pivotTitle', 'reportDef', 'reset', 'rowCount', 'rowFields', 'rowMove', 'rowPinned', 'rowPinning', 'saveViewTrigger', 'savedReports', 'savedView', 'serverSide', 'showColTotals', 'showRowTotals', 'sortEvent', 'sortLock', 'sortOptions', 'sorting', 'style', 'table', 'tableCanvasSize', 'valConfigs', 'validationRules', 'viewState', 'viewport']
         self._valid_wildcard_attributes =            []
-        self.available_properties = ['id', 'availableFieldList', 'cellUpdate', 'cellUpdates', 'chartCanvasPanes', 'chartData', 'chartDefaults', 'chartDefinitions', 'chartEvent', 'chartRequest', 'chartServerWindow', 'cinemaMode', 'colFields', 'columnPinned', 'columnPinning', 'columnSizing', 'columnVisibility', 'columns', 'conditionalFormatting', 'data', 'dataOffset', 'dataVersion', 'decimalPlaces', 'defaultTheme', 'defaultValueFormat', 'drillEndpoint', 'drillThrough', 'expanded', 'fieldPanelSizes', 'filterOptions', 'filters', 'grandTotalPosition', 'numberGroupSeparator', 'persistence', 'persistence_type', 'pinningOptions', 'pinningPresets', 'pivotTitle', 'reset', 'rowCount', 'rowFields', 'rowMove', 'rowPinned', 'rowPinning', 'saveViewTrigger', 'savedView', 'serverSide', 'showColTotals', 'showRowTotals', 'sortEvent', 'sortLock', 'sortOptions', 'sorting', 'style', 'table', 'tableCanvasSize', 'valConfigs', 'validationRules', 'viewState', 'viewport']
+        self.available_properties = ['id', 'activeReportId', 'availableFieldList', 'cellUpdate', 'cellUpdates', 'chartCanvasPanes', 'chartData', 'chartDefaults', 'chartDefinitions', 'chartEvent', 'chartRequest', 'chartServerWindow', 'cinemaMode', 'colFields', 'columnPinned', 'columnPinning', 'columnSizing', 'columnVisibility', 'columns', 'conditionalFormatting', 'data', 'dataOffset', 'dataVersion', 'decimalPlaces', 'defaultTheme', 'defaultValueFormat', 'drillEndpoint', 'drillThrough', 'expanded', 'fieldPanelSizes', 'filterOptions', 'filterRequest', 'filters', 'grandTotalPosition', 'numberGroupSeparator', 'persistence', 'persistence_type', 'pinningOptions', 'pinningPresets', 'pivotMode', 'pivotTitle', 'reportDef', 'reset', 'rowCount', 'rowFields', 'rowMove', 'rowPinned', 'rowPinning', 'saveViewTrigger', 'savedReports', 'savedView', 'serverSide', 'showColTotals', 'showRowTotals', 'sortEvent', 'sortLock', 'sortOptions', 'sorting', 'style', 'table', 'tableCanvasSize', 'valConfigs', 'validationRules', 'viewState', 'viewport']
         self.available_wildcard_properties =            []
         _explicit_args = kwargs.pop('_explicit_args')
         _locals = locals()

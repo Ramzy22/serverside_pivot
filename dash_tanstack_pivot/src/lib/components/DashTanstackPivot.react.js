@@ -69,7 +69,7 @@ const DEFAULT_FLOATING_CHART_PANEL_HEIGHT = 520;
 const MIN_CHART_PANEL_WIDTH = 280;
 const MAX_CHART_PANEL_WIDTH = 960;
 const MIN_FLOATING_CHART_PANEL_HEIGHT = 280;
-const MIN_TABLE_PANEL_WIDTH = 320;
+const MIN_TABLE_PANEL_WIDTH = 0;
 const MIN_CHART_CANVAS_PANE_WIDTH = 320;
 const DEFAULT_TABLE_CANVAS_SIZE = 1.4;
 const TABLE_OVERLAY_CHART_PANE_ID = '__table_overlay_chart__';
@@ -96,6 +96,181 @@ const cloneSerializable = (value, fallback = null) => {
         return fallback;
     }
 };
+
+const normalizePivotModeValue = (value) => (
+    value === 'report' || value === 'pivot' ? value : null
+);
+
+const normalizeReportTopN = (value) => (
+    Number.isFinite(Number(value)) && Number(value) > 0
+        ? Math.floor(Number(value))
+        : null
+);
+
+const normalizeReportNodeValue = (value) => {
+    const source = value && typeof value === 'object' ? value : {};
+    const normalized = {
+        ...source,
+        field: typeof source.field === 'string' ? source.field : '',
+        label: typeof source.label === 'string' ? source.label : '',
+        topN: normalizeReportTopN(source.topN),
+        sortBy: typeof source.sortBy === 'string' && source.sortBy.trim()
+            ? source.sortBy.trim()
+            : null,
+        sortDir: source.sortDir === 'asc' ? 'asc' : 'desc',
+    };
+
+    const childrenSource = source.childrenByValue && typeof source.childrenByValue === 'object'
+        ? source.childrenByValue
+        : (
+            source.conditionalChildren && typeof source.conditionalChildren === 'object'
+                ? source.conditionalChildren
+                : null
+        );
+    if (childrenSource) {
+        const normalizedChildrenByValue = Object.entries(childrenSource).reduce((acc, [key, rule]) => {
+            if (key === undefined || key === null) return acc;
+            if (String(key) === '*') return acc;
+            acc[String(key)] = normalizeReportNodeValue(rule);
+            return acc;
+        }, {});
+        if (Object.keys(normalizedChildrenByValue).length > 0) {
+            normalized.childrenByValue = normalizedChildrenByValue;
+        } else {
+            delete normalized.childrenByValue;
+        }
+    } else {
+        delete normalized.childrenByValue;
+    }
+
+    const defaultChildSource = source.defaultChild && typeof source.defaultChild === 'object'
+        ? source.defaultChild
+        : (
+            childrenSource && childrenSource['*'] && typeof childrenSource['*'] === 'object'
+                ? childrenSource['*']
+                : null
+        );
+    if (defaultChildSource) {
+        normalized.defaultChild = normalizeReportNodeValue(defaultChildSource);
+    } else {
+        delete normalized.defaultChild;
+    }
+
+    return normalized;
+};
+
+const convertLegacyLevelsToReportNode = (levels, index = 0, overrideRule = null) => {
+    const baseRule = overrideRule && typeof overrideRule === 'object'
+        ? overrideRule
+        : (Array.isArray(levels) ? levels[index] : null);
+    if (!baseRule || typeof baseRule !== 'object') return null;
+
+    const normalizedBase = normalizeReportNodeValue(baseRule);
+    const nextDefaultNode = index + 1 < (Array.isArray(levels) ? levels.length : 0)
+        ? convertLegacyLevelsToReportNode(levels, index + 1)
+        : null;
+    const legacyConditional = baseRule.conditionalChildren && typeof baseRule.conditionalChildren === 'object'
+        ? baseRule.conditionalChildren
+        : null;
+
+    if (legacyConditional) {
+        const childrenByValue = Object.entries(legacyConditional).reduce((acc, [key, childRule]) => {
+            if (key === '*' || !childRule || typeof childRule !== 'object') return acc;
+            const childNode = convertLegacyLevelsToReportNode(levels, index + 1, childRule);
+            if (childNode) acc[String(key)] = childNode;
+            return acc;
+        }, {});
+        if (Object.keys(childrenByValue).length > 0) {
+            normalizedBase.childrenByValue = childrenByValue;
+        }
+        if (legacyConditional['*'] && typeof legacyConditional['*'] === 'object') {
+            normalizedBase.defaultChild = convertLegacyLevelsToReportNode(levels, index + 1, legacyConditional['*']);
+        } else if (nextDefaultNode) {
+            normalizedBase.defaultChild = nextDefaultNode;
+        }
+    } else if (nextDefaultNode) {
+        normalizedBase.defaultChild = nextDefaultNode;
+    }
+
+    return normalizedBase;
+};
+
+const normalizeReportDefValue = (value) => {
+    const source = value && typeof value === 'object' ? value : {};
+    const normalizedLevels = Array.isArray(source.levels)
+        ? source.levels.map((level) => normalizeReportNodeValue(level))
+        : [];
+    const normalizedRootFromProp = source.root && typeof source.root === 'object'
+        ? normalizeReportNodeValue(source.root)
+        : null;
+    const normalizedRoot = normalizedRootFromProp && normalizedRootFromProp.field
+        ? normalizedRootFromProp
+        : (normalizedLevels.length > 0 ? convertLegacyLevelsToReportNode(source.levels) : null);
+    return {
+        ...source,
+        root: normalizedRoot,
+        levels: normalizedLevels,
+    };
+};
+
+const collectReportFields = (reportDef) => {
+    const ordered = [];
+    const seen = new Set();
+    const visit = (node) => {
+        if (!node || typeof node !== 'object') return;
+        if (node.field && !seen.has(node.field)) {
+            seen.add(node.field);
+            ordered.push(node.field);
+        }
+        if (node.defaultChild) visit(node.defaultChild);
+        if (node.childrenByValue && typeof node.childrenByValue === 'object') {
+            Object.values(node.childrenByValue).forEach((childNode) => visit(childNode));
+        }
+    };
+    if (reportDef && typeof reportDef === 'object') visit(reportDef.root);
+    return ordered;
+};
+
+const countReportNodes = (reportDef) => {
+    let count = 0;
+    const visit = (node) => {
+        if (!node || typeof node !== 'object') return;
+        count += 1;
+        if (node.defaultChild) visit(node.defaultChild);
+        if (node.childrenByValue && typeof node.childrenByValue === 'object') {
+            Object.values(node.childrenByValue).forEach((childNode) => visit(childNode));
+        }
+    };
+    if (reportDef && typeof reportDef === 'object') visit(reportDef.root);
+    return count;
+};
+
+const getReportHeaderLabel = (reportDef) => {
+    const root = reportDef && typeof reportDef === 'object' ? reportDef.root : null;
+    if (!root || typeof root !== 'object') return 'Report';
+    if (root.label && root.label.trim()) return root.label.trim();
+    if (root.field && root.field.trim()) return formatDisplayLabel(root.field);
+    return 'Report';
+};
+
+const normalizeSavedReportsValue = (value) => (
+    Array.isArray(value)
+        ? value
+            .filter((report) => report && typeof report === 'object')
+            .map((report, index) => ({
+                ...report,
+                id: typeof report.id === 'string' ? report.id : `report-${index + 1}`,
+                name: typeof report.name === 'string' && report.name.trim()
+                    ? report.name
+                    : 'Saved Report',
+                reportDef: normalizeReportDefValue(report.reportDef),
+            }))
+        : []
+);
+
+const normalizeActiveReportIdValue = (value) => (
+    typeof value === 'string' && value.trim() ? value : null
+);
 
 const clampFloatingChartRect = (rect, containerRect) => {
     const source = rect && typeof rect === 'object' ? rect : {};
@@ -539,6 +714,10 @@ export default function DashTanstackPivot(props) {
         fieldPanelSizes: externalFieldPanelSizes = null,
         defaultValueFormat: externalDefaultValueFormat = '',
         numberGroupSeparator: externalNumberGroupSeparator = DEFAULT_NUMBER_GROUP_SEPARATOR,
+        pivotMode: externalPivotMode,
+        reportDef: externalReportDef,
+        savedReports: externalSavedReports,
+        activeReportId: externalActiveReportId,
         reset,
         sortLock = false,
         defaultTheme = 'flash',
@@ -595,6 +774,26 @@ export default function DashTanstackPivot(props) {
     const normalizedInitialNumberGroupSeparator = useMemo(
         () => normalizeNumberGroupSeparator(externalNumberGroupSeparator),
         [externalNumberGroupSeparator]
+    );
+    const hasExternalPivotMode = normalizePivotModeValue(externalPivotMode) !== null;
+    const hasExternalReportDef = externalReportDef !== undefined;
+    const hasExternalSavedReports = externalSavedReports !== undefined;
+    const hasExternalActiveReportId = externalActiveReportId !== undefined;
+    const normalizedInitialPivotMode = useMemo(
+        () => normalizePivotModeValue(externalPivotMode) || 'pivot',
+        [externalPivotMode]
+    );
+    const normalizedInitialReportDef = useMemo(
+        () => normalizeReportDefValue(externalReportDef),
+        [externalReportDef]
+    );
+    const normalizedInitialSavedReports = useMemo(
+        () => normalizeSavedReportsValue(externalSavedReports),
+        [externalSavedReports]
+    );
+    const normalizedInitialActiveReportId = useMemo(
+        () => normalizeActiveReportIdValue(externalActiveReportId),
+        [externalActiveReportId]
     );
 
     // Register sortOptions with Dash's callback State store on mount.
@@ -677,6 +876,30 @@ export default function DashTanstackPivot(props) {
             return getPinnedSideForRow(persistedRowPinning, GRAND_TOTAL_ROW_ID);
         });
         const [layoutMode, setLayoutMode] = useState('hierarchy'); // hierarchy, tabular
+
+        // --- Report Mode State ---
+        const [pivotMode, setPivotMode] = useState(() => (
+            hasExternalPivotMode
+                ? normalizedInitialPivotMode
+                : (normalizePivotModeValue(loadPersistedState('pivotMode', 'pivot')) || 'pivot')
+        )); // 'pivot' | 'report'
+        const [reportDef, setReportDef] = useState(() => (
+            hasExternalReportDef
+                ? normalizedInitialReportDef
+                : normalizeReportDefValue(loadPersistedState('reportDef', { levels: [] }))
+        ));
+        const [savedReports, setSavedReports] = useState(() => (
+            hasExternalSavedReports
+                ? normalizedInitialSavedReports
+                : normalizeSavedReportsValue(loadPersistedState('savedReports', []))
+        ));
+        const [activeReportId, setActiveReportId] = useState(() => (
+            hasExternalActiveReportId
+                ? normalizedInitialActiveReportId
+                : normalizeActiveReportIdValue(loadPersistedState('activeReportId', null))
+        ));
+        // Freeze pivot config when switching to report mode so user can switch back
+        const [frozenPivotConfig, setFrozenPivotConfig] = useState(() => loadPersistedState('frozenPivotConfig', null));
         const [columnVisibility, setColumnVisibility] = useState(() => loadPersistedState('columnVisibility', initialColumnVisibility));
         const [columnSizing, setColumnSizing] = useState(() => loadPersistedState('columnSizing', {}));
         const [autoSizeIncludesHeaderNext, setAutoSizeIncludesHeaderNext] = useState(false);
@@ -746,10 +969,15 @@ export default function DashTanstackPivot(props) {
         const lastFieldPanelSizesPropRef = useRef(null);
         const lastDefaultValueFormatPropRef = useRef(null);
         const lastNumberGroupSeparatorPropRef = useRef(null);
+        const lastPivotModePropRef = useRef(null);
+        const lastReportDefPropRef = useRef(null);
+        const lastSavedReportsPropRef = useRef(null);
+        const lastActiveReportIdPropRef = useRef(null);
         const didPublishDecimalPlacesRef = useRef(false);
         const didPublishFieldPanelSizesRef = useRef(false);
         const didPublishDefaultValueFormatRef = useRef(false);
         const didPublishNumberGroupSeparatorRef = useRef(false);
+        const didPublishReportStateRef = useRef(false);
         const tableRef = useRef(null);
         const displayRowsRef = useRef([]);
         const displayRowIndexRef = useRef(new Map());
@@ -845,6 +1073,10 @@ export default function DashTanstackPivot(props) {
     // Reset Effect
     useEffect(() => {
         if (reset) {
+            const resetPivotMode = hasExternalPivotMode ? normalizedInitialPivotMode : 'pivot';
+            const resetReportDef = hasExternalReportDef ? normalizedInitialReportDef : { levels: [] };
+            const resetSavedReports = hasExternalSavedReports ? normalizedInitialSavedReports : [];
+            const resetActiveReportId = hasExternalActiveReportId ? normalizedInitialActiveReportId : null;
             setRowFields(initialRowFields);
             setColFields(initialColFields);
             // Preserve user-added formula columns through resets (they survive dataframe switches)
@@ -897,6 +1129,11 @@ export default function DashTanstackPivot(props) {
             setDecimalPlaces(normalizedInitialDecimalPlaces);
             setDefaultValueFormat(normalizedInitialDefaultValueFormat);
             setNumberGroupSeparator(normalizedInitialNumberGroupSeparator);
+            setPivotMode(resetPivotMode);
+            setReportDef(resetReportDef);
+            setSavedReports(resetSavedReports);
+            setActiveReportId(resetActiveReportId);
+            setFrozenPivotConfig(null);
             setColumnFormatOverrides({});
             setColumnGroupSeparatorOverrides({});
 
@@ -909,6 +1146,10 @@ export default function DashTanstackPivot(props) {
                     fieldPanelSizes: normalizedInitialFieldPanelSizes,
                     defaultValueFormat: normalizedInitialDefaultValueFormat,
                     numberGroupSeparator: normalizedInitialNumberGroupSeparator,
+                    pivotMode: resetPivotMode,
+                    reportDef: resetReportDef,
+                    savedReports: resetSavedReports,
+                    activeReportId: resetActiveReportId,
                     filters: {},
                     sorting: [],
                     expanded: {},
@@ -921,7 +1162,7 @@ export default function DashTanstackPivot(props) {
                 });
             }
         }
-    }, [reset, initialRowFields, initialColFields, initialValConfigs, initialColumnPinning, initialRowPinning, initialChartDefinition, initialChartDefinitions, normalizedInitialFieldPanelSizes, normalizedInitialDecimalPlaces, normalizedInitialDefaultValueFormat, normalizedInitialNumberGroupSeparator]);
+    }, [reset, initialRowFields, initialColFields, initialValConfigs, initialColumnPinning, initialRowPinning, initialChartDefinition, initialChartDefinitions, normalizedInitialFieldPanelSizes, normalizedInitialDecimalPlaces, normalizedInitialDefaultValueFormat, normalizedInitialNumberGroupSeparator, hasExternalPivotMode, normalizedInitialPivotMode, hasExternalReportDef, normalizedInitialReportDef, hasExternalSavedReports, normalizedInitialSavedReports, hasExternalActiveReportId, normalizedInitialActiveReportId]);
 
         // Save Persistence
         useEffect(() => {
@@ -944,6 +1185,11 @@ export default function DashTanstackPivot(props) {
                 lockedModel: chartPanelLockedModel,
                 lockedRequest: chartPanelLockedRequest,
             });
+            savePersistedState('pivotMode', pivotMode);
+            savePersistedState('reportDef', reportDef);
+            savePersistedState('savedReports', savedReports);
+            savePersistedState('activeReportId', activeReportId);
+            savePersistedState('frozenPivotConfig', frozenPivotConfig);
         }, [
             id,
             columnPinning,
@@ -962,6 +1208,11 @@ export default function DashTanstackPivot(props) {
             chartPanelLockedRequest,
             persistence,
             persistence_type,
+            pivotMode,
+            reportDef,
+            savedReports,
+            activeReportId,
+            frozenPivotConfig,
         ]);
 
         useEffect(() => {
@@ -976,6 +1227,7 @@ export default function DashTanstackPivot(props) {
         }, [columnPinning.right, showNotification]);
 
     const [cinemaMode, setCinemaMode] = useState(initialCinemaMode);
+    const [cinemaModeHovering, setCinemaModeHovering] = useState(false);
     const [showRowTotals, setShowRowTotals] = useState(initialShowRowTotals);
     const [showColTotals, setShowColTotals] = useState(initialShowColTotals);
     const effectiveGrandTotalPinState = useMemo(
@@ -1032,6 +1284,98 @@ export default function DashTanstackPivot(props) {
     const [cellFormatRules, setCellFormatRules] = useState({});
     const [hoveredRowPath, setHoveredRowPath] = useState(null);
     const [zoomLevel, setZoomLevel] = useState(100);
+
+    // --- Report Mode switching ---
+    const handleSetPivotMode = useCallback((nextMode) => {
+        if (nextMode === pivotMode) return;
+        if (nextMode === 'report') {
+            // Freeze current pivot config so user can switch back
+            setFrozenPivotConfig({ rowFields, colFields, valConfigs: valConfigs.map(v => ({...v})) });
+            // Derive row fields from report levels
+            const levelFields = collectReportFields(reportDef);
+            if (levelFields.length > 0) {
+                setRowFields(levelFields);
+                setColFields([]);
+            }
+            setExpanded({});
+        } else {
+            // Restore frozen pivot config
+            if (frozenPivotConfig) {
+                setRowFields(frozenPivotConfig.rowFields || []);
+                setColFields(frozenPivotConfig.colFields || []);
+                setValConfigs(frozenPivotConfig.valConfigs || []);
+                setFrozenPivotConfig(null);
+            }
+            setExpanded({});
+        }
+        setPivotMode(nextMode);
+    }, [pivotMode, rowFields, colFields, valConfigs, reportDef, frozenPivotConfig]);
+
+    useEffect(() => {
+        const normalizedExternalMode = normalizePivotModeValue(externalPivotMode);
+        if (!normalizedExternalMode) return;
+        if (normalizedExternalMode === lastPivotModePropRef.current) return;
+        lastPivotModePropRef.current = normalizedExternalMode;
+        if (pivotMode !== normalizedExternalMode) {
+            handleSetPivotMode(normalizedExternalMode);
+        }
+    }, [externalPivotMode, handleSetPivotMode, pivotMode]);
+
+    useEffect(() => {
+        if (externalReportDef === undefined) return;
+        const serializedExternal = JSON.stringify(normalizedInitialReportDef);
+        if (serializedExternal === lastReportDefPropRef.current) return;
+        lastReportDefPropRef.current = serializedExternal;
+        setReportDef((previousReportDef) => (
+            JSON.stringify(previousReportDef || { levels: [] }) === serializedExternal
+                ? previousReportDef
+                : normalizedInitialReportDef
+        ));
+    }, [externalReportDef, normalizedInitialReportDef]);
+
+    useEffect(() => {
+        if (externalSavedReports === undefined) return;
+        const serializedExternal = JSON.stringify(normalizedInitialSavedReports);
+        if (serializedExternal === lastSavedReportsPropRef.current) return;
+        lastSavedReportsPropRef.current = serializedExternal;
+        setSavedReports((previousSavedReports) => (
+            JSON.stringify(previousSavedReports || []) === serializedExternal
+                ? previousSavedReports
+                : normalizedInitialSavedReports
+        ));
+    }, [externalSavedReports, normalizedInitialSavedReports]);
+
+    useEffect(() => {
+        if (externalActiveReportId === undefined) return;
+        if (normalizedInitialActiveReportId === lastActiveReportIdPropRef.current) return;
+        lastActiveReportIdPropRef.current = normalizedInitialActiveReportId;
+        setActiveReportId((previousActiveReportId) => (
+            previousActiveReportId === normalizedInitialActiveReportId
+                ? previousActiveReportId
+                : normalizedInitialActiveReportId
+        ));
+    }, [externalActiveReportId, normalizedInitialActiveReportId]);
+
+    // When reportDef levels change in report mode, update rowFields to match
+    useEffect(() => {
+        if (pivotMode !== 'report') return;
+        const levelFields = collectReportFields(reportDef);
+        if (levelFields.length > 0 && JSON.stringify(levelFields) !== JSON.stringify(rowFields)) {
+            setRowFields(levelFields);
+            setColFields([]);
+            setExpanded({});
+        }
+    }, [reportDef]); // eslint-disable-line react-hooks/exhaustive-deps
+
+    // Push report-mode state to Dash props so server and persistence flows stay in sync
+    useEffect(() => {
+        if (!setPropsRef.current) return;
+        if (!didPublishReportStateRef.current) {
+            didPublishReportStateRef.current = true;
+            return;
+        }
+        setPropsRef.current({ pivotMode, reportDef, savedReports, activeReportId });
+    }, [pivotMode, reportDef, savedReports, activeReportId]);
 
     // selectedCellKeys and selectedCellColIds are now derived inside PivotAppBar
     // to avoid stale prop issues between parent and child renders.
@@ -1092,13 +1436,25 @@ export default function DashTanstackPivot(props) {
             ? (restoredChartDefinitions.find((definition) => definition.id === restoredActiveChartDefinitionId) || restoredChartDefinitions[0] || null)
             : null;
 
-        const sanitizedFilters = (() => {
-            if (!restored.filters || typeof restored.filters !== 'object') return null;
-            const next = { ...restored.filters };
-            delete next.__request_unique__;
-            return next;
-        })();
+        const sanitizedFilters = (restored.filters && typeof restored.filters === 'object')
+            ? { ...restored.filters }
+            : null;
 
+        if (restored.pivotMode === 'pivot' || restored.pivotMode === 'report') setPivotMode(restored.pivotMode);
+        if (Object.prototype.hasOwnProperty.call(restored, 'reportDef')) {
+            setReportDef(normalizeReportDefValue(restored.reportDef));
+        }
+        if (Object.prototype.hasOwnProperty.call(restored, 'savedReports')) {
+            setSavedReports(normalizeSavedReportsValue(restored.savedReports));
+        }
+        if (Object.prototype.hasOwnProperty.call(restored, 'activeReportId')) {
+            setActiveReportId(normalizeActiveReportIdValue(restored.activeReportId));
+        }
+        if (Object.prototype.hasOwnProperty.call(restored, 'frozenPivotConfig')) {
+            setFrozenPivotConfig(restored.frozenPivotConfig && typeof restored.frozenPivotConfig === 'object'
+                ? restored.frozenPivotConfig
+                : null);
+        }
         if (Array.isArray(restored.rowFields)) setRowFields(restored.rowFields);
         if (Array.isArray(restored.colFields)) setColFields(restored.colFields);
         if (Array.isArray(restored.valConfigs)) setValConfigs(restored.valConfigs);
@@ -1671,10 +2027,14 @@ export default function DashTanstackPivot(props) {
             const resizeState = chartCanvasResizeRef.current;
             if (!resizeState) return;
             const totalUnits = resizeState.totalUnits > 0 ? resizeState.totalUnits : 1;
-            const minSizeUnits = (MIN_CHART_CANVAS_PANE_WIDTH / Math.max(1, resizeState.containerWidth)) * totalUnits;
+            const pxToUnits = totalUnits / Math.max(1, resizeState.containerWidth);
+            const leftMinPx = resizeState.leftKey === 'table' ? MIN_TABLE_PANEL_WIDTH : MIN_CHART_CANVAS_PANE_WIDTH;
+            const rightMinPx = resizeState.rightKey === 'table' ? MIN_TABLE_PANEL_WIDTH : MIN_CHART_CANVAS_PANE_WIDTH;
+            const leftMinUnits = leftMinPx * pxToUnits;
+            const rightMinUnits = rightMinPx * pxToUnits;
             const deltaUnits = ((event.clientX - resizeState.startX) / Math.max(1, resizeState.containerWidth)) * totalUnits;
-            const nextLeftSize = Math.max(minSizeUnits, resizeState.leftSize + deltaUnits);
-            const nextRightSize = Math.max(minSizeUnits, resizeState.rightSize - deltaUnits);
+            const nextLeftSize = Math.max(leftMinUnits, resizeState.leftSize + deltaUnits);
+            const nextRightSize = Math.max(rightMinUnits, resizeState.rightSize - deltaUnits);
             const consumed = nextLeftSize + nextRightSize;
             const targetConsumed = resizeState.leftSize + resizeState.rightSize;
             const correction = targetConsumed > 0 ? targetConsumed / Math.max(consumed, 0.0001) : 1;
@@ -2645,11 +3005,7 @@ export default function DashTanstackPivot(props) {
     }, [setProps]);
 
     const buildChartStateOverrideSnapshot = useCallback(() => {
-        const normalizedFilters = (() => {
-            const next = { ...(filters || {}) };
-            delete next.__request_unique__;
-            return next;
-        })();
+        const normalizedFilters = { ...(filters || {}) };
         return cloneSerializable({
             rowFields,
             colFields,
@@ -2829,16 +3185,17 @@ export default function DashTanstackPivot(props) {
     }, []);
 
     const buildCurrentViewState = useCallback(() => {
-        const normalizedFilters = (() => {
-            const next = { ...(filters || {}) };
-            delete next.__request_unique__;
-            return next;
-        })();
+        const normalizedFilters = { ...(filters || {}) };
         return {
             version: 1,
             table: tableName || null,
             viewport: latestViewportRef.current || null,
             state: {
+                pivotMode,
+                reportDef,
+                savedReports,
+                activeReportId,
+                frozenPivotConfig,
                 rowFields,
                 colFields,
                 valConfigs,
@@ -2924,6 +3281,11 @@ export default function DashTanstackPivot(props) {
         rowFields,
         colFields,
         valConfigs,
+        pivotMode,
+        reportDef,
+        savedReports,
+        activeReportId,
+        frozenPivotConfig,
         filters,
         sorting,
         expanded,
@@ -3937,12 +4299,12 @@ export default function DashTanstackPivot(props) {
         actions.push('separator');
         actions.push({ label: 'Drill Through', icon: <Icons.Search/>, onClick: () => {
              if (row && row.original && row.original._path && row.original._path !== '__grand_total__' && !row.original._isTotal) {
-                 fetchDrillData(row.original._path, 0, null, 'asc', '');
+                 fetchDrillData(row.original._path, 0, null, 'asc', '', row.original._pathFields);
              }
         }});
 
         actions.push('separator');
-        if (row && serverSide && row.getCanExpand() && row.original && row.original._path && rowFields.length > 1) {
+        if (row && serverSide && row.getCanExpand() && row.original && row.original._path && row.original._has_children) {
             actions.push({
                 label: 'Expand All Children',
                 icon: <Icons.ChevronDown/>,
@@ -4094,7 +4456,7 @@ export default function DashTanstackPivot(props) {
         setFilterAnchorEl(e.currentTarget);
         if (setPropsRef.current) {
             setPropsRef.current({
-                filters: { ...filters, '__request_unique__': columnId }
+                filterRequest: { columnId, nonce: Date.now() }
             });
         }
     };
@@ -4102,9 +4464,9 @@ export default function DashTanstackPivot(props) {
     const requestFilterOptions = useCallback((columnId) => {
         if (!columnId || !setPropsRef.current) return;
         setPropsRef.current({
-            filters: { ...filters, '__request_unique__': columnId }
+            filterRequest: { columnId, nonce: Date.now() }
         });
-    }, [filters]);
+    }, []);
 
     useEffect(() => {
         if (!serverSide || !activeFilterCol) {
@@ -4314,6 +4676,8 @@ export default function DashTanstackPivot(props) {
         columnFormatOverrides,
         columnGroupSeparatorOverrides,
         cellFormatRules,
+        pivotMode,
+        reportDef,
     });
 
     // Auto-size new columns to fit their header text on spawn
@@ -6348,23 +6712,30 @@ export default function DashTanstackPivot(props) {
         };
     };
 
-    const fetchDrillData = useCallback(async (rowPath, page = 0, sortCol = null, sortDir = 'asc', filterText = '') => {
+    const fetchDrillData = useCallback(async (rowPath, page = 0, sortCol = null, sortDir = 'asc', filterText = '', pathFields = null) => {
+        const effectivePathFields = Array.isArray(pathFields) && pathFields.length > 0
+            ? pathFields
+            : rowFields;
         const params = new URLSearchParams({
             table: tableName,
             row_path: rowPath,
-            row_fields: rowFields.join(','),
+            row_fields: effectivePathFields.join(','),
             page: String(page),
             page_size: '100',
         });
         if (sortCol) { params.set('sort_col', sortCol); params.set('sort_dir', sortDir); }
         if (filterText) params.set('filter', filterText);
 
-        setDrillModal(prev => ({ ...(prev || { path: rowPath, rows: [], page: 0, totalRows: 0, sortCol, sortDir, filterText }), loading: true }));
+        setDrillModal(prev => ({
+            ...(prev || { path: rowPath, pathFields: effectivePathFields, rows: [], page: 0, totalRows: 0, sortCol, sortDir, filterText }),
+            loading: true,
+            pathFields: effectivePathFields,
+        }));
         try {
             const resp = await fetch(`${drillEndpoint}?${params.toString()}`);
             if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
             const json = await resp.json();
-            setDrillModal({ loading: false, path: rowPath, rows: json.rows || [], page: json.page || 0, totalRows: json.total_rows || 0, sortCol, sortDir, filterText });
+            setDrillModal({ loading: false, path: rowPath, pathFields: effectivePathFields, rows: json.rows || [], page: json.page || 0, totalRows: json.total_rows || 0, sortCol, sortDir, filterText });
         } catch (err) {
             console.error('Drill-through fetch failed:', err);
             setDrillModal(null);
@@ -6375,7 +6746,7 @@ export default function DashTanstackPivot(props) {
         if (!row || !row.original) return;
         const rowPath = row.original._path;
         if (!rowPath || rowPath === '__grand_total__') return;  // skip total rows
-        fetchDrillData(rowPath, 0, null, 'asc', '');
+        fetchDrillData(rowPath, 0, null, 'asc', '', row.original._pathFields);
     }, [fetchDrillData]);
 
     const exportPivot = useCallback(() => {
@@ -6497,12 +6868,18 @@ export default function DashTanstackPivot(props) {
     const floatingChartCanvasPanes = chartCanvasPanes.filter((pane) => pane.floating);
 
     return (
-        <div id={id} style={{ ...styles.root, ...loadingCssVars, position: 'relative', ...style }}>
+        <div
+            id={id}
+            style={{ ...styles.root, ...loadingCssVars, position: 'relative', ...style }}
+            onMouseEnter={() => setCinemaModeHovering(true)}
+            onMouseLeave={() => setCinemaModeHovering(false)}
+        >
             <style>{loadingAnimationStyles}</style>
             <div style={srOnly} role="status" aria-live="polite">{announcement}</div>
             {/* Cinema mode exit button — visible only when cinema mode is active */}
             {cinemaMode && (
                 <button
+                    data-cinema-exit-overlay
                     onClick={() => setCinemaMode(false)}
                     title="Exit Cinema Mode"
                     style={{
@@ -6512,11 +6889,11 @@ export default function DashTanstackPivot(props) {
                         cursor: 'pointer', fontSize: 13, fontWeight: 600,
                         display: 'flex', alignItems: 'center', gap: 6,
                         backdropFilter: 'blur(4px)',
-                        opacity: 0.7,
-                        transition: 'opacity 0.15s',
+                        opacity: cinemaModeHovering ? 0.92 : 0,
+                        pointerEvents: cinemaModeHovering ? 'auto' : 'none',
+                        transform: cinemaModeHovering ? 'translateY(0)' : 'translateY(-6px)',
+                        transition: 'opacity 0.18s ease, transform 0.18s ease',
                     }}
-                    onMouseEnter={e => e.currentTarget.style.opacity = 1}
-                    onMouseLeave={e => e.currentTarget.style.opacity = 0.7}
                 >
                     ✕ Exit Cinema
                 </button>
@@ -6564,6 +6941,14 @@ export default function DashTanstackPivot(props) {
                 canCreateSelectionChart={Object.keys(selectedCells || {}).length > 0}
                 onCreateSelectionChart={() => openSelectionChart()}
                 onAddChartPane={handleAddChartCanvasPane}
+                pivotMode={pivotMode}
+                setPivotMode={handleSetPivotMode}
+                reportDef={reportDef}
+                setReportDef={setReportDef}
+                savedReports={savedReports}
+                setSavedReports={setSavedReports}
+                activeReportId={activeReportId}
+                setActiveReportId={setActiveReportId}
             />}
         <PivotErrorBoundary>
             <div style={{display:'flex', flex:1, overflow:'hidden', fontFamily: fontFamily, fontSize: fontSize, zoom: zoomLevel / 100}}>
@@ -6601,10 +6986,18 @@ export default function DashTanstackPivot(props) {
                         setSidebarWidth={setSidebarWidth}
                         fieldPanelSizes={fieldPanelSizes}
                         setFieldPanelSizes={setFieldPanelSizes}
+                        pivotMode={pivotMode}
+                        reportDef={reportDef}
+                        setReportDef={setReportDef}
+                        savedReports={savedReports}
+                        setSavedReports={setSavedReports}
+                        activeReportId={activeReportId}
+                        setActiveReportId={setActiveReportId}
                     />
                 )}
                 <div ref={chartCanvasLayoutRef} style={{ display:'flex', flex:1, minWidth:0, minHeight:0, overflow:'hidden', position:'relative' }}>
                     <div
+                        data-docked-table-canvas
                         ref={chartLayoutRef}
                         style={{
                             display:'flex',
@@ -6663,6 +7056,8 @@ export default function DashTanstackPivot(props) {
                                 rowCount={statusRowCount}
                                 isRequestPending={isRequestPending}
                                 numberGroupSeparator={numberGroupSeparator}
+                                pivotMode={pivotMode}
+                                reportDef={reportDef}
                             />
                         </div>
                     </div>
@@ -6695,6 +7090,7 @@ export default function DashTanstackPivot(props) {
                                 }} />
                             </div>
                             <div
+                                data-docked-chart-pane={pane.id}
                                 style={{
                                     display:'flex',
                                     flexGrow: pane.size,
@@ -6830,15 +7226,15 @@ export default function DashTanstackPivot(props) {
                 onClose={() => setDrillModal(null)}
                 onPageChange={(newPage) => {
                     if (!drillModal) return;
-                    fetchDrillData(drillModal.path, newPage, drillModal.sortCol, drillModal.sortDir, drillModal.filterText);
+                    fetchDrillData(drillModal.path, newPage, drillModal.sortCol, drillModal.sortDir, drillModal.filterText, drillModal.pathFields);
                 }}
                 onSort={(col, dir) => {
                     if (!drillModal) return;
-                    fetchDrillData(drillModal.path, 0, col, dir, drillModal.filterText);
+                    fetchDrillData(drillModal.path, 0, col, dir, drillModal.filterText, drillModal.pathFields);
                 }}
                 onFilter={(text) => {
                     if (!drillModal) return;
-                    fetchDrillData(drillModal.path, 0, drillModal.sortCol, drillModal.sortDir, text);
+                    fetchDrillData(drillModal.path, 0, drillModal.sortCol, drillModal.sortDir, text, drillModal.pathFields);
                 }}
             />
             <PivotChartModal
@@ -6898,6 +7294,10 @@ DashTanstackPivot.propTypes = {
     showColTotals: PropTypes.bool,
     grandTotalPosition: PropTypes.oneOf(['top', 'bottom']),
     filterOptions: PropTypes.object,
+    filterRequest: PropTypes.shape({
+        columnId: PropTypes.string,
+        nonce: PropTypes.number,
+    }),
     chartData: PropTypes.object,
     chartRequest: PropTypes.object,
     chartEvent: PropTypes.object,
@@ -6962,5 +7362,9 @@ DashTanstackPivot.propTypes = {
     availableFieldList: PropTypes.arrayOf(PropTypes.string),
     dataOffset: PropTypes.number,
     dataVersion: PropTypes.number,
+    pivotMode: PropTypes.oneOf(['pivot', 'report']),
+    reportDef: PropTypes.object,
+    savedReports: PropTypes.arrayOf(PropTypes.object),
+    activeReportId: PropTypes.string,
 };
 

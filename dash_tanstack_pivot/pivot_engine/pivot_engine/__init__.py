@@ -18,6 +18,7 @@ from .runtime import (
     SessionRequestGate,
     register_dash_callbacks_for_instances,
     register_dash_drill_modal_callback,
+    register_dash_filter_request_callback,
     register_dash_pivot_transport_callback,
 )
 
@@ -37,5 +38,6 @@ __all__ = [
     "DashPivotInstanceConfig",
     "register_dash_pivot_transport_callback",
     "register_dash_drill_modal_callback",
+    "register_dash_filter_request_callback",
     "register_dash_callbacks_for_instances",
 ]

@@ -13,7 +13,7 @@ from __future__ import annotations
 import os
 from typing import Any, Callable, Optional
 
-from .runtime import PivotRuntimeService, SessionRequestGate, register_dash_pivot_transport_callback
+from .runtime import PivotRuntimeService, SessionRequestGate, register_dash_filter_request_callback, register_dash_pivot_transport_callback
 
 
 def _find_sort_options_in_layout(layout: Any, target_id: Any) -> Optional[dict]:
@@ -159,4 +159,11 @@ def register_pivot_app(
         drill_store_id=drill_store_id,
         debug=debug,
         sort_options_default=_layout_sort_options,
+    )
+
+    register_dash_filter_request_callback(
+        app,
+        _get_runtime_service,
+        pivot_id=pivot_id,
+        debug=debug,
     )

@@ -52,7 +52,7 @@ def test_runtime_service_works_without_dash():
         show_col_totals=True,
     )
 
-    response = service.process(state, context, current_filter_options={})
+    response = service.process(state, context)
 
     assert response.status == "data"
     assert isinstance(response.data, list)
@@ -79,7 +79,7 @@ def test_initial_structural_load_includes_col_schema_sentinel():
         show_col_totals=True,
     )
 
-    response = service.process(state, context, current_filter_options={})
+    response = service.process(state, context)
 
     assert response.status == "data"
     assert isinstance(response.columns, list)
@@ -120,8 +120,8 @@ def test_runtime_service_isolates_instances_by_client_instance():
         val_configs=[{"field": "sales", "agg": "sum"}],
     )
 
-    response_a = service.process(state, context_a, current_filter_options={})
-    response_b = service.process(state, context_b, current_filter_options={})
+    response_a = service.process(state, context_a)
+    response_b = service.process(state, context_b)
 
     assert response_a.status == "data"
     assert response_b.status == "data"
@@ -168,7 +168,7 @@ def test_collapsed_hierarchy_total_rows_counts_only_visible_root_level():
         show_col_totals=True,
     )
 
-    response = service.process(state, context, current_filter_options={})
+    response = service.process(state, context)
 
     # Collapsed tree should contain only root-level groups + grand total.
     assert response.status == "data"
@@ -221,7 +221,7 @@ def test_curve_pillar_tenor_sort_uses_hidden_sort_key_and_keeps_display_field():
         show_col_totals=False,
     )
 
-    response = service.process(state, context, current_filter_options={})
+    response = service.process(state, context)
 
     assert response.status == "data"
     assert isinstance(response.data, list)
@@ -277,7 +277,7 @@ def test_chart_request_returns_chart_data_payload():
         },
     )
 
-    response = service.process(state, context, current_filter_options={})
+    response = service.process(state, context)
 
     assert response.status == "chart_data"
     assert isinstance(response.chart_data, dict)
@@ -285,3 +285,230 @@ def test_chart_request_returns_chart_data_payload():
     assert response.chart_data.get("stateEpoch") == 2
     assert response.chart_data.get("paneId") == "chart-pane-1"
     assert response.chart_data.get("requestSignature") == "sig-1"
+
+
+def test_report_mode_sorts_and_trims_visible_siblings_by_metric():
+    adapter = create_tanstack_adapter(backend_uri=":memory:")
+    table = pa.Table.from_pydict(
+        {
+            "region": ["North", "North", "South", "South", "East", "East"],
+            "country": ["USA", "Canada", "Brazil", "Chile", "Japan", "China"],
+            "sales": [100, 80, 120, 70, 90, 60],
+        }
+    )
+    adapter.controller.load_data_from_arrow("sales_data", table)
+    service = PivotRuntimeService(adapter_getter=lambda: adapter, session_gate=SessionRequestGate())
+
+    context = PivotRequestContext.from_frontend(
+        table="sales_data",
+        trigger_prop="pivot-grid.viewport",
+        viewport={
+            "start": 0,
+            "end": 20,
+            "window_seq": 1,
+            "state_epoch": 1,
+            "abort_generation": 1,
+            "session_id": "sess-report-sort",
+            "client_instance": "grid-report-sort",
+            "intent": "viewport",
+            "include_grand_total": False,
+            "needs_col_schema": True,
+        },
+    )
+    state = PivotViewState(
+        row_fields=["region", "country"],
+        val_configs=[{"field": "sales", "agg": "sum"}],
+        expanded=True,
+        show_row_totals=False,
+        show_col_totals=False,
+        pivot_mode="report",
+        report_def={
+            "levels": [
+                {
+                    "field": "region",
+                    "label": "Region",
+                    "topN": 2,
+                    "sortBy": "sales_sum",
+                    "sortDir": "desc",
+                },
+                {
+                    "field": "country",
+                    "label": "Country",
+                    "topN": 1,
+                    "sortBy": "sales_sum",
+                    "sortDir": "asc",
+                },
+            ]
+        },
+    )
+
+    response = service.process(state, context)
+
+    assert response.status == "data"
+    visible_rows = [
+        (row.get("depth"), row.get("_id"))
+        for row in response.data
+        if isinstance(row, dict) and not row.get("_isTotal")
+    ]
+    assert visible_rows == [
+        (0, "South"),
+        (1, "Chile"),
+        (0, "North"),
+        (1, "Canada"),
+    ]
+    assert response.total_rows == 4
+    assert response.data[0].get("_levelLabel") == "Region"
+    assert response.data[1].get("_levelLabel") == "Country"
+    assert response.data[1].get("_groupTotalCount") == 2
+    assert "__reportSortBy" not in response.data[0]
+    assert "__reportSortDir" not in response.data[0]
+
+
+def test_report_mode_conditional_children_override_child_rules():
+    adapter = _make_adapter()
+    service = PivotRuntimeService(adapter_getter=lambda: adapter, session_gate=SessionRequestGate())
+
+    context = PivotRequestContext.from_frontend(
+        table="sales_data",
+        trigger_prop="pivot-grid.viewport",
+        viewport={
+            "start": 0,
+            "end": 20,
+            "window_seq": 1,
+            "state_epoch": 1,
+            "abort_generation": 1,
+            "session_id": "sess-report-conditional",
+            "client_instance": "grid-report-conditional",
+            "intent": "viewport",
+            "include_grand_total": False,
+            "needs_col_schema": True,
+        },
+    )
+    state = PivotViewState(
+        row_fields=["region", "country"],
+        val_configs=[{"field": "sales", "agg": "sum"}],
+        expanded=True,
+        show_row_totals=False,
+        show_col_totals=False,
+        pivot_mode="report",
+        report_def={
+            "levels": [
+                {
+                    "field": "region",
+                    "label": "Region",
+                    "conditionalChildren": {
+                        "South": {
+                            "field": "country",
+                            "label": "South Country",
+                            "topN": 1,
+                            "sortBy": "sales_sum",
+                            "sortDir": "desc",
+                        },
+                        "*": {
+                            "field": "country",
+                            "label": "Country",
+                            "topN": 1,
+                            "sortBy": "sales_sum",
+                            "sortDir": "asc",
+                        },
+                    },
+                }
+            ]
+        },
+    )
+
+    response = service.process(state, context)
+
+    assert response.status == "data"
+    visible_rows = [
+        (row.get("depth"), row.get("_id"), row.get("_levelLabel"))
+        for row in response.data
+        if isinstance(row, dict) and not row.get("_isTotal")
+    ]
+    assert visible_rows == [
+        (0, "North", "Region"),
+        (1, "Canada", "Country"),
+        (0, "South", "Region"),
+        (1, "Brazil", "South Country"),
+    ]
+    assert response.total_rows == 4
+
+
+def test_branching_report_root_supports_per_value_child_fields():
+    adapter = create_tanstack_adapter(backend_uri=":memory:")
+    table = pa.Table.from_pydict(
+        {
+            "region": ["North", "North", "East", "East", "East"],
+            "country": ["USA", "Canada", "France", "Germany", "France"],
+            "product": ["A", "B", "C", "D", "C"],
+            "sales": [100, 80, 90, 60, 30],
+        }
+    )
+    adapter.controller.load_data_from_arrow("sales_data", table)
+    service = PivotRuntimeService(adapter_getter=lambda: adapter, session_gate=SessionRequestGate())
+
+    context = PivotRequestContext.from_frontend(
+        table="sales_data",
+        trigger_prop="pivot-grid.viewport",
+        viewport={
+            "start": 0,
+            "end": 20,
+            "window_seq": 1,
+            "state_epoch": 1,
+            "abort_generation": 1,
+            "session_id": "sess-branch-tree",
+            "client_instance": "grid-branch-tree",
+            "intent": "viewport",
+            "include_grand_total": False,
+            "needs_col_schema": True,
+        },
+    )
+    state = PivotViewState(
+        row_fields=["region", "product", "country"],
+        val_configs=[{"field": "sales", "agg": "sum"}],
+        expanded={"North": True, "East": True},
+        show_row_totals=False,
+        show_col_totals=False,
+        pivot_mode="report",
+        report_def={
+            "root": {
+                "field": "region",
+                "label": "Region",
+                "sortBy": "sales_sum",
+                "sortDir": "desc",
+                "childrenByValue": {
+                    "North": {
+                        "field": "product",
+                        "label": "North Product",
+                        "sortBy": "sales_sum",
+                        "sortDir": "desc",
+                    },
+                    "East": {
+                        "field": "country",
+                        "label": "East Country",
+                        "sortBy": "sales_sum",
+                        "sortDir": "desc",
+                    },
+                },
+            }
+        },
+    )
+
+    response = service.process(state, context)
+
+    assert response.status == "data"
+    assert [
+        (row.get("depth"), row.get("_id"), row.get("_levelField"))
+        for row in response.data
+        if isinstance(row, dict) and not row.get("_isTotal")
+    ] == [
+        (0, "East", "region"),
+        (1, "France", "country"),
+        (1, "Germany", "country"),
+        (0, "North", "region"),
+        (1, "A", "product"),
+        (1, "B", "product"),
+    ]
+    assert response.data[1].get("_pathFields") == ["region", "country"]
+    assert response.data[4].get("_pathFields") == ["region", "product"]
+    assert response.total_rows == 6

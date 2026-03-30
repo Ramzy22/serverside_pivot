@@ -68,6 +68,8 @@ export function PivotTableBody({
     rowCount,
     isRequestPending,
     numberGroupSeparator,
+    pivotMode,
+    reportDef,
 }) {
     const pinnedRowIdSet = React.useMemo(() => {
         const ids = new Set();

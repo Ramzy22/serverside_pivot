@@ -61,8 +61,11 @@ export function useColumnDefs({
     columnFormatOverrides,
     columnGroupSeparatorOverrides,
     cellFormatRules,
+    pivotMode,
+    reportDef,
 }) {
     return useMemo(() => {
+        const effectiveLayoutMode = pivotMode === 'report' ? 'hierarchy' : layoutMode;
         const getConfigDisplayFormat = (config) => {
             if (!config) return null;
             if (config.format) return config.format;
@@ -92,6 +95,13 @@ export function useColumnDefs({
                 ? (valConfigs.find(config => matchesValueConfigColumnId(columnId, config)) || null)
                 : null
         );
+        const getReportHeaderLabel = () => {
+            const root = reportDef && typeof reportDef === 'object' ? reportDef.root : null;
+            if (!root || typeof root !== 'object') return 'Report';
+            if (root.label) return root.label;
+            if (root.field) return formatDisplayLabel(root.field);
+            return 'Report';
+        };
 
         // Helper: render a numeric cell value with decimal precision and negative-red coloring
         const renderNumericCell = (value, fmt, rowPath, colId) => {
@@ -221,12 +231,14 @@ export function useColumnDefs({
             });
         }
 
-        if (layoutMode === 'hierarchy') {
+        if (effectiveLayoutMode === 'hierarchy') {
             if (rowFields.length > 0) {
                 hierarchyCols.push({
                     id: 'hierarchy',
                     accessorFn: row => row._id,
-                    header: rowFields.map(formatDisplayLabel).join(' > '),
+                    header: pivotMode === 'report'
+                        ? getReportHeaderLabel()
+                        : rowFields.map(formatDisplayLabel).join(' > '),
                     size: defaultColumnWidths.hierarchy,
                     sortingFn, // Apply sort
                     cell: ({ row }) => {
@@ -260,7 +272,38 @@ export function useColumnDefs({
                                         )}
                                     </button>
                                 ) : <span style={{width:'18px'}}/>}
-                                <span style={{ fontWeight: (row.original && row.original._isTotal) ? 700 : 400 }}>{row.original ? row.original._id : ''}</span>
+                                <span style={{ fontWeight: (row.original && row.original._isTotal) ? 700 : 400 }}>
+                                    {row.original ? row.original._id : ''}
+                                </span>
+                                {/* Report mode: show level label badge */}
+                                {pivotMode === 'report' && row.original && row.original._levelLabel && (
+                                    <span style={{
+                                        fontSize: '9px',
+                                        fontWeight: 600,
+                                        color: theme.primary || '#4F46E5',
+                                        background: `${theme.primary || '#4F46E5'}14`,
+                                        padding: '1px 6px',
+                                        borderRadius: '4px',
+                                        marginLeft: '8px',
+                                        whiteSpace: 'nowrap',
+                                        flexShrink: 0,
+                                    }}>
+                                        {row.original._levelLabel}
+                                    </span>
+                                )}
+                                {/* Report mode: Top N of M indicator */}
+                                {pivotMode === 'report' && row.original && row.original._levelTopN && (
+                                    <span style={{
+                                        fontSize: '9px',
+                                        fontWeight: 500,
+                                        color: theme.textSec,
+                                        marginLeft: '4px',
+                                        whiteSpace: 'nowrap',
+                                        flexShrink: 0,
+                                    }}>
+                                        Top {row.original._levelTopN}{row.original._groupTotalCount ? ` of ${row.original._groupTotalCount}` : ''}
+                                    </span>
+                                )}
                             </div>
                         );
                     }
@@ -284,7 +327,7 @@ export function useColumnDefs({
                         // Outline: Show only if current column matches depth (step layout)
                         // Tabular: Show if column is <= depth (repeat labels)
                         let showValue = true;
-                        if (layoutMode === 'outline') {
+                        if (effectiveLayoutMode === 'outline') {
                             if (i !== depth) showValue = false;
                         } else {
                             // Tabular
@@ -322,6 +365,35 @@ export function useColumnDefs({
                                     </button>
                                 )}
                                 {showValue ? val : ''}
+                                {/* Report mode: show level label badge */}
+                                {pivotMode === 'report' && showValue && row.original && row.original._levelLabel && (
+                                    <span style={{
+                                        fontSize: '9px',
+                                        fontWeight: 600,
+                                        color: theme.primary || '#4F46E5',
+                                        background: `${theme.primary || '#4F46E5'}14`,
+                                        padding: '1px 6px',
+                                        borderRadius: '4px',
+                                        marginLeft: '6px',
+                                        whiteSpace: 'nowrap',
+                                        flexShrink: 0,
+                                    }}>
+                                        {row.original._levelLabel}
+                                    </span>
+                                )}
+                                {/* Report mode: Top N indicator */}
+                                {pivotMode === 'report' && showValue && row.original && row.original._levelTopN && (
+                                    <span style={{
+                                        fontSize: '9px',
+                                        fontWeight: 500,
+                                        color: theme.textSec,
+                                        marginLeft: '4px',
+                                        whiteSpace: 'nowrap',
+                                        flexShrink: 0,
+                                    }}>
+                                        Top {row.original._levelTopN}{row.original._groupTotalCount ? ` of ${row.original._groupTotalCount}` : ''}
+                                    </span>
+                                )}
                             </div>
                         );
                     }
@@ -451,10 +523,11 @@ export function useColumnDefs({
                             }
                             const currentPathKey = pathKey ? `${pathKey}|||${val}` : val;
                             pathKey = currentPathKey;
-                            let node = current.columns.find(c => c.headerVal === val);
+                            let node = current.columns.find(c => c.groupValue === val);
                             if (!node) {
                                 node = {
                                     id: `group_${currentPathKey}`,
+                                    groupValue: val,
                                     headerVal: formatDisplayLabel(val),
                                     header: (
                                         <div style={{display:'flex', alignItems:'center', gap:4, width:'100%', overflow:'hidden'}}>
@@ -554,5 +627,5 @@ export function useColumnDefs({
     // cachedColSchema and filteredData changes on every viewport scroll, causing the entire column
     // tree to rebuild. filteredData is used only as a last-resort fallback (client-side, no schema).
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    }, [rowFields, colFields, valConfigs, minMax, colorScaleMode, colExpanded, serverSide, layoutMode, showRowNumbers, isRowSelecting, rowDragStart, props.columns, cachedColSchema, decimalPlaces, defaultValueFormat, numberGroupSeparator, columnDecimalOverrides, columnFormatOverrides, columnGroupSeparatorOverrides, cellFormatRules]);
+    }, [rowFields, colFields, valConfigs, minMax, colorScaleMode, colExpanded, serverSide, layoutMode, showRowNumbers, isRowSelecting, rowDragStart, props.columns, cachedColSchema, decimalPlaces, defaultValueFormat, numberGroupSeparator, columnDecimalOverrides, columnFormatOverrides, columnGroupSeparatorOverrides, cellFormatRules, pivotMode, reportDef]);
 }

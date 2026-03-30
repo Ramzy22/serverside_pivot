@@ -11,6 +11,7 @@ import {
     mergeFieldPanelSize,
     sanitizeFieldPanelSizeEntry,
 } from '../../utils/fieldPanelLayout';
+import { ReportEditor } from './ReportEditor';
 
 const FORMULA_REFERENCE_RE = /\b[A-Za-z_][A-Za-z0-9_]*\b/g;
 
@@ -1593,6 +1594,13 @@ export function SidebarPanel({
     data,
     sidebarWidth, setSidebarWidth,
     fieldPanelSizes, setFieldPanelSizes,
+    pivotMode = 'pivot',
+    reportDef,
+    setReportDef,
+    savedReports = [],
+    setSavedReports,
+    activeReportId,
+    setActiveReportId,
 }) {
     const [sidebarFilterState, setSidebarFilterState] = React.useState({ columnId: null, anchorEl: null });
     const [activeFormulaField, setActiveFormulaField] = React.useState(null);
@@ -1821,23 +1829,39 @@ export function SidebarPanel({
     }, [activeFormulaField, formulaConfigs, formulaModalField, setValConfigs, valConfigs]);
 
     const w = sidebarWidth || 288;
+    const isReportMode = pivotMode === 'report';
     return (
         <div style={{position:'relative', display:'flex', flexShrink:0}}>
                 <div ref={sidebarRef} style={{...styles.sidebar, width:`${w}px`, minWidth:`${w}px`}} role="complementary" aria-label="Tool Panel">
+                    {isReportMode ? (
+                        <div style={{display: 'flex', borderBottom: `1px solid ${theme.border}`, marginBottom: '16px'}}>
+                            <div
+                                style={{
+                                    padding: '8px 16px', cursor: 'default',
+                                    borderBottom: `2px solid ${theme.primary}`,
+                                    fontWeight: 600,
+                                    color: theme.primary,
+                                    display: 'flex', alignItems: 'center', gap: '6px',
+                                }}
+                            >
+                                <Icons.Report /> Report Builder
+                            </div>
+                        </div>
+                    ) : (
                     <div style={{display: 'flex', borderBottom: `1px solid ${theme.border}`, marginBottom: '16px'}}>
-                        <div 
+                        <div
                             onClick={() => setSidebarTab('fields')}
                             style={{
-                                padding: '8px 16px', cursor: 'pointer', 
+                                padding: '8px 16px', cursor: 'pointer',
                                 borderBottom: sidebarTab === 'fields' ? `2px solid ${theme.primary}` : 'none',
                                 fontWeight: sidebarTab === 'fields' ? 600 : 400,
                                 color: sidebarTab === 'fields' ? theme.primary : theme.textSec
                             }}
                         >Fields</div>
-                        <div 
+                        <div
                             onClick={() => setSidebarTab('filters')}
                             style={{
-                                padding: '8px 16px', cursor: 'pointer', 
+                                padding: '8px 16px', cursor: 'pointer',
                                 borderBottom: sidebarTab === 'filters' ? `2px solid ${theme.primary}` : 'none',
                                 fontWeight: sidebarTab === 'filters' ? 600 : 400,
                                 color: sidebarTab === 'filters' ? theme.primary : theme.textSec,
@@ -1849,7 +1873,7 @@ export function SidebarPanel({
                                 <div style={{width: '6px', height: '6px', borderRadius: '50%', background: '#d32f2f'}} />
                             )}
                         </div>
-                        <div 
+                        <div
                             onClick={() => setSidebarTab('columns')}
                             style={{
                                 padding: '8px 16px', cursor: 'pointer',
@@ -1859,8 +1883,26 @@ export function SidebarPanel({
                             }}
                         >Columns</div>
                     </div>
+                    )}
 
-                    {sidebarTab === 'filters' ? (
+                    {isReportMode ? (
+                        <div style={{flex: 1, overflowY: 'auto', padding: '0 12px 12px'}}>
+                            <ReportEditor
+                                reportDef={reportDef}
+                                setReportDef={setReportDef}
+                                availableFields={availableFields}
+                                theme={theme}
+                                styles={styles}
+                                data={data}
+                                valConfigs={valConfigs}
+                                savedReports={savedReports}
+                                setSavedReports={setSavedReports}
+                                activeReportId={activeReportId}
+                                setActiveReportId={setActiveReportId}
+                                showNotification={showNotification}
+                            />
+                        </div>
+                    ) : sidebarTab === 'filters' ? (
                         <div style={{flex: 1, overflowY: 'auto', display: 'flex', flexDirection: 'column', padding: '8px'}}>
                             <div style={{marginBottom: '10px', display: 'flex', alignItems: 'center', background: theme.background, borderRadius: '6px', padding: '4px 8px', border: `1px solid ${theme.border}`}}>
                                 <Icons.Search />

@@ -3,6 +3,8 @@ import Icons from './Icons';
 import { themes } from '../utils/styles';
 import { DEFAULT_CURRENCY_SYMBOL, formatValue, normalizeNumberGroupSeparator } from '../utils/helpers';
 
+const SHOW_PIVOT_MODE_TOGGLE = false;
+
 const COLOR_PALETTE_OPTIONS = [
     { value: 'redGreen',   label: 'Red to Green' },
     { value: 'greenRed',   label: 'Green to Red' },
@@ -630,6 +632,14 @@ export function PivotAppBar({
     canCreateSelectionChart,
     onCreateSelectionChart,
     onAddChartPane,
+    pivotMode = 'pivot',
+    setPivotMode,
+    reportDef,
+    setReportDef,
+    savedReports = [],
+    setSavedReports,
+    activeReportId,
+    setActiveReportId,
 }) {
     // Derive all selection-dependent state directly from selectedCells
     // inside AppBar to avoid stale prop issues from parent renders
@@ -1186,9 +1196,83 @@ export function PivotAppBar({
                     <Icons.Menu />
                     <span style={{fontSize: '13px', fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.04em'}}>Menu</span>
                 </button>
+                {SHOW_PIVOT_MODE_TOGGLE ? (
+                    <div style={{
+                        display: 'flex',
+                        background: theme.hover,
+                        border: `1px solid ${theme.border}`,
+                        borderRadius: theme.radiusSm || '10px',
+                        padding: '2px',
+                        gap: '2px',
+                    }}>
+                        <button
+                            style={{
+                                ...btnBase,
+                                padding: '5px 12px',
+                                minHeight: '30px',
+                                fontSize: '11px',
+                                background: pivotMode === 'pivot' ? (theme.primary || '#4F46E5') : 'transparent',
+                                color: pivotMode === 'pivot' ? '#fff' : theme.text,
+                                border: 'none',
+                                fontWeight: pivotMode === 'pivot' ? 700 : 500,
+                            }}
+                            onClick={() => setPivotMode('pivot')}
+                            title="Pivot Mode"
+                        >
+                            <Icons.Columns /> Pivot
+                        </button>
+                        <button
+                            style={{
+                                ...btnBase,
+                                padding: '5px 12px',
+                                minHeight: '30px',
+                                fontSize: '11px',
+                                background: pivotMode === 'report' ? (theme.primary || '#4F46E5') : 'transparent',
+                                color: pivotMode === 'report' ? '#fff' : theme.text,
+                                border: 'none',
+                                fontWeight: pivotMode === 'report' ? 700 : 500,
+                            }}
+                            onClick={() => setPivotMode('report')}
+                            title="Report Mode"
+                        >
+                            <Icons.Report /> Report
+                        </button>
+                    </div>
+                ) : null}
                 <div style={{fontWeight:800, fontSize:'15px', color:theme.text, whiteSpace:'nowrap', opacity: 0.92, minWidth: 0}}>
                     {pivotTitle || ''}
                 </div>
+                {/* Report selector dropdown */}
+                {pivotMode === 'report' && savedReports && savedReports.length > 0 && (
+                    <select
+                        value={activeReportId || ''}
+                        onChange={e => {
+                            const id = e.target.value;
+                            if (!id) return;
+                            const report = savedReports.find(r => r.id === id);
+                            if (report && report.reportDef && setReportDef) {
+                                setReportDef(JSON.parse(JSON.stringify(report.reportDef)));
+                                setActiveReportId(id);
+                            }
+                        }}
+                        style={{
+                            ...btnSubtle,
+                            outline: 'none',
+                            cursor: 'pointer',
+                            fontSize: '12px',
+                            padding: '5px 10px',
+                            minHeight: '30px',
+                            minWidth: '140px',
+                            maxWidth: '220px',
+                        }}
+                        title="Switch saved report"
+                    >
+                        <option value="">Select report...</option>
+                        {savedReports.map(r => (
+                            <option key={r.id} value={r.id}>{r.name}</option>
+                        ))}
+                    </select>
+                )}
                 <div style={innerDividerStyle} />
                 <div style={{display:'flex', alignItems:'center', flex:'1 1 250px', minWidth:'220px', maxWidth:'360px'}}>
                     <div style={{

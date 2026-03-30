@@ -15,6 +15,7 @@ except ImportError:
     Input = Output = State = no_update = None
 
 from .models import PivotRequestContext, PivotViewState
+from .service import PivotRuntimeService
 
 
 def _normalize_id(value: Any) -> str:
@@ -100,7 +101,6 @@ def register_dash_pivot_transport_callback(
         Output(pivot_id, "data"),
         Output(pivot_id, "rowCount"),
         Output(pivot_id, "columns"),
-        Output(pivot_id, "filterOptions"),
         Output(pivot_id, "chartData"),
     ]
     if include_drill_store:
@@ -116,7 +116,6 @@ def register_dash_pivot_transport_callback(
         data_payload,
         row_count_payload,
         columns_payload,
-        filter_options_payload,
         chart_data_payload,
         drill_payload,
         data_offset_payload,
@@ -126,7 +125,6 @@ def register_dash_pivot_transport_callback(
             data_payload,
             row_count_payload,
             columns_payload,
-            filter_options_payload,
             chart_data_payload,
         ]
         if include_drill_store:
@@ -149,10 +147,11 @@ def register_dash_pivot_transport_callback(
         Input(pivot_id, "drillThrough"),
         Input(pivot_id, "chartRequest"),
         Input(pivot_id, "viewport"),
+        Input(pivot_id, "pivotMode"),
+        Input(pivot_id, "reportDef"),
         State(pivot_id, "table"),
         State(pivot_id, "sortOptions"),
         State(pivot_id, "columns"),
-        State(pivot_id, "filterOptions"),
     )
     def _update_pivot_table(
         row_fields,
@@ -168,10 +167,11 @@ def register_dash_pivot_transport_callback(
         drill_through,
         chart_request,
         viewport,
+        pivot_mode,
+        report_def,
         table_name,
         sort_options,
         current_columns,
-        current_filter_options,
     ):
         """Main transport adapter callback for one pivot instance."""
         ctx = dash.callback_context
@@ -221,7 +221,6 @@ def register_dash_pivot_transport_callback(
                 no_update,
                 no_update,
                 no_update,
-                no_update,
             )
 
         context = PivotRequestContext.from_frontend(
@@ -258,6 +257,8 @@ def register_dash_pivot_transport_callback(
             drill_through=drill_through,
             viewport=viewport if isinstance(viewport, dict) else {},
             chart_request=chart_request if isinstance(chart_request, dict) else {},
+            pivot_mode=pivot_mode if isinstance(pivot_mode, str) else "pivot",
+            report_def=report_def if isinstance(report_def, dict) else None,
         )
 
         _debug_print(
@@ -293,7 +294,6 @@ def register_dash_pivot_transport_callback(
             result = runtime_service_getter().process(
                 state,
                 context,
-                current_filter_options=current_filter_options or {},
             )
         except Exception as exc:  # pragma: no cover - defensive
             _debug_print(debug, f"Error in pivot runtime service: {exc}")
@@ -302,7 +302,6 @@ def register_dash_pivot_transport_callback(
             return _response_tuple(
                 [],
                 0,
-                no_update,
                 no_update,
                 no_update,
                 no_update,
@@ -378,12 +377,10 @@ def register_dash_pivot_transport_callback(
                 no_update,
                 no_update,
                 no_update,
-                no_update,
             )
 
         if result.status == "drillthrough":
             return _response_tuple(
-                no_update,
                 no_update,
                 no_update,
                 no_update,
@@ -393,21 +390,8 @@ def register_dash_pivot_transport_callback(
                 no_update,
             )
 
-        if result.status == "unique_values":
-            return _response_tuple(
-                no_update,
-                no_update,
-                no_update,
-                (result.filter_options or {}),
-                no_update,
-                no_update,
-                no_update,
-                no_update,
-            )
-
         if result.status == "chart_data":
             return _response_tuple(
-                no_update,
                 no_update,
                 no_update,
                 no_update,
@@ -429,7 +413,6 @@ def register_dash_pivot_transport_callback(
                 columns_out,
                 no_update,
                 no_update,
-                no_update,
                 result.data_offset if result.data_offset is not None else no_update,
                 result.data_version if result.data_version is not None else no_update,
             )
@@ -439,7 +422,6 @@ def register_dash_pivot_transport_callback(
         return _response_tuple(
             [],
             0,
-            no_update,
             no_update,
             no_update,
             no_update,
@@ -509,6 +491,86 @@ def register_dash_drill_modal_callback(
     return True
 
 
+def register_dash_filter_request_callback(
+    app: Any,
+    runtime_service_getter: Callable[[], Any],
+    *,
+    pivot_id: Any,
+    debug: bool = False,
+) -> bool:
+    """
+    Register a lightweight callback for filter-option requests.
+
+    Separated from the main transport callback so filter requests bypass the
+    session gate and never compete with data requests.
+
+    Returns True when newly registered, False when already registered.
+    """
+    import asyncio as _asyncio
+
+    from ..tanstack_adapter import TanStackOperation, TanStackRequest
+
+    registry = _get_callback_registry(app)
+    callback_key = f"filter_request::{_normalize_id(pivot_id)}"
+    if callback_key in registry:
+        return False
+
+    @app.callback(
+        Output(pivot_id, "filterOptions"),
+        Input(pivot_id, "filterRequest"),
+        State(pivot_id, "table"),
+        State(pivot_id, "filters"),
+        State(pivot_id, "filterOptions"),
+        State(pivot_id, "rowFields"),
+        State(pivot_id, "colFields"),
+        State(pivot_id, "valConfigs"),
+        prevent_initial_call=True,
+    )
+    def _handle_filter_request(
+        filter_request,
+        table_name,
+        filters,
+        current_filter_options,
+        row_fields,
+        col_fields,
+        val_configs,
+    ):
+        if not filter_request or not isinstance(filter_request, dict):
+            return no_update
+        column_id = filter_request.get("columnId")
+        if not column_id or not table_name:
+            return no_update
+
+        _debug_print(debug, "[filter-request]", {"columnId": column_id, "table": table_name})
+
+        service = runtime_service_getter()
+        adapter = service._adapter_getter()
+        request_columns = PivotRuntimeService._build_request_columns(
+            row_fields or [], col_fields or [], val_configs or [],
+        )
+        request = TanStackRequest(
+            operation=TanStackOperation.GET_UNIQUE_VALUES,
+            table=table_name,
+            columns=request_columns,
+            filters=filters or {},
+            sorting=[],
+            grouping=row_fields or [],
+            aggregations=[],
+            pagination={"pageIndex": 0, "pageSize": 1000},
+            global_filter=column_id,
+        )
+        response = _asyncio.run(adapter.handle_request(request))
+        new_options = {
+            **(current_filter_options or {}),
+            column_id: [d.get("value") for d in (response.data or [])],
+        }
+        _debug_print(debug, "[filter-response]", {"columnId": column_id, "count": len(new_options.get(column_id, []))})
+        return new_options
+
+    registry.add(callback_key)
+    return True
+
+
 def register_dash_callbacks_for_instances(
     app: Any,
     runtime_service_getter: Callable[[], Any],
@@ -531,6 +593,13 @@ def register_dash_callbacks_for_instances(
             debug=debug,
         )
         status[_normalize_id(instance.pivot_id)] = registered
+
+        register_dash_filter_request_callback(
+            app,
+            runtime_service_getter,
+            pivot_id=instance.pivot_id,
+            debug=debug,
+        )
 
         if (
             instance.drill_modal_id is not None

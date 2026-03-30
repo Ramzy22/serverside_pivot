@@ -1268,7 +1268,7 @@ class TanStackPivotAdapter:
         pivot_filters = []
         if request.filters:
             for field_name, filter_obj in request.filters.items():
-                if not field_name or field_name in ('__request_unique__', '__row_number__', 'hierarchy'):
+                if not field_name or field_name in ('__row_number__', 'hierarchy'):
                     continue
                 if filter_obj is None:
                     continue
@@ -2200,7 +2200,7 @@ class TanStackPivotAdapter:
         pivot_filters = []
         if filters:
             for field_name, filter_obj in filters.items():
-                if not isinstance(filter_obj, dict) or field_name == '__request_unique__' or field_name == column_id: continue
+                if not isinstance(filter_obj, dict) or field_name == column_id: continue
 
                 if 'conditions' in filter_obj and 'operator' in filter_obj:
                     conditions = []
