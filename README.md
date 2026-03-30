@@ -1,16 +1,10 @@
 # serverside-pivot
 
-`serverside-pivot` is a pivot table for Dash.
+Build a real server-side pivot table in Dash in about 10 lines of Python.
 
-It gives you a real interactive pivot UI with row grouping, column grouping, totals, formulas, sorting, filtering, formatting, and virtual scrolling, without writing frontend code.
+`serverside-pivot` is built for analytical apps that need fast aggregations, large datasets, and a serious pivot UI without building a separate frontend. It is designed to handle millions of rows with sub-second aggregations, while keeping the interaction model people expect: drag-and-drop fields, row and column grouping, totals, formulas, sorting, filtering, formatting, and virtual scrolling.
 
-The main strength is that you can use the same component with:
-- `pandas`
-- `polars`
-- `pyarrow`
-- database-backed tables through Ibis
-
-So you can start small in memory, then point the same app at larger SQL data later.
+It works with `pandas`, `polars`, `pyarrow`, and SQL backends through Ibis, so the same component can start on a local dataframe and scale to a production database without changing the user experience.
 
 ## Install
 
@@ -24,7 +18,7 @@ For Redis-backed caching:
 pip install "serverside-pivot[redis]"
 ```
 
-## Quick Start
+## 10-line Quick Start
 
 ```python
 import pandas as pd
@@ -46,12 +40,15 @@ if __name__ == "__main__":
     app.run(debug=True)
 ```
 
+The same `adapter.load_data(...)` call also accepts `polars`, `pyarrow`, and database-backed Ibis sources.
+
 ## Why Use It
 
-- Built for Dash, so the pivot lives naturally inside a Python app.
-- Works with in-memory data and backend data through the same API.
-- Handles large datasets with server-side transport and virtual scrolling.
-- Supports practical pivot features, not just a demo table.
+- Built for Dash, so it fits naturally into a Python application.
+- One API for local dataframes and database-backed data.
+- Handles large tables with server-side transport and windowing.
+- Includes the features people actually expect from a pivot UI, not just a demo grid.
+- Lets you stay in Python instead of splitting the project across Python and React.
 
 ## Examples
 
