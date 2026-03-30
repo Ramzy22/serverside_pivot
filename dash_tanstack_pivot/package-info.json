@@ -1,0 +1,11 @@
+{
+    "name": "dash_tanstack_pivot",
+    "version": "0.0.52",
+    "description": "TanStack Table component for Dash",
+    "main": "build/index.js",
+    "scripts": {
+        "test": "echo \"Error: no test specified\" && exit 1"
+    },
+    "author": "Gemini",
+    "license": "MIT"
+}
