@@ -104,11 +104,11 @@ def test_register_dash_callbacks_for_instances_supports_multi_instance():
 
     status = register_dash_callbacks_for_instances(app, getter, instances, debug=False)
     assert status == {"pivot-a": True, "pivot-b": True}
-    assert len(app.callback_map) == 4
+    assert len(app.callback_map) == 6
 
     status_repeat = register_dash_callbacks_for_instances(app, getter, instances, debug=False)
     assert status_repeat == {"pivot-a": False, "pivot-b": False}
-    assert len(app.callback_map) == 4
+    assert len(app.callback_map) == 6
 
 
 def test_bootstrap_detection_requires_real_viewport_context():
