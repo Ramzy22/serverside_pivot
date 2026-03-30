@@ -119,8 +119,8 @@ def test_table_scoped_isolation():
         val_configs=[{"field": "stock", "agg": "sum"}],
     )
 
-    response_a = service.process(state_a, context_a, current_filter_options={})
-    response_b = service.process(state_b, context_b, current_filter_options={})
+    response_a = service.process(state_a, context_a)
+    response_b = service.process(state_b, context_b)
 
     assert response_a.status == "data"
     assert response_b.status == "data"
@@ -179,8 +179,8 @@ def test_filter_isolation_across_instances():
         filters={},
     )
 
-    response_a = service.process(state_a_filtered, context_a, current_filter_options={})
-    response_b = service.process(state_b_unfiltered, context_b, current_filter_options={})
+    response_a = service.process(state_a_filtered, context_a)
+    response_b = service.process(state_b_unfiltered, context_b)
 
     assert response_a.status == "data"
     assert response_b.status == "data"
@@ -225,8 +225,8 @@ def test_sort_isolation_across_instances():
         sorting=[],
     )
 
-    response_a = service.process(state_a, context_a, current_filter_options={})
-    response_b = service.process(state_b, context_b, current_filter_options={})
+    response_a = service.process(state_a, context_a)
+    response_b = service.process(state_b, context_b)
 
     assert response_a.status == "data"
     assert response_b.status == "data"
@@ -425,7 +425,7 @@ def test_concurrent_interleaved_service_process_calls():
 
     responses = []
     for ctx, state in contexts_and_states:
-        resp = service.process(state, ctx, current_filter_options={})
+        resp = service.process(state, ctx)
         responses.append(resp)
 
     # All responses must succeed (no cross-contamination causes failures)
