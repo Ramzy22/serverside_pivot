@@ -36,15 +36,11 @@ Keyword arguments:
 
 - chartCanvasPanes (list of dicts; optional)
 
-- chartData (dict; optional)
-
 - chartDefaults (dict; optional)
 
 - chartDefinitions (list of dicts; optional)
 
 - chartEvent (dict; optional)
-
-- chartRequest (dict; optional)
 
 - chartServerWindow (dict; optional)
 
@@ -76,15 +72,9 @@ Keyword arguments:
 
 - columnVisibility (dict; optional)
 
-- columns (list; optional)
-
 - conditionalFormatting (list of dicts; optional)
 
 - data (list of dicts; optional)
-
-- dataOffset (number; optional)
-
-- dataVersion (number; optional)
 
 - decimalPlaces (number; optional)
 
@@ -92,29 +82,46 @@ Keyword arguments:
 
 - defaultValueFormat (string; optional)
 
+- detailConfig (dict; optional)
+
+- detailMode (a value equal to: 'none', 'inline', 'sidepanel', 'drawer'; optional)
+
 - drillEndpoint (string; optional)
 
-- drillThrough (dict; optional)
+- editLifecycleEvent (dict; optional)
+
+- editState (dict; optional):
+    Persisted edit state: edited cell markers, comparison original
+    values, display mode,  and propagation event log. Round-tripped
+    via setProps so the Dash backend can  save/restore/modify it.
+
+- editingConfig (dict; optional)
 
 - expanded (dict | boolean; optional)
 
 - fieldPanelSizes (dict; optional)
-
-- filterOptions (dict; optional)
-
-- filterRequest (dict; optional)
-
-    `filterRequest` is a dict with keys:
-
-    - columnId (string; optional)
-
-    - nonce (number; optional)
 
 - filters (dict; optional)
 
 - grandTotalPosition (a value equal to: 'top', 'bottom'; optional)
 
 - numberGroupSeparator (a value equal to: 'comma', 'space', 'thin_space', 'apostrophe', 'none'; optional)
+
+- performanceConfig (dict; optional)
+
+    `performanceConfig` is a dict with keys:
+
+    - cacheBlockSize (number; optional)
+
+    - maxBlocksInCache (number; optional)
+
+    - blockLoadDebounceMs (number; optional)
+
+    - rowOverscan (number; optional)
+
+    - columnOverscan (number; optional)
+
+    - prefetchColumns (number; optional)
 
 - persistence (boolean | string | number; optional)
 
@@ -140,15 +147,11 @@ Keyword arguments:
 
     - config (dict; optional)
 
-- pivotMode (a value equal to: 'pivot', 'report'; optional)
-
 - pivotTitle (string; optional)
 
 - reportDef (dict; optional)
 
 - reset (boolean | number | string | dict | list; optional)
-
-- rowCount (number; optional)
 
 - rowFields (list; optional)
 
@@ -163,6 +166,10 @@ Keyword arguments:
     - top (list of strings; optional)
 
     - bottom (list of strings; optional)
+
+- runtimeRequest (dict; optional)
+
+- runtimeResponse (dict; optional)
 
 - saveViewTrigger (boolean | number | string | dict | list; optional)
 
@@ -196,6 +203,8 @@ Keyword arguments:
 
 - tableCanvasSize (number; optional)
 
+- treeConfig (dict; optional)
+
 - valConfigs (list of dicts; optional)
 
     `valConfigs` is a list of dicts with keys:
@@ -220,11 +229,13 @@ Keyword arguments:
 
     - formulaRef (string; optional)
 
+    - sparkline (boolean | dict; optional)
+
 - validationRules (dict; optional)
 
-- viewState (dict; optional)
+- viewMode (a value equal to: 'pivot', 'report', 'tree', 'table'; optional)
 
-- viewport (dict; optional)"""
+- viewState (dict; optional)"""
     _children_props = []
     _base_nodes = ['children']
     _namespace = 'dash_tanstack_pivot'
@@ -241,15 +252,20 @@ Keyword arguments:
             "separator": NotRequired[str],
             "formula": NotRequired[str],
             "label": NotRequired[str],
-            "formulaRef": NotRequired[str]
+            "formulaRef": NotRequired[str],
+            "sparkline": NotRequired[typing.Union[bool, dict]]
         }
     )
 
-    FilterRequest = TypedDict(
-        "FilterRequest",
+    PerformanceConfig = TypedDict(
+        "PerformanceConfig",
             {
-            "columnId": NotRequired[str],
-            "nonce": NotRequired[NumberType]
+            "cacheBlockSize": NotRequired[NumberType],
+            "maxBlocksInCache": NotRequired[NumberType],
+            "blockLoadDebounceMs": NotRequired[NumberType],
+            "rowOverscan": NotRequired[NumberType],
+            "columnOverscan": NotRequired[NumberType],
+            "prefetchColumns": NotRequired[NumberType]
         }
     )
 
@@ -315,39 +331,41 @@ Keyword arguments:
         data: typing.Optional[typing.Sequence[dict]] = None,
         style: typing.Optional[typing.Any] = None,
         serverSide: typing.Optional[bool] = None,
-        rowCount: typing.Optional[NumberType] = None,
         rowFields: typing.Optional[typing.Sequence] = None,
         colFields: typing.Optional[typing.Sequence] = None,
         valConfigs: typing.Optional[typing.Sequence["ValConfigs"]] = None,
         filters: typing.Optional[dict] = None,
         sorting: typing.Optional[typing.Sequence] = None,
         expanded: typing.Optional[typing.Union[dict, bool]] = None,
-        columns: typing.Optional[typing.Sequence] = None,
         cinemaMode: typing.Optional[bool] = None,
         showRowTotals: typing.Optional[bool] = None,
         showColTotals: typing.Optional[bool] = None,
         grandTotalPosition: typing.Optional[Literal["top", "bottom"]] = None,
-        filterOptions: typing.Optional[dict] = None,
-        filterRequest: typing.Optional["FilterRequest"] = None,
-        chartData: typing.Optional[dict] = None,
-        chartRequest: typing.Optional[dict] = None,
+        runtimeRequest: typing.Optional[dict] = None,
+        runtimeResponse: typing.Optional[dict] = None,
+        viewMode: typing.Optional[Literal["pivot", "report", "tree", "table"]] = None,
+        detailMode: typing.Optional[Literal["none", "inline", "sidepanel", "drawer"]] = None,
+        treeConfig: typing.Optional[dict] = None,
+        detailConfig: typing.Optional[dict] = None,
         chartEvent: typing.Optional[dict] = None,
         chartDefinitions: typing.Optional[typing.Sequence[dict]] = None,
         chartDefaults: typing.Optional[dict] = None,
         chartCanvasPanes: typing.Optional[typing.Sequence[dict]] = None,
         tableCanvasSize: typing.Optional[NumberType] = None,
+        performanceConfig: typing.Optional["PerformanceConfig"] = None,
         chartServerWindow: typing.Optional["ChartServerWindow"] = None,
-        viewport: typing.Optional[dict] = None,
         cellUpdate: typing.Optional[dict] = None,
         cellUpdates: typing.Optional[typing.Sequence[dict]] = None,
         rowMove: typing.Optional[dict] = None,
-        drillThrough: typing.Optional[dict] = None,
         drillEndpoint: typing.Optional[str] = None,
         viewState: typing.Optional[dict] = None,
         saveViewTrigger: typing.Optional[typing.Any] = None,
         savedView: typing.Optional[dict] = None,
         conditionalFormatting: typing.Optional[typing.Sequence[dict]] = None,
         validationRules: typing.Optional[dict] = None,
+        editingConfig: typing.Optional[dict] = None,
+        editLifecycleEvent: typing.Optional[dict] = None,
+        editState: typing.Optional[dict] = None,
         columnPinning: typing.Optional["ColumnPinning"] = None,
         rowPinning: typing.Optional["RowPinning"] = None,
         columnPinned: typing.Optional[dict] = None,
@@ -368,17 +386,14 @@ Keyword arguments:
         defaultTheme: typing.Optional[str] = None,
         sortEvent: typing.Optional[dict] = None,
         availableFieldList: typing.Optional[typing.Sequence[str]] = None,
-        dataOffset: typing.Optional[NumberType] = None,
-        dataVersion: typing.Optional[NumberType] = None,
-        pivotMode: typing.Optional[Literal["pivot", "report"]] = None,
         reportDef: typing.Optional[dict] = None,
         savedReports: typing.Optional[typing.Sequence[dict]] = None,
         activeReportId: typing.Optional[str] = None,
         **kwargs
     ):
-        self._prop_names = ['id', 'activeReportId', 'availableFieldList', 'cellUpdate', 'cellUpdates', 'chartCanvasPanes', 'chartData', 'chartDefaults', 'chartDefinitions', 'chartEvent', 'chartRequest', 'chartServerWindow', 'cinemaMode', 'colFields', 'columnPinned', 'columnPinning', 'columnSizing', 'columnVisibility', 'columns', 'conditionalFormatting', 'data', 'dataOffset', 'dataVersion', 'decimalPlaces', 'defaultTheme', 'defaultValueFormat', 'drillEndpoint', 'drillThrough', 'expanded', 'fieldPanelSizes', 'filterOptions', 'filterRequest', 'filters', 'grandTotalPosition', 'numberGroupSeparator', 'persistence', 'persistence_type', 'pinningOptions', 'pinningPresets', 'pivotMode', 'pivotTitle', 'reportDef', 'reset', 'rowCount', 'rowFields', 'rowMove', 'rowPinned', 'rowPinning', 'saveViewTrigger', 'savedReports', 'savedView', 'serverSide', 'showColTotals', 'showRowTotals', 'sortEvent', 'sortLock', 'sortOptions', 'sorting', 'style', 'table', 'tableCanvasSize', 'valConfigs', 'validationRules', 'viewState', 'viewport']
+        self._prop_names = ['id', 'activeReportId', 'availableFieldList', 'cellUpdate', 'cellUpdates', 'chartCanvasPanes', 'chartDefaults', 'chartDefinitions', 'chartEvent', 'chartServerWindow', 'cinemaMode', 'colFields', 'columnPinned', 'columnPinning', 'columnSizing', 'columnVisibility', 'conditionalFormatting', 'data', 'decimalPlaces', 'defaultTheme', 'defaultValueFormat', 'detailConfig', 'detailMode', 'drillEndpoint', 'editLifecycleEvent', 'editState', 'editingConfig', 'expanded', 'fieldPanelSizes', 'filters', 'grandTotalPosition', 'numberGroupSeparator', 'performanceConfig', 'persistence', 'persistence_type', 'pinningOptions', 'pinningPresets', 'pivotTitle', 'reportDef', 'reset', 'rowFields', 'rowMove', 'rowPinned', 'rowPinning', 'runtimeRequest', 'runtimeResponse', 'saveViewTrigger', 'savedReports', 'savedView', 'serverSide', 'showColTotals', 'showRowTotals', 'sortEvent', 'sortLock', 'sortOptions', 'sorting', 'style', 'table', 'tableCanvasSize', 'treeConfig', 'valConfigs', 'validationRules', 'viewMode', 'viewState']
         self._valid_wildcard_attributes =            []
-        self.available_properties = ['id', 'activeReportId', 'availableFieldList', 'cellUpdate', 'cellUpdates', 'chartCanvasPanes', 'chartData', 'chartDefaults', 'chartDefinitions', 'chartEvent', 'chartRequest', 'chartServerWindow', 'cinemaMode', 'colFields', 'columnPinned', 'columnPinning', 'columnSizing', 'columnVisibility', 'columns', 'conditionalFormatting', 'data', 'dataOffset', 'dataVersion', 'decimalPlaces', 'defaultTheme', 'defaultValueFormat', 'drillEndpoint', 'drillThrough', 'expanded', 'fieldPanelSizes', 'filterOptions', 'filterRequest', 'filters', 'grandTotalPosition', 'numberGroupSeparator', 'persistence', 'persistence_type', 'pinningOptions', 'pinningPresets', 'pivotMode', 'pivotTitle', 'reportDef', 'reset', 'rowCount', 'rowFields', 'rowMove', 'rowPinned', 'rowPinning', 'saveViewTrigger', 'savedReports', 'savedView', 'serverSide', 'showColTotals', 'showRowTotals', 'sortEvent', 'sortLock', 'sortOptions', 'sorting', 'style', 'table', 'tableCanvasSize', 'valConfigs', 'validationRules', 'viewState', 'viewport']
+        self.available_properties = ['id', 'activeReportId', 'availableFieldList', 'cellUpdate', 'cellUpdates', 'chartCanvasPanes', 'chartDefaults', 'chartDefinitions', 'chartEvent', 'chartServerWindow', 'cinemaMode', 'colFields', 'columnPinned', 'columnPinning', 'columnSizing', 'columnVisibility', 'conditionalFormatting', 'data', 'decimalPlaces', 'defaultTheme', 'defaultValueFormat', 'detailConfig', 'detailMode', 'drillEndpoint', 'editLifecycleEvent', 'editState', 'editingConfig', 'expanded', 'fieldPanelSizes', 'filters', 'grandTotalPosition', 'numberGroupSeparator', 'performanceConfig', 'persistence', 'persistence_type', 'pinningOptions', 'pinningPresets', 'pivotTitle', 'reportDef', 'reset', 'rowFields', 'rowMove', 'rowPinned', 'rowPinning', 'runtimeRequest', 'runtimeResponse', 'saveViewTrigger', 'savedReports', 'savedView', 'serverSide', 'showColTotals', 'showRowTotals', 'sortEvent', 'sortLock', 'sortOptions', 'sorting', 'style', 'table', 'tableCanvasSize', 'treeConfig', 'valConfigs', 'validationRules', 'viewMode', 'viewState']
         self.available_wildcard_properties =            []
         _explicit_args = kwargs.pop('_explicit_args')
         _locals = locals()

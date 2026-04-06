@@ -1,6 +1,9 @@
 import React from 'react';
 import SkeletonRow from '../SkeletonRow';
 import StatusBar from './StatusBar';
+import InlineDetailPanel from './InlineDetailPanel';
+import { usePivotTheme } from '../../contexts/PivotThemeContext';
+import { usePivotConfig } from '../../contexts/PivotConfigContext';
 
 const getTotalRowBackground = (theme) =>
     theme.totalBg || theme.select || theme.background;
@@ -12,7 +15,7 @@ const getTotalRowBackground = (theme) =>
  * center rows (with skeleton, expand/collapse loaders), bottom-pinned rows,
  * floating filters, column-loading skeletons, and the StatusBar.
  */
-export function PivotTableBody({
+export const PivotTableBody = React.memo(function PivotTableBody({
     // Scroll container
     parentRef,
     handleKeyDown,
@@ -38,39 +41,55 @@ export function PivotTableBody({
     serverSide,
     serverSidePinsGrandTotal,
     pendingRowTransitions,
-    // Table instance / column groups
-    table,
+    // Pre-computed header groups (avoids passing unstable `table` instance)
+    leftHeaderGroups,
+    centerHeaderGroups: centerHeaderGroupsProp,
+    rightHeaderGroups,
     leftCols,
     centerCols,
     rightCols,
     centerColIndexMap,
-    visibleLeafIndexSet,
+    totalCenterColumns,
     // Display options
     rowHeight,
-    showFloatingFilters,
-    stickyHeaders,
-    showColTotals,
     grandTotalPosition,
     showColumnLoadingSkeletons,
     pendingColumnSkeletonCount,
     columnSkeletonWidth,
-    // Theme / styles
-    theme,
-    styles,
     // Render helpers
     renderCell,
+    renderVirtualColumnCell,
     renderHeaderCell,
     // Filter interaction
-    filters,
     handleHeaderFilter,
     // Status bar
     selectedCells,
     rowCount,
     isRequestPending,
-    numberGroupSeparator,
-    pivotMode,
-    reportDef,
+    columnAdvisory,
+    statusModel,
+    statusActions,
+    treeSuppressGroupRowsSticky,
+    editValueDisplayMode,
+    detailMode,
+    detailState,
+    detailInlineHeight,
+    onDetailClose,
+    onDetailPageChange,
+    onDetailSort,
+    onDetailFilter,
 }) {
+    const { theme, styles } = usePivotTheme();
+    const {
+        filters,
+        pivotMode,
+        reportDef,
+        showFloatingFilters,
+        stickyHeaders,
+        showColTotals,
+        numberGroupSeparator,
+        viewMode,
+    } = usePivotConfig();
     const pinnedRowIdSet = React.useMemo(() => {
         const ids = new Set();
         [...effectiveTopRows, ...effectiveBottomRows].forEach((row) => {
@@ -126,6 +145,151 @@ export function PivotTableBody({
         }, 0),
         [virtualCenterCols, centerCols]
     );
+    // centerHeaderGroups are passed as a pre-computed prop from the parent
+    // to avoid passing the unstable `table` instance which defeats React.memo.
+    const centerHeaderGroups = centerHeaderGroupsProp;
+    const visibleCenterRange = React.useMemo(() => {
+        if (virtualCenterCols.length === 0) return { start: -1, end: -1 };
+        return {
+            start: virtualCenterCols[0].index,
+            end: virtualCenterCols[virtualCenterCols.length - 1].index,
+        };
+    }, [virtualCenterCols]);
+
+    // Pre-compute a header→centerLeafPairs map keyed by column structure.
+    // getLeafColumns() walks the column tree and is expensive with 1000+ columns;
+    // caching it here avoids the O(headers × leaves) inner loop on every scroll frame.
+    const headerLeafPairsMap = React.useMemo(() => {
+        const map = new Map();
+        for (const group of centerHeaderGroups) {
+            for (const header of group.headers) {
+                const leafCols = header.column.getLeafColumns
+                    ? header.column.getLeafColumns()
+                    : [header.column];
+                const centerLeafPairs = [];
+                for (let i = 0; i < leafCols.length; i++) {
+                    const leafColumn = leafCols[i];
+                    const idx = centerColIndexMap.has(leafColumn.id) ? centerColIndexMap.get(leafColumn.id) : -1;
+                    if (idx >= 0) {
+                        centerLeafPairs.push({ col: leafColumn, idx });
+                    }
+                }
+                if (centerLeafPairs.length > 0) {
+                    map.set(header.id, {
+                        pairs: centerLeafPairs,
+                        minIdx: centerLeafPairs[0].idx,
+                        maxIdx: centerLeafPairs[centerLeafPairs.length - 1].idx,
+                    });
+                }
+            }
+        }
+        return map;
+    }, [centerColIndexMap, centerHeaderGroups]);
+
+    // ── Memoized base styles to avoid creating new objects per row/render ──
+    const baseRowStyle = React.useMemo(() => ({
+        ...styles.row,
+        width: `${totalLayoutWidth}px`,
+        borderBottom: `1px solid ${theme.border}`,
+    }), [styles.row, totalLayoutWidth, theme.border]);
+
+    const skeletonRowStyle = React.useMemo(() => ({
+        ...baseRowStyle,
+        position: 'absolute',
+        display: 'flex',
+        alignItems: 'center',
+        zIndex: 90,
+        pointerEvents: 'none',
+    }), [baseRowStyle]);
+
+    const transitionLoaderStyle = React.useMemo(() => ({
+        ...styles.row,
+        pointerEvents: 'none',
+        height: rowHeight,
+        width: `${totalLayoutWidth}px`,
+        position: 'absolute',
+        background: 'var(--pivot-loading-row-gradient, linear-gradient(90deg, rgba(246,250,255,0.96) 0%, rgba(228,241,255,0.98) 50%, rgba(246,250,255,0.96) 100%))',
+        backgroundSize: '220% 100%',
+        borderBottom: `1px dashed ${theme.border}`,
+        display: 'flex',
+        alignItems: 'center',
+        overflow: 'hidden',
+        opacity: 0.95,
+        zIndex: 90,
+        boxShadow: `0 4px 12px -8px ${theme.border}`,
+        animation: 'pivot-row-loader-enter 220ms ease-out, pivot-skeleton-shimmer var(--pivot-loading-shimmer-duration, 2.8s) linear infinite',
+    }), [styles.row, rowHeight, totalLayoutWidth, theme.border]);
+
+    const defaultRowBg = theme.surfaceBg || theme.background;
+    const totalRowBg = getTotalRowBackground(theme);
+
+    const leftPinnedSectionStyle = React.useMemo(() => leftPinnedWidth > 0 ? ({
+        display: 'flex',
+        width: leftPinnedWidth,
+        minWidth: leftPinnedWidth,
+        flexShrink: 0,
+        position: 'sticky',
+        left: 0,
+        zIndex: 72,
+        boxShadow: `2px 0 5px -2px ${theme.pinnedBoundaryShadow || 'rgba(0,0,0,0.2)'}`,
+    }) : null, [leftPinnedWidth, theme.pinnedBoundaryShadow]);
+
+    const rightPinnedSectionStyle = React.useMemo(() => rightPinnedWidth > 0 ? ({
+        display: 'flex',
+        width: rightPinnedWidth,
+        minWidth: rightPinnedWidth,
+        flexShrink: 0,
+        position: 'sticky',
+        right: 0,
+        zIndex: 72,
+        boxShadow: `-2px 0 5px -2px ${theme.pinnedBoundaryShadow || 'rgba(0,0,0,0.2)'}`,
+    }) : null, [rightPinnedWidth, theme.pinnedBoundaryShadow]);
+
+    const centerFlexStyle = React.useMemo(() => ({
+        display: 'flex', flexShrink: 0,
+    }), []);
+
+    const beforeSpacerStyle = React.useMemo(() => ({
+        width: beforeWidth, flexShrink: 0,
+    }), [beforeWidth]);
+
+    const afterSpacerStyle = React.useMemo(() => ({
+        width: afterWidth, flexShrink: 0,
+    }), [afterWidth]);
+
+    const headerRowStyle = React.useMemo(() => ({
+        display: 'flex', height: rowHeight, borderBottom: `1px solid ${theme.border}`,
+    }), [rowHeight, theme.border]);
+
+    const centerHeaderRenderPlan = React.useMemo(
+        () => centerHeaderGroups.map((group) => {
+            const visibleHeaders = [];
+            for (const header of group.headers) {
+                const centerLeafEntry = headerLeafPairsMap.get(header.id);
+                if (!centerLeafEntry) continue;
+                if (
+                    centerLeafEntry.maxIdx < visibleCenterRange.start
+                    || centerLeafEntry.minIdx > visibleCenterRange.end
+                ) {
+                    continue;
+                }
+
+                let visWidth = 0;
+                for (const pair of centerLeafEntry.pairs) {
+                    if (pair.idx < visibleCenterRange.start) continue;
+                    if (pair.idx > visibleCenterRange.end) break;
+                    visWidth += pair.col.getSize();
+                }
+                if (visWidth <= 0) continue;
+                visibleHeaders.push({ header, visWidth });
+            }
+            return {
+                groupId: group.id,
+                visibleHeaders,
+            };
+        }),
+        [centerHeaderGroups, headerLeafPairsMap, visibleCenterRange]
+    );
 
     const getRenderedRowIndex = (row, fallbackIndex = 0) => {
         if (row && typeof row.index === 'number') return row.index;
@@ -149,55 +313,57 @@ export function PivotTableBody({
         return lookup;
     }, [effectiveCenterRows, topRowCount]);
 
-    const getVisibleCellMap = (row) => {
-        if (!row) return new Map();
-        const visibleCells = typeof row.getVisibleCells === 'function'
-            ? row.getVisibleCells()
-            : [
-                ...(typeof row.getLeftVisibleCells === 'function' ? row.getLeftVisibleCells() : []),
-                ...(typeof row.getCenterVisibleCells === 'function' ? row.getCenterVisibleCells() : []),
-                ...(typeof row.getRightVisibleCells === 'function' ? row.getRightVisibleCells() : []),
-            ];
-        return new Map(visibleCells.map((cell) => [cell.column.id, cell]));
-    };
+    const resolveVirtualRow = React.useCallback((virtualIndex) => {
+        if (serverSide) {
+            const cachedData = getRow(virtualIndex);
+            if (!cachedData) return null;
+            const rowId = (cachedData._isTotal || cachedData._path === '__grand_total__' || cachedData._id === 'Grand Total')
+                ? '__grand_total__'
+                : (cachedData._path || (cachedData.id ? cachedData.id : String(virtualIndex)));
+            return centerRowLookup.get(rowId) || null;
+        }
+        return effectiveCenterRows[virtualIndex] || null;
+    }, [centerRowLookup, effectiveCenterRows, getRow, serverSide]);
 
-    const renderCenterVirtualCells = (row, virtualRowIndex, isVirtualRow, cellById) => {
-        const resolvedCellById = cellById || getVisibleCellMap(row);
+    const stickyTreeRow = React.useMemo(() => {
+        if (viewMode !== 'tree' || treeSuppressGroupRowsSticky || virtualRows.length === 0) return null;
+        const firstVisibleRow = virtualRows
+            .map((virtualRow) => resolveVirtualRow(virtualRow.index))
+            .find((row) => row && row.original && !row.original._isTotal);
+        if (!firstVisibleRow || !firstVisibleRow.original) return null;
 
+        const path = typeof firstVisibleRow.original._path === 'string' ? firstVisibleRow.original._path : '';
+        const pathParts = path.split('|||').filter(Boolean);
+        if (pathParts.length <= 1) return null;
+
+        for (let depth = pathParts.length - 1; depth > 0; depth -= 1) {
+            const ancestorPath = pathParts.slice(0, depth).join('|||');
+            const ancestorRow = centerRowLookup.get(ancestorPath);
+            if (ancestorRow && ancestorRow.id !== firstVisibleRow.id) {
+                return ancestorRow;
+            }
+        }
+
+        return null;
+    }, [centerRowLookup, resolveVirtualRow, treeSuppressGroupRowsSticky, viewMode, virtualRows]);
+
+    const renderCenterVirtualCells = (row, virtualRowIndex, isVirtualRow) => {
         return virtualCenterCols.map(virtualCol => {
             const centerColumn = centerCols[virtualCol.index];
             if (!centerColumn) return null;
-            const cell = resolvedCellById.get(centerColumn.id) || null;
-            return renderCell(cell, virtualRowIndex, isVirtualRow, { disableSticky: true });
+            return renderVirtualColumnCell(row, centerColumn, virtualRowIndex, isVirtualRow, { disableSticky: true });
         });
     };
 
-    const renderPinnedSectionCells = (row, columns, virtualRowIndex, isVirtualRow, cellById) =>
-        columns.map((column) =>
-            renderCell(cellById.get(column.id) || null, virtualRowIndex, isVirtualRow, { disableSticky: true })
-        );
-
     const renderSkeletonSections = (rowBackground, skeletonStyle = {}) => (
         <>
-            {leftPinnedWidth > 0 && (
-                <div
-                    style={{
-                        display: 'flex',
-                        width: leftPinnedWidth,
-                        minWidth: leftPinnedWidth,
-                        flexShrink: 0,
-                        position: 'sticky',
-                        left: 0,
-                        zIndex: 72,
-                        background: rowBackground,
-                        boxShadow: `2px 0 5px -2px ${theme.pinnedBoundaryShadow || 'rgba(0,0,0,0.2)'}`
-                    }}
-                >
+            {leftPinnedSectionStyle && (
+                <div style={{...leftPinnedSectionStyle, background: rowBackground}}>
                     <SkeletonRow style={{ width: '100%', ...skeletonStyle }} rowHeight={rowHeight} />
                 </div>
             )}
-            <div style={{ display: 'flex', flexShrink: 0, background: rowBackground }}>
-                <div style={{ width: beforeWidth, flexShrink: 0 }} />
+            <div style={{ ...centerFlexStyle, background: rowBackground }}>
+                <div style={beforeSpacerStyle} />
                 <SkeletonRow
                     style={{
                         width: `${visibleCenterWidth}px`,
@@ -207,22 +373,10 @@ export function PivotTableBody({
                     }}
                     rowHeight={rowHeight}
                 />
-                <div style={{ width: afterWidth, flexShrink: 0 }} />
+                <div style={afterSpacerStyle} />
             </div>
-            {rightPinnedWidth > 0 && (
-                <div
-                    style={{
-                        display: 'flex',
-                        width: rightPinnedWidth,
-                        minWidth: rightPinnedWidth,
-                        flexShrink: 0,
-                        position: 'sticky',
-                        right: 0,
-                        zIndex: 72,
-                        background: rowBackground,
-                        boxShadow: `-2px 0 5px -2px ${theme.pinnedBoundaryShadow || 'rgba(0,0,0,0.2)'}`
-                    }}
-                >
+            {rightPinnedSectionStyle && (
+                <div style={{...rightPinnedSectionStyle, background: rowBackground}}>
                     <SkeletonRow style={{ width: '100%', ...skeletonStyle }} rowHeight={rowHeight} />
                 </div>
             )}
@@ -230,56 +384,37 @@ export function PivotTableBody({
     );
 
     const renderRowSections = (row, virtualRowIndex, isVirtualRow, renderOptions = {}) => {
-        const rowBackground = renderOptions.rowBackground || (theme.surfaceBg || theme.background);
+        const rowBackground = renderOptions.rowBackground || defaultRowBg;
         const disablePinnedColumnStickiness = !!renderOptions.disablePinnedColumnStickiness;
-        const cellById = getVisibleCellMap(row);
 
         return (
             <>
-                {leftPinnedWidth > 0 && (
+                {leftPinnedSectionStyle && (
                     <div
-                        style={{
-                            display: 'flex',
-                            width: leftPinnedWidth,
-                            minWidth: leftPinnedWidth,
-                            flexShrink: 0,
-                            position: disablePinnedColumnStickiness ? 'relative' : 'sticky',
-                            left: disablePinnedColumnStickiness ? undefined : 0,
-                            zIndex: disablePinnedColumnStickiness ? undefined : 72,
-                            background: rowBackground,
-                            boxShadow: disablePinnedColumnStickiness
-                                ? 'none'
-                                : `2px 0 5px -2px ${theme.pinnedBoundaryShadow || 'rgba(0,0,0,0.2)'}`
-                        }}
+                        style={disablePinnedColumnStickiness
+                            ? { display: 'flex', width: leftPinnedWidth, minWidth: leftPinnedWidth, flexShrink: 0, position: 'relative', background: rowBackground, boxShadow: 'none' }
+                            : { ...leftPinnedSectionStyle, background: rowBackground }
+                        }
                     >
                         {leftCols.map((column) =>
-                            renderCell(cellById.get(column.id) || null, virtualRowIndex, isVirtualRow, { disableSticky: true })
+                            renderVirtualColumnCell(row, column, virtualRowIndex, isVirtualRow, { disableSticky: true })
                         )}
                     </div>
                 )}
-                <div style={{ display: 'flex', flexShrink: 0, background: rowBackground }}>
-                    <div style={{ width: beforeWidth, flexShrink: 0 }} />
-                    {renderCenterVirtualCells(row, virtualRowIndex, isVirtualRow, cellById)}
-                    <div style={{ width: afterWidth, flexShrink: 0 }} />
+                <div style={{ ...centerFlexStyle, background: rowBackground }}>
+                    <div style={beforeSpacerStyle} />
+                    {renderCenterVirtualCells(row, virtualRowIndex, isVirtualRow)}
+                    <div style={afterSpacerStyle} />
                 </div>
-                {rightPinnedWidth > 0 && (
+                {rightPinnedSectionStyle && (
                     <div
-                        style={{
-                            display: 'flex',
-                            width: rightPinnedWidth,
-                            minWidth: rightPinnedWidth,
-                            flexShrink: 0,
-                            position: disablePinnedColumnStickiness ? 'relative' : 'sticky',
-                            right: disablePinnedColumnStickiness ? undefined : 0,
-                            zIndex: disablePinnedColumnStickiness ? undefined : 72,
-                            background: rowBackground,
-                            boxShadow: disablePinnedColumnStickiness
-                                ? 'none'
-                                : `-2px 0 5px -2px ${theme.pinnedBoundaryShadow || 'rgba(0,0,0,0.2)'}`
-                        }}
+                        style={disablePinnedColumnStickiness
+                            ? { display: 'flex', width: rightPinnedWidth, minWidth: rightPinnedWidth, flexShrink: 0, position: 'relative', background: rowBackground, boxShadow: 'none' }
+                            : { ...rightPinnedSectionStyle, background: rowBackground }
+                        }
                     >
                         {rightCols.map((column) =>
-                            renderCell(cellById.get(column.id) || null, virtualRowIndex, isVirtualRow, { disableSticky: true })
+                            renderVirtualColumnCell(row, column, virtualRowIndex, isVirtualRow, { disableSticky: true })
                         )}
                     </div>
                 )}
@@ -311,7 +446,6 @@ export function PivotTableBody({
                     const isEdgeRow = isTop ? index === rowsForPin.length - 1 : index === 0;
                     const displayRowIndex = isTop ? index : topRowCount + centerRowCount + index;
                     const rowBackground = theme.surfaceBg || theme.background;
-                    const cellById = getVisibleCellMap(row);
                     const extraShadow = isEdgeRow
                         ? (isTop ? `0 2px 4px -2px ${theme.border}80` : `0 -4px 6px -1px rgba(15,23,42,0.06)`)
                         : 'none';
@@ -320,24 +454,22 @@ export function PivotTableBody({
                             key={`${pinPosition}_${row.id}`}
                             role="row"
                             style={{
-                                ...styles.row,
+                                ...baseRowStyle,
                                 position: 'relative',
-                                width: `${totalLayoutWidth}px`,
                                 minWidth: `${totalLayoutWidth}px`,
                                 height: rowHeight,
                                 background: rowBackground,
-                                borderBottom: `1px solid ${theme.border}`,
                                 boxShadow: extraShadow,
                             }}
                         >
                             {leftCols.map((column) =>
-                                renderCell(cellById.get(column.id) || null, displayRowIndex, false)
+                                renderVirtualColumnCell(row, column, displayRowIndex, false)
                             )}
-                            <div style={{ width: beforeWidth, flexShrink: 0 }} />
-                            {renderCenterVirtualCells(row, displayRowIndex, false, cellById)}
-                            <div style={{ width: afterWidth, flexShrink: 0 }} />
+                            <div style={beforeSpacerStyle} />
+                            {renderCenterVirtualCells(row, displayRowIndex, false)}
+                            <div style={afterSpacerStyle} />
                             {rightCols.map((column) =>
-                                renderCell(cellById.get(column.id) || null, displayRowIndex, false)
+                                renderVirtualColumnCell(row, column, displayRowIndex, false)
                             )}
                         </div>
                     );
@@ -351,6 +483,7 @@ export function PivotTableBody({
             {isRequestPending && (
                 <div
                     aria-hidden="true"
+                    data-pivot-loading-indicator="global"
                     style={{
                         position: 'absolute',
                         top: 0,
@@ -395,13 +528,13 @@ export function PivotTableBody({
                      >
                          {/* Left Section */}
                          <div style={{position: 'sticky', left: 0, zIndex: 4, background: theme.headerBg}}>
-                             {table.getLeftHeaderGroups().map((group, level) => (
-                                     <div key={group.id} style={{display: 'flex', height: rowHeight, borderBottom: `1px solid ${theme.border}`}}>
+                             {leftHeaderGroups.map((group, level) => (
+                                     <div key={group.id} style={headerRowStyle}>
                                      {group.headers.map((header) => renderHeaderCell(header, level, 'left', null, true))}
                                  </div>
                              ))}
                              {showFloatingFilters && (
-                                 <div style={{display: 'flex', height: rowHeight, borderBottom: `1px solid ${theme.border}`, background: theme.background}}>
+                                 <div style={{...headerRowStyle, background: theme.background}}>
                                      {leftCols.map((column, idx) => (
                                          <div key={column.id} style={{...styles.headerCell, width: column.getSize(), height: rowHeight, padding: '2px 4px', borderRight: idx === leftCols.length - 1 ? `1px solid ${theme.border}` : 'none'}}>
                                              {column.id !== 'hierarchy' && (
@@ -426,34 +559,17 @@ export function PivotTableBody({
 
                          {/* Center Section */}
                          <div style={{position: 'relative'}}>
-                             {table.getCenterHeaderGroups().map((group, level) => {
-                                 // Virtualize center headers: only render headers whose leaf
-                                 // columns overlap the visible virtual column range, plus spacers.
-                                 // centerColIndexMap and visibleLeafIndexSet are memoized above the render.
-                                 const visibleHeaders = [];
-                                 for (const header of group.headers) {
-                                     const leafCols = header.column.getLeafColumns
-                                         ? header.column.getLeafColumns()
-                                         : [header.column];
-                                     const centerLeafPairs = leafCols
-                                         .map(lc => ({ col: lc, idx: centerColIndexMap.has(lc.id) ? centerColIndexMap.get(lc.id) : -1 }))
-                                         .filter(p => p.idx >= 0);
-                                     if (centerLeafPairs.length === 0) continue;
-                                     const visiblePairs = centerLeafPairs.filter(p => visibleLeafIndexSet.has(p.idx));
-                                     if (visiblePairs.length === 0) continue;
-                                     const visWidth = visiblePairs.reduce((sum, p) => sum + p.col.getSize(), 0);
-                                     visibleHeaders.push({ header, visWidth });
-                                 }
-                                 return (
-                                     <div key={group.id} style={{display: 'flex', height: rowHeight, borderBottom: `1px solid ${theme.border}`}}>
-                                         <div style={{ width: beforeWidth, flexShrink: 0 }} />
-                                         {visibleHeaders.map(({ header, visWidth }) =>
-                                             renderHeaderCell(header, level, 'center', visWidth)
-                                         )}
-                                         <div style={{ width: afterWidth, flexShrink: 0 }} />
+                              {centerHeaderRenderPlan.map(({ groupId, visibleHeaders }, level) => {
+                                  return (
+                                      <div key={groupId} style={headerRowStyle}>
+                                          <div style={beforeSpacerStyle} />
+                                          {visibleHeaders.map(({ header, visWidth }) =>
+                                              renderHeaderCell(header, level, 'center', visWidth)
+                                          )}
+                                          <div style={afterSpacerStyle} />
                                      </div>
                                  );
-                             })}
+                              })}
                              {showColumnLoadingSkeletons && (
                                  <div
                                      aria-hidden="true"
@@ -488,8 +604,8 @@ export function PivotTableBody({
                                  </div>
                              )}
                              {showFloatingFilters && (
-                                 <div style={{display: 'flex', height: rowHeight, borderBottom: `1px solid ${theme.border}`, background: theme.background}}>
-                                     <div style={{ width: beforeWidth, flexShrink: 0 }} />
+                                 <div style={{...headerRowStyle, background: theme.background}}>
+                                     <div style={beforeSpacerStyle} />
                                      {virtualCenterCols.map(virtualCol => {
                                          const column = centerCols[virtualCol.index];
                                          if (!column) return null;
@@ -512,20 +628,20 @@ export function PivotTableBody({
                                              </div>
                                          );
                                      })}
-                                     <div style={{ width: afterWidth, flexShrink: 0 }} />
+                                     <div style={afterSpacerStyle} />
                                  </div>
                              )}
                          </div>
 
                          {/* Right Section */}
                          <div style={{position: 'sticky', right: 0, zIndex: 4, background: theme.headerBg}}>
-                             {table.getRightHeaderGroups().map((group, level) => (
-                                 <div key={group.id} style={{display: 'flex', height: rowHeight, borderBottom: `1px solid ${theme.border}`}}>
+                             {rightHeaderGroups.map((group, level) => (
+                                 <div key={group.id} style={headerRowStyle}>
                                      {group.headers.map((header) => renderHeaderCell(header, level, 'right', null, true))}
                                  </div>
                              ))}
                              {showFloatingFilters && (
-                                 <div style={{display: 'flex', height: rowHeight, borderBottom: `1px solid ${theme.border}`, background: theme.background}}>
+                                 <div style={{...headerRowStyle, background: theme.background}}>
                                      {rightCols.map((column, idx) => (
                                          <div key={column.id} style={{...styles.headerCell, width: column.getSize(), height: rowHeight, padding: '2px 4px', borderLeft: idx === 0 ? `1px solid ${theme.border}` : 'none'}}>
                                              {column.id !== 'hierarchy' && (
@@ -551,6 +667,29 @@ export function PivotTableBody({
 
                      {/* Top Pinned Rows */}
                     {renderPinnedRowGroup(effectiveTopRows, 'top')}
+                    {stickyTreeRow && (
+                        <div
+                            style={{
+                                position: 'sticky',
+                                top: `${(stickyHeaders ? stickyHeaderHeight : 0) + (effectiveTopRows.length * rowHeight)}px`,
+                                zIndex: 79,
+                                display: 'flex',
+                                width: `${totalLayoutWidth}px`,
+                                minWidth: `${totalLayoutWidth}px`,
+                                height: `${rowHeight}px`,
+                                background: theme.surfaceBg || theme.background,
+                                borderBottom: `1px solid ${theme.border}`,
+                                boxShadow: `0 2px 4px -2px ${theme.border}80`,
+                            }}
+                        >
+                            {renderRowSections(
+                                stickyTreeRow,
+                                centerDisplayIndexById.get(stickyTreeRow.id) ?? getRenderedRowIndex(stickyTreeRow, 0),
+                                false,
+                                { rowBackground: theme.surfaceBg || theme.background }
+                            )}
+                        </div>
+                    )}
 
                      {showColumnLoadingSkeletons && (
                          <div
@@ -608,18 +747,12 @@ export function PivotTableBody({
                                      <div
                                         key={`skeleton_${virtualRow.index}`}
                                         style={{
-                                            ...styles.row,
+                                            ...skeletonRowStyle,
                                             height: virtualRow.size,
                                             top: `${adjustedTop}px`,
-                                            width: `${totalLayoutWidth}px`,
-                                            position: 'absolute',
-                                            background: theme.surfaceBg || theme.background,
-                                            borderBottom: `1px solid ${theme.border}`,
-                                            display: 'flex', alignItems: 'center',
-                                            zIndex: 90,
-                                            pointerEvents: 'none'
+                                            background: defaultRowBg,
                                         }}>
-                                            {renderSkeletonSections(theme.surfaceBg || theme.background)}
+                                            {renderSkeletonSections(defaultRowBg)}
                                         </div>                                 );
                              }
 
@@ -662,26 +795,17 @@ export function PivotTableBody({
 
                           // 4. Fallback: If row object is missing (even if we had cache), show skeleton
                           if (!row || !row.original) {
+                               const skelBg = (row && row.original && row.original._isTotal) ? totalRowBg : defaultRowBg;
                                return (
                                  <div
                                     key={`skeleton_wait_${virtualRow.index}`}
                                     style={{
-                                     ...styles.row,
+                                     ...skeletonRowStyle,
                                      height: virtualRow.size,
                                      top: `${adjustedTop}px`,
-                                     width: `${totalLayoutWidth}px`,
-                                     position: 'absolute',
-                                     background: (row && row.original && row.original._isTotal) ? getTotalRowBackground(theme) : (theme.surfaceBg || theme.background),
-                                     borderBottom: `1px solid ${theme.border}`,
-                                     display: 'flex', alignItems: 'center',
-                                     zIndex: 90,
-                                     pointerEvents: 'none'
+                                     background: skelBg,
                                  }}>
-                                     {renderSkeletonSections(
-                                         (row && row.original && row.original._isTotal)
-                                             ? getTotalRowBackground(theme)
-                                             : (theme.surfaceBg || theme.background)
-                                     )}
+                                     {renderSkeletonSections(skelBg)}
                                  </div>
                              );
                          }
@@ -701,47 +825,44 @@ export function PivotTableBody({
                               : String(virtualRow.index);
                           const displayRowIndex = centerDisplayIndexById.get(row.id) ?? (topRowCount + virtualRow.index);
 
+                          const rowBg = (row.original && row.original._isTotal) ? totalRowBg : defaultRowBg;
+
                           return (
                               <React.Fragment key={stableRowKey}>
                                   <div
                                      role="row"
                                      aria-rowindex={virtualRow.index}
                                      style={{
-                                      ...styles.row,
+                                      ...baseRowStyle,
                                       height: virtualRow.size,
                                       top: `${adjustedTop}px`,
-                                     width: `${totalLayoutWidth}px`,
-                                      background: (row.original && row.original._isTotal) ? getTotalRowBackground(theme) : (theme.surfaceBg || theme.background),
-                                      borderBottom: `1px solid ${theme.border}`,
+                                      background: rowBg,
                                       transition: rowVirtualizer.isScrolling ? 'none' : 'background-color 0.2s'
                                    }}>
                                       {renderRowSections(row, displayRowIndex, true, {
-                                          rowBackground: (row.original && row.original._isTotal)
-                                              ? getTotalRowBackground(theme)
-                                              : (theme.surfaceBg || theme.background)
+                                          rowBackground: rowBg,
                                       })}
                                   </div>
+                                  {detailMode === 'inline' && detailState && detailState.anchorRowId === row.id && (
+                                      <InlineDetailPanel
+                                          detailState={detailState}
+                                          onClose={onDetailClose}
+                                          onPageChange={onDetailPageChange}
+                                          onSort={onDetailSort}
+                                          onFilter={onDetailFilter}
+                                          theme={theme}
+                                          width={totalLayoutWidth}
+                                          top={adjustedTop + virtualRow.size + 4}
+                                          height={detailInlineHeight}
+                                      />
+                                  )}
                                   {showRowTransitionLoader && (
                                       <div
                                          role="row"
                                          aria-hidden="true"
                                          style={{
-                                          ...styles.row,
-                                          pointerEvents: 'none',
-                                          height: rowHeight,
+                                          ...transitionLoaderStyle,
                                           top: `${adjustedTop + virtualRow.size}px`,
-                                         width: `${totalLayoutWidth}px`,
-                                         position: 'absolute',
-                                          background: 'var(--pivot-loading-row-gradient, linear-gradient(90deg, rgba(246,250,255,0.96) 0%, rgba(228,241,255,0.98) 50%, rgba(246,250,255,0.96) 100%))',
-                                          backgroundSize: '220% 100%',
-                                          borderBottom: `1px dashed ${theme.border}`,
-                                         display: 'flex',
-                                         alignItems: 'center',
-                                         overflow: 'hidden',
-                                         opacity: 0.95,
-                                         zIndex: 90,
-                                         boxShadow: `0 4px 12px -8px ${theme.border}`,
-                                          animation: 'pivot-row-loader-enter 220ms ease-out, pivot-skeleton-shimmer var(--pivot-loading-shimmer-duration, 2.8s) linear infinite'
                                       }}>
                                           {renderSkeletonSections(
                                               'var(--pivot-loading-row-gradient, linear-gradient(90deg, rgba(246,250,255,0.96) 0%, rgba(228,241,255,0.98) 50%, rgba(246,250,255,0.96) 100%))',
@@ -790,15 +911,23 @@ export function PivotTableBody({
                  </div>
             </div>
             <StatusBar
-                selectedCells={selectedCells}
-                rowCount={rowCount}
-                visibleRowsCount={rows.length}
+                statusModel={statusModel || {
+                    selection: { selectedCells },
+                    data: {
+                        rowCount,
+                        visibleRowsCount: rows.length,
+                        totalCenterColumns,
+                        columnAdvisory,
+                    },
+                    runtime: {
+                        loading: isRequestPending,
+                    },
+                }}
+                statusActions={statusActions}
                 theme={theme}
-                isLoading={isRequestPending}
                 numberGroupSeparator={numberGroupSeparator}
             />
         </div>
     );
-}
-
+});
 

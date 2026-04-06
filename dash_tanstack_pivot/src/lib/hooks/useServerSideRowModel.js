@@ -6,6 +6,12 @@ const isGrandTotalRow = (row) => (
     !!row && (row._isTotal || row._path === '__grand_total__' || row._id === 'Grand Total')
 );
 
+const columnWindowCovers = (availableStart, availableEnd, requiredStart, requiredEnd) => {
+    if (requiredEnd === null || requiredEnd === undefined) return true;
+    if (availableEnd === null || availableEnd === undefined) return true;
+    return availableStart <= requiredStart && availableEnd >= requiredEnd;
+};
+
 const blockMatchesColumnWindow = (block, colStart, colEnd) => {
     if (!block || colEnd === null || colEnd === undefined) return true;
     const blockHasColMeta = block.colEnd !== null && block.colEnd !== undefined;
@@ -14,7 +20,38 @@ const blockMatchesColumnWindow = (block, colStart, colEnd) => {
     // so it should stay valid instead of triggering an immediate shrink refetch
     // that blanks cells after the first structural paint.
     if (!blockHasColMeta) return true;
-    return block.colStart === colStart && block.colEnd === colEnd;
+    // A wider loaded window should satisfy any narrower visible window. Exact
+    // equality is too strict for a virtualized table because tiny layout
+    // re-measures can shift the visible leaf range by one column and trigger a
+    // self-canceling cascade of viewport requests.
+    return columnWindowCovers(block.colStart, block.colEnd, colStart, colEnd);
+};
+
+const resolveBufferedColumnWindow = (colStart, colEnd, prefetchColumnCountOverride = null) => {
+    if (colStart === null || colStart === undefined || colEnd === null || colEnd === undefined) {
+        return {
+            requestedColStart: colStart ?? null,
+            requestedColEnd: colEnd ?? null,
+            visibleColumnCount: 0,
+            requestedColumnCount: 0,
+            prefetchColumnCount: 0,
+        };
+    }
+
+    const visibleColumnCount = Math.max(0, colEnd - colStart + 1);
+    const prefetchColumnCount = Number.isFinite(Number(prefetchColumnCountOverride))
+        ? Math.max(0, Math.floor(Number(prefetchColumnCountOverride)))
+        : Math.max(2, Math.min(4, Math.ceil(Math.max(visibleColumnCount, 1) / 2)));
+    const requestedColStart = Math.max(0, colStart - prefetchColumnCount);
+    const requestedColEnd = Math.max(requestedColStart, colEnd + prefetchColumnCount);
+
+    return {
+        requestedColStart,
+        requestedColEnd,
+        visibleColumnCount,
+        requestedColumnCount: Math.max(0, requestedColEnd - requestedColStart + 1),
+        prefetchColumnCount,
+    };
 };
 
 const debugLog = (...args) => {
@@ -33,6 +70,18 @@ const debugLog = (...args) => {
     console.log('[pivot-client]', ...args);
 };
 
+const getServerSideRowOverscan = (rowCount) => {
+    const numericRowCount = Number.isFinite(Number(rowCount)) ? Number(rowCount) : 0;
+    if (numericRowCount >= 100000) return 4;
+    if (numericRowCount >= 25000) return 5;
+    return 6;
+};
+
+const getUrgentJumpRowOverscan = (visibleRows) => {
+    const numericVisibleRows = Number.isFinite(Number(visibleRows)) ? Number(visibleRows) : 0;
+    return Math.max(8, Math.min(32, Math.ceil(Math.max(numericVisibleRows, 1) / 2)));
+};
+
 /**
  * Hook to manage server-side virtualization with caching.
  */
@@ -46,6 +95,10 @@ export const useServerSideRowModel = ({
     dataVersion = 0, // Data version from backend to prevent stale updates
     setProps,
     blockSize = 100,
+    maxBlocksInCache = 500,
+    blockLoadDebounceMs = null,
+    rowOverscan = null,
+    prefetchColumns = null,
     estimateRowHeight,
     keyMapper, // function to get a key from a row, if needed
     cacheKey,
@@ -60,7 +113,10 @@ export const useServerSideRowModel = ({
     requestVersionRef: externalRequestVersionRef = null,
     colStart = null,
     colEnd = null,
+    responseColStart = null,
+    responseColEnd = null,
     needsColSchema = false,
+    columnRangeUrgencyToken = 0,
     onViewportRequest = null,
 }) => {
     // 1. Initialize Cache
@@ -73,10 +129,12 @@ export const useServerSideRowModel = ({
         clearCache,
         invalidateFromBlock,
         softInvalidateFromBlock,
+        softInvalidateRange,
         pruneToRange,
+        setPinnedRange,
         cacheVersion,
         getLoadedBlocks
-    } = useRowCache({ blockSize });
+    } = useRowCache({ blockSize, maxBlocks: maxBlocksInCache });
 
     // Request Version Tracking
     const internalRequestVersionRef = useRef(0);
@@ -94,6 +152,19 @@ export const useServerSideRowModel = ({
     // without needing dataColStart/dataColEnd as props (which would cascade on every response).
     const lastRequestedColStartRef = useRef(null);
     const lastRequestedColEndRef = useRef(null);
+    const queuedViewportRef = useRef(null);
+    const viewportFlushTimerRef = useRef(null);
+    const lastViewportDispatchAtRef = useRef(0);
+    const lastObservedScrollTopRef = useRef(0);
+    const lastFastScrollDispatchRef = useRef({ startBlock: -1, endBlock: -1, dispatchedAt: 0 });
+    const lastImmediateViewportRef = useRef({
+        startBlock: -1,
+        endBlock: -1,
+        colStart: null,
+        colEnd: null,
+        dispatchedAt: 0,
+    });
+    const lastHandledColumnRangeUrgencyRef = useRef(0);
     // Throttle pruneToRange: only run when the viewport block range shifts by ≥1 block.
     const lastPrunedRangeRef = useRef({ startBlock: -1, endBlock: -1 });
 
@@ -103,7 +174,13 @@ export const useServerSideRowModel = ({
         count: serverSide ? (rowCount || 0) : (data ? data.length : 0),
         getScrollElement: () => parentRef.current,
         estimateSize: estimateRowHeight || (() => rowHeight),
-        overscan: 12 // Keep DOM footprint small; block-based prefetch covers further rows
+        overscan: serverSide
+            ? (
+                Number.isFinite(Number(rowOverscan))
+                    ? Math.max(0, Math.floor(Number(rowOverscan)))
+                    : getServerSideRowOverscan(rowCount)
+            )
+            : 12
     });
     
     const virtualRows = rowVirtualizer.getVirtualItems();
@@ -130,8 +207,24 @@ export const useServerSideRowModel = ({
         if (!serverSide) return;
         setCurrentEpoch(stateEpoch);
         inflightRequestRef.current = null;
+        queuedViewportRef.current = null;
         lastRequestedColStartRef.current = null;
         lastRequestedColEndRef.current = null;
+        lastViewportDispatchAtRef.current = 0;
+        lastObservedScrollTopRef.current = parentRef.current ? parentRef.current.scrollTop : 0;
+        lastFastScrollDispatchRef.current = { startBlock: -1, endBlock: -1, dispatchedAt: 0 };
+        lastImmediateViewportRef.current = {
+            startBlock: -1,
+            endBlock: -1,
+            colStart: null,
+            colEnd: null,
+            dispatchedAt: 0,
+        };
+        lastHandledColumnRangeUrgencyRef.current = columnRangeUrgencyToken;
+        if (viewportFlushTimerRef.current) {
+            clearTimeout(viewportFlushTimerRef.current);
+            viewportFlushTimerRef.current = null;
+        }
     }, [serverSide, stateEpoch, setCurrentEpoch]);
 
     useEffect(() => {
@@ -139,8 +232,24 @@ export const useServerSideRowModel = ({
         clearCache();
         inflightRequestRef.current = null;
         pendingViewportRef.current = null;
+        queuedViewportRef.current = null;
         lastRequestedColStartRef.current = null;
         lastRequestedColEndRef.current = null;
+        lastViewportDispatchAtRef.current = 0;
+        lastObservedScrollTopRef.current = parentRef.current ? parentRef.current.scrollTop : 0;
+        lastFastScrollDispatchRef.current = { startBlock: -1, endBlock: -1, dispatchedAt: 0 };
+        lastImmediateViewportRef.current = {
+            startBlock: -1,
+            endBlock: -1,
+            colStart: null,
+            colEnd: null,
+            dispatchedAt: 0,
+        };
+        lastHandledColumnRangeUrgencyRef.current = columnRangeUrgencyToken;
+        if (viewportFlushTimerRef.current) {
+            clearTimeout(viewportFlushTimerRef.current);
+            viewportFlushTimerRef.current = null;
+        }
         if (!externalRequestVersionRef) {
             requestVersionRef.current = 0;
         }
@@ -155,6 +264,21 @@ export const useServerSideRowModel = ({
         // Cooperative cancel point: invalidate inflight viewport intents from prior abort generation.
         inflightRequestRef.current = null;
         pendingViewportRef.current = null;
+        queuedViewportRef.current = null;
+        lastObservedScrollTopRef.current = parentRef.current ? parentRef.current.scrollTop : 0;
+        lastFastScrollDispatchRef.current = { startBlock: -1, endBlock: -1, dispatchedAt: 0 };
+        lastImmediateViewportRef.current = {
+            startBlock: -1,
+            endBlock: -1,
+            colStart: null,
+            colEnd: null,
+            dispatchedAt: 0,
+        };
+        lastHandledColumnRangeUrgencyRef.current = columnRangeUrgencyToken;
+        if (viewportFlushTimerRef.current) {
+            clearTimeout(viewportFlushTimerRef.current);
+            viewportFlushTimerRef.current = null;
+        }
         if (viewportAbortControllerRef.current) {
             viewportAbortControllerRef.current.abort();
             viewportAbortControllerRef.current = new AbortController();
@@ -234,10 +358,24 @@ export const useServerSideRowModel = ({
                     0,
                     Math.min((b + 1) * blockSize, effectiveRowCount) - blockStart
                 );
-                const isCompleteBlock = relStart === 0 && blockRows.length >= expectedRowsForBlock;
+                const isCompleteBlock = absStart === blockStart && blockRows.length >= expectedRowsForBlock;
 
                 // Use dataVersion for stale response protection
-                setBlockLoaded(b, blockRows, dataVersion, isCompleteBlock, stateEpoch, lastRequestedColStartRef.current, lastRequestedColEndRef.current);
+                const effectiveResponseColStart = responseColStart !== null && responseColStart !== undefined
+                    ? responseColStart
+                    : lastRequestedColStartRef.current;
+                const effectiveResponseColEnd = responseColEnd !== null && responseColEnd !== undefined
+                    ? responseColEnd
+                    : lastRequestedColEndRef.current;
+                setBlockLoaded(
+                    b,
+                    blockRows,
+                    dataVersion,
+                    isCompleteBlock,
+                    stateEpoch,
+                    effectiveResponseColStart,
+                    effectiveResponseColEnd
+                );
                 debugLog('sync-block', {
                     blockIndex: b,
                     stateEpoch,
@@ -288,9 +426,72 @@ export const useServerSideRowModel = ({
                 });
             }
         }
-    }, [data, dataOffset, dataVersion, excludeGrandTotal, serverSide, blockSize, rowCount, setBlockLoaded, stateEpoch]);
+    }, [data, dataOffset, dataVersion, excludeGrandTotal, serverSide, blockSize, rowCount, setBlockLoaded, stateEpoch, responseColStart, responseColEnd]);
 
-    const requestViewport = useCallback((firstRow, lastRow, blocksNeeded) => {
+    const collectBlocksNeeded = useCallback((
+        firstRow,
+        lastRow,
+        currentInflight = inflightRequestRef.current,
+        overrideColStart = colStart,
+        overrideColEnd = colEnd
+    ) => {
+        const startBlock = Math.floor(firstRow / blockSize);
+        const endBlock = Math.floor(lastRow / blockSize);
+        const blocksNeeded = [];
+
+        for (let b = startBlock; b <= endBlock; b++) {
+            const block = getBlock(b, stateEpoch);
+            const isStale = block && block.status === 'loading' && (Date.now() - block.timestamp > 1500);
+            const isPartial = block && block.status === 'partial';
+            const blockStart = b * blockSize;
+            const blockEnd = (b + 1) * blockSize - 1;
+            const isOrphaned = block && block.status === 'loading' && !isStale && !(
+                currentInflight &&
+                currentInflight.abortGeneration === abortGeneration &&
+                currentInflight.stateEpoch === stateEpoch &&
+                currentInflight.start <= blockStart &&
+                currentInflight.end >= blockEnd
+            );
+            const isColMismatch = block && block.status === 'loaded' && !blockMatchesColumnWindow(block, overrideColStart, overrideColEnd);
+            const inflightColMismatch = block && block.status === 'loading' && currentInflight && !columnWindowCovers(
+                currentInflight.colStart,
+                currentInflight.colEnd,
+                overrideColStart,
+                overrideColEnd
+            );
+            if (!block || block.status === 'error' || isStale || isPartial || isOrphaned || isColMismatch || inflightColMismatch) {
+                blocksNeeded.push(b);
+            }
+        }
+
+        if (blocksNeeded.length > 0) {
+            const newInflightMinBlock = Math.min(...blocksNeeded);
+            const newInflightMaxBlock = Math.max(...blocksNeeded);
+            for (let b = startBlock; b <= endBlock; b++) {
+                if (b >= newInflightMinBlock && b <= newInflightMaxBlock) continue;
+                const bBlock = getBlock(b, stateEpoch);
+                if (bBlock && bBlock.status === 'loading') {
+                    blocksNeeded.push(b);
+                }
+            }
+        }
+
+        return {
+            startBlock,
+            endBlock,
+            blocksNeeded: [...new Set(blocksNeeded)].sort((left, right) => left - right),
+        };
+    }, [abortGeneration, blockSize, colEnd, colStart, getBlock, stateEpoch]);
+
+    const requestViewport = useCallback((
+        firstRow,
+        lastRow,
+        blocksNeeded,
+        overrideColStart = colStart,
+        overrideColEnd = colEnd,
+        queuedAt = Date.now(),
+        options = {}
+    ) => {
         if (!setProps || blocksNeeded.length === 0) return false;
         const abortSignal = viewportAbortControllerRef.current ? viewportAbortControllerRef.current.signal : null;
         if (abortSignal && abortSignal.aborted) return false;
@@ -302,13 +503,19 @@ export const useServerSideRowModel = ({
 
         const inflight = inflightRequestRef.current;
         const inflightIsFresh = inflight && (Date.now() - inflight.timestamp <= 5000);
+        const {
+            requestedColStart,
+            requestedColEnd,
+            visibleColumnCount,
+            requestedColumnCount,
+            prefetchColumnCount,
+        } = resolveBufferedColumnWindow(overrideColStart, overrideColEnd, prefetchColumns);
 
         if (
             inflightIsFresh &&
             inflight.start === reqStart &&
             inflight.end === reqEnd &&
-            inflight.colStart === colStart &&
-            inflight.colEnd === colEnd &&
+            columnWindowCovers(inflight.colStart, inflight.colEnd, overrideColStart, overrideColEnd) &&
             inflight.abortGeneration === abortGeneration &&
             inflight.stateEpoch === stateEpoch
         ) {
@@ -317,6 +524,10 @@ export const useServerSideRowModel = ({
                 lastRow,
                 reqStart,
                 reqEnd,
+                requestedColStart,
+                requestedColEnd,
+                visibleColStart: overrideColStart,
+                visibleColEnd: overrideColEnd,
                 inflightVersion: inflight.version,
                 stateEpoch,
                 abortGeneration
@@ -325,26 +536,26 @@ export const useServerSideRowModel = ({
         }
 
         const newVersion = requestVersionRef.current + 1;
+        const requestId = `viewport:${sessionId}:${clientInstance}:${newVersion}`;
         requestVersionRef.current = newVersion;
         const previousColStart = lastRequestedColStartRef.current;
         const previousColEnd = lastRequestedColEndRef.current;
-        const hasColumnWindow = colStart !== null && colEnd !== null;
+        const hasColumnWindow = requestedColStart !== null && requestedColEnd !== null;
         const columnRangeChanged = hasColumnWindow && (
-            previousColStart !== colStart ||
-            previousColEnd !== colEnd
+            previousColStart !== requestedColStart ||
+            previousColEnd !== requestedColEnd
         );
-        const visibleColumnCount = hasColumnWindow ? Math.max(0, colEnd - colStart + 1) : 0;
         const overlapStart = hasColumnWindow && previousColStart !== null && previousColEnd !== null
-            ? Math.max(previousColStart, colStart)
+            ? Math.max(previousColStart, requestedColStart)
             : null;
         const overlapEnd = hasColumnWindow && previousColStart !== null && previousColEnd !== null
-            ? Math.min(previousColEnd, colEnd)
+            ? Math.min(previousColEnd, requestedColEnd)
             : null;
         const overlapCount = overlapStart !== null && overlapEnd !== null && overlapEnd >= overlapStart
             ? overlapEnd - overlapStart + 1
             : 0;
         const columnDeltaCount = columnRangeChanged
-            ? Math.max(1, visibleColumnCount - overlapCount)
+            ? Math.max(1, requestedColumnCount - overlapCount)
             : 0;
 
         // Always update the block version, even when it is already loading.
@@ -357,13 +568,14 @@ export const useServerSideRowModel = ({
         for (let b = minBlock; b <= maxBlock; b++) {
             setBlockLoading(b, newVersion, stateEpoch);
         }
+        setPinnedRange(minBlock, maxBlock, 2, stateEpoch);
 
         const reqCount = reqEnd - reqStart + 1;
         inflightRequestRef.current = {
             start: reqStart,
             end: reqEnd,
-            colStart,
-            colEnd,
+            colStart: requestedColStart,
+            colEnd: requestedColEnd,
             version: newVersion,
             timestamp: Date.now(),
             abortGeneration,
@@ -371,42 +583,55 @@ export const useServerSideRowModel = ({
         };
         if (typeof onViewportRequest === 'function') {
             onViewportRequest({
+                requestId,
                 version: newVersion,
                 reqStart,
                 reqEnd,
-                colStart,
-                colEnd,
+                colStart: requestedColStart,
+                colEnd: requestedColEnd,
                 hasColumnWindow,
                 columnRangeChanged,
                 columnDeltaCount,
                 visibleColumnCount,
+                requestedColumnCount,
+                prefetchColumnCount,
+                queuedAt,
+                emittedAt: Date.now(),
+                stateEpoch,
+                abortGeneration,
+                silent: Boolean(options && options.silent),
             });
         }
 
         // Stamp the col range into refs BEFORE setProps so the data-sync effect
         // always reads the correct range even if the response arrives synchronously.
-        lastRequestedColStartRef.current = colStart;
-        lastRequestedColEndRef.current = colEnd;
+        lastRequestedColStartRef.current = requestedColStart;
+        lastRequestedColEndRef.current = requestedColEnd;
 
         setProps({
-            viewport: {
-                table: tableName || undefined,
-                start: reqStart,
-                end: reqEnd,
-                count: reqCount,
-                version: newVersion,
-                window_seq: newVersion,
-                state_epoch: stateEpoch,
-                session_id: sessionId,
-                client_instance: clientInstance,
-                abort_generation: abortGeneration,
-                intent: 'viewport',
-                col_start: colStart !== null ? colStart : undefined,
-                col_end: colEnd !== null ? colEnd : undefined,
-                needs_col_schema: needsColSchema || undefined,
-                include_grand_total: excludeGrandTotal || undefined,
-                cinema_mode: cinemaMode || undefined,
-            }
+            runtimeRequest: {
+                kind: 'data',
+                requestId,
+                payload: {
+                    requestId,
+                    table: tableName || undefined,
+                    start: reqStart,
+                    end: reqEnd,
+                    count: reqCount,
+                    version: newVersion,
+                    window_seq: newVersion,
+                    state_epoch: stateEpoch,
+                    session_id: sessionId,
+                    client_instance: clientInstance,
+                    abort_generation: abortGeneration,
+                    intent: 'viewport',
+                    col_start: requestedColStart !== null ? requestedColStart : undefined,
+                    col_end: requestedColEnd !== null ? requestedColEnd : undefined,
+                    needs_col_schema: needsColSchema || undefined,
+                    include_grand_total: excludeGrandTotal || undefined,
+                    cinema_mode: cinemaMode || undefined,
+                },
+            },
         });
 
         debugLog('request-viewport', {
@@ -417,11 +642,15 @@ export const useServerSideRowModel = ({
             reqEnd,
             previousColStart,
             previousColEnd,
-            colStart,
-            colEnd,
+            visibleColStart: overrideColStart,
+            visibleColEnd: overrideColEnd,
+            requestedColStart,
+            requestedColEnd,
             columnRangeChanged,
             columnDeltaCount,
             visibleColumnCount,
+            requestedColumnCount,
+            prefetchColumnCount,
             needsColSchema,
             version: newVersion,
             stateEpoch,
@@ -444,11 +673,397 @@ export const useServerSideRowModel = ({
         needsColSchema,
         excludeGrandTotal,
         onViewportRequest,
+        prefetchColumns,
+        setPinnedRange,
+        cinemaMode,
     ]);
+
+    const flushQueuedViewport = useCallback((forceImmediate = false) => {
+        if (viewportFlushTimerRef.current) {
+            clearTimeout(viewportFlushTimerRef.current);
+            viewportFlushTimerRef.current = null;
+        }
+        const queued = queuedViewportRef.current;
+        if (!queued || queued.blocksNeeded.length === 0) return false;
+        queuedViewportRef.current = null;
+        const sent = requestViewport(
+            queued.firstRow,
+            queued.lastRow,
+            queued.blocksNeeded,
+            queued.overrideColStart,
+            queued.overrideColEnd,
+            queued.enqueuedAt
+        );
+        if (sent || forceImmediate) {
+            lastViewportDispatchAtRef.current = Date.now();
+        }
+        return sent;
+    }, [requestViewport]);
+
+    const enqueueViewportRequest = useCallback((
+        firstRow,
+        lastRow,
+        blocksNeeded,
+        {
+            immediate = false,
+            overrideColStart = colStart,
+            overrideColEnd = colEnd,
+        } = {}
+    ) => {
+        if (!blocksNeeded || blocksNeeded.length === 0) return false;
+        const normalizedBlocks = [...new Set(blocksNeeded)].sort((left, right) => left - right);
+        const existing = queuedViewportRef.current;
+
+        if (
+            existing &&
+            existing.stateEpoch === stateEpoch &&
+            existing.abortGeneration === abortGeneration
+        ) {
+            queuedViewportRef.current = {
+                ...existing,
+                firstRow,
+                lastRow,
+                overrideColStart,
+                overrideColEnd,
+                blocksNeeded: [...new Set([...existing.blocksNeeded, ...normalizedBlocks])].sort((left, right) => left - right),
+                enqueuedAt: existing.enqueuedAt || Date.now(),
+                updatedAt: Date.now(),
+            };
+        } else {
+            queuedViewportRef.current = {
+                firstRow,
+                lastRow,
+                overrideColStart,
+                overrideColEnd,
+                blocksNeeded: normalizedBlocks,
+                stateEpoch,
+                abortGeneration,
+                enqueuedAt: Date.now(),
+                updatedAt: Date.now(),
+            };
+        }
+
+        const queued = queuedViewportRef.current;
+        if (queued && queued.blocksNeeded.length > 0) {
+            setPinnedRange(queued.blocksNeeded[0], queued.blocksNeeded[queued.blocksNeeded.length - 1], 2, stateEpoch);
+        }
+
+        if (viewportFlushTimerRef.current) {
+            clearTimeout(viewportFlushTimerRef.current);
+            viewportFlushTimerRef.current = null;
+        }
+
+        if (immediate) {
+            lastImmediateViewportRef.current = {
+                startBlock: normalizedBlocks[0],
+                endBlock: normalizedBlocks[normalizedBlocks.length - 1],
+                colStart: overrideColStart,
+                colEnd: overrideColEnd,
+                dispatchedAt: Date.now(),
+            };
+            lastHandledColumnRangeUrgencyRef.current = columnRangeUrgencyToken;
+            lastViewportDispatchAtRef.current = Date.now();
+            return flushQueuedViewport(true);
+        }
+
+        const elapsed = Date.now() - lastViewportDispatchAtRef.current;
+        const debounceMs = immediate
+            ? 0
+            : (
+                Number.isFinite(Number(blockLoadDebounceMs))
+                    ? Math.max(0, Math.floor(Number(blockLoadDebounceMs)))
+                    : (elapsed >= 80 ? 16 : 48)
+            );
+        viewportFlushTimerRef.current = setTimeout(() => {
+            viewportFlushTimerRef.current = null;
+            flushQueuedViewport(immediate);
+        }, debounceMs);
+        return true;
+    }, [abortGeneration, blockLoadDebounceMs, colEnd, colStart, columnRangeUrgencyToken, flushQueuedViewport, prefetchColumns, setPinnedRange, stateEpoch]);
+
+    const requestUrgentColumnViewport = useCallback((overrideColStart, overrideColEnd) => {
+        if (!serverSide || !parentRef.current || structuralInFlight) return false;
+
+        const scrollEl = parentRef.current;
+        const estimatedFirstRow = Math.max(0, Math.floor(scrollEl.scrollTop / Math.max(rowHeight, 1)));
+        const estimatedVisibleRows = Math.max(1, Math.ceil(scrollEl.clientHeight / Math.max(rowHeight, 1)));
+        const urgentJumpOverscanRows = getUrgentJumpRowOverscan(estimatedVisibleRows);
+        const estimatedLastRow = Math.max(
+            estimatedFirstRow,
+            Math.min(
+                Math.max((rowCount || 0) - 1, estimatedFirstRow),
+                estimatedFirstRow + estimatedVisibleRows + urgentJumpOverscanRows
+            )
+        );
+
+        const { blocksNeeded } = collectBlocksNeeded(
+            estimatedFirstRow,
+            estimatedLastRow,
+            inflightRequestRef.current,
+            overrideColStart,
+            overrideColEnd
+        );
+        if (blocksNeeded.length === 0) {
+            lastHandledColumnRangeUrgencyRef.current = columnRangeUrgencyToken;
+            return false;
+        }
+
+        return enqueueViewportRequest(estimatedFirstRow, estimatedLastRow, blocksNeeded, {
+            immediate: true,
+            overrideColStart,
+            overrideColEnd,
+        });
+    }, [
+        blockSize,
+        collectBlocksNeeded,
+        columnRangeUrgencyToken,
+        enqueueViewportRequest,
+        parentRef,
+        rowCount,
+        rowHeight,
+        serverSide,
+        structuralInFlight,
+    ]);
+
+    const requestVisibleViewportRefresh = useCallback((overrideColStart = colStart, overrideColEnd = colEnd) => {
+        if (!serverSide || !parentRef.current || structuralInFlight) return false;
+
+        const scrollEl = parentRef.current;
+        const estimatedFirstRow = virtualRows.length > 0
+            ? virtualRows[0].index
+            : Math.max(0, Math.floor(scrollEl.scrollTop / Math.max(rowHeight, 1)));
+        const estimatedLastRow = virtualRows.length > 0
+            ? virtualRows[virtualRows.length - 1].index
+            : Math.max(
+                estimatedFirstRow,
+                Math.min(
+                    Math.max((rowCount || 0) - 1, estimatedFirstRow),
+                    estimatedFirstRow + Math.max(1, Math.ceil(scrollEl.clientHeight / Math.max(rowHeight, 1)))
+                )
+            );
+
+        const startBlock = Math.floor(estimatedFirstRow / blockSize);
+        const endBlock = Math.floor(estimatedLastRow / blockSize);
+        softInvalidateRange(startBlock, endBlock, stateEpoch);
+
+        const { blocksNeeded } = collectBlocksNeeded(
+            estimatedFirstRow,
+            estimatedLastRow,
+            inflightRequestRef.current,
+            overrideColStart,
+            overrideColEnd
+        );
+        if (blocksNeeded.length === 0) return false;
+
+        return requestViewport(
+            estimatedFirstRow,
+            estimatedLastRow,
+            blocksNeeded,
+            overrideColStart,
+            overrideColEnd,
+            Date.now(),
+            { silent: true }
+        );
+    }, [
+        blockSize,
+        colEnd,
+        colStart,
+        collectBlocksNeeded,
+        parentRef,
+        requestViewport,
+        rowCount,
+        rowHeight,
+        serverSide,
+        softInvalidateRange,
+        stateEpoch,
+        structuralInFlight,
+        virtualRows,
+    ]);
+
+    const viewportSchedulingEnabled = true;
+
+    useEffect(() => {
+        if (!viewportSchedulingEnabled || !serverSide || !parentRef.current) return;
+
+        const scrollEl = parentRef.current;
+        lastObservedScrollTopRef.current = scrollEl.scrollTop;
+
+        const handleScroll = () => {
+            if (structuralInFlight) {
+                lastObservedScrollTopRef.current = scrollEl.scrollTop;
+                return;
+            }
+
+            const nextScrollTop = scrollEl.scrollTop;
+            const scrollDelta = Math.abs(nextScrollTop - lastObservedScrollTopRef.current);
+            lastObservedScrollTopRef.current = nextScrollTop;
+
+            const bigJumpThreshold = rowHeight * blockSize * 4;
+            if (scrollDelta < bigJumpThreshold) return;
+
+            const estimatedFirstRow = Math.max(0, Math.floor(nextScrollTop / Math.max(rowHeight, 1)));
+            const estimatedVisibleRows = Math.max(1, Math.ceil(scrollEl.clientHeight / Math.max(rowHeight, 1)));
+            const urgentJumpOverscanRows = getUrgentJumpRowOverscan(estimatedVisibleRows);
+            const estimatedLastRow = Math.max(
+                estimatedFirstRow,
+                Math.min(
+                    Math.max((rowCount || 0) - 1, estimatedFirstRow),
+                    estimatedFirstRow + estimatedVisibleRows + urgentJumpOverscanRows
+                )
+            );
+
+            const { startBlock, endBlock, blocksNeeded } = collectBlocksNeeded(estimatedFirstRow, estimatedLastRow);
+            if (blocksNeeded.length === 0) return;
+
+            const previousFastDispatch = lastFastScrollDispatchRef.current;
+            const now = Date.now();
+            if (
+                previousFastDispatch.startBlock === startBlock
+                && previousFastDispatch.endBlock === endBlock
+                && (now - previousFastDispatch.dispatchedAt) < 180
+            ) {
+                return;
+            }
+
+            lastFastScrollDispatchRef.current = {
+                startBlock,
+                endBlock,
+                dispatchedAt: now,
+            };
+
+            enqueueViewportRequest(estimatedFirstRow, estimatedLastRow, blocksNeeded, { immediate: true });
+        };
+
+        scrollEl.addEventListener('scroll', handleScroll, { passive: true });
+        return () => {
+            scrollEl.removeEventListener('scroll', handleScroll);
+        };
+    }, [
+        viewportSchedulingEnabled,
+        serverSide,
+        parentRef,
+        structuralInFlight,
+        rowHeight,
+        blockSize,
+        rowCount,
+        collectBlocksNeeded,
+        enqueueViewportRequest,
+    ]);
+
+    useEffect(() => {
+        if (!viewportSchedulingEnabled || !serverSide || !setProps || virtualRows.length === 0) return;
+
+        const firstRow = virtualRows[0].index;
+        const lastRow = virtualRows[virtualRows.length - 1].index;
+        const retentionBufferBlocks = 2;
+        const { startBlock, endBlock, blocksNeeded } = collectBlocksNeeded(firstRow, lastRow);
+        const previousRange = lastPrunedRangeRef.current;
+        const blockJumpDistance = previousRange.startBlock >= 0
+            ? Math.max(
+                Math.abs(startBlock - previousRange.startBlock),
+                Math.abs(endBlock - previousRange.endBlock)
+            )
+            : 0;
+        const columnJumpDistance = (
+            colStart !== null
+            && colStart !== undefined
+            && colEnd !== null
+            && colEnd !== undefined
+            && lastRequestedColStartRef.current !== null
+            && lastRequestedColStartRef.current !== undefined
+            && lastRequestedColEndRef.current !== null
+            && lastRequestedColEndRef.current !== undefined
+        )
+            ? Math.max(
+                Math.abs(colStart - lastRequestedColStartRef.current),
+                Math.abs(colEnd - lastRequestedColEndRef.current)
+            )
+            : 0;
+        const columnRangeUrgent = columnRangeUrgencyToken > lastHandledColumnRangeUrgencyRef.current;
+        const shouldDispatchImmediately = blockJumpDistance >= 4 || columnJumpDistance >= 12 || columnRangeUrgent;
+        const recentImmediateViewport = lastImmediateViewportRef.current;
+        const matchesRecentImmediateViewport = (
+            recentImmediateViewport.startBlock === startBlock
+            && recentImmediateViewport.endBlock === endBlock
+            && recentImmediateViewport.colStart === colStart
+            && recentImmediateViewport.colEnd === colEnd
+            && (Date.now() - recentImmediateViewport.dispatchedAt) < 180
+        );
+
+        setPinnedRange(startBlock, endBlock, retentionBufferBlocks + 1, stateEpoch);
+
+        const lpr = lastPrunedRangeRef.current;
+        if (startBlock !== lpr.startBlock || endBlock !== lpr.endBlock) {
+            pruneToRange(startBlock, endBlock, retentionBufferBlocks, stateEpoch);
+            lastPrunedRangeRef.current = { startBlock, endBlock };
+        }
+
+        if (structuralInFlight) {
+            const existingPending = pendingViewportRef.current;
+            pendingViewportRef.current = existingPending
+                ? {
+                    firstRow,
+                    lastRow,
+                    blocksNeeded: [...new Set([...(existingPending.blocksNeeded || []), ...blocksNeeded])].sort((left, right) => left - right),
+                }
+                : { firstRow, lastRow, blocksNeeded };
+            return;
+        }
+
+        if (blocksNeeded.length > 0) {
+            if (matchesRecentImmediateViewport) {
+                if (columnRangeUrgent) {
+                    lastHandledColumnRangeUrgencyRef.current = columnRangeUrgencyToken;
+                }
+                return;
+            }
+            enqueueViewportRequest(firstRow, lastRow, blocksNeeded, { immediate: shouldDispatchImmediately });
+        } else if (columnRangeUrgent) {
+            lastHandledColumnRangeUrgencyRef.current = columnRangeUrgencyToken;
+        }
+    }, [
+        virtualRows,
+        serverSide,
+        setProps,
+        pruneToRange,
+        stateEpoch,
+        structuralInFlight,
+        inflightClearedAt,
+        cacheVersion,
+        collectBlocksNeeded,
+        enqueueViewportRequest,
+        setPinnedRange,
+        colStart,
+        colEnd,
+        columnRangeUrgencyToken,
+    ]);
+
+    useEffect(() => {
+        if (!viewportSchedulingEnabled || !serverSide || structuralInFlight || !pendingViewportRef.current || virtualRows.length === 0) return;
+
+        const pending = pendingViewportRef.current;
+        pendingViewportRef.current = null;
+        const retentionBufferBlocks = 2;
+
+        const { startBlock, endBlock, blocksNeeded } = pending.blocksNeeded && pending.blocksNeeded.length > 0
+            ? {
+                startBlock: Math.floor(pending.firstRow / blockSize),
+                endBlock: Math.floor(pending.lastRow / blockSize),
+                blocksNeeded: pending.blocksNeeded,
+            }
+            : collectBlocksNeeded(pending.firstRow, pending.lastRow);
+
+        setPinnedRange(startBlock, endBlock, retentionBufferBlocks + 1, stateEpoch);
+        pruneToRange(startBlock, endBlock, retentionBufferBlocks, stateEpoch);
+
+        if (blocksNeeded.length > 0) {
+            enqueueViewportRequest(pending.firstRow, pending.lastRow, blocksNeeded, { immediate: true });
+        }
+    }, [serverSide, structuralInFlight, virtualRows, blockSize, pruneToRange, stateEpoch, collectBlocksNeeded, enqueueViewportRequest, setPinnedRange]);
 
     // 4. Check Viewport & Trigger Fetch (with Debounce)
     useEffect(() => {
-        if (!serverSide || !setProps || virtualRows.length === 0) return;
+        if (!serverSide || !setProps || virtualRows.length === 0 || viewportSchedulingEnabled) return;
 
         // Use a small timeout to debounce rapid scrolling/viewport changes
         const timer = setTimeout(() => {
@@ -490,9 +1105,11 @@ export const useServerSideRowModel = ({
                 // as a specific window. Full-data blocks remain valid for any narrower
                 // window in the same epoch.
                 const isColMismatch = block && block.status === 'loaded' && !blockMatchesColumnWindow(block, colStart, colEnd);
-                const inflightColMismatch = block && block.status === 'loading' && currentInflight && (
-                    currentInflight.colStart !== colStart ||
-                    currentInflight.colEnd !== colEnd
+                const inflightColMismatch = block && block.status === 'loading' && currentInflight && !columnWindowCovers(
+                    currentInflight.colStart,
+                    currentInflight.colEnd,
+                    colStart,
+                    colEnd
                 );
                 if (!block || block.status === 'error' || isStale || isPartial || isOrphaned || isColMismatch || inflightColMismatch) {
                     blocksNeeded.push(b);
@@ -530,7 +1147,7 @@ export const useServerSideRowModel = ({
     }, [virtualRows, serverSide, getBlock, setProps, blockSize, pruneToRange, stateEpoch, structuralInFlight, requestViewport, inflightClearedAt, cacheVersion, colStart, colEnd]);
 
     useEffect(() => {
-        if (!serverSide || structuralInFlight || !pendingViewportRef.current || virtualRows.length === 0) return;
+        if (!serverSide || structuralInFlight || !pendingViewportRef.current || virtualRows.length === 0 || viewportSchedulingEnabled) return;
 
         const pending = pendingViewportRef.current;
         pendingViewportRef.current = null;
@@ -557,9 +1174,11 @@ export const useServerSideRowModel = ({
                 currentInflight.end >= blockEnd
             );
             const isColMismatch = block && block.status === 'loaded' && !blockMatchesColumnWindow(block, colStart, colEnd);
-            const inflightColMismatch = block && block.status === 'loading' && currentInflight && (
-                currentInflight.colStart !== colStart ||
-                currentInflight.colEnd !== colEnd
+            const inflightColMismatch = block && block.status === 'loading' && currentInflight && !columnWindowCovers(
+                currentInflight.colStart,
+                currentInflight.colEnd,
+                colStart,
+                colEnd
             );
             if (!block || block.status === 'error' || isStale || isPartial || isOrphaned || isColMismatch || inflightColMismatch) {
                 blocksNeeded.push(b);
@@ -588,6 +1207,11 @@ export const useServerSideRowModel = ({
             if (clearCache) clearCache();
             inflightRequestRef.current = null;
             pendingViewportRef.current = null;
+            queuedViewportRef.current = null;
+            if (viewportFlushTimerRef.current) {
+                clearTimeout(viewportFlushTimerRef.current);
+                viewportFlushTimerRef.current = null;
+            }
             if (viewportAbortControllerRef.current) {
                 viewportAbortControllerRef.current.abort();
             }
@@ -710,6 +1334,8 @@ export const useServerSideRowModel = ({
         grandTotalRow,
         loadedRows,
         renderedData: renderedDataInfo.data,
-        renderedOffset: renderedDataInfo.offset
+        renderedOffset: renderedDataInfo.offset,
+        requestUrgentColumnViewport,
+        requestVisibleViewportRefresh,
     };
 };

@@ -135,3 +135,36 @@ def test_import_dash_tanstack_pivot():
     assert hasattr(mod, "DashTanstackPivot"), (
         "dash_tanstack_pivot module does not expose DashTanstackPivot component"
     )
+
+
+def test_generated_component_exposes_runtime_transport_props():
+    """The generated Python wrapper must expose the unified runtime transport props."""
+    if str(PKG_DIR) not in sys.path:
+        sys.path.insert(0, str(PKG_DIR))
+
+    import importlib
+
+    mod = importlib.import_module("dash_tanstack_pivot")
+    component = mod.DashTanstackPivot(id="pivot-grid")
+
+    assert "runtimeRequest" in component.available_properties
+    assert "runtimeResponse" in component.available_properties
+    assert "viewMode" in component.available_properties
+    assert "detailMode" in component.available_properties
+    assert "treeConfig" in component.available_properties
+    assert "detailConfig" in component.available_properties
+    assert "performanceConfig" in component.available_properties
+    assert "pivotMode" not in component.available_properties
+    for legacy_prop in (
+        "filterRequest",
+        "filterOptions",
+        "chartRequest",
+        "chartData",
+        "drillThrough",
+        "viewport",
+        "rowCount",
+        "dataOffset",
+        "dataVersion",
+        "columns",
+    ):
+        assert legacy_prop not in component.available_properties

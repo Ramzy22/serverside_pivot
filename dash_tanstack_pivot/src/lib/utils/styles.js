@@ -11,6 +11,9 @@ export const themes = {
         textSec: '#757575',
         hover: '#eeeeee',
         select: '#e3f2fd',
+        editedCellBg: '#E8F4EA',
+        editedCellBorder: '#7FAE89',
+        editedCellText: '#244233',
         background: '#fff',
         sidebarBg: '#fafafa',
         pinnedBoundaryShadow: 'rgba(15,23,42,0.22)'
@@ -37,6 +40,9 @@ export const themes = {
         hover: '#171B22',
         hoverStrong: '#1C212B',
         select: 'rgba(129,140,248,0.16)',
+        editedCellBg: '#203A36',
+        editedCellBorder: '#6AB7A8',
+        editedCellText: '#F3FCFA',
         background: '#0F1218',
         sidebarBg: '#10141B',
         totalBg: 'rgba(129,140,248,0.18)',
@@ -62,6 +68,9 @@ export const themes = {
         textSec: '#666',
         hover: '#f5f5f5',
         select: '#e8eaf6',
+        editedCellBg: '#E7F4E9',
+        editedCellBorder: '#73A17E',
+        editedCellText: '#294032',
         background: '#fff',
         sidebarBg: '#fafafa',
         pinnedBoundaryShadow: 'rgba(17,24,39,0.22)'
@@ -78,6 +87,9 @@ export const themes = {
         textSec: '#7f8c8d',
         hover: '#ecf0f1',
         select: '#d6eaf8',
+        editedCellBg: '#E5F4EE',
+        editedCellBorder: '#72A99A',
+        editedCellText: '#23463E',
         background: '#fff',
         sidebarBg: '#fafafa',
         pinnedBoundaryShadow: 'rgba(15,23,42,0.22)'
@@ -93,7 +105,7 @@ export const themes = {
         surfaceBg: '#FFFFFF',
         surfaceMuted: '#F8FAFC',
         surfaceInset: '#F5F7FB',
-        hierarchyBg: '#F7F9FC',
+        hierarchyBg: '#EDF4FF',
         sortedHeaderBg: 'rgba(79,70,229,0.06)',
         sortedHeaderBorder: '#4F46E5',
         sortedHeaderText: '#3730A3',
@@ -103,6 +115,9 @@ export const themes = {
         hover: '#F8FAFC',
         hoverStrong: '#F3F4F6',
         select: 'rgba(79,70,229,0.08)',
+        editedCellBg: '#EDF7EF',
+        editedCellBorder: '#82B38B',
+        editedCellText: '#2C4636',
         background: '#FFFFFF',
         sidebarBg: '#FFFFFF',
         totalBg: 'rgba(238,242,255,0.82)',
@@ -138,6 +153,9 @@ export const themes = {
         hover: '#1A212B',
         hoverStrong: '#202833',
         select: 'rgba(245,158,11,0.18)',
+        editedCellBg: '#203330',
+        editedCellBorder: '#6DB9A7',
+        editedCellText: '#F2FCF8',
         background: '#0F1319',
         sidebarBg: '#10151D',
         totalBg: 'rgba(245,158,11,0.16)',
@@ -173,6 +191,9 @@ export const themes = {
         hover: '#101010',
         hoverStrong: '#171717',
         select: 'rgba(245,158,11,0.20)',
+        editedCellBg: '#1B302C',
+        editedCellBorder: '#72C1AD',
+        editedCellText: '#F4FCF8',
         background: '#000000',
         sidebarBg: '#020202',
         totalBg: 'rgba(245,158,11,0.20)',
@@ -199,8 +220,15 @@ export const themes = {
         textSec: '#8a8a98',
         hover: 'rgba(255,255,255,0.04)',
         select: 'rgba(0,242,255,0.12)',
+        editedCellBg: '#2C2518',
+        editedCellBorder: '#D6B06A',
+        editedCellText: '#FFF6E5',
         background: '#0d0d12',
         sidebarBg: '#0a0a10',
+        themeSelectorBg: '#141824',
+        themeSelectorMenuBg: '#101622',
+        themeSelectorText: '#D7FBFF',
+        themeSelectorMenuText: '#E6FFFF',
         pinnedBoundaryShadow: 'rgba(0,0,0,0.7)',
         radius: '8px',
     },
@@ -217,8 +245,15 @@ export const themes = {
         textSec: '#9ca3af',
         hover: 'rgba(255,255,255,0.03)',
         select: 'rgba(0,242,255,0.1)',
+        editedCellBg: '#271F16',
+        editedCellBorder: '#D8B879',
+        editedCellText: '#FFF7EA',
         background: '#030712',
         sidebarBg: '#050b1a',
+        themeSelectorBg: '#0A1428',
+        themeSelectorMenuBg: '#08101F',
+        themeSelectorText: '#DDFBFF',
+        themeSelectorMenuText: '#F0FDFF',
         pinnedBoundaryShadow: 'rgba(0,0,0,0.8)',
         radius: '8px',
     },
@@ -234,6 +269,9 @@ export const themes = {
         textSec: '#666666',
         hover: 'rgba(37,99,235,0.04)',
         select: 'rgba(37,99,235,0.08)',
+        editedCellBg: '#EEF6EF',
+        editedCellBorder: '#8EAE93',
+        editedCellText: '#2B4330',
         background: '#ffffff',
         sidebarBg: '#fcfcfc',
         pinnedBoundaryShadow: 'rgba(0,0,0,0.06)',
@@ -251,8 +289,15 @@ export const themes = {
         textSec: '#64748b',
         hover: 'rgba(248,250,252,0.8)',
         select: '#f1f5f9',
+        editedCellBg: '#EEF3EA',
+        editedCellBorder: '#96AB8E',
+        editedCellText: '#33412F',
         background: '#ffffff',
         sidebarBg: '#fdfdfd',
+        themeSelectorBg: '#F7F2EB',
+        themeSelectorMenuBg: '#F5EEE5',
+        themeSelectorText: '#433427',
+        themeSelectorMenuText: '#2F241A',
         pinnedBoundaryShadow: 'rgba(0,0,0,0.04)',
         radius: '12px',
     }
@@ -295,6 +340,241 @@ export const mergeStateStyles = (...layers) =>
         });
         return merged;
     }, {});
+
+const HEX_COLOR_RE = /^#([0-9a-f]{3}|[0-9a-f]{6})$/i;
+const RGB_COLOR_RE = /^rgba?\(\s*(\d{1,3})[\s,]+(\d{1,3})[\s,]+(\d{1,3})(?:[\s,/]+([0-9]*\.?[0-9]+))?\s*\)$/i;
+
+export const withAlpha = (color, alpha, fallback = null) => {
+    if (typeof color !== 'string') return fallback;
+    const normalized = color.trim();
+    const safeAlpha = Math.max(0, Math.min(1, Number(alpha)));
+    if (Number.isNaN(safeAlpha)) return fallback || normalized;
+
+    const rgbMatch = normalized.match(RGB_COLOR_RE);
+    if (rgbMatch) {
+        const [, r, g, b] = rgbMatch;
+        return `rgba(${r}, ${g}, ${b}, ${safeAlpha})`;
+    }
+
+    const hexMatch = normalized.match(HEX_COLOR_RE);
+    if (hexMatch) {
+        const hex = hexMatch[1];
+        const expanded = hex.length === 3
+            ? hex.split('').map((char) => char + char).join('')
+            : hex;
+        const r = parseInt(expanded.slice(0, 2), 16);
+        const g = parseInt(expanded.slice(2, 4), 16);
+        const b = parseInt(expanded.slice(4, 6), 16);
+        return `rgba(${r}, ${g}, ${b}, ${safeAlpha})`;
+    }
+
+    return fallback || normalized;
+};
+
+const normalizeHexColor = (value) => {
+    if (typeof value !== 'string') return null;
+    const trimmed = value.trim();
+    if (!HEX_COLOR_RE.test(trimmed)) return null;
+    const hex = trimmed.slice(1);
+    if (hex.length === 3) {
+        return `#${hex.split('').map((char) => char + char).join('')}`.toUpperCase();
+    }
+    return `#${hex}`.toUpperCase();
+};
+
+const hexToRgb = (value) => {
+    const normalized = normalizeHexColor(value);
+    if (!normalized) return null;
+    return {
+        r: parseInt(normalized.slice(1, 3), 16),
+        g: parseInt(normalized.slice(3, 5), 16),
+        b: parseInt(normalized.slice(5, 7), 16),
+    };
+};
+
+const rgbToHex = (rgb) => {
+    if (!rgb || !Number.isFinite(rgb.r) || !Number.isFinite(rgb.g) || !Number.isFinite(rgb.b)) return null;
+    return `#${[rgb.r, rgb.g, rgb.b]
+        .map((channel) => Math.max(0, Math.min(255, Math.round(channel))).toString(16).padStart(2, '0'))
+        .join('')}`.toUpperCase();
+};
+
+const mixHexColors = (primaryColor, surfaceColor, primaryWeight = 0.15) => {
+    const primaryRgb = hexToRgb(primaryColor);
+    const surfaceRgb = hexToRgb(surfaceColor);
+    if (!primaryRgb || !surfaceRgb) return null;
+    const weight = Math.max(0, Math.min(1, primaryWeight));
+    return rgbToHex({
+        r: (primaryRgb.r * weight) + (surfaceRgb.r * (1 - weight)),
+        g: (primaryRgb.g * weight) + (surfaceRgb.g * (1 - weight)),
+        b: (primaryRgb.b * weight) + (surfaceRgb.b * (1 - weight)),
+    });
+};
+
+const resolveExplicitThemeColor = (value) => (
+    typeof value === 'string' && value.trim() ? value.trim() : null
+);
+
+export const colorToInputHex = (value, fallback = '#000000') => {
+    const normalizedHex = normalizeHexColor(value);
+    if (normalizedHex) return normalizedHex;
+    const rgbMatch = typeof value === 'string' ? value.trim().match(RGB_COLOR_RE) : null;
+    if (rgbMatch) {
+        const [, r, g, b] = rgbMatch;
+        return rgbToHex({
+            r: Number(r),
+            g: Number(g),
+            b: Number(b),
+        }) || fallback;
+    }
+    return fallback;
+};
+
+export const deriveStructuralThemeTokens = (baseTheme, explicitOverrides = null) => {
+    const themeSource = baseTheme && typeof baseTheme === 'object' ? baseTheme : {};
+    const overrideSource = explicitOverrides && typeof explicitOverrides === 'object' ? explicitOverrides : {};
+    const isDark = isDarkTheme(themeSource);
+    const primary = normalizeHexColor(themeSource.primary) || (isDark ? '#93C5FD' : '#2563EB');
+    const surface = normalizeHexColor(themeSource.surfaceBg || themeSource.background || themeSource.pageBg)
+        || (isDark ? '#111827' : '#FFFFFF');
+    const insetSurface = normalizeHexColor(
+        themeSource.surfaceInset || themeSource.headerSubtleBg || themeSource.headerBg
+    ) || mixHexColors(primary, surface, isDark ? 0.12 : 0.04)
+        || surface;
+    const text = resolveExplicitThemeColor(themeSource.text) || (isDark ? '#F8FAFC' : '#111827');
+    const strongText = resolveExplicitThemeColor(themeSource.sortedHeaderText)
+        || resolveExplicitThemeColor(themeSource.primary)
+        || text;
+
+    const explicitHierarchyBg = resolveExplicitThemeColor(overrideSource.hierarchyBg);
+    const explicitTotalBg = resolveExplicitThemeColor(overrideSource.totalBg);
+    const explicitTotalBgStrong = resolveExplicitThemeColor(overrideSource.totalBgStrong);
+    const explicitTotalText = resolveExplicitThemeColor(overrideSource.totalText);
+    const explicitTotalTextStrong = resolveExplicitThemeColor(overrideSource.totalTextStrong);
+
+    const hierarchyBg = explicitHierarchyBg
+        || resolveExplicitThemeColor(themeSource.hierarchyBg)
+        || mixHexColors(primary, insetSurface, isDark ? 0.12 : 0.05)
+        || insetSurface;
+    const totalBg = explicitTotalBg
+        || resolveExplicitThemeColor(themeSource.totalBg)
+        || mixHexColors(primary, surface, isDark ? 0.20 : 0.10)
+        || insetSurface;
+    const totalBgStrong = explicitTotalBgStrong
+        || resolveExplicitThemeColor(themeSource.totalBgStrong)
+        || mixHexColors(primary, surface, isDark ? 0.46 : 0.16)
+        || totalBg;
+    const totalText = explicitTotalText
+        || resolveExplicitThemeColor(themeSource.totalText)
+        || (isDark ? text : strongText);
+    const totalTextStrong = explicitTotalTextStrong
+        || resolveExplicitThemeColor(themeSource.totalTextStrong)
+        || (isDark ? (resolveExplicitThemeColor(themeSource.pageBg) || '#0A0C10') : strongText);
+
+    return {
+        hierarchyBg,
+        totalBg,
+        totalBgStrong,
+        totalText,
+        totalTextStrong,
+    };
+};
+
+export const deriveEditedCellThemeTokens = (baseTheme, explicitOverrides = null) => {
+    const themeSource = baseTheme && typeof baseTheme === 'object' ? baseTheme : {};
+    const overrideSource = explicitOverrides && typeof explicitOverrides === 'object' ? explicitOverrides : {};
+    const isDark = isDarkTheme(themeSource);
+    const surface = normalizeHexColor(themeSource.surfaceBg || themeSource.background || themeSource.pageBg)
+        || (isDark ? '#111827' : '#FFFFFF');
+    const mutedSurface = normalizeHexColor(
+        themeSource.surfaceInset || themeSource.headerSubtleBg || themeSource.headerBg
+    ) || surface;
+    const textHex = normalizeHexColor(themeSource.text)
+        || normalizeHexColor(themeSource.textSec)
+        || (isDark ? '#F8FAFC' : '#111827');
+    const text = resolveExplicitThemeColor(themeSource.text) || (isDark ? '#F8FAFC' : '#111827');
+    const editedBase = normalizeHexColor(themeSource.editedCellBorder)
+        || normalizeHexColor(themeSource.editedPaletteBase)
+        || (isDark ? '#7BC1B1' : '#8FAF92');
+    const explicitBg = resolveExplicitThemeColor(overrideSource.editedCellBg);
+    const explicitBorder = resolveExplicitThemeColor(overrideSource.editedCellBorder);
+    const explicitText = resolveExplicitThemeColor(overrideSource.editedCellText);
+    const editedCellBg = explicitBg
+        || mixHexColors(editedBase, mutedSurface, isDark ? 0.20 : 0.14)
+        || mixHexColors(editedBase, surface, isDark ? 0.22 : 0.16)
+        || (isDark ? '#20332F' : '#ECF5ED');
+    const derivedBorderFromBg = explicitBg
+        ? (
+            mixHexColors(textHex, explicitBg, isDark ? 0.22 : 0.18)
+            || mixHexColors(surface, explicitBg, isDark ? 0.10 : 0.16)
+        )
+        : null;
+    const editedCellBorder = explicitBorder
+        || derivedBorderFromBg
+        || mixHexColors(editedBase, surface, isDark ? 0.62 : 0.34)
+        || editedBase;
+    const editedCellText = explicitText || text;
+    return {
+        editedCellBg,
+        editedCellBorder,
+        editedCellText,
+    };
+};
+
+export const CELL_CONTENT_RESET_STYLE = Object.freeze({
+    backgroundColor: 'transparent',
+    backgroundImage: 'none',
+    backgroundRepeat: 'no-repeat',
+    backgroundSize: 'auto',
+    color: 'inherit',
+    fontWeight: 'inherit',
+    fontStyle: 'inherit',
+    boxShadow: 'none',
+});
+
+export const buildEditedCellVisualStyle = (theme, editedCellFmt, editedMarker, options = {}) => {
+    if (!theme || !editedMarker) return null;
+
+    const explicitFillColor = editedCellFmt && editedCellFmt.bg ? editedCellFmt.bg : null;
+    const fillColor = explicitFillColor || theme.editedCellBg || theme.select || theme.background || '#E8F1FF';
+    const textColor = (editedCellFmt && editedCellFmt.color) || theme.editedCellText || undefined;
+    const borderColor = explicitFillColor
+        ? withAlpha(
+            textColor || theme.text || theme.primary || fillColor,
+            theme.isDark ? 0.34 : 0.20,
+            theme.editedCellBorder || theme.primary || '#4F46E5'
+        )
+        : (theme.editedCellBorder || theme.primary || '#4F46E5');
+    const isDirect = editedMarker.direct === true;
+    const stripeColor = withAlpha(borderColor, isDirect ? (theme.isDark ? 0.24 : 0.16) : (theme.isDark ? 0.16 : 0.10), borderColor);
+    const glowBaseColor = fillColor || borderColor;
+    const glowColor = withAlpha(glowBaseColor, isDirect ? (theme.isDark ? 0.18 : 0.14) : (theme.isDark ? 0.12 : 0.08), glowBaseColor);
+    const outlineSource = explicitFillColor
+        ? (textColor || theme.text || borderColor)
+        : borderColor;
+    const outlineColor = isDirect
+        ? withAlpha(outlineSource, theme.isDark ? 0.52 : 0.28, borderColor)
+        : withAlpha(outlineSource, theme.isDark ? 0.34 : 0.18, borderColor);
+    const leftStripeWidth = isDirect ? 8 : 6;
+    const leftFadeWidth = isDirect ? 26 : 18;
+
+    return {
+        backgroundColor: fillColor,
+        backgroundImage: [
+            `linear-gradient(90deg, ${stripeColor} 0px, ${stripeColor} ${leftStripeWidth}px, transparent ${leftStripeWidth}px, transparent ${leftFadeWidth}%)`,
+            `radial-gradient(circle at top right, ${glowColor} 0%, transparent 58%)`,
+            `linear-gradient(0deg, ${fillColor} 0%, ${fillColor} 100%)`,
+        ].join(', '),
+        backgroundRepeat: 'no-repeat',
+        backgroundSize: '100% 100%',
+        color: textColor,
+        fontWeight: editedCellFmt && editedCellFmt.bold ? 'bold' : (options.emphasizeText && isDirect ? 600 : undefined),
+        fontStyle: editedCellFmt && editedCellFmt.italic ? 'italic' : undefined,
+        boxShadow: isDirect
+            ? `inset 3px 0 0 0 ${borderColor}, inset 0 0 0 1px ${outlineColor}`
+            : `inset 2px 0 0 0 ${borderColor}, inset 0 0 0 1px ${outlineColor}`,
+    };
+};
 
 export const isDarkTheme = (theme) => theme && (theme.name === 'dark' || theme.isDark === true);
 

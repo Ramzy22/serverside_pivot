@@ -32,6 +32,8 @@ Keyword arguments:
 
     def __init__(
         self,
+        totalCenterColumns = None,
+        columnAdvisory = None,
         isLoading = None,
         **kwargs
     ):

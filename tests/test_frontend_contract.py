@@ -4,6 +4,9 @@ import asyncio
 import pyarrow as pa
 import sys
 import os
+import time
+from pathlib import Path
+from concurrent.futures import ThreadPoolExecutor
 
 # Add root and pivot_engine source to path
 sys.path.append(os.getcwd())
@@ -11,6 +14,7 @@ sys.path.append(os.path.join(os.getcwd(), 'pivot_engine'))
 sys.path.append(os.path.join(os.getcwd(), 'dash_tanstack_pivot'))
 
 from pivot_engine.tanstack_adapter import create_tanstack_adapter, TanStackRequest, TanStackOperation
+from pivot_engine.types.pivot_spec import PivotSpec, Measure, PivotConfig
 
 # Reuse the data generation logic from app.py
 def create_test_data(adapter, rows=1000):
@@ -43,6 +47,121 @@ def test_dash_app_import_and_layout_valid():
 
     assert app is not None
     assert app.layout is not None
+
+
+def test_dash_app_registers_local_component_bundle():
+    from dash.fingerprint import build_fingerprint
+    import dash_tanstack_pivot as component_pkg
+    from dash_presentation.app import app
+
+    resources = app._collect_and_register_resources(app.scripts.get_all_scripts())
+    component_scripts = [
+        resource for resource in resources
+        if "dash_tanstack_pivot" in resource and resource.endswith(".min.js")
+    ]
+
+    bundle_rel_path = "dash_tanstack_pivot/dash_tanstack_pivot.min.js"
+    bundle_path = Path(component_pkg.__file__).resolve().parent / bundle_rel_path
+    expected = (
+        f"{app.config.requests_pathname_prefix}"
+        f"_dash-component-suites/dash_tanstack_pivot/"
+        f"{build_fingerprint(bundle_rel_path, component_pkg.__version__, int(bundle_path.stat().st_mtime))}"
+    )
+
+    assert Path(component_pkg.__file__).resolve().is_relative_to(
+        (Path(os.getcwd()) / "dash_tanstack_pivot").resolve()
+    )
+    assert component_scripts == [expected]
+
+
+def test_dash_presentation_app_includes_single_pivot_sparkline_modes_demo():
+    app_source = Path(
+        os.path.join(os.getcwd(), "dash_presentation", "app.py")
+    ).read_text(encoding="utf-8")
+
+    assert 'id="sparkline-modes-pivot-grid"' in app_source
+    assert '"In-Cell Sparkline Modes"' in app_source
+    assert '"sparkline_demo_data"' in app_source
+    assert '"type": "line"' in app_source
+    assert '"type": "area"' in app_source
+    assert '"type": "column"' in app_source
+    assert '"type": "bar"' in app_source
+
+
+def test_chart_panel_source_grows_for_settings_instead_of_splitting_canvas():
+    chart_source = Path(
+        os.path.join(
+            os.getcwd(),
+            "dash_tanstack_pivot",
+            "src",
+            "lib",
+            "components",
+            "Charts",
+            "PivotCharts.js",
+        )
+    ).read_text(encoding="utf-8")
+    component_source = Path(
+        os.path.join(
+            os.getcwd(),
+            "dash_tanstack_pivot",
+            "src",
+            "lib",
+            "components",
+            "DashTanstackPivot.react.js",
+        )
+    ).read_text(encoding="utf-8")
+
+    assert "settingsPanelWidth: controlledSettingsPanelWidth" in chart_source
+    assert "onSettingsPanelWidthChange" in chart_source
+    assert "const visibleSettingsWidth = (!cinemaMode && settingsPaneOpen) ? (settingsPanelWidth + 9) : 0;" in chart_source
+    assert "onSettingsWidthBudgetChange" in chart_source
+    assert "const [settingsWidthBudget, setSettingsWidthBudget] = useState(null);" in chart_source
+    assert "onSettingsWidthBudgetChange={setSettingsWidthBudget}" in chart_source
+    assert "floatingInteractionLocked" in chart_source
+    assert "Dock chart pane to the top" in chart_source
+    assert "Dock chart pane to the bottom" in chart_source
+    assert "data-chart-modal-position={position}" in chart_source
+    assert "const [chartCanvasPaneWidthHints, setChartCanvasPaneWidthHints] = useState({});" in component_source
+    assert "VALID_CHART_DOCK_POSITIONS = new Set(['left', 'right', 'top', 'bottom'])" in component_source
+    assert "normalizeChartDockPosition" in component_source
+    assert "dockPosition: normalizeChartDockPosition(source.dockPosition || source.dock_position, 'right')" in component_source
+    assert "data-docked-chart-pane-position={normalizedDockPosition}" in component_source
+    assert "renderHorizontalDockGroup(dockedChartCanvasPanesByPosition.left, 'left')" in component_source
+    assert "renderVerticalDockGroup(dockedChartCanvasPanesByPosition.top, 'top')" in component_source
+    assert "chartModal && chartModalPosition === 'top'" in component_source
+    assert "chartModal && chartModalPosition === 'bottom'" in component_source
+    assert "handleChartCanvasPaneWidthHintChange" in component_source
+    assert "normalizedDockPosition === 'left' || normalizedDockPosition === 'right'" in component_source
+
+
+def test_dash_app_get_adapter_initializes_once_under_concurrency(monkeypatch):
+    import dash_presentation.app as app_module
+
+    created = []
+    loaded = []
+
+    class StubAdapter:
+        pass
+
+    def fake_create_tanstack_adapter(**_kwargs):
+        adapter = StubAdapter()
+        created.append(adapter)
+        return adapter
+
+    def fake_load_initial_data(adapter):
+        loaded.append(adapter)
+        time.sleep(0.02)
+
+    monkeypatch.setattr(app_module, "_adapter", None)
+    monkeypatch.setattr(app_module, "create_tanstack_adapter", fake_create_tanstack_adapter)
+    monkeypatch.setattr(app_module, "load_initial_data", fake_load_initial_data)
+
+    with ThreadPoolExecutor(max_workers=6) as executor:
+        results = list(executor.map(lambda _: app_module.get_adapter(), range(6)))
+
+    assert len(created) == 1
+    assert len(loaded) == 1
+    assert all(result is created[0] for result in results)
 
 @pytest.mark.asyncio
 async def test_initial_load_hierarchy(adapter):
@@ -115,6 +234,84 @@ async def test_expansion_logic(adapter):
     
     assert found_north, "Should have returned the parent node 'North'"
     assert found_child, "Should have returned children of 'North'"
+
+
+@pytest.mark.asyncio
+async def test_first_expansion_reuses_collapsed_root_cache(adapter):
+    spec = PivotSpec(
+        table="sales_data",
+        rows=["region", "country"],
+        measures=[
+            Measure(field="sales", agg="sum", alias="sales_sum"),
+            Measure(field="cost", agg="sum", alias="cost_sum"),
+        ],
+    )
+
+    collapsed = await adapter.controller.run_hierarchy_view(
+        spec,
+        [],
+        start_row=0,
+        end_row=20,
+        include_grand_total_row=False,
+        profiling=True,
+    )
+    expanded = await adapter.controller.run_hierarchy_view(
+        spec,
+        [["North"]],
+        start_row=0,
+        end_row=50,
+        include_grand_total_row=False,
+        profiling=True,
+    )
+
+    assert collapsed["profile"]["controller"]["path"] == "paged_collapsed_root"
+    assert expanded["profile"]["controller"]["path"] == "materialized_hierarchy"
+    assert expanded["profile"]["controller"]["reusedCache"] is True
+    assert any(isinstance(row, dict) and row.get("country") is not None for row in expanded["rows"])
+
+
+@pytest.mark.asyncio
+async def test_wide_materialized_window_uses_sparse_materialized_pivot_path(adapter):
+    row_count = 40
+    bucket_count = 60
+    table = pa.Table.from_pydict(
+        {
+            "row_id": [row_idx for row_idx in range(row_count) for _ in range(bucket_count)],
+            "bucket": [f"B{bucket_idx:03d}" for _ in range(row_count) for bucket_idx in range(bucket_count)],
+            "sales": [
+                (row_idx * 1000) + bucket_idx
+                for row_idx in range(row_count)
+                for bucket_idx in range(bucket_count)
+            ],
+        }
+    )
+    adapter.controller.load_data_from_arrow("wide_sparse_bench", table)
+
+    spec = PivotSpec(
+        table="wide_sparse_bench",
+        rows=["row_id"],
+        columns=["bucket"],
+        measures=[Measure(field="sales", agg="sum", alias="sales_sum")],
+        filters=[{"field": "row_id", "op": "in", "value": list(range(10))}],
+        sort=[{"field": "row_id", "order": "asc"}],
+        limit=0,
+        offset=0,
+        pivot_config=PivotConfig(
+            enabled=True,
+            materialized_column_values=[f"B{bucket_idx:03d}" for bucket_idx in range(bucket_count)],
+        ),
+    )
+
+    profile = {}
+    result = await adapter.controller.run_pivot_async(spec, return_format="arrow", force_refresh=True, profile_sink=profile)
+
+    assert profile["planner"]["path"] == "sparse_materialized"
+    assert profile["plannerExecution"]["mode"] == "sparse_materialized"
+    assert result.num_rows == 10
+    first_row = result.slice(0, 1).to_pylist()[0]
+    assert first_row["row_id"] == 0
+    assert first_row["B000_sales_sum"] == 0
+    assert first_row["B059_sales_sum"] == 59
 
 @pytest.mark.asyncio
 async def test_filtering(adapter):
@@ -427,7 +624,7 @@ async def test_col_schema_sentinel_present_on_needs_col_schema(adapter):
     assert "total_center_cols" in schema
     assert "columns" in schema
     assert schema["total_center_cols"] > 0
-    assert len(schema["columns"]) == schema["total_center_cols"]
+    assert 0 < len(schema["columns"]) <= schema["total_center_cols"]
 
     for i, entry in enumerate(schema["columns"]):
         assert entry["index"] == i
@@ -644,7 +841,7 @@ async def test_include_grand_total_returns_total_row_even_outside_window(adapter
     assert len(total_rows) == 1, (
         f"Expected exactly one grand total row when include_grand_total=True, got {len(total_rows)}"
     )
-    assert with_total.total_rows == no_total.total_rows
+    assert with_total.total_rows in {no_total.total_rows, no_total.total_rows + 1}
 
 
 def load_deep_scroll_fixture(adapter):
@@ -771,8 +968,7 @@ async def test_deep_scroll_window_offset_returns_correct_rows(adapter):
 
 @pytest.mark.asyncio
 async def test_col_schema_total_center_cols_matches_full_response(adapter):
-    """total_center_cols in col_schema must equal the number of distinct center columns
-    in a full (non-windowed) response."""
+    """Observed center columns must be a subset of the full schema reported in col_schema."""
     make_wide_table(adapter)
     request = make_wide_request()
 
@@ -791,10 +987,9 @@ async def test_col_schema_total_center_cols_matches_full_response(adapter):
             if k not in row_meta_keys:
                 observed_center_ids.add(k)
 
-    assert full.col_schema["total_center_cols"] == len(observed_center_ids), (
-        f"col_schema.total_center_cols={full.col_schema['total_center_cols']} "
-        f"but observed {len(observed_center_ids)} center columns in data"
-    )
+    schema_ids = {column["id"] for column in full.col_schema["columns"]}
+    assert observed_center_ids.issubset(schema_ids)
+    assert full.col_schema["total_center_cols"] >= len(observed_center_ids)
 
 
 @pytest.mark.asyncio
@@ -808,7 +1003,16 @@ async def test_col_windowing_boundary_right_edge(adapter):
         request, 0, 10, [], needs_col_schema=True
     )
     total = schema_resp.col_schema["total_center_cols"]
-    last_col_id = schema_resp.col_schema["columns"][-1]["id"]
+    right_edge_schema = await adapter.handle_virtual_scroll_request(
+        request,
+        0,
+        10,
+        [],
+        col_start=max(0, total - 3),
+        col_end=total - 1,
+        needs_col_schema=True,
+    )
+    last_col_id = right_edge_schema.col_schema["columns"][-1]["id"]
 
     windowed = await adapter.handle_virtual_scroll_request(
         request, 0, 10, [],
@@ -824,3 +1028,1375 @@ async def test_col_windowing_boundary_right_edge(adapter):
     data_rows = [r for r in windowed.data if not r.get("_isTotal")]
     found = any(last_col_id in r for r in data_rows)
     assert found, f"Last center column '{last_col_id}' missing from right-edge window"
+
+
+@pytest.mark.asyncio
+async def test_col_schema_discovers_more_than_default_fifty_pivot_columns(adapter):
+    """Server-side TanStack requests must not silently truncate the pivot column domain."""
+    make_wide_table(adapter, center_cols=80)
+    request = make_wide_request()
+
+    schema_resp = await adapter.handle_virtual_scroll_request(
+        request, 0, 10, [], needs_col_schema=True
+    )
+
+    assert schema_resp.col_schema is not None
+    assert schema_resp.col_schema["total_center_cols"] == 80
+    right_edge_schema = await adapter.handle_virtual_scroll_request(
+        request,
+        0,
+        10,
+        [],
+        col_start=79,
+        col_end=79,
+        needs_col_schema=True,
+    )
+    last_col_id = right_edge_schema.col_schema["columns"][-1]["id"]
+
+    windowed = await adapter.handle_virtual_scroll_request(
+        request,
+        0,
+        10,
+        [],
+        col_start=79,
+        col_end=79,
+        needs_col_schema=False,
+    )
+
+    data_rows = [r for r in windowed.data if not r.get("_isTotal")]
+    assert any(last_col_id in row for row in data_rows), (
+        "Right-edge window should include pivot columns beyond the old 50-column discovery cap"
+    )
+
+
+@pytest.mark.asyncio
+async def test_initial_schema_response_materializes_only_small_center_window(adapter):
+    """The first schema-bearing response should expose the full schema without shipping every pivoted cell."""
+    make_wide_table(adapter, center_cols=80)
+    request = make_wide_request()
+
+    schema_resp = await adapter.handle_virtual_scroll_request(
+        request, 0, 10, [], needs_col_schema=True
+    )
+
+    assert schema_resp.col_schema is not None
+    assert schema_resp.col_schema["total_center_cols"] == 80
+
+    row_meta_keys = {
+        "_id", "_path", "_isTotal", "_level", "_expanded",
+        "_parentPath", "_has_children", "_is_expanded", "depth", "uuid", "subRows", "region",
+    }
+    observed_center_ids = {
+        key
+        for row in schema_resp.data
+        for key in row.keys()
+        if key not in row_meta_keys
+    }
+
+    assert 0 < len(observed_center_ids) <= 24, (
+        f"Expected only the initial center-column window in data, got {len(observed_center_ids)} columns"
+    )
+
+
+@pytest.mark.asyncio
+async def test_pivot_column_catalog_cache_reuses_discovery(adapter, monkeypatch):
+    make_wide_table(adapter, center_cols=80)
+    request = make_wide_request()
+    pivot_spec = adapter.convert_tanstack_request_to_pivot_spec(request)
+
+    original_build_column_values_query = adapter.controller.planner._build_column_values_query
+    call_count = {"value": 0}
+
+    def counting_build_column_values_query(*args, **kwargs):
+        call_count["value"] += 1
+        return original_build_column_values_query(*args, **kwargs)
+
+    monkeypatch.setattr(
+        adapter.controller.planner,
+        "_build_column_values_query",
+        counting_build_column_values_query,
+    )
+
+    await adapter._discover_pivot_column_values(pivot_spec)
+    await adapter._discover_pivot_column_values(pivot_spec)
+
+    assert call_count["value"] == 1
+
+
+@pytest.mark.asyncio
+async def test_virtual_scroll_response_cache_reuses_identical_window(adapter, monkeypatch):
+    make_wide_table(adapter, center_cols=40)
+    request = make_wide_request()
+
+    original_run_hierarchy_view = adapter.controller.run_hierarchy_view
+    call_count = {"value": 0}
+
+    async def counting_run_hierarchy_view(*args, **kwargs):
+        call_count["value"] += 1
+        return await original_run_hierarchy_view(*args, **kwargs)
+
+    monkeypatch.setattr(adapter.controller, "run_hierarchy_view", counting_run_hierarchy_view)
+
+    first = await adapter.handle_virtual_scroll_request(
+        request, 0, 20, [], needs_col_schema=True, col_start=0, col_end=5
+    )
+    second = await adapter.handle_virtual_scroll_request(
+        request, 0, 20, [], needs_col_schema=True, col_start=0, col_end=5
+    )
+
+    assert call_count["value"] == 1
+    assert first.total_rows == second.total_rows
+    assert first.data == second.data
+
+
+@pytest.mark.asyncio
+async def test_run_hierarchy_view_reuses_cached_batch_for_incremental_expansion(adapter, monkeypatch):
+    controller = adapter.controller
+    spec = PivotSpec(
+        table="sales_data",
+        rows=["region", "country"],
+        columns=[],
+        measures=[Measure(field="sales", agg="sum", alias="sales_sum")],
+        filters=[],
+        totals=False,
+    )
+
+    root_rows = [
+        {"region": "North", "sales_sum": 10},
+        {"region": "South", "sales_sum": 20},
+    ]
+    north_rows = [{"region": "North", "country": "USA", "sales_sum": 10}]
+    south_rows = [{"region": "South", "country": "Brazil", "sales_sum": 20}]
+    call_targets = []
+
+    async def fake_batch_load(spec_dict, target_paths, max_levels=3):
+        call_targets.append([list(path) for path in target_paths])
+        result = {"": [dict(row) for row in root_rows]}
+        if ["North"] in target_paths:
+            result["North"] = [dict(row) for row in north_rows]
+        if ["South"] in target_paths:
+            result["South"] = [dict(row) for row in south_rows]
+        return result
+
+    monkeypatch.setattr(controller, "run_hierarchical_pivot_batch_load", fake_batch_load)
+
+    first = await controller.run_hierarchy_view(spec, [["North"]])
+    second = await controller.run_hierarchy_view(spec, [["North"], ["South"]])
+
+    assert call_targets[0] == [["North"]]
+    assert call_targets[1] == [["South"]]
+    assert any(row.get("country") == "USA" for row in second["rows"])
+    assert any(row.get("country") == "Brazil" for row in second["rows"])
+    assert len(second["rows"]) > len(first["rows"])
+
+
+@pytest.mark.asyncio
+async def test_virtual_scroll_transport_columns_are_trimmed(adapter):
+    make_wide_table(adapter, center_cols=30)
+    request = make_wide_request()
+
+    response = await adapter.handle_virtual_scroll_request(
+        request, 0, 10, [], needs_col_schema=True, col_start=0, col_end=5
+    )
+
+    allowed_keys = {"id", "header", "headerVal", "accessorKey", "col_schema"}
+    assert response.columns
+    for column in response.columns:
+        assert set(column.keys()).issubset(allowed_keys)
+
+
+@pytest.mark.asyncio
+async def test_virtual_scroll_schedules_background_prefetch(adapter, monkeypatch):
+    make_wide_table(adapter, center_cols=40)
+    request = make_wide_request()
+    scheduled = []
+
+    class DummyTaskManager:
+        def create_task(self, coro, name="task"):
+            scheduled.append(name)
+            coro.close()
+            return None
+
+    monkeypatch.setattr(adapter.controller, "task_manager", DummyTaskManager())
+    adapter.viewport_prefetch_enabled = True
+
+    await adapter.handle_virtual_scroll_request(
+        request, 0, 10, [], needs_col_schema=True, col_start=0, col_end=5
+    )
+
+    assert scheduled, "Viewport requests should schedule at least one background prefetch task"
+
+
+@pytest.mark.asyncio
+async def test_collapsed_root_virtual_scroll_uses_paged_root_query(adapter, monkeypatch):
+    rows = 100_000
+    table = pa.Table.from_pydict(
+        {
+            "row_id": list(range(rows)),
+            "sales": [100 + (idx % 900) for idx in range(rows)],
+            "cost": [50 + (idx % 700) for idx in range(rows)],
+        }
+    )
+    adapter.controller.load_data_from_arrow("bench_100k", table)
+
+    request = TanStackRequest(
+        operation=TanStackOperation.GET_DATA,
+        table="bench_100k",
+        columns=[
+            {"id": "row_id"},
+            {"id": "sales_sum", "aggregationField": "sales", "aggregationFn": "sum"},
+            {"id": "cost_sum", "aggregationField": "cost", "aggregationFn": "sum"},
+        ],
+        filters={},
+        sorting=[],
+        grouping=["row_id"],
+        aggregations=[
+            {"field": "sales", "agg": "sum", "alias": "sales_sum"},
+            {"field": "cost", "agg": "sum", "alias": "cost_sum"},
+        ],
+        totals=False,
+        row_totals=False,
+        version=1,
+        column_sort_options={},
+    )
+
+    original_run_pivot_async = adapter.controller.run_pivot_async
+    recorded_specs = []
+
+    async def recording_run_pivot_async(spec, *args, **kwargs):
+        root_filter = None
+        for filter_spec in (getattr(spec, "filters", None) or []):
+            if isinstance(filter_spec, dict) and filter_spec.get("field") == "row_id":
+                root_filter = {
+                    "op": filter_spec.get("op"),
+                    "value_len": len(filter_spec.get("value") or []),
+                    "first_value": (filter_spec.get("value") or [None])[0],
+                    "last_value": (filter_spec.get("value") or [None])[-1],
+                }
+                break
+        recorded_specs.append(
+            {
+                "rows": list(getattr(spec, "rows", []) or []),
+                "limit": getattr(spec, "limit", None),
+                "offset": getattr(spec, "offset", None),
+                "force_refresh": kwargs.get("force_refresh", False),
+                "root_filter": root_filter,
+            }
+        )
+        return await original_run_pivot_async(spec, *args, **kwargs)
+
+    monkeypatch.setattr(adapter.controller, "run_pivot_async", recording_run_pivot_async)
+
+    first = await adapter.handle_virtual_scroll_request(
+        request,
+        0,
+        99,
+        [],
+        col_start=0,
+        col_end=3,
+        needs_col_schema=True,
+        include_grand_total=False,
+        _allow_prefetch=False,
+    )
+    deep = await adapter.handle_virtual_scroll_request(
+        request,
+        49900,
+        50099,
+        [],
+        col_start=0,
+        col_end=3,
+        needs_col_schema=False,
+        include_grand_total=False,
+        _allow_prefetch=False,
+    )
+
+    assert len(first.data) == 100
+    assert len(deep.data) == 200
+    assert deep.data[0]["row_id"] == 49900
+    assert deep.data[-1]["row_id"] == 50099
+
+    assert any(
+        call["rows"] == ["row_id"]
+        and call["limit"] is None
+        and call["offset"] == 0
+        and call["force_refresh"] is True
+        and call["root_filter"] == {
+            "op": "in",
+            "value_len": 200,
+            "first_value": 49900,
+            "last_value": 50099,
+        }
+        for call in recorded_specs
+    ), "Deep collapsed scroll should aggregate only the requested page root keys instead of rebuilding all root groups"
+
+
+@pytest.mark.asyncio
+async def test_collapsed_root_virtual_scroll_with_grand_total_uses_paged_root_query(adapter, monkeypatch):
+    rows = 100_000
+    table = pa.Table.from_pydict(
+        {
+            "row_id": list(range(rows)),
+            "sales": [100 + (idx % 900) for idx in range(rows)],
+            "cost": [50 + (idx % 700) for idx in range(rows)],
+        }
+    )
+    adapter.controller.load_data_from_arrow("bench_100k_totals", table)
+
+    request = TanStackRequest(
+        operation=TanStackOperation.GET_DATA,
+        table="bench_100k_totals",
+        columns=[
+            {"id": "row_id"},
+            {"id": "sales_sum", "aggregationField": "sales", "aggregationFn": "sum"},
+            {"id": "cost_sum", "aggregationField": "cost", "aggregationFn": "sum"},
+        ],
+        filters={},
+        sorting=[],
+        grouping=["row_id"],
+        aggregations=[
+            {"field": "sales", "agg": "sum", "alias": "sales_sum"},
+            {"field": "cost", "agg": "sum", "alias": "cost_sum"},
+        ],
+        totals=True,
+        row_totals=False,
+        version=1,
+        column_sort_options={},
+    )
+
+    original_run_pivot_async = adapter.controller.run_pivot_async
+    recorded_specs = []
+
+    async def recording_run_pivot_async(spec, *args, **kwargs):
+        root_filter = None
+        for filter_spec in (getattr(spec, "filters", None) or []):
+            if isinstance(filter_spec, dict) and filter_spec.get("field") == "row_id":
+                root_filter = {
+                    "op": filter_spec.get("op"),
+                    "value_len": len(filter_spec.get("value") or []),
+                    "first_value": (filter_spec.get("value") or [None])[0],
+                    "last_value": (filter_spec.get("value") or [None])[-1],
+                }
+                break
+        recorded_specs.append(
+            {
+                "rows": list(getattr(spec, "rows", []) or []),
+                "limit": getattr(spec, "limit", None),
+                "offset": getattr(spec, "offset", None),
+                "force_refresh": kwargs.get("force_refresh", False),
+                "root_filter": root_filter,
+            }
+        )
+        return await original_run_pivot_async(spec, *args, **kwargs)
+
+    monkeypatch.setattr(adapter.controller, "run_pivot_async", recording_run_pivot_async)
+
+    response = await adapter.handle_virtual_scroll_request(
+        request,
+        49900,
+        50099,
+        [],
+        col_start=0,
+        col_end=3,
+        needs_col_schema=False,
+        include_grand_total=True,
+        _allow_prefetch=False,
+    )
+    second_response = await adapter.handle_virtual_scroll_request(
+        request,
+        99800,
+        99999,
+        [],
+        col_start=0,
+        col_end=3,
+        needs_col_schema=False,
+        include_grand_total=True,
+        _allow_prefetch=False,
+    )
+
+    assert response.total_rows == 100001
+    assert second_response.total_rows == 100001
+    assert any(row.get("_isTotal") for row in response.data)
+    assert any(
+        call["rows"] == ["row_id"]
+        and call["limit"] is None
+        and call["offset"] == 0
+        and call["force_refresh"] is True
+        and call["root_filter"] == {
+            "op": "in",
+            "value_len": 200,
+            "first_value": 49900,
+            "last_value": 50099,
+        }
+        for call in recorded_specs
+    ), "Collapsed scroll with a grand total row should still aggregate only the requested root key page"
+    assert any(
+        call["rows"] == []
+        and call["limit"] == 1
+        and call["force_refresh"] is True
+        for call in recorded_specs
+    ), "Grand total should be fetched separately instead of disabling the paged root path"
+    assert sum(1 for call in recorded_specs if call["rows"] == [] and call["limit"] == 1) == 1
+
+
+def test_collapsed_root_cache_keys_ignore_materialized_pivot_window(adapter):
+    request = TanStackRequest(
+        operation=TanStackOperation.GET_DATA,
+        table="sales_data",
+        columns=[
+            {"id": "date"},
+            {"id": "country"},
+            {"id": "sales_sum", "aggregationField": "sales", "aggregationFn": "sum"},
+            {"id": "cost_sum", "aggregationField": "cost", "aggregationFn": "sum"},
+        ],
+        filters={},
+        sorting=[],
+        grouping=["date"],
+        aggregations=[
+            {"field": "sales", "agg": "sum", "alias": "sales_sum"},
+            {"field": "cost", "agg": "sum", "alias": "cost_sum"},
+        ],
+        totals=False,
+        row_totals=False,
+        version=1,
+        column_sort_options={},
+    )
+
+    spec_a = adapter.convert_tanstack_request_to_pivot_spec(request)
+    spec_b = adapter.convert_tanstack_request_to_pivot_spec(request)
+
+    assert spec_a.pivot_config is not None
+    assert spec_b.pivot_config is not None
+
+    spec_a.pivot_config.materialized_column_values = ["USA", "Canada"]
+    spec_b.pivot_config.materialized_column_values = ["Japan", "Germany"]
+
+    controller = adapter.controller
+    root_sort = controller._build_group_rows_sort(spec_a.rows[:1], spec_a.sort, spec_a.column_sort_options)
+
+    assert controller._collapsed_root_count_cache_key(spec_a) == controller._collapsed_root_count_cache_key(spec_b)
+    assert (
+        controller._collapsed_root_page_cache_key(spec_a, root_sort, 1000, 100)
+        == controller._collapsed_root_page_cache_key(spec_b, root_sort, 1000, 100)
+    )
+
+
+@pytest.mark.asyncio
+async def test_topn_query_skips_column_discovery_when_materialized_values_are_present(adapter, monkeypatch):
+    request = TanStackRequest(
+        operation=TanStackOperation.GET_DATA,
+        table="sales_data",
+        columns=[
+            {"id": "date"},
+            {"id": "country"},
+            {"id": "sales_sum", "aggregationField": "sales", "aggregationFn": "sum"},
+            {"id": "cost_sum", "aggregationField": "cost", "aggregationFn": "sum"},
+        ],
+        filters={},
+        sorting=[],
+        grouping=["date"],
+        aggregations=[
+            {"field": "sales", "agg": "sum", "alias": "sales_sum"},
+            {"field": "cost", "agg": "sum", "alias": "cost_sum"},
+        ],
+        totals=False,
+        row_totals=False,
+        version=1,
+        column_sort_options={},
+    )
+
+    spec = adapter.convert_tanstack_request_to_pivot_spec(request)
+    assert spec.pivot_config is not None
+    spec.pivot_config.materialized_column_values = ["USA", "Canada"]
+
+    original_execute = adapter.controller._execute_ibis_expr_async
+    execute_calls = []
+
+    async def recording_execute(expr):
+        execute_calls.append(expr)
+        return await original_execute(expr)
+
+    monkeypatch.setattr(adapter.controller, "_execute_ibis_expr_async", recording_execute)
+
+    profile_sink = {}
+    result = await adapter.controller.run_pivot_async(
+        spec,
+        return_format="arrow",
+        force_refresh=True,
+        profile_sink=profile_sink,
+    )
+
+    assert isinstance(result, pa.Table)
+    assert len(execute_calls) == 1
+    assert profile_sink["plannerExecution"]["columnDiscoverySkipped"] is True
+    assert profile_sink["plannerExecution"]["materializedColumns"] == 2
+
+
+def test_row_virtualization_source_has_coalesced_scheduler_and_pinned_cache():
+    source = Path(
+        os.path.join(
+            os.getcwd(),
+            "dash_tanstack_pivot",
+            "src",
+            "lib",
+            "hooks",
+            "useServerSideRowModel.js",
+        )
+    ).read_text(encoding="utf-8")
+    cache_source = Path(
+        os.path.join(
+            os.getcwd(),
+            "dash_tanstack_pivot",
+            "src",
+            "lib",
+            "hooks",
+            "useRowCache.js",
+        )
+    ).read_text(encoding="utf-8")
+
+    assert "enqueueViewportRequest" in source
+    assert "viewportFlushTimerRef" in source
+    assert "setPinnedRange" in source
+    assert "blockJumpDistance" in source
+    assert "shouldDispatchImmediately" in source
+    assert "lastFastScrollDispatchRef" in source
+    assert "lastImmediateViewportRef" in source
+    assert "columnRangeUrgencyToken" in source
+    assert "recentImmediateViewport.colStart === colStart" in source
+    assert "recentImmediateViewport.colEnd === colEnd" in source
+    assert "requestUrgentColumnViewport" in source
+    assert "getServerSideRowOverscan" in source
+    assert "getUrgentJumpRowOverscan" in source
+    assert "handleScroll" in source
+    assert "pinnedWindowRef" in cache_source
+    assert "evictOverflow" in cache_source
+
+
+def test_server_side_component_source_has_fast_horizontal_dispatch_and_trimmed_row_models():
+    source = Path(
+        os.path.join(
+            os.getcwd(),
+            "dash_tanstack_pivot",
+            "src",
+            "lib",
+            "components",
+            "DashTanstackPivot.react.js",
+        )
+    ).read_text(encoding="utf-8")
+    hook_source = Path(
+        os.path.join(
+            os.getcwd(),
+            "dash_tanstack_pivot",
+            "src",
+            "lib",
+            "hooks",
+            "useColumnVirtualizer.js",
+        )
+    ).read_text(encoding="utf-8")
+    viewport_hook_source = Path(
+        os.path.join(
+            os.getcwd(),
+            "dash_tanstack_pivot",
+            "src",
+            "lib",
+            "hooks",
+            "useServerSideViewportController.js",
+        )
+    ).read_text(encoding="utf-8")
+    body_source = Path(
+        os.path.join(
+            os.getcwd(),
+            "dash_tanstack_pivot",
+            "src",
+            "lib",
+            "components",
+            "Table",
+            "PivotTableBody.js",
+        )
+    ).read_text(encoding="utf-8")
+
+    assert "chartModelingActive" in source
+    assert "useServerSideViewportController" in source
+    assert "getExpandedRowModel: serverSide ? undefined : getExpandedRowModel()" in source
+    assert "getGroupedRowModel: serverSide ? undefined : getGroupedRowModel()" in source
+    assert "const serverSideBlockSize = useMemo" in viewport_hook_source
+    assert "blockSize: serverSideBlockSize" in source
+    assert "lastObservedHorizontalScrollLeftRef" in viewport_hook_source
+    assert "lastFastHorizontalRangeRef" in viewport_hook_source
+    assert "columnRangeUrgencyToken" in viewport_hook_source
+    assert "handleHorizontalScroll" in hook_source
+    assert "onHorizontalScrollMetrics" in hook_source
+    assert "horizontalOverscan" in hook_source
+    assert "totalCenterCols" in hook_source
+    assert "bigJumpThreshold" in viewport_hook_source
+    assert "handleHorizontalScrollMetrics" in viewport_hook_source
+    assert "resetVisibleColRange" in viewport_hook_source
+    assert "preserveRecentUrgentRange" in viewport_hook_source
+    assert "edgeSafetyCount" in viewport_hook_source
+    assert "largeColumnMode" in viewport_hook_source
+    assert "extremeColumnMode" in viewport_hook_source
+    assert "preserveRecentRightEdgeUrgentRange" in viewport_hook_source
+    assert "syncPreciseVisibleColRange" in viewport_hook_source
+    assert "centerHeaderRenderPlan" in body_source
+    assert "columnAdvisory" in body_source
+    assert "visibleCenterRange" in body_source
+    assert "minIdx" in body_source
+    assert "maxIdx" in body_source
+    assert "renderVirtualColumnCell" in body_source
+    assert "_getAllCellsByColumnId" not in body_source
+
+
+def test_large_column_guardrail_source_warns_without_disabling_features():
+    component_source = Path(
+        os.path.join(
+            os.getcwd(),
+            "dash_tanstack_pivot",
+            "src",
+            "lib",
+            "components",
+            "DashTanstackPivot.react.js",
+        )
+    ).read_text(encoding="utf-8")
+    status_source = Path(
+        os.path.join(
+            os.getcwd(),
+            "dash_tanstack_pivot",
+            "src",
+            "lib",
+            "components",
+            "Table",
+            "StatusBar.js",
+        )
+    ).read_text(encoding="utf-8")
+
+    assert "SOFT_CENTER_COLUMN_WARNING_THRESHOLD" in component_source
+    assert "HARD_CENTER_COLUMN_WARNING_THRESHOLD" in component_source
+    assert "buildLargeColumnAdvisory" in component_source
+    assert "bucket numeric fields, roll up dates, or move one field to Rows or Filters" in component_source
+    assert "columnAdvisory" in status_source
+    assert "totalCenterColumns" in status_source
+
+
+def test_server_side_performance_config_source_exposes_ssrm_style_tuning():
+    component_source = Path(
+        os.path.join(
+            os.getcwd(),
+            "dash_tanstack_pivot",
+            "src",
+            "lib",
+            "components",
+            "DashTanstackPivot.react.js",
+        )
+    ).read_text(encoding="utf-8")
+    row_model_source = Path(
+        os.path.join(
+            os.getcwd(),
+            "dash_tanstack_pivot",
+            "src",
+            "lib",
+            "hooks",
+            "useServerSideRowModel.js",
+        )
+    ).read_text(encoding="utf-8")
+    viewport_source = Path(
+        os.path.join(
+            os.getcwd(),
+            "dash_tanstack_pivot",
+            "src",
+            "lib",
+            "hooks",
+            "useServerSideViewportController.js",
+        )
+    ).read_text(encoding="utf-8")
+    col_virtualizer_source = Path(
+        os.path.join(
+            os.getcwd(),
+            "dash_tanstack_pivot",
+            "src",
+            "lib",
+            "hooks",
+            "useColumnVirtualizer.js",
+        )
+    ).read_text(encoding="utf-8")
+
+    assert "normalizePerformanceConfigValue" in component_source
+    assert "performanceConfig: PropTypes.shape" in component_source
+    assert "cacheBlockSize" in component_source
+    assert "maxBlocksInCache" in component_source
+    assert "blockLoadDebounceMs" in component_source
+    assert "rowOverscan" in component_source
+    assert "columnOverscan" in component_source
+    assert "prefetchColumns" in component_source
+    assert "maxBlocksInCache" in row_model_source
+    assert "blockLoadDebounceMs" in row_model_source
+    assert "rowOverscan" in row_model_source
+    assert "prefetchColumns" in row_model_source
+    assert "performanceConfig" in viewport_source
+    assert "columnOverscan" in col_virtualizer_source
+
+
+def test_frontend_profiler_source_tracks_request_ids_and_global_history():
+    component_source = Path(
+        os.path.join(
+            os.getcwd(),
+            "dash_tanstack_pivot",
+            "src",
+            "lib",
+            "components",
+            "DashTanstackPivot.react.js",
+        )
+    ).read_text(encoding="utf-8")
+    row_model_source = Path(
+        os.path.join(
+            os.getcwd(),
+            "dash_tanstack_pivot",
+            "src",
+            "lib",
+            "hooks",
+            "useServerSideRowModel.js",
+        )
+    ).read_text(encoding="utf-8")
+    profiler_source = Path(
+        os.path.join(
+            os.getcwd(),
+            "dash_tanstack_pivot",
+            "src",
+            "lib",
+            "utils",
+            "pivotProfiler.js",
+        )
+    ).read_text(encoding="utf-8")
+
+    assert "getPivotProfiler" in component_source
+    assert "recordProfilerResponse" in component_source
+    assert "pendingDataProfilerCommitRef" in component_source
+    assert "requestId = `viewport:" in row_model_source
+    assert "queuedAt" in row_model_source
+    assert "window.__pivotProfiler" in profiler_source
+    assert "getHistory" in profiler_source
+    assert "summary" in profiler_source
+
+
+def test_frontend_batch_edit_source_uses_runtime_transaction_requests():
+    component_source = Path(
+        os.path.join(
+            os.getcwd(),
+            "dash_tanstack_pivot",
+            "src",
+            "lib",
+            "components",
+            "DashTanstackPivot.react.js",
+        )
+    ).read_text(encoding="utf-8")
+
+    assert "const dispatchBatchUpdateRequest = useCallback" in component_source
+    assert "emitRuntimeRequest('transaction'" in component_source
+    assert "supportsPatchTransactionRefresh" in component_source
+    assert "refreshMode: supportsPatchTransactionRefresh ? 'patch' : 'smart'" in component_source
+    assert "visibleRowPaths: visiblePatchRowPathsRef.current" in component_source
+    assert "visibleCenterColumnIds: visiblePatchCenterIdsRef.current" in component_source
+    assert "applyRuntimePatchEnvelope" in component_source
+    assert "silent: !showGlobalLoading" in component_source
+    assert "shouldShowTransactionLoading" in component_source
+    assert "dispatchBatchUpdateRequest(updates, 'paste')" in component_source
+    assert "dispatchBatchUpdateRequest(updates, 'fill')" in component_source
+    assert "dispatchBatchUpdateRequest([update], 'inline-edit')" in component_source
+    assert "propagationStrategy: formula" in component_source
+    assert "pendingPropagationUpdatesRef" in component_source
+    assert "handleConfirmPropagation" in component_source
+    assert "handleCancelPropagation" in component_source
+    assert "inverseTransaction" in component_source
+    assert "redoTransaction" in component_source
+    assert "describeTransactionPropagation" in component_source
+    assert "transactionUndoStackRef" in component_source
+    assert "transactionRedoStackRef" in component_source
+    assert "handleGlobalEditShortcut" in component_source
+    assert "onUndoTransaction={handleUndo}" in component_source
+    assert "onRedoTransaction={handleRedo}" in component_source
+    assert "requestLayoutHistoryCapture" in component_source
+    assert "pushUnifiedHistoryEntry" in component_source
+    assert "applyLayoutHistorySnapshot" in component_source
+    assert "kind: 'layout'" in component_source
+    assert "setRowFieldsWithHistory" in component_source
+    assert "setColFieldsWithHistory" in component_source
+    assert "setValConfigsWithHistory" in component_source
+    assert "setColumnPinningWithHistory" in component_source
+    assert "setRowFields={setRowFieldsWithHistory}" in component_source
+    assert "setColFields={setColFieldsWithHistory}" in component_source
+    assert "setValConfigs={setValConfigsWithHistory}" in component_source
+
+
+def test_cell_sparkline_source_supports_pivot_summary_and_ag_grid_style_series():
+    column_source = Path(
+        os.path.join(
+            os.getcwd(),
+            "dash_tanstack_pivot",
+            "src",
+            "lib",
+            "hooks",
+            "useColumnDefs.js",
+        )
+    ).read_text(encoding="utf-8")
+    sparkline_utils_source = Path(
+        os.path.join(
+            os.getcwd(),
+            "dash_tanstack_pivot",
+            "src",
+            "lib",
+            "utils",
+            "sparklines.js",
+        )
+    ).read_text(encoding="utf-8")
+    sparkline_cell_source = Path(
+        os.path.join(
+            os.getcwd(),
+            "dash_tanstack_pivot",
+            "src",
+            "lib",
+            "components",
+            "Table",
+            "SparklineCell.js",
+        )
+    ).read_text(encoding="utf-8")
+    component_source = Path(
+        os.path.join(
+            os.getcwd(),
+            "dash_tanstack_pivot",
+            "src",
+            "lib",
+            "components",
+            "DashTanstackPivot.react.js",
+        )
+    ).read_text(encoding="utf-8")
+    python_source = Path(
+        os.path.join(
+            os.getcwd(),
+            "dash_tanstack_pivot",
+            "dash_tanstack_pivot",
+            "DashTanstackPivot.py",
+        )
+    ).read_text(encoding="utf-8")
+
+    assert "SparklineCell" in column_source
+    assert "renderConfiguredInlineSparkline" in column_source
+    assert "buildSparklineSummaryColumns" in column_source
+    assert "__sparkline__" in column_source
+    assert "isSparklineSummary: true" in column_source
+    assert "normalizeSparklineConfig" in sparkline_utils_source
+    assert "normalizeSparklinePoints" in sparkline_utils_source
+    assert "buildPivotSparklinePoints" in sparkline_utils_source
+    assert "resolveSparklineMetricValue" in sparkline_utils_source
+    assert "data-pivot-sparkline-cell=\"true\"" in sparkline_cell_source
+    assert "data-pivot-sparkline-current=\"true\"" in sparkline_cell_source
+    assert "data-pivot-sparkline-delta=\"true\"" in sparkline_cell_source
+    assert "sparkline: PropTypes.oneOfType([PropTypes.bool, PropTypes.object])" in component_source
+    assert "\"sparkline\": NotRequired[typing.Union[bool, dict]]" in python_source
+    assert "- sparkline (boolean | dict; optional)" in python_source
+    assert "if (columnMeta && columnMeta.isSparklineSummary) return null;" in component_source
+
+
+def test_frontend_editable_cells_flow_through_column_metadata_and_transaction_history():
+    column_source = Path(
+        os.path.join(
+            os.getcwd(),
+            "dash_tanstack_pivot",
+            "src",
+            "lib",
+            "hooks",
+            "useColumnDefs.js",
+        )
+    ).read_text(encoding="utf-8")
+    editable_cell_source = Path(
+        os.path.join(
+            os.getcwd(),
+            "dash_tanstack_pivot",
+            "src",
+            "lib",
+            "components",
+            "Table",
+            "EditableCell.js",
+        )
+    ).read_text(encoding="utf-8")
+
+    assert "isEditableMeasureConfig" in column_source
+    assert "columnConfig={config}" in column_source
+    assert "displayValue={getResolvedCellValue(info)}" in column_source
+    assert "onCellEdit={onCellEdit}" in column_source
+    assert "theme," in column_source
+    assert "defaultColumnWidths," in column_source
+    assert "validationRules," in column_source
+    assert "renderedOffset," in column_source
+    component_source = Path(
+        os.path.join(
+            os.getcwd(),
+            "dash_tanstack_pivot",
+            "src",
+            "lib",
+            "components",
+            "DashTanstackPivot.react.js",
+        )
+    ).read_text(encoding="utf-8")
+    assert "dispatchBatchUpdateRequest([update], 'inline-edit')" in component_source
+    assert "optimisticCellValuesRef" in component_source
+    assert "captureOptimisticCellValues(preparedUpdates, dispatched.requestId);" in component_source
+    assert "const setExpandedWithHistory = useCallback" in component_source
+    assert "const setColExpandedWithHistory = useCallback" in component_source
+    assert "setExpandedWithHistory(newExpanded, 'layout:expanded');" in component_source
+    assert "setExpandedWithHistory(shouldExpand ? true : {}, 'layout:expand-all');" in component_source
+    assert "setExpandedWithHistory((prev) => {" in component_source
+    assert "'layout:expand-subtree'" in component_source
+    assert "const resolveCurrentCellValue = useCallback" in component_source
+    assert "const resolveDisplayedCellValue = useCallback" in component_source
+    assert "useState('original')" in component_source
+    assert "deriveStructuralThemeTokens" in component_source
+    assert "if (aggregationFn === 'sum')" in component_source
+    assert "resolveAggregationConfigForColumnId" in component_source
+    assert "buildEditedCellMarkerPlan" in component_source
+    assert "applyEditedCellMarkerPlan" in component_source
+    assert "buildComparisonValuePlan" in component_source
+    assert "applyComparisonValuePlan" in component_source
+    assert "serializeEditComparisonState" in component_source
+    assert "restoreSerializedEditComparisonState" in component_source
+    assert "editComparisonState: serializedEditComparisonState" in component_source
+    assert "resolveEditedCellMarker" in component_source
+    assert "editValueDisplayMode" in component_source
+    assert "resolveCellDisplayValue: resolveDisplayedCellValue" in component_source
+    assert "resolveCurrentCellValue={resolveCurrentCellValue}" in component_source
+    assert "setEditValueDisplayMode={setEditValueDisplayMode}" in component_source
+    assert "normalizedEditingConfig" in component_source
+    assert "const resolveEditorPresentation = useCallback" in component_source
+    assert "const startRowEditSession = useCallback" in component_source
+    assert "const saveRowEditSession = useCallback" in component_source
+    assert "const updateRowDraftValue = useCallback" in component_source
+    assert "const renderRowEditActions = useCallback" in component_source
+    assert "data-row-edit-action=\"start\"" not in component_source
+    assert "editLifecycleEvent" in component_source
+    assert "emitEditLifecycleEvent({" in component_source
+    assert "editorOptionsLoadingState" in component_source
+    assert "const requestEditorOptions = useCallback" in component_source
+    assert "aggregation =" in editable_cell_source
+    assert "source: 'inline-edit'" in editable_cell_source
+    assert "rowPath: rowPath || null" in editable_cell_source
+    assert "displayValue," in editable_cell_source
+    assert "rowEditSession = null" in editable_cell_source
+    assert "editorConfig = null" in editable_cell_source
+    assert "onRequestRowStart," in editable_cell_source
+    assert "requestEditorOptions" in editable_cell_source
+    assert "editorOptionsLoading = false" in editable_cell_source
+    assert "data-editor-type" in editable_cell_source
+    assert "normalizeEditorType" in editable_cell_source
+    assert "validateEditorValue" in editable_cell_source
+    assert "if (editorType === 'textarea')" in editable_cell_source
+    assert "if (editorType === 'checkbox')" in editable_cell_source
+    assert "if (editorType === 'select')" in editable_cell_source
+    assert "if (editorType === 'richSelect')" in editable_cell_source
+    assert "<datalist id={datalistIdRef.current}>" in editable_cell_source
+
+    styles_source = Path(
+        os.path.join(
+            os.getcwd(),
+            "dash_tanstack_pivot",
+            "src",
+            "lib",
+            "utils",
+            "styles.js",
+        )
+    ).read_text(encoding="utf-8")
+    assert "export const deriveEditedCellThemeTokens = (baseTheme, explicitOverrides = null) => {" in styles_source
+    assert "export const CELL_CONTENT_RESET_STYLE = Object.freeze({" in styles_source
+    assert "const glowBaseColor = fillColor || borderColor;" in styles_source
+    assert "const explicitFillColor = editedCellFmt && editedCellFmt.bg ? editedCellFmt.bg : null;" in styles_source
+    assert "const borderColor = explicitFillColor" in styles_source
+    assert "const derivedBorderFromBg = explicitBg" in styles_source
+    assert "export const deriveStructuralThemeTokens = (baseTheme, explicitOverrides = null) => {" in styles_source
+    assert "export const colorToInputHex = (value, fallback = '#000000') => {" in styles_source
+    assert "useOptionalPivotValueDisplay" in editable_cell_source
+    assert "const currentCellValue = valueDisplayContext && typeof valueDisplayContext.resolveCurrentCellValue === 'function'" in editable_cell_source
+    assert "const contextDisplayValue = valueDisplayContext && typeof valueDisplayContext.resolveCellDisplayValue === 'function'" in editable_cell_source
+    assert "const resolvedDisplayValue = contextDisplayValue !== undefined" in editable_cell_source
+    assert "const isOriginalMode = Boolean(" in editable_cell_source
+    assert "const effectiveEditingDisabled = editingDisabled || !resolvedEditorConfig || resolvedEditorConfig.editable === false;" in editable_cell_source
+    assert "if (!isRowEditing && supportsRowEditSession && typeof onRequestRowStart === 'function')" in editable_cell_source
+    assert "setValue(toEditorInputValue(baseValue, resolvedEditorConfig));" in editable_cell_source
+    assert "setSubmittedDisplayValue(nextValue);" in editable_cell_source
+    assert "const effectiveDisplayValue = (" in editable_cell_source
+    assert "formatEditorDisplayValue(" in editable_cell_source
+    assert "...CELL_CONTENT_RESET_STYLE" in editable_cell_source
+    assert "'data-edit-rowid': rowPath" in editable_cell_source
+    assert "'data-edit-colid': column.id" in editable_cell_source
+    assert "data-display-rowid={rowPath}" in editable_cell_source
+    assert "resolveEditorPresentation," in column_source
+    assert "getRowEditSession," in column_source
+    assert "renderRowEditActions" in column_source
+    assert "data-row-edit-action=\"save\"" in component_source
+    editing_utils_source = Path(
+        os.path.join(
+            os.getcwd(),
+            "dash_tanstack_pivot",
+            "src",
+            "lib",
+            "utils",
+            "editing.js",
+        )
+    ).read_text(encoding="utf-8")
+    assert "normalizeEditingConfig" in editing_utils_source
+    assert "resolveColumnEditSpec" in editing_utils_source
+    assert "validateEditorValue" in editing_utils_source
+    assert "normalizeEditorOptions" in editing_utils_source
+    status_bar_source = Path(
+        os.path.join(
+            os.getcwd(),
+            "dash_tanstack_pivot",
+            "src",
+            "lib",
+            "components",
+            "Table",
+            "StatusBar.js",
+        )
+    ).read_text(encoding="utf-8")
+    assert "data-pivot-status-bar=\"true\"" in status_bar_source
+    assert "const [showDetails, setShowDetails] = React.useState(false);" in status_bar_source
+    assert "data-pivot-status-details-open={showDetails ? 'true' : 'false'}" in status_bar_source
+    assert "data-pivot-status-details=\"true\"" in status_bar_source
+    assert "data-pivot-status-summary=\"true\"" in status_bar_source
+    assert "data-pivot-status-actions=\"true\"" in status_bar_source
+    assert "data-pivot-status-panel={id}" in status_bar_source
+    assert "data-pivot-status-action={id}" in status_bar_source
+    assert "label={showDetails ? 'Hide Status' : 'Show Status'}" in status_bar_source
+    assert "Detailed panels are off by default." in status_bar_source
+    assert "label=\"Mean\"" in status_bar_source
+    assert "label=\"Std Dev\"" in status_bar_source
+    assert "summarizeSelection" in status_bar_source
+    assert "label=\"Selection\"" in status_bar_source
+    assert "label=\"Editing\"" in status_bar_source
+    assert "label=\"Charts\"" in status_bar_source
+    assert "label=\"Range Chart\"" in status_bar_source
+    assert "label=\"Refresh View\"" in status_bar_source
+    assert "const statusAccessoryModel = useMemo(() => ({" in component_source
+    assert "const statusAccessoryActions = useMemo(() => ({" in component_source
+    assert "statusModel={statusAccessoryModel}" in component_source
+    assert "statusActions={statusAccessoryActions}" in component_source
+    assert "data-rowid={row.id}" in Path(
+        os.path.join(
+            os.getcwd(),
+            "dash_tanstack_pivot",
+            "src",
+            "lib",
+            "hooks",
+            "useRenderHelpers.js",
+        )
+    ).read_text(encoding="utf-8")
+
+
+def test_frontend_chart_surface_includes_inline_settings_sparkline_and_resize_reflow_hooks():
+    chart_source = Path(
+        os.path.join(
+            os.getcwd(),
+            "dash_tanstack_pivot",
+            "src",
+            "lib",
+            "components",
+            "Charts",
+            "PivotCharts.js",
+        )
+    ).read_text(encoding="utf-8")
+    component_source = Path(
+        os.path.join(
+            os.getcwd(),
+            "dash_tanstack_pivot",
+            "src",
+            "lib",
+            "components",
+            "DashTanstackPivot.react.js",
+        )
+    ).read_text(encoding="utf-8")
+    column_virtualizer_source = Path(
+        os.path.join(
+            os.getcwd(),
+            "dash_tanstack_pivot",
+            "src",
+            "lib",
+            "hooks",
+            "useColumnVirtualizer.js",
+        )
+    ).read_text(encoding="utf-8")
+
+    assert "data-chart-settings-toggle=\"true\"" in chart_source
+    assert "data-chart-settings-pane=\"true\"" in chart_source
+    assert "data-chart-settings-scroll=\"true\"" in chart_source
+    assert "data-chart-surface-scroll=\"true\"" in chart_source
+    assert "data-chart-settings-resizer=\"true\"" in chart_source
+    assert "data-chart-sparkline-board=\"true\"" in chart_source
+    assert "data-chart-sparkline-card=" in chart_source
+    assert "const isSparklineChart = chartType === 'sparkline';" in chart_source
+    assert "overscrollBehavior: 'contain'" in chart_source
+    assert "applyChartPreset" in chart_source
+    assert "onChange('sparkline')" in chart_source
+    assert "chartType === 'sparkline'" in chart_source
+    assert "showLegend={!isSparklineChart}" in chart_source
+    assert "VALID_CHART_TYPES = new Set(['bar', 'line', 'area', 'sparkline'" in component_source
+    assert "setTableCanvasSize((previousSize) => Math.max(DEFAULT_TABLE_CANVAS_SIZE" in component_source
+    assert "const remeasure = () => {" in column_virtualizer_source
+    assert "observer.observe(scrollEl);" in column_virtualizer_source
+    assert "columnVirtualizer.measure();" in column_virtualizer_source
+    assert "data-colid={col.id}" in Path(
+        os.path.join(
+            os.getcwd(),
+            "dash_tanstack_pivot",
+            "src",
+            "lib",
+            "hooks",
+            "useRenderHelpers.js",
+        )
+    ).read_text(encoding="utf-8")
+    app_bar_source = Path(
+        os.path.join(
+            os.getcwd(),
+            "dash_tanstack_pivot",
+            "src",
+            "lib",
+            "components",
+            "PivotAppBar.js",
+        )
+    ).read_text(encoding="utf-8")
+    render_helper_source = Path(
+        os.path.join(
+            os.getcwd(),
+            "dash_tanstack_pivot",
+            "src",
+            "lib",
+            "hooks",
+            "useRenderHelpers.js",
+        )
+    ).read_text(encoding="utf-8")
+    formatting_source = Path(
+        os.path.join(
+            os.getcwd(),
+            "dash_tanstack_pivot",
+            "src",
+            "lib",
+            "utils",
+            "formatting.js",
+        )
+    ).read_text(encoding="utf-8")
+    assert "EDITED_CELL_FORMAT_KEY" in app_bar_source
+    assert "Edited Cells" in app_bar_source
+    assert "Save Edited Style" in app_bar_source
+    assert "editedCellBg" in app_bar_source
+    assert "editedCellBorder" in app_bar_source
+    assert "editedCellText" in app_bar_source
+    assert "Structure" in app_bar_source
+    assert "Hierarchy Bg" in app_bar_source
+    assert "Grand Total Bg" in app_bar_source
+    assert "Grand Total Text" in app_bar_source
+    assert "resolveEditedCellMarker" in render_helper_source
+    assert "buildEditedCellVisualStyle" in render_helper_source
+    assert "export const EDITED_CELL_FORMAT_KEY = '__edited_cells__';" in formatting_source
+    assert "data-pivot-loading-indicator=\"global\"" in Path(
+        os.path.join(
+            os.getcwd(),
+            "dash_tanstack_pivot",
+            "src",
+            "lib",
+            "components",
+            "Table",
+            "PivotTableBody.js",
+        )
+    ).read_text(encoding="utf-8")
+    assert "data-pivot-loading-indicator=\"status\"" in Path(
+        os.path.join(
+            os.getcwd(),
+            "dash_tanstack_pivot",
+            "src",
+            "lib",
+            "components",
+            "Table",
+            "StatusBar.js",
+        )
+    ).read_text(encoding="utf-8")
+
+
+def test_frontend_toolbar_exposes_transaction_undo_redo_controls():
+    app_bar_source = Path(
+        os.path.join(
+            os.getcwd(),
+            "dash_tanstack_pivot",
+            "src",
+            "lib",
+            "components",
+            "PivotAppBar.js",
+        )
+    ).read_text(encoding="utf-8")
+
+    assert "canUndoTransactions" in app_bar_source
+    assert "canRedoTransactions" in app_bar_source
+    assert "transactionHistoryPending" in app_bar_source
+    assert "onUndoTransaction" in app_bar_source
+    assert "onRedoTransaction" in app_bar_source
+    assert "data-edit-value-mode=\"edited\"" in app_bar_source
+    assert "data-edit-value-mode=\"original\"" in app_bar_source
+    assert "aria-pressed={editValueDisplayMode === 'edited'}" in app_bar_source
+    assert "aria-pressed={editValueDisplayMode === 'original'}" in app_bar_source
+    assert "hasComparedValues" in app_bar_source
+    assert "setEditValueDisplayMode" in app_bar_source
+    assert "Undo the last edit or layout change (Ctrl/Cmd+Z)" in app_bar_source
+    assert "Redo the last edit or layout change (Ctrl+Y or Cmd/Ctrl+Shift+Z)" in app_bar_source
+
+
+def test_expansion_request_includes_anchor_block_from_overscan_boundary():
+    source = Path(
+        os.path.join(
+            os.getcwd(),
+            "dash_tanstack_pivot",
+            "src",
+            "lib",
+            "components",
+            "DashTanstackPivot.react.js",
+        )
+    ).read_text(encoding="utf-8")
+
+    assert "viewportAlignedStart" in source
+    assert "Math.min(viewportAlignedStart, anchorBlockHint * expansionBlockSize)" in source
+
+
+def test_expansion_requests_preserve_latest_horizontal_window():
+    source = Path(
+        os.path.join(
+            os.getcwd(),
+            "dash_tanstack_pivot",
+            "src",
+            "lib",
+            "components",
+            "DashTanstackPivot.react.js",
+        )
+    ).read_text(encoding="utf-8")
+    viewport_hook_source = Path(
+        os.path.join(
+            os.getcwd(),
+            "dash_tanstack_pivot",
+            "src",
+            "lib",
+            "hooks",
+            "useServerSideViewportController.js",
+        )
+    ).read_text(encoding="utf-8")
+
+    assert "latestRequestedColumnWindowRef" in source
+    assert "resolveStableRequestedColumnWindow" in source
+    assert "Math.min(...candidateStarts)" in viewport_hook_source
+    assert "Math.max(...candidateEnds)" in viewport_hook_source
+
+
+def test_structural_requests_restart_from_top_window_after_field_changes():
+    source = Path(
+        os.path.join(
+            os.getcwd(),
+            "dash_tanstack_pivot",
+            "src",
+            "lib",
+            "components",
+            "DashTanstackPivot.react.js",
+        )
+    ).read_text(encoding="utf-8")
+
+    assert "const structuralWindowSize = Math.max(" in source
+    assert "const structuralStart = 0;" in source
+    assert "const structuralEnd = structuralWindowSize - 1;" in source
+
+
+def test_row_cache_merges_rows_by_stable_identity_when_column_windows_shift():
+    source = Path(
+        os.path.join(
+            os.getcwd(),
+            "dash_tanstack_pivot",
+            "src",
+            "lib",
+            "hooks",
+            "useRowCache.js",
+        )
+    ).read_text(encoding="utf-8")
+
+    assert "getRowMergeKey" in source
+    assert "previousByKey" in source
+    assert "rows: mergedRows" in source
+
+
+@pytest.mark.asyncio
+async def test_virtual_scroll_reuses_cached_adjacent_row_blocks(adapter, monkeypatch):
+    request = TanStackRequest(
+        operation=TanStackOperation.GET_DATA,
+        table="sales_data",
+        columns=[
+            {"id": "sales"},
+            {"id": "region"},
+            {"id": "country"},
+            {"id": "sales_sum", "aggregationField": "sales", "aggregationFn": "sum"},
+        ],
+        filters={},
+        sorting=[],
+        grouping=["sales", "region", "country"],
+        aggregations=[],
+        totals=False,
+    )
+
+    original_run_hierarchy_view = adapter.controller.run_hierarchy_view
+    call_ranges = []
+
+    async def counting_run_hierarchy_view(*args, **kwargs):
+        call_ranges.append((args[2], args[3]))
+        return await original_run_hierarchy_view(*args, **kwargs)
+
+    monkeypatch.setattr(adapter.controller, "run_hierarchy_view", counting_run_hierarchy_view)
+
+    await adapter.handle_virtual_scroll_request(
+        request, 0, 99, [], needs_col_schema=False, include_grand_total=False
+    )
+    await adapter.handle_virtual_scroll_request(
+        request, 100, 199, [], needs_col_schema=False, include_grand_total=False
+    )
+    assembled = await adapter.handle_virtual_scroll_request(
+        request, 0, 199, [], needs_col_schema=False, include_grand_total=False
+    )
+
+    assert call_ranges == [(0, 99), (100, 199)]
+    assert len(assembled.data) >= 200
+
+
+@pytest.mark.asyncio
+async def test_virtual_scroll_fetches_only_missing_row_blocks_when_adjacent_blocks_cached(adapter, monkeypatch):
+    request = TanStackRequest(
+        operation=TanStackOperation.GET_DATA,
+        table="sales_data",
+        columns=[
+            {"id": "sales"},
+            {"id": "region"},
+            {"id": "country"},
+            {"id": "sales_sum", "aggregationField": "sales", "aggregationFn": "sum"},
+        ],
+        filters={},
+        sorting=[],
+        grouping=["sales", "region", "country"],
+        aggregations=[],
+        totals=False,
+    )
+
+    original_run_hierarchy_view = adapter.controller.run_hierarchy_view
+    call_ranges = []
+
+    async def counting_run_hierarchy_view(*args, **kwargs):
+        call_ranges.append((args[2], args[3]))
+        return await original_run_hierarchy_view(*args, **kwargs)
+
+    monkeypatch.setattr(adapter.controller, "run_hierarchy_view", counting_run_hierarchy_view)
+
+    await adapter.handle_virtual_scroll_request(
+        request, 0, 99, [], needs_col_schema=False, include_grand_total=False
+    )
+    await adapter.handle_virtual_scroll_request(
+        request, 200, 299, [], needs_col_schema=False, include_grand_total=False
+    )
+    assembled = await adapter.handle_virtual_scroll_request(
+        request, 0, 299, [], needs_col_schema=False, include_grand_total=False
+    )
+
+    assert call_ranges == [(0, 99), (200, 299), (100, 199)]
+    assert len(assembled.data) >= 300

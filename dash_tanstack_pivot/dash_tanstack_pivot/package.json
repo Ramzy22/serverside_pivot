@@ -1,6 +1,6 @@
 {
   "name": "dash_tanstack_pivot",
-  "version": "0.0.53",
+  "version": "0.0.54",
   "description": "A Dash component built with TanStack Table v8",
   "main": "build/index.js",
   "scripts": {

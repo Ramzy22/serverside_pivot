@@ -443,10 +443,10 @@ class IbisPlanner:
                 weighted_sum_alias = f"__sumxw_{m.alias}"
                 total_weight_alias = f"__sumw_{m.alias}"
                 ibis_aggregations.append(
-                    (value_col * weight_col).where(valid_mask).sum().name(weighted_sum_alias)
+                    ibis.ifelse(valid_mask, value_col * weight_col, ibis.null()).sum().name(weighted_sum_alias)
                 )
                 ibis_aggregations.append(
-                    weight_col.where(valid_mask).sum().name(total_weight_alias)
+                    ibis.ifelse(valid_mask, weight_col, ibis.null()).sum().name(total_weight_alias)
                 )
 
         # Add hidden base measures for window functions if needed
@@ -640,8 +640,7 @@ class IbisPlanner:
             group_cols,
         )
         
-        if spec.limit:
-            aggregated_table = aggregated_table.limit(spec.limit)
+        aggregated_table = self._apply_limit_offset(aggregated_table, spec)
         
         queries: List[IbisTable] = [aggregated_table]
         
@@ -836,8 +835,7 @@ class IbisPlanner:
             if ibis_sorts:
                 unioned_expr = unioned_expr.order_by(ibis_sorts)
                 
-        if spec.limit:
-            unioned_expr = unioned_expr.limit(spec.limit)
+        unioned_expr = self._apply_limit_offset(unioned_expr, spec)
 
         metadata = {
             "grouping_mode": mode,
@@ -855,11 +853,10 @@ class IbisPlanner:
             # If no columns to pivot, treat as standard aggregation plan
             return self._plan_standard(spec, None, None, include_metadata)
 
-        top_n = 50 
+        top_n = 50
         column_cursor = None
         if spec.pivot_config:
-             if spec.pivot_config.top_n:
-                 top_n = spec.pivot_config.top_n
+             top_n = spec.pivot_config.top_n
              column_cursor = spec.pivot_config.column_cursor
              
         order_measure = spec.measures[0]
@@ -879,6 +876,16 @@ class IbisPlanner:
             metadata["needs_totals"] = True
         
         return {"queries": [col_ibis_expr], "metadata": metadata}
+
+    @staticmethod
+    def _apply_limit_offset(result_expr, spec: PivotSpec):
+        limit = getattr(spec, "limit", None)
+        offset = max(int(getattr(spec, "offset", 0) or 0), 0)
+        if limit:
+            return result_expr.limit(limit, offset=offset) if offset else result_expr.limit(limit)
+        if offset:
+            return result_expr.limit(1000000, offset=offset)
+        return result_expr
 
     def build_pivot_query_from_columns(
         self, spec: PivotSpec, column_values: List[str]
@@ -979,8 +986,8 @@ class IbisPlanner:
                     weight_expr = base_table[m.weighted_field]
                     cond_weight = match_expr.ifelse(weight_expr, ibis.null())
                     valid_mask = cond_col.notnull() & cond_weight.notnull()
-                    weighted_sum = (cond_col * cond_weight).where(valid_mask).sum()
-                    total_weight = cond_weight.where(valid_mask).sum()
+                    weighted_sum = ibis.ifelse(valid_mask, cond_col * cond_weight, ibis.null()).sum()
+                    total_weight = ibis.ifelse(valid_mask, cond_weight, ibis.null()).sum()
                     pivot_aggs.append((weighted_sum / total_weight.nullif(0)).name(alias))
                 else:
                     pass
@@ -1014,8 +1021,8 @@ class IbisPlanner:
                         )
                     weight_expr = base_table[m.weighted_field]
                     valid_mask = col_expr.notnull() & weight_expr.notnull()
-                    weighted_sum = (col_expr * weight_expr).where(valid_mask).sum()
-                    total_weight = weight_expr.where(valid_mask).sum()
+                    weighted_sum = ibis.ifelse(valid_mask, col_expr * weight_expr, ibis.null()).sum()
+                    total_weight = ibis.ifelse(valid_mask, weight_expr, ibis.null()).sum()
                     pivot_aggs.append((weighted_sum / total_weight.nullif(0)).name(alias))
 
         row_dims = list(spec.rows or [])
@@ -1079,8 +1086,7 @@ class IbisPlanner:
             row_dims,
         )
                     
-        if spec.limit:
-            result_expr = result_expr.limit(spec.limit)
+        result_expr = self._apply_limit_offset(result_expr, spec)
             
         return result_expr
 
@@ -1179,8 +1185,7 @@ class IbisPlanner:
             if ibis_sorts:
                 result_expr = result_expr.order_by(ibis_sorts)
                 
-        if spec.limit:
-            result_expr = result_expr.limit(spec.limit)
+        result_expr = self._apply_limit_offset(result_expr, spec)
             
         metadata = {
             "drill_depth": current_depth,
@@ -1191,11 +1196,11 @@ class IbisPlanner:
 
     def _build_column_values_query(
         self, table_name: str, columns: List[str], filters: List[Dict[str, Any]],
-        top_n: int, order_measure: Optional[Measure], column_cursor: Optional[str] = None,
+        top_n: Optional[int], order_measure: Optional[Measure], column_cursor: Optional[str] = None,
         column_sort_options: Optional[Dict[str, Any]] = None,
     ) -> IbisTable:
         """
-        Builds an Ibis expression to discover top-N column values with keyset pagination.
+        Builds an Ibis expression to discover pivot column values with optional keyset pagination.
         """
         base_table = self.con.table(table_name)
         
@@ -1340,7 +1345,8 @@ class IbisPlanner:
         if order_exprs:
             result = result.order_by(order_exprs)
         
-        result = result.limit(top_n)
+        if isinstance(top_n, int) and top_n > 0:
+            result = result.limit(top_n)
         
         return result
 

@@ -6,6 +6,8 @@ Build a real server-side pivot table in Dash in about 10 lines of Python.
 
 It works with `pandas`, `polars`, `pyarrow`, and SQL backends through Ibis, so the same component can start on a local dataframe and scale to a production database without changing the user experience.
 
+On the Dash side, one runtime callback now handles data windows, filter option requests, chart requests, and drill-through.
+
 ## Install
 
 ```bash
@@ -41,6 +43,8 @@ if __name__ == "__main__":
 ```
 
 The same `adapter.load_data(...)` call also accepts `polars`, `pyarrow`, and database-backed Ibis sources.
+
+`register_dash_pivot_transport_callback(...)` is the main integration point. You do not need separate callback wiring for filter lists, charts, or drill-through.
 
 ## Why Use It
 

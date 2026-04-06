@@ -1,1567 +1,46 @@
-import React, { useEffect, useMemo, useRef, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import Icons from '../Icons';
 import { formatDisplayLabel } from '../../utils/helpers';
-
-const INTERNAL_COL_IDS = new Set(['hierarchy', '__row_number__']);
-const MAX_PANEL_CATEGORIES = 18;
-const MAX_PANEL_SERIES = 4;
-const MAX_SELECTION_CATEGORIES = 24;
-const MAX_SELECTION_SERIES = 6;
-const CHART_HEIGHT = 320;
-const CHART_WIDTH = 760;
-
-const DEFAULT_COLORS = ['#2563EB', '#F97316', '#0F766E', '#7C3AED', '#DC2626', '#0891B2'];
-const VALID_COMBO_LAYER_TYPES = new Set(['bar', 'line', 'area']);
-const VALID_COMBO_LAYER_AXES = new Set(['left', 'right']);
-const DEFAULT_COMBO_LAYER_SEQUENCE = ['bar', 'line', 'area'];
-const normalizePositiveLimit = (value, fallback) => {
-    const numericValue = Number(value);
-    if (!Number.isFinite(numericValue) || numericValue < 1) return fallback;
-    return Math.max(1, Math.floor(numericValue));
-};
-
-const parseNumeric = (value) => {
-    if (typeof value === 'number' && Number.isFinite(value)) return value;
-    if (typeof value !== 'string') return null;
-    const trimmed = value.trim();
-    if (!trimmed) return null;
-    const normalized = trimmed.replace(/,/g, '').replace(/%$/, '');
-    const parsed = Number(normalized);
-    return Number.isFinite(parsed) ? parsed : null;
-};
-
-const stringifyValue = (value) => {
-    if (value === null || value === undefined) return '';
-    return String(value);
-};
-
-const formatChartNumber = (value) => {
-    if (typeof value !== 'number' || !Number.isFinite(value)) return '';
-    return value.toFixed(Math.abs(value) >= 100 ? 0 : 2).replace(/\.00$/, '');
-};
-
-const estimateTextWidth = (text, fontSize = 11) => Math.ceil(String(text || '').length * fontSize * 0.62);
-
-const truncateChartLabel = (value, maxLength) => {
-    const label = String(value || '');
-    return label.length > maxLength ? `${label.slice(0, maxLength)}...` : label;
-};
-
-const getColumnLabel = (column) => {
-    if (!column) return 'Value';
-    const header = column.columnDef ? column.columnDef.header : null;
-    if (typeof header === 'string' && header.trim()) return formatDisplayLabel(header);
-    return formatDisplayLabel(column.id || 'Value');
-};
-
-const getColumnHeaderSegments = (column) => {
-    const segments = [];
-    let current = column;
-
-    while (current) {
-        const header = current.columnDef ? current.columnDef.header : null;
-        const headerVal = current.headerVal || (current.columnDef && current.columnDef.headerVal) || null;
-        let resolvedHeader = null;
-
-        if (typeof headerVal === 'string' && headerVal.trim() && headerVal.trim() !== '...') {
-            resolvedHeader = headerVal;
-        } else if (typeof header === 'string' && header.trim() && header.trim() !== '...') {
-            resolvedHeader = header;
-        } else if (typeof current.id === 'string' && current.id.startsWith('group_')) {
-            resolvedHeader = current.id.replace('group_', '').split('|||').pop() || null;
-        }
-
-        if (resolvedHeader) {
-            segments.unshift(formatDisplayLabel(resolvedHeader));
-        }
-        current = current.parent || null;
-    }
-
-    if (segments.length === 0) {
-        return [getColumnLabel(column)];
-    }
-
-    return segments;
-};
-
-const buildColumnLabelResolver = (columns) => {
-    const resolvedColumns = (columns || []).filter(Boolean);
-    const segmentSets = resolvedColumns.map((column) => getColumnHeaderSegments(column));
-    const leafLabels = Array.from(new Set(
-        segmentSets
-            .map((segments) => segments[segments.length - 1])
-            .filter(Boolean)
-    ));
-    const omitRepeatedLeaf = leafLabels.length === 1 && segmentSets.some((segments) => segments.length > 1);
-
-    return (column) => {
-        if (!column) return 'Value';
-        const segments = getColumnHeaderSegments(column);
-        const displaySegments = omitRepeatedLeaf && segments.length > 1
-            ? segments.slice(0, -1)
-            : segments;
-        return (displaySegments.length > 0 ? displaySegments : segments).join(' > ') || getColumnLabel(column);
-    };
-};
-
-const getColumnValueSegments = (column) => {
-    const segments = [];
-    let current = column;
-
-    while (current) {
-        const header = current.columnDef ? current.columnDef.header : null;
-        const headerVal = current.headerVal || (current.columnDef && current.columnDef.headerVal) || null;
-        let resolvedValue = null;
-
-        if (headerVal !== null && headerVal !== undefined && String(headerVal).trim() && String(headerVal).trim() !== '...') {
-            resolvedValue = String(headerVal);
-        } else if (typeof header === 'string' && header.trim() && header.trim() !== '...') {
-            resolvedValue = header;
-        } else if (typeof current.id === 'string' && current.id.startsWith('group_')) {
-            resolvedValue = current.id.replace('group_', '').split('|||').pop() || null;
-        }
-
-        if (resolvedValue) {
-            segments.unshift(resolvedValue);
-        }
-        current = current.parent || null;
-    }
-
-    return segments;
-};
-
-const buildColumnFieldValues = (column, fields = []) => {
-    const rawSegments = getColumnValueSegments(column);
-    const effectiveSegments = rawSegments.slice(0, Math.max(0, fields.length));
-    return effectiveSegments.reduce((acc, value, index) => {
-        const field = fields[index];
-        if (field && value !== undefined && value !== null && String(value).trim() !== '') {
-            acc[field] = String(value);
-        }
-        return acc;
-    }, {});
-};
-
-const getChartableColumns = (visibleCols = []) => (
-    (visibleCols || []).filter((column) => column && column.id && !INTERNAL_COL_IDS.has(column.id))
-);
-
-const getComboLayerDefaultName = (column, index = 0) => (
-    column && column.id ? getColumnLabel(column) : `Series ${index + 1}`
-);
-
-export const buildDefaultCartesianLayers = (visibleCols = [], maxLayers = 3) => {
-    const chartableColumns = getChartableColumns(visibleCols).slice(0, Math.max(1, Math.floor(Number(maxLayers) || 1)));
-    return chartableColumns.map((column, index) => ({
-        id: `layer-${index + 1}`,
-        type: DEFAULT_COMBO_LAYER_SEQUENCE[index % DEFAULT_COMBO_LAYER_SEQUENCE.length],
-        columnId: column.id,
-        axis: index === 0 ? 'left' : (index === 1 ? 'right' : 'left'),
-        name: getComboLayerDefaultName(column, index),
-        hidden: false,
-    }));
-};
-
-const buildGroupedChartColumnOptions = (columns = []) => {
-    const resolveColumnLabel = buildColumnLabelResolver(columns);
-    return columns
-        .map((column) => {
-            const segments = getColumnHeaderSegments(column);
-            const leafLabel = segments[segments.length - 1] || getColumnLabel(column);
-            const groupLabel = segments.length > 1 ? segments.slice(0, -1).join(' / ') : 'Measures';
-            const fullLabel = resolveColumnLabel(column);
-            return {
-                id: column.id,
-                column,
-                leafLabel,
-                groupLabel,
-                fullLabel,
-                searchText: [
-                    column.id,
-                    leafLabel,
-                    groupLabel,
-                    fullLabel,
-                    segments.join(' '),
-                ].join(' ').toLowerCase(),
-            };
-        })
-        .sort((left, right) => (
-            left.groupLabel.localeCompare(right.groupLabel, undefined, { numeric: true, sensitivity: 'base' })
-            || left.fullLabel.localeCompare(right.fullLabel, undefined, { numeric: true, sensitivity: 'base' })
-        ));
-};
-
-const normalizeComboLayer = (layer, availableColumns = [], index = 0, fallbackLayer = null) => {
-    const source = layer && typeof layer === 'object' ? layer : {};
-    const fallback = fallbackLayer && typeof fallbackLayer === 'object' ? fallbackLayer : {};
-    const chartableColumns = getChartableColumns(availableColumns);
-    const fallbackColumn = chartableColumns[0] || null;
-    const requestedColumnId = source.columnId || fallback.columnId || (fallbackColumn && fallbackColumn.id) || null;
-    const matchingColumn = chartableColumns.find((column) => column.id === requestedColumnId) || null;
-    return {
-        id: typeof source.id === 'string' && source.id.trim()
-            ? source.id
-            : (typeof fallback.id === 'string' && fallback.id.trim() ? fallback.id : `layer-${index + 1}`),
-        type: VALID_COMBO_LAYER_TYPES.has(source.type)
-            ? source.type
-            : (VALID_COMBO_LAYER_TYPES.has(fallback.type) ? fallback.type : DEFAULT_COMBO_LAYER_SEQUENCE[index % DEFAULT_COMBO_LAYER_SEQUENCE.length]),
-        columnId: matchingColumn ? matchingColumn.id : requestedColumnId,
-        axis: VALID_COMBO_LAYER_AXES.has(source.axis)
-            ? source.axis
-            : (VALID_COMBO_LAYER_AXES.has(fallback.axis) ? fallback.axis : (index === 1 ? 'right' : 'left')),
-        name: typeof source.name === 'string' && source.name.trim()
-            ? source.name.trim()
-            : (typeof fallback.name === 'string' && fallback.name.trim()
-                ? fallback.name.trim()
-                : getComboLayerDefaultName(matchingColumn || fallbackColumn, index)),
-        hidden: Boolean(source.hidden),
-    };
-};
-
-export const normalizeComboLayers = (layers, availableColumns = [], fallbackLayers = []) => {
-    const sourceLayers = Array.isArray(layers) ? layers : [];
-    const normalized = sourceLayers
-        .filter((layer) => layer && typeof layer === 'object')
-        .map((layer, index) => normalizeComboLayer(layer, availableColumns, index, Array.isArray(fallbackLayers) ? fallbackLayers[index] : null));
-
-    if (normalized.length > 0) return normalized;
-    const defaultLayers = Array.isArray(fallbackLayers) && fallbackLayers.length > 0
-        ? fallbackLayers
-        : buildDefaultCartesianLayers(availableColumns);
-    return defaultLayers.map((layer, index) => normalizeComboLayer(layer, availableColumns, index, layer));
-};
-
-const getRowLabel = (row, fallbackIndex = 0) => {
-    if (!row) return `Row ${fallbackIndex + 1}`;
-    if ((row.original && row.original._path === '__grand_total__') || row._path === '__grand_total__') return 'Grand Total';
-    const explicitId = row.original && row.original._id ? row.original._id : row._id;
-    if (explicitId !== null && explicitId !== undefined && String(explicitId).trim() !== '') {
-        return formatDisplayLabel(String(explicitId));
-    }
-    if (typeof row.getValue === 'function') {
-        const hierarchyValue = row.getValue('hierarchy');
-        if (hierarchyValue !== null && hierarchyValue !== undefined && String(hierarchyValue).trim() !== '') {
-            return formatDisplayLabel(String(hierarchyValue));
-        }
-    }
-    if (row.hierarchy !== null && row.hierarchy !== undefined && String(row.hierarchy).trim() !== '') {
-        return formatDisplayLabel(String(row.hierarchy));
-    }
-    return formatDisplayLabel(row.id || `Row ${fallbackIndex + 1}`);
-};
-
-const getRowDepth = (row) => {
-    if (!row) return 0;
-    const explicitDepth = row.original && typeof row.original.depth === 'number'
-        ? row.original.depth
-        : (typeof row.depth === 'number' ? row.depth : null);
-    if (explicitDepth !== null) return explicitDepth;
-    return typeof row.depth === 'number' ? row.depth : 0;
-};
-
-const getRowLevel = (row) => getRowDepth(row) + 1;
-const getRowPath = (row) => {
-    if (!row) return '';
-    if (row.original && row.original._path) return String(row.original._path);
-    if (row._path) return String(row._path);
-    return String(row.id || '');
-};
-
-const buildRowFieldValues = (rowPath, fields = []) => {
-    const pathParts = rowPath ? String(rowPath).split('|||') : [];
-    return fields.reduce((acc, field, index) => {
-        const value = pathParts[index];
-        if (field && value !== undefined && value !== null && String(value).trim() !== '') {
-            acc[field] = String(value);
-        }
-        return acc;
-    }, {});
-};
-
-const buildRowTarget = (row, fallbackIndex = 0, fields = []) => {
-    const rowPath = getRowPath(row);
-    return {
-        kind: 'row',
-        rowId: row && row.id ? row.id : null,
-        rowPath,
-        label: getRowLabel(row, fallbackIndex),
-        pathValues: rowPath ? rowPath.split('|||') : [],
-        fieldValues: buildRowFieldValues(rowPath, fields),
-    };
-};
-
-const buildColumnTarget = (column, fields = []) => ({
-    kind: 'column',
-    columnId: column && column.id ? column.id : null,
-    label: buildColumnLabelResolver([column])(column),
-    pathValues: getColumnValueSegments(column),
-    fieldValues: buildColumnFieldValues(column, fields),
-});
-const isDescendantPath = (ancestorPath, candidatePath) => (
-    Boolean(ancestorPath) &&
-    Boolean(candidatePath) &&
-    candidatePath.indexOf(`${ancestorPath}|||`) === 0
-);
-
-const isTotalRow = (row) => Boolean(
-    row &&
-    (
-        (row.original && (row.original._isTotal || row.original.__isGrandTotal__ || row.original._path === '__grand_total__'))
-        || row._isTotal
-        || row.__isGrandTotal__
-        || row._path === '__grand_total__'
-    )
-);
-
-const getCellValue = (row, columnId) => {
-    if (!row || !columnId) return null;
-    if (typeof row.getValue === 'function') return row.getValue(columnId);
-    return row[columnId];
-};
-
-const getAvailableLevels = (rows) => Array.from(new Set(
-    (rows || [])
-        .filter((row) => row && !isTotalRow(row))
-        .map((row) => getRowLevel(row))
-)).sort((a, b) => a - b);
-
-const getHierarchyDisplayRows = (rows, hierarchyLevel) => {
-    const orderedRows = (rows || []).filter((row) => row && !isTotalRow(row));
-    if (orderedRows.length === 0) return [];
-
-    const pathToRow = new Map();
-    orderedRows.forEach((row) => {
-        const path = getRowPath(row);
-        if (path) pathToRow.set(path, row);
-    });
-
-    const frontierRows = orderedRows.filter((row, index) => {
-        const currentPath = getRowPath(row);
-        const nextRow = orderedRows[index + 1];
-        const nextPath = nextRow ? getRowPath(nextRow) : '';
-        return !isDescendantPath(currentPath, nextPath);
-    });
-
-    if (hierarchyLevel === 'all') return frontierRows;
-
-    const selectedPaths = new Set();
-    frontierRows.forEach((row) => {
-        const rowPath = getRowPath(row);
-        const pathParts = rowPath ? rowPath.split('|||') : [];
-        const targetLevel = Math.min(Number(hierarchyLevel) || 1, Math.max(pathParts.length, 1));
-        let resolvedPath = '';
-        for (let level = targetLevel; level >= 1; level -= 1) {
-            const candidatePath = pathParts.slice(0, level).join('|||');
-            if (candidatePath && pathToRow.has(candidatePath)) {
-                resolvedPath = candidatePath;
-                break;
-            }
-        }
-        selectedPaths.add(resolvedPath || rowPath);
-    });
-
-    return orderedRows.filter((row) => selectedPaths.has(getRowPath(row)));
-};
-
-const getColorForIndex = (index, theme) => {
-    const palette = [theme.primary, ...DEFAULT_COLORS.filter((color) => color !== theme.primary)];
-    return palette[index % palette.length];
-};
-
-const buildSelectionBounds = (selectionMap, visibleRows, visibleCols) => {
-    const keys = Object.keys(selectionMap || {});
-    if (keys.length === 0) return null;
-
-    const rowIndexById = {};
-    visibleRows.forEach((row, index) => {
-        rowIndexById[row.id] = index;
-    });
-    const colIndexById = {};
-    visibleCols.forEach((column, index) => {
-        colIndexById[column.id] = index;
-    });
-
-    let minRow = Infinity;
-    let maxRow = -1;
-    let minCol = Infinity;
-    let maxCol = -1;
-    const grid = {};
-
-    keys.forEach((selectionKey) => {
-        const separatorIndex = selectionKey.lastIndexOf(':');
-        if (separatorIndex <= 0) return;
-        const rowId = selectionKey.slice(0, separatorIndex);
-        const colId = selectionKey.slice(separatorIndex + 1);
-        const rowIndex = rowIndexById[rowId];
-        const colIndex = colIndexById[colId];
-        if (rowIndex === undefined || colIndex === undefined) return;
-
-        minRow = Math.min(minRow, rowIndex);
-        maxRow = Math.max(maxRow, rowIndex);
-        minCol = Math.min(minCol, colIndex);
-        maxCol = Math.max(maxCol, colIndex);
-        if (!grid[rowIndex]) grid[rowIndex] = {};
-        grid[rowIndex][colIndex] = selectionMap[selectionKey];
-    });
-
-    if (minRow === Infinity || minCol === Infinity) return null;
-
-    return {
-        minRow,
-        maxRow,
-        minCol,
-        maxCol,
-        grid,
-        rowIndexes: Array.from({ length: maxRow - minRow + 1 }, (_, idx) => minRow + idx),
-        colIndexes: Array.from({ length: maxCol - minCol + 1 }, (_, idx) => minCol + idx),
-    };
-};
-
-const buildCategoryBandsForRows = (rowIndexes, visibleRows) => rowIndexes.map((rowIndex, index) => {
-    const row = visibleRows[rowIndex];
-    const path = getRowPath(row);
-    const pathParts = path ? path.split('|||').map((part) => formatDisplayLabel(String(part))) : [];
-    const currentLabel = getRowLabel(row, index);
-    if (pathParts.length <= 1) {
-        return {
-            outerLabel: currentLabel,
-            innerLabel: '',
-            groupKey: path || currentLabel,
-        };
-    }
-    const outerLabel = pathParts[pathParts.length - 2] || currentLabel;
-    const innerLabel = pathParts[pathParts.length - 1] || currentLabel;
-    return {
-        outerLabel,
-        innerLabel,
-        groupKey: pathParts.slice(0, pathParts.length - 1).join('|||') || outerLabel,
-    };
-});
-
-const buildStackedGroupsForRows = (displayRows, allVisibleRows, numericValues, maxGroups) => {
-    if (!Array.isArray(displayRows) || displayRows.length === 0) return [];
-    const orderedRows = (allVisibleRows || []).filter((row) => row && !isTotalRow(row));
-    const rowIndexByPath = new Map();
-    orderedRows.forEach((row, index) => {
-        rowIndexByPath.set(getRowPath(row), index);
-    });
-
-    return displayRows.slice(0, maxGroups).map((row, index) => {
-        const rowPath = getRowPath(row);
-        const rowLevel = getRowLevel(row);
-        const rowIndex = rowIndexByPath.get(rowPath);
-        const segments = [];
-
-        if (rowIndex !== undefined) {
-            for (let nextIndex = rowIndex + 1; nextIndex < orderedRows.length; nextIndex += 1) {
-                const candidate = orderedRows[nextIndex];
-                const candidatePath = getRowPath(candidate);
-                if (!isDescendantPath(rowPath, candidatePath)) break;
-                if (getRowLevel(candidate) === rowLevel + 1) {
-                    const value = parseNumeric(numericValues[candidatePath]);
-                    if (value !== null) {
-                        segments.push({
-                            label: getRowLabel(candidate, segments.length),
-                            value,
-                            path: candidatePath,
-                        });
-                    }
-                }
-            }
-        }
-
-        if (segments.length === 0) {
-            const fallbackValue = parseNumeric(numericValues[rowPath]);
-            segments.push({
-                label: getRowLabel(row, index),
-                value: fallbackValue !== null ? fallbackValue : 0,
-                path: rowPath,
-            });
-        }
-
-        return {
-            key: rowPath || `group-${index}`,
-            label: getRowLabel(row, index),
-            segments,
-        };
-    });
-};
-
-const buildFrontierStackedGroups = (displayRows, categoryBands, numericValues, maxGroups) => {
-    const rows = Array.isArray(displayRows) ? displayRows.slice(0, maxGroups) : [];
-    if (rows.length === 0) return [];
-
-    return rows.reduce((groups, row, index) => {
-        const band = Array.isArray(categoryBands) ? categoryBands[index] : null;
-        const rowPath = getRowPath(row);
-        const value = parseNumeric(numericValues[rowPath]);
-        const segment = {
-            label: band && band.innerLabel ? band.innerLabel : getRowLabel(row, index),
-            value: value !== null ? value : 0,
-            path: rowPath,
-        };
-        const groupKey = band && band.groupKey ? band.groupKey : (rowPath || `group-${index}`);
-        const groupLabel = band && band.innerLabel
-            ? band.outerLabel
-            : getRowLabel(row, index);
-        const previousGroup = groups[groups.length - 1];
-        if (previousGroup && previousGroup.key === groupKey) {
-            previousGroup.segments.push(segment);
-            return groups;
-        }
-        groups.push({
-            key: groupKey,
-            label: groupLabel,
-            segments: [segment],
-        });
-        return groups;
-    }, []);
-};
-
-const buildIcicleNodes = (rows, valueColumn) => {
-    if (!valueColumn || !Array.isArray(rows) || rows.length === 0) {
-        return { nodes: [], maxDepth: 0 };
-    }
-
-    const sourceRows = rows.filter((row) => row && !isTotalRow(row));
-    if (sourceRows.length === 0) {
-        return { nodes: [], maxDepth: 0 };
-    }
-
-    const nodeMap = new Map();
-    let maxDepth = 1;
-
-    sourceRows.forEach((row, index) => {
-        const rowPath = getRowPath(row);
-        if (!rowPath) return;
-        const depth = Math.max(1, rowPath.split('|||').length);
-        maxDepth = Math.max(maxDepth, depth);
-        nodeMap.set(rowPath, {
-            kind: 'row',
-            rowId: row && row.id ? row.id : null,
-            rowPath,
-            label: getRowLabel(row, index),
-            value: parseNumeric(getCellValue(row, valueColumn.id)) || 0,
-            depth,
-            children: [],
-        });
-    });
-
-    const roots = [];
-    nodeMap.forEach((node, rowPath) => {
-        const parentPath = rowPath.includes('|||')
-            ? rowPath.slice(0, rowPath.lastIndexOf('|||'))
-            : null;
-        if (parentPath && nodeMap.has(parentPath)) {
-            nodeMap.get(parentPath).children.push(node);
-            return;
-        }
-        roots.push(node);
-    });
-
-    return { nodes: roots, maxDepth };
-};
-
-const cloneHierarchyNodes = (nodes) => (
-    Array.isArray(nodes)
-        ? nodes.map((node) => ({
-            ...node,
-            children: cloneHierarchyNodes(node.children),
-        }))
-        : []
-);
-
-const sortHierarchyNodes = (nodes, sortMode) => {
-    if (!Array.isArray(nodes)) return [];
-    const normalizedMode = String(sortMode || 'natural').toLowerCase();
-    const children = nodes.map((node) => ({
-        ...node,
-        children: sortHierarchyNodes(node.children, normalizedMode),
-    }));
-    if (normalizedMode === 'natural' || normalizedMode === 'none') {
-        return children;
-    }
-
-    const compare = normalizedMode === 'label_asc'
-        ? (left, right) => String(left.label || '').localeCompare(String(right.label || ''))
-        : normalizedMode === 'label_desc'
-            ? (left, right) => String(right.label || '').localeCompare(String(left.label || ''))
-            : normalizedMode === 'value_asc'
-                ? (left, right) => Math.abs(Number(left.value) || 0) - Math.abs(Number(right.value) || 0)
-                : (left, right) => Math.abs(Number(right.value) || 0) - Math.abs(Number(left.value) || 0);
-    return [...children].sort(compare);
-};
-
-const sortChartModel = (model, sortMode) => {
-    const normalizedMode = String(sortMode || 'natural').toLowerCase();
-    if (!model || normalizedMode === 'natural' || normalizedMode === 'none') return model;
-    if (!Array.isArray(model.categories) || !Array.isArray(model.series) || model.categories.length === 0) {
-        return model;
-    }
-
-    const ordering = model.categories.map((category, index) => ({
-        category,
-        index,
-        total: (model.series || []).reduce((sum, series) => {
-            const value = Array.isArray(series && series.values) ? series.values[index] : null;
-            return sum + (typeof value === 'number' && Number.isFinite(value) ? value : 0);
-        }, 0),
-    }));
-
-    ordering.sort((left, right) => {
-        if (normalizedMode === 'label_asc') {
-            return String(left.category || '').localeCompare(String(right.category || ''));
-        }
-        if (normalizedMode === 'label_desc') {
-            return String(right.category || '').localeCompare(String(left.category || ''));
-        }
-        if (normalizedMode === 'value_asc') {
-            return left.total - right.total;
-        }
-        return right.total - left.total;
-    });
-
-    const reorderedIndexes = ordering.map((item) => item.index);
-    return {
-        ...model,
-        categories: reorderedIndexes.map((index) => model.categories[index]),
-        categoryTargets: Array.isArray(model.categoryTargets) ? reorderedIndexes.map((index) => model.categoryTargets[index]) : model.categoryTargets,
-        categoryBands: Array.isArray(model.categoryBands) ? reorderedIndexes.map((index) => model.categoryBands[index]) : model.categoryBands,
-        stackedGroups: Array.isArray(model.stackedGroups) && model.stackedGroups.length === model.categories.length
-            ? reorderedIndexes.map((index) => model.stackedGroups[index])
-            : model.stackedGroups,
-        series: (model.series || []).map((series) => ({
-            ...series,
-            values: reorderedIndexes.map((index) => series.values[index]),
-        })),
-    };
-};
-
-const buildHierarchySankey = (nodes) => {
-    if (!Array.isArray(nodes) || nodes.length === 0) {
-        return { nodes: [], links: [], maxDepth: 0 };
-    }
-
-    const flatNodes = [];
-    const links = [];
-    let maxDepth = 1;
-
-    const visit = (node, parent = null) => {
-        if (!node || !node.rowPath) return;
-        flatNodes.push({
-            kind: 'row',
-            rowId: node.rowId || null,
-            rowPath: node.rowPath,
-            label: node.label,
-            value: Math.abs(Number(node.value) || 0),
-            depth: node.depth || 1,
-        });
-        maxDepth = Math.max(maxDepth, node.depth || 1);
-        if (parent && parent.rowPath) {
-            links.push({
-                source: parent.rowPath,
-                target: node.rowPath,
-                value: Math.abs(Number(node.value) || 0),
-            });
-        }
-        (node.children || []).forEach((child) => visit(child, node));
-    };
-
-    nodes.forEach((node) => visit(node, null));
-    return { nodes: flatNodes, links, maxDepth };
-};
-
-const polarToCartesian = (cx, cy, radius, angle) => ({
-    x: cx + (radius * Math.cos(angle)),
-    y: cy + (radius * Math.sin(angle)),
-});
-
-const describeDonutArc = (cx, cy, innerRadius, outerRadius, startAngle, endAngle) => {
-    const safeSpan = Math.max(0.0001, Math.min((Math.PI * 2) - 0.0001, endAngle - startAngle));
-    const safeEnd = startAngle + safeSpan;
-    const largeArc = safeSpan > Math.PI ? 1 : 0;
-    const outerStart = polarToCartesian(cx, cy, outerRadius, startAngle);
-    const outerEnd = polarToCartesian(cx, cy, outerRadius, safeEnd);
-
-    if (innerRadius <= 0) {
-        return [
-            `M ${cx} ${cy}`,
-            `L ${outerStart.x} ${outerStart.y}`,
-            `A ${outerRadius} ${outerRadius} 0 ${largeArc} 1 ${outerEnd.x} ${outerEnd.y}`,
-            'Z',
-        ].join(' ');
-    }
-
-    const innerStart = polarToCartesian(cx, cy, innerRadius, safeEnd);
-    const innerEnd = polarToCartesian(cx, cy, innerRadius, startAngle);
-    return [
-        `M ${outerStart.x} ${outerStart.y}`,
-        `A ${outerRadius} ${outerRadius} 0 ${largeArc} 1 ${outerEnd.x} ${outerEnd.y}`,
-        `L ${innerStart.x} ${innerStart.y}`,
-        `A ${innerRadius} ${innerRadius} 0 ${largeArc} 0 ${innerEnd.x} ${innerEnd.y}`,
-        'Z',
-    ].join(' ');
-};
-
-const layoutSunburstNodes = (nodes, startAngle, endAngle, depth, ringWidth, acc = []) => {
-    if (!Array.isArray(nodes) || nodes.length === 0) return acc;
-    const weights = nodes.map((node) => Math.abs(Number(node.value) || 0));
-    const totalWeight = weights.reduce((sum, value) => sum + value, 0);
-    let angleCursor = startAngle;
-
-    nodes.forEach((node, index) => {
-        const fallbackSweep = (endAngle - startAngle) / Math.max(nodes.length, 1);
-        const sweep = totalWeight > 0 ? ((weights[index] || 0) / totalWeight) * (endAngle - startAngle) : fallbackSweep;
-        const nextAngle = angleCursor + sweep;
-        const layoutNode = {
-            ...node,
-            startAngle: angleCursor,
-            endAngle: nextAngle,
-            innerRadius: Math.max(0, (depth - 1) * ringWidth),
-            outerRadius: depth * ringWidth,
-        };
-        acc.push(layoutNode);
-        if (Array.isArray(node.children) && node.children.length > 0) {
-            layoutSunburstNodes(node.children, angleCursor, nextAngle, depth + 1, ringWidth, acc);
-        }
-        angleCursor = nextAngle;
-    });
-    return acc;
-};
-
-const layoutSankey = (nodes, links, width, height) => {
-    if (!Array.isArray(nodes) || nodes.length === 0) return { nodes: [], links: [] };
-
-    const margin = { top: 24, right: 20, bottom: 24, left: 20 };
-    const nodeWidth = 18;
-    const levelMap = new Map();
-    nodes.forEach((node) => {
-        const depth = Math.max(1, Number(node.depth) || 1);
-        if (!levelMap.has(depth)) levelMap.set(depth, []);
-        levelMap.get(depth).push(node);
-    });
-
-    const maxDepth = Math.max(...Array.from(levelMap.keys()));
-    const usableWidth = Math.max(1, width - margin.left - margin.right - nodeWidth);
-    const levelGap = maxDepth > 1 ? usableWidth / (maxDepth - 1) : 0;
-    const positionedNodes = [];
-    const nodeLookup = new Map();
-
-    levelMap.forEach((levelNodes, depth) => {
-        const gap = 16;
-        const availableHeight = Math.max(1, height - margin.top - margin.bottom - (Math.max(levelNodes.length - 1, 0) * gap));
-        const totalValue = levelNodes.reduce((sum, node) => sum + Math.max(Math.abs(Number(node.value) || 0), 1), 0);
-        const scale = totalValue > 0 ? availableHeight / totalValue : 0;
-        let cursorY = margin.top;
-
-        levelNodes.forEach((node) => {
-            const rawHeight = totalValue > 0
-                ? Math.max(14, Math.abs(Number(node.value) || 0) * scale)
-                : Math.max(18, availableHeight / Math.max(levelNodes.length, 1));
-            const positioned = {
-                ...node,
-                x: margin.left + ((depth - 1) * levelGap),
-                y: cursorY,
-                width: nodeWidth,
-                height: rawHeight,
-            };
-            positionedNodes.push(positioned);
-            nodeLookup.set(node.rowPath, positioned);
-            cursorY += rawHeight + gap;
-        });
-    });
-
-    const outgoingTotals = new Map();
-    const incomingTotals = new Map();
-    links.forEach((link) => {
-        outgoingTotals.set(link.source, (outgoingTotals.get(link.source) || 0) + Math.max(link.value || 0, 0));
-        incomingTotals.set(link.target, (incomingTotals.get(link.target) || 0) + Math.max(link.value || 0, 0));
-    });
-    const sourceOffsets = new Map();
-    const targetOffsets = new Map();
-
-    const positionedLinks = links.map((link) => {
-        const sourceNode = nodeLookup.get(link.source);
-        const targetNode = nodeLookup.get(link.target);
-        if (!sourceNode || !targetNode) return null;
-
-        const sourceTotal = Math.max(outgoingTotals.get(link.source) || sourceNode.value || 1, 1);
-        const targetTotal = Math.max(incomingTotals.get(link.target) || targetNode.value || 1, 1);
-        const sourceScale = sourceNode.height / sourceTotal;
-        const targetScale = targetNode.height / targetTotal;
-        const thickness = Math.max(2, Math.min(sourceScale, targetScale) * Math.max(link.value || 0, 0));
-        const sourceOffset = sourceOffsets.get(link.source) || 0;
-        const targetOffset = targetOffsets.get(link.target) || 0;
-        sourceOffsets.set(link.source, sourceOffset + thickness);
-        targetOffsets.set(link.target, targetOffset + thickness);
-
-        return {
-            ...link,
-            sourceNode,
-            targetNode,
-            thickness,
-            sourceY: sourceNode.y + sourceOffset + (thickness / 2),
-            targetY: targetNode.y + targetOffset + (thickness / 2),
-        };
-    }).filter(Boolean);
-
-    return { nodes: positionedNodes, links: positionedLinks };
-};
-
-const buildSeriesFromRowCategories = ({
-    rowIndexes,
-    colIndexes,
-    visibleRows,
-    visibleCols,
-    grid,
-    maxRows,
-    maxColumns,
-    rowFields = [],
-    colFields = [],
-}) => {
-    const numericColIndexes = colIndexes.filter((colIndex) => {
-        const column = visibleCols[colIndex];
-        if (!column || INTERNAL_COL_IDS.has(column.id)) return false;
-        return rowIndexes.some((rowIndex) => parseNumeric(grid[rowIndex] && grid[rowIndex][colIndex]) !== null);
-    });
-
-    if (numericColIndexes.length === 0) {
-        return {
-            categories: [],
-            series: [],
-            note: 'No numeric values found in the selected range.',
-        };
-    }
-
-    const labelColIndex = colIndexes.find((colIndex) => {
-        const column = visibleCols[colIndex];
-        if (!column || INTERNAL_COL_IDS.has(column.id)) return false;
-        return !numericColIndexes.includes(colIndex);
-    });
-
-    const slicedRowIndexes = rowIndexes.slice(0, normalizePositiveLimit(maxRows, MAX_SELECTION_CATEGORIES));
-    const slicedSeriesIndexes = numericColIndexes.slice(0, normalizePositiveLimit(maxColumns, MAX_SELECTION_SERIES));
-    const resolveColumnLabel = buildColumnLabelResolver(
-        slicedSeriesIndexes.map((colIndex) => visibleCols[colIndex]).filter(Boolean)
-    );
-    const categories = slicedRowIndexes.map((rowIndex, idx) => {
-        if (labelColIndex !== undefined) {
-            const cellValue = grid[rowIndex] && grid[rowIndex][labelColIndex];
-            if (cellValue !== null && cellValue !== undefined && String(cellValue).trim() !== '') {
-                return formatDisplayLabel(String(cellValue));
-            }
-        }
-        return getRowLabel(visibleRows[rowIndex], idx);
-    });
-
-    const series = slicedSeriesIndexes.map((colIndex) => ({
-        name: resolveColumnLabel(visibleCols[colIndex]),
-        values: slicedRowIndexes.map((rowIndex) => parseNumeric(grid[rowIndex] && grid[rowIndex][colIndex])),
-    })).filter((entry) => entry.values.some((value) => value !== null));
-
-    if (series.length === 0) {
-        return {
-            categories: [],
-            series: [],
-            note: 'No numeric values found in the selected range.',
-        };
-    }
-
-    const notes = [];
-    if (rowIndexes.length > slicedRowIndexes.length) {
-        notes.push(`showing first ${slicedRowIndexes.length} selected rows`);
-    }
-    if (numericColIndexes.length > slicedSeriesIndexes.length) {
-        notes.push(`showing first ${slicedSeriesIndexes.length} numeric columns`);
-    }
-
-    return {
-        categories,
-        categoryBands: buildCategoryBandsForRows(slicedRowIndexes, visibleRows),
-        categoryTargets: slicedRowIndexes.map((rowIndex, idx) => buildRowTarget(visibleRows[rowIndex], idx, rowFields)),
-        series,
-        note: notes.length > 0 ? notes.join(', ') : null,
-    };
-};
-
-const buildSeriesFromColumnCategories = ({
-    rowIndexes,
-    colIndexes,
-    visibleRows,
-    visibleCols,
-    grid,
-    maxRows,
-    maxColumns,
-    colFields = [],
-}) => {
-    const numericColIndexes = colIndexes.filter((colIndex) => {
-        const column = visibleCols[colIndex];
-        if (!column || INTERNAL_COL_IDS.has(column.id)) return false;
-        return rowIndexes.some((rowIndex) => parseNumeric(grid[rowIndex] && grid[rowIndex][colIndex]) !== null);
-    });
-
-    if (numericColIndexes.length === 0) {
-        return {
-            categories: [],
-            series: [],
-            note: 'No numeric values found in the selected range.',
-        };
-    }
-
-    const slicedColIndexes = numericColIndexes.slice(0, normalizePositiveLimit(maxColumns, MAX_SELECTION_CATEGORIES));
-    const slicedRowIndexes = rowIndexes.slice(0, normalizePositiveLimit(maxRows, MAX_SELECTION_SERIES));
-    const resolveColumnLabel = buildColumnLabelResolver(
-        slicedColIndexes.map((colIndex) => visibleCols[colIndex]).filter(Boolean)
-    );
-    const categories = slicedColIndexes.map((colIndex) => resolveColumnLabel(visibleCols[colIndex]));
-    const series = slicedRowIndexes.map((rowIndex, rowSeriesIndex) => ({
-        name: getRowLabel(visibleRows[rowIndex], rowSeriesIndex),
-        values: slicedColIndexes.map((colIndex) => parseNumeric(grid[rowIndex] && grid[rowIndex][colIndex])),
-    })).filter((entry) => entry.values.some((value) => value !== null));
-
-    if (series.length === 0) {
-        return {
-            categories: [],
-            series: [],
-            note: 'No numeric values found in the selected range.',
-        };
-    }
-
-    const notes = [];
-    if (numericColIndexes.length > slicedColIndexes.length) {
-        notes.push(`showing first ${slicedColIndexes.length} numeric columns`);
-    }
-    if (rowIndexes.length > slicedRowIndexes.length) {
-        notes.push(`showing first ${slicedRowIndexes.length} selected rows`);
-    }
-
-    return {
-        categories,
-        categoryTargets: slicedColIndexes.map((colIndex) => buildColumnTarget(visibleCols[colIndex], colFields)),
-        series,
-        note: notes.length > 0 ? notes.join(', ') : null,
-    };
-};
-
-export const buildSelectionChartModel = (selectionMap, visibleRows, visibleCols, options = {}) => {
-    const orientation = options.orientation || 'auto';
-    const hierarchyLevel = options.hierarchyLevel === undefined ? 'all' : options.hierarchyLevel;
-    const maxRows = normalizePositiveLimit(options.maxRows, MAX_SELECTION_CATEGORIES);
-    const maxColumns = normalizePositiveLimit(options.maxColumns, MAX_SELECTION_SERIES);
-    const rowFields = Array.isArray(options.rowFields) ? options.rowFields : [];
-    const colFields = Array.isArray(options.colFields) ? options.colFields : [];
-    const sortMode = options.sortMode || 'natural';
-    const bounds = buildSelectionBounds(selectionMap, visibleRows, visibleCols);
-    if (!bounds) {
-        return {
-            title: null,
-            subtitle: null,
-            categories: [],
-            categoryTargets: [],
-            series: [],
-            stackedGroups: [],
-            icicleNodes: [],
-            sunburstNodes: [],
-            sankeyNodes: [],
-            sankeyLinks: [],
-            emptyMessage: 'Select a range of value cells to build a chart.',
-            availableLevels: [],
-            maxHierarchyLevel: options.maxHierarchyLevel || 1,
-            activeHierarchyLevel: hierarchyLevel,
-        };
-    }
-
-    const { rowIndexes, colIndexes, grid } = bounds;
-    const selectedRows = rowIndexes.map((rowIndex) => visibleRows[rowIndex]).filter(Boolean);
-    const availableLevels = getAvailableLevels(selectedRows);
-    const maxHierarchyLevel = Math.max(
-        Number(options.maxHierarchyLevel) || 0,
-        availableLevels.length > 0 ? Math.max(...availableLevels) : 0,
-        1
-    );
-    const displayRows = getHierarchyDisplayRows(selectedRows, hierarchyLevel);
-    const displayPaths = new Set(displayRows.map((row) => getRowPath(row)));
-    const filteredRowIndexes = rowIndexes.filter((rowIndex) => displayPaths.has(getRowPath(visibleRows[rowIndex])));
-    const effectiveOrientation = orientation === 'auto'
-        ? (filteredRowIndexes.length <= 1 ? 'columns' : (colIndexes.length > filteredRowIndexes.length + 1 ? 'columns' : 'rows'))
-        : orientation;
-
-    if (filteredRowIndexes.length === 0) {
-        return {
-            title: null,
-            subtitle: null,
-            categories: [],
-            categoryTargets: [],
-            series: [],
-            stackedGroups: [],
-            icicleNodes: [],
-            sunburstNodes: [],
-            sankeyNodes: [],
-            sankeyLinks: [],
-            emptyMessage: `No selected rows found at hierarchy level ${hierarchyLevel}.`,
-            availableLevels,
-            maxHierarchyLevel,
-            activeHierarchyLevel: hierarchyLevel,
-        };
-    }
-
-    if (filteredRowIndexes.length === 1) {
-        const rowIndex = filteredRowIndexes[0];
-        const row = visibleRows[rowIndex];
-        const resolveColumnLabel = buildColumnLabelResolver(
-            colIndexes.map((colIndex) => visibleCols[colIndex]).filter(Boolean)
-        );
-        const entries = colIndexes
-            .map((colIndex) => ({
-                column: visibleCols[colIndex],
-                label: resolveColumnLabel(visibleCols[colIndex]),
-                value: parseNumeric(grid[rowIndex] && grid[rowIndex][colIndex]),
-            }))
-            .filter((entry) => entry.value !== null)
-            .slice(0, maxColumns);
-
-        if (entries.length === 0) {
-            return {
-                title: null,
-                subtitle: null,
-                categories: [],
-                categoryTargets: [],
-                series: [],
-                stackedGroups: [],
-                icicleNodes: [],
-                sunburstNodes: [],
-                sankeyNodes: [],
-                sankeyLinks: [],
-                emptyMessage: 'The selected row does not contain numeric values.',
-                availableLevels,
-                maxHierarchyLevel,
-                activeHierarchyLevel: hierarchyLevel,
-            };
-        }
-
-        const singleRowModel = {
-            title: null,
-            subtitle: null,
-            categories: entries.map((entry) => entry.label),
-            categoryTargets: entries.map((entry) => buildColumnTarget(entry.column, colFields)),
-            categoryBands: [],
-            stackedGroups: [],
-            icicleNodes: [],
-            sunburstNodes: [],
-            sankeyNodes: [],
-            sankeyLinks: [],
-            series: [{
-                name: getRowLabel(row, 0),
-                values: entries.map((entry) => entry.value),
-            }],
-            note: colIndexes.length > entries.length ? `showing first ${entries.length} numeric columns` : null,
-            availableLevels,
-            maxHierarchyLevel,
-            activeHierarchyLevel: hierarchyLevel,
-        };
-        return sortChartModel(singleRowModel, sortMode);
-    }
-
-    const builder = effectiveOrientation === 'columns'
-        ? buildSeriesFromColumnCategories
-        : buildSeriesFromRowCategories;
-    const rowSeries = builder({
-        rowIndexes: filteredRowIndexes,
-        colIndexes,
-        visibleRows,
-        visibleCols,
-        grid,
-        maxRows,
-        maxColumns,
-        rowFields,
-        colFields,
-    });
-
-    if (rowSeries.series.length === 0) {
-        return {
-            title: null,
-            subtitle: null,
-            categories: [],
-            categoryTargets: [],
-            series: [],
-            stackedGroups: [],
-            icicleNodes: [],
-            sunburstNodes: [],
-            sankeyNodes: [],
-            sankeyLinks: [],
-            emptyMessage: rowSeries.note || 'No numeric values found in the selected range.',
-            availableLevels,
-            maxHierarchyLevel,
-            activeHierarchyLevel: hierarchyLevel,
-        };
-    }
-
-    const hierarchySourceRows = getHierarchyDisplayRows(selectedRows, hierarchyLevel);
-    const firstNumericColumn = visibleCols.find((column) => (
-        column
-        && !INTERNAL_COL_IDS.has(column.id)
-        && selectedRows.some((row) => parseNumeric(getCellValue(row, column.id)) !== null)
-    ));
-    const hierarchyModel = firstNumericColumn
-        ? buildIcicleNodes(hierarchySourceRows, firstNumericColumn)
-        : { nodes: [], maxDepth: 0 };
-    const sortedHierarchyNodes = sortHierarchyNodes(hierarchyModel.nodes, sortMode);
-    const sankeyModel = buildHierarchySankey(sortedHierarchyNodes);
-
-    const rawModel = {
-        title: null,
-        subtitle: null,
-        categories: rowSeries.categories,
-        categoryTargets: rowSeries.categoryTargets || [],
-        categoryBands: rowSeries.categoryBands || [],
-        stackedGroups: [],
-        icicleNodes: sortedHierarchyNodes,
-        sunburstNodes: sortedHierarchyNodes,
-        sankeyNodes: sankeyModel.nodes,
-        sankeyLinks: sankeyModel.links,
-        icicleDepth: hierarchyModel.maxDepth,
-        series: rowSeries.series,
-        note: rowSeries.note,
-        availableLevels,
-        maxHierarchyLevel,
-        activeHierarchyLevel: hierarchyLevel,
-    };
-    return sortChartModel(rawModel, sortMode);
-};
-
-export const buildPivotChartModel = (displayRows, visibleCols, options = {}) => {
-    const orientation = options.orientation || 'rows';
-    const hierarchyLevel = options.hierarchyLevel === undefined ? 'all' : options.hierarchyLevel;
-    const maxRows = normalizePositiveLimit(options.maxRows, MAX_PANEL_CATEGORIES);
-    const maxColumns = normalizePositiveLimit(options.maxColumns, MAX_PANEL_SERIES);
-    const rowFields = Array.isArray(options.rowFields) ? options.rowFields : [];
-    const colFields = Array.isArray(options.colFields) ? options.colFields : [];
-    const sortMode = options.sortMode || 'natural';
-    const allVisibleRows = (displayRows || []).filter((row) => !isTotalRow(row));
-    const orderedRows = allVisibleRows;
-    const availableLevels = getAvailableLevels(allVisibleRows);
-    const maxHierarchyLevel = Math.max(
-        Number(options.maxHierarchyLevel) || 0,
-        availableLevels.length > 0 ? Math.max(...availableLevels) : 0,
-        1
-    );
-    const filteredVisibleRows = getHierarchyDisplayRows(allVisibleRows, hierarchyLevel);
-    const chartRows = filteredVisibleRows.slice(0, maxRows);
-    if (chartRows.length === 0) {
-        return {
-            title: null,
-            subtitle: null,
-            categories: [],
-            categoryTargets: [],
-            series: [],
-            stackedGroups: [],
-            icicleNodes: [],
-            sunburstNodes: [],
-            sankeyNodes: [],
-            sankeyLinks: [],
-            emptyMessage: hierarchyLevel === 'all'
-                ? 'The current pivot view does not have visible data rows to chart.'
-                : `No visible rows found at hierarchy level ${hierarchyLevel}.`,
-            availableLevels,
-            maxHierarchyLevel,
-            activeHierarchyLevel: hierarchyLevel,
-        };
-    }
-
-    const candidateColumns = (visibleCols || []).filter((column) => !INTERNAL_COL_IDS.has(column.id));
-    const numericColumns = candidateColumns.filter((column) => (
-        chartRows.some((row) => parseNumeric(getCellValue(row, column.id)) !== null)
-    ));
-    const seriesColumns = numericColumns.slice(0, maxColumns);
-    const resolveColumnLabel = buildColumnLabelResolver(seriesColumns);
-    const icicleModel = seriesColumns.length > 0
-        ? buildIcicleNodes(orderedRows, seriesColumns[0])
-        : { nodes: [], maxDepth: 0 };
-    const sortedHierarchyNodes = sortHierarchyNodes(icicleModel.nodes, sortMode);
-    const sankeyModel = buildHierarchySankey(sortedHierarchyNodes);
-
-    if (seriesColumns.length === 0) {
-        return {
-            title: null,
-            subtitle: null,
-            categories: [],
-            categoryTargets: [],
-            series: [],
-            stackedGroups: [],
-            icicleNodes: [],
-            sunburstNodes: [],
-            sankeyNodes: [],
-            sankeyLinks: [],
-            icicleDepth: 0,
-            emptyMessage: 'No visible numeric columns are available for the live chart panel.',
-            availableLevels,
-            maxHierarchyLevel,
-            activeHierarchyLevel: hierarchyLevel,
-        };
-    }
-
-    const notes = [];
-    if (filteredVisibleRows.length > chartRows.length) {
-        notes.push(`showing first ${chartRows.length} visible rows`);
-    }
-    if (numericColumns.length > seriesColumns.length) {
-        notes.push(`showing first ${seriesColumns.length} numeric columns`);
-    }
-
-    if (orientation === 'columns') {
-        const categories = seriesColumns.map((column) => resolveColumnLabel(column));
-        const rowSeriesRows = chartRows.slice(0, maxRows);
-        if (chartRows.length > rowSeriesRows.length) {
-            notes.push(`showing first ${rowSeriesRows.length} visible rows as series`);
-        }
-        const rowSeries = rowSeriesRows.map((row, index) => ({
-            name: getRowLabel(row, index),
-            values: seriesColumns.map((column) => parseNumeric(getCellValue(row, column.id))),
-        })).filter((entry) => entry.values.some((value) => value !== null));
-
-        const rawModel = {
-            title: null,
-            subtitle: null,
-            categories,
-            categoryTargets: seriesColumns.map((column) => ({
-                ...buildColumnTarget(column, colFields),
-                label: resolveColumnLabel(column),
-            })),
-            categoryBands: [],
-            stackedGroups: [],
-            icicleNodes: sortedHierarchyNodes,
-            sunburstNodes: sortedHierarchyNodes,
-            sankeyNodes: sankeyModel.nodes,
-            sankeyLinks: sankeyModel.links,
-            icicleDepth: icicleModel.maxDepth,
-            series: rowSeries,
-            note: notes.length > 0 ? notes.join(', ') : null,
-            availableLevels,
-            maxHierarchyLevel,
-            activeHierarchyLevel: hierarchyLevel,
-        };
-        return sortChartModel(rawModel, sortMode);
-    }
-
-    const categories = chartRows.map((row, index) => getRowLabel(row, index));
-    const series = seriesColumns.map((column) => ({
-        name: resolveColumnLabel(column),
-        values: chartRows.map((row) => parseNumeric(getCellValue(row, column.id))),
-    })).filter((entry) => entry.values.some((value) => value !== null));
-    const firstSeries = series[0] || null;
-    const numericValuesByPath = {};
-    if (firstSeries) {
-        chartRows.forEach((row, index) => {
-            numericValuesByPath[getRowPath(row)] = firstSeries.values[index];
-        });
-        orderedRows.forEach((row) => {
-            const rowPath = getRowPath(row);
-            if (numericValuesByPath[rowPath] === undefined) {
-                numericValuesByPath[rowPath] = getCellValue(row, seriesColumns[0].id);
-            }
-        });
-    }
-    const categoryBands = buildCategoryBandsForRows(chartRows.map((_, index) => index), chartRows);
-    const stackedGroups = (() => {
-        if (!(series.length === 1 && firstSeries)) return [];
-        if (hierarchyLevel === 'all') {
-            const frontierGroups = buildFrontierStackedGroups(chartRows, categoryBands, numericValuesByPath, maxRows);
-            return frontierGroups.some((group) => Array.isArray(group.segments) && group.segments.length > 1)
-                ? frontierGroups
-                : [];
-        }
-        if (typeof hierarchyLevel === 'number' && hierarchyLevel < maxHierarchyLevel) {
-            const nestedGroups = buildStackedGroupsForRows(chartRows, orderedRows, numericValuesByPath, maxRows);
-            return nestedGroups.some((group) => Array.isArray(group.segments) && group.segments.length > 1)
-                ? nestedGroups
-                : [];
-        }
-        return [];
-    })();
-
-    const rawModel = {
-        title: null,
-        subtitle: null,
-        categories,
-        categoryTargets: chartRows.map((row, index) => buildRowTarget(row, index, rowFields)),
-        categoryBands,
-        stackedGroups,
-        icicleNodes: sortedHierarchyNodes,
-        sunburstNodes: sortedHierarchyNodes,
-        sankeyNodes: sankeyModel.nodes,
-        sankeyLinks: sankeyModel.links,
-        icicleDepth: icicleModel.maxDepth,
-        series,
-        note: notes.length > 0 ? notes.join(', ') : null,
-        availableLevels,
-        maxHierarchyLevel,
-        activeHierarchyLevel: hierarchyLevel,
-    };
-    return sortChartModel(rawModel, sortMode);
-};
-
-const buildComboLayersForRows = (layers, chartRows, visibleCols) => {
-    const chartableColumns = getChartableColumns(visibleCols);
-    return normalizeComboLayers(layers, chartableColumns)
-        .map((layer, index) => {
-            const column = chartableColumns.find((candidate) => candidate.id === layer.columnId) || null;
-            if (!column) return null;
-            const values = chartRows.map((row) => parseNumeric(getCellValue(row, column.id)));
-            if (!values.some((value) => value !== null)) return null;
-            return {
-                ...layer,
-                color: getColorForIndex(index, { primary: DEFAULT_COLORS[0] }),
-                name: layer.name || getColumnLabel(column),
-                columnId: column.id,
-                values,
-            };
-        })
-        .filter(Boolean);
-};
-
-const buildComboEmptyModel = (message, hierarchyLevel, maxHierarchyLevel, availableLevels) => ({
-    title: null,
-    subtitle: null,
-    categories: [],
-    categoryTargets: [],
-    categoryBands: [],
-    layers: [],
-    series: [],
-    stackedGroups: [],
-    icicleNodes: [],
-    sunburstNodes: [],
-    sankeyNodes: [],
-    sankeyLinks: [],
-    emptyMessage: message,
-    availableLevels,
-    maxHierarchyLevel,
-    activeHierarchyLevel: hierarchyLevel,
-});
-
-export const buildComboPivotChartModel = (displayRows, visibleCols, options = {}) => {
-    const hierarchyLevel = options.hierarchyLevel === undefined ? 'all' : options.hierarchyLevel;
-    const maxRows = normalizePositiveLimit(options.maxRows, MAX_PANEL_CATEGORIES);
-    const rowFields = Array.isArray(options.rowFields) ? options.rowFields : [];
-    const sortMode = options.sortMode || 'natural';
-    const allVisibleRows = (displayRows || []).filter((row) => !isTotalRow(row));
-    const availableLevels = getAvailableLevels(allVisibleRows);
-    const maxHierarchyLevel = Math.max(
-        Number(options.maxHierarchyLevel) || 0,
-        availableLevels.length > 0 ? Math.max(...availableLevels) : 0,
-        1
-    );
-    const filteredVisibleRows = getHierarchyDisplayRows(allVisibleRows, hierarchyLevel);
-    const chartRows = filteredVisibleRows.slice(0, maxRows);
-    if (chartRows.length === 0) {
-        return buildComboEmptyModel(
-            hierarchyLevel === 'all'
-                ? 'The current pivot view does not have visible rows for a combo chart.'
-                : `No visible rows found at hierarchy level ${hierarchyLevel}.`,
-            hierarchyLevel,
-            maxHierarchyLevel,
-            availableLevels
-        );
-    }
-
-    const modelLayers = buildComboLayersForRows(options.layers, chartRows, visibleCols);
-    if (modelLayers.length === 0) {
-        return buildComboEmptyModel(
-            'No visible numeric columns are available for the combo chart layers.',
-            hierarchyLevel,
-            maxHierarchyLevel,
-            availableLevels
-        );
-    }
-
-    const notes = [];
-    if (filteredVisibleRows.length > chartRows.length) {
-        notes.push(`showing first ${chartRows.length} visible rows`);
-    }
-
-    const rawModel = {
-        title: null,
-        subtitle: null,
-        categories: chartRows.map((row, index) => getRowLabel(row, index)),
-        categoryTargets: chartRows.map((row, index) => buildRowTarget(row, index, rowFields)),
-        categoryBands: buildCategoryBandsForRows(chartRows.map((_, index) => index), chartRows),
-        layers: modelLayers,
-        series: modelLayers.map((layer) => ({ name: layer.name, values: layer.values })),
-        stackedGroups: [],
-        icicleNodes: [],
-        sunburstNodes: [],
-        sankeyNodes: [],
-        sankeyLinks: [],
-        note: notes.length > 0 ? notes.join(', ') : null,
-        availableLevels,
-        maxHierarchyLevel,
-        activeHierarchyLevel: hierarchyLevel,
-    };
-    return sortChartModel(rawModel, sortMode);
-};
-
-export const buildComboSelectionChartModel = (selectionMap, visibleRows, visibleCols, options = {}) => {
-    const hierarchyLevel = options.hierarchyLevel === undefined ? 'all' : options.hierarchyLevel;
-    const maxRows = normalizePositiveLimit(options.maxRows, MAX_SELECTION_CATEGORIES);
-    const rowFields = Array.isArray(options.rowFields) ? options.rowFields : [];
-    const sortMode = options.sortMode || 'natural';
-    const bounds = buildSelectionBounds(selectionMap, visibleRows, visibleCols);
-    if (!bounds) {
-        return buildComboEmptyModel(
-            'Select a range of value cells to build a combo chart.',
-            hierarchyLevel,
-            options.maxHierarchyLevel || 1,
-            []
-        );
-    }
-
-    const { rowIndexes, colIndexes } = bounds;
-    const selectedRows = rowIndexes.map((rowIndex) => visibleRows[rowIndex]).filter(Boolean);
-    const availableLevels = getAvailableLevels(selectedRows);
-    const maxHierarchyLevel = Math.max(
-        Number(options.maxHierarchyLevel) || 0,
-        availableLevels.length > 0 ? Math.max(...availableLevels) : 0,
-        1
-    );
-    const displayRows = getHierarchyDisplayRows(selectedRows, hierarchyLevel);
-    const chartRows = displayRows.slice(0, maxRows);
-    if (chartRows.length === 0) {
-        return buildComboEmptyModel(
-            `No selected rows found at hierarchy level ${hierarchyLevel}.`,
-            hierarchyLevel,
-            maxHierarchyLevel,
-            availableLevels
-        );
-    }
-
-    const selectedColumnIds = new Set(
-        colIndexes
-            .map((index) => visibleCols[index])
-            .filter((column) => column && column.id && !INTERNAL_COL_IDS.has(column.id))
-            .map((column) => column.id)
-    );
-    const selectionColumns = getChartableColumns(visibleCols).filter((column) => selectedColumnIds.has(column.id));
-    const modelLayers = buildComboLayersForRows(options.layers, chartRows, selectionColumns);
-    if (modelLayers.length === 0) {
-        return buildComboEmptyModel(
-            'The selected range does not contain numeric columns that can be layered.',
-            hierarchyLevel,
-            maxHierarchyLevel,
-            availableLevels
-        );
-    }
-
-    const rawModel = {
-        title: null,
-        subtitle: null,
-        categories: chartRows.map((row, index) => getRowLabel(row, index)),
-        categoryTargets: chartRows.map((row, index) => buildRowTarget(row, index, rowFields)),
-        categoryBands: buildCategoryBandsForRows(chartRows.map((_, index) => index), chartRows),
-        layers: modelLayers,
-        series: modelLayers.map((layer) => ({ name: layer.name, values: layer.values })),
-        stackedGroups: [],
-        icicleNodes: [],
-        sunburstNodes: [],
-        sankeyNodes: [],
-        sankeyLinks: [],
-        note: selectedRows.length > chartRows.length ? `showing first ${chartRows.length} selected rows` : null,
-        availableLevels,
-        maxHierarchyLevel,
-        activeHierarchyLevel: hierarchyLevel,
-    };
-    return sortChartModel(rawModel, sortMode);
-};
-
-const buildLinePath = (points, closeToY = null) => {
-    const validPoints = points.filter((point) => point && Number.isFinite(point.x) && Number.isFinite(point.y));
-    if (validPoints.length === 0) return '';
-    const head = validPoints[0];
-    const segments = [`M ${head.x} ${head.y}`];
-    for (let index = 1; index < validPoints.length; index += 1) {
-        segments.push(`L ${validPoints[index].x} ${validPoints[index].y}`);
-    }
-    if (closeToY !== null) {
-        const tail = validPoints[validPoints.length - 1];
-        segments.push(`L ${tail.x} ${closeToY}`);
-        segments.push(`L ${head.x} ${closeToY}`);
-        segments.push('Z');
-    }
-    return segments.join(' ');
-};
-
-const buildAreaBandPath = (points) => {
-    const validPoints = points.filter((point) => (
-        point
-        && Number.isFinite(point.x)
-        && Number.isFinite(point.y)
-        && Number.isFinite(point.baseY)
-    ));
-    if (validPoints.length === 0) return '';
-    const segments = [`M ${validPoints[0].x} ${validPoints[0].y}`];
-    for (let index = 1; index < validPoints.length; index += 1) {
-        segments.push(`L ${validPoints[index].x} ${validPoints[index].y}`);
-    }
-    for (let index = validPoints.length - 1; index >= 0; index -= 1) {
-        segments.push(`L ${validPoints[index].x} ${validPoints[index].baseY}`);
-    }
-    segments.push('Z');
-    return segments.join(' ');
-};
-
-const getAxisMetrics = (values, chartHeight, margin) => {
-    const numericValues = (values || []).filter((value) => typeof value === 'number' && Number.isFinite(value));
-    const minValue = numericValues.length > 0 ? Math.min(...numericValues, 0) : 0;
-    const maxValue = numericValues.length > 0 ? Math.max(...numericValues, 0) : 0;
-    const span = maxValue - minValue || 1;
-    const scaleY = (value) => {
-        const normalized = (value - minValue) / span;
-        return chartHeight - margin.bottom - (normalized * (chartHeight - margin.top - margin.bottom));
-    };
-    const baselineY = scaleY(0);
-    const tickValues = Array.from({ length: 5 }, (_, index) => minValue + ((span / 4) * index));
-    return {
-        minValue,
-        maxValue,
-        scaleY,
-        baselineY,
-        tickValues,
-    };
-};
-
-const layoutIcicleNodes = (nodes, x, width, level, bandHeight, acc = []) => {
-    if (!Array.isArray(nodes) || nodes.length === 0 || width <= 0 || bandHeight <= 0) {
-        return acc;
-    }
-
-    const weights = nodes.map((node) => {
-        const numericValue = typeof node.value === 'number' && Number.isFinite(node.value)
-            ? Math.abs(node.value)
-            : 0;
-        return numericValue;
-    });
-    const totalWeight = weights.reduce((sum, value) => sum + value, 0);
-    let cursor = x;
-
-    nodes.forEach((node, index) => {
-        const fallbackWidth = width / Math.max(nodes.length, 1);
-        const nodeWidth = totalWeight > 0
-            ? (weights[index] / totalWeight) * width
-            : fallbackWidth;
-        const safeWidth = Math.max(1, nodeWidth);
-        const layoutNode = {
-            ...node,
-            x: cursor,
-            y: level * bandHeight,
-            width: safeWidth,
-            height: bandHeight,
-        };
-        acc.push(layoutNode);
-        if (Array.isArray(node.children) && node.children.length > 0) {
-            layoutIcicleNodes(node.children, cursor, safeWidth, level + 1, bandHeight, acc);
-        }
-        cursor += safeWidth;
-    });
-
-    return acc;
+import {
+    INTERNAL_COL_IDS, MAX_PANEL_CATEGORIES, MAX_PANEL_SERIES,
+    MAX_SELECTION_CATEGORIES, MAX_SELECTION_SERIES,
+    CHART_HEIGHT, CHART_WIDTH, DEFAULT_COLORS, COLOR_PALETTES,
+    COLOR_PALETTE_NAMES, resolvePalette, VALID_COMBO_LAYER_TYPES,
+    VALID_COMBO_LAYER_AXES, DEFAULT_COMBO_LAYER_SEQUENCE,
+    VALUE_FORMAT_MODES,
+    normalizePositiveLimit, formatChartNumber, formatChartValue,
+    estimateTextWidth, truncateChartLabel,
+    getColumnLabel, getColumnHeaderSegments, getColumnValueSegments,
+    buildColumnLabelResolver, buildColumnFieldValues,
+    getChartableColumns, getComboLayerDefaultName,
+    buildDefaultCartesianLayers, buildGroupedChartColumnOptions,
+    normalizeComboLayer, normalizeComboLayers,
+    getRowLabel, getRowDepth, getRowLevel, getRowPath,
+    buildRowFieldValues, buildRowTarget, buildColumnTarget,
+    isDescendantPath, isTotalRow, getCellValue,
+    getAvailableLevels, getHierarchyDisplayRows,
+    getColorForIndex, buildSelectionBounds,
+    buildCategoryBandsForRows, buildStackedGroupsForRows,
+    buildFrontierStackedGroups, buildIcicleNodes,
+    cloneHierarchyNodes, sortHierarchyNodes, sortChartModel,
+    polarToCartesian, describeDonutArc, layoutSunburstNodes,
+    buildHierarchySankey, layoutSankey,
+    buildSeriesFromRowCategories, buildSeriesFromColumnCategories,
+    buildSelectionChartModel, buildPivotChartModel,
+    buildComboLayersForRows, buildComboEmptyModel,
+    buildComboPivotChartModel, buildComboSelectionChartModel,
+    buildLinePath, buildAreaBandPath, niceTickValues, getAxisMetrics,
+    layoutIcicleNodes,
+} from './chartModelBuilders';
+
+// Re-export model builders consumed by DashTanstackPivot
+export {
+    buildDefaultCartesianLayers,
+    normalizeComboLayers,
+    buildPivotChartModel,
+    buildComboPivotChartModel,
+    buildComboSelectionChartModel,
+    buildSelectionChartModel,
 };
 
 const ChartTypeButtons = ({ chartType, onChange, theme, includeHierarchyCharts = true }) => {
@@ -1578,15 +57,20 @@ const ChartTypeButtons = ({ chartType, onChange, theme, includeHierarchyCharts =
 
     return (
         <div style={{ display: 'flex', gap: '6px', flexWrap: 'wrap' }}>
-            <button onClick={() => onChange('bar')} style={buttonStyle('bar')}>Bar</button>
-            <button onClick={() => onChange('line')} style={buttonStyle('line')}>Line</button>
-            <button onClick={() => onChange('area')} style={buttonStyle('area')}>Area</button>
-            <button onClick={() => onChange('combo')} style={buttonStyle('combo')}>Combo</button>
+            <button type="button" data-chart-type="bar" aria-pressed={chartType === 'bar'} onClick={() => onChange('bar')} style={buttonStyle('bar')}>Bar</button>
+            <button type="button" data-chart-type="line" aria-pressed={chartType === 'line'} onClick={() => onChange('line')} style={buttonStyle('line')}>Line</button>
+            <button type="button" data-chart-type="area" aria-pressed={chartType === 'area'} onClick={() => onChange('area')} style={buttonStyle('area')}>Area</button>
+            <button type="button" data-chart-type="sparkline" aria-pressed={chartType === 'sparkline'} onClick={() => onChange('sparkline')} style={buttonStyle('sparkline')}>Sparkline</button>
+            <button type="button" data-chart-type="combo" aria-pressed={chartType === 'combo'} onClick={() => onChange('combo')} style={buttonStyle('combo')}>Combo</button>
+            <button type="button" data-chart-type="pie" aria-pressed={chartType === 'pie'} onClick={() => onChange('pie')} style={buttonStyle('pie')}>Pie</button>
+            <button type="button" data-chart-type="donut" aria-pressed={chartType === 'donut'} onClick={() => onChange('donut')} style={buttonStyle('donut')}>Donut</button>
+            <button type="button" data-chart-type="scatter" aria-pressed={chartType === 'scatter'} onClick={() => onChange('scatter')} style={buttonStyle('scatter')}>Scatter</button>
+            <button type="button" data-chart-type="waterfall" aria-pressed={chartType === 'waterfall'} onClick={() => onChange('waterfall')} style={buttonStyle('waterfall')}>Waterfall</button>
             {includeHierarchyCharts ? (
                 <>
-                    <button onClick={() => onChange('icicle')} style={buttonStyle('icicle')}>Icicle</button>
-                    <button onClick={() => onChange('sunburst')} style={buttonStyle('sunburst')}>Sunburst</button>
-                    <button onClick={() => onChange('sankey')} style={buttonStyle('sankey')}>Sankey</button>
+                    <button type="button" data-chart-type="icicle" aria-pressed={chartType === 'icicle'} onClick={() => onChange('icicle')} style={buttonStyle('icicle')}>Icicle</button>
+                    <button type="button" data-chart-type="sunburst" aria-pressed={chartType === 'sunburst'} onClick={() => onChange('sunburst')} style={buttonStyle('sunburst')}>Sunburst</button>
+                    <button type="button" data-chart-type="sankey" aria-pressed={chartType === 'sankey'} onClick={() => onChange('sankey')} style={buttonStyle('sankey')}>Sankey</button>
                 </>
             ) : null}
         </div>
@@ -1715,36 +199,59 @@ const ChartHeader = ({ title, subtitle, note, theme }) => (
     )
 );
 
-const ChartConfigSection = ({ title, theme, children }) => (
-    <div style={{
-        display: 'flex',
-        flexDirection: 'column',
-        gap: '8px',
-        minWidth: '220px',
-        padding: '10px',
-        border: `1px solid ${theme.border}`,
-        borderRadius: theme.radiusSm || '8px',
-        background: theme.surfaceBg || theme.background || '#fff',
-        boxShadow: theme.shadowInset || 'none',
-    }}>
-        {title ? (
-            <div style={{ paddingBottom: '6px', borderBottom: `1px solid ${theme.border}` }}>
-                <div style={{
-                    fontSize: '10px',
-                    fontWeight: 800,
-                    letterSpacing: '0.08em',
-                    textTransform: 'uppercase',
-                    color: theme.textSec,
-                }}>
-                    {title}
+const ChartConfigSection = ({ title, theme, children, defaultCollapsed = true }) => {
+    const [collapsed, setCollapsed] = useState(defaultCollapsed);
+    return (
+        <div style={{
+            display: 'flex',
+            flexDirection: 'column',
+            gap: collapsed ? 0 : '8px',
+            padding: collapsed ? '6px 10px' : '10px',
+            border: `1px solid ${theme.border}`,
+            borderRadius: theme.radiusSm || '8px',
+            background: theme.surfaceBg || theme.background || '#fff',
+            boxShadow: theme.shadowInset || 'none',
+        }}>
+            {title ? (
+                <div
+                    onClick={() => setCollapsed((v) => !v)}
+                    style={{
+                        paddingBottom: collapsed ? 0 : '6px',
+                        borderBottom: collapsed ? 'none' : `1px solid ${theme.border}`,
+                        cursor: 'pointer',
+                        display: 'flex',
+                        alignItems: 'center',
+                        justifyContent: 'space-between',
+                        userSelect: 'none',
+                    }}
+                >
+                    <div style={{
+                        fontSize: '10px',
+                        fontWeight: 800,
+                        letterSpacing: '0.08em',
+                        textTransform: 'uppercase',
+                        color: theme.textSec,
+                    }}>
+                        {title}
+                    </div>
+                    <span style={{
+                        fontSize: '9px',
+                        color: theme.textSec,
+                        transform: collapsed ? 'rotate(-90deg)' : 'rotate(0deg)',
+                        transition: 'transform 0.15s ease',
+                    }}>
+                        ▼
+                    </span>
                 </div>
-            </div>
-        ) : null}
-        <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
-            {children}
+            ) : null}
+            {!collapsed ? (
+                <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
+                    {children}
+                </div>
+            ) : null}
         </div>
-    </div>
-);
+    );
+};
 
 const ChartConfigField = ({ label, theme, children, controlMinWidth = '180px' }) => (
     <div style={{
@@ -2228,6 +735,61 @@ const exportSvgNode = async (svgNode, fileStem) => {
     downloadBlob(svgBlob, `${fileStem}.svg`);
 };
 
+const svgToCanvas = (svgNode, scale = 2) => new Promise((resolve) => {
+    if (!svgNode) { resolve(null); return; }
+    const serializer = new XMLSerializer();
+    const svgText = serializer.serializeToString(svgNode);
+    const viewBox = svgNode.getAttribute('viewBox');
+    let w = svgNode.clientWidth || 800;
+    let h = svgNode.clientHeight || 400;
+    if (viewBox) {
+        const parts = viewBox.split(/[\s,]+/).map(Number);
+        if (parts.length === 4 && parts[2] > 0 && parts[3] > 0) { w = parts[2]; h = parts[3]; }
+    }
+    const canvas = document.createElement('canvas');
+    canvas.width = w * scale;
+    canvas.height = h * scale;
+    const ctx = canvas.getContext('2d');
+    ctx.fillStyle = '#ffffff';
+    ctx.fillRect(0, 0, canvas.width, canvas.height);
+    const img = new Image();
+    const blob = new Blob([svgText], { type: 'image/svg+xml;charset=utf-8' });
+    const url = URL.createObjectURL(blob);
+    img.onload = () => { ctx.drawImage(img, 0, 0, canvas.width, canvas.height); URL.revokeObjectURL(url); resolve(canvas); };
+    img.onerror = () => { URL.revokeObjectURL(url); resolve(null); };
+    img.src = url;
+});
+
+const exportSvgAsPng = async (svgNode, fileStem) => {
+    const canvas = await svgToCanvas(svgNode);
+    if (!canvas) return;
+    canvas.toBlob((blob) => { if (blob) downloadBlob(blob, `${fileStem}.png`); }, 'image/png');
+};
+
+const copySvgToClipboard = async (svgNode) => {
+    if (!navigator.clipboard || !navigator.clipboard.write) return false;
+    const canvas = await svgToCanvas(svgNode);
+    if (!canvas) return false;
+    try {
+        const blob = await new Promise((resolve) => canvas.toBlob(resolve, 'image/png'));
+        if (!blob) return false;
+        await navigator.clipboard.write([new ClipboardItem({ 'image/png': blob })]);
+        return true;
+    } catch (_) { return false; }
+};
+
+const exportChartCsv = (model, fileStem) => {
+    if (!model) return;
+    const categories = Array.isArray(model.categories) ? model.categories : [];
+    const series = Array.isArray(model.series) ? model.series : [];
+    if (categories.length === 0 || series.length === 0) return;
+    const escape = (v) => { const s = String(v ?? ''); return s.includes(',') || s.includes('"') || s.includes('\n') ? `"${s.replace(/"/g, '""')}"` : s; };
+    const header = ['Category', ...series.map((s) => s.name)].map(escape).join(',');
+    const rows = categories.map((cat, i) => [cat, ...series.map((s) => s.values[i] ?? '')].map(escape).join(','));
+    const csv = [header, ...rows].join('\n');
+    downloadBlob(new Blob([csv], { type: 'text/csv;charset=utf-8' }), `${fileStem}.csv`);
+};
+
 const EmptyChartState = ({ message, theme, chartHeight = CHART_HEIGHT }) => (
     <div style={{
         minHeight: `${chartHeight}px`,
@@ -2294,17 +856,212 @@ const ChartStats = ({ model, theme }) => {
     );
 };
 
-const ChartLegend = ({ items, theme }) => {
+const ChartLegend = ({ items, theme, hiddenSet, onToggle }) => {
     if (!Array.isArray(items) || items.length === 0) return null;
+    const canToggle = typeof onToggle === 'function' && hiddenSet;
 
     return (
         <div style={{ display: 'flex', gap: '10px', flexWrap: 'wrap', alignItems: 'center' }}>
-            {items.map((item) => (
-                <div key={item.label} style={{ display: 'flex', alignItems: 'center', gap: '6px', fontSize: '11px', color: theme.textSec }}>
-                    <span style={{ width: '10px', height: '10px', borderRadius: '999px', background: item.color, display: 'inline-block' }} />
-                    <span>{item.label}</span>
-                </div>
-            ))}
+            {items.map((item) => {
+                const isHidden = canToggle && hiddenSet.has(item.label);
+                return (
+                    <div
+                        key={item.label}
+                        onClick={canToggle ? () => onToggle(item.label) : undefined}
+                        style={{
+                            display: 'flex', alignItems: 'center', gap: '6px', fontSize: '11px',
+                            color: theme.textSec,
+                            cursor: canToggle ? 'pointer' : 'default',
+                            opacity: isHidden ? 0.35 : 1,
+                            textDecoration: isHidden ? 'line-through' : 'none',
+                            userSelect: 'none',
+                        }}
+                    >
+                        <span style={{ width: '10px', height: '10px', borderRadius: '999px', background: isHidden ? theme.border : item.color, display: 'inline-block' }} />
+                        <span>{item.label}</span>
+                    </div>
+                );
+            })}
+        </div>
+    );
+};
+
+const buildSparklineGeometry = (values, width, height, padding = 10) => {
+    const numericValues = Array.isArray(values)
+        ? values.map((value) => (Number.isFinite(Number(value)) ? Number(value) : null))
+        : [];
+    const definedPoints = numericValues
+        .map((value, index) => (value === null ? null : { value, index }))
+        .filter(Boolean);
+
+    if (definedPoints.length === 0) {
+        return {
+            linePath: '',
+            areaPath: '',
+            currentPoint: null,
+            minPoint: null,
+            maxPoint: null,
+            minValue: null,
+            maxValue: null,
+            firstValue: null,
+            lastValue: null,
+        };
+    }
+
+    const minValue = Math.min(...definedPoints.map((point) => point.value));
+    const maxValue = Math.max(...definedPoints.map((point) => point.value));
+    const valueRange = Math.max(1, maxValue - minValue);
+    const stepX = definedPoints.length > 1
+        ? (width - (padding * 2)) / (definedPoints.length - 1)
+        : 0;
+
+    const points = definedPoints.map((point, pointIndex) => {
+        const x = padding + (pointIndex * stepX);
+        const normalized = (point.value - minValue) / valueRange;
+        const y = height - padding - (normalized * Math.max(1, height - (padding * 2)));
+        return {
+            ...point,
+            x,
+            y,
+        };
+    });
+
+    const linePath = points
+        .map((point, pointIndex) => `${pointIndex === 0 ? 'M' : 'L'} ${point.x.toFixed(2)} ${point.y.toFixed(2)}`)
+        .join(' ');
+    const areaPath = points.length > 1
+        ? `${linePath} L ${points[points.length - 1].x.toFixed(2)} ${(height - padding).toFixed(2)} L ${points[0].x.toFixed(2)} ${(height - padding).toFixed(2)} Z`
+        : '';
+    const minPoint = points.find((point) => point.value === minValue) || points[0];
+    const maxPoint = points.find((point) => point.value === maxValue) || points[0];
+    const currentPoint = points[points.length - 1];
+
+    return {
+        linePath,
+        areaPath,
+        currentPoint,
+        minPoint,
+        maxPoint,
+        minValue,
+        maxValue,
+        firstValue: points[0] ? points[0].value : null,
+        lastValue: currentPoint ? currentPoint.value : null,
+    };
+};
+
+const SparklineBoard = ({
+    model,
+    theme,
+    chartHeight,
+    paletteColors,
+    valueFormat,
+}) => {
+    const seriesList = Array.isArray(model && model.series) ? model.series : [];
+    const categories = Array.isArray(model && model.categories) ? model.categories : [];
+
+    if (seriesList.length === 0) {
+        return <EmptyChartState message={model && model.emptyMessage ? model.emptyMessage : 'No sparkline data available.'} theme={theme} chartHeight={chartHeight} />;
+    }
+
+    const cardHeight = 110;
+    const sparkWidth = 240;
+    const sparkHeight = 64;
+
+    return (
+        <div
+            data-chart-sparkline-board="true"
+            style={{
+                display: 'grid',
+                gridTemplateColumns: 'repeat(auto-fit, minmax(240px, 1fr))',
+                gap: '10px',
+                minHeight: 0,
+                maxHeight: `${chartHeight}px`,
+                overflowY: 'auto',
+                paddingRight: '2px',
+            }}
+        >
+            {seriesList.map((series, index) => {
+                const color = getColorForIndex(index, theme, paletteColors);
+                const geometry = buildSparklineGeometry(series.values || [], sparkWidth, sparkHeight, 10);
+                const previousValue = Array.isArray(series.values) && series.values.length > 1
+                    ? Number(series.values[series.values.length - 2])
+                    : null;
+                const currentValue = geometry.lastValue;
+                const delta = Number.isFinite(previousValue) && Number.isFinite(currentValue)
+                    ? currentValue - previousValue
+                    : null;
+                const deltaTone = delta === null
+                    ? theme.textSec
+                    : delta >= 0
+                        ? (theme.isDark ? '#7DD3A7' : '#2E7D5B')
+                        : (theme.isDark ? '#F7A3A3' : '#B45353');
+
+                return (
+                    <div
+                        key={series.id || series.name || `spark-${index}`}
+                        data-chart-sparkline-card={series.id || series.name || `spark-${index}`}
+                        style={{
+                            minHeight: `${cardHeight}px`,
+                            border: `1px solid ${theme.border}`,
+                            borderRadius: theme.radiusSm || '10px',
+                            background: theme.surfaceBg || theme.background || '#fff',
+                            boxShadow: theme.shadowInset || 'none',
+                            padding: '10px 12px',
+                            display: 'flex',
+                            flexDirection: 'column',
+                            gap: '8px',
+                        }}
+                    >
+                        <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', gap: '10px' }}>
+                            <div style={{ minWidth: 0 }}>
+                                <div style={{ fontSize: '12px', fontWeight: 800, color: theme.text, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+                                    {series.name || `Series ${index + 1}`}
+                                </div>
+                                <div style={{ fontSize: '10px', color: theme.textSec }}>
+                                    {categories.length > 0 ? `${categories.length} points` : 'Trend'}
+                                </div>
+                            </div>
+                            <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-end', gap: '2px', flexShrink: 0 }}>
+                                <div style={{ fontSize: '12px', fontWeight: 800, color: theme.text }}>
+                                    {currentValue === null ? '—' : formatChartValue(currentValue, valueFormat)}
+                                </div>
+                                <div style={{ fontSize: '10px', fontWeight: 700, color: deltaTone }}>
+                                    {delta === null ? 'No delta' : `${delta >= 0 ? '+' : ''}${formatChartValue(delta, valueFormat)}`}
+                                </div>
+                            </div>
+                        </div>
+                        <svg
+                            viewBox={`0 0 ${sparkWidth} ${sparkHeight}`}
+                            style={{ width: '100%', height: '64px', display: 'block' }}
+                            aria-label={`${series.name || `Series ${index + 1}`} sparkline`}
+                        >
+                            {geometry.areaPath ? <path d={geometry.areaPath} fill={color} opacity="0.12" /> : null}
+                            {geometry.linePath ? (
+                                <path
+                                    d={geometry.linePath}
+                                    fill="none"
+                                    stroke={color}
+                                    strokeWidth="2.5"
+                                    strokeLinecap="round"
+                                    strokeLinejoin="round"
+                                />
+                            ) : null}
+                            {geometry.minPoint ? <circle cx={geometry.minPoint.x} cy={geometry.minPoint.y} r="2.6" fill={theme.surfaceBg || theme.background || '#fff'} stroke={color} strokeWidth="1.4" opacity="0.7" /> : null}
+                            {geometry.maxPoint ? <circle cx={geometry.maxPoint.x} cy={geometry.maxPoint.y} r="2.8" fill={theme.surfaceBg || theme.background || '#fff'} stroke={color} strokeWidth="1.6" opacity="0.9" /> : null}
+                            {geometry.currentPoint ? <circle cx={geometry.currentPoint.x} cy={geometry.currentPoint.y} r="3.2" fill={color} /> : null}
+                        </svg>
+                        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '8px', fontSize: '10px', color: theme.textSec }}>
+                            <span>{categories[0] ? truncateChartLabel(String(categories[0]), 14) : 'Start'}</span>
+                            <span>
+                                Min {geometry.minValue === null ? '—' : formatChartValue(geometry.minValue, valueFormat)}
+                                {' · '}
+                                Max {geometry.maxValue === null ? '—' : formatChartValue(geometry.maxValue, valueFormat)}
+                            </span>
+                            <span>{categories.length > 0 ? truncateChartLabel(String(categories[categories.length - 1]), 14) : 'End'}</span>
+                        </div>
+                    </div>
+                );
+            })}
         </div>
     );
 };
@@ -2317,9 +1074,17 @@ const SvgChart = ({
     theme,
     chartHeight = CHART_HEIGHT,
     showLegend = true,
+    showDataLabels = false,
     onCategoryActivate = null,
     svgRef = null,
+    colorPalette = 'default',
+    valueFormat = 'auto',
+    yAxisTitle = '',
+    chartTitle = '',
+    onTitleChange = null,
 }) => {
+    const paletteColors = resolvePalette(colorPalette);
+    const fmt = (v) => formatChartValue(v, valueFormat);
     const stackedChildBarMode = chartType === 'bar' && barLayout === 'stacked' && Array.isArray(model.stackedGroups) && model.stackedGroups.length > 0;
     const stackedSeriesBarMode = chartType === 'bar' && barLayout === 'stacked' && !stackedChildBarMode && canStackBarSeries(model);
     const stackedAreaMode = chartType === 'area' && barLayout === 'stacked' && canStackAreaSeries(model);
@@ -2345,449 +1110,248 @@ const SvgChart = ({
         return () => observer.disconnect();
     }, []);
 
-    if (chartType === 'icicle') {
-        if (hierarchyNodes.length === 0) {
-            return <EmptyChartState message="Icicle charts need hierarchical rows and a numeric measure." theme={theme} chartHeight={effectiveChartHeight} />;
+    const [hiddenSeries, setHiddenSeries] = useState(new Set());
+    const toggleHiddenSeries = useCallback((label) => {
+        setHiddenSeries((prev) => {
+            const next = new Set(prev);
+            if (next.has(label)) next.delete(label); else next.add(label);
+            return next;
+        });
+    }, []);
+    const [tooltipInfo, setTooltipInfo] = useState(null);
+    const handleChartMouseMove = useCallback((e) => {
+        const target = e.target;
+        const category = target.getAttribute('data-tip-cat');
+        if (!category) {
+            setTooltipInfo((prev) => prev ? null : prev);
+            return;
         }
-
-        const bandHeight = effectiveChartHeight / icicleDepth;
-        const layoutNodes = layoutIcicleNodes(hierarchyNodes, 0, resolvedChartWidth, 0, bandHeight, []);
-
-        return (
-            <div style={{ display: 'flex', flexDirection: 'column', gap: '10px' }}>
-                <div ref={chartContainerRef} style={{ width: '100%', minWidth: 0 }}>
-                    <svg
-                        ref={svgRef}
-                        viewBox={`0 0 ${resolvedChartWidth} ${effectiveChartHeight}`}
-                        preserveAspectRatio="xMidYMid meet"
-                        style={{
-                            width: '100%',
-                            height: 'auto',
-                            display: 'block',
-                            maxWidth: '100%',
-                        }}
-                        role="img"
-                        aria-label={model.title || 'Icicle chart'}
-                    >
-                        {layoutNodes.map((node, index) => {
-                            const fill = getColorForIndex(Math.max(0, node.depth - 1), theme);
-                            const textShouldShow = node.width >= 54;
-                            return (
-                                <g
-                                    key={`icicle-node-${node.rowPath || index}`}
-                                    onClick={() => {
-                                        if (typeof onCategoryActivate === 'function') onCategoryActivate(node);
-                                    }}
-                                    style={typeof onCategoryActivate === 'function' ? { cursor: 'pointer' } : undefined}
-                                >
-                                    <rect
-                                        x={node.x}
-                                        y={node.y}
-                                        width={Math.max(1, node.width - 1)}
-                                        height={Math.max(20, node.height - 2)}
-                                        rx="4"
-                                        fill={fill}
-                                        opacity="0.86"
-                                        stroke={theme.surfaceBg || theme.background || '#fff'}
-                                        strokeWidth="1"
-                                    />
-                                    {textShouldShow ? (
-                                        <text
-                                            x={node.x + 8}
-                                            y={node.y + Math.min(node.height - 10, 22)}
-                                            textAnchor="start"
-                                            fontSize="11"
-                                            fontWeight="700"
-                                            fill="#fff"
-                                        >
-                                            {truncateChartLabel(node.label, Math.max(6, Math.floor(node.width / 9)))}
-                                        </text>
-                                    ) : null}
-                                </g>
-                            );
-                        })}
-                    </svg>
+        const container = e.currentTarget;
+        const rect = container.getBoundingClientRect();
+        setTooltipInfo({
+            x: e.clientX - rect.left,
+            y: e.clientY - rect.top,
+            category,
+            series: target.getAttribute('data-tip-ser') || '',
+            value: target.getAttribute('data-tip-val') || '',
+            color: target.getAttribute('data-tip-color') || '',
+        });
+    }, []);
+    const handleChartMouseLeave = useCallback(() => setTooltipInfo(null), []);
+    const tooltipElement = tooltipInfo ? (
+        <div style={{
+            position: 'absolute',
+            left: Math.min(tooltipInfo.x + 14, resolvedChartWidth - 160),
+            top: Math.max(0, tooltipInfo.y - 10),
+            pointerEvents: 'none',
+            zIndex: 10,
+            background: theme.surfaceBg || theme.background || '#fff',
+            border: `1px solid ${theme.border}`,
+            borderRadius: theme.radiusSm || '8px',
+            padding: '6px 10px',
+            fontSize: '11px',
+            fontWeight: 600,
+            color: theme.text,
+            boxShadow: '0 4px 12px rgba(0,0,0,0.15)',
+            whiteSpace: 'nowrap',
+        }}>
+            <div style={{ fontWeight: 800, marginBottom: tooltipInfo.series ? '2px' : 0 }}>{tooltipInfo.category}</div>
+            {tooltipInfo.series ? (
+                <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+                    {tooltipInfo.color ? (
+                        <span style={{ width: '8px', height: '8px', borderRadius: '50%', background: tooltipInfo.color, flexShrink: 0 }} />
+                    ) : null}
+                    <span>{tooltipInfo.series}: {tooltipInfo.value}</span>
                 </div>
-            </div>
-        );
-    }
+            ) : (
+                tooltipInfo.value ? <div>{tooltipInfo.value}</div> : null
+            )}
+        </div>
+    ) : null;
+    const [zoomScale, setZoomScale] = useState(1);
+    const [panOffset, setPanOffset] = useState({ x: 0, y: 0 });
+    const panDrag = useRef(null);
+    const [crosshairPos, setCrosshairPos] = useState(null);
 
-    if (chartType === 'sunburst') {
-        if (hierarchyNodes.length === 0) {
-            return <EmptyChartState message="Sunburst charts need hierarchical rows and a numeric measure." theme={theme} chartHeight={effectiveChartHeight} />;
+    const handleChartWheel = useCallback((e) => {
+        e.preventDefault();
+        setZoomScale((prev) => {
+            const next = e.deltaY < 0 ? prev * 1.15 : prev / 1.15;
+            const clamped = Math.min(10, Math.max(1, next));
+            if (clamped === 1) setPanOffset({ x: 0, y: 0 });
+            return clamped;
+        });
+    }, []);
+    const handlePanStart = useCallback((e) => {
+        if (zoomScale <= 1 || e.button !== 0) return;
+        panDrag.current = { startX: e.clientX, startY: e.clientY, startPan: { ...panOffset } };
+    }, [zoomScale, panOffset]);
+    const handlePanMove = useCallback((e) => {
+        if (!panDrag.current) return;
+        const dx = e.clientX - panDrag.current.startX;
+        const dy = e.clientY - panDrag.current.startY;
+        setPanOffset({ x: panDrag.current.startPan.x + dx, y: panDrag.current.startPan.y + dy });
+    }, []);
+    const handlePanEnd = useCallback(() => { panDrag.current = null; }, []);
+    const handleDblClick = useCallback(() => { setZoomScale(1); setPanOffset({ x: 0, y: 0 }); }, []);
+
+    const wrappedMouseMove = useCallback((e) => {
+        handleChartMouseMove(e);
+        handlePanMove(e);
+        const svgEl = svgRef && svgRef.current;
+        if (svgEl && typeof svgEl.getScreenCTM === 'function') {
+            const ctm = svgEl.getScreenCTM();
+            if (ctm) {
+                const pt = svgEl.createSVGPoint();
+                pt.x = e.clientX; pt.y = e.clientY;
+                const svgPt = pt.matrixTransform(ctm.inverse());
+                setCrosshairPos({ x: svgPt.x, y: svgPt.y });
+            }
         }
+    }, [handleChartMouseMove, handlePanMove]);
+    const wrappedMouseLeave = useCallback(() => {
+        handleChartMouseLeave();
+        handlePanEnd();
+        setCrosshairPos(null);
+    }, [handleChartMouseLeave, handlePanEnd]);
 
-        const radius = Math.min(resolvedChartWidth, effectiveChartHeight) / 2 - 18;
-        const centerX = resolvedChartWidth / 2;
-        const centerY = effectiveChartHeight / 2;
-        const ringWidth = radius / Math.max(icicleDepth, 1);
-        const layoutNodes = layoutSunburstNodes(hierarchyNodes, -Math.PI / 2, (Math.PI * 3) / 2, 1, ringWidth, []);
+    const chartContainerEvents = {
+        onMouseMove: wrappedMouseMove,
+        onMouseLeave: wrappedMouseLeave,
+        onWheel: handleChartWheel,
+        onMouseDown: handlePanStart,
+        onMouseUp: handlePanEnd,
+        onDoubleClick: handleDblClick,
+    };
 
-        return (
-            <div style={{ display: 'flex', flexDirection: 'column', gap: '10px' }}>
-                <div ref={chartContainerRef} style={{ width: '100%', minWidth: 0 }}>
-                    <svg
-                        ref={svgRef}
-                        viewBox={`0 0 ${resolvedChartWidth} ${effectiveChartHeight}`}
-                        preserveAspectRatio="xMidYMid meet"
-                        style={{
-                            width: '100%',
-                            height: 'auto',
-                            display: 'block',
-                            maxWidth: '100%',
-                        }}
-                        role="img"
-                        aria-label={model.title || 'Sunburst chart'}
-                    >
-                        {layoutNodes.map((node, index) => {
-                            const fill = getColorForIndex(Math.max(0, node.depth - 1), theme);
-                            const path = describeDonutArc(centerX, centerY, node.innerRadius, node.outerRadius, node.startAngle, node.endAngle);
-                            const midAngle = node.startAngle + ((node.endAngle - node.startAngle) / 2);
-                            const labelRadius = node.innerRadius + ((node.outerRadius - node.innerRadius) / 2);
-                            const labelPos = polarToCartesian(centerX, centerY, labelRadius, midAngle);
-                            const span = node.endAngle - node.startAngle;
-                            const canShowText = span > 0.2 && (node.outerRadius - node.innerRadius) >= 18;
+    const zoomTransform = zoomScale > 1 ? `scale(${zoomScale}) translate(${panOffset.x / zoomScale}px, ${panOffset.y / zoomScale}px)` : undefined;
+    const zoomContainerStyle = zoomScale > 1 ? { overflow: 'hidden', cursor: 'grab' } : undefined;
+    const zoomSvgStyle = zoomScale > 1 ? { transform: zoomTransform, transformOrigin: 'center center' } : undefined;
+    const crosshairElement = crosshairPos && chartType !== 'icicle' && chartType !== 'sunburst' && chartType !== 'sankey' ? (
+        <svg style={{ position: 'absolute', inset: 0, width: '100%', height: '100%', pointerEvents: 'none', zIndex: 5 }} viewBox={`0 0 ${resolvedChartWidth} ${effectiveChartHeight}`} preserveAspectRatio="xMidYMid meet">
+            <line x1={crosshairPos.x} y1={0} x2={crosshairPos.x} y2={effectiveChartHeight} stroke={theme.textSec} strokeOpacity="0.3" strokeDasharray="4 3" />
+            <line x1={0} y1={crosshairPos.y} x2={resolvedChartWidth} y2={crosshairPos.y} stroke={theme.textSec} strokeOpacity="0.3" strokeDasharray="4 3" />
+        </svg>
+    ) : null;
+    const zoomBadge = zoomScale > 1.05 ? (
+        <div style={{ position: 'absolute', top: 4, right: 4, zIndex: 12, background: theme.surfaceBg || '#fff', border: `1px solid ${theme.border}`, borderRadius: theme.radiusSm || '8px', padding: '2px 7px', fontSize: '10px', fontWeight: 700, color: theme.textSec, pointerEvents: 'auto', cursor: 'pointer' }} onClick={handleDblClick} title="Reset zoom (or double-click chart)">
+            {Math.round(zoomScale * 100)}% ✕
+        </div>
+    ) : null;
+    const [editingTitle, setEditingTitle] = useState(false);
+    const [editTitleDraft, setEditTitleDraft] = useState('');
+    const titleInputRef = useRef(null);
+    const [titlePos, setTitlePos] = useState(null);
+    const titleDragRef = useRef(null);
 
-                            return (
-                                <g
-                                    key={`sunburst-node-${node.rowPath || index}`}
-                                    onClick={() => {
-                                        if (typeof onCategoryActivate === 'function') onCategoryActivate(node);
-                                    }}
-                                    style={typeof onCategoryActivate === 'function' ? { cursor: 'pointer' } : undefined}
-                                >
-                                    <path
-                                        d={path}
-                                        fill={fill}
-                                        opacity="0.88"
-                                        stroke={theme.surfaceBg || theme.background || '#fff'}
-                                        strokeWidth="1"
-                                    />
-                                    {canShowText ? (
-                                        <text
-                                            x={labelPos.x}
-                                            y={labelPos.y}
-                                            textAnchor="middle"
-                                            fontSize="10"
-                                            fontWeight="700"
-                                            fill="#fff"
-                                        >
-                                            {truncateChartLabel(node.label, Math.max(5, Math.floor((span * 24))))}
-                                        </text>
-                                    ) : null}
-                                </g>
-                            );
-                        })}
-                    </svg>
-                </div>
-            </div>
-        );
-    }
+    useEffect(() => {
+        const handleDragMove = (event) => {
+            if (!titleDragRef.current) return;
+            const { startX, startY, startPos, containerRect } = titleDragRef.current;
+            const dx = event.clientX - startX;
+            const dy = event.clientY - startY;
+            const nextX = Math.max(0, Math.min(containerRect.width - 40, startPos.x + dx));
+            const nextY = Math.max(0, Math.min(containerRect.height - 20, startPos.y + dy));
+            setTitlePos({ x: nextX, y: nextY });
+        };
+        const handleDragEnd = () => { titleDragRef.current = null; };
+        window.addEventListener('mousemove', handleDragMove);
+        window.addEventListener('mouseup', handleDragEnd);
+        return () => {
+            window.removeEventListener('mousemove', handleDragMove);
+            window.removeEventListener('mouseup', handleDragEnd);
+        };
+    }, []);
 
-    if (chartType === 'sankey') {
-        const sankeyNodes = Array.isArray(model && model.sankeyNodes) ? model.sankeyNodes : [];
-        const sankeyLinks = Array.isArray(model && model.sankeyLinks) ? model.sankeyLinks : [];
-        if (sankeyNodes.length === 0 || sankeyLinks.length === 0) {
-            return <EmptyChartState message="Sankey charts need expanded hierarchical rows with child flows." theme={theme} chartHeight={effectiveChartHeight} />;
-        }
+    const handleTitleDragStart = (event) => {
+        if (editingTitle) return;
+        event.preventDefault();
+        const container = event.currentTarget.parentElement;
+        if (!container) return;
+        const containerRect = container.getBoundingClientRect();
+        const currentPos = titlePos || {
+            x: (containerRect.width / 2) - 40,
+            y: 6,
+        };
+        titleDragRef.current = {
+            startX: event.clientX,
+            startY: event.clientY,
+            startPos: currentPos,
+            containerRect,
+        };
+    };
 
-        const sankeyLayout = layoutSankey(sankeyNodes, sankeyLinks, resolvedChartWidth, effectiveChartHeight);
+    const handleTitleDoubleClick = () => {
+        if (typeof onTitleChange !== 'function') return;
+        setEditTitleDraft(chartTitle || '');
+        setEditingTitle(true);
+    };
+    const commitTitleEdit = () => {
+        if (typeof onTitleChange === 'function') onTitleChange(editTitleDraft);
+        setEditingTitle(false);
+    };
 
-        return (
-            <div style={{ display: 'flex', flexDirection: 'column', gap: '10px' }}>
-                <div ref={chartContainerRef} style={{ width: '100%', minWidth: 0 }}>
-                    <svg
-                        ref={svgRef}
-                        viewBox={`0 0 ${resolvedChartWidth} ${effectiveChartHeight}`}
-                        preserveAspectRatio="xMidYMid meet"
-                        style={{
-                            width: '100%',
-                            height: 'auto',
-                            display: 'block',
-                            maxWidth: '100%',
-                        }}
-                        role="img"
-                        aria-label={model.title || 'Sankey chart'}
-                    >
-                        {sankeyLayout.links.map((link, index) => {
-                            const sourceX = link.sourceNode.x + link.sourceNode.width;
-                            const targetX = link.targetNode.x;
-                            const midX = sourceX + ((targetX - sourceX) / 2);
-                            const path = [
-                                `M ${sourceX} ${link.sourceY}`,
-                                `C ${midX} ${link.sourceY}, ${midX} ${link.targetY}, ${targetX} ${link.targetY}`,
-                            ].join(' ');
-                            return (
-                                <path
-                                    key={`sankey-link-${link.source}-${link.target}-${index}`}
-                                    d={path}
-                                    fill="none"
-                                    stroke={theme.primary}
-                                    strokeOpacity="0.22"
-                                    strokeWidth={link.thickness}
-                                />
-                            );
-                        })}
-                        {sankeyLayout.nodes.map((node, index) => (
-                            <g
-                                key={`sankey-node-${node.rowPath || index}`}
-                                onClick={() => {
-                                    if (typeof onCategoryActivate === 'function') onCategoryActivate(node);
-                                }}
-                                style={typeof onCategoryActivate === 'function' ? { cursor: 'pointer' } : undefined}
-                            >
-                                <rect
-                                    x={node.x}
-                                    y={node.y}
-                                    width={node.width}
-                                    height={node.height}
-                                    rx="4"
-                                    fill={getColorForIndex(Math.max(0, node.depth - 1), theme)}
-                                    opacity="0.92"
-                                    stroke={theme.surfaceBg || theme.background || '#fff'}
-                                    strokeWidth="1"
-                                />
-                                <text
-                                    x={node.x + node.width + 6}
-                                    y={node.y + Math.min(node.height / 2 + 4, node.height - 4)}
-                                    textAnchor="start"
-                                    fontSize="11"
-                                    fill={theme.text}
-                                    fontWeight="700"
-                                >
-                                    {truncateChartLabel(node.label, 24)}
-                                </text>
-                            </g>
-                        ))}
-                    </svg>
-                </div>
-            </div>
-        );
-    }
+    useEffect(() => {
+        if (editingTitle && titleInputRef.current) titleInputRef.current.focus();
+    }, [editingTitle]);
 
-    if (chartType === 'combo') {
-        const comboLayers = (Array.isArray(model && model.layers) ? model.layers : [])
-            .filter((layer) => layer && !layer.hidden && Array.isArray(layer.values) && layer.values.some((value) => value !== null));
-        if (comboLayers.length === 0) {
-            return <EmptyChartState message={model.emptyMessage || 'No combo layers are configured.'} theme={theme} chartHeight={effectiveChartHeight} />;
-        }
+    const titleStyle = titlePos
+        ? { left: `${titlePos.x}px`, top: `${titlePos.y}px` }
+        : { left: '50%', top: '6px', transform: 'translateX(-50%)' };
 
-        const hasRightAxis = comboLayers.some((layer) => layer.axis === 'right');
-        const margin = { top: 24, right: hasRightAxis ? 76 : 20, bottom: 96, left: 72 };
-        const categoryCount = Math.max(1, Array.isArray(model.categories) ? model.categories.length : 0);
-        const step = Math.max(1, (resolvedChartWidth - margin.left - margin.right) / categoryCount);
-        const groupWidth = Math.max(22, Math.min(72, step * 0.72));
-        const barLayers = comboLayers.filter((layer) => layer.type === 'bar');
-        const areaLayers = comboLayers.filter((layer) => layer.type === 'area');
-        const lineLayers = comboLayers.filter((layer) => layer.type === 'line');
-        const leftMetrics = getAxisMetrics(
-            comboLayers.filter((layer) => layer.axis !== 'right').flatMap((layer) => layer.values),
-            effectiveChartHeight,
-            margin
-        );
-        const rightMetrics = hasRightAxis
-            ? getAxisMetrics(
-                comboLayers.filter((layer) => layer.axis === 'right').flatMap((layer) => layer.values),
-                effectiveChartHeight,
-                margin
-            )
-            : leftMetrics;
-        const categoryTargets = Array.isArray(model.categoryTargets) ? model.categoryTargets : [];
-        const legendItems = comboLayers.map((layer, index) => ({
-            label: layer.name,
-            color: layer.color || getColorForIndex(index, theme),
-        }));
-        const getLayerScale = (layer) => (layer.axis === 'right' ? rightMetrics.scaleY : leftMetrics.scaleY);
-        const getLayerBaseline = (layer) => (layer.axis === 'right' ? rightMetrics.baselineY : leftMetrics.baselineY);
-        const barGap = 4;
-        const barWidth = Math.max(8, (groupWidth - (Math.max(barLayers.length, 1) - 1) * barGap) / Math.max(barLayers.length, 1));
-
-        return (
-            <div style={{ display: 'flex', flexDirection: 'column', gap: '10px' }}>
-                <div ref={chartContainerRef} style={{ width: '100%', minWidth: 0 }}>
-                    <svg
-                        ref={svgRef}
-                        viewBox={`0 0 ${resolvedChartWidth} ${effectiveChartHeight}`}
-                        preserveAspectRatio="xMidYMid meet"
-                        style={{
-                            width: '100%',
-                            height: 'auto',
-                            display: 'block',
-                            maxWidth: '100%',
-                        }}
-                        role="img"
-                        aria-label={model.title || 'Combo chart'}
-                    >
-                        {leftMetrics.tickValues.map((tickValue, index) => {
-                            const y = leftMetrics.scaleY(tickValue);
-                            return (
-                                <g key={`combo-left-tick-${index}`}>
-                                    <line
-                                        x1={margin.left}
-                                        x2={resolvedChartWidth - margin.right}
-                                        y1={y}
-                                        y2={y}
-                                        stroke={theme.border}
-                                        strokeOpacity="0.7"
-                                        strokeDasharray="4 4"
-                                    />
-                                    <text
-                                        x={margin.left - 10}
-                                        y={y + 4}
-                                        textAnchor="end"
-                                        fontSize="11"
-                                        fill={theme.textSec}
-                                    >
-                                        {formatChartNumber(tickValue)}
-                                    </text>
-                                </g>
-                            );
-                        })}
-
-                        {hasRightAxis ? rightMetrics.tickValues.map((tickValue, index) => {
-                            const y = rightMetrics.scaleY(tickValue);
-                            return (
-                                <text
-                                    key={`combo-right-tick-${index}`}
-                                    x={resolvedChartWidth - margin.right + 10}
-                                    y={y + 4}
-                                    textAnchor="start"
-                                    fontSize="11"
-                                    fill={theme.textSec}
-                                >
-                                    {formatChartNumber(tickValue)}
-                                </text>
-                            );
-                        }) : null}
-
-                        <line
-                            x1={margin.left}
-                            x2={resolvedChartWidth - margin.right}
-                            y1={leftMetrics.baselineY}
-                            y2={leftMetrics.baselineY}
-                            stroke={theme.textSec}
-                            strokeOpacity="0.45"
-                        />
-
-                        {barLayers.map((layer, barLayerIndex) => (
-                            model.categories.map((category, categoryIndex) => {
-                                const value = layer.values[categoryIndex];
-                                if (value === null || value === undefined) return null;
-                                const slotStart = margin.left + (categoryIndex * step) + ((step - groupWidth) / 2);
-                                const scaleY = getLayerScale(layer);
-                                const baselineY = getLayerBaseline(layer);
-                                const y = scaleY(value);
-                                return (
-                                    <rect
-                                        key={`${layer.id}-${category}-${barLayerIndex}`}
-                                        x={slotStart + (barLayerIndex * (barWidth + barGap))}
-                                        y={Math.min(y, baselineY)}
-                                        width={barWidth}
-                                        height={Math.max(1, Math.abs(baselineY - y))}
-                                        rx="3"
-                                        fill={layer.color || getColorForIndex(barLayerIndex, theme)}
-                                        opacity="0.9"
-                                    />
-                                );
-                            })
-                        ))}
-
-                        {areaLayers.map((layer, layerIndex) => {
-                            const points = model.categories.map((_, categoryIndex) => {
-                                const rawValue = layer.values[categoryIndex];
-                                if (rawValue === null || rawValue === undefined) return null;
-                                const x = margin.left + (categoryIndex * step) + (step / 2);
-                                const scaleY = getLayerScale(layer);
-                                return {
-                                    x,
-                                    y: scaleY(rawValue),
-                                    baseY: getLayerBaseline(layer),
-                                };
-                            });
-                            const areaPath = buildAreaBandPath(points);
-                            const linePath = buildLinePath(points);
-                            const color = layer.color || getColorForIndex(barLayers.length + layerIndex, theme);
-                            return (
-                                <g key={`combo-area-${layer.id}`}>
-                                    {areaPath ? <path d={areaPath} fill={color} opacity="0.16" /> : null}
-                                    {linePath ? <path d={linePath} fill="none" stroke={color} strokeWidth="2.5" strokeLinejoin="round" strokeLinecap="round" /> : null}
-                                </g>
-                            );
-                        })}
-
-                        {lineLayers.map((layer, layerIndex) => {
-                            const points = model.categories.map((_, categoryIndex) => {
-                                const rawValue = layer.values[categoryIndex];
-                                if (rawValue === null || rawValue === undefined) return null;
-                                const x = margin.left + (categoryIndex * step) + (step / 2);
-                                return {
-                                    x,
-                                    y: getLayerScale(layer)(rawValue),
-                                };
-                            });
-                            const linePath = buildLinePath(points);
-                            const color = layer.color || getColorForIndex(barLayers.length + areaLayers.length + layerIndex, theme);
-                            return (
-                                <g key={`combo-line-${layer.id}`}>
-                                    {linePath ? <path d={linePath} fill="none" stroke={color} strokeWidth="3" strokeLinejoin="round" strokeLinecap="round" /> : null}
-                                    {points.map((point, pointIndex) => {
-                                        if (!point) return null;
-                                        return (
-                                            <circle
-                                                key={`${layer.id}-point-${pointIndex}`}
-                                                cx={point.x}
-                                                cy={point.y}
-                                                r="4"
-                                                fill={color}
-                                                stroke={theme.surfaceBg || theme.background || '#fff'}
-                                                strokeWidth="2"
-                                            />
-                                        );
-                                    })}
-                                </g>
-                            );
-                        })}
-
-                        {model.categories.map((category, categoryIndex) => {
-                            const x = margin.left + (categoryIndex * step) + (step / 2);
-                            return (
-                                <text
-                                    key={`combo-label-${categoryIndex}`}
-                                    x={x}
-                                    y={effectiveChartHeight - margin.bottom + 28}
-                                    textAnchor="middle"
-                                    fontSize="11"
-                                    fill={theme.textSec}
-                                >
-                                    {truncateChartLabel(category, 18)}
-                                </text>
-                            );
-                        })}
-
-                        {typeof onCategoryActivate === 'function' ? model.categories.map((_, categoryIndex) => {
-                            const target = categoryTargets[categoryIndex];
-                            if (!target) return null;
-                            return (
-                                <rect
-                                    key={`combo-hit-${categoryIndex}`}
-                                    x={margin.left + (categoryIndex * step)}
-                                    y={margin.top}
-                                    width={step}
-                                    height={effectiveChartHeight - margin.top - margin.bottom}
-                                    fill="transparent"
-                                    style={{ cursor: 'pointer' }}
-                                    onClick={() => onCategoryActivate(target)}
-                                />
-                            );
-                        }) : null}
-                    </svg>
-                </div>
-                {showLegend ? <ChartLegend items={legendItems} theme={theme} /> : null}
-            </div>
-        );
-    }
+    const chartTitleOverlay = chartTitle || editingTitle ? (
+        <div
+            onMouseDown={handleTitleDragStart}
+            onDoubleClick={handleTitleDoubleClick}
+            style={{
+                position: 'absolute',
+                ...titleStyle,
+                zIndex: 6,
+                cursor: editingTitle ? 'text' : 'grab',
+                userSelect: editingTitle ? 'auto' : 'none',
+            }}
+        >
+            {editingTitle ? (
+                <input
+                    ref={titleInputRef}
+                    type="text"
+                    value={editTitleDraft}
+                    onChange={(event) => setEditTitleDraft(event.target.value)}
+                    onBlur={commitTitleEdit}
+                    onKeyDown={(event) => {
+                        if (event.key === 'Enter') commitTitleEdit();
+                        if (event.key === 'Escape') setEditingTitle(false);
+                    }}
+                    onMouseDown={(event) => event.stopPropagation()}
+                    style={{
+                        fontSize: '13px',
+                        fontWeight: 700,
+                        color: theme.text,
+                        background: theme.surfaceBg || theme.background || '#fff',
+                        border: `1.5px solid ${theme.primary}`,
+                        borderRadius: theme.radiusSm || '6px',
+                        padding: '2px 10px',
+                        outline: 'none',
+                        minWidth: '80px',
+                    }}
+                />
+            ) : (
+                <span style={{
+                    fontSize: '13px',
+                    fontWeight: 700,
+                    color: theme.text,
+                    background: `${theme.surfaceBg || theme.background || '#fff'}cc`,
+                    padding: '2px 10px',
+                    borderRadius: theme.radiusSm || '6px',
+                    whiteSpace: 'nowrap',
+                    display: 'inline-block',
+                }}>{chartTitle}</span>
+            )}
+        </div>
+    ) : null;
 
     const geometry = useMemo(() => {
+        if (chartType === 'icicle' || chartType === 'sunburst' || chartType === 'sankey' || chartType === 'pie' || chartType === 'donut' || chartType === 'scatter' || chartType === 'waterfall' || chartType === 'combo' || chartType === 'sparkline') return null;
         const flatValues = stackedChildBarMode
             ? (model.stackedGroups || []).reduce((acc, group) => {
                 let positiveTotal = 0;
@@ -2848,10 +1412,7 @@ const SvgChart = ({
             maxValue += padding;
         }
 
-        const tickLabels = Array.from({ length: 5 }, (_, idx) => {
-            const ratio = idx / 4;
-            return formatChartNumber(maxValue - ((maxValue - minValue) * ratio));
-        });
+        const tickLabels = niceTickValues(minValue, maxValue, 5).map((v) => fmt(v));
         const maxTickLabelWidth = tickLabels.reduce((maxWidth, label) => Math.max(maxWidth, estimateTextWidth(label)), 0);
 
         const horizontalInnerLabels = stackedChildBarMode
@@ -2910,14 +1471,947 @@ const SvgChart = ({
         };
     }, [axisMode, model, chartType, stackedAreaMode, stackedChildBarMode, stackedSeriesBarMode, horizontalBarMode, effectiveChartHeight, resolvedChartWidth]);
 
+    if (chartType === 'sparkline') {
+        return (
+            <div
+                ref={chartContainerRef}
+                data-chart-sparkline-surface="true"
+                style={{
+                    position: 'relative',
+                    minHeight: `${effectiveChartHeight}px`,
+                    height: `${effectiveChartHeight}px`,
+                    minWidth: 0,
+                }}
+            >
+                <SparklineBoard
+                    model={model}
+                    theme={theme}
+                    chartHeight={effectiveChartHeight}
+                    paletteColors={paletteColors}
+                    valueFormat={valueFormat}
+                />
+                {chartTitleOverlay}
+            </div>
+        );
+    }
+
+    if (chartType === 'icicle') {
+        if (hierarchyNodes.length === 0) {
+            return <EmptyChartState message="Icicle charts need hierarchical rows and a numeric measure." theme={theme} chartHeight={effectiveChartHeight} />;
+        }
+
+        const bandHeight = effectiveChartHeight / icicleDepth;
+        const layoutNodes = layoutIcicleNodes(hierarchyNodes, 0, resolvedChartWidth, 0, bandHeight, []);
+
+        return (
+            <div style={{ display: 'flex', flexDirection: 'column', gap: '10px' }}>
+                <div ref={chartContainerRef} style={{ width: '100%', minWidth: 0, position: 'relative' }} {...chartContainerEvents}>
+                    <svg
+                        ref={svgRef}
+                        viewBox={`0 0 ${resolvedChartWidth} ${effectiveChartHeight}`}
+                        preserveAspectRatio="xMidYMid meet"
+                        style={{
+                            width: '100%',
+                            height: 'auto',
+                            display: 'block',
+                            maxWidth: '100%',
+                        }}
+                        role="img"
+                        aria-label={model.title || 'Icicle chart'}
+                    >
+                        {layoutNodes.map((node, index) => {
+                            const fill = getColorForIndex(Math.max(0, node.depth - 1), theme, paletteColors);
+                            const textShouldShow = node.width >= 54;
+                            return (
+                                <g
+                                    key={`icicle-node-${node.rowPath || index}`}
+                                    onClick={() => {
+                                        if (typeof onCategoryActivate === 'function') onCategoryActivate(node);
+                                    }}
+                                    style={typeof onCategoryActivate === 'function' ? { cursor: 'pointer' } : undefined}
+                                >
+                                    <rect
+                                        x={node.x}
+                                        y={node.y}
+                                        width={Math.max(1, node.width - 1)}
+                                        height={Math.max(20, node.height - 2)}
+                                        rx="4"
+                                        fill={fill}
+                                        opacity="0.86"
+                                        stroke={theme.surfaceBg || theme.background || '#fff'}
+                                        strokeWidth="1"
+                                        data-tip-cat={node.label || ''}
+                                        data-tip-val={typeof node.value === 'number' ? fmt(node.value) : ''}
+                                        data-tip-color={fill}
+                                    />
+                                    {textShouldShow ? (
+                                        <text
+                                            x={node.x + 8}
+                                            y={node.y + Math.min(node.height - 10, 22)}
+                                            textAnchor="start"
+                                            fontSize="11"
+                                            fontWeight="700"
+                                            fill="#fff"
+                                            style={{ pointerEvents: 'none' }}
+                                        >
+                                            {truncateChartLabel(node.label, Math.max(6, Math.floor(node.width / 9)))}
+                                        </text>
+                                    ) : null}
+                                </g>
+                            );
+                        })}
+                    </svg>
+                    {chartTitleOverlay}{crosshairElement}{tooltipElement}{zoomBadge}
+                </div>
+            </div>
+        );
+    }
+
+    if (chartType === 'sunburst') {
+        if (hierarchyNodes.length === 0) {
+            return <EmptyChartState message="Sunburst charts need hierarchical rows and a numeric measure." theme={theme} chartHeight={effectiveChartHeight} />;
+        }
+
+        const radius = Math.min(resolvedChartWidth, effectiveChartHeight) / 2 - 18;
+        const centerX = resolvedChartWidth / 2;
+        const centerY = effectiveChartHeight / 2;
+        const ringWidth = radius / Math.max(icicleDepth, 1);
+        const layoutNodes = layoutSunburstNodes(hierarchyNodes, -Math.PI / 2, (Math.PI * 3) / 2, 1, ringWidth, []);
+
+        return (
+            <div style={{ display: 'flex', flexDirection: 'column', gap: '10px' }}>
+                <div ref={chartContainerRef} style={{ width: '100%', minWidth: 0, position: 'relative' }} {...chartContainerEvents}>
+                    <svg
+                        ref={svgRef}
+                        viewBox={`0 0 ${resolvedChartWidth} ${effectiveChartHeight}`}
+                        preserveAspectRatio="xMidYMid meet"
+                        style={{
+                            width: '100%',
+                            height: 'auto',
+                            display: 'block',
+                            maxWidth: '100%',
+                        }}
+                        role="img"
+                        aria-label={model.title || 'Sunburst chart'}
+                    >
+                        {layoutNodes.map((node, index) => {
+                            const fill = getColorForIndex(Math.max(0, node.depth - 1), theme, paletteColors);
+                            const path = describeDonutArc(centerX, centerY, node.innerRadius, node.outerRadius, node.startAngle, node.endAngle);
+                            const midAngle = node.startAngle + ((node.endAngle - node.startAngle) / 2);
+                            const labelRadius = node.innerRadius + ((node.outerRadius - node.innerRadius) / 2);
+                            const labelPos = polarToCartesian(centerX, centerY, labelRadius, midAngle);
+                            const span = node.endAngle - node.startAngle;
+                            const canShowText = span > 0.2 && (node.outerRadius - node.innerRadius) >= 18;
+
+                            return (
+                                <g
+                                    key={`sunburst-node-${node.rowPath || index}`}
+                                    onClick={() => {
+                                        if (typeof onCategoryActivate === 'function') onCategoryActivate(node);
+                                    }}
+                                    style={typeof onCategoryActivate === 'function' ? { cursor: 'pointer' } : undefined}
+                                >
+                                    <path
+                                        d={path}
+                                        fill={fill}
+                                        opacity="0.88"
+                                        stroke={theme.surfaceBg || theme.background || '#fff'}
+                                        strokeWidth="1"
+                                        data-tip-cat={node.label || ''}
+                                        data-tip-val={typeof node.value === 'number' ? fmt(node.value) : ''}
+                                        data-tip-color={fill}
+                                    />
+                                    {canShowText ? (
+                                        <text
+                                            x={labelPos.x}
+                                            y={labelPos.y}
+                                            textAnchor="middle"
+                                            fontSize="10"
+                                            fontWeight="700"
+                                            fill="#fff"
+                                            style={{ pointerEvents: 'none' }}
+                                        >
+                                            {truncateChartLabel(node.label, Math.max(5, Math.floor((span * 24))))}
+                                        </text>
+                                    ) : null}
+                                </g>
+                            );
+                        })}
+                    </svg>
+                    {chartTitleOverlay}{crosshairElement}{tooltipElement}{zoomBadge}
+                </div>
+            </div>
+        );
+    }
+
+    if (chartType === 'sankey') {
+        const sankeyNodes = Array.isArray(model && model.sankeyNodes) ? model.sankeyNodes : [];
+        const sankeyLinks = Array.isArray(model && model.sankeyLinks) ? model.sankeyLinks : [];
+        if (sankeyNodes.length === 0 || sankeyLinks.length === 0) {
+            return <EmptyChartState message="Sankey charts need expanded hierarchical rows with child flows." theme={theme} chartHeight={effectiveChartHeight} />;
+        }
+
+        const sankeyLayout = layoutSankey(sankeyNodes, sankeyLinks, resolvedChartWidth, effectiveChartHeight);
+
+        return (
+            <div style={{ display: 'flex', flexDirection: 'column', gap: '10px' }}>
+                <div ref={chartContainerRef} style={{ width: '100%', minWidth: 0, position: 'relative' }} {...chartContainerEvents}>
+                    <svg
+                        ref={svgRef}
+                        viewBox={`0 0 ${resolvedChartWidth} ${effectiveChartHeight}`}
+                        preserveAspectRatio="xMidYMid meet"
+                        style={{
+                            width: '100%',
+                            height: 'auto',
+                            display: 'block',
+                            maxWidth: '100%',
+                        }}
+                        role="img"
+                        aria-label={model.title || 'Sankey chart'}
+                    >
+                        {sankeyLayout.links.map((link, index) => {
+                            const sourceX = link.sourceNode.x + link.sourceNode.width;
+                            const targetX = link.targetNode.x;
+                            const midX = sourceX + ((targetX - sourceX) / 2);
+                            const path = [
+                                `M ${sourceX} ${link.sourceY}`,
+                                `C ${midX} ${link.sourceY}, ${midX} ${link.targetY}, ${targetX} ${link.targetY}`,
+                            ].join(' ');
+                            return (
+                                <path
+                                    key={`sankey-link-${link.source}-${link.target}-${index}`}
+                                    d={path}
+                                    fill="none"
+                                    stroke={theme.primary}
+                                    strokeOpacity="0.22"
+                                    strokeWidth={link.thickness}
+                                    data-tip-cat={`${link.sourceNode.label || ''} → ${link.targetNode.label || ''}`}
+                                    data-tip-val={typeof link.value === 'number' ? fmt(link.value) : ''}
+                                />
+                            );
+                        })}
+                        {sankeyLayout.nodes.map((node, index) => {
+                            const fill = getColorForIndex(Math.max(0, node.depth - 1), theme, paletteColors);
+                            return (
+                                <g
+                                    key={`sankey-node-${node.rowPath || index}`}
+                                    onClick={() => {
+                                        if (typeof onCategoryActivate === 'function') onCategoryActivate(node);
+                                    }}
+                                    style={typeof onCategoryActivate === 'function' ? { cursor: 'pointer' } : undefined}
+                                >
+                                    <rect
+                                        x={node.x}
+                                        y={node.y}
+                                        width={node.width}
+                                        height={node.height}
+                                        rx="4"
+                                        fill={fill}
+                                        opacity="0.92"
+                                        stroke={theme.surfaceBg || theme.background || '#fff'}
+                                        strokeWidth="1"
+                                        data-tip-cat={node.label || ''}
+                                        data-tip-val={typeof node.value === 'number' ? fmt(node.value) : ''}
+                                        data-tip-color={fill}
+                                    />
+                                    <text
+                                        x={node.x + node.width + 6}
+                                        y={node.y + Math.min(node.height / 2 + 4, node.height - 4)}
+                                        textAnchor="start"
+                                        fontSize="11"
+                                        fill={theme.text}
+                                        fontWeight="700"
+                                        style={{ pointerEvents: 'none' }}
+                                    >
+                                        {truncateChartLabel(node.label, 24)}
+                                    </text>
+                                </g>
+                            );
+                        })}
+                    </svg>
+                    {chartTitleOverlay}{crosshairElement}{tooltipElement}{zoomBadge}
+                </div>
+            </div>
+        );
+    }
+
+    if (chartType === 'pie' || chartType === 'donut') {
+        const pieSeries = Array.isArray(model && model.series) && model.series.length > 0 ? model.series[0] : null;
+        const pieCategories = Array.isArray(model && model.categories) ? model.categories : [];
+        if (!pieSeries || pieCategories.length === 0) {
+            return <EmptyChartState message="Pie charts need categories and at least one numeric measure." theme={theme} chartHeight={effectiveChartHeight} />;
+        }
+        const rawSlices = pieCategories.map((category, index) => {
+            const rawValue = pieSeries.values[index];
+            const value = typeof rawValue === 'number' && Number.isFinite(rawValue) ? rawValue : 0;
+            return { category, value: Math.abs(value), originalValue: value, index };
+        }).filter((slice) => slice.value > 0 && !hiddenSeries.has(slice.category));
+        const totalValue = rawSlices.reduce((sum, slice) => sum + slice.value, 0);
+        if (totalValue === 0) {
+            return <EmptyChartState message="All values are zero — nothing to display." theme={theme} chartHeight={effectiveChartHeight} />;
+        }
+        const isDonut = chartType === 'donut';
+        const radius = Math.min(resolvedChartWidth, effectiveChartHeight) / 2 - 24;
+        const innerRadius = isDonut ? radius * 0.52 : 0;
+        const centerX = resolvedChartWidth / 2;
+        const centerY = effectiveChartHeight / 2;
+        const categoryTargets = Array.isArray(model && model.categoryTargets) ? model.categoryTargets : [];
+        let angleCursor = -Math.PI / 2;
+        const sliceData = rawSlices.map((slice) => {
+            const fraction = slice.value / totalValue;
+            const sweep = fraction * Math.PI * 2;
+            const startAngle = angleCursor;
+            const endAngle = angleCursor + sweep;
+            angleCursor = endAngle;
+            return { ...slice, startAngle, endAngle, fraction };
+        });
+        const legendItems = sliceData.map((slice) => ({
+            label: `${slice.category} (${(slice.fraction * 100).toFixed(1)}%)`,
+            color: getColorForIndex(slice.index, theme, paletteColors),
+        }));
+
+        return (
+            <div style={{ display: 'flex', flexDirection: 'column', gap: '10px' }}>
+                <div ref={chartContainerRef} style={{ width: '100%', minWidth: 0, position: 'relative' }} {...chartContainerEvents}>
+                    <svg
+                        ref={svgRef}
+                        viewBox={`0 0 ${resolvedChartWidth} ${effectiveChartHeight}`}
+                        preserveAspectRatio="xMidYMid meet"
+                        style={{
+                            width: '100%',
+                            height: 'auto',
+                            display: 'block',
+                            maxWidth: '100%',
+                        }}
+                        role="img"
+                        aria-label={model.title || (isDonut ? 'Donut chart' : 'Pie chart')}
+                    >
+                        {sliceData.map((slice) => {
+                            const fill = getColorForIndex(slice.index, theme, paletteColors);
+                            const path = describeDonutArc(centerX, centerY, innerRadius, radius, slice.startAngle, slice.endAngle);
+                            const midAngle = slice.startAngle + ((slice.endAngle - slice.startAngle) / 2);
+                            const labelRadius = isDonut
+                                ? innerRadius + ((radius - innerRadius) / 2)
+                                : radius * 0.62;
+                            const labelPos = polarToCartesian(centerX, centerY, labelRadius, midAngle);
+                            const canShowLabel = (slice.endAngle - slice.startAngle) > 0.3;
+                            const outerLabelPos = polarToCartesian(centerX, centerY, radius + 14, midAngle);
+                            const canShowOuterLabel = (slice.endAngle - slice.startAngle) > 0.15;
+                            const target = categoryTargets[slice.index] || null;
+
+                            return (
+                                <g
+                                    key={`pie-slice-${slice.index}`}
+                                    onClick={() => {
+                                        if (typeof onCategoryActivate === 'function' && target) onCategoryActivate(target);
+                                    }}
+                                    style={typeof onCategoryActivate === 'function' && target ? { cursor: 'pointer' } : undefined}
+                                >
+                                    <path
+                                        d={path}
+                                        fill={fill}
+                                        opacity="0.9"
+                                        stroke={theme.surfaceBg || theme.background || '#fff'}
+                                        strokeWidth="2"
+                                        data-tip-cat={slice.category}
+                                        data-tip-ser={pieSeries.name}
+                                        data-tip-val={`${fmt(slice.originalValue)} (${(slice.fraction * 100).toFixed(1)}%)`}
+                                        data-tip-color={fill}
+                                    />
+                                    {canShowLabel ? (
+                                        <text
+                                            x={labelPos.x}
+                                            y={labelPos.y}
+                                            textAnchor="middle"
+                                            dominantBaseline="central"
+                                            fontSize="10"
+                                            fontWeight="700"
+                                            fill="#fff"
+                                            style={{ pointerEvents: 'none' }}
+                                        >
+                                            {(slice.fraction * 100).toFixed(1)}%
+                                        </text>
+                                    ) : null}
+                                    {showDataLabels && canShowOuterLabel ? (
+                                        <text
+                                            x={outerLabelPos.x}
+                                            y={outerLabelPos.y}
+                                            textAnchor={midAngle > Math.PI / 2 && midAngle < (3 * Math.PI / 2) ? 'end' : 'start'}
+                                            dominantBaseline="central"
+                                            fontSize="9"
+                                            fontWeight="700"
+                                            fill={theme.textSec}
+                                            style={{ pointerEvents: 'none' }}
+                                        >
+                                            {fmt(slice.originalValue)}
+                                        </text>
+                                    ) : null}
+                                </g>
+                            );
+                        })}
+                        {isDonut ? (
+                            <text
+                                x={centerX}
+                                y={centerY}
+                                textAnchor="middle"
+                                dominantBaseline="central"
+                                fontSize="16"
+                                fontWeight="800"
+                                fill={theme.text}
+                                style={{ pointerEvents: 'none' }}
+                            >
+                                {fmt(totalValue)}
+                            </text>
+                        ) : null}
+                    </svg>
+                    {chartTitleOverlay}{crosshairElement}{tooltipElement}{zoomBadge}
+                </div>
+                {showLegend ? <ChartLegend items={legendItems} theme={theme} hiddenSet={hiddenSeries} onToggle={toggleHiddenSeries} /> : null}
+            </div>
+        );
+    }
+
+    if (chartType === 'scatter') {
+        const allSeries = Array.isArray(model && model.series) ? model.series.filter((s) => !hiddenSeries.has(s.name)) : [];
+        const categories = Array.isArray(model && model.categories) ? model.categories : [];
+        const categoryTargets = Array.isArray(model && model.categoryTargets) ? model.categoryTargets : [];
+        if (allSeries.length < 2) {
+            return <EmptyChartState message="Scatter charts need at least two numeric measures (X and Y)." theme={theme} chartHeight={effectiveChartHeight} />;
+        }
+        const xSeries = allSeries[0];
+        const ySeries = allSeries.slice(1);
+        const xValues = (xSeries.values || []).filter((v) => typeof v === 'number' && Number.isFinite(v));
+        const allYValues = ySeries.flatMap((s) => (s.values || []).filter((v) => typeof v === 'number' && Number.isFinite(v)));
+        if (xValues.length === 0 || allYValues.length === 0) {
+            return <EmptyChartState message="Not enough numeric data for a scatter chart." theme={theme} chartHeight={effectiveChartHeight} />;
+        }
+        let minX = Math.min(...xValues);
+        let maxX = Math.max(...xValues);
+        let minY = Math.min(...allYValues);
+        let maxY = Math.max(...allYValues);
+        if (minX === maxX) { const pad = Math.abs(maxX || 1) * 0.15 || 1; minX -= pad; maxX += pad; }
+        if (minY === maxY) { const pad = Math.abs(maxY || 1) * 0.15 || 1; minY -= pad; maxY += pad; }
+        const xPad = (maxX - minX) * 0.06;
+        const yPad = (maxY - minY) * 0.06;
+        minX -= xPad; maxX += xPad; minY -= yPad; maxY += yPad;
+        const leftMargin = Math.max(52, estimateTextWidth(fmt(maxY), 11) + 16);
+        const margin = { top: 24, right: 20, bottom: 64, left: leftMargin };
+        const plotWidth = resolvedChartWidth - margin.left - margin.right;
+        const plotHeight = effectiveChartHeight - margin.top - margin.bottom;
+        const scaleX = (v) => margin.left + ((v - minX) / (maxX - minX)) * plotWidth;
+        const scaleY = (v) => margin.top + ((maxY - v) / (maxY - minY)) * plotHeight;
+        const xTicks = niceTickValues(minX, maxX, 5);
+        const yTicks = niceTickValues(minY, maxY, 5);
+        const legendItems = ySeries.map((s, i) => ({ label: s.name, color: getColorForIndex(i, theme, paletteColors) }));
+        const canClick = typeof onCategoryActivate === 'function';
+        return (
+            <div style={{ display: 'flex', flexDirection: 'column', gap: '10px' }}>
+                <div style={{ position: 'relative', width: '100%' }} {...chartContainerEvents}>
+                    <svg
+                        ref={svgRef}
+                        viewBox={`0 0 ${resolvedChartWidth} ${effectiveChartHeight}`}
+                        width="100%"
+                        preserveAspectRatio="xMidYMid meet"
+                        style={{ display: 'block', overflow: 'visible' }}
+                    >
+                        {yTicks.map((tick, i) => (
+                            <g key={`y-tick-${i}`}>
+                                <line x1={margin.left} y1={scaleY(tick)} x2={resolvedChartWidth - margin.right} y2={scaleY(tick)} stroke={theme.border} strokeDasharray="3 4" />
+                                <text x={margin.left - 8} y={scaleY(tick) + 4} textAnchor="end" fontSize="11" fill={theme.textSec} style={{ pointerEvents: 'none' }}>{fmt(tick)}</text>
+                            </g>
+                        ))}
+                        {xTicks.map((tick, i) => (
+                            <g key={`x-tick-${i}`}>
+                                <line x1={scaleX(tick)} y1={margin.top} x2={scaleX(tick)} y2={effectiveChartHeight - margin.bottom} stroke={theme.border} strokeDasharray="3 4" />
+                                <text x={scaleX(tick)} y={effectiveChartHeight - margin.bottom + 18} textAnchor="middle" fontSize="11" fill={theme.textSec} style={{ pointerEvents: 'none' }}>{fmt(tick)}</text>
+                            </g>
+                        ))}
+                        <line x1={margin.left} y1={effectiveChartHeight - margin.bottom} x2={resolvedChartWidth - margin.right} y2={effectiveChartHeight - margin.bottom} stroke={theme.border} />
+                        <line x1={margin.left} y1={margin.top} x2={margin.left} y2={effectiveChartHeight - margin.bottom} stroke={theme.border} />
+                        <text x={resolvedChartWidth / 2} y={effectiveChartHeight - 8} textAnchor="middle" fontSize="11" fontWeight="700" fill={theme.textSec} style={{ pointerEvents: 'none' }}>{xSeries.name}</text>
+                        {yAxisTitle ? (
+                            <text x={14} y={(margin.top + effectiveChartHeight - margin.bottom) / 2} textAnchor="middle" fontSize="11" fontWeight="700" fill={theme.textSec} transform={`rotate(-90, 14, ${(margin.top + effectiveChartHeight - margin.bottom) / 2})`} style={{ pointerEvents: 'none' }}>{yAxisTitle}</text>
+                        ) : null}
+                        {ySeries.map((series, seriesIndex) => {
+                            const color = getColorForIndex(seriesIndex, theme, paletteColors);
+                            return (series.values || []).map((yVal, pointIndex) => {
+                                const xVal = xSeries.values[pointIndex];
+                                if (typeof xVal !== 'number' || !Number.isFinite(xVal) || typeof yVal !== 'number' || !Number.isFinite(yVal)) return null;
+                                const cx = scaleX(xVal);
+                                const cy = scaleY(yVal);
+                                const label = categories[pointIndex] || `Point ${pointIndex + 1}`;
+                                const target = categoryTargets[pointIndex];
+                                return (
+                                    <circle
+                                        key={`scatter-${seriesIndex}-${pointIndex}`}
+                                        cx={cx}
+                                        cy={cy}
+                                        r="5"
+                                        fill={color}
+                                        opacity="0.82"
+                                        stroke={theme.surfaceBg || theme.background || '#fff'}
+                                        strokeWidth="1.5"
+                                        data-tip-cat={label}
+                                        data-tip-ser={`${series.name} (${xSeries.name}=${fmt(xVal)})`}
+                                        data-tip-val={fmt(yVal)}
+                                        data-tip-color={color}
+                                        style={canClick && target ? { cursor: 'pointer' } : undefined}
+                                        onClick={canClick && target ? () => onCategoryActivate(target) : undefined}
+                                    />
+                                );
+                            });
+                        })}
+                        {showDataLabels ? ySeries.map((series, seriesIndex) => {
+                            const color = getColorForIndex(seriesIndex, theme, paletteColors);
+                            return (series.values || []).map((yVal, pointIndex) => {
+                                const xVal = xSeries.values[pointIndex];
+                                if (typeof xVal !== 'number' || !Number.isFinite(xVal) || typeof yVal !== 'number' || !Number.isFinite(yVal)) return null;
+                                return (
+                                    <text
+                                        key={`scatter-label-${seriesIndex}-${pointIndex}`}
+                                        x={scaleX(xVal)}
+                                        y={scaleY(yVal) - 8}
+                                        textAnchor="middle"
+                                        fontSize="10"
+                                        fontWeight="700"
+                                        fill={color}
+                                        style={{ pointerEvents: 'none' }}
+                                    >
+                                        {fmt(yVal)}
+                                    </text>
+                                );
+                            });
+                        }) : null}
+                    </svg>
+                    {chartTitleOverlay}{crosshairElement}{tooltipElement}{zoomBadge}
+                </div>
+                {showLegend ? <ChartLegend items={legendItems} theme={theme} hiddenSet={hiddenSeries} onToggle={toggleHiddenSeries} /> : null}
+            </div>
+        );
+    }
+
+    if (chartType === 'waterfall') {
+        const wfSeries = Array.isArray(model && model.series) && model.series.length > 0 ? model.series[0] : null;
+        const wfCategories = Array.isArray(model && model.categories) ? model.categories : [];
+        const categoryTargets = Array.isArray(model && model.categoryTargets) ? model.categoryTargets : [];
+        if (!wfSeries || wfCategories.length === 0) {
+            return <EmptyChartState message="Waterfall charts need categories and at least one numeric measure." theme={theme} chartHeight={effectiveChartHeight} />;
+        }
+        const increments = wfCategories.map((_, i) => {
+            const v = wfSeries.values[i];
+            return typeof v === 'number' && Number.isFinite(v) ? v : 0;
+        });
+        const bars = [];
+        let running = 0;
+        for (let i = 0; i < increments.length; i++) {
+            const start = running;
+            running += increments[i];
+            bars.push({ label: wfCategories[i], start, end: running, increment: increments[i], type: increments[i] >= 0 ? 'positive' : 'negative' });
+        }
+        bars.push({ label: 'Total', start: 0, end: running, increment: running, type: 'total' });
+        const allEnds = bars.map((b) => b.start).concat(bars.map((b) => b.end));
+        let minVal = Math.min(...allEnds, 0);
+        let maxVal = Math.max(...allEnds, 0);
+        if (minVal === maxVal) { const pad = Math.abs(maxVal || 1) * 0.15 || 1; minVal -= pad; maxVal += pad; }
+        const yPad = (maxVal - minVal) * 0.08;
+        minVal -= yPad; maxVal += yPad;
+        const wfTicks = niceTickValues(minVal, maxVal, 5);
+        const leftMargin = Math.max(52, estimateTextWidth(fmt(maxVal), 11) + 16);
+        const margin = { top: 24, right: 20, bottom: 84, left: leftMargin };
+        const plotWidth = resolvedChartWidth - margin.left - margin.right;
+        const plotHeight = effectiveChartHeight - margin.top - margin.bottom;
+        const scaleY = (v) => margin.top + ((maxVal - v) / (maxVal - minVal)) * plotHeight;
+        const step = plotWidth / bars.length;
+        const barWidth = Math.max(14, Math.min(60, step * 0.6));
+        const positiveColor = '#059669';
+        const negativeColor = '#DC2626';
+        const totalColor = getColorForIndex(0, theme, paletteColors);
+        const canClick = typeof onCategoryActivate === 'function';
+        const legendItems = [
+            { label: 'Increase', color: positiveColor },
+            { label: 'Decrease', color: negativeColor },
+            { label: 'Total', color: totalColor },
+        ];
+        return (
+            <div style={{ display: 'flex', flexDirection: 'column', gap: '10px' }}>
+                <div ref={chartContainerRef} style={{ width: '100%', minWidth: 0, position: 'relative' }} {...chartContainerEvents}>
+                    <svg
+                        ref={svgRef}
+                        viewBox={`0 0 ${resolvedChartWidth} ${effectiveChartHeight}`}
+                        width="100%"
+                        preserveAspectRatio="xMidYMid meet"
+                        style={{ display: 'block', overflow: 'visible' }}
+                    >
+                        {wfTicks.map((tick, i) => (
+                            <g key={`wf-tick-${i}`}>
+                                <line x1={margin.left} y1={scaleY(tick)} x2={resolvedChartWidth - margin.right} y2={scaleY(tick)} stroke={theme.border} strokeDasharray="3 4" />
+                                <text x={margin.left - 8} y={scaleY(tick) + 4} textAnchor="end" fontSize="11" fill={theme.textSec} style={{ pointerEvents: 'none' }}>{fmt(tick)}</text>
+                            </g>
+                        ))}
+                        <line x1={margin.left} y1={scaleY(0)} x2={resolvedChartWidth - margin.right} y2={scaleY(0)} stroke={theme.textSec} strokeOpacity="0.5" />
+                        {yAxisTitle ? (
+                            <text x={14} y={(margin.top + effectiveChartHeight - margin.bottom) / 2} textAnchor="middle" fontSize="11" fontWeight="700" fill={theme.textSec} transform={`rotate(-90, 14, ${(margin.top + effectiveChartHeight - margin.bottom) / 2})`} style={{ pointerEvents: 'none' }}>{yAxisTitle}</text>
+                        ) : null}
+                        {bars.map((bar, i) => {
+                            const cx = margin.left + i * step + step / 2;
+                            const x = cx - barWidth / 2;
+                            const yTop = scaleY(Math.max(bar.start, bar.end));
+                            const yBot = scaleY(Math.min(bar.start, bar.end));
+                            const height = Math.max(1, yBot - yTop);
+                            const fill = bar.type === 'total' ? totalColor : bar.type === 'positive' ? positiveColor : negativeColor;
+                            const target = i < categoryTargets.length ? categoryTargets[i] : null;
+                            return (
+                                <g key={`wf-bar-${i}`}>
+                                    {i > 0 && i < bars.length - 1 ? (
+                                        <line
+                                            x1={margin.left + (i - 1) * step + step / 2 + barWidth / 2}
+                                            y1={scaleY(bar.start)}
+                                            x2={x}
+                                            y2={scaleY(bar.start)}
+                                            stroke={theme.textSec}
+                                            strokeDasharray="2 2"
+                                            strokeOpacity="0.5"
+                                        />
+                                    ) : null}
+                                    <rect
+                                        x={x}
+                                        y={yTop}
+                                        width={barWidth}
+                                        height={height}
+                                        rx="3"
+                                        fill={fill}
+                                        opacity="0.9"
+                                        data-tip-cat={bar.label}
+                                        data-tip-ser={bar.type === 'total' ? 'Total' : (bar.increment >= 0 ? '+' : '') + fmt(bar.increment)}
+                                        data-tip-val={fmt(bar.end)}
+                                        data-tip-color={fill}
+                                        style={canClick && target ? { cursor: 'pointer' } : undefined}
+                                        onClick={canClick && target ? () => onCategoryActivate(target) : undefined}
+                                    />
+                                    {showDataLabels ? (
+                                        <text
+                                            x={cx}
+                                            y={yTop - 5}
+                                            textAnchor="middle"
+                                            fontSize="9"
+                                            fontWeight="700"
+                                            fill={theme.textSec}
+                                            style={{ pointerEvents: 'none' }}
+                                        >
+                                            {bar.type === 'total' ? fmt(bar.end) : (bar.increment >= 0 ? '+' : '') + fmt(bar.increment)}
+                                        </text>
+                                    ) : null}
+                                    <text
+                                        x={cx}
+                                        y={effectiveChartHeight - margin.bottom + 16}
+                                        textAnchor="middle"
+                                        fontSize="10"
+                                        fontWeight="600"
+                                        fill={theme.textSec}
+                                        style={{ pointerEvents: 'none' }}
+                                    >
+                                        {truncateChartLabel(bar.label, 12)}
+                                    </text>
+                                </g>
+                            );
+                        })}
+                    </svg>
+                    {chartTitleOverlay}{crosshairElement}{tooltipElement}{zoomBadge}
+                </div>
+                {showLegend ? <ChartLegend items={legendItems} theme={theme} hiddenSet={hiddenSeries} onToggle={toggleHiddenSeries} /> : null}
+            </div>
+        );
+    }
+
+    if (chartType === 'combo') {
+        const comboLayers = (Array.isArray(model && model.layers) ? model.layers : [])
+            .filter((layer) => layer && !layer.hidden && !hiddenSeries.has(layer.name) && Array.isArray(layer.values) && layer.values.some((value) => value !== null));
+        if (comboLayers.length === 0) {
+            return <EmptyChartState message={model.emptyMessage || 'No combo layers are configured.'} theme={theme} chartHeight={effectiveChartHeight} />;
+        }
+
+        const hasRightAxis = comboLayers.some((layer) => layer.axis === 'right');
+        const margin = { top: 24, right: hasRightAxis ? 76 : 20, bottom: 96, left: 72 };
+        const categoryCount = Math.max(1, Array.isArray(model.categories) ? model.categories.length : 0);
+        const step = Math.max(1, (resolvedChartWidth - margin.left - margin.right) / categoryCount);
+        const groupWidth = Math.max(22, Math.min(72, step * 0.72));
+        const barLayers = comboLayers.filter((layer) => layer.type === 'bar');
+        const areaLayers = comboLayers.filter((layer) => layer.type === 'area');
+        const lineLayers = comboLayers.filter((layer) => layer.type === 'line');
+        const leftMetrics = getAxisMetrics(
+            comboLayers.filter((layer) => layer.axis !== 'right').flatMap((layer) => layer.values),
+            effectiveChartHeight,
+            margin
+        );
+        const rightMetrics = hasRightAxis
+            ? getAxisMetrics(
+                comboLayers.filter((layer) => layer.axis === 'right').flatMap((layer) => layer.values),
+                effectiveChartHeight,
+                margin
+            )
+            : leftMetrics;
+        const categoryTargets = Array.isArray(model.categoryTargets) ? model.categoryTargets : [];
+        const legendItems = comboLayers.map((layer, index) => ({
+            label: layer.name,
+            color: getColorForIndex(index, theme, paletteColors),
+        }));
+        const getLayerScale = (layer) => (layer.axis === 'right' ? rightMetrics.scaleY : leftMetrics.scaleY);
+        const getLayerBaseline = (layer) => (layer.axis === 'right' ? rightMetrics.baselineY : leftMetrics.baselineY);
+        const barGap = 4;
+        const barWidth = Math.max(8, (groupWidth - (Math.max(barLayers.length, 1) - 1) * barGap) / Math.max(barLayers.length, 1));
+
+        return (
+            <div style={{ display: 'flex', flexDirection: 'column', gap: '10px' }}>
+                <div ref={chartContainerRef} style={{ width: '100%', minWidth: 0, position: 'relative', ...zoomContainerStyle }} {...chartContainerEvents}>
+                    <svg
+                        ref={svgRef}
+                        viewBox={`0 0 ${resolvedChartWidth} ${effectiveChartHeight}`}
+                        preserveAspectRatio="xMidYMid meet"
+                        style={{
+                            width: '100%',
+                            height: 'auto',
+                            display: 'block',
+                            maxWidth: '100%',
+                            ...zoomSvgStyle,
+                        }}
+                        role="img"
+                        aria-label={model.title || 'Combo chart'}
+                    >
+                        {leftMetrics.tickValues.map((tickValue, index) => {
+                            const y = leftMetrics.scaleY(tickValue);
+                            return (
+                                <g key={`combo-left-tick-${index}`}>
+                                    <line
+                                        x1={margin.left}
+                                        x2={resolvedChartWidth - margin.right}
+                                        y1={y}
+                                        y2={y}
+                                        stroke={theme.border}
+                                        strokeOpacity="0.7"
+                                        strokeDasharray="4 4"
+                                    />
+                                    <text
+                                        x={margin.left - 10}
+                                        y={y + 4}
+                                        textAnchor="end"
+                                        fontSize="11"
+                                        fill={theme.textSec}
+                                    >
+                                        {fmt(tickValue)}
+                                    </text>
+                                </g>
+                            );
+                        })}
+
+                        {hasRightAxis ? rightMetrics.tickValues.map((tickValue, index) => {
+                            const y = rightMetrics.scaleY(tickValue);
+                            return (
+                                <text
+                                    key={`combo-right-tick-${index}`}
+                                    x={resolvedChartWidth - margin.right + 10}
+                                    y={y + 4}
+                                    textAnchor="start"
+                                    fontSize="11"
+                                    fill={theme.textSec}
+                                >
+                                    {fmt(tickValue)}
+                                </text>
+                            );
+                        }) : null}
+
+                        {yAxisTitle ? (
+                            <text x={14} y={(margin.top + effectiveChartHeight - margin.bottom) / 2} textAnchor="middle" fontSize="11" fontWeight="700" fill={theme.textSec} transform={`rotate(-90, 14, ${(margin.top + effectiveChartHeight - margin.bottom) / 2})`} style={{ pointerEvents: 'none' }}>{yAxisTitle}</text>
+                        ) : null}
+
+                        <line
+                            x1={margin.left}
+                            x2={resolvedChartWidth - margin.right}
+                            y1={leftMetrics.baselineY}
+                            y2={leftMetrics.baselineY}
+                            stroke={theme.textSec}
+                            strokeOpacity="0.45"
+                        />
+
+                        {barLayers.map((layer, barLayerIndex) => (
+                            model.categories.map((category, categoryIndex) => {
+                                const value = layer.values[categoryIndex];
+                                if (value === null || value === undefined) return null;
+                                const slotStart = margin.left + (categoryIndex * step) + ((step - groupWidth) / 2);
+                                const scaleY = getLayerScale(layer);
+                                const baselineY = getLayerBaseline(layer);
+                                const y = scaleY(value);
+                                const color = getColorForIndex(barLayerIndex, theme, paletteColors);
+                                const barX = slotStart + (barLayerIndex * (barWidth + barGap));
+                                return (
+                                    <React.Fragment key={`${layer.id}-${category}-${barLayerIndex}`}>
+                                        <rect
+                                            x={barX}
+                                            y={Math.min(y, baselineY)}
+                                            width={barWidth}
+                                            height={Math.max(1, Math.abs(baselineY - y))}
+                                            rx="3"
+                                            fill={color}
+                                            opacity="0.9"
+                                            data-tip-cat={category}
+                                            data-tip-ser={layer.name}
+                                            data-tip-val={fmt(value)}
+                                            data-tip-color={color}
+                                        />
+                                        {showDataLabels ? (
+                                            <text
+                                                x={barX + barWidth / 2}
+                                                y={value >= 0 ? Math.min(y, baselineY) - 4 : Math.max(y, baselineY) + 12}
+                                                textAnchor="middle"
+                                                fontSize="9"
+                                                fontWeight="700"
+                                                fill={theme.textSec}
+                                                style={{ pointerEvents: 'none' }}
+                                            >
+                                                {fmt(value)}
+                                            </text>
+                                        ) : null}
+                                    </React.Fragment>
+                                );
+                            })
+                        ))}
+
+                        {areaLayers.map((layer, layerIndex) => {
+                            const points = model.categories.map((_, categoryIndex) => {
+                                const rawValue = layer.values[categoryIndex];
+                                if (rawValue === null || rawValue === undefined) return null;
+                                const x = margin.left + (categoryIndex * step) + (step / 2);
+                                const scaleY = getLayerScale(layer);
+                                return {
+                                    x,
+                                    y: scaleY(rawValue),
+                                    baseY: getLayerBaseline(layer),
+                                    rawValue,
+                                };
+                            });
+                            const areaPath = buildAreaBandPath(points);
+                            const linePath = buildLinePath(points);
+                            const color = getColorForIndex(barLayers.length + layerIndex, theme, paletteColors);
+                            return (
+                                <g key={`combo-area-${layer.id}`}>
+                                    {areaPath ? <path d={areaPath} fill={color} opacity="0.16" style={{ pointerEvents: 'none' }} /> : null}
+                                    {linePath ? <path d={linePath} fill="none" stroke={color} strokeWidth="2.5" strokeLinejoin="round" strokeLinecap="round" style={{ pointerEvents: 'none' }} /> : null}
+                                    {points.map((point, pointIndex) => {
+                                        if (!point) return null;
+                                        return (
+                                            <React.Fragment key={`${layer.id}-area-pt-${pointIndex}`}>
+                                                <circle
+                                                    cx={point.x}
+                                                    cy={point.y}
+                                                    r="4"
+                                                    fill={color}
+                                                    stroke={theme.surfaceBg || theme.background || '#fff'}
+                                                    strokeWidth="2"
+                                                    data-tip-cat={model.categories[pointIndex]}
+                                                    data-tip-ser={layer.name}
+                                                    data-tip-val={fmt(point.rawValue)}
+                                                    data-tip-color={color}
+                                                />
+                                                {showDataLabels ? (
+                                                    <text x={point.x} y={point.y - 8} textAnchor="middle" fontSize="9" fontWeight="700" fill={theme.textSec} style={{ pointerEvents: 'none' }}>
+                                                        {fmt(point.rawValue)}
+                                                    </text>
+                                                ) : null}
+                                            </React.Fragment>
+                                        );
+                                    })}
+                                </g>
+                            );
+                        })}
+
+                        {lineLayers.map((layer, layerIndex) => {
+                            const points = model.categories.map((_, categoryIndex) => {
+                                const rawValue = layer.values[categoryIndex];
+                                if (rawValue === null || rawValue === undefined) return null;
+                                const x = margin.left + (categoryIndex * step) + (step / 2);
+                                return {
+                                    x,
+                                    y: getLayerScale(layer)(rawValue),
+                                    rawValue,
+                                };
+                            });
+                            const linePath = buildLinePath(points);
+                            const color = getColorForIndex(barLayers.length + areaLayers.length + layerIndex, theme, paletteColors);
+                            return (
+                                <g key={`combo-line-${layer.id}`}>
+                                    {linePath ? <path d={linePath} fill="none" stroke={color} strokeWidth="3" strokeLinejoin="round" strokeLinecap="round" style={{ pointerEvents: 'none' }} /> : null}
+                                    {points.map((point, pointIndex) => {
+                                        if (!point) return null;
+                                        return (
+                                            <React.Fragment key={`${layer.id}-point-${pointIndex}`}>
+                                                <circle
+                                                    cx={point.x}
+                                                    cy={point.y}
+                                                    r="4"
+                                                    fill={color}
+                                                    stroke={theme.surfaceBg || theme.background || '#fff'}
+                                                    strokeWidth="2"
+                                                    data-tip-cat={model.categories[pointIndex]}
+                                                    data-tip-ser={layer.name}
+                                                    data-tip-val={fmt(point.rawValue)}
+                                                    data-tip-color={color}
+                                                />
+                                                {showDataLabels ? (
+                                                    <text x={point.x} y={point.y - 8} textAnchor="middle" fontSize="9" fontWeight="700" fill={theme.textSec} style={{ pointerEvents: 'none' }}>
+                                                        {fmt(point.rawValue)}
+                                                    </text>
+                                                ) : null}
+                                            </React.Fragment>
+                                        );
+                                    })}
+                                </g>
+                            );
+                        })}
+
+                        {model.categories.map((category, categoryIndex) => {
+                            const x = margin.left + (categoryIndex * step) + (step / 2);
+                            return (
+                                <text
+                                    key={`combo-label-${categoryIndex}`}
+                                    x={x}
+                                    y={effectiveChartHeight - margin.bottom + 28}
+                                    textAnchor="middle"
+                                    fontSize="11"
+                                    fill={theme.textSec}
+                                >
+                                    {truncateChartLabel(category, 18)}
+                                </text>
+                            );
+                        })}
+
+                        {typeof onCategoryActivate === 'function' ? model.categories.map((_, categoryIndex) => {
+                            const target = categoryTargets[categoryIndex];
+                            if (!target) return null;
+                            return (
+                                <rect
+                                    key={`combo-hit-${categoryIndex}`}
+                                    x={margin.left + (categoryIndex * step)}
+                                    y={margin.top}
+                                    width={step}
+                                    height={effectiveChartHeight - margin.top - margin.bottom}
+                                    fill="transparent"
+                                    style={{ cursor: 'pointer' }}
+                                    onClick={() => onCategoryActivate(target)}
+                                />
+                            );
+                        }) : null}
+                    </svg>
+                    {chartTitleOverlay}{crosshairElement}{tooltipElement}{zoomBadge}
+                </div>
+                {showLegend ? <ChartLegend items={legendItems} theme={theme} hiddenSet={hiddenSeries} onToggle={toggleHiddenSeries} /> : null}
+            </div>
+        );
+    }
+
     if (!geometry) {
         return <EmptyChartState message="No numeric data available for this chart." theme={theme} chartHeight={effectiveChartHeight} />;
     }
 
-    const ticks = Array.from({ length: 5 }, (_, idx) => {
-        const ratio = idx / 4;
-        return geometry.maxValue - ((geometry.maxValue - geometry.minValue) * ratio);
-    });
+    const ticks = niceTickValues(geometry.minValue, geometry.maxValue, 5);
     const stackedLegendLabels = stackedChildBarMode
         ? Array.from(new Set(
             (model.stackedGroups || []).reduce((labels, group) => {
@@ -2929,14 +2423,14 @@ const SvgChart = ({
         ))
         : [];
     const stackedColorByLabel = stackedLegendLabels.reduce((acc, label, index) => {
-        acc[label] = getColorForIndex(index, theme);
+        acc[label] = getColorForIndex(index, theme, paletteColors);
         return acc;
     }, {});
     const legendItems = stackedChildBarMode
-        ? stackedLegendLabels.map((label) => ({ label, color: stackedColorByLabel[label] || getColorForIndex(0, theme) }))
+        ? stackedLegendLabels.map((label) => ({ label, color: stackedColorByLabel[label] || getColorForIndex(0, theme, paletteColors) }))
         : (model.series || []).map((series, index) => ({
             label: series.name,
-            color: getColorForIndex(index, theme),
+            color: getColorForIndex(index, theme, paletteColors),
         }));
     const groupedBands = geometry.hasHierarchicalBands
         ? model.categoryBands.reduce((groups, band, index) => {
@@ -2959,7 +2453,7 @@ const SvgChart = ({
 
     return (
         <div style={{ display: 'flex', flexDirection: 'column', gap: '10px' }}>
-            <div ref={chartContainerRef} style={{ width: '100%', minWidth: 0 }}>
+            <div ref={chartContainerRef} style={{ width: '100%', minWidth: 0, position: 'relative', ...zoomContainerStyle }} {...chartContainerEvents}>
                 <svg
                     ref={svgRef}
                     viewBox={`0 0 ${resolvedChartWidth} ${effectiveChartHeight}`}
@@ -2969,6 +2463,7 @@ const SvgChart = ({
                         height: 'auto',
                         display: 'block',
                         maxWidth: '100%',
+                        ...zoomSvgStyle,
                     }}
                     role="img"
                     aria-label={model.title}
@@ -2982,14 +2477,14 @@ const SvgChart = ({
                                     <>
                                         <line x1={x} y1={geometry.margin.top} x2={x} y2={effectiveChartHeight - geometry.margin.bottom} stroke={theme.border} strokeDasharray="3 4" />
                                         <text x={x} y={effectiveChartHeight - geometry.margin.bottom + 18} textAnchor="middle" fontSize="11" fill={theme.textSec}>
-                                            {formatChartNumber(tickValue)}
+                                            {fmt(tickValue)}
                                         </text>
                                     </>
                                 ) : (
                                     <>
                                         <line x1={geometry.margin.left} y1={y} x2={resolvedChartWidth - geometry.margin.right} y2={y} stroke={theme.border} strokeDasharray="3 4" />
                                         <text x={geometry.margin.left - 8} y={y + 4} textAnchor="end" fontSize="11" fill={theme.textSec}>
-                                            {formatChartNumber(tickValue)}
+                                            {fmt(tickValue)}
                                         </text>
                                     </>
                                 )}
@@ -3004,6 +2499,9 @@ const SvgChart = ({
                         stroke={theme.textSec}
                         strokeWidth="1"
                     />
+                    {yAxisTitle ? (
+                        <text x={14} y={(geometry.margin.top + effectiveChartHeight - geometry.margin.bottom) / 2} textAnchor="middle" fontSize="11" fontWeight="700" fill={theme.textSec} transform={`rotate(-90, 14, ${(geometry.margin.top + effectiveChartHeight - geometry.margin.bottom) / 2})`} style={{ pointerEvents: 'none' }}>{yAxisTitle}</text>
+                    ) : null}
 
                     {geometry.hasHierarchicalBands && groupedBands.map((group, groupIndex) => {
                         if (groupIndex === groupedBands.length - 1) return null;
@@ -3040,6 +2538,7 @@ const SvgChart = ({
                                     const endValue = startValue + rawValue;
                                     if (rawValue >= 0) positiveOffset = endValue;
                                     else negativeOffset = endValue;
+                                    const segColor = stackedColorByLabel[segment.label] || getColorForIndex(0, theme, paletteColors);
                                     if (geometry.horizontalBarMode) {
                                         const x1 = geometry.scaleX(startValue);
                                         const x2 = geometry.scaleX(endValue);
@@ -3051,8 +2550,12 @@ const SvgChart = ({
                                                 width={Math.max(1, Math.abs(x2 - x1))}
                                                 height={barThickness}
                                                 rx="3"
-                                                fill={stackedColorByLabel[segment.label] || getColorForIndex(0, theme)}
+                                                fill={segColor}
                                                 opacity="0.94"
+                                                data-tip-cat={group.label}
+                                                data-tip-ser={segment.label}
+                                                data-tip-val={fmt(rawValue)}
+                                                data-tip-color={segColor}
                                             />
                                         );
                                     }
@@ -3068,8 +2571,12 @@ const SvgChart = ({
                                             width={barThickness}
                                             height={height}
                                             rx="3"
-                                            fill={stackedColorByLabel[segment.label] || getColorForIndex(0, theme)}
+                                            fill={segColor}
                                             opacity="0.94"
+                                            data-tip-cat={group.label}
+                                            data-tip-ser={segment.label}
+                                            data-tip-val={fmt(rawValue)}
+                                            data-tip-color={segColor}
                                         />
                                     );
                                 })}
@@ -3110,13 +2617,16 @@ const SvgChart = ({
                     return (
                         <g key={`bar-group-${category}`}>
                             {model.series.map((series, seriesIndex) => {
+                                if (hiddenSeries.has(series.name)) return null;
                                 const value = series.values[categoryIndex];
                                 if (value === null || value === undefined) return null;
+                                const barColor = getColorForIndex(seriesIndex, theme, paletteColors);
                                 if (stackedSeriesBarMode) {
                                     const startValue = value >= 0 ? positiveOffset : negativeOffset;
                                     const endValue = startValue + value;
                                     if (value >= 0) positiveOffset = endValue;
                                     else negativeOffset = endValue;
+                                    const tipAttrs = { 'data-tip-cat': category, 'data-tip-ser': series.name, 'data-tip-val': fmt(value), 'data-tip-color': barColor };
                                     if (geometry.horizontalBarMode) {
                                         const x1 = geometry.scaleX(startValue);
                                         const x2 = geometry.scaleX(endValue);
@@ -3128,8 +2638,9 @@ const SvgChart = ({
                                                 width={Math.max(1, Math.abs(x2 - x1))}
                                                 height={barThickness}
                                                 rx="3"
-                                                fill={getColorForIndex(seriesIndex, theme)}
+                                                fill={barColor}
                                                 opacity="0.92"
+                                                {...tipAttrs}
                                             />
                                         );
                                     }
@@ -3143,8 +2654,9 @@ const SvgChart = ({
                                             width={barThickness}
                                             height={Math.max(1, Math.abs(y2 - y1))}
                                             rx="3"
-                                            fill={getColorForIndex(seriesIndex, theme)}
+                                            fill={barColor}
                                             opacity="0.92"
+                                            {...tipAttrs}
                                         />
                                     );
                                 }
@@ -3152,32 +2664,68 @@ const SvgChart = ({
                                     const x = geometry.scaleX(value);
                                     const y = slotStart + seriesIndex * (barThickness + 4);
                                     return (
-                                        <rect
-                                            key={`${series.name}-${category}`}
-                                            x={Math.min(x, geometry.baselineX)}
-                                            y={y}
-                                            width={Math.max(1, Math.abs(geometry.baselineX - x))}
-                                            height={barThickness}
-                                            rx="3"
-                                            fill={getColorForIndex(seriesIndex, theme)}
-                                            opacity="0.9"
-                                        />
+                                        <React.Fragment key={`${series.name}-${category}`}>
+                                            <rect
+                                                x={Math.min(x, geometry.baselineX)}
+                                                y={y}
+                                                width={Math.max(1, Math.abs(geometry.baselineX - x))}
+                                                height={barThickness}
+                                                rx="3"
+                                                fill={barColor}
+                                                opacity="0.9"
+                                                data-tip-cat={category}
+                                                data-tip-ser={series.name}
+                                                data-tip-val={fmt(value)}
+                                                data-tip-color={barColor}
+                                            />
+                                            {showDataLabels ? (
+                                                <text
+                                                    x={value >= 0 ? Math.max(x, geometry.baselineX) + 4 : Math.min(x, geometry.baselineX) - 4}
+                                                    y={y + barThickness / 2 + 3}
+                                                    textAnchor={value >= 0 ? 'start' : 'end'}
+                                                    fontSize="9"
+                                                    fontWeight="700"
+                                                    fill={theme.textSec}
+                                                    style={{ pointerEvents: 'none' }}
+                                                >
+                                                    {fmt(value)}
+                                                </text>
+                                            ) : null}
+                                        </React.Fragment>
                                     );
                                 }
                                 const y = geometry.scaleY(value);
                                 const height = Math.max(1, Math.abs(geometry.baselineY - y));
                                 const x = slotStart + seriesIndex * (barThickness + 4);
                                 return (
-                                    <rect
-                                        key={`${series.name}-${category}`}
-                                        x={x}
-                                        y={Math.min(y, geometry.baselineY)}
-                                        width={barThickness}
-                                        height={height}
-                                        rx="3"
-                                        fill={getColorForIndex(seriesIndex, theme)}
-                                        opacity="0.9"
-                                    />
+                                    <React.Fragment key={`${series.name}-${category}`}>
+                                        <rect
+                                            x={x}
+                                            y={Math.min(y, geometry.baselineY)}
+                                            width={barThickness}
+                                            height={height}
+                                            rx="3"
+                                            fill={barColor}
+                                            opacity="0.9"
+                                            data-tip-cat={category}
+                                            data-tip-ser={series.name}
+                                            data-tip-val={fmt(value)}
+                                            data-tip-color={barColor}
+                                        />
+                                        {showDataLabels ? (
+                                            <text
+                                                x={x + barThickness / 2}
+                                                y={value >= 0 ? Math.min(y, geometry.baselineY) - 4 : Math.max(y, geometry.baselineY) + 12}
+                                                textAnchor="middle"
+                                                fontSize="9"
+                                                fontWeight="700"
+                                                fill={theme.textSec}
+                                                style={{ pointerEvents: 'none' }}
+                                            >
+                                                {fmt(value)}
+                                            </text>
+                                        ) : null}
+                                    </React.Fragment>
                                 );
                             })}
                         </g>
@@ -3188,7 +2736,8 @@ const SvgChart = ({
                     const positiveOffsets = model.categories.map(() => 0);
                     const negativeOffsets = model.categories.map(() => 0);
                     return model.series.map((series, seriesIndex) => {
-                        const stroke = getColorForIndex(seriesIndex, theme);
+                        if (hiddenSeries.has(series.name)) return null;
+                        const stroke = getColorForIndex(seriesIndex, theme, paletteColors);
                         const points = model.categories.map((_, categoryIndex) => {
                             const rawValue = series.values[categoryIndex];
                             if (rawValue === null || rawValue === undefined) return null;
@@ -3202,12 +2751,14 @@ const SvgChart = ({
                                     x,
                                     y: geometry.scaleY(endValue),
                                     baseY: geometry.scaleY(startValue),
+                                    rawValue,
                                 };
                             }
                             return {
                                 x,
                                 y: geometry.scaleY(rawValue),
                                 baseY: geometry.baselineY,
+                                rawValue,
                             };
                         });
                         const linePath = buildLinePath(points);
@@ -3215,23 +2766,41 @@ const SvgChart = ({
                         return (
                             <g key={`${series.name}-${chartType}`}>
                                 {chartType === 'area' && areaPath && (
-                                    <path d={areaPath} fill={stroke} opacity={stackedAreaMode ? '0.46' : '0.16'} />
+                                    <path d={areaPath} fill={stroke} opacity={stackedAreaMode ? '0.46' : '0.16'} style={{ pointerEvents: 'none' }} />
                                 )}
                                 {linePath && (
-                                    <path d={linePath} fill="none" stroke={stroke} strokeWidth="3" strokeLinejoin="round" strokeLinecap="round" />
+                                    <path d={linePath} fill="none" stroke={stroke} strokeWidth="3" strokeLinejoin="round" strokeLinecap="round" style={{ pointerEvents: 'none' }} />
                                 )}
                                 {points.map((point, pointIndex) => {
                                     if (!point) return null;
                                     return (
-                                        <circle
-                                            key={`${series.name}-${pointIndex}`}
-                                            cx={point.x}
-                                            cy={point.y}
-                                            r="4"
-                                            fill={stroke}
-                                            stroke={theme.surfaceBg || theme.background || '#fff'}
-                                            strokeWidth="2"
-                                        />
+                                        <React.Fragment key={`${series.name}-${pointIndex}`}>
+                                            <circle
+                                                cx={point.x}
+                                                cy={point.y}
+                                                r="4"
+                                                fill={stroke}
+                                                stroke={theme.surfaceBg || theme.background || '#fff'}
+                                                strokeWidth="2"
+                                                data-tip-cat={model.categories[pointIndex]}
+                                                data-tip-ser={series.name}
+                                                data-tip-val={fmt(point.rawValue)}
+                                                data-tip-color={stroke}
+                                            />
+                                            {showDataLabels ? (
+                                                <text
+                                                    x={point.x}
+                                                    y={point.y - 8}
+                                                    textAnchor="middle"
+                                                    fontSize="9"
+                                                    fontWeight="700"
+                                                    fill={theme.textSec}
+                                                    style={{ pointerEvents: 'none' }}
+                                                >
+                                                    {fmt(point.rawValue)}
+                                                </text>
+                                            ) : null}
+                                        </React.Fragment>
                                     );
                                 })}
                             </g>
@@ -3380,8 +2949,9 @@ const SvgChart = ({
                     })
                     )}
                 </svg>
+                {chartTitleOverlay}{tooltipElement}
             </div>
-            {showLegend ? <ChartLegend items={legendItems} theme={theme} /> : null}
+            {showLegend ? <ChartLegend items={legendItems} theme={theme} hiddenSet={hiddenSeries} onToggle={toggleHiddenSeries} /> : null}
         </div>
     );
 };
@@ -3419,13 +2989,19 @@ const ChartSurface = ({
     serverScope,
     onServerScopeChange,
     showServerScope = false,
+    floating = false,
     cinemaMode = false,
     onCategoryActivate,
     allowHierarchyCharts = true,
     locked = false,
     onToggleLock,
+    configOpen: controlledConfigOpen,
+    onConfigChange,
+    settingsPanelWidth: controlledSettingsPanelWidth,
+    onSettingsPanelWidthChange,
 }) => {
     const isComboChart = chartType === 'combo';
+    const isSparklineChart = chartType === 'sparkline';
     const canStack = isComboChart
         ? false
         : chartType === 'area'
@@ -3436,12 +3012,26 @@ const ChartSurface = ({
     const resolvedNote = note !== undefined
         ? note
         : locked
-            ? 'Locked to the current chart request'
+            ? (floating ? 'Locked to the current chart request and floating frame' : 'Locked to the current chart request')
             : (model && model.note);
-    const [configOpen, setConfigOpen] = useState(false);
+    const [uncontrolledConfigOpen, setUncontrolledConfigOpen] = useState(false);
+    const configOpen = typeof controlledConfigOpen === 'boolean' ? controlledConfigOpen : uncontrolledConfigOpen;
+    const setConfigOpen = typeof onConfigChange === 'function' ? onConfigChange : setUncontrolledConfigOpen;
+    const [showDataLabels, setShowDataLabels] = useState(false);
+    const [colorPalette, setColorPalette] = useState('default');
+    const [valueFormat, setValueFormat] = useState('auto');
+    const [yAxisTitle, setYAxisTitle] = useState('');
     const chartHeightResizeRef = useRef(null);
+    const settingsPaneResizeRef = useRef(null);
     const cinemaContainerRef = useRef(null);
     const [cinemaAutoHeight, setCinemaAutoHeight] = useState(null);
+    const [uncontrolledSettingsPanelWidth, setUncontrolledSettingsPanelWidth] = useState(348);
+    const settingsPanelWidth = Number.isFinite(Number(controlledSettingsPanelWidth))
+        ? Math.max(300, Math.min(520, Math.floor(Number(controlledSettingsPanelWidth))))
+        : uncontrolledSettingsPanelWidth;
+    const setSettingsPanelWidth = typeof onSettingsPanelWidthChange === 'function'
+        ? onSettingsPanelWidthChange
+        : setUncontrolledSettingsPanelWidth;
     const showChrome = !cinemaMode;
     const chartHeight = cinemaMode && cinemaAutoHeight
         ? Math.max(180, cinemaAutoHeight)
@@ -3488,6 +3078,38 @@ const ChartSurface = ({
         fontWeight: 600,
         minWidth: '68px',
     };
+    const applyChartPreset = useCallback((preset) => {
+        if (preset === 'trend') {
+            onChartTypeChange('line');
+            if (typeof onOrientationChange === 'function') onOrientationChange('rows');
+            if (typeof onSortModeChange === 'function') onSortModeChange('natural');
+            return;
+        }
+        if (preset === 'compare') {
+            onChartTypeChange('bar');
+            if (typeof onBarLayoutChange === 'function') onBarLayoutChange('grouped');
+            if (typeof onAxisModeChange === 'function') onAxisModeChange('vertical');
+            return;
+        }
+        if (preset === 'composition') {
+            onChartTypeChange(showHierarchySection ? 'sunburst' : 'donut');
+            return;
+        }
+        if (preset === 'flow') {
+            onChartTypeChange('waterfall');
+            return;
+        }
+        if (preset === 'sparkline') {
+            onChartTypeChange('sparkline');
+        }
+    }, [
+        onAxisModeChange,
+        onBarLayoutChange,
+        onChartTypeChange,
+        onOrientationChange,
+        onSortModeChange,
+        showHierarchySection,
+    ]);
 
     useEffect(() => {
         if (!cinemaMode || !configOpen) return;
@@ -3531,12 +3153,49 @@ const ChartSurface = ({
         };
     }, [onChartHeightChange]);
 
+    useEffect(() => {
+        const handlePointerMove = (event) => {
+            if (!settingsPaneResizeRef.current) return;
+            const resizeState = settingsPaneResizeRef.current;
+            const delta = resizeState.direction === 'left'
+                ? (resizeState.startX - event.clientX)
+                : (event.clientX - resizeState.startX);
+            const nextWidth = Math.max(300, Math.min(520, resizeState.startWidth + delta));
+            setSettingsPanelWidth(nextWidth);
+        };
+
+        const stopResize = () => {
+            settingsPaneResizeRef.current = null;
+        };
+
+        window.addEventListener('mousemove', handlePointerMove);
+        window.addEventListener('mouseup', stopResize);
+        window.addEventListener('mouseleave', stopResize);
+        window.addEventListener('blur', stopResize);
+
+        return () => {
+            window.removeEventListener('mousemove', handlePointerMove);
+            window.removeEventListener('mouseup', stopResize);
+            window.removeEventListener('mouseleave', stopResize);
+            window.removeEventListener('blur', stopResize);
+        };
+    }, []);
+
     return (
-        <div ref={cinemaContainerRef} style={{ display: 'flex', flexDirection: 'column', gap: showChrome ? '14px' : '10px', flex: cinemaMode ? '1 1 auto' : '0 0 auto', minHeight: 0 }}>
+        <div
+            ref={cinemaContainerRef}
+            style={{
+                display: 'flex',
+                flexDirection: 'column',
+                gap: showChrome ? '14px' : '10px',
+                flex: '1 1 auto',
+                minHeight: 0,
+                overflow: 'hidden',
+            }}
+        >
             {showChrome ? (
                 <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', gap: '12px' }}>
                     <ChartHeader
-                        title={resolvedTitle}
                         subtitle={resolvedSubtitle}
                         note={resolvedNote}
                         theme={theme}
@@ -3550,20 +3209,45 @@ const ChartSurface = ({
                         >
                             SVG
                         </button>
+                        <button
+                            type="button"
+                            onClick={() => exportSvgAsPng(svgRef.current, 'pivot-chart')}
+                            style={exportButtonStyle}
+                            title="Export chart as PNG"
+                        >
+                            PNG
+                        </button>
+                        <button
+                            type="button"
+                            onClick={() => copySvgToClipboard(svgRef.current)}
+                            style={exportButtonStyle}
+                            title="Copy chart to clipboard"
+                        >
+                            Copy
+                        </button>
+                        <button
+                            type="button"
+                            onClick={() => exportChartCsv(model, 'pivot-chart')}
+                            style={exportButtonStyle}
+                            title="Export chart data as CSV"
+                        >
+                            CSV
+                        </button>
                         {typeof onToggleLock === 'function' ? (
                             <button
                                 type="button"
                                 onClick={onToggleLock}
                                 style={lockButtonStyle}
-                                title={locked ? 'Unlock chart request' : 'Lock current chart request'}
-                                aria-label={locked ? 'Unlock chart request' : 'Lock current chart request'}
+                                title={locked ? (floating ? 'Unlock chart request and floating frame' : 'Unlock chart request') : (floating ? 'Lock current chart request and floating frame' : 'Lock current chart request')}
+                                aria-label={locked ? (floating ? 'Unlock chart request and floating frame' : 'Unlock chart request') : (floating ? 'Lock current chart request and floating frame' : 'Lock current chart request')}
                             >
                                 <Icons.Lock />
                             </button>
                         ) : null}
                         <button
                             type="button"
-                            onClick={() => setConfigOpen((isOpen) => !isOpen)}
+                            onClick={() => setConfigOpen(!configOpen)}
+                            data-chart-settings-toggle="true"
                             style={configButtonStyle}
                             title={configOpen ? 'Hide chart settings' : 'Show chart settings'}
                             aria-label={configOpen ? 'Hide chart settings' : 'Show chart settings'}
@@ -3573,223 +3257,22 @@ const ChartSurface = ({
                     </div>
                 </div>
             ) : null}
-            {showChrome && configOpen ? (
-                <div
-                    onClick={() => setConfigOpen(false)}
-                    style={{
-                        position: 'fixed',
-                        inset: 0,
-                        zIndex: 10060,
-                        background: 'rgba(2, 6, 23, 0.52)',
-                        display: 'flex',
-                        alignItems: 'center',
-                        justifyContent: 'center',
-                        padding: '24px',
-                    }}
-                >
-                    <div
-                        onClick={(event) => event.stopPropagation()}
-                        style={{
-                            width: 'min(1180px, calc(100vw - 32px))',
-                            maxHeight: 'calc(100vh - 48px)',
-                            overflowY: 'auto',
-                            padding: '16px',
-                            border: `1px solid ${theme.border}`,
-                            borderRadius: theme.radius || '16px',
-                            background: theme.surfaceBg || theme.background || '#fff',
-                            boxShadow: theme.shadowMd || '0 18px 40px rgba(2, 6, 23, 0.24)',
-                        }}
-                    >
-                        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '12px', marginBottom: '12px' }}>
-                            <div style={{ fontSize: '15px', fontWeight: 800, color: theme.text }}>
-                                {resolvedTitle || 'Settings'}
-                            </div>
-                            <button
-                                type="button"
-                                onClick={() => setConfigOpen(false)}
-                                style={exportButtonStyle}
-                            >
-                                Close
-                            </button>
-                        </div>
-                        <div style={{
-                            display: 'grid',
-                            gridTemplateColumns: 'repeat(auto-fit, minmax(240px, 1fr))',
-                            gap: '10px',
-                        }}>
-                            <ChartConfigSection
-                                title="General"
-                                theme={theme}
-                            >
-                                {typeof onTitleChange === 'function' ? (
-                                    <ChartConfigField
-                                        label="Title"
-                                        theme={theme}
-                                        controlMinWidth="220px"
-                                    >
-                                        <input
-                                            type="text"
-                                            value={resolvedTitle || ''}
-                                            onChange={(event) => onTitleChange(event.target.value)}
-                                            placeholder="Chart title"
-                                            style={{ ...compactInputStyle, minWidth: '220px', width: '100%' }}
-                                        />
-                                    </ChartConfigField>
-                                ) : null}
-                                {typeof onChartHeightChange === 'function' ? (
-                                    <ChartConfigField
-                                        label="Height"
-                                        theme={theme}
-                                        controlMinWidth="96px"
-                                    >
-                                        <input
-                                            type="number"
-                                            min="180"
-                                            step="20"
-                                            value={chartHeight}
-                                            onChange={(event) => onChartHeightChange(event.target.value)}
-                                            style={compactInputStyle}
-                                        />
-                                    </ChartConfigField>
-                                ) : null}
-                                <ChartConfigField
-                                    label="Limits"
-                                    theme={theme}
-                                    controlMinWidth="180px"
-                                >
-                                    <ChartLimitInputs
-                                        rowLimit={rowLimit}
-                                        onRowLimitChange={onRowLimitChange}
-                                        columnLimit={columnLimit}
-                                        onColumnLimitChange={onColumnLimitChange}
-                                        theme={theme}
-                                    />
-                                </ChartConfigField>
-                            </ChartConfigSection>
-
-                            <ChartConfigSection
-                                title="View"
-                                theme={theme}
-                            >
-                                {(chartType !== 'icicle' && chartType !== 'sunburst' && chartType !== 'sankey' && !isComboChart) ? (
-                                    <ChartConfigField
-                                        label="Source"
-                                        theme={theme}
-                                    >
-                                        <ChartOrientationButtons orientation={orientation} onChange={onOrientationChange} theme={theme} />
-                                    </ChartConfigField>
-                                ) : null}
-                                {(chartType === 'bar') ? (
-                                    <ChartConfigField
-                                        label="Direction"
-                                        theme={theme}
-                                    >
-                                        <ChartAxisButtons axisMode={axisMode} onChange={onAxisModeChange} theme={theme} />
-                                    </ChartConfigField>
-                                ) : null}
-                                {(chartType === 'bar' || chartType === 'area') && !isComboChart && (
-                                    <ChartConfigField
-                                        label="Layout"
-                                        theme={theme}
-                                    >
-                                        <ChartLayoutButtons
-                                            chartType={chartType}
-                                            barLayout={barLayout}
-                                            onChange={onBarLayoutChange}
-                                            canStack={canStack}
-                                            theme={theme}
-                                        />
-                                    </ChartConfigField>
-                                )}
-                                {typeof onSortModeChange === 'function' ? (
-                                    <ChartConfigField
-                                        label="Sort"
-                                        theme={theme}
-                                        controlMinWidth="150px"
-                                    >
-                                        <ChartSortButtons sortMode={sortMode} onChange={onSortModeChange} theme={theme} />
-                                    </ChartConfigField>
-                                ) : null}
-                            </ChartConfigSection>
-
-                            {isComboChart ? (
-                                <ChartConfigSection
-                                    title="Layers"
-                                    theme={theme}
-                                >
-                                    <ChartConfigField
-                                        label="Stack"
-                                        theme={theme}
-                                        controlMinWidth="100%"
-                                    >
-                                        <ChartLayerEditor
-                                            layers={chartLayers}
-                                            onChange={onChartLayersChange}
-                                            availableColumns={availableColumns}
-                                            theme={theme}
-                                        />
-                                    </ChartConfigField>
-                                </ChartConfigSection>
-                            ) : null}
-
-                            {showHierarchySection ? (
-                                <ChartConfigSection
-                                    title="Level"
-                                    theme={theme}
-                                >
-                                    <ChartConfigField
-                                        label="Level"
-                                        theme={theme}
-                                    >
-                                        <ChartHierarchyButtons
-                                            level={hierarchyLevel}
-                                            onChange={onHierarchyLevelChange}
-                                            maxLevel={maxHierarchyLevel}
-                                            theme={theme}
-                                        />
-                                    </ChartConfigField>
-                                </ChartConfigSection>
-                            ) : null}
-
-                            <ChartConfigSection
-                                title="Actions"
-                                theme={theme}
-                            >
-                                {typeof onInteractionModeChange === 'function' ? (
-                                    <ChartConfigField
-                                        label="Click"
-                                        theme={theme}
-                                    >
-                                        <ChartInteractionButtons interactionMode={interactionMode} onChange={onInteractionModeChange} theme={theme} />
-                                    </ChartConfigField>
-                                ) : null}
-                                {showServerScope && typeof onServerScopeChange === 'function' ? (
-                                    <ChartConfigField
-                                        label="Scope"
-                                        theme={theme}
-                                    >
-                                        <ChartScopeButtons scope={serverScope} onChange={onServerScopeChange} theme={theme} />
-                                    </ChartConfigField>
-                                ) : null}
-                            </ChartConfigSection>
-
-                            <ChartConfigSection
-                                title="Type"
-                                theme={theme}
-                            >
-                                <ChartConfigField
-                                    label="Type"
-                                    theme={theme}
-                                    controlMinWidth="220px"
-                                >
-                                    <ChartTypeButtons chartType={chartType} onChange={onChartTypeChange} theme={theme} includeHierarchyCharts={allowHierarchyCharts} />
-                                </ChartConfigField>
-                            </ChartConfigSection>
-                        </div>
-                    </div>
-                </div>
-            ) : null}
-        <div style={{ display: 'flex', flexDirection: 'column', minHeight: 0 }}>
+        <div style={{ display: 'flex', minHeight: 0, gap: 0, overflow: 'hidden', flex: '1 1 auto' }}>
+        <div
+            data-chart-surface-main="true"
+            data-chart-surface-scroll="true"
+            style={{
+                display: 'flex',
+                flexDirection: 'column',
+                minHeight: 0,
+                minWidth: 0,
+                flex: '1 1 auto',
+                overflowY: 'auto',
+                overflowX: 'hidden',
+                overscrollBehavior: 'contain',
+                paddingRight: configOpen ? '4px' : '0',
+            }}
+        >
             {!model
                 ? <EmptyChartState message="No chart data available." theme={theme} chartHeight={chartHeight} />
                     : ((!Array.isArray(model.series) || model.series.length === 0)
@@ -3797,7 +3280,7 @@ const ChartSurface = ({
                     && chartType !== 'sunburst'
                     && chartType !== 'sankey'
                     ? <EmptyChartState message={model.emptyMessage || 'No chart data available.'} theme={theme} chartHeight={chartHeight} />
-                    : <SvgChart model={model} chartType={chartType} barLayout={barLayout} axisMode={axisMode} theme={theme} chartHeight={chartHeight} showLegend onCategoryActivate={onCategoryActivate} svgRef={svgRef} />)}
+                    : <SvgChart model={model} chartType={chartType} barLayout={barLayout} axisMode={axisMode} theme={theme} chartHeight={chartHeight} showLegend={!isSparklineChart} showDataLabels={showDataLabels} onCategoryActivate={onCategoryActivate} svgRef={svgRef} colorPalette={colorPalette} valueFormat={valueFormat} yAxisTitle={yAxisTitle} chartTitle={resolvedTitle} onTitleChange={onTitleChange} />)}
             {!cinemaMode && typeof onChartHeightChange === 'function' ? (
                 <div
                     onMouseDown={(event) => {
@@ -3825,6 +3308,312 @@ const ChartSurface = ({
                     <div style={{ width: '72px', height: '5px', borderRadius: '999px', background: theme.border, opacity: 0.95 }} />
                 </div>
             ) : null}
+        </div>
+        {showChrome && configOpen ? (
+            <>
+                <div
+                    data-chart-settings-resizer="true"
+                    onMouseDown={(event) => {
+                        event.preventDefault();
+                        settingsPaneResizeRef.current = {
+                            startX: event.clientX,
+                            startWidth: settingsPanelWidth,
+                            direction: 'right',
+                        };
+                    }}
+                    style={{
+                        width: '8px',
+                        cursor: 'col-resize',
+                        background: 'transparent',
+                        position: 'relative',
+                        flexShrink: 0,
+                    }}
+                    title="Resize chart settings"
+                >
+                    <div style={{
+                        position: 'absolute',
+                        top: '50%',
+                        left: '50%',
+                        transform: 'translate(-50%, -50%)',
+                        width: '3px',
+                        height: '78px',
+                        borderRadius: '999px',
+                        background: theme.border,
+                        opacity: 0.92,
+                    }} />
+                </div>
+                <aside
+                    data-chart-settings-pane="true"
+                    style={{
+                        width: `${settingsPanelWidth}px`,
+                        minWidth: '300px',
+                        maxWidth: '520px',
+                        flexShrink: 0,
+                        minHeight: 0,
+                        overflow: 'hidden',
+                        borderLeft: `1px solid ${theme.border}`,
+                        background: theme.sidebarBg || theme.surfaceBg || theme.background,
+                        display: 'flex',
+                        flexDirection: 'column',
+                    }}
+                >
+                <div
+                    data-chart-settings-scroll="true"
+                    style={{
+                        overflowY: 'auto',
+                        overflowX: 'hidden',
+                        overscrollBehavior: 'contain',
+                        padding: '14px',
+                        display: 'flex',
+                        flexDirection: 'column',
+                        gap: '10px',
+                        flex: 1,
+                        minHeight: 0,
+                        background: theme.sidebarBg || theme.surfaceBg || theme.background,
+                    }}
+                >
+                    <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '6px' }}>
+                        <div style={{ fontSize: '15px', fontWeight: 800, color: theme.text }}>Chart Settings</div>
+                        <button
+                            type="button"
+                            onClick={() => setConfigOpen(false)}
+                            style={exportButtonStyle}
+                        >
+                            Close
+                        </button>
+                    </div>
+                <ChartConfigSection title="Presets" theme={theme} defaultCollapsed>
+                    <div style={{ display: 'grid', gridTemplateColumns: 'repeat(2, minmax(0, 1fr))', gap: '6px' }}>
+                        {[
+                            { key: 'trend', label: 'Trend' },
+                            { key: 'compare', label: 'Compare' },
+                            { key: 'composition', label: 'Composition' },
+                            { key: 'flow', label: 'Flow' },
+                            { key: 'sparkline', label: 'Sparkline' },
+                        ].map((preset) => (
+                            <button
+                                key={preset.key}
+                                type="button"
+                                onClick={() => applyChartPreset(preset.key)}
+                                style={{
+                                    ...exportButtonStyle,
+                                    textAlign: 'left',
+                                    justifyContent: 'flex-start',
+                                }}
+                            >
+                                {preset.label}
+                            </button>
+                        ))}
+                    </div>
+                </ChartConfigSection>
+                <ChartConfigSection title="General" theme={theme} defaultCollapsed>
+                    {typeof onTitleChange === 'function' ? (
+                        <ChartConfigField label="Title" theme={theme} controlMinWidth="100%">
+                            <input
+                                type="text"
+                                value={resolvedTitle || ''}
+                                onChange={(event) => onTitleChange(event.target.value)}
+                                placeholder="Chart title"
+                                style={{ ...compactInputStyle, width: '100%' }}
+                            />
+                        </ChartConfigField>
+                    ) : null}
+                    {typeof onChartHeightChange === 'function' ? (
+                        <ChartConfigField label="Height" theme={theme} controlMinWidth="96px">
+                            <input
+                                type="number"
+                                min="180"
+                                step="20"
+                                value={chartHeight}
+                                onChange={(event) => onChartHeightChange(event.target.value)}
+                                style={compactInputStyle}
+                            />
+                        </ChartConfigField>
+                    ) : null}
+                    <ChartConfigField label="Limits" theme={theme} controlMinWidth="100%">
+                        <ChartLimitInputs
+                            rowLimit={rowLimit}
+                            onRowLimitChange={onRowLimitChange}
+                            columnLimit={columnLimit}
+                            onColumnLimitChange={onColumnLimitChange}
+                            theme={theme}
+                        />
+                    </ChartConfigField>
+                </ChartConfigSection>
+
+                <ChartConfigSection title="Type" theme={theme} defaultCollapsed={false}>
+                    <ChartConfigField label="Type" theme={theme} controlMinWidth="100%">
+                        <ChartTypeButtons chartType={chartType} onChange={onChartTypeChange} theme={theme} includeHierarchyCharts={allowHierarchyCharts} />
+                    </ChartConfigField>
+                </ChartConfigSection>
+
+                <ChartConfigSection title="View" theme={theme} defaultCollapsed={false}>
+                    {(chartType !== 'icicle' && chartType !== 'sunburst' && chartType !== 'sankey' && chartType !== 'pie' && chartType !== 'donut' && chartType !== 'scatter' && chartType !== 'waterfall' && !isComboChart) ? (
+                        <ChartConfigField label="Source" theme={theme}>
+                            <ChartOrientationButtons orientation={orientation} onChange={onOrientationChange} theme={theme} />
+                        </ChartConfigField>
+                    ) : null}
+                    {(chartType === 'bar') ? (
+                        <ChartConfigField label="Direction" theme={theme}>
+                            <ChartAxisButtons axisMode={axisMode} onChange={onAxisModeChange} theme={theme} />
+                        </ChartConfigField>
+                    ) : null}
+                    {(chartType === 'bar' || chartType === 'area') && !isComboChart && (
+                        <ChartConfigField label="Layout" theme={theme}>
+                            <ChartLayoutButtons chartType={chartType} barLayout={barLayout} onChange={onBarLayoutChange} canStack={canStack} theme={theme} />
+                        </ChartConfigField>
+                    )}
+                    {typeof onSortModeChange === 'function' ? (
+                        <ChartConfigField label="Sort" theme={theme} controlMinWidth="100%">
+                            <ChartSortButtons sortMode={sortMode} onChange={onSortModeChange} theme={theme} />
+                        </ChartConfigField>
+                    ) : null}
+                    {chartType !== 'icicle' && chartType !== 'sunburst' && chartType !== 'sankey' && chartType !== 'sparkline' ? (
+                        <ChartConfigField label="Labels" theme={theme}>
+                            <button
+                                type="button"
+                                onClick={() => setShowDataLabels((v) => !v)}
+                                style={{
+                                    border: `1px solid ${showDataLabels ? theme.primary : theme.border}`,
+                                    background: showDataLabels ? theme.select : (theme.headerSubtleBg || theme.hover),
+                                    color: showDataLabels ? theme.primary : theme.text,
+                                    borderRadius: theme.radiusSm || '8px',
+                                    padding: '6px 8px',
+                                    fontSize: '11px',
+                                    fontWeight: 700,
+                                    cursor: 'pointer',
+                                }}
+                            >
+                                {showDataLabels ? 'Values On' : 'Values Off'}
+                            </button>
+                        </ChartConfigField>
+                    ) : null}
+                    {chartType !== 'icicle' && chartType !== 'sunburst' && chartType !== 'sankey' && chartType !== 'pie' && chartType !== 'donut' ? (
+                        <ChartConfigField label="Format" theme={theme} controlMinWidth="100%">
+                            <select
+                                value={valueFormat}
+                                onChange={(event) => setValueFormat(event.target.value)}
+                                style={{
+                                    border: `1px solid ${theme.border}`,
+                                    background: theme.surfaceBg || theme.background || '#fff',
+                                    color: theme.text,
+                                    borderRadius: theme.radiusSm || '8px',
+                                    padding: '6px 8px',
+                                    fontSize: '11px',
+                                    fontWeight: 700,
+                                    width: '100%',
+                                }}
+                                title="Value format for axis labels"
+                            >
+                                {VALUE_FORMAT_MODES.map((opt) => (
+                                    <option key={opt.value} value={opt.value}>{opt.label}</option>
+                                ))}
+                            </select>
+                        </ChartConfigField>
+                    ) : null}
+                    {chartType !== 'icicle' && chartType !== 'sunburst' && chartType !== 'sankey' && chartType !== 'pie' && chartType !== 'donut' && chartType !== 'sparkline' ? (
+                        <ChartConfigField label="Y-Axis" theme={theme} controlMinWidth="100%">
+                            <input
+                                type="text"
+                                value={yAxisTitle}
+                                onChange={(event) => setYAxisTitle(event.target.value)}
+                                placeholder="Y-axis title"
+                                style={{
+                                    border: `1px solid ${theme.border}`,
+                                    background: theme.surfaceBg || theme.background || '#fff',
+                                    color: theme.text,
+                                    borderRadius: theme.radiusSm || '8px',
+                                    padding: '6px 8px',
+                                    fontSize: '11px',
+                                    fontWeight: 700,
+                                    width: '100%',
+                                }}
+                            />
+                        </ChartConfigField>
+                    ) : null}
+                </ChartConfigSection>
+
+                <ChartConfigSection title="Colors" theme={theme}>
+                    <div style={{ display: 'flex', flexWrap: 'wrap', gap: '6px' }}>
+                        {COLOR_PALETTE_NAMES.map((name) => {
+                            const active = colorPalette === name;
+                            const swatches = COLOR_PALETTES[name];
+                            return (
+                                <button
+                                    key={name}
+                                    type="button"
+                                    onClick={() => setColorPalette(name)}
+                                    title={name.charAt(0).toUpperCase() + name.slice(1)}
+                                    style={{
+                                        display: 'flex',
+                                        alignItems: 'center',
+                                        gap: '3px',
+                                        padding: '3px 6px',
+                                        border: `1.5px solid ${active ? theme.primary : theme.border}`,
+                                        background: active ? theme.select : (theme.headerSubtleBg || theme.hover),
+                                        borderRadius: theme.radiusSm || '8px',
+                                        cursor: 'pointer',
+                                    }}
+                                >
+                                    {swatches.slice(0, 4).map((hex, i) => (
+                                        <span
+                                            key={i}
+                                            style={{
+                                                width: '8px',
+                                                height: '8px',
+                                                borderRadius: '50%',
+                                                background: hex,
+                                                flexShrink: 0,
+                                            }}
+                                        />
+                                    ))}
+                                    <span style={{
+                                        fontSize: '9px',
+                                        fontWeight: active ? 700 : 600,
+                                        color: active ? theme.primary : theme.textSec,
+                                        marginLeft: '1px',
+                                        textTransform: 'capitalize',
+                                    }}>
+                                        {name === 'a11y' ? 'A11y' : name}
+                                    </span>
+                                </button>
+                            );
+                        })}
+                    </div>
+                </ChartConfigSection>
+
+                {isComboChart ? (
+                    <ChartConfigSection title="Layers" theme={theme}>
+                        <ChartConfigField label="Stack" theme={theme} controlMinWidth="100%">
+                            <ChartLayerEditor layers={chartLayers} onChange={onChartLayersChange} availableColumns={availableColumns} theme={theme} />
+                        </ChartConfigField>
+                    </ChartConfigSection>
+                ) : null}
+
+                {showHierarchySection ? (
+                    <ChartConfigSection title="Level" theme={theme}>
+                        <ChartConfigField label="Level" theme={theme}>
+                            <ChartHierarchyButtons level={hierarchyLevel} onChange={onHierarchyLevelChange} maxLevel={maxHierarchyLevel} theme={theme} />
+                        </ChartConfigField>
+                    </ChartConfigSection>
+                ) : null}
+
+                <ChartConfigSection title="Actions" theme={theme}>
+                    {typeof onInteractionModeChange === 'function' ? (
+                        <ChartConfigField label="Click" theme={theme}>
+                            <ChartInteractionButtons interactionMode={interactionMode} onChange={onInteractionModeChange} theme={theme} />
+                        </ChartConfigField>
+                    ) : null}
+                    {showServerScope && typeof onServerScopeChange === 'function' ? (
+                        <ChartConfigField label="Scope" theme={theme}>
+                            <ChartScopeButtons scope={serverScope} onChange={onServerScopeChange} theme={theme} />
+                        </ChartConfigField>
+                    ) : null}
+                </ChartConfigSection>
+            </div>
+            </aside>
+            </>
+        ) : null}
         </div>
         {showChrome ? <ChartStats model={model} theme={theme} /> : null}
     </div>
@@ -3884,8 +3673,11 @@ export const PivotChartPanel = ({
     showServerScope = false,
     locked = false,
     onToggleLock,
+    dockPosition = 'right',
+    onDockPositionChange,
     cinemaMode: controlledCinemaMode,
     onCinemaModeChange,
+    onSettingsWidthBudgetChange,
     standalone = false,
     showResizeHandle = true,
     title = 'Chart Panel',
@@ -3893,6 +3685,10 @@ export const PivotChartPanel = ({
 }) => {
     const [fullscreenMode, setFullscreenMode] = useState(false);
     const [uncontrolledCinemaMode, setUncontrolledCinemaMode] = useState(false);
+    const [settingsPaneOpen, setSettingsPaneOpen] = useState(false);
+    const [settingsPanelWidth, setSettingsPanelWidth] = useState(348);
+    const panelAsideRef = useRef(null);
+    const baseDockedPanelWidthRef = useRef(Math.max(width || 430, 430));
     if (!open) return null;
     const cinemaMode = typeof controlledCinemaMode === 'boolean' ? controlledCinemaMode : uncontrolledCinemaMode;
     const toggleCinemaMode = () => {
@@ -3903,6 +3699,7 @@ export const PivotChartPanel = ({
         }
         setUncontrolledCinemaMode(nextValue);
     };
+    const floatingInteractionLocked = floating && locked;
 
     const sourceButtonStyle = (value) => ({
         border: `1px solid ${value === source ? theme.primary : theme.border}`,
@@ -3929,6 +3726,14 @@ export const PivotChartPanel = ({
         gap: '6px',
         minWidth: '32px',
     });
+    const dockButtonStyle = (value) => ({
+        ...actionButtonStyle(dockPosition === value),
+        minWidth: '56px',
+        padding: '6px 10px',
+    });
+    const visibleSettingsWidth = (!cinemaMode && settingsPaneOpen) ? (settingsPanelWidth + 9) : 0;
+    const basePanelWidth = Math.max(width || 430, 430);
+    const floatingPanelWidth = (floatingRect && floatingRect.width) || basePanelWidth;
 
     const panelContainerStyle = fullscreenMode
         ? {
@@ -3944,7 +3749,7 @@ export const PivotChartPanel = ({
                 position: 'absolute',
                 left: `${(floatingRect && floatingRect.left) || 24}px`,
                 top: `${(floatingRect && floatingRect.top) || 24}px`,
-                width: `${(floatingRect && floatingRect.width) || Math.max(width || 430, 430)}px`,
+                width: `${floatingPanelWidth + visibleSettingsWidth}px`,
                 height: `${(floatingRect && floatingRect.height) || 520}px`,
                 zIndex: 240,
                 display: 'flex',
@@ -3953,7 +3758,52 @@ export const PivotChartPanel = ({
             }
             : standalone
                 ? { display: 'flex', flex: '1 1 auto', minWidth: 0, minHeight: 0, overflow: 'hidden' }
-                : { display: 'flex', width: `${width || 430}px`, minWidth: `${width || 430}px`, maxWidth: `${width || 430}px`, flexShrink: 0 };
+                : {
+                    display: 'flex',
+                    width: `${basePanelWidth + visibleSettingsWidth}px`,
+                    minWidth: `${basePanelWidth + visibleSettingsWidth}px`,
+                    maxWidth: `${basePanelWidth + visibleSettingsWidth}px`,
+                    flexShrink: 0,
+                };
+
+    useEffect(() => {
+        if (!standalone || floating || fullscreenMode) return undefined;
+        const element = panelAsideRef.current;
+        if (!element) return undefined;
+        const updateWidth = () => {
+            const nextWidth = element.clientWidth;
+            if (nextWidth > 0 && !settingsPaneOpen) {
+                baseDockedPanelWidthRef.current = nextWidth;
+            }
+        };
+        updateWidth();
+        if (typeof ResizeObserver === 'undefined') return undefined;
+        const observer = new ResizeObserver(updateWidth);
+        observer.observe(element);
+        return () => observer.disconnect();
+    }, [floating, fullscreenMode, settingsPaneOpen, standalone]);
+
+    useEffect(() => {
+        if (typeof onSettingsWidthBudgetChange !== 'function') return undefined;
+        if (!standalone || floating || fullscreenMode || cinemaMode || !settingsPaneOpen) {
+            onSettingsWidthBudgetChange(null);
+            return undefined;
+        }
+        const baseWidthHint = baseDockedPanelWidthRef.current || basePanelWidth;
+        onSettingsWidthBudgetChange(Math.max(320, Math.ceil(baseWidthHint + visibleSettingsWidth)));
+        return () => {
+            onSettingsWidthBudgetChange(null);
+        };
+    }, [
+        basePanelWidth,
+        cinemaMode,
+        floating,
+        fullscreenMode,
+        onSettingsWidthBudgetChange,
+        settingsPaneOpen,
+        standalone,
+        visibleSettingsWidth,
+    ]);
 
     return (
         <div style={panelContainerStyle}>
@@ -3985,7 +3835,7 @@ export const PivotChartPanel = ({
                     }} />
                 </div>
             ) : null}
-            <aside style={{
+            <aside ref={panelAsideRef} style={{
                 width: fullscreenMode || floating || standalone ? '100%' : `calc(100% - ${showResizeHandle ? 8 : 0}px)`,
                 height: fullscreenMode || floating || standalone ? '100%' : 'auto',
                 minWidth: 0,
@@ -3995,7 +3845,7 @@ export const PivotChartPanel = ({
                 borderRadius: floating || fullscreenMode ? (theme.radius || '16px') : 0,
                 background: theme.sidebarBg || theme.surfaceBg || theme.background,
                 padding: fullscreenMode ? '12px' : '14px',
-                overflowY: 'auto',
+                overflow: 'hidden',
                 boxShadow: floating || fullscreenMode
                     ? (theme.shadowMd || '0 18px 40px rgba(15,23,42,0.24)')
                     : standalone ? 'none' : `-10px 0 24px ${theme.pinnedBoundaryShadow || 'rgba(15,23,42,0.12)'}`,
@@ -4006,11 +3856,11 @@ export const PivotChartPanel = ({
             }}>
                 <div
                     onMouseDown={(event) => {
-                        if (floating && !fullscreenMode && typeof onFloatingDragStart === 'function') {
+                        if (floating && !fullscreenMode && !floatingInteractionLocked && typeof onFloatingDragStart === 'function') {
                             onFloatingDragStart(event);
                         }
                     }}
-                    style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '12px', marginBottom: cinemaMode ? '0' : '12px', cursor: floating && !fullscreenMode ? 'move' : 'default' }}
+                    style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '12px', marginBottom: cinemaMode ? '0' : '12px', cursor: floating && !fullscreenMode && !floatingInteractionLocked ? 'move' : 'default' }}
                 >
                     {cinemaMode ? <div /> : (
                         <div style={{ display: 'flex', flexDirection: 'column', gap: '4px', minWidth: 0 }}>
@@ -4115,6 +3965,14 @@ export const PivotChartPanel = ({
                         ) : null}
                     </div>
                 ) : null}
+                {!cinemaMode && standalone && !floating && typeof onDockPositionChange === 'function' ? (
+                    <div style={{ display: 'flex', gap: '6px', marginBottom: '10px', flexWrap: 'wrap', alignItems: 'center' }}>
+                        <button type="button" onClick={() => onDockPositionChange('left')} style={dockButtonStyle('left')} title="Dock chart pane to the left">Left</button>
+                        <button type="button" onClick={() => onDockPositionChange('right')} style={dockButtonStyle('right')} title="Dock chart pane to the right">Right</button>
+                        <button type="button" onClick={() => onDockPositionChange('top')} style={dockButtonStyle('top')} title="Dock chart pane to the top">Top</button>
+                        <button type="button" onClick={() => onDockPositionChange('bottom')} style={dockButtonStyle('bottom')} title="Dock chart pane to the bottom">Bottom</button>
+                    </div>
+                ) : null}
                 {!cinemaMode ? (
                     <div style={{ display: 'flex', gap: '6px', marginBottom: '12px', flexWrap: 'wrap' }}>
                         <button style={sourceButtonStyle('pivot')} onClick={() => onSourceChange('pivot')}>Pivot View</button>
@@ -4155,10 +4013,15 @@ export const PivotChartPanel = ({
                     cinemaMode={cinemaMode}
                     onCategoryActivate={onCategoryActivate}
                     allowHierarchyCharts={allowHierarchyCharts}
+                    floating={floating}
                     locked={locked}
                     onToggleLock={onToggleLock}
+                    configOpen={settingsPaneOpen}
+                    onConfigChange={setSettingsPaneOpen}
+                    settingsPanelWidth={settingsPanelWidth}
+                    onSettingsPanelWidthChange={setSettingsPanelWidth}
                 />
-                {floating && !fullscreenMode ? (
+                {floating && !fullscreenMode && !locked ? (
                     <>
                         <div
                             onMouseDown={(event) => typeof onFloatingResizeStart === 'function' && onFloatingResizeStart('right', event)}
@@ -4179,7 +4042,7 @@ export const PivotChartPanel = ({
     );
 };
 
-export const PivotChartModal = ({ chartState, onClose, theme }) => {
+export const PivotChartModal = ({ chartState, onClose, theme, position = 'right', onPositionChange }) => {
     const [chartType, setChartType] = useState(chartState && chartState.chartType ? chartState.chartType : 'bar');
     const [barLayout, setBarLayout] = useState(chartState && chartState.barLayout ? chartState.barLayout : 'grouped');
     const [axisMode, setAxisMode] = useState(chartState && chartState.axisMode ? chartState.axisMode : 'vertical');
@@ -4189,6 +4052,7 @@ export const PivotChartModal = ({ chartState, onClose, theme }) => {
     const [columnLimit, setColumnLimit] = useState(chartState && chartState.columnLimit ? chartState.columnLimit : MAX_SELECTION_SERIES);
     const [sortMode, setSortMode] = useState(chartState && chartState.sortMode ? chartState.sortMode : 'natural');
     const [chartLayers, setChartLayers] = useState(chartState && Array.isArray(chartState.chartLayers) ? chartState.chartLayers : []);
+    const [settingsWidthBudget, setSettingsWidthBudget] = useState(null);
 
     useEffect(() => {
         setChartType(chartState && chartState.chartType ? chartState.chartType : 'bar');
@@ -4261,55 +4125,103 @@ export const PivotChartModal = ({ chartState, onClose, theme }) => {
     }, [activeModel, barLayout, chartType]);
 
     if (!chartState) return null;
+    const isVerticalPosition = position === 'top' || position === 'bottom';
+    const panelWidthBudget = Math.max(420, Number.isFinite(Number(settingsWidthBudget)) ? Math.floor(Number(settingsWidthBudget)) : 420);
+    const panelHeightBudget = Math.max(360, Number(chartState.chartHeight || CHART_HEIGHT) + 220);
+
+    const posBtn = (value, label) => ({
+        border: `1px solid ${value === position ? theme.primary : theme.border}`,
+        background: value === position ? theme.select : (theme.headerSubtleBg || theme.hover),
+        color: value === position ? theme.primary : theme.text,
+        borderRadius: theme.radiusSm || '8px',
+        padding: '5px 8px',
+        fontSize: '11px',
+        fontWeight: 700,
+        cursor: 'pointer',
+    });
 
     return (
-        <div
-            onClick={onClose}
+        <aside
+            data-chart-modal-position={position}
             style={{
-                position: 'fixed',
-                inset: 0,
-                zIndex: 10005,
-                background: 'rgba(2, 6, 23, 0.52)',
                 display: 'flex',
-                alignItems: 'center',
-                justifyContent: 'center',
-                padding: '24px',
+                flexDirection: 'column',
+                width: isVerticalPosition ? '100%' : `${panelWidthBudget}px`,
+                minWidth: isVerticalPosition ? 0 : `${Math.max(320, panelWidthBudget)}px`,
+                maxWidth: isVerticalPosition ? '100%' : '70%',
+                height: isVerticalPosition ? `${panelHeightBudget}px` : undefined,
+                minHeight: isVerticalPosition ? '320px' : 0,
+                flexShrink: 0,
+                overflow: 'hidden',
+                borderLeft: position === 'right' ? `1px solid ${theme.border}` : 'none',
+                borderRight: position === 'left' ? `1px solid ${theme.border}` : 'none',
+                borderTop: position === 'bottom' ? `1px solid ${theme.border}` : 'none',
+                borderBottom: position === 'top' ? `1px solid ${theme.border}` : 'none',
+                background: theme.sidebarBg || theme.surfaceBg || theme.background,
             }}
         >
-            <div
-                onClick={(event) => event.stopPropagation()}
-                style={{
-                    width: 'min(1040px, 92vw)',
-                    maxHeight: '88vh',
-                    overflowY: 'auto',
-                    background: theme.surfaceBg || theme.background || '#fff',
-                    border: `1px solid ${theme.border}`,
-                    borderRadius: theme.radius || '16px',
-                    boxShadow: theme.shadowMd || '0 18px 40px rgba(0,0,0,0.28)',
-                    padding: '18px',
-                }}
-            >
-                <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '12px', marginBottom: '14px' }}>
-                    <div style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
-                        <div style={{ fontSize: '16px', fontWeight: 800, color: theme.text }}>
-                            {chartState.title || 'Range Chart'}
-                        </div>
+            <div style={{ padding: '12px 14px', overflow: 'hidden', flex: 1, minHeight: 0, display: 'flex', flexDirection: 'column', gap: '12px' }}>
+                <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '8px' }}>
+                    <div style={{ fontSize: '14px', fontWeight: 800, color: theme.text }}>
+                        {chartState.title || 'Range Chart'}
                     </div>
-                    <button
-                        onClick={onClose}
-                        style={{
-                            border: `1px solid ${theme.border}`,
-                            background: theme.headerSubtleBg || theme.hover,
-                            color: theme.text,
-                            borderRadius: theme.radiusSm || '8px',
-                            padding: '7px 10px',
-                            fontSize: '11px',
-                            fontWeight: 700,
-                            cursor: 'pointer',
-                        }}
-                    >
-                        Close
-                    </button>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '4px' }}>
+                        {typeof onPositionChange === 'function' ? (
+                            <>
+                                <button
+                                    type="button"
+                                    onClick={() => onPositionChange('left')}
+                                    style={posBtn('left')}
+                                    title="Dock chart pane to the left"
+                                    aria-label="Dock left"
+                                >
+                                    Left
+                                </button>
+                                <button
+                                    type="button"
+                                    onClick={() => onPositionChange('right')}
+                                    style={posBtn('right')}
+                                    title="Dock chart pane to the right"
+                                    aria-label="Dock right"
+                                >
+                                    Right
+                                </button>
+                                <button
+                                    type="button"
+                                    onClick={() => onPositionChange('top')}
+                                    style={posBtn('top')}
+                                    title="Dock chart pane to the top"
+                                    aria-label="Dock top"
+                                >
+                                    Top
+                                </button>
+                                <button
+                                    type="button"
+                                    onClick={() => onPositionChange('bottom')}
+                                    style={posBtn('bottom')}
+                                    title="Dock chart pane to the bottom"
+                                    aria-label="Dock bottom"
+                                >
+                                    Bottom
+                                </button>
+                            </>
+                        ) : null}
+                        <button
+                            onClick={onClose}
+                            style={{
+                                border: `1px solid ${theme.border}`,
+                                background: theme.headerSubtleBg || theme.hover,
+                                color: theme.text,
+                                borderRadius: theme.radiusSm || '8px',
+                                padding: '5px 10px',
+                                fontSize: '11px',
+                                fontWeight: 700,
+                                cursor: 'pointer',
+                            }}
+                        >
+                            Close
+                        </button>
+                    </div>
                 </div>
                 <ChartSurface
                     model={activeModel}
@@ -4326,6 +4238,7 @@ export const PivotChartModal = ({ chartState, onClose, theme }) => {
                     onOrientationChange={setOrientation}
                     hierarchyLevel={hierarchyLevel}
                     onHierarchyLevelChange={setHierarchyLevel}
+                    title={chartState.title || 'Range Chart'}
                     rowLimit={rowLimit}
                     onRowLimitChange={setRowLimit}
                     columnLimit={columnLimit}
@@ -4334,8 +4247,9 @@ export const PivotChartModal = ({ chartState, onClose, theme }) => {
                     onSortModeChange={setSortMode}
                     theme={theme}
                     allowHierarchyCharts={!(chartState.selectionMap && chartState.visibleRows && chartState.visibleCols)}
+                    onSettingsWidthBudgetChange={setSettingsWidthBudget}
                 />
             </div>
-        </div>
+        </aside>
     );
 };

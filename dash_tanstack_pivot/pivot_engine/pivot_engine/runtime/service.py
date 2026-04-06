@@ -4,12 +4,15 @@ from __future__ import annotations
 
 import asyncio
 import re
+import time
 from typing import Any, Callable, Dict, List, Optional
 
 from ..tanstack_adapter import TanStackOperation, TanStackRequest, TanStackResponse
 
-from .models import PivotRequestContext, PivotServiceResponse, PivotViewState
+from .models import PivotRequestContext, PivotServiceResponse, PivotViewState, first_present, safe_int
 from .session_gate import SessionRequestGate
+from .detail_service import DetailRuntimeService
+from .tree_service import TreeRuntimeService
 
 
 class PivotRuntimeService:
@@ -24,6 +27,8 @@ class PivotRuntimeService:
         self._adapter_getter = adapter_getter
         self._session_gate = session_gate or SessionRequestGate()
         self._debug = debug
+        self._tree_service = TreeRuntimeService(debug=debug)
+        self._detail_service = DetailRuntimeService(self._tree_service, debug=debug)
 
     async def process_async(
         self,
@@ -31,7 +36,62 @@ class PivotRuntimeService:
         context: PivotRequestContext,
     ) -> PivotServiceResponse:
         """Process one pivot request and return a transport-neutral response."""
+        service_started_at = time.perf_counter()
+        trigger_kind = "transaction" if state.transaction_request else (context.trigger_kind or "data")
+        profiling_enabled = bool(context.profiling)
+        adapter_lookup_started_at = service_started_at
         adapter = self._adapter_getter()
+        adapter_lookup_finished_at = time.perf_counter()
+
+        def build_profile(
+            *,
+            execution_started_at: Optional[float] = None,
+            execution_finished_at: Optional[float] = None,
+            postprocess_started_at: Optional[float] = None,
+            response_rows: Optional[int] = None,
+            response_columns: Optional[int] = None,
+            extra: Optional[Dict[str, Any]] = None,
+        ) -> Optional[Dict[str, Any]]:
+            if not profiling_enabled:
+                return None
+
+            def ms(start: Optional[float], end: Optional[float]) -> Optional[float]:
+                if start is None or end is None:
+                    return None
+                return round((end - start) * 1000, 3)
+
+            profile = {
+                "request": {
+                    "requestId": context.request_id,
+                    "kind": trigger_kind,
+                    "viewMode": state.view_mode,
+                    "intent": context.intent,
+                    "table": context.table,
+                    "rowFields": len(state.row_fields or []),
+                    "colFields": len(state.col_fields or []),
+                    "valueFields": len(state.val_configs or []),
+                    "startRow": context.start_row,
+                    "endRow": context.end_row,
+                    "colStart": context.col_start,
+                    "colEnd": context.col_end,
+                    "needsColSchema": context.needs_col_schema,
+                    "includeGrandTotal": context.include_grand_total,
+                },
+                "service": {
+                    "adapterLookupMs": ms(adapter_lookup_started_at, adapter_lookup_finished_at),
+                    "gateMs": ms(adapter_lookup_finished_at, gate_finished_at),
+                    "requestBuildMs": ms(gate_finished_at, request_built_at),
+                    "executeMs": ms(execution_started_at, execution_finished_at),
+                    "postProcessMs": ms(postprocess_started_at, time.perf_counter()) if postprocess_started_at is not None else None,
+                    "totalMs": ms(service_started_at, time.perf_counter()),
+                    "responseRows": response_rows,
+                    "responseColumns": response_columns,
+                },
+            }
+            if isinstance(extra, dict) and extra:
+                for key, value in extra.items():
+                    profile[key] = value
+            return profile
 
         if not self._session_gate.register_request(
             session_id=context.session_id,
@@ -41,7 +101,11 @@ class PivotRuntimeService:
             intent=context.intent,
             client_instance=context.client_instance,
         ):
-            return PivotServiceResponse(status="stale")
+            gate_finished_at = time.perf_counter()
+            request_built_at = gate_finished_at
+            return PivotServiceResponse(status="stale", profile=build_profile())
+
+        gate_finished_at = time.perf_counter()
 
         tanstack_sorting = []
         sort_options = state.sort_options if isinstance(state.sort_options, dict) else {}
@@ -111,30 +175,196 @@ class PivotRuntimeService:
             version=context.window_seq,
             column_sort_options=column_sort_options or None,
         )
+        request_built_at = time.perf_counter()
 
-        trigger_kind = context.trigger_kind
-        if trigger_kind == "drill" and state.drill_through:
+        if trigger_kind == "detail" and state.detail_request:
+            execution_started_at = time.perf_counter()
             try:
-                records = await adapter.handle_drill_through(request, state.drill_through)
+                detail_result = await self._detail_service.handle_request(adapter, request, state, context)
             except Exception as exc:  # pragma: no cover - defensive
+                execution_finished_at = time.perf_counter()
+                if self._debug:
+                    print(f"Detail request failed: {exc}")
+                return PivotServiceResponse(
+                    status="error",
+                    message=str(exc),
+                    data=[],
+                    total_rows=0,
+                    profile=build_profile(
+                        execution_started_at=execution_started_at,
+                        execution_finished_at=execution_finished_at,
+                    ),
+                )
+            execution_finished_at = time.perf_counter()
+            if not self._session_gate.response_is_current(
+                session_id=context.session_id,
+                state_epoch=context.state_epoch,
+                window_seq=context.window_seq,
+                abort_generation=context.abort_generation,
+                intent=context.intent,
+                client_instance=context.client_instance,
+            ):
+                return PivotServiceResponse(
+                    status="stale",
+                    profile=build_profile(
+                        execution_started_at=execution_started_at,
+                        execution_finished_at=execution_finished_at,
+                    ),
+                )
+            detail_result.profile = build_profile(
+                execution_started_at=execution_started_at,
+                execution_finished_at=execution_finished_at,
+                response_rows=len(detail_result.detail_payload.get("rows") or []) if isinstance(detail_result.detail_payload, dict) else None,
+                response_columns=len(detail_result.detail_payload.get("columns") or []) if isinstance(detail_result.detail_payload, dict) else None,
+            )
+            return detail_result
+
+        if trigger_kind == "drill" and state.drill_through:
+            drill_payload = self._normalize_drill_request_payload(
+                state.drill_through if isinstance(state.drill_through, dict) else {}
+            )
+            execution_started_at = time.perf_counter()
+            try:
+                drill_result = await adapter.handle_drill_through(request, state.drill_through)
+            except Exception as exc:  # pragma: no cover - defensive
+                execution_finished_at = time.perf_counter()
                 if self._debug:
                     print(f"Drill through failed: {exc}")
-                records = []
-            return PivotServiceResponse(status="drillthrough", drill_records=records)
+                drill_result = {"rows": [], "total_rows": 0}
+            else:
+                execution_finished_at = time.perf_counter()
 
-        if trigger_kind == "update" and state.cell_update:
+            if isinstance(drill_result, dict):
+                records = list(drill_result.get("rows") or [])
+                drill_response_payload = self._normalize_drill_response_payload(drill_result, drill_payload, records)
+            else:
+                records = list(drill_result or [])
+                drill_response_payload = self._normalize_drill_response_payload({}, drill_payload, records)
+
+            return PivotServiceResponse(
+                status="drillthrough",
+                drill_records=records,
+                drill_payload=drill_response_payload,
+                profile=build_profile(
+                    execution_started_at=execution_started_at,
+                    execution_finished_at=execution_finished_at,
+                    response_rows=len(records),
+                    response_columns=len(records[0]) if records and isinstance(records[0], dict) else None,
+                ),
+            )
+
+        transaction_result: Optional[Dict[str, Any]] = None
+        transaction_refresh_mode = "viewport"
+        transaction_requires_structural_refresh = False
+
+        if state.transaction_request:
+            execution_started_at = time.perf_counter()
             try:
-                await adapter.handle_update(request, state.cell_update)
+                if hasattr(adapter, "handle_transaction"):
+                    transaction_result = await adapter.handle_transaction(request, state.transaction_request)
+                else:
+                    transaction_result = {
+                        "status": "unsupported",
+                        "message": "Adapter does not support row transactions.",
+                    }
+            except Exception as exc:  # pragma: no cover - defensive
+                execution_finished_at = time.perf_counter()
+                if self._debug:
+                    print(f"Transaction request failed: {exc}")
+                return PivotServiceResponse(
+                    status="error",
+                    message=str(exc),
+                    data=[],
+                    total_rows=0,
+                    profile=build_profile(
+                        execution_started_at=execution_started_at,
+                        execution_finished_at=execution_finished_at,
+                    ),
+                )
+            execution_finished_at = time.perf_counter()
+            transaction_refresh_mode = str(
+                (transaction_result or {}).get("refreshMode")
+                or (state.transaction_request or {}).get("refreshMode")
+                or (state.transaction_request or {}).get("refresh_mode")
+                or "viewport"
+            ).strip().lower()
+            transaction_requires_structural_refresh = bool(
+                (transaction_result or {}).get("requiresStructuralRefresh")
+            )
+            if transaction_refresh_mode == "none":
+                return PivotServiceResponse(
+                    status="transaction_applied",
+                    transaction_result=transaction_result,
+                    profile=build_profile(
+                        execution_started_at=execution_started_at,
+                        execution_finished_at=execution_finished_at,
+                        extra={"transaction": transaction_result} if isinstance(transaction_result, dict) else None,
+                    ),
+                )
+            if (
+                transaction_refresh_mode == "patch"
+                and not transaction_requires_structural_refresh
+                and isinstance(transaction_result, dict)
+                and isinstance(transaction_result.get("patchPayload"), dict)
+            ):
+                return PivotServiceResponse(
+                    status="patched",
+                    data_version=context.window_seq,
+                    data_offset=context.start_row,
+                    transaction_result=transaction_result,
+                    patch_payload=transaction_result.get("patchPayload"),
+                    profile=build_profile(
+                        execution_started_at=execution_started_at,
+                        execution_finished_at=execution_finished_at,
+                        extra={"transaction": transaction_result},
+                    ),
+                )
+
+        if trigger_kind == "update" and (state.cell_update or state.cell_updates):
+            update_payloads = []
+            if isinstance(state.cell_update, dict):
+                update_payloads.append(state.cell_update)
+            update_payloads.extend(
+                update_payload
+                for update_payload in (state.cell_updates or [])
+                if isinstance(update_payload, dict)
+            )
+            try:
+                if hasattr(adapter, "handle_updates"):
+                    await adapter.handle_updates(request, update_payloads)
+                else:
+                    for update_payload in update_payloads:
+                        await adapter.handle_update(request, update_payload)
             except Exception as exc:  # pragma: no cover - defensive
                 if self._debug:
                     print(f"Cell update failed: {exc}")
 
         expanded_paths = self._parse_expanded_paths(state.expanded)
+        effective_needs_col_schema = bool(
+            context.needs_col_schema
+            or transaction_requires_structural_refresh
+            or transaction_refresh_mode in {"structural", "full", "smart_structural"}
+        )
 
+        execution_started_at = time.perf_counter()
         try:
-            if (
+            if state.view_mode == "tree" and trigger_kind != "chart":
+                response_state = await self._tree_service.handle_data_request(
+                    adapter,
+                    request,
+                    state,
+                    context,
+                    expanded_paths,
+                )
+                response = TanStackResponse(
+                    data=list(response_state.data or []),
+                    columns=list(response_state.columns or []),
+                    total_rows=response_state.total_rows,
+                    version=context.window_seq,
+                )
+            elif (
                 trigger_kind != "chart"
-                and state.pivot_mode == "report"
+                and state.view_mode == "report"
                 and self._has_branching_report_root(state.report_def)
             ):
                 response = await self._handle_branching_report_request(
@@ -163,6 +393,7 @@ class PivotRuntimeService:
                     needs_col_schema=bool((state.chart_request or {}).get("needs_col_schema", False)),
                     include_grand_total=context.include_grand_total,
                     requested_center_ids=requested_series_ids,
+                    profiling=profiling_enabled,
                 )
             elif context.viewport_active and context.end_row is not None:
                 response = await adapter.handle_virtual_scroll_request(
@@ -172,8 +403,9 @@ class PivotRuntimeService:
                     expanded_paths,
                     col_start=context.col_start,
                     col_end=context.col_end,
-                    needs_col_schema=context.needs_col_schema,
+                    needs_col_schema=effective_needs_col_schema,
                     include_grand_total=context.include_grand_total,
+                    profiling=profiling_enabled,
                 )
             else:
                 if state.row_fields:
@@ -184,13 +416,25 @@ class PivotRuntimeService:
                         initial_end_row,
                         expanded_paths,
                         needs_col_schema=True,
+                        profiling=profiling_enabled,
                     )
                 else:
                     response = await adapter.handle_request(request)
         except Exception as exc:
+            execution_finished_at = time.perf_counter()
             if self._debug:
                 print(f"Pivot execution failed: {exc}")
-            return PivotServiceResponse(status="error", message=str(exc), data=[], total_rows=0)
+            return PivotServiceResponse(
+                status="error",
+                message=str(exc),
+                data=[],
+                total_rows=0,
+                profile=build_profile(
+                    execution_started_at=execution_started_at,
+                    execution_finished_at=execution_finished_at,
+                ),
+            )
+        execution_finished_at = time.perf_counter()
 
         response_version = context.window_seq if context.window_seq is not None else response.version
         if not self._session_gate.response_is_current(
@@ -201,9 +445,19 @@ class PivotRuntimeService:
             intent=context.intent,
             client_instance=context.client_instance,
         ):
-            return PivotServiceResponse(status="stale")
+            return PivotServiceResponse(
+                status="stale",
+                profile=build_profile(
+                    execution_started_at=execution_started_at,
+                    execution_finished_at=execution_finished_at,
+                    response_rows=len(response.data or []),
+                    response_columns=len(response.columns or []),
+                    extra=(response.profile if isinstance(getattr(response, "profile", None), dict) else None),
+                ),
+            )
 
         if trigger_kind == "chart":
+            postprocess_started_at = time.perf_counter()
             return PivotServiceResponse(
                 status="chart_data",
                 chart_data={
@@ -223,13 +477,21 @@ class PivotRuntimeService:
                     "requestSignature": (state.chart_request or {}).get("request_signature"),
                 },
                 data_version=response_version,
+                profile=build_profile(
+                    execution_started_at=execution_started_at,
+                    execution_finished_at=execution_finished_at,
+                    postprocess_started_at=postprocess_started_at,
+                    response_rows=len(response.data or []),
+                    response_columns=len(response.columns or []),
+                    extra=(response.profile if isinstance(getattr(response, "profile", None), dict) else None),
+                ),
             )
 
         # --- Report Mode: annotate rows with level metadata ---
         response_data = response.data
         response_total_rows = response.total_rows
         if (
-            state.pivot_mode == "report"
+            state.view_mode == "report"
             and state.report_def
             and isinstance(state.report_def, dict)
             and not self._has_branching_report_root(state.report_def)
@@ -240,16 +502,17 @@ class PivotRuntimeService:
 
         cols_payload: List[Dict[str, Any]] = list(response.columns or [])
         should_emit_columns = (
-            context.needs_col_schema
+            effective_needs_col_schema
             or not context.viewport_active
             or (context.intent == "structural" and context.original_intent != "expansion")
         )
         should_attach_col_schema = bool(response.col_schema) and (
-            context.needs_col_schema or should_emit_columns
+            effective_needs_col_schema or should_emit_columns
         )
         if should_attach_col_schema:
             cols_payload = cols_payload + [{"id": "__col_schema", "col_schema": response.col_schema}]
 
+        postprocess_started_at = time.perf_counter()
         return PivotServiceResponse(
             status="data",
             data=response_data,
@@ -258,6 +521,20 @@ class PivotRuntimeService:
             data_offset=context.start_row,
             data_version=response_version,
             color_scale_stats=response.color_scale_stats,
+            transaction_result=transaction_result,
+            profile=build_profile(
+                execution_started_at=execution_started_at,
+                execution_finished_at=execution_finished_at,
+                postprocess_started_at=postprocess_started_at,
+                response_rows=len(response_data or []),
+                response_columns=len(cols_payload or []),
+                extra={
+                    **(response.profile if isinstance(getattr(response, "profile", None), dict) else {}),
+                    **({"transaction": transaction_result} if isinstance(transaction_result, dict) else {}),
+                } if (
+                    isinstance(getattr(response, "profile", None), dict) or isinstance(transaction_result, dict)
+                ) else None,
+            ),
         )
 
     def process(
@@ -267,6 +544,46 @@ class PivotRuntimeService:
     ) -> PivotServiceResponse:
         """Sync wrapper for sync transports."""
         return asyncio.run(self.process_async(state, context))
+
+    @staticmethod
+    def _normalize_drill_request_payload(drill_payload: Dict[str, Any]) -> Dict[str, Any]:
+        """Normalize drill request metadata to one canonical camelCase shape."""
+        return {
+            "rowPath": first_present(drill_payload, "rowPath", "row_path", default="") or "",
+            "rowFields": list(first_present(drill_payload, "rowFields", "row_fields", "pathFields", default=[]) or []),
+            "page": safe_int(first_present(drill_payload, "page"), 0),
+            "pageSize": safe_int(first_present(drill_payload, "pageSize", "page_size"), 100),
+            "sortCol": first_present(drill_payload, "sortCol", "sort_col"),
+            "sortDir": first_present(drill_payload, "sortDir", "sort_dir", default="asc") or "asc",
+            "filterText": first_present(drill_payload, "filterText", "filter", default="") or "",
+        }
+
+    @staticmethod
+    def _normalize_drill_response_payload(
+        drill_result: Dict[str, Any],
+        drill_payload: Dict[str, Any],
+        records: List[Dict[str, Any]],
+    ) -> Dict[str, Any]:
+        """Build one canonical drill response payload shape for runtimeResponse."""
+        return {
+            "rows": records,
+            "page": safe_int(first_present(drill_result, "page", default=drill_payload.get("page")), 0),
+            "pageSize": safe_int(
+                first_present(drill_result, "pageSize", "page_size", default=drill_payload.get("pageSize")),
+                safe_int(drill_payload.get("pageSize"), 100),
+            ),
+            "totalRows": safe_int(first_present(drill_result, "totalRows", "total_rows"), len(records)),
+            "sortCol": first_present(drill_result, "sortCol", "sort_col", default=drill_payload.get("sortCol")),
+            "sortDir": first_present(drill_result, "sortDir", "sort_dir", default=drill_payload.get("sortDir", "asc")) or "asc",
+            "filterText": first_present(
+                drill_result,
+                "filterText",
+                "filter",
+                default=drill_payload.get("filterText", ""),
+            ) or "",
+            "rowPath": first_present(drill_result, "rowPath", "row_path", default=drill_payload.get("rowPath")) or "",
+            "rowFields": list(first_present(drill_result, "rowFields", "row_fields", default=drill_payload.get("rowFields", [])) or []),
+        }
 
     @staticmethod
     def _normalize_formula_reference_key(value: Any, fallback: Any = "formula") -> str:

@@ -1,10 +1,11 @@
-import { useCallback } from 'react';
+import { useCallback, useMemo, useRef } from 'react';
 import React from 'react';
 import Icons from '../components/Icons';
 import FilterPopover from '../components/Filters/FilterPopover';
 import { flexRender } from '@tanstack/react-table';
-import { mergeStateStyles } from '../utils/styles';
+import { buildEditedCellVisualStyle, mergeStateStyles } from '../utils/styles';
 import { formatDisplayLabel } from '../utils/helpers';
+import { EDITED_CELL_FORMAT_KEY } from '../utils/formatting';
 
 /**
  * useRenderHelpers — extracts renderCell and renderHeaderCell from DashTanstackPivot.
@@ -39,7 +40,7 @@ export function useRenderHelpers({
     getConditionalStyle,
     // renderHeaderCell dependencies (all synchronous / render-time)
     rowHeight,
-    table,
+    tableRef,
     leftCols,
     centerCols,
     rightCols,
@@ -48,9 +49,9 @@ export function useRenderHelpers({
     handleHeaderContextMenu,
     autoSizeColumn,
     autoSizeBounds,
-    hoveredHeaderId,
+    hoveredHeaderIdRef,
     setHoveredHeaderId,
-    focusedHeaderId,
+    focusedHeaderIdRef,
     setFocusedHeaderId,
     onDragStart,
     handleFilterClick,
@@ -65,121 +66,172 @@ export function useRenderHelpers({
     dataBarsColumns,
     colorScaleStats,
     cellFormatRules,
+    resolveEditedCellMarker,
+    resolveCellDisplayValue,
+    editedCellEpoch,
 }) {
-    // --- Helper to Render a single Cell with useCallback ---
-    const renderCell = useCallback((cell, virtualRowIndex, isVirtualRow = false, renderOptions = {}) => {
-        if (!cell) return null;
+    // --- Stable style objects extracted from the per-cell hot path ---
+    // These are recreated only when theme/styles change, not per cell per scroll frame.
+    const baseCellStyle = useMemo(() => ({
+        ...styles.cell,
+        height: '100%',
+        display: 'flex',
+        alignItems: 'center',
+        fontFamily: "'Inter', ui-sans-serif, system-ui, sans-serif",
+        userSelect: 'none',
+    }), [styles.cell]);
+
+    const selectedOverlayRef = useMemo(() => ({
+        background: theme.select,
+        boxShadow: `inset 0 0 0 1px ${theme.primary}`,
+    }), [theme.select, theme.primary]);
+
+    const selectedEditedOverlayRef = useMemo(() => ({
+        boxShadow: `inset 0 0 0 1px ${theme.primary}`,
+    }), [theme.primary]);
+
+    const focusOverlayRef = useMemo(() => ({
+        outline: `1px solid ${theme.primary}`,
+        outlineOffset: '-1px',
+    }), [theme.primary]);
+
+    const fillOverlayRef = useMemo(() => ({
+        boxShadow: `inset 0 0 0 1px ${theme.primary}`,
+    }), [theme.primary]);
+
+    const fillHandleStyle = useMemo(() => ({
+        position: 'absolute',
+        right: 0,
+        bottom: 0,
+        width: '8px',
+        height: '8px',
+        background: theme.primary,
+        cursor: 'crosshair',
+        zIndex: 100,
+        border: `1px solid ${isDarkTheme(theme) ? '#000' : '#fff'}`,
+        borderRadius: '1px',
+    }), [theme, isDarkTheme]);
+
+    // Pre-computed theme backgrounds — avoids repeated ternary chains per cell.
+    const themeBgs = useMemo(() => ({
+        total: theme.totalBg || theme.select || theme.background,
+        grandTotal: theme.totalBgStrong || theme.totalBg || theme.select || theme.background,
+        hierarchy: theme.hierarchyBg || theme.surfaceInset || theme.surfaceBg || theme.background || '#fff',
+        normal: theme.surfaceBg || theme.background || '#fff',
+        totalText: theme.totalText || theme.text || theme.primary,
+        grandTotalText: theme.totalTextStrong || theme.primary,
+    }), [theme]);
+
+    const EMPTY_STYLE = useMemo(() => ({}), []);
+    const DATA_BAR_SPAN_STYLE = useMemo(() => ({ position: 'relative', zIndex: 1 }), []);
+    const SKELETON_CELL_STYLE = useMemo(() => ({
+        width: '70%',
+        maxWidth: '120px',
+        height: '10px',
+        borderRadius: '999px',
+        background: 'var(--pivot-loading-cell-gradient, linear-gradient(90deg, rgba(232,242,255,0.7) 0%, rgba(190,218,255,0.94) 45%, rgba(232,242,255,0.7) 100%))',
+        backgroundSize: '220% 100%',
+        animation: 'pivot-skeleton-shimmer var(--pivot-loading-shimmer-duration, 2.8s) linear infinite',
+    }), []);
+
+    const renderResolvedCell = useCallback((cellLike, virtualRowIndex, isVirtualRow = false, renderOptions = {}) => {
+        if (!cellLike) return null;
         const disableSticky = !!renderOptions.disableSticky;
 
-        const row = cell.row;
-        const col = cell.column;
+        const row = cellLike.row;
+        const col = cellLike.column;
         const colIndex = visibleLeafColIndexMap.get(col.id) !== undefined ? visibleLeafColIndexMap.get(col.id) : -1;
-        const isHierarchy = cell.column.id === 'hierarchy';
+        const isHierarchy = col.id === 'hierarchy';
         const colParentHeader = col.parent && typeof col.parent.columnDef?.header === 'string' ? col.parent.columnDef.header : '';
         const isTotalCol = !isHierarchy && (colParentHeader === 'Grand Total' || colParentHeader.startsWith('Grand Total'));
         const isSelected = Object.prototype.hasOwnProperty.call(
             selectedCells || {},
-            `${row.id}:${cell.column.id}`
+            `${row.id}:${col.id}`
         );
-        const isLastSelected = lastSelected && lastSelected.rowIndex === virtualRowIndex && lastSelected.colIndex === colIndex; // Approximate check
-        // Check for fill handle selection
+        const isLastSelected = lastSelected && lastSelected.rowIndex === virtualRowIndex && lastSelected.colIndex === colIndex;
         let isFillSelected = false;
         if (fillRange && dragStart) {
-             const rMin = Math.min(dragStart.rowIndex, fillRange.rEnd); // simplified for demo
-             // Precise range check would require row index mapping
              if (virtualRowIndex >= fillRange.rStart && virtualRowIndex <= fillRange.rEnd && colIndex >= fillRange.cStart && colIndex <= fillRange.cEnd) {
                  isFillSelected = true;
              }
         }
 
-        // Per-cell format rule lookup
         const rowPath = row.original && row.original._path ? row.original._path : row.id;
         const cellKey = `${rowPath}:::${col.id}`;
+        const rawCellValue = cellLike.getValue();
+        const resolvedCellValue = typeof resolveCellDisplayValue === 'function'
+            ? resolveCellDisplayValue(rowPath, col.id, rawCellValue)
+            : rawCellValue;
+        const displayCellLike = {
+            ...cellLike,
+            getValue: () => resolvedCellValue,
+            renderValue: () => (resolvedCellValue ?? null),
+        };
+        displayCellLike.getContext = () => ({
+            ...cellLike.getContext(),
+            cell: displayCellLike,
+            getValue: displayCellLike.getValue,
+            renderValue: displayCellLike.renderValue,
+        });
         const cellFmt = cellFormatRules && cellFormatRules[cellKey];
+        const editedCellFmt = cellFormatRules && cellFormatRules[EDITED_CELL_FORMAT_KEY];
+        const editedMarker = typeof resolveEditedCellMarker === 'function'
+            ? resolveEditedCellMarker(rowPath, col.id)
+            : null;
 
         const isGrandTotalRow = !!(row.original && row.original._isTotal);
         const themeBackground = isGrandTotalRow
-            ? (theme.totalBg || theme.select || theme.background)
+            ? themeBgs.grandTotal
             : isTotalCol
-                ? (theme.totalBg || theme.select || theme.background)
-                : isHierarchy
-                    ? (theme.hierarchyBg || theme.surfaceInset || theme.surfaceBg || theme.background || '#fff')
-                    : (theme.surfaceBg || theme.background || '#fff');
-        const condStyle = getConditionalStyle(
-            cell.column.id,
-            cell.getValue(),
-            row.original,
-            row.id
-        );
-        // Cell format background takes priority over color-scale/conditional style
+                ? themeBgs.total
+                : isHierarchy ? themeBgs.hierarchy : themeBgs.normal;
+        const condStyle = getConditionalStyle(col.id, resolvedCellValue, row.original, row.id);
+        const editedVisualStyle = editedMarker
+            ? buildEditedCellVisualStyle(theme, editedCellFmt, editedMarker, { emphasizeText: true })
+            : null;
+        const editedBaseStyle = editedVisualStyle || EMPTY_STYLE;
         const stickyBaseStyle = cellFmt && cellFmt.bg
-            ? mergeStateStyles(condStyle, { background: cellFmt.bg })
-            : mergeStateStyles({ background: themeBackground }, condStyle);
+            ? mergeStateStyles({ background: themeBackground }, condStyle, editedBaseStyle, { background: cellFmt.bg })
+            : mergeStateStyles({ background: themeBackground }, condStyle, editedBaseStyle);
         const stickyStyle = disableSticky
-            ? { background: stickyBaseStyle.background }
-            : getStickyStyle(cell.column, stickyBaseStyle.background);
-        const selectedOverlayStyle = isSelected
-            ? {
-                background: theme.select,
-                boxShadow: `inset 0 0 0 1px ${theme.primary}`
-            }
-            : {};
-        const focusOverlayStyle = isLastSelected
-            ? {
-                outline: `1px solid ${theme.primary}`,
-                outlineOffset: '-1px'
-            }
-            : {};
-        const fillOverlayStyle = isFillSelected
-            ? { boxShadow: `inset 0 0 0 1px ${theme.primary}` }
-            : {};
+            ? { background: stickyBaseStyle.background || stickyBaseStyle.backgroundColor }
+            : getStickyStyle(cellLike.column, stickyBaseStyle.background || stickyBaseStyle.backgroundColor);
+        const selectionOverlayStyle = isSelected
+            ? (editedMarker ? selectedEditedOverlayRef : selectedOverlayRef)
+            : EMPTY_STYLE;
         const cellStateStyle = mergeStateStyles(
             stickyBaseStyle,
             stickyStyle,
-            selectedOverlayStyle,
-            focusOverlayStyle,
-            fillOverlayStyle
+            selectionOverlayStyle,
+            isLastSelected ? focusOverlayRef : EMPTY_STYLE,
+            isFillSelected ? fillOverlayRef : EMPTY_STYLE,
         );
 
-        // Fix row number ordering
         let cellContent;
-        if (cell.column.id === '__row_number__' && isVirtualRow) {
+        if (col.id === '__row_number__' && isVirtualRow) {
             cellContent = (row.original && typeof row.original.__virtualIndex === 'number')
                 ? row.original.__virtualIndex + 1
                 : (typeof row.index === 'number' ? row.index + 1 : virtualRowIndex + 1);
         } else {
             const rowData = row.original || {};
-            const hasFetchedColumn = Object.prototype.hasOwnProperty.call(rowData, cell.column.id);
+            const hasFetchedColumn = Object.prototype.hasOwnProperty.call(rowData, col.id);
             const showPendingColumnPlaceholder = (
                 serverSide &&
                 !!rowData.__colPending &&
                 !isHierarchy &&
-                cell.column.id !== '__row_number__' &&
+                col.id !== '__row_number__' &&
                 !hasFetchedColumn
             );
 
             if (showPendingColumnPlaceholder) {
-                cellContent = (
-                    <span
-                        aria-hidden="true"
-                        style={{
-                            width: '70%',
-                            maxWidth: '120px',
-                            height: '10px',
-                            borderRadius: '999px',
-                            background: 'var(--pivot-loading-cell-gradient, linear-gradient(90deg, rgba(232,242,255,0.7) 0%, rgba(190,218,255,0.94) 45%, rgba(232,242,255,0.7) 100%))',
-                            backgroundSize: '220% 100%',
-                            animation: 'pivot-skeleton-shimmer var(--pivot-loading-shimmer-duration, 2.8s) linear infinite'
-                        }}
-                    />
-                );
+                cellContent = <span aria-hidden="true" style={SKELETON_CELL_STYLE} />;
             } else {
-                cellContent = flexRender(cell.column.columnDef.cell, cell.getContext());
+                cellContent = flexRender(col.columnDef.cell, displayCellLike.getContext());
             }
         }
 
         // Data bars
-        const rawNumValue = cell.getValue();
+        const rawNumValue = resolvedCellValue;
         const isDataBar = !isHierarchy
             && dataBarsColumns && dataBarsColumns.has(col.id)
             && typeof rawNumValue === 'number'
@@ -189,7 +241,6 @@ export function useRenderHelpers({
         if (isDataBar) {
             const stats = colorScaleStats && colorScaleStats.byCol && colorScaleStats.byCol[col.id];
             if (stats) {
-                // Linear scale from zero: bar width = |value| / max(|max|, |min|)
                 const absMax = Math.max(Math.abs(stats.max), Math.abs(stats.min), 1e-9);
                 const pct = Math.min(1, Math.abs(rawNumValue) / absMax);
                 const isNeg = rawNumValue < 0;
@@ -217,46 +268,44 @@ export function useRenderHelpers({
 
         return (
             <div
-                key={cell.id}
+                key={cellLike.id}
                 role="gridcell"
                 aria-selected={isSelected}
-                onMouseDown={(e) => handleCellMouseDown(e, virtualRowIndex, colIndex, row.id, cell.column.id, cell.getValue())}
+                data-rowid={row.id}
+                data-colid={col.id}
+                onMouseDown={(e) => handleCellMouseDown(e, virtualRowIndex, colIndex, row.id, col.id, resolvedCellValue)}
                 onMouseEnter={() => handleCellMouseEnter(virtualRowIndex, colIndex)}
                 style={{
-                    ...styles.cell,
+                    ...baseCellStyle,
                     width: col.getSize(),
-                    height: '100%',
-                    display: 'flex',
-                    alignItems: 'center',
                     justifyContent: isHierarchy ? 'flex-start' : 'flex-end',
-                    fontFamily: "'Inter', ui-sans-serif, system-ui, sans-serif",
                     fontVariantNumeric: isHierarchy ? undefined : 'tabular-nums',
-                    fontWeight: cellFmt && cellFmt.bold ? 'bold' : (isGrandTotalRow ? 700 : isTotalCol ? 600 : ((isHierarchy && row.getIsGrouped()) ? 500 : 400)),
-                    fontStyle: cellFmt && cellFmt.italic ? 'italic' : undefined,
-                    color: cellFmt && cellFmt.color ? cellFmt.color : (isHierarchy ? undefined : ((isGrandTotalRow || isTotalCol) ? (theme.totalTextStrong || theme.primary) : theme.textSec)),
+                    fontWeight: cellFmt && cellFmt.bold
+                        ? 'bold'
+                        : (editedVisualStyle && editedVisualStyle.fontWeight)
+                            ? editedVisualStyle.fontWeight
+                            : (isGrandTotalRow ? 700 : isTotalCol ? 600 : ((isHierarchy && row.getIsGrouped()) ? 500 : 400)),
+                    fontStyle: cellFmt && cellFmt.italic
+                        ? 'italic'
+                        : (editedVisualStyle && editedVisualStyle.fontStyle ? editedVisualStyle.fontStyle : undefined),
+                    color: cellFmt && cellFmt.color
+                        ? cellFmt.color
+                        : (editedVisualStyle && editedVisualStyle.color)
+                            ? editedVisualStyle.color
+                            : (isHierarchy ? undefined : (
+                                isGrandTotalRow
+                                    ? themeBgs.grandTotalText
+                                    : isTotalCol ? themeBgs.totalText : theme.textSec
+                            )),
                     ...cellStateStyle,
-                    userSelect: 'none',
                     position: !disableSticky && cellStateStyle.position === 'sticky' ? 'sticky' : 'relative',
                 }}
-                onContextMenu={e => handleContextMenu(e, cell.getValue(), cell.column.id, row)}
+                onContextMenu={e => handleContextMenu(e, resolvedCellValue, col.id, row)}
             >
                 {dataBarEl}
-                <span style={dataBarEl ? { position: 'relative', zIndex: 1 } : undefined}>{cellContent}</span>
+                <span style={dataBarEl ? DATA_BAR_SPAN_STYLE : undefined}>{cellContent}</span>
                 {isLastSelected && Object.keys(selectedCells).length === 1 && isSelected && (
-                    <div
-                        onMouseDown={handleFillMouseDown}
-                        style={{
-                            position: 'absolute',
-                            right: 0,
-                            bottom: 0,
-                            width: '8px',
-                            height: '8px',
-                            background: theme.primary,
-                            cursor: 'crosshair',
-                            zIndex: 100,
-                            border: `1px solid ${isDarkTheme(theme) ? '#000' : '#fff'}`,                            borderRadius: '1px'
-                        }}
-                    />
+                    <div onMouseDown={handleFillMouseDown} style={fillHandleStyle} />
                 )}
             </div>
         );
@@ -274,35 +323,121 @@ export function useRenderHelpers({
         handleFillMouseDown,
         visibleLeafColIndexMap,
         lastSelected,
-        styles,
         getConditionalStyle,
         dataBarsColumns,
         colorScaleStats,
         cellFormatRules,
+        resolveEditedCellMarker,
+        resolveCellDisplayValue,
+        editedCellEpoch,
+        baseCellStyle,
+        selectedOverlayRef,
+        selectedEditedOverlayRef,
+        focusOverlayRef,
+        fillOverlayRef,
+        fillHandleStyle,
+        themeBgs,
+        EMPTY_STYLE,
+        DATA_BAR_SPAN_STYLE,
+        SKELETON_CELL_STYLE,
     ]);
 
-    // NEW: Render Header Cell for Split Sections
+    // --- Helper to Render a single real TanStack Cell with useCallback ---
+    const renderCell = useCallback((cell, virtualRowIndex, isVirtualRow = false, renderOptions = {}) => {
+        if (!cell) return null;
+        return renderResolvedCell(cell, virtualRowIndex, isVirtualRow, renderOptions);
+    }, [renderResolvedCell]);
+
+    // Render a lightweight pseudo-cell for the currently visible columns only.
+    // This avoids forcing TanStack to materialize cells for every leaf column in a row.
+    const renderVirtualColumnCell = useCallback((row, column, virtualRowIndex, isVirtualRow = false, renderOptions = {}) => {
+        if (!row || !column) return null;
+        const getValue = () => row.getValue(column.id);
+        const pseudoCell = {
+            id: `${row.id}_${column.id}`,
+            row,
+            column,
+            getValue,
+            renderValue: () => getValue() ?? null,
+        };
+        pseudoCell.getContext = () => ({
+            table: tableRef.current,
+            column,
+            row,
+            cell: pseudoCell,
+            getValue: pseudoCell.getValue,
+            renderValue: pseudoCell.renderValue,
+        });
+        return renderResolvedCell(pseudoCell, virtualRowIndex, isVirtualRow, renderOptions);
+    }, [renderResolvedCell, tableRef]);
+
+    // Pre-compute section leaf ID sets so renderHeaderCell doesn't rebuild them per call.
+    const leftColIdSet = useMemo(() => new Set(leftCols.map(c => c.id)), [leftCols]);
+    const rightColIdSet = useMemo(() => new Set(rightCols.map(c => c.id)), [rightCols]);
+    const centerColIdSet = useMemo(() => new Set(centerCols.map(c => c.id)), [centerCols]);
+    // Cache getLeafColumns() results by column id to avoid repeated tree walks.
+    // Cleared when column structure changes (tracked via the section sets above).
+    const leafColumnsCacheRef = useRef(new Map());
+    useMemo(() => { leafColumnsCacheRef.current = new Map(); }, [leftColIdSet, rightColIdSet, centerColIdSet]);
+
+    // Stable header style objects — rebuilt only on theme change.
+    const headerContentBaseStyle = useMemo(() => ({
+        display: 'flex',
+        alignItems: 'center',
+        gap: '4px',
+        width: '100%',
+        padding: '0 4px',
+        overflow: 'hidden',
+        minWidth: autoSizeBounds.minWidth,
+    }), [autoSizeBounds.minWidth]);
+
+    const headerTextStyle = useMemo(() => ({
+        overflow: 'hidden',
+        textOverflow: 'ellipsis',
+        whiteSpace: 'nowrap',
+        flex: 1,
+        minWidth: 0,
+    }), []);
+
+    const moreVertStyle = useMemo(() => ({
+        display: 'flex',
+        alignItems: 'center',
+        padding: '2px',
+        borderRadius: '4px',
+        cursor: 'pointer',
+        color: theme.textSec,
+        opacity: 0.6,
+    }), [theme.textSec]);
+
+    // Render Header Cell for Split Sections
     // overrideWidth: when set, replaces the computed section width (used for partially-visible
     // group headers during center-column virtualization so the width matches only the visible leaves).
-    const renderHeaderCell = (header, level, renderSection = 'center', overrideWidth = null, disableSticky = false) => {
+    // Wrapped in useCallback so PivotTableBody's React.memo can skip re-renders
+    // when only unrelated parent state (sidebar, charts, context menus) changes.
+    const renderHeaderCell = useCallback((header, level, renderSection = 'center', overrideWidth = null, disableSticky = false) => {
         const isGroupHeader = header.column.columns && header.column.columns.length > 0;
-        const isMeasureSubHeader = !isGroupHeader && header.column.id !== 'hierarchy' && header.column.id !== '__row_number__';
+        const isHierarchyHeader = header.column.id === 'hierarchy';
+        const isMeasureSubHeader = !isGroupHeader && !isHierarchyHeader && header.column.id !== '__row_number__';
         const headerText = typeof header.column.columnDef.header === 'string' ? header.column.columnDef.header : '';
         const parentText = header.column.parent && typeof header.column.parent.columnDef?.header === 'string' ? header.column.parent.columnDef.header : '';
         const isTotalGroupHeader = isGroupHeader && (headerText === 'Grand Total' || headerText.startsWith('Grand Total'));
         const isUnderTotalGroup = isMeasureSubHeader && (parentText === 'Grand Total' || parentText.startsWith('Grand Total'));
         const isSorted = header.column.getIsSorted();
         const sortIndex = header.column.getSortIndex();
-        const isMultiSort = table.getState().sorting.length > 1;
+        const isMultiSort = tableRef.current ? tableRef.current.getState().sorting.length > 1 : false;
         const isResizingColumn = header.column.getIsResizing();
-        const isHoveredHeader = hoveredHeaderId === header.column.id;
-        const isFocusedHeader = focusedHeaderId === header.column.id;
+        const isHoveredHeader = hoveredHeaderIdRef.current === header.column.id;
+        const isFocusedHeader = focusedHeaderIdRef.current === header.column.id;
         const isResizeHandleVisible = isResizingColumn || isHoveredHeader || isFocusedHeader;
         const isPinned = header.column.getIsPinned();
-        const leafColumns = header.column.getLeafColumns ? header.column.getLeafColumns() : [header.column];
-        const sectionLeafIds = new Set(
-            (renderSection === 'left' ? leftCols : renderSection === 'right' ? rightCols : centerCols).map(column => column.id)
-        );
+        // Use cached leaf columns to avoid O(n) tree walk per header per render
+        let leafColumns = leafColumnsCacheRef.current.get(header.column.id);
+        if (!leafColumns) {
+            leafColumns = header.column.getLeafColumns ? header.column.getLeafColumns() : [header.column];
+            leafColumnsCacheRef.current.set(header.column.id, leafColumns);
+        }
+        const sectionLeafIds = renderSection === 'left' ? leftColIdSet
+            : renderSection === 'right' ? rightColIdSet : centerColIdSet;
         const sectionWidth = leafColumns
             .filter(column => sectionLeafIds.has(column.id))
             .reduce((sum, column) => sum + column.getSize(), 0);
@@ -318,15 +453,18 @@ export function useRenderHelpers({
             ? { boxShadow: `inset 0 0 0 1px ${theme.primary}` }
             : {};
         const sortIconColor = isSorted ? (theme.sortedHeaderText || theme.primary) : theme.textSec;
+        const headerBaseBackground = isHierarchyHeader
+            ? (theme.hierarchyBg || theme.headerSubtleBg || theme.headerBg)
+            : theme.headerBg;
 
         // Calculate sticky style for pinned headers using the hook
         const stickyStyle = disableSticky
-            ? { background: mergeStateStyles({ background: theme.headerBg }, sortedHeaderStyle).background }
+            ? { background: mergeStateStyles({ background: headerBaseBackground }, sortedHeaderStyle).background }
             : getHeaderStickyStyle(
                 header,
                 level,
                 renderSection,
-                mergeStateStyles({ background: theme.headerBg }, sortedHeaderStyle).background
+                mergeStateStyles({ background: headerBaseBackground }, sortedHeaderStyle).background
             );
         const headerStateStyle = mergeStateStyles(
             styles.headerCell,
@@ -349,6 +487,9 @@ export function useRenderHelpers({
                     background: theme.totalBgStrong || (theme.totalBg || theme.select),
                     color: theme.totalTextStrong || theme.primary,
                     fontWeight: 700,
+                } : isHierarchyHeader ? {
+                    background: theme.hierarchyBg || theme.headerSubtleBg || theme.headerBg,
+                    color: theme.text,
                 } : isGroupHeader && !isSorted ? {
                     background: isDarkTheme(theme) ? theme.headerBg : (theme.headerSubtleBg || '#F9FAFB'),
                 } : {}),
@@ -394,24 +535,12 @@ export function useRenderHelpers({
             }}
             onClick={header.column.getToggleSortingHandler()}>
                 <div style={{
-                    display:'flex',
-                    alignItems:'center',
-                    gap: '4px',
-                    width: '100%',
+                    ...headerContentBaseStyle,
                     justifyContent: header.column.id === 'hierarchy' ? 'flex-start' : isMeasureSubHeader ? 'flex-end' : 'center',
-                    padding: '0 4px',
-                    overflow: 'hidden',
-                    minWidth: autoSizeBounds.minWidth
                 }}
                 data-header-content="true"
                 data-header-column-id={String(header.column.id)}>
-                <span style={{
-                    overflow:'hidden',
-                    textOverflow:'ellipsis',
-                    whiteSpace:'nowrap',
-                    flex: 1,
-                    minWidth: 0
-                }}
+                <span style={headerTextStyle}
                 data-header-text="true">
                     {header.isPlaceholder ? null : (typeof header.column.columnDef.header === 'string'
                         ? formatDisplayLabel(header.column.columnDef.header)
@@ -446,16 +575,7 @@ export function useRenderHelpers({
 
                 <div
                     onClick={(e) => { e.stopPropagation(); handleHeaderContextMenu(e, header.column.id, header, level); }}
-                    style={{
-                        display:'flex',
-                        alignItems: 'center',
-                        padding: '2px',
-                        borderRadius: '4px',
-                        cursor: 'pointer',
-                        color: theme.textSec,
-                        opacity: 0.6,
-                        hover: { opacity: 1, background: '#eee' }
-                    }}
+                    style={moreVertStyle}
                     aria-label="More options"
                 >
                     <Icons.MoreVert/>
@@ -510,7 +630,35 @@ export function useRenderHelpers({
                 />}
             </div>
         );
-    };
+    }, [
+        theme,
+        isDarkTheme,
+        styles.headerCell,
+        rowHeight,
+        // tableRef, hoveredHeaderIdRef, focusedHeaderIdRef are stable refs —
+        // read at call time, not listed as deps (identity never changes).
+        selectedCols,
+        filters,
+        activeFilterCol,
+        filterAnchorEl,
+        activeFilterOptions,
+        autoSizeColumn,
+        handleHeaderContextMenu,
+        handleFilterClick,
+        handleHeaderFilter,
+        closeFilterPopover,
+        setHoveredHeaderId,
+        setFocusedHeaderId,
+        onDragStart,
+        getHeaderStickyStyle,
+        leftColIdSet,
+        rightColIdSet,
+        centerColIdSet,
+        leafColumnsCacheRef,
+        headerContentBaseStyle,
+        headerTextStyle,
+        moreVertStyle,
+    ]);
 
-    return { renderCell, renderHeaderCell };
+    return { renderCell, renderVirtualColumnCell, renderHeaderCell };
 }

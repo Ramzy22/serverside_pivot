@@ -8,9 +8,8 @@ import {
     getGroupedRowModel,
 } from '@tanstack/react-table';
 import { useVirtualizer } from '@tanstack/react-virtual';
-import * as XLSX from 'xlsx';
-import { saveAs } from 'file-saver';
-import { themes, getStyles, isDarkTheme, gridDimensionTokens } from '../utils/styles';
+import { themes, getStyles, isDarkTheme, gridDimensionTokens, deriveEditedCellThemeTokens, deriveStructuralThemeTokens } from '../utils/styles';
+import { exportPivotTable } from '../utils/exportUtils';
 import { DEFAULT_FIELD_PANEL_SIZES, sanitizeFieldPanelSizes } from '../utils/fieldPanelLayout';
 import Icons from './Icons';
 const debugLog = (...args) => {
@@ -32,6 +31,7 @@ import Notification from './Notification';
 import useStickyStyles from '../hooks/useStickyStyles';
 import { useServerSideRowModel } from '../hooks/useServerSideRowModel';
 import { useColumnVirtualizer } from '../hooks/useColumnVirtualizer';
+import { useServerSideViewportController } from '../hooks/useServerSideViewportController';
 import {
     DEFAULT_NUMBER_GROUP_SEPARATOR,
     formatAggLabel,
@@ -42,10 +42,19 @@ import {
     isGroupColumn,
     normalizeNumberGroupSeparator,
 } from '../utils/helpers';
+import {
+    normalizeEditingConfig,
+    resolveColumnEditSpec,
+    resolveEditorOptionsSource,
+    validateEditorValue,
+} from '../utils/editing';
+import { getPivotProfiler, isPivotProfilingEnabled } from '../utils/pivotProfiler';
 import ContextMenu from './Table/ContextMenu';
 import { PivotAppBar } from './PivotAppBar';
 import { SidebarPanel } from './Sidebar/SidebarPanel';
-import DrillThroughModal from './Table/DrillThroughModal';
+import DetailSidePanel from './Table/DetailSidePanel';
+import EditSidePanel from './Table/EditSidePanel';
+import DetailDrawer from './Table/DetailDrawer';
 import {
     buildPivotChartModel,
     buildComboPivotChartModel,
@@ -61,6 +70,15 @@ import { PivotTableBody } from './Table/PivotTableBody';
 import PivotErrorBoundary from './PivotErrorBoundary';
 import { usePersistence } from '../hooks/usePersistence';
 import { useFilteredData } from '../hooks/useFilteredData';
+import { useChartState } from '../hooks/useChartState';
+import { useFormatState } from '../hooks/useFormatState';
+import { useCellInteraction } from '../hooks/useCellInteraction';
+import { useSidebarUI } from '../hooks/useSidebarUI';
+import { useReportMode } from '../hooks/useReportMode';
+import { useDetailDrillThrough } from '../hooks/useDetailDrillThrough';
+import { PivotThemeProvider } from '../contexts/PivotThemeContext';
+import { PivotConfigProvider } from '../contexts/PivotConfigContext';
+import { PivotValueDisplayProvider } from '../contexts/PivotValueDisplayContext';
 
 const DEFAULT_CHART_PANEL_ROW_LIMIT = 50;
 const DEFAULT_CHART_PANEL_COLUMN_LIMIT = 10;
@@ -71,9 +89,13 @@ const MAX_CHART_PANEL_WIDTH = 960;
 const MIN_FLOATING_CHART_PANEL_HEIGHT = 280;
 const MIN_TABLE_PANEL_WIDTH = 0;
 const MIN_CHART_CANVAS_PANE_WIDTH = 320;
+const DEFAULT_DOCKED_CHART_PANE_HEIGHT = 420;
+const MIN_DOCKED_CHART_PANE_HEIGHT = 180;
+const MIN_TABLE_PANEL_HEIGHT = 200;
+const VALID_CHART_DOCK_POSITIONS = new Set(['left', 'right', 'top', 'bottom']);
 const DEFAULT_TABLE_CANVAS_SIZE = 1.4;
 const TABLE_OVERLAY_CHART_PANE_ID = '__table_overlay_chart__';
-const VALID_CHART_TYPES = new Set(['bar', 'line', 'area', 'combo', 'icicle', 'sunburst', 'sankey']);
+const VALID_CHART_TYPES = new Set(['bar', 'line', 'area', 'sparkline', 'combo', 'pie', 'donut', 'scatter', 'waterfall', 'icicle', 'sunburst', 'sankey']);
 const VALID_CHART_SORT_MODES = new Set(['natural', 'value_desc', 'value_asc', 'label_asc', 'label_desc']);
 const VALID_CHART_INTERACTION_MODES = new Set(['focus', 'filter', 'event']);
 const VALID_CHART_SERVER_SCOPES = new Set(['viewport', 'root']);
@@ -97,7 +119,296 @@ const cloneSerializable = (value, fallback = null) => {
     }
 };
 
-const normalizePivotModeValue = (value) => (
+const VALID_VIEW_MODES = new Set(['pivot', 'report', 'tree', 'table']);
+const VALID_DETAIL_MODES = new Set(['none', 'inline', 'sidepanel', 'drawer']);
+const SOFT_CENTER_COLUMN_WARNING_THRESHOLD = 2000;
+const HARD_CENTER_COLUMN_WARNING_THRESHOLD = 10000;
+const clampOptionalInteger = (value, min, max) => {
+    const normalized = Number(value);
+    if (!Number.isFinite(normalized)) return null;
+    return Math.max(min, Math.min(max, Math.floor(normalized)));
+};
+
+const VALID_TREE_DISPLAY_MODES = new Set(['singleColumn', 'multipleColumns']);
+const VALID_DETAIL_REFRESH_STRATEGIES = new Set(['rows', 'everything', 'nothing']);
+const VALID_TRANSACTION_REFRESH_MODES = new Set(['none', 'viewport', 'smart', 'structural', 'full', 'patch']);
+const MAX_TRANSACTION_HISTORY_ENTRIES = 100;
+
+const normalizeViewModeValue = (value) => (
+    VALID_VIEW_MODES.has(value) ? value : null
+);
+
+const normalizeDetailModeValue = (value) => (
+    VALID_DETAIL_MODES.has(value) ? value : null
+);
+
+const normalizeTreeSourceTypeValue = (value) => {
+    const normalized = typeof value === 'string' ? value.trim().toLowerCase() : '';
+    if (normalized === 'path' || normalized === 'data_path' || normalized === 'datapath') return 'path';
+    if (normalized === 'parentid' || normalized === 'parent_id' || normalized === 'adjacency') return 'adjacency';
+    if (normalized === 'nested' || normalized === 'children') return 'nested';
+    return 'adjacency';
+};
+
+const normalizeTreeDisplayModeValue = (value) => {
+    if (typeof value !== 'string') return 'singleColumn';
+    const normalized = value.trim().toLowerCase();
+    if (normalized === 'multiplecolumns' || normalized === 'multiple_columns' || normalized === 'multiple' || normalized === 'tabular' || normalized === 'outline') {
+        return 'multipleColumns';
+    }
+    return 'singleColumn';
+};
+
+const normalizeTreeGroupDefaultExpandedValue = (value) => {
+    const normalized = Number(value);
+    if (!Number.isFinite(normalized)) return 0;
+    const rounded = Math.floor(normalized);
+    if (rounded < -1) return -1;
+    return rounded;
+};
+
+const normalizeTreeDefaultOpenPathsValue = (value) => {
+    if (!Array.isArray(value)) return [];
+    const normalizedPaths = [];
+    value.forEach((entry) => {
+        if (typeof entry === 'string' && entry.trim()) {
+            normalizedPaths.push(entry.trim());
+            return;
+        }
+        if (Array.isArray(entry)) {
+            const normalizedEntry = entry
+                .map((part) => (part === undefined || part === null ? '' : String(part).trim()))
+                .filter(Boolean)
+                .join('|||');
+            if (normalizedEntry) normalizedPaths.push(normalizedEntry);
+        }
+    });
+    return Array.from(new Set(normalizedPaths));
+};
+
+const normalizeTreeLevelLabelsValue = (value) => (
+    Array.isArray(value)
+        ? value
+            .map((label) => (typeof label === 'string' ? label.trim() : ''))
+            .filter(Boolean)
+        : []
+);
+
+const normalizeDetailRefreshStrategyValue = (value) => {
+    const normalized = typeof value === 'string' ? value.trim().toLowerCase() : '';
+    return VALID_DETAIL_REFRESH_STRATEGIES.has(normalized) ? normalized : 'rows';
+};
+
+const hasTransactionEntries = (transaction) => (
+    Boolean(transaction && typeof transaction === 'object')
+    && ['add', 'remove', 'update', 'upsert'].some((kind) => Array.isArray(transaction[kind]) && transaction[kind].length > 0)
+);
+
+const normalizeTransactionRefreshModeValue = (value, fallback = 'smart') => {
+    const normalized = typeof value === 'string' ? value.trim().toLowerCase() : '';
+    return VALID_TRANSACTION_REFRESH_MODES.has(normalized) ? normalized : fallback;
+};
+
+const normalizePropagationFormulaValue = (value, fallback = 'equal') => {
+    const normalized = typeof value === 'string'
+        ? value.trim().toLowerCase().replace(/[\s-]+/g, '_')
+        : '';
+    if (['equal', 'even', 'default', 'delta', 'uniform', 'equal_delta', 'balanced_delta', 'uniform_shift', 'balanced_shift'].includes(normalized)) {
+        return 'equal';
+    }
+    if (['proportional', 'ratio', 'scale', 'scaled'].includes(normalized)) {
+        return 'proportional';
+    }
+    if (fallback === null || fallback === undefined) return null;
+    if (fallback === value) return null;
+    return normalizePropagationFormulaValue(fallback, null);
+};
+
+const isParentAggregatePropagationEdit = (update, groupingFields) => {
+    if (!update || typeof update !== 'object') return false;
+    const aggregation = update.aggregation && typeof update.aggregation === 'object'
+        ? update.aggregation
+        : null;
+    const aggregationFn = aggregation && aggregation.agg
+        ? String(aggregation.agg).trim().toLowerCase()
+        : '';
+    if (!aggregationFn || aggregation.windowFn) return false;
+    const rowPath = update.rowPath || update.rowId;
+    const normalizedRowPath = rowPath === null || rowPath === undefined ? '' : String(rowPath).trim();
+    if (!normalizedRowPath || normalizedRowPath === GRAND_TOTAL_ROW_ID) return false;
+    const pathDepth = normalizedRowPath.split('|||').filter(Boolean).length;
+    const groupingDepth = Array.isArray(groupingFields) ? groupingFields.length : 0;
+    return groupingDepth > 0 && pathDepth > 0 && pathDepth < groupingDepth;
+};
+
+const normalizeTransactionHistoryPayload = (transaction, overrides = {}) => {
+    if (!transaction || typeof transaction !== 'object') return null;
+    const normalized = cloneSerializable({
+        add: Array.isArray(transaction.add) ? transaction.add : [],
+        remove: Array.isArray(transaction.remove) ? transaction.remove : [],
+        update: Array.isArray(transaction.update) ? transaction.update : [],
+        upsert: Array.isArray(transaction.upsert) ? transaction.upsert : [],
+        keyFields: Array.isArray(transaction.keyFields) ? transaction.keyFields : [],
+        refreshMode: normalizeTransactionRefreshModeValue(
+            overrides.refreshMode !== undefined ? overrides.refreshMode : transaction.refreshMode,
+            'smart'
+        ),
+        source: overrides.source !== undefined ? overrides.source : transaction.source,
+    }, null);
+    return hasTransactionEntries(normalized) ? normalized : null;
+};
+
+const cellValuesMatch = (expectedValue, actualValue) => {
+    if (Object.is(expectedValue, actualValue)) return true;
+    const expectedNumber = Number(expectedValue);
+    const actualNumber = Number(actualValue);
+    if (Number.isFinite(expectedNumber) && Number.isFinite(actualNumber)) {
+        return expectedNumber === actualNumber;
+    }
+    return String(expectedValue) === String(actualValue);
+};
+
+const hasAppliedTransactionWork = (transactionResult) => (
+    Boolean(transactionResult && typeof transactionResult === 'object')
+    && Object.values((transactionResult.applied && typeof transactionResult.applied === 'object') ? transactionResult.applied : {})
+        .some((count) => Number(count) > 0)
+);
+
+const shouldShowTransactionLoading = (transaction) => {
+    if (!transaction || typeof transaction !== 'object') return true;
+    const refreshMode = normalizeTransactionRefreshModeValue(transaction.refreshMode, 'smart');
+    if (refreshMode === 'structural' || refreshMode === 'full' || refreshMode === 'smart_structural') {
+        return true;
+    }
+    return ['add', 'remove', 'upsert'].some((kind) => Array.isArray(transaction[kind]) && transaction[kind].length > 0);
+};
+
+const describeTransactionPropagation = (entry) => {
+    if (!entry || typeof entry !== 'object') return '';
+    const updatedRowCount = Math.max(0, Number(entry.updatedRowCount) || 0);
+    const targetColumn = entry.targetColumn ? formatDisplayLabel(entry.targetColumn) : 'value';
+    const aggregationLabel = formatAggLabel(entry.aggregationFn || 'sum', entry.weightField);
+    const strategy = normalizePropagationFormulaValue(entry.strategy, null);
+    const strategyLabel = strategy ? ` using ${strategy} formula` : '';
+    if (updatedRowCount > 0) {
+        return `Propagated ${aggregationLabel} on ${targetColumn} to ${updatedRowCount} source row${updatedRowCount === 1 ? '' : 's'}${strategyLabel}.`;
+    }
+    return `Applied ${aggregationLabel} edit on ${targetColumn}${strategyLabel}.`;
+};
+
+const isEditableKeyboardTarget = (target) => {
+    if (!target || typeof target !== 'object') return false;
+    const tagName = typeof target.tagName === 'string' ? target.tagName.toUpperCase() : '';
+    return Boolean(
+        target.isContentEditable
+        || tagName === 'INPUT'
+        || tagName === 'TEXTAREA'
+        || tagName === 'SELECT'
+    );
+};
+
+const normalizeTreeConfigValue = (value) => {
+    const source = value && typeof value === 'object' ? value : {};
+    const sourceType = normalizeTreeSourceTypeValue(
+        source.sourceType
+        || source.source_type
+        || source.mode
+        || source.treeDataMode
+        || source.tree_data_mode
+    );
+    const valueFields = Array.isArray(source.valueFields)
+        ? source.valueFields.filter((field) => typeof field === 'string' && field)
+        : [];
+    const extraFields = Array.isArray(source.extraFields)
+        ? source.extraFields.filter((field) => typeof field === 'string' && field)
+        : [];
+    const defaultOpenValue = Object.prototype.hasOwnProperty.call(source, 'openByDefault')
+        ? source.openByDefault
+        : source.open_by_default;
+    const groupDefaultExpandedSource = Array.isArray(defaultOpenValue)
+        ? undefined
+        : (
+            defaultOpenValue !== undefined
+                ? defaultOpenValue
+                : (
+                    source.groupDefaultExpanded !== undefined
+                        ? source.groupDefaultExpanded
+                        : (
+                            source.group_default_expanded !== undefined
+                                ? source.group_default_expanded
+                                : source.defaultOpenDepth
+                        )
+                )
+        );
+    const defaultOpenPaths = normalizeTreeDefaultOpenPathsValue(
+        Array.isArray(defaultOpenValue)
+            ? defaultOpenValue
+            : (source.defaultOpenPaths || source.default_open_paths)
+    );
+    return {
+        sourceType,
+        idField: typeof (source.idField || source.id_field) === 'string' && (source.idField || source.id_field) ? (source.idField || source.id_field) : 'id',
+        parentIdField: typeof (source.parentIdField || source.parent_id_field || source.treeDataParentIdField) === 'string' && (source.parentIdField || source.parent_id_field || source.treeDataParentIdField)
+            ? (source.parentIdField || source.parent_id_field || source.treeDataParentIdField)
+            : 'parent_id',
+        pathField: typeof (source.pathField || source.path_field || source.treeDataPathField || source.dataPathField) === 'string' && (source.pathField || source.path_field || source.treeDataPathField || source.dataPathField)
+            ? (source.pathField || source.path_field || source.treeDataPathField || source.dataPathField)
+            : 'path',
+        pathSeparator: typeof (source.pathSeparator || source.path_separator) === 'string' && (source.pathSeparator || source.path_separator) ? (source.pathSeparator || source.path_separator) : '|||',
+        childrenField: typeof (source.childrenField || source.children_field || source.treeDataChildrenField) === 'string' && (source.childrenField || source.children_field || source.treeDataChildrenField)
+            ? (source.childrenField || source.children_field || source.treeDataChildrenField)
+            : 'children',
+        labelField: typeof (source.labelField || source.label_field) === 'string' && (source.labelField || source.label_field) ? (source.labelField || source.label_field) : 'name',
+        sortBy: typeof (source.sortBy || source.sort_by) === 'string' && (source.sortBy || source.sort_by) ? (source.sortBy || source.sort_by) : null,
+        sortDir: (source.sortDir || source.sort_dir) === 'desc' ? 'desc' : 'asc',
+        valueFields,
+        extraFields,
+        displayMode: normalizeTreeDisplayModeValue(source.displayMode || source.display_mode || source.treeDataDisplayType || source.tree_data_display_type),
+        groupDefaultExpanded: normalizeTreeGroupDefaultExpandedValue(groupDefaultExpandedSource),
+        defaultOpenPaths,
+        suppressGroupRowsSticky: Boolean(
+            source.suppressGroupRowsSticky
+            || source.suppress_group_rows_sticky
+            || source.disableStickyGroups
+            || source.disable_sticky_groups
+        ),
+        levelLabels: normalizeTreeLevelLabelsValue(source.levelLabels || source.level_labels),
+    };
+};
+
+const normalizeDetailConfigValue = (value) => {
+    const source = value && typeof value === 'object' ? value : {};
+    const defaultKind = typeof source.defaultKind === 'string' && source.defaultKind.trim()
+        ? source.defaultKind.trim().toLowerCase()
+        : 'records';
+    return {
+        enabled: source.enabled !== false,
+        defaultKind,
+        allowPerRowKind: (source.allowPerRowKind !== false) && (source.allow_per_row_kind !== false),
+        inlineHeight: Number.isFinite(Number(source.inlineHeight || source.inline_height)) ? Math.max(220, Math.floor(Number(source.inlineHeight || source.inline_height))) : 280,
+        sidepanelWidth: Number.isFinite(Number(source.sidepanelWidth || source.sidepanel_width)) ? Math.max(320, Math.floor(Number(source.sidepanelWidth || source.sidepanel_width))) : 480,
+        drawerHeight: Number.isFinite(Number(source.drawerHeight || source.drawer_height)) ? Math.max(240, Math.floor(Number(source.drawerHeight || source.drawer_height))) : 320,
+        keepDetailRows: Boolean(source.keepDetailRows || source.keep_detail_rows),
+        keepDetailRowsCount: clampOptionalInteger(
+            source.keepDetailRowsCount !== undefined
+                ? source.keepDetailRowsCount
+                : source.keep_detail_rows_count,
+            1,
+            1000
+        ) || 10,
+        refreshStrategy: normalizeDetailRefreshStrategyValue(source.refreshStrategy || source.refresh_strategy),
+    };
+};
+
+const hasTreeDefaultExpansionConfig = (treeConfig) => {
+    if (!treeConfig || typeof treeConfig !== 'object') return false;
+    if (Number.isFinite(Number(treeConfig.groupDefaultExpanded)) && Number(treeConfig.groupDefaultExpanded) !== 0) {
+        return true;
+    }
+    return Array.isArray(treeConfig.defaultOpenPaths) && treeConfig.defaultOpenPaths.length > 0;
+};
+
+const normalizeLegacyPivotModeValue = (value) => (
     value === 'report' || value === 'pivot' ? value : null
 );
 
@@ -390,6 +701,8 @@ const sanitizeChartDefinitions = (definitions, fallbackDefinition) => {
 
 const serializeChartColumn = (column) => {
     if (!column || typeof column !== 'object') return null;
+    const columnMeta = (column.columnDef && column.columnDef.meta) || column.meta || null;
+    if (columnMeta && columnMeta.isSparklineSummary) return null;
     return {
         id: column.id || null,
         headerVal: column.headerVal !== undefined ? column.headerVal : null,
@@ -493,6 +806,72 @@ const resolveChartAvailableColumns = (chartDataEntry, fallbackColumns = []) => {
     return merged;
 };
 
+const coerceTransportNumber = (value, fallback = null) => {
+    if (value === null || value === undefined || value === '') return fallback;
+    const numeric = Number(value);
+    return Number.isFinite(numeric) ? numeric : fallback;
+};
+
+const normalizeRuntimeDataEnvelope = (payload, fallback = {}) => {
+    const source = payload && typeof payload === 'object' ? payload : {};
+    return {
+        data: Array.isArray(source.data) ? source.data : (Array.isArray(fallback.data) ? fallback.data : []),
+        rowCount: coerceTransportNumber(source.rowCount, coerceTransportNumber(fallback.rowCount, null)),
+        columns: Array.isArray(source.columns) ? source.columns : (Array.isArray(fallback.columns) ? fallback.columns : []),
+        dataOffset: coerceTransportNumber(source.dataOffset, coerceTransportNumber(fallback.dataOffset, 0)),
+        dataVersion: coerceTransportNumber(source.dataVersion, coerceTransportNumber(fallback.dataVersion, 0)),
+    };
+};
+
+const resolveTransportRowId = (row) => {
+    if (!row || typeof row !== 'object') return null;
+    if (row._isTotal || row._path === '__grand_total__' || row._id === 'Grand Total' || row.__isGrandTotal__) {
+        return '__grand_total__';
+    }
+    if (row._path !== undefined && row._path !== null && row._path !== '') return String(row._path);
+    if (row.id !== undefined && row.id !== null && row.id !== '') return String(row.id);
+    if (row._id !== undefined && row._id !== null && row._id !== '') return String(row._id);
+    return null;
+};
+
+const applyRuntimePatchEnvelope = (patch, fallback = {}) => {
+    const source = patch && typeof patch === 'object' ? patch : {};
+    const previousState = fallback && typeof fallback === 'object' ? fallback : {};
+    const previousData = Array.isArray(previousState.data) ? previousState.data : [];
+    const patchRows = Array.isArray(source.rows) ? source.rows.filter((row) => row && typeof row === 'object') : [];
+
+    if (patchRows.length === 0) {
+        return normalizeRuntimeDataEnvelope({
+            data: previousData,
+            rowCount: source.rowCount,
+            columns: source.columns,
+            dataOffset: source.dataOffset,
+            dataVersion: source.dataVersion,
+        }, previousState);
+    }
+
+    const patchByRowId = new Map();
+    patchRows.forEach((row) => {
+        const rowId = resolveTransportRowId(row);
+        if (!rowId) return;
+        patchByRowId.set(rowId, row);
+    });
+
+    const mergedData = previousData.map((row) => {
+        const rowId = resolveTransportRowId(row);
+        if (!rowId || !patchByRowId.has(rowId)) return row;
+        return { ...row, ...patchByRowId.get(rowId) };
+    });
+
+    return normalizeRuntimeDataEnvelope({
+        data: mergedData,
+        rowCount: source.rowCount,
+        columns: source.columns,
+        dataOffset: source.dataOffset,
+        dataVersion: source.dataVersion,
+    }, previousState);
+};
+
 const normalizeLockedChartRequest = (value) => {
     if (!value || typeof value !== 'object') return null;
     return {
@@ -502,6 +881,10 @@ const normalizeLockedChartRequest = (value) => {
         requestSignature: typeof value.requestSignature === 'string' ? value.requestSignature : null,
     };
 };
+
+const normalizeChartDockPosition = (value, fallback = 'right') => (
+    VALID_CHART_DOCK_POSITIONS.has(value) ? value : fallback
+);
 
 const normalizeChartCanvasPane = (value, fallbackDefinition, index = 0) => {
     const source = value && typeof value === 'object' ? value : {};
@@ -514,6 +897,7 @@ const normalizeChartCanvasPane = (value, fallbackDefinition, index = 0) => {
     return {
         ...normalizedDefinition,
         size: Number.isFinite(numericSize) && numericSize > 0 ? numericSize : 1,
+        dockPosition: normalizeChartDockPosition(source.dockPosition || source.dock_position, 'right'),
         floating: Boolean(source.floating),
         floatingRect: clampFloatingChartRect(source.floatingRect, null),
         locked: Boolean(source.locked),
@@ -623,6 +1007,58 @@ const normalizeDefaultValueFormat = (value) => {
     return SUPPORTED_DEFAULT_NUMBER_FORMATS.has(normalized) ? normalized : '';
 };
 
+const mergeSparseColSchema = (previousSchema, incomingSchema, fallbackSize = 140) => {
+    if (!incomingSchema || typeof incomingSchema !== 'object') return previousSchema;
+    const totalRaw = Number(incomingSchema.total_center_cols);
+    if (!Number.isFinite(totalRaw) || totalRaw < 0) return previousSchema;
+
+    const total = Math.max(0, Math.floor(totalRaw));
+    const nextColumns = Array.from({ length: total }, (_, index) => {
+        const previousColumn = previousSchema
+            && previousSchema.total_center_cols === total
+            && Array.isArray(previousSchema.columns)
+            ? previousSchema.columns[index]
+            : null;
+        return previousColumn || null;
+    });
+
+    for (const rawColumn of (incomingSchema.columns || [])) {
+        if (!rawColumn || typeof rawColumn !== 'object') continue;
+        const indexRaw = Number(rawColumn.index);
+        if (!Number.isFinite(indexRaw)) continue;
+        const index = Math.floor(indexRaw);
+        if (index < 0 || index >= total) continue;
+        nextColumns[index] = {
+            ...rawColumn,
+            index,
+            size: Number.isFinite(Number(rawColumn.size))
+                ? Number(rawColumn.size)
+                : fallbackSize,
+        };
+    }
+
+    return {
+        total_center_cols: total,
+        columns: nextColumns,
+    };
+};
+
+const isSparseSchemaRangeLoaded = (schema, start, end) => {
+    if (!schema || !Array.isArray(schema.columns)) return false;
+    const total = Number.isFinite(Number(schema.total_center_cols))
+        ? Math.max(0, Math.floor(Number(schema.total_center_cols)))
+        : schema.columns.length;
+    if (total === 0) return true;
+    if (start === null || start === undefined || end === null || end === undefined) return false;
+    const safeStart = Math.max(0, Math.min(Math.floor(start), total - 1));
+    const safeEnd = Math.max(safeStart, Math.min(Math.floor(end), total - 1));
+    for (let index = safeStart; index <= safeEnd; index += 1) {
+        const entry = schema.columns[index];
+        if (!entry || typeof entry.id !== 'string' || !entry.id) return false;
+    }
+    return true;
+};
+
 const loadingAnimationStyles = `
 @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@300;500&family=Plus+Jakarta+Sans:wght@300;500;800&display=swap');
 @keyframes pivot-row-loader-enter {
@@ -641,6 +1077,57 @@ const loadingAnimationStyles = `
 
 const getStickyHeaderHeight = (headerGroupCount, rowHeight, showFloatingFilters) =>
     (headerGroupCount * rowHeight) + (showFloatingFilters ? rowHeight : 0);
+
+const normalizePerformanceConfigValue = (value) => {
+    const source = value && typeof value === 'object' ? value : {};
+    return {
+        cacheBlockSize: clampOptionalInteger(source.cacheBlockSize, 16, 1024),
+        maxBlocksInCache: clampOptionalInteger(source.maxBlocksInCache, 8, 5000),
+        blockLoadDebounceMs: clampOptionalInteger(source.blockLoadDebounceMs, 0, 500),
+        rowOverscan: clampOptionalInteger(source.rowOverscan, 0, 64),
+        columnOverscan: clampOptionalInteger(source.columnOverscan, 0, 16),
+        prefetchColumns: clampOptionalInteger(source.prefetchColumns, 0, 32),
+    };
+};
+
+const buildLargeColumnAdvisory = ({ serverSide, totalCenterCols, colFields }) => {
+    const normalizedCount = Number(totalCenterCols);
+    if (!serverSide || !Number.isFinite(normalizedCount) || normalizedCount < SOFT_CENTER_COLUMN_WARNING_THRESHOLD) {
+        return null;
+    }
+
+    const safeCount = Math.max(0, Math.floor(normalizedCount));
+    const tone = safeCount >= HARD_CENTER_COLUMN_WARNING_THRESHOLD ? 'warning' : 'info';
+    const formattedCount = new Intl.NumberFormat().format(safeCount);
+    const fieldLabel = Array.isArray(colFields) && colFields.length > 0
+        ? colFields.map((field) => formatDisplayLabel(field)).join(' × ')
+        : 'the current column shape';
+
+    return {
+        tone,
+        label: tone === 'warning' ? `Wide pivot: ${formattedCount} cols` : `${formattedCount} cols`,
+        detail: `${fieldLabel} creates ${formattedCount} center columns. Bucket numeric fields, roll up dates, or move one field to Rows or Filters for smoother interaction.`,
+        notification: `${fieldLabel} creates ${formattedCount} center columns. For smoother interaction, bucket numeric fields, roll up dates, or move one field to Rows or Filters.`,
+    };
+};
+
+const hasActiveFilterValue = (value) => {
+    if (value === null || value === undefined) return false;
+    if (typeof value === 'string') return value.trim().length > 0;
+    if (Array.isArray(value)) return value.length > 0;
+    if (typeof value === 'object') {
+        return Object.keys(value).length > 0;
+    }
+    return true;
+};
+
+const countActiveFilters = (filters) => {
+    if (!filters || typeof filters !== 'object') return 0;
+    return Object.values(filters).reduce(
+        (count, value) => count + (hasActiveFilterValue(value) ? 1 : 0),
+        0
+    );
+};
 
 const GRAND_TOTAL_ROW_ID = '__grand_total__';
 const MISSING_PERSISTED_VALUE = Symbol('missing-persisted-value');
@@ -684,11 +1171,10 @@ const applyRowPinning = (rowPinning, rowId, pinState) => {
 export default function DashTanstackPivot(props) {
     const { 
         id, 
-        data = [], 
+        data: inputData = [], 
         style = {}, 
         setProps, 
         serverSide = false, 
-        rowCount,
         rowFields: initialRowFields = [],
         colFields: initialColFields = [],
         valConfigs: initialValConfigs = [],
@@ -699,9 +1185,10 @@ export default function DashTanstackPivot(props) {
         showRowTotals: initialShowRowTotals = true,
         showColTotals: initialShowColTotals = true,
         grandTotalPosition = 'top',
-        filterOptions = {},
         conditionalFormatting = [],
         validationRules = {},
+        editingConfig: externalEditingConfig = null,
+        editState: externalEditState = null,
         columnPinning: initialColumnPinning = { left: ['hierarchy'], right: [] },
         rowPinning: initialRowPinning = { top: [], bottom: [] },
         persistence,
@@ -714,7 +1201,6 @@ export default function DashTanstackPivot(props) {
         fieldPanelSizes: externalFieldPanelSizes = null,
         defaultValueFormat: externalDefaultValueFormat = '',
         numberGroupSeparator: externalNumberGroupSeparator = DEFAULT_NUMBER_GROUP_SEPARATOR,
-        pivotMode: externalPivotMode,
         reportDef: externalReportDef,
         savedReports: externalSavedReports,
         activeReportId: externalActiveReportId,
@@ -723,15 +1209,18 @@ export default function DashTanstackPivot(props) {
         defaultTheme = 'flash',
         availableFieldList,
         table: tableName,
-        dataOffset = 0,
-        dataVersion = 0,
-        chartData = null,
+        runtimeResponse = null,
+        viewMode: externalViewMode,
+        detailMode: externalDetailMode,
+        treeConfig: externalTreeConfig,
+        detailConfig: externalDetailConfig,
         chartServerWindow = null,
         chartDefinitions = null,
         chartDefaults = null,
         chartCanvasPanes: externalChartCanvasPanes = null,
         tableCanvasSize: externalTableCanvasSize = null,
         drillEndpoint = '/api/drill-through',
+        performanceConfig: externalPerformanceConfig = null,
         viewState = null,
         saveViewTrigger = null,
     } = props;
@@ -771,18 +1260,41 @@ export default function DashTanstackPivot(props) {
         () => normalizeDefaultValueFormat(externalDefaultValueFormat),
         [externalDefaultValueFormat]
     );
+    const normalizedEditingConfig = useMemo(
+        () => normalizeEditingConfig(externalEditingConfig),
+        [externalEditingConfig]
+    );
     const normalizedInitialNumberGroupSeparator = useMemo(
         () => normalizeNumberGroupSeparator(externalNumberGroupSeparator),
         [externalNumberGroupSeparator]
     );
-    const hasExternalPivotMode = normalizePivotModeValue(externalPivotMode) !== null;
+    const normalizedPerformanceConfig = useMemo(
+        () => normalizePerformanceConfigValue(externalPerformanceConfig),
+        [externalPerformanceConfig]
+    );
+    const hasExternalViewMode = normalizeViewModeValue(externalViewMode) !== null;
+    const hasExternalDetailMode = normalizeDetailModeValue(externalDetailMode) !== null;
+    const hasExternalTreeConfig = externalTreeConfig !== undefined;
+    const hasExternalDetailConfig = externalDetailConfig !== undefined;
+    const normalizedInitialViewMode = useMemo(
+        () => normalizeViewModeValue(externalViewMode) || 'pivot',
+        [externalViewMode]
+    );
+    const normalizedInitialDetailMode = useMemo(
+        () => normalizeDetailModeValue(externalDetailMode) || 'none',
+        [externalDetailMode]
+    );
+    const normalizedInitialTreeConfig = useMemo(
+        () => normalizeTreeConfigValue(externalTreeConfig),
+        [externalTreeConfig]
+    );
+    const normalizedInitialDetailConfig = useMemo(
+        () => normalizeDetailConfigValue(externalDetailConfig),
+        [externalDetailConfig]
+    );
     const hasExternalReportDef = externalReportDef !== undefined;
     const hasExternalSavedReports = externalSavedReports !== undefined;
     const hasExternalActiveReportId = externalActiveReportId !== undefined;
-    const normalizedInitialPivotMode = useMemo(
-        () => normalizePivotModeValue(externalPivotMode) || 'pivot',
-        [externalPivotMode]
-    );
     const normalizedInitialReportDef = useMemo(
         () => normalizeReportDefValue(externalReportDef),
         [externalReportDef]
@@ -808,7 +1320,37 @@ export default function DashTanstackPivot(props) {
     // --- Persistence Helper ---
     const { load: loadPersistedState, save: savePersistedState } = usePersistence(id, persistence, persistence_type);
 
+        const [transportDataState, setTransportDataState] = useState(() => normalizeRuntimeDataEnvelope({
+            data: Array.isArray(inputData) ? inputData : [],
+            rowCount: serverSide ? null : (Array.isArray(inputData) ? inputData.length : 0),
+            columns: [],
+            dataOffset: 0,
+            dataVersion: 0,
+        }));
+        const [transportFilterOptionsState, setTransportFilterOptionsState] = useState(() => ({}));
+        const [editorOptionsLoadingState, setEditorOptionsLoadingState] = useState(() => ({}));
+        const [transportChartDataState, setTransportChartDataState] = useState(() => (null));
+
+        const data = transportDataState.data;
+        const rowCount = transportDataState.rowCount;
+        const responseColumns = transportDataState.columns;
+        const dataOffset = transportDataState.dataOffset;
+        const dataVersion = transportDataState.dataVersion;
+        const filterOptions = transportFilterOptionsState;
+        const chartData = transportChartDataState;
+
         const [notification, setNotification] = useState(null);
+
+        useEffect(() => {
+            if (serverSide) return;
+            setTransportDataState((previousState) => normalizeRuntimeDataEnvelope({
+                data: Array.isArray(inputData) ? inputData : [],
+                rowCount: Array.isArray(inputData) ? inputData.length : 0,
+                columns: previousState.columns,
+                dataOffset: 0,
+                dataVersion: previousState.dataVersion,
+            }, previousState));
+        }, [inputData, serverSide]);
 
         useEffect(() => {
             if (notification) {
@@ -820,21 +1362,40 @@ export default function DashTanstackPivot(props) {
         const showNotification = React.useCallback((msg, type='info') => {
             setNotification({ message: msg, type });
         }, []);
+        const emitEditLifecycleEvent = useCallback((event) => {
+            if (typeof setProps !== 'function' || !event || typeof event !== 'object') return;
+            setProps({
+                editLifecycleEvent: {
+                    ...event,
+                    timestamp: Date.now(),
+                },
+            });
+        }, [setProps]);
 
         // --- State ---
 
         const availableFields = useMemo(() => {
             if (availableFieldList && availableFieldList.length > 0) return availableFieldList;
-            if (serverSide && props.columns) return props.columns.filter(c => c.id !== '__col_schema').map(c => c.id || c);
+            if (serverSide && responseColumns) return responseColumns.filter(c => c.id !== '__col_schema').map(c => c.id || c);
 
             return data && data.length ? Object.keys(data[0]) : [];
 
-        }, [data, props.columns, serverSide, availableFieldList]);
+        }, [data, responseColumns, serverSide, availableFieldList]);
 
         // Theme State
         const [themeName, setThemeName] = useState(() => (themes[defaultTheme] ? defaultTheme : 'flash'));
         const [themeOverrides, setThemeOverrides] = useState({});
-        const theme = useMemo(() => ({ ...themes[themeName], ...themeOverrides }), [themeName, themeOverrides]);
+        const theme = useMemo(() => {
+            const nextTheme = { ...themes[themeName], ...themeOverrides };
+            const structuralTheme = {
+                ...nextTheme,
+                ...deriveStructuralThemeTokens(nextTheme, themeOverrides),
+            };
+            return {
+                ...structuralTheme,
+                ...deriveEditedCellThemeTokens(structuralTheme, themeOverrides),
+            };
+        }, [themeName, themeOverrides]);
         const styles = useMemo(() => getStyles(theme), [theme]);
         const loadingCssVars = useMemo(() => {
             if (isDarkTheme(theme)) {
@@ -876,103 +1437,123 @@ export default function DashTanstackPivot(props) {
             return getPinnedSideForRow(persistedRowPinning, GRAND_TOTAL_ROW_ID);
         });
         const [layoutMode, setLayoutMode] = useState('hierarchy'); // hierarchy, tabular
+        const {
+            viewMode, setViewMode,
+            reportDef, setReportDef,
+            savedReports, setSavedReports,
+            activeReportId, setActiveReportId,
+            frozenPivotConfig, setFrozenPivotConfig,
+        } = useReportMode({
+            hasExternalViewMode,
+            normalizedInitialViewMode,
+            normalizeViewModeValue,
+            normalizeLegacyPivotModeValue,
+            hasExternalReportDef,
+            normalizedInitialReportDef,
+            normalizeReportDefValue,
+            hasExternalSavedReports,
+            normalizedInitialSavedReports,
+            normalizeSavedReportsValue,
+            hasExternalActiveReportId,
+            normalizedInitialActiveReportId,
+            normalizeActiveReportIdValue,
+            loadPersistedState,
+        });
+        const [detailMode, setDetailMode] = useState(() => (
+            hasExternalDetailMode
+                ? normalizedInitialDetailMode
+                : (normalizeDetailModeValue(loadPersistedState('detailMode', 'none')) || 'none')
+        ));
+        const [treeConfig, setTreeConfig] = useState(() => (
+            hasExternalTreeConfig
+                ? normalizedInitialTreeConfig
+                : normalizeTreeConfigValue(loadPersistedState('treeConfig', {}))
+        ));
+        const [detailConfig, setDetailConfig] = useState(() => (
+            hasExternalDetailConfig
+                ? normalizedInitialDetailConfig
+                : normalizeDetailConfigValue(loadPersistedState('detailConfig', {}))
+        ));
 
-        // --- Report Mode State ---
-        const [pivotMode, setPivotMode] = useState(() => (
-            hasExternalPivotMode
-                ? normalizedInitialPivotMode
-                : (normalizePivotModeValue(loadPersistedState('pivotMode', 'pivot')) || 'pivot')
-        )); // 'pivot' | 'report'
-        const [reportDef, setReportDef] = useState(() => (
-            hasExternalReportDef
-                ? normalizedInitialReportDef
-                : normalizeReportDefValue(loadPersistedState('reportDef', { levels: [] }))
-        ));
-        const [savedReports, setSavedReports] = useState(() => (
-            hasExternalSavedReports
-                ? normalizedInitialSavedReports
-                : normalizeSavedReportsValue(loadPersistedState('savedReports', []))
-        ));
-        const [activeReportId, setActiveReportId] = useState(() => (
-            hasExternalActiveReportId
-                ? normalizedInitialActiveReportId
-                : normalizeActiveReportIdValue(loadPersistedState('activeReportId', null))
-        ));
-        // Freeze pivot config when switching to report mode so user can switch back
-        const [frozenPivotConfig, setFrozenPivotConfig] = useState(() => loadPersistedState('frozenPivotConfig', null));
+        // reportDef, savedReports, activeReportId, frozenPivotConfig provided by useReportMode above
         const [columnVisibility, setColumnVisibility] = useState(() => loadPersistedState('columnVisibility', initialColumnVisibility));
         const [columnSizing, setColumnSizing] = useState(() => loadPersistedState('columnSizing', {}));
         const [autoSizeIncludesHeaderNext, setAutoSizeIncludesHeaderNext] = useState(false);
         const [pivotColumnSorting, setPivotColumnSorting] = useState({});
         const [announcement, setAnnouncement] = useState("");
-        const [drillModal, setDrillModal] = useState(null);
-        // drillModal shape: { loading, rows, page, totalRows, path, sortCol, sortDir, filterText } | null
-        const [chartPanelOpen, setChartPanelOpen] = useState(false);
-        const [chartPanelSource, setChartPanelSource] = useState(initialChartDefinition.source);
-        const [chartPanelType, setChartPanelType] = useState(initialChartDefinition.chartType);
-        const [chartPanelBarLayout, setChartPanelBarLayout] = useState(initialChartDefinition.barLayout);
-        const [chartPanelAxisMode, setChartPanelAxisMode] = useState(initialChartDefinition.axisMode);
-        const [chartPanelOrientation, setChartPanelOrientation] = useState(initialChartDefinition.orientation);
-        const [chartPanelHierarchyLevel, setChartPanelHierarchyLevel] = useState(initialChartDefinition.hierarchyLevel);
-        const [chartPanelTitle, setChartPanelTitle] = useState(initialChartDefinition.chartTitle);
-        const [chartPanelLayers, setChartPanelLayers] = useState(Array.isArray(initialChartDefinition.chartLayers) ? initialChartDefinition.chartLayers : []);
-        const [chartPanelRowLimit, setChartPanelRowLimit] = useState(initialChartDefinition.rowLimit);
-        const [chartPanelColumnLimit, setChartPanelColumnLimit] = useState(initialChartDefinition.columnLimit);
-        const [chartPanelWidth, setChartPanelWidth] = useState(initialChartDefinition.width);
-        const [chartPanelGraphHeight, setChartPanelGraphHeight] = useState(initialChartDefinition.chartHeight);
-        const [chartPanelFloating, setChartPanelFloating] = useState(() => Boolean(loadPersistedState('chartPanelFloatingLayout', {}).floating));
-        const [chartPanelFloatingRect, setChartPanelFloatingRect] = useState(() => {
-            const persistedLayout = loadPersistedState('chartPanelFloatingLayout', {});
-            return clampFloatingChartRect(persistedLayout.rect, null);
+        // detailSurface, detailSurfaceCacheRef, pendingDetailRequestRef, toggleDetailForRowRef
+        // provided by useDetailDrillThrough hook
+        // --- Chart state extracted to useChartState hook ---
+        const {
+            chartPanelOpen, setChartPanelOpen,
+            chartPanelSource, setChartPanelSource,
+            chartPanelType, setChartPanelType,
+            chartPanelBarLayout, setChartPanelBarLayout,
+            chartPanelAxisMode, setChartPanelAxisMode,
+            chartPanelOrientation, setChartPanelOrientation,
+            chartPanelHierarchyLevel, setChartPanelHierarchyLevel,
+            chartPanelTitle, setChartPanelTitle,
+            chartPanelLayers, setChartPanelLayers,
+            chartPanelRowLimit, setChartPanelRowLimit,
+            chartPanelColumnLimit, setChartPanelColumnLimit,
+            chartPanelWidth, setChartPanelWidth,
+            chartPanelGraphHeight, setChartPanelGraphHeight,
+            chartPanelFloating, setChartPanelFloating,
+            chartPanelFloatingRect, setChartPanelFloatingRect,
+            chartPanelSortMode, setChartPanelSortMode,
+            chartPanelInteractionMode, setChartPanelInteractionMode,
+            chartPanelServerScope, setChartPanelServerScope,
+            chartPanelLocked, setChartPanelLocked,
+            chartPanelLockedModel, setChartPanelLockedModel,
+            chartPanelLockedRequest, setChartPanelLockedRequest,
+            isChartPanelResizing, setIsChartPanelResizing,
+            chartModal, setChartModal,
+            chartModalPosition, setChartModalPosition,
+            managedChartDefinitions, setManagedChartDefinitions,
+            activeChartDefinitionId, setActiveChartDefinitionId,
+            chartCanvasPanes, setChartCanvasPanes,
+            tableCanvasSize, setTableCanvasSize,
+            chartPaneDataById, setChartPaneDataById,
+            chartPanelOrientationAutoRef,
+            chartLayoutRef,
+            chartCanvasLayoutRef,
+            chartCanvasResizeRef,
+            chartCanvasVerticalResizeRef,
+            chartPanelFloatingDragRef,
+            chartPanelFloatingResizeRef,
+            chartCanvasFloatingDragRef,
+            chartCanvasFloatingResizeRef,
+            chartRequestSeqRef,
+            activeChartRequestRef,
+            completedChartRequestSignaturesRef,
+            applyingChartDefinitionRef,
+            lastChartDefinitionsPropRef,
+            lastChartCanvasPanesPropRef,
+        } = useChartState({
+            initialChartDefinition,
+            initialChartDefinitions,
+            externalChartCanvasPanes,
+            externalTableCanvasSize,
+            loadPersistedState,
+            clampFloatingChartRect,
+            normalizeLockedChartRequest,
+            sanitizeChartCanvasPanes,
+            DEFAULT_TABLE_CANVAS_SIZE,
         });
-        const [chartPanelSortMode, setChartPanelSortMode] = useState(initialChartDefinition.sortMode);
-        const [chartPanelInteractionMode, setChartPanelInteractionMode] = useState(initialChartDefinition.interactionMode);
-        const [chartPanelServerScope, setChartPanelServerScope] = useState(initialChartDefinition.serverScope);
-        const [chartPanelLocked, setChartPanelLocked] = useState(() => Boolean(loadPersistedState('chartPanelLockState', {}).locked));
-        const [chartPanelLockedModel, setChartPanelLockedModel] = useState(() => loadPersistedState('chartPanelLockState', {}).lockedModel || null);
-        const [chartPanelLockedRequest, setChartPanelLockedRequest] = useState(() => normalizeLockedChartRequest(loadPersistedState('chartPanelLockState', {}).lockedRequest));
-        const [isChartPanelResizing, setIsChartPanelResizing] = useState(false);
-        const [chartModal, setChartModal] = useState(null);
-        const chartPanelOrientationAutoRef = useRef(true);
-        const chartLayoutRef = useRef(null);
-        const chartCanvasLayoutRef = useRef(null);
-        const chartCanvasResizeRef = useRef(null);
-        const chartPanelFloatingDragRef = useRef(null);
-        const chartPanelFloatingResizeRef = useRef(null);
-        const chartCanvasFloatingDragRef = useRef(null);
-        const chartCanvasFloatingResizeRef = useRef(null);
-        const chartRequestSeqRef = useRef(0);
-        const [managedChartDefinitions, setManagedChartDefinitions] = useState(initialChartDefinitions);
-        const [activeChartDefinitionId, setActiveChartDefinitionId] = useState(() => initialChartDefinitions[0] ? initialChartDefinitions[0].id : 'live-chart-panel');
-        const [chartCanvasPanes, setChartCanvasPanes] = useState(() => (
-            Array.isArray(externalChartCanvasPanes)
-                ? sanitizeChartCanvasPanes(externalChartCanvasPanes, initialChartDefinition)
-                : sanitizeChartCanvasPanes(loadPersistedState('chartCanvasPanes', []), initialChartDefinition)
-        ));
-        const [tableCanvasSize, setTableCanvasSize] = useState(() => {
-            const externalSize = Number(externalTableCanvasSize);
-            if (Number.isFinite(externalSize) && externalSize > 0) {
-                return externalSize;
-            }
-            const persistedSize = Number(loadPersistedState('tableCanvasSize', DEFAULT_TABLE_CANVAS_SIZE));
-            return Number.isFinite(persistedSize) && persistedSize > 0 ? persistedSize : DEFAULT_TABLE_CANVAS_SIZE;
-        });
-        const [chartPaneDataById, setChartPaneDataById] = useState({});
-        const activeChartRequestRef = useRef(null);
-        const completedChartRequestSignaturesRef = useRef({});
-        const applyingChartDefinitionRef = useRef(false);
-        const lastChartDefinitionsPropRef = useRef(null);
-        const lastChartCanvasPanesPropRef = useRef(null);
+        const [chartCanvasPaneWidthHints, setChartCanvasPaneWidthHints] = useState({});
         const lastTableCanvasSizePropRef = useRef(null);
         const lastValConfigsPropRef = useRef(null);
         const lastDecimalPlacesPropRef = useRef(null);
         const lastFieldPanelSizesPropRef = useRef(null);
         const lastDefaultValueFormatPropRef = useRef(null);
         const lastNumberGroupSeparatorPropRef = useRef(null);
-        const lastPivotModePropRef = useRef(null);
         const lastReportDefPropRef = useRef(null);
         const lastSavedReportsPropRef = useRef(null);
         const lastActiveReportIdPropRef = useRef(null);
+        const lastViewModePropRef = useRef(null);
+        const lastDetailModePropRef = useRef(null);
+        const lastTreeConfigPropRef = useRef(null);
+        const lastDetailConfigPropRef = useRef(null);
         const didPublishDecimalPlacesRef = useRef(false);
         const didPublishFieldPanelSizesRef = useRef(false);
         const didPublishDefaultValueFormatRef = useRef(false);
@@ -1070,10 +1651,11 @@ export default function DashTanstackPivot(props) {
             currentColumnVirtualizer.scrollToIndex(Math.max(displayIndex - leftCount, 0));
         }, [parentRef]);
 
+    const pivotMode = viewMode === 'report' ? 'report' : 'pivot';
+
     // Reset Effect
     useEffect(() => {
         if (reset) {
-            const resetPivotMode = hasExternalPivotMode ? normalizedInitialPivotMode : 'pivot';
             const resetReportDef = hasExternalReportDef ? normalizedInitialReportDef : { levels: [] };
             const resetSavedReports = hasExternalSavedReports ? normalizedInitialSavedReports : [];
             const resetActiveReportId = hasExternalActiveReportId ? normalizedInitialActiveReportId : null;
@@ -1129,7 +1711,10 @@ export default function DashTanstackPivot(props) {
             setDecimalPlaces(normalizedInitialDecimalPlaces);
             setDefaultValueFormat(normalizedInitialDefaultValueFormat);
             setNumberGroupSeparator(normalizedInitialNumberGroupSeparator);
-            setPivotMode(resetPivotMode);
+            setViewMode(normalizedInitialViewMode);
+            setDetailMode(normalizedInitialDetailMode);
+            setTreeConfig(normalizedInitialTreeConfig);
+            setDetailConfig(normalizedInitialDetailConfig);
             setReportDef(resetReportDef);
             setSavedReports(resetSavedReports);
             setActiveReportId(resetActiveReportId);
@@ -1146,7 +1731,10 @@ export default function DashTanstackPivot(props) {
                     fieldPanelSizes: normalizedInitialFieldPanelSizes,
                     defaultValueFormat: normalizedInitialDefaultValueFormat,
                     numberGroupSeparator: normalizedInitialNumberGroupSeparator,
-                    pivotMode: resetPivotMode,
+                    viewMode: normalizedInitialViewMode,
+                    detailMode: normalizedInitialDetailMode,
+                    treeConfig: normalizedInitialTreeConfig,
+                    detailConfig: normalizedInitialDetailConfig,
                     reportDef: resetReportDef,
                     savedReports: resetSavedReports,
                     activeReportId: resetActiveReportId,
@@ -1162,7 +1750,7 @@ export default function DashTanstackPivot(props) {
                 });
             }
         }
-    }, [reset, initialRowFields, initialColFields, initialValConfigs, initialColumnPinning, initialRowPinning, initialChartDefinition, initialChartDefinitions, normalizedInitialFieldPanelSizes, normalizedInitialDecimalPlaces, normalizedInitialDefaultValueFormat, normalizedInitialNumberGroupSeparator, hasExternalPivotMode, normalizedInitialPivotMode, hasExternalReportDef, normalizedInitialReportDef, hasExternalSavedReports, normalizedInitialSavedReports, hasExternalActiveReportId, normalizedInitialActiveReportId]);
+    }, [reset, initialRowFields, initialColFields, initialValConfigs, initialColumnPinning, initialRowPinning, initialChartDefinition, initialChartDefinitions, normalizedInitialFieldPanelSizes, normalizedInitialDecimalPlaces, normalizedInitialDefaultValueFormat, normalizedInitialNumberGroupSeparator, normalizedInitialViewMode, normalizedInitialDetailMode, normalizedInitialTreeConfig, normalizedInitialDetailConfig, hasExternalReportDef, normalizedInitialReportDef, hasExternalSavedReports, normalizedInitialSavedReports, hasExternalActiveReportId, normalizedInitialActiveReportId]);
 
         // Save Persistence
         useEffect(() => {
@@ -1185,7 +1773,10 @@ export default function DashTanstackPivot(props) {
                 lockedModel: chartPanelLockedModel,
                 lockedRequest: chartPanelLockedRequest,
             });
-            savePersistedState('pivotMode', pivotMode);
+            savePersistedState('viewMode', viewMode);
+            savePersistedState('detailMode', detailMode);
+            savePersistedState('treeConfig', treeConfig);
+            savePersistedState('detailConfig', detailConfig);
             savePersistedState('reportDef', reportDef);
             savePersistedState('savedReports', savedReports);
             savePersistedState('activeReportId', activeReportId);
@@ -1206,9 +1797,12 @@ export default function DashTanstackPivot(props) {
             chartPanelLocked,
             chartPanelLockedModel,
             chartPanelLockedRequest,
+            viewMode,
+            detailMode,
+            treeConfig,
+            detailConfig,
             persistence,
             persistence_type,
-            pivotMode,
             reportDef,
             savedReports,
             activeReportId,
@@ -1238,23 +1832,34 @@ export default function DashTanstackPivot(props) {
         effectiveGrandTotalPinState === 'top' || effectiveGrandTotalPinState === 'bottom'
     );
     const [showRowNumbers, setShowRowNumbers] = useState(false);
-    const [sidebarOpen, setSidebarOpen] = useState(true);
-    const [sidebarWidth, setSidebarWidth] = useState(() => clampSidebarWidth(loadPersistedState('sidebarWidth', 288)));
-    const [fieldPanelSizes, setFieldPanelSizes] = useState(() => (
-        externalFieldPanelSizes && typeof externalFieldPanelSizes === 'object'
-            ? normalizedInitialFieldPanelSizes
-            : sanitizeFieldPanelSizes(loadPersistedState('fieldPanelSizes', DEFAULT_FIELD_PANEL_SIZES))
-    ));
-    const [activeFilterCol, setActiveFilterCol] = useState(null);
-    const [filterAnchorEl, setFilterAnchorEl] = useState(null);
-    const [sidebarTab, setSidebarTab] = useState('fields'); // 'fields', 'columns'
-    const [showFloatingFilters, setShowFloatingFilters] = useState(false);
-    const [stickyHeaders, setStickyHeaders] = useState(true);
-    const [colSearch, setColSearch] = useState('');
-    const [colTypeFilter, setColTypeFilter] = useState('all');
-    const [selectedCols, setSelectedCols] = useState(new Set());
+    const {
+        sidebarOpen, setSidebarOpen,
+        sidebarWidth, setSidebarWidth,
+        fieldPanelSizes, setFieldPanelSizes,
+        activeFilterCol, setActiveFilterCol,
+        filterAnchorEl, setFilterAnchorEl,
+        sidebarTab, setSidebarTab,
+        showFloatingFilters, setShowFloatingFilters,
+        stickyHeaders, setStickyHeaders,
+        colSearch, setColSearch,
+        colTypeFilter, setColTypeFilter,
+        selectedCols, setSelectedCols,
+    } = useSidebarUI({
+        loadPersistedState,
+        clampSidebarWidth,
+        externalFieldPanelSizes,
+        normalizedInitialFieldPanelSizes,
+        sanitizeFieldPanelSizes,
+        DEFAULT_FIELD_PANEL_SIZES,
+    });
     const [hoveredHeaderId, setHoveredHeaderId] = useState(null);
     const [focusedHeaderId, setFocusedHeaderId] = useState(null);
+    // Refs mirroring hover/focus state for renderHeaderCell's useCallback
+    // (reading from refs avoids putting fast-changing state in the dep array).
+    const hoveredHeaderIdRef = useRef(null);
+    hoveredHeaderIdRef.current = hoveredHeaderId;
+    const focusedHeaderIdRef = useRef(null);
+    focusedHeaderIdRef.current = focusedHeaderId;
     
     // Global Keyboard Shortcuts
     useEffect(() => {
@@ -1268,39 +1873,46 @@ export default function DashTanstackPivot(props) {
         return () => window.removeEventListener('keydown', handleGlobalKeyDown);
     }, []);
 
-    const [colorScaleMode, setColorScaleMode] = useState('off');
-    const [colorPalette, setColorPalette] = useState('redGreen');
-    const [dataBarsColumns, setDataBarsColumns] = useState(new Set());
+    // --- Formatting/display state extracted to useFormatState hook ---
+    const {
+        colorScaleMode, setColorScaleMode,
+        colorPalette, setColorPalette,
+        dataBarsColumns, setDataBarsColumns,
+        fontFamily, setFontFamily,
+        fontSize, setFontSize,
+        decimalPlaces, setDecimalPlaces,
+        defaultValueFormat, setDefaultValueFormat,
+        numberGroupSeparator, setNumberGroupSeparator,
+        columnDecimalOverrides, setColumnDecimalOverrides,
+        columnFormatOverrides, setColumnFormatOverrides,
+        columnGroupSeparatorOverrides, setColumnGroupSeparatorOverrides,
+        cellFormatRules, setCellFormatRules,
+        hoveredRowPath, setHoveredRowPath,
+        zoomLevel, setZoomLevel,
+    } = useFormatState({
+        normalizedInitialDecimalPlaces,
+        normalizedInitialDefaultValueFormat,
+        normalizedInitialNumberGroupSeparator,
+    });
 
-    // Font / display controls
-    const [fontFamily, setFontFamily] = useState("'Inter', system-ui, sans-serif");
-    const [fontSize, setFontSize] = useState('14px');
-    const [decimalPlaces, setDecimalPlaces] = useState(normalizedInitialDecimalPlaces);
-    const [defaultValueFormat, setDefaultValueFormat] = useState(normalizedInitialDefaultValueFormat);
-    const [numberGroupSeparator, setNumberGroupSeparator] = useState(normalizedInitialNumberGroupSeparator);
-    const [columnDecimalOverrides, setColumnDecimalOverrides] = useState({});
-    const [columnFormatOverrides, setColumnFormatOverrides] = useState({});
-    const [columnGroupSeparatorOverrides, setColumnGroupSeparatorOverrides] = useState({});
-    const [cellFormatRules, setCellFormatRules] = useState({});
-    const [hoveredRowPath, setHoveredRowPath] = useState(null);
-    const [zoomLevel, setZoomLevel] = useState(100);
+    // --- Report / View Mode switching ---
+    const applyViewMode = useCallback((nextMode) => {
+        const normalizedNextMode = normalizeViewModeValue(nextMode) || 'pivot';
+        if (normalizedNextMode === viewMode) return;
 
-    // --- Report Mode switching ---
-    const handleSetPivotMode = useCallback((nextMode) => {
-        if (nextMode === pivotMode) return;
-        if (nextMode === 'report') {
-            // Freeze current pivot config so user can switch back
-            setFrozenPivotConfig({ rowFields, colFields, valConfigs: valConfigs.map(v => ({...v})) });
-            // Derive row fields from report levels
+        const enteringReport = normalizedNextMode === 'report' && viewMode !== 'report';
+        const leavingReport = viewMode === 'report' && normalizedNextMode !== 'report';
+
+        if (enteringReport) {
+            setFrozenPivotConfig({ rowFields, colFields, valConfigs: valConfigs.map(v => ({ ...v })) });
             const levelFields = collectReportFields(reportDef);
             if (levelFields.length > 0) {
                 setRowFields(levelFields);
                 setColFields([]);
             }
             setExpanded({});
-        } else {
-            // Restore frozen pivot config
-            if (frozenPivotConfig) {
+        } else if (leavingReport) {
+            if (normalizedNextMode === 'pivot' && frozenPivotConfig) {
                 setRowFields(frozenPivotConfig.rowFields || []);
                 setColFields(frozenPivotConfig.colFields || []);
                 setValConfigs(frozenPivotConfig.valConfigs || []);
@@ -1308,18 +1920,53 @@ export default function DashTanstackPivot(props) {
             }
             setExpanded({});
         }
-        setPivotMode(nextMode);
-    }, [pivotMode, rowFields, colFields, valConfigs, reportDef, frozenPivotConfig]);
+
+        setViewMode(normalizedNextMode);
+    }, [viewMode, rowFields, colFields, valConfigs, reportDef, frozenPivotConfig]);
+
+    const handleSetPivotMode = useCallback((nextMode) => {
+        applyViewMode(nextMode === 'report' ? 'report' : 'pivot');
+    }, [applyViewMode]);
 
     useEffect(() => {
-        const normalizedExternalMode = normalizePivotModeValue(externalPivotMode);
+        const normalizedExternalMode = normalizeViewModeValue(externalViewMode);
         if (!normalizedExternalMode) return;
-        if (normalizedExternalMode === lastPivotModePropRef.current) return;
-        lastPivotModePropRef.current = normalizedExternalMode;
-        if (pivotMode !== normalizedExternalMode) {
-            handleSetPivotMode(normalizedExternalMode);
-        }
-    }, [externalPivotMode, handleSetPivotMode, pivotMode]);
+        if (normalizedExternalMode === lastViewModePropRef.current) return;
+        lastViewModePropRef.current = normalizedExternalMode;
+        applyViewMode(normalizedExternalMode);
+    }, [applyViewMode, externalViewMode]);
+
+    useEffect(() => {
+        const normalizedExternalMode = normalizeDetailModeValue(externalDetailMode);
+        if (!normalizedExternalMode) return;
+        if (normalizedExternalMode === lastDetailModePropRef.current) return;
+        lastDetailModePropRef.current = normalizedExternalMode;
+        setDetailMode((previousMode) => (previousMode === normalizedExternalMode ? previousMode : normalizedExternalMode));
+    }, [externalDetailMode]);
+
+    useEffect(() => {
+        if (externalTreeConfig === undefined) return;
+        const serializedExternal = JSON.stringify(normalizedInitialTreeConfig);
+        if (serializedExternal === lastTreeConfigPropRef.current) return;
+        lastTreeConfigPropRef.current = serializedExternal;
+        setTreeConfig((previousConfig) => (
+            JSON.stringify(previousConfig || {}) === serializedExternal
+                ? previousConfig
+                : normalizedInitialTreeConfig
+        ));
+    }, [externalTreeConfig, normalizedInitialTreeConfig]);
+
+    useEffect(() => {
+        if (externalDetailConfig === undefined) return;
+        const serializedExternal = JSON.stringify(normalizedInitialDetailConfig);
+        if (serializedExternal === lastDetailConfigPropRef.current) return;
+        lastDetailConfigPropRef.current = serializedExternal;
+        setDetailConfig((previousConfig) => (
+            JSON.stringify(previousConfig || {}) === serializedExternal
+                ? previousConfig
+                : normalizedInitialDetailConfig
+        ));
+    }, [externalDetailConfig, normalizedInitialDetailConfig]);
 
     useEffect(() => {
         if (externalReportDef === undefined) return;
@@ -1358,14 +2005,14 @@ export default function DashTanstackPivot(props) {
 
     // When reportDef levels change in report mode, update rowFields to match
     useEffect(() => {
-        if (pivotMode !== 'report') return;
+        if (viewMode !== 'report') return;
         const levelFields = collectReportFields(reportDef);
         if (levelFields.length > 0 && JSON.stringify(levelFields) !== JSON.stringify(rowFields)) {
             setRowFields(levelFields);
             setColFields([]);
             setExpanded({});
         }
-    }, [reportDef]); // eslint-disable-line react-hooks/exhaustive-deps
+    }, [reportDef, rowFields, viewMode]); // eslint-disable-line react-hooks/exhaustive-deps
 
     // Push report-mode state to Dash props so server and persistence flows stay in sync
     useEffect(() => {
@@ -1374,8 +2021,8 @@ export default function DashTanstackPivot(props) {
             didPublishReportStateRef.current = true;
             return;
         }
-        setPropsRef.current({ pivotMode, reportDef, savedReports, activeReportId });
-    }, [pivotMode, reportDef, savedReports, activeReportId]);
+        setPropsRef.current({ viewMode, reportDef, savedReports, activeReportId });
+    }, [viewMode, reportDef, savedReports, activeReportId]);
 
     // selectedCellKeys and selectedCellColIds are now derived inside PivotAppBar
     // to avoid stale prop issues between parent and child renders.
@@ -1389,33 +2036,28 @@ export default function DashTanstackPivot(props) {
     const autoSizeBounds = gridDimensionTokens.autoSize;
     
     const [colExpanded, setColExpanded] = useState({});
-    const [contextMenu, setContextMenu] = useState(null);
-    const [selectedCells, setSelectedCells] = useState({});
-    const [lastSelected, setLastSelected] = useState(null);
-    const [isDragging, setIsDragging] = useState(false);
-    const [dragStart, setDragStart] = useState(null);
-    const [isFilling, setIsFilling] = useState(false);
-        const [fillRange, setFillRange] = useState(null);
+    const {
+        contextMenu, setContextMenu,
+        selectedCells, setSelectedCells,
+        lastSelected, setLastSelected,
+        isDragging, setIsDragging,
+        dragStart, setDragStart,
+        isFilling, setIsFilling,
+        fillRange, setFillRange,
+        isRowSelecting, setIsRowSelecting,
+        rowDragStart, setRowDragStart,
+    } = useCellInteraction();
 
-        // --- Data Management State ---
-    const [history, setHistory] = useState([]);
-    const [future, setFuture] = useState([]);
+    const transactionUndoExecutorRef = useRef(() => {});
+    const transactionRedoExecutorRef = useRef(() => {});
 
-    const handleUndo = () => {
-        if (history.length === 0) return;
-        const previous = history[history.length - 1];
-        setHistory(history.slice(0, -1));
-        setFuture([selectedCells, ...future]);
-        if (setProps) setProps({ undo: true, timestamp: Date.now() });
-    };
+    const handleUndo = useCallback(() => {
+        transactionUndoExecutorRef.current();
+    }, []);
 
-    const handleRedo = () => {
-        if (future.length === 0) return;
-        const next = future[0];
-        setFuture(future.slice(1));
-        setHistory([...history, selectedCells]);
-        if (setProps) setProps({ redo: true, timestamp: Date.now() });
-    };
+    const handleRedo = useCallback(() => {
+        transactionRedoExecutorRef.current();
+    }, []);
 
     const handleRefresh = () => {
         if (setProps) setProps({ refresh: Date.now() });
@@ -1440,7 +2082,14 @@ export default function DashTanstackPivot(props) {
             ? { ...restored.filters }
             : null;
 
-        if (restored.pivotMode === 'pivot' || restored.pivotMode === 'report') setPivotMode(restored.pivotMode);
+        if (restored.viewMode === 'pivot' || restored.viewMode === 'report' || restored.viewMode === 'tree' || restored.viewMode === 'table') {
+            setViewMode(restored.viewMode);
+        } else if (restored.pivotMode === 'pivot' || restored.pivotMode === 'report') {
+            setViewMode(restored.pivotMode);
+        }
+        if (restored.detailMode === 'none' || restored.detailMode === 'inline' || restored.detailMode === 'sidepanel' || restored.detailMode === 'drawer') setDetailMode(restored.detailMode);
+        if (restored.treeConfig && typeof restored.treeConfig === 'object') setTreeConfig(normalizeTreeConfigValue(restored.treeConfig));
+        if (restored.detailConfig && typeof restored.detailConfig === 'object') setDetailConfig(normalizeDetailConfigValue(restored.detailConfig));
         if (Object.prototype.hasOwnProperty.call(restored, 'reportDef')) {
             setReportDef(normalizeReportDefValue(restored.reportDef));
         }
@@ -1477,6 +2126,9 @@ export default function DashTanstackPivot(props) {
         if (typeof restored.colTypeFilter === 'string') setColTypeFilter(restored.colTypeFilter);
         if (typeof restored.themeName === 'string' && themes[restored.themeName]) setThemeName(restored.themeName);
         if (restored.themeOverrides && typeof restored.themeOverrides === 'object') setThemeOverrides(restored.themeOverrides);
+        if (restored.editValueDisplayMode === 'original' || restored.editValueDisplayMode === 'edited') {
+            setEditValueDisplayMode(restored.editValueDisplayMode);
+        }
         if (typeof restored.layoutMode === 'string') setLayoutMode(restored.layoutMode);
         if (typeof restored.colorScaleMode === 'string') setColorScaleMode(restored.colorScaleMode);
         if (typeof restored.colorPalette === 'string') setColorPalette(restored.colorPalette);
@@ -2075,6 +2727,57 @@ export default function DashTanstackPivot(props) {
         };
     }, []);
 
+    const handleStartChartCanvasVerticalResize = useCallback((paneId, position, event) => {
+        const containerRect = chartCanvasLayoutRef.current
+            ? chartCanvasLayoutRef.current.getBoundingClientRect()
+            : null;
+        if (!containerRect || containerRect.height <= 0) return;
+        const pane = chartCanvasPanes.find((p) => p.id === paneId);
+        if (!pane) return;
+        const paneEl = chartCanvasLayoutRef.current.querySelector(`[data-docked-chart-pane="${paneId}"]`);
+        const startHeight = paneEl ? paneEl.getBoundingClientRect().height : DEFAULT_DOCKED_CHART_PANE_HEIGHT;
+        chartCanvasVerticalResizeRef.current = {
+            startY: event.clientY,
+            paneId,
+            position,
+            startHeight,
+            containerHeight: containerRect.height,
+        };
+    }, [chartCanvasPanes]);
+
+    useEffect(() => {
+        const handleVerticalMove = (event) => {
+            const resizeState = chartCanvasVerticalResizeRef.current;
+            if (!resizeState) return;
+            const deltaY = event.clientY - resizeState.startY;
+            const sign = resizeState.position === 'top' ? 1 : -1;
+            const nextHeight = Math.max(
+                MIN_DOCKED_CHART_PANE_HEIGHT,
+                Math.min(
+                    resizeState.containerHeight - MIN_TABLE_PANEL_HEIGHT,
+                    resizeState.startHeight + (deltaY * sign)
+                )
+            );
+            const nextChartHeight = Math.max(120, Math.floor(nextHeight - 188));
+            setChartCanvasPanes((prev) => prev.map((p) =>
+                p.id === resizeState.paneId ? { ...p, chartHeight: nextChartHeight } : p
+            ));
+        };
+        const stopVerticalResize = () => {
+            chartCanvasVerticalResizeRef.current = null;
+        };
+        window.addEventListener('mousemove', handleVerticalMove);
+        window.addEventListener('mouseup', stopVerticalResize);
+        window.addEventListener('mouseleave', stopVerticalResize);
+        window.addEventListener('blur', stopVerticalResize);
+        return () => {
+            window.removeEventListener('mousemove', handleVerticalMove);
+            window.removeEventListener('mouseup', stopVerticalResize);
+            window.removeEventListener('mouseleave', stopVerticalResize);
+            window.removeEventListener('blur', stopVerticalResize);
+        };
+    }, []);
+
     const handleToggleChartPanelFloating = useCallback(() => {
         setChartPanelFloating((previousFloating) => {
             const nextFloating = !previousFloating;
@@ -2123,8 +2826,8 @@ export default function DashTanstackPivot(props) {
     }, [chartPanelFloating, chartPanelFloatingRect]);
 
     const handleToggleChartCanvasPaneFloating = useCallback((paneId) => {
-        const containerRect = chartLayoutRef.current
-            ? chartLayoutRef.current.getBoundingClientRect()
+        const containerRect = chartCanvasLayoutRef.current
+            ? chartCanvasLayoutRef.current.getBoundingClientRect()
             : null;
         updateChartCanvasPane(paneId, (pane) => {
             const nextFloating = !pane.floating;
@@ -2140,28 +2843,28 @@ export default function DashTanstackPivot(props) {
                 }, containerRect),
             };
         });
-    }, [updateChartCanvasPane]);
+    }, [chartCanvasLayoutRef, updateChartCanvasPane]);
 
     const handleStartChartCanvasPaneFloatingDrag = useCallback((paneId, event) => {
-        if (!chartLayoutRef.current) return;
+        if (!chartCanvasLayoutRef.current) return;
         event.preventDefault();
         event.stopPropagation();
         const targetPane = chartCanvasPanes.find((pane) => pane.id === paneId);
-        if (!targetPane || !targetPane.floating) return;
+        if (!targetPane || !targetPane.floating || targetPane.locked) return;
         chartCanvasFloatingDragRef.current = {
             paneId,
             startX: event.clientX,
             startY: event.clientY,
             rect: targetPane.floatingRect || clampFloatingChartRect({}, null),
         };
-    }, [chartCanvasPanes]);
+    }, [chartCanvasLayoutRef, chartCanvasPanes]);
 
     const handleStartChartCanvasPaneFloatingResize = useCallback((paneId, direction, event) => {
-        if (!chartLayoutRef.current) return;
+        if (!chartCanvasLayoutRef.current) return;
         event.preventDefault();
         event.stopPropagation();
         const targetPane = chartCanvasPanes.find((pane) => pane.id === paneId);
-        if (!targetPane || !targetPane.floating) return;
+        if (!targetPane || !targetPane.floating || targetPane.locked) return;
         chartCanvasFloatingResizeRef.current = {
             paneId,
             direction,
@@ -2169,7 +2872,7 @@ export default function DashTanstackPivot(props) {
             startY: event.clientY,
             rect: targetPane.floatingRect || clampFloatingChartRect({}, null),
         };
-    }, [chartCanvasPanes]);
+    }, [chartCanvasLayoutRef, chartCanvasPanes]);
 
     useEffect(() => {
         const handlePointerMove = (event) => {
@@ -2213,8 +2916,8 @@ export default function DashTanstackPivot(props) {
 
             if (chartCanvasFloatingDragRef.current) {
                 const dragState = chartCanvasFloatingDragRef.current;
-                const containerRect = chartLayoutRef.current
-                    ? chartLayoutRef.current.getBoundingClientRect()
+                const containerRect = chartCanvasLayoutRef.current
+                    ? chartCanvasLayoutRef.current.getBoundingClientRect()
                     : null;
                 const nextRect = clampFloatingChartRect({
                     ...dragState.rect,
@@ -2227,8 +2930,8 @@ export default function DashTanstackPivot(props) {
 
             if (chartCanvasFloatingResizeRef.current) {
                 const resizeState = chartCanvasFloatingResizeRef.current;
-                const containerRect = chartLayoutRef.current
-                    ? chartLayoutRef.current.getBoundingClientRect()
+                const containerRect = chartCanvasLayoutRef.current
+                    ? chartCanvasLayoutRef.current.getBoundingClientRect()
                     : null;
                 const deltaX = event.clientX - resizeState.startX;
                 const deltaY = event.clientY - resizeState.startY;
@@ -2300,8 +3003,8 @@ export default function DashTanstackPivot(props) {
         if (!hasFloatingPane) return undefined;
 
         const syncFloatingPanes = () => {
-            const containerRect = chartLayoutRef.current
-                ? chartLayoutRef.current.getBoundingClientRect()
+            const containerRect = chartCanvasLayoutRef.current
+                ? chartCanvasLayoutRef.current.getBoundingClientRect()
                 : null;
             setChartCanvasPanes((previousPanes) => {
                 let mutated = false;
@@ -2323,15 +3026,15 @@ export default function DashTanstackPivot(props) {
 
         syncFloatingPanes();
 
-        if (typeof ResizeObserver === 'undefined' || !chartLayoutRef.current) {
+        if (typeof ResizeObserver === 'undefined' || !chartCanvasLayoutRef.current) {
             window.addEventListener('resize', syncFloatingPanes);
             return () => window.removeEventListener('resize', syncFloatingPanes);
         }
 
         const observer = new ResizeObserver(syncFloatingPanes);
-        observer.observe(chartLayoutRef.current);
+        observer.observe(chartCanvasLayoutRef.current);
         return () => observer.disconnect();
-    }, [chartCanvasPanes]);
+    }, [chartCanvasLayoutRef, chartCanvasPanes]);
 
     // Clipboard Paste
     useEffect(() => {
@@ -2339,30 +3042,43 @@ export default function DashTanstackPivot(props) {
             if (!lastSelected) return;
             e.preventDefault();
             const clipboardData = e.clipboardData.getData('text');
-            const rows = clipboardData.split(/\r\n|\n/).map(r => r.split('\t'));
+            const rows = clipboardData
+                .split(/\r\n|\n/)
+                .filter((row, index, sourceRows) => row.length > 0 || index < sourceRows.length - 1)
+                .map((row) => row.split('\t'));
 
-            if (setPropsRef.current && lastSelected.rowIndex !== undefined && lastSelected.colIndex !== undefined) {
-                const visibleLeafColumns = (tableRef.current && tableRef.current.getVisibleLeafColumns) ? tableRef.current.getVisibleLeafColumns() : [];
-                const visibleRows = getDisplayRows();
+            if (lastSelected.rowIndex === undefined || lastSelected.colIndex === undefined) return;
+            const visibleLeafColumns = (tableRef.current && tableRef.current.getVisibleLeafColumns) ? tableRef.current.getVisibleLeafColumns() : [];
+            const visibleRows = getDisplayRows();
+            const updates = [];
 
-                const startRow = visibleRows[lastSelected.rowIndex];
-                const startCol = visibleLeafColumns[lastSelected.colIndex];
-
-                if (startRow && startCol) {
-                    setPropsRef.current({
-                        paste: {
-                            startRowId: startRow.id,
-                            startColId: startCol.id,
-                            data: rows
+            rows.forEach((rowValues, rowOffset) => {
+                rowValues.forEach((rawValue, colOffset) => {
+                    const targetRow = visibleRows[lastSelected.rowIndex + rowOffset];
+                    const targetCol = visibleLeafColumns[lastSelected.colIndex + colOffset];
+                    if (!targetRow || !targetCol) return;
+                    const currentValue = targetRow.getValue(targetCol.id);
+                    let nextValue = rawValue;
+                    if (typeof currentValue === 'number' && rawValue !== '') {
+                        const numericValue = Number(rawValue);
+                        if (!Number.isNaN(numericValue)) {
+                            nextValue = numericValue;
                         }
+                    }
+                    updates.push({
+                        rowId: targetRow.id,
+                        colId: targetCol.id,
+                        value: nextValue,
                     });
-                }
-            }
+                });
+            });
+
+            dispatchBatchUpdateRequest(updates, 'paste');
         };
 
         window.addEventListener('paste', handlePaste);
         return () => window.removeEventListener('paste', handlePaste);
-    }, [lastSelected]);
+    }, [dispatchBatchUpdateRequest, getDisplayRows, lastSelected]);
 
     // Validation helper
     const validateCell = (val, rule) => {
@@ -2393,6 +3109,26 @@ export default function DashTanstackPivot(props) {
     };
 
     const handleKeyDown = (e) => {
+        if (
+            !isEditableKeyboardTarget(e.target)
+            && (e.ctrlKey || e.metaKey)
+            && !e.altKey
+            && e.key
+        ) {
+            const shortcutKey = e.key.toLowerCase();
+            if (shortcutKey === 'z') {
+                e.preventDefault();
+                if (e.shiftKey) handleRedo();
+                else handleUndo();
+                return;
+            }
+            if (shortcutKey === 'y') {
+                e.preventDefault();
+                handleRedo();
+                return;
+            }
+        }
+
         const visibleLeafColumnsAll = (tableRef.current && tableRef.current.getVisibleLeafColumns) ? tableRef.current.getVisibleLeafColumns() : [];
         const visibleRowsAll = getDisplayRows();
 
@@ -2560,8 +3296,7 @@ export default function DashTanstackPivot(props) {
         return newSelection;
     };
 
-    const [isRowSelecting, setIsRowSelecting] = useState(false);
-    const [rowDragStart, setRowDragStart] = useState(null);
+    // isRowSelecting and rowDragStart are provided by useCellInteraction above
 
     // Stop row selection on mouse up
     useEffect(() => {
@@ -2715,7 +3450,7 @@ export default function DashTanstackPivot(props) {
                 }
             }
             if (updates.length > 0) {
-                setProps({ cellUpdates: updates });
+                dispatchBatchUpdateRequest(updates, 'fill');
             }
         }
         setIsFilling(false);
@@ -2753,13 +3488,6 @@ export default function DashTanstackPivot(props) {
         return () => window.removeEventListener('keydown', handleGlobalCopy);
     }, [selectedCells]);
 
-    const toggleCol = (key) => {
-        setColExpanded(prev => ({
-            ...prev,
-            [key]: prev[key] === undefined ? false : !prev[key]
-        }));
-    };
-
     const isColExpanded = (key) => colExpanded[key] !== false;
 
     const [dragItem, setDragItem] = useState(null);
@@ -2768,199 +3496,1258 @@ export default function DashTanstackPivot(props) {
     const clientInstanceRef = useRef(createClientInstanceId(id || 'pivot-grid'));
     const requestVersionRef = useRef(Number(dataVersion) || 0);
     const latestDataVersionRef = useRef(Number(dataVersion) || 0);
-    const pendingRequestVersionsRef = useRef(new Set());
-    const loadingDelayTimerRef = useRef(null);
     const stateEpochRef = useRef(0);
     const abortGenerationRef = useRef(0);
     const structuralPendingVersionRef = useRef(null);
     const expandAllDebounceRef = useRef(false);
     const latestViewportRef = useRef({ start: 0, end: 99, count: 100 });
     const [stateEpoch, setStateEpoch] = useState(0);
-    const [cachedColSchema, setCachedColSchema] = useState(null);
-    const colSchemaEpochRef = useRef(-1);
-    const [visibleColRange, setVisibleColRange] = useState({ start: 0, end: 0 });
-    const colRequestStartRef = useRef(null);
-    const colRequestEndRef = useRef(null);
-    const needsColSchemaRef = useRef(true);
     const [abortGeneration, setAbortGeneration] = useState(0);
     const [structuralInFlight, setStructuralInFlight] = useState(false);
     const [pendingRowTransitions, setPendingRowTransitions] = useState(() => new Map());
     const [pendingColumnSkeletonCount, setPendingColumnSkeletonCount] = useState(0);
-    const pendingHorizontalRequestVersionsRef = useRef(new Set());
-    const [pendingHorizontalColumnCount, setPendingHorizontalColumnCount] = useState(0);
-    const [isHorizontalColumnRequestPending, setIsHorizontalColumnRequestPending] = useState(false);
-    const [isRequestPending, setIsRequestPending] = useState(false);
+    const tableDataRef = useRef([]);
+    const requestUrgentColumnViewportRef = useRef(null);
+    const pivotProfilerRef = useRef(getPivotProfiler());
+    const profilingEnabledRef = useRef(isPivotProfilingEnabled());
+    const pendingDataProfilerCommitRef = useRef(null);
+    const pendingDataProfilerFrameRef = useRef(null);
+    const transactionUndoStackRef = useRef([]);
+    const transactionRedoStackRef = useRef([]);
+    const pendingTransactionHistoryRef = useRef(new Map());
+    const transactionHistoryPendingRequestRef = useRef(null);
+    const optimisticCellValuesRef = useRef(new Map());
+    const optimisticCellRequestsRef = useRef(new Map());
+    const visiblePatchRowPathsRef = useRef([]);
+    const visiblePatchCenterIdsRef = useRef([]);
+    const deferredViewportRefreshTimeoutRef = useRef(null);
+    const editedCellMarkersRef = useRef(new Map());
+    const comparisonCellOriginalValuesRef = useRef(new Map());
+    const comparisonCellCountsRef = useRef(new Map());
+    const rowEditSessionsRef = useRef({});
+    const editorOptionsLoadingRef = useRef({});
+    const lastPropagationFormulaRef = useRef('equal');
+    const pendingLayoutHistoryCaptureRef = useRef(null);
+    const pendingLayoutHistoryCaptureTimeoutRef = useRef(null);
+    const [, setOptimisticCellEpoch] = useState(0);
+    const [editedCellEpoch, setEditedCellEpoch] = useState(0);
+    const [comparisonCellEpoch, setComparisonCellEpoch] = useState(0);
+    const [rowEditSessions, setRowEditSessions] = useState({});
+    const [editValueDisplayMode, setEditValueDisplayMode] = useState('original');
+    const propagationLogRef = useRef([]);
+    const [propagationLogEpoch, setPropagationLogEpoch] = useState(0);
+    const pendingPropagationUpdatesRef = useRef(null);
+    const [pendingPropagationUpdates, setPendingPropagationUpdates] = useState(null);
+    const [editPanelOpen, setEditPanelOpen] = useState(false);
+    const [propagationMethodUI, setPropagationMethodUI] = useState('equal');
+    const [transactionHistoryState, setTransactionHistoryState] = useState({
+        undoCount: 0,
+        redoCount: 0,
+        pending: false,
+    });
+    const [comparisonValueState, setComparisonValueState] = useState({
+        activeCount: 0,
+    });
+    const profilerComponentIdRef = useRef(id || 'pivot-grid');
+    profilerComponentIdRef.current = id || 'pivot-grid';
+    const {
+        cachedColSchema,
+        colRequestEnd,
+        colRequestStart,
+        colRequestEndRef,
+        colRequestStartRef,
+        colSchemaEpochRef,
+        columnRangeUrgencyToken,
+        handleHorizontalScrollMetrics,
+        isHorizontalColumnRequestPending,
+        isRequestPending,
+        latestRequestedColumnWindowRef,
+        latestRequestedViewportRef,
+        markRequestPending,
+        needsColSchema,
+        needsColSchemaRef,
+        pendingHorizontalColumnCount,
+        resetVisibleColRange,
+        responseSchemaWindow,
+        resolveStableRequestedColumnWindow,
+        serverSideBlockSize,
+        syncPreciseVisibleColRange,
+        totalCenterCols,
+        visibleColRange,
+    } = useServerSideViewportController({
+        serverSide,
+        effectiveRowCount: serverSidePinsGrandTotal && rowCount ? Math.max(rowCount - 1, 0) : rowCount,
+        responseColumns,
+        dataVersion,
+        stateEpoch,
+        structuralInFlight,
+        structuralPendingVersionRef,
+        filteredData,
+        rowFields,
+        colFields,
+        schemaFallbackWidth: defaultColumnWidths.schemaFallback,
+        requestVersionRef,
+        latestDataVersionRef,
+        requestUrgentColumnViewportRef,
+        coerceTransportNumber,
+        mergeSparseColSchema,
+        isSparseSchemaRangeLoaded,
+        performanceConfig: normalizedPerformanceConfig,
+    });
 
-    const markRequestPending = useCallback((requestMeta) => {
-        const normalizedMeta = requestMeta && typeof requestMeta === 'object'
-            ? requestMeta
-            : { version: requestMeta };
-        const numericVersion = Number(normalizedMeta.version);
-        if (Number.isFinite(numericVersion)) {
-            pendingRequestVersionsRef.current.add(numericVersion);
-        }
-        if (
-            Number.isFinite(numericVersion) &&
-            normalizedMeta.columnRangeChanged &&
-            normalizedMeta.hasColumnWindow
-        ) {
-            pendingHorizontalRequestVersionsRef.current.add(numericVersion);
-            setIsHorizontalColumnRequestPending(true);
-            setPendingHorizontalColumnCount(Math.max(
-                1,
-                Math.min(
-                    normalizedMeta.columnDeltaCount || normalizedMeta.visibleColumnCount || 1,
-                    Math.max(normalizedMeta.visibleColumnCount || 1, 6)
-                )
-            ));
-        }
-        if (isRequestPending || loadingDelayTimerRef.current !== null) return;
-        loadingDelayTimerRef.current = setTimeout(() => {
-            loadingDelayTimerRef.current = null;
-            if (pendingRequestVersionsRef.current.size > 0) {
-                setIsRequestPending(true);
-            }
-        }, 200);
-    }, [isRequestPending]);
+    const columnAdvisory = useMemo(
+        () => buildLargeColumnAdvisory({ serverSide, totalCenterCols, colFields }),
+        [colFields, serverSide, totalCenterCols]
+    );
+    const lastColumnAdvisoryRef = useRef('');
 
     useEffect(() => {
-        const numericVersion = Number(dataVersion);
-        if (!Number.isFinite(numericVersion)) return;
-        latestDataVersionRef.current = numericVersion;
-        if (numericVersion > requestVersionRef.current) {
-            requestVersionRef.current = numericVersion;
+        if (!columnAdvisory) {
+            lastColumnAdvisoryRef.current = '';
+            return;
         }
-        for (const pendingVersion of Array.from(pendingRequestVersionsRef.current)) {
-            if (pendingVersion <= numericVersion) {
-                pendingRequestVersionsRef.current.delete(pendingVersion);
-            }
-        }
-        for (const pendingVersion of Array.from(pendingHorizontalRequestVersionsRef.current)) {
-            if (pendingVersion <= numericVersion) {
-                pendingHorizontalRequestVersionsRef.current.delete(pendingVersion);
-            }
-        }
-        if (pendingRequestVersionsRef.current.size === 0) {
-            if (loadingDelayTimerRef.current !== null) {
-                clearTimeout(loadingDelayTimerRef.current);
-                loadingDelayTimerRef.current = null;
-            }
-            setIsRequestPending(false);
-        }
-        if (pendingHorizontalRequestVersionsRef.current.size === 0) {
-            setIsHorizontalColumnRequestPending(false);
-            setPendingHorizontalColumnCount(0);
-        }
-    }, [dataVersion]);
+        const advisoryKey = `${viewMode}|${colFields.join('|')}|${totalCenterCols}`;
+        if (lastColumnAdvisoryRef.current === advisoryKey) return;
+        lastColumnAdvisoryRef.current = advisoryKey;
+        showNotification(columnAdvisory.notification, columnAdvisory.tone);
+    }, [colFields, columnAdvisory, showNotification, totalCenterCols, viewMode]);
+
+    const layoutHistorySnapshot = useMemo(() => cloneSerializable({
+        rowFields,
+        colFields,
+        valConfigs,
+        filters,
+        sorting,
+        expanded,
+        colExpanded,
+        columnPinning,
+        rowPinning,
+        showRowTotals,
+        showColTotals,
+        grandTotalPinOverride,
+    }, null), [
+        colExpanded,
+        colFields,
+        columnPinning,
+        expanded,
+        filters,
+        grandTotalPinOverride,
+        rowFields,
+        rowPinning,
+        showColTotals,
+        showRowTotals,
+        sorting,
+        valConfigs,
+    ]);
+    const layoutHistorySnapshotRef = useRef(layoutHistorySnapshot);
+    const layoutHistorySnapshotKey = useMemo(
+        () => JSON.stringify(layoutHistorySnapshot || {}),
+        [layoutHistorySnapshot]
+    );
 
     useEffect(() => {
-        return () => {
-            if (loadingDelayTimerRef.current !== null) {
-                clearTimeout(loadingDelayTimerRef.current);
-                loadingDelayTimerRef.current = null;
-            }
+        rowEditSessionsRef.current = rowEditSessions;
+    }, [rowEditSessions]);
+
+    useEffect(() => {
+        editorOptionsLoadingRef.current = editorOptionsLoadingState;
+    }, [editorOptionsLoadingState]);
+
+    const updateRowEditSessions = useCallback((updater) => {
+        let nextSnapshot = rowEditSessionsRef.current;
+        setRowEditSessions((previousSessions) => {
+            const resolvedSessions = typeof updater === 'function'
+                ? updater(previousSessions)
+                : updater;
+            nextSnapshot = resolvedSessions && typeof resolvedSessions === 'object'
+                ? resolvedSessions
+                : {};
+            rowEditSessionsRef.current = nextSnapshot;
+            return nextSnapshot;
+        });
+        return nextSnapshot;
+    }, []);
+
+    const syncTransactionHistoryState = useCallback(() => {
+        setTransactionHistoryState({
+            undoCount: transactionUndoStackRef.current.length,
+            redoCount: transactionRedoStackRef.current.length,
+            pending: Boolean(transactionHistoryPendingRequestRef.current),
+        });
+    }, []);
+
+    const syncComparisonValueState = useCallback(() => {
+        setComparisonValueState({
+            activeCount: comparisonCellCountsRef.current.size,
+        });
+    }, []);
+
+    const serializeEditComparisonState = useCallback(() => {
+        const cells = [];
+        comparisonCellOriginalValuesRef.current.forEach((entry, key) => {
+            if (!entry || typeof entry !== 'object') return;
+            const count = comparisonCellCountsRef.current.get(key) || 0;
+            if (count <= 0) return;
+            const rowId = entry.rowId === null || entry.rowId === undefined ? '' : String(entry.rowId);
+            const colId = entry.colId === null || entry.colId === undefined ? '' : String(entry.colId);
+            if (!rowId || !colId) return;
+            cells.push({
+                rowId,
+                colId,
+                originalValue: entry.value,
+            });
+        });
+
+        const markers = [];
+        editedCellMarkersRef.current.forEach((entry, key) => {
+            if (!entry || typeof entry !== 'object') return;
+            const direct = (entry.directCount || 0) > 0;
+            const propagated = (entry.propagatedCount || 0) > 0;
+            if (!direct && !propagated) return;
+            markers.push({
+                key: String(key),
+                direct,
+                propagated,
+            });
+        });
+
+        if (cells.length === 0 && markers.length === 0) {
+            return null;
+        }
+
+        cells.sort((left, right) => `${left.rowId}:::${left.colId}`.localeCompare(`${right.rowId}:::${right.colId}`));
+        markers.sort((left, right) => left.key.localeCompare(right.key));
+
+        return {
+            version: 1,
+            cells,
+            markers,
         };
     }, []);
 
-    useEffect(() => {
-        if (!isRequestPending) return;
-        const timeoutId = setTimeout(() => {
-            pendingRequestVersionsRef.current.clear();
-            pendingHorizontalRequestVersionsRef.current.clear();
-            setIsRequestPending(false);
-            setIsHorizontalColumnRequestPending(false);
-            setPendingHorizontalColumnCount(0);
-        }, 15000);
-        return () => clearTimeout(timeoutId);
-    }, [isRequestPending]);
+    const restoreSerializedEditComparisonState = useCallback((serializedState) => {
+        const hadComparisonEntries = comparisonCellCountsRef.current.size > 0 || comparisonCellOriginalValuesRef.current.size > 0;
+        const hadEditedMarkers = editedCellMarkersRef.current.size > 0;
 
-    useEffect(() => {
-        if (!serverSide) return;
-        pendingHorizontalRequestVersionsRef.current.clear();
-        setIsHorizontalColumnRequestPending(false);
-        setPendingHorizontalColumnCount(0);
-    }, [serverSide, stateEpoch]);
+        comparisonCellCountsRef.current.clear();
+        comparisonCellOriginalValuesRef.current.clear();
+        editedCellMarkersRef.current.clear();
 
-    // Clear schema on structural change so we re-derive from fresh data
-    useEffect(() => {
-        if (!serverSide) return;
-        setCachedColSchema(null);
-    }, [stateEpoch, serverSide]);
+        let hasComparisonEntries = false;
+        let hasEditedMarkers = false;
+        const restored = serializedState && typeof serializedState === 'object'
+            ? serializedState
+            : null;
 
-    // Extract authoritative col_schema embedded by the server as a sentinel entry in props.columns.
-    // This is more robust than inferring schema from row keys (handles windowed responses correctly).
-    useEffect(() => {
-        if (!serverSide || !props.columns) return;
-        const schemaEntry = props.columns.find(c => c.id === '__col_schema');
-        if (!schemaEntry || !schemaEntry.col_schema) return;
-
-        const pendingStructural = structuralPendingVersionRef.current;
-        const numericVersion = Number(dataVersion);
-        const schemaIsFreshForCurrentEpoch = !structuralInFlight
-            || !pendingStructural
-            || (Number.isFinite(numericVersion) && numericVersion >= pendingStructural.version);
-
-        // During a structural row/column change, props.columns still contains the
-        // previous response for one render. Re-applying that stale schema makes the
-        // new layout request window against old center-column ids, which shows
-        // formula headers backed by missing row keys until the next round-trip.
-        if (!schemaIsFreshForCurrentEpoch) return;
-
-        setCachedColSchema(schemaEntry.col_schema);
-        colSchemaEpochRef.current = stateEpoch;
-    }, [serverSide, props.columns, stateEpoch, dataVersion, structuralInFlight]);
-
-    // Derive schema from row keys — only used in client-side mode.
-    // In server-side mode the authoritative schema always comes from the __col_schema sentinel
-    // embedded in props.columns by the server.  Allowing row-key inference in server-side mode
-    // risks schema drift on windowed/partial payloads (only the visible col slice is present).
-    useEffect(() => {
-        if (serverSide || cachedColSchema) return;
-        if (!filteredData || filteredData.length === 0) return;
-        const rowMetaKeys = new Set(['_id', '_path', '_isTotal', '_level', '_expanded',
-            '_parentPath', '_has_children', '_is_expanded', 'depth', 'uuid', 'subRows', '__virtualIndex']);
-        const ignoredIds = new Set([...rowFields, ...colFields, '_isTotal']);
-        const colIds = [];
-        const colIdSet = new Set();
-        for (const row of filteredData) {
-            if (!row) continue;
-            for (const key of Object.keys(row)) {
-                if (!colIdSet.has(key) && !rowMetaKeys.has(key) && !ignoredIds.has(key)) {
-                    colIds.push(key);
-                    colIdSet.add(key);
-                }
-            }
-        }
-        if (colIds.length > 0) {
-            setCachedColSchema({
-                total_center_cols: colIds.length,
-                columns: colIds.map((id, i) => ({ index: i, id, size: defaultColumnWidths.schemaFallback }))
+        (Array.isArray(restored && restored.cells) ? restored.cells : []).forEach((cell) => {
+            if (!cell || typeof cell !== 'object') return;
+            const key = getOptimisticCellKey(cell.rowId, cell.colId);
+            if (!key) return;
+            comparisonCellCountsRef.current.set(key, 1);
+            comparisonCellOriginalValuesRef.current.set(key, {
+                rowId: String(cell.rowId),
+                colId: String(cell.colId),
+                value: Object.prototype.hasOwnProperty.call(cell, 'originalValue') ? cell.originalValue : undefined,
             });
-            colSchemaEpochRef.current = stateEpoch;
+            hasComparisonEntries = true;
+        });
+
+        (Array.isArray(restored && restored.markers) ? restored.markers : []).forEach((marker) => {
+            if (!marker || typeof marker !== 'object') return;
+            const key = typeof marker.key === 'string'
+                ? marker.key
+                : getOptimisticCellKey(marker.rowId, marker.colId);
+            if (!key) return;
+            const nextEntry = {
+                directCount: marker.direct ? 1 : 0,
+                propagatedCount: marker.propagated ? 1 : 0,
+            };
+            if (nextEntry.directCount <= 0 && nextEntry.propagatedCount <= 0) return;
+            editedCellMarkersRef.current.set(key, nextEntry);
+            hasEditedMarkers = true;
+        });
+
+        syncComparisonValueState();
+        if (hadComparisonEntries || hasComparisonEntries) {
+            bumpComparisonCellEpoch();
         }
-    }, [serverSide, filteredData, cachedColSchema, stateEpoch, rowFields, colFields, defaultColumnWidths.schemaFallback]);
+        if (hadEditedMarkers || hasEditedMarkers) {
+            bumpEditedCellEpoch();
+        }
+    }, [bumpComparisonCellEpoch, bumpEditedCellEpoch, getOptimisticCellKey, syncComparisonValueState]);
 
-    const needsColSchema = !cachedColSchema || colSchemaEpochRef.current !== stateEpoch;
-    const totalCenterCols = cachedColSchema ? cachedColSchema.total_center_cols : null;
+    const serializedEditComparisonState = useMemo(
+        () => serializeEditComparisonState(),
+        [comparisonCellEpoch, comparisonValueState.activeCount, editedCellEpoch, serializeEditComparisonState]
+    );
 
-    // Always request all center columns to avoid feedback loop where fewer
-    // columns → smaller table → smaller visible range → even fewer columns.
-    // Column virtualization handles render-side efficiency.
-    const colRequestStart = (serverSide && cachedColSchema && !needsColSchema && totalCenterCols !== null)
-        ? Math.max(0, Math.min(visibleColRange.start, Math.max(totalCenterCols - 1, 0)))
-        : null;
+    const bumpEditedCellEpoch = useCallback(() => {
+        setEditedCellEpoch((previousEpoch) => previousEpoch + 1);
+    }, []);
 
-    const colRequestEnd = (serverSide && cachedColSchema && !needsColSchema && totalCenterCols !== null)
-        ? Math.max(
-            Math.max(0, Math.min(visibleColRange.start, Math.max(totalCenterCols - 1, 0))),
-            Math.max(0, Math.min(visibleColRange.end, Math.max(totalCenterCols - 1, 0)))
-        )
-        : null;
+    const bumpOptimisticCellEpoch = useCallback(() => {
+        setOptimisticCellEpoch((previousEpoch) => previousEpoch + 1);
+    }, []);
 
-    // Keep refs in sync for use in field-zone effect closures
-    colRequestStartRef.current = colRequestStart;
-    colRequestEndRef.current = colRequestEnd;
-    needsColSchemaRef.current = needsColSchema;
+    const bumpComparisonCellEpoch = useCallback(() => {
+        setComparisonCellEpoch((previousEpoch) => previousEpoch + 1);
+    }, []);
+
+    const getOptimisticCellKey = useCallback((rowId, colId) => {
+        const normalizedRowId = rowId === null || rowId === undefined ? '' : String(rowId);
+        const normalizedColId = colId === null || colId === undefined ? '' : String(colId);
+        if (!normalizedRowId || !normalizedColId) return null;
+        return `${normalizedRowId}:::${normalizedColId}`;
+    }, []);
+
+    const resolveOptimisticCellValue = useCallback((rowId, colId, fallbackValue) => {
+        const key = getOptimisticCellKey(rowId, colId);
+        if (!key) return fallbackValue;
+        const optimisticEntry = optimisticCellValuesRef.current.get(key);
+        return optimisticEntry ? optimisticEntry.value : fallbackValue;
+    }, [getOptimisticCellKey]);
+
+    const resolveVisibleDataRowId = useCallback((row) => {
+        if (!row || typeof row !== 'object') return null;
+        if (row._isTotal || row._path === GRAND_TOTAL_ROW_ID || row._id === 'Grand Total') return GRAND_TOTAL_ROW_ID;
+        if (row._path !== undefined && row._path !== null && row._path !== '') return String(row._path);
+        if (row.id !== undefined && row.id !== null && row.id !== '') return String(row.id);
+        if (row._id !== undefined && row._id !== null && row._id !== '') return String(row._id);
+        return null;
+    }, []);
+
+    const resolveCurrentCellValue = useCallback((rowId, colId, fallbackValue = undefined) => {
+        if (rowId === null || rowId === undefined || colId === null || colId === undefined) return fallbackValue;
+        const normalizedRowId = String(rowId);
+        const normalizedColId = String(colId);
+        const visibleRows = Array.isArray(tableDataRef.current) ? tableDataRef.current : [];
+        const matchedRow = visibleRows.find((row) => resolveVisibleDataRowId(row) === normalizedRowId) || null;
+        const resolvedFallback = matchedRow && Object.prototype.hasOwnProperty.call(matchedRow, normalizedColId)
+            ? matchedRow[normalizedColId]
+            : fallbackValue;
+        return resolveOptimisticCellValue(normalizedRowId, normalizedColId, resolvedFallback);
+    }, [resolveOptimisticCellValue, resolveVisibleDataRowId]);
+
+    const resolveDisplayedCellValue = useCallback((rowId, colId, fallbackValue = undefined) => {
+        const currentValue = resolveCurrentCellValue(rowId, colId, fallbackValue);
+        if (editValueDisplayMode !== 'original') return currentValue;
+        const key = getOptimisticCellKey(rowId, colId);
+        if (!key) return currentValue;
+        const originalEntry = comparisonCellOriginalValuesRef.current.get(key);
+        return originalEntry ? originalEntry.value : currentValue;
+    }, [editValueDisplayMode, getOptimisticCellKey, resolveCurrentCellValue]);
+
+    const getDirectVisibleChildRowIds = useCallback((ancestorRowId) => {
+        const visibleRows = Array.isArray(tableDataRef.current) ? tableDataRef.current : [];
+        if (ancestorRowId === GRAND_TOTAL_ROW_ID) {
+            return visibleRows
+                .map(resolveVisibleDataRowId)
+                .filter((rowId) => typeof rowId === 'string' && rowId !== GRAND_TOTAL_ROW_ID && !rowId.includes('|||'));
+        }
+        const normalizedAncestorId = ancestorRowId === null || ancestorRowId === undefined ? '' : String(ancestorRowId);
+        if (!normalizedAncestorId) return [];
+        const ancestorDepth = normalizedAncestorId.split('|||').length;
+        const directChildPrefix = `${normalizedAncestorId}|||`;
+        return visibleRows
+            .map(resolveVisibleDataRowId)
+            .filter((rowId) => (
+                typeof rowId === 'string'
+                && rowId.startsWith(directChildPrefix)
+                && rowId.split('|||').length === ancestorDepth + 1
+            ));
+    }, [resolveVisibleDataRowId]);
+
+    const resolveAggregationConfigForColumnId = useCallback((columnId) => {
+        if (!Array.isArray(valConfigs) || !columnId) return null;
+        const normalizedId = String(columnId).trim().toLowerCase();
+        if (!normalizedId) return null;
+        const matchedConfig = valConfigs.find((config) => {
+            if (!config || typeof config !== 'object' || !config.field) return false;
+            if (config.agg === 'formula') {
+                const formulaId = String(config.field).trim().toLowerCase();
+                return normalizedId === formulaId || normalizedId.endsWith(`_${formulaId}`);
+            }
+            const measureId = getKey('', config.field, config.agg).toLowerCase();
+            const measureSuffix = `_${config.field}_${config.agg}`.toLowerCase();
+            return normalizedId === measureId || normalizedId.endsWith(measureSuffix);
+        }) || null;
+        if (!matchedConfig) return null;
+        return {
+            field: matchedConfig.field || null,
+            agg: matchedConfig.agg || null,
+            weightField: matchedConfig.weightField || null,
+            windowFn: matchedConfig.windowFn || null,
+        };
+    }, [valConfigs]);
+
+    const isEditableAggregationColumn = useCallback((config, columnId) => {
+        if (!config || typeof config !== 'object') return false;
+        if (typeof columnId === 'string' && columnId.startsWith('__RowTotal__')) return false;
+        const normalizedAgg = String(config.agg || '').trim().toLowerCase();
+        if (!normalizedAgg || normalizedAgg === 'formula') return false;
+        if (config.windowFn) return false;
+        return !['count', 'count_distinct', 'distinct_count'].includes(normalizedAgg);
+    }, []);
+
+    const resolveEditorPresentation = useCallback((columnId, columnConfig = null, currentValue = undefined, defaultEditable = false) => {
+        const editorConfig = resolveColumnEditSpec({
+            editingConfig: normalizedEditingConfig,
+            validationRules,
+            columnId,
+            columnConfig,
+            currentValue,
+            defaultEditable,
+        });
+        if (!editorConfig || editorConfig.editable === false) return null;
+        const optionsSource = editorConfig.optionsSource || resolveEditorOptionsSource(editorConfig, columnId, columnConfig);
+        const optionsKey = optionsSource && optionsSource.columnId ? optionsSource.columnId : null;
+        const options = optionsKey && Array.isArray(filterOptions[optionsKey])
+            ? filterOptions[optionsKey]
+            : (Array.isArray(editorConfig.options) ? editorConfig.options : []);
+        const loading = Boolean(optionsKey && editorOptionsLoadingRef.current[optionsKey]);
+        return {
+            editorConfig: {
+                ...editorConfig,
+                optionsSource,
+                options,
+            },
+            options,
+            loading,
+            optionsKey,
+        };
+    }, [filterOptions, normalizedEditingConfig, validationRules]);
+
+    const getRowEditSession = useCallback((rowId) => {
+        if (rowId === null || rowId === undefined) return null;
+        return rowEditSessionsRef.current[String(rowId)] || null;
+    }, []);
+
+    const closeRowEditSession = useCallback((rowId) => {
+        if (rowId === null || rowId === undefined) return;
+        const normalizedRowId = String(rowId);
+        updateRowEditSessions((previousSessions) => {
+            if (!previousSessions[normalizedRowId]) return previousSessions;
+            const nextSessions = { ...previousSessions };
+            delete nextSessions[normalizedRowId];
+            return nextSessions;
+        });
+    }, [updateRowEditSessions]);
+
+    const resolveRowEditableColumns = useCallback((row) => {
+        if (!row || !tableRef.current || typeof tableRef.current.getVisibleLeafColumns !== 'function') return [];
+        const rowId = row && row.original && row.original._path ? row.original._path : row.id;
+        return tableRef.current.getVisibleLeafColumns().reduce((acc, column) => {
+            if (!column || !column.id) return acc;
+            if (column.id === 'hierarchy' || column.id === '__row_number__' || String(column.id).startsWith('__tree_level__')) return acc;
+            if (column.columnDef && column.columnDef.meta && column.columnDef.meta.isSchemaPlaceholder) return acc;
+            const columnConfig = resolveAggregationConfigForColumnId(column.id);
+            const currentValue = typeof row.getValue === 'function'
+                ? row.getValue(column.id)
+                : (row.original && Object.prototype.hasOwnProperty.call(row.original, column.id) ? row.original[column.id] : undefined);
+            const editorState = resolveEditorPresentation(
+                column.id,
+                columnConfig,
+                currentValue,
+                isEditableAggregationColumn(columnConfig, column.id),
+            );
+            if (!editorState || !editorState.editorConfig || editorState.editorConfig.editable === false) {
+                return acc;
+            }
+            acc.push({
+                colId: column.id,
+                columnConfig,
+                editorConfig: editorState.editorConfig,
+                currentValue: resolveCurrentCellValue(rowId, column.id, currentValue),
+            });
+            return acc;
+        }, []);
+    }, [isEditableAggregationColumn, resolveAggregationConfigForColumnId, resolveCurrentCellValue, resolveEditorPresentation]);
+
+    const startRowEditSession = useCallback((row, options = {}) => {
+        if (!row) return;
+        const rowId = row && row.original && row.original._path ? row.original._path : row.id;
+        if (!rowId) return;
+        const normalizedRowId = String(rowId);
+        const editableColumns = resolveRowEditableColumns(row);
+        if (editableColumns.length === 0) {
+            showNotification('This row does not expose editable visible values.', 'warning');
+            return;
+        }
+        const normalizedFocusColumnId = options && options.focusColumnId !== undefined && options.focusColumnId !== null
+            ? String(options.focusColumnId)
+            : null;
+        const editableColumnMap = editableColumns.reduce((acc, entry) => {
+            acc[entry.colId] = {
+                columnConfig: entry.columnConfig,
+                editorConfig: entry.editorConfig,
+            };
+            return acc;
+        }, {});
+        const originalValues = editableColumns.reduce((acc, entry) => {
+            acc[entry.colId] = entry.currentValue;
+            return acc;
+        }, {});
+        let createdSession = false;
+        updateRowEditSessions((previousSessions) => {
+            const previousSession = previousSessions[normalizedRowId] || null;
+            if (!previousSession) createdSession = true;
+            return {
+                ...previousSessions,
+                [normalizedRowId]: {
+                    active: true,
+                    status: previousSession && previousSession.status === 'saving' ? 'saving' : 'editing',
+                    drafts: previousSession && previousSession.drafts ? { ...previousSession.drafts } : {},
+                    errors: previousSession && previousSession.errors ? { ...previousSession.errors } : {},
+                    touched: previousSession && previousSession.touched ? { ...previousSession.touched } : {},
+                    originalValues: {
+                        ...originalValues,
+                        ...(previousSession && previousSession.originalValues ? previousSession.originalValues : {}),
+                    },
+                    editableColumns: {
+                        ...(previousSession && previousSession.editableColumns ? previousSession.editableColumns : {}),
+                        ...editableColumnMap,
+                    },
+                    autoSave: Boolean(options && options.autoSave),
+                    focusColumnId: normalizedFocusColumnId,
+                    trigger: options && options.trigger ? String(options.trigger) : (previousSession && previousSession.trigger ? previousSession.trigger : 'manual'),
+                },
+            };
+        });
+        if (createdSession) {
+            emitEditLifecycleEvent({
+                kind: 'row_edit_start',
+                rowId: normalizedRowId,
+                columnIds: editableColumns.map((entry) => entry.colId),
+            });
+        }
+    }, [emitEditLifecycleEvent, resolveRowEditableColumns, showNotification, updateRowEditSessions]);
+
+    const updateRowDraftValue = useCallback((rowId, colId, nextValue, meta = {}) => {
+        if (rowId === null || rowId === undefined || !colId) return;
+        const normalizedRowId = String(rowId);
+        const normalizedColId = String(colId);
+        let emittedValidationError = null;
+        updateRowEditSessions((previousSessions) => {
+            const session = previousSessions[normalizedRowId];
+            if (!session) return previousSessions;
+            const nextDrafts = { ...(session.drafts || {}) };
+            const nextErrors = { ...(session.errors || {}) };
+            const nextTouched = { ...(session.touched || {}), [normalizedColId]: true };
+            const originalValue = session.originalValues ? session.originalValues[normalizedColId] : undefined;
+            if (cellValuesMatch(nextValue, originalValue)) {
+                delete nextDrafts[normalizedColId];
+            } else {
+                nextDrafts[normalizedColId] = nextValue;
+            }
+            const editorConfig = (
+                meta && meta.editorConfig
+                ? meta.editorConfig
+                : (
+                    session.editableColumns
+                    && session.editableColumns[normalizedColId]
+                    && session.editableColumns[normalizedColId].editorConfig
+                )
+            ) || {};
+            const nextRowValues = {
+                ...(session.originalValues || {}),
+                ...nextDrafts,
+                [normalizedColId]: Object.prototype.hasOwnProperty.call(nextDrafts, normalizedColId) ? nextDrafts[normalizedColId] : originalValue,
+            };
+            const validation = validateEditorValue(nextRowValues[normalizedColId], editorConfig.validationRules || [], {
+                columnId: normalizedColId,
+                columnLabel: normalizedColId,
+                rowId: normalizedRowId,
+                rowValues: nextRowValues,
+            });
+            if (!validation.valid) {
+                nextErrors[normalizedColId] = validation.error || 'Invalid value';
+                emittedValidationError = nextErrors[normalizedColId];
+            } else {
+                delete nextErrors[normalizedColId];
+            }
+            return {
+                ...previousSessions,
+                [normalizedRowId]: {
+                    ...session,
+                    status: 'editing',
+                    drafts: nextDrafts,
+                    errors: nextErrors,
+                    touched: nextTouched,
+                },
+            };
+        });
+        if (emittedValidationError) {
+            emitEditLifecycleEvent({
+                kind: 'row_edit_validation_error',
+                rowId: normalizedRowId,
+                colId: normalizedColId,
+                message: emittedValidationError,
+            });
+        }
+    }, [emitEditLifecycleEvent, updateRowEditSessions]);
+
+    const cancelRowEditSession = useCallback((rowId) => {
+        if (rowId === null || rowId === undefined) return;
+        closeRowEditSession(rowId);
+        emitEditLifecycleEvent({
+            kind: 'row_edit_cancel',
+            rowId: String(rowId),
+        });
+    }, [closeRowEditSession, emitEditLifecycleEvent]);
+
+    const getRowEditMeta = useCallback((row) => {
+        if (!row) return {
+            rowId: null,
+            session: null,
+            canEdit: false,
+            dirtyCount: 0,
+            errorCount: 0,
+            saving: false,
+        };
+        const rowId = row && row.original && row.original._path ? row.original._path : row.id;
+        const session = rowId ? getRowEditSession(rowId) : null;
+        const editableColumns = resolveRowEditableColumns(row);
+        return {
+            rowId: rowId ? String(rowId) : null,
+            session,
+            canEdit: editableColumns.length > 0,
+            dirtyCount: session ? Object.keys(session.drafts || {}).length : 0,
+            errorCount: session ? Object.values(session.errors || {}).filter(Boolean).length : 0,
+            saving: Boolean(session && session.status === 'saving'),
+        };
+    }, [getRowEditSession, resolveRowEditableColumns]);
+
+    const clearAllOptimisticCellValues = useCallback(() => {
+        const hadEntries = optimisticCellValuesRef.current.size > 0 || optimisticCellRequestsRef.current.size > 0;
+        optimisticCellValuesRef.current.clear();
+        optimisticCellRequestsRef.current.clear();
+        if (hadEntries) bumpOptimisticCellEpoch();
+    }, [bumpOptimisticCellEpoch]);
+
+    const captureOptimisticCellValues = useCallback((updates, requestId) => {
+        const requestKeys = new Set();
+        const storeOptimisticValue = (rowId, colId, value) => {
+            const key = getOptimisticCellKey(rowId, colId);
+            if (!key) return;
+            optimisticCellValuesRef.current.set(key, {
+                requestId,
+                rowId: String(rowId),
+                colId: String(colId),
+                value,
+            });
+            requestKeys.add(key);
+        };
+        (Array.isArray(updates) ? updates : []).forEach((update) => {
+            if (!update || typeof update !== 'object') return;
+            const rowId = update.rowPath || update.rowId;
+            const colId = update.colId;
+            storeOptimisticValue(rowId, colId, update.value);
+
+            const aggregation = update.aggregation && typeof update.aggregation === 'object'
+                ? update.aggregation
+                : resolveAggregationConfigForColumnId(colId);
+            const aggregationFn = aggregation && aggregation.agg
+                ? String(aggregation.agg).trim().toLowerCase()
+                : '';
+            if (!aggregationFn || aggregation.windowFn) return;
+            const normalizedRowPath = rowId === null || rowId === undefined ? '' : String(rowId);
+            if (!normalizedRowPath || normalizedRowPath === GRAND_TOTAL_ROW_ID) return;
+
+            const pathParts = normalizedRowPath.split('|||');
+            const ancestorPaths = [];
+            for (let depth = pathParts.length - 1; depth >= 1; depth -= 1) {
+                ancestorPaths.push(pathParts.slice(0, depth).join('|||'));
+            }
+            ancestorPaths.push(GRAND_TOTAL_ROW_ID);
+            if (ancestorPaths.length === 0) return;
+
+            const nextValue = Number(update.value);
+            const previousValue = Number(update.oldValue);
+            if (aggregationFn === 'sum') {
+                if (!Number.isFinite(nextValue) || !Number.isFinite(previousValue)) return;
+                const delta = nextValue - previousValue;
+                if (!Number.isFinite(delta) || delta === 0) return;
+                ancestorPaths.forEach((ancestorPath) => {
+                    const ancestorValue = Number(resolveCurrentCellValue(ancestorPath, colId));
+                    if (!Number.isFinite(ancestorValue)) return;
+                    storeOptimisticValue(ancestorPath, colId, ancestorValue + delta);
+                });
+                return;
+            }
+
+            if (aggregationFn === 'min' || aggregationFn === 'max') {
+                if (!Number.isFinite(nextValue)) return;
+                const reducer = aggregationFn === 'min' ? Math.min : Math.max;
+                ancestorPaths.forEach((ancestorPath) => {
+                    const childRowIds = getDirectVisibleChildRowIds(ancestorPath);
+                    if (childRowIds.length === 0) return;
+                    const childValues = childRowIds
+                        .map((childRowId) => {
+                            if (childRowId === normalizedRowPath) return nextValue;
+                            return Number(resolveCurrentCellValue(childRowId, colId));
+                        })
+                        .filter((value) => Number.isFinite(value));
+                    if (childValues.length === 0) return;
+                    storeOptimisticValue(ancestorPath, colId, reducer(...childValues));
+                });
+            }
+        });
+        if (!requestId || requestKeys.size === 0) return;
+        optimisticCellRequestsRef.current.set(requestId, Array.from(requestKeys));
+        bumpOptimisticCellEpoch();
+    }, [bumpOptimisticCellEpoch, getDirectVisibleChildRowIds, getOptimisticCellKey, resolveAggregationConfigForColumnId, resolveCurrentCellValue]);
+
+    const releaseOptimisticCellRequest = useCallback((requestId) => {
+        if (!requestId) return;
+        optimisticCellRequestsRef.current.delete(requestId);
+    }, []);
+
+    const clearOptimisticCellValuesForRequest = useCallback((requestId) => {
+        if (!requestId) return;
+        const requestKeys = optimisticCellRequestsRef.current.get(requestId);
+        if (!Array.isArray(requestKeys) || requestKeys.length === 0) {
+            optimisticCellRequestsRef.current.delete(requestId);
+            return;
+        }
+        let didDelete = false;
+        requestKeys.forEach((key) => {
+            const optimisticEntry = optimisticCellValuesRef.current.get(key);
+            if (!optimisticEntry || optimisticEntry.requestId !== requestId) return;
+            optimisticCellValuesRef.current.delete(key);
+            didDelete = true;
+        });
+        optimisticCellRequestsRef.current.delete(requestId);
+        if (didDelete) bumpOptimisticCellEpoch();
+    }, [bumpOptimisticCellEpoch]);
+
+    const resolveEditedCellMarker = useCallback((rowId, colId) => {
+        const key = getOptimisticCellKey(rowId, colId);
+        if (!key) return null;
+        const marker = editedCellMarkersRef.current.get(key);
+        if (!marker || (marker.directCount || 0) <= 0 && (marker.propagatedCount || 0) <= 0) {
+            return null;
+        }
+        return {
+            direct: (marker.directCount || 0) > 0,
+            propagated: (marker.propagatedCount || 0) > 0,
+        };
+    }, [getOptimisticCellKey]);
+
+    const clearAllEditedCellMarkers = useCallback(() => {
+        if (editedCellMarkersRef.current.size === 0) return;
+        editedCellMarkersRef.current.clear();
+        bumpEditedCellEpoch();
+    }, [bumpEditedCellEpoch]);
+
+    const clearAllComparisonValueState = useCallback(() => {
+        const hadEntries = comparisonCellCountsRef.current.size > 0 || comparisonCellOriginalValuesRef.current.size > 0;
+        comparisonCellCountsRef.current.clear();
+        comparisonCellOriginalValuesRef.current.clear();
+        if (hadEntries) {
+            syncComparisonValueState();
+            bumpComparisonCellEpoch();
+        }
+    }, [bumpComparisonCellEpoch, syncComparisonValueState]);
+
+    const didRestorePersistedEditComparisonRef = useRef(false);
+    const didAttemptEditComparisonRestoreRef = useRef(false);
+    const lastRestoredViewEditComparisonKeyRef = useRef(null);
+
+    useEffect(() => {
+        if (!persistence || !didAttemptEditComparisonRestoreRef.current) return;
+        savePersistedState('editComparisonState', serializedEditComparisonState);
+        savePersistedState('editValueDisplayMode', editValueDisplayMode);
+    }, [editValueDisplayMode, persistence, savePersistedState, serializedEditComparisonState]);
+
+    // Push edit state to Dash via setProps so the backend can persist/modify it
+    const lastEmittedEditStateKeyRef = useRef(null);
+    const editStateSessionKey = id ? `__pivot_editState_${typeof id === 'string' ? id : JSON.stringify(id)}` : null;
+    useEffect(() => {
+        const propagationLog = propagationLogRef.current.length > 0
+            ? propagationLogRef.current
+            : undefined;
+        const statePayload = serializedEditComparisonState
+            ? { ...serializedEditComparisonState, displayMode: editValueDisplayMode, propagationLog }
+            : (propagationLog ? { version: 1, cells: [], markers: [], displayMode: editValueDisplayMode, propagationLog } : null);
+        const stateKey = statePayload ? JSON.stringify(statePayload) : '__empty__';
+        if (stateKey === lastEmittedEditStateKeyRef.current) return;
+        lastEmittedEditStateKeyRef.current = stateKey;
+        if (typeof setProps === 'function') {
+            setProps({ editState: statePayload });
+        }
+        // Auto-save to sessionStorage so edits survive page refresh
+        if (editStateSessionKey) {
+            try {
+                if (statePayload) {
+                    sessionStorage.setItem(editStateSessionKey, JSON.stringify(statePayload));
+                } else {
+                    sessionStorage.removeItem(editStateSessionKey);
+                }
+            } catch (_ignored) { /* storage full or unavailable */ }
+        }
+    }, [editStateSessionKey, editValueDisplayMode, propagationLogEpoch, serializedEditComparisonState, setProps]);
+
+    // Restore edit state: prefer prop, then sessionStorage
+    const didRestoreEditStateFromPropRef = useRef(false);
+    useEffect(() => {
+        if (didRestoreEditStateFromPropRef.current) return;
+        didRestoreEditStateFromPropRef.current = true;
+        let stateToRestore = externalEditState;
+        if ((!stateToRestore || typeof stateToRestore !== 'object') && editStateSessionKey) {
+            try {
+                const stored = sessionStorage.getItem(editStateSessionKey);
+                if (stored) stateToRestore = JSON.parse(stored);
+            } catch (_ignored) { /* parse error or unavailable */ }
+        }
+        if (!stateToRestore || typeof stateToRestore !== 'object') return;
+        if (!stateToRestore.cells && !stateToRestore.markers) return;
+        restoreSerializedEditComparisonState(stateToRestore);
+        if (stateToRestore.displayMode === 'edited' || stateToRestore.displayMode === 'original') {
+            setEditValueDisplayMode(stateToRestore.displayMode);
+        }
+        if (Array.isArray(stateToRestore.propagationLog) && stateToRestore.propagationLog.length > 0) {
+            propagationLogRef.current = stateToRestore.propagationLog;
+            setPropagationLogEpoch((p) => p + 1);
+        }
+    }, [editStateSessionKey, externalEditState, restoreSerializedEditComparisonState]);
+
+    const buildEditedCellMarkerPlan = useCallback((updates) => {
+        const directKeys = new Set();
+        const propagatedKeys = new Set();
+        const markCell = (rowId, colId, kind = 'propagated') => {
+            const key = getOptimisticCellKey(rowId, colId);
+            if (!key) return;
+            if (kind === 'direct') {
+                directKeys.add(key);
+                propagatedKeys.delete(key);
+                return;
+            }
+            if (!directKeys.has(key)) {
+                propagatedKeys.add(key);
+            }
+        };
+
+        (Array.isArray(updates) ? updates : []).forEach((update) => {
+            if (!update || typeof update !== 'object') return;
+            const rowId = update.rowPath || update.rowId;
+            const colId = update.colId;
+            markCell(rowId, colId, 'direct');
+
+            const aggregation = update.aggregation && typeof update.aggregation === 'object'
+                ? update.aggregation
+                : resolveAggregationConfigForColumnId(colId);
+            const aggregationFn = aggregation && aggregation.agg
+                ? String(aggregation.agg).trim().toLowerCase()
+                : '';
+            if (!aggregationFn || aggregation.windowFn) return;
+
+            const normalizedRowId = rowId === null || rowId === undefined ? '' : String(rowId);
+            if (!normalizedRowId || normalizedRowId === GRAND_TOTAL_ROW_ID) return;
+
+            const pathParts = normalizedRowId.split('|||');
+            for (let depth = pathParts.length - 1; depth >= 1; depth -= 1) {
+                markCell(pathParts.slice(0, depth).join('|||'), colId, 'propagated');
+            }
+            markCell(GRAND_TOTAL_ROW_ID, colId, 'propagated');
+        });
+
+        if (directKeys.size === 0 && propagatedKeys.size === 0) return null;
+        return {
+            direct: Array.from(directKeys),
+            propagated: Array.from(propagatedKeys).filter((key) => !directKeys.has(key)),
+        };
+    }, [getOptimisticCellKey, resolveAggregationConfigForColumnId]);
+
+    const buildComparisonValuePlan = useCallback((updates) => {
+        const cells = new Map();
+        const addCell = (rowId, colId, originalValue = undefined) => {
+            const key = getOptimisticCellKey(rowId, colId);
+            if (!key) return;
+            const existingCell = cells.get(key);
+            const nextCell = {
+                key,
+                rowId: String(rowId),
+                colId: String(colId),
+            };
+            if (originalValue !== undefined) {
+                nextCell.originalValue = originalValue;
+            } else if (existingCell && Object.prototype.hasOwnProperty.call(existingCell, 'originalValue')) {
+                nextCell.originalValue = existingCell.originalValue;
+            }
+            cells.set(key, nextCell);
+        };
+        const addVisibleDescendants = (ancestorRowId, colId) => {
+            const normalizedAncestorId = ancestorRowId === null || ancestorRowId === undefined ? '' : String(ancestorRowId);
+            if (!normalizedAncestorId) return;
+            const descendantPrefix = `${normalizedAncestorId}|||`;
+            const visibleRows = Array.isArray(tableDataRef.current) ? tableDataRef.current : [];
+            visibleRows.forEach((row) => {
+                const rowId = resolveVisibleDataRowId(row);
+                if (!rowId || rowId === normalizedAncestorId) return;
+                if (normalizedAncestorId === GRAND_TOTAL_ROW_ID) {
+                    if (rowId !== GRAND_TOTAL_ROW_ID) addCell(rowId, colId);
+                    return;
+                }
+                if (rowId.startsWith(descendantPrefix)) addCell(rowId, colId);
+            });
+        };
+
+        (Array.isArray(updates) ? updates : []).forEach((update) => {
+            if (!update || typeof update !== 'object') return;
+            const rowId = update.rowPath || update.rowId;
+            const colId = update.colId;
+            addCell(rowId, colId, update.oldValue);
+
+            const aggregation = update.aggregation && typeof update.aggregation === 'object'
+                ? update.aggregation
+                : resolveAggregationConfigForColumnId(colId);
+            const aggregationFn = aggregation && aggregation.agg
+                ? String(aggregation.agg).trim().toLowerCase()
+                : '';
+            if (!aggregationFn || aggregation.windowFn) return;
+
+            const normalizedRowId = rowId === null || rowId === undefined ? '' : String(rowId);
+            if (!normalizedRowId) return;
+
+            if (normalizedRowId === GRAND_TOTAL_ROW_ID) {
+                addVisibleDescendants(GRAND_TOTAL_ROW_ID, colId);
+                return;
+            }
+
+            const pathParts = normalizedRowId.split('|||');
+            for (let depth = pathParts.length - 1; depth >= 1; depth -= 1) {
+                addCell(pathParts.slice(0, depth).join('|||'), colId);
+            }
+            addCell(GRAND_TOTAL_ROW_ID, colId);
+            addVisibleDescendants(normalizedRowId, colId);
+        });
+
+        if (cells.size === 0) return null;
+        return {
+            cells: Array.from(cells.values()),
+        };
+    }, [getOptimisticCellKey, resolveAggregationConfigForColumnId, resolveVisibleDataRowId]);
+
+    const applyComparisonValuePlan = useCallback((comparisonPlan, direction = 'forward') => {
+        if (!comparisonPlan || typeof comparisonPlan !== 'object') return;
+        const delta = direction === 'backward' ? -1 : 1;
+        let didChange = false;
+
+        (Array.isArray(comparisonPlan.cells) ? comparisonPlan.cells : []).forEach((cell) => {
+            if (!cell || typeof cell !== 'object') return;
+            const key = getOptimisticCellKey(cell.rowId, cell.colId);
+            if (!key) return;
+            const existingCount = comparisonCellCountsRef.current.get(key) || 0;
+            if (delta > 0 && existingCount === 0) {
+                comparisonCellOriginalValuesRef.current.set(key, {
+                    rowId: String(cell.rowId),
+                    colId: String(cell.colId),
+                    value: Object.prototype.hasOwnProperty.call(cell, 'originalValue')
+                        ? cell.originalValue
+                        : resolveCurrentCellValue(cell.rowId, cell.colId),
+                });
+                didChange = true;
+            }
+            const nextCount = Math.max(0, existingCount + delta);
+            if (nextCount === 0) {
+                if (comparisonCellCountsRef.current.delete(key)) didChange = true;
+                if (comparisonCellOriginalValuesRef.current.delete(key)) didChange = true;
+                return;
+            }
+            if (nextCount !== existingCount) {
+                comparisonCellCountsRef.current.set(key, nextCount);
+                didChange = true;
+            }
+        });
+
+        if (didChange) {
+            syncComparisonValueState();
+            bumpComparisonCellEpoch();
+        }
+    }, [bumpComparisonCellEpoch, getOptimisticCellKey, resolveCurrentCellValue, syncComparisonValueState]);
+
+    const applyEditedCellMarkerPlan = useCallback((markerPlan, direction = 'forward') => {
+        if (!markerPlan || typeof markerPlan !== 'object') return;
+        const delta = direction === 'backward' ? -1 : 1;
+        let didChange = false;
+        const applyMarkerKeys = (keys, countField) => {
+            (Array.isArray(keys) ? keys : []).forEach((key) => {
+                if (!key) return;
+                const existingEntry = editedCellMarkersRef.current.get(key) || { directCount: 0, propagatedCount: 0 };
+                const nextCount = Math.max(0, (existingEntry[countField] || 0) + delta);
+                const nextEntry = {
+                    ...existingEntry,
+                    [countField]: nextCount,
+                };
+                if ((nextEntry.directCount || 0) === 0 && (nextEntry.propagatedCount || 0) === 0) {
+                    if (editedCellMarkersRef.current.delete(key)) {
+                        didChange = true;
+                    }
+                    return;
+                }
+                editedCellMarkersRef.current.set(key, nextEntry);
+                didChange = true;
+            });
+        };
+        applyMarkerKeys(markerPlan.direct, 'directCount');
+        applyMarkerKeys(markerPlan.propagated, 'propagatedCount');
+        if (didChange) bumpEditedCellEpoch();
+    }, [bumpEditedCellEpoch]);
+
+    const reconcileOptimisticCellValuesWithPayload = useCallback((payload) => {
+        const responseRows = Array.isArray(payload && payload.data) ? payload.data : [];
+        if (responseRows.length === 0 || optimisticCellValuesRef.current.size === 0) return;
+
+        const resolveResponseRowId = (row) => {
+            if (!row || typeof row !== 'object') return null;
+            if (row._isTotal || row._path === GRAND_TOTAL_ROW_ID || row._id === 'Grand Total') return GRAND_TOTAL_ROW_ID;
+            if (row._path !== undefined && row._path !== null && row._path !== '') return String(row._path);
+            if (row.id !== undefined && row.id !== null && row.id !== '') return String(row.id);
+            if (row._id !== undefined && row._id !== null && row._id !== '') return String(row._id);
+            return null;
+        };
+
+        const rowLookup = new Map();
+        responseRows.forEach((row) => {
+            const rowId = resolveResponseRowId(row);
+            if (!rowId) return;
+            rowLookup.set(rowId, row);
+        });
+
+        let didDelete = false;
+        optimisticCellValuesRef.current.forEach((entry, key) => {
+            if (!entry || typeof entry !== 'object') return;
+            const row = rowLookup.get(entry.rowId);
+            if (!row || !cellValuesMatch(entry.value, row[entry.colId])) return;
+            optimisticCellValuesRef.current.delete(key);
+            didDelete = true;
+        });
+
+        if (didDelete) bumpOptimisticCellEpoch();
+    }, [bumpOptimisticCellEpoch]);
+
+    const pushUnifiedHistoryEntry = useCallback((entry) => {
+        if (!entry || typeof entry !== 'object') return;
+        const nextUndoStack = [...transactionUndoStackRef.current, entry];
+        if (nextUndoStack.length > MAX_TRANSACTION_HISTORY_ENTRIES) {
+            nextUndoStack.splice(0, nextUndoStack.length - MAX_TRANSACTION_HISTORY_ENTRIES);
+        }
+        transactionUndoStackRef.current = nextUndoStack;
+        transactionRedoStackRef.current = [];
+        syncTransactionHistoryState();
+    }, [syncTransactionHistoryState]);
+
+    const clearPendingLayoutHistoryCapture = useCallback((token = null) => {
+        const pendingCapture = pendingLayoutHistoryCaptureRef.current;
+        if (!pendingCapture) return;
+        if (token && pendingCapture.token !== token) return;
+        pendingLayoutHistoryCaptureRef.current = null;
+        if (pendingLayoutHistoryCaptureTimeoutRef.current !== null) {
+            clearTimeout(pendingLayoutHistoryCaptureTimeoutRef.current);
+            pendingLayoutHistoryCaptureTimeoutRef.current = null;
+        }
+    }, []);
+
+    const requestLayoutHistoryCapture = useCallback((source = 'layout') => {
+        const beforeSnapshot = layoutHistorySnapshotRef.current || layoutHistorySnapshot || {};
+        const token = `${source}:${Date.now().toString(36)}:${Math.random().toString(36).slice(2, 8)}`;
+        pendingLayoutHistoryCaptureRef.current = {
+            token,
+            source,
+            beforeSnapshot,
+            beforeKey: JSON.stringify(beforeSnapshot || {}),
+        };
+        if (pendingLayoutHistoryCaptureTimeoutRef.current !== null) {
+            clearTimeout(pendingLayoutHistoryCaptureTimeoutRef.current);
+        }
+        pendingLayoutHistoryCaptureTimeoutRef.current = setTimeout(() => {
+            clearPendingLayoutHistoryCapture(token);
+        }, 500);
+        return token;
+    }, [clearPendingLayoutHistoryCapture, layoutHistorySnapshot]);
+
+    const setRowFieldsWithHistory = useCallback((updater, source = 'layout:rows') => {
+        requestLayoutHistoryCapture(source);
+        setRowFields(updater);
+    }, [requestLayoutHistoryCapture]);
+
+    const setColFieldsWithHistory = useCallback((updater, source = 'layout:columns') => {
+        requestLayoutHistoryCapture(source);
+        setColFields(updater);
+    }, [requestLayoutHistoryCapture]);
+
+    const setValConfigsWithHistory = useCallback((updater, source = 'layout:values') => {
+        requestLayoutHistoryCapture(source);
+        setValConfigs(updater);
+    }, [requestLayoutHistoryCapture]);
+
+    const pushImmediateLayoutHistoryEntry = useCallback((sliceKey, updater, source) => {
+        const beforeSnapshot = cloneSerializable(layoutHistorySnapshotRef.current || layoutHistorySnapshot || {}, null) || {};
+        const previousSlice = beforeSnapshot[sliceKey];
+        const nextSlice = typeof updater === 'function' ? updater(previousSlice) : updater;
+        const afterSnapshot = cloneSerializable({
+            ...beforeSnapshot,
+            [sliceKey]: nextSlice,
+        }, null) || {};
+        const beforeKey = JSON.stringify(beforeSnapshot || {});
+        const afterKey = JSON.stringify(afterSnapshot || {});
+        clearPendingLayoutHistoryCapture();
+        layoutHistorySnapshotRef.current = afterSnapshot;
+        if (beforeKey !== afterKey) {
+            pushUnifiedHistoryEntry({
+                kind: 'layout',
+                source,
+                before: beforeSnapshot,
+                after: afterSnapshot,
+                createdAt: Date.now(),
+            });
+        }
+        return nextSlice;
+    }, [clearPendingLayoutHistoryCapture, layoutHistorySnapshot, pushUnifiedHistoryEntry]);
+
+    const setExpandedWithHistory = useCallback((updater, source = 'layout:expanded') => {
+        const nextExpanded = pushImmediateLayoutHistoryEntry('expanded', updater, source);
+        setExpanded(nextExpanded);
+    }, [pushImmediateLayoutHistoryEntry]);
+
+    const setColExpandedWithHistory = useCallback((updater, source = 'layout:column-groups') => {
+        const nextColExpanded = pushImmediateLayoutHistoryEntry('colExpanded', updater, source);
+        setColExpanded(nextColExpanded);
+    }, [pushImmediateLayoutHistoryEntry]);
+
+    const toggleCol = useCallback((key, source = 'layout:column-groups') => {
+        setColExpandedWithHistory((previousExpanded) => ({
+            ...previousExpanded,
+            [key]: previousExpanded[key] === undefined ? false : !previousExpanded[key],
+        }), source);
+    }, [setColExpandedWithHistory]);
+
+    const setColumnPinningWithHistory = useCallback((updater, source = 'layout:column-pinning') => {
+        requestLayoutHistoryCapture(source);
+        setColumnPinning(updater);
+    }, [requestLayoutHistoryCapture]);
+
+    const setRowPinningWithHistory = useCallback((updater, source = 'layout:row-pinning') => {
+        requestLayoutHistoryCapture(source);
+        setRowPinning(updater);
+    }, [requestLayoutHistoryCapture]);
+
+    const applyLayoutHistorySnapshot = useCallback((snapshot) => {
+        if (!snapshot || typeof snapshot !== 'object') return;
+        setRowFields(Array.isArray(snapshot.rowFields) ? snapshot.rowFields : []);
+        setColFields(Array.isArray(snapshot.colFields) ? snapshot.colFields : []);
+        setValConfigs(Array.isArray(snapshot.valConfigs) ? snapshot.valConfigs : []);
+        setFilters(snapshot.filters && typeof snapshot.filters === 'object' ? snapshot.filters : {});
+        setSorting(Array.isArray(snapshot.sorting) ? snapshot.sorting : []);
+        setExpanded(snapshot.expanded && typeof snapshot.expanded === 'object' ? snapshot.expanded : {});
+        setColExpanded(snapshot.colExpanded && typeof snapshot.colExpanded === 'object' ? snapshot.colExpanded : {});
+        setColumnPinning(
+            snapshot.columnPinning && typeof snapshot.columnPinning === 'object'
+                ? snapshot.columnPinning
+                : { left: ['hierarchy'], right: [] }
+        );
+        setRowPinning(
+            snapshot.rowPinning && typeof snapshot.rowPinning === 'object'
+                ? snapshot.rowPinning
+                : { top: [], bottom: [] }
+        );
+        setShowRowTotals(Boolean(snapshot.showRowTotals));
+        setShowColTotals(Boolean(snapshot.showColTotals));
+        setGrandTotalPinOverride(
+            snapshot.grandTotalPinOverride === 'top' || snapshot.grandTotalPinOverride === 'bottom'
+                ? snapshot.grandTotalPinOverride
+                : false
+        );
+    }, []);
+
+    const clearTransactionHistory = useCallback(() => {
+        transactionUndoStackRef.current = [];
+        transactionRedoStackRef.current = [];
+        pendingTransactionHistoryRef.current.clear();
+        transactionHistoryPendingRequestRef.current = null;
+        clearAllOptimisticCellValues();
+        clearAllEditedCellMarkers();
+        clearAllComparisonValueState();
+        clearPendingLayoutHistoryCapture();
+        syncTransactionHistoryState();
+    }, [clearAllComparisonValueState, clearAllEditedCellMarkers, clearAllOptimisticCellValues, clearPendingLayoutHistoryCapture, syncTransactionHistoryState]);
+
+    useEffect(() => {
+        clearTransactionHistory();
+    }, [clearTransactionHistory, serverSide, tableName]);
+
+    useEffect(() => {
+        if (!viewState || typeof viewState !== 'object') return;
+        const restored = (viewState.state && typeof viewState.state === 'object')
+            ? viewState.state
+            : viewState;
+        const serializedState = restored.editComparisonState && typeof restored.editComparisonState === 'object'
+            ? restored.editComparisonState
+            : null;
+        const restoreKey = JSON.stringify(serializedState);
+        if (lastRestoredViewEditComparisonKeyRef.current === restoreKey) return;
+        lastRestoredViewEditComparisonKeyRef.current = restoreKey;
+        restoreSerializedEditComparisonState(serializedState);
+        didAttemptEditComparisonRestoreRef.current = true;
+    }, [restoreSerializedEditComparisonState, viewState]);
+
+    useEffect(() => {
+        if (!persistence || didRestorePersistedEditComparisonRef.current) return;
+        if (viewState && typeof viewState === 'object') return;
+        didRestorePersistedEditComparisonRef.current = true;
+        restoreSerializedEditComparisonState(loadPersistedState('editComparisonState', null));
+        const persistedDisplayMode = loadPersistedState('editValueDisplayMode', 'original');
+        setEditValueDisplayMode(persistedDisplayMode === 'edited' ? 'edited' : 'original');
+        didAttemptEditComparisonRestoreRef.current = true;
+    }, [loadPersistedState, persistence, restoreSerializedEditComparisonState, viewState]);
+
+    useEffect(() => {
+        if (viewState && typeof viewState === 'object') return;
+        if (!persistence) {
+            didAttemptEditComparisonRestoreRef.current = true;
+            return;
+        }
+        if (didRestorePersistedEditComparisonRef.current) {
+            didAttemptEditComparisonRestoreRef.current = true;
+        }
+    }, [persistence, viewState]);
+
+    useEffect(() => {
+        if (comparisonValueState.activeCount === 0 && editValueDisplayMode !== 'original') {
+            setEditValueDisplayMode('original');
+        }
+    }, [comparisonValueState.activeCount, editValueDisplayMode]);
+
+    useEffect(() => {
+        layoutHistorySnapshotRef.current = layoutHistorySnapshot;
+        const pendingCapture = pendingLayoutHistoryCaptureRef.current;
+        if (!pendingCapture) return;
+        if (layoutHistorySnapshotKey === pendingCapture.beforeKey) return;
+        clearPendingLayoutHistoryCapture(pendingCapture.token);
+        pushUnifiedHistoryEntry({
+            kind: 'layout',
+            source: pendingCapture.source || 'layout',
+            before: pendingCapture.beforeSnapshot,
+            after: layoutHistorySnapshot,
+            createdAt: Date.now(),
+        });
+    }, [
+        clearPendingLayoutHistoryCapture,
+        layoutHistorySnapshot,
+        layoutHistorySnapshotKey,
+        pushUnifiedHistoryEntry,
+    ]);
+
+    useEffect(() => () => {
+        if (pendingLayoutHistoryCaptureTimeoutRef.current !== null) {
+            clearTimeout(pendingLayoutHistoryCaptureTimeoutRef.current);
+            pendingLayoutHistoryCaptureTimeoutRef.current = null;
+        }
+    }, []);
+
+
+
+
 
     const beginStructuralTransaction = useCallback(() => {
         stateEpochRef.current += 1;
@@ -2999,10 +4786,816 @@ export default function DashTanstackPivot(props) {
         };
     }, []);
 
-    const setPropsRef = useRef(setProps);
+    const recordProfilerQueuedRequest = useCallback((requestMeta) => {
+        if (!profilingEnabledRef.current) return;
+        const profiler = pivotProfilerRef.current;
+        if (!profiler || !requestMeta || !requestMeta.requestId) return;
+        profiler.queue({
+            requestId: requestMeta.requestId,
+            componentId: profilerComponentIdRef.current,
+            kind: 'data',
+            queuedAt: requestMeta.queuedAt,
+            emittedAt: requestMeta.emittedAt,
+            status: 'queued',
+            meta: {
+                table: tableName || null,
+                viewMode,
+                reqStart: requestMeta.reqStart,
+                reqEnd: requestMeta.reqEnd,
+                colStart: requestMeta.colStart,
+                colEnd: requestMeta.colEnd,
+                stateEpoch: requestMeta.stateEpoch,
+                abortGeneration: requestMeta.abortGeneration,
+                windowSeq: requestMeta.version,
+                visibleColumnCount: requestMeta.visibleColumnCount,
+                requestedColumnCount: requestMeta.requestedColumnCount,
+                columnDeltaCount: requestMeta.columnDeltaCount,
+            },
+        });
+    }, [tableName, viewMode]);
+
+    const recordProfilerRequestStart = useCallback((runtimeRequest) => {
+        if (!profilingEnabledRef.current) return;
+        const profiler = pivotProfilerRef.current;
+        if (!profiler || !runtimeRequest || !runtimeRequest.requestId) return;
+        profiler.begin({
+            requestId: runtimeRequest.requestId,
+            componentId: profilerComponentIdRef.current,
+            kind: runtimeRequest.kind || 'data',
+            emittedAt: Date.now(),
+            status: 'sent',
+            meta: {
+                table: runtimeRequest.table || tableName || null,
+                viewMode,
+                detailMode,
+                windowSeq: runtimeRequest.window_seq,
+                stateEpoch: runtimeRequest.state_epoch,
+                abortGeneration: runtimeRequest.abort_generation,
+            },
+        });
+    }, [detailMode, tableName, viewMode]);
+
+    const recordProfilerResponse = useCallback((response) => {
+        if (!profilingEnabledRef.current) return;
+        const profiler = pivotProfilerRef.current;
+        if (!profiler || !response || typeof response !== 'object' || !response.requestId) return;
+        const payload = response.payload && typeof response.payload === 'object'
+            ? response.payload
+            : {};
+        profiler.response({
+            requestId: response.requestId,
+            componentId: profilerComponentIdRef.current,
+            kind: response.kind || 'data',
+            status: response.status || null,
+            responseReceivedAt: Date.now(),
+            profile: response.profile,
+            meta: {
+                table: response.table || tableName || null,
+                stateEpoch: response.state_epoch,
+                windowSeq: response.window_seq,
+                rowCount: payload.rowCount,
+                dataVersion: payload.dataVersion,
+            },
+        });
+    }, [tableName]);
+
+    const normalizeOutgoingRuntimeRequest = useCallback((runtimeRequest) => {
+        if (!runtimeRequest || typeof runtimeRequest !== 'object') return null;
+
+        const kind = typeof runtimeRequest.kind === 'string' && runtimeRequest.kind.trim()
+            ? runtimeRequest.kind.trim().toLowerCase()
+            : 'data';
+        const payload = runtimeRequest.payload && typeof runtimeRequest.payload === 'object'
+            ? runtimeRequest.payload
+            : runtimeRequest;
+        const requestId = String(
+            runtimeRequest.requestId
+            || runtimeRequest.request_id
+            || payload.requestId
+            || payload.request_id
+            || payload.request_signature
+            || payload.version
+            || payload.window_seq
+            || payload.nonce
+            || `${kind}:${Date.now()}`
+        );
+
+        return {
+            ...runtimeRequest,
+            kind,
+            requestId,
+            table: runtimeRequest.table || payload.table || tableName || undefined,
+            session_id: runtimeRequest.session_id || payload.session_id || sessionIdRef.current,
+            client_instance: runtimeRequest.client_instance || payload.client_instance || clientInstanceRef.current,
+            state_epoch: runtimeRequest.state_epoch !== undefined ? runtimeRequest.state_epoch : payload.state_epoch,
+            window_seq: runtimeRequest.window_seq !== undefined
+                ? runtimeRequest.window_seq
+                : (payload.window_seq !== undefined ? payload.window_seq : payload.version),
+            abort_generation: runtimeRequest.abort_generation !== undefined
+                ? runtimeRequest.abort_generation
+                : payload.abort_generation,
+            payload: cloneSerializable({
+                ...payload,
+                viewMode: payload.viewMode || viewMode,
+                detailMode: payload.detailMode || detailMode,
+                treeConfig: payload.treeConfig !== undefined ? payload.treeConfig : treeConfig,
+                detailConfig: payload.detailConfig !== undefined ? payload.detailConfig : detailConfig,
+                profile: payload.profile !== undefined ? payload.profile : (profilingEnabledRef.current || undefined),
+            }, payload),
+        };
+    }, [detailConfig, detailMode, tableName, treeConfig, viewMode]);
+
+    const dispatchSetProps = useCallback((nextProps) => {
+        if (typeof setProps !== 'function') return;
+        if (!nextProps || typeof nextProps !== 'object') {
+            setProps(nextProps);
+            return;
+        }
+        const runtimeRequest = normalizeOutgoingRuntimeRequest(nextProps.runtimeRequest);
+        if (runtimeRequest) {
+            recordProfilerRequestStart(runtimeRequest);
+            setProps({
+                ...nextProps,
+                runtimeRequest,
+            });
+            return;
+        }
+        setProps(nextProps);
+    }, [normalizeOutgoingRuntimeRequest, recordProfilerRequestStart, setProps]);
+
+    const setPropsRef = useRef(dispatchSetProps);
     useEffect(() => {
-        setPropsRef.current = setProps;
-    }, [setProps]);
+        setPropsRef.current = dispatchSetProps;
+    }, [dispatchSetProps]);
+
+    const emitRuntimeRequest = useCallback((kind, payload) => {
+        if (!setPropsRef.current || !payload || typeof payload !== 'object') return;
+        setPropsRef.current({
+            runtimeRequest: {
+                kind,
+                payload,
+            },
+        });
+    }, []);
+
+    const requestEditorOptions = useCallback((editorConfig, columnId, columnConfig = null) => {
+        const source = resolveEditorOptionsSource(editorConfig, columnId, columnConfig);
+        if (!source || !source.columnId) return;
+        if (Object.prototype.hasOwnProperty.call(filterOptions || {}, source.columnId)) return;
+        if (editorOptionsLoadingRef.current[source.columnId]) return;
+        setEditorOptionsLoadingState((previousState) => ({
+            ...previousState,
+            [source.columnId]: true,
+        }));
+        emitEditLifecycleEvent({
+            kind: 'editor_options_request',
+            columnId,
+            sourceColumnId: source.columnId,
+            editor: editorConfig && editorConfig.editor ? editorConfig.editor : null,
+        });
+        emitRuntimeRequest('filter_options', { columnId: source.columnId, nonce: Date.now() });
+    }, [emitEditLifecycleEvent, emitRuntimeRequest, filterOptions]);
+
+    // --- Detail/drill-through extracted to useDetailDrillThrough hook ---
+    const {
+        detailSurface,
+        setDetailSurface,
+        toggleDetailForRowRef,
+        pendingDetailRequestRef,
+        activeDetailDisplayMode,
+        fetchDetailData,
+        handleCellDrillThrough,
+        toggleDetailForRow,
+        handleDetailPageChange,
+        handleDetailSort,
+        handleDetailFilter,
+        handleDetailClose,
+    } = useDetailDrillThrough({
+        detailConfig,
+        detailMode,
+        viewMode,
+        reportDef,
+        treeConfig,
+        rowFields,
+        colFields,
+        valConfigs,
+        tableName,
+        runtimeResponse,
+        emitRuntimeRequest,
+        stateEpoch,
+        abortGeneration,
+        sessionIdRef,
+        clientInstanceRef,
+        requestVersionRef,
+        setPropsRef,
+        profilingEnabledRef,
+        pivotProfilerRef,
+        profilerComponentIdRef,
+    });
+
+    const supportsPatchTransactionRefresh = useMemo(() => {
+        if (!serverSide || viewMode !== 'pivot' || detailMode !== 'none') return false;
+        if (!Array.isArray(rowFields) || rowFields.length === 0) return false;
+        return !(Array.isArray(valConfigs) && valConfigs.some((config) => {
+            if (!config || typeof config !== 'object') return false;
+            const aggregation = String(config.agg || '').trim().toLowerCase();
+            return aggregation === 'formula' || Boolean(config.windowFn);
+        }));
+    }, [detailMode, rowFields, serverSide, valConfigs, viewMode]);
+
+    const dispatchTransactionRequest = useCallback((transactionPayload, source = 'transaction') => {
+        let normalizedTransaction = normalizeTransactionHistoryPayload(transactionPayload, { source });
+        if (!normalizedTransaction || !setPropsRef.current || !serverSide) return null;
+        if (transactionHistoryPendingRequestRef.current) {
+            showNotification('Wait for the current undo or redo to finish before applying another edit.', 'warning');
+            return null;
+        }
+        const requestedRefreshMode = normalizeTransactionRefreshModeValue(normalizedTransaction.refreshMode, 'smart');
+        const canUsePatchRefresh = (
+            requestedRefreshMode === 'patch'
+            && visiblePatchRowPathsRef.current.length > 0
+            && (!colFields.length || visiblePatchCenterIdsRef.current.length > 0)
+        );
+        if (requestedRefreshMode === 'patch' && !canUsePatchRefresh) {
+            normalizedTransaction = {
+                ...normalizedTransaction,
+                refreshMode: 'viewport',
+            };
+        }
+        const showGlobalLoading = shouldShowTransactionLoading(normalizedTransaction);
+
+        const viewportSnapshot = latestRequestedViewportRef.current || latestViewportRef.current || { start: 0, end: 99, count: 100 };
+        const nextStart = Math.max(0, Number.isFinite(Number(viewportSnapshot.start)) ? Number(viewportSnapshot.start) : 0);
+        const nextEndCandidate = Number.isFinite(Number(viewportSnapshot.end))
+            ? Number(viewportSnapshot.end)
+            : (nextStart + Math.max(1, Number(viewportSnapshot.count) || 100) - 1);
+        const nextEnd = Math.max(nextStart, nextEndCandidate);
+        const nextCount = Math.max(1, nextEnd - nextStart + 1);
+        const updateColumnWindow = resolveStableRequestedColumnWindow();
+        const tx = beginExpansionRequest();
+        const requestId = `${source}:${tx.version}`;
+        markRequestPending({
+            version: tx.version,
+            reqStart: nextStart,
+            reqEnd: nextEnd,
+            colStart: updateColumnWindow.start,
+            colEnd: updateColumnWindow.end,
+            silent: !showGlobalLoading,
+        });
+        emitRuntimeRequest('transaction', {
+            table: tableName || undefined,
+            start: nextStart,
+            end: nextEnd,
+            count: nextCount,
+            window_seq: tx.version,
+            version: tx.version,
+            requestId,
+            state_epoch: tx.stateEpoch,
+            session_id: sessionIdRef.current,
+            client_instance: clientInstanceRef.current,
+            abort_generation: tx.abortGeneration,
+            intent: 'viewport',
+            col_start: updateColumnWindow.start !== null ? updateColumnWindow.start : undefined,
+            col_end: updateColumnWindow.end !== null ? updateColumnWindow.end : undefined,
+            include_grand_total: serverSidePinsGrandTotal || undefined,
+            cinema_mode: cinemaMode || undefined,
+            ...normalizedTransaction,
+            ...(normalizedTransaction.refreshMode === 'patch' ? {
+                visibleRowPaths: visiblePatchRowPathsRef.current,
+                visibleCenterColumnIds: visiblePatchCenterIdsRef.current,
+            } : {}),
+        });
+        return { requestId };
+    }, [beginExpansionRequest, cinemaMode, colFields.length, emitRuntimeRequest, markRequestPending, resolveStableRequestedColumnWindow, serverSide, serverSidePinsGrandTotal, showNotification, tableName]);
+
+    const finalizeTransactionHistoryResponse = useCallback((response, payload) => {
+        if (!response || typeof response !== 'object') return;
+        const requestId = response.requestId || null;
+        if (!requestId) return;
+        const pendingEntry = pendingTransactionHistoryRef.current.get(requestId);
+        if (!pendingEntry) return;
+        pendingTransactionHistoryRef.current.delete(requestId);
+
+        const transactionResult = payload && typeof payload === 'object' && payload.transaction && typeof payload.transaction === 'object'
+            ? payload.transaction
+            : {};
+        const didApplyWork = hasAppliedTransactionWork(transactionResult);
+        const transactionWarnings = Array.isArray(transactionResult.warnings) ? transactionResult.warnings : [];
+        const propagationEntries = Array.isArray(transactionResult.propagation) ? transactionResult.propagation : [];
+
+        if (pendingEntry.action === 'apply') {
+            const captureable = Boolean(transactionResult.history && transactionResult.history.captureable);
+            const undoTransaction = normalizeTransactionHistoryPayload(transactionResult.inverseTransaction);
+            const redoTransaction = normalizeTransactionHistoryPayload(transactionResult.redoTransaction);
+            if (response.status === 'data') releaseOptimisticCellRequest(requestId);
+            if (!didApplyWork && pendingEntry.editedMarkerPlan) {
+                applyEditedCellMarkerPlan(pendingEntry.editedMarkerPlan, 'backward');
+            }
+            if (!didApplyWork && pendingEntry.comparisonPlan) {
+                applyComparisonValuePlan(pendingEntry.comparisonPlan, 'backward');
+            }
+            if (didApplyWork && captureable && undoTransaction && redoTransaction) {
+                pushUnifiedHistoryEntry({
+                    kind: 'transaction',
+                    undoTransaction,
+                    redoTransaction,
+                    editedMarkerPlan: pendingEntry.editedMarkerPlan || null,
+                    comparisonPlan: pendingEntry.comparisonPlan || null,
+                    source: pendingEntry.source || transactionResult.source || 'transaction',
+                    createdAt: Date.now(),
+                });
+            } else if (didApplyWork && transactionResult.history && Array.isArray(transactionResult.history.warnings) && transactionResult.history.warnings[0]) {
+                showNotification(transactionResult.history.warnings[0], 'warning');
+            } else if (!didApplyWork && transactionWarnings[0]) {
+                showNotification(transactionWarnings[0], 'warning');
+            }
+            if (didApplyWork && propagationEntries.length > 0) {
+                propagationEntries.forEach((entry) => {
+                    if (!entry || typeof entry !== 'object') return;
+                    propagationLogRef.current = [
+                        ...propagationLogRef.current.slice(-49),
+                        { ...entry, timestamp: Date.now() },
+                    ];
+                });
+                setPropagationLogEpoch((prev) => prev + 1);
+                setEditPanelOpen(true);
+            }
+            if (pendingEntry.rowEditRowId) {
+                if (didApplyWork) {
+                    closeRowEditSession(pendingEntry.rowEditRowId);
+                    emitEditLifecycleEvent({
+                        kind: 'row_edit_commit_success',
+                        rowId: pendingEntry.rowEditRowId,
+                        dirtyColumns: pendingEntry.dirtyColumns || [],
+                    });
+                } else {
+                    updateRowEditSessions((previousSessions) => {
+                        const previousSession = previousSessions[pendingEntry.rowEditRowId];
+                        if (!previousSession) return previousSessions;
+                        return {
+                            ...previousSessions,
+                            [pendingEntry.rowEditRowId]: {
+                                ...previousSession,
+                                status: 'editing',
+                            },
+                        };
+                    });
+                    emitEditLifecycleEvent({
+                        kind: 'row_edit_commit_error',
+                        rowId: pendingEntry.rowEditRowId,
+                        message: transactionWarnings[0] || 'The row edit did not apply.',
+                    });
+                }
+            }
+            return;
+        }
+
+        if (pendingEntry.action === 'undo') {
+            if (response.status === 'data') releaseOptimisticCellRequest(requestId);
+            if (didApplyWork && pendingEntry.entry && pendingEntry.entry.editedMarkerPlan) {
+                applyEditedCellMarkerPlan(pendingEntry.entry.editedMarkerPlan, 'backward');
+            }
+            if (didApplyWork && pendingEntry.entry && pendingEntry.entry.comparisonPlan) {
+                applyComparisonValuePlan(pendingEntry.entry.comparisonPlan, 'backward');
+            }
+            transactionUndoStackRef.current = transactionUndoStackRef.current.slice(0, -1);
+            transactionRedoStackRef.current = [...transactionRedoStackRef.current, pendingEntry.entry];
+            transactionHistoryPendingRequestRef.current = null;
+            syncTransactionHistoryState();
+            if (didApplyWork) showNotification('Undid the last transaction.', 'success');
+            return;
+        }
+
+        if (pendingEntry.action === 'redo') {
+            if (response.status === 'data') releaseOptimisticCellRequest(requestId);
+            if (!didApplyWork && pendingEntry.entry && pendingEntry.entry.comparisonPlan) {
+                applyComparisonValuePlan(pendingEntry.entry.comparisonPlan, 'backward');
+            }
+            if (didApplyWork && pendingEntry.entry && pendingEntry.entry.editedMarkerPlan) {
+                applyEditedCellMarkerPlan(pendingEntry.entry.editedMarkerPlan, 'forward');
+            }
+            transactionRedoStackRef.current = transactionRedoStackRef.current.slice(0, -1);
+            transactionUndoStackRef.current = [...transactionUndoStackRef.current, pendingEntry.entry];
+            transactionHistoryPendingRequestRef.current = null;
+            syncTransactionHistoryState();
+            if (didApplyWork) showNotification('Reapplied the last transaction.', 'success');
+        }
+    }, [applyComparisonValuePlan, applyEditedCellMarkerPlan, closeRowEditSession, emitEditLifecycleEvent, pushUnifiedHistoryEntry, releaseOptimisticCellRequest, showNotification, syncTransactionHistoryState, updateRowEditSessions]);
+
+    const clearPendingTransactionHistoryRequest = useCallback((response, notifyOnError = false) => {
+        if (!response || typeof response !== 'object') return;
+        const requestId = response.requestId || null;
+        if (!requestId) return;
+        const pendingEntry = pendingTransactionHistoryRef.current.get(requestId);
+        if (!pendingEntry) return;
+        pendingTransactionHistoryRef.current.delete(requestId);
+        clearOptimisticCellValuesForRequest(requestId);
+        if (pendingEntry.action === 'apply' && pendingEntry.editedMarkerPlan) {
+            applyEditedCellMarkerPlan(pendingEntry.editedMarkerPlan, 'backward');
+        }
+        if ((pendingEntry.action === 'apply' || pendingEntry.action === 'redo') && pendingEntry.comparisonPlan) {
+            applyComparisonValuePlan(pendingEntry.comparisonPlan, 'backward');
+        }
+        if (pendingEntry.action === 'apply' && pendingEntry.rowEditRowId) {
+            updateRowEditSessions((previousSessions) => {
+                const previousSession = previousSessions[pendingEntry.rowEditRowId];
+                if (!previousSession) return previousSessions;
+                return {
+                    ...previousSessions,
+                    [pendingEntry.rowEditRowId]: {
+                        ...previousSession,
+                        status: 'editing',
+                    },
+                };
+            });
+            emitEditLifecycleEvent({
+                kind: 'row_edit_commit_error',
+                rowId: pendingEntry.rowEditRowId,
+                message: response.message || 'Unable to commit the row edit.',
+            });
+        }
+        if (pendingEntry.action === 'undo' || pendingEntry.action === 'redo') {
+            transactionHistoryPendingRequestRef.current = null;
+            syncTransactionHistoryState();
+            if (notifyOnError && response.status === 'error') {
+                showNotification(`Unable to ${pendingEntry.action} the transaction.`, 'error');
+            }
+        }
+    }, [applyComparisonValuePlan, applyEditedCellMarkerPlan, clearOptimisticCellValuesForRequest, emitEditLifecycleEvent, showNotification, syncTransactionHistoryState, updateRowEditSessions]);
+
+    const resolvePropagationFormulaUpdates = useCallback((updates, source, meta) => {
+        const normalizedUpdates = Array.isArray(updates) ? updates : [];
+        const needsPropagation = normalizedUpdates.some((u) => isParentAggregatePropagationEdit(u, rowFields));
+        if (!needsPropagation) return normalizedUpdates;
+        // Stash updates and open the panel for method selection instead of window.prompt
+        pendingPropagationUpdatesRef.current = { updates: normalizedUpdates, source: source || 'batch', meta: meta || null };
+        setPendingPropagationUpdates(normalizedUpdates);
+        setPropagationMethodUI(lastPropagationFormulaRef.current || 'equal');
+        setEditPanelOpen(true);
+        return null; // Signal caller to abort — will resume after user picks method
+    }, [rowFields]);
+
+    const dispatchBatchUpdateRequest = useCallback((updates, source = 'batch', meta = null) => {
+        const normalizedUpdates = Array.isArray(updates)
+            ? updates.filter((update) => update && typeof update === 'object' && update.rowId && update.colId)
+            : [];
+        if (normalizedUpdates.length === 0 || !setPropsRef.current) return null;
+
+        if (!serverSide) {
+            if (editValueDisplayMode === 'original') {
+                setEditValueDisplayMode('edited');
+            }
+            setPropsRef.current({ cellUpdates: normalizedUpdates });
+            return { requestId: null };
+        }
+        const preparedUpdates = resolvePropagationFormulaUpdates(normalizedUpdates, source, meta);
+        if (!preparedUpdates || preparedUpdates.length === 0) return null;
+        if (editValueDisplayMode === 'original') {
+            setEditValueDisplayMode('edited');
+        }
+        const comparisonPlan = buildComparisonValuePlan(preparedUpdates);
+        if (comparisonPlan) {
+            applyComparisonValuePlan(comparisonPlan, 'forward');
+        }
+        const dispatched = dispatchTransactionRequest({
+            update: preparedUpdates,
+            refreshMode: supportsPatchTransactionRefresh ? 'patch' : 'smart',
+        }, source);
+        if (!dispatched || !dispatched.requestId) {
+            if (comparisonPlan) applyComparisonValuePlan(comparisonPlan, 'backward');
+            return null;
+        }
+        captureOptimisticCellValues(preparedUpdates, dispatched.requestId);
+        const editedMarkerPlan = buildEditedCellMarkerPlan(preparedUpdates);
+        if (editedMarkerPlan) {
+            applyEditedCellMarkerPlan(editedMarkerPlan, 'forward');
+        }
+        pendingTransactionHistoryRef.current.set(dispatched.requestId, {
+            action: 'apply',
+            source,
+            editedMarkerPlan,
+            comparisonPlan,
+            rowEditRowId: meta && meta.rowEditRowId ? String(meta.rowEditRowId) : null,
+            dirtyColumns: meta && Array.isArray(meta.dirtyColumns) ? meta.dirtyColumns : [],
+        });
+        return dispatched;
+    }, [applyComparisonValuePlan, applyEditedCellMarkerPlan, buildComparisonValuePlan, buildEditedCellMarkerPlan, captureOptimisticCellValues, dispatchTransactionRequest, editValueDisplayMode, resolvePropagationFormulaUpdates, serverSide, setEditValueDisplayMode, supportsPatchTransactionRefresh]);
+
+    const dispatchInlineCellEdit = useCallback((update) => {
+        if (!update || typeof update !== 'object') return;
+        dispatchBatchUpdateRequest([update], 'inline-edit');
+    }, [dispatchBatchUpdateRequest]);
+
+    const saveRowEditSession = useCallback((rowId) => {
+        if (rowId === null || rowId === undefined) return;
+        const normalizedRowId = String(rowId);
+        const session = rowEditSessionsRef.current[normalizedRowId];
+        if (!session || session.status === 'saving') return;
+        const dirtyColumns = Object.keys(session.drafts || {});
+        if (dirtyColumns.length === 0) {
+            closeRowEditSession(normalizedRowId);
+            emitEditLifecycleEvent({
+                kind: 'row_edit_cancel',
+                rowId: normalizedRowId,
+                empty: true,
+            });
+            return;
+        }
+
+        const nextErrors = {};
+        const rowValues = {
+            ...(session.originalValues || {}),
+            ...(session.drafts || {}),
+        };
+        dirtyColumns.forEach((colId) => {
+            const editorConfig = session.editableColumns && session.editableColumns[colId]
+                ? session.editableColumns[colId].editorConfig
+                : {};
+            const validation = validateEditorValue(rowValues[colId], editorConfig.validationRules || [], {
+                columnId: colId,
+                columnLabel: colId,
+                rowId: normalizedRowId,
+                rowValues,
+            });
+            if (!validation.valid) {
+                nextErrors[colId] = validation.error || 'Invalid value';
+            }
+        });
+        if (Object.keys(nextErrors).length > 0) {
+            updateRowEditSessions((previousSessions) => {
+                const previousSession = previousSessions[normalizedRowId];
+                if (!previousSession) return previousSessions;
+                return {
+                    ...previousSessions,
+                    [normalizedRowId]: {
+                        ...previousSession,
+                        status: 'editing',
+                        errors: {
+                            ...(previousSession.errors || {}),
+                            ...nextErrors,
+                        },
+                    },
+                };
+            });
+            emitEditLifecycleEvent({
+                kind: 'row_edit_validation_error',
+                rowId: normalizedRowId,
+                errors: nextErrors,
+            });
+            return;
+        }
+
+        const updates = dirtyColumns.map((colId) => {
+            const editableEntry = session.editableColumns && session.editableColumns[colId]
+                ? session.editableColumns[colId]
+                : null;
+            const nextUpdate = {
+                rowId: normalizedRowId,
+                colId,
+                value: rowValues[colId],
+                oldValue: session.originalValues ? session.originalValues[colId] : undefined,
+                rowPath: normalizedRowId,
+                source: 'row-edit',
+                timestamp: Date.now(),
+            };
+            if (editableEntry && editableEntry.columnConfig && editableEntry.columnConfig.field) {
+                nextUpdate.aggregation = {
+                    field: editableEntry.columnConfig.field,
+                    agg: editableEntry.columnConfig.agg,
+                    weightField: editableEntry.columnConfig.weightField || null,
+                    windowFn: editableEntry.columnConfig.windowFn || null,
+                };
+            }
+            return nextUpdate;
+        });
+
+        updateRowEditSessions((previousSessions) => {
+            const previousSession = previousSessions[normalizedRowId];
+            if (!previousSession) return previousSessions;
+            return {
+                ...previousSessions,
+                [normalizedRowId]: {
+                    ...previousSession,
+                    status: 'saving',
+                },
+            };
+        });
+        emitEditLifecycleEvent({
+            kind: 'row_edit_commit_start',
+            rowId: normalizedRowId,
+            dirtyColumns,
+        });
+        const dispatched = dispatchBatchUpdateRequest(updates, 'row-edit', {
+            rowEditRowId: normalizedRowId,
+            dirtyColumns,
+        });
+        if (!dispatched) {
+            updateRowEditSessions((previousSessions) => {
+                const previousSession = previousSessions[normalizedRowId];
+                if (!previousSession) return previousSessions;
+                return {
+                    ...previousSessions,
+                    [normalizedRowId]: {
+                        ...previousSession,
+                        status: 'editing',
+                    },
+                };
+            });
+            emitEditLifecycleEvent({
+                kind: 'row_edit_commit_error',
+                rowId: normalizedRowId,
+                message: 'Unable to dispatch the row edit transaction.',
+            });
+            return;
+        }
+        if (!serverSide || !dispatched.requestId) {
+            closeRowEditSession(normalizedRowId);
+            emitEditLifecycleEvent({
+                kind: 'row_edit_commit_success',
+                rowId: normalizedRowId,
+                dirtyColumns,
+                local: true,
+            });
+        }
+    }, [closeRowEditSession, dispatchBatchUpdateRequest, emitEditLifecycleEvent, serverSide, updateRowEditSessions]);
+
+    const renderRowEditActions = useCallback((row) => {
+        if (!row) return null;
+        if (!normalizedEditingConfig.rowActions || !['row', 'hybrid'].includes(normalizedEditingConfig.mode)) {
+            return null;
+        }
+        const meta = getRowEditMeta(row);
+        if (!meta.canEdit) return null;
+        const hasSession = Boolean(meta.session);
+        const hasErrors = meta.errorCount > 0;
+        const showSessionControls = hasSession && !meta.session.autoSave;
+        const showSessionStatus = hasSession && (meta.dirtyCount > 0 || meta.saving);
+        if (!showSessionControls && !showSessionStatus) {
+            return null;
+        }
+        return (
+            <span
+                style={{
+                    display: 'inline-flex',
+                    alignItems: 'center',
+                    gap: '4px',
+                    marginLeft: '8px',
+                    flexShrink: 0,
+                }}
+            >
+                {showSessionControls ? (
+                    <>
+                        <button
+                            type="button"
+                            data-row-edit-action="save"
+                            data-row-edit-rowid={meta.rowId}
+                            onClick={(e) => {
+                                e.stopPropagation();
+                                saveRowEditSession(meta.rowId);
+                            }}
+                            onMouseDown={(e) => e.stopPropagation()}
+                            disabled={meta.saving}
+                            style={{
+                                border: `1px solid ${hasErrors ? '#dc2626' : (theme.primary || '#2563EB')}`,
+                                background: hasErrors ? '#fef2f2' : (theme.primary || '#2563EB'),
+                                color: hasErrors ? '#991b1b' : '#fff',
+                                cursor: meta.saving ? 'progress' : 'pointer',
+                                opacity: meta.saving ? 0.7 : 1,
+                                padding: '2px 4px',
+                                borderRadius: '6px',
+                                display: 'inline-flex',
+                                alignItems: 'center',
+                                justifyContent: 'center',
+                            }}
+                            title={hasErrors ? 'Fix validation errors before saving this row' : 'Save this row'}
+                        >
+                            <Icons.Save />
+                        </button>
+                        <button
+                            type="button"
+                            data-row-edit-action="cancel"
+                            data-row-edit-rowid={meta.rowId}
+                            onClick={(e) => {
+                                e.stopPropagation();
+                                cancelRowEditSession(meta.rowId);
+                            }}
+                            onMouseDown={(e) => e.stopPropagation()}
+                            style={{
+                                border: `1px solid ${theme.border}`,
+                                background: theme.surfaceBg,
+                                color: theme.textSec,
+                                cursor: 'pointer',
+                                padding: '2px 4px',
+                                borderRadius: '6px',
+                                display: 'inline-flex',
+                                alignItems: 'center',
+                                justifyContent: 'center',
+                            }}
+                            title="Cancel row editing"
+                        >
+                            <Icons.Close />
+                        </button>
+                    </>
+                ) : null}
+                {showSessionStatus ? (
+                    <span
+                        style={{
+                            fontSize: '10px',
+                            fontWeight: 700,
+                            color: hasErrors ? '#991b1b' : theme.textSec,
+                            background: hasErrors ? '#fee2e2' : theme.headerSubtleBg,
+                            borderRadius: '999px',
+                            padding: '1px 6px',
+                        }}
+                    >
+                        {meta.saving ? 'Saving…' : `${meta.dirtyCount} dirty${meta.errorCount ? ` • ${meta.errorCount} invalid` : ''}`}
+                    </span>
+                ) : null}
+            </span>
+        );
+    }, [cancelRowEditSession, getRowEditMeta, normalizedEditingConfig.mode, normalizedEditingConfig.rowActions, saveRowEditSession, theme.border, theme.headerSubtleBg, theme.primary, theme.surfaceBg, theme.textSec]);
+
+    const executeUndoTransaction = useCallback(() => {
+        if (transactionHistoryPendingRequestRef.current) return;
+        const entry = transactionUndoStackRef.current[transactionUndoStackRef.current.length - 1];
+        if (!entry || typeof entry !== 'object') return;
+        if (entry.kind === 'layout') {
+            transactionUndoStackRef.current = transactionUndoStackRef.current.slice(0, -1);
+            transactionRedoStackRef.current = [...transactionRedoStackRef.current, entry];
+            clearPendingLayoutHistoryCapture();
+            applyLayoutHistorySnapshot(entry.before);
+            syncTransactionHistoryState();
+            showNotification('Undid the last layout change.', 'success');
+            return;
+        }
+        if (!serverSide || !entry.undoTransaction) return;
+        const dispatched = dispatchTransactionRequest(entry.undoTransaction, 'undo');
+        if (!dispatched || !dispatched.requestId) return;
+        pendingTransactionHistoryRef.current.set(dispatched.requestId, {
+            action: 'undo',
+            entry,
+        });
+        transactionHistoryPendingRequestRef.current = dispatched.requestId;
+        syncTransactionHistoryState();
+    }, [applyLayoutHistorySnapshot, clearPendingLayoutHistoryCapture, dispatchTransactionRequest, serverSide, showNotification, syncTransactionHistoryState]);
+
+    const executeRedoTransaction = useCallback(() => {
+        if (transactionHistoryPendingRequestRef.current) return;
+        const entry = transactionRedoStackRef.current[transactionRedoStackRef.current.length - 1];
+        if (!entry || typeof entry !== 'object') return;
+        if (entry.kind === 'layout') {
+            transactionRedoStackRef.current = transactionRedoStackRef.current.slice(0, -1);
+            transactionUndoStackRef.current = [...transactionUndoStackRef.current, entry];
+            clearPendingLayoutHistoryCapture();
+            applyLayoutHistorySnapshot(entry.after);
+            syncTransactionHistoryState();
+            showNotification('Reapplied the last layout change.', 'success');
+            return;
+        }
+        if (!serverSide || !entry.redoTransaction) return;
+        if (entry.comparisonPlan) {
+            applyComparisonValuePlan(entry.comparisonPlan, 'forward');
+        }
+        setEditValueDisplayMode('edited');
+        const dispatched = dispatchTransactionRequest(entry.redoTransaction, 'redo');
+        if (!dispatched || !dispatched.requestId) {
+            if (entry.comparisonPlan) applyComparisonValuePlan(entry.comparisonPlan, 'backward');
+            if (comparisonValueState.activeCount === 0) {
+                setEditValueDisplayMode('original');
+            }
+            return;
+        }
+        pendingTransactionHistoryRef.current.set(dispatched.requestId, {
+            action: 'redo',
+            entry,
+            comparisonPlan: entry.comparisonPlan || null,
+        });
+        transactionHistoryPendingRequestRef.current = dispatched.requestId;
+        syncTransactionHistoryState();
+    }, [applyComparisonValuePlan, applyLayoutHistorySnapshot, clearPendingLayoutHistoryCapture, comparisonValueState.activeCount, dispatchTransactionRequest, serverSide, setEditValueDisplayMode, showNotification, syncTransactionHistoryState]);
+
+    transactionUndoExecutorRef.current = executeUndoTransaction;
+    transactionRedoExecutorRef.current = executeRedoTransaction;
+
+    useEffect(() => {
+        const handleGlobalEditShortcut = (event) => {
+            if (event.defaultPrevented || isEditableKeyboardTarget(event.target)) return;
+            if (!(event.ctrlKey || event.metaKey) || event.altKey) return;
+            const key = event.key.toLowerCase();
+            if (key === 'z') {
+                event.preventDefault();
+                if (event.shiftKey) handleRedo();
+                else handleUndo();
+                return;
+            }
+            if (key === 'y') {
+                event.preventDefault();
+                handleRedo();
+            }
+        };
+        window.addEventListener('keydown', handleGlobalEditShortcut);
+        return () => window.removeEventListener('keydown', handleGlobalEditShortcut);
+    }, [handleRedo, handleUndo]);
 
     const buildChartStateOverrideSnapshot = useCallback(() => {
         const normalizedFilters = { ...(filters || {}) };
@@ -3140,6 +5733,7 @@ export default function DashTanstackPivot(props) {
             {
                 ...baseDefinition,
                 size: 1,
+                dockPosition: 'right',
                 floating: false,
                 floatingRect: clampFloatingChartRect({
                     width: chartPanelWidth,
@@ -3174,7 +5768,28 @@ export default function DashTanstackPivot(props) {
     ]);
 
     const handleRemoveChartCanvasPane = useCallback((paneId) => {
-        setChartCanvasPanes((previousPanes) => previousPanes.filter((pane) => pane.id !== paneId));
+        setChartCanvasPanes((previousPanes) => {
+            const removedPane = previousPanes.find((pane) => pane.id === paneId) || null;
+            const remainingPanes = previousPanes.filter((pane) => pane.id !== paneId);
+
+            if (removedPane && !removedPane.floating) {
+                const reclaimedSize = Number.isFinite(Number(removedPane.size)) && Number(removedPane.size) > 0
+                    ? Number(removedPane.size)
+                    : 1;
+                const firstDockedIndex = remainingPanes.findIndex((pane) => !pane.floating);
+                if (firstDockedIndex >= 0) {
+                    const nextPanes = [...remainingPanes];
+                    nextPanes[firstDockedIndex] = {
+                        ...nextPanes[firstDockedIndex],
+                        size: (Number(nextPanes[firstDockedIndex].size) || 1) + reclaimedSize,
+                    };
+                    return nextPanes;
+                }
+                setTableCanvasSize((previousSize) => Math.max(DEFAULT_TABLE_CANVAS_SIZE, (Number(previousSize) || DEFAULT_TABLE_CANVAS_SIZE) + reclaimedSize));
+            }
+
+            return remainingPanes;
+        });
         setChartPaneDataById((previousData) => {
             if (!Object.prototype.hasOwnProperty.call(previousData, paneId)) return previousData;
             const nextData = { ...previousData };
@@ -3191,7 +5806,10 @@ export default function DashTanstackPivot(props) {
             table: tableName || null,
             viewport: latestViewportRef.current || null,
             state: {
-                pivotMode,
+                viewMode,
+                detailMode,
+                treeConfig,
+                detailConfig,
                 reportDef,
                 savedReports,
                 activeReportId,
@@ -3215,6 +5833,8 @@ export default function DashTanstackPivot(props) {
                 colTypeFilter,
                 themeName,
                 themeOverrides,
+                editValueDisplayMode,
+                editComparisonState: serializedEditComparisonState,
                 layoutMode,
                 colorScaleMode,
                 colorPalette,
@@ -3281,7 +5901,10 @@ export default function DashTanstackPivot(props) {
         rowFields,
         colFields,
         valConfigs,
-        pivotMode,
+        viewMode,
+        detailMode,
+        treeConfig,
+        detailConfig,
         reportDef,
         savedReports,
         activeReportId,
@@ -3302,6 +5925,8 @@ export default function DashTanstackPivot(props) {
         colTypeFilter,
         themeName,
         themeOverrides,
+        editValueDisplayMode,
+        serializedEditComparisonState,
         layoutMode,
         colorScaleMode,
         colorPalette,
@@ -3371,6 +5996,10 @@ export default function DashTanstackPivot(props) {
     }, [saveViewTrigger, handleSaveView]);
 
     const lastPropsRef = useRef({
+        viewMode: normalizedInitialViewMode,
+        detailMode: normalizedInitialDetailMode,
+        treeConfig: normalizedInitialTreeConfig,
+        detailConfig: normalizedInitialDetailConfig,
         rowFields: initialRowFields,
         colFields: initialColFields,
         valConfigs: initialValConfigs,
@@ -3390,6 +6019,10 @@ export default function DashTanstackPivot(props) {
 
     React.useEffect(() => {
         const nextProps = {
+            viewMode,
+            detailMode,
+            treeConfig,
+            detailConfig,
             rowFields, colFields, valConfigs, filters, sorting, sortOptions: effectiveSortOptions, expanded,
             cinemaMode, showRowTotals, showColTotals, columnPinning, rowPinning, columnVisibility, columnSizing
         };
@@ -3414,7 +6047,7 @@ export default function DashTanstackPivot(props) {
             // In that case we keep the existing cache (no stateEpoch bump) so rows
             // remain visible. A loading row appears below the expanded row via
             // pendingRowTransitions, and the viewport snaps in place.
-            const uiOnlyKeys = new Set(['columnPinning', 'rowPinning', 'grandTotalPinOverride', 'columnVisibility', 'columnSizing']);
+            const uiOnlyKeys = new Set(['detailMode', 'detailConfig', 'columnPinning', 'rowPinning', 'grandTotalPinOverride', 'columnVisibility', 'columnSizing']);
             const isExpansionOnly = serverSide && changedKeys.length > 0 && changedKeys.every(key => key === 'expanded');
             const isSortingOnly = serverSide && changedKeys.length > 0 && changedKeys.every(key => key === 'sorting');
             const isUiOnlyChange = changedKeys.length > 0 && changedKeys.every(key => uiOnlyKeys.has(key));
@@ -3438,7 +6071,8 @@ export default function DashTanstackPivot(props) {
                 }
                 const tx = beginExpansionRequest();
                 markRequestPending(tx.version);
-                const viewportSnapshot = latestViewportRef.current || { start: 0, end: 99, count: 100 };
+                const viewportSnapshot = latestRequestedViewportRef.current || latestViewportRef.current || { start: 0, end: 99, count: 100 };
+                const expansionColumnWindow = resolveStableRequestedColumnWindow();
 
                 // Extend the row window to cover the block immediately after the anchor block.
                 // When expanding a row near the END of its block (e.g. row 95 in block 0),
@@ -3447,11 +6081,22 @@ export default function DashTanstackPivot(props) {
                 // pendingExpansionRef.current is already set by onExpandedChange (same event,
                 // before this effect runs), so anchorBlock is available here.
                 const anchorBlockHint = (pendingExpansionRef.current && pendingExpansionRef.current.anchorBlock != null ? pendingExpansionRef.current.anchorBlock : -1);
-                const expansionBlockSize = 100; // must match blockSize prop
+                const expansionBlockSize = serverSideBlockSize; // must match useServerSideRowModel blockSize
+                const viewportAlignedStart = Math.max(
+                    0,
+                    Math.floor(Math.max(0, viewportSnapshot.start || 0) / expansionBlockSize) * expansionBlockSize
+                );
+                const alignedStart = anchorBlockHint >= 0
+                    ? Math.min(viewportAlignedStart, anchorBlockHint * expansionBlockSize)
+                    : viewportAlignedStart;
                 const extendedEnd = anchorBlockHint >= 0
                     ? Math.max(viewportSnapshot.end, (anchorBlockHint + 2) * expansionBlockSize - 1)
                     : viewportSnapshot.end;
-                const extendedCount = extendedEnd - viewportSnapshot.start + 1;
+                const alignedEnd = Math.max(
+                    extendedEnd,
+                    Math.ceil((Math.max(alignedStart, extendedEnd) + 1) / expansionBlockSize) * expansionBlockSize - 1
+                );
+                const extendedCount = alignedEnd - alignedStart + 1;
 
                 // Record the last block the expansion response will cover so the deferred
                 // effect knows to start soft-invalidating from the block AFTER it, rather
@@ -3461,25 +6106,35 @@ export default function DashTanstackPivot(props) {
                         anchorBlockHint >= 0 ? anchorBlockHint + 1 : -1;
                 }
 
+                markRequestPending({
+                    version: tx.version,
+                    reqStart: alignedStart,
+                    reqEnd: alignedEnd,
+                    colStart: expansionColumnWindow.start,
+                    colEnd: expansionColumnWindow.end,
+                });
                 setPropsRef.current({
                     ...nextProps,
-                    viewport: {
-                        table: tableName || undefined,
-                        start: viewportSnapshot.start,
-                        end: extendedEnd,
-                        count: extendedCount,
-                        version: tx.version,
-                        window_seq: tx.version,
-                        state_epoch: tx.stateEpoch,
-                        session_id: sessionIdRef.current,
-                        client_instance: clientInstanceRef.current,
-                        abort_generation: tx.abortGeneration,
-                        intent: 'expansion',
-                        col_start: colRequestStartRef.current !== null ? colRequestStartRef.current : undefined,
-                        col_end: colRequestEndRef.current !== null ? colRequestEndRef.current : undefined,
-                        needs_col_schema: needsColSchemaRef.current && serverSide || undefined,
-                        include_grand_total: serverSidePinsGrandTotal || undefined,
-                    }
+                    runtimeRequest: {
+                        kind: 'data',
+                        payload: {
+                            table: tableName || undefined,
+                            start: alignedStart,
+                            end: alignedEnd,
+                            count: extendedCount,
+                            version: tx.version,
+                            window_seq: tx.version,
+                            state_epoch: tx.stateEpoch,
+                            session_id: sessionIdRef.current,
+                            client_instance: clientInstanceRef.current,
+                            abort_generation: tx.abortGeneration,
+                            intent: 'expansion',
+                            col_start: expansionColumnWindow.start !== null ? expansionColumnWindow.start : undefined,
+                            col_end: expansionColumnWindow.end !== null ? expansionColumnWindow.end : undefined,
+                            needs_col_schema: needsColSchemaRef.current && serverSide || undefined,
+                            include_grand_total: serverSidePinsGrandTotal || undefined,
+                        },
+                    },
                 });
                 return;
             }
@@ -3495,27 +6150,37 @@ export default function DashTanstackPivot(props) {
                 }
 
                 const tx = beginExpansionRequest();
-                markRequestPending(tx.version);
+                const sortingColumnWindow = resolveStableRequestedColumnWindow();
                 const initialEnd = 99;
+                markRequestPending({
+                    version: tx.version,
+                    reqStart: 0,
+                    reqEnd: initialEnd,
+                    colStart: sortingColumnWindow.start,
+                    colEnd: sortingColumnWindow.end,
+                });
                 setPropsRef.current({
                     ...nextProps,
-                    viewport: {
-                        table: tableName || undefined,
-                        start: 0,
-                        end: initialEnd,
-                        count: initialEnd + 1,
-                        version: tx.version,
-                        window_seq: tx.version,
-                        state_epoch: tx.stateEpoch,
-                        session_id: sessionIdRef.current,
-                        client_instance: clientInstanceRef.current,
-                        abort_generation: tx.abortGeneration,
-                        intent: 'viewport',
-                        col_start: colRequestStartRef.current !== null ? colRequestStartRef.current : undefined,
-                        col_end: colRequestEndRef.current !== null ? colRequestEndRef.current : undefined,
-                        include_grand_total: serverSidePinsGrandTotal || undefined,
-                        cinema_mode: cinemaMode || undefined,
-                    }
+                    runtimeRequest: {
+                        kind: 'data',
+                        payload: {
+                            table: tableName || undefined,
+                            start: 0,
+                            end: initialEnd,
+                            count: initialEnd + 1,
+                            version: tx.version,
+                            window_seq: tx.version,
+                            state_epoch: tx.stateEpoch,
+                            session_id: sessionIdRef.current,
+                            client_instance: clientInstanceRef.current,
+                            abort_generation: tx.abortGeneration,
+                            intent: 'viewport',
+                            col_start: sortingColumnWindow.start !== null ? sortingColumnWindow.start : undefined,
+                            col_end: sortingColumnWindow.end !== null ? sortingColumnWindow.end : undefined,
+                            include_grand_total: serverSidePinsGrandTotal || undefined,
+                            cinema_mode: cinemaMode || undefined,
+                        },
+                    },
                 });
                 return;
             }
@@ -3529,29 +6194,47 @@ export default function DashTanstackPivot(props) {
                 setPendingColumnSkeletonCount(0);
             }
             const tx = beginStructuralTransaction();
-            markRequestPending(tx.version);
-            const viewportSnapshot = latestViewportRef.current || { start: 0, end: 99, count: 100 };
+            const structuralViewportSnapshot = latestRequestedViewportRef.current || latestViewportRef.current || { start: 0, end: 99, count: 100 };
+            const structuralWindowSize = Math.max(
+                100,
+                Math.max(1, Number.isFinite(Number(structuralViewportSnapshot.count)) ? Number(structuralViewportSnapshot.count) : 0)
+            );
+            const structuralStart = 0;
+            const structuralEnd = structuralWindowSize - 1;
+            const structuralColumnWindow = resolveStableRequestedColumnWindow();
+            markRequestPending({
+                version: tx.version,
+                reqStart: structuralStart,
+                reqEnd: structuralEnd,
+                colStart: structuralColumnWindow.start,
+                colEnd: structuralColumnWindow.end,
+            });
             setPropsRef.current({
                 ...nextProps,
-                viewport: {
-                    table: tableName || undefined,
-                    start: viewportSnapshot.start,
-                    end: viewportSnapshot.end,
-                    count: viewportSnapshot.count,
-                    version: tx.version,
-                    window_seq: tx.version,
-                    state_epoch: tx.stateEpoch,
-                    session_id: sessionIdRef.current,
-                    client_instance: clientInstanceRef.current,
-                    abort_generation: tx.abortGeneration,
-                    intent: 'structural',
-                    needs_col_schema: serverSide || undefined,
-                    include_grand_total: serverSidePinsGrandTotal || undefined,
-                    cinema_mode: cinemaMode || undefined,
-                }
+                runtimeRequest: {
+                    kind: 'data',
+                    payload: {
+                        table: tableName || undefined,
+                        start: structuralStart,
+                        end: structuralEnd,
+                        count: structuralWindowSize,
+                        version: tx.version,
+                        window_seq: tx.version,
+                        state_epoch: tx.stateEpoch,
+                        session_id: sessionIdRef.current,
+                        client_instance: clientInstanceRef.current,
+                        abort_generation: tx.abortGeneration,
+                        intent: 'structural',
+                        col_start: structuralColumnWindow.start !== null ? structuralColumnWindow.start : undefined,
+                        col_end: structuralColumnWindow.end !== null ? structuralColumnWindow.end : undefined,
+                        needs_col_schema: serverSide || undefined,
+                        include_grand_total: serverSidePinsGrandTotal || undefined,
+                        cinema_mode: cinemaMode || undefined,
+                    },
+                },
             });
         }
-    }, [rowFields, colFields, valConfigs, filters, sorting, effectiveSortOptions, expanded, cinemaMode, showRowTotals, showColTotals, columnPinning, rowPinning, grandTotalPinOverride, columnVisibility, columnSizing, beginStructuralTransaction, beginExpansionRequest, serverSide, tableName, serverSidePinsGrandTotal]);
+    }, [viewMode, detailMode, treeConfig, detailConfig, rowFields, colFields, valConfigs, filters, sorting, effectiveSortOptions, expanded, cinemaMode, showRowTotals, showColTotals, columnPinning, rowPinning, grandTotalPinOverride, columnVisibility, columnSizing, beginStructuralTransaction, beginExpansionRequest, markRequestPending, resolveStableRequestedColumnWindow, serverSide, serverSideBlockSize, tableName, serverSidePinsGrandTotal]);
 
     useEffect(() => {
         const handleClick = () => setContextMenu(null);
@@ -3949,17 +6632,14 @@ export default function DashTanstackPivot(props) {
         if (columnVirtualizerRef.current && typeof columnVirtualizerRef.current.scrollToIndex === 'function') {
             columnVirtualizerRef.current.scrollToIndex(0);
         }
-        setVisibleColRange(prev => {
-            let visibleCount = Math.max(1, prev.end - prev.start + 1);
-            if (columnVirtualizerRef.current && typeof columnVirtualizerRef.current.getVirtualItems === 'function') {
-                const virtualItems = columnVirtualizerRef.current.getVirtualItems() || [];
-                if (virtualItems.length > 0) {
-                    visibleCount = Math.max(visibleCount, virtualItems.length);
-                }
+        let visibleCount = Math.max(1, visibleColRange.end - visibleColRange.start + 1);
+        if (columnVirtualizerRef.current && typeof columnVirtualizerRef.current.getVirtualItems === 'function') {
+            const virtualItems = columnVirtualizerRef.current.getVirtualItems() || [];
+            if (virtualItems.length > 0) {
+                visibleCount = Math.max(visibleCount, virtualItems.length);
             }
-            const nextRange = { start: 0, end: Math.max(0, visibleCount - 1) };
-            return prev.start === nextRange.start && prev.end === nextRange.end ? prev : nextRange;
-        });
+        }
+        resetVisibleColRange(visibleCount);
         const fieldLabel = formatDisplayLabel(field);
         if (mode === 'label' && direction === 'asc') {
             showNotification(`Header order for ${fieldLabel} set to A-Z.`, 'success');
@@ -3997,7 +6677,7 @@ export default function DashTanstackPivot(props) {
 
         const idsArray = Array.from(idsToUpdate);
 
-        setColumnPinning(prev => {
+        setColumnPinningWithHistory(prev => {
             const next = { left: [...(prev.left || [])], right: [...(prev.right || [])] };
 
             // Remove all relevant IDs from both sides first
@@ -4009,15 +6689,16 @@ export default function DashTanstackPivot(props) {
             if (side === 'right') next.right.push(...idsArray);
 
             return next;
-        });
-    }, []);
+        }, 'layout:column-pinning');
+    }, [setColumnPinningWithHistory]);
 
 
     const handlePinRow = (rowId, pinState) => {
+        requestLayoutHistoryCapture('layout:row-pinning');
         if (rowId === GRAND_TOTAL_ROW_ID) {
             setGrandTotalPinOverride(pinState === 'top' || pinState === 'bottom' ? pinState : false);
         }
-        setRowPinning(prev => applyRowPinning(prev, rowId, pinState));
+        setRowPinningWithHistory(prev => applyRowPinning(prev, rowId, pinState), 'layout:row-pinning');
 
         // Fire Pinning Event
         if (setProps) {
@@ -4299,7 +6980,7 @@ export default function DashTanstackPivot(props) {
         actions.push('separator');
         actions.push({ label: 'Drill Through', icon: <Icons.Search/>, onClick: () => {
              if (row && row.original && row.original._path && row.original._path !== '__grand_total__' && !row.original._isTotal) {
-                 fetchDrillData(row.original._path, 0, null, 'asc', '', row.original._pathFields);
+                 handleCellDrillThrough(row, colId);
              }
         }});
 
@@ -4313,10 +6994,10 @@ export default function DashTanstackPivot(props) {
                     subtreeExpandRef.current = { path: rowPath, expandedPaths: new Set([rowPath]) };
                     captureExpansionScrollPosition();
                     clearCache();
-                    setExpanded(prev => {
+                    setExpandedWithHistory((prev) => {
                         const base = (prev !== null && typeof prev === 'object') ? prev : {};
                         return { ...base, [rowPath]: true };
-                    });
+                    }, 'layout:expand-subtree');
                 }
             });
         }
@@ -4352,6 +7033,34 @@ export default function DashTanstackPivot(props) {
         return { cleanData: rows, serverColorScaleStats: stats };
     }, [data]);
 
+    useEffect(() => {
+        const nextRowPaths = [];
+        const seenPaths = new Set();
+        cleanData.forEach((row) => {
+            const rowId = resolveTransportRowId(row);
+            if (!rowId || seenPaths.has(rowId)) return;
+            seenPaths.add(rowId);
+            nextRowPaths.push(rowId);
+        });
+        visiblePatchRowPathsRef.current = nextRowPaths;
+    }, [cleanData]);
+
+    useEffect(() => {
+        const groupingIds = new Set(Array.isArray(rowFields) ? rowFields : []);
+        const nextCenterIds = [];
+        const seenIds = new Set();
+        (Array.isArray(responseColumns) ? responseColumns : []).forEach((column) => {
+            const columnId = column && typeof column === 'object' ? column.id : column;
+            const normalizedId = String(columnId || '').trim();
+            if (!normalizedId || normalizedId === '__col_schema' || groupingIds.has(normalizedId) || seenIds.has(normalizedId)) {
+                return;
+            }
+            seenIds.add(normalizedId);
+            nextCenterIds.push(normalizedId);
+        });
+        visiblePatchCenterIdsRef.current = nextCenterIds;
+    }, [responseColumns, rowFields]);
+
     const filteredData = useFilteredData(cleanData, filters, serverSide);
 
     const staticTotal = useMemo(() => ({ _isTotal: true, _path: '__grand_total__', _id: 'Grand Total', __isGrandTotal__: true }), []);
@@ -4386,6 +7095,7 @@ export default function DashTanstackPivot(props) {
 
         const column = table.getColumn(columnId);
         if (!column) return;
+        if (column.columnDef && column.columnDef.meta && column.columnDef.meta.isSchemaPlaceholder) return;
         const matchingValueConfig = Array.isArray(valConfigs)
             ? (valConfigs.find((config) => matchesSelectedColumnToValueConfig(columnId, config)) || null)
             : null;
@@ -4454,19 +7164,13 @@ export default function DashTanstackPivot(props) {
         e.stopPropagation();
         setActiveFilterCol(columnId);
         setFilterAnchorEl(e.currentTarget);
-        if (setPropsRef.current) {
-            setPropsRef.current({
-                filterRequest: { columnId, nonce: Date.now() }
-            });
-        }
+        emitRuntimeRequest('filter_options', { columnId, nonce: Date.now() });
     };
 
     const requestFilterOptions = useCallback((columnId) => {
-        if (!columnId || !setPropsRef.current) return;
-        setPropsRef.current({
-            filterRequest: { columnId, nonce: Date.now() }
-        });
-    }, []);
+        if (!columnId) return;
+        emitRuntimeRequest('filter_options', { columnId, nonce: Date.now() });
+    }, [emitRuntimeRequest]);
 
     useEffect(() => {
         if (!serverSide || !activeFilterCol) {
@@ -4545,6 +7249,7 @@ export default function DashTanstackPivot(props) {
         const nextRowFields = [...colFields];
         const nextColFields = [...rowFields];
 
+        requestLayoutHistoryCapture('layout:transpose');
         closeFilterPopover();
         setContextMenu(null);
         setExpanded({});
@@ -4553,8 +7258,6 @@ export default function DashTanstackPivot(props) {
         setSelectedCells({});
         setLastSelected(null);
         setSelectedCols(new Set());
-        setHistory([]);
-        setFuture([]);
         setDragStart(null);
         setFillRange(null);
         setIsDragging(false);
@@ -4575,6 +7278,7 @@ export default function DashTanstackPivot(props) {
         closeFilterPopover,
         colFields,
         rowFields,
+        requestLayoutHistoryCapture,
         showColTotals,
         showRowTotals,
         showNotification,
@@ -4605,6 +7309,11 @@ export default function DashTanstackPivot(props) {
     const effectiveRowCount = serverSidePinsGrandTotal && rowCount ? Math.max(rowCount - 1, 0) : rowCount;
     const statusRowCount = serverSidePinsGrandTotal && rowCount ? Math.max(rowCount - 1, 0) : rowCount;
 
+    const handleViewportRequestMeta = useCallback((requestMeta) => {
+        markRequestPending(requestMeta);
+        recordProfilerQueuedRequest(requestMeta);
+    }, [markRequestPending, recordProfilerQueuedRequest]);
+
     const captureExpansionScrollPosition = useCallback(() => {
         if (!serverSide || !parentRef.current) return;
         expansionScrollRestoreRef.current = {
@@ -4613,7 +7322,7 @@ export default function DashTanstackPivot(props) {
         };
     }, [serverSide]);
 
-    const { rowVirtualizer, getRow, renderedData, renderedOffset, clearCache, invalidateFromBlock, softInvalidateFromBlock, grandTotalRow, loadedRows } = useServerSideRowModel({
+    const { rowVirtualizer, getRow, renderedData, renderedOffset, clearCache, invalidateFromBlock, softInvalidateFromBlock, grandTotalRow, loadedRows, requestUrgentColumnViewport, requestVisibleViewportRefresh } = useServerSideRowModel({
         parentRef,
         serverSide,
         rowCount: effectiveRowCount,
@@ -4621,8 +7330,12 @@ export default function DashTanstackPivot(props) {
         data: filteredData,
         dataOffset: dataOffset || 0,
         dataVersion: dataVersion || 0,
-        setProps,
-        blockSize: 100,
+        setProps: dispatchSetProps,
+        blockSize: serverSideBlockSize,
+        maxBlocksInCache: normalizedPerformanceConfig.maxBlocksInCache || 500,
+        blockLoadDebounceMs: normalizedPerformanceConfig.blockLoadDebounceMs,
+        rowOverscan: normalizedPerformanceConfig.rowOverscan,
+        prefetchColumns: normalizedPerformanceConfig.prefetchColumns,
         cacheKey: serverSideCacheKey,
         excludeGrandTotal: serverSidePinsGrandTotal,
         cinemaMode,
@@ -4635,18 +7348,41 @@ export default function DashTanstackPivot(props) {
         tableName,
         colStart: colRequestStart,
         colEnd: colRequestEnd,
+        columnRangeUrgencyToken,
+        responseColStart: responseSchemaWindow.start,
+        responseColEnd: responseSchemaWindow.end,
         needsColSchema: needsColSchema && serverSide,
-        onViewportRequest: markRequestPending,
+        onViewportRequest: handleViewportRequestMeta,
     });
+    requestUrgentColumnViewportRef.current = requestUrgentColumnViewport;
+
+    const scheduleSilentViewportRefresh = useCallback(() => {
+        if (!serverSide || typeof requestVisibleViewportRefresh !== 'function') return;
+        if (deferredViewportRefreshTimeoutRef.current !== null) {
+            clearTimeout(deferredViewportRefreshTimeoutRef.current);
+        }
+        deferredViewportRefreshTimeoutRef.current = setTimeout(() => {
+            deferredViewportRefreshTimeoutRef.current = null;
+            requestVisibleViewportRefresh();
+        }, 0);
+    }, [requestVisibleViewportRefresh, serverSide]);
+
+    useEffect(() => () => {
+        if (deferredViewportRefreshTimeoutRef.current !== null) {
+            clearTimeout(deferredViewportRefreshTimeoutRef.current);
+        }
+    }, []);
 
     const columns = useColumnDefs({
         sortOptions: effectiveSortOptions,
         serverSide,
         showRowNumbers,
         layoutMode,
+        viewMode,
         rowFields,
         colFields,
         valConfigs,
+        treeConfig,
         minMax,
         colorScaleMode,
         colExpanded,
@@ -4659,7 +7395,16 @@ export default function DashTanstackPivot(props) {
         theme,
         defaultColumnWidths,
         validationRules,
-        setProps,
+        onCellEdit: dispatchInlineCellEdit,
+        resolveEditorPresentation,
+        rowEditMode: normalizedEditingConfig.mode,
+        getRowEditSession,
+        onRequestRowStart: startRowEditSession,
+        onRowDraftChange: updateRowDraftValue,
+        onRequestRowSave: saveRowEditSession,
+        onRequestRowCancel: cancelRowEditSession,
+        requestEditorOptions,
+        renderRowEditActions,
         handleContextMenu,
         handleRowSelect,
         handleRowRangeSelect,
@@ -4678,6 +7423,15 @@ export default function DashTanstackPivot(props) {
         cellFormatRules,
         pivotMode,
         reportDef,
+        detailMode,
+        isDetailOpenForRow: (rowPath) => Boolean(detailSurface && detailSurface.rowPath === rowPath),
+        onToggleDetail: (row) => {
+            if (toggleDetailForRowRef.current) {
+                toggleDetailForRowRef.current(row);
+            }
+        },
+        resolveCellDisplayValue: resolveDisplayedCellValue,
+        editValueDisplayMode,
     });
 
     // Auto-size new columns to fit their header text on spawn
@@ -4691,6 +7445,7 @@ export default function DashTanstackPivot(props) {
         const newSizes = {};
         visLeafCols.forEach(col => {
             if (columnSizing[col.id] !== undefined) return; // already user-set
+            if (col.columnDef && col.columnDef.meta && col.columnDef.meta.isSchemaPlaceholder) return;
             const measuredFromText = getDisplayHeaderTextStackForColumn(col).reduce((maxWidth, headerText) => (
                 Math.max(maxWidth, ctx.measureText(headerText).width + autoSizeBounds.headerPadding + autoSizeBounds.headerOverscan)
             ), autoSizeBounds.minWidth);
@@ -4747,7 +7502,7 @@ export default function DashTanstackPivot(props) {
         return null;
     }, []);
 
-    const tableData = useMemo(() => {
+    const rawTableData = useMemo(() => {
         if (serverSide) {
              const centerData = renderedData.filter(row => (
                  row &&
@@ -4805,6 +7560,39 @@ export default function DashTanstackPivot(props) {
         getStableDataRowId,
         serverSidePinsGrandTotal,
     ]);
+    tableDataRef.current = rawTableData;
+
+    const tableData = useMemo(() => {
+        if (editValueDisplayMode !== 'original' || comparisonValueState.activeCount === 0) {
+            return rawTableData;
+        }
+
+        const overrideRowsById = new Map();
+        comparisonCellOriginalValuesRef.current.forEach((entry, key) => {
+            if (!entry || typeof entry !== 'object') return;
+            const cellCount = comparisonCellCountsRef.current.get(key) || 0;
+            if (cellCount <= 0) return;
+            const rowId = entry.rowId === null || entry.rowId === undefined ? '' : String(entry.rowId);
+            const colId = entry.colId === null || entry.colId === undefined ? '' : String(entry.colId);
+            if (!rowId || !colId) return;
+            const rowOverrides = overrideRowsById.get(rowId) || {};
+            rowOverrides[colId] = entry.value;
+            overrideRowsById.set(rowId, rowOverrides);
+        });
+
+        if (overrideRowsById.size === 0) {
+            return rawTableData;
+        }
+
+        return rawTableData.map((row) => {
+            const rowId = getStableDataRowId(row);
+            if (!rowId || !overrideRowsById.has(rowId)) return row;
+            return {
+                ...row,
+                ...overrideRowsById.get(rowId),
+            };
+        });
+    }, [comparisonCellEpoch, comparisonValueState.activeCount, editValueDisplayMode, getStableDataRowId, rawTableData]);
 
     // Color scale palettes: [lowColor, highColor, darkTextLow, darkTextHigh]
     const COLOR_PALETTES = {
@@ -4999,6 +7787,21 @@ export default function DashTanstackPivot(props) {
         return !!expanded[row.id];
     }, [expanded, serverSide]);
 
+    const normalizeExpandedStateForTreeDefaults = useCallback((nextExpanded, previousExpanded) => {
+        if (!serverSide || viewMode !== 'tree' || !treeHasDefaultExpansion) return nextExpanded;
+        if (nextExpanded === true || !nextExpanded || typeof nextExpanded !== 'object') return nextExpanded;
+
+        const normalizedExpanded = { ...nextExpanded };
+        const previous = previousExpanded && typeof previousExpanded === 'object' ? previousExpanded : {};
+        const allKeys = new Set([...Object.keys(previous), ...Object.keys(normalizedExpanded)]);
+        allKeys.forEach((key) => {
+            if (!Object.prototype.hasOwnProperty.call(normalizedExpanded, key)) {
+                normalizedExpanded[key] = false;
+            }
+        });
+        return normalizedExpanded;
+    }, [serverSide, treeHasDefaultExpansion, viewMode]);
+
     const tableState = useMemo(() => {
         const availableRowIds = new Set((tableData || []).map(getStableDataRowId).filter(Boolean));
         let finalRowPinning = {
@@ -5025,7 +7828,7 @@ export default function DashTanstackPivot(props) {
             expanded,
             columnPinning,
             rowPinning: finalRowPinning,
-            grouping: rowFields,
+            grouping: viewMode === 'pivot' ? rowFields : [],
             columnVisibility,
             columnSizing
         };
@@ -5035,6 +7838,7 @@ export default function DashTanstackPivot(props) {
         columnPinning,
         rowPinning,
         rowFields,
+        viewMode,
         columnVisibility,
         columnSizing,
         tableData,
@@ -5057,7 +7861,17 @@ export default function DashTanstackPivot(props) {
             // Expanding/collapsing ALL rows changes every row index — full cache wipe.
             // (This path bypasses onExpandedChange so invalidateFromBlock won't run.)
             clearCache();
-            setExpanded(shouldExpand ? true : {});
+            if (!shouldExpand && viewMode === 'tree' && treeHasDefaultExpansion) {
+                const collapsedPaths = {};
+                table.getRowModel().rows.forEach((row) => {
+                    if (row && row.id && row.getCanExpand() && !(row.original && row.original._isTotal)) {
+                        collapsedPaths[row.id] = false;
+                    }
+                });
+                setExpandedWithHistory(collapsedPaths, 'layout:expand-all');
+                return;
+            }
+            setExpandedWithHistory(shouldExpand ? true : {}, 'layout:expand-all');
             return;
         }
 
@@ -5089,10 +7903,10 @@ export default function DashTanstackPivot(props) {
                 }
             });
 
-            setExpanded(newExpanded);
+            setExpandedWithHistory(newExpanded, 'layout:expand-all');
         } else {
             // Collapse all by setting empty object
-            setExpanded({});
+            setExpandedWithHistory({}, 'layout:expand-all');
         }
     };
 
@@ -5121,7 +7935,8 @@ export default function DashTanstackPivot(props) {
         onSortingChange: (updater) => { handleSortingChange(updater); },
         onExpandedChange: (updater) => {
             captureExpansionScrollPosition();
-            const newExpanded = typeof updater === 'function' ? updater(expanded) : updater;
+            const rawExpanded = typeof updater === 'function' ? updater(expanded) : updater;
+            const newExpanded = normalizeExpandedStateForTreeDefaults(rawExpanded, expanded);
 
             if (serverSide) {
                 // Find which path was toggled so we know which block to defer-invalidate
@@ -5131,7 +7946,10 @@ export default function DashTanstackPivot(props) {
                 const oldExp = expanded || {};
                 const newExp = newExpanded || {};
                 const allKeys = new Set([...Object.keys(oldExp), ...Object.keys(newExp)]);
-                const changedPath = [...allKeys].find(k => !!oldExp[k] !== !!newExp[k]);
+                const changedPath = [...allKeys].find((key) => (
+                    Object.prototype.hasOwnProperty.call(oldExp, key) !== Object.prototype.hasOwnProperty.call(newExp, key)
+                    || !!oldExp[key] !== !!newExp[key]
+                ));
                 if (changedPath) {
                     const isNowExpanded = !!(newExpanded && newExpanded[changedPath]);
                     setPendingRowTransitions(prev => {
@@ -5165,16 +7983,16 @@ export default function DashTanstackPivot(props) {
                 pendingExpansionRef.current = { anchorBlock, expandedRowVirtualIndex, oldRowCount: rowCount };
             }
 
-            setExpanded(newExpanded);
+            setExpandedWithHistory(newExpanded, 'layout:expanded');
         },
-        onColumnPinningChange: (updater) => { debugLog('onColumnPinningChange'); setColumnPinning(updater); },
-        onRowPinningChange: (updater) => { debugLog('onRowPinningChange'); setRowPinning(updater); },
+        onColumnPinningChange: (updater) => { debugLog('onColumnPinningChange'); setColumnPinningWithHistory(updater, 'layout:column-pinning'); },
+        onRowPinningChange: (updater) => { debugLog('onRowPinningChange'); setRowPinningWithHistory(updater, 'layout:row-pinning'); },
         onColumnVisibilityChange: (updater) => { debugLog('onColumnVisibilityChange'); setColumnVisibility(updater); },
         onColumnSizingChange: (updater) => { debugLog('onColumnSizingChange'); setColumnSizing(updater); },
         getRowId,
         getCoreRowModel: getCoreRowModel(),
-        getExpandedRowModel: getExpandedRowModel(),
-        getGroupedRowModel: getGroupedRowModel(),
+        getExpandedRowModel: serverSide ? undefined : getExpandedRowModel(),
+        getGroupedRowModel: serverSide ? undefined : getGroupedRowModel(),
         getSubRows,
         enableRowPinning: true, // Enable Row Pinning
         enableColumnResizing: true,
@@ -5235,7 +8053,7 @@ export default function DashTanstackPivot(props) {
             }
         }
         
-        setColumnPinning(newPinning);
+        setColumnPinningWithHistory(newPinning, 'layout:toggle-all-columns-pinned');
     };
 
     const activeFilterOptions = useMemo(() => {
@@ -5530,13 +8348,33 @@ export default function DashTanstackPivot(props) {
 
     // Debug effect removed (finding #10 — hot-path logging).
 
-    const visibleLeafColumns = table.getVisibleLeafColumns();
+    const chartModelingActive = chartPanelOpen
+        || chartCanvasPanes.length > 0
+        || !!chartModal
+        || chartPanelLocked
+        || Object.keys(chartPaneDataById).length > 0;
+    // NOTE: `table` is intentionally excluded from the dep array — its identity
+    // changes every render (useReactTable returns a new object when any state
+    // changes).  The actual structural drivers of visible-leaf-columns are the
+    // column definitions, visibility map, and pinning map — all listed below.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    const visibleLeafColumns = useMemo(
+        () => table.getVisibleLeafColumns(),
+        [columns, columnVisibility, columnPinning]
+    );
     const chartDisplayRows = useMemo(
-        () => [...effectiveTopRows, ...effectiveCenterRows, ...effectiveBottomRows],
-        [effectiveTopRows, effectiveCenterRows, effectiveBottomRows]
+        () => (
+            chartModelingActive
+                ? [...effectiveTopRows, ...effectiveCenterRows, ...effectiveBottomRows]
+                : []
+        ),
+        [chartModelingActive, effectiveTopRows, effectiveCenterRows, effectiveBottomRows]
     );
     const liveSelectionChartModel = useMemo(
         () => (
+            !chartModelingActive
+                ? null
+                : (
             chartPanelType === 'combo'
                 ? buildComboSelectionChartModel(selectedCells, chartDisplayRows, visibleLeafColumns, {
                     hierarchyLevel: chartPanelHierarchyLevel,
@@ -5558,11 +8396,15 @@ export default function DashTanstackPivot(props) {
                     colFields,
                     sortMode: chartPanelSortMode,
                 })
+                )
         ),
-        [selectedCells, chartDisplayRows, visibleLeafColumns, chartPanelType, chartPanelOrientation, chartPanelHierarchyLevel, rowFields.length, chartPanelRowLimit, chartPanelColumnLimit, rowFields, colFields, chartPanelSortMode, chartPanelLayers]
+        [chartModelingActive, selectedCells, chartDisplayRows, visibleLeafColumns, chartPanelType, chartPanelOrientation, chartPanelHierarchyLevel, rowFields.length, chartPanelRowLimit, chartPanelColumnLimit, rowFields, colFields, chartPanelSortMode, chartPanelLayers]
     );
     const livePivotChartModel = useMemo(
         () => (
+            !chartModelingActive
+                ? null
+                : (
             chartPanelType === 'combo'
                 ? buildComboPivotChartModel(
                     serverSide && Array.isArray(loadedRows) && loadedRows.length > 0 ? loadedRows : chartDisplayRows,
@@ -5592,8 +8434,9 @@ export default function DashTanstackPivot(props) {
                         sortMode: chartPanelSortMode,
                     }
                 )
+                )
         ),
-        [chartDisplayRows, loadedRows, serverSide, visibleLeafColumns, chartPanelType, chartPanelOrientation, chartPanelHierarchyLevel, rowFields.length, chartPanelRowLimit, chartPanelColumnLimit, rowFields, colFields, chartPanelSortMode, chartPanelLayers]
+        [chartModelingActive, chartDisplayRows, loadedRows, serverSide, visibleLeafColumns, chartPanelType, chartPanelOrientation, chartPanelHierarchyLevel, rowFields.length, chartPanelRowLimit, chartPanelColumnLimit, rowFields, colFields, chartPanelSortMode, chartPanelLayers]
     );
     const overlayChartData = chartPaneDataById[TABLE_OVERLAY_CHART_PANE_ID] || null;
     const activeChartPanelModel = useMemo(() => {
@@ -5679,6 +8522,7 @@ export default function DashTanstackPivot(props) {
         visibleLeafColumns,
     ]);
     const chartCanvasPaneModels = useMemo(() => {
+        if (chartCanvasPanes.length === 0) return {};
         const nextModels = {};
         chartCanvasPanes.forEach((pane) => {
             if (!pane || !pane.id) return;
@@ -6257,6 +9101,145 @@ export default function DashTanstackPivot(props) {
         chartPanelType,
         liveChartStateFingerprint,
     ]);
+
+    useEffect(() => {
+        if (!runtimeResponse || typeof runtimeResponse !== 'object') return;
+        recordProfilerResponse(runtimeResponse);
+        const payload = runtimeResponse.payload && typeof runtimeResponse.payload === 'object'
+            ? runtimeResponse.payload
+            : {};
+
+        if ((runtimeResponse.kind === 'data' || runtimeResponse.kind === 'update' || runtimeResponse.kind === 'transaction') && runtimeResponse.status === 'data') {
+            finalizeTransactionHistoryResponse(runtimeResponse, payload);
+            reconcileOptimisticCellValuesWithPayload(payload);
+            pendingDataProfilerCommitRef.current = {
+                requestId: runtimeResponse.requestId || null,
+                dataVersion: coerceTransportNumber(payload.dataVersion, null),
+                rowCount: coerceTransportNumber(payload.rowCount, null),
+            };
+            setTransportDataState((previousState) => normalizeRuntimeDataEnvelope(payload, previousState));
+            return;
+        }
+
+        if (runtimeResponse.kind === 'transaction' && runtimeResponse.status === 'patched') {
+            const patchPayload = payload.patch && typeof payload.patch === 'object'
+                ? payload.patch
+                : {};
+            finalizeTransactionHistoryResponse(runtimeResponse, payload);
+            reconcileOptimisticCellValuesWithPayload({ data: patchPayload.rows || [] });
+            pendingDataProfilerCommitRef.current = {
+                requestId: runtimeResponse.requestId || null,
+                dataVersion: coerceTransportNumber(payload.dataVersion, null),
+                rowCount: coerceTransportNumber(payload.rowCount, null),
+            };
+            setTransportDataState((previousState) => applyRuntimePatchEnvelope({
+                ...patchPayload,
+                dataOffset: payload.dataOffset,
+                dataVersion: payload.dataVersion,
+                rowCount: payload.rowCount,
+                columns: payload.columns,
+            }, previousState));
+            if (payload.transaction && payload.transaction.deferredViewportRefresh) {
+                scheduleSilentViewportRefresh();
+            }
+            return;
+        }
+
+        if (runtimeResponse.kind === 'transaction' && runtimeResponse.status === 'transaction_applied') {
+            finalizeTransactionHistoryResponse(runtimeResponse, payload);
+            if (profilingEnabledRef.current && runtimeResponse.requestId && pivotProfilerRef.current) {
+                pivotProfilerRef.current.resolve({
+                    requestId: runtimeResponse.requestId,
+                    componentId: profilerComponentIdRef.current,
+                    kind: 'transaction',
+                    status: runtimeResponse.status,
+                });
+            }
+            return;
+        }
+
+        if (runtimeResponse.kind === 'filter_options' && runtimeResponse.status === 'ok') {
+            const columnId = payload.columnId || payload.column_id;
+            if (!columnId) return;
+            setTransportFilterOptionsState((previousState) => ({
+                ...(previousState || {}),
+                [columnId]: Array.isArray(payload.options) ? payload.options : [],
+            }));
+            setEditorOptionsLoadingState((previousState) => ({
+                ...previousState,
+                [columnId]: false,
+            }));
+            emitEditLifecycleEvent({
+                kind: 'editor_options_loaded',
+                sourceColumnId: columnId,
+                optionCount: Array.isArray(payload.options) ? payload.options.length : 0,
+            });
+            if (profilingEnabledRef.current && runtimeResponse.requestId && pivotProfilerRef.current) {
+                pivotProfilerRef.current.resolve({
+                    requestId: runtimeResponse.requestId,
+                    componentId: profilerComponentIdRef.current,
+                    kind: 'filter_options',
+                    status: runtimeResponse.status,
+                });
+            }
+            return;
+        }
+        if (runtimeResponse.kind === 'filter_options' && runtimeResponse.status === 'error') {
+            const columnId = payload.columnId || payload.column_id;
+            if (columnId) {
+                setEditorOptionsLoadingState((previousState) => ({
+                    ...previousState,
+                    [columnId]: false,
+                }));
+            }
+            return;
+        }
+
+        if (runtimeResponse.kind === 'chart') {
+            if (runtimeResponse.status === 'chart_data') {
+                setTransportChartDataState(payload);
+                if (profilingEnabledRef.current && runtimeResponse.requestId && pivotProfilerRef.current) {
+                    pivotProfilerRef.current.resolve({
+                        requestId: runtimeResponse.requestId,
+                        componentId: profilerComponentIdRef.current,
+                        kind: 'chart',
+                        status: runtimeResponse.status,
+                    });
+                }
+                return;
+            }
+            if (runtimeResponse.status === 'error') {
+                activeChartRequestRef.current = null;
+                console.error('Chart request failed:', runtimeResponse.message || runtimeResponse);
+                if (profilingEnabledRef.current && runtimeResponse.requestId && pivotProfilerRef.current) {
+                    pivotProfilerRef.current.resolve({
+                        requestId: runtimeResponse.requestId,
+                        componentId: profilerComponentIdRef.current,
+                        kind: 'chart',
+                        status: runtimeResponse.status,
+                    });
+                }
+            }
+            return;
+        }
+        if (runtimeResponse.status === 'stale' || runtimeResponse.status === 'error') {
+            clearPendingTransactionHistoryRequest(runtimeResponse, true);
+        }
+        if (
+            profilingEnabledRef.current
+            && runtimeResponse.requestId
+            && pivotProfilerRef.current
+            && (runtimeResponse.status === 'stale' || runtimeResponse.status === 'error')
+        ) {
+            pivotProfilerRef.current.resolve({
+                requestId: runtimeResponse.requestId,
+                componentId: profilerComponentIdRef.current,
+                kind: runtimeResponse.kind || 'data',
+                status: runtimeResponse.status,
+            });
+        }
+    }, [clearPendingTransactionHistoryRequest, emitEditLifecycleEvent, finalizeTransactionHistoryResponse, reconcileOptimisticCellValuesWithPayload, recordProfilerResponse, runtimeResponse]);
+
     useEffect(() => {
         if (!chartData || typeof chartData !== 'object') return;
         const paneId = chartData.paneId || TABLE_OVERLAY_CHART_PANE_ID;
@@ -6278,6 +9261,72 @@ export default function DashTanstackPivot(props) {
             activeChartRequestRef.current = null;
         }
     }, [chartData]);
+
+    useLayoutEffect(() => {
+        const pendingCommit = pendingDataProfilerCommitRef.current;
+        if (!pendingCommit || !pendingCommit.requestId || !profilingEnabledRef.current || !pivotProfilerRef.current) {
+            return undefined;
+        }
+        if (
+            Number.isFinite(pendingCommit.dataVersion)
+            && Number.isFinite(Number(dataVersion))
+            && Number(dataVersion) < pendingCommit.dataVersion
+        ) {
+            return undefined;
+        }
+
+        pendingDataProfilerCommitRef.current = null;
+        if (pendingDataProfilerFrameRef.current !== null && typeof window !== 'undefined' && typeof window.cancelAnimationFrame === 'function') {
+            window.cancelAnimationFrame(pendingDataProfilerFrameRef.current);
+            pendingDataProfilerFrameRef.current = null;
+        }
+
+        const finalizeCommit = () => {
+            pivotProfilerRef.current.resolve({
+                requestId: pendingCommit.requestId,
+                componentId: profilerComponentIdRef.current,
+                kind: 'data',
+                status: 'data',
+                committedAt: Date.now(),
+                meta: {
+                    dataVersion: Number(dataVersion),
+                    rowCount,
+                    dataOffset,
+                    columnsCount: Array.isArray(responseColumns) ? responseColumns.length : 0,
+                },
+            });
+            pendingDataProfilerFrameRef.current = null;
+        };
+
+        if (typeof window !== 'undefined' && typeof window.requestAnimationFrame === 'function') {
+            pendingDataProfilerFrameRef.current = window.requestAnimationFrame(finalizeCommit);
+            return () => {
+                if (pendingDataProfilerFrameRef.current !== null && typeof window.cancelAnimationFrame === 'function') {
+                    window.cancelAnimationFrame(pendingDataProfilerFrameRef.current);
+                    pendingDataProfilerFrameRef.current = null;
+                }
+            };
+        }
+
+        finalizeCommit();
+        return undefined;
+    }, [dataOffset, dataVersion, responseColumns, rowCount]);
+
+    useEffect(() => () => {
+        if (pendingDataProfilerFrameRef.current !== null && typeof window !== 'undefined' && typeof window.cancelAnimationFrame === 'function') {
+            window.cancelAnimationFrame(pendingDataProfilerFrameRef.current);
+            pendingDataProfilerFrameRef.current = null;
+        }
+    }, []);
+
+    const treeHasDefaultExpansion = useMemo(
+        () => viewMode === 'tree' && hasTreeDefaultExpansionConfig(treeConfig),
+        [treeConfig, viewMode]
+    );
+
+    // Detail cache, surface sync, and reset effects provided by useDetailDrillThrough hook
+
+    // Detail response handling effect provided by useDetailDrillThrough hook
 
     useEffect(() => {
         if (
@@ -6303,23 +9352,22 @@ export default function DashTanstackPivot(props) {
             paneId: nextCandidate.paneId,
             signature: nextCandidate.signature,
         };
-        setPropsRef.current({
-            chartRequest: {
-                ...nextCandidate.request,
-                pane_id: nextCandidate.paneId,
-                request_signature: nextCandidate.signature,
-                version: chartRequestSeqRef.current,
-                window_seq: chartRequestSeqRef.current,
-                state_epoch: stateEpoch,
-                session_id: sessionIdRef.current,
-                client_instance: clientInstanceRef.current,
-                abort_generation: abortGeneration,
-                intent: 'chart',
-            },
+        emitRuntimeRequest('chart', {
+            ...nextCandidate.request,
+            pane_id: nextCandidate.paneId,
+            request_signature: nextCandidate.signature,
+            version: chartRequestSeqRef.current,
+            window_seq: chartRequestSeqRef.current,
+            state_epoch: stateEpoch,
+            session_id: sessionIdRef.current,
+            client_instance: clientInstanceRef.current,
+            abort_generation: abortGeneration,
+            intent: 'chart',
         });
     }, [
         abortGeneration,
         chartRequestCandidates,
+        emitRuntimeRequest,
         needsColSchema,
         serverSide,
         stateEpoch,
@@ -6336,10 +9384,24 @@ export default function DashTanstackPivot(props) {
         totalLayoutWidth,
         leftCols,
         rightCols,
-        centerCols
+        centerCols,
+        preciseVisibleColRange,
     } = useColumnVirtualizer({
         parentRef,
-        table
+        table,
+        serverSide,
+        totalCenterCols,
+        columnOverscan: normalizedPerformanceConfig.columnOverscan,
+        stateEpoch,
+        estimateColumnWidth: defaultColumnWidths.schemaFallback,
+        onHorizontalScrollMetrics: handleHorizontalScrollMetrics,
+        onPreciseVisibleColRange: (nextRange) => syncPreciseVisibleColRange(nextRange, {
+            preserveWiderRange: chartPanelOpen || chartCanvasPanes.length > 0,
+        }),
+        // Column-structure deps for memoized leaf-column lists
+        columnVisibility,
+        columnPinning,
+        columns,
     });
     columnVirtualizerRef.current = columnVirtualizer;
     pinnedColumnMetaRef.current = {
@@ -6348,66 +9410,27 @@ export default function DashTanstackPivot(props) {
         rightCount: rightCols.length
     };
 
-    useLayoutEffect(() => {
-        if (!parentRef.current || !columnVirtualizer) return;
-        // Keep horizontal virtualization in sync after pivot group collapse/expand.
-        // Without this clamp, right-edge stale indices can point past center columns
-        // and render blank numeric cells.
-        const scrollEl = parentRef.current;
-        const maxScrollLeft = Math.max(0, scrollEl.scrollWidth - scrollEl.clientWidth);
-        if (scrollEl.scrollLeft > maxScrollLeft) {
-            // Clamp the DOM scroll position.
-            scrollEl.scrollLeft = maxScrollLeft;
-            // Synchronously update the virtualizer's internal scrollOffset BEFORE
-            // calling measure(). measure() calls notify() which triggers a React
-            // re-render; if scrollOffset is still the old out-of-bounds value at
-            // that point the re-render will show only the last column (blank
-            // numbers in all others) until the async DOM scroll event fires.
-            // Direct mutation is safe here — scrollOffset is a plain instance
-            // property that getScrollOffset() reads directly.
-            columnVirtualizer.scrollOffset = maxScrollLeft;
-        }
-        columnVirtualizer.measure();
-    }, [columnVirtualizer, centerCols.length, totalLayoutWidth]);
-
-    // Memoized lookup structures for the header render path.
+    // Memoized lookup structure for the header render path.
     // centerColIndexMap: O(1) id→index lookup; only rebuilt when the column list changes.
-    // visibleLeafIndexSet: O(1) membership check; only rebuilt when the virtual window shifts.
     const centerColIndexMap = useMemo(
         () => new Map(centerCols.map((c, i) => [c.id, i])),
         [centerCols]
     );
-    const visibleLeafIndexSet = useMemo(
-        () => new Set(virtualCenterCols.map(v => v.index)),
-        [virtualCenterCols]
-    );
 
     // O(1) colId → visible-leaf-index map for renderCell; rebuilt only when column list changes.
     const visibleLeafColIndexMap = useMemo(
-        () => new Map(table.getVisibleLeafColumns().map((c, i) => [c.id, i])),
-        // eslint-disable-next-line react-hooks/exhaustive-deps
-        [table.getVisibleLeafColumns()]
+        () => new Map(visibleLeafColumns.map((c, i) => [c.id, i])),
+        [visibleLeafColumns]
     );
 
-    // Sync the column virtualizer's visible range into state so useServerSideRowModel
-    // can detect column window changes and trigger re-fetches.
-    useEffect(() => {
-        if (virtualCenterCols.length === 0) return;
-        const newStart = virtualCenterCols[0].index;
-        const newEnd = virtualCenterCols[virtualCenterCols.length - 1].index;
-        setVisibleColRange(prev => {
-            // Opening or resizing the chart panel narrows the table viewport, which
-            // can shrink the virtual end index even though the user did not
-            // horizontally navigate. Preserve the wider loaded column window so
-            // server-side chart data and already-loaded cell values do not vanish
-            // simply because the panel consumes layout width.
-            if ((chartPanelOpen || chartCanvasPanes.length > 0) && newStart === prev.start && newEnd < prev.end) {
-                return prev;
-            }
-            if (prev.start === newStart && prev.end === newEnd) return prev;
-            return { start: newStart, end: newEnd };
-        });
-    }, [virtualCenterCols, chartPanelOpen, chartCanvasPanes.length]);
+    // Pre-compute header groups so PivotTableBody doesn't need the `table` instance
+    // (whose identity changes every render, defeating React.memo).
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    const leftHeaderGroups = useMemo(() => table.getLeftHeaderGroups(), [columns, columnVisibility, columnPinning]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    const rightHeaderGroups = useMemo(() => table.getRightHeaderGroups(), [columns, columnVisibility, columnPinning]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    const centerHeaderGroups = useMemo(() => table.getCenterHeaderGroups(), [columns, columnVisibility, columnPinning]);
 
     useEffect(() => {
         if (!serverSide || virtualCenterCols.length === 0) return;
@@ -6415,9 +9438,9 @@ export default function DashTanstackPivot(props) {
             scrollLeft: parentRef.current ? parentRef.current.scrollLeft : null,
             visibleColRange,
             virtualRange: {
-                start: virtualCenterCols[0].index,
-                end: virtualCenterCols[virtualCenterCols.length - 1].index,
-                count: virtualCenterCols.length,
+                start: preciseVisibleColRange.start,
+                end: preciseVisibleColRange.end,
+                count: Math.max(0, preciseVisibleColRange.end - preciseVisibleColRange.start + 1),
             },
             requestedColRange: {
                 start: colRequestStart,
@@ -6435,6 +9458,8 @@ export default function DashTanstackPivot(props) {
     }, [
         serverSide,
         virtualCenterCols,
+        preciseVisibleColRange.start,
+        preciseVisibleColRange.end,
         visibleColRange,
         colRequestStart,
         colRequestEnd,
@@ -6527,17 +9552,17 @@ export default function DashTanstackPivot(props) {
                     n.splice(targetIdx, 0, moved); 
                     setList(n);
                 };
-                if (srcZone==='rows') move(rowFields, setRowFields);
-                if (srcZone==='cols') move(colFields, setColFields);
-                if (srcZone==='vals') move(valConfigs, setValConfigs);
+                if (srcZone==='rows') move(rowFields, (next) => setRowFieldsWithHistory(next, 'layout:header-drop'));
+                if (srcZone==='cols') move(colFields, (next) => setColFieldsWithHistory(next, 'layout:header-drop'));
+                if (srcZone==='vals') move(valConfigs, (next) => setValConfigsWithHistory(next, 'layout:header-drop'));
              }
         } else {
             // Pivoting (Moving between zones)
             const targetIdx = getFieldIndex(targetColId, targetZone);
             // Remove from source
-            if (srcZone==='rows') setRowFields(p=>p.filter(f=>f!==fieldName));
-            if (srcZone==='cols') setColFields(p=>p.filter(f=>f!==fieldName));
-            if (srcZone==='vals') setValConfigs(p=>p.filter(f=>f.field!==fieldName));
+            if (srcZone==='rows') setRowFieldsWithHistory((p) => p.filter(f => f !== fieldName), 'layout:header-drop');
+            if (srcZone==='cols') setColFieldsWithHistory((p) => p.filter(f => f !== fieldName), 'layout:header-drop');
+            if (srcZone==='vals') setValConfigsWithHistory((p) => p.filter(f => f.field !== fieldName), 'layout:header-drop');
 
             // Insert into target
             const insert = (list, setList, item) => {
@@ -6545,9 +9570,9 @@ export default function DashTanstackPivot(props) {
                 n.splice(targetIdx, 0, item);
                 setList(n);
             };
-            if (targetZone==='rows') insert(rowFields, setRowFields, fieldName);
-            if (targetZone==='cols') insert(colFields, setColFields, fieldName);
-            if (targetZone==='vals') insert(valConfigs, setValConfigs, {field: fieldName, agg:'sum'});
+            if (targetZone==='rows') insert(rowFields, (next) => setRowFieldsWithHistory(next, 'layout:header-drop'), fieldName);
+            if (targetZone==='cols') insert(colFields, (next) => setColFieldsWithHistory(next, 'layout:header-drop'), fieldName);
+            if (targetZone==='vals') insert(valConfigs, (next) => setValConfigsWithHistory(next, 'layout:header-drop'), {field: fieldName, agg:'sum'});
         }
         setDragItem(null);
     };
@@ -6583,22 +9608,25 @@ export default function DashTanstackPivot(props) {
             return;
         }
         if (srcZone !== targetZone) {
-            if (srcZone==='rows') setRowFields(p=>p.filter(f=>f!==fieldName));
-            if (srcZone==='cols') setColFields(p=>p.filter(f=>f!==fieldName));
-            if (srcZone==='vals') setValConfigs(p=>p.filter((_,i)=>i!==srcIdx));
-            if (targetZone==='rows') setRowFields(p=>p.includes(fieldName) ? p : insertItem(p, targetIdx, fieldName));
-            if (targetZone==='cols') setColFields(p=>p.includes(fieldName) ? p : insertItem(p, targetIdx, fieldName));
-            if (targetZone==='vals') setValConfigs(p=>insertItem(p, targetIdx, draggedValueConfig || {field: fieldName, agg:'sum'}));
-            if (targetZone==='filter' && !filters.hasOwnProperty(fieldName)) setFilters(p=>({...p, [fieldName]: ''}));
+            if (srcZone==='rows') setRowFieldsWithHistory((p) => p.filter(f => f !== fieldName), 'layout:zone-drop');
+            if (srcZone==='cols') setColFieldsWithHistory((p) => p.filter(f => f !== fieldName), 'layout:zone-drop');
+            if (srcZone==='vals') setValConfigsWithHistory((p) => p.filter((_, i) => i !== srcIdx), 'layout:zone-drop');
+            if (targetZone==='rows') setRowFieldsWithHistory((p) => (p.includes(fieldName) ? p : insertItem(p, targetIdx, fieldName)), 'layout:zone-drop');
+            if (targetZone==='cols') setColFieldsWithHistory((p) => (p.includes(fieldName) ? p : insertItem(p, targetIdx, fieldName)), 'layout:zone-drop');
+            if (targetZone==='vals') setValConfigsWithHistory((p) => insertItem(p, targetIdx, draggedValueConfig || {field: fieldName, agg:'sum'}), 'layout:zone-drop');
+            if (targetZone==='filter' && !filters.hasOwnProperty(fieldName)) {
+                requestLayoutHistoryCapture('layout:zone-drop');
+                setFilters(p => ({ ...p, [fieldName]: '' }));
+            }
         } else {
             const move = (list, setList) => {
                 const n = [...list]; const [moved] = n.splice(srcIdx, 1);
                 let ins = targetIdx; if (srcIdx < targetIdx) ins -= 1;
                 n.splice(ins, 0, moved); setList(n);
             };
-            if (targetZone==='rows') move(rowFields, setRowFields);
-            if (targetZone==='cols') move(colFields, setColFields);
-            if (targetZone==='vals') move(valConfigs, setValConfigs);
+            if (targetZone==='rows') move(rowFields, (next) => setRowFieldsWithHistory(next, 'layout:zone-drop'));
+            if (targetZone==='cols') move(colFields, (next) => setColFieldsWithHistory(next, 'layout:zone-drop'));
+            if (targetZone==='vals') move(valConfigs, (next) => setValConfigsWithHistory(next, 'layout:zone-drop'));
         }
         setDragItem(null); setDropLine(null);
     };
@@ -6607,199 +9635,10 @@ export default function DashTanstackPivot(props) {
 
 
 
-    const buildExportAoa = (allRows) => {
-        // Use table.getHeaderGroups() so we get the real multi-level header structure
-        // with correct parent/child relationships and colSpans set by TanStack.
-        const headerGroups = table.getHeaderGroups();
+    // buildExportAoa and exportPivot extracted to ../utils/exportUtils.js
+    const exportPivot = useCallback(() => exportPivotTable(table, rowCount), [table, rowCount]);
 
-        // Identify leaf (data) columns from the last header group, excluding
-        // internal/UI-only columns that should not appear in the export.
-        const SKIP_COL_IDS = new Set(['__row_number__']);
-        const lastHeaderGroup = headerGroups[headerGroups.length - 1];
-        const leafHeaders = (lastHeaderGroup && lastHeaderGroup.headers != null ? lastHeaderGroup.headers : [])
-            .filter(h => !SKIP_COL_IDS.has(h.column.id) && !h.isPlaceholder);
-
-        const leafCount = leafHeaders.length;
-
-        // Build one AOA row per header group.
-        // For each header row, we fill a flat array of length leafCount.
-        // A header with colSpan > 1 occupies that many leaf slots; placeholders fill gaps.
-        const headerAoaRows = [];
-        const allMerges = [];
-
-        headerGroups.forEach((hg, rowIdx) => {
-            const aoaRow = new Array(leafCount).fill('');
-            let leafPos = 0;
-            hg.headers.forEach(h => {
-                if (SKIP_COL_IDS.has(h.column.id)) return;
-                const span = (h.colSpan != null ? h.colSpan : 1);
-                if (!h.isPlaceholder) {
-                    // Resolve header text — prefer columnDef.header string, fall back to id
-                    const colDef = h.column.columnDef;
-                    let headerText = '';
-                    if (typeof colDef.header === 'string') {
-                        headerText = colDef.header;
-                    } else if (typeof h.column.id === 'string') {
-                        // Strip group_ prefix and internal path separators for cleaner output
-                        headerText = h.column.id
-                            .replace(/^group_/, '')
-                            .replace(/\|\|\|/g, ' > ');
-                    }
-                    aoaRow[leafPos] = headerText;
-                    if (span > 1 && rowIdx < headerGroups.length - 1) {
-                        // Merge across the span; row 0-indexed in the final aoa
-                        allMerges.push({ s: { r: rowIdx, c: leafPos }, e: { r: rowIdx, c: leafPos + span - 1 } });
-                    }
-                }
-                leafPos += span;
-            });
-            headerAoaRows.push(aoaRow);
-        });
-
-        // If there is only one header group and it looks identical to itself
-        // (no real parent grouping), just keep one header row to avoid duplication.
-        const dedupedHeaderRows = headerAoaRows.length > 1
-            ? headerAoaRows
-            : headerAoaRows;  // keep as-is for single group (flat table)
-
-        // Build data rows — include ALL rows (totals + data rows)
-        // Track max content width per column for auto-sizing.
-        const colWidths = leafHeaders.map(h => {
-            const colDef = h.column.columnDef;
-            return typeof colDef.header === 'string' ? colDef.header.length : (h.column.id != null ? h.column.id : '').length;
-        });
-
-        const dataRows = allRows.map(r => {
-            return leafHeaders.map((h, ci) => {
-                const col = h.column;
-                const colId = col.id;
-                const colDef = col.columnDef;
-
-                let val;
-                if (colId === 'hierarchy') {
-                    // Hierarchy column: indent using spaces to reflect depth
-                    const depth = (r.original && r.original.depth != null ? r.original.depth : (r.depth != null ? r.depth : 0));
-                    const label = (r.original && r.original._isTotal) ? ((r.original && r.original._id != null) ? r.original._id : 'Total') : ((r.original && r.original._id != null) ? r.original._id : '');
-                    val = '\u00A0\u00A0'.repeat(depth) + label;  // non-breaking spaces for Excel visibility
-                } else if (typeof colDef.accessorFn === 'function') {
-                    // Use accessorFn to get the value (same as TanStack does internally)
-                    val = colDef.accessorFn(r.original, r.index);
-                } else if (colDef.accessorKey) {
-                    val = (r.original && r.original[colDef.accessorKey]);
-                } else {
-                    val = '';
-                }
-
-                // Normalize: undefined/null → empty string; keep numbers as numbers
-                if (val === undefined || val === null) val = '';
-
-                // Track max width for column auto-sizing
-                const cellLen = String(val).length;
-                if (cellLen > colWidths[ci]) colWidths[ci] = cellLen;
-
-                return val;
-            });
-        });
-
-        // Build ws['!cols'] — cap at 60 chars to avoid overly wide columns
-        const wsCols = colWidths.map(w => ({ wch: Math.min(Math.max(w + 2, 8), 60) }));
-
-        return {
-            aoa: [...dedupedHeaderRows, ...dataRows],
-            merges: allMerges,
-            wsCols,
-            headerRowCount: dedupedHeaderRows.length,
-        };
-    };
-
-    const fetchDrillData = useCallback(async (rowPath, page = 0, sortCol = null, sortDir = 'asc', filterText = '', pathFields = null) => {
-        const effectivePathFields = Array.isArray(pathFields) && pathFields.length > 0
-            ? pathFields
-            : rowFields;
-        const params = new URLSearchParams({
-            table: tableName,
-            row_path: rowPath,
-            row_fields: effectivePathFields.join(','),
-            page: String(page),
-            page_size: '100',
-        });
-        if (sortCol) { params.set('sort_col', sortCol); params.set('sort_dir', sortDir); }
-        if (filterText) params.set('filter', filterText);
-
-        setDrillModal(prev => ({
-            ...(prev || { path: rowPath, pathFields: effectivePathFields, rows: [], page: 0, totalRows: 0, sortCol, sortDir, filterText }),
-            loading: true,
-            pathFields: effectivePathFields,
-        }));
-        try {
-            const resp = await fetch(`${drillEndpoint}?${params.toString()}`);
-            if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
-            const json = await resp.json();
-            setDrillModal({ loading: false, path: rowPath, pathFields: effectivePathFields, rows: json.rows || [], page: json.page || 0, totalRows: json.total_rows || 0, sortCol, sortDir, filterText });
-        } catch (err) {
-            console.error('Drill-through fetch failed:', err);
-            setDrillModal(null);
-        }
-    }, [tableName, rowFields, drillEndpoint]);
-
-    const handleCellDrillThrough = useCallback((row, colId) => {
-        if (!row || !row.original) return;
-        const rowPath = row.original._path;
-        if (!rowPath || rowPath === '__grand_total__') return;  // skip total rows
-        fetchDrillData(rowPath, 0, null, 'asc', '', row.original._pathFields);
-    }, [fetchDrillData]);
-
-    const exportPivot = useCallback(() => {
-        const XLSX_LIMIT = 500000;
-        const allRows = table.getRowModel().rows;  // full row model, not just virtual window
-
-        const isCSV = (rowCount || 0) > XLSX_LIMIT;
-
-        if (isCSV) {
-            // CSV path — flat, no merge support needed
-            // Use TanStack visible leaf columns so we match what's shown on screen,
-            // and skip internal UI-only columns.
-            const SKIP_CSV = new Set(['__row_number__']);
-            const leafCols = table.getVisibleLeafColumns().filter(c => !SKIP_CSV.has(c.id));
-
-            const escape = (v) => {
-                if (v == null) return '';
-                const s = String(v);
-                return (s.includes(',') || s.includes('"') || s.includes('\n'))
-                    ? `"${s.replace(/"/g, '""')}"` : s;
-            };
-            const header = leafCols.map(c => {
-                const h = (c.columnDef && c.columnDef.header);
-                return escape(typeof h === 'string' ? h : (c.id != null ? c.id : ''));
-            }).join(',');
-            const lines = allRows.map(r =>
-                leafCols.map(c => {
-                    if (c.id === 'hierarchy') {
-                        const depth = (r.original && r.original.depth != null ? r.original.depth : (r.depth != null ? r.depth : 0));
-                        return escape('  '.repeat(depth) + (r.original && r.original._id != null ? r.original._id : ''));
-                    }
-                    const val = typeof (c.columnDef && c.columnDef.accessorFn) === 'function'
-                        ? c.columnDef.accessorFn(r.original, r.index)
-                        : ((c.columnDef && c.columnDef.accessorKey) ? (r.original && r.original[c.columnDef.accessorKey]) : '');
-                    return escape(val != null ? val : '');
-                }).join(',')
-            );
-            const blob = new Blob([[header, ...lines].join('\n')], { type: 'text/csv;charset=utf-8;' });
-            saveAs(blob, 'pivot.csv');
-        } else {
-            // XLSX path — multi-level headers + hierarchy indent
-            const { aoa, merges, wsCols } = buildExportAoa(allRows);
-            const ws = XLSX.utils.aoa_to_sheet(aoa);
-            if (merges.length > 0) ws['!merges'] = merges;
-            if (wsCols && wsCols.length > 0) ws['!cols'] = wsCols;
-            const wb = XLSX.utils.book_new();
-            XLSX.utils.book_append_sheet(wb, ws, 'Pivot');
-            const buf = XLSX.write(wb, { bookType: 'xlsx', type: 'array' });
-            saveAs(new Blob([buf], { type: 'application/octet-stream' }), 'pivot.xlsx');
-        }
-    }, [rows, columns, rowCount, table]);
-
-    const { renderCell, renderHeaderCell } = useRenderHelpers({
+    const { renderCell, renderVirtualColumnCell, renderHeaderCell } = useRenderHelpers({
         // renderCell dependencies
         serverSide,
         selectedCells,
@@ -6818,7 +9657,7 @@ export default function DashTanstackPivot(props) {
         getConditionalStyle,
         // renderHeaderCell dependencies (synchronous / render-time reads)
         rowHeight,
-        table,
+        tableRef,
         leftCols,
         centerCols,
         rightCols,
@@ -6827,9 +9666,9 @@ export default function DashTanstackPivot(props) {
         handleHeaderContextMenu,
         autoSizeColumn,
         autoSizeBounds,
-        hoveredHeaderId,
+        hoveredHeaderIdRef,
         setHoveredHeaderId,
-        focusedHeaderId,
+        focusedHeaderIdRef,
         setFocusedHeaderId,
         onDragStart,
         handleFilterClick,
@@ -6844,6 +9683,9 @@ export default function DashTanstackPivot(props) {
         dataBarsColumns,
         colorScaleStats,
         cellFormatRules,
+        resolveEditedCellMarker,
+        resolveCellDisplayValue: resolveDisplayedCellValue,
+        editedCellEpoch,
     });
 
     const srOnly = {
@@ -6864,8 +9706,537 @@ export default function DashTanstackPivot(props) {
         outline: `2px solid ${theme.primary}`,
         outlineOffset: '2px'
     };
+    const handleClearStatusSelection = useCallback(() => {
+        setSelectedCells({});
+        setLastSelected(null);
+    }, [setLastSelected, setSelectedCells]);
+
+    const handleClearStatusFilters = useCallback(() => {
+        setFilters({});
+    }, [setFilters]);
+
+    const handleRefreshStatusViewport = useCallback(() => {
+        if (!serverSide || typeof requestVisibleViewportRefresh !== 'function') return;
+        requestVisibleViewportRefresh();
+    }, [requestVisibleViewportRefresh, serverSide]);
+
+    const rowEditStatusSummary = useMemo(() => {
+        const sessions = Object.values(rowEditSessions || {});
+        return sessions.reduce((summary, session) => {
+            if (!session || session.active !== true) return summary;
+            summary.activeRowCount += 1;
+            if (session.status === 'saving') summary.savingRowCount += 1;
+            const dirtyFieldCount = Object.keys(session.drafts || {}).length;
+            const invalidFieldCount = Object.keys(session.errors || {}).length;
+            if (dirtyFieldCount > 0) {
+                summary.dirtyRowCount += 1;
+                summary.dirtyFieldCount += dirtyFieldCount;
+            }
+            if (invalidFieldCount > 0) {
+                summary.invalidRowCount += 1;
+                summary.invalidFieldCount += invalidFieldCount;
+            }
+            return summary;
+        }, {
+            activeRowCount: 0,
+            savingRowCount: 0,
+            dirtyRowCount: 0,
+            dirtyFieldCount: 0,
+            invalidRowCount: 0,
+            invalidFieldCount: 0,
+        });
+    }, [rowEditSessions]);
+
+    // Build edited cells list from current selection for the EditSidePanel
+    const editPanelCells = useMemo(() => {
+        const cells = [];
+        const selKeys = Object.keys(selectedCells || {});
+        if (selKeys.length === 0) return cells;
+        for (const selKey of selKeys) {
+            const sepIdx = selKey.lastIndexOf(':');
+            if (sepIdx < 0) continue;
+            const rowId = selKey.slice(0, sepIdx);
+            const colId = selKey.slice(sepIdx + 1);
+            const marker = resolveEditedCellMarker(rowId, colId);
+            if (!marker) continue;
+            const key = getOptimisticCellKey(rowId, colId);
+            const origEntry = key ? comparisonCellOriginalValuesRef.current.get(key) : null;
+            cells.push({
+                rowId,
+                colId,
+                direct: marker.direct,
+                propagated: marker.propagated,
+                originalValue: origEntry ? origEntry.value : undefined,
+                currentValue: selectedCells[selKey],
+            });
+        }
+        return cells;
+    }, [selectedCells, editedCellEpoch, comparisonCellEpoch, resolveEditedCellMarker, getOptimisticCellKey]);
+
+    // Auto-open panel when selected cells include edited ones (only if not already dismissed)
+    useEffect(() => {
+        if (editPanelCells.length > 0) setEditPanelOpen(true);
+    }, [editPanelCells.length]);
+
+    const handleRevertCell = useCallback((rowId, colId) => {
+        const key = getOptimisticCellKey(rowId, colId);
+        if (!key) return;
+        const originalEntry = comparisonCellOriginalValuesRef.current.get(key);
+        const originalValue = originalEntry ? originalEntry.value : undefined;
+        // Clear client-side edit tracking
+        optimisticCellValuesRef.current.delete(key);
+        editedCellMarkersRef.current.delete(key);
+        comparisonCellCountsRef.current.delete(key);
+        comparisonCellOriginalValuesRef.current.delete(key);
+        bumpEditedCellEpoch();
+        bumpComparisonCellEpoch();
+        syncComparisonValueState();
+        // Send original value back to the server so the data actually reverts
+        if (serverSide && originalValue !== undefined && setPropsRef.current) {
+            const revertUpdate = { rowId, colId, value: originalValue };
+            dispatchTransactionRequest({
+                update: [revertUpdate],
+                refreshMode: supportsPatchTransactionRefresh ? 'patch' : 'smart',
+            }, 'revert');
+        } else if (!serverSide && originalValue !== undefined && setPropsRef.current) {
+            setPropsRef.current({ cellUpdates: [{ rowId, colId, value: originalValue }] });
+        }
+    }, [getOptimisticCellKey, bumpEditedCellEpoch, bumpComparisonCellEpoch, syncComparisonValueState, serverSide, dispatchTransactionRequest, supportsPatchTransactionRefresh]);
+
+    const handleConfirmPropagation = useCallback(() => {
+        const pending = pendingPropagationUpdatesRef.current;
+        if (!pending || !pending.updates || pending.updates.length === 0) return;
+        const formula = propagationMethodUI || 'equal';
+        lastPropagationFormulaRef.current = formula;
+        const preparedUpdates = pending.updates.map((update) => {
+            if (!isParentAggregatePropagationEdit(update, rowFields)) return update;
+            return { ...update, propagationStrategy: formula };
+        });
+        pendingPropagationUpdatesRef.current = null;
+        setPendingPropagationUpdates(null);
+        if (editValueDisplayMode === 'original') {
+            setEditValueDisplayMode('edited');
+        }
+        if (!serverSide) {
+            if (setPropsRef.current) setPropsRef.current({ cellUpdates: preparedUpdates });
+            return;
+        }
+        const comparisonPlan = buildComparisonValuePlan(preparedUpdates);
+        if (comparisonPlan) applyComparisonValuePlan(comparisonPlan, 'forward');
+        const dispatched = dispatchTransactionRequest({
+            update: preparedUpdates,
+            refreshMode: supportsPatchTransactionRefresh ? 'patch' : 'smart',
+        }, pending.source);
+        if (!dispatched || !dispatched.requestId) {
+            if (comparisonPlan) applyComparisonValuePlan(comparisonPlan, 'backward');
+            return;
+        }
+        captureOptimisticCellValues(preparedUpdates, dispatched.requestId);
+        const editedMarkerPlan = buildEditedCellMarkerPlan(preparedUpdates);
+        if (editedMarkerPlan) applyEditedCellMarkerPlan(editedMarkerPlan, 'forward');
+        pendingTransactionHistoryRef.current.set(dispatched.requestId, {
+            action: 'apply',
+            source: pending.source,
+            editedMarkerPlan,
+            comparisonPlan,
+            rowEditRowId: pending.meta && pending.meta.rowEditRowId ? String(pending.meta.rowEditRowId) : null,
+            dirtyColumns: pending.meta && Array.isArray(pending.meta.dirtyColumns) ? pending.meta.dirtyColumns : [],
+        });
+    }, [applyComparisonValuePlan, applyEditedCellMarkerPlan, buildComparisonValuePlan, buildEditedCellMarkerPlan, captureOptimisticCellValues, dispatchTransactionRequest, editValueDisplayMode, propagationMethodUI, rowFields, serverSide, setEditValueDisplayMode, supportsPatchTransactionRefresh]);
+
+    const handleCancelPropagation = useCallback(() => {
+        pendingPropagationUpdatesRef.current = null;
+        setPendingPropagationUpdates(null);
+    }, []);
+
+    const handlePropagationMethodChange = useCallback((method) => {
+        setPropagationMethodUI(method);
+    }, []);
+
+    const statusAccessoryModel = useMemo(() => ({
+        selection: {
+            selectedCells,
+        },
+        data: {
+            viewMode,
+            rowCount: statusRowCount,
+            visibleRowsCount: rows.length,
+            totalCenterColumns: totalCenterCols,
+            rowFieldCount: rowFields.length,
+            columnFieldCount: colFields.length,
+            measureCount: valConfigs.length,
+            sortingCount: Array.isArray(sorting) ? sorting.length : 0,
+            activeFilterCount: countActiveFilters(filters),
+            globalSearch: typeof (filters && filters.global) === 'string' ? filters.global.trim() : '',
+            columnAdvisory,
+        },
+        runtime: {
+            loading: isRequestPending,
+            serverSide,
+            loadedRowCount: serverSide ? loadedRows.length : rows.length,
+        },
+        editing: {
+            displayMode: editValueDisplayMode,
+            comparedValueCount: comparisonValueState.activeCount,
+            undoCount: transactionHistoryState.undoCount,
+            redoCount: transactionHistoryState.redoCount,
+            pending: transactionHistoryState.pending,
+            activeRowEditCount: rowEditStatusSummary.activeRowCount,
+            savingRowCount: rowEditStatusSummary.savingRowCount,
+            dirtyRowCount: rowEditStatusSummary.dirtyRowCount,
+            dirtyFieldCount: rowEditStatusSummary.dirtyFieldCount,
+            invalidRowCount: rowEditStatusSummary.invalidRowCount,
+            invalidFieldCount: rowEditStatusSummary.invalidFieldCount,
+            propagationLog: propagationLogRef.current,
+            propagationLogCount: propagationLogRef.current.length,
+        },
+        charts: {
+            definitionCount: managedChartDefinitions.length,
+            paneCount: chartCanvasPanes.length,
+            dockedPaneCount: chartCanvasPanes.filter((pane) => !pane.floating).length,
+            floatingPaneCount: chartCanvasPanes.filter((pane) => pane.floating).length,
+        },
+    }), [
+        chartCanvasPanes,
+        colFields.length,
+        columnAdvisory,
+        comparisonValueState.activeCount,
+        editValueDisplayMode,
+        filters,
+        isRequestPending,
+        loadedRows.length,
+        managedChartDefinitions.length,
+        rowEditStatusSummary,
+        rowFields.length,
+        rows.length,
+        serverSide,
+        sorting,
+        statusRowCount,
+        totalCenterCols,
+        transactionHistoryState.pending,
+        transactionHistoryState.redoCount,
+        transactionHistoryState.undoCount,
+        propagationLogEpoch,
+        valConfigs.length,
+        viewMode,
+        selectedCells,
+    ]);
+
+    const statusAccessoryActions = useMemo(() => ({
+        canClearSelection: Object.keys(selectedCells || {}).length > 0,
+        canClearFilters: countActiveFilters(filters) > 0,
+        canRefreshViewport: Boolean(serverSide && !isRequestPending && typeof requestVisibleViewportRefresh === 'function'),
+        canCreateSelectionChart: Object.keys(selectedCells || {}).length > 0,
+        canUndo: transactionHistoryState.undoCount > 0 && !transactionHistoryState.pending,
+        canRedo: transactionHistoryState.redoCount > 0 && !transactionHistoryState.pending,
+        canToggleOriginal: comparisonValueState.activeCount > 0,
+        canRevertAll: comparisonValueState.activeCount > 0 || editedCellMarkersRef.current.size > 0,
+        isShowingOriginal: editValueDisplayMode === 'original' && comparisonValueState.activeCount > 0,
+        onClearSelection: handleClearStatusSelection,
+        onClearFilters: handleClearStatusFilters,
+        onRefreshViewport: handleRefreshStatusViewport,
+        onCreateSelectionChart: () => openSelectionChart(),
+        onToggleOriginal: () => setEditValueDisplayMode((prev) => prev === 'original' ? 'edited' : 'original'),
+        onRevertAll: () => {
+            const revertUpdates = [];
+            comparisonCellOriginalValuesRef.current.forEach((entry) => {
+                if (!entry || entry.value === undefined) return;
+                revertUpdates.push({ rowId: entry.rowId, colId: entry.colId, value: entry.value });
+            });
+            clearAllOptimisticCellValues();
+            clearAllEditedCellMarkers();
+            clearAllComparisonValueState();
+            propagationLogRef.current = [];
+            setPropagationLogEpoch((prev) => prev + 1);
+            syncTransactionHistoryState();
+            if (revertUpdates.length > 0) {
+                if (serverSide) {
+                    dispatchTransactionRequest({
+                        update: revertUpdates,
+                        refreshMode: supportsPatchTransactionRefresh ? 'patch' : 'smart',
+                    }, 'revert-all');
+                } else if (setPropsRef.current) {
+                    setPropsRef.current({ cellUpdates: revertUpdates });
+                }
+            }
+            showNotification('Reverted all edits to original values.', 'info');
+        },
+        onUndo: handleUndo,
+        onRedo: handleRedo,
+    }), [
+        filters,
+        handleClearStatusFilters,
+        handleClearStatusSelection,
+        handleRedo,
+        handleRefreshStatusViewport,
+        handleUndo,
+        isRequestPending,
+        openSelectionChart,
+        requestVisibleViewportRefresh,
+        clearAllComparisonValueState,
+        clearAllEditedCellMarkers,
+        clearAllOptimisticCellValues,
+        comparisonValueState.activeCount,
+        editValueDisplayMode,
+        selectedCells,
+        serverSide,
+        showNotification,
+        syncTransactionHistoryState,
+        dispatchTransactionRequest,
+        supportsPatchTransactionRefresh,
+        transactionHistoryState.pending,
+        transactionHistoryState.redoCount,
+        transactionHistoryState.undoCount,
+    ]);
+
+    const handleChartCanvasPaneWidthHintChange = useCallback((paneId, nextWidthHint = null) => {
+        setChartCanvasPaneWidthHints((previousHints) => {
+            const currentValue = Object.prototype.hasOwnProperty.call(previousHints, paneId)
+                ? previousHints[paneId]
+                : undefined;
+            if (!Number.isFinite(Number(nextWidthHint))) {
+                if (currentValue === undefined) return previousHints;
+                const { [paneId]: _removed, ...rest } = previousHints;
+                return rest;
+            }
+            const normalizedWidth = Math.max(MIN_CHART_CANVAS_PANE_WIDTH, Math.floor(Number(nextWidthHint)));
+            if (currentValue === normalizedWidth) return previousHints;
+            return {
+                ...previousHints,
+                [paneId]: normalizedWidth,
+            };
+        });
+    }, []);
+
+    useEffect(() => {
+        const activePaneIds = new Set(chartCanvasPanes.map((pane) => pane.id));
+        setChartCanvasPaneWidthHints((previousHints) => {
+            const nextHints = Object.entries(previousHints).reduce((acc, [paneId, widthHint]) => {
+                if (activePaneIds.has(paneId)) acc[paneId] = widthHint;
+                return acc;
+            }, {});
+            return Object.keys(nextHints).length === Object.keys(previousHints).length ? previousHints : nextHints;
+        });
+    }, [chartCanvasPanes]);
+
     const dockedChartCanvasPanes = chartCanvasPanes.filter((pane) => !pane.floating);
     const floatingChartCanvasPanes = chartCanvasPanes.filter((pane) => pane.floating);
+    const dockedChartCanvasPanesByPosition = useMemo(() => ({
+        left: dockedChartCanvasPanes.filter((pane) => normalizeChartDockPosition(pane.dockPosition, 'right') === 'left'),
+        right: dockedChartCanvasPanes.filter((pane) => normalizeChartDockPosition(pane.dockPosition, 'right') === 'right'),
+        top: dockedChartCanvasPanes.filter((pane) => normalizeChartDockPosition(pane.dockPosition, 'right') === 'top'),
+        bottom: dockedChartCanvasPanes.filter((pane) => normalizeChartDockPosition(pane.dockPosition, 'right') === 'bottom'),
+    }), [dockedChartCanvasPanes]);
+
+    const renderChartCanvasPane = (pane, dockPosition) => {
+        const normalizedDockPosition = normalizeChartDockPosition(dockPosition || pane.dockPosition, 'right');
+        const widthHint = Number.isFinite(Number(chartCanvasPaneWidthHints[pane.id]))
+            ? Math.max(MIN_CHART_CANVAS_PANE_WIDTH, Math.floor(Number(chartCanvasPaneWidthHints[pane.id])))
+            : null;
+        const isVerticalDock = normalizedDockPosition === 'top' || normalizedDockPosition === 'bottom';
+        const basePaneStyle = isVerticalDock
+            ? {
+                display: 'flex',
+                width: '100%',
+                height: `${Math.max(DEFAULT_DOCKED_CHART_PANE_HEIGHT, Math.floor((pane.chartHeight || DEFAULT_CHART_GRAPH_HEIGHT) + 188))}px`,
+                minHeight: `${Math.max(280, Math.floor((pane.chartHeight || DEFAULT_CHART_GRAPH_HEIGHT) + 120))}px`,
+                minWidth: 0,
+                overflow: 'hidden',
+                borderTop: normalizedDockPosition === 'bottom' ? `1px solid ${theme.border}` : 'none',
+                borderBottom: normalizedDockPosition === 'top' ? `1px solid ${theme.border}` : 'none',
+                flexShrink: 0,
+            }
+            : {
+                display: 'flex',
+                flexGrow: widthHint === null ? pane.size : 0,
+                flexBasis: widthHint === null ? 0 : `${widthHint}px`,
+                width: widthHint === null ? undefined : `${widthHint}px`,
+                minWidth: widthHint === null ? `${MIN_CHART_CANVAS_PANE_WIDTH}px` : `${widthHint}px`,
+                minHeight: 0,
+                overflow: 'hidden',
+                borderLeft: normalizedDockPosition === 'right' ? `1px solid ${theme.border}` : 'none',
+                borderRight: normalizedDockPosition === 'left' ? `1px solid ${theme.border}` : 'none',
+            };
+
+        return (
+            <div
+                key={pane.id}
+                data-docked-chart-pane={pane.id}
+                data-docked-chart-pane-position={normalizedDockPosition}
+                style={basePaneStyle}
+            >
+                <PivotChartPanel
+                    open
+                    onClose={() => handleRemoveChartCanvasPane(pane.id)}
+                    source={pane.source}
+                    onSourceChange={(value) => updateChartCanvasPane(pane.id, { source: value })}
+                    chartType={pane.chartType}
+                    onChartTypeChange={(value) => updateChartCanvasPane(pane.id, { chartType: value })}
+                    chartLayers={pane.chartLayers}
+                    onChartLayersChange={(value) => updateChartCanvasPane(pane.id, { chartLayers: value })}
+                    availableColumns={resolveChartAvailableColumns(chartPaneDataById[pane.id], visibleLeafColumns)}
+                    barLayout={pane.barLayout}
+                    onBarLayoutChange={(value) => updateChartCanvasPane(pane.id, { barLayout: value })}
+                    axisMode={pane.axisMode}
+                    onAxisModeChange={(value) => updateChartCanvasPane(pane.id, { axisMode: value })}
+                    orientation={pane.orientation}
+                    onOrientationChange={(value) => updateChartCanvasPane(pane.id, { orientation: value })}
+                    hierarchyLevel={pane.hierarchyLevel}
+                    onHierarchyLevelChange={(value) => updateChartCanvasPane(pane.id, { hierarchyLevel: value })}
+                    chartTitle={pane.chartTitle || pane.name}
+                    onChartTitleChange={(value) => updateChartCanvasPane(pane.id, { chartTitle: value })}
+                    rowLimit={pane.rowLimit}
+                    onRowLimitChange={(value) => updateChartCanvasPane(pane.id, { rowLimit: value })}
+                    columnLimit={pane.columnLimit}
+                    onColumnLimitChange={(value) => updateChartCanvasPane(pane.id, { columnLimit: value })}
+                    chartHeight={pane.chartHeight || DEFAULT_CHART_GRAPH_HEIGHT}
+                    onChartHeightChange={(value) => {
+                        const nextHeight = Number(value);
+                        updateChartCanvasPane(pane.id, {
+                            chartHeight: Number.isFinite(nextHeight) ? Math.max(180, Math.floor(nextHeight)) : DEFAULT_CHART_GRAPH_HEIGHT,
+                        });
+                    }}
+                    sortMode={pane.sortMode}
+                    onSortModeChange={(value) => updateChartCanvasPane(pane.id, { sortMode: value })}
+                    interactionMode={pane.interactionMode}
+                    onInteractionModeChange={(value) => updateChartCanvasPane(pane.id, { interactionMode: value })}
+                    serverScope={pane.serverScope}
+                    onServerScopeChange={(value) => updateChartCanvasPane(pane.id, { serverScope: value })}
+                    showServerScope={serverSide}
+                    model={chartCanvasPaneModels[pane.id] || null}
+                    theme={theme}
+                    onCategoryActivate={(target) => activateChartCategory(pane.source, pane.interactionMode, target)}
+                    floating={false}
+                    onToggleFloating={() => handleToggleChartCanvasPaneFloating(pane.id)}
+                    floatingRect={pane.floatingRect}
+                    onFloatingDragStart={(event) => handleStartChartCanvasPaneFloatingDrag(pane.id, event)}
+                    onFloatingResizeStart={(direction, event) => handleStartChartCanvasPaneFloatingResize(pane.id, direction, event)}
+                    standalone
+                    showResizeHandle={false}
+                    title={pane.name}
+                    showDefinitionManager={false}
+                    locked={pane.locked}
+                    onToggleLock={() => handleToggleChartCanvasPaneLock(pane.id)}
+                    cinemaMode={Boolean(pane.cinemaMode)}
+                    onCinemaModeChange={(value) => updateChartCanvasPane(pane.id, { cinemaMode: Boolean(value) })}
+                    dockPosition={normalizedDockPosition}
+                    onDockPositionChange={(value) => updateChartCanvasPane(pane.id, { dockPosition: normalizeChartDockPosition(value, normalizedDockPosition) })}
+                    onSettingsWidthBudgetChange={(nextWidthHint) => handleChartCanvasPaneWidthHintChange(
+                        pane.id,
+                        normalizedDockPosition === 'left' || normalizedDockPosition === 'right'
+                            ? nextWidthHint
+                            : null
+                    )}
+                />
+            </div>
+        );
+    };
+
+    const renderHorizontalDockGroup = (panes, groupPosition) => {
+        if (!Array.isArray(panes) || panes.length === 0) return null;
+        return (
+            <div
+                data-docked-chart-group={groupPosition}
+                style={{ display: 'flex', minWidth: 0, minHeight: 0, overflow: 'hidden', flexShrink: 0 }}
+            >
+                {panes.map((pane, index) => {
+                    const previousPane = index > 0 ? panes[index - 1] : null;
+                    const nextPane = index < panes.length - 1 ? panes[index + 1] : null;
+                    const resizeLeftKey = groupPosition === 'left'
+                        ? pane.id
+                        : (index === 0 ? 'table' : previousPane.id);
+                    const resizeRightKey = groupPosition === 'left'
+                        ? (nextPane ? nextPane.id : 'table')
+                        : pane.id;
+                    const shouldRenderBeforeHandle = groupPosition === 'right';
+                    const shouldRenderAfterHandle = groupPosition === 'left';
+                    const renderResizeHandle = (leftKey, rightKey) => (
+                        <div
+                            onMouseDown={(event) => {
+                                event.preventDefault();
+                                handleStartChartCanvasResize(leftKey, rightKey, event);
+                            }}
+                            style={{
+                                width: '8px',
+                                cursor: 'col-resize',
+                                background: 'transparent',
+                                position: 'relative',
+                                flexShrink: 0,
+                            }}
+                            title="Resize workspace panes"
+                        >
+                            <div style={{
+                                position: 'absolute',
+                                top: '50%',
+                                left: '50%',
+                                transform: 'translate(-50%, -50%)',
+                                width: '3px',
+                                height: '78px',
+                                borderRadius: '999px',
+                                background: theme.border,
+                                opacity: 0.92,
+                            }} />
+                        </div>
+                    );
+
+                    return (
+                        <React.Fragment key={pane.id}>
+                            {shouldRenderBeforeHandle ? renderResizeHandle(resizeLeftKey, resizeRightKey) : null}
+                            {renderChartCanvasPane(pane, groupPosition)}
+                            {shouldRenderAfterHandle ? renderResizeHandle(resizeLeftKey, resizeRightKey) : null}
+                        </React.Fragment>
+                    );
+                })}
+            </div>
+        );
+    };
+
+    const renderVerticalDockGroup = (panes, groupPosition) => {
+        if (!Array.isArray(panes) || panes.length === 0) return null;
+        const renderVerticalResizeHandle = (paneId) => (
+            <div
+                onMouseDown={(event) => {
+                    event.preventDefault();
+                    handleStartChartCanvasVerticalResize(paneId, groupPosition, event);
+                }}
+                style={{
+                    height: '8px',
+                    cursor: 'row-resize',
+                    background: 'transparent',
+                    position: 'relative',
+                    flexShrink: 0,
+                    width: '100%',
+                }}
+                title="Resize chart pane"
+            >
+                <div style={{
+                    position: 'absolute',
+                    top: '50%',
+                    left: '50%',
+                    transform: 'translate(-50%, -50%)',
+                    height: '3px',
+                    width: '78px',
+                    borderRadius: '999px',
+                    background: theme.border,
+                    opacity: 0.92,
+                }} />
+            </div>
+        );
+        return (
+            <div
+                data-docked-chart-group={groupPosition}
+                style={{ display: 'flex', flexDirection: 'column', minWidth: 0, minHeight: 0, overflow: 'hidden', flexShrink: 0 }}
+            >
+                {panes.map((pane) => (
+                    <React.Fragment key={pane.id}>
+                        {groupPosition === 'bottom' ? renderVerticalResizeHandle(pane.id) : null}
+                        {renderChartCanvasPane(pane, groupPosition)}
+                        {groupPosition === 'top' ? renderVerticalResizeHandle(pane.id) : null}
+                    </React.Fragment>
+                ))}
+            </div>
+        );
+    };
 
     return (
         <div
@@ -6876,6 +10247,21 @@ export default function DashTanstackPivot(props) {
         >
             <style>{loadingAnimationStyles}</style>
             <div style={srOnly} role="status" aria-live="polite">{announcement}</div>
+            <PivotThemeProvider theme={theme} styles={styles}>
+            <PivotConfigProvider
+                filters={filters} setFilters={setFilters}
+                pivotMode={pivotMode} setPivotMode={handleSetPivotMode}
+                reportDef={reportDef} setReportDef={setReportDef}
+                savedReports={savedReports} setSavedReports={setSavedReports}
+                activeReportId={activeReportId} setActiveReportId={setActiveReportId}
+                showFloatingFilters={showFloatingFilters} setShowFloatingFilters={setShowFloatingFilters}
+                stickyHeaders={stickyHeaders} setStickyHeaders={setStickyHeaders}
+                showColTotals={showColTotals} setShowColTotals={setShowColTotals}
+                showRowTotals={showRowTotals} setShowRowTotals={setShowRowTotals}
+                showRowNumbers={showRowNumbers} setShowRowNumbers={setShowRowNumbers}
+                numberGroupSeparator={numberGroupSeparator} setNumberGroupSeparator={setNumberGroupSeparator}
+                viewMode={viewMode}
+            >
             {/* Cinema mode exit button — visible only when cinema mode is active */}
             {cinemaMode && (
                 <button
@@ -6898,6 +10284,13 @@ export default function DashTanstackPivot(props) {
                     ✕ Exit Cinema
                 </button>
             )}
+            <PivotValueDisplayProvider
+                editValueDisplayMode={editValueDisplayMode}
+                resolveCellDisplayValue={resolveDisplayedCellValue}
+                resolveCurrentCellValue={resolveCurrentCellValue}
+                setEditValueDisplayMode={setEditValueDisplayMode}
+                hasComparedValues={comparisonValueState.activeCount > 0}
+            >
             {/* PivotAppBar stays outside PivotErrorBoundary so toolbar controls
                 remain usable even if the table renderer hits an error state. */}
             {!cinemaMode && <PivotAppBar
@@ -6905,11 +10298,6 @@ export default function DashTanstackPivot(props) {
                 sidebarOpen={sidebarOpen} setSidebarOpen={setSidebarOpen}
                 themeName={themeName} setThemeName={setThemeName}
                 themeOverrides={themeOverrides} setThemeOverrides={setThemeOverrides}
-                showRowNumbers={showRowNumbers} setShowRowNumbers={setShowRowNumbers}
-                showFloatingFilters={showFloatingFilters} setShowFloatingFilters={setShowFloatingFilters}
-                stickyHeaders={stickyHeaders} setStickyHeaders={setStickyHeaders}
-                showRowTotals={showRowTotals} setShowRowTotals={setShowRowTotals}
-                showColTotals={showColTotals} setShowColTotals={setShowColTotals}
                 spacingMode={spacingMode} setSpacingMode={setSpacingMode} spacingLabels={spacingLabels}
                 layoutMode={layoutMode} setLayoutMode={setLayoutMode}
                 onAutoSizeColumns={handleAutoSizeToolbarClick}
@@ -6919,8 +10307,6 @@ export default function DashTanstackPivot(props) {
                 colorScaleMode={colorScaleMode} setColorScaleMode={setColorScaleMode}
                 colorPalette={colorPalette} setColorPalette={setColorPalette}
                 rowCount={rowCount} exportPivot={exportPivot}
-                theme={theme} styles={styles}
-                filters={filters} setFilters={setFilters}
                 onSaveView={handleSaveView}
                 pivotTitle={props.pivotTitle}
                 fontFamily={fontFamily} setFontFamily={setFontFamily}
@@ -6928,7 +10314,6 @@ export default function DashTanstackPivot(props) {
                 zoomLevel={zoomLevel} setZoomLevel={setZoomLevel}
                 decimalPlaces={decimalPlaces} setDecimalPlaces={setDecimalPlaces}
                 defaultValueFormat={defaultValueFormat} setDefaultValueFormat={setDefaultValueFormat}
-                numberGroupSeparator={numberGroupSeparator} setNumberGroupSeparator={setNumberGroupSeparator}
                 columnDecimalOverrides={columnDecimalOverrides} setColumnDecimalOverrides={setColumnDecimalOverrides}
                 columnFormatOverrides={columnFormatOverrides} setColumnFormatOverrides={setColumnFormatOverrides}
                 columnGroupSeparatorOverrides={columnGroupSeparatorOverrides} setColumnGroupSeparatorOverrides={setColumnGroupSeparatorOverrides}
@@ -6938,33 +10323,31 @@ export default function DashTanstackPivot(props) {
                 canApplySelectionValueFormat={canApplySelectionValueFormat}
                 onApplySelectionValueFormat={applySelectionValueFormat}
                 dataBarsColumns={dataBarsColumns} setDataBarsColumns={setDataBarsColumns}
+                canUndoTransactions={transactionHistoryState.undoCount > 0}
+                canRedoTransactions={transactionHistoryState.redoCount > 0}
+                transactionHistoryPending={transactionHistoryState.pending}
+                onUndoTransaction={handleUndo}
+                onRedoTransaction={handleRedo}
+                editValueDisplayMode={editValueDisplayMode}
+                setEditValueDisplayMode={setEditValueDisplayMode}
+                hasComparedValues={comparisonValueState.activeCount > 0}
                 canCreateSelectionChart={Object.keys(selectedCells || {}).length > 0}
                 onCreateSelectionChart={() => openSelectionChart()}
                 onAddChartPane={handleAddChartCanvasPane}
-                pivotMode={pivotMode}
-                setPivotMode={handleSetPivotMode}
-                reportDef={reportDef}
-                setReportDef={setReportDef}
-                savedReports={savedReports}
-                setSavedReports={setSavedReports}
-                activeReportId={activeReportId}
-                setActiveReportId={setActiveReportId}
             />}
         <PivotErrorBoundary>
             <div style={{display:'flex', flex:1, overflow:'hidden', fontFamily: fontFamily, fontSize: fontSize, zoom: zoomLevel / 100}}>
                 {!cinemaMode && sidebarOpen && (
                     <SidebarPanel
                         sidebarTab={sidebarTab} setSidebarTab={setSidebarTab}
-                        rowFields={rowFields} setRowFields={setRowFields}
-                        colFields={colFields} setColFields={setColFields}
-                        valConfigs={valConfigs} setValConfigs={setValConfigs}
-                        filters={filters} setFilters={setFilters}
+                        rowFields={rowFields} setRowFields={setRowFieldsWithHistory}
+                        colFields={colFields} setColFields={setColFieldsWithHistory}
+                        valConfigs={valConfigs} setValConfigs={setValConfigsWithHistory}
                         columnVisibility={columnVisibility} setColumnVisibility={setColumnVisibility}
-                        columnPinning={columnPinning} setColumnPinning={setColumnPinning}
+                        columnPinning={columnPinning} setColumnPinning={setColumnPinningWithHistory}
                         availableFields={availableFields}
                         table={table}
                         pinningPresets={pinningPresets}
-                        theme={theme} styles={styles}
                         showNotification={showNotification}
                         filterAnchorEl={filterAnchorEl} setFilterAnchorEl={setFilterAnchorEl}
                         colSearch={colSearch} setColSearch={setColSearch}
@@ -6986,179 +10369,186 @@ export default function DashTanstackPivot(props) {
                         setSidebarWidth={setSidebarWidth}
                         fieldPanelSizes={fieldPanelSizes}
                         setFieldPanelSizes={setFieldPanelSizes}
-                        pivotMode={pivotMode}
-                        reportDef={reportDef}
-                        setReportDef={setReportDef}
-                        savedReports={savedReports}
-                        setSavedReports={setSavedReports}
-                        activeReportId={activeReportId}
-                        setActiveReportId={setActiveReportId}
                     />
                 )}
-                <div ref={chartCanvasLayoutRef} style={{ display:'flex', flex:1, minWidth:0, minHeight:0, overflow:'hidden', position:'relative' }}>
-                    <div
-                        data-docked-table-canvas
-                        ref={chartLayoutRef}
-                        style={{
-                            display:'flex',
-                            flexDirection:'column',
-                            flexGrow: tableCanvasSize,
-                            flexBasis: 0,
-                            minWidth: `${MIN_TABLE_PANEL_WIDTH}px`,
-                            minHeight: 0,
-                            overflow:'hidden',
-                            position:'relative',
-                        }}
-                    >
-                        <div style={{ display:'flex', flex:1, minWidth:0, minHeight:0, overflow:'hidden' }}>
-                            <PivotTableBody
-                                parentRef={parentRef}
-                                handleKeyDown={handleKeyDown}
-                                rows={rows}
-                                visibleLeafColumns={visibleLeafColumns}
-                                totalLayoutWidth={totalLayoutWidth}
-                                beforeWidth={beforeWidth}
-                                afterWidth={afterWidth}
-                                bodyRowsTopOffset={bodyRowsTopOffset}
-                                stickyHeaderHeight={stickyHeaderHeight}
-                                effectiveTopRows={effectiveTopRows}
-                                effectiveBottomRows={effectiveBottomRows}
-                                effectiveCenterRows={effectiveCenterRows}
-                                virtualRows={virtualRows}
-                                virtualCenterCols={virtualCenterCols}
-                                rowVirtualizer={activeRowVirtualizer}
-                                rowModelLookup={rowModelLookup}
-                                getRow={getRow}
-                                serverSide={serverSide}
-                                serverSidePinsGrandTotal={serverSidePinsGrandTotal}
-                                pendingRowTransitions={pendingRowTransitions}
-                                table={table}
-                                leftCols={leftCols}
-                                centerCols={centerCols}
-                                rightCols={rightCols}
-                                centerColIndexMap={centerColIndexMap}
-                                visibleLeafIndexSet={visibleLeafIndexSet}
-                                rowHeight={rowHeight}
-                                showFloatingFilters={showFloatingFilters}
-                                stickyHeaders={stickyHeaders}
-                                showColTotals={showColTotals}
-                                grandTotalPosition={grandTotalPosition}
-                                showColumnLoadingSkeletons={showColumnLoadingSkeletons}
-                                pendingColumnSkeletonCount={activeColumnSkeletonCount}
-                                columnSkeletonWidth={columnSkeletonWidth}
+                <div ref={chartCanvasLayoutRef} style={{ display:'flex', flexDirection:'column', flex:1, minWidth:0, minHeight:0, overflowX:'hidden', overflowY: (dockedChartCanvasPanesByPosition.top.length > 0 || dockedChartCanvasPanesByPosition.bottom.length > 0) ? 'auto' : 'hidden', position:'relative' }}>
+                    {chartModal && chartModalPosition === 'top' ? (
+                        <PivotChartModal
+                            chartState={chartModal}
+                            onClose={() => setChartModal(null)}
+                            theme={theme}
+                            position={chartModalPosition}
+                            onPositionChange={setChartModalPosition}
+                        />
+                    ) : null}
+                    {renderVerticalDockGroup(dockedChartCanvasPanesByPosition.top, 'top')}
+                    <div style={{ display:'flex', flex:1, minWidth:0, minHeight:0, overflow:'hidden', position:'relative' }}>
+                        {chartModal && chartModalPosition === 'left' ? (
+                            <PivotChartModal
+                                chartState={chartModal}
+                                onClose={() => setChartModal(null)}
                                 theme={theme}
-                                styles={styles}
-                                renderCell={renderCell}
-                                renderHeaderCell={renderHeaderCell}
-                                filters={filters}
-                                handleHeaderFilter={handleHeaderFilter}
-                                selectedCells={selectedCells}
-                                rowCount={statusRowCount}
-                                isRequestPending={isRequestPending}
-                                numberGroupSeparator={numberGroupSeparator}
-                                pivotMode={pivotMode}
-                                reportDef={reportDef}
+                                position={chartModalPosition}
+                                onPositionChange={setChartModalPosition}
                             />
-                        </div>
-                    </div>
-                    {dockedChartCanvasPanes.map((pane, index) => (
-                        <React.Fragment key={pane.id}>
-                            <div
-                                onMouseDown={(event) => {
-                                    event.preventDefault();
-                                    handleStartChartCanvasResize(index === 0 ? 'table' : dockedChartCanvasPanes[index - 1].id, pane.id, event);
-                                }}
-                                style={{
-                                    width: '8px',
-                                    cursor: 'col-resize',
-                                    background: 'transparent',
-                                    position: 'relative',
-                                    flexShrink: 0,
-                                }}
-                                title="Resize workspace panes"
-                            >
-                                <div style={{
-                                    position: 'absolute',
-                                    top: '50%',
-                                    left: '50%',
-                                    transform: 'translate(-50%, -50%)',
-                                    width: '3px',
-                                    height: '78px',
-                                    borderRadius: '999px',
-                                    background: theme.border,
-                                    opacity: 0.92,
-                                }} />
-                            </div>
-                            <div
-                                data-docked-chart-pane={pane.id}
-                                style={{
-                                    display:'flex',
-                                    flexGrow: pane.size,
-                                    flexBasis: 0,
-                                    minWidth: `${MIN_CHART_CANVAS_PANE_WIDTH}px`,
-                                    minHeight: 0,
-                                    overflow:'hidden',
-                                    borderLeft: `1px solid ${theme.border}`,
-                                }}
-                            >
-                                <PivotChartPanel
-                                    open
-                                    onClose={() => handleRemoveChartCanvasPane(pane.id)}
-                                    source={pane.source}
-                                    onSourceChange={(value) => updateChartCanvasPane(pane.id, { source: value })}
-                                    chartType={pane.chartType}
-                                    onChartTypeChange={(value) => updateChartCanvasPane(pane.id, { chartType: value })}
-                                    chartLayers={pane.chartLayers}
-                                    onChartLayersChange={(value) => updateChartCanvasPane(pane.id, { chartLayers: value })}
-                                    availableColumns={resolveChartAvailableColumns(chartPaneDataById[pane.id], visibleLeafColumns)}
-                                    barLayout={pane.barLayout}
-                                    onBarLayoutChange={(value) => updateChartCanvasPane(pane.id, { barLayout: value })}
-                                    axisMode={pane.axisMode}
-                                    onAxisModeChange={(value) => updateChartCanvasPane(pane.id, { axisMode: value })}
-                                    orientation={pane.orientation}
-                                    onOrientationChange={(value) => updateChartCanvasPane(pane.id, { orientation: value })}
-                                    hierarchyLevel={pane.hierarchyLevel}
-                                    onHierarchyLevelChange={(value) => updateChartCanvasPane(pane.id, { hierarchyLevel: value })}
-                                    chartTitle={pane.chartTitle || pane.name}
-                                    onChartTitleChange={(value) => updateChartCanvasPane(pane.id, { chartTitle: value })}
-                                    rowLimit={pane.rowLimit}
-                                    onRowLimitChange={(value) => updateChartCanvasPane(pane.id, { rowLimit: value })}
-                                    columnLimit={pane.columnLimit}
-                                    onColumnLimitChange={(value) => updateChartCanvasPane(pane.id, { columnLimit: value })}
-                                    chartHeight={pane.chartHeight || DEFAULT_CHART_GRAPH_HEIGHT}
-                                    onChartHeightChange={(value) => {
-                                        const nextHeight = Number(value);
-                                        updateChartCanvasPane(pane.id, {
-                                            chartHeight: Number.isFinite(nextHeight) ? Math.max(180, Math.floor(nextHeight)) : DEFAULT_CHART_GRAPH_HEIGHT,
-                                        });
-                                    }}
-                                    sortMode={pane.sortMode}
-                                    onSortModeChange={(value) => updateChartCanvasPane(pane.id, { sortMode: value })}
-                                    interactionMode={pane.interactionMode}
-                                    onInteractionModeChange={(value) => updateChartCanvasPane(pane.id, { interactionMode: value })}
-                                    serverScope={pane.serverScope}
-                                    onServerScopeChange={(value) => updateChartCanvasPane(pane.id, { serverScope: value })}
-                                    showServerScope={serverSide}
-                                    model={chartCanvasPaneModels[pane.id] || null}
-                                    theme={theme}
-                                    onCategoryActivate={(target) => activateChartCategory(pane.source, pane.interactionMode, target)}
-                                    floating={false}
-                                    onToggleFloating={() => handleToggleChartCanvasPaneFloating(pane.id)}
-                                    floatingRect={pane.floatingRect}
-                                    onFloatingDragStart={(event) => handleStartChartCanvasPaneFloatingDrag(pane.id, event)}
-                                    onFloatingResizeStart={(direction, event) => handleStartChartCanvasPaneFloatingResize(pane.id, direction, event)}
-                                    standalone
-                                    showResizeHandle={false}
-                                    title={pane.name}
-                                    showDefinitionManager={false}
-                                    locked={pane.locked}
-                                    onToggleLock={() => handleToggleChartCanvasPaneLock(pane.id)}
-                                    cinemaMode={Boolean(pane.cinemaMode)}
-                                    onCinemaModeChange={(value) => updateChartCanvasPane(pane.id, { cinemaMode: Boolean(value) })}
+                        ) : null}
+                        {renderHorizontalDockGroup(dockedChartCanvasPanesByPosition.left, 'left')}
+                        <div
+                            data-docked-table-canvas
+                            ref={chartLayoutRef}
+                            style={{
+                                display:'flex',
+                                flexDirection:'column',
+                                flexGrow: tableCanvasSize,
+                                flexBasis: 0,
+                                minWidth: `${MIN_TABLE_PANEL_WIDTH}px`,
+                                minHeight: 0,
+                                overflow:'hidden',
+                                position:'relative',
+                            }}
+                        >
+                            <div style={{ display:'flex', flex:1, minWidth:0, minHeight:0, overflow:'hidden' }}>
+                                <PivotTableBody
+                                    key={`pivot-body-${editValueDisplayMode}`}
+                                    parentRef={parentRef}
+                                    handleKeyDown={handleKeyDown}
+                                    rows={rows}
+                                    visibleLeafColumns={visibleLeafColumns}
+                                    totalLayoutWidth={totalLayoutWidth}
+                                    beforeWidth={beforeWidth}
+                                    afterWidth={afterWidth}
+                                    bodyRowsTopOffset={bodyRowsTopOffset}
+                                    stickyHeaderHeight={stickyHeaderHeight}
+                                    effectiveTopRows={effectiveTopRows}
+                                    effectiveBottomRows={effectiveBottomRows}
+                                    effectiveCenterRows={effectiveCenterRows}
+                                    virtualRows={virtualRows}
+                                    virtualCenterCols={virtualCenterCols}
+                                    rowVirtualizer={activeRowVirtualizer}
+                                    rowModelLookup={rowModelLookup}
+                                    getRow={getRow}
+                                    serverSide={serverSide}
+                                    serverSidePinsGrandTotal={serverSidePinsGrandTotal}
+                                    pendingRowTransitions={pendingRowTransitions}
+                                    leftHeaderGroups={leftHeaderGroups}
+                                    centerHeaderGroups={centerHeaderGroups}
+                                    rightHeaderGroups={rightHeaderGroups}
+                                    leftCols={leftCols}
+                                    centerCols={centerCols}
+                                    rightCols={rightCols}
+                                    centerColIndexMap={centerColIndexMap}
+                                    totalCenterColumns={totalCenterCols}
+                                    rowHeight={rowHeight}
+                                    grandTotalPosition={grandTotalPosition}
+                                    showColumnLoadingSkeletons={showColumnLoadingSkeletons}
+                                    pendingColumnSkeletonCount={activeColumnSkeletonCount}
+                                    columnSkeletonWidth={columnSkeletonWidth}
+                                    renderCell={renderCell}
+                                    renderVirtualColumnCell={renderVirtualColumnCell}
+                                    renderHeaderCell={renderHeaderCell}
+                                    handleHeaderFilter={handleHeaderFilter}
+                                    selectedCells={selectedCells}
+                                    rowCount={statusRowCount}
+                                    isRequestPending={isRequestPending}
+                                    statusModel={statusAccessoryModel}
+                                    statusActions={statusAccessoryActions}
+                                    treeSuppressGroupRowsSticky={Boolean(viewMode === 'tree' && treeConfig && treeConfig.suppressGroupRowsSticky)}
+                                    editValueDisplayMode={editValueDisplayMode}
+                                    detailMode={activeDetailDisplayMode}
+                                    detailState={activeDetailDisplayMode === 'inline' ? detailSurface : null}
+                                    detailInlineHeight={detailConfig.inlineHeight}
+                                    onDetailClose={handleDetailClose}
+                                    onDetailPageChange={handleDetailPageChange}
+                                    onDetailSort={handleDetailSort}
+                                    onDetailFilter={handleDetailFilter}
                                 />
+                                {activeDetailDisplayMode === 'drawer' && detailSurface && (
+                                    <DetailDrawer
+                                        detailState={detailSurface}
+                                        onClose={() => setDetailSurface(null)}
+                                        onPageChange={handleDetailPageChange}
+                                        onSort={handleDetailSort}
+                                        onFilter={handleDetailFilter}
+                                        theme={theme}
+                                        height={detailConfig.drawerHeight}
+                                    />
+                                )}
                             </div>
-                        </React.Fragment>
-                    ))}
+                        </div>
+                        {activeDetailDisplayMode === 'sidepanel' && detailSurface && (
+                            <DetailSidePanel
+                                detailState={detailSurface}
+                                onClose={() => setDetailSurface(null)}
+                                onPageChange={handleDetailPageChange}
+                                onSort={handleDetailSort}
+                                onFilter={handleDetailFilter}
+                                theme={theme}
+                                width={detailConfig.sidepanelWidth}
+                            />
+                        )}
+                        {(editPanelOpen && editPanelCells.length > 0) || pendingPropagationUpdates ? (
+                            <EditSidePanel
+                                editedCells={editPanelCells}
+                                propagationLog={propagationLogRef.current}
+                                onRevertCell={handleRevertCell}
+                                onRevertAll={() => {
+                                    // Collect all original values before clearing
+                                    const revertUpdates = [];
+                                    comparisonCellOriginalValuesRef.current.forEach((entry) => {
+                                        if (!entry || entry.value === undefined) return;
+                                        revertUpdates.push({ rowId: entry.rowId, colId: entry.colId, value: entry.value });
+                                    });
+                                    clearAllOptimisticCellValues();
+                                    clearAllEditedCellMarkers();
+                                    clearAllComparisonValueState();
+                                    propagationLogRef.current = [];
+                                    setPropagationLogEpoch((p) => p + 1);
+                                    syncTransactionHistoryState();
+                                    // Send original values back to server
+                                    if (revertUpdates.length > 0) {
+                                        if (serverSide) {
+                                            dispatchTransactionRequest({
+                                                update: revertUpdates,
+                                                refreshMode: supportsPatchTransactionRefresh ? 'patch' : 'smart',
+                                            }, 'revert-all');
+                                        } else if (setPropsRef.current) {
+                                            setPropsRef.current({ cellUpdates: revertUpdates });
+                                        }
+                                    }
+                                }}
+                                onToggleDisplayMode={() => setEditValueDisplayMode((p) => p === 'original' ? 'edited' : 'original')}
+                                displayMode={editValueDisplayMode}
+                                onClose={() => { setEditPanelOpen(false); handleCancelPropagation(); }}
+                                theme={theme}
+                                width={320}
+                                pendingPropagation={pendingPropagationUpdates}
+                                propagationMethod={propagationMethodUI}
+                                onPropagationMethodChange={handlePropagationMethodChange}
+                                onConfirmPropagation={handleConfirmPropagation}
+                                onCancelPropagation={handleCancelPropagation}
+                            />
+                        ) : null}
+                        {renderHorizontalDockGroup(dockedChartCanvasPanesByPosition.right, 'right')}
+                        {chartModal && chartModalPosition === 'right' ? (
+                            <PivotChartModal
+                                chartState={chartModal}
+                                onClose={() => setChartModal(null)}
+                                theme={theme}
+                                position={chartModalPosition}
+                                onPositionChange={setChartModalPosition}
+                            />
+                        ) : null}
+                    </div>
+                    {renderVerticalDockGroup(dockedChartCanvasPanesByPosition.bottom, 'bottom')}
+                    {chartModal && chartModalPosition === 'bottom' ? (
+                        <PivotChartModal
+                            chartState={chartModal}
+                            onClose={() => setChartModal(null)}
+                            theme={theme}
+                            position={chartModalPosition}
+                            onPositionChange={setChartModalPosition}
+                        />
+                    ) : null}
                     {floatingChartCanvasPanes.map((pane) => (
                         <PivotChartPanel
                             key={pane.id}
@@ -7221,28 +10611,10 @@ export default function DashTanstackPivot(props) {
             </div>
             {contextMenu && <ContextMenu {...contextMenu} theme={theme} onClose={() => setContextMenu(null)} />}
             {notification && <Notification message={notification.message} type={notification.type} onClose={() => setNotification(null)} />}
-            <DrillThroughModal
-                drillState={drillModal}
-                onClose={() => setDrillModal(null)}
-                onPageChange={(newPage) => {
-                    if (!drillModal) return;
-                    fetchDrillData(drillModal.path, newPage, drillModal.sortCol, drillModal.sortDir, drillModal.filterText, drillModal.pathFields);
-                }}
-                onSort={(col, dir) => {
-                    if (!drillModal) return;
-                    fetchDrillData(drillModal.path, 0, col, dir, drillModal.filterText, drillModal.pathFields);
-                }}
-                onFilter={(text) => {
-                    if (!drillModal) return;
-                    fetchDrillData(drillModal.path, 0, drillModal.sortCol, drillModal.sortDir, text, drillModal.pathFields);
-                }}
-            />
-            <PivotChartModal
-                chartState={chartModal}
-                onClose={() => setChartModal(null)}
-                theme={theme}
-            />
         </PivotErrorBoundary>
+            </PivotValueDisplayProvider>
+            </PivotConfigProvider>
+            </PivotThemeProvider>
         </div>
     );
 };
@@ -7255,7 +10627,6 @@ DashTanstackPivot.propTypes = {
         setProps: PropTypes.func,
         style: PropTypes.object,
         serverSide: PropTypes.bool,
-        rowCount: PropTypes.number,
         rowFields: PropTypes.array,
         colFields: PropTypes.array,
         valConfigs: PropTypes.arrayOf(PropTypes.shape({
@@ -7283,45 +10654,59 @@ DashTanstackPivot.propTypes = {
             formula: PropTypes.string,
             label: PropTypes.string,
             formulaRef: PropTypes.string,
+            sparkline: PropTypes.oneOfType([PropTypes.bool, PropTypes.object]),
         })),
         filters: PropTypes.object,
         sorting: PropTypes.array,
         expanded: PropTypes.oneOfType([PropTypes.object, PropTypes.bool]),
-        columns: PropTypes.array,
     
     cinemaMode: PropTypes.bool,
     showRowTotals: PropTypes.bool,
     showColTotals: PropTypes.bool,
     grandTotalPosition: PropTypes.oneOf(['top', 'bottom']),
-    filterOptions: PropTypes.object,
-    filterRequest: PropTypes.shape({
-        columnId: PropTypes.string,
-        nonce: PropTypes.number,
-    }),
-    chartData: PropTypes.object,
-    chartRequest: PropTypes.object,
+    runtimeRequest: PropTypes.object,
+    runtimeResponse: PropTypes.object,
+    viewMode: PropTypes.oneOf(['pivot', 'report', 'tree', 'table']),
+    detailMode: PropTypes.oneOf(['none', 'inline', 'sidepanel', 'drawer']),
+    treeConfig: PropTypes.object,
+    detailConfig: PropTypes.object,
     chartEvent: PropTypes.object,
     chartDefinitions: PropTypes.arrayOf(PropTypes.object),
     chartDefaults: PropTypes.object,
     chartCanvasPanes: PropTypes.arrayOf(PropTypes.object),
     tableCanvasSize: PropTypes.number,
+    performanceConfig: PropTypes.shape({
+        cacheBlockSize: PropTypes.number,
+        maxBlocksInCache: PropTypes.number,
+        blockLoadDebounceMs: PropTypes.number,
+        rowOverscan: PropTypes.number,
+        columnOverscan: PropTypes.number,
+        prefetchColumns: PropTypes.number,
+    }),
     chartServerWindow: PropTypes.shape({
         enabled: PropTypes.bool,
         rows: PropTypes.number,
         columns: PropTypes.number,
         scope: PropTypes.oneOf(['viewport', 'root']),
     }),
-    viewport: PropTypes.object,
     cellUpdate: PropTypes.object,
     cellUpdates: PropTypes.arrayOf(PropTypes.object),
     rowMove: PropTypes.object,
-    drillThrough: PropTypes.object,
     drillEndpoint: PropTypes.string,
     viewState: PropTypes.object,
     saveViewTrigger: PropTypes.any,
     savedView: PropTypes.object,
     conditionalFormatting: PropTypes.arrayOf(PropTypes.object),
     validationRules: PropTypes.object,
+    editingConfig: PropTypes.object,
+    editLifecycleEvent: PropTypes.object,
+
+    /**
+     * Persisted edit state: edited cell markers, comparison original values, display mode,
+     * and propagation event log. Round-tripped via setProps so the Dash backend can
+     * save/restore/modify it.
+     */
+    editState: PropTypes.object,
     columnPinning: PropTypes.shape({
         left: PropTypes.arrayOf(PropTypes.string),
         right: PropTypes.arrayOf(PropTypes.string)
@@ -7360,11 +10745,7 @@ DashTanstackPivot.propTypes = {
     defaultTheme: PropTypes.string,
     sortEvent: PropTypes.object,
     availableFieldList: PropTypes.arrayOf(PropTypes.string),
-    dataOffset: PropTypes.number,
-    dataVersion: PropTypes.number,
-    pivotMode: PropTypes.oneOf(['pivot', 'report']),
     reportDef: PropTypes.object,
     savedReports: PropTypes.arrayOf(PropTypes.object),
     activeReportId: PropTypes.string,
 };
-

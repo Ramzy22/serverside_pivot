@@ -59,6 +59,7 @@ class PivotConfig:
     include_totals_column: bool = False
     null_column_label: str = "(null)"
     column_cursor: Optional[str] = None  # Keyset cursor for horizontal scrolling
+    materialized_column_values: Optional[List[str]] = None
 
 @dataclass
 class DrillPath:
@@ -78,6 +79,7 @@ class PivotSpec:
     filters: List[Dict[str, Any]] = field(default_factory=list)
     sort: Optional[Union[Dict[str, Any], List[Dict[str, Any]]]] = field(default_factory=list)
     limit: int = 1000
+    offset: int = 0
     cursor: Optional[Dict[str, Any]] = None
     totals: bool = False
     having: Optional[List[Dict[str, Any]]] = None
@@ -107,6 +109,7 @@ class PivotSpec:
             filters=d.get("filters", []),
             sort=d.get("sort", []),
             limit=d.get("limit", 1000),
+            offset=d.get("offset", 0),
             cursor=d.get("cursor"),
             totals=d.get("totals", False),
             having=d.get("having"),
@@ -128,6 +131,7 @@ class PivotSpec:
             "filters": self.filters,
             "sort": self.sort,
             "limit": self.limit,
+            "offset": self.offset,
             "cursor": self.cursor,
             "totals": self.totals,
             "having": self.having,

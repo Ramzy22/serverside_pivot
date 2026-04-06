@@ -5,6 +5,8 @@ import ToolPanelSection from './ToolPanelSection';
 import ColumnTreeItem from './ColumnTreeItem';
 import Icons from '../Icons';
 import { isGroupColumn, getAllLeafIdsFromColumn, hasChildrenInZone } from '../../utils/helpers';
+import { usePivotTheme } from '../../contexts/PivotThemeContext';
+import { usePivotConfig } from '../../contexts/PivotConfigContext';
 import { formatDisplayLabel, isWeightedAverageAgg } from '../../utils/helpers';
 import {
     getFieldPanelLimits,
@@ -1569,18 +1571,16 @@ function ResizableFieldPanel({
     );
 }
 
-export function SidebarPanel({
+export const SidebarPanel = React.memo(function SidebarPanel({
     sidebarTab, setSidebarTab,
     rowFields, setRowFields,
     colFields, setColFields,
     valConfigs, setValConfigs,
-    filters, setFilters,
     columnVisibility, setColumnVisibility,
     columnPinning, setColumnPinning,
     availableFields,
     table,
     pinningPresets,
-    theme, styles,
     showNotification,
     filterAnchorEl, setFilterAnchorEl,
     colSearch, setColSearch,
@@ -1594,14 +1594,15 @@ export function SidebarPanel({
     data,
     sidebarWidth, setSidebarWidth,
     fieldPanelSizes, setFieldPanelSizes,
-    pivotMode = 'pivot',
-    reportDef,
-    setReportDef,
-    savedReports = [],
-    setSavedReports,
-    activeReportId,
-    setActiveReportId,
 }) {
+    const { theme, styles } = usePivotTheme();
+    const {
+        filters, setFilters,
+        pivotMode,
+        reportDef, setReportDef,
+        savedReports, setSavedReports,
+        activeReportId, setActiveReportId,
+    } = usePivotConfig();
     const [sidebarFilterState, setSidebarFilterState] = React.useState({ columnId: null, anchorEl: null });
     const [activeFormulaField, setActiveFormulaField] = React.useState(null);
     const [formulaModalField, setFormulaModalField] = React.useState(null);
@@ -2567,4 +2568,4 @@ export function SidebarPanel({
             </div>
         </div>
     );
-}
+});

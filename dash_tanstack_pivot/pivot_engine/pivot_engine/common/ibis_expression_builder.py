@@ -417,8 +417,10 @@ class IbisExpressionBuilder:
 
             # Ignore rows where value or weight is null.
             valid_mask = col.notnull() & weight_col.notnull()
-            weighted_sum = (col * weight_col).where(valid_mask).sum()
-            total_weight = weight_col.where(valid_mask).sum()
+            weighted_value = ibis.ifelse(valid_mask, col * weight_col, ibis.null())
+            weighted_weight = ibis.ifelse(valid_mask, weight_col, ibis.null())
+            weighted_sum = weighted_value.sum()
+            total_weight = weighted_weight.sum()
             return (weighted_sum / total_weight.nullif(0)).name(measure.alias)
 
         if agg_type == 'sum':

@@ -1,7 +1,10 @@
-import React, { useState, useRef, useEffect, useMemo } from 'react';
+import React, { useState, useRef, useEffect, useMemo, useLayoutEffect } from 'react';
 import Icons from './Icons';
-import { themes } from '../utils/styles';
+import { themes, buildEditedCellVisualStyle, colorToInputHex } from '../utils/styles';
 import { DEFAULT_CURRENCY_SYMBOL, formatValue, normalizeNumberGroupSeparator } from '../utils/helpers';
+import { EDITED_CELL_FORMAT_KEY } from '../utils/formatting';
+import { usePivotTheme } from '../contexts/PivotThemeContext';
+import { usePivotConfig } from '../contexts/PivotConfigContext';
 
 const SHOW_PIVOT_MODE_TOGGLE = false;
 
@@ -398,10 +401,15 @@ function NumberFormatDialog({
 function CellFormatPopover({ theme, styles, cellFormatRules, setCellFormatRules, selectedCellKeys, onClose, anchorRef }) {
     const firstKey = selectedCellKeys && selectedCellKeys.length > 0 ? selectedCellKeys[0] : null;
     const current = (firstKey && cellFormatRules && cellFormatRules[firstKey]) || {};
+    const editedCurrent = (cellFormatRules && cellFormatRules[EDITED_CELL_FORMAT_KEY]) || {};
     const [bg, setBg] = useState(current.bg || '#ffffff');
     const [color, setColor] = useState(current.color || '#000000');
     const [bold, setBold] = useState(current.bold || false);
     const [italic, setItalic] = useState(current.italic || false);
+    const [editedBg, setEditedBg] = useState(editedCurrent.bg || theme.editedCellBg || '#E8F1FF');
+    const [editedColor, setEditedColor] = useState(editedCurrent.color || theme.editedCellText || theme.text || '#111827');
+    const [editedBold, setEditedBold] = useState(editedCurrent.bold || false);
+    const [editedItalic, setEditedItalic] = useState(editedCurrent.italic || false);
     const popoverRef = useRef(null);
 
     // Sync local state when selection changes
@@ -412,6 +420,14 @@ function CellFormatPopover({ theme, styles, cellFormatRules, setCellFormatRules,
         setBold(rule.bold || false);
         setItalic(rule.italic || false);
     }, [firstKey, cellFormatRules]);
+
+    useEffect(() => {
+        const rule = (cellFormatRules && cellFormatRules[EDITED_CELL_FORMAT_KEY]) || {};
+        setEditedBg(rule.bg || theme.editedCellBg || '#E8F1FF');
+        setEditedColor(rule.color || theme.editedCellText || theme.text || '#111827');
+        setEditedBold(rule.bold || false);
+        setEditedItalic(rule.italic || false);
+    }, [cellFormatRules, theme.editedCellBg, theme.editedCellText, theme.text]);
 
     // Close on outside click
     useEffect(() => {
@@ -445,6 +461,32 @@ function CellFormatPopover({ theme, styles, cellFormatRules, setCellFormatRules,
         });
     };
 
+    const applyEditedStyle = () => {
+        setCellFormatRules((prev) => ({
+            ...prev,
+            [EDITED_CELL_FORMAT_KEY]: {
+                bg: editedBg,
+                color: editedColor,
+                bold: editedBold,
+                italic: editedItalic,
+            },
+        }));
+    };
+
+    const clearEditedStyle = () => {
+        setCellFormatRules((prev) => {
+            const next = { ...prev };
+            delete next[EDITED_CELL_FORMAT_KEY];
+            return next;
+        });
+    };
+    const editedPreviewStyle = buildEditedCellVisualStyle(
+        theme,
+        { bg: editedBg, color: editedColor, bold: editedBold, italic: editedItalic },
+        { direct: true, propagated: false },
+        { emphasizeText: true }
+    ) || {};
+
     return (
         <div ref={popoverRef} style={{
             position: 'absolute',
@@ -463,9 +505,10 @@ function CellFormatPopover({ theme, styles, cellFormatRules, setCellFormatRules,
                 Format Cell{cellCount > 1 ? ` (${cellCount} cells)` : ''}
             </div>
             {cellCount === 0 ? (
-                <div style={{fontSize: '12px', color: theme.textSec, marginBottom: '8px'}}>Select cells to format</div>
+                <div style={{fontSize: '12px', color: theme.textSec, marginBottom: '10px'}}>Select cells to format, or tune the edited-cell highlight below.</div>
             ) : (
                 <>
+                    <div style={{fontSize: '11px', fontWeight: 700, color: theme.textSec, letterSpacing: '0.04em', textTransform: 'uppercase', marginBottom: '6px'}}>Selection</div>
                     <div style={{display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '8px', marginBottom: '8px'}}>
                         <div>
                             <label style={{fontSize: '11px', color: theme.textSec, display: 'block', marginBottom: '3px'}}>Background</label>
@@ -492,7 +535,7 @@ function CellFormatPopover({ theme, styles, cellFormatRules, setCellFormatRules,
                             style={{...styles.btn, fontStyle: 'italic', background: italic ? theme.select : theme.hover, minWidth: '36px'}}
                             title="Italic"><em>I</em></button>
                     </div>
-                    <div style={{display: 'flex', gap: '6px'}}>
+                    <div style={{display: 'flex', gap: '6px', marginBottom: '12px'}}>
                         <button onClick={apply} style={{...styles.btn, background: theme.primary, color: '#fff', flex: 1}}>
                             Apply{cellCount > 1 ? ` (${cellCount})` : ''}
                         </button>
@@ -500,11 +543,59 @@ function CellFormatPopover({ theme, styles, cellFormatRules, setCellFormatRules,
                     </div>
                 </>
             )}
+            <div style={{ borderTop: `1px solid ${theme.border}`, paddingTop: '10px' }}>
+                <div style={{fontSize: '11px', fontWeight: 700, color: theme.textSec, letterSpacing: '0.04em', textTransform: 'uppercase', marginBottom: '4px'}}>Edited Cells</div>
+                <div style={{fontSize: '11px', color: theme.textSec, marginBottom: '8px'}}>Used for direct edits and visible aggregate cells affected by the edit.</div>
+                <div style={{display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '8px', marginBottom: '8px'}}>
+                    <div>
+                        <label style={{fontSize: '11px', color: theme.textSec, display: 'block', marginBottom: '3px'}}>Background</label>
+                        <div style={{display: 'flex', gap: '4px', alignItems: 'center'}}>
+                            <input type="color" value={editedBg} onChange={e => setEditedBg(e.target.value)}
+                                style={{width: '28px', height: '28px', border: 'none', padding: 0, cursor: 'pointer', borderRadius: '3px'}} />
+                            <span style={{fontSize: '11px', color: theme.textSec}}>{editedBg}</span>
+                        </div>
+                    </div>
+                    <div>
+                        <label style={{fontSize: '11px', color: theme.textSec, display: 'block', marginBottom: '3px'}}>Text Color</label>
+                        <div style={{display: 'flex', gap: '4px', alignItems: 'center'}}>
+                            <input type="color" value={editedColor} onChange={e => setEditedColor(e.target.value)}
+                                style={{width: '28px', height: '28px', border: 'none', padding: 0, cursor: 'pointer', borderRadius: '3px'}} />
+                            <span style={{fontSize: '11px', color: theme.textSec}}>{editedColor}</span>
+                        </div>
+                    </div>
+                </div>
+                <div style={{display: 'flex', gap: '8px', marginBottom: '10px'}}>
+                    <button onClick={() => setEditedBold(b => !b)}
+                        style={{...styles.btn, fontWeight: 'bold', background: editedBold ? theme.select : theme.hover, minWidth: '36px'}}
+                        title="Bold edited cells">B</button>
+                    <button onClick={() => setEditedItalic(i => !i)}
+                        style={{...styles.btn, fontStyle: 'italic', background: editedItalic ? theme.select : theme.hover, minWidth: '36px'}}
+                        title="Italic edited cells"><em>I</em></button>
+                </div>
+                <div style={{
+                    display: 'flex',
+                    alignItems: 'center',
+                    justifyContent: 'flex-end',
+                    padding: '7px 10px',
+                    borderRadius: '8px',
+                    marginBottom: '10px',
+                    minHeight: '36px',
+                    ...editedPreviewStyle,
+                }}>
+                    12,480
+                </div>
+                <div style={{display: 'flex', gap: '6px'}}>
+                    <button onClick={applyEditedStyle} style={{...styles.btn, background: theme.primary, color: '#fff', flex: 1}}>
+                        Save Edited Style
+                    </button>
+                    <button onClick={clearEditedStyle} style={{...styles.btn, background: theme.hover, flex: 1}}>Use Theme Default</button>
+                </div>
+            </div>
         </div>
     );
 }
 
-const THEME_COLOR_FIELDS = [
+const THEME_CORE_COLOR_FIELDS = [
     { key: 'primary', label: 'Primary' },
     { key: 'pageBg', label: 'Page Bg' },
     { key: 'surfaceBg', label: 'Surface Bg' },
@@ -514,11 +605,31 @@ const THEME_COLOR_FIELDS = [
     { key: 'border', label: 'Border' },
     { key: 'text', label: 'Text' },
     { key: 'textSec', label: 'Muted Text' },
-    { key: 'totalBgStrong', label: 'Total Bg' },
+];
+
+const THEME_STRUCTURE_COLOR_FIELDS = [
+    { key: 'hierarchyBg', label: 'Hierarchy Bg' },
+    { key: 'totalBg', label: 'Total Bg' },
+    { key: 'totalBgStrong', label: 'Grand Total Bg' },
+    { key: 'totalText', label: 'Total Text' },
+    { key: 'totalTextStrong', label: 'Grand Total Text' },
+];
+
+const THEME_EDITED_COLOR_FIELDS = [
+    { key: 'editedCellBg', label: 'Edited Background' },
+    { key: 'editedCellBorder', label: 'Edited Border' },
+    { key: 'editedCellText', label: 'Edited Text' },
 ];
 
 function ThemeEditorPopover({ theme, themeName, themeOverrides, setThemeOverrides, onClose, anchorRef }) {
     const popoverRef = useRef(null);
+    const [popoverLayout, setPopoverLayout] = useState({ top: 12, left: 12, width: 440, maxHeight: 560 });
+    const editedPreviewStyle = buildEditedCellVisualStyle(
+        theme,
+        null,
+        { direct: true, propagated: false },
+        { emphasizeText: true }
+    ) || {};
 
     useEffect(() => {
         const handleOutside = (e) => {
@@ -531,6 +642,44 @@ function ThemeEditorPopover({ theme, themeName, themeOverrides, setThemeOverride
         return () => document.removeEventListener('mousedown', handleOutside);
     }, [onClose, anchorRef]);
 
+    useLayoutEffect(() => {
+        if (typeof window === 'undefined') return undefined;
+
+        const updateLayout = () => {
+            const viewportWidth = window.innerWidth || 1280;
+            const viewportHeight = window.innerHeight || 720;
+            const availableWidth = Math.max(280, viewportWidth - 24);
+            const width = Math.min(460, availableWidth);
+            const preferredHeight = 560;
+            const anchorRect = anchorRef.current && typeof anchorRef.current.getBoundingClientRect === 'function'
+                ? anchorRef.current.getBoundingClientRect()
+                : null;
+            const preferredLeft = anchorRect ? (anchorRect.right - width) : (viewportWidth - width - 12);
+            const left = Math.min(
+                Math.max(12, preferredLeft),
+                Math.max(12, viewportWidth - width - 12)
+            );
+            const belowTop = anchorRect ? (anchorRect.bottom + 8) : 12;
+            const aboveTop = anchorRect ? Math.max(12, anchorRect.top - preferredHeight - 8) : 12;
+            const shouldOpenAbove = Boolean(
+                anchorRect
+                && (belowTop + preferredHeight > viewportHeight - 12)
+                && anchorRect.top > (viewportHeight - anchorRect.bottom)
+            );
+            const top = shouldOpenAbove ? aboveTop : Math.max(12, belowTop);
+            const maxHeight = Math.max(240, viewportHeight - top - 12);
+            setPopoverLayout({ top, left, width, maxHeight });
+        };
+
+        updateLayout();
+        window.addEventListener('resize', updateLayout);
+        window.addEventListener('scroll', updateLayout, true);
+        return () => {
+            window.removeEventListener('resize', updateLayout);
+            window.removeEventListener('scroll', updateLayout, true);
+        };
+    }, [anchorRef]);
+
     const resetField = (key) => {
         setThemeOverrides(prev => {
             const next = { ...prev };
@@ -540,48 +689,173 @@ function ThemeEditorPopover({ theme, themeName, themeOverrides, setThemeOverride
     };
 
     const clearAll = () => setThemeOverrides({});
+    const controlGridColumns = popoverLayout.width < 420 ? '1fr' : 'repeat(2, minmax(0, 1fr))';
+
+    const renderColorField = ({ key, label }) => (
+        <div key={key} style={{
+            display: 'flex',
+            flexDirection: 'column',
+            gap: '6px',
+            padding: '8px',
+            borderRadius: '10px',
+            border: `1px solid ${theme.border}`,
+            background: theme.headerSubtleBg || theme.hover,
+        }}>
+            <label style={{ fontSize: '11px', color: theme.textSec, fontWeight: 600 }}>{label}</label>
+            <div style={{ display: 'grid', gridTemplateColumns: '28px minmax(0, 1fr) auto', alignItems: 'center', gap: '8px' }}>
+                <input
+                    type="color"
+                    value={colorToInputHex(theme[key], '#000000')}
+                    onChange={(e) => setThemeOverrides(prev => ({ ...prev, [key]: e.target.value }))}
+                    style={{ width: '28px', height: '28px', border: 'none', padding: 0, background: 'transparent', cursor: 'pointer' }}
+                />
+                <span style={{
+                    fontSize: '11px',
+                    color: theme.text,
+                    fontFamily: 'monospace',
+                    whiteSpace: 'nowrap',
+                    overflow: 'hidden',
+                    textOverflow: 'ellipsis',
+                }}>
+                    {theme[key] || '#000000'}
+                </span>
+                <button onClick={() => resetField(key)} style={{
+                    border: `1px solid ${theme.border}`,
+                    background: theme.surfaceBg || '#fff',
+                    color: theme.textSec,
+                    borderRadius: '8px',
+                    fontSize: '10px',
+                    padding: '5px 7px',
+                    cursor: 'pointer'
+                }}>
+                    Reset
+                </button>
+            </div>
+        </div>
+    );
 
     return (
         <div ref={popoverRef} style={{
-            position: 'absolute',
-            top: '100%',
-            right: 0,
+            position: 'fixed',
+            top: `${popoverLayout.top}px`,
+            left: `${popoverLayout.left}px`,
             zIndex: 9999,
             background: theme.surfaceBg || '#fff',
             border: `1px solid ${theme.border}`,
             borderRadius: theme.radiusSm || '10px',
             boxShadow: theme.shadowMd || '0 12px 28px rgba(0,0,0,0.12)',
             padding: '12px',
-            minWidth: '280px',
-            marginTop: '6px',
+            width: `${popoverLayout.width}px`,
+            maxWidth: 'calc(100vw - 24px)',
+            maxHeight: `${popoverLayout.maxHeight}px`,
+            overflowY: 'auto',
+            boxSizing: 'border-box',
         }}>
             <div style={{ fontWeight: 700, fontSize: '13px', color: theme.text, marginBottom: '4px' }}>Theme Colors</div>
             <div style={{ fontSize: '11px', color: theme.textSec, marginBottom: '10px' }}>{themeName} with saved overrides</div>
-            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '8px' }}>
-                {THEME_COLOR_FIELDS.map(({ key, label }) => (
-                    <div key={key} style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
-                        <label style={{ fontSize: '11px', color: theme.textSec }}>{label}</label>
-                        <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
-                            <input
-                                type="color"
-                                value={theme[key] || '#000000'}
-                                onChange={(e) => setThemeOverrides(prev => ({ ...prev, [key]: e.target.value }))}
-                                style={{ width: '28px', height: '28px', border: 'none', padding: 0, background: 'transparent', cursor: 'pointer' }}
-                            />
-                            <button onClick={() => resetField(key)} style={{
-                                border: `1px solid ${theme.border}`,
-                                background: theme.headerSubtleBg || theme.hover,
-                                color: theme.textSec,
-                                borderRadius: '8px',
-                                fontSize: '10px',
-                                padding: '5px 6px',
-                                cursor: 'pointer'
-                            }}>
-                                Reset
-                            </button>
+            <div style={{ fontSize: '11px', fontWeight: 700, color: theme.textSec, letterSpacing: '0.04em', textTransform: 'uppercase', marginBottom: '8px' }}>
+                Core Colors
+            </div>
+            <div style={{ display: 'grid', gridTemplateColumns: controlGridColumns, gap: '8px' }}>
+                {THEME_CORE_COLOR_FIELDS.map(renderColorField)}
+            </div>
+            <div style={{
+                marginTop: '12px',
+                paddingTop: '12px',
+                borderTop: `1px solid ${theme.border}`,
+            }}>
+                <div style={{ fontSize: '11px', fontWeight: 700, color: theme.textSec, letterSpacing: '0.04em', textTransform: 'uppercase', marginBottom: '8px' }}>
+                    Structure
+                </div>
+                <div style={{
+                    display: 'grid',
+                    gridTemplateColumns: controlGridColumns,
+                    gap: '8px',
+                    marginBottom: '10px',
+                }}>
+                    <div style={{
+                        borderRadius: '10px',
+                        border: `1px solid ${theme.border}`,
+                        overflow: 'hidden',
+                        background: theme.surfaceBg || theme.background || '#fff',
+                    }}>
+                        <div style={{
+                            padding: '8px 10px',
+                            background: theme.headerBg,
+                            color: theme.text,
+                            borderBottom: `1px solid ${theme.border}`,
+                            fontSize: '11px',
+                            fontWeight: 700,
+                        }}>
+                            Column Header
+                        </div>
+                        <div style={{
+                            padding: '8px 10px',
+                            background: theme.hierarchyBg,
+                            color: theme.text,
+                            fontSize: '11px',
+                        }}>
+                            Hierarchy Column
                         </div>
                     </div>
-                ))}
+                    <div style={{
+                        borderRadius: '10px',
+                        border: `1px solid ${theme.border}`,
+                        overflow: 'hidden',
+                        background: theme.surfaceBg || theme.background || '#fff',
+                    }}>
+                        <div style={{
+                            padding: '8px 10px',
+                            background: theme.totalBg,
+                            color: theme.totalText,
+                            borderBottom: `1px solid ${theme.border}`,
+                            fontSize: '11px',
+                            fontWeight: 600,
+                        }}>
+                            Total
+                        </div>
+                        <div style={{
+                            padding: '8px 10px',
+                            background: theme.totalBgStrong,
+                            color: theme.totalTextStrong,
+                            fontSize: '11px',
+                            fontWeight: 700,
+                        }}>
+                            Grand Total
+                        </div>
+                    </div>
+                </div>
+                <div style={{ display: 'grid', gridTemplateColumns: controlGridColumns, gap: '8px' }}>
+                    {THEME_STRUCTURE_COLOR_FIELDS.map(renderColorField)}
+                </div>
+            </div>
+            <div style={{
+                marginTop: '12px',
+                paddingTop: '12px',
+                borderTop: `1px solid ${theme.border}`,
+            }}>
+                <div style={{ fontSize: '11px', fontWeight: 700, color: theme.textSec, letterSpacing: '0.04em', textTransform: 'uppercase', marginBottom: '8px' }}>
+                    Edited Cells
+                </div>
+                <div style={{
+                    display: 'flex',
+                    alignItems: 'center',
+                    justifyContent: 'space-between',
+                    gap: '12px',
+                    padding: '10px 12px',
+                    marginBottom: '10px',
+                    borderRadius: '10px',
+                    ...editedPreviewStyle,
+                }}>
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: '3px' }}>
+                        <div style={{ fontSize: '11px', fontWeight: 700 }}>Edited Cell Preview</div>
+                        <div style={{ fontSize: '10px', color: theme.editedCellText || theme.textSec }}>Background, border, and text shown together</div>
+                    </div>
+                    <div style={{ fontWeight: 700 }}>12,480</div>
+                </div>
+                <div style={{ display: 'grid', gridTemplateColumns: controlGridColumns, gap: '8px' }}>
+                    {THEME_EDITED_COLOR_FIELDS.map(renderColorField)}
+                </div>
             </div>
             <div style={{ display: 'flex', gap: '8px', marginTop: '12px' }}>
                 <button onClick={clearAll} style={{ border: `1px solid ${theme.border}`, background: theme.headerSubtleBg || theme.hover, color: theme.text, borderRadius: '8px', padding: '7px 10px', cursor: 'pointer', flex: 1 }}>Clear Overrides</button>
@@ -591,16 +865,11 @@ function ThemeEditorPopover({ theme, themeName, themeOverrides, setThemeOverride
     );
 }
 
-export function PivotAppBar({
+export const PivotAppBar = React.memo(function PivotAppBar({
     cinemaMode, setCinemaMode,
     sidebarOpen, setSidebarOpen,
     themeName, setThemeName,
     themeOverrides, setThemeOverrides,
-    showRowNumbers, setShowRowNumbers,
-    showFloatingFilters, setShowFloatingFilters,
-    stickyHeaders, setStickyHeaders,
-    showRowTotals, setShowRowTotals,
-    showColTotals, setShowColTotals,
     spacingMode, setSpacingMode, spacingLabels,
     layoutMode, setLayoutMode,
     onAutoSizeColumns,
@@ -610,8 +879,6 @@ export function PivotAppBar({
     rowCount, exportPivot,
     onTransposePivot,
     canTranspose,
-    theme, styles,
-    filters, setFilters,
     onSaveView,
     pivotTitle,
     fontFamily, setFontFamily,
@@ -619,7 +886,6 @@ export function PivotAppBar({
     zoomLevel, setZoomLevel,
     decimalPlaces, setDecimalPlaces,
     defaultValueFormat, setDefaultValueFormat,
-    numberGroupSeparator, setNumberGroupSeparator,
     columnDecimalOverrides, setColumnDecimalOverrides,
     columnFormatOverrides, setColumnFormatOverrides,
     columnGroupSeparatorOverrides, setColumnGroupSeparatorOverrides,
@@ -629,18 +895,32 @@ export function PivotAppBar({
     canApplySelectionValueFormat,
     onApplySelectionValueFormat,
     dataBarsColumns, setDataBarsColumns,
+    canUndoTransactions,
+    canRedoTransactions,
+    transactionHistoryPending,
+    onUndoTransaction,
+    onRedoTransaction,
+    editValueDisplayMode,
+    setEditValueDisplayMode,
+    hasComparedValues,
     canCreateSelectionChart,
     onCreateSelectionChart,
     onAddChartPane,
-    pivotMode = 'pivot',
-    setPivotMode,
-    reportDef,
-    setReportDef,
-    savedReports = [],
-    setSavedReports,
-    activeReportId,
-    setActiveReportId,
 }) {
+    const { theme, styles } = usePivotTheme();
+    const {
+        filters, setFilters,
+        pivotMode, setPivotMode,
+        reportDef, setReportDef,
+        savedReports, setSavedReports,
+        activeReportId, setActiveReportId,
+        showFloatingFilters, setShowFloatingFilters,
+        stickyHeaders, setStickyHeaders,
+        showColTotals, setShowColTotals,
+        showRowTotals, setShowRowTotals,
+        showRowNumbers, setShowRowNumbers,
+        numberGroupSeparator, setNumberGroupSeparator,
+    } = usePivotConfig();
     // Derive all selection-dependent state directly from selectedCells
     // inside AppBar to avoid stale prop issues from parent renders
     const selectedCellKeys = useMemo(() => {
@@ -841,6 +1121,28 @@ export function PivotAppBar({
         color: theme.primary,
         boxShadow: theme.shadowInset || 'none',
     };
+    const valueModeFrameStyle = {
+        display: 'inline-flex',
+        alignItems: 'center',
+        gap: '4px',
+        padding: '3px',
+        borderRadius: theme.radiusSm || '10px',
+        background: theme.headerSubtleBg || theme.hover,
+        border: `1px solid ${theme.border}`,
+        boxShadow: theme.shadowInset || 'none',
+    };
+    const valueModeButtonStyle = (mode, disabled = false) => ({
+        ...btnBase,
+        minHeight: '30px',
+        padding: '4px 10px',
+        borderRadius: '8px',
+        background: editValueDisplayMode === mode ? theme.select : 'transparent',
+        border: `1px solid ${editValueDisplayMode === mode ? theme.primary : 'transparent'}`,
+        color: editValueDisplayMode === mode ? theme.primary : theme.textSec,
+        opacity: disabled ? 0.45 : 1,
+        cursor: disabled ? 'not-allowed' : 'pointer',
+        boxShadow: 'none',
+    });
     const btnPrimary = {
         ...btnBase,
         background: theme.primary,
@@ -913,6 +1215,11 @@ export function PivotAppBar({
         ...btnSubtle,
         outline: 'none',
         cursor: 'pointer',
+    };
+    const themeSelectStyle = {
+        ...compactSelectStyle,
+        background: theme.themeSelectorBg || theme.headerSubtleBg || theme.hover,
+        color: theme.themeSelectorText || theme.text,
     };
     const sectionToggleButtonStyle = (active) => (active ? btnActive : btnSubtle);
 
@@ -1122,6 +1429,7 @@ export function PivotAppBar({
             </button>
             {typeof onAddChartPane === 'function' ? (
                 <button
+                    data-add-chart-pane="true"
                     style={{ ...btnSubtle, display: 'inline-flex', alignItems: 'center', gap: '6px' }}
                     onClick={onAddChartPane}
                     title="Add a resizable chart pane beside the pivot table"
@@ -1155,9 +1463,20 @@ export function PivotAppBar({
                 )}
             </div>
             <select value={themeName} onChange={e => setThemeName(e.target.value)}
-                style={compactSelectStyle}>
+                style={themeSelectStyle}>
                 {[...THEME_ORDER, ...Object.keys(themes).filter(t => !THEME_ORDER.includes(t))]
-                    .map(t => <option key={t} value={t}>{THEME_LABELS[t] || t.replace(/_/g, ' ').replace(/\b\w/g, c => c.toUpperCase())}</option>)}
+                    .map(t => (
+                        <option
+                            key={t}
+                            value={t}
+                            style={{
+                                background: theme.themeSelectorMenuBg || theme.surfaceBg || theme.background,
+                                color: theme.themeSelectorMenuText || theme.text,
+                            }}
+                        >
+                            {THEME_LABELS[t] || t.replace(/_/g, ' ').replace(/\b\w/g, c => c.toUpperCase())}
+                        </option>
+                    ))}
             </select>
             <button style={btnSaveView} onClick={onSaveView}><Icons.Save /> Save View</button>
             <button style={btnPrimary} onClick={exportPivot}>
@@ -1301,10 +1620,46 @@ export function PivotAppBar({
                     </div>
                 </div>
                 <div style={innerDividerStyle} />
-                <button style={sectionToggleButtonStyle(openToolbarSections.view)} onClick={() => toggleToolbarSection('view')}>View</button>
-                <button style={sectionToggleButtonStyle(openToolbarSections.format)} onClick={() => toggleToolbarSection('format')}>Format</button>
-                <button style={sectionToggleButtonStyle(openToolbarSections.charts)} onClick={() => toggleToolbarSection('charts')}>Charts</button>
-                <button style={sectionToggleButtonStyle(openToolbarSections.theme)} onClick={() => toggleToolbarSection('theme')}>Theme</button>
+                <button
+                    style={canUndoTransactions && !transactionHistoryPending ? btnSubtle : { ...btnSubtle, opacity: 0.45, cursor: 'not-allowed' }}
+                    onClick={onUndoTransaction}
+                    title="Undo the last edit or layout change (Ctrl/Cmd+Z)"
+                    disabled={!canUndoTransactions || transactionHistoryPending}
+                >
+                    Undo
+                </button>
+                <button
+                    style={canRedoTransactions && !transactionHistoryPending ? btnSubtle : { ...btnSubtle, opacity: 0.45, cursor: 'not-allowed' }}
+                    onClick={onRedoTransaction}
+                    title="Redo the last edit or layout change (Ctrl+Y or Cmd/Ctrl+Shift+Z)"
+                    disabled={!canRedoTransactions || transactionHistoryPending}
+                >
+                    Redo
+                </button>
+                <div style={valueModeFrameStyle} title="Switch between current edited values and the original values captured before this session's active edits">
+                    <button
+                        type="button"
+                        data-edit-value-mode="edited"
+                        aria-pressed={editValueDisplayMode === 'edited'}
+                        style={valueModeButtonStyle('edited')}
+                        onClick={() => setEditValueDisplayMode('edited')}
+                    >
+                        Edited
+                    </button>
+                    <button
+                        type="button"
+                        data-edit-value-mode="original"
+                        aria-pressed={editValueDisplayMode === 'original'}
+                        style={valueModeButtonStyle('original')}
+                        onClick={() => setEditValueDisplayMode('original')}
+                    >
+                        Original
+                    </button>
+                </div>
+                <button data-toolbar-section-toggle="view" style={sectionToggleButtonStyle(openToolbarSections.view)} onClick={() => toggleToolbarSection('view')}>View</button>
+                <button data-toolbar-section-toggle="format" style={sectionToggleButtonStyle(openToolbarSections.format)} onClick={() => toggleToolbarSection('format')}>Format</button>
+                <button data-toolbar-section-toggle="charts" style={sectionToggleButtonStyle(openToolbarSections.charts)} onClick={() => toggleToolbarSection('charts')}>Charts</button>
+                <button data-toolbar-section-toggle="theme" style={sectionToggleButtonStyle(openToolbarSections.theme)} onClick={() => toggleToolbarSection('theme')}>Theme</button>
                 <button
                     style={cinemaMode ? btnActive : btnSubtle}
                     onClick={() => setCinemaMode(!cinemaMode)}
@@ -1340,4 +1695,4 @@ export function PivotAppBar({
         />
         </>
     );
-}
+});

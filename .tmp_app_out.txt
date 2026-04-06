@@ -1,0 +1,9 @@
+Preloading pivot datasets before starting Dash...
+Generating simulation data (2M rows)...
+Data loaded into Pivot Engine: 2000000 rows.
+Pre-materializing default hierarchy...
+Hierarchy materialized.
+Dash is running on http://127.0.0.1:8050/
+
+ * Serving Flask app 'app'
+ * Debug mode: on

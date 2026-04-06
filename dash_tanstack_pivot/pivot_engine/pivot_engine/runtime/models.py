@@ -14,6 +14,16 @@ def safe_int(value: Any, default: int = 0) -> int:
         return default
 
 
+def first_present(mapping: Any, *keys: str, default: Any = None) -> Any:
+    """Return the first non-None value found in mapping for the given keys."""
+    if not isinstance(mapping, dict):
+        return default
+    for key in keys:
+        if key in mapping and mapping.get(key) is not None:
+            return mapping.get(key)
+    return default
+
+
 @dataclass
 class PivotViewState:
     """Frontend-independent pivot state for a single request."""
@@ -29,10 +39,16 @@ class PivotViewState:
     show_row_totals: bool = False
     show_col_totals: bool = True
     cell_update: Optional[Dict[str, Any]] = None
+    cell_updates: List[Dict[str, Any]] = field(default_factory=list)
+    transaction_request: Optional[Dict[str, Any]] = None
     drill_through: Optional[Dict[str, Any]] = None
+    detail_request: Optional[Dict[str, Any]] = None
     viewport: Dict[str, Any] = field(default_factory=dict)
     chart_request: Dict[str, Any] = field(default_factory=dict)
-    pivot_mode: str = "pivot"
+    view_mode: str = "pivot"
+    detail_mode: str = "none"
+    tree_config: Optional[Dict[str, Any]] = None
+    detail_config: Optional[Dict[str, Any]] = None
     report_def: Optional[Dict[str, Any]] = None
 
 
@@ -56,6 +72,8 @@ class PivotRequestContext:
     viewport_active: bool = False
     start_row: int = 0
     end_row: Optional[int] = None
+    request_id: Optional[str] = None
+    profiling: bool = False
 
     @classmethod
     def from_frontend(
@@ -80,32 +98,34 @@ class PivotRequestContext:
 
         viewport_active = (
             isinstance(viewport_meta, dict)
-            and viewport_meta.get("start") is not None
-            and viewport_meta.get("end") is not None
+            and first_present(viewport_meta, "start") is not None
+            and first_present(viewport_meta, "end") is not None
         )
 
-        start_row = safe_int(viewport_meta.get("start"), 0) if viewport_active else 0
-        end_row = safe_int(viewport_meta.get("end"), 1000) if viewport_active else None
-        col_end_raw = viewport_meta.get("col_end")
+        start_row = safe_int(first_present(viewport_meta, "start"), 0) if viewport_active else 0
+        end_row = safe_int(first_present(viewport_meta, "end"), 1000) if viewport_active else None
+        col_end_raw = first_present(viewport_meta, "col_end", "colEnd")
         col_end = safe_int(col_end_raw, 0) if col_end_raw is not None else None
 
         return cls(
             table=table,
             trigger_prop=trigger_prop,
-            session_id=str(viewport_meta.get("session_id") or "anonymous"),
-            client_instance=str(viewport_meta.get("client_instance") or "default"),
-            state_epoch=safe_int(viewport_meta.get("state_epoch"), 0),
-            window_seq=safe_int(viewport_meta.get("window_seq", viewport_meta.get("version", 0)), 0),
-            abort_generation=safe_int(viewport_meta.get("abort_generation"), 0),
+            session_id=str(first_present(viewport_meta, "session_id", "sessionId", default="anonymous") or "anonymous"),
+            client_instance=str(first_present(viewport_meta, "client_instance", "clientInstance", default="default") or "default"),
+            state_epoch=safe_int(first_present(viewport_meta, "state_epoch", "stateEpoch"), 0),
+            window_seq=safe_int(first_present(viewport_meta, "window_seq", "windowSeq", "version"), 0),
+            abort_generation=safe_int(first_present(viewport_meta, "abort_generation", "abortGeneration"), 0),
             original_intent=original_intent,
             intent=intent,
-            col_start=safe_int(viewport_meta.get("col_start"), 0),
+            col_start=safe_int(first_present(viewport_meta, "col_start", "colStart"), 0),
             col_end=col_end,
-            needs_col_schema=bool(viewport_meta.get("needs_col_schema", False)),
-            include_grand_total=bool(viewport_meta.get("include_grand_total", False)),
+            needs_col_schema=bool(first_present(viewport_meta, "needs_col_schema", "needsColSchema", default=False)),
+            include_grand_total=bool(first_present(viewport_meta, "include_grand_total", "includeGrandTotal", default=False)),
             viewport_active=viewport_active,
             start_row=start_row,
             end_row=end_row,
+            request_id=str(first_present(viewport_meta, "requestId", "request_id", default="") or "") or None,
+            profiling=bool(first_present(viewport_meta, "profile", "profiling", default=False)),
         )
 
     @property
@@ -113,9 +133,11 @@ class PivotRequestContext:
         """Categorize trigger for transport adapters."""
         if not self.trigger_prop:
             return None
+        if self.trigger_prop.endswith(".detailRequest"):
+            return "detail"
         if self.trigger_prop.endswith(".drillThrough"):
             return "drill"
-        if self.trigger_prop.endswith(".cellUpdate"):
+        if self.trigger_prop.endswith(".cellUpdate") or self.trigger_prop.endswith(".cellUpdates"):
             return "update"
         if self.trigger_prop.endswith(".chartRequest"):
             return "chart"
@@ -134,8 +156,13 @@ class PivotServiceResponse:
     columns: Optional[List[Dict[str, Any]]] = None
     filter_options: Optional[Dict[str, Any]] = None
     drill_records: Optional[List[Dict[str, Any]]] = None
+    drill_payload: Optional[Dict[str, Any]] = None
+    detail_payload: Optional[Dict[str, Any]] = None
     data_offset: Optional[int] = None
     data_version: Optional[int] = None
     message: Optional[str] = None
     color_scale_stats: Optional[Dict[str, Any]] = None
     chart_data: Optional[Dict[str, Any]] = None
+    transaction_result: Optional[Dict[str, Any]] = None
+    patch_payload: Optional[Dict[str, Any]] = None
+    profile: Optional[Dict[str, Any]] = None

@@ -126,7 +126,7 @@ class HierarchicalVirtualScrollManager:
         
         # If pivoting is requested (spec.columns is set), we proceed
         if spec.columns and len(spec.columns) > 0:
-            top_n = spec.pivot_config.top_n if spec.pivot_config and spec.pivot_config.top_n else 50
+            top_n = spec.pivot_config.top_n if spec.pivot_config else 50
             col_order_measure = spec.measures[0] 
             
             try:

@@ -71,7 +71,8 @@ app.layout = html.Div(
 )
 
 # ---------------------------------------------------------------------------
-# 5. Register the transport callback (wires viewport -> data)
+# 5. Register the unified runtime callback
+#    It serves data windows, filter lists, charts, and drill-through.
 # ---------------------------------------------------------------------------
 register_dash_pivot_transport_callback(app, lambda: service, pivot_id="pivot-basic")
 

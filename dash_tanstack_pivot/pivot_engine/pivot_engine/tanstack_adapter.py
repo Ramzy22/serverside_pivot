@@ -6,16 +6,28 @@ from typing import Dict, Any, List, Optional, Callable, Union
 from dataclasses import dataclass
 from enum import Enum
 import asyncio
+import copy
 from functools import cmp_to_key
 import logging
 import math
 import re
+import time
+import json
+import hashlib
+from collections import OrderedDict
 from .scalable_pivot_controller import ScalablePivotController
 from .types.pivot_spec import PivotSpec, Measure
 from .security import User, apply_rls_to_spec
+from .formula_mixin import FormulaEngineMixin
 
 _adapter_logger = logging.getLogger("pivot_engine.adapter")
 _FORMULA_IDENTIFIER_RE = re.compile(r"\b[A-Za-z_][A-Za-z0-9_]*\b")
+_INITIAL_SCHEMA_WINDOW_CENTER_COLS = 24
+_LOCAL_CACHE_TTL_SECONDS = 10.0
+_PIVOT_CATALOG_CACHE_SIZE = 32
+_RESPONSE_WINDOW_CACHE_SIZE = 128
+_ROW_BLOCK_CACHE_SIZE = 1024
+_ROW_BLOCK_SIZE = 100
 
 
 def _normalize_formula_reference_key(value: Any, fallback: Any = "formula") -> str:
@@ -189,9 +201,10 @@ class TanStackResponse:
     version: Optional[int] = None
     col_schema: Optional[Dict[str, Any]] = None
     color_scale_stats: Optional[Dict[str, Any]] = None
+    profile: Optional[Dict[str, Any]] = None
 
 
-class TanStackPivotAdapter:
+class TanStackPivotAdapter(FormulaEngineMixin):
     """Direct TanStack adapter that bypasses REST API and connects to controller"""
     
     def __init__(self, controller: ScalablePivotController, debug: bool = False):
@@ -202,6 +215,551 @@ class TanStackPivotAdapter:
         # reuse the schema from the last needs_col_schema=True response instead of
         # rescanning all row dict keys on every scroll (O(rows*cols) → O(1)).
         self._center_col_ids_cache: dict = {}
+        self._pivot_column_catalog_cache: OrderedDict[str, tuple[Dict[str, Any], float]] = OrderedDict()
+        self._response_window_cache: OrderedDict[str, tuple[TanStackResponse, float]] = OrderedDict()
+        self._row_block_cache: OrderedDict[str, tuple[Dict[str, Any], float]] = OrderedDict()
+        self._grand_total_cache: OrderedDict[str, tuple[Dict[str, Any], float]] = OrderedDict()
+        self._prefetch_request_keys: set[str] = set()
+        self.viewport_prefetch_enabled: bool = False
+
+    @staticmethod
+    def _profile_ms(start: Optional[float], end: Optional[float]) -> Optional[float]:
+        if start is None or end is None:
+            return None
+        return round((end - start) * 1000, 3)
+
+    def _attach_virtual_scroll_profile(
+        self,
+        response: "TanStackResponse",
+        *,
+        started_at: float,
+        request: "TanStackRequest",
+        start_row: int,
+        end_row: int,
+        col_start: int,
+        col_end: Optional[int],
+        needs_col_schema: bool,
+        include_grand_total: bool,
+        path: str,
+        stages: Dict[str, Optional[float]],
+        extra: Optional[Dict[str, Any]] = None,
+    ) -> "TanStackResponse":
+        response.profile = {
+            "adapter": {
+                "operation": "virtual_scroll",
+                "path": path,
+                "table": request.table,
+                "rowWindow": [int(start_row or 0), int(end_row if end_row is not None else start_row or 0)],
+                "colWindow": [int(col_start or 0), None if col_end is None else int(col_end)],
+                "needsColSchema": bool(needs_col_schema),
+                "includeGrandTotal": bool(include_grand_total),
+                "responseRows": len(response.data or []),
+                "responseColumns": len(response.columns or []),
+                "totalRows": response.total_rows,
+                "totalMs": self._profile_ms(started_at, time.perf_counter()),
+                **{key: value for key, value in (stages or {}).items() if value is not None},
+            }
+        }
+        if isinstance(extra, dict):
+            for key, value in extra.items():
+                if value is not None:
+                    response.profile[key] = value
+        return response
+
+    @staticmethod
+    def _stable_json(value: Any) -> str:
+        return json.dumps(value, sort_keys=True, default=str, separators=(",", ":"))
+
+    def _request_structure_fingerprint(self, request: "TanStackRequest") -> str:
+        payload = {
+            "table": request.table,
+            "columns": request.columns or [],
+            "filters": request.filters or {},
+            "sorting": request.sorting or [],
+            "grouping": request.grouping or [],
+            "aggregations": request.aggregations or [],
+            "totals": bool(request.totals),
+            "row_totals": bool(request.row_totals),
+            "column_sort_options": request.column_sort_options or {},
+        }
+        return hashlib.sha256(self._stable_json(payload).encode()).hexdigest()[:24]
+
+    def _center_column_catalog_cache_key(self, request: "TanStackRequest") -> str:
+        payload = {
+            "table": request.table,
+            "columns": request.columns or [],
+            "filters": request.filters or {},
+            "column_sort_options": request.column_sort_options or {},
+        }
+        return hashlib.sha256(self._stable_json(payload).encode()).hexdigest()[:24]
+
+    @staticmethod
+    def _normalize_expanded_paths(expanded_paths: Union[List[List[str]], bool, None]) -> tuple:
+        if expanded_paths is True:
+            return (("__ALL__",),)
+        normalized = []
+        for path in expanded_paths or []:
+            if path == ["__ALL__"]:
+                return (("__ALL__",),)
+            if not isinstance(path, list) or not path:
+                continue
+            normalized.append(tuple("" if value is None else str(value) for value in path))
+        return tuple(sorted(set(normalized)))
+
+    @staticmethod
+    def _clone_response(response: "TanStackResponse", include_profile: bool = False) -> "TanStackResponse":
+        if response is None:
+            return response
+        return TanStackResponse(
+            data=[dict(row) for row in (response.data or [])],
+            columns=[dict(column) for column in (response.columns or [])],
+            pagination=dict(response.pagination) if isinstance(response.pagination, dict) else response.pagination,
+            total_rows=response.total_rows,
+            grouping=[
+                dict(item) if isinstance(item, dict) else item
+                for item in (response.grouping or [])
+            ] if response.grouping else response.grouping,
+            version=response.version,
+            col_schema={
+                **response.col_schema,
+                "columns": [
+                    dict(column) for column in (response.col_schema.get("columns") or [])
+                ],
+            } if isinstance(response.col_schema, dict) else response.col_schema,
+            color_scale_stats=(
+                json.loads(json.dumps(response.color_scale_stats, default=str))
+                if response.color_scale_stats is not None
+                else None
+            ),
+            profile=(
+                json.loads(json.dumps(response.profile, default=str))
+                if include_profile and response.profile is not None
+                else None
+            ),
+        )
+
+    @staticmethod
+    def _cache_lookup(cache: OrderedDict, key: str):
+        cached_entry = cache.get(key)
+        if not cached_entry:
+            return None
+        value, expires_at = cached_entry
+        if time.time() > expires_at:
+            cache.pop(key, None)
+            return None
+        cache.move_to_end(key)
+        return value
+
+    @staticmethod
+    def _cache_store(cache: OrderedDict, key: str, value: Any, max_size: int, ttl_seconds: float):
+        cache[key] = (value, time.time() + ttl_seconds)
+        cache.move_to_end(key)
+        while len(cache) > max_size:
+            cache.popitem(last=False)
+
+    def _response_window_cache_key(
+        self,
+        request: "TanStackRequest",
+        start_row: int,
+        end_row: int,
+        expanded_paths: Union[List[List[str]], bool, None],
+        col_start: int,
+        col_end: Optional[int],
+        needs_col_schema: bool,
+        include_grand_total: bool,
+        requested_center_ids: Optional[List[str]],
+    ) -> str:
+        payload = {
+            "request": self._request_structure_fingerprint(request),
+            "expanded": self._normalize_expanded_paths(expanded_paths),
+            "start_row": int(start_row or 0),
+            "end_row": int(end_row if end_row is not None else start_row or 0),
+            "col_start": int(col_start or 0),
+            "col_end": None if col_end is None else int(col_end),
+            "needs_col_schema": bool(needs_col_schema),
+            "include_grand_total": bool(include_grand_total),
+            "requested_center_ids": list(requested_center_ids or []),
+        }
+        return hashlib.sha256(self._stable_json(payload).encode()).hexdigest()[:32]
+
+    def _row_block_cache_key(
+        self,
+        request: "TanStackRequest",
+        block_index: int,
+        expanded_paths: Union[List[List[str]], bool, None],
+        col_start: int,
+        col_end: Optional[int],
+        requested_center_ids: Optional[List[str]],
+    ) -> str:
+        payload = {
+            "request": self._request_structure_fingerprint(request),
+            "expanded": self._normalize_expanded_paths(expanded_paths),
+            "block_index": int(block_index),
+            "col_start": int(col_start or 0),
+            "col_end": None if col_end is None else int(col_end),
+            "requested_center_ids": list(requested_center_ids or []),
+        }
+        return hashlib.sha256(self._stable_json(payload).encode()).hexdigest()[:32]
+
+    def _grand_total_cache_key(
+        self,
+        request: "TanStackRequest",
+        expanded_paths: Union[List[List[str]], bool, None],
+        col_start: int,
+        col_end: Optional[int],
+        requested_center_ids: Optional[List[str]],
+    ) -> str:
+        payload = {
+            "request": self._request_structure_fingerprint(request),
+            "expanded": self._normalize_expanded_paths(expanded_paths),
+            "col_start": int(col_start or 0),
+            "col_end": None if col_end is None else int(col_end),
+            "requested_center_ids": list(requested_center_ids or []),
+        }
+        return hashlib.sha256(self._stable_json(payload).encode()).hexdigest()[:32]
+
+    def _store_row_block_window(
+        self,
+        request: "TanStackRequest",
+        response: "TanStackResponse",
+        start_row: int,
+        end_row: int,
+        expanded_paths: Union[List[List[str]], bool, None],
+        col_start: int,
+        col_end: Optional[int],
+        requested_center_ids: Optional[List[str]],
+    ) -> None:
+        if response is None or not isinstance(response.data, list):
+            return
+
+        grand_total_row = next((dict(row) for row in response.data if _is_grand_total_row(row)), None)
+        regular_rows = [dict(row) for row in response.data if isinstance(row, dict) and not _is_grand_total_row(row)]
+
+        if grand_total_row is not None:
+            self._cache_store(
+                self._grand_total_cache,
+                self._grand_total_cache_key(request, expanded_paths, col_start, col_end, requested_center_ids),
+                grand_total_row,
+                max_size=_ROW_BLOCK_CACHE_SIZE,
+                ttl_seconds=_LOCAL_CACHE_TTL_SECONDS,
+            )
+
+        if not regular_rows:
+            return
+
+        response_start = int(start_row or 0)
+        response_end = response_start + len(regular_rows) - 1
+        total_rows = response.total_rows if response.total_rows is not None else response_end + 1
+        start_block = response_start // _ROW_BLOCK_SIZE
+        end_block = response_end // _ROW_BLOCK_SIZE
+
+        for block_index in range(start_block, end_block + 1):
+            block_start = block_index * _ROW_BLOCK_SIZE
+            block_end = block_start + _ROW_BLOCK_SIZE - 1
+            abs_start = max(block_start, response_start)
+            abs_end = min(block_end, response_end)
+            rel_start = abs_start - response_start
+            rel_end = abs_end - response_start + 1
+            block_rows = regular_rows[rel_start:rel_end]
+            expected_rows = max(0, min(block_end + 1, int(total_rows)) - block_start)
+            is_complete = abs_start == block_start and len(block_rows) >= expected_rows and expected_rows > 0
+            if not is_complete:
+                continue
+            self._cache_store(
+                self._row_block_cache,
+                self._row_block_cache_key(request, block_index, expanded_paths, col_start, col_end, requested_center_ids),
+                {
+                    "rows": [dict(row) for row in block_rows[:expected_rows]],
+                    "total_rows": response.total_rows,
+                    "version": response.version,
+                    "pagination": dict(response.pagination) if isinstance(response.pagination, dict) else response.pagination,
+                    "grouping": [
+                        dict(item) if isinstance(item, dict) else item
+                        for item in (response.grouping or [])
+                    ] if response.grouping else response.grouping,
+                    "columns": [dict(column) for column in (response.columns or [])],
+                },
+                max_size=_ROW_BLOCK_CACHE_SIZE,
+                ttl_seconds=_LOCAL_CACHE_TTL_SECONDS,
+            )
+
+    def _get_cached_row_block_entries(
+        self,
+        request: "TanStackRequest",
+        start_row: int,
+        end_row: int,
+        expanded_paths: Union[List[List[str]], bool, None],
+        col_start: int,
+        col_end: Optional[int],
+        requested_center_ids: Optional[List[str]],
+    ) -> tuple[Dict[int, Dict[str, Any]], List[int]]:
+        if end_row is None:
+            return {}, []
+        start_block = max(int(start_row or 0), 0) // _ROW_BLOCK_SIZE
+        end_block = max(int(end_row), int(start_row or 0)) // _ROW_BLOCK_SIZE
+        entries: Dict[int, Dict[str, Any]] = {}
+        missing_blocks: List[int] = []
+        for block_index in range(start_block, end_block + 1):
+            entry = self._cache_lookup(
+                self._row_block_cache,
+                self._row_block_cache_key(request, block_index, expanded_paths, col_start, col_end, requested_center_ids),
+            )
+            if entry is None:
+                missing_blocks.append(block_index)
+                continue
+            entries[block_index] = entry
+        return entries, missing_blocks
+
+    def _assemble_cached_row_block_window(
+        self,
+        request: "TanStackRequest",
+        start_row: int,
+        end_row: int,
+        expanded_paths: Union[List[List[str]], bool, None],
+        col_start: int,
+        col_end: Optional[int],
+        include_grand_total: bool,
+        requested_center_ids: Optional[List[str]],
+    ) -> Optional["TanStackResponse"]:
+        block_entries, missing_blocks = self._get_cached_row_block_entries(
+            request,
+            start_row,
+            end_row,
+            expanded_paths,
+            col_start,
+            col_end,
+            requested_center_ids,
+        )
+        if missing_blocks:
+            return None
+
+        grand_total_row = None
+        if include_grand_total:
+            grand_total_row = self._cache_lookup(
+                self._grand_total_cache,
+                self._grand_total_cache_key(request, expanded_paths, col_start, col_end, requested_center_ids),
+            )
+            if grand_total_row is None:
+                return None
+
+        start_block = max(int(start_row or 0), 0) // _ROW_BLOCK_SIZE
+        end_block = max(int(end_row), int(start_row or 0)) // _ROW_BLOCK_SIZE
+        merged_rows: List[Dict[str, Any]] = []
+        metadata_source: Optional[Dict[str, Any]] = None
+        for block_index in range(start_block, end_block + 1):
+            entry = block_entries.get(block_index)
+            if entry is None:
+                return None
+            if metadata_source is None:
+                metadata_source = entry
+            merged_rows.extend(dict(row) for row in (entry.get("rows") or []))
+
+        trim_from = max(int(start_row or 0) - start_block * _ROW_BLOCK_SIZE, 0)
+        trim_to = trim_from + max(int(end_row if end_row is not None else start_row or 0) - int(start_row or 0) + 1, 0)
+        window_rows = merged_rows[trim_from:trim_to]
+        expected_rows = max(int(end_row if end_row is not None else start_row or 0) - int(start_row or 0) + 1, 0)
+        if len(window_rows) < expected_rows:
+            return None
+
+        if include_grand_total and isinstance(grand_total_row, dict):
+            window_rows = [*window_rows, dict(grand_total_row)]
+
+        metadata_source = metadata_source or {}
+        return TanStackResponse(
+            data=window_rows,
+            columns=[dict(column) for column in (metadata_source.get("columns") or [])],
+            pagination=dict(metadata_source["pagination"]) if isinstance(metadata_source.get("pagination"), dict) else metadata_source.get("pagination"),
+            total_rows=metadata_source.get("total_rows"),
+            grouping=[
+                dict(item) if isinstance(item, dict) else item
+                for item in (metadata_source.get("grouping") or [])
+            ] if metadata_source.get("grouping") else metadata_source.get("grouping"),
+            version=metadata_source.get("version"),
+            col_schema=None,
+            color_scale_stats=None,
+        )
+
+    @staticmethod
+    def _trim_transport_columns(columns: Optional[List[Dict[str, Any]]]) -> List[Dict[str, Any]]:
+        trimmed_columns: List[Dict[str, Any]] = []
+        for column in columns or []:
+            if not isinstance(column, dict):
+                continue
+            column_id = column.get("id")
+            if not column_id:
+                continue
+            if column_id == "__col_schema":
+                trimmed_columns.append({
+                    "id": "__col_schema",
+                    "col_schema": column.get("col_schema"),
+                })
+                continue
+            trimmed_column = {"id": column_id}
+            for key in ("header", "headerVal", "accessorKey"):
+                if column.get(key) is not None:
+                    trimmed_column[key] = column.get(key)
+            trimmed_columns.append(trimmed_column)
+        return trimmed_columns
+
+    def _finalize_windowed_response(self, response: "TanStackResponse") -> "TanStackResponse":
+        if response.columns:
+            response.columns = self._trim_transport_columns(response.columns)
+        return response
+
+    def _get_cached_window_response(self, cache_key: str) -> Optional["TanStackResponse"]:
+        cached_response = self._cache_lookup(self._response_window_cache, cache_key)
+        if cached_response is None:
+            return None
+        return self._clone_response(cached_response)
+
+    def _store_window_response(self, cache_key: str, response: "TanStackResponse") -> "TanStackResponse":
+        finalized = self._finalize_windowed_response(response)
+        self._cache_store(
+            self._response_window_cache,
+            cache_key,
+            self._clone_response(finalized),
+            max_size=_RESPONSE_WINDOW_CACHE_SIZE,
+            ttl_seconds=_LOCAL_CACHE_TTL_SECONDS,
+        )
+        return finalized
+
+    def _schedule_viewport_prefetch(
+        self,
+        request: "TanStackRequest",
+        start_row: int,
+        end_row: int,
+        expanded_paths: Union[List[List[str]], bool, None],
+        col_start: int,
+        col_end: Optional[int],
+        include_grand_total: bool,
+        total_rows: Optional[int],
+        total_center_cols: Optional[int],
+    ) -> None:
+        if end_row is None or total_rows is None:
+            return
+        if not self.viewport_prefetch_enabled:
+            return
+        task_manager = getattr(self.controller, "task_manager", None)
+        if task_manager is None:
+            return
+        try:
+            asyncio.get_running_loop()
+        except RuntimeError:
+            return
+
+        row_window_size = max(int(end_row) - int(start_row or 0) + 1, 1)
+        next_row_start = int(end_row) + 1
+        next_row_end = min(max(int(total_rows) - 1, 0), next_row_start + row_window_size - 1)
+        prefetch_specs: List[Dict[str, Any]] = []
+
+        if next_row_start <= next_row_end:
+            prefetch_specs.append({
+                "start_row": next_row_start,
+                "end_row": next_row_end,
+                "col_start": col_start,
+                "col_end": col_end,
+                "needs_col_schema": False,
+                "label": "rows",
+            })
+
+        if (
+            total_center_cols is not None
+            and col_end is not None
+            and col_start is not None
+            and int(col_end) < int(total_center_cols) - 1
+        ):
+            col_window_size = max(int(col_end) - int(col_start) + 1, 1)
+            next_col_start = int(col_end) + 1
+            next_col_end = min(int(total_center_cols) - 1, next_col_start + col_window_size - 1)
+            if next_col_start <= next_col_end:
+                prefetch_specs.append({
+                    "start_row": start_row,
+                    "end_row": end_row,
+                    "col_start": next_col_start,
+                    "col_end": next_col_end,
+                    "needs_col_schema": True,
+                    "label": "cols",
+                })
+
+        for prefetch_spec in prefetch_specs:
+            cache_key = self._response_window_cache_key(
+                request,
+                prefetch_spec["start_row"],
+                prefetch_spec["end_row"],
+                expanded_paths,
+                prefetch_spec["col_start"],
+                prefetch_spec["col_end"],
+                prefetch_spec["needs_col_schema"],
+                include_grand_total,
+                None,
+            )
+            if cache_key in self._prefetch_request_keys or self._cache_lookup(self._response_window_cache, cache_key) is not None:
+                continue
+
+            async def _run_prefetch(spec=prefetch_spec, prefetch_cache_key=cache_key):
+                try:
+                    await self.handle_virtual_scroll_request(
+                        request,
+                        spec["start_row"],
+                        spec["end_row"],
+                        expanded_paths=expanded_paths,
+                        col_start=spec["col_start"],
+                        col_end=spec["col_end"],
+                        needs_col_schema=spec["needs_col_schema"],
+                        include_grand_total=include_grand_total,
+                        requested_center_ids=None,
+                        _allow_prefetch=False,
+                    )
+                except Exception as exc:
+                    if self._debug:
+                        _adapter_logger.debug("Background prefetch %s failed: %s", spec["label"], exc)
+                finally:
+                    self._prefetch_request_keys.discard(prefetch_cache_key)
+
+            self._prefetch_request_keys.add(cache_key)
+            task_manager.create_task(_run_prefetch(), name=f"pivot_prefetch_{prefetch_spec['label']}_{cache_key[:8]}")
+
+    def _complete_virtual_scroll_response(
+        self,
+        response: "TanStackResponse",
+        response_cache_key: str,
+        request: "TanStackRequest",
+        start_row: int,
+        end_row: int,
+        expanded_paths: Union[List[List[str]], bool, None],
+        col_start: int,
+        col_end: Optional[int],
+        include_grand_total: bool,
+        allow_prefetch: bool,
+        requested_center_ids: Optional[List[str]] = None,
+    ) -> "TanStackResponse":
+        self._store_row_block_window(
+            request,
+            response,
+            start_row,
+            end_row,
+            expanded_paths,
+            col_start,
+            col_end,
+            requested_center_ids,
+        )
+        stored_response = self._store_window_response(response_cache_key, response)
+        if allow_prefetch:
+            total_center_cols = None
+            if isinstance(stored_response.col_schema, dict):
+                total_center_cols = stored_response.col_schema.get("total_center_cols")
+            self._schedule_viewport_prefetch(
+                request,
+                start_row,
+                end_row,
+                expanded_paths,
+                col_start,
+                col_end,
+                include_grand_total,
+                stored_response.total_rows,
+                total_center_cols,
+            )
+        return stored_response
 
     def _get_center_col_ids_from_rows(self, rows: list, row_meta_keys: set, pinned_ids: set) -> list:
         """Return an ordered list of center (non-pinned, non-meta) column IDs from result rows."""
@@ -406,12 +964,170 @@ class TanStackPivotAdapter:
 
         return center_col_ids, authoritative_columns
 
+    @staticmethod
+    def _dynamic_request_ids(request: "TanStackRequest") -> list[str]:
+        return [
+            str(col.get("id"))
+            for col in (request.columns or [])
+            if isinstance(col, dict)
+            and col.get("id")
+            and (col.get("aggregationFn") or col.get("isFormula"))
+        ]
+
+    def _build_center_col_ids_from_discovered_values(
+        self,
+        discovered_values: list[Any],
+        request: "TanStackRequest",
+    ) -> list[str]:
+        dynamic_ids = self._dynamic_request_ids(request)
+        if not dynamic_ids:
+            return []
+
+        ordered: list[str] = []
+        for raw_value in (discovered_values or []):
+            prefix = str(raw_value)
+            for dynamic_id in dynamic_ids:
+                ordered.append(f"{prefix}_{dynamic_id}")
+
+        if request.row_totals:
+            for dynamic_id in dynamic_ids:
+                ordered.append(f"__RowTotal__{dynamic_id}")
+
+        return ordered
+
+    def _resolve_center_window_ids(
+        self,
+        center_col_ids: list[str],
+        request: "TanStackRequest",
+        col_start: int,
+        col_end: Optional[int],
+        needs_col_schema: bool,
+        requested_center_ids: Optional[List[str]] = None,
+    ) -> Optional[list[str]]:
+        if not center_col_ids:
+            return None
+
+        if requested_center_ids:
+            requested_order = [
+                col_id for col_id in requested_center_ids
+                if isinstance(col_id, str) and col_id in center_col_ids
+            ]
+            return requested_order or None
+
+        safe_start = max(0, min(int(col_start or 0), len(center_col_ids) - 1))
+        if col_end is not None:
+            safe_end = max(safe_start, min(int(col_end), len(center_col_ids) - 1))
+            return center_col_ids[safe_start:safe_end + 1]
+
+        if needs_col_schema:
+            safe_end = min(len(center_col_ids) - 1, safe_start + _INITIAL_SCHEMA_WINDOW_CENTER_COLS - 1)
+            return center_col_ids[safe_start:safe_end + 1]
+
+        return None
+
+    def _materialized_pivot_values_for_window(
+        self,
+        window_center_ids: Optional[list[str]],
+        request: "TanStackRequest",
+    ) -> Optional[list[str]]:
+        if not window_center_ids:
+            return None
+
+        dynamic_ids = self._dynamic_request_ids(request)
+        if not dynamic_ids:
+            return None
+
+        ordered_values: list[str] = []
+        seen_values: set[str] = set()
+
+        for col_id in window_center_ids:
+            if not isinstance(col_id, str) or col_id.startswith("__RowTotal__"):
+                continue
+            for dynamic_id in dynamic_ids:
+                suffix = f"_{dynamic_id}"
+                if not col_id.endswith(suffix):
+                    continue
+                raw_value = col_id[:-len(suffix)]
+                if raw_value and raw_value not in seen_values:
+                    ordered_values.append(raw_value)
+                    seen_values.add(raw_value)
+                break
+
+        return ordered_values
+
+    async def _discover_pivot_column_values(self, spec: PivotSpec) -> list[str]:
+        if not spec.columns:
+            return []
+
+        request_like = TanStackRequest(
+            operation=TanStackOperation.GET_DATA,
+            table=spec.table,
+            columns=[
+                *({"id": row_id} for row_id in (spec.rows or [])),
+                *({
+                    "id": (
+                        measure.alias
+                        or (measure.field if getattr(measure, "agg", None) == "formula" else f"{measure.field}_{measure.agg}")
+                    ),
+                    "aggregationField": measure.field,
+                    "aggregationFn": measure.agg,
+                    "isFormula": getattr(measure, "agg", None) == "formula",
+                } for measure in (spec.measures or []))
+            ],
+            filters=spec.filters or [],
+            sorting=[],
+            grouping=spec.rows or [],
+            aggregations=[],
+            column_sort_options=spec.column_sort_options or {},
+        )
+        local_cache_key = self._center_column_catalog_cache_key(request_like)
+        cached_catalog = self._cache_lookup(self._pivot_column_catalog_cache, local_cache_key)
+        if isinstance(cached_catalog, dict) and isinstance(cached_catalog.get("values"), list):
+            return list(cached_catalog["values"])
+
+        order_measure = spec.measures[0] if spec.measures else None
+        col_query = self.controller.planner._build_column_values_query(
+            spec.table,
+            spec.columns,
+            spec.filters,
+            None,
+            order_measure,
+            spec.pivot_config.column_cursor if spec.pivot_config else None,
+            spec.column_sort_options,
+        )
+
+        col_cache_key = self.controller._cache_key_for_query(col_query, spec)
+        cached_cols_table = self.controller.cache.get(col_cache_key)
+        if cached_cols_table is not None and "_col_key" in cached_cols_table.column_names:
+            return [
+                str(value)
+                for value in cached_cols_table.column("_col_key").to_pylist()
+            ]
+
+        col_results_table = await self.controller._execute_ibis_expr_async(col_query)
+        self.controller.cache.set(col_cache_key, col_results_table)
+        if col_results_table is None or "_col_key" not in col_results_table.column_names:
+            return []
+        discovered_values = [
+            str(value)
+            for value in col_results_table.column("_col_key").to_pylist()
+        ]
+        self._cache_store(
+            self._pivot_column_catalog_cache,
+            local_cache_key,
+            {"values": list(discovered_values)},
+            max_size=_PIVOT_CATALOG_CACHE_SIZE,
+            ttl_seconds=_LOCAL_CACHE_TTL_SECONDS,
+        )
+        return discovered_values
+
     def _apply_col_windowing(self, tanstack_result: 'TanStackResponse', request: 'TanStackRequest',
                               col_start: int, col_end: Optional[int], needs_col_schema: bool,
-                              requested_center_ids: Optional[List[str]] = None) -> 'TanStackResponse':
+                              requested_center_ids: Optional[List[str]] = None,
+                              discovered_center_ids: Optional[List[str]] = None) -> 'TanStackResponse':
         """Apply column slicing and optionally build col_schema."""
         if not needs_col_schema and col_end is None and not requested_center_ids:
-            return tanstack_result
+            return self._finalize_windowed_response(tanstack_result)
 
         row_meta_keys = {
             '_id', '_path', '_isTotal', '_level', '_expanded', '_parentPath',
@@ -424,22 +1140,25 @@ class TanStackPivotAdapter:
             if isinstance(col, dict) and not col.get("aggregationFn") and not col.get("isFormula") and col.get("id")
         }
         excluded_ids = set(row_meta_keys) | pinned_ids | request_dimension_ids
-        # Include a stable filter fingerprint so that pivot column sets computed under
-        # one filter are not reused after the filter changes (which can change which
-        # column values exist and cause wrong columns to be windowed into the response).
-        import hashlib as _hashlib, json as _json
-        _filter_fp = _hashlib.md5(
-            _json.dumps(request.filters or {}, sort_keys=True, default=str).encode()
-        ).hexdigest()[:8]
-        _cols_fp = _hashlib.md5(
-            _json.dumps(request.columns or [], sort_keys=True, default=str).encode()
-        ).hexdigest()[:8]
-        _col_sort_fp = _hashlib.md5(
-            _json.dumps(request.column_sort_options or {}, sort_keys=True, default=str).encode()
-        ).hexdigest()[:8]
-        cache_key = (request.table, frozenset(excluded_ids), _filter_fp, _cols_fp, _col_sort_fp)
+        cache_key = (
+            request.table,
+            frozenset(excluded_ids),
+            self._center_column_catalog_cache_key(request),
+        )
 
-        if needs_col_schema or cache_key not in self._center_col_ids_cache or requested_center_ids:
+        if discovered_center_ids is not None:
+            center_col_ids = [
+                str(col_id)
+                for col_id in discovered_center_ids
+                if isinstance(col_id, str)
+            ]
+            self._center_col_ids_cache[cache_key] = center_col_ids
+            if tanstack_result.columns:
+                _, authoritative_columns = self._build_authoritative_response_columns(
+                    tanstack_result, request, row_meta_keys, excluded_ids
+                )
+                tanstack_result.columns = authoritative_columns
+        elif needs_col_schema or cache_key not in self._center_col_ids_cache or requested_center_ids:
             center_col_ids, authoritative_columns = self._build_authoritative_response_columns(
                 tanstack_result, request, row_meta_keys, excluded_ids
             )
@@ -453,16 +1172,33 @@ class TanStackPivotAdapter:
                 )
                 tanstack_result.columns = authoritative_columns
 
+        effective_window_ids = self._resolve_center_window_ids(
+            center_col_ids,
+            request,
+            col_start,
+            col_end,
+            needs_col_schema,
+            requested_center_ids=requested_center_ids,
+        )
+
         if needs_col_schema:
             column_lookup = {
                 col.get('id'): col
                 for col in (tanstack_result.columns or [])
                 if isinstance(col, dict) and col.get('id')
             }
+            schema_center_ids = effective_window_ids or center_col_ids
+            schema_start_index = 0
+            if schema_center_ids:
+                first_schema_id = schema_center_ids[0]
+                try:
+                    schema_start_index = center_col_ids.index(first_schema_id)
+                except ValueError:
+                    schema_start_index = 0
             tanstack_result.col_schema = {
                 'total_center_cols': len(center_col_ids),
                 'columns': [{
-                    'index': i,
+                    'index': schema_start_index + i,
                     'id': col_id,
                     'size': 140,
                     'header': (
@@ -479,7 +1215,7 @@ class TanStackPivotAdapter:
                             or col_id
                         )
                     ),
-                } for i, col_id in enumerate(center_col_ids)]
+                } for i, col_id in enumerate(schema_center_ids)]
             }
 
         if requested_center_ids:
@@ -517,11 +1253,10 @@ class TanStackPivotAdapter:
                         ordered_columns.append(col)
                         seen.add(col_id)
                 tanstack_result.columns = ordered_columns
-            return tanstack_result
+            return self._finalize_windowed_response(tanstack_result)
 
-        if col_end is not None and center_col_ids:
-            safe_end = min(col_end, len(center_col_ids) - 1)
-            window_ids = set(center_col_ids[col_start:safe_end + 1])
+        if effective_window_ids:
+            window_ids = set(effective_window_ids)
             keep_ids = window_ids | pinned_ids
 
             tanstack_result.data = [
@@ -529,7 +1264,21 @@ class TanStackPivotAdapter:
                 for row in tanstack_result.data
             ]
 
-        return tanstack_result
+            if tanstack_result.columns:
+                column_lookup = {
+                    col.get('id'): col
+                    for col in tanstack_result.columns
+                    if isinstance(col, dict) and col.get('id')
+                }
+                ordered_columns = []
+                seen = set()
+                for col_id in list(request.grouping or []) + [col_id for col_id in center_col_ids if col_id in keep_ids]:
+                    if col_id in column_lookup and col_id not in seen:
+                        ordered_columns.append(column_lookup[col_id])
+                        seen.add(col_id)
+                tanstack_result.columns = ordered_columns
+
+        return self._finalize_windowed_response(tanstack_result)
 
     def load_data(self, data, table_name: str) -> None:
         """
@@ -583,657 +1332,7 @@ class TanStackPivotAdapter:
                 "has_grand_total": any(r.get("_id") == "Grand Total" for r in rows),
             }
         )
-
-    @staticmethod
-    def _normalize_window_fn(window_fn: Optional[str]) -> Optional[str]:
-        if not window_fn:
-            return None
-        fn = str(window_fn).strip().lower()
-        mapping = {
-            "percent_of_total": "percent_of_grand_total",
-            "percent_of_grand_total": "percent_of_grand_total",
-            "percent_of_row": "percent_of_row",
-            "percent_of_col": "percent_of_col",
-        }
-        return mapping.get(fn)
-
-    @staticmethod
-    def _numeric_or_none(value: Any) -> Optional[float]:
-        if isinstance(value, bool):
-            return None
-        if isinstance(value, (int, float)):
-            if isinstance(value, float) and math.isnan(value):
-                return None
-            return float(value)
-        return None
-
-    @staticmethod
-    def _formula_label(column: Dict[str, Any]) -> str:
-        label = (
-            column.get("formulaLabel")
-            or column.get("header")
-            or column.get("accessorKey")
-            or column.get("id")
-        )
-        return str(label) if label is not None else ""
-
-    @staticmethod
-    def _formula_reference_key(column: Dict[str, Any]) -> str:
-        ref = (
-            column.get("formulaRef")
-            or _normalize_formula_reference_key(
-                column.get("formulaLabel") or column.get("header") or column.get("id"),
-                column.get("id"),
-            )
-            or column.get("id")
-        )
-        return str(ref) if ref is not None else ""
-
-    @staticmethod
-    def _matches_formula_column_id(column_id: Any, formula_id: Any) -> bool:
-        if not isinstance(column_id, str) or not isinstance(formula_id, str):
-            return False
-        return column_id == formula_id or column_id.endswith(f"_{formula_id}")
-
-    @staticmethod
-    def _extract_formula_identifiers(expression: Any) -> List[str]:
-        if not isinstance(expression, str):
-            return []
-        return list(dict.fromkeys(_FORMULA_IDENTIFIER_RE.findall(expression)))
-
-    def _canonicalize_formula_expression(self, expression: Any, alias_map: Dict[str, str]) -> str:
-        if not isinstance(expression, str) or not alias_map:
-            return str(expression or "")
-        normalized = str(expression)
-        for alias, canonical in sorted(alias_map.items(), key=lambda item: len(item[0]), reverse=True):
-            if not alias:
-                continue
-            normalized = re.sub(rf"\b{re.escape(alias)}\b", canonical, normalized, flags=re.IGNORECASE)
-        return normalized
-
-    def _build_formula_evaluation_plan(self, formula_cols: List[Dict[str, Any]]) -> tuple[List[Dict[str, Any]], set[str]]:
-        formula_by_id = {
-            str(col.get("id")): col
-            for col in formula_cols
-            if isinstance(col, dict) and col.get("id")
-        }
-        if not formula_by_id:
-            return [], set()
-
-        formula_alias_to_id: Dict[str, str] = {}
-        for formula_id, col in formula_by_id.items():
-            formula_alias_to_id[formula_id.lower()] = formula_id
-            formula_ref = self._formula_reference_key(col)
-            if formula_ref:
-                formula_alias_to_id[formula_ref.lower()] = formula_id
-
-        dependencies: Dict[str, set[str]] = {}
-        self_referencing: set[str] = set()
-        ordered_formula_ids = [str(col.get("id")) for col in formula_cols if isinstance(col, dict) and col.get("id")]
-
-        for formula_id, col in formula_by_id.items():
-            identifiers = set(self._extract_formula_identifiers(col.get("formulaExpr", "")))
-            canonical_dependencies = {
-                formula_alias_to_id[identifier.lower()]
-                for identifier in identifiers
-                if identifier.lower() in formula_alias_to_id
-            }
-            if formula_id in canonical_dependencies:
-                self_referencing.add(formula_id)
-            dependencies[formula_id] = {identifier for identifier in canonical_dependencies if identifier != formula_id}
-
-        resolved: set[str] = set()
-        plan: List[Dict[str, Any]] = []
-
-        while True:
-            progressed = False
-            for formula_id in ordered_formula_ids:
-                if formula_id in resolved or formula_id in self_referencing:
-                    continue
-                if dependencies.get(formula_id, set()).issubset(resolved):
-                    plan.append(formula_by_id[formula_id])
-                    resolved.add(formula_id)
-                    progressed = True
-            if not progressed:
-                break
-
-        unresolved = (set(formula_by_id.keys()) - resolved) | self_referencing
-        return plan, unresolved
-
-    def _evaluate_formula_expression(self, parser: Any, expression: str, namespace: Dict[str, Any]) -> Optional[float]:
-        try:
-            result = parser.evaluate(expression, namespace)
-        except Exception:
-            return None
-        numeric_result = self._numeric_or_none(result)
-        if numeric_result is None or not math.isfinite(numeric_result):
-            return None
-        return numeric_result
-
-    def _resolved_sort_field(self, sort_spec: Dict[str, Any], request: TanStackRequest) -> Optional[str]:
-        if not isinstance(sort_spec, dict):
-            return None
-        sort_field = sort_spec.get("id")
-        if sort_field == "hierarchy" and request.grouping:
-            sort_field = request.grouping[0]
-        return str(sort_field) if isinstance(sort_field, str) and sort_field else None
-
-    @staticmethod
-    def _formula_ids_from_request(request: TanStackRequest) -> set[str]:
-        return {
-            str(col.get("id"))
-            for col in (request.columns or [])
-            if isinstance(col, dict) and col.get("isFormula") and col.get("id")
-        }
-
-    def _build_formula_rollup_values(self, rows: List[Dict[str, Any]], formula_ids: set[str]) -> Dict[str, Optional[float]]:
-        if not rows or not formula_ids:
-            return {}
-
-        regular_rows = [row for row in rows if isinstance(row, dict) and not _is_grand_total_row(row)]
-        if not regular_rows:
-            return {}
-
-        total_source_rows = [
-            row for row in regular_rows
-            if row.get("depth") == 0
-        ] or regular_rows
-
-        materialized_formula_keys = set()
-        for row in total_source_rows:
-            for key in row.keys():
-                if not isinstance(key, str):
-                    continue
-                if key in formula_ids or key.startswith("__RowTotal__"):
-                    if key in formula_ids or any(
-                        key == f"__RowTotal__{formula_id}" or self._matches_formula_column_id(key, formula_id)
-                        for formula_id in formula_ids
-                    ):
-                        materialized_formula_keys.add(key)
-                        continue
-                if any(self._matches_formula_column_id(key, formula_id) for formula_id in formula_ids):
-                    materialized_formula_keys.add(key)
-
-        rollups: Dict[str, Optional[float]] = {}
-        for key in materialized_formula_keys:
-            values = [
-                numeric_value
-                for numeric_value in (
-                    self._numeric_or_none(row.get(key))
-                    for row in total_source_rows
-                )
-                if numeric_value is not None
-            ]
-            rollups[key] = sum(values) if values else None
-
-        return rollups
-
-    def _has_formula_sort(self, request: TanStackRequest) -> bool:
-        formula_ids = self._formula_ids_from_request(request)
-        if not formula_ids:
-            return False
-        for sort_spec in (request.sorting or []):
-            sort_field = self._resolved_sort_field(sort_spec, request)
-            if not sort_field:
-                continue
-            if any(self._matches_formula_column_id(sort_field, formula_id) for formula_id in formula_ids):
-                return True
-        return False
-
-    def _compare_row_values(self, left_value: Any, right_value: Any, desc: bool = False) -> int:
-        left_missing = _is_missing_value(left_value)
-        right_missing = _is_missing_value(right_value)
-        if left_missing or right_missing:
-            if left_missing and right_missing:
-                return 0
-            return 1 if left_missing else -1
-
-        left_numeric = self._numeric_or_none(left_value)
-        right_numeric = self._numeric_or_none(right_value)
-        if left_numeric is not None and right_numeric is not None:
-            if left_numeric < right_numeric:
-                result = -1
-            elif left_numeric > right_numeric:
-                result = 1
-            else:
-                result = 0
-        else:
-            left_text = str(left_value).casefold()
-            right_text = str(right_value).casefold()
-            if left_text < right_text:
-                result = -1
-            elif left_text > right_text:
-                result = 1
-            else:
-                result = 0
-
-        return -result if desc else result
-
-    def _compare_rows_for_requested_sort(
-        self,
-        left_row: Dict[str, Any],
-        right_row: Dict[str, Any],
-        request: TanStackRequest,
-        original_order: Dict[str, int],
-        left_key: str,
-        right_key: str,
-    ) -> int:
-        for sort_spec in (request.sorting or []):
-            sort_field = self._resolved_sort_field(sort_spec, request)
-            if not sort_field:
-                continue
-            comparison = self._compare_row_values(
-                left_row.get(sort_field),
-                right_row.get(sort_field),
-                desc=bool(sort_spec.get("desc")),
-            )
-            if comparison:
-                return comparison
-        return (original_order.get(left_key, 0) > original_order.get(right_key, 0)) - (
-            original_order.get(left_key, 0) < original_order.get(right_key, 0)
-        )
-
-    def _sort_rows_for_formula_sort(self, rows: List[Dict[str, Any]], request: TanStackRequest) -> List[Dict[str, Any]]:
-        if not rows or not self._has_formula_sort(request):
-            return rows
-
-        grand_total_rows = [row for row in rows if _is_grand_total_row(row)]
-        regular_rows = [row for row in rows if not _is_grand_total_row(row)]
-        if not regular_rows:
-            return rows
-
-        can_preserve_tree = request.grouping and all(
-            isinstance(row, dict) and isinstance(row.get("_path"), str) and row.get("_path")
-            for row in regular_rows
-        )
-
-        if not can_preserve_tree:
-            keyed_rows = [
-                (f"__row_{index}", row)
-                for index, row in enumerate(regular_rows)
-                if isinstance(row, dict)
-            ]
-            original_order = {key: index for index, (key, _) in enumerate(keyed_rows)}
-            sorted_rows = [
-                row
-                for _, row in sorted(
-                    keyed_rows,
-                    key=cmp_to_key(
-                        lambda left, right: self._compare_rows_for_requested_sort(
-                            left[1],
-                            right[1],
-                            request,
-                            original_order,
-                            left[0],
-                            right[0],
-                        )
-                    ),
-                )
-            ]
-            return sorted_rows + grand_total_rows
-
-        path_to_row = {}
-        original_order = {}
-        children_by_parent: Dict[Optional[str], List[str]] = {}
-        root_paths: List[str] = []
-
-        for index, row in enumerate(regular_rows):
-            path = row.get("_path")
-            if not isinstance(path, str) or not path:
-                continue
-            path_to_row[path] = row
-            original_order[path] = index
-
-        for path in path_to_row:
-            parent_path = path.rsplit("|||", 1)[0] if "|||" in path else None
-            if parent_path and parent_path in path_to_row:
-                children_by_parent.setdefault(parent_path, []).append(path)
-            else:
-                root_paths.append(path)
-
-        def sort_paths(paths: List[str]) -> List[str]:
-            return sorted(
-                paths,
-                key=cmp_to_key(
-                    lambda left_path, right_path: self._compare_rows_for_requested_sort(
-                        path_to_row[left_path],
-                        path_to_row[right_path],
-                        request,
-                        original_order,
-                        left_path,
-                        right_path,
-                    )
-                ),
-            )
-
-        sorted_rows: List[Dict[str, Any]] = []
-
-        def append_subtree(path: str) -> None:
-            row = path_to_row.get(path)
-            if row is None:
-                return
-            sorted_rows.append(row)
-            for child_path in sort_paths(children_by_parent.get(path, [])):
-                append_subtree(child_path)
-
-        for root_path in sort_paths(root_paths):
-            append_subtree(root_path)
-
-        return sorted_rows + grand_total_rows
-
-    def _apply_formula_columns(self, rows: List[Dict[str, Any]], request: TanStackRequest) -> None:
-        """
-        Apply formula columns (post-aggregation calculated fields) to each row.
-
-        Formula configs arrive in request.columns as entries with isFormula=True and a formulaExpr
-        string like "revenue - cost".  References in the expression are field names (without agg
-        suffix).  At runtime we look for keys of the form <dim_prefix>_<field>_<agg> in each row
-        and evaluate the formula for every matching prefix, writing result back as
-        <dim_prefix>_<formula_id> (or just <formula_id> in flat mode).
-        """
-        if not rows:
-            return
-
-        formula_cols = [
-            col for col in (request.columns or [])
-            if isinstance(col, dict) and col.get("isFormula")
-        ]
-        if not formula_cols:
-            return
-        formula_ids = {
-            str(col.get("id"))
-            for col in formula_cols
-            if isinstance(col, dict) and col.get("id")
-        }
-        formula_plan, unresolved_formula_ids = self._build_formula_evaluation_plan(formula_cols)
-        formula_alias_map = {}
-        for col in formula_cols:
-            if not isinstance(col, dict) or not col.get("id"):
-                continue
-            formula_id = str(col.get("id"))
-            formula_alias_map[formula_id.lower()] = formula_id
-            formula_ref = self._formula_reference_key(col)
-            if formula_ref:
-                formula_alias_map[formula_ref.lower()] = formula_id
-
-        from .planner.expression_parser import SafeExpressionParser
-
-        parser = SafeExpressionParser()
-
-        # Gather all row keys once to detect pivot prefixes.
-        all_keys: set = set()
-        for row in rows:
-            if isinstance(row, dict):
-                all_keys.update(row.keys())
-
-        # Build a map: measure_field -> list of agg suffixes present in data (e.g. "sum", "avg")
-        # so we can resolve formula references like "revenue" -> row["revenue_sum"]
-        agg_cols = [
-            col for col in (request.columns or [])
-            if isinstance(col, dict) and col.get("aggregationFn")
-        ]
-        # field -> agg suffix  (pick first match; formula references just the field name)
-        field_agg_map: Dict[str, str] = {}
-        field_measure_id_map: Dict[str, str] = {}
-        for col in agg_cols:
-            field = col.get("aggregationField") or col.get("id", "")
-            measure_id = col.get("id") or ""
-            agg = col.get("aggregationFn", "sum")
-            if field and field not in field_agg_map:
-                field_agg_map[field] = agg
-            if field and field not in field_measure_id_map and measure_id:
-                field_measure_id_map[field] = str(measure_id)
-
-        grouping_ids = set(request.grouping or [])
-        has_column_dimensions = any(
-            isinstance(col, dict)
-            and col.get("id") not in grouping_ids
-            and not col.get("aggregationFn")
-            and not col.get("isFormula")
-            for col in (request.columns or [])
-        )
-
-        if has_column_dimensions:
-            # Collect unique dim prefixes across all measure columns.
-            # A pivot key looks like: <dim_prefix>_<field>_<agg>
-            dim_prefixes: set = set()
-            for field, agg in field_agg_map.items():
-                suffix = f"_{field}_{agg}"
-                for key in all_keys:
-                    if isinstance(key, str) and key.endswith(suffix) and not key.startswith("__RowTotal__"):
-                        prefix = key[: len(key) - len(suffix)]
-                        dim_prefixes.add(prefix)
-            row_total_measure_keys = {
-                field: f"__RowTotal__{measure_id}"
-                for field, measure_id in field_measure_id_map.items()
-            }
-            has_row_total_measure_values = bool(row_total_measure_keys) and any(
-                isinstance(row, dict) and any(total_key in row for total_key in row_total_measure_keys.values())
-                for row in rows
-            )
-
-            for row in rows:
-                if not isinstance(row, dict):
-                    continue
-                for prefix in dim_prefixes:
-                    namespace: Dict[str, Any] = {}
-                    for field, agg in field_agg_map.items():
-                        key = f"{prefix}_{field}_{agg}"
-                        val = self._numeric_or_none(row.get(key))
-                        namespace[field] = val if val is not None else float("nan")
-
-                    for fcol in formula_plan:
-                        formula_id = fcol.get("id", "")
-                        formula_expr = self._canonicalize_formula_expression(fcol.get("formulaExpr", ""), formula_alias_map)
-                        if not formula_id or not formula_expr:
-                            continue
-                        result_key = f"{prefix}_{formula_id}"
-                        result = self._evaluate_formula_expression(parser, formula_expr, namespace)
-                        row[result_key] = result
-                        namespace[formula_id] = result if result is not None else float("nan")
-                        formula_ref = self._formula_reference_key(fcol)
-                        if formula_ref:
-                            namespace[formula_ref] = result if result is not None else float("nan")
-
-                    for formula_id in unresolved_formula_ids:
-                        row[f"{prefix}_{formula_id}"] = None
-                        namespace[formula_id] = float("nan")
-                        unresolved_col = next((col for col in formula_cols if col.get("id") == formula_id), None)
-                        formula_ref = self._formula_reference_key(unresolved_col or {})
-                        if formula_ref:
-                            namespace[formula_ref] = float("nan")
-
-                if has_row_total_measure_values:
-                    materialized_formula_values: Dict[str, List[float]] = {
-                        str(fcol.get("id")): []
-                        for fcol in formula_plan
-                        if isinstance(fcol, dict) and fcol.get("id")
-                    }
-                    for prefix in dim_prefixes:
-                        for formula_id in materialized_formula_values:
-                            result_value = self._numeric_or_none(row.get(f"{prefix}_{formula_id}"))
-                            if result_value is not None:
-                                materialized_formula_values[formula_id].append(result_value)
-
-                    for fcol in formula_plan:
-                        formula_id = fcol.get("id", "")
-                        if not formula_id:
-                            continue
-                        values = materialized_formula_values.get(str(formula_id), [])
-                        row[f"__RowTotal__{formula_id}"] = sum(values) if values else None
-
-                    for formula_id in unresolved_formula_ids:
-                        row[f"__RowTotal__{formula_id}"] = None
-        else:
-            # Flat mode: formula key is just the formula_id
-            for row in rows:
-                if not isinstance(row, dict):
-                    continue
-                namespace = {}
-                for field, agg in field_agg_map.items():
-                    key = f"{field}_{agg}"
-                    val = self._numeric_or_none(row.get(key))
-                    namespace[field] = val if val is not None else float("nan")
-
-                for fcol in formula_plan:
-                    formula_id = fcol.get("id", "")
-                    formula_expr = self._canonicalize_formula_expression(fcol.get("formulaExpr", ""), formula_alias_map)
-                    if not formula_id or not formula_expr:
-                        continue
-                    result = self._evaluate_formula_expression(parser, formula_expr, namespace)
-                    row[formula_id] = result
-                    namespace[formula_id] = result if result is not None else float("nan")
-                    formula_ref = self._formula_reference_key(fcol)
-                    if formula_ref:
-                        namespace[formula_ref] = result if result is not None else float("nan")
-
-                for formula_id in unresolved_formula_ids:
-                    row[formula_id] = None
-                    namespace[formula_id] = float("nan")
-                    unresolved_col = next((col for col in formula_cols if col.get("id") == formula_id), None)
-                    formula_ref = self._formula_reference_key(unresolved_col or {})
-                    if formula_ref:
-                        namespace[formula_ref] = float("nan")
-
-        grand_total_rows = [row for row in rows if isinstance(row, dict) and _is_grand_total_row(row)]
-        regular_rows = [row for row in rows if isinstance(row, dict) and not _is_grand_total_row(row)]
-        if grand_total_rows and regular_rows and formula_ids:
-            rollup_values = self._build_formula_rollup_values(regular_rows, formula_ids)
-            for grand_total_row in grand_total_rows:
-                grand_total_row.update(rollup_values)
-
-    def _apply_pivot_window_functions(self, rows: List[Dict[str, Any]], request: TanStackRequest) -> None:
-        """
-        Apply pivot-window functions (% row/col/grand-total) on already aggregated pivot rows.
-
-        In pivot mode the planner materializes dynamic columns first; this post-step applies
-        the window transformation expected by the frontend value config.
-        """
-        if not rows:
-            return
-
-        grouping_ids = set(request.grouping or [])
-        has_column_dimensions = any(
-            isinstance(col, dict)
-            and col.get("id") not in grouping_ids
-            and not col.get("aggregationFn")
-            and not col.get("isFormula")
-            for col in (request.columns or [])
-        )
-
-        measure_windows = []
-        for col in (request.columns or []):
-            if not isinstance(col, dict) or not col.get("aggregationFn"):
-                continue
-            measure_id = col.get("id")
-            normalized_window = self._normalize_window_fn(col.get("windowFn"))
-            if measure_id and normalized_window:
-                measure_windows.append((measure_id, normalized_window))
-
-        if not measure_windows:
-            return
-
-        all_keys = set()
-        for row in rows:
-            if isinstance(row, dict):
-                all_keys.update(row.keys())
-
-        grand_total_row = next((row for row in rows if _is_grand_total_row(row)), None)
-        non_grand_rows = [row for row in rows if isinstance(row, dict) and not _is_grand_total_row(row)]
-
-        for measure_id, window_fn in measure_windows:
-            if has_column_dimensions:
-                pivot_keys = sorted(
-                    key for key in all_keys
-                    if isinstance(key, str)
-                    and key.endswith(f"_{measure_id}")
-                    and not key.startswith("__RowTotal__")
-                )
-            else:
-                pivot_keys = [measure_id] if measure_id in all_keys else []
-            if not pivot_keys:
-                continue
-
-            row_total_key = f"__RowTotal__{measure_id}"
-
-            if window_fn == "percent_of_row":
-                target_rows = non_grand_rows + ([grand_total_row] if isinstance(grand_total_row, dict) else [])
-                for row in target_rows:
-                    denom = self._numeric_or_none(row.get(row_total_key))
-                    if denom is None:
-                        denom = sum(self._numeric_or_none(row.get(k)) or 0.0 for k in pivot_keys)
-                    if not denom:
-                        for key in pivot_keys:
-                            if self._numeric_or_none(row.get(key)) is not None:
-                                row[key] = None
-                        if self._numeric_or_none(row.get(row_total_key)) is not None:
-                            row[row_total_key] = None
-                        continue
-                    for key in pivot_keys:
-                        val = self._numeric_or_none(row.get(key))
-                        if val is not None:
-                            row[key] = val / denom
-                    if self._numeric_or_none(row.get(row_total_key)) is not None:
-                        row[row_total_key] = 1.0
-
-            elif window_fn == "percent_of_col":
-                col_denoms: Dict[str, float] = {}
-                for key in pivot_keys:
-                    denom = self._numeric_or_none(grand_total_row.get(key)) if isinstance(grand_total_row, dict) else None
-                    if denom is None:
-                        denom = sum(self._numeric_or_none(row.get(key)) or 0.0 for row in non_grand_rows)
-                    col_denoms[key] = denom or 0.0
-
-                grand_total_value = self._numeric_or_none(grand_total_row.get(row_total_key)) if isinstance(grand_total_row, dict) else None
-                if grand_total_value is None:
-                    grand_total_value = sum(self._numeric_or_none(row.get(row_total_key)) or 0.0 for row in non_grand_rows)
-
-                for row in non_grand_rows:
-                    for key in pivot_keys:
-                        val = self._numeric_or_none(row.get(key))
-                        denom = col_denoms.get(key, 0.0)
-                        if val is not None:
-                            row[key] = (val / denom) if denom else None
-                    row_total_val = self._numeric_or_none(row.get(row_total_key))
-                    if row_total_val is not None:
-                        row[row_total_key] = (row_total_val / grand_total_value) if grand_total_value else None
-
-                if isinstance(grand_total_row, dict):
-                    for key in pivot_keys:
-                        denom = col_denoms.get(key, 0.0)
-                        if self._numeric_or_none(grand_total_row.get(key)) is not None:
-                            grand_total_row[key] = 1.0 if denom else None
-                    if has_column_dimensions and self._numeric_or_none(grand_total_row.get(row_total_key)) is not None:
-                        grand_total_row[row_total_key] = 1.0 if grand_total_value else None
-
-            elif window_fn == "percent_of_grand_total":
-                grand_total_value = None
-                if has_column_dimensions and isinstance(grand_total_row, dict):
-                    grand_total_value = self._numeric_or_none(grand_total_row.get(row_total_key))
-                if grand_total_value is None and isinstance(grand_total_row, dict):
-                    grand_total_value = sum(self._numeric_or_none(grand_total_row.get(key)) or 0.0 for key in pivot_keys)
-                if grand_total_value is None:
-                    if has_column_dimensions:
-                        grand_total_value = sum(self._numeric_or_none(row.get(row_total_key)) or 0.0 for row in non_grand_rows)
-                    else:
-                        grand_total_value = sum(
-                            self._numeric_or_none(row.get(key)) or 0.0
-                            for row in non_grand_rows
-                            for key in pivot_keys
-                        )
-                if not grand_total_value:
-                    continue
-
-                target_rows = non_grand_rows + ([grand_total_row] if isinstance(grand_total_row, dict) else [])
-                for row in target_rows:
-                    for key in pivot_keys:
-                        val = self._numeric_or_none(row.get(key))
-                        if val is not None:
-                            row[key] = val / grand_total_value
-                    row_total_val = self._numeric_or_none(row.get(row_total_key))
-                    if has_column_dimensions and row_total_val is not None:
-                        row[row_total_key] = row_total_val / grand_total_value
-
+    # Formula engine and window function methods provided by FormulaEngineMixin
     def convert_tanstack_request_to_pivot_spec(self, request: TanStackRequest) -> PivotSpec:
         """Convert TanStack request to PivotSpec format"""
         # Extract grouping columns as hierarchy
@@ -1679,63 +1778,881 @@ class TanStackPivotAdapter:
         """
         Handle a cell update request from the frontend.
         """
-        table_name = request.table
-        
-        row_id = update_payload.get('rowId')
-        col_id = update_payload.get('colId')
-        new_value = update_payload.get('value')
-        
-        if not row_id or not col_id:
+        result = await self.handle_updates(request, [update_payload])
+        return bool(result.get("updated", 0))
+
+    def _invalidate_local_caches(self) -> None:
+        self._center_col_ids_cache.clear()
+        self._pivot_column_catalog_cache.clear()
+        self._response_window_cache.clear()
+        self._row_block_cache.clear()
+        self._grand_total_cache.clear()
+        self._prefetch_request_keys.clear()
+
+    @staticmethod
+    def _normalize_aggregation_name(value: Any) -> str:
+        return str(value or "").strip().lower()
+
+    def _request_column_dimension_ids(self, request: TanStackRequest) -> List[str]:
+        grouping_ids = {str(field) for field in (request.grouping or []) if field}
+        ordered_dimensions: List[str] = []
+        for col in request.columns or []:
+            if not isinstance(col, dict):
+                continue
+            column_id = str(col.get("id") or "").strip()
+            if (
+                not column_id
+                or column_id in grouping_ids
+                or col.get("aggregationFn")
+                or col.get("isFormula")
+            ):
+                continue
+            if column_id not in ordered_dimensions:
+                ordered_dimensions.append(column_id)
+        return ordered_dimensions
+
+    def _resolve_request_column_spec(
+        self,
+        request: TanStackRequest,
+        column_id: Any,
+    ) -> Optional[Dict[str, Any]]:
+        normalized_column_id = str(column_id or "").strip()
+        if not normalized_column_id:
+            return None
+
+        column_dimensions = self._request_column_dimension_ids(request)
+        matched_column = None
+        matched_prefix = None
+
+        for col in request.columns or []:
+            if not isinstance(col, dict):
+                continue
+            request_column_id = str(col.get("id") or "").strip()
+            accessor_key = str(col.get("accessorKey") or "").strip()
+            if request_column_id == normalized_column_id or accessor_key == normalized_column_id:
+                matched_column = col
+                break
+
+        if matched_column is None:
+            lowered_column_id = normalized_column_id.lower()
+            row_total_prefix = "__RowTotal__"
+            row_total_payload = normalized_column_id[len(row_total_prefix):] if normalized_column_id.startswith(row_total_prefix) else None
+            for col in request.columns or []:
+                if not isinstance(col, dict):
+                    continue
+                request_column_id = str(col.get("id") or "").strip()
+                if not request_column_id:
+                    continue
+                if row_total_payload and request_column_id.lower() == row_total_payload.lower():
+                    matched_column = col
+                    break
+                if col.get("isFormula"):
+                    if self._matches_formula_column_id(normalized_column_id, request_column_id):
+                        matched_column = col
+                        suffix = f"_{request_column_id}"
+                        if lowered_column_id.endswith(suffix.lower()) and len(normalized_column_id) > len(suffix):
+                            matched_prefix = normalized_column_id[:-len(suffix)]
+                        break
+                    continue
+                aggregation_field = str(col.get("aggregationField") or "").strip()
+                aggregation_fn = self._normalize_aggregation_name(col.get("aggregationFn"))
+                if not aggregation_field or not aggregation_fn:
+                    continue
+                suffix = f"_{aggregation_field}_{aggregation_fn}"
+                if lowered_column_id.endswith(suffix.lower()):
+                    matched_column = col
+                    if len(normalized_column_id) > len(suffix):
+                        matched_prefix = normalized_column_id[:-len(suffix)]
+                        if matched_prefix.endswith("_"):
+                            matched_prefix = matched_prefix[:-1]
+                    break
+
+        spec = {
+            "columnId": normalized_column_id,
+            "targetColumn": normalized_column_id,
+            "aggregationField": None,
+            "aggregationFn": None,
+            "windowFn": None,
+            "weightField": None,
+            "isFormula": False,
+            "isRowTotal": normalized_column_id.startswith("__RowTotal__"),
+            "pivotFilters": {},
+            "editable": True,
+            "reason": None,
+        }
+
+        if isinstance(matched_column, dict):
+            target_column = matched_column.get("aggregationField") or matched_column.get("accessorKey") or matched_column.get("id")
+            spec.update(
+                {
+                    "targetColumn": str(target_column) if target_column else normalized_column_id,
+                    "aggregationField": matched_column.get("aggregationField"),
+                    "aggregationFn": self._normalize_aggregation_name(matched_column.get("aggregationFn")),
+                    "windowFn": matched_column.get("windowFn"),
+                    "weightField": matched_column.get("weightField"),
+                    "isFormula": bool(matched_column.get("isFormula")),
+                }
+            )
+
+        if matched_prefix and column_dimensions:
+            prefix_parts = matched_prefix.split("|")
+            if len(column_dimensions) == 1:
+                spec["pivotFilters"] = {column_dimensions[0]: matched_prefix}
+            elif len(prefix_parts) == len(column_dimensions):
+                spec["pivotFilters"] = {
+                    column_dimensions[index]: prefix_parts[index]
+                    for index in range(len(column_dimensions))
+                }
+            else:
+                spec["editable"] = False
+                spec["reason"] = "Skipped aggregate edit because the pivot column path could not be resolved."
+
+        aggregation_fn = spec["aggregationFn"]
+        if spec["isRowTotal"]:
+            spec["editable"] = False
+            spec["reason"] = "Row total cells are derived from multiple pivot buckets and are not directly editable."
+        elif spec["isFormula"]:
+            spec["editable"] = False
+            spec["reason"] = "Formula cells are derived and are not directly editable."
+        elif spec["windowFn"]:
+            spec["editable"] = False
+            spec["reason"] = "Window-function cells are derived and are not directly editable."
+        elif aggregation_fn in {"count", "count_distinct", "distinct_count"}:
+            spec["editable"] = False
+            spec["reason"] = "Count-based aggregates cannot be edited because they do not map to one source value."
+
+        return spec
+
+    def _resolve_request_target_column(self, request: TanStackRequest, column_id: Any) -> Optional[str]:
+        column_spec = self._resolve_request_column_spec(request, column_id)
+        if not isinstance(column_spec, dict):
+            return None
+        target_column = column_spec.get("targetColumn")
+        return str(target_column).strip() if target_column else None
+
+    def _normalize_table_row_data(self, request: TanStackRequest, row_data: Dict[str, Any]) -> Dict[str, Any]:
+        normalized: Dict[str, Any] = {}
+        if not isinstance(row_data, dict):
+            return normalized
+        for column_id, value in row_data.items():
+            raw_column_id = str(column_id or "").strip()
+            if not raw_column_id or raw_column_id.startswith("_"):
+                continue
+            target_column = self._resolve_request_target_column(request, raw_column_id)
+            if not target_column or target_column.startswith("_"):
+                continue
+            normalized[target_column] = value
+        return normalized
+
+    @staticmethod
+    def _normalize_transaction_refresh_mode(value: Any) -> str:
+        normalized = str(value or "smart").strip().lower()
+        if normalized in {"none", "viewport", "smart", "structural", "full", "patch"}:
+            return normalized
+        return "smart"
+
+    @staticmethod
+    def _normalize_visible_patch_row_paths(transaction_payload: Dict[str, Any]) -> List[str]:
+        raw_paths = (
+            transaction_payload.get("visibleRowPaths")
+            or transaction_payload.get("visible_row_paths")
+            or transaction_payload.get("visiblePaths")
+            or transaction_payload.get("visible_paths")
+        )
+        normalized: List[str] = []
+        seen: set[str] = set()
+        for value in (raw_paths if isinstance(raw_paths, list) else []):
+            if value is None:
+                continue
+            path = str(value).strip()
+            if not path or path in seen:
+                continue
+            seen.add(path)
+            normalized.append(path)
+        return normalized
+
+    @staticmethod
+    def _normalize_visible_patch_center_ids(transaction_payload: Dict[str, Any]) -> List[str]:
+        raw_ids = (
+            transaction_payload.get("visibleCenterColumnIds")
+            or transaction_payload.get("visible_center_column_ids")
+            or transaction_payload.get("visibleColumnIds")
+            or transaction_payload.get("visible_column_ids")
+        )
+        normalized: List[str] = []
+        seen: set[str] = set()
+        for value in (raw_ids if isinstance(raw_ids, list) else []):
+            column_id = str(value or "").strip()
+            if not column_id or column_id == "__col_schema" or column_id in seen:
+                continue
+            seen.add(column_id)
+            normalized.append(column_id)
+        return normalized
+
+    @staticmethod
+    def _extract_patch_entry_path(
+        request: TanStackRequest,
+        entry: Dict[str, Any],
+    ) -> Optional[str]:
+        if not isinstance(entry, dict):
+            return None
+        raw_path = entry.get("rowPath") or entry.get("row_path") or entry.get("path")
+        if raw_path is None:
+            raw_path = entry.get("rowId") or entry.get("row_id")
+        if raw_path is None and isinstance(entry.get("keys"), dict):
+            parts = []
+            for field in request.grouping or []:
+                if field not in entry["keys"]:
+                    parts = []
+                    break
+                parts.append(str(entry["keys"][field]))
+            if parts:
+                raw_path = "|||".join(parts)
+        if raw_path is None:
+            return None
+        normalized_parts = [part for part in str(raw_path).split("|||") if part != ""]
+        if not normalized_parts:
+            return None
+        return "|||".join(normalized_parts)
+
+    def _resolve_transaction_patch_row_paths(
+        self,
+        request: TanStackRequest,
+        transaction_payload: Dict[str, Any],
+        visible_row_paths: List[str],
+    ) -> List[str]:
+        if not visible_row_paths:
+            return []
+        visible_order = [str(path) for path in visible_row_paths if str(path or "").strip()]
+        normalized_visible = [path for path in visible_order if path != "__grand_total__"]
+        grouping_fields = list(request.grouping or [])
+        if not grouping_fields:
+            return visible_order
+
+        update_entries = self._extract_transaction_entries(transaction_payload, "update")
+        if not update_entries:
+            return visible_order
+
+        affected_paths: set[str] = set()
+        include_grand_total = "__grand_total__" in visible_order
+
+        for entry in update_entries:
+            entry_path = self._extract_patch_entry_path(request, entry)
+            if not entry_path:
+                return visible_order
+            if entry_path == "__grand_total__":
+                return visible_order
+
+            path_parts = [part for part in entry_path.split("|||") if part != ""]
+            if not path_parts or len(path_parts) > len(grouping_fields):
+                return visible_order
+
+            is_group_path = len(path_parts) < len(grouping_fields)
+            for visible_path in normalized_visible:
+                if (
+                    visible_path == entry_path
+                    or entry_path.startswith(f"{visible_path}|||")
+                ):
+                    affected_paths.add(visible_path)
+                    continue
+                if is_group_path and visible_path.startswith(f"{entry_path}|||"):
+                    affected_paths.add(visible_path)
+
+            if include_grand_total:
+                affected_paths.add("__grand_total__")
+
+        if not affected_paths:
+            return visible_order
+        return [path for path in visible_order if path in affected_paths]
+
+    def _transaction_requires_deferred_viewport_refresh(
+        self,
+        request: TanStackRequest,
+        transaction_payload: Dict[str, Any],
+        visible_row_paths: List[str],
+        patch_row_paths: List[str],
+    ) -> bool:
+        if not visible_row_paths or not patch_row_paths:
             return False
-            
-        # Determine Key Columns based on hierarchy
-        # The row_id is a "|||" separated string of dimension values
-        hierarchy_cols = request.grouping or []
-        key_columns = {}
-        
-        # If we have a hierarchy, parse the path
-        if hierarchy_cols:
-             parts = str(row_id).split('|||')
-             # Note: If parts < len(hierarchy_cols), it might be an aggregation row (Total).
-             # We generally should not allow editing totals unless it means "allocate".
-             # For now, we proceed if we can match keys.
-             
-             for i, col in enumerate(hierarchy_cols):
-                 if i < len(parts):
-                     val = parts[i]
-                     # Attempt to restore type if possible?
-                     # Everything in path is string.
-                     # Backend SQL usually handles string-to-number casting if quoted correctly.
-                     key_columns[col] = val
-        else:
-             # Flat table mode. 
-             # If row_id is just an index (string), we can't update without a PK.
-             # But if the data has an _id or PK, it should be used.
-             # The frontend uses row index if no ID.
-             # We assume the user has configured unique keys in 'rowFields' even if it looks flat.
-             pass
-
-        if not key_columns:
-             print("Warning: No key columns identified for update.")
-             return False
-
-        # Determine Target Column
-        # Map frontend column ID to backend field name
-        target_col = col_id
-        for col in request.columns:
-             if col['id'] == col_id:
-                 if 'aggregationField' in col:
-                     target_col = col['aggregationField']
-                 elif 'accessorKey' in col:
-                     target_col = col['accessorKey']
-                 break
-        
-        if hasattr(self.controller, 'update_record'):
-             return await self.controller.update_record(table_name, key_columns, {target_col: new_value})
-             
+        grouping_fields = list(request.grouping or [])
+        if not grouping_fields:
+            return False
+        patch_path_set = set(str(path) for path in patch_row_paths)
+        normalized_visible = [str(path) for path in visible_row_paths if str(path or "").strip() and str(path) != "__grand_total__"]
+        for entry in self._extract_transaction_entries(transaction_payload, "update"):
+            entry_path = self._extract_patch_entry_path(request, entry)
+            if not entry_path or entry_path == "__grand_total__":
+                return False
+            path_parts = [part for part in entry_path.split("|||") if part != ""]
+            if len(path_parts) >= len(grouping_fields):
+                continue
+            for visible_path in normalized_visible:
+                if visible_path.startswith(f"{entry_path}|||") and visible_path not in patch_path_set:
+                    return True
         return False
 
-    async def handle_drill_through(self, request: TanStackRequest, drill_payload: Dict[str, Any]) -> List[Dict[str, Any]]:
+    @staticmethod
+    def _request_supports_patch_refresh(request: TanStackRequest) -> bool:
+        if not isinstance(request, TanStackRequest):
+            return False
+        if not request.grouping:
+            return False
+        for column in request.columns or []:
+            if not isinstance(column, dict):
+                continue
+            if column.get("isFormula") or column.get("windowFn"):
+                return False
+        return True
+
+    @staticmethod
+    def _build_path_filter_block(grouping_fields: List[str], requested_paths: List[List[str]]) -> Optional[Dict[str, Any]]:
+        if not grouping_fields or not requested_paths:
+            return None
+        if len(grouping_fields) == 1:
+            return {
+                "field": grouping_fields[0],
+                "op": "in",
+                "value": [path[0] for path in requested_paths if path],
+            }
+
+        tuple_conditions: List[Dict[str, Any]] = []
+        for path in requested_paths:
+            if len(path) != len(grouping_fields):
+                continue
+            conditions = [
+                {"field": grouping_fields[index], "op": "=", "value": path[index]}
+                for index in range(len(grouping_fields))
+            ]
+            if len(conditions) == 1:
+                tuple_conditions.append(conditions[0])
+            elif conditions:
+                tuple_conditions.append({"op": "AND", "conditions": conditions})
+        if not tuple_conditions:
+            return None
+        if len(tuple_conditions) == 1:
+            return tuple_conditions[0]
+        return {"op": "OR", "conditions": tuple_conditions}
+
+    async def _execute_patch_row_group_query(
+        self,
+        request: TanStackRequest,
+        spec: PivotSpec,
+        *,
+        depth: int,
+        requested_center_ids: Optional[List[str]],
+    ) -> TanStackResponse:
+        pivot_result = await self.controller.run_pivot_async(spec, return_format="dict", force_refresh=True)
+        pivot_columns = list((pivot_result or {}).get("columns") or [])
+        pivot_rows = []
+        for raw_row in (pivot_result or {}).get("rows") or []:
+            if isinstance(raw_row, dict):
+                row_out = dict(raw_row)
+            else:
+                row_out = {
+                    pivot_columns[index]: raw_row[index] if index < len(raw_row) else None
+                    for index in range(len(pivot_columns))
+                }
+            row_out["depth"] = max(depth - 1, 0)
+            pivot_rows.append(row_out)
+        converted = self.convert_pivot_result_to_tanstack_format(
+            {"columns": pivot_columns, "rows": pivot_rows},
+            request,
+            version=request.version,
+        )
+        return self._apply_col_windowing(
+            converted,
+            request,
+            0,
+            None,
+            False,
+            requested_center_ids=requested_center_ids,
+        )
+
+    async def _build_transaction_patch_payload(
+        self,
+        request: TanStackRequest,
+        transaction_payload: Dict[str, Any],
+    ) -> Optional[Dict[str, Any]]:
+        visible_row_paths = self._normalize_visible_patch_row_paths(transaction_payload)
+        if not visible_row_paths or not self._request_supports_patch_refresh(request):
+            return None
+        targeted_row_paths = self._resolve_transaction_patch_row_paths(
+            request,
+            transaction_payload,
+            visible_row_paths,
+        )
+        if not targeted_row_paths:
+            return None
+
+        requested_center_ids = self._normalize_visible_patch_center_ids(transaction_payload)
+        base_spec = self.convert_tanstack_request_to_pivot_spec(request)
+        base_spec.limit = None
+        base_spec.sort = []
+        base_spec.totals = False
+
+        if base_spec.columns:
+            if not requested_center_ids:
+                return None
+            materialized_values = self._materialized_pivot_values_for_window(requested_center_ids, request)
+            if not materialized_values:
+                return None
+            base_spec = copy.deepcopy(base_spec)
+            if base_spec.pivot_config:
+                base_spec.pivot_config.materialized_column_values = materialized_values
+
+        grouped_paths: "OrderedDict[int, List[List[str]]]" = OrderedDict()
+        include_grand_total = False
+        for row_path in targeted_row_paths:
+            if row_path == "__grand_total__":
+                include_grand_total = True
+                continue
+            path_parts = [part for part in str(row_path).split("|||") if part != ""]
+            if not path_parts:
+                continue
+            depth = len(path_parts)
+            if depth > len(request.grouping):
+                continue
+            grouped_paths.setdefault(depth, []).append(path_parts)
+
+        patch_rows_by_path: Dict[str, Dict[str, Any]] = {}
+
+        if include_grand_total:
+            grand_total_spec = copy.deepcopy(base_spec)
+            grand_total_spec.rows = []
+            grand_total_spec.filters = list(copy.deepcopy(base_spec.filters or []))
+            grand_total_response = await self._execute_patch_row_group_query(
+                request,
+                grand_total_spec,
+                depth=0,
+                requested_center_ids=requested_center_ids,
+            )
+            if grand_total_response.data:
+                grand_total_row = dict(grand_total_response.data[0])
+                grand_total_row["_id"] = "Grand Total"
+                grand_total_row["_isTotal"] = True
+                grand_total_row["_path"] = "__grand_total__"
+                grand_total_row["depth"] = 0
+                patch_rows_by_path["__grand_total__"] = grand_total_row
+
+        for depth, requested_paths in grouped_paths.items():
+            group_spec = copy.deepcopy(base_spec)
+            group_spec.rows = list(request.grouping[:depth])
+            group_spec.filters = list(copy.deepcopy(base_spec.filters or []))
+            path_filter = self._build_path_filter_block(group_spec.rows, requested_paths)
+            if path_filter:
+                group_spec.filters.append(path_filter)
+            group_response = await self._execute_patch_row_group_query(
+                request,
+                group_spec,
+                depth=depth,
+                requested_center_ids=requested_center_ids,
+            )
+            for row in group_response.data or []:
+                if not isinstance(row, dict):
+                    continue
+                row_path = str(row.get("_path") or "").strip()
+                if not row_path:
+                    continue
+                patch_rows_by_path[row_path] = dict(row)
+
+        ordered_rows = [
+            patch_rows_by_path[row_path]
+            for row_path in targeted_row_paths
+            if row_path in patch_rows_by_path
+        ]
+        if not ordered_rows:
+            return None
+
+        return {
+            "mode": "visible_rows",
+            "rows": ordered_rows,
+            "requestedRowPaths": list(targeted_row_paths),
+            "requestedCenterColumnIds": list(requested_center_ids),
+            "deferredViewportRefresh": self._transaction_requires_deferred_viewport_refresh(
+                request,
+                transaction_payload,
+                visible_row_paths,
+                targeted_row_paths,
+            ),
+        }
+
+    def _resolve_transaction_key_fields(
+        self,
+        request: TanStackRequest,
+        transaction_payload: Dict[str, Any],
+    ) -> List[str]:
+        raw_key_fields = (
+            transaction_payload.get("keyFields")
+            or transaction_payload.get("key_fields")
+            or transaction_payload.get("keyField")
+            or transaction_payload.get("key_field")
+        )
+        if isinstance(raw_key_fields, str):
+            raw_key_fields = [raw_key_fields]
+        if isinstance(raw_key_fields, list):
+            normalized = []
+            for field in raw_key_fields:
+                field_name = self._resolve_request_target_column(request, field)
+                if field_name and field_name not in normalized:
+                    normalized.append(field_name)
+            if normalized:
+                return normalized
+
+        tree_config = transaction_payload.get("treeConfig")
+        if isinstance(tree_config, dict):
+            id_field = tree_config.get("idField") or tree_config.get("id_field")
+            resolved_id_field = self._resolve_request_target_column(request, id_field)
+            if resolved_id_field:
+                return [resolved_id_field]
+
+        normalized_grouping = []
+        for field in request.grouping or []:
+            field_name = self._resolve_request_target_column(request, field)
+            if field_name and field_name not in normalized_grouping:
+                normalized_grouping.append(field_name)
+        return normalized_grouping
+
+    @staticmethod
+    def _extract_transaction_entries(transaction_payload: Dict[str, Any], operation_kind: str) -> List[Dict[str, Any]]:
+        entries: List[Dict[str, Any]] = []
+        direct = transaction_payload.get(operation_kind)
+        if isinstance(direct, dict):
+            entries.append(direct)
+        elif isinstance(direct, list):
+            entries.extend([entry for entry in direct if isinstance(entry, dict)])
+
+        alias_map = {
+            "add": "insert",
+            "remove": "delete",
+            "update": "updates",
+            "upsert": "merge",
+        }
+        alias_value = transaction_payload.get(alias_map.get(operation_kind, ""))
+        if isinstance(alias_value, dict):
+            entries.append(alias_value)
+        elif isinstance(alias_value, list):
+            entries.extend([entry for entry in alias_value if isinstance(entry, dict)])
+
+        operations = transaction_payload.get("operations")
+        if isinstance(operations, list):
+            entries.extend(
+                entry for entry in operations
+                if isinstance(entry, dict) and str(entry.get("kind") or "").strip().lower() == operation_kind
+            )
+
+        return entries
+
+    def _extract_transaction_row_data(self, request: TanStackRequest, entry: Dict[str, Any]) -> Dict[str, Any]:
+        if not isinstance(entry, dict):
+            return {}
+        row_source = entry.get("rowData")
+        if not isinstance(row_source, dict):
+            row_source = entry.get("data")
+        if not isinstance(row_source, dict):
+            row_source = {
+                key: value
+                for key, value in entry.items()
+                if key not in {"kind", "keys", "keyColumns", "key_columns", "values", "updates", "rowId", "row_id"}
+            }
+        return self._normalize_table_row_data(request, row_source)
+
+    def _extract_transaction_key_columns(
+        self,
+        request: TanStackRequest,
+        entry: Dict[str, Any],
+        row_data: Dict[str, Any],
+        key_fields: List[str],
+    ) -> Dict[str, Any]:
+        exact_keys = bool(entry.get("exactKeys") or entry.get("exact_keys"))
+        explicit_keys = entry.get("keys")
+        if not isinstance(explicit_keys, dict):
+            explicit_keys = entry.get("keyColumns")
+        if not isinstance(explicit_keys, dict):
+            explicit_keys = entry.get("key_columns")
+        if isinstance(explicit_keys, dict):
+            normalized_keys = self._normalize_table_row_data(request, explicit_keys)
+            if exact_keys:
+                return normalized_keys
+            if key_fields:
+                normalized_keys = {field: normalized_keys[field] for field in key_fields if field in normalized_keys}
+            if not key_fields or len(normalized_keys) == len(key_fields):
+                return normalized_keys
+            return {}
+
+        row_id = entry.get("rowId") or entry.get("row_id")
+        if row_id is not None and key_fields:
+            parts = str(row_id).split("|||")
+            if len(parts) < len(key_fields):
+                return {}
+            return {field: parts[index] for index, field in enumerate(key_fields)}
+
+        if key_fields:
+            candidate = {field: row_data[field] for field in key_fields if field in row_data}
+            if len(candidate) == len(key_fields):
+                return candidate
+
+        return {}
+
+    def _normalize_update_operation(
+        self,
+        request: TanStackRequest,
+        update_payload: Dict[str, Any],
+    ) -> Optional[Dict[str, Any]]:
+        table_name = request.table
+        row_id = update_payload.get("rowId") or update_payload.get("row_id")
+        col_id = update_payload.get("colId") or update_payload.get("col_id")
+        new_value = update_payload.get("value")
+
+        if not table_name or row_id is None or not col_id:
+            return None
+
+        hierarchy_cols = request.grouping or []
+        key_columns = {}
+
+        if hierarchy_cols:
+            parts = str(row_id).split("|||")
+            for i, col in enumerate(hierarchy_cols):
+                if i < len(parts):
+                    key_columns[col] = parts[i]
+
+        column_spec = self._resolve_request_column_spec(request, col_id)
+        if not column_spec:
+            return None
+
+        pivot_filters = column_spec.get("pivotFilters") if isinstance(column_spec.get("pivotFilters"), dict) else {}
+        if pivot_filters:
+            key_columns.update(pivot_filters)
+
+        if not key_columns:
+            return {
+                "warning": "Skipped update entry without resolvable row or pivot keys.",
+            }
+
+        target_col = column_spec.get("targetColumn")
+        if not target_col:
+            return None
+
+        if not column_spec.get("editable", True):
+            reason = column_spec.get("reason") or f"Column '{col_id}' is not editable."
+            return {"warning": reason}
+
+        aggregation_fn = self._normalize_aggregation_name(column_spec.get("aggregationFn"))
+        if aggregation_fn:
+            return {
+                "key_columns": key_columns,
+                "aggregate_edit": {
+                    "column": target_col,
+                    "rowId": str(row_id),
+                    "columnId": str(col_id),
+                    "aggregationFn": aggregation_fn,
+                    "weightField": column_spec.get("weightField"),
+                    "windowFn": column_spec.get("windowFn"),
+                    "oldValue": update_payload.get("oldValue"),
+                    "newValue": new_value,
+                    "propagationStrategy": (
+                        update_payload.get("propagationStrategy")
+                        or update_payload.get("propagation_strategy")
+                        or update_payload.get("propagationFormula")
+                        or update_payload.get("propagation_formula")
+                    ),
+                    "pivotFilters": pivot_filters,
+                },
+            }
+
+        return {
+            "key_columns": key_columns,
+            "updates": {target_col: new_value},
+        }
+
+    async def handle_transaction(self, request: TanStackRequest, transaction_payload: Dict[str, Any]) -> Dict[str, Any]:
+        """Apply a richer-than-AG-Grid row transaction with smart refresh semantics."""
+        payload = transaction_payload if isinstance(transaction_payload, dict) else {}
+        key_fields = self._resolve_transaction_key_fields(request, payload)
+        refresh_mode = self._normalize_transaction_refresh_mode(
+            payload.get("refreshMode") if isinstance(payload, dict) else None
+        )
+        warnings: List[str] = []
+
+        normalized_transaction = {
+            "add": [],
+            "remove": [],
+            "update": [],
+            "upsert": [],
+        }
+
+        for entry in self._extract_transaction_entries(payload, "add"):
+            row_data = self._extract_transaction_row_data(request, entry)
+            if not row_data:
+                warnings.append("Skipped add entry without valid row data.")
+                continue
+            key_columns = self._extract_transaction_key_columns(request, entry, row_data, key_fields)
+            normalized_transaction["add"].append({
+                "row_data": row_data,
+                "key_columns": key_columns,
+            })
+
+        for entry in self._extract_transaction_entries(payload, "remove"):
+            row_data = self._extract_transaction_row_data(request, entry)
+            key_columns = self._extract_transaction_key_columns(request, entry, row_data, key_fields)
+            if not key_columns:
+                warnings.append("Skipped remove entry without resolvable key columns.")
+                continue
+            normalized_transaction["remove"].append({"key_columns": key_columns})
+
+        update_entries = self._extract_transaction_entries(payload, "update")
+        if not update_entries and isinstance(payload.get("updates"), list):
+            update_entries = [entry for entry in payload.get("updates") if isinstance(entry, dict)]
+        for entry in update_entries:
+            operation = None
+            if entry.get("rowId") is not None and entry.get("colId") is not None:
+                operation = self._normalize_update_operation(request, entry)
+            else:
+                row_data = self._extract_transaction_row_data(request, entry)
+                key_columns = self._extract_transaction_key_columns(request, entry, row_data, key_fields)
+                values_source = entry.get("values") if isinstance(entry.get("values"), dict) else (
+                    entry.get("updates") if isinstance(entry.get("updates"), dict) else row_data
+                )
+                update_values = self._normalize_table_row_data(request, values_source)
+                for field in list(key_columns.keys()):
+                    update_values.pop(field, None)
+                if key_columns and update_values:
+                    operation = {
+                        "key_columns": key_columns,
+                        "updates": update_values,
+                    }
+            if isinstance(operation, dict) and operation.get("warning"):
+                warnings.append(str(operation.get("warning")))
+                continue
+            if not operation:
+                warnings.append("Skipped update entry without resolvable keys or values.")
+                continue
+            normalized_transaction["update"].append(operation)
+
+        if normalized_transaction["update"]:
+            merged_updates: OrderedDict[str, Dict[str, Any]] = OrderedDict()
+            passthrough_updates: List[Dict[str, Any]] = []
+            for operation in normalized_transaction["update"]:
+                if isinstance(operation.get("aggregate_edit"), dict):
+                    passthrough_updates.append(operation)
+                    continue
+                operation_key = self._stable_json(operation["key_columns"])
+                existing_operation = merged_updates.get(operation_key)
+                if existing_operation is None:
+                    merged_updates[operation_key] = {
+                        "key_columns": dict(operation["key_columns"]),
+                        "updates": dict(operation["updates"]),
+                    }
+                else:
+                    existing_operation["updates"].update(operation["updates"])
+            normalized_transaction["update"] = passthrough_updates + list(merged_updates.values())
+
+        for entry in self._extract_transaction_entries(payload, "upsert"):
+            row_data = self._extract_transaction_row_data(request, entry)
+            key_columns = self._extract_transaction_key_columns(request, entry, row_data, key_fields)
+            merged_row = {**key_columns, **row_data}
+            if not key_columns or not merged_row:
+                warnings.append("Skipped upsert entry without resolvable keys or row data.")
+                continue
+            normalized_transaction["upsert"].append(
+                {
+                    "key_columns": key_columns,
+                    "row_data": merged_row,
+                }
+            )
+
+        apply_result = {"requested": {}, "applied": {}, "warnings": [], "rowCountDelta": 0}
+        if hasattr(self.controller, "apply_row_transaction"):
+            apply_result = await self.controller.apply_row_transaction(request.table, normalized_transaction)
+        elif normalized_transaction["update"]:
+            updated_count = await self.controller.update_records(request.table, normalized_transaction["update"])
+            apply_result = {
+                "requested": {"update": len(normalized_transaction["update"])},
+                "applied": {"update": updated_count},
+                "warnings": [],
+                "rowCountDelta": 0,
+            }
+
+        applied = apply_result.get("applied") if isinstance(apply_result.get("applied"), dict) else {}
+        requested = apply_result.get("requested") if isinstance(apply_result.get("requested"), dict) else {}
+        requires_structural_refresh = bool(
+            (applied.get("add") or 0)
+            or (applied.get("remove") or 0)
+            or (applied.get("upsertInserted") or 0)
+            or refresh_mode in {"structural", "full"}
+        )
+        resolved_refresh_mode = refresh_mode
+        if refresh_mode == "smart":
+            resolved_refresh_mode = "structural" if requires_structural_refresh else "viewport"
+        elif refresh_mode == "patch":
+            resolved_refresh_mode = "structural" if requires_structural_refresh else "patch"
+        elif refresh_mode == "full":
+            resolved_refresh_mode = "structural"
+
+        if any(applied.values()):
+            self._invalidate_local_caches()
+
+        patch_payload = None
+        if resolved_refresh_mode == "patch" and any(applied.values()):
+            patch_payload = await self._build_transaction_patch_payload(request, payload)
+            if patch_payload is None:
+                resolved_refresh_mode = "viewport"
+
+        def enrich_history_transaction(transaction: Any) -> Optional[Dict[str, Any]]:
+            if not isinstance(transaction, dict):
+                return None
+            enriched = {
+                key: list(value or [])
+                for key, value in transaction.items()
+                if isinstance(value, list) and value
+            }
+            if not enriched:
+                return None
+            enriched["keyFields"] = list(key_fields or [])
+            enriched["refreshMode"] = resolved_refresh_mode if resolved_refresh_mode != "none" else "smart"
+            return enriched
+
+        history_result = apply_result.get("history") if isinstance(apply_result.get("history"), dict) else {}
+
+        return {
+            "kind": "transaction",
+            "keyFields": key_fields,
+            "requested": requested,
+            "applied": applied,
+            "warnings": warnings + list(apply_result.get("warnings") or []),
+            "rowCountDelta": int(apply_result.get("rowCountDelta") or 0),
+            "refreshMode": resolved_refresh_mode,
+            "requiresStructuralRefresh": requires_structural_refresh,
+            "source": payload.get("source"),
+            "propagation": list(apply_result.get("propagation") or []),
+            "patchPayload": patch_payload,
+            "deferredViewportRefresh": bool((patch_payload or {}).get("deferredViewportRefresh")),
+            "inverseTransaction": enrich_history_transaction(apply_result.get("inverseTransaction")),
+            "redoTransaction": enrich_history_transaction(apply_result.get("redoTransaction")),
+            "history": {
+                "captureable": bool(history_result.get("captureable")),
+                "warnings": list(history_result.get("warnings") or []),
+            },
+        }
+
+    async def handle_updates(self, request: TanStackRequest, update_payloads: List[Dict[str, Any]]) -> Dict[str, Any]:
+        """Apply one or more cell updates and invalidate adapter caches."""
+        transaction_result = await self.handle_transaction(
+            request,
+            {
+                "update": update_payloads,
+                "refreshMode": "viewport",
+                "source": "cell_updates",
+            },
+        )
+        updated_count = int(((transaction_result.get("applied") or {}).get("update")) or 0)
+        if updated_count <= 0:
+            return {"updated": 0}
+        return {
+            "updated": updated_count,
+            "transaction": transaction_result,
+        }
+
+    async def handle_drill_through(self, request: TanStackRequest, drill_payload: Dict[str, Any]) -> Dict[str, Any]:
         """
         Handle a drill through request.
         """
@@ -1744,6 +2661,21 @@ class TanStackPivotAdapter:
         
         # 2. Extract drill filters from payload
         drill_filters_raw = drill_payload.get('filters', {})
+        row_path = drill_payload.get('row_path') or drill_payload.get('rowPath') or ""
+        row_fields = drill_payload.get('row_fields') or drill_payload.get('pathFields') or []
+        if not isinstance(row_fields, list):
+            row_fields = []
+        path_parts = str(row_path).split("|||") if row_path else []
+
+        for index, field in enumerate(row_fields):
+            if index < len(path_parts) and path_parts[index]:
+                drill_filters_raw = {
+                    **(drill_filters_raw or {}),
+                    field: {
+                        "type": "eq",
+                        "value": path_parts[index],
+                    },
+                }
         
         # Convert frontend filter format to pivot engine format
         # This mirrors logic in convert_tanstack_request_to_pivot_spec
@@ -1764,9 +2696,36 @@ class TanStackPivotAdapter:
                         'value': filter_obj.get('value')
                     })
         
+        page = max(int(drill_payload.get('page', 0) or 0), 0)
+        page_size_raw = drill_payload.get('page_size', drill_payload.get('pageSize', 100))
+        page_size = min(max(int(page_size_raw or 100), 1), 500)
+        sort_col = drill_payload.get('sort_col') or drill_payload.get('sortCol')
+        sort_dir = str(drill_payload.get('sort_dir') or drill_payload.get('sortDir') or 'asc').lower()
+        text_filter = drill_payload.get('filter')
+        if text_filter is None:
+            text_filter = drill_payload.get('filterText', '')
+
         # 3. Call controller (returns dict with 'rows' and 'total_rows')
-        result = await self.controller.get_drill_through_data(spec, drill_filters)
-        return result['rows']
+        result = await self.controller.get_drill_through_data(
+            spec,
+            drill_filters,
+            limit=page_size,
+            offset=page * page_size,
+            sort_col=sort_col,
+            sort_dir='desc' if sort_dir == 'desc' else 'asc',
+            text_filter=str(text_filter or ''),
+        )
+        return {
+            "rows": result.get("rows", []),
+            "total_rows": result.get("total_rows", 0),
+            "page": page,
+            "page_size": page_size,
+            "sort_col": sort_col,
+            "sort_dir": 'desc' if sort_dir == 'desc' else 'asc',
+            "filter": str(text_filter or ''),
+            "row_path": row_path,
+            "row_fields": row_fields,
+        }
 
     async def handle_request(self, request: TanStackRequest, user: Optional[User] = None) -> TanStackResponse:
         """Handle a TanStack request directly"""
@@ -1960,9 +2919,194 @@ class TanStackPivotAdapter:
                                           col_end: Optional[int] = None,
                                           needs_col_schema: bool = False,
                                           include_grand_total: bool = False,
-                                          requested_center_ids: Optional[List[str]] = None) -> TanStackResponse:
+                                          requested_center_ids: Optional[List[str]] = None,
+                                          _allow_prefetch: bool = True,
+                                          profiling: bool = False) -> TanStackResponse:
         """Handle virtual scrolling request with start/end row indices"""
+        request_started_at = time.perf_counter()
+        cache_lookup_started_at = request_started_at
+        response_cache_key = self._response_window_cache_key(
+            request,
+            start_row,
+            end_row,
+            expanded_paths,
+            col_start,
+            col_end,
+            needs_col_schema,
+            include_grand_total,
+            requested_center_ids,
+        )
+        cached_response = self._get_cached_window_response(response_cache_key)
+        cache_lookup_finished_at = time.perf_counter()
+        if cached_response is not None:
+            if _allow_prefetch:
+                total_center_cols = None
+                if isinstance(cached_response.col_schema, dict):
+                    total_center_cols = cached_response.col_schema.get("total_center_cols")
+                elif request.grouping:
+                    center_cache_key = (
+                        request.table,
+                        frozenset({
+                            '_id', '_path', '_isTotal', '_level', '_expanded', '_parentPath',
+                            '_has_children', '_is_expanded', 'depth', '_depth', 'uuid', 'subRows',
+                            *(request.grouping or []),
+                            *(col.get("id") for col in (request.columns or []) if isinstance(col, dict) and not col.get("aggregationFn") and not col.get("isFormula") and col.get("id"))
+                        }),
+                        self._center_column_catalog_cache_key(request),
+                    )
+                    total_center_cols = len(self._center_col_ids_cache.get(center_cache_key, [])) or None
+                self._schedule_viewport_prefetch(
+                    request,
+                    start_row,
+                    end_row,
+                    expanded_paths,
+                    col_start,
+                    col_end,
+                    include_grand_total,
+                    cached_response.total_rows,
+                    total_center_cols,
+                )
+            return self._attach_virtual_scroll_profile(
+                cached_response,
+                started_at=request_started_at,
+                request=request,
+                start_row=start_row,
+                end_row=end_row,
+                col_start=col_start,
+                col_end=col_end,
+                needs_col_schema=needs_col_schema,
+                include_grand_total=include_grand_total,
+                path="response_cache_hit",
+                stages={
+                    "cacheLookupMs": self._profile_ms(cache_lookup_started_at, cache_lookup_finished_at),
+                },
+            ) if profiling else cached_response
+        if not needs_col_schema:
+            row_block_lookup_started_at = time.perf_counter()
+            cached_block_response = self._assemble_cached_row_block_window(
+                request,
+                start_row,
+                end_row,
+                expanded_paths,
+                col_start,
+                col_end,
+                include_grand_total,
+                requested_center_ids,
+            )
+            row_block_lookup_finished_at = time.perf_counter()
+            if cached_block_response is not None:
+                completed_response = self._complete_virtual_scroll_response(
+                    cached_block_response,
+                    response_cache_key,
+                    request,
+                    start_row,
+                    end_row,
+                    expanded_paths,
+                    col_start,
+                    col_end,
+                    include_grand_total,
+                    _allow_prefetch,
+                    requested_center_ids,
+                )
+                return self._attach_virtual_scroll_profile(
+                    completed_response,
+                    started_at=request_started_at,
+                    request=request,
+                    start_row=start_row,
+                    end_row=end_row,
+                    col_start=col_start,
+                    col_end=col_end,
+                    needs_col_schema=needs_col_schema,
+                    include_grand_total=include_grand_total,
+                    path="row_block_cache_hit",
+                    stages={
+                        "cacheLookupMs": self._profile_ms(cache_lookup_started_at, cache_lookup_finished_at),
+                        "rowBlockLookupMs": self._profile_ms(row_block_lookup_started_at, row_block_lookup_finished_at),
+                    },
+                ) if profiling else completed_response
+
+            missing_blocks_lookup_started_at = time.perf_counter()
+            cached_blocks, missing_blocks = self._get_cached_row_block_entries(
+                request,
+                start_row,
+                end_row,
+                expanded_paths,
+                col_start,
+                col_end,
+                requested_center_ids,
+            )
+            missing_blocks_lookup_finished_at = time.perf_counter()
+            if cached_blocks and missing_blocks:
+                missing_start_row = missing_blocks[0] * _ROW_BLOCK_SIZE
+                missing_end_row = ((missing_blocks[-1] + 1) * _ROW_BLOCK_SIZE) - 1
+                missing_blocks_fetch_started_at = time.perf_counter()
+                await self.handle_virtual_scroll_request(
+                    request,
+                    missing_start_row,
+                    missing_end_row,
+                    expanded_paths=expanded_paths,
+                    user=user,
+                    col_start=col_start,
+                    col_end=col_end,
+                    needs_col_schema=False,
+                    include_grand_total=include_grand_total,
+                    requested_center_ids=requested_center_ids,
+                    _allow_prefetch=False,
+                    profiling=False,
+                )
+                missing_blocks_fetch_finished_at = time.perf_counter()
+                row_block_reassemble_started_at = time.perf_counter()
+                cached_block_response = self._assemble_cached_row_block_window(
+                    request,
+                    start_row,
+                    end_row,
+                    expanded_paths,
+                    col_start,
+                    col_end,
+                    include_grand_total,
+                    requested_center_ids,
+                )
+                row_block_reassemble_finished_at = time.perf_counter()
+                if cached_block_response is not None:
+                    completed_response = self._complete_virtual_scroll_response(
+                        cached_block_response,
+                        response_cache_key,
+                        request,
+                        start_row,
+                        end_row,
+                        expanded_paths,
+                        col_start,
+                        col_end,
+                        include_grand_total,
+                        _allow_prefetch,
+                        requested_center_ids,
+                    )
+                    return self._attach_virtual_scroll_profile(
+                        completed_response,
+                        started_at=request_started_at,
+                        request=request,
+                        start_row=start_row,
+                        end_row=end_row,
+                        col_start=col_start,
+                        col_end=col_end,
+                        needs_col_schema=needs_col_schema,
+                        include_grand_total=include_grand_total,
+                        path="row_block_partial_reuse",
+                        stages={
+                            "cacheLookupMs": self._profile_ms(cache_lookup_started_at, cache_lookup_finished_at),
+                            "rowBlockLookupMs": self._profile_ms(missing_blocks_lookup_started_at, missing_blocks_lookup_finished_at),
+                            "missingBlocksFetchMs": self._profile_ms(missing_blocks_fetch_started_at, missing_blocks_fetch_finished_at),
+                            "rowBlockReassembleMs": self._profile_ms(row_block_reassemble_started_at, row_block_reassemble_finished_at),
+                        },
+                        extra={
+                            "rowBlockCache": {
+                                "cachedBlocks": len(cached_blocks),
+                                "missingBlocks": len(missing_blocks),
+                            }
+                        },
+                    ) if profiling else completed_response
         if self._has_formula_sort(request):
+            formula_path_started_at = time.perf_counter()
             target_paths = expanded_paths or []
             requires_hierarchy_materialization = bool(request.grouping) and (
                 expanded_paths is True
@@ -1994,7 +3138,8 @@ class TanStackPivotAdapter:
                 col_schema=full_response.col_schema,
                 color_scale_stats=full_response.color_scale_stats,
             )
-            return self._apply_col_windowing(
+            col_window_started_at = time.perf_counter()
+            windowed_response = self._apply_col_windowing(
                 response,
                 request,
                 col_start,
@@ -2002,13 +3147,75 @@ class TanStackPivotAdapter:
                 needs_col_schema,
                 requested_center_ids=requested_center_ids,
             )
+            col_window_finished_at = time.perf_counter()
+            completed_response = self._complete_virtual_scroll_response(
+                windowed_response,
+                response_cache_key,
+                request,
+                start_row,
+                end_row,
+                expanded_paths,
+                col_start,
+                col_end,
+                include_grand_total,
+                _allow_prefetch,
+                requested_center_ids,
+            )
+            return self._attach_virtual_scroll_profile(
+                completed_response,
+                started_at=request_started_at,
+                request=request,
+                start_row=start_row,
+                end_row=end_row,
+                col_start=col_start,
+                col_end=col_end,
+                needs_col_schema=needs_col_schema,
+                include_grand_total=include_grand_total,
+                path="formula_sort_window",
+                stages={
+                    "cacheLookupMs": self._profile_ms(cache_lookup_started_at, cache_lookup_finished_at),
+                    "formulaPathMs": self._profile_ms(formula_path_started_at, time.perf_counter()),
+                    "colWindowingMs": self._profile_ms(col_window_started_at, col_window_finished_at),
+                },
+                extra=(full_response.profile if isinstance(getattr(full_response, "profile", None), dict) else None),
+            ) if profiling else completed_response
 
         # Convert request to pivot spec
+        pivot_spec_started_at = time.perf_counter()
         pivot_spec = self.convert_tanstack_request_to_pivot_spec(request)
+        pivot_spec_finished_at = time.perf_counter()
 
         # Apply RLS if user is provided
         if user:
             pivot_spec = apply_rls_to_spec(pivot_spec, user)
+
+        discovered_center_ids: Optional[List[str]] = None
+        if pivot_spec.columns and pivot_spec.pivot_config and pivot_spec.pivot_config.enabled:
+            column_catalog_started_at = time.perf_counter()
+            discovered_values = await self._discover_pivot_column_values(pivot_spec)
+            column_catalog_finished_at = time.perf_counter()
+            if discovered_values:
+                discovered_center_ids = self._build_center_col_ids_from_discovered_values(
+                    discovered_values,
+                    request,
+                )
+                window_center_ids = self._resolve_center_window_ids(
+                    discovered_center_ids,
+                    request,
+                    col_start,
+                    col_end,
+                    needs_col_schema,
+                    requested_center_ids=requested_center_ids,
+                )
+                pivot_spec = pivot_spec.copy()
+                if pivot_spec.pivot_config:
+                    pivot_spec.pivot_config.materialized_column_values = self._materialized_pivot_values_for_window(
+                        window_center_ids,
+                        request,
+                    )
+        else:
+            column_catalog_started_at = None
+            column_catalog_finished_at = None
 
         # Handle "Expand All" case
         target_paths = expanded_paths or []
@@ -2017,21 +3224,28 @@ class TanStackPivotAdapter:
 
         if hasattr(self.controller, 'run_hierarchy_view'):
             try:
+                hierarchy_view_started_at = time.perf_counter()
                 hierarchy_view = await self.controller.run_hierarchy_view(
                     pivot_spec,
                     target_paths,
                     start_row,
                     end_row,
                     include_grand_total_row=include_grand_total,
+                    profiling=profiling,
                 )
+                hierarchy_view_finished_at = time.perf_counter()
             except TypeError:
                 # Backward compatibility with older controller signatures.
+                hierarchy_view_started_at = time.perf_counter()
                 hierarchy_view = await self.controller.run_hierarchy_view(
                     pivot_spec, target_paths, start_row, end_row
                 )
+                hierarchy_view_finished_at = time.perf_counter()
+            convert_started_at = time.perf_counter()
             tanstack_result = self.convert_pivot_result_to_tanstack_format(
                 hierarchy_view.get("rows", []), request, version=request.version
             )
+            convert_finished_at = time.perf_counter()
             if hierarchy_view.get("total_rows") is not None:
                 tanstack_result.total_rows = hierarchy_view["total_rows"]
 
@@ -2056,13 +3270,59 @@ class TanStackPivotAdapter:
                     existing_rows = tanstack_result.data or []
                     if not any(_is_grand_total_row(row) for row in existing_rows):
                         tanstack_result.data = [*existing_rows, grand_total_row]
+                    if not request.totals and tanstack_result.total_rows is not None:
+                        tanstack_result.total_rows = max(int(tanstack_result.total_rows) - 1, 0)
 
             tanstack_result.data = _order_hierarchical_rows(
                 _move_grand_total_to_end(_dedup_grand_total(tanstack_result.data))
             )
             if hierarchy_view.get("color_scale_stats"):
                 tanstack_result.color_scale_stats = hierarchy_view["color_scale_stats"]
-            return self._apply_col_windowing(tanstack_result, request, col_start, col_end, needs_col_schema, requested_center_ids=requested_center_ids)
+            col_window_started_at = time.perf_counter()
+            windowed_response = self._apply_col_windowing(
+                tanstack_result,
+                request,
+                col_start,
+                col_end,
+                needs_col_schema,
+                requested_center_ids=requested_center_ids,
+                discovered_center_ids=discovered_center_ids,
+            )
+            col_window_finished_at = time.perf_counter()
+            completed_response = self._complete_virtual_scroll_response(
+                windowed_response,
+                response_cache_key,
+                request,
+                start_row,
+                end_row,
+                expanded_paths,
+                col_start,
+                col_end,
+                include_grand_total,
+                _allow_prefetch,
+                requested_center_ids,
+            )
+            return self._attach_virtual_scroll_profile(
+                completed_response,
+                started_at=request_started_at,
+                request=request,
+                start_row=start_row,
+                end_row=end_row,
+                col_start=col_start,
+                col_end=col_end,
+                needs_col_schema=needs_col_schema,
+                include_grand_total=include_grand_total,
+                path="hierarchy_view",
+                stages={
+                    "cacheLookupMs": self._profile_ms(cache_lookup_started_at, cache_lookup_finished_at),
+                    "pivotSpecMs": self._profile_ms(pivot_spec_started_at, pivot_spec_finished_at),
+                    "columnCatalogMs": self._profile_ms(column_catalog_started_at, column_catalog_finished_at),
+                    "hierarchyViewMs": self._profile_ms(hierarchy_view_started_at, hierarchy_view_finished_at),
+                    "convertMs": self._profile_ms(convert_started_at, convert_finished_at),
+                    "colWindowingMs": self._profile_ms(col_window_started_at, col_window_finished_at),
+                },
+                extra=(hierarchy_view.get("profile") if isinstance(hierarchy_view.get("profile"), dict) else None),
+            ) if profiling else completed_response
 
         # Use the controller's virtual scrolling method
         if hasattr(self.controller, 'run_virtual_scroll_hierarchical'):
@@ -2085,7 +3345,48 @@ class TanStackPivotAdapter:
                 # Only deduplicate grand total — do NOT reorder, as _order_hierarchical_rows
                 # uses local first_seen indices that shuffle partial windows incorrectly.
                 tanstack_result.data = _move_grand_total_to_end(_dedup_grand_total(tanstack_result.data))
-                return self._apply_col_windowing(tanstack_result, request, col_start, col_end, needs_col_schema, requested_center_ids=requested_center_ids)
+                col_window_started_at = time.perf_counter()
+                windowed_response = self._apply_col_windowing(
+                    tanstack_result,
+                    request,
+                    col_start,
+                    col_end,
+                    needs_col_schema,
+                    requested_center_ids=requested_center_ids,
+                    discovered_center_ids=discovered_center_ids,
+                )
+                col_window_finished_at = time.perf_counter()
+                completed_response = self._complete_virtual_scroll_response(
+                    windowed_response,
+                    response_cache_key,
+                    request,
+                    start_row,
+                    end_row,
+                    expanded_paths,
+                    col_start,
+                    col_end,
+                    include_grand_total,
+                    _allow_prefetch,
+                    requested_center_ids,
+                )
+                return self._attach_virtual_scroll_profile(
+                    completed_response,
+                    started_at=request_started_at,
+                    request=request,
+                    start_row=start_row,
+                    end_row=end_row,
+                    col_start=col_start,
+                    col_end=col_end,
+                    needs_col_schema=needs_col_schema,
+                    include_grand_total=include_grand_total,
+                    path="legacy_virtual_scroll",
+                    stages={
+                        "cacheLookupMs": self._profile_ms(cache_lookup_started_at, cache_lookup_finished_at),
+                        "pivotSpecMs": self._profile_ms(pivot_spec_started_at, pivot_spec_finished_at),
+                        "columnCatalogMs": self._profile_ms(column_catalog_started_at, column_catalog_finished_at),
+                        "colWindowingMs": self._profile_ms(col_window_started_at, col_window_finished_at),
+                    },
+                ) if profiling else completed_response
 
             except Exception as e:
                 print(f"Virtual scroll failed: {e}, falling back to hierarchical load")
@@ -2094,14 +3395,96 @@ class TanStackPivotAdapter:
                 fallback_result.data = _order_hierarchical_rows(
                     _move_grand_total_to_end(_dedup_grand_total(fallback_result.data))
                 )
-                return self._apply_col_windowing(fallback_result, request, col_start, col_end, needs_col_schema, requested_center_ids=requested_center_ids)
+                col_window_started_at = time.perf_counter()
+                windowed_response = self._apply_col_windowing(
+                    fallback_result,
+                    request,
+                    col_start,
+                    col_end,
+                    needs_col_schema,
+                    requested_center_ids=requested_center_ids,
+                    discovered_center_ids=discovered_center_ids,
+                )
+                col_window_finished_at = time.perf_counter()
+                completed_response = self._complete_virtual_scroll_response(
+                    windowed_response,
+                    response_cache_key,
+                    request,
+                    start_row,
+                    end_row,
+                    expanded_paths,
+                    col_start,
+                    col_end,
+                    include_grand_total,
+                    _allow_prefetch,
+                    requested_center_ids,
+                )
+                return self._attach_virtual_scroll_profile(
+                    completed_response,
+                    started_at=request_started_at,
+                    request=request,
+                    start_row=start_row,
+                    end_row=end_row,
+                    col_start=col_start,
+                    col_end=col_end,
+                    needs_col_schema=needs_col_schema,
+                    include_grand_total=include_grand_total,
+                    path="legacy_virtual_scroll_fallback",
+                    stages={
+                        "cacheLookupMs": self._profile_ms(cache_lookup_started_at, cache_lookup_finished_at),
+                        "pivotSpecMs": self._profile_ms(pivot_spec_started_at, pivot_spec_finished_at),
+                        "columnCatalogMs": self._profile_ms(column_catalog_started_at, column_catalog_finished_at),
+                        "colWindowingMs": self._profile_ms(col_window_started_at, col_window_finished_at),
+                    },
+                ) if profiling else completed_response
         else:
             # Fallback: Use regular hierarchical method
             fallback_result = await self.handle_hierarchical_request(request, expanded_paths)
             fallback_result.data = _order_hierarchical_rows(
                 _move_grand_total_to_end(_dedup_grand_total(fallback_result.data))
             )
-            return self._apply_col_windowing(fallback_result, request, col_start, col_end, needs_col_schema, requested_center_ids=requested_center_ids)
+            col_window_started_at = time.perf_counter()
+            windowed_response = self._apply_col_windowing(
+                fallback_result,
+                request,
+                col_start,
+                col_end,
+                needs_col_schema,
+                requested_center_ids=requested_center_ids,
+                discovered_center_ids=discovered_center_ids,
+            )
+            col_window_finished_at = time.perf_counter()
+            completed_response = self._complete_virtual_scroll_response(
+                windowed_response,
+                response_cache_key,
+                request,
+                start_row,
+                end_row,
+                expanded_paths,
+                col_start,
+                col_end,
+                include_grand_total,
+                _allow_prefetch,
+                requested_center_ids,
+            )
+            return self._attach_virtual_scroll_profile(
+                completed_response,
+                started_at=request_started_at,
+                request=request,
+                start_row=start_row,
+                end_row=end_row,
+                col_start=col_start,
+                col_end=col_end,
+                needs_col_schema=needs_col_schema,
+                include_grand_total=include_grand_total,
+                path="hierarchical_fallback",
+                stages={
+                    "cacheLookupMs": self._profile_ms(cache_lookup_started_at, cache_lookup_finished_at),
+                    "pivotSpecMs": self._profile_ms(pivot_spec_started_at, pivot_spec_finished_at),
+                    "columnCatalogMs": self._profile_ms(column_catalog_started_at, column_catalog_finished_at),
+                    "colWindowingMs": self._profile_ms(col_window_started_at, col_window_finished_at),
+                },
+            ) if profiling else completed_response
 
     def get_schema_info(self, table_name: str) -> Dict[str, Any]:
         """Get schema information for TanStack column configuration"""
