@@ -6,6 +6,7 @@ import {
     getCoreRowModel,
     getExpandedRowModel,
     getGroupedRowModel,
+    getPaginationRowModel,
 } from '@tanstack/react-table';
 import { useVirtualizer } from '@tanstack/react-virtual';
 import { themes, getStyles, isDarkTheme, gridDimensionTokens, deriveEditedCellThemeTokens, deriveStructuralThemeTokens } from '../utils/styles';
@@ -95,6 +96,8 @@ const MIN_TABLE_PANEL_HEIGHT = 200;
 const VALID_CHART_DOCK_POSITIONS = new Set(['left', 'right', 'top', 'bottom']);
 const DEFAULT_TABLE_CANVAS_SIZE = 1.4;
 const TABLE_OVERLAY_CHART_PANE_ID = '__table_overlay_chart__';
+const EDITING_TEMPORARILY_DISABLED = true;
+const MAX_AUTO_SIZE_SAMPLE_ROWS = 300;
 const VALID_CHART_TYPES = new Set(['bar', 'line', 'area', 'sparkline', 'combo', 'pie', 'donut', 'scatter', 'waterfall', 'icicle', 'sunburst', 'sankey']);
 const VALID_CHART_SORT_MODES = new Set(['natural', 'value_desc', 'value_asc', 'label_asc', 'label_desc']);
 const VALID_CHART_INTERACTION_MODES = new Set(['focus', 'filter', 'event']);
@@ -132,6 +135,7 @@ const clampOptionalInteger = (value, min, max) => {
 const VALID_TREE_DISPLAY_MODES = new Set(['singleColumn', 'multipleColumns']);
 const VALID_DETAIL_REFRESH_STRATEGIES = new Set(['rows', 'everything', 'nothing']);
 const VALID_TRANSACTION_REFRESH_MODES = new Set(['none', 'viewport', 'smart', 'structural', 'full', 'patch']);
+const VALID_TRANSACTION_EVENT_ACTIONS = new Set(['undo', 'redo', 'revert', 'replace']);
 const MAX_TRANSACTION_HISTORY_ENTRIES = 100;
 
 const normalizeViewModeValue = (value) => (
@@ -209,6 +213,11 @@ const normalizeTransactionRefreshModeValue = (value, fallback = 'smart') => {
     return VALID_TRANSACTION_REFRESH_MODES.has(normalized) ? normalized : fallback;
 };
 
+const normalizeTransactionEventActionValue = (value) => {
+    const normalized = typeof value === 'string' ? value.trim().toLowerCase() : '';
+    return VALID_TRANSACTION_EVENT_ACTIONS.has(normalized) ? normalized : null;
+};
+
 const normalizePropagationFormulaValue = (value, fallback = 'equal') => {
     const normalized = typeof value === 'string'
         ? value.trim().toLowerCase().replace(/[\s-]+/g, '_')
@@ -243,6 +252,9 @@ const isParentAggregatePropagationEdit = (update, groupingFields) => {
 
 const normalizeTransactionHistoryPayload = (transaction, overrides = {}) => {
     if (!transaction || typeof transaction !== 'object') return null;
+    const normalizedEventAction = normalizeTransactionEventActionValue(
+        overrides.eventAction !== undefined ? overrides.eventAction : (transaction.eventAction || transaction.event_action)
+    );
     const normalized = cloneSerializable({
         add: Array.isArray(transaction.add) ? transaction.add : [],
         remove: Array.isArray(transaction.remove) ? transaction.remove : [],
@@ -254,8 +266,20 @@ const normalizeTransactionHistoryPayload = (transaction, overrides = {}) => {
             'smart'
         ),
         source: overrides.source !== undefined ? overrides.source : transaction.source,
+        eventAction: normalizedEventAction || undefined,
+        eventId: transaction.eventId !== undefined ? transaction.eventId : transaction.event_id,
+        eventIds: Array.isArray(transaction.eventIds)
+            ? transaction.eventIds
+            : (Array.isArray(transaction.event_ids) ? transaction.event_ids : []),
+        propagationStrategy: (() => {
+            const propagationValue = transaction.propagationStrategy !== undefined
+                ? transaction.propagationStrategy
+                : transaction.propagation_strategy;
+            const normalizedPropagationValue = normalizePropagationFormulaValue(propagationValue, null);
+            return normalizedPropagationValue || propagationValue;
+        })(),
     }, null);
-    return hasTransactionEntries(normalized) ? normalized : null;
+    return hasTransactionEntries(normalized) || normalizedEventAction ? normalized : null;
 };
 
 const cellValuesMatch = (expectedValue, actualValue) => {
@@ -903,7 +927,7 @@ const normalizeChartCanvasPane = (value, fallbackDefinition, index = 0) => {
         locked: Boolean(source.locked),
         lockedModel: cloneSerializable(source.lockedModel, null),
         lockedRequest: normalizeLockedChartRequest(source.lockedRequest),
-        cinemaMode: Boolean(source.cinemaMode),
+        immersiveMode: Boolean(source.immersiveMode),
     };
 };
 
@@ -1129,6 +1153,61 @@ const countActiveFilters = (filters) => {
     );
 };
 
+const PAGE_SIZE_OPTIONS = [10, 25, 50, 100, 200];
+const PaginationBar = React.memo(function PaginationBar({ table, theme, pageSize, onPageSizeChange }) {
+    const pageCount = table.getPageCount();
+    const pageIndex = table.getState().pagination?.pageIndex ?? 0;
+    const totalRows = table.getPrePaginationRowModel().rows.length;
+    const rangeStart = pageIndex * pageSize + 1;
+    const rangeEnd = Math.min((pageIndex + 1) * pageSize, totalRows);
+    const btnStyle = (disabled) => ({
+        border: `1px solid ${theme.border}`,
+        borderRadius: '4px',
+        background: disabled ? 'transparent' : (theme.headerSubtleBg || theme.hover),
+        color: disabled ? (theme.textSec || '#999') : theme.text,
+        padding: '3px 10px',
+        fontSize: '11px',
+        fontWeight: 600,
+        cursor: disabled ? 'not-allowed' : 'pointer',
+        opacity: disabled ? 0.5 : 1,
+    });
+    return (
+        <div style={{
+            display: 'flex', alignItems: 'center', justifyContent: 'space-between',
+            padding: '6px 12px', borderTop: `1px solid ${theme.border}`,
+            background: theme.headerBg || theme.background, flexShrink: 0,
+            fontSize: '11px', color: theme.text, gap: '8px',
+        }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+                <span style={{ color: theme.textSec }}>Rows per page</span>
+                <select
+                    value={pageSize}
+                    onChange={(e) => onPageSizeChange(Number(e.target.value))}
+                    style={{
+                        border: `1px solid ${theme.border}`, borderRadius: '4px',
+                        background: theme.surfaceBg || theme.background, color: theme.text,
+                        padding: '2px 4px', fontSize: '11px',
+                    }}
+                >
+                    {PAGE_SIZE_OPTIONS.map((s) => <option key={s} value={s}>{s}</option>)}
+                </select>
+            </div>
+            <span style={{ color: theme.textSec }}>
+                {totalRows > 0 ? `${rangeStart}–${rangeEnd} of ${totalRows}` : '0 rows'}
+            </span>
+            <div style={{ display: 'flex', gap: '4px' }}>
+                <button style={btnStyle(!table.getCanPreviousPage())} onClick={() => table.setPageIndex(0)} disabled={!table.getCanPreviousPage()}>{'«'}</button>
+                <button style={btnStyle(!table.getCanPreviousPage())} onClick={() => table.previousPage()} disabled={!table.getCanPreviousPage()}>{'‹'}</button>
+                <span style={{ padding: '3px 8px', fontSize: '11px', fontWeight: 600 }}>
+                    {pageIndex + 1} / {pageCount || 1}
+                </span>
+                <button style={btnStyle(!table.getCanNextPage())} onClick={() => table.nextPage()} disabled={!table.getCanNextPage()}>{'›'}</button>
+                <button style={btnStyle(!table.getCanNextPage())} onClick={() => table.setPageIndex(pageCount - 1)} disabled={!table.getCanNextPage()}>{'»'}</button>
+            </div>
+        </div>
+    );
+});
+
 const GRAND_TOTAL_ROW_ID = '__grand_total__';
 const MISSING_PERSISTED_VALUE = Symbol('missing-persisted-value');
 
@@ -1181,7 +1260,7 @@ export default function DashTanstackPivot(props) {
         filters: initialFilters = {},
         sorting: initialSorting = [],
         expanded: initialExpanded = {},
-        cinemaMode: initialCinemaMode = false,
+        immersiveMode: initialImmersiveMode = false,
         showRowTotals: initialShowRowTotals = true,
         showColTotals: initialShowColTotals = true,
         grandTotalPosition = 'top',
@@ -1223,6 +1302,8 @@ export default function DashTanstackPivot(props) {
         performanceConfig: externalPerformanceConfig = null,
         viewState = null,
         saveViewTrigger = null,
+        uiConfig: externalUiConfig = null,
+        paginationConfig: externalPagination = null,
     } = props;
 
     const normalizedInitialChartServerWindow = normalizeChartServerWindowConfig(chartServerWindow);
@@ -1268,6 +1349,28 @@ export default function DashTanstackPivot(props) {
         () => normalizeNumberGroupSeparator(externalNumberGroupSeparator),
         [externalNumberGroupSeparator]
     );
+    const uiConfig = useMemo(() => {
+        const src = externalUiConfig && typeof externalUiConfig === 'object' ? externalUiConfig : {};
+        return {
+            showToolbar: src.showToolbar !== false,
+            showSidebar: src.showSidebar !== false,
+            showFilters: src.showFilters !== false,
+            showCharts: src.showCharts !== false,
+            showEditing: !EDITING_TEMPORARILY_DISABLED && src.showEditing !== false,
+            showEditPanel: !EDITING_TEMPORARILY_DISABLED && src.showEditPanel !== false,
+            lockImmersiveMode: src.lockImmersiveMode === true,
+        };
+    }, [externalUiConfig]);
+    const editingEnabled = !EDITING_TEMPORARILY_DISABLED && uiConfig.showEditing;
+    const editPanelEnabled = editingEnabled && uiConfig.showEditPanel;
+    const paginationConfig = useMemo(() => {
+        if (serverSide) return { enabled: false, pageSize: 50 };
+        const src = externalPagination && typeof externalPagination === 'object' ? externalPagination : {};
+        const enabled = src.enabled === true;
+        const pageSize = Number.isFinite(Number(src.pageSize)) && Number(src.pageSize) > 0
+            ? Math.floor(Number(src.pageSize)) : 50;
+        return { enabled, pageSize };
+    }, [externalPagination, serverSide]);
     const normalizedPerformanceConfig = useMemo(
         () => normalizePerformanceConfigValue(externalPerformanceConfig),
         [externalPerformanceConfig]
@@ -1820,8 +1923,10 @@ export default function DashTanstackPivot(props) {
             return () => window.removeEventListener('resize', handleResize);
         }, [columnPinning.right, showNotification]);
 
-    const [cinemaMode, setCinemaMode] = useState(initialCinemaMode);
-    const [cinemaModeHovering, setCinemaModeHovering] = useState(false);
+    const [immersiveModeState, setImmersiveModeState] = useState(initialImmersiveMode || uiConfig.lockImmersiveMode);
+    const immersiveMode = uiConfig.lockImmersiveMode ? true : immersiveModeState;
+    const setImmersiveMode = uiConfig.lockImmersiveMode ? () => {} : setImmersiveModeState;
+    const [immersiveModeHovering, setImmersiveModeHovering] = useState(false);
     const [showRowTotals, setShowRowTotals] = useState(initialShowRowTotals);
     const [showColTotals, setShowColTotals] = useState(initialShowColTotals);
     const effectiveGrandTotalPinState = useMemo(
@@ -1871,7 +1976,7 @@ export default function DashTanstackPivot(props) {
         };
         window.addEventListener('keydown', handleGlobalKeyDown);
         return () => window.removeEventListener('keydown', handleGlobalKeyDown);
-    }, []);
+    }, [normalizeTrackedEventIds]);
 
     // --- Formatting/display state extracted to useFormatState hook ---
     const {
@@ -2110,7 +2215,7 @@ export default function DashTanstackPivot(props) {
         if (sanitizedFilters) setFilters(sanitizedFilters);
         if (Array.isArray(restored.sorting)) setSorting(restored.sorting);
         if (restored.expanded && typeof restored.expanded === 'object') setExpanded(restored.expanded);
-        if (typeof restored.cinemaMode === 'boolean') setCinemaMode(restored.cinemaMode);
+        if (typeof restored.immersiveMode === 'boolean') setImmersiveMode(restored.immersiveMode);
         if (typeof restored.showRowTotals === 'boolean') setShowRowTotals(restored.showRowTotals);
         if (typeof restored.showColTotals === 'boolean') setShowColTotals(restored.showColTotals);
         if (typeof restored.showRowNumbers === 'boolean') setShowRowNumbers(restored.showRowNumbers);
@@ -3516,6 +3621,12 @@ export default function DashTanstackPivot(props) {
     const transactionRedoStackRef = useRef([]);
     const pendingTransactionHistoryRef = useRef(new Map());
     const transactionHistoryPendingRequestRef = useRef(null);
+    const editSessionStateRef = useRef({
+        sessionId: sessionIdRef.current,
+        clientInstance: clientInstanceRef.current,
+        sessionKey: null,
+        sessionVersion: 0,
+    });
     const optimisticCellValuesRef = useRef(new Map());
     const optimisticCellRequestsRef = useRef(new Map());
     const visiblePatchRowPathsRef = useRef([]);
@@ -3695,6 +3806,9 @@ export default function DashTanstackPivot(props) {
                 rowId,
                 colId,
                 originalValue: entry.value,
+                comparisonCount: count,
+                directEventIds: normalizeTrackedEventIds(entry.directEventIds),
+                propagatedEventIds: normalizeTrackedEventIds(entry.propagatedEventIds),
             });
         });
 
@@ -3708,6 +3822,8 @@ export default function DashTanstackPivot(props) {
                 key: String(key),
                 direct,
                 propagated,
+                directCount: Math.max(0, Number(entry.directCount) || 0),
+                propagatedCount: Math.max(0, Number(entry.propagatedCount) || 0),
             });
         });
 
@@ -3748,7 +3864,15 @@ export default function DashTanstackPivot(props) {
                 rowId: String(cell.rowId),
                 colId: String(cell.colId),
                 value: Object.prototype.hasOwnProperty.call(cell, 'originalValue') ? cell.originalValue : undefined,
+                directEventIds: normalizeTrackedEventIds(cell.directEventIds),
+                propagatedEventIds: normalizeTrackedEventIds(cell.propagatedEventIds),
             });
+            const restoredCount = Math.max(
+                1,
+                Number(cell.comparisonCount) || 0,
+                normalizeTrackedEventIds(cell.directEventIds).length + normalizeTrackedEventIds(cell.propagatedEventIds).length
+            );
+            comparisonCellCountsRef.current.set(key, restoredCount);
             hasComparisonEntries = true;
         });
 
@@ -3759,8 +3883,8 @@ export default function DashTanstackPivot(props) {
                 : getOptimisticCellKey(marker.rowId, marker.colId);
             if (!key) return;
             const nextEntry = {
-                directCount: marker.direct ? 1 : 0,
-                propagatedCount: marker.propagated ? 1 : 0,
+                directCount: Math.max(0, Number(marker.directCount) || 0 || (marker.direct ? 1 : 0)),
+                propagatedCount: Math.max(0, Number(marker.propagatedCount) || 0 || (marker.propagated ? 1 : 0)),
             };
             if (nextEntry.directCount <= 0 && nextEntry.propagatedCount <= 0) return;
             editedCellMarkersRef.current.set(key, nextEntry);
@@ -3774,7 +3898,7 @@ export default function DashTanstackPivot(props) {
         if (hadEditedMarkers || hasEditedMarkers) {
             bumpEditedCellEpoch();
         }
-    }, [bumpComparisonCellEpoch, bumpEditedCellEpoch, getOptimisticCellKey, syncComparisonValueState]);
+    }, [bumpComparisonCellEpoch, bumpEditedCellEpoch, getOptimisticCellKey, normalizeTrackedEventIds, syncComparisonValueState]);
 
     const serializedEditComparisonState = useMemo(
         () => serializeEditComparisonState(),
@@ -3799,6 +3923,22 @@ export default function DashTanstackPivot(props) {
         if (!normalizedRowId || !normalizedColId) return null;
         return `${normalizedRowId}:::${normalizedColId}`;
     }, []);
+
+    const splitOptimisticCellKey = useCallback((key) => {
+        if (typeof key !== 'string' || !key) return null;
+        const separatorIndex = key.lastIndexOf(':::');
+        if (separatorIndex <= 0) return null;
+        return {
+            rowId: key.slice(0, separatorIndex),
+            colId: key.slice(separatorIndex + 3),
+        };
+    }, []);
+
+    const normalizeTrackedEventIds = useCallback((eventIds) => (
+        Array.isArray(eventIds)
+            ? Array.from(new Set(eventIds.map((value) => String(value || '').trim()).filter(Boolean)))
+            : []
+    ), []);
 
     const resolveOptimisticCellValue = useCallback((rowId, colId, fallbackValue) => {
         const key = getOptimisticCellKey(rowId, colId);
@@ -3836,6 +3976,273 @@ export default function DashTanstackPivot(props) {
         const originalEntry = comparisonCellOriginalValuesRef.current.get(key);
         return originalEntry ? originalEntry.value : currentValue;
     }, [editValueDisplayMode, getOptimisticCellKey, resolveCurrentCellValue]);
+
+    const ensureTrackedComparisonCellEntry = useCallback((key, fallback = null) => {
+        if (!key) return null;
+        const existingEntry = comparisonCellOriginalValuesRef.current.get(key);
+        if (existingEntry && typeof existingEntry === 'object') {
+            return existingEntry;
+        }
+        const derived = splitOptimisticCellKey(key);
+        const rowId = fallback && fallback.rowId !== undefined ? String(fallback.rowId) : (derived ? derived.rowId : '');
+        const colId = fallback && fallback.colId !== undefined ? String(fallback.colId) : (derived ? derived.colId : '');
+        if (!rowId || !colId) return null;
+        const createdEntry = {
+            rowId,
+            colId,
+            value: fallback && Object.prototype.hasOwnProperty.call(fallback, 'value')
+                ? fallback.value
+                : resolveCurrentCellValue(rowId, colId),
+            directEventIds: [],
+            propagatedEventIds: [],
+        };
+        comparisonCellOriginalValuesRef.current.set(key, createdEntry);
+        return createdEntry;
+    }, [resolveCurrentCellValue, splitOptimisticCellKey]);
+
+    const appendTrackedEventOwnership = useCallback((eventId, affectedCells) => {
+        const normalizedEventId = String(eventId || '').trim();
+        if (!normalizedEventId || !affectedCells || typeof affectedCells !== 'object') return;
+        let didChange = false;
+        const appendKeys = (keys, fieldName) => {
+            (Array.isArray(keys) ? keys : []).forEach((key) => {
+                const entry = ensureTrackedComparisonCellEntry(key);
+                if (!entry) return;
+                const currentIds = normalizeTrackedEventIds(entry[fieldName]);
+                if (currentIds.includes(normalizedEventId)) {
+                    entry[fieldName] = currentIds;
+                    return;
+                }
+                entry[fieldName] = [...currentIds, normalizedEventId];
+                didChange = true;
+            });
+        };
+        appendKeys(affectedCells.direct, 'directEventIds');
+        appendKeys(affectedCells.propagated, 'propagatedEventIds');
+        if (didChange) {
+            bumpComparisonCellEpoch();
+        }
+    }, [bumpComparisonCellEpoch, ensureTrackedComparisonCellEntry, normalizeTrackedEventIds]);
+
+    const detachTrackedEventOwnership = useCallback((eventIds, options = {}) => {
+        const normalizedEventIds = normalizeTrackedEventIds(eventIds);
+        if (normalizedEventIds.length === 0) return;
+        const eventIdSet = new Set(normalizedEventIds);
+        const adjustCounts = Boolean(options.adjustCounts);
+        let didChange = false;
+
+        comparisonCellOriginalValuesRef.current.forEach((entry, key) => {
+            if (!entry || typeof entry !== 'object') return;
+            const directEventIds = normalizeTrackedEventIds(entry.directEventIds);
+            const propagatedEventIds = normalizeTrackedEventIds(entry.propagatedEventIds);
+            const nextDirectEventIds = directEventIds.filter((eventId) => !eventIdSet.has(eventId));
+            const nextPropagatedEventIds = propagatedEventIds.filter((eventId) => !eventIdSet.has(eventId));
+            const removedDirectCount = directEventIds.length - nextDirectEventIds.length;
+            const removedPropagatedCount = propagatedEventIds.length - nextPropagatedEventIds.length;
+            if (removedDirectCount <= 0 && removedPropagatedCount <= 0) return;
+
+            entry.directEventIds = nextDirectEventIds;
+            entry.propagatedEventIds = nextPropagatedEventIds;
+            didChange = true;
+
+            if (!adjustCounts) return;
+
+            const existingComparisonCount = comparisonCellCountsRef.current.get(key) || 0;
+            const nextComparisonCount = Math.max(0, existingComparisonCount - removedDirectCount - removedPropagatedCount);
+            if (nextComparisonCount > 0) {
+                comparisonCellCountsRef.current.set(key, nextComparisonCount);
+            } else {
+                comparisonCellCountsRef.current.delete(key);
+                comparisonCellOriginalValuesRef.current.delete(key);
+            }
+
+            const existingMarker = editedCellMarkersRef.current.get(key) || { directCount: 0, propagatedCount: 0 };
+            const nextMarker = {
+                directCount: Math.max(0, (existingMarker.directCount || 0) - removedDirectCount),
+                propagatedCount: Math.max(0, (existingMarker.propagatedCount || 0) - removedPropagatedCount),
+            };
+            if (nextMarker.directCount > 0 || nextMarker.propagatedCount > 0) {
+                editedCellMarkersRef.current.set(key, nextMarker);
+            } else {
+                editedCellMarkersRef.current.delete(key);
+            }
+        });
+
+        if (didChange) {
+            if (adjustCounts) {
+                syncComparisonValueState();
+                bumpEditedCellEpoch();
+            }
+            bumpComparisonCellEpoch();
+        }
+    }, [bumpComparisonCellEpoch, bumpEditedCellEpoch, normalizeTrackedEventIds, syncComparisonValueState]);
+
+    const resolveTrackedCellEventIds = useCallback((rowId, colId, options = {}) => {
+        const key = getOptimisticCellKey(rowId, colId);
+        if (!key) return [];
+        const entry = comparisonCellOriginalValuesRef.current.get(key);
+        if (!entry || typeof entry !== 'object') return [];
+        const includeDirect = options.includeDirect !== false;
+        const includePropagated = options.includePropagated !== false;
+        const eventIds = [];
+        if (includeDirect) {
+            eventIds.push(...normalizeTrackedEventIds(entry.directEventIds));
+        }
+        if (includePropagated) {
+            eventIds.push(...normalizeTrackedEventIds(entry.propagatedEventIds));
+        }
+        return Array.from(new Set(eventIds));
+    }, [getOptimisticCellKey, normalizeTrackedEventIds]);
+
+    const resolveCellEditOwnershipState = useCallback((rowId, colId) => {
+        const directEventIds = resolveTrackedCellEventIds(rowId, colId, {
+            includeDirect: true,
+            includePropagated: false,
+        });
+        const propagatedEventIds = resolveTrackedCellEventIds(rowId, colId, {
+            includeDirect: false,
+            includePropagated: true,
+        });
+        if (directEventIds.length > 0 && propagatedEventIds.length > 0) {
+            return {
+                mode: 'blocked',
+                targetEventIds: [],
+                reason: 'This cell has overlapping active edit ownership. Revert the existing edit before changing it again.',
+            };
+        }
+        if (propagatedEventIds.length > 0) {
+            return {
+                mode: 'blocked',
+                targetEventIds: [],
+                reason: 'This cell is locked by an active parent or child edit. Revert that edit before modifying this cell directly.',
+            };
+        }
+        if (directEventIds.length > 1) {
+            return {
+                mode: 'blocked',
+                targetEventIds: [],
+                reason: 'This cell has multiple active direct edits. Revert the existing edits before changing it again.',
+            };
+        }
+        if (directEventIds.length === 1) {
+            return {
+                mode: 'replace',
+                targetEventIds: directEventIds,
+                reason: null,
+            };
+        }
+        return {
+            mode: 'apply',
+            targetEventIds: [],
+            reason: null,
+        };
+    }, [resolveTrackedCellEventIds]);
+
+    const findTransactionHistoryEntryByEventId = useCallback((eventId) => {
+        const normalizedEventId = String(eventId || '').trim();
+        if (!normalizedEventId) return null;
+        const findInEntries = (entries) => (
+            Array.isArray(entries)
+                ? entries.find((entry) => entry && entry.kind === 'transaction' && entry.eventId === normalizedEventId) || null
+                : null
+        );
+        return findInEntries(transactionUndoStackRef.current) || findInEntries(transactionRedoStackRef.current);
+    }, []);
+
+    const sortEventIdsByActiveHistory = useCallback((eventIds) => {
+        const normalizedEventIds = normalizeTrackedEventIds(eventIds);
+        if (normalizedEventIds.length <= 1) return normalizedEventIds;
+        const orderMap = new Map();
+        transactionUndoStackRef.current.forEach((entry, index) => {
+            if (!entry || entry.kind !== 'transaction' || !entry.eventId) return;
+            orderMap.set(entry.eventId, index);
+        });
+        return normalizedEventIds.sort((left, right) => {
+            const leftIndex = orderMap.has(left) ? orderMap.get(left) : -1;
+            const rightIndex = orderMap.has(right) ? orderMap.get(right) : -1;
+            return rightIndex - leftIndex;
+        });
+    }, [normalizeTrackedEventIds]);
+
+    const pruneTransactionHistoryEntries = useCallback((eventIds) => {
+        const normalizedEventIds = new Set(normalizeTrackedEventIds(eventIds));
+        if (normalizedEventIds.size === 0) return;
+        transactionUndoStackRef.current = transactionUndoStackRef.current.filter((entry) => (
+            !entry || entry.kind !== 'transaction' || !normalizedEventIds.has(entry.eventId)
+        ));
+        transactionRedoStackRef.current = transactionRedoStackRef.current.filter((entry) => (
+            !entry || entry.kind !== 'transaction' || !normalizedEventIds.has(entry.eventId)
+        ));
+        syncTransactionHistoryState();
+    }, [normalizeTrackedEventIds, syncTransactionHistoryState]);
+
+    const hydrateVisibleEditOverlay = useCallback((editOverlay) => {
+        const overlayCells = Array.isArray(editOverlay && editOverlay.cells) ? editOverlay.cells : [];
+        if (overlayCells.length === 0) return;
+        let didComparisonChange = false;
+        let didMarkerChange = false;
+
+        overlayCells.forEach((cell) => {
+            if (!cell || typeof cell !== 'object') return;
+            const key = getOptimisticCellKey(cell.rowId, cell.colId);
+            if (!key) return;
+            const directEventIds = normalizeTrackedEventIds(cell.directEventIds);
+            const propagatedEventIds = normalizeTrackedEventIds(cell.propagatedEventIds);
+            const existingEntry = comparisonCellOriginalValuesRef.current.get(key);
+            const nextOriginalValue = Object.prototype.hasOwnProperty.call(cell, 'originalValue')
+                ? cell.originalValue
+                : (existingEntry ? existingEntry.value : undefined);
+            const nextEntry = {
+                rowId: String(cell.rowId),
+                colId: String(cell.colId),
+                value: nextOriginalValue,
+                directEventIds,
+                propagatedEventIds,
+            };
+            const didEntryChange = (
+                !existingEntry
+                || existingEntry.value !== nextEntry.value
+                || JSON.stringify(normalizeTrackedEventIds(existingEntry.directEventIds)) !== JSON.stringify(directEventIds)
+                || JSON.stringify(normalizeTrackedEventIds(existingEntry.propagatedEventIds)) !== JSON.stringify(propagatedEventIds)
+            );
+            if (didEntryChange) {
+                comparisonCellOriginalValuesRef.current.set(key, nextEntry);
+                didComparisonChange = true;
+            }
+
+            const nextComparisonCount = Math.max(
+                1,
+                Number(cell.comparisonCount) || 0,
+                directEventIds.length + propagatedEventIds.length,
+            );
+            if ((comparisonCellCountsRef.current.get(key) || 0) !== nextComparisonCount) {
+                comparisonCellCountsRef.current.set(key, nextComparisonCount);
+                didComparisonChange = true;
+            }
+
+            const nextMarkerEntry = {
+                directCount: directEventIds.length,
+                propagatedCount: propagatedEventIds.length,
+            };
+            const existingMarkerEntry = editedCellMarkersRef.current.get(key);
+            if (
+                !existingMarkerEntry
+                || (existingMarkerEntry.directCount || 0) !== nextMarkerEntry.directCount
+                || (existingMarkerEntry.propagatedCount || 0) !== nextMarkerEntry.propagatedCount
+            ) {
+                editedCellMarkersRef.current.set(key, nextMarkerEntry);
+                didMarkerChange = true;
+            }
+        });
+
+        if (didComparisonChange) {
+            syncComparisonValueState();
+            bumpComparisonCellEpoch();
+        }
+        if (didMarkerChange) {
+            bumpEditedCellEpoch();
+        }
+    }, [bumpComparisonCellEpoch, bumpEditedCellEpoch, getOptimisticCellKey, normalizeTrackedEventIds, syncComparisonValueState]);
 
     const getDirectVisibleChildRowIds = useCallback((ancestorRowId) => {
         const visibleRows = Array.isArray(tableDataRef.current) ? tableDataRef.current : [];
@@ -3889,7 +4296,7 @@ export default function DashTanstackPivot(props) {
         return !['count', 'count_distinct', 'distinct_count'].includes(normalizedAgg);
     }, []);
 
-    const resolveEditorPresentation = useCallback((columnId, columnConfig = null, currentValue = undefined, defaultEditable = false) => {
+    const resolveEditorPresentation = useCallback((rowId, columnId, columnConfig = null, currentValue = undefined, defaultEditable = false) => {
         const editorConfig = resolveColumnEditSpec({
             editingConfig: normalizedEditingConfig,
             validationRules,
@@ -3899,6 +4306,15 @@ export default function DashTanstackPivot(props) {
             defaultEditable,
         });
         if (!editorConfig || editorConfig.editable === false) return null;
+        const ownershipState = (
+            serverSide
+            && rowId !== null
+            && rowId !== undefined
+            && columnId !== null
+            && columnId !== undefined
+        )
+            ? resolveCellEditOwnershipState(String(rowId), String(columnId))
+            : { mode: 'apply', targetEventIds: [], reason: null };
         const optionsSource = editorConfig.optionsSource || resolveEditorOptionsSource(editorConfig, columnId, columnConfig);
         const optionsKey = optionsSource && optionsSource.columnId ? optionsSource.columnId : null;
         const options = optionsKey && Array.isArray(filterOptions[optionsKey])
@@ -3910,12 +4326,16 @@ export default function DashTanstackPivot(props) {
                 ...editorConfig,
                 optionsSource,
                 options,
+                editOwnershipMode: ownershipState.mode,
+                replaceEventIds: ownershipState.targetEventIds,
             },
             options,
             loading,
             optionsKey,
+            editingDisabled: ownershipState.mode === 'blocked',
+            editingDisabledReason: ownershipState.reason,
         };
-    }, [filterOptions, normalizedEditingConfig, validationRules]);
+    }, [filterOptions, normalizedEditingConfig, resolveCellEditOwnershipState, serverSide, validationRules]);
 
     const getRowEditSession = useCallback((rowId) => {
         if (rowId === null || rowId === undefined) return null;
@@ -3945,12 +4365,16 @@ export default function DashTanstackPivot(props) {
                 ? row.getValue(column.id)
                 : (row.original && Object.prototype.hasOwnProperty.call(row.original, column.id) ? row.original[column.id] : undefined);
             const editorState = resolveEditorPresentation(
+                rowId,
                 column.id,
                 columnConfig,
                 currentValue,
                 isEditableAggregationColumn(columnConfig, column.id),
             );
             if (!editorState || !editorState.editorConfig || editorState.editorConfig.editable === false) {
+                return acc;
+            }
+            if (editorState.editingDisabled) {
                 return acc;
             }
             acc.push({
@@ -4021,6 +4445,14 @@ export default function DashTanstackPivot(props) {
             });
         }
     }, [emitEditLifecycleEvent, resolveRowEditableColumns, showNotification, updateRowEditSessions]);
+
+    const handleBlockedCellEdit = useCallback((payload) => {
+        if (!payload || typeof payload !== 'object') return;
+        showNotification(
+            payload.reason || 'This cell cannot be edited while an overlapping edit is active.',
+            'warning',
+        );
+    }, [showNotification]);
 
     const updateRowDraftValue = useCallback((rowId, colId, nextValue, meta = {}) => {
         if (rowId === null || rowId === undefined || !colId) return;
@@ -4262,7 +4694,34 @@ export default function DashTanstackPivot(props) {
     // Push edit state to Dash via setProps so the backend can persist/modify it
     const lastEmittedEditStateKeyRef = useRef(null);
     const editStateSessionKey = id ? `__pivot_editState_${typeof id === 'string' ? id : JSON.stringify(id)}` : null;
+    const didRestoreEditStateFromPropRef = useRef(false);
+
+    // Restore edit state FIRST: prefer prop, then sessionStorage
     useEffect(() => {
+        if (didRestoreEditStateFromPropRef.current) return;
+        didRestoreEditStateFromPropRef.current = true;
+        let stateToRestore = externalEditState;
+        if ((!stateToRestore || typeof stateToRestore !== 'object') && editStateSessionKey) {
+            try {
+                const stored = sessionStorage.getItem(editStateSessionKey);
+                if (stored) stateToRestore = JSON.parse(stored);
+            } catch (_ignored) { /* parse error or unavailable */ }
+        }
+        if (!stateToRestore || typeof stateToRestore !== 'object') return;
+        if (!stateToRestore.cells && !stateToRestore.markers) return;
+        restoreSerializedEditComparisonState(stateToRestore);
+        if (stateToRestore.displayMode === 'edited' || stateToRestore.displayMode === 'original') {
+            setEditValueDisplayMode(stateToRestore.displayMode);
+        }
+        if (Array.isArray(stateToRestore.propagationLog) && stateToRestore.propagationLog.length > 0) {
+            propagationLogRef.current = stateToRestore.propagationLog;
+            setPropagationLogEpoch((p) => p + 1);
+        }
+    }, [editStateSessionKey, externalEditState, restoreSerializedEditComparisonState]);
+
+    // Save edit state to Dash and sessionStorage AFTER restore has been attempted
+    useEffect(() => {
+        if (!didRestoreEditStateFromPropRef.current) return;
         const propagationLog = propagationLogRef.current.length > 0
             ? propagationLogRef.current
             : undefined;
@@ -4287,30 +4746,6 @@ export default function DashTanstackPivot(props) {
         }
     }, [editStateSessionKey, editValueDisplayMode, propagationLogEpoch, serializedEditComparisonState, setProps]);
 
-    // Restore edit state: prefer prop, then sessionStorage
-    const didRestoreEditStateFromPropRef = useRef(false);
-    useEffect(() => {
-        if (didRestoreEditStateFromPropRef.current) return;
-        didRestoreEditStateFromPropRef.current = true;
-        let stateToRestore = externalEditState;
-        if ((!stateToRestore || typeof stateToRestore !== 'object') && editStateSessionKey) {
-            try {
-                const stored = sessionStorage.getItem(editStateSessionKey);
-                if (stored) stateToRestore = JSON.parse(stored);
-            } catch (_ignored) { /* parse error or unavailable */ }
-        }
-        if (!stateToRestore || typeof stateToRestore !== 'object') return;
-        if (!stateToRestore.cells && !stateToRestore.markers) return;
-        restoreSerializedEditComparisonState(stateToRestore);
-        if (stateToRestore.displayMode === 'edited' || stateToRestore.displayMode === 'original') {
-            setEditValueDisplayMode(stateToRestore.displayMode);
-        }
-        if (Array.isArray(stateToRestore.propagationLog) && stateToRestore.propagationLog.length > 0) {
-            propagationLogRef.current = stateToRestore.propagationLog;
-            setPropagationLogEpoch((p) => p + 1);
-        }
-    }, [editStateSessionKey, externalEditState, restoreSerializedEditComparisonState]);
-
     const buildEditedCellMarkerPlan = useCallback((updates) => {
         const directKeys = new Set();
         const propagatedKeys = new Set();
@@ -4325,6 +4760,21 @@ export default function DashTanstackPivot(props) {
             if (!directKeys.has(key)) {
                 propagatedKeys.add(key);
             }
+        };
+        const markVisibleDescendants = (ancestorRowId, colId) => {
+            const normalizedAncestorId = ancestorRowId === null || ancestorRowId === undefined ? '' : String(ancestorRowId);
+            if (!normalizedAncestorId) return;
+            const descendantPrefix = `${normalizedAncestorId}|||`;
+            const visibleRows = Array.isArray(tableDataRef.current) ? tableDataRef.current : [];
+            visibleRows.forEach((row) => {
+                const rowId = resolveVisibleDataRowId(row);
+                if (!rowId || rowId === normalizedAncestorId) return;
+                if (normalizedAncestorId === GRAND_TOTAL_ROW_ID) {
+                    if (rowId !== GRAND_TOTAL_ROW_ID) markCell(rowId, colId, 'propagated');
+                    return;
+                }
+                if (rowId.startsWith(descendantPrefix)) markCell(rowId, colId, 'propagated');
+            });
         };
 
         (Array.isArray(updates) ? updates : []).forEach((update) => {
@@ -4342,13 +4792,23 @@ export default function DashTanstackPivot(props) {
             if (!aggregationFn || aggregation.windowFn) return;
 
             const normalizedRowId = rowId === null || rowId === undefined ? '' : String(rowId);
-            if (!normalizedRowId || normalizedRowId === GRAND_TOTAL_ROW_ID) return;
+            if (!normalizedRowId) return;
+            const strategy = String(update.propagationStrategy || '').trim().toLowerCase();
+            const skipDescendants = strategy === 'none';
 
+            if (normalizedRowId === GRAND_TOTAL_ROW_ID) {
+                if (!skipDescendants) markVisibleDescendants(GRAND_TOTAL_ROW_ID, colId);
+                return;
+            }
+
+            // Mark ancestors as propagated (children→parent always happens)
             const pathParts = normalizedRowId.split('|||');
             for (let depth = pathParts.length - 1; depth >= 1; depth -= 1) {
                 markCell(pathParts.slice(0, depth).join('|||'), colId, 'propagated');
             }
             markCell(GRAND_TOTAL_ROW_ID, colId, 'propagated');
+            // Mark visible descendants as propagated (skip for "none")
+            if (!skipDescendants) markVisibleDescendants(normalizedRowId, colId);
         });
 
         if (directKeys.size === 0 && propagatedKeys.size === 0) return null;
@@ -4356,7 +4816,7 @@ export default function DashTanstackPivot(props) {
             direct: Array.from(directKeys),
             propagated: Array.from(propagatedKeys).filter((key) => !directKeys.has(key)),
         };
-    }, [getOptimisticCellKey, resolveAggregationConfigForColumnId]);
+    }, [getOptimisticCellKey, resolveAggregationConfigForColumnId, resolveVisibleDataRowId]);
 
     const buildComparisonValuePlan = useCallback((updates) => {
         const cells = new Map();
@@ -4408,9 +4868,11 @@ export default function DashTanstackPivot(props) {
 
             const normalizedRowId = rowId === null || rowId === undefined ? '' : String(rowId);
             if (!normalizedRowId) return;
+            const strategy = String(update.propagationStrategy || '').trim().toLowerCase();
+            const skipDescendants = strategy === 'none';
 
             if (normalizedRowId === GRAND_TOTAL_ROW_ID) {
-                addVisibleDescendants(GRAND_TOTAL_ROW_ID, colId);
+                if (!skipDescendants) addVisibleDescendants(GRAND_TOTAL_ROW_ID, colId);
                 return;
             }
 
@@ -4419,7 +4881,7 @@ export default function DashTanstackPivot(props) {
                 addCell(pathParts.slice(0, depth).join('|||'), colId);
             }
             addCell(GRAND_TOTAL_ROW_ID, colId);
-            addVisibleDescendants(normalizedRowId, colId);
+            if (!skipDescendants) addVisibleDescendants(normalizedRowId, colId);
         });
 
         if (cells.size === 0) return null;
@@ -4665,6 +5127,12 @@ export default function DashTanstackPivot(props) {
         transactionRedoStackRef.current = [];
         pendingTransactionHistoryRef.current.clear();
         transactionHistoryPendingRequestRef.current = null;
+        editSessionStateRef.current = {
+            sessionId: sessionIdRef.current,
+            clientInstance: clientInstanceRef.current,
+            sessionKey: null,
+            sessionVersion: 0,
+        };
         clearAllOptimisticCellValues();
         clearAllEditedCellMarkers();
         clearAllComparisonValueState();
@@ -4672,8 +5140,20 @@ export default function DashTanstackPivot(props) {
         syncTransactionHistoryState();
     }, [clearAllComparisonValueState, clearAllEditedCellMarkers, clearAllOptimisticCellValues, clearPendingLayoutHistoryCapture, syncTransactionHistoryState]);
 
+    const didMountClearTransactionRef = useRef(false);
+    const prevServerSideRef = useRef(serverSide);
+    const prevTableNameRef = useRef(tableName);
     useEffect(() => {
-        clearTransactionHistory();
+        if (!didMountClearTransactionRef.current) {
+            didMountClearTransactionRef.current = true;
+            return;
+        }
+        if (prevServerSideRef.current !== serverSide || prevTableNameRef.current !== tableName) {
+            prevServerSideRef.current = serverSide;
+            prevTableNameRef.current = tableName;
+            console.log('[CLEAR-TX] clearing due to serverSide/tableName change');
+            clearTransactionHistory();
+        }
     }, [clearTransactionHistory, serverSide, tableName]);
 
     useEffect(() => {
@@ -5007,7 +5487,7 @@ export default function DashTanstackPivot(props) {
         let normalizedTransaction = normalizeTransactionHistoryPayload(transactionPayload, { source });
         if (!normalizedTransaction || !setPropsRef.current || !serverSide) return null;
         if (transactionHistoryPendingRequestRef.current) {
-            showNotification('Wait for the current undo or redo to finish before applying another edit.', 'warning');
+            showNotification('Wait for the current edit-history action to finish before applying another edit.', 'warning');
             return null;
         }
         const requestedRefreshMode = normalizeTransactionRefreshModeValue(normalizedTransaction.refreshMode, 'smart');
@@ -5058,7 +5538,7 @@ export default function DashTanstackPivot(props) {
             col_start: updateColumnWindow.start !== null ? updateColumnWindow.start : undefined,
             col_end: updateColumnWindow.end !== null ? updateColumnWindow.end : undefined,
             include_grand_total: serverSidePinsGrandTotal || undefined,
-            cinema_mode: cinemaMode || undefined,
+            immersive_mode: immersiveMode || undefined,
             ...normalizedTransaction,
             ...(normalizedTransaction.refreshMode === 'patch' ? {
                 visibleRowPaths: visiblePatchRowPathsRef.current,
@@ -5066,7 +5546,7 @@ export default function DashTanstackPivot(props) {
             } : {}),
         });
         return { requestId };
-    }, [beginExpansionRequest, cinemaMode, colFields.length, emitRuntimeRequest, markRequestPending, resolveStableRequestedColumnWindow, serverSide, serverSidePinsGrandTotal, showNotification, tableName]);
+    }, [beginExpansionRequest, immersiveMode, colFields.length, emitRuntimeRequest, markRequestPending, resolveStableRequestedColumnWindow, serverSide, serverSidePinsGrandTotal, showNotification, tableName]);
 
     const finalizeTransactionHistoryResponse = useCallback((response, payload) => {
         if (!response || typeof response !== 'object') return;
@@ -5082,6 +5562,54 @@ export default function DashTanstackPivot(props) {
         const didApplyWork = hasAppliedTransactionWork(transactionResult);
         const transactionWarnings = Array.isArray(transactionResult.warnings) ? transactionResult.warnings : [];
         const propagationEntries = Array.isArray(transactionResult.propagation) ? transactionResult.propagation : [];
+        const responseAffectedCells = transactionResult.affectedCells && typeof transactionResult.affectedCells === 'object'
+            ? transactionResult.affectedCells
+            : null;
+        const responseEditSession = transactionResult.editSession && typeof transactionResult.editSession === 'object'
+            ? transactionResult.editSession
+            : null;
+        if (responseEditSession) {
+            editSessionStateRef.current = {
+                sessionId: responseEditSession.sessionId || sessionIdRef.current,
+                clientInstance: responseEditSession.clientInstance || clientInstanceRef.current,
+                sessionKey: responseEditSession.sessionKey || null,
+                sessionVersion: Number(responseEditSession.sessionVersion) || 0,
+            };
+        }
+
+        const resolveTargetHistoryEntries = () => {
+            const explicitEntries = Array.isArray(pendingEntry.historyEntries)
+                ? pendingEntry.historyEntries.filter(Boolean)
+                : [];
+            if (explicitEntries.length > 0) return explicitEntries;
+            const targetEventIds = Array.isArray(pendingEntry.targetEventIds) ? pendingEntry.targetEventIds : [];
+            return targetEventIds
+                .map((eventId) => findTransactionHistoryEntryByEventId(eventId))
+                .filter(Boolean);
+        };
+
+        const rollbackHistoryEntries = (historyEntries) => {
+            (Array.isArray(historyEntries) ? historyEntries : []).forEach((entry) => {
+                if (!entry || typeof entry !== 'object') return;
+                if (entry.editedMarkerPlan) {
+                    applyEditedCellMarkerPlan(entry.editedMarkerPlan, 'backward');
+                }
+                if (entry.comparisonPlan) {
+                    applyComparisonValuePlan(entry.comparisonPlan, 'backward');
+                }
+                if (entry.eventId) {
+                    detachTrackedEventOwnership([entry.eventId]);
+                }
+            });
+        };
+
+        const pushCapturedHistoryEntry = (entry) => {
+            if (!entry) return;
+            pushUnifiedHistoryEntry(entry);
+            if (entry.eventId && entry.affectedCells) {
+                appendTrackedEventOwnership(entry.eventId, entry.affectedCells);
+            }
+        };
 
         if (pendingEntry.action === 'apply') {
             const captureable = Boolean(transactionResult.history && transactionResult.history.captureable);
@@ -5095,7 +5623,7 @@ export default function DashTanstackPivot(props) {
                 applyComparisonValuePlan(pendingEntry.comparisonPlan, 'backward');
             }
             if (didApplyWork && captureable && undoTransaction && redoTransaction) {
-                pushUnifiedHistoryEntry({
+                pushCapturedHistoryEntry({
                     kind: 'transaction',
                     undoTransaction,
                     redoTransaction,
@@ -5103,6 +5631,10 @@ export default function DashTanstackPivot(props) {
                     comparisonPlan: pendingEntry.comparisonPlan || null,
                     source: pendingEntry.source || transactionResult.source || 'transaction',
                     createdAt: Date.now(),
+                    eventId: transactionResult.eventId || null,
+                    sessionVersion: Number(transactionResult.sessionVersion) || 0,
+                    affectedCells: responseAffectedCells,
+                    impactedScopeIds: Array.isArray(transactionResult.impactedScopeIds) ? transactionResult.impactedScopeIds : [],
                 });
             } else if (didApplyWork && transactionResult.history && Array.isArray(transactionResult.history.warnings) && transactionResult.history.warnings[0]) {
                 showNotification(transactionResult.history.warnings[0], 'warning');
@@ -5158,11 +5690,20 @@ export default function DashTanstackPivot(props) {
             if (didApplyWork && pendingEntry.entry && pendingEntry.entry.comparisonPlan) {
                 applyComparisonValuePlan(pendingEntry.entry.comparisonPlan, 'backward');
             }
-            transactionUndoStackRef.current = transactionUndoStackRef.current.slice(0, -1);
-            transactionRedoStackRef.current = [...transactionRedoStackRef.current, pendingEntry.entry];
+            if (didApplyWork && pendingEntry.entry && pendingEntry.entry.eventId) {
+                detachTrackedEventOwnership([pendingEntry.entry.eventId]);
+            }
+            if (didApplyWork) {
+                transactionUndoStackRef.current = transactionUndoStackRef.current.slice(0, -1);
+                transactionRedoStackRef.current = [...transactionRedoStackRef.current, pendingEntry.entry];
+            }
             transactionHistoryPendingRequestRef.current = null;
             syncTransactionHistoryState();
-            if (didApplyWork) showNotification('Undid the last transaction.', 'success');
+            if (didApplyWork) {
+                showNotification('Undid the last transaction.', 'success');
+            } else if (transactionWarnings[0]) {
+                showNotification(transactionWarnings[0], 'warning');
+            }
             return;
         }
 
@@ -5174,13 +5715,155 @@ export default function DashTanstackPivot(props) {
             if (didApplyWork && pendingEntry.entry && pendingEntry.entry.editedMarkerPlan) {
                 applyEditedCellMarkerPlan(pendingEntry.entry.editedMarkerPlan, 'forward');
             }
-            transactionRedoStackRef.current = transactionRedoStackRef.current.slice(0, -1);
-            transactionUndoStackRef.current = [...transactionUndoStackRef.current, pendingEntry.entry];
+            if (didApplyWork && pendingEntry.entry && pendingEntry.entry.eventId && pendingEntry.entry.affectedCells) {
+                appendTrackedEventOwnership(pendingEntry.entry.eventId, pendingEntry.entry.affectedCells);
+            }
+            if (didApplyWork) {
+                transactionRedoStackRef.current = transactionRedoStackRef.current.slice(0, -1);
+                transactionUndoStackRef.current = [...transactionUndoStackRef.current, pendingEntry.entry];
+            }
             transactionHistoryPendingRequestRef.current = null;
             syncTransactionHistoryState();
-            if (didApplyWork) showNotification('Reapplied the last transaction.', 'success');
+            if (didApplyWork) {
+                showNotification('Reapplied the last transaction.', 'success');
+            } else if (transactionWarnings[0]) {
+                showNotification(transactionWarnings[0], 'warning');
+            }
+            return;
         }
-    }, [applyComparisonValuePlan, applyEditedCellMarkerPlan, closeRowEditSession, emitEditLifecycleEvent, pushUnifiedHistoryEntry, releaseOptimisticCellRequest, showNotification, syncTransactionHistoryState, updateRowEditSessions]);
+
+        if (pendingEntry.action === 'revert') {
+            if (response.status === 'data') releaseOptimisticCellRequest(requestId);
+            if (didApplyWork) {
+                const targetEntries = resolveTargetHistoryEntries();
+                if (targetEntries.length > 0) {
+                    rollbackHistoryEntries(targetEntries);
+                } else if (Array.isArray(pendingEntry.targetEventIds) && pendingEntry.targetEventIds.length > 0) {
+                    detachTrackedEventOwnership(pendingEntry.targetEventIds, { adjustCounts: true });
+                }
+                if (Array.isArray(pendingEntry.targetEventIds) && pendingEntry.targetEventIds.length > 0) {
+                    pruneTransactionHistoryEntries(pendingEntry.targetEventIds);
+                }
+                if (pendingEntry.clearAllOnSuccess) {
+                    clearAllOptimisticCellValues();
+                    clearAllEditedCellMarkers();
+                    clearAllComparisonValueState();
+                    propagationLogRef.current = [];
+                    setPropagationLogEpoch((previousEpoch) => previousEpoch + 1);
+                }
+                showNotification(pendingEntry.successMessage || 'Reverted the selected edits.', 'success');
+            } else if (transactionWarnings[0]) {
+                showNotification(transactionWarnings[0], 'warning');
+            }
+            transactionHistoryPendingRequestRef.current = null;
+            syncTransactionHistoryState();
+            return;
+        }
+
+        if (pendingEntry.action === 'replace') {
+            if (response.status === 'data') releaseOptimisticCellRequest(requestId);
+            if (didApplyWork) {
+                const targetEntries = resolveTargetHistoryEntries();
+                if (targetEntries.length > 0) {
+                    rollbackHistoryEntries(targetEntries);
+                } else if (Array.isArray(pendingEntry.targetEventIds) && pendingEntry.targetEventIds.length > 0) {
+                    detachTrackedEventOwnership(pendingEntry.targetEventIds, { adjustCounts: true });
+                }
+                if (Array.isArray(pendingEntry.targetEventIds) && pendingEntry.targetEventIds.length > 0) {
+                    pruneTransactionHistoryEntries(pendingEntry.targetEventIds);
+                }
+                if (pendingEntry.comparisonPlan) {
+                    applyComparisonValuePlan(pendingEntry.comparisonPlan, 'forward');
+                }
+                if (pendingEntry.editedMarkerPlan) {
+                    applyEditedCellMarkerPlan(pendingEntry.editedMarkerPlan, 'forward');
+                }
+                const captureable = Boolean(transactionResult.history && transactionResult.history.captureable);
+                const undoTransaction = normalizeTransactionHistoryPayload(transactionResult.inverseTransaction);
+                const redoTransaction = normalizeTransactionHistoryPayload(transactionResult.redoTransaction);
+                if (captureable && undoTransaction && redoTransaction) {
+                    pushCapturedHistoryEntry({
+                        kind: 'transaction',
+                        undoTransaction,
+                        redoTransaction,
+                        editedMarkerPlan: pendingEntry.editedMarkerPlan || null,
+                        comparisonPlan: pendingEntry.comparisonPlan || null,
+                        source: pendingEntry.source || transactionResult.source || 'replace',
+                        createdAt: Date.now(),
+                        eventId: transactionResult.eventId || null,
+                        sessionVersion: Number(transactionResult.sessionVersion) || 0,
+                        affectedCells: responseAffectedCells,
+                        impactedScopeIds: Array.isArray(transactionResult.impactedScopeIds) ? transactionResult.impactedScopeIds : [],
+                    });
+                }
+                if (pendingEntry.rowEditRowId) {
+                    closeRowEditSession(pendingEntry.rowEditRowId);
+                    emitEditLifecycleEvent({
+                        kind: 'row_edit_commit_success',
+                        rowId: pendingEntry.rowEditRowId,
+                        dirtyColumns: pendingEntry.dirtyColumns || [],
+                    });
+                }
+                showNotification(pendingEntry.successMessage || 'Updated the selected edit.', 'success');
+            } else if (transactionWarnings[0]) {
+                if (pendingEntry.rowEditRowId) {
+                    updateRowEditSessions((previousSessions) => {
+                        const previousSession = previousSessions[pendingEntry.rowEditRowId];
+                        if (!previousSession) return previousSessions;
+                        return {
+                            ...previousSessions,
+                            [pendingEntry.rowEditRowId]: {
+                                ...previousSession,
+                                status: 'editing',
+                            },
+                        };
+                    });
+                    emitEditLifecycleEvent({
+                        kind: 'row_edit_commit_error',
+                        rowId: pendingEntry.rowEditRowId,
+                        message: transactionWarnings[0] || 'The row edit did not apply.',
+                    });
+                }
+                showNotification(transactionWarnings[0], 'warning');
+            } else if (pendingEntry.rowEditRowId) {
+                updateRowEditSessions((previousSessions) => {
+                    const previousSession = previousSessions[pendingEntry.rowEditRowId];
+                    if (!previousSession) return previousSessions;
+                    return {
+                        ...previousSessions,
+                        [pendingEntry.rowEditRowId]: {
+                            ...previousSession,
+                            status: 'editing',
+                        },
+                    };
+                });
+                emitEditLifecycleEvent({
+                    kind: 'row_edit_commit_error',
+                    rowId: pendingEntry.rowEditRowId,
+                    message: 'The row edit did not apply.',
+                });
+            }
+            transactionHistoryPendingRequestRef.current = null;
+            syncTransactionHistoryState();
+        }
+    }, [
+        appendTrackedEventOwnership,
+        applyComparisonValuePlan,
+        applyEditedCellMarkerPlan,
+        clearAllComparisonValueState,
+        clearAllEditedCellMarkers,
+        clearAllOptimisticCellValues,
+        closeRowEditSession,
+        detachTrackedEventOwnership,
+        emitEditLifecycleEvent,
+        findTransactionHistoryEntryByEventId,
+        pruneTransactionHistoryEntries,
+        pushUnifiedHistoryEntry,
+        releaseOptimisticCellRequest,
+        showNotification,
+        syncTransactionHistoryState,
+        updateRowEditSessions,
+    ]);
 
     const clearPendingTransactionHistoryRequest = useCallback((response, notifyOnError = false) => {
         if (!response || typeof response !== 'object') return;
@@ -5196,7 +5879,7 @@ export default function DashTanstackPivot(props) {
         if ((pendingEntry.action === 'apply' || pendingEntry.action === 'redo') && pendingEntry.comparisonPlan) {
             applyComparisonValuePlan(pendingEntry.comparisonPlan, 'backward');
         }
-        if (pendingEntry.action === 'apply' && pendingEntry.rowEditRowId) {
+        if ((pendingEntry.action === 'apply' || pendingEntry.action === 'replace') && pendingEntry.rowEditRowId) {
             updateRowEditSessions((previousSessions) => {
                 const previousSession = previousSessions[pendingEntry.rowEditRowId];
                 if (!previousSession) return previousSessions;
@@ -5214,7 +5897,7 @@ export default function DashTanstackPivot(props) {
                 message: response.message || 'Unable to commit the row edit.',
             });
         }
-        if (pendingEntry.action === 'undo' || pendingEntry.action === 'redo') {
+        if (pendingEntry.action === 'undo' || pendingEntry.action === 'redo' || pendingEntry.action === 'revert' || pendingEntry.action === 'replace') {
             transactionHistoryPendingRequestRef.current = null;
             syncTransactionHistoryState();
             if (notifyOnError && response.status === 'error') {
@@ -5227,6 +5910,8 @@ export default function DashTanstackPivot(props) {
         const normalizedUpdates = Array.isArray(updates) ? updates : [];
         const needsPropagation = normalizedUpdates.some((u) => isParentAggregatePropagationEdit(u, rowFields));
         if (!needsPropagation) return normalizedUpdates;
+        // Block new propagation edits while one is already pending
+        if (pendingPropagationUpdatesRef.current) return null;
         // Stash updates and open the panel for method selection instead of window.prompt
         pendingPropagationUpdatesRef.current = { updates: normalizedUpdates, source: source || 'batch', meta: meta || null };
         setPendingPropagationUpdates(normalizedUpdates);
@@ -5235,7 +5920,119 @@ export default function DashTanstackPivot(props) {
         return null; // Signal caller to abort — will resume after user picks method
     }, [rowFields]);
 
+    const analyzeServerEditOwnership = useCallback((updates) => {
+        const replacementEventIds = [];
+        for (const update of (Array.isArray(updates) ? updates : [])) {
+            if (!update || typeof update !== 'object') continue;
+            const rowId = update.rowPath || update.rowId;
+            const colId = update.colId;
+            if (rowId === null || rowId === undefined || colId === null || colId === undefined) continue;
+            const ownershipState = resolveCellEditOwnershipState(String(rowId), String(colId));
+            if (ownershipState.mode === 'blocked') {
+                return {
+                    mode: 'blocked',
+                    targetEventIds: [],
+                    reason: ownershipState.reason || 'This cell cannot be edited while an overlapping edit is active.',
+                };
+            }
+            if (ownershipState.mode === 'replace') {
+                replacementEventIds.push(...ownershipState.targetEventIds);
+            }
+        }
+        const targetEventIds = sortEventIdsByActiveHistory(replacementEventIds);
+        return {
+            mode: targetEventIds.length > 0 ? 'replace' : 'apply',
+            targetEventIds,
+            reason: null,
+        };
+    }, [resolveCellEditOwnershipState, sortEventIdsByActiveHistory]);
+
+    const dispatchServerEditUpdates = useCallback((updates, source = 'batch', meta = null) => {
+        const ownershipState = analyzeServerEditOwnership(updates);
+        if (ownershipState.mode === 'blocked') {
+            showNotification(ownershipState.reason || 'This cell cannot be edited while an overlapping edit is active.', 'warning');
+            return null;
+        }
+        const isReplacement = ownershipState.mode === 'replace';
+        const effectiveUpdates = isReplacement
+            ? updates.map((update) => {
+                if (!update || typeof update !== 'object') return update;
+                const rowId = update.rowPath || update.rowId;
+                const colId = update.colId;
+                const key = getOptimisticCellKey(rowId, colId);
+                const originalEntry = key ? comparisonCellOriginalValuesRef.current.get(key) : null;
+                if (!originalEntry || !Object.prototype.hasOwnProperty.call(originalEntry, 'value')) {
+                    return update;
+                }
+                return {
+                    ...update,
+                    oldValue: originalEntry.value,
+                };
+            })
+            : updates;
+        const comparisonPlan = buildComparisonValuePlan(effectiveUpdates);
+        if (!isReplacement && comparisonPlan) {
+            applyComparisonValuePlan(comparisonPlan, 'forward');
+        }
+        const editedMarkerPlan = buildEditedCellMarkerPlan(effectiveUpdates);
+        const dispatched = dispatchTransactionRequest(isReplacement ? {
+            eventAction: 'replace',
+            eventIds: ownershipState.targetEventIds,
+            update: effectiveUpdates,
+            refreshMode: supportsPatchTransactionRefresh ? 'patch' : 'smart',
+        } : {
+            update: effectiveUpdates,
+            refreshMode: supportsPatchTransactionRefresh ? 'patch' : 'smart',
+        }, source);
+        if (!dispatched || !dispatched.requestId) {
+            if (!isReplacement && comparisonPlan) applyComparisonValuePlan(comparisonPlan, 'backward');
+            return null;
+        }
+        if (!isReplacement) {
+            captureOptimisticCellValues(effectiveUpdates, dispatched.requestId);
+            if (editedMarkerPlan) {
+                applyEditedCellMarkerPlan(editedMarkerPlan, 'forward');
+            }
+            pendingTransactionHistoryRef.current.set(dispatched.requestId, {
+                action: 'apply',
+                source,
+                editedMarkerPlan,
+                comparisonPlan,
+                rowEditRowId: meta && meta.rowEditRowId ? String(meta.rowEditRowId) : null,
+                dirtyColumns: meta && Array.isArray(meta.dirtyColumns) ? meta.dirtyColumns : [],
+            });
+            return dispatched;
+        }
+        pendingTransactionHistoryRef.current.set(dispatched.requestId, {
+            action: 'replace',
+            source,
+            targetEventIds: ownershipState.targetEventIds,
+            historyEntries: ownershipState.targetEventIds.map((eventId) => findTransactionHistoryEntryByEventId(eventId)).filter(Boolean),
+            comparisonPlan,
+            editedMarkerPlan,
+            rowEditRowId: meta && meta.rowEditRowId ? String(meta.rowEditRowId) : null,
+            dirtyColumns: meta && Array.isArray(meta.dirtyColumns) ? meta.dirtyColumns : [],
+        });
+        transactionHistoryPendingRequestRef.current = dispatched.requestId;
+        syncTransactionHistoryState();
+        return dispatched;
+    }, [
+        analyzeServerEditOwnership,
+        applyComparisonValuePlan,
+        applyEditedCellMarkerPlan,
+        buildComparisonValuePlan,
+        buildEditedCellMarkerPlan,
+        captureOptimisticCellValues,
+        dispatchTransactionRequest,
+        findTransactionHistoryEntryByEventId,
+        getOptimisticCellKey,
+        showNotification,
+        supportsPatchTransactionRefresh,
+        syncTransactionHistoryState,
+    ]);
+
     const dispatchBatchUpdateRequest = useCallback((updates, source = 'batch', meta = null) => {
+        if (!editingEnabled) return null;
         const normalizedUpdates = Array.isArray(updates)
             ? updates.filter((update) => update && typeof update === 'object' && update.rowId && update.colId)
             : [];
@@ -5253,33 +6050,8 @@ export default function DashTanstackPivot(props) {
         if (editValueDisplayMode === 'original') {
             setEditValueDisplayMode('edited');
         }
-        const comparisonPlan = buildComparisonValuePlan(preparedUpdates);
-        if (comparisonPlan) {
-            applyComparisonValuePlan(comparisonPlan, 'forward');
-        }
-        const dispatched = dispatchTransactionRequest({
-            update: preparedUpdates,
-            refreshMode: supportsPatchTransactionRefresh ? 'patch' : 'smart',
-        }, source);
-        if (!dispatched || !dispatched.requestId) {
-            if (comparisonPlan) applyComparisonValuePlan(comparisonPlan, 'backward');
-            return null;
-        }
-        captureOptimisticCellValues(preparedUpdates, dispatched.requestId);
-        const editedMarkerPlan = buildEditedCellMarkerPlan(preparedUpdates);
-        if (editedMarkerPlan) {
-            applyEditedCellMarkerPlan(editedMarkerPlan, 'forward');
-        }
-        pendingTransactionHistoryRef.current.set(dispatched.requestId, {
-            action: 'apply',
-            source,
-            editedMarkerPlan,
-            comparisonPlan,
-            rowEditRowId: meta && meta.rowEditRowId ? String(meta.rowEditRowId) : null,
-            dirtyColumns: meta && Array.isArray(meta.dirtyColumns) ? meta.dirtyColumns : [],
-        });
-        return dispatched;
-    }, [applyComparisonValuePlan, applyEditedCellMarkerPlan, buildComparisonValuePlan, buildEditedCellMarkerPlan, captureOptimisticCellValues, dispatchTransactionRequest, editValueDisplayMode, resolvePropagationFormulaUpdates, serverSide, setEditValueDisplayMode, supportsPatchTransactionRefresh]);
+        return dispatchServerEditUpdates(preparedUpdates, source, meta);
+    }, [dispatchServerEditUpdates, editValueDisplayMode, editingEnabled, resolvePropagationFormulaUpdates, serverSide, setEditValueDisplayMode]);
 
     const dispatchInlineCellEdit = useCallback((update) => {
         if (!update || typeof update !== 'object') return;
@@ -5528,16 +6300,25 @@ export default function DashTanstackPivot(props) {
             showNotification('Undid the last layout change.', 'success');
             return;
         }
-        if (!serverSide || !entry.undoTransaction) return;
-        const dispatched = dispatchTransactionRequest(entry.undoTransaction, 'undo');
+        if (!serverSide) return;
+        const undoPayload = entry.eventId
+            ? {
+                eventAction: 'undo',
+                eventId: entry.eventId,
+                refreshMode: supportsPatchTransactionRefresh ? 'patch' : 'smart',
+            }
+            : entry.undoTransaction;
+        if (!undoPayload) return;
+        const dispatched = dispatchTransactionRequest(undoPayload, 'undo');
         if (!dispatched || !dispatched.requestId) return;
         pendingTransactionHistoryRef.current.set(dispatched.requestId, {
             action: 'undo',
             entry,
+            targetEventIds: entry.eventId ? [entry.eventId] : [],
         });
         transactionHistoryPendingRequestRef.current = dispatched.requestId;
         syncTransactionHistoryState();
-    }, [applyLayoutHistorySnapshot, clearPendingLayoutHistoryCapture, dispatchTransactionRequest, serverSide, showNotification, syncTransactionHistoryState]);
+    }, [applyLayoutHistorySnapshot, clearPendingLayoutHistoryCapture, dispatchTransactionRequest, serverSide, showNotification, supportsPatchTransactionRefresh, syncTransactionHistoryState]);
 
     const executeRedoTransaction = useCallback(() => {
         if (transactionHistoryPendingRequestRef.current) return;
@@ -5552,12 +6333,26 @@ export default function DashTanstackPivot(props) {
             showNotification('Reapplied the last layout change.', 'success');
             return;
         }
-        if (!serverSide || !entry.redoTransaction) return;
+        if (!serverSide) return;
         if (entry.comparisonPlan) {
             applyComparisonValuePlan(entry.comparisonPlan, 'forward');
         }
         setEditValueDisplayMode('edited');
-        const dispatched = dispatchTransactionRequest(entry.redoTransaction, 'redo');
+        const redoPayload = entry.eventId
+            ? {
+                eventAction: 'redo',
+                eventId: entry.eventId,
+                refreshMode: supportsPatchTransactionRefresh ? 'patch' : 'smart',
+            }
+            : entry.redoTransaction;
+        if (!redoPayload) {
+            if (entry.comparisonPlan) applyComparisonValuePlan(entry.comparisonPlan, 'backward');
+            if (comparisonValueState.activeCount === 0) {
+                setEditValueDisplayMode('original');
+            }
+            return;
+        }
+        const dispatched = dispatchTransactionRequest(redoPayload, 'redo');
         if (!dispatched || !dispatched.requestId) {
             if (entry.comparisonPlan) applyComparisonValuePlan(entry.comparisonPlan, 'backward');
             if (comparisonValueState.activeCount === 0) {
@@ -5569,10 +6364,11 @@ export default function DashTanstackPivot(props) {
             action: 'redo',
             entry,
             comparisonPlan: entry.comparisonPlan || null,
+            targetEventIds: entry.eventId ? [entry.eventId] : [],
         });
         transactionHistoryPendingRequestRef.current = dispatched.requestId;
         syncTransactionHistoryState();
-    }, [applyComparisonValuePlan, applyLayoutHistorySnapshot, clearPendingLayoutHistoryCapture, comparisonValueState.activeCount, dispatchTransactionRequest, serverSide, setEditValueDisplayMode, showNotification, syncTransactionHistoryState]);
+    }, [applyComparisonValuePlan, applyLayoutHistorySnapshot, clearPendingLayoutHistoryCapture, comparisonValueState.activeCount, dispatchTransactionRequest, serverSide, setEditValueDisplayMode, showNotification, supportsPatchTransactionRefresh, syncTransactionHistoryState]);
 
     transactionUndoExecutorRef.current = executeUndoTransaction;
     transactionRedoExecutorRef.current = executeRedoTransaction;
@@ -5681,7 +6477,7 @@ export default function DashTanstackPivot(props) {
             col_start: colStart,
             col_end: colEnd,
             include_grand_total: showColTotals || undefined,
-            cinema_mode: cinemaMode || undefined,
+            immersive_mode: immersiveMode || undefined,
             needs_col_schema: needsChartColumnCatalog || undefined,
             row_limit: resolvedRowLimit,
             column_limit: resolvedColumnLimit,
@@ -5744,7 +6540,7 @@ export default function DashTanstackPivot(props) {
                 locked: false,
                 lockedModel: null,
                 lockedRequest: null,
-                cinemaMode: false,
+                immersiveMode: false,
             },
         ]);
     }, [
@@ -6024,7 +6820,7 @@ export default function DashTanstackPivot(props) {
             treeConfig,
             detailConfig,
             rowFields, colFields, valConfigs, filters, sorting, sortOptions: effectiveSortOptions, expanded,
-            cinemaMode, showRowTotals, showColTotals, columnPinning, rowPinning, columnVisibility, columnSizing
+            immersiveMode, showRowTotals, showColTotals, columnPinning, rowPinning, columnVisibility, columnSizing
         };
         const nextSyncState = {
             ...nextProps,
@@ -6178,7 +6974,7 @@ export default function DashTanstackPivot(props) {
                             col_start: sortingColumnWindow.start !== null ? sortingColumnWindow.start : undefined,
                             col_end: sortingColumnWindow.end !== null ? sortingColumnWindow.end : undefined,
                             include_grand_total: serverSidePinsGrandTotal || undefined,
-                            cinema_mode: cinemaMode || undefined,
+                            immersive_mode: immersiveMode || undefined,
                         },
                     },
                 });
@@ -6229,12 +7025,12 @@ export default function DashTanstackPivot(props) {
                         col_end: structuralColumnWindow.end !== null ? structuralColumnWindow.end : undefined,
                         needs_col_schema: serverSide || undefined,
                         include_grand_total: serverSidePinsGrandTotal || undefined,
-                        cinema_mode: cinemaMode || undefined,
+                        immersive_mode: immersiveMode || undefined,
                     },
                 },
             });
         }
-    }, [viewMode, detailMode, treeConfig, detailConfig, rowFields, colFields, valConfigs, filters, sorting, effectiveSortOptions, expanded, cinemaMode, showRowTotals, showColTotals, columnPinning, rowPinning, grandTotalPinOverride, columnVisibility, columnSizing, beginStructuralTransaction, beginExpansionRequest, markRequestPending, resolveStableRequestedColumnWindow, serverSide, serverSideBlockSize, tableName, serverSidePinsGrandTotal]);
+    }, [viewMode, detailMode, treeConfig, detailConfig, rowFields, colFields, valConfigs, filters, sorting, effectiveSortOptions, expanded, immersiveMode, showRowTotals, showColTotals, columnPinning, rowPinning, grandTotalPinOverride, columnVisibility, columnSizing, beginStructuralTransaction, beginExpansionRequest, markRequestPending, resolveStableRequestedColumnWindow, serverSide, serverSideBlockSize, tableName, serverSidePinsGrandTotal]);
 
     useEffect(() => {
         const handleClick = () => setContextMenu(null);
@@ -6510,6 +7306,19 @@ export default function DashTanstackPivot(props) {
 
         return parts;
     }, [getDisplayHeaderTextForColumn]);
+    const getAutoSizeSampleRows = useCallback((rows) => {
+        if (!Array.isArray(rows) || rows.length === 0) return [];
+        if (rows.length <= MAX_AUTO_SIZE_SAMPLE_ROWS) return rows;
+        const lastIndex = rows.length - 1;
+        const sampledIndices = new Set();
+        for (let index = 0; index < MAX_AUTO_SIZE_SAMPLE_ROWS; index += 1) {
+            sampledIndices.add(Math.round((index * lastIndex) / (MAX_AUTO_SIZE_SAMPLE_ROWS - 1)));
+        }
+        return Array.from(sampledIndices)
+            .sort((left, right) => left - right)
+            .map((index) => rows[index])
+            .filter(Boolean);
+    }, []);
     const getRenderedHeaderWidthForColumn = useCallback((columnId) => {
         if (typeof document === 'undefined' || typeof window === 'undefined' || !columnId) return null;
         const scopedRoot = typeof id === 'string' && id ? document.getElementById(id) : null;
@@ -6519,32 +7328,48 @@ export default function DashTanstackPivot(props) {
 
         let maxMeasuredWidth = null;
         headerElements.forEach((headerElement) => {
-            let naturalContentWidth = 0;
             const headerContent = headerElement.querySelector('[data-header-content="true"]');
-            if (headerContent) {
-                const contentStyle = window.getComputedStyle(headerContent);
-                const gap = parseFloat(contentStyle.columnGap || contentStyle.gap || '0') || 0;
-                const horizontalPadding = (parseFloat(contentStyle.paddingLeft || '0') || 0)
-                    + (parseFloat(contentStyle.paddingRight || '0') || 0);
-                const childElements = Array.from(headerContent.children || []);
-                const childWidths = childElements.reduce((sum, childElement) => {
-                    if (childElement && childElement.dataset && childElement.dataset.headerText === 'true') {
-                        return sum + Math.ceil(childElement.scrollWidth || childElement.getBoundingClientRect().width || 0);
-                    }
-                    return sum + Math.ceil(childElement.getBoundingClientRect().width || 0);
-                }, 0);
-                naturalContentWidth = childWidths + horizontalPadding + (gap * Math.max(0, childElements.length - 1));
-            }
-
             const headerStyle = window.getComputedStyle(headerElement);
             const horizontalChrome = (parseFloat(headerStyle.paddingLeft || '0') || 0)
                 + (parseFloat(headerStyle.paddingRight || '0') || 0)
                 + (parseFloat(headerStyle.borderLeftWidth || '0') || 0)
                 + (parseFloat(headerStyle.borderRightWidth || '0') || 0);
-            const renderedWidth = Math.ceil(headerElement.getBoundingClientRect().width || 0);
+            let naturalContentWidth = 0;
+            if (headerContent && document.body) {
+                const measurementClone = headerContent.cloneNode(true);
+                measurementClone.style.position = 'absolute';
+                measurementClone.style.left = '-100000px';
+                measurementClone.style.top = '0';
+                measurementClone.style.visibility = 'hidden';
+                measurementClone.style.pointerEvents = 'none';
+                measurementClone.style.width = 'max-content';
+                measurementClone.style.minWidth = '0';
+                measurementClone.style.maxWidth = 'none';
+                measurementClone.style.overflow = 'visible';
+                measurementClone.style.display = 'inline-flex';
+                measurementClone.style.flex = '0 0 auto';
+                measurementClone.querySelectorAll('[data-header-text="true"]').forEach((textElement) => {
+                    if (!textElement || !textElement.style) return;
+                    textElement.style.flex = '0 0 auto';
+                    textElement.style.width = 'auto';
+                    textElement.style.minWidth = '0';
+                    textElement.style.maxWidth = 'none';
+                    textElement.style.overflow = 'visible';
+                    textElement.style.textOverflow = 'clip';
+                    textElement.style.display = 'inline-block';
+                });
+                document.body.appendChild(measurementClone);
+                naturalContentWidth = Math.ceil(
+                    measurementClone.scrollWidth
+                    || measurementClone.getBoundingClientRect().width
+                    || 0
+                );
+                document.body.removeChild(measurementClone);
+            }
             const candidateWidth = naturalContentWidth > 0
-                ? Math.max(renderedWidth, naturalContentWidth + horizontalChrome + autoSizeBounds.headerOverscan)
-                : Math.max(renderedWidth, headerElement.scrollWidth || 0);
+                ? naturalContentWidth + horizontalChrome + autoSizeBounds.headerOverscan
+                : null;
+            if (!Number.isFinite(candidateWidth)) return;
             maxMeasuredWidth = maxMeasuredWidth === null
                 ? candidateWidth
                 : Math.max(maxMeasuredWidth, candidateWidth);
@@ -6552,6 +7377,51 @@ export default function DashTanstackPivot(props) {
 
         return maxMeasuredWidth;
     }, [autoSizeBounds.headerOverscan, id]);
+    const getRenderedCellWidthForColumn = useCallback((columnId) => {
+        if (typeof document === 'undefined' || typeof window === 'undefined' || !columnId) return null;
+        const scopedRoot = typeof id === 'string' && id ? document.getElementById(id) : null;
+        const cellElements = Array.from((scopedRoot || document).querySelectorAll('[role="gridcell"][data-colid]'))
+            .filter((element) => element && element.dataset && element.dataset.colid === String(columnId));
+        if (cellElements.length === 0) return null;
+
+        let maxMeasuredWidth = null;
+        cellElements.forEach((cellElement) => {
+            const cellStyle = window.getComputedStyle(cellElement);
+            const horizontalChrome = (parseFloat(cellStyle.paddingLeft || '0') || 0)
+                + (parseFloat(cellStyle.paddingRight || '0') || 0)
+                + (parseFloat(cellStyle.borderLeftWidth || '0') || 0)
+                + (parseFloat(cellStyle.borderRightWidth || '0') || 0);
+            const contentContainer = Array.from(cellElement.children || []).find((childElement) => (
+                childElement && childElement.tagName === 'SPAN'
+            )) || cellElement.querySelector('span');
+            let contentWidth = 0;
+            if (contentContainer) {
+                const contentStyle = window.getComputedStyle(contentContainer);
+                const gap = parseFloat(contentStyle.columnGap || contentStyle.gap || '0') || 0;
+                const horizontalPadding = (parseFloat(contentStyle.paddingLeft || '0') || 0)
+                    + (parseFloat(contentStyle.paddingRight || '0') || 0);
+                const childElements = Array.from(contentContainer.children || []);
+                if (childElements.length > 0) {
+                    const childWidths = childElements.reduce((sum, childElement) => (
+                        sum + Math.ceil(childElement.scrollWidth || childElement.getBoundingClientRect().width || 0)
+                    ), 0);
+                    contentWidth = childWidths + horizontalPadding + (gap * Math.max(0, childElements.length - 1));
+                }
+                if (contentWidth <= 0) {
+                    contentWidth = Math.ceil(contentContainer.scrollWidth || contentContainer.getBoundingClientRect().width || 0);
+                }
+            }
+            const candidateWidth = contentWidth > 0
+                ? Math.ceil(contentWidth + horizontalChrome + autoSizeBounds.cellOverscan)
+                : null;
+            if (!Number.isFinite(candidateWidth)) return;
+            maxMeasuredWidth = maxMeasuredWidth === null
+                ? candidateWidth
+                : Math.max(maxMeasuredWidth, candidateWidth);
+        });
+
+        return maxMeasuredWidth;
+    }, [autoSizeBounds.cellOverscan, id]);
     const queueHeaderFitValidation = useCallback((columnId, measuredWidth) => {
         if (typeof window === 'undefined' || !columnId || !table || typeof table.setColumnSizing !== 'function') return;
         const raf = window.requestAnimationFrame || ((callback) => window.setTimeout(callback, 0));
@@ -6559,11 +7429,15 @@ export default function DashTanstackPivot(props) {
             raf(() => {
                 const renderedHeaderWidth = getRenderedHeaderWidthForColumn(columnId);
                 if (!Number.isFinite(renderedHeaderWidth)) return;
+                const currentColumn = typeof table.getColumn === 'function' ? table.getColumn(columnId) : null;
+                const currentWidth = currentColumn && typeof currentColumn.getSize === 'function'
+                    ? currentColumn.getSize()
+                    : measuredWidth;
                 const targetWidth = Math.min(
                     autoSizeBounds.maxWidth,
-                    Math.max(autoSizeBounds.minWidth, Math.ceil(renderedHeaderWidth + autoSizeBounds.headerOverscan))
+                    Math.max(autoSizeBounds.minWidth, Math.ceil(renderedHeaderWidth))
                 );
-                if (targetWidth > measuredWidth + 1) {
+                if (targetWidth > Math.max(measuredWidth, currentWidth) + 1) {
                     table.setColumnSizing((old) => ({
                         ...old,
                         [columnId]: targetWidth
@@ -7082,9 +7956,15 @@ export default function DashTanstackPivot(props) {
         });
     };
 
-    const autoSizeColumn = (columnId, includeHeader = true) => {
+    // px per depth level matching useColumnDefs paddingLeft: `${depth * 24}px`
+    const HIERARCHY_INDENT_PX = 24;
+    // expand button: 16px icon + 6px marginRight = 22px; spacer span: 18px — use 22 as worst case
+    const HIERARCHY_EXPAND_PX = 22;
+
+    const autoSizeColumn = useCallback((columnId, includeHeader = true) => {
+        if (!table) return;
         const rows = table.getRowModel().rows;
-        const sampleRows = rows.slice(0, 250);
+        const sampleRows = getAutoSizeSampleRows(rows);
         let maxWidth = autoSizeBounds.minWidth;
 
         const canvas = document.createElement('canvas');
@@ -7114,11 +7994,15 @@ export default function DashTanstackPivot(props) {
         context.font = bodyFont;
         sampleRows.forEach(row => {
             const cellValue = row.getValue(columnId);
-            let text;
+            let width;
             if (columnId === 'hierarchy') {
                 const depth = row.original && typeof row.original.depth === 'number' ? row.original.depth : (row.depth || 0);
-                const label = row.original && row.original._id != null ? formatDisplayLabel(String(row.original._id)) : '';
-                text = `${' '.repeat(depth * 2)}${label}`;
+                const label = row.original
+                    ? formatDisplayLabel(String(row.original._label != null ? row.original._label : (row.original._id != null ? row.original._id : '')))
+                    : '';
+                const textWidth = context.measureText(label).width;
+                // actual indent = CSS paddingLeft (depth * 24px) + expand button (22px) + cell padding (24px)
+                width = textWidth + depth * HIERARCHY_INDENT_PX + HIERARCHY_EXPAND_PX + autoSizeBounds.cellPadding + autoSizeBounds.cellOverscan;
             } else {
                 const effectiveDecimalPlaces = columnDecimalOverrides && columnDecimalOverrides[columnId] !== undefined
                     ? columnDecimalOverrides[columnId]
@@ -7129,14 +8013,20 @@ export default function DashTanstackPivot(props) {
                 const effectiveGroupSeparator = columnGroupSeparatorOverrides && columnGroupSeparatorOverrides[columnId] !== undefined
                     ? columnGroupSeparatorOverrides[columnId]
                     : numberGroupSeparator;
-                text = formatValue(cellValue, effectiveFormat, effectiveDecimalPlaces, effectiveGroupSeparator);
+                const text = formatValue(cellValue, effectiveFormat, effectiveDecimalPlaces, effectiveGroupSeparator);
+                width = context.measureText(text).width + autoSizeBounds.cellPadding + autoSizeBounds.cellOverscan;
             }
-            const width = context.measureText(text).width
-                + autoSizeBounds.cellPadding
-                + (includeHeader ? 0 : autoSizeBounds.cellOverscan);
             if (width > maxWidth) maxWidth = width;
         });
 
+        const renderedCellWidth = (columnId !== 'hierarchy' && columnId !== '__row_number__')
+            ? getRenderedCellWidthForColumn(columnId)
+            : null;
+        if (Number.isFinite(renderedCellWidth)) {
+            maxWidth = Math.max(maxWidth, renderedCellWidth);
+        }
+
+        maxWidth = Math.ceil(maxWidth);
         maxWidth = Math.min(maxWidth, autoSizeBounds.maxWidth);
         maxWidth = Math.max(maxWidth, autoSizeBounds.minWidth);
 
@@ -7144,23 +8034,25 @@ export default function DashTanstackPivot(props) {
             ...old,
             [columnId]: maxWidth
         }));
-        if (includeHeader) {
-            queueHeaderFitValidation(columnId, maxWidth);
-        }
-    };
+        queueHeaderFitValidation(columnId, maxWidth);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [table, fontSize, fontFamily, valConfigs, decimalPlaces, columnDecimalOverrides, columnFormatOverrides,
+        columnGroupSeparatorOverrides, numberGroupSeparator, defaultValueFormat, autoSizeBounds,
+        matchesSelectedColumnToValueConfig, getAutoSizeSampleRows, getDisplayHeaderTextStackForColumn, getRenderedCellWidthForColumn, getRenderedHeaderWidthForColumn,
+        queueHeaderFitValidation, formatDisplayLabel]);
 
-    const autoSizeVisibleColumns = useCallback((includeHeader = false) => {
+    const autoSizeVisibleColumns = useCallback((includeHeader = true) => {
         if (!table || !table.getVisibleLeafColumns) return;
         table.getVisibleLeafColumns().forEach((column) => {
             autoSizeColumn(column.id, includeHeader);
         });
     }, [table, autoSizeColumn]);
     const handleAutoSizeToolbarClick = useCallback(() => {
-        autoSizeVisibleColumns(autoSizeIncludesHeaderNext);
-        setAutoSizeIncludesHeaderNext((prev) => !prev);
-    }, [autoSizeVisibleColumns, autoSizeIncludesHeaderNext]);
+        autoSizeVisibleColumns(true);
+    }, [autoSizeVisibleColumns]);
 
     const handleFilterClick = (e, columnId) => {
+        if (!uiConfig.showFilters) return;
         e.stopPropagation();
         setActiveFilterCol(columnId);
         setFilterAnchorEl(e.currentTarget);
@@ -7338,7 +8230,7 @@ export default function DashTanstackPivot(props) {
         prefetchColumns: normalizedPerformanceConfig.prefetchColumns,
         cacheKey: serverSideCacheKey,
         excludeGrandTotal: serverSidePinsGrandTotal,
-        cinemaMode,
+        immersiveMode,
         stateEpoch,
         sessionId: sessionIdRef.current,
         clientInstance: clientInstanceRef.current,
@@ -7391,20 +8283,22 @@ export default function DashTanstackPivot(props) {
         props,
         cachedColSchema,
         filteredData,
+        rowCount,
         // Render-time closures (stable refs or render-time reads)
         theme,
         defaultColumnWidths,
         validationRules,
-        onCellEdit: dispatchInlineCellEdit,
-        resolveEditorPresentation,
-        rowEditMode: normalizedEditingConfig.mode,
-        getRowEditSession,
-        onRequestRowStart: startRowEditSession,
-        onRowDraftChange: updateRowDraftValue,
-        onRequestRowSave: saveRowEditSession,
-        onRequestRowCancel: cancelRowEditSession,
-        requestEditorOptions,
-        renderRowEditActions,
+        onCellEdit: editingEnabled ? dispatchInlineCellEdit : undefined,
+        onEditBlocked: editingEnabled ? handleBlockedCellEdit : undefined,
+        resolveEditorPresentation: editingEnabled ? resolveEditorPresentation : undefined,
+        rowEditMode: editingEnabled ? normalizedEditingConfig.mode : 'cell',
+        getRowEditSession: editingEnabled ? getRowEditSession : undefined,
+        onRequestRowStart: editingEnabled ? startRowEditSession : undefined,
+        onRowDraftChange: editingEnabled ? updateRowDraftValue : undefined,
+        onRequestRowSave: editingEnabled ? saveRowEditSession : undefined,
+        onRequestRowCancel: editingEnabled ? cancelRowEditSession : undefined,
+        requestEditorOptions: editingEnabled ? requestEditorOptions : undefined,
+        renderRowEditActions: editingEnabled ? renderRowEditActions : undefined,
         handleContextMenu,
         handleRowSelect,
         handleRowRangeSelect,
@@ -7432,6 +8326,7 @@ export default function DashTanstackPivot(props) {
         },
         resolveCellDisplayValue: resolveDisplayedCellValue,
         editValueDisplayMode,
+        editingEnabled,
     });
 
     // Auto-size new columns to fit their header text on spawn
@@ -7450,10 +8345,16 @@ export default function DashTanstackPivot(props) {
                 Math.max(maxWidth, ctx.measureText(headerText).width + autoSizeBounds.headerPadding + autoSizeBounds.headerOverscan)
             ), autoSizeBounds.minWidth);
             const measuredFromDom = getRenderedHeaderWidthForColumn(col.id);
+            const measuredFromCells = (col.id !== 'hierarchy' && col.id !== '__row_number__')
+                ? getRenderedCellWidthForColumn(col.id)
+                : null;
             const measured = Number.isFinite(measuredFromDom)
                 ? Math.max(measuredFromText, measuredFromDom)
                 : measuredFromText;
-            const clamped = Math.min(Math.max(measured, autoSizeBounds.minWidth), 300);
+            const measuredWithCells = Number.isFinite(measuredFromCells)
+                ? Math.max(measured, measuredFromCells)
+                : measured;
+            const clamped = Math.min(Math.max(measuredWithCells, autoSizeBounds.minWidth), autoSizeBounds.maxWidth);
             if (clamped > (col.columnDef.size || autoSizeBounds.minWidth)) {
                 newSizes[col.id] = clamped;
             }
@@ -7465,7 +8366,7 @@ export default function DashTanstackPivot(props) {
             });
         }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    }, [colFields, fontFamily, fontSize, getDisplayHeaderTextStackForColumn, getRenderedHeaderWidthForColumn, queueHeaderFitValidation, rowFields, valConfigs]);
+    }, [autoSizeBounds.maxWidth, colFields, fontFamily, fontSize, getDisplayHeaderTextStackForColumn, getRenderedCellWidthForColumn, getRenderedHeaderWidthForColumn, queueHeaderFitValidation, rowFields, valConfigs]);
 
     useEffect(() => {
         if (!serverSide || !structuralInFlight) return;
@@ -7802,6 +8703,11 @@ export default function DashTanstackPivot(props) {
         return normalizedExpanded;
     }, [serverSide, treeHasDefaultExpansion, viewMode]);
 
+    const [paginationState, setPaginationState] = useState({ pageIndex: 0, pageSize: paginationConfig.pageSize });
+    useEffect(() => {
+        setPaginationState(prev => prev.pageSize === paginationConfig.pageSize ? prev : { ...prev, pageIndex: 0, pageSize: paginationConfig.pageSize });
+    }, [paginationConfig.pageSize]);
+
     const tableState = useMemo(() => {
         const availableRowIds = new Set((tableData || []).map(getStableDataRowId).filter(Boolean));
         let finalRowPinning = {
@@ -7823,7 +8729,7 @@ export default function DashTanstackPivot(props) {
                 : bottomWithoutGrandTotal,
         };
 
-        return {
+        const state = {
             sorting,
             expanded,
             columnPinning,
@@ -7832,6 +8738,10 @@ export default function DashTanstackPivot(props) {
             columnVisibility,
             columnSizing
         };
+        if (paginationConfig.enabled) {
+            state.pagination = paginationState;
+        }
+        return state;
     }, [
         sorting,
         expanded,
@@ -7844,6 +8754,8 @@ export default function DashTanstackPivot(props) {
         tableData,
         effectiveGrandTotalPinState,
         getStableDataRowId,
+        paginationConfig.enabled,
+        paginationState,
     ]);
 
 
@@ -7993,6 +8905,8 @@ export default function DashTanstackPivot(props) {
         getCoreRowModel: getCoreRowModel(),
         getExpandedRowModel: serverSide ? undefined : getExpandedRowModel(),
         getGroupedRowModel: serverSide ? undefined : getGroupedRowModel(),
+        getPaginationRowModel: paginationConfig.enabled ? getPaginationRowModel() : undefined,
+        onPaginationChange: paginationConfig.enabled ? setPaginationState : undefined,
         getSubRows,
         enableRowPinning: true, // Enable Row Pinning
         enableColumnResizing: true,
@@ -8360,7 +9274,7 @@ export default function DashTanstackPivot(props) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
     const visibleLeafColumns = useMemo(
         () => table.getVisibleLeafColumns(),
-        [columns, columnVisibility, columnPinning]
+        [columns, columnVisibility, columnPinning, columnSizing]
     );
     const chartDisplayRows = useMemo(
         () => (
@@ -9111,6 +10025,7 @@ export default function DashTanstackPivot(props) {
 
         if ((runtimeResponse.kind === 'data' || runtimeResponse.kind === 'update' || runtimeResponse.kind === 'transaction') && runtimeResponse.status === 'data') {
             finalizeTransactionHistoryResponse(runtimeResponse, payload);
+            hydrateVisibleEditOverlay(payload.editOverlay);
             reconcileOptimisticCellValuesWithPayload(payload);
             pendingDataProfilerCommitRef.current = {
                 requestId: runtimeResponse.requestId || null,
@@ -9126,6 +10041,7 @@ export default function DashTanstackPivot(props) {
                 ? payload.patch
                 : {};
             finalizeTransactionHistoryResponse(runtimeResponse, payload);
+            hydrateVisibleEditOverlay(payload.editOverlay);
             reconcileOptimisticCellValuesWithPayload({ data: patchPayload.rows || [] });
             pendingDataProfilerCommitRef.current = {
                 requestId: runtimeResponse.requestId || null,
@@ -9238,7 +10154,7 @@ export default function DashTanstackPivot(props) {
                 status: runtimeResponse.status,
             });
         }
-    }, [clearPendingTransactionHistoryRequest, emitEditLifecycleEvent, finalizeTransactionHistoryResponse, reconcileOptimisticCellValuesWithPayload, recordProfilerResponse, runtimeResponse]);
+    }, [clearPendingTransactionHistoryRequest, emitEditLifecycleEvent, finalizeTransactionHistoryResponse, hydrateVisibleEditOverlay, reconcileOptimisticCellValuesWithPayload, recordProfilerResponse, runtimeResponse]);
 
     useEffect(() => {
         if (!chartData || typeof chartData !== 'object') return;
@@ -9401,6 +10317,7 @@ export default function DashTanstackPivot(props) {
         // Column-structure deps for memoized leaf-column lists
         columnVisibility,
         columnPinning,
+        columnSizing,
         columns,
     });
     columnVirtualizerRef.current = columnVirtualizer;
@@ -9426,11 +10343,11 @@ export default function DashTanstackPivot(props) {
     // Pre-compute header groups so PivotTableBody doesn't need the `table` instance
     // (whose identity changes every render, defeating React.memo).
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    const leftHeaderGroups = useMemo(() => table.getLeftHeaderGroups(), [columns, columnVisibility, columnPinning]);
+    const leftHeaderGroups = useMemo(() => table.getLeftHeaderGroups(), [columns, columnVisibility, columnPinning, columnSizing]);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    const rightHeaderGroups = useMemo(() => table.getRightHeaderGroups(), [columns, columnVisibility, columnPinning]);
+    const rightHeaderGroups = useMemo(() => table.getRightHeaderGroups(), [columns, columnVisibility, columnPinning, columnSizing]);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    const centerHeaderGroups = useMemo(() => table.getCenterHeaderGroups(), [columns, columnVisibility, columnPinning]);
+    const centerHeaderGroups = useMemo(() => table.getCenterHeaderGroups(), [columns, columnVisibility, columnPinning, columnSizing]);
 
     useEffect(() => {
         if (!serverSide || virtualCenterCols.length === 0) return;
@@ -9778,30 +10695,75 @@ export default function DashTanstackPivot(props) {
         if (editPanelCells.length > 0) setEditPanelOpen(true);
     }, [editPanelCells.length]);
 
+    const collectTrackedEventIdsForCells = useCallback((cells, options = {}) => {
+        const rawEventIds = [];
+        (Array.isArray(cells) ? cells : []).forEach((cell) => {
+            if (!cell || typeof cell !== 'object') return;
+            rawEventIds.push(...resolveTrackedCellEventIds(cell.rowId, cell.colId, options));
+        });
+        return sortEventIdsByActiveHistory(rawEventIds);
+    }, [resolveTrackedCellEventIds, sortEventIdsByActiveHistory]);
+
+    const collectAllTrackedEventIds = useCallback(() => {
+        const rawEventIds = [];
+        comparisonCellOriginalValuesRef.current.forEach((entry) => {
+            if (!entry || typeof entry !== 'object') return;
+            rawEventIds.push(...normalizeTrackedEventIds(entry.directEventIds));
+            rawEventIds.push(...normalizeTrackedEventIds(entry.propagatedEventIds));
+        });
+        return sortEventIdsByActiveHistory(rawEventIds);
+    }, [normalizeTrackedEventIds, sortEventIdsByActiveHistory]);
+
     const handleRevertCell = useCallback((rowId, colId) => {
         const key = getOptimisticCellKey(rowId, colId);
         if (!key) return;
-        const originalEntry = comparisonCellOriginalValuesRef.current.get(key);
-        const originalValue = originalEntry ? originalEntry.value : undefined;
-        // Clear client-side edit tracking
-        optimisticCellValuesRef.current.delete(key);
-        editedCellMarkersRef.current.delete(key);
-        comparisonCellCountsRef.current.delete(key);
-        comparisonCellOriginalValuesRef.current.delete(key);
-        bumpEditedCellEpoch();
-        bumpComparisonCellEpoch();
-        syncComparisonValueState();
-        // Send original value back to the server so the data actually reverts
-        if (serverSide && originalValue !== undefined && setPropsRef.current) {
-            const revertUpdate = { rowId, colId, value: originalValue };
-            dispatchTransactionRequest({
-                update: [revertUpdate],
+        const targetEventIds = serverSide
+            ? resolveTrackedCellEventIds(rowId, colId, { includeDirect: true, includePropagated: true })
+            : [];
+        if (serverSide && targetEventIds.length > 0) {
+            const dispatched = dispatchTransactionRequest({
+                eventAction: 'revert',
+                eventIds: targetEventIds,
                 refreshMode: supportsPatchTransactionRefresh ? 'patch' : 'smart',
             }, 'revert');
-        } else if (!serverSide && originalValue !== undefined && setPropsRef.current) {
-            setPropsRef.current({ cellUpdates: [{ rowId, colId, value: originalValue }] });
+            if (!dispatched || !dispatched.requestId) return;
+            pendingTransactionHistoryRef.current.set(dispatched.requestId, {
+                action: 'revert',
+                source: 'revert',
+                targetEventIds,
+                historyEntries: targetEventIds.map((eventId) => findTransactionHistoryEntryByEventId(eventId)).filter(Boolean),
+                successMessage: 'Reverted the selected cell.',
+            });
+            transactionHistoryPendingRequestRef.current = dispatched.requestId;
+            syncTransactionHistoryState();
+            return;
         }
-    }, [getOptimisticCellKey, bumpEditedCellEpoch, bumpComparisonCellEpoch, syncComparisonValueState, serverSide, dispatchTransactionRequest, supportsPatchTransactionRefresh]);
+
+        const originalEntry = comparisonCellOriginalValuesRef.current.get(key);
+        if (originalEntry) {
+            optimisticCellValuesRef.current.delete(key);
+            editedCellMarkersRef.current.delete(key);
+            comparisonCellCountsRef.current.delete(key);
+            comparisonCellOriginalValuesRef.current.delete(key);
+            bumpEditedCellEpoch();
+            bumpComparisonCellEpoch();
+            syncComparisonValueState();
+            if (!serverSide && setPropsRef.current && originalEntry.value !== undefined) {
+                setPropsRef.current({ cellUpdates: [{ rowId: originalEntry.rowId, colId: originalEntry.colId, value: originalEntry.value }] });
+            }
+        }
+    }, [
+        bumpComparisonCellEpoch,
+        bumpEditedCellEpoch,
+        dispatchTransactionRequest,
+        findTransactionHistoryEntryByEventId,
+        getOptimisticCellKey,
+        resolveTrackedCellEventIds,
+        serverSide,
+        supportsPatchTransactionRefresh,
+        syncComparisonValueState,
+        syncTransactionHistoryState,
+    ]);
 
     const handleConfirmPropagation = useCallback(() => {
         const pending = pendingPropagationUpdatesRef.current;
@@ -9814,6 +10776,7 @@ export default function DashTanstackPivot(props) {
         });
         pendingPropagationUpdatesRef.current = null;
         setPendingPropagationUpdates(null);
+        setEditPanelOpen(false);
         if (editValueDisplayMode === 'original') {
             setEditValueDisplayMode('edited');
         }
@@ -9821,37 +10784,208 @@ export default function DashTanstackPivot(props) {
             if (setPropsRef.current) setPropsRef.current({ cellUpdates: preparedUpdates });
             return;
         }
-        const comparisonPlan = buildComparisonValuePlan(preparedUpdates);
-        if (comparisonPlan) applyComparisonValuePlan(comparisonPlan, 'forward');
-        const dispatched = dispatchTransactionRequest({
-            update: preparedUpdates,
-            refreshMode: supportsPatchTransactionRefresh ? 'patch' : 'smart',
-        }, pending.source);
-        if (!dispatched || !dispatched.requestId) {
-            if (comparisonPlan) applyComparisonValuePlan(comparisonPlan, 'backward');
-            return;
-        }
-        captureOptimisticCellValues(preparedUpdates, dispatched.requestId);
-        const editedMarkerPlan = buildEditedCellMarkerPlan(preparedUpdates);
-        if (editedMarkerPlan) applyEditedCellMarkerPlan(editedMarkerPlan, 'forward');
-        pendingTransactionHistoryRef.current.set(dispatched.requestId, {
-            action: 'apply',
-            source: pending.source,
-            editedMarkerPlan,
-            comparisonPlan,
-            rowEditRowId: pending.meta && pending.meta.rowEditRowId ? String(pending.meta.rowEditRowId) : null,
-            dirtyColumns: pending.meta && Array.isArray(pending.meta.dirtyColumns) ? pending.meta.dirtyColumns : [],
-        });
-    }, [applyComparisonValuePlan, applyEditedCellMarkerPlan, buildComparisonValuePlan, buildEditedCellMarkerPlan, captureOptimisticCellValues, dispatchTransactionRequest, editValueDisplayMode, propagationMethodUI, rowFields, serverSide, setEditValueDisplayMode, supportsPatchTransactionRefresh]);
+        dispatchServerEditUpdates(preparedUpdates, pending.source, pending.meta || null);
+    }, [dispatchServerEditUpdates, editValueDisplayMode, propagationMethodUI, rowFields, serverSide, setEditValueDisplayMode]);
 
     const handleCancelPropagation = useCallback(() => {
         pendingPropagationUpdatesRef.current = null;
         setPendingPropagationUpdates(null);
+        setEditPanelOpen(false);
     }, []);
 
     const handlePropagationMethodChange = useCallback((method) => {
         setPropagationMethodUI(method);
     }, []);
+
+    const handleReapplyPropagation = useCallback((directCells, method) => {
+        if (!Array.isArray(directCells) || directCells.length === 0) return;
+        const normalizedMethod = normalizePropagationFormulaValue(method, 'equal') || 'equal';
+        if (!serverSide) {
+            if (setPropsRef.current) {
+                setPropsRef.current({
+                    cellUpdates: directCells.map((cell) => ({
+                        rowId: cell.rowId,
+                        colId: cell.colId,
+                        value: cell.currentValue,
+                        propagationStrategy: normalizedMethod,
+                    })),
+                });
+            }
+            return;
+        }
+        const targetEventIds = sortEventIdsByActiveHistory(
+            directCells.flatMap((cell) => resolveTrackedCellEventIds(cell.rowId, cell.colId, {
+                includeDirect: true,
+                includePropagated: false,
+            }))
+        );
+        if (targetEventIds.length === 0) {
+            showNotification('This edit does not have a tracked server event to replace.', 'warning');
+            return;
+        }
+        const replacementUpdates = directCells.map((cell) => {
+            const key = getOptimisticCellKey(cell.rowId, cell.colId);
+            const originalEntry = key ? comparisonCellOriginalValuesRef.current.get(key) : null;
+            return {
+                rowId: cell.rowId,
+                colId: cell.colId,
+                value: cell.currentValue,
+                oldValue: originalEntry ? originalEntry.value : undefined,
+                propagationStrategy: normalizedMethod,
+            };
+        });
+        const comparisonPlan = buildComparisonValuePlan(replacementUpdates);
+        const editedMarkerPlan = buildEditedCellMarkerPlan(replacementUpdates);
+        const dispatched = dispatchTransactionRequest({
+            eventAction: 'replace',
+            eventIds: targetEventIds,
+            propagationStrategy: normalizedMethod,
+            refreshMode: supportsPatchTransactionRefresh ? 'patch' : 'smart',
+        }, 'reapply-propagation');
+        if (!dispatched || !dispatched.requestId) return;
+        pendingTransactionHistoryRef.current.set(dispatched.requestId, {
+            action: 'replace',
+            source: 'reapply-propagation',
+            targetEventIds,
+            historyEntries: targetEventIds.map((eventId) => findTransactionHistoryEntryByEventId(eventId)).filter(Boolean),
+            comparisonPlan,
+            editedMarkerPlan,
+            successMessage: 'Updated propagation for the selected edit scope.',
+        });
+        transactionHistoryPendingRequestRef.current = dispatched.requestId;
+        syncTransactionHistoryState();
+    }, [
+        buildComparisonValuePlan,
+        buildEditedCellMarkerPlan,
+        dispatchTransactionRequest,
+        findTransactionHistoryEntryByEventId,
+        getOptimisticCellKey,
+        resolveTrackedCellEventIds,
+        serverSide,
+        showNotification,
+        sortEventIdsByActiveHistory,
+        supportsPatchTransactionRefresh,
+        syncTransactionHistoryState,
+    ]);
+
+    const handleRevertSelected = useCallback((cells) => {
+        if (!Array.isArray(cells) || cells.length === 0) return;
+        if (serverSide) {
+            const targetEventIds = collectTrackedEventIdsForCells(cells, {
+                includeDirect: true,
+                includePropagated: true,
+            });
+            if (targetEventIds.length > 0) {
+                const dispatched = dispatchTransactionRequest({
+                    eventAction: 'revert',
+                    eventIds: targetEventIds,
+                    refreshMode: supportsPatchTransactionRefresh ? 'patch' : 'smart',
+                }, 'revert-selected');
+                if (!dispatched || !dispatched.requestId) return;
+                pendingTransactionHistoryRef.current.set(dispatched.requestId, {
+                    action: 'revert',
+                    source: 'revert-selected',
+                    targetEventIds,
+                    historyEntries: targetEventIds.map((eventId) => findTransactionHistoryEntryByEventId(eventId)).filter(Boolean),
+                    successMessage: `Reverted ${cells.length} selected edit${cells.length === 1 ? '' : 's'}.`,
+                });
+                transactionHistoryPendingRequestRef.current = dispatched.requestId;
+                syncTransactionHistoryState();
+                return;
+            }
+        }
+        const revertUpdates = [];
+        cells.forEach((cell) => {
+            const key = getOptimisticCellKey(cell.rowId, cell.colId);
+            if (!key) return;
+            const originalEntry = comparisonCellOriginalValuesRef.current.get(key);
+            if (originalEntry && originalEntry.value !== undefined) {
+                revertUpdates.push({ rowId: originalEntry.rowId, colId: originalEntry.colId, value: originalEntry.value });
+            }
+            optimisticCellValuesRef.current.delete(key);
+            editedCellMarkersRef.current.delete(key);
+            comparisonCellCountsRef.current.delete(key);
+            comparisonCellOriginalValuesRef.current.delete(key);
+        });
+        bumpEditedCellEpoch();
+        bumpComparisonCellEpoch();
+        syncComparisonValueState();
+        if (revertUpdates.length > 0) {
+            if (serverSide) {
+                dispatchTransactionRequest({
+                    update: revertUpdates,
+                    refreshMode: supportsPatchTransactionRefresh ? 'patch' : 'smart',
+                }, 'revert-selected-fallback');
+            } else if (setPropsRef.current) {
+                setPropsRef.current({ cellUpdates: revertUpdates });
+            }
+        }
+    }, [
+        bumpComparisonCellEpoch,
+        bumpEditedCellEpoch,
+        collectTrackedEventIdsForCells,
+        dispatchTransactionRequest,
+        findTransactionHistoryEntryByEventId,
+        getOptimisticCellKey,
+        serverSide,
+        supportsPatchTransactionRefresh,
+        syncComparisonValueState,
+        syncTransactionHistoryState,
+    ]);
+
+    const handleRevertAll = useCallback(() => {
+        const targetEventIds = serverSide ? collectAllTrackedEventIds() : [];
+        if (serverSide && targetEventIds.length > 0) {
+            const dispatched = dispatchTransactionRequest({
+                eventAction: 'revert',
+                eventIds: targetEventIds,
+                refreshMode: supportsPatchTransactionRefresh ? 'patch' : 'smart',
+            }, 'revert-all');
+            if (!dispatched || !dispatched.requestId) return;
+            pendingTransactionHistoryRef.current.set(dispatched.requestId, {
+                action: 'revert',
+                source: 'revert-all',
+                targetEventIds,
+                historyEntries: targetEventIds.map((eventId) => findTransactionHistoryEntryByEventId(eventId)).filter(Boolean),
+                clearAllOnSuccess: true,
+                successMessage: 'Reverted all active edits.',
+            });
+            transactionHistoryPendingRequestRef.current = dispatched.requestId;
+            syncTransactionHistoryState();
+            return;
+        }
+        const revertUpdates = [];
+        comparisonCellOriginalValuesRef.current.forEach((entry) => {
+            if (!entry || entry.value === undefined) return;
+            revertUpdates.push({ rowId: entry.rowId, colId: entry.colId, value: entry.value });
+        });
+        clearAllOptimisticCellValues();
+        clearAllEditedCellMarkers();
+        clearAllComparisonValueState();
+        propagationLogRef.current = [];
+        setPropagationLogEpoch((previousEpoch) => previousEpoch + 1);
+        syncTransactionHistoryState();
+        if (revertUpdates.length > 0) {
+            if (serverSide) {
+                dispatchTransactionRequest({
+                    update: revertUpdates,
+                    refreshMode: supportsPatchTransactionRefresh ? 'patch' : 'smart',
+                }, 'revert-all-fallback');
+            } else if (setPropsRef.current) {
+                setPropsRef.current({ cellUpdates: revertUpdates });
+            }
+        }
+    }, [
+        clearAllComparisonValueState,
+        clearAllEditedCellMarkers,
+        clearAllOptimisticCellValues,
+        collectAllTrackedEventIds,
+        dispatchTransactionRequest,
+        findTransactionHistoryEntryByEventId,
+        serverSide,
+        supportsPatchTransactionRefresh,
+        syncTransactionHistoryState,
+    ]);
 
     const statusAccessoryModel = useMemo(() => ({
         selection: {
@@ -10117,8 +11251,8 @@ export default function DashTanstackPivot(props) {
                     showDefinitionManager={false}
                     locked={pane.locked}
                     onToggleLock={() => handleToggleChartCanvasPaneLock(pane.id)}
-                    cinemaMode={Boolean(pane.cinemaMode)}
-                    onCinemaModeChange={(value) => updateChartCanvasPane(pane.id, { cinemaMode: Boolean(value) })}
+                    immersiveMode={Boolean(pane.immersiveMode)}
+                    onImmersiveModeChange={(value) => updateChartCanvasPane(pane.id, { immersiveMode: Boolean(value) })}
                     dockPosition={normalizedDockPosition}
                     onDockPositionChange={(value) => updateChartCanvasPane(pane.id, { dockPosition: normalizeChartDockPosition(value, normalizedDockPosition) })}
                     onSettingsWidthBudgetChange={(nextWidthHint) => handleChartCanvasPaneWidthHintChange(
@@ -10133,6 +11267,7 @@ export default function DashTanstackPivot(props) {
     };
 
     const renderHorizontalDockGroup = (panes, groupPosition) => {
+        if (!uiConfig.showCharts) return null;
         if (!Array.isArray(panes) || panes.length === 0) return null;
         return (
             <div
@@ -10192,6 +11327,7 @@ export default function DashTanstackPivot(props) {
     };
 
     const renderVerticalDockGroup = (panes, groupPosition) => {
+        if (!uiConfig.showCharts) return null;
         if (!Array.isArray(panes) || panes.length === 0) return null;
         const renderVerticalResizeHandle = (paneId) => (
             <div
@@ -10242,8 +11378,8 @@ export default function DashTanstackPivot(props) {
         <div
             id={id}
             style={{ ...styles.root, ...loadingCssVars, position: 'relative', ...style }}
-            onMouseEnter={() => setCinemaModeHovering(true)}
-            onMouseLeave={() => setCinemaModeHovering(false)}
+            onMouseEnter={() => setImmersiveModeHovering(true)}
+            onMouseLeave={() => setImmersiveModeHovering(false)}
         >
             <style>{loadingAnimationStyles}</style>
             <div style={srOnly} role="status" aria-live="polite">{announcement}</div>
@@ -10262,12 +11398,12 @@ export default function DashTanstackPivot(props) {
                 numberGroupSeparator={numberGroupSeparator} setNumberGroupSeparator={setNumberGroupSeparator}
                 viewMode={viewMode}
             >
-            {/* Cinema mode exit button — visible only when cinema mode is active */}
-            {cinemaMode && (
+            {/* Immersive mode exit button — visible only when immersive mode is active and not locked */}
+            {immersiveMode && !uiConfig.lockImmersiveMode && (
                 <button
-                    data-cinema-exit-overlay
-                    onClick={() => setCinemaMode(false)}
-                    title="Exit Cinema Mode"
+                    data-immersive-exit-overlay
+                    onClick={() => setImmersiveMode(false)}
+                    title="Exit Immersive Mode"
                     style={{
                         position: 'absolute', top: 12, right: 12, zIndex: 9999,
                         background: 'rgba(0,0,0,0.55)', color: '#fff',
@@ -10275,13 +11411,13 @@ export default function DashTanstackPivot(props) {
                         cursor: 'pointer', fontSize: 13, fontWeight: 600,
                         display: 'flex', alignItems: 'center', gap: 6,
                         backdropFilter: 'blur(4px)',
-                        opacity: cinemaModeHovering ? 0.92 : 0,
-                        pointerEvents: cinemaModeHovering ? 'auto' : 'none',
-                        transform: cinemaModeHovering ? 'translateY(0)' : 'translateY(-6px)',
+                        opacity: immersiveModeHovering ? 0.92 : 0,
+                        pointerEvents: immersiveModeHovering ? 'auto' : 'none',
+                        transform: immersiveModeHovering ? 'translateY(0)' : 'translateY(-6px)',
                         transition: 'opacity 0.18s ease, transform 0.18s ease',
                     }}
                 >
-                    ✕ Exit Cinema
+                    ✕ Exit Immersive
                 </button>
             )}
             <PivotValueDisplayProvider
@@ -10293,8 +11429,9 @@ export default function DashTanstackPivot(props) {
             >
             {/* PivotAppBar stays outside PivotErrorBoundary so toolbar controls
                 remain usable even if the table renderer hits an error state. */}
-            {!cinemaMode && <PivotAppBar
-                cinemaMode={cinemaMode} setCinemaMode={setCinemaMode}
+            <div style={{display:'flex', flexDirection:'column', flex:1, overflow:'hidden', zoom: zoomLevel / 100}}>
+            {!immersiveMode && uiConfig.showToolbar && <PivotAppBar
+                immersiveMode={immersiveMode} setImmersiveMode={setImmersiveMode}
                 sidebarOpen={sidebarOpen} setSidebarOpen={setSidebarOpen}
                 themeName={themeName} setThemeName={setThemeName}
                 themeOverrides={themeOverrides} setThemeOverrides={setThemeOverrides}
@@ -10334,10 +11471,11 @@ export default function DashTanstackPivot(props) {
                 canCreateSelectionChart={Object.keys(selectedCells || {}).length > 0}
                 onCreateSelectionChart={() => openSelectionChart()}
                 onAddChartPane={handleAddChartCanvasPane}
+                uiConfig={uiConfig}
             />}
         <PivotErrorBoundary>
-            <div style={{display:'flex', flex:1, overflow:'hidden', fontFamily: fontFamily, fontSize: fontSize, zoom: zoomLevel / 100}}>
-                {!cinemaMode && sidebarOpen && (
+            <div style={{display:'flex', flex:1, overflow:'hidden', fontFamily: fontFamily, fontSize: fontSize}}>
+                {!immersiveMode && uiConfig.showSidebar && sidebarOpen && (
                     <SidebarPanel
                         sidebarTab={sidebarTab} setSidebarTab={setSidebarTab}
                         rowFields={rowFields} setRowFields={setRowFieldsWithHistory}
@@ -10372,7 +11510,7 @@ export default function DashTanstackPivot(props) {
                     />
                 )}
                 <div ref={chartCanvasLayoutRef} style={{ display:'flex', flexDirection:'column', flex:1, minWidth:0, minHeight:0, overflowX:'hidden', overflowY: (dockedChartCanvasPanesByPosition.top.length > 0 || dockedChartCanvasPanesByPosition.bottom.length > 0) ? 'auto' : 'hidden', position:'relative' }}>
-                    {chartModal && chartModalPosition === 'top' ? (
+                    {uiConfig.showCharts && chartModal && chartModalPosition === 'top' ? (
                         <PivotChartModal
                             chartState={chartModal}
                             onClose={() => setChartModal(null)}
@@ -10383,7 +11521,7 @@ export default function DashTanstackPivot(props) {
                     ) : null}
                     {renderVerticalDockGroup(dockedChartCanvasPanesByPosition.top, 'top')}
                     <div style={{ display:'flex', flex:1, minWidth:0, minHeight:0, overflow:'hidden', position:'relative' }}>
-                        {chartModal && chartModalPosition === 'left' ? (
+                        {uiConfig.showCharts && chartModal && chartModalPosition === 'left' ? (
                             <PivotChartModal
                                 chartState={chartModal}
                                 onClose={() => setChartModal(null)}
@@ -10462,6 +11600,14 @@ export default function DashTanstackPivot(props) {
                                     onDetailSort={handleDetailSort}
                                     onDetailFilter={handleDetailFilter}
                                 />
+                                {paginationConfig.enabled && !serverSide && (
+                                    <PaginationBar
+                                        table={table}
+                                        theme={theme}
+                                        pageSize={paginationState.pageSize}
+                                        onPageSizeChange={(size) => setPaginationState({ pageIndex: 0, pageSize: size })}
+                                    />
+                                )}
                                 {activeDetailDisplayMode === 'drawer' && detailSurface && (
                                     <DetailDrawer
                                         detailState={detailSurface}
@@ -10486,36 +11632,14 @@ export default function DashTanstackPivot(props) {
                                 width={detailConfig.sidepanelWidth}
                             />
                         )}
-                        {(editPanelOpen && editPanelCells.length > 0) || pendingPropagationUpdates ? (
+                        {editPanelEnabled && ((editPanelOpen && editPanelCells.length > 0) || pendingPropagationUpdates) ? (
                             <EditSidePanel
                                 editedCells={editPanelCells}
                                 propagationLog={propagationLogRef.current}
+                                onReapplyPropagation={handleReapplyPropagation}
                                 onRevertCell={handleRevertCell}
-                                onRevertAll={() => {
-                                    // Collect all original values before clearing
-                                    const revertUpdates = [];
-                                    comparisonCellOriginalValuesRef.current.forEach((entry) => {
-                                        if (!entry || entry.value === undefined) return;
-                                        revertUpdates.push({ rowId: entry.rowId, colId: entry.colId, value: entry.value });
-                                    });
-                                    clearAllOptimisticCellValues();
-                                    clearAllEditedCellMarkers();
-                                    clearAllComparisonValueState();
-                                    propagationLogRef.current = [];
-                                    setPropagationLogEpoch((p) => p + 1);
-                                    syncTransactionHistoryState();
-                                    // Send original values back to server
-                                    if (revertUpdates.length > 0) {
-                                        if (serverSide) {
-                                            dispatchTransactionRequest({
-                                                update: revertUpdates,
-                                                refreshMode: supportsPatchTransactionRefresh ? 'patch' : 'smart',
-                                            }, 'revert-all');
-                                        } else if (setPropsRef.current) {
-                                            setPropsRef.current({ cellUpdates: revertUpdates });
-                                        }
-                                    }
-                                }}
+                                onRevertSelected={handleRevertSelected}
+                                onRevertAll={handleRevertAll}
                                 onToggleDisplayMode={() => setEditValueDisplayMode((p) => p === 'original' ? 'edited' : 'original')}
                                 displayMode={editValueDisplayMode}
                                 onClose={() => { setEditPanelOpen(false); handleCancelPropagation(); }}
@@ -10529,7 +11653,7 @@ export default function DashTanstackPivot(props) {
                             />
                         ) : null}
                         {renderHorizontalDockGroup(dockedChartCanvasPanesByPosition.right, 'right')}
-                        {chartModal && chartModalPosition === 'right' ? (
+                        {uiConfig.showCharts && chartModal && chartModalPosition === 'right' ? (
                             <PivotChartModal
                                 chartState={chartModal}
                                 onClose={() => setChartModal(null)}
@@ -10540,7 +11664,7 @@ export default function DashTanstackPivot(props) {
                         ) : null}
                     </div>
                     {renderVerticalDockGroup(dockedChartCanvasPanesByPosition.bottom, 'bottom')}
-                    {chartModal && chartModalPosition === 'bottom' ? (
+                    {uiConfig.showCharts && chartModal && chartModalPosition === 'bottom' ? (
                         <PivotChartModal
                             chartState={chartModal}
                             onClose={() => setChartModal(null)}
@@ -10549,7 +11673,7 @@ export default function DashTanstackPivot(props) {
                             onPositionChange={setChartModalPosition}
                         />
                     ) : null}
-                    {floatingChartCanvasPanes.map((pane) => (
+                    {uiConfig.showCharts && floatingChartCanvasPanes.map((pane) => (
                         <PivotChartPanel
                             key={pane.id}
                             open
@@ -10603,8 +11727,8 @@ export default function DashTanstackPivot(props) {
                             showDefinitionManager={false}
                             locked={pane.locked}
                             onToggleLock={() => handleToggleChartCanvasPaneLock(pane.id)}
-                            cinemaMode={Boolean(pane.cinemaMode)}
-                            onCinemaModeChange={(value) => updateChartCanvasPane(pane.id, { cinemaMode: Boolean(value) })}
+                            immersiveMode={Boolean(pane.immersiveMode)}
+                            onImmersiveModeChange={(value) => updateChartCanvasPane(pane.id, { immersiveMode: Boolean(value) })}
                         />
                     ))}
                 </div>
@@ -10612,6 +11736,7 @@ export default function DashTanstackPivot(props) {
             {contextMenu && <ContextMenu {...contextMenu} theme={theme} onClose={() => setContextMenu(null)} />}
             {notification && <Notification message={notification.message} type={notification.type} onClose={() => setNotification(null)} />}
         </PivotErrorBoundary>
+            </div>{/* end zoom wrapper */}
             </PivotValueDisplayProvider>
             </PivotConfigProvider>
             </PivotThemeProvider>
@@ -10660,7 +11785,7 @@ DashTanstackPivot.propTypes = {
         sorting: PropTypes.array,
         expanded: PropTypes.oneOfType([PropTypes.object, PropTypes.bool]),
     
-    cinemaMode: PropTypes.bool,
+    immersiveMode: PropTypes.bool,
     showRowTotals: PropTypes.bool,
     showColTotals: PropTypes.bool,
     grandTotalPosition: PropTypes.oneOf(['top', 'bottom']),
@@ -10707,6 +11832,12 @@ DashTanstackPivot.propTypes = {
      * save/restore/modify it.
      */
     editState: PropTypes.object,
+    uiConfig: PropTypes.object,
+    /**
+     * Client-side pagination configuration: { enabled: true, pageSize: 50 }.
+     * Only applies when serverSide is false.
+     */
+    paginationConfig: PropTypes.object,
     columnPinning: PropTypes.shape({
         left: PropTypes.arrayOf(PropTypes.string),
         right: PropTypes.arrayOf(PropTypes.string)

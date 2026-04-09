@@ -1609,6 +1609,35 @@ export const SidebarPanel = React.memo(function SidebarPanel({
     const sidebarRef = React.useRef(null);
     const sidebarScrollTopRef = React.useRef(0);
     const resizeDragRef = React.useRef(null);
+    const dragScrollRafRef = React.useRef(null);
+
+    const startDragScroll = React.useCallback((e) => {
+        const el = sidebarRef.current;
+        if (!el) return;
+        const ZONE = 60;
+        const SPEED = 12;
+        const rect = el.getBoundingClientRect();
+        const y = e.clientY;
+        const distTop = y - rect.top;
+        const distBottom = rect.bottom - y;
+        let dir = 0;
+        if (distTop < ZONE && distTop >= 0) dir = -1;
+        else if (distBottom < ZONE && distBottom >= 0) dir = 1;
+        if (dir === 0) {
+            if (dragScrollRafRef.current) { cancelAnimationFrame(dragScrollRafRef.current); dragScrollRafRef.current = null; }
+            return;
+        }
+        const scroll = () => {
+            if (!sidebarRef.current) return;
+            sidebarRef.current.scrollTop += dir * SPEED;
+            dragScrollRafRef.current = requestAnimationFrame(scroll);
+        };
+        if (!dragScrollRafRef.current) dragScrollRafRef.current = requestAnimationFrame(scroll);
+    }, []);
+
+    const stopDragScroll = React.useCallback(() => {
+        if (dragScrollRafRef.current) { cancelAnimationFrame(dragScrollRafRef.current); dragScrollRafRef.current = null; }
+    }, []);
     const formulaConfigs = React.useMemo(
         () => valConfigs.filter((config) => config && config.agg === 'formula'),
         [valConfigs]
@@ -1833,7 +1862,7 @@ export const SidebarPanel = React.memo(function SidebarPanel({
     const isReportMode = pivotMode === 'report';
     return (
         <div style={{position:'relative', display:'flex', flexShrink:0}}>
-                <div ref={sidebarRef} style={{...styles.sidebar, width:`${w}px`, minWidth:`${w}px`}} role="complementary" aria-label="Tool Panel">
+                <div ref={sidebarRef} style={{...styles.sidebar, width:`${w}px`, minWidth:`${w}px`}} role="complementary" aria-label="Tool Panel" onDragOver={startDragScroll} onDragLeave={stopDragScroll} onDrop={stopDragScroll}>
                     {isReportMode ? (
                         <div style={{display: 'flex', borderBottom: `1px solid ${theme.border}`, marginBottom: '16px'}}>
                             <div

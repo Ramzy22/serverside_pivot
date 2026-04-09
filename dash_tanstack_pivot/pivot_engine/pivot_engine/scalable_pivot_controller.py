@@ -2426,6 +2426,209 @@ class ScalablePivotController(PivotController):
             })
         return ordered_records
 
+    def _fetch_matching_rows_with_rowid_sync(
+        self,
+        table_name: str,
+        key_columns: Dict[str, Any],
+        table_columns: Optional[List[str]] = None,
+    ) -> List[Dict[str, Any]]:
+        selected_columns = [
+            str(column)
+            for column in (table_columns or self._get_table_columns(table_name) or [])
+            if isinstance(column, str) and column and column != "__rowid__"
+        ]
+        select_list = ", ".join(["rowid AS __rowid__", *selected_columns]) if selected_columns else "rowid AS __rowid__"
+        where_sql, where_params = self._build_where_clause(key_columns)
+        rows = self._execute_parameterized_fetchall(
+            f"SELECT {select_list} FROM {table_name} WHERE {where_sql}",
+            where_params,
+        )
+        records: List[Dict[str, Any]] = []
+        expected_columns = ["__rowid__", *selected_columns]
+        for row in rows:
+            if isinstance(row, dict):
+                records.append({
+                    key: row.get(key)
+                    for key in expected_columns
+                    if key in row
+                })
+                continue
+            if isinstance(row, (list, tuple)):
+                records.append({
+                    expected_columns[index]: row[index]
+                    for index in range(min(len(expected_columns), len(row)))
+                })
+        return records
+
+    @staticmethod
+    def _resolve_grouping_scope_paths_for_row(row: Dict[str, Any], grouping_fields: List[str]) -> List[str]:
+        if not isinstance(row, dict) or not grouping_fields:
+            return []
+        parts: List[str] = []
+        scope_paths: List[str] = []
+        for field in grouping_fields:
+            if field not in row or row.get(field) is None:
+                break
+            parts.append(str(row.get(field)))
+            scope_paths.append("|||".join(parts))
+        return scope_paths
+
+    @staticmethod
+    def _new_scope_value_accumulator() -> Dict[str, Any]:
+        return {
+            "before_sum": 0.0,
+            "after_sum": 0.0,
+            "before_count": 0,
+            "after_count": 0,
+            "before_weighted_sum": 0.0,
+            "after_weighted_sum": 0.0,
+            "before_weight_total": 0.0,
+            "after_weight_total": 0.0,
+            "before_min": None,
+            "after_min": None,
+            "before_max": None,
+            "after_max": None,
+        }
+
+    def _accumulate_scope_value(
+        self,
+        accumulator: Dict[str, Any],
+        row: Dict[str, Any],
+        *,
+        target_column: str,
+        aggregation_fn: str,
+        weight_field: Optional[str],
+        side: str,
+    ) -> None:
+        numeric_value = self._coerce_numeric_value(row.get(target_column) if isinstance(row, dict) else None)
+        if numeric_value is None:
+            return
+        if aggregation_fn == "sum":
+            accumulator[f"{side}_sum"] += numeric_value
+            return
+        if aggregation_fn == "avg":
+            accumulator[f"{side}_sum"] += numeric_value
+            accumulator[f"{side}_count"] += 1
+            return
+        if aggregation_fn in {"weighted_avg", "wavg", "weighted_mean"}:
+            weight_value = self._coerce_numeric_value(row.get(weight_field) if isinstance(row, dict) else None)
+            if weight_value is None:
+                return
+            accumulator[f"{side}_weighted_sum"] += numeric_value * weight_value
+            accumulator[f"{side}_weight_total"] += weight_value
+            return
+        if aggregation_fn == "min":
+            current_value = accumulator[f"{side}_min"]
+            accumulator[f"{side}_min"] = numeric_value if current_value is None else min(current_value, numeric_value)
+            return
+        if aggregation_fn == "max":
+            current_value = accumulator[f"{side}_max"]
+            accumulator[f"{side}_max"] = numeric_value if current_value is None else max(current_value, numeric_value)
+
+    @staticmethod
+    def _finalize_scope_value_accumulator(accumulator: Dict[str, Any], aggregation_fn: str, side: str) -> Optional[float]:
+        if aggregation_fn == "sum":
+            return float(accumulator[f"{side}_sum"])
+        if aggregation_fn == "avg":
+            count = int(accumulator[f"{side}_count"] or 0)
+            return (float(accumulator[f"{side}_sum"]) / count) if count > 0 else None
+        if aggregation_fn in {"weighted_avg", "wavg", "weighted_mean"}:
+            weight_total = float(accumulator[f"{side}_weight_total"] or 0.0)
+            if math.isclose(weight_total, 0.0, abs_tol=1e-12):
+                return None
+            return float(accumulator[f"{side}_weighted_sum"]) / weight_total
+        if aggregation_fn == "min":
+            return accumulator[f"{side}_min"]
+        if aggregation_fn == "max":
+            return accumulator[f"{side}_max"]
+        return None
+
+    def _build_scope_value_changes_from_row_pairs(
+        self,
+        row_pairs: List[Dict[str, Dict[str, Any]]],
+        *,
+        grouping_fields: List[str],
+        direct_scope_id: Optional[str],
+        measure_id: str,
+        target_column: str,
+        aggregation_fn: str,
+        weight_field: Optional[str] = None,
+    ) -> List[Dict[str, Any]]:
+        if not row_pairs or not measure_id or not target_column or not aggregation_fn:
+            return []
+        scope_accumulators: OrderedDict[str, Dict[str, Any]] = OrderedDict()
+        normalized_direct_scope = str(direct_scope_id or "").strip()
+        for row_pair in row_pairs:
+            before_row = row_pair.get("before_row") if isinstance(row_pair, dict) else None
+            after_row = row_pair.get("after_row") if isinstance(row_pair, dict) else None
+            row_source = before_row if isinstance(before_row, dict) else after_row if isinstance(after_row, dict) else None
+            if not isinstance(row_source, dict):
+                continue
+            scope_paths = self._resolve_grouping_scope_paths_for_row(row_source, grouping_fields)
+            scoped_targets = ["__grand_total__", *scope_paths] if scope_paths else ([normalized_direct_scope] if normalized_direct_scope else [])
+            for scope_id in list(dict.fromkeys([scope for scope in scoped_targets if scope])):
+                accumulator = scope_accumulators.setdefault(scope_id, self._new_scope_value_accumulator())
+                if isinstance(before_row, dict):
+                    self._accumulate_scope_value(
+                        accumulator,
+                        before_row,
+                        target_column=target_column,
+                        aggregation_fn=aggregation_fn,
+                        weight_field=weight_field,
+                        side="before",
+                    )
+                if isinstance(after_row, dict):
+                    self._accumulate_scope_value(
+                        accumulator,
+                        after_row,
+                        target_column=target_column,
+                        aggregation_fn=aggregation_fn,
+                        weight_field=weight_field,
+                        side="after",
+                    )
+
+        scope_value_changes: List[Dict[str, Any]] = []
+        for scope_id, accumulator in scope_accumulators.items():
+            before_value = self._finalize_scope_value_accumulator(accumulator, aggregation_fn, "before")
+            after_value = self._finalize_scope_value_accumulator(accumulator, aggregation_fn, "after")
+            if before_value is None or after_value is None:
+                continue
+            if math.isclose(float(before_value), float(after_value), rel_tol=1e-9, abs_tol=1e-9):
+                continue
+            scope_value_changes.append({
+                "scopeId": scope_id,
+                "measureId": measure_id,
+                "beforeValue": before_value,
+                "afterValue": after_value,
+                "role": "direct" if scope_id == normalized_direct_scope else "propagated",
+                "aggregationFn": aggregation_fn,
+            })
+        return scope_value_changes
+
+    def _build_direct_scope_value_changes(
+        self,
+        before_rows: List[Dict[str, Any]],
+        *,
+        row_path: Optional[str],
+        measure_id: str,
+        target_column: str,
+        next_value: Any,
+    ) -> List[Dict[str, Any]]:
+        if not before_rows or not row_path or not measure_id or not target_column:
+            return []
+        inverse_values = self._build_inverse_update_values(before_rows, [target_column]) or {}
+        before_value = inverse_values.get(target_column)
+        if before_value is None or before_value == next_value:
+            return []
+        return [{
+            "scopeId": str(row_path),
+            "measureId": str(measure_id),
+            "beforeValue": before_value,
+            "afterValue": next_value,
+            "role": "direct",
+            "aggregationFn": "direct",
+        }]
+
     @staticmethod
     def _new_history_transaction() -> Dict[str, List[Dict[str, Any]]]:
         return {
@@ -2472,6 +2675,8 @@ class ScalablePivotController(PivotController):
     @staticmethod
     def _normalize_aggregate_propagation_strategy(value: Any) -> str:
         normalized = str(value or "").strip().lower().replace("-", "_").replace(" ", "_")
+        if normalized in {"none", "skip", "parent_only"}:
+            return "none"
         if normalized in {"", "equal", "even", "default", "delta", "uniform"}:
             return "equal"
         if normalized in {"proportional", "ratio", "scale", "scaled"}:
@@ -2541,6 +2746,35 @@ class ScalablePivotController(PivotController):
         if isinstance(result, list):
             return result[0] if result else None
         return result
+
+    def _execute_parameterized_fetchall(self, sql: str, params: List[Any]) -> List[Any]:
+        con = self.planner.con
+        if hasattr(con, "con"):
+            result = con.con.execute(sql, [*params])
+        elif hasattr(con, "execute"):
+            result = con.execute(sql, [*params])
+        else:
+            raise NotImplementedError("Backend does not support parameterized SQL queries")
+
+        if hasattr(result, "fetchall"):
+            rows = result.fetchall()
+        elif isinstance(result, list):
+            rows = result
+        else:
+            rows = []
+
+        description = getattr(result, "description", None) or []
+        columns = [column[0] for column in description] if description else []
+        if columns and rows and not isinstance(rows[0], dict):
+            return [
+                {
+                    columns[index]: row[index]
+                    for index in range(min(len(columns), len(row)))
+                }
+                for row in rows
+                if isinstance(row, (list, tuple))
+            ]
+        return rows
 
     def _fetch_aggregate_edit_summary_sync(
         self,
@@ -2661,6 +2895,69 @@ class ScalablePivotController(PivotController):
         )
         return matched_row_count if base_delta != 0 else remainder_count
 
+    def _execute_parameterized_fetchall(self, sql: str, params: List[Any]) -> list:
+        con = self.planner.con
+        if hasattr(con, "con"):
+            result = con.con.execute(sql, [*params])
+        elif hasattr(con, "execute"):
+            result = con.execute(sql, [*params])
+        else:
+            raise NotImplementedError("Backend does not support parameterized SQL queries")
+        if hasattr(result, "fetchall"):
+            return result.fetchall()
+        if isinstance(result, list):
+            return result
+        return []
+
+    def _apply_integer_proportional_sync(
+        self,
+        table_name: str,
+        target_column: str,
+        where_sql: str,
+        where_params: List[Any],
+        matched_row_count: int,
+        scale_factor: float,
+        target_sum: float,
+    ) -> int:
+        """Scale integer rows proportionally with remainder correction."""
+        if matched_row_count <= 0 or math.isclose(scale_factor, 1.0, rel_tol=1e-12):
+            return 0
+        numeric_where = " AND ".join(
+            predicate for predicate in [where_sql, f"{target_column} IS NOT NULL"] if predicate
+        ) or f"{target_column} IS NOT NULL"
+        rows = self._execute_parameterized_fetchall(
+            f"SELECT rowid, {target_column} AS val FROM {table_name} WHERE {numeric_where}",
+            where_params,
+        )
+        if not rows:
+            return 0
+        scaled = []
+        for row in rows:
+            rid = row["rowid"] if isinstance(row, dict) else row[0]
+            val = row["val"] if isinstance(row, dict) else row[1]
+            if val is None:
+                continue
+            new_val = round(float(val) * scale_factor)
+            scaled.append((rid, new_val))
+        if not scaled:
+            return 0
+        rounded_sum = sum(v for _, v in scaled)
+        remainder = int(round(target_sum)) - int(rounded_sum)
+        if remainder != 0:
+            step = 1 if remainder > 0 else -1
+            for i in range(abs(remainder)):
+                idx = i % len(scaled)
+                rid, val = scaled[idx]
+                scaled[idx] = (rid, val + step)
+        updated = 0
+        for rid, new_val in scaled:
+            self._execute_parameterized_mutation(
+                f"UPDATE {table_name} SET {target_column} = ? WHERE rowid = ?",
+                [int(new_val), rid],
+            )
+            updated += 1
+        return updated
+
     def _apply_set_based_aggregate_edit_sync(
         self,
         table_name: str,
@@ -2725,6 +3022,13 @@ class ScalablePivotController(PivotController):
             aggregate_edit.get("propagationStrategy") or aggregate_edit.get("propagationFormula")
         )
 
+        if propagation_strategy == "none":
+            return {
+                "warning": (
+                    "Aggregate propagation policy 'none' is no longer supported for persisted edits."
+                )
+            }
+
         if aggregation_fn == "sum":
             if propagation_strategy == "proportional":
                 if math.isclose(current_value, 0.0, rel_tol=1e-9, abs_tol=1e-9):
@@ -2733,19 +3037,18 @@ class ScalablePivotController(PivotController):
                             "Skipped aggregate edit because proportional propagation requires a non-zero current value."
                         )
                     }
-                if integer_storage:
-                    return {
-                        "warning": (
-                            "Skipped aggregate edit because proportional propagation is not supported exactly "
-                            "for integer source rows. Use equal instead."
-                        )
-                    }
                 scale_factor = next_value / current_value
-                self._execute_parameterized_mutation(
-                    f"UPDATE {table_name} SET {target_column} = {target_column} * ? WHERE {numeric_where}",
-                    [scale_factor, *where_params],
-                )
-                updated_row_count = matched_row_count
+                if integer_storage:
+                    updated_row_count = self._apply_integer_proportional_sync(
+                        table_name, target_column, where_sql, where_params,
+                        matched_row_count, scale_factor, next_value,
+                    )
+                else:
+                    self._execute_parameterized_mutation(
+                        f"UPDATE {table_name} SET {target_column} = {target_column} * ? WHERE {numeric_where}",
+                        [scale_factor, *where_params],
+                    )
+                    updated_row_count = matched_row_count
                 strategy = "proportional"
             else:
                 total_delta = next_value - current_value
@@ -2783,19 +3086,19 @@ class ScalablePivotController(PivotController):
                             "Skipped aggregate edit because proportional propagation requires a non-zero current value."
                         )
                     }
-                if integer_storage:
-                    return {
-                        "warning": (
-                            "Skipped aggregate edit because proportional propagation is not supported exactly "
-                            "for integer source rows. Use equal instead."
-                        )
-                    }
                 scale_factor = next_value / current_value
-                self._execute_parameterized_mutation(
-                    f"UPDATE {table_name} SET {target_column} = {target_column} * ? WHERE {numeric_where}",
-                    [scale_factor, *where_params],
-                )
-                updated_row_count = matched_row_count
+                if integer_storage:
+                    # For avg, target_sum = next_value * matched_row_count
+                    updated_row_count = self._apply_integer_proportional_sync(
+                        table_name, target_column, where_sql, where_params,
+                        matched_row_count, scale_factor, next_value * matched_row_count,
+                    )
+                else:
+                    self._execute_parameterized_mutation(
+                        f"UPDATE {table_name} SET {target_column} = {target_column} * ? WHERE {numeric_where}",
+                        [scale_factor, *where_params],
+                    )
+                    updated_row_count = matched_row_count
                 strategy = "proportional"
             else:
                 if integer_storage:
@@ -2833,19 +3136,18 @@ class ScalablePivotController(PivotController):
                             "Skipped aggregate edit because proportional propagation requires a non-zero current value."
                         )
                     }
-                if integer_storage:
-                    return {
-                        "warning": (
-                            "Skipped aggregate edit because proportional propagation is not supported exactly "
-                            "for integer source rows. Use equal instead."
-                        )
-                    }
                 scale_factor = next_value / current_value
-                self._execute_parameterized_mutation(
-                    f"UPDATE {table_name} SET {target_column} = {target_column} * ? WHERE {numeric_where}",
-                    [scale_factor, *where_params],
-                )
-                updated_row_count = matched_row_count
+                if integer_storage:
+                    updated_row_count = self._apply_integer_proportional_sync(
+                        table_name, target_column, where_sql, where_params,
+                        matched_row_count, scale_factor, next_value * matched_row_count,
+                    )
+                else:
+                    self._execute_parameterized_mutation(
+                        f"UPDATE {table_name} SET {target_column} = {target_column} * ? WHERE {numeric_where}",
+                        [scale_factor, *where_params],
+                    )
+                    updated_row_count = matched_row_count
                 strategy = "proportional"
             else:
                 delta_per_row = next_value - current_value
@@ -3117,6 +3419,7 @@ class ScalablePivotController(PivotController):
             history_captureable = True
             inverse_transaction = self._new_history_transaction()
             redo_transaction = self._new_history_transaction()
+            scope_value_changes: List[Dict[str, Any]] = []
             transaction_ctx = self.backend.transaction() if getattr(self, "backend", None) and hasattr(self.backend, "transaction") else nullcontext()
 
             with transaction_ctx:
@@ -3140,10 +3443,21 @@ class ScalablePivotController(PivotController):
                 for operation in update_operations:
                     key_columns = self._sanitize_column_mapping(operation.get("key_columns"), allowed_columns=table_columns)
                     aggregate_edit = operation.get("aggregate_edit") if isinstance(operation.get("aggregate_edit"), dict) else None
+                    edit_meta = operation.get("edit_meta") if isinstance(operation.get("edit_meta"), dict) else {}
+                    grouping_fields = [
+                        str(field)
+                        for field in (edit_meta.get("groupingFields") or [])
+                        if isinstance(field, str) and field
+                    ]
                     if aggregate_edit:
                         if not key_columns:
                             warnings.append("Skipped aggregate edit without valid row or pivot keys.")
                             continue
+                        before_rows_with_rowid = self._fetch_matching_rows_with_rowid_sync(
+                            table_name,
+                            key_columns,
+                            table_columns=table_columns,
+                        )
                         set_based_result = self._apply_set_based_aggregate_edit_sync(
                             table_name,
                             key_columns,
@@ -3159,6 +3473,38 @@ class ScalablePivotController(PivotController):
                             if propagation_summary:
                                 propagation_events.append(propagation_summary)
                             if applied_count > 0:
+                                after_rows_with_rowid = self._fetch_matching_rows_with_rowid_sync(
+                                    table_name,
+                                    key_columns,
+                                    table_columns=table_columns,
+                                )
+                                before_by_rowid = {
+                                    row.get("__rowid__"): row
+                                    for row in before_rows_with_rowid
+                                    if isinstance(row, dict) and row.get("__rowid__") is not None
+                                }
+                                target_column = str(aggregate_edit.get("column") or "").strip()
+                                row_pairs = [
+                                    {
+                                        "before_row": before_by_rowid.get(after_row.get("__rowid__")),
+                                        "after_row": after_row,
+                                    }
+                                    for after_row in after_rows_with_rowid
+                                    if isinstance(after_row, dict)
+                                    and after_row.get("__rowid__") in before_by_rowid
+                                    and before_by_rowid.get(after_row.get("__rowid__"), {}).get(target_column) != after_row.get(target_column)
+                                ]
+                                scope_value_changes.extend(
+                                    self._build_scope_value_changes_from_row_pairs(
+                                        row_pairs,
+                                        grouping_fields=grouping_fields,
+                                        direct_scope_id=aggregate_edit.get("rowPath") or aggregate_edit.get("rowId"),
+                                        measure_id=str(aggregate_edit.get("columnId") or "").strip(),
+                                        target_column=target_column,
+                                        aggregation_fn=self._normalize_aggregation_name(aggregate_edit.get("aggregationFn")),
+                                        weight_field=aggregate_edit.get("weightField"),
+                                    )
+                                )
                                 applied["update"] += applied_count
                                 inverse_update = set_based_result.get("inverseUpdate")
                                 redo_update = set_based_result.get("redoUpdate")
@@ -3179,7 +3525,7 @@ class ScalablePivotController(PivotController):
                                         "the aggregate cell identity could not be reconstructed."
                                     )
                             continue
-                        before_rows = self._fetch_matching_rows_sync(table_name, key_columns, table_columns=table_columns)
+                        before_rows = before_rows_with_rowid
                         if not before_rows:
                             continue
                         try:
@@ -3192,6 +3538,17 @@ class ScalablePivotController(PivotController):
                                 f"Aggregate edit for '{aggregate_edit.get('column')}' produced no source-row changes."
                             )
                             continue
+                        scope_value_changes.extend(
+                            self._build_scope_value_changes_from_row_pairs(
+                                row_rewrites,
+                                grouping_fields=grouping_fields,
+                                direct_scope_id=aggregate_edit.get("rowPath") or aggregate_edit.get("rowId"),
+                                measure_id=str(aggregate_edit.get("columnId") or "").strip(),
+                                target_column=str(aggregate_edit.get("column") or "").strip(),
+                                aggregation_fn=self._normalize_aggregation_name(aggregate_edit.get("aggregationFn")),
+                                weight_field=aggregate_edit.get("weightField"),
+                            )
+                        )
 
                         grouped_rewrites: OrderedDict[str, Dict[str, Any]] = OrderedDict()
                         unique_before_rows: OrderedDict[str, Dict[str, Any]] = OrderedDict()
@@ -3273,6 +3630,17 @@ class ScalablePivotController(PivotController):
                     before_rows = self._fetch_matching_rows_sync(table_name, key_columns, table_columns=table_columns)
                     if not before_rows:
                         continue
+                    if edit_meta.get("rowPath") and edit_meta.get("colId") and len(updates) == 1:
+                        target_column = next(iter(updates.keys()))
+                        scope_value_changes.extend(
+                            self._build_direct_scope_value_changes(
+                                before_rows,
+                                row_path=str(edit_meta.get("rowPath") or edit_meta.get("rowId") or ""),
+                                measure_id=str(edit_meta.get("colId") or ""),
+                                target_column=target_column,
+                                next_value=updates.get(target_column),
+                            )
+                        )
                     set_parts = [f"{column} = ?" for column in updates.keys()]
                     where_sql, where_params = self._build_where_clause(key_columns)
                     self._execute_parameterized_mutation(
@@ -3394,6 +3762,7 @@ class ScalablePivotController(PivotController):
                 "inverseTransaction": undo_transaction if history_captureable else None,
                 "redoTransaction": replay_transaction if history_captureable else None,
                 "propagation": propagation_events,
+                "scopeValueChanges": scope_value_changes,
                 "history": {
                     "captureable": bool(history_captureable),
                     "warnings": history_warnings,

@@ -35,7 +35,7 @@ class PivotViewState:
     sorting: List[Dict[str, Any]] = field(default_factory=list)
     sort_options: Dict[str, Any] = field(default_factory=dict)
     expanded: Any = field(default_factory=dict)
-    cinema_mode: bool = False
+    immersive_mode: bool = False
     show_row_totals: bool = False
     show_col_totals: bool = True
     cell_update: Optional[Dict[str, Any]] = None
@@ -165,4 +165,5 @@ class PivotServiceResponse:
     chart_data: Optional[Dict[str, Any]] = None
     transaction_result: Optional[Dict[str, Any]] = None
     patch_payload: Optional[Dict[str, Any]] = None
+    edit_overlay: Optional[Dict[str, Any]] = None
     profile: Optional[Dict[str, Any]] = None

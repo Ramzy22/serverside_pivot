@@ -103,7 +103,7 @@ export const useServerSideRowModel = ({
     keyMapper, // function to get a key from a row, if needed
     cacheKey,
     excludeGrandTotal = false,
-    cinemaMode = false,
+    immersiveMode = false,
     stateEpoch = 0,
     sessionId = 'anonymous',
     clientInstance = 'default',
@@ -629,7 +629,7 @@ export const useServerSideRowModel = ({
                     col_end: requestedColEnd !== null ? requestedColEnd : undefined,
                     needs_col_schema: needsColSchema || undefined,
                     include_grand_total: excludeGrandTotal || undefined,
-                    cinema_mode: cinemaMode || undefined,
+                    immersive_mode: immersiveMode || undefined,
                 },
             },
         });
@@ -675,7 +675,7 @@ export const useServerSideRowModel = ({
         onViewportRequest,
         prefetchColumns,
         setPinnedRange,
-        cinemaMode,
+        immersiveMode,
     ]);
 
     const flushQueuedViewport = useCallback((forceImmediate = false) => {

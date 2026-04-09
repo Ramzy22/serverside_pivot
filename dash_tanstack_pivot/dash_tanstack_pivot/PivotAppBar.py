@@ -32,8 +32,7 @@ Keyword arguments:
 
     def __init__(
         self,
-        pivotMode = None,
-        savedReports = None,
+        uiConfig = None,
         **kwargs
     ):
         self._prop_names = []

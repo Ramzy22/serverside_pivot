@@ -21,9 +21,11 @@ const EditableCell = ({
     numberGroupSeparator,
     validationRules,
     onCellEdit,
+    onEditBlocked,
     setProps,
     handleContextMenu,
     editingDisabled = false,
+    editingDisabledReason = null,
     rowEditMode = 'cell',
     editorConfig = null,
     rowEditSession = null,
@@ -103,6 +105,7 @@ const EditableCell = ({
     const [error, setError] = useState(rowSessionError || null);
     const inputRef = useRef(null);
     const lastExternalInputValueRef = useRef(toEditorInputValue(effectiveDisplayValue, resolvedEditorConfig));
+    const lastBlockedNoticeRef = useRef(0);
 
     const mergedValidationRules = Array.isArray(resolvedEditorConfig.validationRules) && resolvedEditorConfig.validationRules.length > 0
         ? resolvedEditorConfig.validationRules
@@ -228,8 +231,8 @@ const EditableCell = ({
         return true;
     };
 
-    const commitValue = ({ keepEditing = false } = {}) => {
-        const nextValue = coerceEditorValue(value, resolvedEditorConfig, currentCellValue);
+    const commitValue = ({ keepEditing = false, nextValue: nextDraftValue = value } = {}) => {
+        const nextValue = coerceEditorValue(nextDraftValue, resolvedEditorConfig, currentCellValue);
         const validation = validate(nextValue);
         if (!validation.valid) {
             setError(validation.error || 'Invalid value');
@@ -271,7 +274,22 @@ const EditableCell = ({
     };
 
     const beginEditing = () => {
-        if (effectiveEditingDisabled) return;
+        if (effectiveEditingDisabled) {
+            const nextBlockedNoticeAt = Date.now();
+            if (
+                editingDisabledReason
+                && typeof onEditBlocked === 'function'
+                && nextBlockedNoticeAt - lastBlockedNoticeRef.current > 400
+            ) {
+                lastBlockedNoticeRef.current = nextBlockedNoticeAt;
+                onEditBlocked({
+                    rowId: rowPath,
+                    colId: column.id,
+                    reason: editingDisabledReason,
+                });
+            }
+            return;
+        }
         if (!isRowEditing && supportsRowEditSession && typeof onRequestRowStart === 'function') {
             onRequestRowStart(row, {
                 trigger: 'cell',
@@ -389,10 +407,7 @@ const EditableCell = ({
                                 commitRowDraft(nextChecked);
                                 return;
                             }
-                            setTimeout(() => {
-                                setValue(nextChecked);
-                                commitValue();
-                            }, 0);
+                            commitValue({ nextValue: nextChecked });
                         }}
                         style={{ width: '16px', height: '16px' }}
                     />
@@ -413,7 +428,7 @@ const EditableCell = ({
                             return;
                         }
                         if (resolvedEditorConfig.saveOnChange !== false) {
-                            setTimeout(() => commitValue(), 0);
+                            commitValue({ nextValue });
                         }
                     }}
                     disabled={editorOptionsLoading}
@@ -473,18 +488,10 @@ const EditableCell = ({
 
     return (
         <div
-            onMouseDown={(e) => {
-                if (e.detail !== 2) return;
-                e.stopPropagation();
-                e.preventDefault();
-                beginEditing();
-            }}
-            onClick={(e) => {
-                if (e.detail !== 2) return;
+            onDoubleClick={(e) => {
                 e.stopPropagation();
                 beginEditing();
             }}
-            onDoubleClick={beginEditing}
             onContextMenu={(e) => handleContextMenu(e, effectiveDisplayValue, column.id, row)}
             data-display-rowid={rowPath}
             data-display-colid={column.id}
@@ -501,7 +508,7 @@ const EditableCell = ({
                 border: error ? '1px solid red' : '1px solid transparent',
                 ...CELL_CONTENT_RESET_STYLE,
             }}
-            title={error || undefined}
+            title={error || editingDisabledReason || undefined}
         >
             {getDisplayText()}
         </div>

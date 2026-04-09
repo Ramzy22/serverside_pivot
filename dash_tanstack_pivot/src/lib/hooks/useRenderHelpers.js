@@ -547,7 +547,7 @@ export function useRenderHelpers({
                         : flexRender(header.column.columnDef.header, header.getContext()))}
                 </span>
 
-                {!isGroupHeader && header.column.id !== 'hierarchy' && !header.isPlaceholder && (
+                {!isGroupHeader && header.column.id !== 'hierarchy' && header.column.id !== '__row_number__' && !header.isPlaceholder && (
                     <div
                         onClick={(e) => handleFilterClick(e, header.column.id)}
                         style={{

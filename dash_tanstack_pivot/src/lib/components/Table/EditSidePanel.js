@@ -12,6 +12,8 @@ export function EditSidePanel({
     propagationLog,
     onRevertCell,
     onRevertAll,
+    onRevertSelected,
+    onReapplyPropagation,
     onToggleDisplayMode,
     displayMode,
     onClose,
@@ -25,6 +27,8 @@ export function EditSidePanel({
 }) {
     const hasPending = pendingPropagation && pendingPropagation.length > 0;
     const hasEdited = editedCells && editedCells.length > 0;
+    const hasDirectEdits = hasEdited && editedCells.some((c) => c.direct);
+    const canReapply = !hasPending && hasDirectEdits && typeof onReapplyPropagation === 'function';
     if (!hasEdited && !hasPending) return null;
 
     const panelWidth = Math.max(260, Math.min(Number(width) || 320, 480));
@@ -107,7 +111,13 @@ export function EditSidePanel({
                     </button>
                     <button
                         type="button"
-                        onClick={onRevertAll}
+                        onClick={() => {
+                            if (typeof onRevertSelected === 'function' && editedCells && editedCells.length > 0) {
+                                onRevertSelected(editedCells);
+                            } else if (typeof onRevertAll === 'function') {
+                                onRevertAll();
+                            }
+                        }}
                         style={{
                             flex: 1,
                             border: '1px solid rgba(220, 38, 38, 0.3)',
@@ -120,7 +130,7 @@ export function EditSidePanel({
                             cursor: 'pointer',
                         }}
                     >
-                        Revert All
+                        Revert Selected ({editedCells ? editedCells.length : 0})
                     </button>
                 </div>
             )}
@@ -140,44 +150,30 @@ export function EditSidePanel({
                         Editing a group row will distribute the change to child rows.
                     </div>
                     <div style={{ display: 'flex', flexDirection: 'column', gap: '4px', marginBottom: '8px' }}>
-                        <label style={{
-                            display: 'flex', alignItems: 'center', gap: '6px',
-                            padding: '4px 8px', borderRadius: '4px', cursor: 'pointer',
-                            background: propagationMethod === 'equal' ? `${accent}14` : 'transparent',
-                            border: `1px solid ${propagationMethod === 'equal' ? accent + '40' : borderColor}`,
-                        }}>
-                            <input
-                                type="radio"
-                                name="propagation-method"
-                                value="equal"
-                                checked={propagationMethod === 'equal'}
-                                onChange={() => onPropagationMethodChange('equal')}
-                                style={{ margin: 0, accentColor: accent }}
-                            />
-                            <div>
-                                <div style={{ fontWeight: 600, fontSize: '10px', color: theme.text }}>Equal</div>
-                                <div style={{ fontSize: '9px', color: theme.textSec }}>Distribute change evenly across child rows</div>
-                            </div>
-                        </label>
-                        <label style={{
-                            display: 'flex', alignItems: 'center', gap: '6px',
-                            padding: '4px 8px', borderRadius: '4px', cursor: 'pointer',
-                            background: propagationMethod === 'proportional' ? `${accent}14` : 'transparent',
-                            border: `1px solid ${propagationMethod === 'proportional' ? accent + '40' : borderColor}`,
-                        }}>
-                            <input
-                                type="radio"
-                                name="propagation-method"
-                                value="proportional"
-                                checked={propagationMethod === 'proportional'}
-                                onChange={() => onPropagationMethodChange('proportional')}
-                                style={{ margin: 0, accentColor: accent }}
-                            />
-                            <div>
-                                <div style={{ fontWeight: 600, fontSize: '10px', color: theme.text }}>Proportional</div>
-                                <div style={{ fontSize: '9px', color: theme.textSec }}>Preserve current child ratios</div>
-                            </div>
-                        </label>
+                        {[
+                            { value: 'equal', label: 'Equal', desc: 'Distribute change evenly across child rows' },
+                            { value: 'proportional', label: 'Proportional', desc: 'Preserve current child ratios' },
+                        ].map((opt) => (
+                            <label key={opt.value} style={{
+                                display: 'flex', alignItems: 'center', gap: '6px',
+                                padding: '4px 8px', borderRadius: '4px', cursor: 'pointer',
+                                background: propagationMethod === opt.value ? `${accent}14` : 'transparent',
+                                border: `1px solid ${propagationMethod === opt.value ? accent + '40' : borderColor}`,
+                            }}>
+                                <input
+                                    type="radio"
+                                    name="propagation-method"
+                                    value={opt.value}
+                                    checked={propagationMethod === opt.value}
+                                    onChange={() => onPropagationMethodChange(opt.value)}
+                                    style={{ margin: 0, accentColor: accent }}
+                                />
+                                <div>
+                                    <div style={{ fontWeight: 600, fontSize: '10px', color: theme.text }}>{opt.label}</div>
+                                    <div style={{ fontSize: '9px', color: theme.textSec }}>{opt.desc}</div>
+                                </div>
+                            </label>
+                        ))}
                     </div>
                     <div style={{ display: 'flex', gap: '6px' }}>
                         <button
@@ -296,6 +292,43 @@ export function EditSidePanel({
                             </div>
                         </div>
                     ))}
+                </div>
+            )}
+
+            {/* Re-apply propagation for selected edited cells */}
+            {canReapply && (
+                <div style={{
+                    padding: '6px 10px',
+                    borderTop: `1px solid ${borderColor}`,
+                    borderBottom: `1px solid ${borderColor}`,
+                    background: `${accent}06`,
+                    flexShrink: 0,
+                }}>
+                    <div style={{ fontWeight: 700, fontSize: '10px', marginBottom: '4px', color: theme.text }}>
+                        Change Propagation
+                    </div>
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: '3px' }}>
+                        {[
+                            { value: 'equal', label: 'Equal' },
+                            { value: 'proportional', label: 'Proportional' },
+                        ].map((opt) => (
+                            <label key={opt.value} style={{
+                                display: 'flex', alignItems: 'center', gap: '5px',
+                                padding: '3px 6px', borderRadius: '3px', cursor: 'pointer', fontSize: '10px',
+                                background: propagationMethod === opt.value ? `${accent}14` : 'transparent',
+                                border: `1px solid ${propagationMethod === opt.value ? accent + '40' : borderColor}`,
+                            }}>
+                                <input type="radio" name="reapply-method" value={opt.value}
+                                    checked={propagationMethod === opt.value}
+                                    onChange={() => {
+                                        onPropagationMethodChange(opt.value);
+                                        onReapplyPropagation(editedCells.filter((c) => c.direct), opt.value);
+                                    }}
+                                    style={{ margin: 0, accentColor: accent }} />
+                                <span style={{ fontWeight: 600 }}>{opt.label}</span>
+                            </label>
+                        ))}
+                    </div>
                 </div>
             )}
 

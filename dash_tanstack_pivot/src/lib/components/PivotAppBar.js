@@ -70,8 +70,8 @@ const THEME_LABELS = {
 
 const DECIMAL_MIN = 0;
 const DECIMAL_MAX = 6;
-const ZOOM_MIN = 60;
-const ZOOM_MAX = 160;
+const ZOOM_MIN = 40;
+const ZOOM_MAX = 200;
 const ZOOM_STEP = 10;
 
 const getNumberFormatCategory = (formatValue) => {
@@ -866,7 +866,7 @@ function ThemeEditorPopover({ theme, themeName, themeOverrides, setThemeOverride
 }
 
 export const PivotAppBar = React.memo(function PivotAppBar({
-    cinemaMode, setCinemaMode,
+    immersiveMode, setImmersiveMode,
     sidebarOpen, setSidebarOpen,
     themeName, setThemeName,
     themeOverrides, setThemeOverrides,
@@ -906,6 +906,7 @@ export const PivotAppBar = React.memo(function PivotAppBar({
     canCreateSelectionChart,
     onCreateSelectionChart,
     onAddChartPane,
+    uiConfig = {},
 }) {
     const { theme, styles } = usePivotTheme();
     const {
@@ -1006,8 +1007,8 @@ export const PivotAppBar = React.memo(function PivotAppBar({
     const [themeEditorOpen, setThemeEditorOpen] = useState(false);
     const themeEditorBtnRef = useRef(null);
     const [openToolbarSections, setOpenToolbarSections] = useState({
-        view: true,
-        format: false,
+        view: false,
+        format: true,
         charts: true,
         theme: false,
     });
@@ -1172,12 +1173,13 @@ export const PivotAppBar = React.memo(function PivotAppBar({
         minHeight: '40px',
     };
     const innerDividerStyle = {
-        width: '1px',
-        alignSelf: 'center',
-        minHeight: '24px',
-        background: theme.border,
-        opacity: 0.8,
+        width: '1.5px',
+        alignSelf: 'stretch',
+        minHeight: '22px',
+        margin: '7px 2px',
+        background: theme.isDark ? 'rgba(255,255,255,0.28)' : 'rgba(0,0,0,0.28)',
         flexShrink: 0,
+        borderRadius: '1px',
     };
     const secondLineStyle = {
         display: 'flex',
@@ -1227,7 +1229,7 @@ export const PivotAppBar = React.memo(function PivotAppBar({
         <>
             <button style={showRowNumbers ? btnActive : btnSubtle} onClick={() => setShowRowNumbers(!showRowNumbers)} title="Toggle row numbers">Row #</button>
             <button style={stickyHeaders ? btnActive : btnSubtle} onClick={() => setStickyHeaders(!stickyHeaders)}>Sticky Header</button>
-            <button style={showFloatingFilters ? btnActive : btnSubtle} onClick={() => setShowFloatingFilters(!showFloatingFilters)}>Filters</button>
+            {uiConfig.showFilters !== false && <button style={showFloatingFilters ? btnActive : btnSubtle} onClick={() => setShowFloatingFilters(!showFloatingFilters)}>Filters</button>}
             <button style={showRowTotals ? btnActive : btnSubtle} onClick={() => setShowRowTotals(!showRowTotals)}>Row Total</button>
             <button style={showColTotals ? btnActive : btnSubtle} onClick={() => setShowColTotals(!showColTotals)}>Col Total</button>
             <button
@@ -1247,9 +1249,9 @@ export const PivotAppBar = React.memo(function PivotAppBar({
             <button
                 style={btnSubtle}
                 onClick={onAutoSizeColumns}
-                title={autoSizeIncludesHeaderNext ? 'Auto size visible columns including headers' : 'Auto size visible columns from cell values only'}
+                title="Auto-size all visible columns to fit their content"
             >
-                {autoSizeIncludesHeaderNext ? 'Auto Size + Header' : 'Auto Size Data'}
+                Auto Size
             </button>
         </>
     );
@@ -1395,25 +1397,6 @@ export const PivotAppBar = React.memo(function PivotAppBar({
                 style={compactSelectStyle}>
                 {FONT_SIZE_OPTIONS.map(s => <option key={s} value={s}>{s}</option>)}
             </select>
-            <div style={{display:'flex', alignItems:'center', gap:'2px', background: theme.hover, border:`1px solid ${theme.border}`, borderRadius:'6px', padding:'2px 4px'}}>
-                <button
-                    title="Zoom out"
-                    style={{...btnGhost, padding:'2px 6px', fontSize:'12px', minWidth:'28px', opacity: zoomLevel <= ZOOM_MIN ? 0.35 : 1}}
-                    onClick={() => handleZoomChange(-ZOOM_STEP)}
-                    disabled={zoomLevel <= ZOOM_MIN}
-                >
-                    -
-                </button>
-                <span style={{fontSize:'11px', color: theme.textSec, minWidth:'42px', textAlign:'center', fontWeight: 600}}>{zoomLevel}%</span>
-                <button
-                    title="Zoom in"
-                    style={{...btnGhost, padding:'2px 6px', fontSize:'12px', minWidth:'28px', opacity: zoomLevel >= ZOOM_MAX ? 0.35 : 1}}
-                    onClick={() => handleZoomChange(ZOOM_STEP)}
-                    disabled={zoomLevel >= ZOOM_MAX}
-                >
-                    +
-                </button>
-            </div>
         </>
     );
 
@@ -1479,16 +1462,13 @@ export const PivotAppBar = React.memo(function PivotAppBar({
                     ))}
             </select>
             <button style={btnSaveView} onClick={onSaveView}><Icons.Save /> Save View</button>
-            <button style={btnPrimary} onClick={exportPivot}>
-                <Icons.Export/> {(rowCount || 0) > 500000 ? 'Export CSV' : 'Export'}
-            </button>
         </>
     );
 
     const activeSections = [
         openToolbarSections.view ? { id: 'view', label: 'View', controls: viewControls } : null,
         openToolbarSections.format ? { id: 'format', label: 'Format', controls: formatControls } : null,
-        openToolbarSections.charts ? { id: 'charts', label: 'Charts', controls: chartControls } : null,
+        openToolbarSections.charts && uiConfig.showCharts !== false ? { id: 'charts', label: 'Charts', controls: chartControls } : null,
         openToolbarSections.theme ? { id: 'theme', label: 'Theme', controls: themeControls } : null,
     ].filter(Boolean);
 
@@ -1508,13 +1488,13 @@ export const PivotAppBar = React.memo(function PivotAppBar({
             alignItems: 'stretch'
         }}>
             <div style={firstLineStyle}>
-                <button 
-                    onClick={() => setSidebarOpen(!sidebarOpen)} 
+                {uiConfig.showSidebar !== false && <button
+                    onClick={() => setSidebarOpen(!sidebarOpen)}
                     style={{...btnGhost, padding:'6px 10px', color: theme.text, display: 'flex', alignItems: 'center', gap: '8px'}}
                 >
                     <Icons.Menu />
                     <span style={{fontSize: '13px', fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.04em'}}>Menu</span>
-                </button>
+                </button>}
                 {SHOW_PIVOT_MODE_TOGGLE ? (
                     <div style={{
                         display: 'flex',
@@ -1619,23 +1599,25 @@ export const PivotAppBar = React.memo(function PivotAppBar({
                         />
                     </div>
                 </div>
+                {uiConfig.showEditing !== false && <>
                 <div style={innerDividerStyle} />
                 <button
-                    style={canUndoTransactions && !transactionHistoryPending ? btnSubtle : { ...btnSubtle, opacity: 0.45, cursor: 'not-allowed' }}
+                    style={{...(canUndoTransactions && !transactionHistoryPending ? btnSubtle : { ...btnSubtle, opacity: 0.45, cursor: 'not-allowed' }), display:'inline-flex', alignItems:'center', gap:'5px'}}
                     onClick={onUndoTransaction}
                     title="Undo the last edit or layout change (Ctrl/Cmd+Z)"
                     disabled={!canUndoTransactions || transactionHistoryPending}
                 >
-                    Undo
+                    <Icons.Undo /> Undo
                 </button>
                 <button
-                    style={canRedoTransactions && !transactionHistoryPending ? btnSubtle : { ...btnSubtle, opacity: 0.45, cursor: 'not-allowed' }}
+                    style={{...(canRedoTransactions && !transactionHistoryPending ? btnSubtle : { ...btnSubtle, opacity: 0.45, cursor: 'not-allowed' }), display:'inline-flex', alignItems:'center', gap:'5px'}}
                     onClick={onRedoTransaction}
                     title="Redo the last edit or layout change (Ctrl+Y or Cmd/Ctrl+Shift+Z)"
                     disabled={!canRedoTransactions || transactionHistoryPending}
                 >
-                    Redo
+                    <Icons.Redo /> Redo
                 </button>
+                <div style={innerDividerStyle} />
                 <div style={valueModeFrameStyle} title="Switch between current edited values and the original values captured before this session's active edits">
                     <button
                         type="button"
@@ -1656,17 +1638,49 @@ export const PivotAppBar = React.memo(function PivotAppBar({
                         Original
                     </button>
                 </div>
+                </>}
+                <div style={innerDividerStyle} />
                 <button data-toolbar-section-toggle="view" style={sectionToggleButtonStyle(openToolbarSections.view)} onClick={() => toggleToolbarSection('view')}>View</button>
                 <button data-toolbar-section-toggle="format" style={sectionToggleButtonStyle(openToolbarSections.format)} onClick={() => toggleToolbarSection('format')}>Format</button>
-                <button data-toolbar-section-toggle="charts" style={sectionToggleButtonStyle(openToolbarSections.charts)} onClick={() => toggleToolbarSection('charts')}>Charts</button>
+                {uiConfig.showCharts !== false && <button data-toolbar-section-toggle="charts" style={sectionToggleButtonStyle(openToolbarSections.charts)} onClick={() => toggleToolbarSection('charts')}>Charts</button>}
                 <button data-toolbar-section-toggle="theme" style={sectionToggleButtonStyle(openToolbarSections.theme)} onClick={() => toggleToolbarSection('theme')}>Theme</button>
-                <button
-                    style={cinemaMode ? btnActive : btnSubtle}
-                    onClick={() => setCinemaMode(!cinemaMode)}
-                    title="Cinema Mode — hide all controls and show only the table"
-                >
-                    Cinema
-                </button>
+                <div style={innerDividerStyle} />
+                <div style={{display:'flex', alignItems:'center', gap:'2px', background: theme.hover, border:`1px solid ${theme.border}`, borderRadius:'6px', padding:'2px 4px'}}>
+                    <button
+                        title="Zoom out"
+                        style={{...btnGhost, padding:'2px 6px', fontSize:'12px', minWidth:'28px', opacity: zoomLevel <= ZOOM_MIN ? 0.35 : 1}}
+                        onClick={() => handleZoomChange(-ZOOM_STEP)}
+                        disabled={zoomLevel <= ZOOM_MIN}
+                    >-</button>
+                    <span style={{fontSize:'11px', color: theme.textSec, minWidth:'42px', textAlign:'center', fontWeight: 600}}>{zoomLevel}%</span>
+                    <button
+                        title="Zoom in"
+                        style={{...btnGhost, padding:'2px 6px', fontSize:'12px', minWidth:'28px', opacity: zoomLevel >= ZOOM_MAX ? 0.35 : 1}}
+                        onClick={() => handleZoomChange(ZOOM_STEP)}
+                        disabled={zoomLevel >= ZOOM_MAX}
+                    >+</button>
+                </div>
+                <div style={innerDividerStyle} />
+                {!uiConfig.lockImmersiveMode ? <>
+                    <div style={{...innerDividerStyle, marginLeft:'auto'}} />
+                    <button
+                        style={{...(immersiveMode ? btnActive : btnSubtle), display:'inline-flex', alignItems:'center', gap:'5px'}}
+                        onClick={() => setImmersiveMode(!immersiveMode)}
+                        title="Immersive Mode — hide all controls and show only the table"
+                    >
+                        {immersiveMode ? <Icons.FullscreenExit /> : <Icons.Fullscreen />} Immersive
+                    </button>
+                    <div style={innerDividerStyle} />
+                    <button style={btnPrimary} onClick={exportPivot}>
+                        <Icons.Export/> {(rowCount || 0) > 500000 ? 'Export CSV' : 'Export'}
+                    </button>
+                </> : <>
+                    <div style={{marginLeft:'auto'}} />
+                    <div style={innerDividerStyle} />
+                    <button style={btnPrimary} onClick={exportPivot}>
+                        <Icons.Export/> {(rowCount || 0) > 500000 ? 'Export CSV' : 'Export'}
+                    </button>
+                </>}
             </div>
 
             {activeSections.length > 0 ? (

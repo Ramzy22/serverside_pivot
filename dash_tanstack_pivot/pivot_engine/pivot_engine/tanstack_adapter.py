@@ -16,6 +16,7 @@ import json
 import hashlib
 from collections import OrderedDict
 from .scalable_pivot_controller import ScalablePivotController
+from .editing import EditDomainService
 from .types.pivot_spec import PivotSpec, Measure
 from .security import User, apply_rls_to_spec
 from .formula_mixin import FormulaEngineMixin
@@ -209,6 +210,7 @@ class TanStackPivotAdapter(FormulaEngineMixin):
     
     def __init__(self, controller: ScalablePivotController, debug: bool = False):
         self.controller = controller
+        self.edit_domain = EditDomainService()
         self.hierarchy_state = {}  # Store expansion state
         self._debug = debug
         # Cache center_col_ids per (table, frozenset(grouping)) so windowed requests
@@ -1444,6 +1446,8 @@ class TanStackPivotAdapter(FormulaEngineMixin):
         pivot_sort = []
         for sort_spec in request.sorting:
             col_id = sort_spec['id']
+            if not col_id or col_id == '__row_number__':
+                continue
             if col_id == 'hierarchy' and request.grouping:
                 col_id = request.grouping[0]
 
@@ -2440,9 +2444,16 @@ class TanStackPivotAdapter(FormulaEngineMixin):
         if aggregation_fn:
             return {
                 "key_columns": key_columns,
+                "edit_meta": {
+                    "rowId": str(row_id),
+                    "rowPath": str(update_payload.get("rowPath") or row_id),
+                    "colId": str(col_id),
+                    "groupingFields": list(request.grouping or []),
+                },
                 "aggregate_edit": {
                     "column": target_col,
                     "rowId": str(row_id),
+                    "rowPath": str(update_payload.get("rowPath") or row_id),
                     "columnId": str(col_id),
                     "aggregationFn": aggregation_fn,
                     "weightField": column_spec.get("weightField"),
@@ -2461,6 +2472,12 @@ class TanStackPivotAdapter(FormulaEngineMixin):
 
         return {
             "key_columns": key_columns,
+            "edit_meta": {
+                "rowId": str(row_id),
+                "rowPath": str(update_payload.get("rowPath") or row_id),
+                "colId": str(col_id),
+                "groupingFields": list(request.grouping or []),
+            },
             "updates": {target_col: new_value},
         }
 
@@ -2560,6 +2577,83 @@ class TanStackPivotAdapter(FormulaEngineMixin):
                 }
             )
 
+        prepared_event_action = self.edit_domain.prepare_event_action(request, payload, normalized_transaction)
+
+        if prepared_event_action is not None:
+            normalized_transaction = prepared_event_action.normalized_transaction or normalized_transaction
+
+        requested_counts = {
+            kind: len(normalized_transaction.get(kind) or [])
+            for kind in ("add", "remove", "update", "upsert")
+            if len(normalized_transaction.get(kind) or []) > 0
+        }
+
+        if prepared_event_action is None:
+            validation = self.edit_domain.validate_transaction(request, payload, normalized_transaction)
+        else:
+            validation = self.edit_domain.validate_prepared_event_action(request, payload, prepared_event_action)
+            if not any(requested_counts.values()) and not list(validation.get("warnings") or []):
+                warnings.append("Requested event action could not be prepared from the current edit session.")
+        warnings.extend(list(validation.get("warnings") or []))
+        if validation.get("conflicts"):
+            response = {
+                "kind": "transaction",
+                "keyFields": key_fields,
+                "requested": requested_counts,
+                "applied": {},
+                "warnings": warnings,
+                "rowCountDelta": 0,
+                "refreshMode": refresh_mode,
+                "requiresStructuralRefresh": False,
+                "source": payload.get("source"),
+                "propagation": [],
+                "patchPayload": None,
+                "deferredViewportRefresh": False,
+                "inverseTransaction": None,
+                "redoTransaction": None,
+                "history": {
+                    "captureable": False,
+                    "warnings": [],
+                },
+                "conflicts": list(validation.get("conflicts") or []),
+            }
+            return self.edit_domain.enrich_transaction_result(
+                request,
+                payload,
+                normalized_transaction,
+                response,
+                prepared_event_action=prepared_event_action,
+            )
+
+        if warnings and not any(requested_counts.values()):
+            response = {
+                "kind": "transaction",
+                "keyFields": key_fields,
+                "requested": requested_counts,
+                "applied": {},
+                "warnings": warnings,
+                "rowCountDelta": 0,
+                "refreshMode": refresh_mode,
+                "requiresStructuralRefresh": False,
+                "source": payload.get("source"),
+                "propagation": [],
+                "patchPayload": None,
+                "deferredViewportRefresh": False,
+                "inverseTransaction": None,
+                "redoTransaction": None,
+                "history": {
+                    "captureable": False,
+                    "warnings": [],
+                },
+            }
+            return self.edit_domain.enrich_transaction_result(
+                request,
+                payload,
+                normalized_transaction,
+                response,
+                prepared_event_action=prepared_event_action,
+            )
+
         apply_result = {"requested": {}, "applied": {}, "warnings": [], "rowCountDelta": 0}
         if hasattr(self.controller, "apply_row_transaction"):
             apply_result = await self.controller.apply_row_transaction(request.table, normalized_transaction)
@@ -2613,7 +2707,7 @@ class TanStackPivotAdapter(FormulaEngineMixin):
 
         history_result = apply_result.get("history") if isinstance(apply_result.get("history"), dict) else {}
 
-        return {
+        response = {
             "kind": "transaction",
             "keyFields": key_fields,
             "requested": requested,
@@ -2624,6 +2718,7 @@ class TanStackPivotAdapter(FormulaEngineMixin):
             "requiresStructuralRefresh": requires_structural_refresh,
             "source": payload.get("source"),
             "propagation": list(apply_result.get("propagation") or []),
+            "scopeValueChanges": list(apply_result.get("scopeValueChanges") or []),
             "patchPayload": patch_payload,
             "deferredViewportRefresh": bool((patch_payload or {}).get("deferredViewportRefresh")),
             "inverseTransaction": enrich_history_transaction(apply_result.get("inverseTransaction")),
@@ -2633,6 +2728,20 @@ class TanStackPivotAdapter(FormulaEngineMixin):
                 "warnings": list(history_result.get("warnings") or []),
             },
         }
+        if prepared_event_action is not None and prepared_event_action.action in {"undo", "redo", "revert"}:
+            response["history"] = {
+                "captureable": False,
+                "warnings": list(history_result.get("warnings") or []),
+            }
+        if prepared_event_action is not None:
+            response = self.edit_domain.finalize_event_action(request, payload, prepared_event_action, response)
+        return self.edit_domain.enrich_transaction_result(
+            request,
+            payload,
+            normalized_transaction,
+            response,
+            prepared_event_action=prepared_event_action,
+        )
 
     async def handle_updates(self, request: TanStackRequest, update_payloads: List[Dict[str, Any]]) -> Dict[str, Any]:
         """Apply one or more cell updates and invalidate adapter caches."""
@@ -3577,6 +3686,9 @@ class TanStackPivotAdapter(FormulaEngineMixin):
         pass
 
     async def get_unique_values(self, table_name: str, column_id: str, filters: Dict[str, Any] = None) -> List[Any]:
+        # Skip virtual columns that don't exist in the underlying table
+        if not column_id or column_id in ('__row_number__', 'hierarchy'):
+            return []
         """Get unique values for a column, potentially filtered"""
         
         # Convert the filters from the request format to the spec format

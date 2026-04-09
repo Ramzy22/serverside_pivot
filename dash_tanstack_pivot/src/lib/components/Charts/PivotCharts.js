@@ -2990,7 +2990,7 @@ const ChartSurface = ({
     onServerScopeChange,
     showServerScope = false,
     floating = false,
-    cinemaMode = false,
+    immersiveMode = false,
     onCategoryActivate,
     allowHierarchyCharts = true,
     locked = false,
@@ -3023,8 +3023,8 @@ const ChartSurface = ({
     const [yAxisTitle, setYAxisTitle] = useState('');
     const chartHeightResizeRef = useRef(null);
     const settingsPaneResizeRef = useRef(null);
-    const cinemaContainerRef = useRef(null);
-    const [cinemaAutoHeight, setCinemaAutoHeight] = useState(null);
+    const immersiveContainerRef = useRef(null);
+    const [immersiveAutoHeight, setImmersiveAutoHeight] = useState(null);
     const [uncontrolledSettingsPanelWidth, setUncontrolledSettingsPanelWidth] = useState(348);
     const settingsPanelWidth = Number.isFinite(Number(controlledSettingsPanelWidth))
         ? Math.max(300, Math.min(520, Math.floor(Number(controlledSettingsPanelWidth))))
@@ -3032,9 +3032,9 @@ const ChartSurface = ({
     const setSettingsPanelWidth = typeof onSettingsPanelWidthChange === 'function'
         ? onSettingsPanelWidthChange
         : setUncontrolledSettingsPanelWidth;
-    const showChrome = !cinemaMode;
-    const chartHeight = cinemaMode && cinemaAutoHeight
-        ? Math.max(180, cinemaAutoHeight)
+    const showChrome = !immersiveMode;
+    const chartHeight = immersiveMode && immersiveAutoHeight
+        ? Math.max(180, immersiveAutoHeight)
         : Math.max(180, Number.isFinite(Number(chartHeightProp)) ? Number(chartHeightProp) : CHART_HEIGHT);
     const svgRef = useRef(null);
     const maxHierarchyLevel = (model && model.maxHierarchyLevel) || 1;
@@ -3112,21 +3112,21 @@ const ChartSurface = ({
     ]);
 
     useEffect(() => {
-        if (!cinemaMode || !configOpen) return;
+        if (!immersiveMode || !configOpen) return;
         setConfigOpen(false);
-    }, [cinemaMode, configOpen]);
+    }, [immersiveMode, configOpen]);
 
     useEffect(() => {
-        if (!cinemaMode) { setCinemaAutoHeight(null); return; }
-        const el = cinemaContainerRef.current;
+        if (!immersiveMode) { setImmersiveAutoHeight(null); return; }
+        const el = immersiveContainerRef.current;
         if (!el) return;
-        const update = () => { const h = el.clientHeight; if (h > 0) setCinemaAutoHeight(h); };
+        const update = () => { const h = el.clientHeight; if (h > 0) setImmersiveAutoHeight(h); };
         update();
         if (typeof ResizeObserver === 'undefined') return;
         const ro = new ResizeObserver(update);
         ro.observe(el);
         return () => ro.disconnect();
-    }, [cinemaMode]);
+    }, [immersiveMode]);
 
     useEffect(() => {
         const handlePointerMove = (event) => {
@@ -3183,7 +3183,7 @@ const ChartSurface = ({
 
     return (
         <div
-            ref={cinemaContainerRef}
+            ref={immersiveContainerRef}
             style={{
                 display: 'flex',
                 flexDirection: 'column',
@@ -3281,7 +3281,7 @@ const ChartSurface = ({
                     && chartType !== 'sankey'
                     ? <EmptyChartState message={model.emptyMessage || 'No chart data available.'} theme={theme} chartHeight={chartHeight} />
                     : <SvgChart model={model} chartType={chartType} barLayout={barLayout} axisMode={axisMode} theme={theme} chartHeight={chartHeight} showLegend={!isSparklineChart} showDataLabels={showDataLabels} onCategoryActivate={onCategoryActivate} svgRef={svgRef} colorPalette={colorPalette} valueFormat={valueFormat} yAxisTitle={yAxisTitle} chartTitle={resolvedTitle} onTitleChange={onTitleChange} />)}
-            {!cinemaMode && typeof onChartHeightChange === 'function' ? (
+            {!immersiveMode && typeof onChartHeightChange === 'function' ? (
                 <div
                     onMouseDown={(event) => {
                         event.preventDefault();
@@ -3675,8 +3675,8 @@ export const PivotChartPanel = ({
     onToggleLock,
     dockPosition = 'right',
     onDockPositionChange,
-    cinemaMode: controlledCinemaMode,
-    onCinemaModeChange,
+    immersiveMode: controlledImmersiveMode,
+    onImmersiveModeChange,
     onSettingsWidthBudgetChange,
     standalone = false,
     showResizeHandle = true,
@@ -3684,20 +3684,20 @@ export const PivotChartPanel = ({
     showDefinitionManager = true,
 }) => {
     const [fullscreenMode, setFullscreenMode] = useState(false);
-    const [uncontrolledCinemaMode, setUncontrolledCinemaMode] = useState(false);
+    const [uncontrolledImmersiveMode, setUncontrolledImmersiveMode] = useState(false);
     const [settingsPaneOpen, setSettingsPaneOpen] = useState(false);
     const [settingsPanelWidth, setSettingsPanelWidth] = useState(348);
     const panelAsideRef = useRef(null);
     const baseDockedPanelWidthRef = useRef(Math.max(width || 430, 430));
     if (!open) return null;
-    const cinemaMode = typeof controlledCinemaMode === 'boolean' ? controlledCinemaMode : uncontrolledCinemaMode;
-    const toggleCinemaMode = () => {
-        const nextValue = !cinemaMode;
-        if (typeof onCinemaModeChange === 'function') {
-            onCinemaModeChange(nextValue);
+    const immersiveMode = typeof controlledImmersiveMode === 'boolean' ? controlledImmersiveMode : uncontrolledImmersiveMode;
+    const toggleImmersiveMode = () => {
+        const nextValue = !immersiveMode;
+        if (typeof onImmersiveModeChange === 'function') {
+            onImmersiveModeChange(nextValue);
             return;
         }
-        setUncontrolledCinemaMode(nextValue);
+        setUncontrolledImmersiveMode(nextValue);
     };
     const floatingInteractionLocked = floating && locked;
 
@@ -3731,7 +3731,7 @@ export const PivotChartPanel = ({
         minWidth: '56px',
         padding: '6px 10px',
     });
-    const visibleSettingsWidth = (!cinemaMode && settingsPaneOpen) ? (settingsPanelWidth + 9) : 0;
+    const visibleSettingsWidth = (!immersiveMode && settingsPaneOpen) ? (settingsPanelWidth + 9) : 0;
     const basePanelWidth = Math.max(width || 430, 430);
     const floatingPanelWidth = (floatingRect && floatingRect.width) || basePanelWidth;
 
@@ -3785,7 +3785,7 @@ export const PivotChartPanel = ({
 
     useEffect(() => {
         if (typeof onSettingsWidthBudgetChange !== 'function') return undefined;
-        if (!standalone || floating || fullscreenMode || cinemaMode || !settingsPaneOpen) {
+        if (!standalone || floating || fullscreenMode || immersiveMode || !settingsPaneOpen) {
             onSettingsWidthBudgetChange(null);
             return undefined;
         }
@@ -3796,7 +3796,7 @@ export const PivotChartPanel = ({
         };
     }, [
         basePanelWidth,
-        cinemaMode,
+        immersiveMode,
         floating,
         fullscreenMode,
         onSettingsWidthBudgetChange,
@@ -3851,7 +3851,7 @@ export const PivotChartPanel = ({
                     : standalone ? 'none' : `-10px 0 24px ${theme.pinnedBoundaryShadow || 'rgba(15,23,42,0.12)'}`,
                 display: 'flex',
                 flexDirection: 'column',
-                gap: cinemaMode ? '8px' : '0',
+                gap: immersiveMode ? '8px' : '0',
                 position: 'relative',
             }}>
                 <div
@@ -3860,9 +3860,9 @@ export const PivotChartPanel = ({
                             onFloatingDragStart(event);
                         }
                     }}
-                    style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '12px', marginBottom: cinemaMode ? '0' : '12px', cursor: floating && !fullscreenMode && !floatingInteractionLocked ? 'move' : 'default' }}
+                    style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '12px', marginBottom: immersiveMode ? '0' : '12px', cursor: floating && !fullscreenMode && !floatingInteractionLocked ? 'move' : 'default' }}
                 >
-                    {cinemaMode ? <div /> : (
+                    {immersiveMode ? <div /> : (
                         <div style={{ display: 'flex', flexDirection: 'column', gap: '4px', minWidth: 0 }}>
                             <div style={{ fontSize: '15px', fontWeight: 800, color: theme.text }}>{title}</div>
                         </div>
@@ -3881,12 +3881,12 @@ export const PivotChartPanel = ({
                         ) : null}
                         <button
                             type="button"
-                            onClick={toggleCinemaMode}
-                            style={actionButtonStyle(cinemaMode)}
-                            title={cinemaMode ? 'Exit cinema mode' : 'Enter cinema mode'}
-                            aria-label={cinemaMode ? 'Exit cinema mode' : 'Enter cinema mode'}
+                            onClick={toggleImmersiveMode}
+                            style={actionButtonStyle(immersiveMode)}
+                            title={immersiveMode ? 'Exit immersive mode' : 'Enter immersive mode'}
+                            aria-label={immersiveMode ? 'Exit immersive mode' : 'Enter immersive mode'}
                         >
-                            Cinema
+                            Immersive
                         </button>
                         <button
                             type="button"
@@ -3907,7 +3907,7 @@ export const PivotChartPanel = ({
                         </button>
                     </div>
                 </div>
-                {!cinemaMode && showDefinitionManager ? (
+                {!immersiveMode && showDefinitionManager ? (
                     <div style={{ display: 'flex', gap: '8px', marginBottom: '10px', flexWrap: 'wrap', alignItems: 'center' }}>
                         {Array.isArray(chartDefinitions) && chartDefinitions.length > 0 ? (
                             <>
@@ -3965,7 +3965,7 @@ export const PivotChartPanel = ({
                         ) : null}
                     </div>
                 ) : null}
-                {!cinemaMode && standalone && !floating && typeof onDockPositionChange === 'function' ? (
+                {!immersiveMode && standalone && !floating && typeof onDockPositionChange === 'function' ? (
                     <div style={{ display: 'flex', gap: '6px', marginBottom: '10px', flexWrap: 'wrap', alignItems: 'center' }}>
                         <button type="button" onClick={() => onDockPositionChange('left')} style={dockButtonStyle('left')} title="Dock chart pane to the left">Left</button>
                         <button type="button" onClick={() => onDockPositionChange('right')} style={dockButtonStyle('right')} title="Dock chart pane to the right">Right</button>
@@ -3973,7 +3973,7 @@ export const PivotChartPanel = ({
                         <button type="button" onClick={() => onDockPositionChange('bottom')} style={dockButtonStyle('bottom')} title="Dock chart pane to the bottom">Bottom</button>
                     </div>
                 ) : null}
-                {!cinemaMode ? (
+                {!immersiveMode ? (
                     <div style={{ display: 'flex', gap: '6px', marginBottom: '12px', flexWrap: 'wrap' }}>
                         <button style={sourceButtonStyle('pivot')} onClick={() => onSourceChange('pivot')}>Pivot View</button>
                         <button style={sourceButtonStyle('selection')} onClick={() => onSourceChange('selection')}>Selection</button>
@@ -4010,7 +4010,7 @@ export const PivotChartPanel = ({
                     onServerScopeChange={onServerScopeChange}
                     showServerScope={showServerScope}
                     theme={theme}
-                    cinemaMode={cinemaMode}
+                    immersiveMode={immersiveMode}
                     onCategoryActivate={onCategoryActivate}
                     allowHierarchyCharts={allowHierarchyCharts}
                     floating={floating}

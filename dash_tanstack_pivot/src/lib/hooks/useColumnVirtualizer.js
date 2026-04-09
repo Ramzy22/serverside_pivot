@@ -11,11 +11,15 @@ const DEFAULT_VISIBLE_RANGE = { start: 0, end: 0 };
 // Stable-reference helper: returns the previous array when the ids haven't changed.
 const useStableColumnList = (columns) => {
     const prevRef = useRef(columns);
-    const prevIdsRef = useRef('');
-    const ids = columns.map(c => c.id).join(',');
-    if (ids !== prevIdsRef.current) {
+    const prevSignatureRef = useRef('');
+    const signature = columns.map((column) => {
+        const columnId = column && column.id ? column.id : '';
+        const size = column && typeof column.getSize === 'function' ? column.getSize() : '';
+        return `${columnId}:${size}`;
+    }).join(',');
+    if (signature !== prevSignatureRef.current) {
         prevRef.current = columns;
-        prevIdsRef.current = ids;
+        prevSignatureRef.current = signature;
     }
     return prevRef.current;
 };
@@ -34,20 +38,21 @@ export const useColumnVirtualizer = ({
     // When omitted the lists still recompute every render (safe fallback).
     columnVisibility,
     columnPinning,
+    columnSizing,
     columns,
 }) => {
     /* eslint-disable react-hooks/exhaustive-deps */
     const leftCols = useStableColumnList(
         useMemo(() => table.getLeftLeafColumns().filter(c => c.getIsVisible()),
-            [table, columns, columnVisibility, columnPinning])
+            [table, columns, columnVisibility, columnPinning, columnSizing])
     );
     const rightCols = useStableColumnList(
         useMemo(() => table.getRightLeafColumns().filter(c => c.getIsVisible()),
-            [table, columns, columnVisibility, columnPinning])
+            [table, columns, columnVisibility, columnPinning, columnSizing])
     );
     const centerCols = useStableColumnList(
         useMemo(() => table.getCenterLeafColumns().filter(c => c.getIsVisible()),
-            [table, columns, columnVisibility, columnPinning])
+            [table, columns, columnVisibility, columnPinning, columnSizing])
     );
     /* eslint-enable react-hooks/exhaustive-deps */
 

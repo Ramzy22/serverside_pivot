@@ -53,11 +53,13 @@ export function useColumnDefs({
     props,
     cachedColSchema,
     filteredData,
+    rowCount,
     // Render-time closures (not in dep array — stable refs or render-time reads)
     theme,
     defaultColumnWidths,
     validationRules,
     onCellEdit,
+    onEditBlocked,
     resolveEditorPresentation,
     rowEditMode,
     getRowEditSession,
@@ -239,6 +241,7 @@ export function useColumnDefs({
         const resolveEditableCellState = (info, config, defaultEditable = false) => {
             if (typeof resolveEditorPresentation !== 'function') return null;
             return resolveEditorPresentation(
+                getCellRowId(info),
                 info && info.column ? info.column.id : null,
                 config,
                 getResolvedCellValue(info),
@@ -261,7 +264,10 @@ export function useColumnDefs({
                     numberGroupSeparator={numberGroupSeparator}
                     validationRules={validationRules}
                     onCellEdit={onCellEdit}
+                    onEditBlocked={onEditBlocked}
                     handleContextMenu={handleContextMenu}
+                    editingDisabled={Boolean(editableState.editingDisabled)}
+                    editingDisabledReason={editableState.editingDisabledReason || null}
                     rowEditMode={rowEditMode}
                     editorConfig={editableState.editorConfig}
                     rowEditSession={typeof getRowEditSession === 'function' ? getRowEditSession(getCellRowId(info)) : null}
@@ -431,6 +437,8 @@ export function useColumnDefs({
                     id: '__row_number__',
                     header: '#',
                     size: defaultColumnWidths.rowNumber,
+                    enableSorting: false,
+                    enableColumnFilter: false,
                     enablePinning: false, // User Request: Cannot be changed
                 cell: ({ row }) => (
                     <div
@@ -461,7 +469,7 @@ export function useColumnDefs({
                         }}
                     >
                         {(row.original && (row.original._isTotal || row.original._path === '__grand_total__' || row.original._id === 'Grand Total'))
-                            ? (props.rowCount != null ? props.rowCount : '∑')
+                            ? (rowCount != null ? rowCount : '∑')
                             : (row.index + 1 + (serverSide ? (renderedOffset || 0) : 0))}
                     </div>
                 )
@@ -1190,13 +1198,14 @@ export function useColumnDefs({
         isRowSelecting,
         rowDragStart,
         props.columns,
-        props.rowCount,
+        rowCount,
         cachedColSchema,
         filteredData,
         theme,
         defaultColumnWidths,
         validationRules,
         onCellEdit,
+        onEditBlocked,
         resolveEditorPresentation,
         rowEditMode,
         getRowEditSession,

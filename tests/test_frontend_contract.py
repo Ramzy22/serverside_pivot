@@ -113,7 +113,7 @@ def test_chart_panel_source_grows_for_settings_instead_of_splitting_canvas():
 
     assert "settingsPanelWidth: controlledSettingsPanelWidth" in chart_source
     assert "onSettingsPanelWidthChange" in chart_source
-    assert "const visibleSettingsWidth = (!cinemaMode && settingsPaneOpen) ? (settingsPanelWidth + 9) : 0;" in chart_source
+    assert "const visibleSettingsWidth = (!immersiveMode && settingsPaneOpen) ? (settingsPanelWidth + 9) : 0;" in chart_source
     assert "onSettingsWidthBudgetChange" in chart_source
     assert "const [settingsWidthBudget, setSettingsWidthBudget] = useState(null);" in chart_source
     assert "onSettingsWidthBudgetChange={setSettingsWidthBudget}" in chart_source
@@ -1627,6 +1627,7 @@ def test_server_side_component_source_has_fast_horizontal_dispatch_and_trimmed_r
     assert "onHorizontalScrollMetrics" in hook_source
     assert "horizontalOverscan" in hook_source
     assert "totalCenterCols" in hook_source
+    assert "columnSizing," in hook_source
     assert "bigJumpThreshold" in viewport_hook_source
     assert "handleHorizontalScrollMetrics" in viewport_hook_source
     assert "resetVisibleColRange" in viewport_hook_source
@@ -1637,6 +1638,7 @@ def test_server_side_component_source_has_fast_horizontal_dispatch_and_trimmed_r
     assert "preserveRecentRightEdgeUrgentRange" in viewport_hook_source
     assert "syncPreciseVisibleColRange" in viewport_hook_source
     assert "centerHeaderRenderPlan" in body_source
+    assert "centerCols[pair.idx]" in body_source
     assert "columnAdvisory" in body_source
     assert "visibleCenterRange" in body_source
     assert "minIdx" in body_source
@@ -1732,6 +1734,8 @@ def test_server_side_performance_config_source_exposes_ssrm_style_tuning():
     assert "prefetchColumns" in row_model_source
     assert "performanceConfig" in viewport_source
     assert "columnOverscan" in col_virtualizer_source
+    assert "const signature = columns.map((column) => {" in col_virtualizer_source
+    assert "[table, columns, columnVisibility, columnPinning, columnSizing]" in col_virtualizer_source
 
 
 def test_frontend_profiler_source_tracks_request_ids_and_global_history():
@@ -1937,7 +1941,7 @@ def test_frontend_editable_cells_flow_through_column_metadata_and_transaction_hi
     ).read_text(encoding="utf-8")
     assert "dispatchBatchUpdateRequest([update], 'inline-edit')" in component_source
     assert "optimisticCellValuesRef" in component_source
-    assert "captureOptimisticCellValues(preparedUpdates, dispatched.requestId);" in component_source
+    assert "captureOptimisticCellValues(effectiveUpdates, dispatched.requestId);" in component_source
     assert "const setExpandedWithHistory = useCallback" in component_source
     assert "const setColExpandedWithHistory = useCallback" in component_source
     assert "setExpandedWithHistory(newExpanded, 'layout:expanded');" in component_source
@@ -1990,6 +1994,38 @@ def test_frontend_editable_cells_flow_through_column_metadata_and_transaction_hi
     assert "if (editorType === 'select')" in editable_cell_source
     assert "if (editorType === 'richSelect')" in editable_cell_source
     assert "<datalist id={datalistIdRef.current}>" in editable_cell_source
+    assert "const commitValue = ({ keepEditing = false, nextValue: nextDraftValue = value } = {}) => {" in editable_cell_source
+    assert "commitValue({ nextValue: nextChecked })" in editable_cell_source
+    assert "commitValue({ nextValue });" in editable_cell_source
+    assert "onDoubleClick={(e) => {" in editable_cell_source
+    assert "onMouseDown={(e) => {" not in editable_cell_source
+    assert "onClick={(e) => {" not in editable_cell_source
+    assert "const EDITING_TEMPORARILY_DISABLED = true;" in component_source
+    assert "showEditing: !EDITING_TEMPORARILY_DISABLED && src.showEditing !== false" in component_source
+    assert "showEditPanel: !EDITING_TEMPORARILY_DISABLED && src.showEditPanel !== false" in component_source
+    assert "if (!editingEnabled) return null;" in component_source
+    assert "const getRenderedCellWidthForColumn = useCallback((columnId) => {" in component_source
+    assert "const getAutoSizeSampleRows = useCallback((rows) => {" in component_source
+    assert "const renderedCellWidth = (columnId !== 'hierarchy' && columnId !== '__row_number__')" in component_source
+    assert "const measuredFromCells = (col.id !== 'hierarchy' && col.id !== '__row_number__')" in component_source
+    assert "Math.min(Math.max(measuredWithCells, autoSizeBounds.minWidth), autoSizeBounds.maxWidth)" in component_source
+    assert "Math.ceil(renderedHeaderWidth)" in component_source
+    assert "contentWidth + horizontalChrome + autoSizeBounds.cellOverscan" in component_source
+    assert "const measurementClone = headerContent.cloneNode(true);" in component_source
+    assert "measurementClone.style.width = 'max-content';" in component_source
+
+    app_bar_source = Path(
+        os.path.join(
+            os.getcwd(),
+            "dash_tanstack_pivot",
+            "src",
+            "lib",
+            "components",
+            "PivotAppBar.js",
+        )
+    ).read_text(encoding="utf-8")
+    assert "view: false," in app_bar_source
+    assert "format: true," in app_bar_source
 
     styles_source = Path(
         os.path.join(

@@ -171,7 +171,7 @@ export const PivotTableBody = React.memo(function PivotTableBody({
                     const leafColumn = leafCols[i];
                     const idx = centerColIndexMap.has(leafColumn.id) ? centerColIndexMap.get(leafColumn.id) : -1;
                     if (idx >= 0) {
-                        centerLeafPairs.push({ col: leafColumn, idx });
+                        centerLeafPairs.push({ idx });
                     }
                 }
                 if (centerLeafPairs.length > 0) {
@@ -278,7 +278,8 @@ export const PivotTableBody = React.memo(function PivotTableBody({
                 for (const pair of centerLeafEntry.pairs) {
                     if (pair.idx < visibleCenterRange.start) continue;
                     if (pair.idx > visibleCenterRange.end) break;
-                    visWidth += pair.col.getSize();
+                    const centerColumn = centerCols[pair.idx];
+                    visWidth += centerColumn ? centerColumn.getSize() : 0;
                 }
                 if (visWidth <= 0) continue;
                 visibleHeaders.push({ header, visWidth });
@@ -288,7 +289,7 @@ export const PivotTableBody = React.memo(function PivotTableBody({
                 visibleHeaders,
             };
         }),
-        [centerHeaderGroups, headerLeafPairsMap, visibleCenterRange]
+        [centerCols, centerHeaderGroups, headerLeafPairsMap, visibleCenterRange]
     );
 
     const getRenderedRowIndex = (row, fallbackIndex = 0) => {

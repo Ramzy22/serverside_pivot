@@ -177,6 +177,19 @@ class PivotRuntimeService:
         )
         request_built_at = time.perf_counter()
 
+        def build_edit_overlay(rows: Any) -> Optional[Dict[str, Any]]:
+            if not isinstance(rows, list) or not rows:
+                return None
+            edit_domain = getattr(adapter, "edit_domain", None)
+            if edit_domain is None or not hasattr(edit_domain, "build_visible_edit_overlay"):
+                return None
+            return edit_domain.build_visible_edit_overlay(
+                request,
+                session_id=context.session_id,
+                client_instance=context.client_instance,
+                rows=rows,
+            )
+
         if trigger_kind == "detail" and state.detail_request:
             execution_started_at = time.perf_counter()
             try:
@@ -258,10 +271,19 @@ class PivotRuntimeService:
         transaction_requires_structural_refresh = False
 
         if state.transaction_request:
+            transaction_request_payload = (
+                {
+                    **(state.transaction_request or {}),
+                    "session_id": first_present(state.transaction_request, "session_id", "sessionId", default=context.session_id) or context.session_id,
+                    "client_instance": first_present(state.transaction_request, "client_instance", "clientInstance", default=context.client_instance) or context.client_instance,
+                }
+                if isinstance(state.transaction_request, dict)
+                else {}
+            )
             execution_started_at = time.perf_counter()
             try:
                 if hasattr(adapter, "handle_transaction"):
-                    transaction_result = await adapter.handle_transaction(request, state.transaction_request)
+                    transaction_result = await adapter.handle_transaction(request, transaction_request_payload)
                 else:
                     transaction_result = {
                         "status": "unsupported",
@@ -284,8 +306,8 @@ class PivotRuntimeService:
             execution_finished_at = time.perf_counter()
             transaction_refresh_mode = str(
                 (transaction_result or {}).get("refreshMode")
-                or (state.transaction_request or {}).get("refreshMode")
-                or (state.transaction_request or {}).get("refresh_mode")
+                or transaction_request_payload.get("refreshMode")
+                or transaction_request_payload.get("refresh_mode")
                 or "viewport"
             ).strip().lower()
             transaction_requires_structural_refresh = bool(
@@ -307,12 +329,14 @@ class PivotRuntimeService:
                 and isinstance(transaction_result, dict)
                 and isinstance(transaction_result.get("patchPayload"), dict)
             ):
+                patch_payload = transaction_result.get("patchPayload") or {}
                 return PivotServiceResponse(
                     status="patched",
                     data_version=context.window_seq,
                     data_offset=context.start_row,
                     transaction_result=transaction_result,
-                    patch_payload=transaction_result.get("patchPayload"),
+                    patch_payload=patch_payload,
+                    edit_overlay=build_edit_overlay(list(patch_payload.get("rows") or [])),
                     profile=build_profile(
                         execution_started_at=execution_started_at,
                         execution_finished_at=execution_finished_at,
@@ -522,6 +546,7 @@ class PivotRuntimeService:
             data_version=response_version,
             color_scale_stats=response.color_scale_stats,
             transaction_result=transaction_result,
+            edit_overlay=build_edit_overlay(list(response_data or [])),
             profile=build_profile(
                 execution_started_at=execution_started_at,
                 execution_finished_at=execution_finished_at,
