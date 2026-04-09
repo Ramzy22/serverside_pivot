@@ -2489,6 +2489,13 @@ class TanStackPivotAdapter(FormulaEngineMixin):
             payload.get("refreshMode") if isinstance(payload, dict) else None
         )
         warnings: List[str] = []
+        zero_applied_counts = {
+            "add": 0,
+            "remove": 0,
+            "update": 0,
+            "upsertUpdated": 0,
+            "upsertInserted": 0,
+        }
 
         normalized_transaction = {
             "add": [],
@@ -2600,7 +2607,7 @@ class TanStackPivotAdapter(FormulaEngineMixin):
                 "kind": "transaction",
                 "keyFields": key_fields,
                 "requested": requested_counts,
-                "applied": {},
+                "applied": dict(zero_applied_counts),
                 "warnings": warnings,
                 "rowCountDelta": 0,
                 "refreshMode": refresh_mode,
@@ -2630,7 +2637,7 @@ class TanStackPivotAdapter(FormulaEngineMixin):
                 "kind": "transaction",
                 "keyFields": key_fields,
                 "requested": requested_counts,
-                "applied": {},
+                "applied": dict(zero_applied_counts),
                 "warnings": warnings,
                 "rowCountDelta": 0,
                 "refreshMode": refresh_mode,
@@ -2654,7 +2661,7 @@ class TanStackPivotAdapter(FormulaEngineMixin):
                 prepared_event_action=prepared_event_action,
             )
 
-        apply_result = {"requested": {}, "applied": {}, "warnings": [], "rowCountDelta": 0}
+        apply_result = {"requested": {}, "applied": dict(zero_applied_counts), "warnings": [], "rowCountDelta": 0}
         if hasattr(self.controller, "apply_row_transaction"):
             apply_result = await self.controller.apply_row_transaction(request.table, normalized_transaction)
         elif normalized_transaction["update"]:
@@ -2666,7 +2673,11 @@ class TanStackPivotAdapter(FormulaEngineMixin):
                 "rowCountDelta": 0,
             }
 
-        applied = apply_result.get("applied") if isinstance(apply_result.get("applied"), dict) else {}
+        raw_applied = apply_result.get("applied") if isinstance(apply_result.get("applied"), dict) else {}
+        applied = {
+            **zero_applied_counts,
+            **raw_applied,
+        }
         requested = apply_result.get("requested") if isinstance(apply_result.get("requested"), dict) else {}
         requires_structural_refresh = bool(
             (applied.get("add") or 0)
