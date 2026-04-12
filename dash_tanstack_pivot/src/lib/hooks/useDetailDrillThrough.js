@@ -308,25 +308,21 @@ export function useDetailDrillThrough({
             pendingDetailRequestRef.current = null;
             return;
         }
-        const cachedSurface = getCachedDetailSurface(rowPath);
+        // Pass only the identity/structural fields — fetchDetailData owns all cache
+        // resolution internally via getCachedDetailSurface, so pre-reading here would
+        // cause a double LRU touch and duplicate cache logic.
         fetchDetailData({
             rowPath,
             rowFields: Array.isArray(row.original._pathFields) && row.original._pathFields.length > 0
                 ? row.original._pathFields
                 : rowFields,
             rowKey: row.original._rowKey || rowPath,
-            page: cachedSurface && Number.isFinite(Number(cachedSurface.page)) ? Number(cachedSurface.page) : 0,
-            pageSize: cachedSurface && Number.isFinite(Number(cachedSurface.pageSize)) ? Number(cachedSurface.pageSize) : 100,
-            sortCol: cachedSurface ? (cachedSurface.sortCol || null) : null,
-            sortDir: cachedSurface ? (cachedSurface.sortDir || 'asc') : 'asc',
-            filterText: cachedSurface ? (cachedSurface.filterText || '') : '',
-            title: cachedSurface ? (cachedSurface.title || row.original._label || row.original._id || rowPath) : (row.original._label || row.original._id || rowPath),
-            detailKind: cachedSurface ? (cachedSurface.detailKind || row.original._detail_kind || detailConfig.defaultKind || 'records') : (row.original._detail_kind || detailConfig.defaultKind || 'records'),
+            title: row.original._label || row.original._id || rowPath,
+            detailKind: row.original._detail_kind || detailConfig.defaultKind || 'records',
             anchorRowId: row.id,
             anchorDepth: typeof row.original.depth === 'number' ? row.original.depth : 0,
-            source: cachedSurface ? (cachedSurface.source || 'detail') : 'detail',
         });
-    }, [detailConfig.defaultKind, detailMode, detailSurface, fetchDetailData, getCachedDetailSurface, rowFields]);
+    }, [detailConfig.defaultKind, detailMode, detailSurface, fetchDetailData, rowFields]);
 
     const handleDetailPageChange = useCallback((nextPage) => {
         if (!detailSurface) return;

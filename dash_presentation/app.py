@@ -2,21 +2,23 @@
 app.py - Enterprise Grade Server-Side Pivot Table
 Integrates DashTanstackPivot (serverside-pivot) with pivot-engine backend.
 """
+import json
 import os
 import sys
 import threading
+from pathlib import Path
 
-_REPO_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), os.pardir))
-if _REPO_ROOT not in sys.path:
-    sys.path.insert(0, _REPO_ROOT)
+_REPO_ROOT = Path(__file__).resolve().parent.parent
+if str(_REPO_ROOT) not in sys.path:
+    sys.path.insert(0, str(_REPO_ROOT))
 
 # Ensure the local pivot_engine package takes priority over any stale installs.
-_PE_DIR = os.path.join(os.path.dirname(__file__), os.pardir,
-                       "dash_tanstack_pivot", "pivot_engine")
-if os.path.isdir(_PE_DIR) and _PE_DIR not in sys.path:
-    sys.path.insert(0, os.path.abspath(_PE_DIR))
+_PE_DIR = _REPO_ROOT / "dash_tanstack_pivot" / "pivot_engine"
+if _PE_DIR.is_dir() and str(_PE_DIR) not in sys.path:
+    sys.path.insert(0, str(_PE_DIR))
 
 import pyarrow as pa
+import pyarrow.parquet as pq
 from dash import Dash, Input, Output, State, dcc, html, no_update
 
 from dash_tanstack_pivot import DashTanstackPivot
@@ -24,45 +26,151 @@ from pivot_engine import create_tanstack_adapter, register_pivot_app
 
 _DEBUG_OUTPUT = os.environ.get("PIVOT_DEBUG_OUTPUT", "1").lower() in {"1", "true", "yes"}
 _EAGER_LOAD_ON_START = os.environ.get("PIVOT_EAGER_LOAD", "1").lower() in {"1", "true", "yes"}
+_DATA_DIR = Path(__file__).resolve().parent / "data"
+_TRADER_HISTORY_PATH = _DATA_DIR / "nasdaq_trader_demo_history.parquet"
+_TRADER_SNAPSHOT_PATH = _DATA_DIR / "nasdaq_trader_demo_snapshot.parquet"
+_TRADER_METADATA_PATH = _DATA_DIR / "nasdaq_trader_demo_metadata.json"
+
+
+def _load_trader_dataset_metadata():
+    if not _TRADER_METADATA_PATH.exists():
+        return {}
+    try:
+        return json.loads(_TRADER_METADATA_PATH.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return {}
+
+
+_TRADER_AVAILABLE_FIELDS = [
+    "trade_date",
+    "desk",
+    "strategy",
+    "asset_class",
+    "instrument_type",
+    "sector",
+    "symbol",
+    "underlier",
+    "instrument",
+    "expiry",
+    "option_right",
+    "strike",
+    "multiplier",
+    "position_qty",
+    "price",
+    "prev_price",
+    "day_return",
+    "price_norm_20d",
+    "volume",
+    "adv20_shares",
+    "realized_vol_20d",
+    "market_value",
+    "gross_exposure",
+    "net_exposure",
+    "day_pnl",
+    "mtd_pnl",
+    "cum_pnl_20d",
+    "delta_usd",
+    "gamma_usd",
+    "vega_usd",
+    "theta_usd",
+    "beta_adj_exposure",
+    "adv_pct",
+    "scenario_pnl_1pct",
+]
+_TRADER_LOOKBACK_DAYS = 20
+_TRADER_LATEST_DATE = "latest"
+_TRADER_TIMELINE_META = f"Frozen Yahoo snapshot · {_TRADER_LOOKBACK_DAYS} sessions ending {_TRADER_LATEST_DATE}"
+_TRADER_CURRENT_META = f"Latest book snapshot · {_TRADER_LATEST_DATE}"
+
+_TRADER_PRIMARY_CHART_PANES = [
+    {
+        "id": "chart-pane-momentum",
+        "name": "Momentum Board",
+        "chartTitle": "Momentum Board",
+        "source": "pivot",
+        "chartType": "sparkline",
+        "barLayout": "grouped",
+        "axisMode": "vertical",
+        "orientation": "rows",
+        "hierarchyLevel": "all",
+        "rowLimit": 14,
+        "columnLimit": 10,
+        "width": 450,
+        "chartHeight": 260,
+        "sortMode": "natural",
+        "interactionMode": "focus",
+        "serverScope": "viewport",
+        "size": 1,
+        "floating": True,
+        "floatingRect": {"left": 36, "top": 34, "width": 470, "height": 430},
+    },
+    {
+        "id": "chart-pane-risk-tree",
+        "name": "Risk Tree",
+        "chartTitle": "Risk Tree",
+        "source": "pivot",
+        "chartType": "icicle",
+        "barLayout": "grouped",
+        "axisMode": "vertical",
+        "orientation": "rows",
+        "hierarchyLevel": "all",
+        "rowLimit": 18,
+        "columnLimit": 12,
+        "width": 470,
+        "chartHeight": 260,
+        "sortMode": "natural",
+        "interactionMode": "focus",
+        "serverScope": "viewport",
+        "size": 1,
+        "floating": True,
+        "floatingRect": {"left": 532, "top": 34, "width": 500, "height": 430},
+    },
+    {
+        "id": "chart-pane-pnl-drivers",
+        "name": "PnL Drivers",
+        "chartTitle": "PnL Drivers",
+        "source": "pivot",
+        "chartType": "waterfall",
+        "barLayout": "grouped",
+        "axisMode": "vertical",
+        "orientation": "rows",
+        "hierarchyLevel": "all",
+        "rowLimit": 12,
+        "columnLimit": 10,
+        "width": 520,
+        "chartHeight": 250,
+        "sortMode": "natural",
+        "interactionMode": "focus",
+        "serverScope": "viewport",
+        "size": 1,
+        "floating": True,
+        "floatingRect": {"left": 220, "top": 458, "width": 560, "height": 400},
+    },
+]
 
 
 # --- 2. Data Loading (Simulation) ---
 def load_initial_data(adapter):
     if _DEBUG_OUTPUT:
-        print("Generating simulation data (2M rows)...")
-    rows = 2000000
+        print(f"Loading frozen trader datasets from {_DATA_DIR}...")
+    if not _TRADER_HISTORY_PATH.exists() or not _TRADER_SNAPSHOT_PATH.exists():
+        raise FileNotFoundError(
+            "Missing trader presentation datasets. Run "
+            "`python scripts/generate_nasdaq_trader_demo_dataset.py` first."
+        )
 
-    # Create more diverse date range for column virtualization test
-    dates = [f"2023-{m:02d}-{d:02d}" for m in range(1, 13) for d in range(1, 29, 2)]
-
-    data_source = {
-        "region": (["North", "South", "East", "West"] * (rows // 4)),
-        "country": (["USA", "Canada", "Brazil", "UK", "China", "Japan", "Germany", "France"] * (rows // 8)),
-        "product": (["Laptop", "Phone", "Tablet", "Monitor", "Headphones"] * (rows // 5)),
-        "sales": [x % 1000 for x in range(rows)],
-        "cost": [x % 800 for x in range(rows)],
-        "date": (dates * (rows // len(dates)) + dates[:rows % len(dates)]),
-    }
-    table = pa.Table.from_pydict(data_source)
-
-    adapter.controller.load_data_from_arrow("sales_data", table)
+    trader_history_table = pq.read_table(_TRADER_HISTORY_PATH)
+    trader_snapshot_table = pq.read_table(_TRADER_SNAPSHOT_PATH)
+    adapter.controller.load_data_from_arrow("nasdaq_trader_demo_history", trader_history_table)
+    adapter.controller.load_data_from_arrow("nasdaq_trader_demo_snapshot", trader_snapshot_table)
+    # Keep the original example table name for the sparkline contract/demo surface.
+    adapter.controller.load_data_from_arrow("sparkline_demo_data", trader_history_table)
     if _DEBUG_OUTPUT:
-        print(f"Data loaded into Pivot Engine: {rows} rows.")
-
-    from pivot_engine.types.pivot_spec import PivotSpec, Measure
-    default_spec = PivotSpec(
-        table="sales_data",
-        rows=["region", "country"],
-        measures=[
-            Measure(field="sales", agg="sum", alias="sales_sum"),
-            Measure(field="cost", agg="sum", alias="cost_sum"),
-        ],
-    )
-    if _DEBUG_OUTPUT:
-        print("Pre-materializing default hierarchy...")
-    adapter.controller.materialized_hierarchy_manager.create_materialized_hierarchy(default_spec)
-    if _DEBUG_OUTPUT:
-        print("Hierarchy materialized.")
+        print(
+            "Trader datasets loaded: "
+            f"{trader_history_table.num_rows} history rows, "
+            f"{trader_snapshot_table.num_rows} snapshot rows."
+        )
 
     tenor_table = pa.Table.from_pydict(
         {
@@ -85,28 +193,8 @@ def load_initial_data(adapter):
     )
     adapter.controller.load_data_from_arrow("curve_data", curve_pillar_table)
 
-    sparkline_regions = ["North", "North", "South", "South", "West", "West", "Central", "Central"]
-    sparkline_segments = ["Enterprise", "SMB", "Enterprise", "SMB", "Enterprise", "SMB", "Enterprise", "SMB"]
-    sparkline_months = [f"2024-{month_index:02d}" for month_index in range(1, 7)]
-    sparkline_rows = {
-        "region": [],
-        "segment": [],
-        "month": [],
-        "sales": [],
-        "margin": [],
-        "tickets": [],
-        "returns": [],
-    }
-    for entity_index, (region, segment) in enumerate(zip(sparkline_regions, sparkline_segments)):
-        for month_index, month in enumerate(sparkline_months):
-            sparkline_rows["region"].append(region)
-            sparkline_rows["segment"].append(segment)
-            sparkline_rows["month"].append(month)
-            sparkline_rows["sales"].append(float(120 + (entity_index * 26) + (month_index * 18) + ((month_index % 2) * 9)))
-            sparkline_rows["margin"].append(round(0.18 + (entity_index * 0.012) + (month_index * 0.014) - ((month_index % 3) * 0.004), 4))
-            sparkline_rows["tickets"].append(float(32 + (entity_index * 4) + (month_index * 6)))
-            sparkline_rows["returns"].append(float(3 + (entity_index % 3) + (month_index % 4)))
-    adapter.controller.load_data_from_arrow("sparkline_demo_data", pa.Table.from_pydict(sparkline_rows))
+    # No extra table needed for the field-array sparkline demo —
+    # it uses nasdaq_trader_demo_history directly with agg="array_agg".
 
 
 _adapter = None
@@ -129,7 +217,7 @@ def get_adapter():
 # --- 3. Dash App ---
 app = Dash(
     __name__,
-    suppress_callback_exceptions=True,
+    suppress_callback_exceptions=False,  # Fix L5: catch future layout mistakes
     external_stylesheets=[
         "https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap"
     ],
@@ -143,35 +231,6 @@ _PAGE_STYLE = {
     "padding": 0,
 }
 
-_HEADER_STYLE = {
-    "height": "56px",
-    "background": "#ffffff",
-    "borderBottom": "1px solid #E5E7EB",
-    "display": "flex",
-    "alignItems": "center",
-    "justifyContent": "space-between",
-    "padding": "0 24px",
-    "position": "sticky",
-    "top": 0,
-    "zIndex": 10,
-}
-
-_LOGO_BADGE_STYLE = {
-    "width": "28px",
-    "height": "28px",
-    "background": "#4F46E5",
-    "borderRadius": "8px",
-    "display": "flex",
-    "alignItems": "center",
-    "justifyContent": "center",
-    "marginRight": "8px",
-    "fontSize": "14px",
-    "color": "#fff",
-    "fontWeight": "700",
-    "flexShrink": "0",
-    "boxShadow": "0 1px 3px rgba(79,70,229,0.3)",
-}
-
 _SECTION_HEADER_STYLE = {
     "fontSize": "11px",
     "fontWeight": "700",
@@ -179,21 +238,6 @@ _SECTION_HEADER_STYLE = {
     "textTransform": "uppercase",
     "color": "#94A3B8",
     "padding": "0 0 10px 0",
-}
-
-_RESTORE_BTN_STYLE = {
-    "display": "inline-flex",
-    "alignItems": "center",
-    "gap": "6px",
-    "fontSize": "13px",
-    "fontWeight": "500",
-    "color": "#374151",
-    "background": "#ffffff",
-    "border": "1px solid #E5E7EB",
-    "borderRadius": "10px",
-    "padding": "6px 12px",
-    "cursor": "pointer",
-    "boxShadow": "0 1px 2px rgba(15,23,42,0.05)",
 }
 
 _SECTION_CARD_STYLE = {"padding": "0"}
@@ -304,110 +348,71 @@ def build_lazy_panel_content(button_id, button_label, description):
 
 
 app.layout = html.Div(
-    style=_PAGE_STYLE,
+    style={
+        **_PAGE_STYLE,
+        "width": "100vw",
+        "height": "100vh",
+        "minHeight": "100vh",
+        "overflow": "hidden",
+        "background": "#F4F7FB",
+    },
     children=[
         dcc.Store(id="saved-view-store"),
-        html.Header(
-            style=_HEADER_STYLE,
-            children=[
-                html.Div(
-                    style={"display": "flex", "alignItems": "center"},
-                    children=[
-                        html.Div("P", style=_LOGO_BADGE_STYLE),
-                        html.Span(
-                            "Nexus Pivot",
-                            style={"fontWeight": "600", "fontSize": "15px",
-                                   "color": "#111827", "letterSpacing": "-0.01em"},
-                        ),
-                    ],
-                ),
-                html.Button(
-                    "Restore Saved View",
-                    id="restore-view-btn",
-                    style=_RESTORE_BTN_STYLE,
-                ),
-            ],
-        ),
         html.Main(
             style=_MAIN_CONTENT_STYLE,
             children=[
                 build_panel(
-                    "Primary Pivot",
-                    "Pivot Analysis",
-                    "Server-side sales dataset",
+                    "Trader Monitor",
+                    "NASDAQ Cross-Asset Trend Deck",
+                    _TRADER_TIMELINE_META,
                     DashTanstackPivot(
                         id="pivot-grid",
-                        style={"height": "800px", "width": "100%"},
-                        table="sales_data",
+                        style={"height": "860px", "width": "100%"},
+                        table="nasdaq_trader_demo_history",
                         serverSide=True,
-                        rowFields=["region", "country"],
-                        colFields=[],
-                        valConfigs=[{"field": "sales", "agg": "sum"}, {"field": "cost", "agg": "sum"}],
-                        filters={},
-                        sorting=[],
-                        expanded={},
-                        showRowTotals=True,
-                        showColTotals=True,
-                        availableFieldList=["region", "country", "product", "sales", "cost", "date"],
-                        data=[],
-                        validationRules={
-                            "sales_sum": [{"type": "numeric"}, {"type": "min", "value": 0}],
-                            "cost_sum": [{"type": "numeric"}, {"type": "min", "value": 0}],
-                        },
-                    ),
-                ),
-                build_panel(
-                    "Sparkline Demo",
-                    "In-Cell Sparkline Modes",
-                    "Line, area, column, and bar trends in one pivot",
-                    DashTanstackPivot(
-                        id="sparkline-modes-pivot-grid",
-                        style={"height": "560px", "width": "100%"},
-                        table="sparkline_demo_data",
-                        serverSide=True,
-                        rowFields=["region", "segment"],
-                        colFields=["month"],
+                        rowFields=["desk", "asset_class", "sector", "symbol"],
+                        colFields=["trade_date"],
                         valConfigs=[
                             {
-                                "field": "sales",
+                                "field": "price_norm_20d",
+                                "agg": "avg",
+                                "format": "fixed:1",
+                                "sparkline": {
+                                    "type": "line",
+                                    "header": "Market Move",
+                                    "showCurrentValue": True,
+                                    "showDelta": True,
+                                },
+                            },
+                            {
+                                "field": "day_pnl",
                                 "agg": "sum",
                                 "format": "fixed:0",
                                 "sparkline": {
-                                    "type": "line",
-                                    "header": "Sales Line",
-                                    "showCurrentValue": True,
-                                    "showDelta": True,
-                                },
-                            },
-                            {
-                                "field": "margin",
-                                "agg": "avg",
-                                "format": "percent",
-                                "sparkline": {
                                     "type": "area",
-                                    "header": "Margin Area",
+                                    "header": "PnL Path",
                                     "showCurrentValue": True,
                                     "showDelta": True,
                                 },
                             },
                             {
-                                "field": "tickets",
+                                "field": "delta_usd",
                                 "agg": "sum",
                                 "format": "fixed:0",
                                 "sparkline": {
                                     "type": "column",
-                                    "header": "Tickets Column",
+                                    "header": "Delta Risk",
                                     "showCurrentValue": True,
                                     "showDelta": True,
                                 },
                             },
                             {
-                                "field": "returns",
+                                "field": "vega_usd",
                                 "agg": "sum",
                                 "format": "fixed:0",
                                 "sparkline": {
                                     "type": "bar",
-                                    "header": "Returns Bar",
+                                    "header": "Vega Risk",
                                     "showCurrentValue": True,
                                     "showDelta": True,
                                 },
@@ -415,12 +420,43 @@ app.layout = html.Div(
                         ],
                         filters={},
                         sorting=[],
-                        expanded={"North": True, "South": True},
+                        expanded={"Index Overlay": True, "Semis Delta One": True, "Volatility": True},
                         showRowTotals=False,
                         showColTotals=False,
-                        availableFieldList=["region", "segment", "month", "sales", "margin", "tickets", "returns"],
+                        availableFieldList=_TRADER_AVAILABLE_FIELDS,
+                        chartCanvasPanes=_TRADER_PRIMARY_CHART_PANES,
+                        tableCanvasSize=1.2,
                         defaultTheme="flash",
                         data=[],
+                    ),
+                ),
+                build_panel(
+                    "Sparkline Summary Demo",
+                    "Trend Columns at a Glance",
+                    "A dedicated sparkline column per metric shows the full 20-day trend for each symbol.",
+                    html.Div(
+                        id="sparkline-demo-slot",
+                        children=build_lazy_panel_content(
+                            "load-sparkline-demo-btn",
+                            "Load Sparkline Demo",
+                            "Opens a summary pivot where each metric gets its own sparkline column — "
+                            "price trend (line), PnL trend (area), and volume trend (column) across 20 trading days.",
+                        ),
+                    ),
+                ),
+                build_panel(
+                    "Field-Array Sparkline Demo",
+                    "Symbol Price History — no column pivot",
+                    "Each row stores its full 20-day price series as an array. "
+                    "Trade dates never appear as columns.",
+                    html.Div(
+                        id="field-sparkline-demo-slot",
+                        children=build_lazy_panel_content(
+                            "load-field-sparkline-btn",
+                            "Load Field-Array Sparkline Demo",
+                            "Shows price_norm_history rendered as a sparkline column alongside "
+                            "last_price, day_pnl, and volume — all with colFields=[].",
+                        ),
                     ),
                 ),
                 build_panel(
@@ -475,9 +511,118 @@ def persist_saved_view(saved_view):
     prevent_initial_call=True,
 )
 def restore_saved_view(_clicks, saved_view):
+    """Restore saved view. Requires a 'restore-view-btn' button in the layout."""
     if not saved_view:
         return no_update
     return saved_view
+
+
+@app.callback(
+    Output("sparkline-demo-slot", "children"),
+    Input("load-sparkline-demo-btn", "n_clicks"),
+    prevent_initial_call=True,
+)
+def mount_sparkline_demo(_clicks):
+    """Load the sparkline demo — summary columns showing 20-day trend per metric."""
+    return DashTanstackPivot(
+        id="sparkline-modes-pivot-grid",
+        style={"height": "560px", "width": "100%"},
+        table="nasdaq_trader_demo_history",
+        serverSide=True,
+        rowFields=["desk", "sector", "symbol"],
+        colFields=["trade_date"],
+        valConfigs=[
+            {
+                "field": "price_norm_20d",
+                "agg": "avg",
+                "format": "fixed:1",
+                "sparkline": {
+                    "type": "line",
+                    "header": "20D Price Trend",
+                    "showCurrentValue": True,
+                    "showDelta": True,
+                    "hideColumns": True,
+                },
+            },
+            {
+                "field": "day_pnl",
+                "agg": "sum",
+                "format": "fixed:0",
+                "sparkline": {
+                    "type": "area",
+                    "header": "20D PnL Trend",
+                    "showCurrentValue": True,
+                    "showDelta": True,
+                    "hideColumns": True,
+                },
+            },
+            {
+                "field": "volume",
+                "agg": "sum",
+                "format": "fixed:0",
+                "sparkline": {
+                    "type": "column",
+                    "header": "20D Volume Trend",
+                    "showCurrentValue": True,
+                    "showDelta": True,
+                    "hideColumns": True,
+                },
+            },
+        ],
+        filters={},
+        sorting=[],
+        expanded={},
+        showRowTotals=False,
+        showColTotals=False,
+        availableFieldList=_TRADER_AVAILABLE_FIELDS,
+        defaultTheme="flash",
+        data=[],
+    )
+
+
+@app.callback(
+    Output("field-sparkline-demo-slot", "children"),
+    Input("load-field-sparkline-btn", "n_clicks"),
+    prevent_initial_call=True,
+)
+def mount_field_sparkline_demo(_clicks):
+    # Uses the existing history table directly.
+    # array_agg collects price_norm_20d into a list per symbol — the frontend
+    # reads it as a sparkline with source="field", no trade_date column needed.
+    return DashTanstackPivot(
+        id="field-sparkline-pivot",
+        style={"height": "520px", "width": "100%"},
+        table="nasdaq_trader_demo_history",
+        serverSide=True,
+        rowFields=["desk", "sector", "symbol"],
+        colFields=[],
+        valConfigs=[
+            {"field": "price", "agg": "last", "format": "fixed:2", "label": "Last Price"},
+            {"field": "day_pnl", "agg": "sum", "format": "fixed:0", "label": "Day PnL"},
+            {"field": "volume", "agg": "sum", "format": "fixed:0", "label": "Volume"},
+            {
+                "field": "price_norm_20d",
+                "agg": "array_agg",
+                "label": "20D Move",
+                "sparkline": {
+                    "source": "field",
+                    "type": "area",
+                    "header": "20D Move",
+                    "showCurrentValue": True,
+                    "showDelta": True,
+                },
+            },
+        ],
+        filters={},
+        sorting=[],
+        expanded={},
+        showRowTotals=False,
+        showColTotals=False,
+        availableFieldList=["desk", "sector", "asset_class", "symbol",
+                            "price", "day_pnl", "volume", "price_norm_20d"],
+        defaultTheme="flash",
+        data=[],
+    )
 
 
 @app.callback(
@@ -547,10 +692,32 @@ def mount_tenor_demo(_clicks):
 
 
 # --- 4. Pivot wiring (one line) ---
+# All pivots share a single adapter singleton.  register_pivot_app wires
+# each pivot_id to the same transport callback; the runtime callback uses
+# a shared PivotRuntimeService so session state is consistent across grids.
+_service = None
+_service_lock = threading.Lock()
+
+
+def _get_service():
+    global _service
+    if _service is not None:
+        return _service
+    with _service_lock:
+        if _service is None:
+            from pivot_engine.runtime import PivotRuntimeService, SessionRequestGate
+            _service = PivotRuntimeService(
+                adapter_getter=get_adapter,
+                session_gate=SessionRequestGate(),
+            )
+    return _service
+
+
 register_pivot_app(app, adapter_getter=get_adapter, pivot_id="pivot-grid")
 register_pivot_app(app, adapter_getter=get_adapter, pivot_id="sparkline-modes-pivot-grid")
 register_pivot_app(app, adapter_getter=get_adapter, pivot_id="curve-pivot-grid")
 register_pivot_app(app, adapter_getter=get_adapter, pivot_id="tenor-pivot-grid")
+register_pivot_app(app, adapter_getter=get_adapter, pivot_id="field-sparkline-pivot")
 
 if __name__ == "__main__":
     if _EAGER_LOAD_ON_START:

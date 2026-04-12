@@ -24,6 +24,18 @@ def _scope_id_from_key_columns(request: Any, key_columns: Dict[str, Any]) -> str
     return normalize_scope_id("|||".join(parts))
 
 
+def _scope_is_covered_by_subtree(root_scope_id: str, candidate_scope_id: str) -> bool:
+    root = normalize_scope_id(root_scope_id)
+    candidate = normalize_scope_id(candidate_scope_id)
+    if not root or not candidate:
+        return False
+    if root == candidate:
+        return True
+    if root == GRAND_TOTAL_SCOPE_ID:
+        return True
+    return candidate.startswith(f"{root}|||")
+
+
 def resolve_scope_targets(request: Any, normalized_transaction: Dict[str, Any]) -> List[ResolvedScopeTarget]:
     targets: List[ResolvedScopeTarget] = []
     grouping_depth = _grouping_depth(request)
@@ -74,28 +86,30 @@ def build_affected_cells_payload(
     normalized_transaction: Dict[str, Any],
 ) -> Dict[str, List[str]]:
     visible_paths = [
-        normalize_scope_id(path)
+        normalized
         for path in (transaction_payload.get("visibleRowPaths") or [])
-        if normalize_scope_id(path)
+        if (normalized := normalize_scope_id(path))
     ]
     direct: List[str] = []
+    direct_seen: set[str] = set()
     propagated: List[str] = []
+    propagated_seen: set[str] = set()
     for target in resolve_scope_targets(request, normalized_transaction):
         direct_key = f"{target.scope_id}:::{target.measure_id}"
-        if direct_key not in direct:
+        if direct_key not in direct_seen:
+            direct_seen.add(direct_key)
             direct.append(direct_key)
         for impacted_scope in collect_impacted_scope_ids(target.scope_id):
             impacted_key = f"{impacted_scope}:::{target.measure_id}"
-            if impacted_key != direct_key and impacted_key not in propagated:
+            if impacted_key != direct_key and impacted_key not in propagated_seen:
+                propagated_seen.add(impacted_key)
                 propagated.append(impacted_key)
         if target.lock_mode == "subtree":
-            prefix = f"{target.scope_id}|||"
             for visible_path in visible_paths:
-                if visible_path == target.scope_id:
-                    continue
-                if target.scope_id == GRAND_TOTAL_SCOPE_ID or visible_path.startswith(prefix):
+                if _scope_is_covered_by_subtree(target.scope_id, visible_path):
                     impacted_key = f"{visible_path}:::{target.measure_id}"
-                    if impacted_key not in direct and impacted_key not in propagated:
+                    if impacted_key not in direct_seen and impacted_key not in propagated_seen:
+                        propagated_seen.add(impacted_key)
                         propagated.append(impacted_key)
     return {"direct": direct, "propagated": propagated}
 

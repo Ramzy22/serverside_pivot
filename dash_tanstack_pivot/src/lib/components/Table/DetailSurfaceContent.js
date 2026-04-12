@@ -1,7 +1,8 @@
 import React, { useEffect, useState } from 'react';
-import Icons from '../Icons';
+import Icons from '../../utils/Icons';
 
-export function DetailSurfaceContent({
+/** Detail surface content with tabs for source rows and metadata. */
+function DetailSurfaceContent({
     detailState,
     onClose,
     onPageChange,

@@ -1,5 +1,5 @@
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
-import Icons from '../Icons';
+import Icons from '../../utils/Icons';
 import { formatAggLabel, formatDisplayLabel } from '../../utils/helpers';
 
 const REPORT_PATH_SEPARATOR = '|||';

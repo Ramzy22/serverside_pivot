@@ -2,16 +2,21 @@ import os
 import sys
 from pathlib import Path
 from types import SimpleNamespace
+from typing import get_type_hints
 
 import pyarrow as pa
+import pytest
 
 sys.path.append(os.getcwd())
 sys.path.append(os.path.join(os.getcwd(), "pivot_engine"))
 sys.path.append(os.path.join(os.getcwd(), "dash_tanstack_pivot"))
 
 from pivot_engine import create_tanstack_adapter
-from pivot_engine.editing.models import PreparedEventAction, ScopeLock, SessionEventRecord
+from pivot_engine.editing.models import EditSessionState, OverlayIndex, OverlayIndexByGrouping, PreparedEventAction, ScopeLock, SessionEventRecord
+from pivot_engine.editing.scope_index import scopes_overlap
+from pivot_engine.editing.session_manager import EditSessionManager
 from pivot_engine.editing.service import EditDomainService, _build_inverse_normalized_transaction
+from pivot_engine.editing.target_resolver import build_affected_cells_payload
 from pivot_engine.runtime import PivotRequestContext, PivotRuntimeService, PivotViewState, SessionRequestGate
 
 
@@ -168,6 +173,186 @@ def test_build_inverse_normalized_transaction_restores_explicit_null_old_values(
     )
 
     assert inverse["update"][0]["updates"] == {"sales": None}
+
+
+def test_build_inverse_normalized_transaction_matches_original_updates_by_scope_identity():
+    inverse = _build_inverse_normalized_transaction(
+        SessionEventRecord(
+            event_id="evt_identity_undo",
+            session_key="sales_data::sess-identity::grid-identity",
+            session_version=1,
+            source="apply",
+            created_at=0.0,
+            normalized_transaction={
+                "add": [],
+                "remove": [],
+                "update": [
+                    {
+                        "key_columns": {"region": "North"},
+                        "edit_meta": {"rowId": "North", "rowPath": "North", "colId": "sales_sum"},
+                        "aggregate_edit": {
+                            "column": "sales",
+                            "rowId": "North",
+                            "rowPath": "North",
+                            "columnId": "sales_sum",
+                            "oldValue": 200,
+                            "newValue": 260,
+                        },
+                    },
+                    {
+                        "key_columns": {"region": "North", "country": "USA"},
+                        "edit_meta": {"rowId": "North|||USA", "rowPath": "North|||USA", "colId": "sales_sum"},
+                        "updates": {"sales": 150},
+                    },
+                ],
+                "upsert": [],
+            },
+            original_updates=[
+                {"rowId": "South", "colId": "sales_sum", "oldValue": 120, "value": 150},
+                {"rowId": "North|||USA", "colId": "sales_sum", "oldValue": 100, "value": 150},
+                {"rowId": "North", "colId": "sales_sum", "oldValue": 200, "value": 260},
+            ],
+        ),
+        source="undo",
+        refresh_mode="patch",
+    )
+
+    assert inverse["update"][0]["aggregate_edit"]["newValue"] == 200
+    assert inverse["update"][0]["aggregate_edit"]["oldValue"] == 260
+    assert inverse["update"][1]["updates"] == {"sales": 100}
+
+
+def test_edit_session_event_history_ids_are_read_only_snapshots():
+    domain = EditDomainService()
+    request = SimpleNamespace(table="sales_data", grouping=["region", "country"])
+    session = domain.get_or_create_session(
+        request,
+        {"session_id": "sess-readonly", "client_instance": "grid-readonly"},
+    )
+
+    domain.sessions.register_event(
+        session,
+        SessionEventRecord(
+            event_id="evt_readonly",
+            session_key=session.session_key,
+            session_version=1,
+            source="apply",
+            created_at=0.0,
+            normalized_transaction={"add": [], "remove": [], "update": [], "upsert": []},
+        ),
+    )
+
+    active_event_ids = session.active_event_ids
+    assert active_event_ids == ("evt_readonly",)
+    with pytest.raises(AttributeError):
+        active_event_ids.append("evt_external")
+    with pytest.raises(AttributeError):
+        session.active_event_ids = ["evt_external"]
+    assert domain.sessions.latest_active_event_id(session) == "evt_readonly"
+
+
+def test_replace_action_keeps_replacement_record_transaction_independent_from_execution_merge():
+    domain = EditDomainService()
+    request = SimpleNamespace(table="sales_data", grouping=["region"])
+    session = domain.get_or_create_session(
+        request,
+        {"session_id": "sess-replace-isolation", "client_instance": "grid-replace-isolation"},
+    )
+    event = SessionEventRecord(
+        event_id="evt_replace_source",
+        session_key=session.session_key,
+        session_version=1,
+        source="apply",
+        created_at=0.0,
+        normalized_transaction={
+            "add": [],
+            "remove": [],
+            "update": [
+                {
+                    "key_columns": {"region": "North"},
+                    "edit_meta": {"rowId": "North", "rowPath": "North", "colId": "sales_sum"},
+                    "aggregate_edit": {
+                        "column": "sales",
+                        "rowId": "North",
+                        "rowPath": "North",
+                        "columnId": "sales_sum",
+                        "oldValue": 200,
+                        "newValue": 260,
+                        "propagationStrategy": "equal",
+                    },
+                }
+            ],
+            "upsert": [],
+        },
+        inverse_transaction={"update": [{"rowId": "North", "colId": "sales_sum", "value": 200, "oldValue": 260}]},
+        original_updates=[{"rowId": "North", "colId": "sales_sum", "oldValue": 200, "value": 260}],
+    )
+    domain.sessions.register_event(session, event)
+
+    action = domain.prepare_event_action(
+        request,
+        {
+            "session_id": "sess-replace-isolation",
+            "client_instance": "grid-replace-isolation",
+            "eventAction": "replace",
+            "eventIds": ["evt_replace_source"],
+            "propagationStrategy": "proportional",
+        },
+        {"add": [], "remove": [], "update": [], "upsert": []},
+    )
+
+    assert action is not None
+    execution_replacement_update = action.normalized_transaction["update"][-1]
+    record_replacement_update = action.record_normalized_transaction["update"][0]
+    assert execution_replacement_update is not record_replacement_update
+    execution_replacement_update["aggregate_edit"]["newValue"] = 999
+    assert record_replacement_update["aggregate_edit"]["newValue"] == 260
+
+
+def test_scope_overlap_treats_subtree_root_as_covered_scope():
+    assert scopes_overlap("North", "subtree", "North", "exact_scope")
+    assert scopes_overlap("North", "exact_scope", "North", "subtree")
+    assert scopes_overlap("North", "subtree", "North|||USA", "exact_scope")
+    assert scopes_overlap("North|||USA", "exact_scope", "North", "subtree")
+
+
+def test_affected_cells_marks_subtree_root_direct_and_descendants_propagated():
+    affected = build_affected_cells_payload(
+        SimpleNamespace(grouping=["region", "country"]),
+        {"visibleRowPaths": ["North", "North|||USA", "North|||Canada", "South"]},
+        {
+            "add": [],
+            "remove": [],
+            "update": [
+                {
+                    "key_columns": {"region": "North"},
+                    "edit_meta": {
+                        "rowPath": "North",
+                        "colId": "sales_sum",
+                    },
+                    "aggregate_edit": {
+                        "rowPath": "North",
+                        "columnId": "sales_sum",
+                    },
+                }
+            ],
+            "upsert": [],
+        },
+    )
+
+    assert affected["direct"] == ["North:::sales_sum"]
+    assert "North:::sales_sum" not in affected["propagated"]
+    assert "North|||USA:::sales_sum" in affected["propagated"]
+    assert "North|||Canada:::sales_sum" in affected["propagated"]
+    assert "South:::sales_sum" not in affected["propagated"]
+
+
+def test_overlay_index_annotations_match_grouped_and_current_index_shapes():
+    session_hints = get_type_hints(EditSessionState)
+    manager_hints = get_type_hints(EditSessionManager.current_overlay_index)
+
+    assert session_hints["overlay_index_by_grouping"] == OverlayIndexByGrouping
+    assert manager_hints["return"] == OverlayIndex
 
 
 def test_runtime_service_blocks_overlapping_parent_child_edit_scopes_in_same_session():

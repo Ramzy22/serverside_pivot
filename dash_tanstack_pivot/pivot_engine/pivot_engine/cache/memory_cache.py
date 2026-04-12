@@ -3,6 +3,7 @@
 Simple in-memory cache with TTL support for various data types including PyArrow Tables.
 """
 import time
+import threading
 from typing import Optional, Any, Dict, Union
 from collections import OrderedDict
 import pyarrow as pa
@@ -33,6 +34,7 @@ class MemoryCache:
         self._cache: OrderedDict[str, tuple[Any, float]] = OrderedDict()
         self.default_ttl = ttl
         self.max_size = max_size
+        self._lock = threading.RLock()
 
     def get(self, key: str) -> Optional[Any]:
         """
@@ -44,19 +46,20 @@ class MemoryCache:
         Returns:
             The cached item, or None if the item is not found or expired.
         """
-        if key not in self._cache:
-            return None
+        with self._lock:
+            if key not in self._cache:
+                return None
 
-        value, expiry = self._cache[key]
+            value, expiry = self._cache[key]
 
-        if time.time() > expiry:
-            # Entry has expired
-            del self._cache[key]
-            return None
+            if time.time() > expiry:
+                # Entry has expired
+                del self._cache[key]
+                return None
 
-        # LRU: Move to end (mark as recently used)
-        self._cache.move_to_end(key)
-        return value
+            # LRU: Move to end (mark as recently used)
+            self._cache.move_to_end(key)
+            return value
 
     def set(self, key: str, value: Any, ttl: Optional[int] = None):
         """
@@ -70,35 +73,39 @@ class MemoryCache:
         ttl_to_use = ttl if ttl is not None else self.default_ttl
         expiry = time.time() + ttl_to_use
         
-        if key in self._cache:
-            # Update existing
-            self._cache.move_to_end(key)
-        self._cache[key] = (value, expiry)
-        
-        # Evict if over size
-        while len(self._cache) > self.max_size:
-            self._cache.popitem(last=False)
+        with self._lock:
+            if key in self._cache:
+                # Update existing
+                self._cache.move_to_end(key)
+            self._cache[key] = (value, expiry)
+
+            # Evict if over size
+            while len(self._cache) > self.max_size:
+                self._cache.popitem(last=False)
 
     def clear(self):
         """Clear all items from the cache."""
-        self._cache.clear()
+        with self._lock:
+            self._cache.clear()
 
     def delete(self, key: str):
         """Delete a specific key from the cache."""
-        if key in self._cache:
-            del self._cache[key]
+        with self._lock:
+            if key in self._cache:
+                del self._cache[key]
 
     def get_all_keys(self):
         """Get all keys in the cache (for cache invalidation purposes)."""
         # Remove expired entries first and return valid keys
-        current_time = time.time()
-        valid_keys = []
-        # Create a copy of items to iterate safely while deleting
-        for key, (value, expiry) in list(self._cache.items()):
-            if current_time <= expiry:
-                valid_keys.append(key)
-            else:
-                # Remove expired entries
-                del self._cache[key]
-        return valid_keys
+        with self._lock:
+            current_time = time.time()
+            valid_keys = []
+            # Create a copy of items to iterate safely while deleting
+            for key, (value, expiry) in list(self._cache.items()):
+                if current_time <= expiry:
+                    valid_keys.append(key)
+                else:
+                    # Remove expired entries
+                    del self._cache[key]
+            return valid_keys
 

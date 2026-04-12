@@ -19,6 +19,7 @@ export const useServerSideViewportController = ({
     serverSide,
     effectiveRowCount,
     responseColumns,
+    responseColSchema = null,
     dataVersion,
     stateEpoch,
     structuralInFlight,
@@ -70,13 +71,29 @@ export const useServerSideViewportController = ({
         visibleColRangeRef.current = visibleColRange;
     }, [visibleColRange]);
 
+    const responseSchema = useMemo(() => {
+        if (responseColSchema && typeof responseColSchema === 'object') {
+            return responseColSchema;
+        }
+        if (!Array.isArray(responseColumns)) {
+            return null;
+        }
+        const schemaEntry = responseColumns.find((column) => (
+            column
+            && typeof column === 'object'
+            && column.id === '__col_schema'
+            && column.col_schema
+            && typeof column.col_schema === 'object'
+        ));
+        return schemaEntry ? schemaEntry.col_schema : null;
+    }, [responseColSchema, responseColumns]);
+
     const responseSchemaWindow = useMemo(() => {
-        if (!serverSide || !Array.isArray(responseColumns)) {
+        if (!serverSide || !responseSchema) {
             return { start: null, end: null };
         }
-        const schemaEntry = responseColumns.find((column) => column && column.id === '__col_schema');
-        const schemaColumns = schemaEntry && schemaEntry.col_schema && Array.isArray(schemaEntry.col_schema.columns)
-            ? schemaEntry.col_schema.columns
+        const schemaColumns = Array.isArray(responseSchema.columns)
+            ? responseSchema.columns
             : [];
         if (schemaColumns.length === 0) {
             return { start: null, end: null };
@@ -90,7 +107,7 @@ export const useServerSideViewportController = ({
             start: Math.max(0, Math.floor(firstIndex)),
             end: Math.max(Math.floor(firstIndex), Math.floor(lastIndex)),
         };
-    }, [coerceTransportNumber, responseColumns, serverSide]);
+    }, [coerceTransportNumber, responseSchema, serverSide]);
 
     const markRequestPending = useCallback((requestMeta) => {
         const normalizedMeta = requestMeta && typeof requestMeta === 'object'
@@ -231,9 +248,7 @@ export const useServerSideViewportController = ({
     }, [serverSide, stateEpoch]);
 
     useEffect(() => {
-        if (!serverSide || !responseColumns) return;
-        const schemaEntry = responseColumns.find((column) => column && column.id === '__col_schema');
-        if (!schemaEntry || !schemaEntry.col_schema) return;
+        if (!serverSide || !responseSchema) return;
 
         const pendingStructural = structuralPendingVersionRef.current;
         const numericVersion = Number(dataVersion);
@@ -244,13 +259,13 @@ export const useServerSideViewportController = ({
         if (!schemaIsFreshForCurrentEpoch) return;
 
         setCachedColSchema((previousSchema) => (
-            mergeSparseColSchema(previousSchema, schemaEntry.col_schema, schemaFallbackWidth)
+            mergeSparseColSchema(previousSchema, responseSchema, schemaFallbackWidth)
         ));
         colSchemaEpochRef.current = stateEpoch;
     }, [
         dataVersion,
         mergeSparseColSchema,
-        responseColumns,
+        responseSchema,
         schemaFallbackWidth,
         serverSide,
         stateEpoch,

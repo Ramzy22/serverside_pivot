@@ -1,7 +1,8 @@
 import React from 'react';
 import DetailSurfaceContent from './DetailSurfaceContent';
 
-export function DetailDrawer({
+/** Detail drawer for drill-through and row inspection views. */
+function DetailDrawer({
     detailState,
     onClose,
     onPageChange,

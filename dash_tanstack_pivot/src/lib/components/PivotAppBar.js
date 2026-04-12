@@ -1,10 +1,11 @@
 import React, { useState, useRef, useEffect, useMemo, useLayoutEffect } from 'react';
-import Icons from './Icons';
+import Icons from '../utils/Icons';
 import { themes, buildEditedCellVisualStyle, colorToInputHex } from '../utils/styles';
 import { DEFAULT_CURRENCY_SYMBOL, formatValue, normalizeNumberGroupSeparator } from '../utils/helpers';
 import { EDITED_CELL_FORMAT_KEY } from '../utils/formatting';
 import { usePivotTheme } from '../contexts/PivotThemeContext';
 import { usePivotConfig } from '../contexts/PivotConfigContext';
+import { usePivotRenderCounter } from '../hooks/usePivotRenderCounter';
 
 const SHOW_PIVOT_MODE_TOGGLE = false;
 
@@ -908,6 +909,7 @@ export const PivotAppBar = React.memo(function PivotAppBar({
     onAddChartPane,
     uiConfig = {},
 }) {
+    usePivotRenderCounter('PivotAppBar');
     const { theme, styles } = usePivotTheme();
     const {
         filters, setFilters,

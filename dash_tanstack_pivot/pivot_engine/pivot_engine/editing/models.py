@@ -1,10 +1,14 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 
 
 GRAND_TOTAL_SCOPE_ID = "__grand_total__"
+
+OverlayCellEntry = Dict[str, Any]
+OverlayIndex = Dict[str, Dict[str, OverlayCellEntry]]
+OverlayIndexByGrouping = Dict[str, OverlayIndex]
 
 
 @dataclass
@@ -54,10 +58,18 @@ class EditSessionState:
     base_snapshot_version: int = 0
     session_version: int = 0
     status: str = "active"
-    active_event_ids: List[str] = field(default_factory=list)
-    undone_event_ids: List[str] = field(default_factory=list)
+    _active_event_ids: Tuple[str, ...] = field(default_factory=tuple, repr=False)
+    _undone_event_ids: Tuple[str, ...] = field(default_factory=tuple, repr=False)
     scope_locks_cache: List[ScopeLock] = field(default_factory=list)
-    overlay_index_by_grouping: Dict[str, Dict[str, Dict[str, Dict[str, Any]]]] = field(default_factory=dict)
+    overlay_index_by_grouping: OverlayIndexByGrouping = field(default_factory=dict)
+
+    @property
+    def active_event_ids(self) -> Tuple[str, ...]:
+        return tuple(self._active_event_ids)
+
+    @property
+    def undone_event_ids(self) -> Tuple[str, ...]:
+        return tuple(self._undone_event_ids)
 
 
 @dataclass

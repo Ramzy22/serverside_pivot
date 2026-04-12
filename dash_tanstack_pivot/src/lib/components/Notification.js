@@ -1,5 +1,5 @@
 import React from 'react';
-import Icons from './Icons';
+import Icons from '../utils/Icons';
 
 const Notification = ({ message, type, onClose }) => (
     <div style={{

@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-import copy
+import json
 import time
 import uuid
 from typing import Any, Dict, Iterable, List, Optional
@@ -14,23 +14,67 @@ from .target_resolver import build_affected_cells_payload, build_impacted_scopes
 
 OVERLAP_BLOCK_WARNING = "Blocked edit because the target scope overlaps an active edit in this session."
 
+# Fix L10: Normalize common camelCase API keys to snake_case at entry points
+_CAMEL_TO_SNAKE_KEYS = {
+    "sessionId": "session_id",
+    "clientInstance": "client_instance",
+    "eventId": "event_id",
+    "eventIds": "event_ids",
+    "eventType": "event_type",
+    "eventAction": "event_action",
+    "refreshMode": "refresh_mode",
+    "propagationStrategy": "propagation_strategy",
+    "propagationPolicy": "propagation_policy",
+    "scopeId": "scope_id",
+    "measureId": "measure_id",
+    "rowPath": "row_path",
+    "rowId": "row_id",
+    "colId": "col_id",
+    "oldValue": "old_value",
+    "newValue": "new_value",
+    "aggregateEdit": "aggregate_edit",
+    "editMeta": "edit_meta",
+    "keyColumns": "key_columns",
+}
+
+
+def _normalize_payload_keys(payload: Dict[str, Any]) -> Dict[str, Any]:
+    """Convert camelCase keys to snake_case where a mapping exists.
+
+    This provides a consistent internal representation regardless of whether the
+    caller sends ``sessionId`` or ``session_id``.
+    """
+    if not isinstance(payload, dict):
+        return payload
+    normalized: Dict[str, Any] = {}
+    for key, value in payload.items():
+        snake_key = _CAMEL_TO_SNAKE_KEYS.get(key, key)
+        normalized[snake_key] = value
+    return normalized
+
+
+def _clone_json_like(value: Any) -> Any:
+    if isinstance(value, dict):
+        return {key: _clone_json_like(item) for key, item in value.items()}
+    if isinstance(value, list):
+        return [_clone_json_like(item) for item in value]
+    if isinstance(value, tuple):
+        return tuple(_clone_json_like(item) for item in value)
+    return value
+
 
 def _clone_transaction(transaction: Optional[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
     if not isinstance(transaction, dict):
         return None
-    return copy.deepcopy(transaction)
+    return _clone_json_like(transaction)
 
 
 def _collect_requested_event_ids(transaction_payload: Dict[str, Any]) -> List[str]:
-    raw_event_ids = transaction_payload.get("eventIds")
+    # Fix L10: normalize keys so we only check snake_case
+    normalized = _normalize_payload_keys(transaction_payload)
+    raw_event_ids = normalized.get("event_ids")
     if raw_event_ids is None:
-        raw_event_ids = transaction_payload.get("event_ids")
-    if raw_event_ids is None:
-        raw_event_ids = [
-            transaction_payload.get("eventId")
-            if transaction_payload.get("eventId") is not None
-            else transaction_payload.get("event_id")
-        ]
+        raw_event_ids = [normalized.get("event_id")]
     elif not isinstance(raw_event_ids, (list, tuple, set)):
         raw_event_ids = [raw_event_ids]
     return [
@@ -54,8 +98,67 @@ def _merge_history_transactions(transactions: List[Dict[str, Any]], *, source: s
             continue
         for key in ("add", "remove", "update", "upsert"):
             if isinstance(transaction.get(key), list):
-                merged[key].extend(copy.deepcopy(transaction.get(key) or []))
+                # No deepcopy needed: every caller passes freshly-cloned transactions
+                # (via _clone_transaction / _build_inverse_normalized_transaction), so
+                # their elements are already independent copies.
+                merged[key].extend(transaction.get(key))
     return merged
+
+
+def _stable_history_json(value: Any) -> str:
+    return json.dumps(value, sort_keys=True, separators=(",", ":"), default=str)
+
+
+def _first_non_empty_string(*values: Any) -> str:
+    for value in values:
+        if value is None:
+            continue
+        normalized = str(value).strip()
+        if normalized:
+            return normalized
+    return ""
+
+
+def _history_update_identity(update: Any) -> Optional[str]:
+    if not isinstance(update, dict):
+        return None
+    aggregate_edit = update.get("aggregate_edit") if isinstance(update.get("aggregate_edit"), dict) else {}
+    edit_meta = update.get("edit_meta") if isinstance(update.get("edit_meta"), dict) else {}
+    scope_id = _first_non_empty_string(
+        update.get("scopeId"),
+        update.get("rowPath"),
+        update.get("rowId"),
+        edit_meta.get("rowPath"),
+        edit_meta.get("rowId"),
+        aggregate_edit.get("rowPath"),
+        aggregate_edit.get("rowId"),
+    )
+    measure_id = _first_non_empty_string(
+        update.get("measureId"),
+        update.get("colId"),
+        edit_meta.get("colId"),
+        aggregate_edit.get("columnId"),
+    )
+    if scope_id and measure_id:
+        return f"scope:{scope_id}::measure:{measure_id}"
+
+    keys = update.get("key_columns") if isinstance(update.get("key_columns"), dict) else update.get("keys")
+    values = update.get("updates") if isinstance(update.get("updates"), dict) else update.get("values")
+    if isinstance(keys, dict) and isinstance(values, dict) and len(values) == 1:
+        value_key = next(iter(values.keys()))
+        return f"keys:{_stable_history_json(keys)}::field:{value_key}"
+    if isinstance(keys, dict):
+        return f"keys:{_stable_history_json(keys)}"
+    return None
+
+
+def _index_original_updates_by_identity(original_updates: List[Dict[str, Any]]) -> Dict[str, Dict[str, Any]]:
+    indexed: Dict[str, Dict[str, Any]] = {}
+    for update in original_updates:
+        identity = _history_update_identity(update)
+        if identity and identity not in indexed:
+            indexed[identity] = update
+    return indexed
 
 
 def _build_inverse_normalized_transaction(event: SessionEventRecord, *, source: str, refresh_mode: str) -> Dict[str, Any]:
@@ -66,10 +169,18 @@ def _build_inverse_normalized_transaction(event: SessionEventRecord, *, source: 
         "upsert": [],
     }
     original_updates = list(event.original_updates or [])
-    for index, operation in enumerate(list(normalized.get("update") or [])):
+    original_updates_by_identity = _index_original_updates_by_identity(
+        [update for update in original_updates if isinstance(update, dict)]
+    )
+    normalized_updates = list(normalized.get("update") or [])
+    can_use_positional_fallback = len(normalized_updates) == len(original_updates)
+    for index, operation in enumerate(normalized_updates):
         if not isinstance(operation, dict):
             continue
-        original_update = original_updates[index] if index < len(original_updates) and isinstance(original_updates[index], dict) else {}
+        identity = _history_update_identity(operation)
+        original_update = original_updates_by_identity.get(identity or "") or {}
+        if not original_update and can_use_positional_fallback and index < len(original_updates) and isinstance(original_updates[index], dict):
+            original_update = original_updates[index]
         aggregate_edit = operation.get("aggregate_edit") if isinstance(operation.get("aggregate_edit"), dict) else None
         if aggregate_edit is not None:
             previous_value = original_update.get("oldValue", aggregate_edit.get("oldValue"))
@@ -140,11 +251,11 @@ def _merge_scope_value_changes(scope_value_changes: List[Dict[str, Any]]) -> Lis
             continue
         merge_key = f"{scope_id}:::{measure_id}"
         if merge_key not in merged:
-            merged[merge_key] = copy.deepcopy(change)
+            merged[merge_key] = _clone_json_like(change)
             ordered_keys.append(merge_key)
             continue
         merged_change = merged[merge_key]
-        merged_change["afterValue"] = copy.deepcopy(change.get("afterValue"))
+        merged_change["afterValue"] = _clone_json_like(change.get("afterValue"))
         if str(change.get("role") or "") == "direct":
             merged_change["role"] = "direct"
         if change.get("aggregationFn"):
@@ -172,9 +283,11 @@ class EditDomainService:
 
     @staticmethod
     def _payload_session_parts(request: Any, transaction_payload: Dict[str, Any]) -> tuple[str, str, str]:
-        table = str(getattr(request, "table", "") or transaction_payload.get("table") or "")
-        session_id = str(transaction_payload.get("session_id") or transaction_payload.get("sessionId") or "anonymous")
-        client_instance = str(transaction_payload.get("client_instance") or transaction_payload.get("clientInstance") or "default")
+        # Fix L10: normalize camelCase keys to snake_case for consistent lookups
+        normalized = _normalize_payload_keys(transaction_payload)
+        table = str(getattr(request, "table", "") or normalized.get("table") or "")
+        session_id = str(normalized.get("session_id") or "anonymous")
+        client_instance = str(normalized.get("client_instance") or "default")
         return table, session_id, client_instance
 
     def get_or_create_session(self, request: Any, transaction_payload: Dict[str, Any]):
@@ -183,6 +296,17 @@ class EditDomainService:
 
     def get_or_create_session_from_parts(self, *, table: str, session_id: str, client_instance: str):
         return self.sessions.get_or_create_session(table=table, session_id=session_id, client_instance=client_instance)
+
+    def has_visible_edit_overlay(self, request: Any, *, session_id: str, client_instance: str) -> bool:
+        table = str(getattr(request, "table", "") or "")
+        if not table:
+            return False
+        return self.sessions.has_overlay_index(
+            table=table,
+            session_id=session_id or "anonymous",
+            client_instance=client_instance or "default",
+            grouping_fields=list(getattr(request, "grouping", None) or []),
+        )
 
     @staticmethod
     def _normalize_event_ids(event_ids: Optional[Iterable[Any]]) -> List[str]:
@@ -226,9 +350,10 @@ class EditDomainService:
         if normalized_event_id:
             events = self._resolve_session_events(session, [normalized_event_id], require_active=True)
             return events[0] if events else None
-        if not session.active_event_ids:
+        latest_event_id = self.sessions.latest_active_event_id(session)
+        if not latest_event_id:
             return None
-        active_events = self._resolve_session_events(session, [session.active_event_ids[-1]], require_active=True)
+        active_events = self._resolve_session_events(session, [latest_event_id], require_active=True)
         return active_events[0] if active_events else None
 
     def _validate_scope_targets(
@@ -290,7 +415,7 @@ class EditDomainService:
                     {
                         "rowId": scope_id,
                         "colId": measure_id,
-                        "originalValue": copy.deepcopy(cell_entry.get("originalValue")),
+                        "originalValue": _clone_json_like(cell_entry.get("originalValue")),
                         "comparisonCount": len(direct_event_ids) + len(propagated_event_ids),
                         "directEventIds": direct_event_ids,
                         "propagatedEventIds": propagated_event_ids,
@@ -469,7 +594,7 @@ class EditDomainService:
                 explicit_replacement_transaction.get(kind)
                 for kind in ("add", "remove", "update", "upsert")
             ):
-                record_original_updates = copy.deepcopy(
+                record_original_updates = _clone_json_like(
                     explicit_replacement_transaction.get("update")
                     or transaction_payload.get("update")
                     or transaction_payload.get("updates")
@@ -480,7 +605,7 @@ class EditDomainService:
                     source=action,
                     refresh_mode=refresh_mode,
                 )
-                replacement_updates = copy.deepcopy(record_original_updates)
+                replacement_updates = _clone_json_like(record_original_updates)
                 record_normalized_transaction = explicit_replacement_transaction
             else:
                 propagation_policy = validate_real_propagation_policy(
@@ -495,7 +620,7 @@ class EditDomainService:
                             continue
                         replacement_updates.append(
                             {
-                                **copy.deepcopy(update),
+                                **_clone_json_like(update),
                                 "propagationStrategy": propagation_policy,
                             }
                         )
@@ -505,9 +630,13 @@ class EditDomainService:
                     source=action,
                     refresh_mode=refresh_mode,
                 )
-                merged["update"] = list(merged.get("update") or []) + list(replacement_transaction.get("update") or [])
-                record_normalized_transaction = replacement_transaction
-                record_original_updates = copy.deepcopy(replacement_updates)
+                merged = _merge_history_transactions(
+                    [merged, replacement_transaction],
+                    source=action,
+                    refresh_mode=refresh_mode,
+                )
+                record_normalized_transaction = _clone_json_like(replacement_transaction)
+                record_original_updates = _clone_json_like(replacement_updates)
             return PreparedEventAction(
                 action=action,
                 session_key=session.session_key,
@@ -560,7 +689,7 @@ class EditDomainService:
             "update": [],
             "upsert": [],
         }
-        record_original_updates = copy.deepcopy(
+        record_original_updates = _clone_json_like(
             prepared_event_action.record_original_updates
             if prepared_event_action and prepared_event_action.record_original_updates
             else (transaction_payload.get("update") or transaction_payload.get("updates") or [])
@@ -608,7 +737,7 @@ class EditDomainService:
             inverse_transaction=_clone_transaction(response.get("inverseTransaction")),
             redo_transaction=_clone_transaction(response.get("redoTransaction")),
             original_updates=record_original_updates,
-            affected_cells=copy.deepcopy(response.get("affectedCells") or {"direct": [], "propagated": []}),
+            affected_cells=_clone_json_like(response.get("affectedCells") or {"direct": [], "propagated": []}),
             impacted_scope_ids=list(impacted_scope_ids),
             grouping_fields=list(getattr(request, "grouping", None) or []),
             scope_value_changes=scope_value_changes,

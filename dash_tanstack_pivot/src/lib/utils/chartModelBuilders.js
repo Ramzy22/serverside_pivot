@@ -2,7 +2,7 @@
  * Chart model building utilities — pure functions, no React.
  * Extracted from PivotCharts.js for separation of concerns.
  */
-import { formatDisplayLabel } from '../../utils/helpers';
+import { formatDisplayLabel } from './helpers';
 export const INTERNAL_COL_IDS = new Set(['hierarchy', '__row_number__']);
 export const MAX_PANEL_CATEGORIES = 50;
 export const MAX_PANEL_SERIES = 12;
@@ -1652,3 +1652,9 @@ export const layoutIcicleNodes = (nodes, x, width, level, bandHeight, acc = []) 
 
     return acc;
 };
+
+export const canStackBarSeries = (model) => Array.isArray(model && model.series) && model.series.length > 1;
+export const canStackBarLayout = (model) => (
+    (Array.isArray(model && model.stackedGroups) && model.stackedGroups.length > 0)
+    || canStackBarSeries(model)
+);

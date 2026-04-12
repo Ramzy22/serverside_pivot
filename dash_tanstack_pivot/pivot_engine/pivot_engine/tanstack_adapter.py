@@ -213,7 +213,7 @@ class TanStackPivotAdapter(FormulaEngineMixin):
         self.edit_domain = EditDomainService()
         self.hierarchy_state = {}  # Store expansion state
         self._debug = debug
-        # Cache center_col_ids per (table, frozenset(grouping)) so windowed requests
+        # Cache center_col_ids per request structure/generation so windowed requests
         # reuse the schema from the last needs_col_schema=True response instead of
         # rescanning all row dict keys on every scroll (O(rows*cols) → O(1)).
         self._center_col_ids_cache: dict = {}
@@ -221,6 +221,7 @@ class TanStackPivotAdapter(FormulaEngineMixin):
         self._response_window_cache: OrderedDict[str, tuple[TanStackResponse, float]] = OrderedDict()
         self._row_block_cache: OrderedDict[str, tuple[Dict[str, Any], float]] = OrderedDict()
         self._grand_total_cache: OrderedDict[str, tuple[Dict[str, Any], float]] = OrderedDict()
+        self._local_cache_generation = 0
         self._prefetch_request_keys: set[str] = set()
         self.viewport_prefetch_enabled: bool = False
 
@@ -274,6 +275,7 @@ class TanStackPivotAdapter(FormulaEngineMixin):
 
     def _request_structure_fingerprint(self, request: "TanStackRequest") -> str:
         payload = {
+            "cache_generation": self._local_cache_generation,
             "table": request.table,
             "columns": request.columns or [],
             "filters": request.filters or {},
@@ -288,6 +290,7 @@ class TanStackPivotAdapter(FormulaEngineMixin):
 
     def _center_column_catalog_cache_key(self, request: "TanStackRequest") -> str:
         payload = {
+            "cache_generation": self._local_cache_generation,
             "table": request.table,
             "columns": request.columns or [],
             "filters": request.filters or {},
@@ -1106,7 +1109,7 @@ class TanStackPivotAdapter(FormulaEngineMixin):
                 for value in cached_cols_table.column("_col_key").to_pylist()
             ]
 
-        col_results_table = await self.controller._execute_ibis_expr_async(col_query)
+        col_results_table = await self.controller._execute_ibis_expr_async(col_query, spec.table)
         self.controller.cache.set(col_cache_key, col_results_table)
         if col_results_table is None or "_col_key" not in col_results_table.column_names:
             return []
@@ -1143,8 +1146,10 @@ class TanStackPivotAdapter(FormulaEngineMixin):
         }
         excluded_ids = set(row_meta_keys) | pinned_ids | request_dimension_ids
         cache_key = (
+            self._local_cache_generation,
             request.table,
-            frozenset(excluded_ids),
+            tuple(str(field) for field in (request.grouping or [])),
+            tuple(sorted(str(column_id) for column_id in excluded_ids)),
             self._center_column_catalog_cache_key(request),
         )
 
@@ -1473,6 +1478,10 @@ class TanStackPivotAdapter(FormulaEngineMixin):
                 sort_item["semanticType"] = semantic_type
             if sort_type:
                 sort_item["sortType"] = sort_type
+            if sort_spec.get("absoluteSort") is True:
+                sort_item["absoluteSort"] = True
+                if not sort_item.get("sortType"):
+                    sort_item["sortType"] = "absolute"
             if isinstance(sort_key_field, str) and sort_key_field:
                 sort_item["sortKeyField"] = sort_key_field
             
@@ -1786,6 +1795,7 @@ class TanStackPivotAdapter(FormulaEngineMixin):
         return bool(result.get("updated", 0))
 
     def _invalidate_local_caches(self) -> None:
+        self._local_cache_generation += 1
         self._center_col_ids_cache.clear()
         self._pivot_column_catalog_cache.clear()
         self._response_window_cache.clear()
@@ -3064,14 +3074,21 @@ class TanStackPivotAdapter(FormulaEngineMixin):
                 if isinstance(cached_response.col_schema, dict):
                     total_center_cols = cached_response.col_schema.get("total_center_cols")
                 elif request.grouping:
+                    row_meta_keys = {
+                        '_id', '_path', '_isTotal', '_level', '_expanded', '_parentPath',
+                        '_has_children', '_is_expanded', 'depth', '_depth', 'uuid', 'subRows'
+                    }
+                    request_dimension_ids = {
+                        col.get("id")
+                        for col in (request.columns or [])
+                        if isinstance(col, dict) and not col.get("aggregationFn") and not col.get("isFormula") and col.get("id")
+                    }
+                    excluded_ids = set(row_meta_keys) | set(request.grouping or []) | request_dimension_ids
                     center_cache_key = (
+                        self._local_cache_generation,
                         request.table,
-                        frozenset({
-                            '_id', '_path', '_isTotal', '_level', '_expanded', '_parentPath',
-                            '_has_children', '_is_expanded', 'depth', '_depth', 'uuid', 'subRows',
-                            *(request.grouping or []),
-                            *(col.get("id") for col in (request.columns or []) if isinstance(col, dict) and not col.get("aggregationFn") and not col.get("isFormula") and col.get("id"))
-                        }),
+                        tuple(str(field) for field in (request.grouping or [])),
+                        tuple(sorted(str(column_id) for column_id in excluded_ids)),
                         self._center_column_catalog_cache_key(request),
                     )
                     total_center_cols = len(self._center_col_ids_cache.get(center_cache_key, [])) or None

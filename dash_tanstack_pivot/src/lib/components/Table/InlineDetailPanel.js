@@ -1,7 +1,8 @@
 import React from 'react';
 import DetailSurfaceContent from './DetailSurfaceContent';
 
-export function InlineDetailPanel({
+/** Inline detail panel embedded within the table body. */
+function InlineDetailPanel({
     detailState,
     onClose,
     onPageChange,

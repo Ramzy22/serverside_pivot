@@ -11,6 +11,8 @@ Features:
 """
 
 from typing import Any, List, Dict, Optional, Union
+import itertools
+import threading
 import time
 from contextlib import contextmanager
 
@@ -102,10 +104,13 @@ class IbisBackend:
                 # Default to DuckDB
                 self.con = ibis.duckdb.connect(connection_uri)
 
-        # Track query stats
+        # Track query stats — lock guards counters updated from executor threads.
         self._query_count = 0
         self._total_time = 0.0
-        self._running_queries = {}  # Map task_id -> task object for cancellation
+        self._stats_lock = threading.Lock()
+        self._query_id_counter = itertools.count(1)
+        self._running_queries_lock = threading.Lock()
+        self._running_queries: Dict[str, Any] = {}  # Map stable query_id -> asyncio Future.
 
     def execute(self, query: Union[Dict[str, Any], str], params: Optional[List[Any]] = None, return_arrow: bool = True) -> Union[pa.Table, List[Dict[str, Any]]]:
         """
@@ -158,14 +163,17 @@ class IbisBackend:
                         try:
                             df = pd.DataFrame(result)
                             result = pa.Table.from_pandas(df)
-                        except:
+                        except Exception:
                             pass
             elif not return_arrow and isinstance(result, pa.Table):
                  result = result.to_pylist()
 
-            # Performance tracking
-            self._query_count += 1
-            self._total_time += (time.time() - start_time)
+            # Performance tracking — guarded because execute() runs in worker threads
+            # via run_in_executor and multiple threads can race on these counters.
+            elapsed = time.time() - start_time
+            with self._stats_lock:
+                self._query_count += 1
+                self._total_time += elapsed
 
             return result
         except Exception as e:
@@ -180,33 +188,35 @@ class IbisBackend:
         import asyncio
         loop = asyncio.get_running_loop()
         
-        # Create the task
         task = loop.run_in_executor(None, self.execute, query, params, return_arrow)
-        task_id = id(task)
-        self._running_queries[task_id] = task
+        query_id = f"ibis-query-{next(self._query_id_counter)}"
+        with self._running_queries_lock:
+            self._running_queries[query_id] = task
         
         try:
             return await task
         except asyncio.CancelledError:
-            print(f"Query task {task_id} cancelled")
+            print(f"Query task {query_id} cancelled")
             # We can't easily kill the thread, but we stop waiting for it
             raise
         finally:
-            if task_id in self._running_queries:
-                del self._running_queries[task_id]
+            with self._running_queries_lock:
+                self._running_queries.pop(query_id, None)
 
-    async def cancel_query(self, query_id: int):
+    async def cancel_query(self, query_id: Union[int, str]):
         """
         Attempt to cancel a running query.
         For thread-based execution, this just cancels the asyncio waiter.
         True database-level cancellation depends on backend capabilities.
         """
-        if query_id in self._running_queries:
-            task = self._running_queries[query_id]
-            task.cancel()
-            print(f"Cancelled query task {query_id}")
-            return True
-        return False
+        normalized_query_id = str(query_id)
+        with self._running_queries_lock:
+            task = self._running_queries.get(normalized_query_id)
+        if task is None:
+            return False
+        task.cancel()
+        print(f"Cancelled query task {normalized_query_id}")
+        return True
 
     def execute_arrow(
         self,
@@ -353,24 +363,48 @@ class IbisBackend:
 
     def reset_stats(self):
         """Reset performance counters"""
-        self._query_count = 0
-        self._total_time = 0.0
+        with self._stats_lock:
+            self._query_count = 0
+            self._total_time = 0.0
+
+    def _execute_transaction_sql(self, sql: str):
+        """Execute transaction control SQL or fail before pretending it worked."""
+        if self.con is None:
+            raise ValueError("Backend not connected")
+
+        raw_sql = getattr(self.con, "raw_sql", None)
+        if callable(raw_sql):
+            return raw_sql(sql)
+
+        execute = getattr(self.con, "execute", None)
+        if callable(execute):
+            return execute(sql)
+
+        raise NotImplementedError(
+            f"Transactions are not supported by {type(self.con).__name__}: "
+            "the connection exposes neither raw_sql() nor execute()."
+        )
 
     @contextmanager
     def transaction(self):
         """
         Context manager for transactions.
 
-        Note: Transaction behavior varies by database backend.
+        Backends that cannot execute transaction-control SQL must fail explicitly
+        instead of silently yielding without BEGIN/COMMIT/ROLLBACK protection.
         """
+        self._execute_transaction_sql("BEGIN TRANSACTION")
         try:
             yield
+            self._execute_transaction_sql("COMMIT")
         except Exception:
-            # Rollback behavior varies by database
+            self._execute_transaction_sql("ROLLBACK")
             raise
 
     def close(self):
         """Close database connection"""
+        if not hasattr(self, "con"):
+            return
         if hasattr(self.con, 'close'):
             self.con.close()
         self.con = None

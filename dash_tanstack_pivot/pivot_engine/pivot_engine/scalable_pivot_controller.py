@@ -120,6 +120,8 @@ class ScalablePivotController(PivotController):
         self.task_manager = get_task_manager()
         self.planning_lock = threading.Lock() # Lock for planner (Ibis/DuckDB metadata access is not thread-safe)
         self.execution_lock = threading.RLock()
+        self._execution_locks: Dict[str, threading.RLock] = {}
+        self._execution_locks_guard = threading.Lock()
         self.hierarchy_request_lock = threading.RLock()
         
         # Helper to get connection safely
@@ -133,20 +135,24 @@ class ScalablePivotController(PivotController):
         if enable_streaming:
             self.streaming_processor = StreamAggregationProcessor()
 
-        if enable_incremental_views:
+        if enable_incremental_views and con is not None:
             self.incremental_view_manager = IncrementalMaterializedViewManager(con)
+        else:
+            self.incremental_view_manager = None
 
         # Advanced hierarchical managers
-        self.materialized_hierarchy_manager = MaterializedHierarchyManager(con, self.cache)
+        self.materialized_hierarchy_manager = MaterializedHierarchyManager(con, self.cache) if con is not None else None
 
         # Performance managers
         # HierarchicalVirtualScrollManager expects an IbisPlanner instance
         # Lock removed as manager is now stateless/thread-safe
-        self.virtual_scroll_manager = HierarchicalVirtualScrollManager(
-            self.planner, self.cache, self.materialized_hierarchy_manager
+        self.virtual_scroll_manager = (
+            HierarchicalVirtualScrollManager(self.planner, self.cache, self.materialized_hierarchy_manager)
+            if con is not None and self.materialized_hierarchy_manager is not None
+            else None
         )
         # ProgressiveDataLoader expects an Ibis connection
-        self.progressive_loader = ProgressiveDataLoader(con, self.cache)
+        self.progressive_loader = ProgressiveDataLoader(con, self.cache) if con is not None else None
 
 
         # Initialize real pattern analyzer for intelligent prefetching
@@ -157,10 +163,12 @@ class ScalablePivotController(PivotController):
             cache=self.cache,
         )
         # PruningManager expects an Ibis connection
-        self.pruning_manager = HierarchyPruningManager(con)
+        self.pruning_manager = HierarchyPruningManager(con) if con is not None else None
         # ProgressiveHierarchicalLoader expects an Ibis connection
-        self.progressive_hierarchy_loader = ProgressiveHierarchicalLoader(
-            con, self.cache, self.pruning_manager
+        self.progressive_hierarchy_loader = (
+            ProgressiveHierarchicalLoader(con, self.cache, self.pruning_manager)
+            if con is not None and self.pruning_manager is not None
+            else None
         )
 
         # CDC for real-time updates
@@ -191,6 +199,15 @@ class ScalablePivotController(PivotController):
     def _uses_duckdb_ibis(self) -> bool:
         backend_name = getattr(getattr(self.planner, "con", None), "name", "").lower()
         return backend_name == "duckdb"
+
+    def _execution_lock_for_table(self, table_name: Optional[str]) -> threading.RLock:
+        key = str(table_name or "__default__")
+        with self._execution_locks_guard:
+            lock = self._execution_locks.get(key)
+            if lock is None:
+                lock = threading.RLock()
+                self._execution_locks[key] = lock
+            return lock
 
     @staticmethod
     def _split_pivot_filters(spec: PivotSpec) -> tuple[List[Dict[str, Any]], List[Dict[str, Any]]]:
@@ -470,7 +487,7 @@ class ScalablePivotController(PivotController):
         }
         return pa.table(column_data)
 
-    async def _execute_ibis_expr_async(self, expr) -> pa.Table:
+    async def _execute_ibis_expr_async(self, expr, table_name: Optional[str] = None) -> pa.Table:
         """Execute an Ibis expression safely for the current backend."""
         loop = asyncio.get_running_loop()
 
@@ -478,12 +495,12 @@ class ScalablePivotController(PivotController):
             return await loop.run_in_executor(None, expr.to_pyarrow)
 
         def execute_with_lock():
-            with self.execution_lock:
+            with self._execution_lock_for_table(table_name):
                 return expr.to_pyarrow()
 
         return await loop.run_in_executor(None, execute_with_lock)
 
-    async def _execute_ibis_scalar_async(self, expr) -> Any:
+    async def _execute_ibis_scalar_async(self, expr, table_name: Optional[str] = None) -> Any:
         """Execute an Ibis scalar expression safely for the current backend."""
         loop = asyncio.get_running_loop()
 
@@ -491,7 +508,7 @@ class ScalablePivotController(PivotController):
             return await loop.run_in_executor(None, expr.execute)
 
         def execute_with_lock():
-            with self.execution_lock:
+            with self._execution_lock_for_table(table_name):
                 return expr.execute()
 
         return await loop.run_in_executor(None, execute_with_lock)
@@ -505,7 +522,8 @@ class ScalablePivotController(PivotController):
         await self.cdc_manager.setup_cdc(table_name)
 
         # Register materialized view manager to receive change notifications
-        self.cdc_manager.register_materialized_view_manager(table_name, self.incremental_view_manager)
+        if self.incremental_view_manager is not None:
+            self.cdc_manager.register_materialized_view_manager(table_name, self.incremental_view_manager)
 
         # Start tracking changes in the background using TaskManager
         self.task_manager.create_task(
@@ -560,7 +578,7 @@ class ScalablePivotController(PivotController):
 
     async def create_incremental_view(self, spec: PivotSpec):
         """Create incremental materialized view"""
-        if not self.enable_incremental_views:
+        if not self.enable_incremental_views or self.incremental_view_manager is None:
             raise ValueError("Incremental views are not enabled")
         
         view_name = await self.incremental_view_manager.create_incremental_view(spec)
@@ -568,13 +586,15 @@ class ScalablePivotController(PivotController):
 
     def run_virtual_scroll_hierarchical(self, spec: PivotSpec, start_row: int, end_row: int, expanded_paths: List[List[str]]):
         """Run hierarchical pivot with virtual scrolling for large datasets"""
+        if self.virtual_scroll_manager is None:
+            raise ValueError("Virtual scroll manager requires an Ibis connection.")
         result = self.virtual_scroll_manager.get_visible_rows_hierarchical(
             spec, start_row, end_row, expanded_paths
         )
         return result
 
     # Dimension-specific sort keys that must NOT propagate across levels.
-    _DIM_SORT_KEYS = ("sortKeyField", "semanticType", "sortSemantic", "sortType")
+    _DIM_SORT_KEYS = ("sortKeyField", "semanticType", "sortSemantic", "sortType", "absoluteSort")
 
     @staticmethod
     def _build_group_rows_sort(
@@ -907,7 +927,7 @@ class ScalablePivotController(PivotController):
         else:
             count_expr = base_table.count()
 
-        total_rows = int(await self._execute_ibis_scalar_async(count_expr))
+        total_rows = int(await self._execute_ibis_scalar_async(count_expr, spec.table))
         self._hierarchy_root_count_cache_set(cache_key, total_rows)
         return total_rows
 
@@ -1004,7 +1024,7 @@ class ScalablePivotController(PivotController):
         if page_size:
             key_query = key_query.limit(page_size, offset=max(int(start_row or 0), 0))
 
-        key_table = await self._execute_ibis_expr_async(key_query)
+        key_table = await self._execute_ibis_expr_async(key_query, spec.table)
         if not isinstance(key_table, pa.Table) or root_field not in key_table.column_names:
             return None
 
@@ -1117,7 +1137,25 @@ class ScalablePivotController(PivotController):
                 grand_total_row["depth"] = 0
                 grand_total_row["_depth"] = 0
                 total_rows += 1
-                grand_total_formula_source_rows = [dict(row) for row in root_rows if isinstance(row, dict)]
+                formula_source_root_rows = root_rows
+                if len(root_rows) < max(total_rows - 1, 0):
+                    formula_source_spec = spec.copy()
+                    formula_source_spec.rows = list(spec.rows[:1])
+                    formula_source_spec.limit = 0
+                    formula_source_spec.offset = 0
+                    formula_source_spec.totals = False
+                    formula_source_table = await self.run_pivot_async(
+                        formula_source_spec,
+                        return_format="arrow",
+                        force_refresh=True,
+                    )
+                    if isinstance(formula_source_table, pa.Table):
+                        formula_source_root_rows = formula_source_table.to_pylist()
+                grand_total_formula_source_rows = [
+                    dict(row)
+                    for row in formula_source_root_rows
+                    if isinstance(row, dict)
+                ]
         else:
             grand_total_query_profile = None
             grand_total_started_at = None
@@ -1293,6 +1331,8 @@ class ScalablePivotController(PivotController):
 
     async def run_progressive_load(self, spec: PivotSpec, chunk_callback: Optional[Callable] = None):
         """Run progressive data loading for large datasets"""
+        if self.progressive_loader is None:
+            raise ValueError("Progressive data loading requires an Ibis connection.")
         result = await self.progressive_loader.load_progressive_chunks(spec, chunk_callback)
         return result
 
@@ -1694,6 +1734,8 @@ class ScalablePivotController(PivotController):
 
     async def run_hierarchical_progressive(self, spec: PivotSpec, expanded_paths: List[List[str]], level_callback: Optional[Callable] = None):
         """Run hierarchical data loading progressively by levels"""
+        if self.progressive_loader is None:
+            raise ValueError("Hierarchical progressive loading requires an Ibis connection.")
         result = await self.progressive_loader.load_hierarchical_progressive(spec, expanded_paths, level_callback)
         return result
 
@@ -1879,10 +1921,12 @@ class ScalablePivotController(PivotController):
             if self._uses_duckdb_ibis():
                 # Disabled for DuckDB shared-connection mode (see caller guard).
                 return
+            if self.materialized_hierarchy_manager is None:
+                return
             loop = asyncio.get_running_loop()
 
             def _materialize_with_lock():
-                with self.execution_lock:
+                with self._execution_lock_for_table(getattr(spec, "table", None)):
                     self.materialized_hierarchy_manager.create_materialized_hierarchy(spec)
 
             await loop.run_in_executor(None, _materialize_with_lock)
@@ -1914,7 +1958,7 @@ class ScalablePivotController(PivotController):
 
         for query_expr in queries_to_run:
             if hasattr(query_expr, 'to_pyarrow'):
-                tasks.append(self._execute_ibis_expr_async(query_expr))
+                tasks.append(self._execute_ibis_expr_async(query_expr, spec.table))
             else:
                 if self.backend and hasattr(self.backend, 'execute_async'):
                     tasks.append(self.backend.execute_async(query_expr))
@@ -1995,7 +2039,7 @@ class ScalablePivotController(PivotController):
             pivot_cache_hit = False
             source_query_started_at = time.perf_counter()
             grouped_expr, hidden_sort_keys = self._build_sparse_materialized_source_query(spec, materialized_column_values)
-            grouped_table = await self._execute_ibis_expr_async(grouped_expr)
+            grouped_table = await self._execute_ibis_expr_async(grouped_expr, spec.table)
             source_query_finished_at = time.perf_counter()
             source_row_count = int(getattr(grouped_table, "num_rows", 0) or 0)
             reshape_started_at = time.perf_counter()
@@ -2067,7 +2111,7 @@ class ScalablePivotController(PivotController):
                 self._cache_hits += 1
                 column_cache_hit = True
             else:
-                col_results_table = await self._execute_ibis_expr_async(col_ibis_expr)
+                col_results_table = await self._execute_ibis_expr_async(col_ibis_expr, spec.table)
                 column_values = col_results_table.column("_col_key").to_pylist()
                 self.cache.set(col_cache_key, col_results_table)
                 self._cache_misses += 1
@@ -2086,7 +2130,7 @@ class ScalablePivotController(PivotController):
             result_table = cached_pivot_table
             pivot_cache_hit = True
         else:
-            pivot_results_table = await self._execute_ibis_expr_async(pivot_ibis_expr)
+            pivot_results_table = await self._execute_ibis_expr_async(pivot_ibis_expr, spec.table)
                 
             self.cache.set(pivot_cache_key, pivot_results_table)
             result_table = pivot_results_table

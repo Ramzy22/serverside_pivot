@@ -50,10 +50,11 @@ const normalizeSparklinePointEntry = (entry, index) => {
 export const normalizeSparklineConfig = (value, fallbackType = 'line') => {
     if (value === false || value === null || value === undefined) return null;
     const source = value === true ? {} : (typeof value === 'object' ? value : {});
+    if (source.enabled === false) return null;
     const requestedType = typeof source.type === 'string' ? source.type.trim().toLowerCase() : '';
     const type = VALID_SPARKLINE_TYPES.has(requestedType) ? requestedType : fallbackType;
     return {
-        enabled: source.enabled !== false,
+        enabled: true,
         type,
         metric: typeof source.metric === 'string' && source.metric.trim()
             ? source.metric.trim().toLowerCase()
@@ -68,6 +69,13 @@ export const normalizeSparklineConfig = (value, fallbackType = 'line') => {
             ? clamp(Number(source.areaOpacity), 0.02, 0.45)
             : 0.14,
         compact: Boolean(source.compact),
+        hideColumns: Boolean(source.hideColumns),
+        source: (typeof source.source === 'string' && source.source.trim().toLowerCase() === 'field')
+            ? 'field'
+            : 'pivot',
+        placement: (typeof source.placement === 'string' && ['after', 'before', 'end'].includes(source.placement.trim().toLowerCase()))
+            ? source.placement.trim().toLowerCase()
+            : 'after',
     };
 };
 

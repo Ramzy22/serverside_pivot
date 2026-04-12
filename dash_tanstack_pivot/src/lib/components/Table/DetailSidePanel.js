@@ -1,7 +1,8 @@
 import React from 'react';
 import DetailSurfaceContent from './DetailSurfaceContent';
 
-export function DetailSidePanel({
+/** Detail side panel for row-level inspection. */
+function DetailSidePanel({
     detailState,
     onClose,
     onPageChange,

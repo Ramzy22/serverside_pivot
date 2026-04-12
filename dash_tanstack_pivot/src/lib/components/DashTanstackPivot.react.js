@@ -12,7 +12,7 @@ import { useVirtualizer } from '@tanstack/react-virtual';
 import { themes, getStyles, isDarkTheme, gridDimensionTokens, deriveEditedCellThemeTokens, deriveStructuralThemeTokens } from '../utils/styles';
 import { exportPivotTable } from '../utils/exportUtils';
 import { DEFAULT_FIELD_PANEL_SIZES, sanitizeFieldPanelSizes } from '../utils/fieldPanelLayout';
-import Icons from './Icons';
+import Icons from '../utils/Icons';
 const debugLog = (...args) => {
     const buildDebugEnabled = process.env.NODE_ENV !== 'production';
     let runtimeDebugEnabled = false;
@@ -61,6 +61,8 @@ import {
     buildComboPivotChartModel,
     buildComboSelectionChartModel,
     buildSelectionChartModel,
+} from '../utils/chartModelBuilders';
+import {
     canStackBarLayout,
     PivotChartModal,
     PivotChartPanel,
@@ -80,6 +82,7 @@ import { useDetailDrillThrough } from '../hooks/useDetailDrillThrough';
 import { PivotThemeProvider } from '../contexts/PivotThemeContext';
 import { PivotConfigProvider } from '../contexts/PivotConfigContext';
 import { PivotValueDisplayProvider } from '../contexts/PivotValueDisplayContext';
+import { normalizeSortingState, updateSortingForColumn } from '../utils/sorting';
 
 const DEFAULT_CHART_PANEL_ROW_LIMIT = 50;
 const DEFAULT_CHART_PANEL_COLUMN_LIMIT = 10;
@@ -98,6 +101,7 @@ const DEFAULT_TABLE_CANVAS_SIZE = 1.4;
 const TABLE_OVERLAY_CHART_PANE_ID = '__table_overlay_chart__';
 const EDITING_TEMPORARILY_DISABLED = true;
 const MAX_AUTO_SIZE_SAMPLE_ROWS = 300;
+const MAX_PENDING_ROW_TRANSITIONS = 128;
 const VALID_CHART_TYPES = new Set(['bar', 'line', 'area', 'sparkline', 'combo', 'pie', 'donut', 'scatter', 'waterfall', 'icicle', 'sunburst', 'sankey']);
 const VALID_CHART_SORT_MODES = new Set(['natural', 'value_desc', 'value_asc', 'label_asc', 'label_desc']);
 const VALID_CHART_INTERACTION_MODES = new Set(['focus', 'filter', 'event']);
@@ -836,12 +840,46 @@ const coerceTransportNumber = (value, fallback = null) => {
     return Number.isFinite(numeric) ? numeric : fallback;
 };
 
+const isColSchemaTransportColumn = (column) => {
+    const columnId = column && typeof column === 'object' ? column.id : column;
+    return String(columnId || '').trim() === '__col_schema';
+};
+
+const extractColSchemaFromTransportColumns = (columns) => {
+    if (!Array.isArray(columns)) return null;
+    const schemaEntry = columns.find((column) => (
+        column
+        && typeof column === 'object'
+        && column.id === '__col_schema'
+        && column.col_schema
+        && typeof column.col_schema === 'object'
+    ));
+    return schemaEntry ? schemaEntry.col_schema : null;
+};
+
+const normalizeTransportColumns = (columns, fallbackColumns = []) => {
+    const sourceColumns = Array.isArray(columns)
+        ? columns
+        : (Array.isArray(fallbackColumns) ? fallbackColumns : []);
+    return sourceColumns.filter((column) => !isColSchemaTransportColumn(column));
+};
+
 const normalizeRuntimeDataEnvelope = (payload, fallback = {}) => {
     const source = payload && typeof payload === 'object' ? payload : {};
+    const colSchema = (
+        source.colSchema
+        || source.col_schema
+        || extractColSchemaFromTransportColumns(source.columns)
+        || fallback.colSchema
+        || fallback.col_schema
+        || extractColSchemaFromTransportColumns(fallback.columns)
+        || null
+    );
     return {
         data: Array.isArray(source.data) ? source.data : (Array.isArray(fallback.data) ? fallback.data : []),
         rowCount: coerceTransportNumber(source.rowCount, coerceTransportNumber(fallback.rowCount, null)),
-        columns: Array.isArray(source.columns) ? source.columns : (Array.isArray(fallback.columns) ? fallback.columns : []),
+        columns: normalizeTransportColumns(source.columns, fallback.columns),
+        colSchema,
         dataOffset: coerceTransportNumber(source.dataOffset, coerceTransportNumber(fallback.dataOffset, 0)),
         dataVersion: coerceTransportNumber(source.dataVersion, coerceTransportNumber(fallback.dataVersion, 0)),
     };
@@ -869,6 +907,7 @@ const applyRuntimePatchEnvelope = (patch, fallback = {}) => {
             data: previousData,
             rowCount: source.rowCount,
             columns: source.columns,
+            colSchema: source.colSchema || source.col_schema,
             dataOffset: source.dataOffset,
             dataVersion: source.dataVersion,
         }, previousState);
@@ -891,6 +930,7 @@ const applyRuntimePatchEnvelope = (patch, fallback = {}) => {
         data: mergedData,
         rowCount: source.rowCount,
         columns: source.columns,
+        colSchema: source.colSchema || source.col_schema,
         dataOffset: source.dataOffset,
         dataVersion: source.dataVersion,
     }, previousState);
@@ -1437,6 +1477,7 @@ export default function DashTanstackPivot(props) {
         const data = transportDataState.data;
         const rowCount = transportDataState.rowCount;
         const responseColumns = transportDataState.columns;
+        const responseColSchema = transportDataState.colSchema;
         const dataOffset = transportDataState.dataOffset;
         const dataVersion = transportDataState.dataVersion;
         const filterOptions = transportFilterOptionsState;
@@ -1479,7 +1520,11 @@ export default function DashTanstackPivot(props) {
 
         const availableFields = useMemo(() => {
             if (availableFieldList && availableFieldList.length > 0) return availableFieldList;
-            if (serverSide && responseColumns) return responseColumns.filter(c => c.id !== '__col_schema').map(c => c.id || c);
+            if (serverSide && responseColumns) {
+                return responseColumns
+                    .map(c => (c && typeof c === 'object' ? c.id : c))
+                    .filter(id => id && id !== '__col_schema');
+            }
 
             return data && data.length ? Object.keys(data[0]) : [];
 
@@ -1644,6 +1689,9 @@ export default function DashTanstackPivot(props) {
             DEFAULT_TABLE_CANVAS_SIZE,
         });
         const [chartCanvasPaneWidthHints, setChartCanvasPaneWidthHints] = useState({});
+        const [sparklineDataModal, setSparklineDataModal] = useState(null);
+        const openSparklineDataModalRef = useRef(null);
+        openSparklineDataModalRef.current = setSparklineDataModal;
         const lastTableCanvasSizePropRef = useRef(null);
         const lastValConfigsPropRef = useRef(null);
         const lastDecimalPlacesPropRef = useRef(null);
@@ -3689,6 +3737,7 @@ export default function DashTanstackPivot(props) {
         serverSide,
         effectiveRowCount: serverSidePinsGrandTotal && rowCount ? Math.max(rowCount - 1, 0) : rowCount,
         responseColumns,
+        responseColSchema,
         dataVersion,
         stateEpoch,
         structuralInFlight,
@@ -7628,6 +7677,29 @@ export default function DashTanstackPivot(props) {
         });
     }, [layoutMode, rowFields.length, showRowNumbers]);
 
+    const applyHeaderSort = (colId, desc, sortMetadata = {}, append = false) => {
+        if (!colId || colId === '__row_number__') return;
+        const nextSorting = updateSortingForColumn({
+            sorting,
+            columnId: colId,
+            desc,
+            sortMetadata,
+            append,
+        });
+        setSorting(nextSorting);
+        if (setPropsRef.current) {
+            setPropsRef.current({
+                sorting: nextSorting,
+                sortEvent: {
+                    type: 'change',
+                    status: 'applied',
+                    sorting: nextSorting,
+                    timestamp: Date.now()
+                }
+            });
+        }
+    };
+
     // 4. FIXED: handleHeaderContextMenu with proper group detection
     const handleHeaderContextMenu = (e, colId, header = null, level = 0) => {
         e.preventDefault();
@@ -7645,16 +7717,57 @@ export default function DashTanstackPivot(props) {
 
         // Only show sort options for leaf columns
         if (!isGroup) {
+            const hasOtherSorts = Array.isArray(sorting) && sorting.some((sortSpec) => sortSpec && sortSpec.id !== colId);
+            const existingSortIndex = Array.isArray(sorting)
+                ? sorting.findIndex((sortSpec) => sortSpec && sortSpec.id === colId)
+                : -1;
+            const existingSortPriority = existingSortIndex >= 0 ? existingSortIndex + 1 : null;
+            const multiSortActionVerb = existingSortPriority ? `Update Priority ${existingSortPriority}` : 'Add';
+            const absoluteSortMetadata = { sortType: 'absolute', absoluteSort: true };
             actions.push({
                 label: 'Sort Ascending',
                 icon: <Icons.SortAsc/>,
-                onClick: () => column.toggleSorting(false)
+                onClick: () => applyHeaderSort(colId, false)
             });
             actions.push({
                 label: 'Sort Descending',
                 icon: <Icons.SortDesc/>,
-                onClick: () => column.toggleSorting(true)
+                onClick: () => applyHeaderSort(colId, true)
             });
+            if (hasOtherSorts) {
+                actions.push({
+                    label: `${multiSortActionVerb} Ascending Sort`,
+                    icon: <Icons.SortAsc/>,
+                    onClick: () => applyHeaderSort(colId, false, {}, true)
+                });
+                actions.push({
+                    label: `${multiSortActionVerb} Descending Sort`,
+                    icon: <Icons.SortDesc/>,
+                    onClick: () => applyHeaderSort(colId, true, {}, true)
+                });
+            }
+            actions.push({
+                label: 'Sort Absolute Ascending',
+                icon: <Icons.SortAsc/>,
+                onClick: () => applyHeaderSort(colId, false, absoluteSortMetadata)
+            });
+            actions.push({
+                label: 'Sort Absolute Descending',
+                icon: <Icons.SortDesc/>,
+                onClick: () => applyHeaderSort(colId, true, absoluteSortMetadata)
+            });
+            if (hasOtherSorts) {
+                actions.push({
+                    label: `${multiSortActionVerb} Absolute Ascending Sort`,
+                    icon: <Icons.SortAsc/>,
+                    onClick: () => applyHeaderSort(colId, false, absoluteSortMetadata, true)
+                });
+                actions.push({
+                    label: `${multiSortActionVerb} Absolute Descending Sort`,
+                    icon: <Icons.SortDesc/>,
+                    onClick: () => applyHeaderSort(colId, true, absoluteSortMetadata, true)
+                });
+            }
             actions.push({
                 label: 'Clear Sort',
                 onClick: () => column.clearSorting()
@@ -8267,6 +8380,7 @@ export default function DashTanstackPivot(props) {
 
     const columns = useColumnDefs({
         sortOptions: effectiveSortOptions,
+        sorting,
         serverSide,
         showRowNumbers,
         layoutMode,
@@ -8327,6 +8441,7 @@ export default function DashTanstackPivot(props) {
         resolveCellDisplayValue: resolveDisplayedCellValue,
         editValueDisplayMode,
         editingEnabled,
+        openSparklineDataModalRef,
     });
 
     // Auto-size new columns to fit their header text on spawn
@@ -8360,7 +8475,7 @@ export default function DashTanstackPivot(props) {
             }
         });
         if (Object.keys(newSizes).length > 0) {
-            setColumnSizing(prev => ({ ...newSizes, ...prev }));
+            setColumnSizing(prev => ({ ...prev, ...newSizes }));
             Object.entries(newSizes).forEach(([columnId, width]) => {
                 queueHeaderFitValidation(columnId, width);
             });
@@ -8391,6 +8506,14 @@ export default function DashTanstackPivot(props) {
         }, 10000);
         return () => clearTimeout(timeoutId);
     }, [serverSide, structuralInFlight, stateEpoch]);
+
+    useEffect(() => {
+        if (!serverSide || pendingRowTransitions.size === 0) return;
+        const timeoutId = setTimeout(() => {
+            setPendingRowTransitions(new Map());
+        }, 10000);
+        return () => clearTimeout(timeoutId);
+    }, [pendingRowTransitions, serverSide]);
 
     const getStableDataRowId = useCallback((row) => {
         if (!row) return null;
@@ -8823,7 +8946,8 @@ export default function DashTanstackPivot(props) {
     };
 
     const handleSortingChange = (updater) => {
-        const newSorting = typeof updater === 'function' ? updater(sorting) : updater;
+        const rawNextSorting = typeof updater === 'function' ? updater(sorting) : updater;
+        const newSorting = normalizeSortingState(rawNextSorting, sorting);
         setSorting(newSorting);
 
         // Fire sort event to backend
@@ -8867,6 +8991,10 @@ export default function DashTanstackPivot(props) {
                     setPendingRowTransitions(prev => {
                         const next = new Map(prev);
                         next.set(changedPath, isNowExpanded ? 'expand' : 'collapse');
+                        while (next.size > MAX_PENDING_ROW_TRANSITIONS) {
+                            const oldestKey = next.keys().next().value;
+                            next.delete(oldestKey);
+                        }
                         return next;
                     });
                 }
@@ -11577,6 +11705,7 @@ export default function DashTanstackPivot(props) {
                                     centerColIndexMap={centerColIndexMap}
                                     totalCenterColumns={totalCenterCols}
                                     rowHeight={rowHeight}
+                                    layoutMode={layoutMode}
                                     grandTotalPosition={grandTotalPosition}
                                     showColumnLoadingSkeletons={showColumnLoadingSkeletons}
                                     pendingColumnSkeletonCount={activeColumnSkeletonCount}
@@ -11735,6 +11864,72 @@ export default function DashTanstackPivot(props) {
             </div>
             {contextMenu && <ContextMenu {...contextMenu} theme={theme} onClose={() => setContextMenu(null)} />}
             {notification && <Notification message={notification.message} type={notification.type} onClose={() => setNotification(null)} />}
+            {sparklineDataModal && (
+                <div
+                    style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.45)', zIndex: 10000, display: 'flex', alignItems: 'center', justifyContent: 'center' }}
+                    onClick={() => setSparklineDataModal(null)}
+                >
+                    <div
+                        onClick={(e) => e.stopPropagation()}
+                        style={{
+                            background: theme.background,
+                            border: `1px solid ${theme.border}`,
+                            borderRadius: '12px',
+                            boxShadow: '0 8px 32px rgba(0,0,0,0.22)',
+                            minWidth: '300px',
+                            maxWidth: '520px',
+                            maxHeight: '70vh',
+                            display: 'flex',
+                            flexDirection: 'column',
+                            fontFamily: "'Inter', ui-sans-serif, system-ui, sans-serif",
+                            overflow: 'hidden',
+                        }}
+                    >
+                        {/* Modal header */}
+                        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '14px 18px 10px', borderBottom: `1px solid ${theme.border}` }}>
+                            <span style={{ fontSize: '13px', fontWeight: 700, color: theme.text }}>
+                                {sparklineDataModal.headerLabel || 'Trend Data'}
+                            </span>
+                            <button
+                                type="button"
+                                onClick={() => setSparklineDataModal(null)}
+                                style={{ background: 'none', border: 'none', cursor: 'pointer', color: theme.textSec, fontSize: '18px', lineHeight: 1, padding: '2px 4px' }}
+                            >×</button>
+                        </div>
+                        {/* Data table */}
+                        <div style={{ overflow: 'auto', flex: 1 }}>
+                            <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '12px' }}>
+                                <thead>
+                                    <tr style={{ background: theme.headerBg || theme.headerSubtleBg }}>
+                                        <th style={{ textAlign: 'left', padding: '7px 14px', color: theme.textSec, fontWeight: 600, fontSize: '10px', textTransform: 'uppercase', letterSpacing: '0.05em', borderBottom: `1px solid ${theme.border}` }}>Period</th>
+                                        <th style={{ textAlign: 'right', padding: '7px 14px', color: theme.textSec, fontWeight: 600, fontSize: '10px', textTransform: 'uppercase', letterSpacing: '0.05em', borderBottom: `1px solid ${theme.border}` }}>Value</th>
+                                    </tr>
+                                </thead>
+                                <tbody>
+                                    {(sparklineDataModal.points || []).map((point, i) => (
+                                        <tr key={i} style={{ borderBottom: `1px solid ${theme.border}`, background: i % 2 === 0 ? 'transparent' : (theme.headerSubtleBg || 'rgba(0,0,0,0.02)') }}>
+                                            <td style={{ padding: '6px 14px', color: theme.textSec }}>{point.label}</td>
+                                            <td style={{ padding: '6px 14px', textAlign: 'right', fontVariantNumeric: 'tabular-nums', fontWeight: 600, color: theme.text }}>{typeof point.value === 'number' ? point.value.toLocaleString(undefined, { maximumFractionDigits: 6 }) : point.value}</td>
+                                        </tr>
+                                    ))}
+                                    {(sparklineDataModal.points || []).length === 0 && (
+                                        <tr><td colSpan={2} style={{ padding: '16px 14px', color: theme.textSec, textAlign: 'center' }}>No data</td></tr>
+                                    )}
+                                </tbody>
+                            </table>
+                        </div>
+                        {/* Footer summary */}
+                        {(sparklineDataModal.points || []).length > 0 && (
+                            <div style={{ borderTop: `1px solid ${theme.border}`, padding: '8px 14px', display: 'flex', gap: '16px', fontSize: '11px', color: theme.textSec, background: theme.headerSubtleBg || theme.headerBg }}>
+                                <span>{(sparklineDataModal.points || []).length} points</span>
+                                <span>Min: <b style={{ color: theme.text }}>{Math.min(...(sparklineDataModal.points || []).map(p => p.value)).toLocaleString(undefined, { maximumFractionDigits: 4 })}</b></span>
+                                <span>Max: <b style={{ color: theme.text }}>{Math.max(...(sparklineDataModal.points || []).map(p => p.value)).toLocaleString(undefined, { maximumFractionDigits: 4 })}</b></span>
+                                <span>Last: <b style={{ color: theme.primary }}>{(sparklineDataModal.points || [])[(sparklineDataModal.points || []).length - 1]?.value?.toLocaleString(undefined, { maximumFractionDigits: 4 })}</b></span>
+                            </div>
+                        )}
+                    </div>
+                </div>
+            )}
         </PivotErrorBoundary>
             </div>{/* end zoom wrapper */}
             </PivotValueDisplayProvider>

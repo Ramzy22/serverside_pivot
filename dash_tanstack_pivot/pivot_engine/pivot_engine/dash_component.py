@@ -2,13 +2,15 @@
 dash_component.py - A standard Dash AIO component for the Pivot Engine.
 Uses dash-ag-grid for rendering and ScalablePivotController for processing.
 """
-from typing import List, Dict, Any, Optional
+from typing import List, Dict, Any, Optional, Callable
 import uuid
 import json
 import pandas as pd
 from dash import html, dcc, Output, Input, State, callback, MATCH, ALL
 import dash_ag_grid as dag
 
+from pivot_engine.grid_hierarchy import build_org_hierarchy_paths
+from pivot_engine.runtime.async_bridge import run_awaitable_sync
 from pivot_engine.scalable_pivot_controller import ScalablePivotController
 from pivot_engine.types.pivot_spec import PivotSpec, Measure
 
@@ -38,6 +40,7 @@ class PivotTableAIO(html.Div):
         initial_rows: List[str] = [],
         initial_measures: List[Dict[str, Any]] = [],
         initial_filters: List[Dict[str, Any]] = [],
+        enable_enterprise_modules: bool = True,  # Fix L6: configurable enterprise modules
         **kwargs
     ):
         """
@@ -47,6 +50,7 @@ class PivotTableAIO(html.Div):
             table_name: Name of the table to query
             initial_rows: List of dimension columns
             initial_measures: List of measures (dicts with field, agg, alias)
+            enable_enterprise_modules: Enable enterprise features (tree data). Default True.
         """
         if aio_id is None:
             aio_id = str(uuid.uuid4())
@@ -87,7 +91,7 @@ class PivotTableAIO(html.Div):
                     },
                 },
             },
-            enableEnterpriseModules=True, # Tree data needs enterprise (or valid polyfill logic)
+            enableEnterpriseModules=enable_enterprise_modules,  # Fix L6: use constructor parameter
             # Note: dash-ag-grid includes enterprise bundle, works with watermark without license
             style={"height": "600px", "width": "100%"},
         )
@@ -104,12 +108,7 @@ class PivotTableAIO(html.Div):
         controller_factory: Function that returns the controller instance (singleton).
         """
         
-        @callback(
-            Output(PivotTableAIO.ids.grid(MATCH), 'rowData'),
-            Output(PivotTableAIO.ids.grid(MATCH), 'columnDefs'),
-            Input(PivotTableAIO.ids.store(MATCH), 'data'),
-        )
-        def update_grid(spec_data):
+        async def _update_grid_async(spec_data):
             if not spec_data:
                 return [], []
             
@@ -129,26 +128,6 @@ class PivotTableAIO(html.Div):
             # This returns a Dict[path_key, list[nodes]]
             # We need to flatten this for AG Grid Tree Data
             
-            # For simplicity in V1, we fetch the first N levels
-            # A more advanced version would use expanded_paths from grid state
-            expanded_paths = [] # Default to collapsed
-            
-            # Note: run_hierarchical_pivot_batch_load is async. 
-            # Dash callbacks support async if using Quart or standard Flask with sync wrapper.
-            # Since controller is async, we need to run it synchronously here or make callback async.
-            # Dash supports async callbacks natively now.
-            
-            import asyncio
-            try:
-                # Get the running loop or create a new one
-                loop = asyncio.get_event_loop()
-            except RuntimeError:
-                loop = asyncio.new_event_loop()
-                asyncio.set_event_loop(loop)
-
-            # We want depth=len(rows) to see full tree, or limit it
-            depth = len(spec_data['rows'])
-            
             # We need to construct expanded paths to load *everything* for the initial view
             # OR we just load the root. 
             # Let's load top 2 levels to show it working.
@@ -163,10 +142,8 @@ class PivotTableAIO(html.Div):
             
             try:
                 # Run standard pivot to get all data (up to limit)
-                result = loop.run_until_complete(controller.run_pivot_async(spec, return_format="dict"))
+                result = await controller.run_pivot_async(spec, return_format="dict")
             except Exception as e:
-                # If loop is already running (e.g. uvicorn), we can't run_until_complete.
-                # In standard Dash (Flask), this works.
                 print(f"Error running pivot: {e}")
                 return [], []
 
@@ -184,15 +161,7 @@ class PivotTableAIO(html.Div):
             
             # Construct 'path' column for AG Grid
             # The path is a list of keys for the hierarchy
-            def make_path(row):
-                path = []
-                for dim in row_dims:
-                    val = row.get(dim)
-                    if val is not None:
-                        path.append(str(val))
-                return path
-
-            df['orgHierarchy'] = df.apply(make_path, axis=1)
+            df['orgHierarchy'] = build_org_hierarchy_paths(df, row_dims)
             
             # Column Defs
             # Hide the dimension columns, show only hierarchy + measures
@@ -211,3 +180,10 @@ class PivotTableAIO(html.Div):
 
             return df.to_dict('records'), col_defs
 
+        @callback(
+            Output(PivotTableAIO.ids.grid(MATCH), 'rowData'),
+            Output(PivotTableAIO.ids.grid(MATCH), 'columnDefs'),
+            Input(PivotTableAIO.ids.store(MATCH), 'data'),
+        )
+        def update_grid(spec_data):
+            return run_awaitable_sync(_update_grid_async(spec_data))

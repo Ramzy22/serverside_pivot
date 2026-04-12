@@ -3,7 +3,7 @@ import FilterPopover from '../Filters/FilterPopover';
 import SidebarFilterItem from './SidebarFilterItem';
 import ToolPanelSection from './ToolPanelSection';
 import ColumnTreeItem from './ColumnTreeItem';
-import Icons from '../Icons';
+import Icons from '../../utils/Icons';
 import { isGroupColumn, getAllLeafIdsFromColumn, hasChildrenInZone } from '../../utils/helpers';
 import { usePivotTheme } from '../../contexts/PivotThemeContext';
 import { usePivotConfig } from '../../contexts/PivotConfigContext';
@@ -13,9 +13,21 @@ import {
     mergeFieldPanelSize,
     sanitizeFieldPanelSizeEntry,
 } from '../../utils/fieldPanelLayout';
+import { normalizeSparklineConfig } from '../../utils/sparklines';
+import { usePivotRenderCounter } from '../../hooks/usePivotRenderCounter';
 import { ReportEditor } from './ReportEditor';
 
 const FORMULA_REFERENCE_RE = /\b[A-Za-z_][A-Za-z0-9_]*\b/g;
+const DEFAULT_VALUE_SPARKLINE_CONFIG = {
+    type: 'line',
+    metric: 'last',
+    showCurrentValue: true,
+    showDelta: true,
+    compact: false,
+    hideColumns: false,
+    placement: 'after',
+    source: 'pivot',
+};
 
 function escapeRegExp(value) {
     return String(value || '').replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
@@ -76,6 +88,46 @@ function updateValueConfig(setValConfigs, idx, updater) {
         next[idx] = updater(next[idx]);
         return next;
     });
+}
+
+function normalizeValueSparklineDraft(value) {
+    const normalized = normalizeSparklineConfig(value);
+    if (!normalized) return null;
+    return {
+        ...DEFAULT_VALUE_SPARKLINE_CONFIG,
+        ...normalized,
+        header: normalized.header || '',
+        color: normalized.color || '',
+        positiveColor: normalized.positiveColor || '',
+        negativeColor: normalized.negativeColor || '',
+    };
+}
+
+function sanitizeValueSparklineConfig(value) {
+    const source = {
+        ...DEFAULT_VALUE_SPARKLINE_CONFIG,
+        ...(value || {}),
+    };
+    const nextConfig = {
+        type: source.type || DEFAULT_VALUE_SPARKLINE_CONFIG.type,
+        metric: source.metric || DEFAULT_VALUE_SPARKLINE_CONFIG.metric,
+        showCurrentValue: source.showCurrentValue !== false,
+        showDelta: source.showDelta !== false,
+        compact: Boolean(source.compact),
+        hideColumns: Boolean(source.hideColumns),
+        placement: (typeof source.placement === 'string' && ['after', 'before', 'end'].includes(source.placement))
+            ? source.placement
+            : 'after',
+        source: source.source === 'field' ? 'field' : 'pivot',
+    };
+    ['header', 'color', 'positiveColor', 'negativeColor'].forEach((key) => {
+        const text = typeof source[key] === 'string' ? source[key].trim() : '';
+        if (text) nextConfig[key] = text;
+    });
+    if (Number.isFinite(Number(source.areaOpacity))) {
+        nextConfig.areaOpacity = Math.max(0.02, Math.min(0.45, Number(source.areaOpacity)));
+    }
+    return nextConfig;
 }
 
 function buildSuggestedFormula(baseValues) {
@@ -455,7 +507,410 @@ function getFormulaStatusStyles(theme, tone) {
     return statusColors[tone] || statusColors.muted;
 }
 
-function FormulaListItem({ item, idx, selected, onSelect, onRemove, theme, styles, dropLine, zoneId }) {
+function SparklineConfigModal({ item, idx, setValConfigs, theme, onClose }) {
+    const config = React.useMemo(
+        () => normalizeValueSparklineDraft(item && item.sparkline) || { ...DEFAULT_VALUE_SPARKLINE_CONFIG },
+        // eslint-disable-next-line react-hooks/exhaustive-deps
+        [item && item.sparkline]
+    );
+
+    const update = React.useCallback((patch) => {
+        updateValueConfig(setValConfigs, idx, (current) => {
+            const currentDraft = normalizeValueSparklineDraft(current.sparkline) || { ...DEFAULT_VALUE_SPARKLINE_CONFIG };
+            return {
+                ...current,
+                sparkline: sanitizeValueSparklineConfig({ ...currentDraft, ...patch }),
+            };
+        });
+    }, [idx, setValConfigs]);
+
+    const stopProp = React.useCallback((e) => e.stopPropagation(), []);
+
+    const CHART_TYPES = [
+        { value: 'line', label: 'Line' },
+        { value: 'area', label: 'Area' },
+        { value: 'column', label: 'Column' },
+        { value: 'bar', label: 'Bar' },
+    ];
+
+    const inputStyle = {
+        background: theme.background,
+        border: `1px solid ${theme.border}`,
+        borderRadius: '5px',
+        color: theme.text,
+        fontSize: '11px',
+        padding: '4px 7px',
+        outline: 'none',
+        width: '100%',
+        boxSizing: 'border-box',
+    };
+
+    const labelStyle = {
+        fontSize: '10px',
+        fontWeight: 700,
+        letterSpacing: '0.06em',
+        color: theme.textSec,
+        textTransform: 'uppercase',
+        marginBottom: '6px',
+        display: 'block',
+    };
+
+    const sectionStyle = {
+        marginBottom: '14px',
+    };
+
+    return (
+        <div
+            style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.45)', zIndex: 9999, display: 'flex', alignItems: 'center', justifyContent: 'center' }}
+            onMouseDown={stopProp}
+            onClick={onClose}
+        >
+            <div
+                onClick={stopProp}
+                style={{
+                    background: theme.background,
+                    border: `1px solid ${theme.border}`,
+                    borderRadius: '12px',
+                    boxShadow: '0 8px 32px rgba(0,0,0,0.22)',
+                    width: '320px',
+                    maxHeight: '80vh',
+                    overflow: 'auto',
+                    padding: '18px 20px 16px',
+                    fontFamily: "'Inter', ui-sans-serif, system-ui, sans-serif",
+                }}
+            >
+                {/* Header */}
+                <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '16px' }}>
+                    <span style={{ fontSize: '13px', fontWeight: 700, color: theme.text }}>Sparkline Settings</span>
+                    <button
+                        type="button"
+                        onClick={onClose}
+                        style={{ background: 'none', border: 'none', cursor: 'pointer', color: theme.textSec, fontSize: '18px', lineHeight: 1, padding: '2px 4px' }}
+                    >×</button>
+                </div>
+
+                {/* Data source */}
+                <div style={sectionStyle}>
+                    <span style={labelStyle}>Data source</span>
+                    <div style={{ display: 'flex', gap: '4px' }}>
+                        {[
+                            { value: 'pivot', label: 'Pivot columns' },
+                            { value: 'field', label: 'Field array' },
+                        ].map(({ value, label }) => (
+                            <button
+                                key={value}
+                                type="button"
+                                onClick={() => update({ source: value })}
+                                style={{
+                                    flex: 1,
+                                    padding: '4px 0',
+                                    fontSize: '11px',
+                                    fontWeight: 600,
+                                    borderRadius: '6px',
+                                    cursor: 'pointer',
+                                    border: `1px solid ${(config.source || 'pivot') === value ? theme.primary : theme.border}`,
+                                    background: (config.source || 'pivot') === value ? `${theme.primary}18` : (theme.headerSubtleBg || theme.background),
+                                    color: (config.source || 'pivot') === value ? theme.primary : theme.textSec,
+                                }}
+                            >{label}</button>
+                        ))}
+                    </div>
+                    <div style={{ marginTop: '5px', fontSize: '10px', color: theme.textSec, lineHeight: 1.4 }}>
+                        {(config.source || 'pivot') === 'pivot'
+                            ? 'Sparkline collects data across the pivot\'s column dimensions (e.g. Jan, Feb, Mar).'
+                            : 'Each row\'s cell value is already an array of data points (e.g. trade history, price series).'}
+                    </div>
+                </div>
+
+                {/* Chart type */}
+                <div style={sectionStyle}>
+                    <span style={labelStyle}>Chart type</span>
+                    <div style={{ display: 'flex', gap: '4px' }}>
+                        {CHART_TYPES.map(({ value, label }) => (
+                            <button
+                                key={value}
+                                type="button"
+                                onClick={() => update({ type: value })}
+                                style={{
+                                    flex: 1,
+                                    padding: '4px 0',
+                                    fontSize: '11px',
+                                    fontWeight: 600,
+                                    borderRadius: '6px',
+                                    cursor: 'pointer',
+                                    border: `1px solid ${config.type === value ? theme.primary : theme.border}`,
+                                    background: config.type === value ? `${theme.primary}18` : (theme.headerSubtleBg || theme.background),
+                                    color: config.type === value ? theme.primary : theme.textSec,
+                                }}
+                            >{label}</button>
+                        ))}
+                    </div>
+                </div>
+
+                {/* Summary metric */}
+                <div style={sectionStyle}>
+                    <span style={labelStyle}>Summary metric</span>
+                    <select
+                        value={config.metric}
+                        onChange={(e) => update({ metric: e.target.value })}
+                        style={{ ...inputStyle, cursor: 'pointer' }}
+                    >
+                        <option value="last">Last value</option>
+                        <option value="first">First value</option>
+                        <option value="min">Minimum</option>
+                        <option value="max">Maximum</option>
+                        <option value="avg">Average</option>
+                        <option value="sum">Sum</option>
+                        <option value="delta">Delta (last − first)</option>
+                    </select>
+                </div>
+
+                {/* Display options */}
+                <div style={sectionStyle}>
+                    <span style={labelStyle}>Display</span>
+                    <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '6px' }}>
+                        {[
+                            { key: 'showCurrentValue', label: 'Show value' },
+                            { key: 'showDelta', label: 'Show delta' },
+                            { key: 'compact', label: 'Compact mode' },
+                            { key: 'hideColumns', label: 'Hide source columns' },
+                        ].map(({ key, label }) => (
+                            <label key={key} style={{ display: 'flex', alignItems: 'center', gap: '5px', fontSize: '11px', color: theme.text, cursor: 'pointer', userSelect: 'none' }}>
+                                <input
+                                    type="checkbox"
+                                    checked={Boolean(config[key])}
+                                    onChange={(e) => update({ [key]: e.target.checked })}
+                                    style={{ accentColor: theme.primary, width: '13px', height: '13px', cursor: 'pointer' }}
+                                />
+                                {label}
+                            </label>
+                        ))}
+                    </div>
+                    {config.hideColumns && (
+                        <div style={{ marginTop: '6px', fontSize: '10px', color: theme.textSec, background: `${theme.primary}10`, border: `1px solid ${theme.primary}30`, borderRadius: '6px', padding: '5px 8px', lineHeight: 1.4 }}>
+                            Source value columns will be hidden; only the trend column is shown.
+                        </div>
+                    )}
+                </div>
+
+                {/* Placement — only relevant for pivot-collect mode */}
+                {(config.source || 'pivot') === 'pivot' && <div style={sectionStyle}>
+                    <span style={labelStyle}>Position</span>
+                    <div style={{ display: 'flex', gap: '4px' }}>
+                        {[
+                            { value: 'before', label: 'Before' },
+                            { value: 'after', label: 'After' },
+                            { value: 'end', label: 'End' },
+                        ].map(({ value, label }) => (
+                            <button
+                                key={value}
+                                type="button"
+                                onClick={() => update({ placement: value })}
+                                style={{
+                                    flex: 1,
+                                    padding: '4px 0',
+                                    fontSize: '11px',
+                                    fontWeight: 600,
+                                    borderRadius: '6px',
+                                    cursor: 'pointer',
+                                    border: `1px solid ${config.placement === value ? theme.primary : theme.border}`,
+                                    background: config.placement === value ? `${theme.primary}18` : (theme.headerSubtleBg || theme.background),
+                                    color: config.placement === value ? theme.primary : theme.textSec,
+                                }}
+                            >{label}</button>
+                        ))}
+                    </div>
+                    <div style={{ marginTop: '5px', fontSize: '10px', color: theme.textSec, lineHeight: 1.4 }}>
+                        {config.placement === 'before' && 'Trend column appears before the first matching data column.'}
+                        {config.placement === 'after' && 'Trend column appears after the last matching data column.'}
+                        {config.placement === 'end' && 'Trend column appears at the far right, after all data columns.'}
+                        {!config.placement && 'Trend column appears after the last matching data column.'}
+                    </div>
+                </div>}
+
+                {/* Colors */}
+                <div style={sectionStyle}>
+                    <span style={labelStyle}>Colors</span>
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
+                        {[
+                            { key: 'color', label: 'Line / fill color', always: true },
+                            { key: 'positiveColor', label: 'Positive bar color', always: false },
+                            { key: 'negativeColor', label: 'Negative bar color', always: false },
+                        ].filter(({ always }) => always || config.type === 'column' || config.type === 'bar').map(({ key, label }) => (
+                            <div key={key}>
+                                <span style={{ fontSize: '10px', color: theme.textSec, marginBottom: '3px', display: 'block' }}>{label}</span>
+                                <div style={{ display: 'flex', gap: '5px', alignItems: 'center' }}>
+                                    <input
+                                        type="color"
+                                        value={config[key] || (key === 'negativeColor' ? '#B91C1C' : key === 'positiveColor' ? '#2F855A' : '#2563EB')}
+                                        onChange={(e) => update({ [key]: e.target.value })}
+                                        style={{ width: '28px', height: '26px', padding: '1px 2px', border: `1px solid ${theme.border}`, borderRadius: '4px', cursor: 'pointer', background: 'none' }}
+                                    />
+                                    <input
+                                        type="text"
+                                        value={config[key] || ''}
+                                        onChange={(e) => update({ [key]: e.target.value })}
+                                        placeholder="Auto"
+                                        style={{ ...inputStyle, flex: 1 }}
+                                    />
+                                    {config[key] && (
+                                        <button
+                                            type="button"
+                                            onClick={() => update({ [key]: '' })}
+                                            style={{ background: 'none', border: 'none', cursor: 'pointer', color: theme.textSec, fontSize: '14px', lineHeight: 1, padding: '2px' }}
+                                            title="Reset to auto"
+                                        >×</button>
+                                    )}
+                                </div>
+                            </div>
+                        ))}
+                    </div>
+                </div>
+
+                {/* Area opacity */}
+                {config.type === 'area' && (
+                    <div style={sectionStyle}>
+                        <span style={labelStyle}>Area fill opacity</span>
+                        <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                            <input
+                                type="range"
+                                min="0.02"
+                                max="0.45"
+                                step="0.01"
+                                value={config.areaOpacity != null ? config.areaOpacity : 0.14}
+                                onChange={(e) => update({ areaOpacity: Number(e.target.value) })}
+                                style={{ flex: 1, accentColor: theme.primary }}
+                            />
+                            <span style={{ fontSize: '11px', color: theme.textSec, minWidth: '32px', textAlign: 'right' }}>
+                                {Math.round((config.areaOpacity != null ? config.areaOpacity : 0.14) * 100)}%
+                            </span>
+                        </div>
+                    </div>
+                )}
+
+                {/* Column header label */}
+                <div style={sectionStyle}>
+                    <span style={labelStyle}>Column header label</span>
+                    <input
+                        type="text"
+                        value={config.header || ''}
+                        onChange={(e) => update({ header: e.target.value })}
+                        placeholder="Auto (e.g. Sales Trend)"
+                        style={inputStyle}
+                    />
+                </div>
+
+                {/* Footer */}
+                <div style={{ display: 'flex', justifyContent: 'flex-end' }}>
+                    <button
+                        type="button"
+                        onClick={onClose}
+                        style={{
+                            background: theme.primary,
+                            color: '#fff',
+                            border: 'none',
+                            borderRadius: '7px',
+                            padding: '6px 18px',
+                            fontSize: '12px',
+                            fontWeight: 700,
+                            cursor: 'pointer',
+                        }}
+                    >Done</button>
+                </div>
+            </div>
+        </div>
+    );
+}
+
+function ValueSparklineControls({ item, idx, setValConfigs, theme, showNotification }) {
+    const [modalOpen, setModalOpen] = React.useState(false);
+    const enabled = Boolean(normalizeValueSparklineDraft(item && item.sparkline));
+    const stopProp = React.useCallback((e) => e.stopPropagation(), []);
+
+    const toggleSparkline = React.useCallback((e) => {
+        e.stopPropagation();
+        if (enabled) {
+            updateValueConfig(setValConfigs, idx, (current) => ({ ...current, sparkline: false }));
+            if (showNotification) showNotification('Removed sparkline trend.', 'info');
+        } else {
+            updateValueConfig(setValConfigs, idx, (current) => ({
+                ...current,
+                sparkline: sanitizeValueSparklineConfig(current.sparkline || DEFAULT_VALUE_SPARKLINE_CONFIG),
+            }));
+            setModalOpen(true);
+            if (showNotification) showNotification('Sparkline trend enabled.', 'success');
+        }
+    }, [enabled, idx, setValConfigs, showNotification]);
+
+    return (
+        <div
+            data-value-sparkline-controls="true"
+            data-value-sparkline-enabled={enabled ? 'true' : 'false'}
+            onMouseDown={stopProp}
+            onClick={stopProp}
+            style={{ marginTop: '6px', paddingTop: '6px', borderTop: `1px solid ${theme.border}`, width: '100%', display: 'flex', alignItems: 'center', gap: '6px' }}
+        >
+            <button
+                type="button"
+                data-value-sparkline-toggle="true"
+                onClick={toggleSparkline}
+                style={{
+                    border: `1px solid ${enabled ? theme.primary : theme.border}`,
+                    background: enabled ? `${theme.primary}12` : (theme.headerSubtleBg || theme.background),
+                    color: enabled ? theme.primary : theme.textSec,
+                    borderRadius: '6px',
+                    cursor: 'pointer',
+                    padding: '3px 8px',
+                    fontSize: '10px',
+                    lineHeight: '16px',
+                    fontWeight: 700,
+                    flexShrink: 0,
+                }}
+            >
+                {enabled ? 'Remove Trend' : '+ Trend'}
+            </button>
+            {enabled && (
+                <button
+                    type="button"
+                    data-value-sparkline-settings="true"
+                    onClick={(e) => { e.stopPropagation(); setModalOpen(true); }}
+                    style={{
+                        border: `1px solid ${theme.border}`,
+                        background: theme.headerSubtleBg || theme.background,
+                        color: theme.textSec,
+                        borderRadius: '6px',
+                        cursor: 'pointer',
+                        padding: '3px 8px',
+                        fontSize: '10px',
+                        lineHeight: '16px',
+                        fontWeight: 600,
+                        flexShrink: 0,
+                    }}
+                    title="Configure sparkline"
+                >Configure ⚙</button>
+            )}
+            {!enabled && (
+                <span style={{ fontSize: '10px', color: theme.textSec }}>Optional trend column</span>
+            )}
+            {enabled && !modalOpen && (
+                <span style={{ fontSize: '10px', color: theme.primary, flex: 1, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+                    {['line','area','column','bar'].includes(item.sparkline && item.sparkline.type) ? item.sparkline.type : 'line'} · {(item.sparkline && item.sparkline.metric) || 'last'}
+                </span>
+            )}
+            {modalOpen && (
+                <SparklineConfigModal
+                    item={item}
+                    idx={idx}
+                    setValConfigs={setValConfigs}
+                    theme={theme}
+                    onClose={() => setModalOpen(false)}
+                />
+            )}
+        </div>
+    );
+}
+
+function FormulaListItem({ item, idx, selected, onSelect, onRemove, setValConfigs, theme, styles, dropLine, zoneId, valueSelectStyle, showNotification }) {
     const baseBorder = selected ? `${theme.primary}77` : theme.border;
     const background = selected ? (theme.headerBg || `${theme.primary}0f`) : (theme.background || 'transparent');
     const preview = String(item.formula || '').trim() || 'Empty formula';
@@ -470,6 +925,8 @@ function FormulaListItem({ item, idx, selected, onSelect, onRemove, theme, style
                 borderLeft: selected ? `3px solid ${theme.primary}` : `3px solid transparent`,
                 boxShadow: 'none',
                 cursor: 'pointer',
+                flexWrap: 'wrap',
+                alignItems: 'flex-start',
             }}
             title="Select formula"
         >
@@ -532,6 +989,14 @@ function FormulaListItem({ item, idx, selected, onSelect, onRemove, theme, style
                     <Icons.Close />
                 </span>
             </div>
+            <ValueSparklineControls
+                item={item}
+                idx={idx}
+                setValConfigs={setValConfigs}
+                theme={theme}
+                valueSelectStyle={valueSelectStyle}
+                showNotification={showNotification}
+            />
             {dropLine && dropLine.zone === zoneId && dropLine.idx === idx + 1 && <div style={{ ...styles.dropLine, bottom: -2 }} />}
         </div>
     );
@@ -1595,6 +2060,7 @@ export const SidebarPanel = React.memo(function SidebarPanel({
     sidebarWidth, setSidebarWidth,
     fieldPanelSizes, setFieldPanelSizes,
 }) {
+    usePivotRenderCounter('SidebarPanel');
     const { theme, styles } = usePivotTheme();
     const {
         filters, setFilters,
@@ -2090,13 +2556,19 @@ export const SidebarPanel = React.memo(function SidebarPanel({
                                                                 selected={item.field === activeFormulaField}
                                                                 onSelect={openFormulaModal}
                                                                 onRemove={removeValueAtIndex}
+                                                                setValConfigs={setValConfigs}
                                                                 theme={theme}
                                                                 styles={styles}
                                                                 dropLine={dropLine}
                                                                 zoneId={zone.id}
+                                                                valueSelectStyle={valueSelectStyle}
+                                                                showNotification={showNotification}
                                                             />
                                                         ) : (
-                                                            <div style={styles.chip}>
+                                                            <div style={{
+                                                                ...styles.chip,
+                                                                ...(zone.id === 'vals' ? { flexWrap: 'wrap', alignItems: 'flex-start' } : {}),
+                                                            }}>
                                                                 {dropLine && dropLine.zone===zone.id && dropLine.idx===idx && <div style={{...styles.dropLine,top:-2}}/>}
                                                                 <div style={{display:'flex',alignItems:'center',gap:'8px', minWidth: 0, flex: 1}}>
                                                                     <Icons.DragIndicator/>
@@ -2128,6 +2600,16 @@ export const SidebarPanel = React.memo(function SidebarPanel({
                                                                 </div>
                                                                 {zone.id === 'filter' && sidebarFilterState.columnId === label && (
                                                                     <FilterPopover column={{header: displayLabel, id: label}} anchorEl={sidebarFilterState.anchorEl} onClose={closeSidebarFilter} onFilter={(filterValue) => handleHeaderFilter(label, filterValue)} currentFilter={filters[label]} options={getFilterOptionsForColumn(label)} theme={theme} />
+                                                                )}
+                                                                {zone.id === 'vals' && (
+                                                                    <ValueSparklineControls
+                                                                        item={item}
+                                                                        idx={idx}
+                                                                        setValConfigs={setValConfigs}
+                                                                        theme={theme}
+                                                                        valueSelectStyle={valueSelectStyle}
+                                                                        showNotification={showNotification}
+                                                                    />
                                                                 )}
                                                                 {dropLine && dropLine.zone===zone.id && dropLine.idx===idx+1 && <div style={{...styles.dropLine,bottom:-2}}/>}
                                                             </div>

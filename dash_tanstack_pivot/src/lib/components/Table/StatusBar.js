@@ -1,5 +1,5 @@
 import React, { useMemo } from 'react';
-import Icons from '../Icons';
+import Icons from '../../utils/Icons';
 import { formatValue } from '../../utils/helpers';
 
 const fmt = (value, decimals = 0, numberGroupSeparator) => {

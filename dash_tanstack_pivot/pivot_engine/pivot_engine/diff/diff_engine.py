@@ -125,6 +125,46 @@ class TileKey:
         )
 
 
+class MultiDimensionalTilePlanner:
+    """Plans coarse row/column tiles for hierarchical and pivoted result shapes."""
+
+    def __init__(self, tile_size: int = 100):
+        self.tile_size = max(int(tile_size or 100), 1)
+
+    def plan_hierarchical_tiles(self, spec: Dict[str, Any], drill_state: Dict[str, Any]) -> List[TileKey]:
+        rows = list((spec or {}).get("rows") or [])
+        expanded_paths = list((drill_state or {}).get("expanded_paths") or [[]])
+        tiles: List[TileKey] = []
+        for index, path in enumerate(expanded_paths or [[]]):
+            path_values = [str(value) for value in (path or [])]
+            level = min(len(path_values), max(len(rows) - 1, 0))
+            tiles.append(
+                TileKey(
+                    row_start=index * self.tile_size,
+                    row_end=(index + 1) * self.tile_size,
+                    col_start=0,
+                    col_end=-1,
+                    dimension_level={row: min(pos, level) for pos, row in enumerate(rows)},
+                    drill_path=path_values,
+                )
+            )
+        return tiles
+
+    def plan_multi_dimensional_tiles(self, spec: Dict[str, Any]) -> List[TileKey]:
+        rows = list((spec or {}).get("rows") or [])
+        columns = list((spec or {}).get("columns") or [])
+        dimensions = rows + columns
+        return [
+            TileKey(
+                row_start=0,
+                row_end=self.tile_size,
+                col_start=0,
+                col_end=-1,
+                dimension_level={dimension: index for index, dimension in enumerate(dimensions)},
+            )
+        ]
+
+
 @dataclass
 class QueryTile:
     """Represents a cached tile of query results"""
@@ -439,14 +479,25 @@ class QueryDiffEngine:
                             columns[col] = []
                         columns[col].append(val)
 
-                arrays = {}
-                for col_name, values in columns.items():
-                    try:
-                        arrays[col_name] = pa.array(values)
-                    except:
-                        arrays[col_name] = pa.array([str(v) for v in values])
+                ordered_column_names = []
+                if base_result is not None:
+                    ordered_column_names.extend(base_result.column_names)
+                ordered_column_names.extend(
+                    col_name
+                    for col_name in columns.keys()
+                    if col_name not in ordered_column_names
+                )
 
-                return pa.table(arrays)
+                arrays = []
+                for col_name in ordered_column_names:
+                    values = [row.get(col_name) for row in merged_data]
+                    try:
+                        field = base_result.schema.field(col_name) if base_result is not None and col_name in base_result.column_names else None
+                        arrays.append(pa.array(values, type=field.type if field is not None else None))
+                    except Exception:
+                        arrays.append(pa.array([str(v) if v is not None else None for v in values]))
+
+                return pa.table(arrays, names=ordered_column_names)
 
         return base_result
 
@@ -513,6 +564,7 @@ class QueryDiffEngine:
         strategy["can_reuse_tiles"] = len(tiles_cached) > 0
         strategy["tiles_needed"] = [t.to_string() for t in tiles_needed]
         strategy["cache_hits"] = len(tiles_cached)
+        strategy["total_tiles"] = (end_tile - start_tile) + 1
         
         if not tiles_needed:
             # All tiles cached
@@ -521,13 +573,53 @@ class QueryDiffEngine:
         tile_ibis_expressions = []
         for tile in tiles_needed:
             for q_expr in queries: # q_expr is an IbisTable
-                # Only process aggregate queries for tiling
-                op_name = getattr(q_expr.op(), 'name', None)
-                if op_name == "aggregate": 
+                try:
                     tile_ibis_expr = self._create_tile_query(q_expr, tile, spec_dict)
-                    tile_ibis_expressions.append(tile_ibis_expr)
+                except Exception:
+                    strategy["tile_plan_fallback"] = "limit_not_supported"
+                    strategy["can_reuse_tiles"] = False
+                    return queries, strategy
+                tile_ibis_expressions.append(tile_ibis_expr)
+
+        if not tile_ibis_expressions:
+            strategy["tile_plan_fallback"] = "no_tile_queries"
+            strategy["can_reuse_tiles"] = False
+            return queries, strategy
         
         return tile_ibis_expressions, strategy
+
+    def _calculate_prefetch_tiles(self, cached_tiles: List[TileKey], spec_dict: Dict[str, Any]) -> List[TileKey]:
+        if not cached_tiles:
+            return []
+
+        seen = {(tile.row_start, tile.row_end, tile.col_start, tile.col_end) for tile in cached_tiles}
+        prefetch_tiles: List[TileKey] = []
+        for tile in cached_tiles:
+            candidates = [
+                TileKey(
+                    row_start=max(tile.row_start - self.tile_size, 0),
+                    row_end=max(tile.row_start, self.tile_size),
+                    col_start=tile.col_start,
+                    col_end=tile.col_end,
+                    dimension_level=tile.dimension_level,
+                    drill_path=tile.drill_path,
+                ),
+                TileKey(
+                    row_start=tile.row_end,
+                    row_end=tile.row_end + self.tile_size,
+                    col_start=tile.col_start,
+                    col_end=tile.col_end,
+                    dimension_level=tile.dimension_level,
+                    drill_path=tile.drill_path,
+                ),
+            ]
+            for candidate in candidates:
+                key = (candidate.row_start, candidate.row_end, candidate.col_start, candidate.col_end)
+                if candidate.row_start == candidate.row_end or key in seen:
+                    continue
+                seen.add(key)
+                prefetch_tiles.append(candidate)
+        return prefetch_tiles
     
     def _create_tile_query(
         self,

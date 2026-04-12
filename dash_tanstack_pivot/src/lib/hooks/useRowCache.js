@@ -110,31 +110,20 @@ export const useRowCache = ({ blockSize = 100, maxBlocks = 500 } = {}) => {
     const evictOverflow = useCallback((epoch = currentEpochRef.current) => {
         let changed = false;
         while (cacheRef.current.size > maxBlocks) {
+            // The Map preserves insertion order and every setBlockLoading/setBlockLoaded
+            // moves its entry to the end via delete+set, so the front is always the
+            // oldest (least-recently-used) entry. Scan from the front and evict the
+            // first non-pinned block — O(k) where k = pinned blocks near the front,
+            // typically 0, never more than a handful.
             let evictionKey = null;
-            let evictionScore = null;
-
-            for (const [key, block] of cacheRef.current.entries()) {
+            for (const [key, _block] of cacheRef.current.entries()) {
                 const { epoch: keyEpoch, blockIndex: keyBlockIndex } = parseKey(String(key));
-                const distance = blockDistanceFromPinned(keyBlockIndex, keyEpoch);
-                const isPinned = distance === 0;
-                const age = Number(block?.timestamp) || 0;
-                const score = [
-                    isPinned ? 1 : 0,
-                    distance,
-                    -age,
-                ];
-                if (
-                    evictionScore === null ||
-                    score[0] < evictionScore[0] ||
-                    (score[0] === evictionScore[0] && score[1] > evictionScore[1]) ||
-                    (score[0] === evictionScore[0] && score[1] === evictionScore[1] && score[2] > evictionScore[2])
-                ) {
-                    evictionScore = score;
+                if (blockDistanceFromPinned(keyBlockIndex, keyEpoch) !== 0) {
                     evictionKey = key;
+                    break;
                 }
             }
-
-            if (evictionKey === null) break;
+            if (evictionKey === null) break; // All remaining blocks are pinned
             cacheRef.current.delete(evictionKey);
             changed = true;
         }

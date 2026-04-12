@@ -1,11 +1,12 @@
 import { useCallback, useMemo, useRef } from 'react';
 import React from 'react';
-import Icons from '../components/Icons';
+import Icons from '../utils/Icons';
 import FilterPopover from '../components/Filters/FilterPopover';
 import { flexRender } from '@tanstack/react-table';
 import { buildEditedCellVisualStyle, mergeStateStyles } from '../utils/styles';
 import { formatDisplayLabel } from '../utils/helpers';
 import { EDITED_CELL_FORMAT_KEY } from '../utils/formatting';
+import { findSortSpecifier, isAbsoluteSortSpecifier } from '../utils/sorting';
 
 /**
  * useRenderHelpers — extracts renderCell and renderHeaderCell from DashTanstackPivot.
@@ -140,6 +141,29 @@ export function useRenderHelpers({
 
         const row = cellLike.row;
         const col = cellLike.column;
+        const rowSpanState = renderOptions.rowSpan || null;
+        const rowSpanHeight = rowSpanState && rowSpanState.rowSpan > 1 && Number(rowSpanState.height) > 0
+            ? Number(rowSpanState.height)
+            : null;
+        if (rowSpanState && rowSpanState.hidden) {
+            return (
+                <div
+                    key={cellLike.id}
+                    role="gridcell"
+                    aria-hidden="true"
+                    data-rowid={row.id}
+                    data-colid={col.id}
+                    data-rowspan-hidden="true"
+                    style={{
+                        ...baseCellStyle,
+                        width: col.getSize(),
+                        height: '100%',
+                        visibility: 'hidden',
+                        pointerEvents: 'none',
+                    }}
+                />
+            );
+        }
         const colIndex = visibleLeafColIndexMap.get(col.id) !== undefined ? visibleLeafColIndexMap.get(col.id) : -1;
         const isHierarchy = col.id === 'hierarchy';
         const colParentHeader = col.parent && typeof col.parent.columnDef?.header === 'string' ? col.parent.columnDef.header : '';
@@ -167,12 +191,16 @@ export function useRenderHelpers({
             getValue: () => resolvedCellValue,
             renderValue: () => (resolvedCellValue ?? null),
         };
-        displayCellLike.getContext = () => ({
-            ...cellLike.getContext(),
+        const baseCellContext = typeof cellLike.getContext === 'function'
+            ? cellLike.getContext()
+            : {};
+        const displayCellContext = {
+            ...baseCellContext,
             cell: displayCellLike,
             getValue: displayCellLike.getValue,
             renderValue: displayCellLike.renderValue,
-        });
+        };
+        displayCellLike.getContext = () => displayCellContext;
         const cellFmt = cellFormatRules && cellFormatRules[cellKey];
         const editedCellFmt = cellFormatRules && cellFormatRules[EDITED_CELL_FORMAT_KEY];
         const editedMarker = typeof resolveEditedCellMarker === 'function'
@@ -273,11 +301,15 @@ export function useRenderHelpers({
                 aria-selected={isSelected}
                 data-rowid={row.id}
                 data-colid={col.id}
+                data-rowspan={rowSpanHeight ? rowSpanState.rowSpan : undefined}
                 onMouseDown={(e) => handleCellMouseDown(e, virtualRowIndex, colIndex, row.id, col.id, resolvedCellValue)}
                 onMouseEnter={() => handleCellMouseEnter(virtualRowIndex, colIndex)}
                 style={{
                     ...baseCellStyle,
                     width: col.getSize(),
+                    height: rowSpanHeight || '100%',
+                    minHeight: rowSpanHeight || undefined,
+                    alignSelf: rowSpanHeight ? 'flex-start' : undefined,
                     justifyContent: isHierarchy ? 'flex-start' : 'flex-end',
                     fontVariantNumeric: isHierarchy ? undefined : 'tabular-nums',
                     fontWeight: cellFmt && cellFmt.bold
@@ -299,6 +331,9 @@ export function useRenderHelpers({
                             )),
                     ...cellStateStyle,
                     position: !disableSticky && cellStateStyle.position === 'sticky' ? 'sticky' : 'relative',
+                    zIndex: rowSpanHeight
+                        ? Math.max(Number(cellStateStyle.zIndex) || 0, 6)
+                        : cellStateStyle.zIndex,
                 }}
                 onContextMenu={e => handleContextMenu(e, resolvedCellValue, col.id, row)}
             >
@@ -409,6 +444,41 @@ export function useRenderHelpers({
         opacity: 0.6,
     }), [theme.textSec]);
 
+    const sortPriorityBadgeStyle = useMemo(() => ({
+        display: 'inline-flex',
+        alignItems: 'center',
+        justifyContent: 'center',
+        minWidth: '16px',
+        height: '16px',
+        padding: '0 4px',
+        borderRadius: '8px',
+        fontSize: '10px',
+        lineHeight: 1,
+        fontWeight: 800,
+        color: '#fff',
+        background: theme.sortedHeaderBorder || theme.primary,
+        flexShrink: 0,
+    }), [theme.primary, theme.sortedHeaderBorder]);
+
+    const absoluteSortBadgeStyle = useMemo(() => ({
+        display: 'inline-flex',
+        alignItems: 'center',
+        justifyContent: 'center',
+        height: '16px',
+        padding: '0 4px',
+        borderRadius: '6px',
+        border: `1px solid ${theme.sortedHeaderBorder || theme.primary}`,
+        color: theme.sortedHeaderText || theme.primary,
+        fontSize: '9px',
+        lineHeight: 1,
+        fontWeight: 800,
+        flexShrink: 0,
+    }), [theme.primary, theme.sortedHeaderBorder, theme.sortedHeaderText]);
+
+    const sortingSignature = Array.isArray(sorting)
+        ? sorting.map((sortSpec) => `${sortSpec && sortSpec.id}:${sortSpec && sortSpec.desc ? 'desc' : 'asc'}:${isAbsoluteSortSpecifier(sortSpec) ? 'abs' : ''}`).join('|')
+        : '';
+
     // Render Header Cell for Split Sections
     // overrideWidth: when set, replaces the computed section width (used for partially-visible
     // group headers during center-column virtualization so the width matches only the visible leaves).
@@ -424,7 +494,9 @@ export function useRenderHelpers({
         const isUnderTotalGroup = isMeasureSubHeader && (parentText === 'Grand Total' || parentText.startsWith('Grand Total'));
         const isSorted = header.column.getIsSorted();
         const sortIndex = header.column.getSortIndex();
-        const isMultiSort = tableRef.current ? tableRef.current.getState().sorting.length > 1 : false;
+        const sortSpecifier = findSortSpecifier(sorting, header.column.id);
+        const isAbsoluteSort = isAbsoluteSortSpecifier(sortSpecifier);
+        const hasSortPriority = !isGroupHeader && isSorted && Number.isFinite(Number(sortIndex)) && Number(sortIndex) >= 0;
         const isResizingColumn = header.column.getIsResizing();
         const isHoveredHeader = hoveredHeaderIdRef.current === header.column.id;
         const isFocusedHeader = focusedHeaderIdRef.current === header.column.id;
@@ -456,6 +528,10 @@ export function useRenderHelpers({
         const headerBaseBackground = isHierarchyHeader
             ? (theme.hierarchyBg || theme.headerSubtleBg || theme.headerBg)
             : theme.headerBg;
+        const headerLabel = formatDisplayLabel(typeof header.column.columnDef.header === 'string' ? header.column.columnDef.header : header.column.id);
+        const sortAriaDescription = isSorted
+            ? ` Sorted ${isSorted === 'desc' ? 'descending' : 'ascending'}${hasSortPriority ? ` with priority ${sortIndex + 1}` : ''}${isAbsoluteSort ? ' by absolute value' : ''}.`
+            : '';
 
         // Calculate sticky style for pinned headers using the hook
         const stickyStyle = disableSticky
@@ -505,7 +581,7 @@ export function useRenderHelpers({
             data-header-column-id={String(header.column.id)}
             role="columnheader"
             aria-sort={isSorted || 'none'}
-            aria-label={`${formatDisplayLabel(typeof header.column.columnDef.header === 'string' ? header.column.columnDef.header : header.column.id)}. Click or press Alt+Up/Down to sort.`}
+            aria-label={`${headerLabel}.${sortAriaDescription} Click or press Alt+Up/Down to sort.`}
             tabIndex={0}
             onKeyDown={(e) => {
                 if (e.altKey && (e.key === 'ArrowUp' || e.key === 'ArrowDown')) {
@@ -569,8 +645,11 @@ export function useRenderHelpers({
                         {isSorted === 'asc' ? <Icons.SortAsc/> : <Icons.SortDesc/>}
                     </span>
                 )}
-                {!isGroupHeader && isSorted && isMultiSort && (
-                    <span style={{fontSize: '9px', verticalAlign: 'super', marginLeft: '1px', opacity: 0.8, fontWeight: 700, color: sortIconColor}}>{sortIndex + 1}</span>
+                {hasSortPriority && (
+                    <span style={sortPriorityBadgeStyle} title={`Sort priority ${sortIndex + 1}`}>{sortIndex + 1}</span>
+                )}
+                {!isGroupHeader && isSorted && isAbsoluteSort && (
+                    <span style={absoluteSortBadgeStyle} title="Absolute value sort">|x|</span>
                 )}
 
                 <div
@@ -658,6 +737,9 @@ export function useRenderHelpers({
         headerContentBaseStyle,
         headerTextStyle,
         moreVertStyle,
+        sortPriorityBadgeStyle,
+        absoluteSortBadgeStyle,
+        sortingSignature,
     ]);
 
     return { renderCell, renderVirtualColumnCell, renderHeaderCell };

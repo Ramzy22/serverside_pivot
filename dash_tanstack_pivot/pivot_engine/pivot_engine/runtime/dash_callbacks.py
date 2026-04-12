@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import asyncio
+import inspect
 import json
 import traceback
 import time
@@ -16,6 +18,7 @@ except ImportError:
     Input = Output = State = no_update = None
 
 from .models import PivotRequestContext, PivotViewState
+from .async_bridge import run_awaitable_sync
 from .service import PivotRuntimeService
 
 
@@ -47,6 +50,12 @@ def _debug_print(enabled: bool, *parts: Any) -> None:
                 print(*parts)
             except OSError:
                 pass
+
+
+async def _await_if_needed(value: Any) -> Any:
+    if inspect.isawaitable(value):
+        return await value
+    return value
 
 
 def _is_bootstrap_without_viewport(triggered_prop: Optional[str], viewport: Any) -> bool:
@@ -253,7 +262,7 @@ def register_dash_pivot_transport_callback(
             drill_payload,
         )
 
-    @app.callback(
+    callback_args = (
         *outputs,
         Input(pivot_id, "rowFields"),
         Input(pivot_id, "colFields"),
@@ -275,7 +284,8 @@ def register_dash_pivot_transport_callback(
         State(pivot_id, "table"),
         State(pivot_id, "sortOptions"),
     )
-    def _update_pivot_table(
+
+    async def _update_pivot_table_async(
         row_fields,
         col_fields,
         val_configs,
@@ -368,8 +378,6 @@ def register_dash_pivot_transport_callback(
 
             _debug_print(debug, "[filter-request]", {"columnId": column_id, "table": resolved_table})
 
-            import asyncio as _asyncio
-
             from ..tanstack_adapter import TanStackOperation, TanStackRequest
 
             service = runtime_service_getter()
@@ -402,7 +410,7 @@ def register_dash_pivot_transport_callback(
                 pagination={"pageIndex": 0, "pageSize": 1000},
                 global_filter=column_id,
             )
-            response = _asyncio.run(adapter.handle_request(request))
+            response = await _await_if_needed(adapter.handle_request(request))
             next_filter_options = [d.get("value") for d in (response.data or [])]
             _debug_print(debug, "[filter-response]", {"columnId": column_id, "count": len(next_filter_options)})
             callback_finished_at = time.perf_counter()
@@ -555,10 +563,12 @@ def register_dash_pivot_transport_callback(
         )
 
         try:
-            result = runtime_service_getter().process(
-                state,
-                context,
-            )
+            service = runtime_service_getter()
+            process_async = getattr(service, "process_async", None)
+            if callable(process_async):
+                result = await _await_if_needed(process_async(state, context))
+            else:
+                result = await asyncio.to_thread(service.process, state, context)
             service_finished_at = time.perf_counter()
         except Exception as exc:  # pragma: no cover - defensive
             service_finished_at = time.perf_counter()
@@ -613,20 +623,11 @@ def register_dash_pivot_transport_callback(
                         columns_sample.append(col.get("id"))
                     else:  # pragma: no cover - defensive
                         columns_sample.append(str(col))
-                schema_entry = next(
-                    (
-                        col
-                        for col in result.columns
-                        if isinstance(col, dict) and col.get("id") == "__col_schema"
-                    ),
-                    None,
-                )
-                if isinstance(schema_entry, dict) and isinstance(schema_entry.get("col_schema"), dict):
-                    schema_obj = schema_entry.get("col_schema") or {}
-                    col_schema_total = schema_obj.get("total_center_cols")
-                    for item in (schema_obj.get("columns") or [])[:8]:
-                        if isinstance(item, dict):
-                            col_schema_sample.append(item.get("id"))
+            if isinstance(result.col_schema, dict):
+                col_schema_total = result.col_schema.get("total_center_cols")
+                for item in (result.col_schema.get("columns") or [])[:8]:
+                    if isinstance(item, dict):
+                        col_schema_sample.append(item.get("id"))
             _debug_print(
                 debug,
                 "[pivot-response]",
@@ -739,6 +740,7 @@ def register_dash_pivot_transport_callback(
                         "data": data_out,
                         "rowCount": result.total_rows if result.total_rows is not None else 0,
                         "columns": columns_out if columns_out is not no_update else None,
+                        "colSchema": result.col_schema,
                         "dataOffset": result.data_offset,
                         "dataVersion": result.data_version,
                         "transaction": result.transaction_result,
@@ -810,6 +812,15 @@ def register_dash_pivot_transport_callback(
                 profile=merged_profile,
             ),
         )
+
+    if getattr(app, "_use_async", False):
+        @app.callback(*callback_args)
+        async def _update_pivot_table(*callback_values):
+            return await _update_pivot_table_async(*callback_values)
+    else:
+        @app.callback(*callback_args)
+        def _update_pivot_table(*callback_values):
+            return run_awaitable_sync(_update_pivot_table_async(*callback_values))
 
     registry.add(callback_key)
     return True

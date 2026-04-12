@@ -242,6 +242,12 @@ class IbisExpressionBuilder:
             semantic_type = str(
                 s.get("semanticType") or s.get("semantic") or s.get("sortSemantic") or ""
             ).lower()
+            absolute_sort = bool(s.get("absoluteSort")) or sort_type in {
+                "absolute",
+                "abs",
+                "absolute_value",
+                "absolute-value",
+            }
 
             col = table[effective_field]
             sort_expr = None
@@ -313,6 +319,24 @@ class IbisExpressionBuilder:
                 ibis_sorts.append(col.isnull().desc())
             elif nulls == 'last':
                 ibis_sorts.append(col.isnull().asc())
+
+            if absolute_sort:
+                try:
+                    col_type = col.type()
+                    is_numeric_col = any(
+                        getattr(col_type, type_check, lambda: False)()
+                        for type_check in ("is_numeric", "is_integer", "is_floating", "is_decimal")
+                    )
+                    sort_col = col.abs() if is_numeric_col else col
+                except Exception:
+                    sort_col = col
+                if order == 'asc':
+                    ibis_sorts.append(sort_col.asc())
+                    ibis_sorts.append(col.asc())
+                elif order == 'desc':
+                    ibis_sorts.append(sort_col.desc())
+                    ibis_sorts.append(col.desc())
+                continue
 
             if order == 'asc':
                 sort_expr = col.asc()

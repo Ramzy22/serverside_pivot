@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import Icons from '../Icons';
+import Icons from '../../utils/Icons';
 import { getStyles } from '../../utils/styles';
 import DateRangeFilter from './DateRangeFilter';
 import NumericRangeFilter from './NumericRangeFilter';

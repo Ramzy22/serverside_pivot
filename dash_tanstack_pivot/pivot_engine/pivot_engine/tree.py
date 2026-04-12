@@ -390,7 +390,7 @@ class TreeExpansionManager:
         )
 
     # Keys that are dimension-specific and must NOT be carried across levels.
-    _DIMENSION_SORT_KEYS = ("sortKeyField", "semanticType", "sortSemantic", "sortType")
+    _DIMENSION_SORT_KEYS = ("sortKeyField", "semanticType", "sortSemantic", "sortType", "absoluteSort")
 
     def _build_sort_for_dimension(
         self, dimension: str, base_spec: Dict[str, Any]

@@ -9,9 +9,9 @@ Features:
 - Performance metrics
 """
 
-from typing import Any, List, Dict, Optional, Union
 import time
 import queue
+import re
 import threading
 from contextlib import contextmanager
 from typing import Any, List, Dict, Optional, Union
@@ -25,6 +25,54 @@ try:
     import pyarrow as pa
 except ImportError:
     pa = None
+
+
+_MAX_DUCKDB_THREADS = 1024
+_DUCKDB_MEMORY_LIMIT_RE = re.compile(
+    r"^(?P<value>(?:0|[1-9][0-9]*)(?:\.[0-9]+)?)\s*(?P<unit>B|KB|MB|GB|TB|KIB|MIB|GIB|TIB)$",
+    re.IGNORECASE,
+)
+_DUCKDB_MEMORY_UNIT_CANONICAL = {
+    "B": "B",
+    "KB": "KB",
+    "MB": "MB",
+    "GB": "GB",
+    "TB": "TB",
+    "KIB": "KiB",
+    "MIB": "MiB",
+    "GIB": "GiB",
+    "TIB": "TiB",
+}
+
+
+def _validate_duckdb_threads(threads: Any) -> int:
+    if isinstance(threads, bool):
+        raise ValueError("DuckDB threads must be a positive integer.")
+    try:
+        normalized_threads = int(threads)
+    except (TypeError, ValueError):
+        raise ValueError("DuckDB threads must be a positive integer.") from None
+    if str(threads).strip() != str(normalized_threads) and not isinstance(threads, int):
+        raise ValueError("DuckDB threads must be a positive integer.")
+    if normalized_threads < 1 or normalized_threads > _MAX_DUCKDB_THREADS:
+        raise ValueError(f"DuckDB threads must be between 1 and {_MAX_DUCKDB_THREADS}.")
+    return normalized_threads
+
+
+def _validate_duckdb_memory_limit(memory_limit: Any) -> str:
+    if not isinstance(memory_limit, str):
+        raise ValueError("DuckDB memory_limit must be a size string like '4GB'.")
+    match = _DUCKDB_MEMORY_LIMIT_RE.fullmatch(memory_limit.strip())
+    if not match:
+        raise ValueError("DuckDB memory_limit must be a positive size literal such as '512MB' or '4GB'.")
+    value = match.group("value")
+    try:
+        if float(value) <= 0:
+            raise ValueError
+    except ValueError:
+        raise ValueError("DuckDB memory_limit must be greater than zero.") from None
+    unit = _DUCKDB_MEMORY_UNIT_CANONICAL[match.group("unit").upper()]
+    return f"{value}{unit}"
 
 
 class ConnectionPool:
@@ -42,25 +90,74 @@ class ConnectionPool:
             self.pool.put(self.factory())
             self.created_count += 1
 
+    @staticmethod
+    def _is_healthy(con: Any) -> bool:
+        try:
+            con.execute("SELECT 1").fetchone()
+            return True
+        except Exception:
+            return False
+
+    def _new_connection(self):
+        con = self.factory()
+        self.created_count += 1
+        return con
+
+    def _discard_connection(self, con: Any) -> None:
+        close = getattr(con, "close", None)
+        if callable(close):
+            try:
+                close()
+            except Exception:
+                pass
+        with self.lock:
+            if self.created_count > 0:
+                self.created_count -= 1
+
+    def _borrow_connection(self):
+        con = None
+        while True:
+            with self.lock:
+                try:
+                    con = self.pool.get(block=False)
+                except queue.Empty:
+                    if self.created_count < self.max_size:
+                        return self._new_connection()
+                    # Pool is empty and at max_size — fall through to blocking wait.
+
+            if con is None:
+                # Wait for a connection to be returned. Use a timeout so that if a
+                # concurrent thread discards an unhealthy connection (decrementing
+                # created_count without putting anything back in the queue), we
+                # re-enter the lock, see created_count < max_size, and create a new
+                # one — otherwise we'd block here forever.
+                try:
+                    con = self.pool.get(timeout=1.0)
+                except queue.Empty:
+                    con = None
+                    continue  # Re-check created_count under the lock
+
+            if self._is_healthy(con):
+                return con
+
+            self._discard_connection(con)
+            con = None
+
     @contextmanager
     def get_connection(self):
-        try:
-            # Try to get from pool without blocking first
-            con = self.pool.get(block=False)
-        except queue.Empty:
-            # If empty, check if we can create more
-            with self.lock:
-                if self.created_count < self.max_size:
-                    con = self.factory()
-                    self.created_count += 1
-                else:
-                    # Wait for one to become available
-                    con = self.pool.get() # Block
-        
+        con = self._borrow_connection()
+        should_return = True
         try:
             yield con
+        except Exception:
+            should_return = False
+            self._discard_connection(con)
+            raise
         finally:
-            self.pool.put(con)
+            if should_return and self._is_healthy(con):
+                self.pool.put(con)
+            elif should_return:
+                self._discard_connection(con)
 
 class DuckDBBackend:
     """
@@ -98,10 +195,12 @@ class DuckDBBackend:
 
         # Configure DuckDB
         if threads is not None:
-            self.con.execute(f"SET threads={threads}")
+            safe_threads = _validate_duckdb_threads(threads)
+            self.con.execute(f"SET threads={safe_threads}")
 
         if memory_limit is not None:
-            self.con.execute(f"SET memory_limit='{memory_limit}'")
+            safe_memory_limit = _validate_duckdb_memory_limit(memory_limit)
+            self.con.execute(f"SET memory_limit='{safe_memory_limit}'")
             
         # Initialize connection pool
         # For DuckDB, we use cursors from the main connection as 'connections' in the pool
@@ -150,34 +249,31 @@ class DuckDBBackend:
     
     def execute_arrow(
         self,
-        query: Union[str, Dict[str, Any]],
-        params: Optional[List[Any]] = None
+        query: Dict[str, Any],
     ) -> pa.Table:
         """
         Execute query and return Arrow table.
         
         Convenience method for zero-copy Arrow output.
         """
-        return self.execute(query, params, return_arrow=True)
+        return self.execute(query)
     
     def execute_batch(
         self,
         queries: List[Dict[str, Any]],
-        return_arrow: bool = False
-    ) -> List[Union[List[Dict[str, Any]], pa.Table]]:
+    ) -> List[pa.Table]:
         """
         Execute multiple queries in sequence.
         
         Args:
             queries: List of query dicts with "sql" and "params"
-            return_arrow: Return Arrow tables
             
         Returns:
-            List of results (one per query)
+            List of Arrow table results (one per query)
         """
         results = []
         for query in queries:
-            result = self.execute(query, return_arrow=return_arrow)
+            result = self.execute(query)
             results.append(result)
         return results
     
@@ -201,20 +297,21 @@ class DuckDBBackend:
         else:
             sql = query
             params = params or []
-        
-        if params:
-            result = self.con.execute(sql, params)
-        else:
-            result = self.con.execute(sql)
-        
-        cols = [desc[0] for desc in result.description]
-        
-        while True:
-            rows = result.fetchmany(batch_size)
-            if not rows:
-                break
-            batch = [dict(zip(cols, row)) for row in rows]
-            yield batch
+
+        with self.pool.get_connection() as con:
+            if params:
+                result = con.execute(sql, params)
+            else:
+                result = con.execute(sql)
+
+            cols = [desc[0] for desc in result.description]
+
+            while True:
+                rows = result.fetchmany(batch_size)
+                if not rows:
+                    break
+                batch = [dict(zip(cols, row)) for row in rows]
+                yield batch
     
     def explain(
         self,

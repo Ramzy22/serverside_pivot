@@ -3,6 +3,7 @@ IbisPlanner - Enhanced with Grouping Sets, Top-N Pivot, Ratio Metrics, Multi-dim
 """
 
 from typing import List, Dict, Any, Tuple, Optional, Union
+import time
 import re
 import itertools
 from dataclasses import dataclass
@@ -115,6 +116,8 @@ class IbisPlanner:
         self.query_rewriter = QueryRewriter()
         self.builder = IbisExpressionBuilder(con)
         self.parser = SafeExpressionParser()
+        self._row_count_cache: Dict[str, Tuple[int, float]] = {}
+        self._row_count_cache_ttl = 300.0
 
         # Detect the backend database type for feature compatibility
         self._database_type = self._detect_database_type()
@@ -305,12 +308,26 @@ class IbisPlanner:
         has_joins = "Join" in str(ibis_expr) or "join" in str(ibis_expr)
         
         return self.cost_estimator.estimate_base_cost(
-            100000,
+            self._estimate_table_row_count(spec.table),
             filters_count,
             grouping_cols_count,
             measures_count,
             has_joins
         )
+
+    def _estimate_table_row_count(self, table_name: str) -> int:
+        if not table_name or self.con is None:
+            return 100000
+        now = time.time()
+        cached = self._row_count_cache.get(table_name)
+        if cached and cached[1] > now:
+            return max(1, int(cached[0] or 1))
+        try:
+            row_count = int(self.con.table(table_name).count().execute())
+        except Exception:
+            row_count = 100000
+        self._row_count_cache[table_name] = (row_count, now + self._row_count_cache_ttl)
+        return max(1, row_count)
 
     def _apply_stable_ordering(
         self,
@@ -1257,6 +1274,7 @@ class IbisPlanner:
                 "semanticType": raw_options.get("semanticType"),
                 "sortSemantic": raw_options.get("sortSemantic"),
                 "nulls": raw_options.get("nulls"),
+                "absoluteSort": raw_options.get("absoluteSort"),
                 "_index": column_index,
             })
 
@@ -1310,7 +1328,7 @@ class IbisPlanner:
                 if label_key_alias and label_key_alias in result.columns:
                     label_tiebreak["sortKeyField"] = label_key_alias
                 else:
-                    for key in ("sortType", "semanticType", "sortSemantic", "nulls"):
+                    for key in ("sortType", "semanticType", "sortSemantic", "nulls", "absoluteSort"):
                         if sort_spec.get(key) is not None:
                             label_tiebreak[key] = sort_spec.get(key)
                 label_exprs = self.builder.build_sort_expressions(result, [label_tiebreak])
@@ -1328,7 +1346,7 @@ class IbisPlanner:
             if label_key_alias and label_key_alias in result.columns:
                 label_sort["sortKeyField"] = label_key_alias
             else:
-                for key in ("sortType", "sortKeyField", "semanticType", "sortSemantic", "nulls"):
+                for key in ("sortType", "sortKeyField", "semanticType", "sortSemantic", "nulls", "absoluteSort"):
                     if sort_spec.get(key) is not None:
                         label_sort[key] = sort_spec.get(key)
             label_exprs = self.builder.build_sort_expressions(result, [label_sort])

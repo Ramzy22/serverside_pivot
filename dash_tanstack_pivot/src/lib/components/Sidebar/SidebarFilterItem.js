@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import Icons from '../Icons';
+import Icons from '../../utils/Icons';
 import ColumnFilter from '../Filters/ColumnFilter';
 import { formatDisplayLabel } from '../../utils/helpers';
 

@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import Icons from '../Icons';
+import Icons from '../../utils/Icons';
 import { getAllLeafColumns, getAllLeafIdsFromColumn, hasChildrenInZone } from '../../utils/helpers';
 import { formatDisplayLabel } from '../../utils/helpers';
 

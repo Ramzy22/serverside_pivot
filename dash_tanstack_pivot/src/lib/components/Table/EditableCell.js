@@ -36,6 +36,7 @@ const EditableCell = ({
     requestEditorOptions,
     editorOptions = [],
     editorOptionsLoading = false,
+    editorOptionsError = null,
 }) => {
     const rawValue = getValue();
     const rowPath = (row && row.original && row.original._path) || row.id;
@@ -431,11 +432,17 @@ const EditableCell = ({
                             commitValue({ nextValue });
                         }
                     }}
-                    disabled={editorOptionsLoading}
+                    disabled={editorOptionsLoading || Boolean(editorOptionsError)}
+                    title={editorOptionsError || undefined}
+                    style={{
+                        ...editorChromeStyle,
+                        ...(editorOptionsError ? { border: '2px solid #dc2626' } : {}),
+                    }}
                 >
                     {editorOptionsLoading && <option value="">Loading…</option>}
-                    {!editorOptionsLoading && !resolvedEditorConfig.allowCustomValue && <option value="">Select…</option>}
-                    {normalizedOptions.map((option) => (
+                    {editorOptionsError && <option value="">Error loading options</option>}
+                    {!editorOptionsLoading && !editorOptionsError && !resolvedEditorConfig.allowCustomValue && <option value="">Select…</option>}
+                    {!editorOptionsError && normalizedOptions.map((option) => (
                         <option key={`${String(option.value)}:${option.label}`} value={option.value}>
                             {option.label}
                         </option>
@@ -451,9 +458,14 @@ const EditableCell = ({
                         {...commonInputProps}
                         type="text"
                         value={value}
-                        list={normalizedOptions.length > 0 ? datalistIdRef.current : undefined}
+                        list={!editorOptionsError && normalizedOptions.length > 0 ? datalistIdRef.current : undefined}
                         onChange={(e) => setValue(e.target.value)}
-                        placeholder={editorOptionsLoading ? 'Loading…' : (resolvedEditorConfig.placeholder || '')}
+                        placeholder={editorOptionsLoading ? 'Loading…' : (editorOptionsError ? 'Error loading options' : (resolvedEditorConfig.placeholder || ''))}
+                        title={editorOptionsError || commonInputProps.title}
+                        style={{
+                            ...editorChromeStyle,
+                            ...(editorOptionsError ? { border: '2px solid #dc2626' } : {}),
+                        }}
                     />
                     {normalizedOptions.length > 0 && (
                         <datalist id={datalistIdRef.current}>

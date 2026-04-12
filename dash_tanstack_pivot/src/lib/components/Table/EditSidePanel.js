@@ -1,5 +1,5 @@
 import React from 'react';
-import Icons from '../Icons';
+import Icons from '../../utils/Icons';
 
 const fmt = (v, dec = 4) => {
     if (v === null || v === undefined || v === '') return '--';
@@ -7,7 +7,8 @@ const fmt = (v, dec = 4) => {
     return Number.isFinite(n) ? n.toLocaleString(undefined, { maximumFractionDigits: dec }) : String(v);
 };
 
-export function EditSidePanel({
+/** Edit side panel for row-level editing sessions. */
+function EditSidePanel({
     editedCells,
     propagationLog,
     onRevertCell,

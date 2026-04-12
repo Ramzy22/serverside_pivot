@@ -609,7 +609,7 @@ def make_wide_request():
 
 
 @pytest.mark.asyncio
-async def test_col_schema_sentinel_present_on_needs_col_schema(adapter):
+async def test_col_schema_present_on_needs_col_schema(adapter):
     """When needs_col_schema=True the response col_schema is populated and contains
     total_center_cols + a columns list with correct index/id entries."""
     make_wide_table(adapter)
@@ -1638,7 +1638,8 @@ def test_server_side_component_source_has_fast_horizontal_dispatch_and_trimmed_r
     assert "preserveRecentRightEdgeUrgentRange" in viewport_hook_source
     assert "syncPreciseVisibleColRange" in viewport_hook_source
     assert "centerHeaderRenderPlan" in body_source
-    assert "centerCols[pair.idx]" in body_source
+    assert "centerColumnWidthPrefix" in body_source
+    assert "centerLeafEntry.indices" in body_source
     assert "columnAdvisory" in body_source
     assert "visibleCenterRange" in body_source
     assert "minIdx" in body_source
@@ -1861,6 +1862,17 @@ def test_cell_sparkline_source_supports_pivot_summary_and_ag_grid_style_series()
             "SparklineCell.js",
         )
     ).read_text(encoding="utf-8")
+    sidebar_source = Path(
+        os.path.join(
+            os.getcwd(),
+            "dash_tanstack_pivot",
+            "src",
+            "lib",
+            "components",
+            "Sidebar",
+            "SidebarPanel.js",
+        )
+    ).read_text(encoding="utf-8")
     component_source = Path(
         os.path.join(
             os.getcwd(),
@@ -1886,6 +1898,7 @@ def test_cell_sparkline_source_supports_pivot_summary_and_ag_grid_style_series()
     assert "__sparkline__" in column_source
     assert "isSparklineSummary: true" in column_source
     assert "normalizeSparklineConfig" in sparkline_utils_source
+    assert "source.enabled === false" in sparkline_utils_source
     assert "normalizeSparklinePoints" in sparkline_utils_source
     assert "buildPivotSparklinePoints" in sparkline_utils_source
     assert "resolveSparklineMetricValue" in sparkline_utils_source
@@ -1896,6 +1909,39 @@ def test_cell_sparkline_source_supports_pivot_summary_and_ag_grid_style_series()
     assert "\"sparkline\": NotRequired[typing.Union[bool, dict]]" in python_source
     assert "- sparkline (boolean | dict; optional)" in python_source
     assert "if (columnMeta && columnMeta.isSparklineSummary) return null;" in component_source
+    assert "data-value-sparkline-toggle=\"true\"" in sidebar_source
+    assert "data-value-sparkline-settings=\"true\"" in sidebar_source
+    assert "sanitizeValueSparklineConfig" in sidebar_source
+
+
+def test_frontend_sorting_source_preserves_multisort_priority_and_metadata():
+    component_source = Path(
+        os.path.join(
+            os.getcwd(),
+            "dash_tanstack_pivot",
+            "src",
+            "lib",
+            "components",
+            "DashTanstackPivot.react.js",
+        )
+    ).read_text(encoding="utf-8")
+    sorting_source = Path(
+        os.path.join(
+            os.getcwd(),
+            "dash_tanstack_pivot",
+            "src",
+            "lib",
+            "utils",
+            "sorting.js",
+        )
+    ).read_text(encoding="utf-8")
+
+    assert "updateSortingForColumn({" in component_source
+    assert "normalizeSortingState(rawNextSorting, sorting)" in component_source
+    assert "Update Priority" in component_source
+    assert "mergeSortSpecifierMetadata" in sorting_source
+    assert "updatedExisting = true" in sorting_source
+    assert "SORT_METADATA_KEYS" in sorting_source
 
 
 def test_frontend_editable_cells_flow_through_column_metadata_and_transaction_history():

@@ -52,6 +52,18 @@ def _make_weighted_average_adapter():
     return adapter
 
 
+def _make_absolute_sort_adapter():
+    adapter = create_tanstack_adapter(backend_uri=":memory:")
+    table = pa.Table.from_pydict(
+        {
+            "book": ["Low", "Large Loss", "Gain", "Mid Loss"],
+            "pnl": [5.0, -100.0, 30.0, -50.0],
+        }
+    )
+    adapter.controller.load_data_from_arrow("risk_data", table)
+    return adapter
+
+
 def test_runtime_service_works_without_dash():
     adapter = _make_adapter()
     service = PivotRuntimeService(adapter_getter=lambda: adapter, session_gate=SessionRequestGate())
@@ -122,6 +134,45 @@ def test_runtime_service_includes_profile_when_requested():
     assert response.profile["service"]["totalMs"] is not None
     assert response.profile["adapter"]["operation"] == "virtual_scroll"
     assert response.profile["controller"]["operation"] == "hierarchy_view"
+
+
+def test_runtime_service_preserves_absolute_sort_metadata():
+    adapter = _make_absolute_sort_adapter()
+    service = PivotRuntimeService(adapter_getter=lambda: adapter, session_gate=SessionRequestGate())
+
+    context = PivotRequestContext.from_frontend(
+        table="risk_data",
+        trigger_prop="pivot-grid.viewport",
+        viewport={
+            "start": 0,
+            "end": 20,
+            "window_seq": 1,
+            "state_epoch": 1,
+            "abort_generation": 1,
+            "session_id": "sess-absolute-sort",
+            "client_instance": "grid-absolute-sort",
+            "intent": "viewport",
+            "include_grand_total": False,
+            "needs_col_schema": True,
+        },
+    )
+    state = PivotViewState(
+        row_fields=["book"],
+        val_configs=[{"field": "pnl", "agg": "sum"}],
+        sorting=[{"id": "pnl_sum", "desc": True, "sortType": "absolute", "absoluteSort": True}],
+        show_row_totals=False,
+        show_col_totals=False,
+    )
+
+    response = service.process(state, context)
+
+    assert response.status == "data"
+    ordered_books = [
+        row["book"]
+        for row in response.data
+        if isinstance(row, dict) and not row.get("_isTotal")
+    ]
+    assert ordered_books == ["Large Loss", "Mid Loss", "Gain", "Low"]
 
 
 def test_runtime_service_drillthrough_preserves_request_metadata():
@@ -949,7 +1000,7 @@ def test_runtime_service_transaction_refresh_mode_none_returns_transaction_resul
     assert north_usa["sales"] == 444
 
 
-def test_initial_structural_load_includes_col_schema_sentinel():
+def test_initial_structural_load_includes_col_schema_payload_without_sentinel():
     adapter = _make_adapter()
     service = PivotRuntimeService(adapter_getter=lambda: adapter, session_gate=SessionRequestGate())
 
@@ -972,8 +1023,10 @@ def test_initial_structural_load_includes_col_schema_sentinel():
 
     assert response.status == "data"
     assert isinstance(response.columns, list)
-    assert any(
-        isinstance(col, dict) and col.get("id") == "__col_schema" and col.get("col_schema")
+    assert isinstance(response.col_schema, dict)
+    assert response.col_schema.get("columns")
+    assert not any(
+        isinstance(col, dict) and col.get("id") == "__col_schema"
         for col in response.columns
     )
 

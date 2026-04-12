@@ -144,6 +144,7 @@ export const useServerSideRowModel = ({
     const viewportAbortControllerRef = useRef(
         typeof AbortController !== 'undefined' ? new AbortController() : null
     );
+    const isMountedRef = useRef(true);
     const [grandTotalRow, setGrandTotalRow] = useState(null);
     // Incremented whenever inflight is cleared so the viewport effect re-runs
     // even when virtualRows hasn't changed (e.g. after a stale/dropped response).
@@ -167,6 +168,13 @@ export const useServerSideRowModel = ({
     const lastHandledColumnRangeUrgencyRef = useRef(0);
     // Throttle pruneToRange: only run when the viewport block range shifts by ≥1 block.
     const lastPrunedRangeRef = useRef({ startBlock: -1, endBlock: -1 });
+
+    useEffect(() => {
+        isMountedRef.current = true;
+        return () => {
+            isMountedRef.current = false;
+        };
+    }, []);
 
     // 2. Initialize Virtualizer
     // We use the full rowCount for serverSide
@@ -319,7 +327,49 @@ export const useServerSideRowModel = ({
             normalizedData = data.filter(row => !isGrandTotalRow(row));
         }
 
+        const clearInflightForResponse = () => {
+            const inflight = inflightRequestRef.current;
+            if (!inflight) return;
+
+            // Use raw response coverage, not the grand-total-filtered row count:
+            // the grand total is transport metadata for the pinned total row, not
+            // a cache row. For the last block, clamp the expected end to the known
+            // regular row count so a short final response can still retire inflight.
+            const responseStart = dataOffset;
+            const rawResponseEnd = data.length > 0 ? dataOffset + data.length - 1 : dataOffset - 1;
+            const numericRowCount = Number(rowCount);
+            const rowCountEnd = Number.isFinite(numericRowCount) && numericRowCount > 0
+                ? numericRowCount - 1
+                : null;
+            const requiredResponseEnd = rowCountEnd !== null
+                ? Math.min(inflight.end, rowCountEnd)
+                : inflight.end;
+            const coversEmptyDataset = Number.isFinite(numericRowCount)
+                && numericRowCount === 0
+                && normalizedData.length === 0
+                && responseStart <= inflight.start;
+
+            if (
+                responseStart <= inflight.start &&
+                (rawResponseEnd >= requiredResponseEnd || coversEmptyDataset) &&
+                dataVersion >= inflight.version
+            ) {
+                inflightRequestRef.current = null;
+                setInflightClearedAt(t => t + 1);
+                debugLog('clear-inflight', {
+                    requestStart: inflight.start,
+                    requestEnd: inflight.end,
+                    requestVersion: inflight.version,
+                    responseStart,
+                    responseEnd: rawResponseEnd,
+                    requiredResponseEnd,
+                    dataVersion
+                });
+            }
+        };
+
         if (normalizedData.length === 0) {
+            clearInflightForResponse();
             debugLog('sync-empty', {
                 dataOffset,
                 dataVersion,
@@ -389,6 +439,7 @@ export const useServerSideRowModel = ({
             }
         }
 
+        clearInflightForResponse();
         const inflight = inflightRequestRef.current;
         if (inflight) {
             // Use the original (pre-grand-total-filter) offset and length so that
@@ -492,7 +543,7 @@ export const useServerSideRowModel = ({
         queuedAt = Date.now(),
         options = {}
     ) => {
-        if (!setProps || blocksNeeded.length === 0) return false;
+        if (!isMountedRef.current || !setProps || blocksNeeded.length === 0) return false;
         const abortSignal = viewportAbortControllerRef.current ? viewportAbortControllerRef.current.signal : null;
         if (abortSignal && abortSignal.aborted) return false;
 
@@ -608,6 +659,7 @@ export const useServerSideRowModel = ({
         lastRequestedColStartRef.current = requestedColStart;
         lastRequestedColEndRef.current = requestedColEnd;
 
+        if (!isMountedRef.current) return false;
         setProps({
             runtimeRequest: {
                 kind: 'data',

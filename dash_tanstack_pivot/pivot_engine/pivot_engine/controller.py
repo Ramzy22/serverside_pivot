@@ -84,7 +84,11 @@ class PivotController:
         # The diff_engine expects an Ibis connection for _compute_true_total
         # If we are using IbisBackend, we pass its connection
         # If using DuckDBBackend, we might need to handle it differently or DiffEngine supports it
-        diff_engine_backend = self.backend.con if isinstance(self.backend, IbisBackend) else None
+        diff_engine_backend = (
+            self.backend.con
+            if isinstance(self.backend, IbisBackend)
+            else getattr(self.planner, "con", None)
+        )
         
         self.diff_engine = QueryDiffEngine(
             cache=self.cache,
@@ -405,47 +409,24 @@ class PivotController:
             rows_as_lists = df.values.tolist()
 
         except (ImportError, Exception):
-            # 2. Fallback to vectorized PyArrow operations (instead of row-by-row)
-            # This is much faster than the previous row-by-row approach
-            import pyarrow.compute as pc
+            columns = list(table.column_names)
 
-            # Convert each column to Python lists vectorized
-            num_rows = table.num_rows
-            num_cols = len(table.schema)
+            def normalize_cell(value: Any) -> Any:
+                if isinstance(value, decimal.Decimal):
+                    return float(value)
+                if isinstance(value, float) and value != value:
+                    return None
+                if value is None:
+                    return None
+                isoformat = getattr(value, "isoformat", None)
+                if callable(isoformat):
+                    return isoformat()
+                return value
 
-            # Pre-allocate the result lists
-            rows_as_lists = [None] * num_rows
-            for row_idx in range(num_rows):
-                rows_as_lists[row_idx] = [None] * num_cols
-
-            # Process each column vectorized
-            for col_idx, col_name in enumerate(table.column_names):
-                col_array = table.column(col_idx)
-
-                # Handle different PyArrow types efficiently
-                if pa.types.is_dictionary(col_array.type):
-                    # Convert dictionary to string values
-                    values = pc.cast(col_array, pa.string()).to_pylist()
-                elif pa.types.is_decimal(col_array.type):
-                    # Convert decimals to floats
-                    values = [float(x) if x is not None else None for x in col_array.to_pylist()]
-                elif pa.types.is_floating(col_array.type):
-                    # Handle floats including NaN
-                    values = col_array.to_pylist()
-                    # Replace NaN with None
-                    for i, val in enumerate(values):
-                        if val is not None and isinstance(val, float) and val != val:  # NaN check
-                            values[i] = None
-                elif pa.types.is_temporal(col_array.type) or pa.types.is_timestamp(col_array.type):
-                    # Convert temporal types to string representation
-                    values = [str(x) if x is not None else None for x in col_array.to_pylist()]
-                else:
-                    # For other types, use direct conversion
-                    values = col_array.to_pylist()
-
-                # Put the values in the appropriate column of each row
-                for row_idx in range(num_rows):
-                    rows_as_lists[row_idx][col_idx] = values[row_idx]
+            rows_as_lists = [
+                [normalize_cell(row.get(column)) for column in columns]
+                for row in table.to_pylist()
+            ]
 
         next_cursor = None
         if spec.limit and table.num_rows == spec.limit:

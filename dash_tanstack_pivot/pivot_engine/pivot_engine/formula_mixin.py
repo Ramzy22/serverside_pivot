@@ -14,6 +14,7 @@ if TYPE_CHECKING:
     from .tanstack_adapter import TanStackRequest
 
 _FORMULA_IDENTIFIER_RE = re.compile(r"\b[A-Za-z_][A-Za-z0-9_]*\b")
+MISSING_FORMULA_VALUE = object()
 
 
 def _normalize_formula_reference_key(value: Any, fallback: Any = "formula") -> str:
@@ -26,7 +27,11 @@ def _normalize_formula_reference_key(value: Any, fallback: Any = "formula") -> s
 
 
 def _is_missing_value(value: Any) -> bool:
-    return value is None or (isinstance(value, float) and math.isnan(value))
+    return value is None or value is MISSING_FORMULA_VALUE or (isinstance(value, float) and math.isnan(value))
+
+
+def _formula_namespace_value(value: Optional[float]) -> Any:
+    return value if value is not None else MISSING_FORMULA_VALUE
 
 
 def _is_grand_total_row(row: Any) -> bool:
@@ -238,7 +243,13 @@ class FormulaEngineMixin:
                 return True
         return False
 
-    def _compare_row_values(self, left_value: Any, right_value: Any, desc: bool = False) -> int:
+    def _compare_row_values(
+        self,
+        left_value: Any,
+        right_value: Any,
+        desc: bool = False,
+        absolute_sort: bool = False,
+    ) -> int:
         left_missing = _is_missing_value(left_value)
         right_missing = _is_missing_value(right_value)
         if left_missing or right_missing:
@@ -249,9 +260,15 @@ class FormulaEngineMixin:
         left_numeric = self._numeric_or_none(left_value)
         right_numeric = self._numeric_or_none(right_value)
         if left_numeric is not None and right_numeric is not None:
-            if left_numeric < right_numeric:
+            comparable_left = abs(left_numeric) if absolute_sort else left_numeric
+            comparable_right = abs(right_numeric) if absolute_sort else right_numeric
+            if comparable_left < comparable_right:
                 result = -1
-            elif left_numeric > right_numeric:
+            elif comparable_left > comparable_right:
+                result = 1
+            elif absolute_sort and left_numeric < right_numeric:
+                result = -1
+            elif absolute_sort and left_numeric > right_numeric:
                 result = 1
             else:
                 result = 0
@@ -284,6 +301,11 @@ class FormulaEngineMixin:
                 left_row.get(sort_field),
                 right_row.get(sort_field),
                 desc=bool(sort_spec.get("desc")),
+                absolute_sort=(
+                    bool(sort_spec.get("absoluteSort"))
+                    or str(sort_spec.get("sortType") or "").strip().lower()
+                    in {"absolute", "abs", "absolute_value", "absolute-value"}
+                ),
             )
             if comparison:
                 return comparison
@@ -478,7 +500,7 @@ class FormulaEngineMixin:
                     for field, agg in field_agg_map.items():
                         key = f"{prefix}_{field}_{agg}"
                         val = self._numeric_or_none(row.get(key))
-                        namespace[field] = val if val is not None else float("nan")
+                        namespace[field] = _formula_namespace_value(val)
 
                     for fcol in formula_plan:
                         formula_id = fcol.get("id", "")
@@ -488,18 +510,18 @@ class FormulaEngineMixin:
                         result_key = f"{prefix}_{formula_id}"
                         result = self._evaluate_formula_expression(parser, formula_expr, namespace)
                         row[result_key] = result
-                        namespace[formula_id] = result if result is not None else float("nan")
+                        namespace[formula_id] = _formula_namespace_value(result)
                         formula_ref = self._formula_reference_key(fcol)
                         if formula_ref:
-                            namespace[formula_ref] = result if result is not None else float("nan")
+                            namespace[formula_ref] = _formula_namespace_value(result)
 
                     for formula_id in unresolved_formula_ids:
                         row[f"{prefix}_{formula_id}"] = None
-                        namespace[formula_id] = float("nan")
+                        namespace[formula_id] = MISSING_FORMULA_VALUE
                         unresolved_col = next((col for col in formula_cols if col.get("id") == formula_id), None)
                         formula_ref = self._formula_reference_key(unresolved_col or {})
                         if formula_ref:
-                            namespace[formula_ref] = float("nan")
+                            namespace[formula_ref] = MISSING_FORMULA_VALUE
 
                 if has_row_total_measure_values:
                     materialized_formula_values: Dict[str, List[float]] = {
@@ -531,7 +553,7 @@ class FormulaEngineMixin:
                 for field, agg in field_agg_map.items():
                     key = f"{field}_{agg}"
                     val = self._numeric_or_none(row.get(key))
-                    namespace[field] = val if val is not None else float("nan")
+                    namespace[field] = _formula_namespace_value(val)
 
                 for fcol in formula_plan:
                     formula_id = fcol.get("id", "")
@@ -540,18 +562,18 @@ class FormulaEngineMixin:
                         continue
                     result = self._evaluate_formula_expression(parser, formula_expr, namespace)
                     row[formula_id] = result
-                    namespace[formula_id] = result if result is not None else float("nan")
+                    namespace[formula_id] = _formula_namespace_value(result)
                     formula_ref = self._formula_reference_key(fcol)
                     if formula_ref:
-                        namespace[formula_ref] = result if result is not None else float("nan")
+                        namespace[formula_ref] = _formula_namespace_value(result)
 
                 for formula_id in unresolved_formula_ids:
                     row[formula_id] = None
-                    namespace[formula_id] = float("nan")
+                    namespace[formula_id] = MISSING_FORMULA_VALUE
                     unresolved_col = next((col for col in formula_cols if col.get("id") == formula_id), None)
                     formula_ref = self._formula_reference_key(unresolved_col or {})
                     if formula_ref:
-                        namespace[formula_ref] = float("nan")
+                        namespace[formula_ref] = MISSING_FORMULA_VALUE
 
         grand_total_rows = [row for row in rows if isinstance(row, dict) and _is_grand_total_row(row)]
         regular_rows = [row for row in rows if isinstance(row, dict) and not _is_grand_total_row(row)]
@@ -691,4 +713,3 @@ class FormulaEngineMixin:
                     row_total_val = self._numeric_or_none(row.get(row_total_key))
                     if has_column_dimensions and row_total_val is not None:
                         row[row_total_key] = row_total_val / grand_total_value
-

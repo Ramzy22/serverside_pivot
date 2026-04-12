@@ -60,12 +60,24 @@ def collect_impacted_scope_ids(scope_id: str) -> List[str]:
     if normalized == GRAND_TOTAL_SCOPE_ID:
         return [GRAND_TOTAL_SCOPE_ID]
     parts = normalized.split("|||")
-    impacted = [normalized]
+    impacted: List[str] = []
+    seen: set[str] = set()
+
+    def append_once(scope: str) -> None:
+        if scope and scope not in seen:
+            seen.add(scope)
+            impacted.append(scope)
+
+    append_once(normalized)
     for depth in range(len(parts) - 1, 0, -1):
-        impacted.append("|||".join(parts[:depth]))
-    impacted.append(GRAND_TOTAL_SCOPE_ID)
-    return list(dict.fromkeys([scope for scope in impacted if scope]))
+        append_once("|||".join(parts[:depth]))
+    append_once(GRAND_TOTAL_SCOPE_ID)
+    return impacted
 
 
 def visible_scope_ids_from_paths(paths: Iterable[str]) -> List[str]:
-    return [normalize_scope_id(path) for path in paths if normalize_scope_id(path)]
+    return [
+        normalized
+        for path in paths
+        if (normalized := normalize_scope_id(path))
+    ]

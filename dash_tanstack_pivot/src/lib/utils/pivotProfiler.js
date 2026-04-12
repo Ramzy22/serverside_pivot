@@ -1,4 +1,6 @@
 const MAX_HISTORY = 500;
+const MAX_MEASURE_HISTORY = 500;
+const MAX_RENDER_HISTORY = 500;
 
 const now = () => Date.now();
 
@@ -89,6 +91,9 @@ const logSummary = (entry) => {
 const createPivotProfiler = () => {
     const active = new Map();
     const history = [];
+    const measures = [];
+    const renderCounts = new Map();
+    const renderHistory = [];
 
     const ensureEntry = (requestId, meta = {}) => {
         if (!requestId) return null;
@@ -185,6 +190,52 @@ const createPivotProfiler = () => {
                 finishedAt: meta.finishedAt ?? now(),
             });
         },
+        measure(meta = {}) {
+            if (!meta || !meta.name) return null;
+            const finishedAt = Number.isFinite(meta.finishedAt) ? meta.finishedAt : now();
+            const startedAt = Number.isFinite(meta.startedAt) ? meta.startedAt : null;
+            const durationMs = Number.isFinite(meta.durationMs)
+                ? roundMs(meta.durationMs)
+                : (startedAt !== null ? roundMs(finishedAt - startedAt) : null);
+            const entry = {
+                name: String(meta.name),
+                componentId: meta.componentId || null,
+                startedAt,
+                finishedAt,
+                durationMs,
+                meta: meta.meta && typeof meta.meta === 'object' ? { ...meta.meta } : {},
+            };
+            measures.push(entry);
+            if (measures.length > MAX_MEASURE_HISTORY) {
+                measures.splice(0, measures.length - MAX_MEASURE_HISTORY);
+            }
+            if (isPivotProfilerConsoleEnabled()) {
+                console.log('[pivot-profiler:measure]', entry);
+            }
+            return entry;
+        },
+        render(meta = {}) {
+            const componentName = meta.componentName || meta.componentId;
+            if (!componentName) return null;
+            const key = String(componentName);
+            const count = (renderCounts.get(key) || 0) + 1;
+            renderCounts.set(key, count);
+            const entry = {
+                componentName: key,
+                componentId: meta.componentId || null,
+                count,
+                renderedAt: Number.isFinite(meta.renderedAt) ? meta.renderedAt : now(),
+                meta: meta.meta && typeof meta.meta === 'object' ? { ...meta.meta } : {},
+            };
+            renderHistory.push(entry);
+            if (renderHistory.length > MAX_RENDER_HISTORY) {
+                renderHistory.splice(0, renderHistory.length - MAX_RENDER_HISTORY);
+            }
+            if (isPivotProfilerConsoleEnabled()) {
+                console.log('[pivot-profiler:render]', entry);
+            }
+            return entry;
+        },
         latest(componentId = null) {
             const items = componentId
                 ? history.filter((entry) => entry.componentId === componentId)
@@ -196,10 +247,26 @@ const createPivotProfiler = () => {
                 ? history.filter((entry) => entry.componentId === componentId)
                 : [...history];
         },
+        getMeasures(componentId = null) {
+            return componentId
+                ? measures.filter((entry) => entry.componentId === componentId)
+                : [...measures];
+        },
+        getRenderCounts() {
+            return Object.fromEntries(renderCounts.entries());
+        },
+        getRenderHistory(componentId = null) {
+            return componentId
+                ? renderHistory.filter((entry) => entry.componentId === componentId)
+                : [...renderHistory];
+        },
         clear(componentId = null) {
             if (!componentId) {
                 active.clear();
                 history.splice(0, history.length);
+                measures.splice(0, measures.length);
+                renderCounts.clear();
+                renderHistory.splice(0, renderHistory.length);
                 return;
             }
             Array.from(active.entries()).forEach(([requestId, entry]) => {
@@ -210,6 +277,16 @@ const createPivotProfiler = () => {
             for (let index = history.length - 1; index >= 0; index -= 1) {
                 if (history[index].componentId === componentId) {
                     history.splice(index, 1);
+                }
+            }
+            for (let index = measures.length - 1; index >= 0; index -= 1) {
+                if (measures[index].componentId === componentId) {
+                    measures.splice(index, 1);
+                }
+            }
+            for (let index = renderHistory.length - 1; index >= 0; index -= 1) {
+                if (renderHistory[index].componentId === componentId) {
+                    renderHistory.splice(index, 1);
                 }
             }
         },
@@ -248,4 +325,26 @@ export const getPivotProfiler = () => {
         window.__pivotProfiler = createPivotProfiler();
     }
     return window.__pivotProfiler;
+};
+
+export const getPivotPerformanceNow = () => {
+    if (typeof performance !== 'undefined' && typeof performance.now === 'function') {
+        return performance.now();
+    }
+    return now();
+};
+
+export const recordPivotMeasure = (name, startedAt, meta = {}) => {
+    if (!isPivotProfilingEnabled()) return null;
+    const profiler = getPivotProfiler();
+    if (!profiler || typeof profiler.measure !== 'function') return null;
+    const finishedAt = getPivotPerformanceNow();
+    return profiler.measure({
+        name,
+        startedAt,
+        finishedAt,
+        durationMs: Number.isFinite(startedAt) ? finishedAt - startedAt : null,
+        componentId: meta.componentId,
+        meta,
+    });
 };

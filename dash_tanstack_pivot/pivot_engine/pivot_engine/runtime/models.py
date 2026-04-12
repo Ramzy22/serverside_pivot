@@ -162,6 +162,7 @@ class PivotServiceResponse:
     data_version: Optional[int] = None
     message: Optional[str] = None
     color_scale_stats: Optional[Dict[str, Any]] = None
+    col_schema: Optional[Dict[str, Any]] = None
     chart_data: Optional[Dict[str, Any]] = None
     transaction_result: Optional[Dict[str, Any]] = None
     patch_payload: Optional[Dict[str, Any]] = None

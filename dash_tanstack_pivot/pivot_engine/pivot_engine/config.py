@@ -6,9 +6,6 @@ from typing import Dict, Any, Optional
 from dataclasses import dataclass, field
 from dotenv import load_dotenv
 
-# Load environment variables from .env file if present
-load_dotenv()
-
 
 @dataclass
 class ScalablePivotConfig:
@@ -59,41 +56,44 @@ class ScalablePivotConfig:
     throttle_time: float = 0.1  # 100ms between UI updates
 
     def from_env(self) -> 'ScalablePivotConfig':
-        """Load configuration from environment variables"""
-        config = ScalablePivotConfig()
-        
+        """Load configuration from environment variables into this instance."""
+        # Fix L7: load .env lazily instead of at module import time
+        load_dotenv()
+
         # Database settings
-        config.backend_uri = os.getenv('BACKEND_URI', config.backend_uri)
-        config.backend_type = os.getenv('BACKEND_TYPE', config.backend_type)
+        self.backend_uri = os.getenv('BACKEND_URI', self.backend_uri)
+        self.backend_type = os.getenv('BACKEND_TYPE', self.backend_type)
         
         # Cache settings
-        config.cache_type = os.getenv('CACHE_TYPE', config.cache_type)
-        config.default_cache_ttl = int(os.getenv('CACHE_TTL', str(config.default_cache_ttl)))
+        self.cache_type = os.getenv('CACHE_TYPE', self.cache_type)
+        self.default_cache_ttl = int(os.getenv('CACHE_TTL', str(self.default_cache_ttl)))
         
         # Redis settings if enabled
-        if os.getenv('CACHE_TYPE', 'memory') == 'redis':
-            config.redis_config = {
+        if self.cache_type == 'redis':
+            self.redis_config = {
                 'host': os.getenv('REDIS_HOST', 'localhost'),
                 'port': int(os.getenv('REDIS_PORT', '6379')),
                 'db': int(os.getenv('REDIS_DB', '0')),
-                'password': os.getenv('REDIS_PASSWORD', None)
             }
+            redis_password = os.getenv('REDIS_PASSWORD')
+            if redis_password:
+                self.redis_config['password'] = redis_password
         
         # Performance settings
-        config.tile_size = int(os.getenv('TILE_SIZE', str(config.tile_size)))
-        config.chunk_size = int(os.getenv('CHUNK_SIZE', str(config.chunk_size)))
+        self.tile_size = int(os.getenv('TILE_SIZE', str(self.tile_size)))
+        self.chunk_size = int(os.getenv('CHUNK_SIZE', str(self.chunk_size)))
         
         # Hierarchical settings
-        config.max_hierarchy_depth = int(os.getenv('MAX_HIERARCHY_DEPTH', str(config.max_hierarchy_depth)))
+        self.max_hierarchy_depth = int(os.getenv('MAX_HIERARCHY_DEPTH', str(self.max_hierarchy_depth)))
         
         # Performance limits
-        config.query_timeout = int(os.getenv('QUERY_TIMEOUT', str(config.query_timeout)))
-        config.max_concurrent_queries = int(os.getenv('MAX_CONCURRENT_QUERIES', str(config.max_concurrent_queries)))
+        self.query_timeout = int(os.getenv('QUERY_TIMEOUT', str(self.query_timeout)))
+        self.max_concurrent_queries = int(os.getenv('MAX_CONCURRENT_QUERIES', str(self.max_concurrent_queries)))
         
         # UI settings
-        config.virtual_scroll_threshold = int(os.getenv('VIRTUAL_SCROLL_THRESHOLD', str(config.virtual_scroll_threshold)))
+        self.virtual_scroll_threshold = int(os.getenv('VIRTUAL_SCROLL_THRESHOLD', str(self.virtual_scroll_threshold)))
         
-        return config
+        return self
     
     def validate(self) -> None:
         """Validate configuration settings"""

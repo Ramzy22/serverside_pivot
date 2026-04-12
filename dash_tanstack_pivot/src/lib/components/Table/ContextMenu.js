@@ -1,8 +1,10 @@
-import React, { useState, useEffect, useLayoutEffect, useRef } from 'react';
+import React, { useState, useLayoutEffect, useRef } from 'react';
 
 const ContextMenu = ({ x, y, onClose, actions, theme }) => {
     const [adjustedPosition, setAdjustedPosition] = useState({ x, y });
     const menuRef = useRef(null);
+    const actionsLengthRef = useRef(actions.length);
+    actionsLengthRef.current = actions.length;
 
     useLayoutEffect(() => {
         const clampPosition = () => {
@@ -10,7 +12,7 @@ const ContextMenu = ({ x, y, onClose, actions, theme }) => {
             const viewportHeight = window.innerHeight;
             const rect = menuRef.current ? menuRef.current.getBoundingClientRect() : null;
             const menuWidth = rect ? rect.width : 200;
-            const menuHeight = rect ? rect.height : (actions.length * 32 + 20);
+            const menuHeight = rect ? rect.height : (actionsLengthRef.current * 32 + 20);
             const padding = 8;
 
             let adjustedX = x;
@@ -37,10 +39,6 @@ const ContextMenu = ({ x, y, onClose, actions, theme }) => {
             window.removeEventListener('resize', clampPosition);
             window.removeEventListener('scroll', clampPosition, true);
         };
-    }, [x, y, actions]);
-
-    useEffect(() => {
-        setAdjustedPosition({ x, y });
     }, [x, y]);
 
     return (

@@ -29,9 +29,7 @@ class SafeExpressionParser:
             raise ValueError(f"Invalid expression '{expression}': {e}")
 
     def _eval_node(self, node: ast.AST, context: Dict[str, Any]) -> Any:
-        if isinstance(node, ast.Num): # Python < 3.8
-            return node.n
-        elif isinstance(node, ast.Constant): # Python >= 3.8
+        if isinstance(node, ast.Constant):  # Python >= 3.8
             return node.value
         elif isinstance(node, ast.Name):
             if node.id in context:

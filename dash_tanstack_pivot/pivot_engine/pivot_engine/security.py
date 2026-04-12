@@ -3,7 +3,8 @@ security.py - Security and Authentication for Scalable Pivot Engine
 Supports API Key (Service-to-Service) and OAuth2/JWT (User-to-Service).
 """
 import os
-from typing import Optional, List, Dict, Any
+import logging
+from typing import Optional, List, Dict, Any, Set
 
 try:
     from fastapi import HTTPException, Security, status, Depends
@@ -31,8 +32,54 @@ except ImportError:
     _jose_available = False
     jwt = JWTError = None
 
+DEFAULT_JWT_SECRET_KEY = "dev-jwt-secret"
+_PRODUCTION_ENV_VALUES = {"production", "prod"}
+_DEVELOPMENT_AUTH_ENV_VALUES = {"development", "local"}
+_ENVIRONMENT_VARIABLES = ("ENV", "APP_ENV", "FLASK_ENV", "DASH_ENV")
+_LOGGER = logging.getLogger(__name__)
+
+
+def _is_production_environment() -> bool:
+    for variable_name in _ENVIRONMENT_VARIABLES:
+        value = str(os.getenv(variable_name) or "").strip().lower()
+        if value in _PRODUCTION_ENV_VALUES:
+            return True
+    return False
+
+
+def _is_development_auth_environment() -> bool:
+    if _is_production_environment():
+        return False
+    return any(
+        str(os.getenv(variable_name) or "").strip().lower() in _DEVELOPMENT_AUTH_ENV_VALUES
+        for variable_name in _ENVIRONMENT_VARIABLES
+    )
+
+
+def _allow_development_auth_fallbacks() -> bool:
+    return os.getenv("ALLOW_DEV_AUTH") == "1" and _is_development_auth_environment()
+
+
+def _get_development_auth_fallback_user() -> "User":
+    _LOGGER.warning(
+        "Using development authentication fallback; disable ALLOW_DEV_AUTH outside local development."
+    )
+    return _get_dev_user()
+
+
+def _load_jwt_secret_key() -> str:
+    configured_secret = os.getenv("JWT_SECRET_KEY")
+    if configured_secret and configured_secret != DEFAULT_JWT_SECRET_KEY:
+        return configured_secret
+    if _is_production_environment():
+        raise RuntimeError(
+            "JWT_SECRET_KEY must be set to a non-default value in production."
+        )
+    return configured_secret or DEFAULT_JWT_SECRET_KEY
+
+
 # Configuration
-JWT_SECRET_KEY = os.getenv("JWT_SECRET_KEY", "dev-jwt-secret")
+JWT_SECRET_KEY = _load_jwt_secret_key()
 JWT_ALGORITHM = os.getenv("JWT_ALGORITHM", "HS256")
 PIVOT_API_KEY = os.getenv("PIVOT_API_KEY")
 
@@ -72,8 +119,8 @@ async def get_current_user(
     if api_key:
         if not PIVOT_API_KEY:
             # Dev mode fallback if no key configured
-            if api_key == "dev-key":
-                return _get_dev_user()
+            if _allow_development_auth_fallbacks() and api_key == "dev-key":
+                return _get_development_auth_fallback_user()
         
         if api_key == PIVOT_API_KEY:
             # Service account typically has full admin rights or specific scope
@@ -113,8 +160,8 @@ async def get_current_user(
             )
 
     # 3. Development Fallback (if no auth provided and in dev mode)
-    if not PIVOT_API_KEY and os.getenv("ENV") != "production":
-        return _get_dev_user()
+    if not PIVOT_API_KEY and _allow_development_auth_fallbacks():
+        return _get_development_auth_fallback_user()
 
     raise HTTPException(
         status_code=status.HTTP_401_UNAUTHORIZED,
@@ -132,6 +179,21 @@ def _get_dev_user():
 
 from .types.pivot_spec import PivotSpec
 
+
+def _filter_references_fields(filter_spec: Any, protected_fields: Set[str]) -> bool:
+    if not isinstance(filter_spec, dict) or not protected_fields:
+        return False
+    field_name = filter_spec.get("field")
+    if field_name is not None and str(field_name) in protected_fields:
+        return True
+    return any(
+        isinstance(condition, dict)
+        and condition.get("field") is not None
+        and str(condition.get("field")) in protected_fields
+        for condition in (filter_spec.get("conditions") or [])
+    )
+
+
 def get_user_with_rls(user: User = (Depends(get_current_user) if _fastapi_available else None)) -> User:
     """
     Dependency to get user with RLS context applied.
@@ -144,9 +206,13 @@ def apply_rls_to_spec(spec: PivotSpec, user: User) -> PivotSpec:
     Modifies the spec in-place and returns it.
     """
     if user.attributes:
+        protected_fields = {str(field) for field in user.attributes.keys()}
+        spec.filters = [
+            filter_spec
+            for filter_spec in list(spec.filters or [])
+            if not _filter_references_fields(filter_spec, protected_fields)
+        ]
         for field, value in user.attributes.items():
-            # Check if filter already exists to avoid duplication?
-            # For now, simplistic append. 
             spec.filters.append({
                 "field": field,
                 "op": "=",

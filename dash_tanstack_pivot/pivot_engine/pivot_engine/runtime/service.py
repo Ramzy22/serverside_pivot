@@ -144,13 +144,13 @@ class PivotRuntimeService:
                         break
             static_column_sort = column_sort_options.get(lookup_id)
             if isinstance(static_column_sort, dict):
-                for key in ("semanticType", "sortSemantic", "nulls", "sortType", "sortKeyField"):
+                for key in ("semanticType", "sortSemantic", "nulls", "sortType", "sortKeyField", "absoluteSort"):
                     if key in static_column_sort and static_column_sort.get(key) is not None:
                         sort_item[key] = static_column_sort.get(key)
 
             # Preserve optional semantic hints for backend ordering (e.g. tenor sort)
             # and hidden-key directives for deterministic curve-pillar ordering.
-            for key in ("semanticType", "sortSemantic", "nulls", "sortType", "sortKeyField"):
+            for key in ("semanticType", "sortSemantic", "nulls", "sortType", "sortKeyField", "absoluteSort"):
                 if key in s:
                     sort_item[key] = s.get(key)
             tanstack_sorting.append(sort_item)
@@ -182,6 +182,15 @@ class PivotRuntimeService:
                 return None
             edit_domain = getattr(adapter, "edit_domain", None)
             if edit_domain is None or not hasattr(edit_domain, "build_visible_edit_overlay"):
+                return None
+            if (
+                hasattr(edit_domain, "has_visible_edit_overlay")
+                and not edit_domain.has_visible_edit_overlay(
+                    request,
+                    session_id=context.session_id,
+                    client_instance=context.client_instance,
+                )
+            ):
                 return None
             return edit_domain.build_visible_edit_overlay(
                 request,
@@ -530,11 +539,9 @@ class PivotRuntimeService:
             or not context.viewport_active
             or (context.intent == "structural" and context.original_intent != "expansion")
         )
-        should_attach_col_schema = bool(response.col_schema) and (
+        schema_payload = response.col_schema if bool(response.col_schema) and (
             effective_needs_col_schema or should_emit_columns
-        )
-        if should_attach_col_schema:
-            cols_payload = cols_payload + [{"id": "__col_schema", "col_schema": response.col_schema}]
+        ) else None
 
         postprocess_started_at = time.perf_counter()
         return PivotServiceResponse(
@@ -542,6 +549,7 @@ class PivotRuntimeService:
             data=response_data,
             total_rows=response_total_rows,
             columns=cols_payload if should_emit_columns else None,
+            col_schema=schema_payload,
             data_offset=context.start_row,
             data_version=response_version,
             color_scale_stats=response.color_scale_stats,

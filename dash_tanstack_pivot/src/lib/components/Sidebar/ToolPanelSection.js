@@ -1,6 +1,6 @@
 import React, { useState, useRef, useEffect } from 'react';
 import { useVirtualizer } from '@tanstack/react-virtual';
-import Icons from '../Icons';
+import Icons from '../../utils/Icons';
 
 const ToolPanelSection = ({ title, children, items, renderItem, theme, styles, initialExpanded = true, count, onDrop, sectionId }) => {
     const [expanded, setExpanded] = useState(initialExpanded);

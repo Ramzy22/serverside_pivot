@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import Icons from '../Icons';
+import Icons from '../../utils/Icons';
 import { getStyles } from '../../utils/styles';
 
 const DateRangeFilter = ({ onFilter, currentFilter, theme }) => {

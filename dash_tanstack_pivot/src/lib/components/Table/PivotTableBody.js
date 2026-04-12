@@ -4,9 +4,53 @@ import StatusBar from './StatusBar';
 import InlineDetailPanel from './InlineDetailPanel';
 import { usePivotTheme } from '../../contexts/PivotThemeContext';
 import { usePivotConfig } from '../../contexts/PivotConfigContext';
+import { buildRowSpanPlan, collectRowSpanColumns } from '../../utils/rowSpanning';
+import { getPivotPerformanceNow, recordPivotMeasure } from '../../utils/pivotProfiler';
+import { usePivotRenderCounter } from '../../hooks/usePivotRenderCounter';
 
 const getTotalRowBackground = (theme) =>
     theme.totalBg || theme.select || theme.background;
+
+const getLeafColumnIds = (column, leafIdCache) => {
+    if (!column) return [];
+    const cacheKey = column.id || column;
+    if (leafIdCache.has(cacheKey)) return leafIdCache.get(cacheKey);
+
+    const leafIds = [];
+    const stack = [column];
+    while (stack.length > 0) {
+        const current = stack.pop();
+        if (!current) continue;
+        const children = Array.isArray(current.columns) ? current.columns : [];
+        if (children.length > 0) {
+            for (let index = children.length - 1; index >= 0; index -= 1) {
+                stack.push(children[index]);
+            }
+        } else if (current.id) {
+            leafIds.push(current.id);
+        }
+    }
+
+    if (leafIds.length === 0 && typeof column.getLeafColumns === 'function') {
+        column.getLeafColumns().forEach((leafColumn) => {
+            if (leafColumn && leafColumn.id) leafIds.push(leafColumn.id);
+        });
+    }
+    if (leafIds.length === 0 && column.id) {
+        leafIds.push(column.id);
+    }
+
+    leafIdCache.set(cacheKey, leafIds);
+    return leafIds;
+};
+
+const isContiguousIndexRange = (indices) => {
+    if (!Array.isArray(indices) || indices.length <= 1) return true;
+    for (let index = 1; index < indices.length; index += 1) {
+        if (indices[index] !== indices[index - 1] + 1) return false;
+    }
+    return true;
+};
 
 /**
  * PivotTableBody — the main scroll container and virtual-scroll table body.
@@ -52,6 +96,7 @@ export const PivotTableBody = React.memo(function PivotTableBody({
     totalCenterColumns,
     // Display options
     rowHeight,
+    layoutMode,
     grandTotalPosition,
     showColumnLoadingSkeletons,
     pendingColumnSkeletonCount,
@@ -79,6 +124,7 @@ export const PivotTableBody = React.memo(function PivotTableBody({
     onDetailSort,
     onDetailFilter,
 }) {
+    usePivotRenderCounter('PivotTableBody');
     const { theme, styles } = usePivotTheme();
     const {
         filters,
@@ -156,35 +202,54 @@ export const PivotTableBody = React.memo(function PivotTableBody({
         };
     }, [virtualCenterCols]);
 
-    // Pre-compute a header→centerLeafPairs map keyed by column structure.
+    // Pre-compute header-to-center-leaf indexes keyed by column structure.
     // getLeafColumns() walks the column tree and is expensive with 1000+ columns;
-    // caching it here avoids the O(headers × leaves) inner loop on every scroll frame.
+    // caching it here avoids repeated header/leaf tree walks on every scroll frame.
+    const centerColumnWidthPrefix = React.useMemo(() => {
+        const prefix = new Array(centerCols.length + 1);
+        prefix[0] = 0;
+        for (let index = 0; index < centerCols.length; index += 1) {
+            const column = centerCols[index];
+            prefix[index + 1] = prefix[index] + (column ? column.getSize() : 0);
+        }
+        return prefix;
+    }, [centerCols, totalLayoutWidth]);
+
     const headerLeafPairsMap = React.useMemo(() => {
+        const startedAt = getPivotPerformanceNow();
         const map = new Map();
+        const leafIdCache = new Map();
         for (const group of centerHeaderGroups) {
             for (const header of group.headers) {
-                const leafCols = header.column.getLeafColumns
-                    ? header.column.getLeafColumns()
-                    : [header.column];
-                const centerLeafPairs = [];
-                for (let i = 0; i < leafCols.length; i++) {
-                    const leafColumn = leafCols[i];
-                    const idx = centerColIndexMap.has(leafColumn.id) ? centerColIndexMap.get(leafColumn.id) : -1;
+                const leafIds = getLeafColumnIds(header.column, leafIdCache);
+                const indices = [];
+                for (let i = 0; i < leafIds.length; i += 1) {
+                    const leafId = leafIds[i];
+                    const idx = centerColIndexMap.has(leafId) ? centerColIndexMap.get(leafId) : -1;
                     if (idx >= 0) {
-                        centerLeafPairs.push({ idx });
+                        indices.push(idx);
                     }
                 }
-                if (centerLeafPairs.length > 0) {
+                if (indices.length > 0) {
+                    indices.sort((left, right) => left - right);
                     map.set(header.id, {
-                        pairs: centerLeafPairs,
-                        minIdx: centerLeafPairs[0].idx,
-                        maxIdx: centerLeafPairs[centerLeafPairs.length - 1].idx,
+                        indices,
+                        minIdx: indices[0],
+                        maxIdx: indices[indices.length - 1],
+                        contiguous: isContiguousIndexRange(indices),
                     });
                 }
             }
         }
+        recordPivotMeasure('PivotTableBody.headerLeafIndexMap', startedAt, {
+            componentId: 'PivotTableBody',
+            headerGroups: centerHeaderGroups.length,
+            centerColumns: centerCols.length,
+            cachedColumns: leafIdCache.size,
+            mappedHeaders: map.size,
+        });
         return map;
-    }, [centerColIndexMap, centerHeaderGroups]);
+    }, [centerColIndexMap, centerCols.length, centerHeaderGroups]);
 
     // ── Memoized base styles to avoid creating new objects per row/render ──
     const baseRowStyle = React.useMemo(() => ({
@@ -262,34 +327,50 @@ export const PivotTableBody = React.memo(function PivotTableBody({
     }), [rowHeight, theme.border]);
 
     const centerHeaderRenderPlan = React.useMemo(
-        () => centerHeaderGroups.map((group) => {
-            const visibleHeaders = [];
-            for (const header of group.headers) {
-                const centerLeafEntry = headerLeafPairsMap.get(header.id);
-                if (!centerLeafEntry) continue;
-                if (
-                    centerLeafEntry.maxIdx < visibleCenterRange.start
-                    || centerLeafEntry.minIdx > visibleCenterRange.end
-                ) {
-                    continue;
-                }
+        () => {
+            const startedAt = getPivotPerformanceNow();
+            const plan = centerHeaderGroups.map((group) => {
+                const visibleHeaders = [];
+                for (const header of group.headers) {
+                    const centerLeafEntry = headerLeafPairsMap.get(header.id);
+                    if (!centerLeafEntry) continue;
+                    if (
+                        centerLeafEntry.maxIdx < visibleCenterRange.start
+                        || centerLeafEntry.minIdx > visibleCenterRange.end
+                    ) {
+                        continue;
+                    }
 
-                let visWidth = 0;
-                for (const pair of centerLeafEntry.pairs) {
-                    if (pair.idx < visibleCenterRange.start) continue;
-                    if (pair.idx > visibleCenterRange.end) break;
-                    const centerColumn = centerCols[pair.idx];
-                    visWidth += centerColumn ? centerColumn.getSize() : 0;
+                    let visWidth = 0;
+                    if (centerLeafEntry.contiguous) {
+                        const visibleStart = Math.max(centerLeafEntry.minIdx, visibleCenterRange.start);
+                        const visibleEnd = Math.min(centerLeafEntry.maxIdx, visibleCenterRange.end);
+                        visWidth = centerColumnWidthPrefix[visibleEnd + 1] - centerColumnWidthPrefix[visibleStart];
+                    } else {
+                        for (const idx of centerLeafEntry.indices) {
+                            if (idx < visibleCenterRange.start) continue;
+                            if (idx > visibleCenterRange.end) break;
+                            const centerColumn = centerCols[idx];
+                            visWidth += centerColumn ? centerColumn.getSize() : 0;
+                        }
+                    }
+                    if (visWidth <= 0) continue;
+                    visibleHeaders.push({ header, visWidth });
                 }
-                if (visWidth <= 0) continue;
-                visibleHeaders.push({ header, visWidth });
-            }
-            return {
-                groupId: group.id,
-                visibleHeaders,
-            };
-        }),
-        [centerCols, centerHeaderGroups, headerLeafPairsMap, visibleCenterRange]
+                return {
+                    groupId: group.id,
+                    visibleHeaders,
+                };
+            });
+            recordPivotMeasure('PivotTableBody.centerHeaderRenderPlan', startedAt, {
+                componentId: 'PivotTableBody',
+                headerGroups: centerHeaderGroups.length,
+                visibleStart: visibleCenterRange.start,
+                visibleEnd: visibleCenterRange.end,
+            });
+            return plan;
+        },
+        [centerCols, centerColumnWidthPrefix, centerHeaderGroups, headerLeafPairsMap, visibleCenterRange]
     );
 
     const getRenderedRowIndex = (row, fallbackIndex = 0) => {
@@ -326,6 +407,35 @@ export const PivotTableBody = React.memo(function PivotTableBody({
         return effectiveCenterRows[virtualIndex] || null;
     }, [centerRowLookup, effectiveCenterRows, getRow, serverSide]);
 
+    const rowSpanColumns = React.useMemo(() => {
+        if (layoutMode !== 'tabular') return [];
+        return collectRowSpanColumns([...leftCols, ...centerCols, ...rightCols]);
+    }, [layoutMode, leftCols, centerCols, rightCols]);
+    const rowSpanEnabled = rowSpanColumns.length > 0;
+    const rowSpanRowEntries = React.useMemo(() => {
+        if (!rowSpanEnabled) return [];
+        return virtualRows.reduce((entries, virtualRow) => {
+            if (serverSide && pinnedVirtualIndexSet.has(virtualRow.index)) return entries;
+            const row = resolveVirtualRow(virtualRow.index);
+            if (row && row.original) {
+                entries.push({
+                    row,
+                    size: Number(virtualRow.size) > 0 ? Number(virtualRow.size) : rowHeight,
+                });
+            }
+            return entries;
+        }, []);
+    }, [rowSpanEnabled, virtualRows, serverSide, pinnedVirtualIndexSet, resolveVirtualRow, rowHeight]);
+    const rowSpanPlan = React.useMemo(
+        () => buildRowSpanPlan({ rowEntries: rowSpanRowEntries, rowSpanColumns }),
+        [rowSpanRowEntries, rowSpanColumns]
+    );
+    const getCellRenderOptions = React.useCallback((column, renderOptions = {}) => {
+        const rowSpanByColumnId = renderOptions.rowSpanByColumnId || null;
+        const rowSpan = rowSpanByColumnId ? rowSpanByColumnId.get(column.id) : null;
+        return rowSpan ? { disableSticky: true, rowSpan } : { disableSticky: true };
+    }, []);
+
     const stickyTreeRow = React.useMemo(() => {
         if (viewMode !== 'tree' || treeSuppressGroupRowsSticky || virtualRows.length === 0) return null;
         const firstVisibleRow = virtualRows
@@ -348,11 +458,11 @@ export const PivotTableBody = React.memo(function PivotTableBody({
         return null;
     }, [centerRowLookup, resolveVirtualRow, treeSuppressGroupRowsSticky, viewMode, virtualRows]);
 
-    const renderCenterVirtualCells = (row, virtualRowIndex, isVirtualRow) => {
+    const renderCenterVirtualCells = (row, virtualRowIndex, isVirtualRow, renderOptions = {}) => {
         return virtualCenterCols.map(virtualCol => {
             const centerColumn = centerCols[virtualCol.index];
             if (!centerColumn) return null;
-            return renderVirtualColumnCell(row, centerColumn, virtualRowIndex, isVirtualRow, { disableSticky: true });
+            return renderVirtualColumnCell(row, centerColumn, virtualRowIndex, isVirtualRow, getCellRenderOptions(centerColumn, renderOptions));
         });
     };
 
@@ -398,13 +508,13 @@ export const PivotTableBody = React.memo(function PivotTableBody({
                         }
                     >
                         {leftCols.map((column) =>
-                            renderVirtualColumnCell(row, column, virtualRowIndex, isVirtualRow, { disableSticky: true })
+                            renderVirtualColumnCell(row, column, virtualRowIndex, isVirtualRow, getCellRenderOptions(column, renderOptions))
                         )}
                     </div>
                 )}
                 <div style={{ ...centerFlexStyle, background: rowBackground }}>
                     <div style={beforeSpacerStyle} />
-                    {renderCenterVirtualCells(row, virtualRowIndex, isVirtualRow)}
+                    {renderCenterVirtualCells(row, virtualRowIndex, isVirtualRow, renderOptions)}
                     <div style={afterSpacerStyle} />
                 </div>
                 {rightPinnedSectionStyle && (
@@ -415,7 +525,7 @@ export const PivotTableBody = React.memo(function PivotTableBody({
                         }
                     >
                         {rightCols.map((column) =>
-                            renderVirtualColumnCell(row, column, virtualRowIndex, isVirtualRow, { disableSticky: true })
+                            renderVirtualColumnCell(row, column, virtualRowIndex, isVirtualRow, getCellRenderOptions(column, renderOptions))
                         )}
                     </div>
                 )}
@@ -827,6 +937,9 @@ export const PivotTableBody = React.memo(function PivotTableBody({
                           const displayRowIndex = centerDisplayIndexById.get(row.id) ?? (topRowCount + virtualRow.index);
 
                           const rowBg = (row.original && row.original._isTotal) ? totalRowBg : defaultRowBg;
+                          const rowSpanByColumnId = rowSpanEnabled && row.id != null
+                              ? (rowSpanPlan.get(String(row.id)) || null)
+                              : null;
 
                           return (
                               <React.Fragment key={stableRowKey}>
@@ -842,6 +955,7 @@ export const PivotTableBody = React.memo(function PivotTableBody({
                                    }}>
                                       {renderRowSections(row, displayRowIndex, true, {
                                           rowBackground: rowBg,
+                                          rowSpanByColumnId,
                                       })}
                                   </div>
                                   {detailMode === 'inline' && detailState && detailState.anchorRowId === row.id && (

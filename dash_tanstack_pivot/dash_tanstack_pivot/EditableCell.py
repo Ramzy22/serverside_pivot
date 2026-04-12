@@ -33,11 +33,13 @@ Keyword arguments:
     def __init__(
         self,
         editingDisabled = None,
+        editingDisabledReason = None,
         rowEditMode = None,
         editorConfig = None,
         rowEditSession = None,
         editorOptions = None,
         editorOptionsLoading = None,
+        editorOptionsError = None,
         **kwargs
     ):
         self._prop_names = []

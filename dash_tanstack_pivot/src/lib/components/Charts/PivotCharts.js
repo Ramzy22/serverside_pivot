@@ -1,5 +1,6 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import Icons from '../Icons';
+import Icons from '../../utils/Icons';
+import { usePivotRenderCounter } from '../../hooks/usePivotRenderCounter';
 import { formatDisplayLabel } from '../../utils/helpers';
 import {
     INTERNAL_COL_IDS, MAX_PANEL_CATEGORIES, MAX_PANEL_SERIES,
@@ -31,17 +32,9 @@ import {
     buildComboPivotChartModel, buildComboSelectionChartModel,
     buildLinePath, buildAreaBandPath, niceTickValues, getAxisMetrics,
     layoutIcicleNodes,
-} from './chartModelBuilders';
-
-// Re-export model builders consumed by DashTanstackPivot
-export {
-    buildDefaultCartesianLayers,
-    normalizeComboLayers,
-    buildPivotChartModel,
-    buildComboPivotChartModel,
-    buildComboSelectionChartModel,
-    buildSelectionChartModel,
-};
+    canStackBarSeries,
+    canStackBarLayout,
+} from '../../utils/chartModelBuilders';
 
 const ChartTypeButtons = ({ chartType, onChange, theme, includeHierarchyCharts = true }) => {
     const buttonStyle = (type) => ({
@@ -77,12 +70,8 @@ const ChartTypeButtons = ({ chartType, onChange, theme, includeHierarchyCharts =
     );
 };
 
+/** Check whether an area chart model has enough series to stack. */
 const canStackAreaSeries = (model) => Array.isArray(model && model.series) && model.series.length > 1;
-export const canStackBarSeries = (model) => Array.isArray(model && model.series) && model.series.length > 1;
-export const canStackBarLayout = (model) => (
-    (Array.isArray(model && model.stackedGroups) && model.stackedGroups.length > 0)
-    || canStackBarSeries(model)
-);
 
 const ChartLayoutButtons = ({ chartType, barLayout, onChange, canStack, theme }) => {
     const buttonStyle = (value, disabled = false) => ({
@@ -3683,6 +3672,7 @@ export const PivotChartPanel = ({
     title = 'Chart Panel',
     showDefinitionManager = true,
 }) => {
+    usePivotRenderCounter('PivotChartPanel', activeChartId);
     const [fullscreenMode, setFullscreenMode] = useState(false);
     const [uncontrolledImmersiveMode, setUncontrolledImmersiveMode] = useState(false);
     const [settingsPaneOpen, setSettingsPaneOpen] = useState(false);

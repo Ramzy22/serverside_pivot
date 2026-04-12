@@ -84,14 +84,10 @@ class HierarchicalVirtualScrollManager:
         """Generate cache key for a hierarchical query."""
         spec_hash = self._get_spec_hash(spec)
         paths_str = str(sorted(map(str, expanded_paths))) if expanded_paths else ""
-        cache_data = {
-            'spec_hash': spec_hash,
-            'offset': offset,
-            'limit': limit,
-            'expanded_paths_hash': hashlib.md5(paths_str.encode()).hexdigest()
-        }
-        cache_key_str = json.dumps(cache_data, sort_keys=True)
-        return f"hier_scroll_v3:{hashlib.sha256(cache_key_str.encode()).hexdigest()[:16]}"
+        paths_hash = hashlib.md5(paths_str.encode()).hexdigest()
+        # Combine the four uniquely-identifying fields directly — no outer hash needed
+        # since spec_hash and paths_hash are already fixed-length hex digests.
+        return f"hier_scroll_v3:{spec_hash}:{paths_hash}:{offset}:{limit}"
 
     def get_visible_rows_hierarchical(self, spec: PivotSpec, start_row: int, end_row: int, expanded_paths: List[List[str]]):
         """Get hierarchical rows for virtual scrolling with expansion state"""
@@ -818,11 +814,11 @@ class HierarchicalVirtualScrollManager:
             }
             dim_opts = column_sort_options.get(dim) if isinstance(column_sort_options, dict) else None
             if isinstance(dim_opts, dict):
-                for key in ("sortType", "sortKeyField", "semanticType", "sortSemantic", "nulls"):
+                for key in ("sortType", "sortKeyField", "semanticType", "sortSemantic", "nulls", "absoluteSort"):
                     if key in dim_opts and dim_opts.get(key) is not None:
                         dim_sort[key] = dim_opts.get(key)
             if user_sort_field == dim and isinstance(user_sort_spec, dict):
-                for key in ("sortType", "sortKeyField", "semanticType", "sortSemantic", "nulls"):
+                for key in ("sortType", "sortKeyField", "semanticType", "sortSemantic", "nulls", "absoluteSort"):
                     if key in user_sort_spec and user_sort_spec.get(key) is not None:
                         dim_sort[key] = user_sort_spec.get(key)
 
