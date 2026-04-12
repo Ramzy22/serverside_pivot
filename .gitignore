@@ -198,3 +198,22 @@ node_modules/
 # AI assistant internals
 .claude/
 .codex/
+.qwen/
+.gemini/
+.planning/
+.selenium-cache/
+
+# AI and Planning MD files
+ANALYSIS_REPORT.md
+EDIT_SYSTEM_ARCHITECTURE.md
+docs/
+CHANGELOG.md
+
+# Profiler and temporary logs
+*.pid
+.tmp_*
+.tmp_app_*
+tmp_*
+__tmp_*
+.pytest_cache/
+.selenium-cache/
