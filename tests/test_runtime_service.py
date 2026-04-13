@@ -102,8 +102,7 @@ def test_runtime_service_works_without_dash():
     assert response.total_rows >= len(response.data)
 
 
-@pytest.mark.asyncio
-async def test_runtime_service_cancels_superseded_viewport_work():
+def test_runtime_service_cancels_superseded_viewport_work():
     class SlowAdapter:
         def __init__(self):
             self.first_started = asyncio.Event()
@@ -126,40 +125,43 @@ async def test_runtime_service_cancels_superseded_viewport_work():
                 version=2,
             )
 
-    adapter = SlowAdapter()
-    service = PivotRuntimeService(adapter_getter=lambda: adapter, session_gate=SessionRequestGate())
-    state = PivotViewState(
-        row_fields=["region"],
-        val_configs=[{"field": "sales", "agg": "sum"}],
-    )
-    base_viewport = {
-        "start": 0,
-        "end": 20,
-        "state_epoch": 1,
-        "abort_generation": 1,
-        "session_id": "sess-cancel",
-        "client_instance": "grid-a",
-        "intent": "viewport",
-    }
-    first_context = PivotRequestContext.from_frontend(
-        table="sales_data",
-        trigger_prop="custom.viewport",
-        viewport={**base_viewport, "window_seq": 1},
-    )
-    second_context = PivotRequestContext.from_frontend(
-        table="sales_data",
-        trigger_prop="custom.viewport",
-        viewport={**base_viewport, "window_seq": 2},
-    )
+    async def _run():
+        adapter = SlowAdapter()
+        service = PivotRuntimeService(adapter_getter=lambda: adapter, session_gate=SessionRequestGate())
+        state = PivotViewState(
+            row_fields=["region"],
+            val_configs=[{"field": "sales", "agg": "sum"}],
+        )
+        base_viewport = {
+            "start": 0,
+            "end": 20,
+            "state_epoch": 1,
+            "abort_generation": 1,
+            "session_id": "sess-cancel",
+            "client_instance": "grid-a",
+            "intent": "viewport",
+        }
+        first_context = PivotRequestContext.from_frontend(
+            table="sales_data",
+            trigger_prop="custom.viewport",
+            viewport={**base_viewport, "window_seq": 1},
+        )
+        second_context = PivotRequestContext.from_frontend(
+            table="sales_data",
+            trigger_prop="custom.viewport",
+            viewport={**base_viewport, "window_seq": 2},
+        )
 
-    first_task = asyncio.create_task(service.process_async(state, first_context))
-    await asyncio.wait_for(adapter.first_started.wait(), timeout=1)
-    second_response = await service.process_async(state, second_context)
-    first_response = await asyncio.wait_for(first_task, timeout=1)
+        first_task = asyncio.create_task(service.process_async(state, first_context))
+        await asyncio.wait_for(adapter.first_started.wait(), timeout=1)
+        second_response = await service.process_async(state, second_context)
+        first_response = await asyncio.wait_for(first_task, timeout=1)
 
-    assert second_response.status == "data"
-    assert first_response.status == "stale"
-    assert adapter.first_cancelled
+        assert second_response.status == "data"
+        assert first_response.status == "stale"
+        assert adapter.first_cancelled
+
+    asyncio.run(_run())
 
 
 def test_runtime_service_includes_profile_when_requested():
