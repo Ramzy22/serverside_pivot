@@ -19,7 +19,7 @@ if _PE_DIR.is_dir() and str(_PE_DIR) not in sys.path:
 
 import pyarrow as pa
 import pyarrow.parquet as pq
-from dash import Dash, Input, Output, State, dcc, html, no_update
+from dash import Dash, Input, Output, dcc, html, no_update
 
 from dash_tanstack_pivot import DashTanstackPivot
 from pivot_engine import create_tanstack_adapter, register_pivot_app
@@ -69,6 +69,11 @@ _TRADER_AVAILABLE_FIELDS = [
     "day_pnl",
     "mtd_pnl",
     "cum_pnl_20d",
+    "price_20d",
+    "day_pnl_20d",
+    "volume_20d",
+    "market_value_20d",
+    "pnl_20d",
     "delta_usd",
     "gamma_usd",
     "vega_usd",
@@ -81,6 +86,22 @@ _TRADER_LOOKBACK_DAYS = 20
 _TRADER_LATEST_DATE = "latest"
 _TRADER_TIMELINE_META = f"Frozen Yahoo snapshot · {_TRADER_LOOKBACK_DAYS} sessions ending {_TRADER_LATEST_DATE}"
 _TRADER_CURRENT_META = f"Latest book snapshot · {_TRADER_LATEST_DATE}"
+
+_TRADER_SERIES_POINT_FIELDS = [
+    ("price_20d", "price"),
+    ("day_pnl_20d", "day_pnl"),
+    ("volume_20d", "volume"),
+    ("market_value_20d", "market_value"),
+    ("pnl_20d", "cum_pnl_20d"),
+]
+
+_TRADER_SPARKLINE_FIELDS = {
+    "price_20d": {"source": "field", "displayMode": "trend", "type": "line", "metric": "last", "showCurrentValue": True, "showDelta": True},
+    "pnl_20d": {"source": "field", "displayMode": "trend", "type": "area", "metric": "last", "showCurrentValue": True, "showDelta": True},
+    "volume_20d": {"source": "field", "displayMode": "trend", "type": "column", "metric": "sum", "showCurrentValue": True, "showDelta": True},
+    "market_value_20d": {"source": "field", "displayMode": "value", "type": "line", "metric": "last", "showCurrentValue": True, "showDelta": True},
+    "day_pnl_20d": {"source": "field", "displayMode": "trend", "type": "area", "metric": "last", "showCurrentValue": True, "showDelta": True},
+}
 
 _TRADER_PRIMARY_CHART_PANES = [
     {
@@ -161,7 +182,19 @@ def load_initial_data(adapter):
 
     trader_history_table = pq.read_table(_TRADER_HISTORY_PATH)
     trader_snapshot_table = pq.read_table(_TRADER_SNAPSHOT_PATH)
+    trader_series_table = trader_history_table.sort_by([("symbol", "ascending"), ("trade_date", "ascending")])
+    sparkline_point_type = pa.struct([("x", pa.string()), ("y", pa.float64())])
+    for series_field, value_field in _TRADER_SERIES_POINT_FIELDS:
+        series_points = pa.array(
+            [
+                {"x": row.get("trade_date"), "y": row.get(value_field)}
+                for row in trader_series_table.select(["trade_date", value_field]).to_pylist()
+            ],
+            type=sparkline_point_type,
+        )
+        trader_series_table = trader_series_table.append_column(series_field, series_points)
     adapter.controller.load_data_from_arrow("nasdaq_trader_demo_history", trader_history_table)
+    adapter.controller.load_data_from_arrow("nasdaq_trader_demo_pnl_series", trader_series_table)
     adapter.controller.load_data_from_arrow("nasdaq_trader_demo_snapshot", trader_snapshot_table)
     # Keep the original example table name for the sparkline contract/demo surface.
     adapter.controller.load_data_from_arrow("sparkline_demo_data", trader_history_table)
@@ -193,8 +226,8 @@ def load_initial_data(adapter):
     )
     adapter.controller.load_data_from_arrow("curve_data", curve_pillar_table)
 
-    # No extra table needed for the field-array sparkline demo —
-    # it uses nasdaq_trader_demo_history directly with agg="array_agg".
+    # The field-array sparkline demos use nasdaq_trader_demo_pnl_series.
+    # *_20d fields are point structs; agg="array_agg" returns [{x, y}, ...].
 
 
 _adapter = None
@@ -350,10 +383,11 @@ def build_lazy_panel_content(button_id, button_label, description):
 app.layout = html.Div(
     style={
         **_PAGE_STYLE,
-        "width": "100vw",
+        "width": "100%",
         "height": "100vh",
         "minHeight": "100vh",
-        "overflow": "hidden",
+        "overflowX": "hidden",
+        "overflowY": "auto",
         "background": "#F4F7FB",
     },
     children=[
@@ -363,56 +397,72 @@ app.layout = html.Div(
             children=[
                 build_panel(
                     "Trader Monitor",
-                    "NASDAQ Cross-Asset Trend Deck",
-                    _TRADER_TIMELINE_META,
+                    "NASDAQ 20D PnL Series",
+                    "Each value is a 20-session {x, y} series. Open Sparkline Column settings and switch Cell display.",
                     DashTanstackPivot(
                         id="pivot-grid",
                         style={"height": "860px", "width": "100%"},
-                        table="nasdaq_trader_demo_history",
+                        table="nasdaq_trader_demo_pnl_series",
                         serverSide=True,
-                        rowFields=["desk", "asset_class", "sector", "symbol"],
-                        colFields=["trade_date"],
+                        rowFields=["instrument"],
+                        colFields=[],
                         valConfigs=[
                             {
-                                "field": "price_norm_20d",
-                                "agg": "avg",
-                                "format": "fixed:1",
+                                "field": "price_20d",
+                                "agg": "array_agg",
+                                "format": "fixed:2",
+                                "label": "Price 20D",
                                 "sparkline": {
+                                    "source": "field",
+                                    "displayMode": "trend",
                                     "type": "line",
-                                    "header": "Market Move",
+                                    "metric": "last",
+                                    "header": "Price 20D",
                                     "showCurrentValue": True,
                                     "showDelta": True,
                                 },
                             },
                             {
-                                "field": "day_pnl",
-                                "agg": "sum",
+                                "field": "pnl_20d",
+                                "agg": "array_agg",
                                 "format": "fixed:0",
+                                "label": "PnL 20D",
                                 "sparkline": {
+                                    "source": "field",
+                                    "displayMode": "trend",
                                     "type": "area",
-                                    "header": "PnL Path",
+                                    "metric": "last",
+                                    "header": "PnL 20D",
                                     "showCurrentValue": True,
                                     "showDelta": True,
                                 },
                             },
                             {
-                                "field": "delta_usd",
-                                "agg": "sum",
+                                "field": "volume_20d",
+                                "agg": "array_agg",
                                 "format": "fixed:0",
+                                "label": "Volume 20D",
                                 "sparkline": {
+                                    "source": "field",
+                                    "displayMode": "trend",
                                     "type": "column",
-                                    "header": "Delta Risk",
+                                    "metric": "sum",
+                                    "header": "Volume 20D",
                                     "showCurrentValue": True,
                                     "showDelta": True,
                                 },
                             },
                             {
-                                "field": "vega_usd",
-                                "agg": "sum",
+                                "field": "market_value_20d",
+                                "agg": "array_agg",
                                 "format": "fixed:0",
+                                "label": "Market Value 20D",
                                 "sparkline": {
-                                    "type": "bar",
-                                    "header": "Vega Risk",
+                                    "source": "field",
+                                    "displayMode": "value",
+                                    "type": "line",
+                                    "metric": "last",
+                                    "header": "Market Value 20D",
                                     "showCurrentValue": True,
                                     "showDelta": True,
                                 },
@@ -420,42 +470,66 @@ app.layout = html.Div(
                         ],
                         filters={},
                         sorting=[],
-                        expanded={"Index Overlay": True, "Semis Delta One": True, "Volatility": True},
+                        expanded={},
                         showRowTotals=False,
                         showColTotals=False,
                         availableFieldList=_TRADER_AVAILABLE_FIELDS,
-                        chartCanvasPanes=_TRADER_PRIMARY_CHART_PANES,
-                        tableCanvasSize=1.2,
+                        sparklineFields=_TRADER_SPARKLINE_FIELDS,
                         defaultTheme="flash",
                         data=[],
                     ),
                 ),
                 build_panel(
-                    "Sparkline Summary Demo",
-                    "Trend Columns at a Glance",
-                    "A dedicated sparkline column per metric shows the full 20-day trend for each symbol.",
+                    "Performance Baseline",
+                    "NASDAQ Snapshot — No Trendlines",
+                    "Plain numeric pivot on the snapshot table. Use this to benchmark rendering and scroll performance.",
+                    DashTanstackPivot(
+                        id="perf-baseline-grid",
+                        style={"height": "860px", "width": "100%"},
+                        table="nasdaq_trader_demo_snapshot",
+                        serverSide=True,
+                        rowFields=["desk", "strategy"],
+                        colFields=["asset_class"],
+                        valConfigs=[
+                            {"field": "day_pnl", "agg": "sum", "format": "fixed:0", "label": "Day PnL"},
+                            {"field": "market_value", "agg": "sum", "format": "fixed:0", "label": "Mkt Val"},
+                            {"field": "net_exposure", "agg": "sum", "format": "fixed:0", "label": "Net Exp"},
+                            {"field": "position_qty", "agg": "sum", "format": "fixed:0", "label": "Qty"},
+                        ],
+                        filters={},
+                        sorting=[],
+                        expanded={},
+                        showRowTotals=True,
+                        showColTotals=True,
+                        availableFieldList=_TRADER_AVAILABLE_FIELDS,
+                        defaultTheme="flash",
+                        data=[],
+                    ),
+                ),
+                build_panel(
+                    "Linked Sparkline Columns",
+                    "Values Plus Trend",
+                    "Numeric value columns stay available; each metric also gets a linked trend column.",
                     html.Div(
                         id="sparkline-demo-slot",
                         children=build_lazy_panel_content(
                             "load-sparkline-demo-btn",
-                            "Load Sparkline Demo",
-                            "Opens a summary pivot where each metric gets its own sparkline column — "
-                            "price trend (line), PnL trend (area), and volume trend (column) across 20 trading days.",
+                            "Load Linked Trend Demo",
+                            "Adds linked trend columns for price, PnL, and volume while keeping the date value columns numeric.",
                         ),
                     ),
                 ),
                 build_panel(
                     "Field-Array Sparkline Demo",
-                    "Symbol Price History — no column pivot",
-                    "Each row stores its full 20-day price series as an array. "
-                    "Trade dates never appear as columns.",
+                    "Symbol PnL History - no column pivot",
+                    "Each instrument stores its full 20-day PnL series as an array. "
+                    "Switch the series column between trendline and value in the sidebar.",
                     html.Div(
                         id="field-sparkline-demo-slot",
                         children=build_lazy_panel_content(
                             "load-field-sparkline-btn",
                             "Load Field-Array Sparkline Demo",
-                            "Shows price_norm_history rendered as a sparkline column alongside "
-                            "last_price, day_pnl, and volume — all with colFields=[].",
+                            "Shows price, PnL, and volume as series-valued columns. Open Sparkline Column settings and use Cell display.",
                         ),
                     ),
                 ),
@@ -503,27 +577,13 @@ def persist_saved_view(saved_view):
     return saved_view
 
 
-# Restore the last saved view from Dash Store back into the component.
-@app.callback(
-    Output("pivot-grid", "viewState"),
-    Input("restore-view-btn", "n_clicks"),
-    State("saved-view-store", "data"),
-    prevent_initial_call=True,
-)
-def restore_saved_view(_clicks, saved_view):
-    """Restore saved view. Requires a 'restore-view-btn' button in the layout."""
-    if not saved_view:
-        return no_update
-    return saved_view
-
-
 @app.callback(
     Output("sparkline-demo-slot", "children"),
     Input("load-sparkline-demo-btn", "n_clicks"),
     prevent_initial_call=True,
 )
 def mount_sparkline_demo(_clicks):
-    """Load the sparkline demo — summary columns showing 20-day trend per metric."""
+    """Load linked trend columns without replacing the numeric pivot value cells."""
     return DashTanstackPivot(
         id="sparkline-modes-pivot-grid",
         style={"height": "560px", "width": "100%"},
@@ -541,7 +601,8 @@ def mount_sparkline_demo(_clicks):
                     "header": "20D Price Trend",
                     "showCurrentValue": True,
                     "showDelta": True,
-                    "hideColumns": True,
+                    "hideColumns": False,
+                    "placement": "before",
                 },
             },
             {
@@ -553,7 +614,8 @@ def mount_sparkline_demo(_clicks):
                     "header": "20D PnL Trend",
                     "showCurrentValue": True,
                     "showDelta": True,
-                    "hideColumns": True,
+                    "hideColumns": False,
+                    "placement": "before",
                 },
             },
             {
@@ -565,7 +627,8 @@ def mount_sparkline_demo(_clicks):
                     "header": "20D Volume Trend",
                     "showCurrentValue": True,
                     "showDelta": True,
-                    "hideColumns": True,
+                    "hideColumns": False,
+                    "placement": "before",
                 },
             },
         ],
@@ -586,28 +649,72 @@ def mount_sparkline_demo(_clicks):
     prevent_initial_call=True,
 )
 def mount_field_sparkline_demo(_clicks):
-    # Uses the existing history table directly.
-    # array_agg collects price_norm_20d into a list per symbol — the frontend
-    # reads it as a sparkline with source="field", no trade_date column needed.
+    # array_agg collects each point struct into [{x, y}, ...].
+    # The frontend reads that field as a series with source="field".
     return DashTanstackPivot(
         id="field-sparkline-pivot",
         style={"height": "520px", "width": "100%"},
-        table="nasdaq_trader_demo_history",
+        table="nasdaq_trader_demo_pnl_series",
         serverSide=True,
-        rowFields=["desk", "sector", "symbol"],
+        rowFields=["instrument"],
         colFields=[],
         valConfigs=[
-            {"field": "price", "agg": "last", "format": "fixed:2", "label": "Last Price"},
-            {"field": "day_pnl", "agg": "sum", "format": "fixed:0", "label": "Day PnL"},
-            {"field": "volume", "agg": "sum", "format": "fixed:0", "label": "Volume"},
             {
-                "field": "price_norm_20d",
+                "field": "price_20d",
                 "agg": "array_agg",
-                "label": "20D Move",
+                "format": "fixed:2",
+                "label": "Price 20D",
                 "sparkline": {
                     "source": "field",
+                    "displayMode": "value",
+                    "type": "line",
+                    "metric": "last",
+                    "header": "Price 20D",
+                    "showCurrentValue": True,
+                    "showDelta": True,
+                },
+            },
+            {
+                "field": "day_pnl_20d",
+                "agg": "array_agg",
+                "format": "fixed:0",
+                "label": "Day PnL 20D",
+                "sparkline": {
+                    "source": "field",
+                    "displayMode": "trend",
                     "type": "area",
-                    "header": "20D Move",
+                    "metric": "sum",
+                    "header": "Day PnL 20D",
+                    "showCurrentValue": True,
+                    "showDelta": True,
+                },
+            },
+            {
+                "field": "volume_20d",
+                "agg": "array_agg",
+                "format": "fixed:0",
+                "label": "Volume 20D",
+                "sparkline": {
+                    "source": "field",
+                    "displayMode": "trend",
+                    "type": "column",
+                    "metric": "sum",
+                    "header": "Volume 20D",
+                    "showCurrentValue": True,
+                    "showDelta": True,
+                },
+            },
+            {
+                "field": "pnl_20d",
+                "agg": "array_agg",
+                "format": "fixed:0",
+                "label": "PnL 20D",
+                "sparkline": {
+                    "source": "field",
+                    "displayMode": "trend",
+                    "type": "area",
+                    "metric": "last",
+                    "header": "PnL 20D",
                     "showCurrentValue": True,
                     "showDelta": True,
                 },
@@ -618,8 +725,10 @@ def mount_field_sparkline_demo(_clicks):
         expanded={},
         showRowTotals=False,
         showColTotals=False,
-        availableFieldList=["desk", "sector", "asset_class", "symbol",
-                            "price", "day_pnl", "volume", "price_norm_20d"],
+        availableFieldList=[
+            "desk", "sector", "asset_class", "symbol", "instrument",
+            "price_20d", "day_pnl_20d", "volume_20d", "pnl_20d",
+        ],
         defaultTheme="flash",
         data=[],
     )
@@ -691,6 +800,22 @@ def mount_tenor_demo(_clicks):
     )
 
 
+app.validation_layout = html.Div(
+    children=[
+        app.layout,
+        html.Div(
+            style={"display": "none"},
+            children=[
+                mount_sparkline_demo(None),
+                mount_field_sparkline_demo(None),
+                mount_curve_demo(None),
+                mount_tenor_demo(None),
+            ],
+        ),
+    ]
+)
+
+
 # --- 4. Pivot wiring (one line) ---
 # All pivots share a single adapter singleton.  register_pivot_app wires
 # each pivot_id to the same transport callback; the runtime callback uses
@@ -714,6 +839,7 @@ def _get_service():
 
 
 register_pivot_app(app, adapter_getter=get_adapter, pivot_id="pivot-grid")
+register_pivot_app(app, adapter_getter=get_adapter, pivot_id="perf-baseline-grid")
 register_pivot_app(app, adapter_getter=get_adapter, pivot_id="sparkline-modes-pivot-grid")
 register_pivot_app(app, adapter_getter=get_adapter, pivot_id="curve-pivot-grid")
 register_pivot_app(app, adapter_getter=get_adapter, pivot_id="tenor-pivot-grid")

@@ -25,8 +25,9 @@ const DEFAULT_VALUE_SPARKLINE_CONFIG = {
     showDelta: true,
     compact: false,
     hideColumns: false,
-    placement: 'after',
+    placement: 'before',
     source: 'pivot',
+    displayMode: 'trend',
 };
 
 function escapeRegExp(value) {
@@ -90,6 +91,13 @@ function updateValueConfig(setValConfigs, idx, updater) {
     });
 }
 
+function getValueConfigSparklineIdentity(config) {
+    if (!config || typeof config !== 'object') return '';
+    const field = config.field === undefined || config.field === null ? '' : String(config.field);
+    const agg = config.agg === undefined || config.agg === null ? '' : String(config.agg);
+    return `${field}::${agg}`;
+}
+
 function normalizeValueSparklineDraft(value) {
     const normalized = normalizeSparklineConfig(value);
     if (!normalized) return null;
@@ -115,10 +123,9 @@ function sanitizeValueSparklineConfig(value) {
         showDelta: source.showDelta !== false,
         compact: Boolean(source.compact),
         hideColumns: Boolean(source.hideColumns),
-        placement: (typeof source.placement === 'string' && ['after', 'before', 'end'].includes(source.placement))
-            ? source.placement
-            : 'after',
+        placement: 'before',
         source: source.source === 'field' ? 'field' : 'pivot',
+        displayMode: source.displayMode === 'value' ? 'value' : 'trend',
     };
     ['header', 'color', 'positiveColor', 'negativeColor'].forEach((key) => {
         const text = typeof source[key] === 'string' ? source[key].trim() : '';
@@ -128,6 +135,34 @@ function sanitizeValueSparklineConfig(value) {
         nextConfig.areaOpacity = Math.max(0.02, Math.min(0.45, Number(source.areaOpacity)));
     }
     return nextConfig;
+}
+
+function getValueSparklineCapabilities(item, colFields = []) {
+    const agg = String((item && item.agg) || '').trim().toLowerCase();
+    const hasColumnAxis = Array.isArray(colFields) && colFields.length > 0;
+    const canUseFieldSeries = agg === 'array_agg';
+    const canUsePivotSeries = agg !== 'array_agg' && hasColumnAxis;
+    return {
+        canUseFieldSeries,
+        canUsePivotSeries,
+        canUseAny: canUseFieldSeries || canUsePivotSeries,
+        defaultSource: canUseFieldSeries ? 'field' : (canUsePivotSeries ? 'pivot' : null),
+    };
+}
+
+function isSparklineSourcePossible(source, capabilities) {
+    if (!capabilities || !capabilities.canUseAny) return false;
+    return source === 'field' ? capabilities.canUseFieldSeries : capabilities.canUsePivotSeries;
+}
+
+function sanitizeValueSparklineForCapabilities(value, capabilities) {
+    const nextConfig = sanitizeValueSparklineConfig(value);
+    if (!capabilities || !capabilities.canUseAny) return null;
+    if (isSparklineSourcePossible(nextConfig.source, capabilities)) return nextConfig;
+    return {
+        ...nextConfig,
+        source: capabilities.defaultSource,
+    };
 }
 
 function buildSuggestedFormula(baseValues) {
@@ -507,22 +542,37 @@ function getFormulaStatusStyles(theme, tone) {
     return statusColors[tone] || statusColors.muted;
 }
 
-function SparklineConfigModal({ item, idx, setValConfigs, theme, onClose }) {
+function SparklineConfigModal({ item, idx, setValConfigs, theme, colFields = [], onClose }) {
     const config = React.useMemo(
         () => normalizeValueSparklineDraft(item && item.sparkline) || { ...DEFAULT_VALUE_SPARKLINE_CONFIG },
         // eslint-disable-next-line react-hooks/exhaustive-deps
         [item && item.sparkline]
     );
+    const capabilities = React.useMemo(
+        () => getValueSparklineCapabilities(item, colFields),
+        [colFields, item]
+    );
+    const sourceOptions = React.useMemo(() => {
+        const options = [];
+        if (capabilities.canUsePivotSeries) options.push({ value: 'pivot', label: 'Linked pivot' });
+        if (capabilities.canUseFieldSeries) options.push({ value: 'field', label: 'Series field' });
+        return options;
+    }, [capabilities]);
+    const effectiveSource = isSparklineSourcePossible(config.source || 'pivot', capabilities)
+        ? (config.source || 'pivot')
+        : capabilities.defaultSource;
 
     const update = React.useCallback((patch) => {
         updateValueConfig(setValConfigs, idx, (current) => {
             const currentDraft = normalizeValueSparklineDraft(current.sparkline) || { ...DEFAULT_VALUE_SPARKLINE_CONFIG };
+            const nextSparkline = sanitizeValueSparklineForCapabilities({ ...currentDraft, ...patch }, capabilities);
+            if (!nextSparkline) return current;
             return {
                 ...current,
-                sparkline: sanitizeValueSparklineConfig({ ...currentDraft, ...patch }),
+                sparkline: nextSparkline,
             };
         });
-    }, [idx, setValConfigs]);
+    }, [capabilities, idx, setValConfigs]);
 
     const stopProp = React.useCallback((e) => e.stopPropagation(), []);
 
@@ -581,7 +631,7 @@ function SparklineConfigModal({ item, idx, setValConfigs, theme, onClose }) {
             >
                 {/* Header */}
                 <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '16px' }}>
-                    <span style={{ fontSize: '13px', fontWeight: 700, color: theme.text }}>Sparkline Settings</span>
+                    <span style={{ fontSize: '13px', fontWeight: 700, color: theme.text }}>Sparkline Column</span>
                     <button
                         type="button"
                         onClick={onClose}
@@ -592,11 +642,10 @@ function SparklineConfigModal({ item, idx, setValConfigs, theme, onClose }) {
                 {/* Data source */}
                 <div style={sectionStyle}>
                     <span style={labelStyle}>Data source</span>
+                    {sourceOptions.length > 0 ? (
+                    <>
                     <div style={{ display: 'flex', gap: '4px' }}>
-                        {[
-                            { value: 'pivot', label: 'Pivot columns' },
-                            { value: 'field', label: 'Field array' },
-                        ].map(({ value, label }) => (
+                        {sourceOptions.map(({ value, label }) => (
                             <button
                                 key={value}
                                 type="button"
@@ -608,19 +657,70 @@ function SparklineConfigModal({ item, idx, setValConfigs, theme, onClose }) {
                                     fontWeight: 600,
                                     borderRadius: '6px',
                                     cursor: 'pointer',
-                                    border: `1px solid ${(config.source || 'pivot') === value ? theme.primary : theme.border}`,
-                                    background: (config.source || 'pivot') === value ? `${theme.primary}18` : (theme.headerSubtleBg || theme.background),
-                                    color: (config.source || 'pivot') === value ? theme.primary : theme.textSec,
+                                    border: `1px solid ${effectiveSource === value ? theme.primary : theme.border}`,
+                                    background: effectiveSource === value ? `${theme.primary}18` : (theme.headerSubtleBg || theme.background),
+                                    color: effectiveSource === value ? theme.primary : theme.textSec,
                                 }}
                             >{label}</button>
                         ))}
                     </div>
                     <div style={{ marginTop: '5px', fontSize: '10px', color: theme.textSec, lineHeight: 1.4 }}>
-                        {(config.source || 'pivot') === 'pivot'
-                            ? 'Sparkline collects data across the pivot\'s column dimensions (e.g. Jan, Feb, Mar).'
-                            : 'Each row\'s cell value is already an array of data points (e.g. trade history, price series).'}
+                        {effectiveSource === 'pivot'
+                            ? 'Trend values are collected across the pivot columns. Source value cells stay numeric unless hidden.'
+                            : 'Each cell already contains the full data series for its row.'}
                     </div>
+                    </>
+                    ) : (
+                        <div
+                            data-value-sparkline-unavailable="true"
+                            style={{
+                                padding: '7px 8px',
+                                borderRadius: '6px',
+                                border: `1px solid ${theme.warning || '#F59E0B'}55`,
+                                background: `${theme.warning || '#F59E0B'}12`,
+                                color: theme.text,
+                                fontSize: '10px',
+                                lineHeight: 1.45,
+                            }}
+                        >
+                            Add a column field for linked trends, or use the Series aggregation for field data.
+                        </div>
+                    )}
                 </div>
+
+                {effectiveSource === 'field' && (
+                    <div style={sectionStyle}>
+                        <span style={labelStyle}>Cell display</span>
+                        <div style={{ display: 'flex', gap: '4px' }}>
+                            {[
+                                { value: 'trend', label: 'Trendline' },
+                                { value: 'value', label: 'Value' },
+                            ].map(({ value, label }) => (
+                                <button
+                                    key={value}
+                                    type="button"
+                                    onClick={() => update({ displayMode: value })}
+                                    style={{
+                                        flex: 1,
+                                        padding: '4px 0',
+                                        fontSize: '11px',
+                                        fontWeight: 600,
+                                        borderRadius: '6px',
+                                        cursor: 'pointer',
+                                        border: `1px solid ${(config.displayMode || 'trend') === value ? theme.primary : theme.border}`,
+                                        background: (config.displayMode || 'trend') === value ? `${theme.primary}18` : (theme.headerSubtleBg || theme.background),
+                                        color: (config.displayMode || 'trend') === value ? theme.primary : theme.textSec,
+                                    }}
+                                >{label}</button>
+                            ))}
+                        </div>
+                        <div style={{ marginTop: '5px', fontSize: '10px', color: theme.textSec, lineHeight: 1.4 }}>
+                            {(config.displayMode || 'trend') === 'value'
+                                ? 'Show the selected summary metric from the series.'
+                                : 'Draw the series in the cell.'}
+                        </div>
+                    </div>
+                )}
 
                 {/* Chart type */}
                 <div style={sectionStyle}>
@@ -670,10 +770,10 @@ function SparklineConfigModal({ item, idx, setValConfigs, theme, onClose }) {
                     <span style={labelStyle}>Display</span>
                     <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '6px' }}>
                         {[
-                            { key: 'showCurrentValue', label: 'Show value' },
-                            { key: 'showDelta', label: 'Show delta' },
-                            { key: 'compact', label: 'Compact mode' },
-                            { key: 'hideColumns', label: 'Hide source columns' },
+                            { key: 'showCurrentValue', label: 'Value label' },
+                            { key: 'showDelta', label: 'Delta label' },
+                            { key: 'compact', label: 'Compact cell' },
+                            { key: 'hideColumns', label: 'Hide source values' },
                         ].map(({ key, label }) => (
                             <label key={key} style={{ display: 'flex', alignItems: 'center', gap: '5px', fontSize: '11px', color: theme.text, cursor: 'pointer', userSelect: 'none' }}>
                                 <input
@@ -688,43 +788,21 @@ function SparklineConfigModal({ item, idx, setValConfigs, theme, onClose }) {
                     </div>
                     {config.hideColumns && (
                         <div style={{ marginTop: '6px', fontSize: '10px', color: theme.textSec, background: `${theme.primary}10`, border: `1px solid ${theme.primary}30`, borderRadius: '6px', padding: '5px 8px', lineHeight: 1.4 }}>
-                            Source value columns will be hidden; only the trend column is shown.
+                            Source value columns are hidden; the trend column remains.
+                        </div>
+                    )}
+                    {!config.hideColumns && effectiveSource === 'pivot' && (
+                        <div style={{ marginTop: '6px', fontSize: '10px', color: theme.textSec, background: theme.headerSubtleBg || theme.background, border: `1px solid ${theme.border}`, borderRadius: '6px', padding: '5px 8px', lineHeight: 1.4 }}>
+                            Source value columns stay numeric; the trend column is added beside them.
                         </div>
                     )}
                 </div>
 
                 {/* Placement — only relevant for pivot-collect mode */}
-                {(config.source || 'pivot') === 'pivot' && <div style={sectionStyle}>
+                {effectiveSource === 'pivot' && <div style={sectionStyle}>
                     <span style={labelStyle}>Position</span>
-                    <div style={{ display: 'flex', gap: '4px' }}>
-                        {[
-                            { value: 'before', label: 'Before' },
-                            { value: 'after', label: 'After' },
-                            { value: 'end', label: 'End' },
-                        ].map(({ value, label }) => (
-                            <button
-                                key={value}
-                                type="button"
-                                onClick={() => update({ placement: value })}
-                                style={{
-                                    flex: 1,
-                                    padding: '4px 0',
-                                    fontSize: '11px',
-                                    fontWeight: 600,
-                                    borderRadius: '6px',
-                                    cursor: 'pointer',
-                                    border: `1px solid ${config.placement === value ? theme.primary : theme.border}`,
-                                    background: config.placement === value ? `${theme.primary}18` : (theme.headerSubtleBg || theme.background),
-                                    color: config.placement === value ? theme.primary : theme.textSec,
-                                }}
-                            >{label}</button>
-                        ))}
-                    </div>
-                    <div style={{ marginTop: '5px', fontSize: '10px', color: theme.textSec, lineHeight: 1.4 }}>
-                        {config.placement === 'before' && 'Trend column appears before the first matching data column.'}
-                        {config.placement === 'after' && 'Trend column appears after the last matching data column.'}
-                        {config.placement === 'end' && 'Trend column appears at the far right, after all data columns.'}
-                        {!config.placement && 'Trend column appears after the last matching data column.'}
+                    <div style={{ fontSize: '10px', color: theme.textSec, lineHeight: 1.4, background: theme.headerSubtleBg || theme.background, border: `1px solid ${theme.border}`, borderRadius: '6px', padding: '6px 8px' }}>
+                        Trend columns are placed before the matching value columns.
                     </div>
                 </div>}
 
@@ -822,26 +900,60 @@ function SparklineConfigModal({ item, idx, setValConfigs, theme, onClose }) {
     );
 }
 
-function ValueSparklineControls({ item, idx, setValConfigs, theme, showNotification }) {
+function ValueSparklineControls({ item, idx, setValConfigs, theme, colFields = [], fixedSparklineValueKeySet = new Set(), showNotification }) {
     const [modalOpen, setModalOpen] = React.useState(false);
-    const enabled = Boolean(normalizeValueSparklineDraft(item && item.sparkline));
+    const currentDraft = normalizeValueSparklineDraft(item && item.sparkline);
+    const sparklineIdentity = getValueConfigSparklineIdentity(item);
+    const isFixedSparkline = Boolean(sparklineIdentity && fixedSparklineValueKeySet && fixedSparklineValueKeySet.has(sparklineIdentity));
+    const capabilities = React.useMemo(
+        () => getValueSparklineCapabilities(item, colFields),
+        [colFields, item]
+    );
+    const configured = Boolean(currentDraft);
+    const enabled = Boolean(currentDraft && isSparklineSourcePossible(currentDraft.source || 'pivot', capabilities));
     const stopProp = React.useCallback((e) => e.stopPropagation(), []);
+    const ensureConfigurableSparkline = React.useCallback(() => {
+        let didConfigure = false;
+        updateValueConfig(setValConfigs, idx, (current) => {
+            const nextSparkline = sanitizeValueSparklineForCapabilities(
+                current.sparkline || DEFAULT_VALUE_SPARKLINE_CONFIG,
+                capabilities
+            );
+            if (!nextSparkline) return current;
+            didConfigure = true;
+            return { ...current, sparkline: nextSparkline };
+        });
+        return didConfigure;
+    }, [capabilities, idx, setValConfigs]);
 
     const toggleSparkline = React.useCallback((e) => {
         e.stopPropagation();
-        if (enabled) {
+        if (configured) {
+            if (isFixedSparkline) {
+                if (showNotification) showNotification('This trend is defined by the app. You can adjust its settings, but not remove it here.', 'info');
+                return;
+            }
             updateValueConfig(setValConfigs, idx, (current) => ({ ...current, sparkline: false }));
-            if (showNotification) showNotification('Removed sparkline trend.', 'info');
-        } else {
-            updateValueConfig(setValConfigs, idx, (current) => ({
-                ...current,
-                sparkline: sanitizeValueSparklineConfig(current.sparkline || DEFAULT_VALUE_SPARKLINE_CONFIG),
-            }));
+            if (showNotification) showNotification('Removed trend column.', 'info');
+        } else if (capabilities.canUseAny && ensureConfigurableSparkline()) {
             setModalOpen(true);
-            if (showNotification) showNotification('Sparkline trend enabled.', 'success');
+            if (showNotification) showNotification('Trend column enabled.', 'success');
+        } else if (showNotification) {
+            showNotification('Trend needs a column field, or a Series aggregation for field data.', 'warning');
         }
-    }, [enabled, idx, setValConfigs, showNotification]);
+    }, [capabilities.canUseAny, configured, ensureConfigurableSparkline, idx, isFixedSparkline, setValConfigs, showNotification]);
 
+    const openSettings = React.useCallback((e) => {
+        e.stopPropagation();
+        if (!capabilities.canUseAny) {
+            if (showNotification) showNotification('Trend settings are not available for this value selection.', 'warning');
+            return;
+        }
+        ensureConfigurableSparkline();
+        setModalOpen(true);
+    }, [capabilities.canUseAny, ensureConfigurableSparkline, showNotification]);
+
+    if (!configured) return null;
     return (
         <div
             data-value-sparkline-controls="true"
@@ -852,49 +964,25 @@ function ValueSparklineControls({ item, idx, setValConfigs, theme, showNotificat
         >
             <button
                 type="button"
-                data-value-sparkline-toggle="true"
-                onClick={toggleSparkline}
+                data-value-sparkline-settings="true"
+                onClick={openSettings}
                 style={{
-                    border: `1px solid ${enabled ? theme.primary : theme.border}`,
-                    background: enabled ? `${theme.primary}12` : (theme.headerSubtleBg || theme.background),
-                    color: enabled ? theme.primary : theme.textSec,
+                    border: `1px solid ${theme.border}`,
+                    background: theme.headerSubtleBg || theme.background,
+                    color: theme.textSec,
                     borderRadius: '6px',
                     cursor: 'pointer',
                     padding: '3px 8px',
                     fontSize: '10px',
                     lineHeight: '16px',
-                    fontWeight: 700,
+                    fontWeight: 600,
                     flexShrink: 0,
                 }}
-            >
-                {enabled ? 'Remove Trend' : '+ Trend'}
-            </button>
-            {enabled && (
-                <button
-                    type="button"
-                    data-value-sparkline-settings="true"
-                    onClick={(e) => { e.stopPropagation(); setModalOpen(true); }}
-                    style={{
-                        border: `1px solid ${theme.border}`,
-                        background: theme.headerSubtleBg || theme.background,
-                        color: theme.textSec,
-                        borderRadius: '6px',
-                        cursor: 'pointer',
-                        padding: '3px 8px',
-                        fontSize: '10px',
-                        lineHeight: '16px',
-                        fontWeight: 600,
-                        flexShrink: 0,
-                    }}
-                    title="Configure sparkline"
-                >Configure ⚙</button>
-            )}
-            {!enabled && (
-                <span style={{ fontSize: '10px', color: theme.textSec }}>Optional trend column</span>
-            )}
+                title="Configure sparkline"
+            >Settings</button>
             {enabled && !modalOpen && (
                 <span style={{ fontSize: '10px', color: theme.primary, flex: 1, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
-                    {['line','area','column','bar'].includes(item.sparkline && item.sparkline.type) ? item.sparkline.type : 'line'} · {(item.sparkline && item.sparkline.metric) || 'last'}
+                    {((item.sparkline && item.sparkline.source) === 'field') ? `series ${(item.sparkline && item.sparkline.displayMode) === 'value' ? 'value' : 'trend'}` : 'linked pivot'} | {['line','area','column','bar'].includes(item.sparkline && item.sparkline.type) ? item.sparkline.type : 'line'} | {(item.sparkline && item.sparkline.metric) || 'last'}
                 </span>
             )}
             {modalOpen && (
@@ -903,6 +991,7 @@ function ValueSparklineControls({ item, idx, setValConfigs, theme, showNotificat
                     idx={idx}
                     setValConfigs={setValConfigs}
                     theme={theme}
+                    colFields={colFields}
                     onClose={() => setModalOpen(false)}
                 />
             )}
@@ -910,7 +999,7 @@ function ValueSparklineControls({ item, idx, setValConfigs, theme, showNotificat
     );
 }
 
-function FormulaListItem({ item, idx, selected, onSelect, onRemove, setValConfigs, theme, styles, dropLine, zoneId, valueSelectStyle, showNotification }) {
+function FormulaListItem({ item, idx, selected, onSelect, onRemove, setValConfigs, theme, styles, dropLine, zoneId, valueSelectStyle, colFields = [], fixedSparklineValueKeySet = new Set(), showNotification }) {
     const baseBorder = selected ? `${theme.primary}77` : theme.border;
     const background = selected ? (theme.headerBg || `${theme.primary}0f`) : (theme.background || 'transparent');
     const preview = String(item.formula || '').trim() || 'Empty formula';
@@ -995,6 +1084,8 @@ function FormulaListItem({ item, idx, selected, onSelect, onRemove, setValConfig
                 setValConfigs={setValConfigs}
                 theme={theme}
                 valueSelectStyle={valueSelectStyle}
+                colFields={colFields}
+                fixedSparklineValueKeySet={fixedSparklineValueKeySet}
                 showNotification={showNotification}
             />
             {dropLine && dropLine.zone === zoneId && dropLine.idx === idx + 1 && <div style={{ ...styles.dropLine, bottom: -2 }} />}
@@ -2059,6 +2150,8 @@ export const SidebarPanel = React.memo(function SidebarPanel({
     data,
     sidebarWidth, setSidebarWidth,
     fieldPanelSizes, setFieldPanelSizes,
+    fixedSparklineValueKeys = [],
+    sparklineFields = null,
 }) {
     usePivotRenderCounter('SidebarPanel');
     const { theme, styles } = usePivotTheme();
@@ -2076,6 +2169,10 @@ export const SidebarPanel = React.memo(function SidebarPanel({
     const sidebarScrollTopRef = React.useRef(0);
     const resizeDragRef = React.useRef(null);
     const dragScrollRafRef = React.useRef(null);
+    const fixedSparklineValueKeySet = React.useMemo(
+        () => new Set(Array.isArray(fixedSparklineValueKeys) ? fixedSparklineValueKeys : []),
+        [fixedSparklineValueKeys]
+    );
 
     const startDragScroll = React.useCallback((e) => {
         const el = sidebarRef.current;
@@ -2460,8 +2557,8 @@ export const SidebarPanel = React.memo(function SidebarPanel({
                                     >
                                         {availableFields.map(f => (
                                             <div key={f} draggable onDragStart={e=>onDragStart(e,f,'pool')} style={{
-                                                padding: '8px 12px',
-                                                fontSize: '12px',
+                                                padding: '4px 8px',
+                                                fontSize: '11px',
                                                 lineHeight: 1.2,
                                                 fontWeight: 500,
                                                 fontFamily: "'Inter', ui-sans-serif, system-ui, sans-serif",
@@ -2474,7 +2571,7 @@ export const SidebarPanel = React.memo(function SidebarPanel({
                                                 boxShadow: theme.isDark ? 'none' : (theme.shadowInset || '0 1px 2px rgba(0,0,0,0.04)'),
                                                 cursor: 'grab',
                                                 userSelect: 'none',
-                                                minHeight: '34px',
+                                                minHeight: '24px',
                                             }}>
                                                 {formatDisplayLabel(f)}
                                             </div>
@@ -2562,6 +2659,8 @@ export const SidebarPanel = React.memo(function SidebarPanel({
                                                                 dropLine={dropLine}
                                                                 zoneId={zone.id}
                                                                 valueSelectStyle={valueSelectStyle}
+                                                                colFields={colFields}
+                                                                fixedSparklineValueKeySet={fixedSparklineValueKeySet}
                                                                 showNotification={showNotification}
                                                             />
                                                         ) : (
@@ -2577,7 +2676,7 @@ export const SidebarPanel = React.memo(function SidebarPanel({
                                                                 {zone.id === 'vals' && (
                                                                     <div style={{display:'flex', alignItems:'center', gap:'4px', marginLeft:'8px', flexWrap:'nowrap', flexShrink: 0}}>
                                                                         <select value={item.agg} onChange={e=>handleValueAggChange(idx, e.target.value)} style={{...valueSelectStyle, width:'74px'}} title="Aggregation">
-                                                                            <option value="sum">Sum</option><option value="avg">Avg</option><option value="count">Cnt</option><option value="min">Min</option><option value="max">Max</option><option value="weighted_avg">WAvg</option>
+                                                                            <option value="sum">Sum</option><option value="avg">Avg</option><option value="count">Cnt</option><option value="min">Min</option><option value="max">Max</option><option value="weighted_avg">WAvg</option><option value="array_agg">Series</option>
                                                                         </select>
                                                                         {isWeightedAverageAgg(item.agg) && (
                                                                             <select value={item.weightField || ''} onChange={e => handleValueWeightFieldChange(idx, e.target.value)} style={{...valueSelectStyle, width:'92px'}} title="Weight field">
@@ -2608,6 +2707,8 @@ export const SidebarPanel = React.memo(function SidebarPanel({
                                                                         setValConfigs={setValConfigs}
                                                                         theme={theme}
                                                                         valueSelectStyle={valueSelectStyle}
+                                                                        colFields={colFields}
+                                                                        fixedSparklineValueKeySet={fixedSparklineValueKeySet}
                                                                         showNotification={showNotification}
                                                                     />
                                                                 )}

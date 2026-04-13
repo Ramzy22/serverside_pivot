@@ -2,6 +2,7 @@ from .ColumnFilter import ColumnFilter
 from .FilterPopover import FilterPopover
 from .MultiSelectFilter import MultiSelectFilter
 from .PivotAppBar import PivotAppBar
+from .SidebarPanel import SidebarPanel
 from .ToolPanelSection import ToolPanelSection
 from .DetailDrawer import DetailDrawer
 from .DetailSidePanel import DetailSidePanel
@@ -16,6 +17,7 @@ __all__ = [
     "FilterPopover",
     "MultiSelectFilter",
     "PivotAppBar",
+    "SidebarPanel",
     "ToolPanelSection",
     "DetailDrawer",
     "DetailSidePanel",

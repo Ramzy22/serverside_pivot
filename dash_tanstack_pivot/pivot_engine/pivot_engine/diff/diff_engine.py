@@ -22,6 +22,15 @@ from pivot_engine.types.pivot_spec import PivotSpec
 from ibis.expr.api import Table as IbisTable, Expr
 
 
+def _cache_table_key(table_name: Any) -> str:
+    raw = str(table_name or "__unknown__")
+    safe = "".join(
+        char if char.isalnum() or char in "_.-" else "_"
+        for char in raw
+    ).strip("._-")
+    return (safe or "__unknown__")[:128]
+
+
 class SpecChangeType(Enum):
     """Types of changes between pivot specs"""
     IDENTICAL = "identical"
@@ -794,9 +803,11 @@ class QueryDiffEngine:
             spec_hash = hashlib.sha256(json.dumps(spec_dict, sort_keys=True, default=str).encode()).hexdigest()[:16]
             key_str = f"{compiled_sql}-{spec_hash}"
             key_hash = hashlib.sha256(key_str.encode()).hexdigest()[:32]
-            return f"pivot_ibis:query:{key_hash}"
+            table_key = _cache_table_key(spec_dict.get("table"))
+            return f"pivot_ibis:query:{table_key}:{key_hash}"
         except Exception as e:
-            return f"pivot_ibis:query_fallback:{hashlib.sha256(str(ibis_expr).encode('utf-8')).hexdigest()[:32]}"
+            table_key = _cache_table_key(spec_dict.get("table"))
+            return f"pivot_ibis:query_fallback:{table_key}:{hashlib.sha256(str(ibis_expr).encode('utf-8')).hexdigest()[:32]}"
     
     def _digest_plan(
         self,

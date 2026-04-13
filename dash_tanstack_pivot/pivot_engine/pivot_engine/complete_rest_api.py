@@ -245,7 +245,7 @@ class CompletePivotAPI:
                 spec_dict = pivot_spec.to_dict()
                 
                 # Use controller's hierarchical method
-                result = self.controller.run_hierarchical_pivot(spec_dict)
+                result = await self.controller.run_hierarchical_pivot(spec_dict)
                 
                 return APIResponse(
                     status="success",

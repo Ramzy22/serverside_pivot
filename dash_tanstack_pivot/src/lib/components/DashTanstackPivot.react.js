@@ -13,6 +13,119 @@ import { themes, getStyles, isDarkTheme, gridDimensionTokens, deriveEditedCellTh
 import { exportPivotTable } from '../utils/exportUtils';
 import { DEFAULT_FIELD_PANEL_SIZES, sanitizeFieldPanelSizes } from '../utils/fieldPanelLayout';
 import Icons from '../utils/Icons';
+import {
+    // Chart constants
+    DEFAULT_CHART_PANEL_ROW_LIMIT,
+    DEFAULT_CHART_PANEL_COLUMN_LIMIT,
+    DEFAULT_CHART_GRAPH_HEIGHT,
+    DEFAULT_FLOATING_CHART_PANEL_HEIGHT,
+    MIN_CHART_PANEL_WIDTH,
+    MAX_CHART_PANEL_WIDTH,
+    MIN_FLOATING_CHART_PANEL_HEIGHT,
+    MIN_TABLE_PANEL_WIDTH,
+    MIN_CHART_CANVAS_PANE_WIDTH,
+    DEFAULT_DOCKED_CHART_PANE_HEIGHT,
+    MIN_DOCKED_CHART_PANE_HEIGHT,
+    MIN_TABLE_PANEL_HEIGHT,
+    VALID_CHART_DOCK_POSITIONS,
+    DEFAULT_TABLE_CANVAS_SIZE,
+    TABLE_OVERLAY_CHART_PANE_ID,
+    MAX_AUTO_SIZE_SAMPLE_ROWS,
+    MAX_PENDING_ROW_TRANSITIONS,
+    VALID_CHART_TYPES,
+    VALID_CHART_SORT_MODES,
+    VALID_CHART_INTERACTION_MODES,
+    VALID_CHART_SERVER_SCOPES,
+    // View/Detail mode constants
+    VALID_VIEW_MODES,
+    VALID_DETAIL_MODES,
+    VALID_TREE_DISPLAY_MODES,
+    VALID_DETAIL_REFRESH_STRATEGIES,
+    VALID_TRANSACTION_REFRESH_MODES,
+    VALID_TRANSACTION_EVENT_ACTIONS,
+    MAX_TRANSACTION_HISTORY_ENTRIES,
+    SOFT_CENTER_COLUMN_WARNING_THRESHOLD,
+    HARD_CENTER_COLUMN_WARNING_THRESHOLD,
+    SUPPORTED_DEFAULT_NUMBER_FORMATS,
+    GRAND_TOTAL_ROW_ID,
+    MISSING_PERSISTED_VALUE,
+    // Chart utilities
+    getPreferredChartOrientation,
+    sanitizeChartDefinitionName,
+    createChartDefinitionId,
+    cloneSerializable,
+    // Mode normalization
+    normalizeViewModeValue,
+    normalizeDetailModeValue,
+    // Transaction
+    hasTransactionEntries,
+    normalizeTransactionRefreshModeValue,
+    normalizeTransactionEventActionValue,
+    normalizePropagationFormulaValue,
+    isParentAggregatePropagationEdit,
+    normalizeTransactionHistoryPayload,
+    cellValuesMatch,
+    hasAppliedTransactionWork,
+    shouldShowTransactionLoading,
+    describeTransactionPropagation,
+    isEditableKeyboardTarget,
+    // Tree/Detail config
+    normalizeTreeConfigValue,
+    normalizeDetailConfigValue,
+    hasTreeDefaultExpansionConfig,
+    // Report
+    normalizeLegacyPivotModeValue,
+    normalizeReportTopN,
+    normalizeReportDefValue,
+    collectReportFields,
+    countReportNodes,
+    getReportHeaderLabel,
+    normalizeSavedReportsValue,
+    normalizeActiveReportIdValue,
+    // Chart definition
+    clampFloatingChartRect,
+    normalizeChartDefinition,
+    sanitizeChartDefinitions,
+    normalizeChartResponseColumn,
+    normalizeChartResponseColumns,
+    buildChartColumnsFromSchema,
+    resolveChartModelColumns,
+    resolveChartAvailableColumns,
+    getRequestedChartSeriesColumnIds,
+    normalizeLockedChartRequest,
+    normalizeChartDockPosition,
+    normalizeChartCanvasPane,
+    sanitizeChartCanvasPanes,
+    getChartPanelWidthBounds,
+    normalizeChartServerWindowConfig,
+    // Transport
+    coerceTransportNumber,
+    isColSchemaTransportColumn,
+    extractColSchemaFromTransportColumns,
+    normalizeTransportColumns,
+    normalizeRuntimeDataEnvelope,
+    resolveTransportRowId,
+    applyRuntimePatchEnvelope,
+    // Session/ID
+    getOrCreateSessionId,
+    createClientInstanceId,
+    // UI helpers
+    clampSidebarWidth,
+    clampDecimalPlaces,
+    normalizeDefaultValueFormat,
+    mergeSparseColSchema,
+    isSparseSchemaRangeLoaded,
+    normalizePerformanceConfigValue,
+    buildLargeColumnAdvisory,
+    hasActiveFilterValue,
+    countActiveFilters,
+    // Row pinning
+    normalizeRowPinningState,
+    getPinnedSideForRow,
+    sanitizeGrandTotalPinOverride,
+    resolveGrandTotalPinState,
+    applyRowPinning,
+} from '../hooks/usePivotNormalization';
 const debugLog = (...args) => {
     const buildDebugEnabled = process.env.NODE_ENV !== 'production';
     let runtimeDebugEnabled = false;
@@ -61,9 +174,9 @@ import {
     buildComboPivotChartModel,
     buildComboSelectionChartModel,
     buildSelectionChartModel,
+    canStackBarLayout,
 } from '../utils/chartModelBuilders';
 import {
-    canStackBarLayout,
     PivotChartModal,
     PivotChartPanel,
 } from './Charts/PivotCharts';
@@ -71,6 +184,7 @@ import { useColumnDefs } from '../hooks/useColumnDefs';
 import { useRenderHelpers } from '../hooks/useRenderHelpers';
 import { PivotTableBody } from './Table/PivotTableBody';
 import PivotErrorBoundary from './PivotErrorBoundary';
+import { PaginationBar } from './PivotSmallComponents';
 import { usePersistence } from '../hooks/usePersistence';
 import { useFilteredData } from '../hooks/useFilteredData';
 import { useChartState } from '../hooks/useChartState';
@@ -83,1045 +197,9 @@ import { PivotThemeProvider } from '../contexts/PivotThemeContext';
 import { PivotConfigProvider } from '../contexts/PivotConfigContext';
 import { PivotValueDisplayProvider } from '../contexts/PivotValueDisplayContext';
 import { normalizeSortingState, updateSortingForColumn } from '../utils/sorting';
+import { buildSparklineGeometry } from '../utils/sparklines';
 
-const DEFAULT_CHART_PANEL_ROW_LIMIT = 50;
-const DEFAULT_CHART_PANEL_COLUMN_LIMIT = 10;
-const DEFAULT_CHART_GRAPH_HEIGHT = 320;
-const DEFAULT_FLOATING_CHART_PANEL_HEIGHT = 520;
-const MIN_CHART_PANEL_WIDTH = 280;
-const MAX_CHART_PANEL_WIDTH = 960;
-const MIN_FLOATING_CHART_PANEL_HEIGHT = 280;
-const MIN_TABLE_PANEL_WIDTH = 0;
-const MIN_CHART_CANVAS_PANE_WIDTH = 320;
-const DEFAULT_DOCKED_CHART_PANE_HEIGHT = 420;
-const MIN_DOCKED_CHART_PANE_HEIGHT = 180;
-const MIN_TABLE_PANEL_HEIGHT = 200;
-const VALID_CHART_DOCK_POSITIONS = new Set(['left', 'right', 'top', 'bottom']);
-const DEFAULT_TABLE_CANVAS_SIZE = 1.4;
-const TABLE_OVERLAY_CHART_PANE_ID = '__table_overlay_chart__';
 const EDITING_TEMPORARILY_DISABLED = true;
-const MAX_AUTO_SIZE_SAMPLE_ROWS = 300;
-const MAX_PENDING_ROW_TRANSITIONS = 128;
-const VALID_CHART_TYPES = new Set(['bar', 'line', 'area', 'sparkline', 'combo', 'pie', 'donut', 'scatter', 'waterfall', 'icicle', 'sunburst', 'sankey']);
-const VALID_CHART_SORT_MODES = new Set(['natural', 'value_desc', 'value_asc', 'label_asc', 'label_desc']);
-const VALID_CHART_INTERACTION_MODES = new Set(['focus', 'filter', 'event']);
-const VALID_CHART_SERVER_SCOPES = new Set(['viewport', 'root']);
-const getPreferredChartOrientation = (columnFields) => (
-    Array.isArray(columnFields) && columnFields.length > 0 ? 'columns' : 'rows'
-);
-
-const sanitizeChartDefinitionName = (value, fallback = 'Chart') => {
-    const text = typeof value === 'string' ? value.trim() : '';
-    return text || fallback;
-};
-
-const createChartDefinitionId = (prefix = 'chart') => `${prefix}-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
-
-const cloneSerializable = (value, fallback = null) => {
-    if (value === undefined) return fallback;
-    try {
-        return JSON.parse(JSON.stringify(value));
-    } catch (error) {
-        return fallback;
-    }
-};
-
-const VALID_VIEW_MODES = new Set(['pivot', 'report', 'tree', 'table']);
-const VALID_DETAIL_MODES = new Set(['none', 'inline', 'sidepanel', 'drawer']);
-const SOFT_CENTER_COLUMN_WARNING_THRESHOLD = 2000;
-const HARD_CENTER_COLUMN_WARNING_THRESHOLD = 10000;
-const clampOptionalInteger = (value, min, max) => {
-    const normalized = Number(value);
-    if (!Number.isFinite(normalized)) return null;
-    return Math.max(min, Math.min(max, Math.floor(normalized)));
-};
-
-const VALID_TREE_DISPLAY_MODES = new Set(['singleColumn', 'multipleColumns']);
-const VALID_DETAIL_REFRESH_STRATEGIES = new Set(['rows', 'everything', 'nothing']);
-const VALID_TRANSACTION_REFRESH_MODES = new Set(['none', 'viewport', 'smart', 'structural', 'full', 'patch']);
-const VALID_TRANSACTION_EVENT_ACTIONS = new Set(['undo', 'redo', 'revert', 'replace']);
-const MAX_TRANSACTION_HISTORY_ENTRIES = 100;
-
-const normalizeViewModeValue = (value) => (
-    VALID_VIEW_MODES.has(value) ? value : null
-);
-
-const normalizeDetailModeValue = (value) => (
-    VALID_DETAIL_MODES.has(value) ? value : null
-);
-
-const normalizeTreeSourceTypeValue = (value) => {
-    const normalized = typeof value === 'string' ? value.trim().toLowerCase() : '';
-    if (normalized === 'path' || normalized === 'data_path' || normalized === 'datapath') return 'path';
-    if (normalized === 'parentid' || normalized === 'parent_id' || normalized === 'adjacency') return 'adjacency';
-    if (normalized === 'nested' || normalized === 'children') return 'nested';
-    return 'adjacency';
-};
-
-const normalizeTreeDisplayModeValue = (value) => {
-    if (typeof value !== 'string') return 'singleColumn';
-    const normalized = value.trim().toLowerCase();
-    if (normalized === 'multiplecolumns' || normalized === 'multiple_columns' || normalized === 'multiple' || normalized === 'tabular' || normalized === 'outline') {
-        return 'multipleColumns';
-    }
-    return 'singleColumn';
-};
-
-const normalizeTreeGroupDefaultExpandedValue = (value) => {
-    const normalized = Number(value);
-    if (!Number.isFinite(normalized)) return 0;
-    const rounded = Math.floor(normalized);
-    if (rounded < -1) return -1;
-    return rounded;
-};
-
-const normalizeTreeDefaultOpenPathsValue = (value) => {
-    if (!Array.isArray(value)) return [];
-    const normalizedPaths = [];
-    value.forEach((entry) => {
-        if (typeof entry === 'string' && entry.trim()) {
-            normalizedPaths.push(entry.trim());
-            return;
-        }
-        if (Array.isArray(entry)) {
-            const normalizedEntry = entry
-                .map((part) => (part === undefined || part === null ? '' : String(part).trim()))
-                .filter(Boolean)
-                .join('|||');
-            if (normalizedEntry) normalizedPaths.push(normalizedEntry);
-        }
-    });
-    return Array.from(new Set(normalizedPaths));
-};
-
-const normalizeTreeLevelLabelsValue = (value) => (
-    Array.isArray(value)
-        ? value
-            .map((label) => (typeof label === 'string' ? label.trim() : ''))
-            .filter(Boolean)
-        : []
-);
-
-const normalizeDetailRefreshStrategyValue = (value) => {
-    const normalized = typeof value === 'string' ? value.trim().toLowerCase() : '';
-    return VALID_DETAIL_REFRESH_STRATEGIES.has(normalized) ? normalized : 'rows';
-};
-
-const hasTransactionEntries = (transaction) => (
-    Boolean(transaction && typeof transaction === 'object')
-    && ['add', 'remove', 'update', 'upsert'].some((kind) => Array.isArray(transaction[kind]) && transaction[kind].length > 0)
-);
-
-const normalizeTransactionRefreshModeValue = (value, fallback = 'smart') => {
-    const normalized = typeof value === 'string' ? value.trim().toLowerCase() : '';
-    return VALID_TRANSACTION_REFRESH_MODES.has(normalized) ? normalized : fallback;
-};
-
-const normalizeTransactionEventActionValue = (value) => {
-    const normalized = typeof value === 'string' ? value.trim().toLowerCase() : '';
-    return VALID_TRANSACTION_EVENT_ACTIONS.has(normalized) ? normalized : null;
-};
-
-const normalizePropagationFormulaValue = (value, fallback = 'equal') => {
-    const normalized = typeof value === 'string'
-        ? value.trim().toLowerCase().replace(/[\s-]+/g, '_')
-        : '';
-    if (['equal', 'even', 'default', 'delta', 'uniform', 'equal_delta', 'balanced_delta', 'uniform_shift', 'balanced_shift'].includes(normalized)) {
-        return 'equal';
-    }
-    if (['proportional', 'ratio', 'scale', 'scaled'].includes(normalized)) {
-        return 'proportional';
-    }
-    if (fallback === null || fallback === undefined) return null;
-    if (fallback === value) return null;
-    return normalizePropagationFormulaValue(fallback, null);
-};
-
-const isParentAggregatePropagationEdit = (update, groupingFields) => {
-    if (!update || typeof update !== 'object') return false;
-    const aggregation = update.aggregation && typeof update.aggregation === 'object'
-        ? update.aggregation
-        : null;
-    const aggregationFn = aggregation && aggregation.agg
-        ? String(aggregation.agg).trim().toLowerCase()
-        : '';
-    if (!aggregationFn || aggregation.windowFn) return false;
-    const rowPath = update.rowPath || update.rowId;
-    const normalizedRowPath = rowPath === null || rowPath === undefined ? '' : String(rowPath).trim();
-    if (!normalizedRowPath || normalizedRowPath === GRAND_TOTAL_ROW_ID) return false;
-    const pathDepth = normalizedRowPath.split('|||').filter(Boolean).length;
-    const groupingDepth = Array.isArray(groupingFields) ? groupingFields.length : 0;
-    return groupingDepth > 0 && pathDepth > 0 && pathDepth < groupingDepth;
-};
-
-const normalizeTransactionHistoryPayload = (transaction, overrides = {}) => {
-    if (!transaction || typeof transaction !== 'object') return null;
-    const normalizedEventAction = normalizeTransactionEventActionValue(
-        overrides.eventAction !== undefined ? overrides.eventAction : (transaction.eventAction || transaction.event_action)
-    );
-    const normalized = cloneSerializable({
-        add: Array.isArray(transaction.add) ? transaction.add : [],
-        remove: Array.isArray(transaction.remove) ? transaction.remove : [],
-        update: Array.isArray(transaction.update) ? transaction.update : [],
-        upsert: Array.isArray(transaction.upsert) ? transaction.upsert : [],
-        keyFields: Array.isArray(transaction.keyFields) ? transaction.keyFields : [],
-        refreshMode: normalizeTransactionRefreshModeValue(
-            overrides.refreshMode !== undefined ? overrides.refreshMode : transaction.refreshMode,
-            'smart'
-        ),
-        source: overrides.source !== undefined ? overrides.source : transaction.source,
-        eventAction: normalizedEventAction || undefined,
-        eventId: transaction.eventId !== undefined ? transaction.eventId : transaction.event_id,
-        eventIds: Array.isArray(transaction.eventIds)
-            ? transaction.eventIds
-            : (Array.isArray(transaction.event_ids) ? transaction.event_ids : []),
-        propagationStrategy: (() => {
-            const propagationValue = transaction.propagationStrategy !== undefined
-                ? transaction.propagationStrategy
-                : transaction.propagation_strategy;
-            const normalizedPropagationValue = normalizePropagationFormulaValue(propagationValue, null);
-            return normalizedPropagationValue || propagationValue;
-        })(),
-    }, null);
-    return hasTransactionEntries(normalized) || normalizedEventAction ? normalized : null;
-};
-
-const cellValuesMatch = (expectedValue, actualValue) => {
-    if (Object.is(expectedValue, actualValue)) return true;
-    const expectedNumber = Number(expectedValue);
-    const actualNumber = Number(actualValue);
-    if (Number.isFinite(expectedNumber) && Number.isFinite(actualNumber)) {
-        return expectedNumber === actualNumber;
-    }
-    return String(expectedValue) === String(actualValue);
-};
-
-const hasAppliedTransactionWork = (transactionResult) => (
-    Boolean(transactionResult && typeof transactionResult === 'object')
-    && Object.values((transactionResult.applied && typeof transactionResult.applied === 'object') ? transactionResult.applied : {})
-        .some((count) => Number(count) > 0)
-);
-
-const shouldShowTransactionLoading = (transaction) => {
-    if (!transaction || typeof transaction !== 'object') return true;
-    const refreshMode = normalizeTransactionRefreshModeValue(transaction.refreshMode, 'smart');
-    if (refreshMode === 'structural' || refreshMode === 'full' || refreshMode === 'smart_structural') {
-        return true;
-    }
-    return ['add', 'remove', 'upsert'].some((kind) => Array.isArray(transaction[kind]) && transaction[kind].length > 0);
-};
-
-const describeTransactionPropagation = (entry) => {
-    if (!entry || typeof entry !== 'object') return '';
-    const updatedRowCount = Math.max(0, Number(entry.updatedRowCount) || 0);
-    const targetColumn = entry.targetColumn ? formatDisplayLabel(entry.targetColumn) : 'value';
-    const aggregationLabel = formatAggLabel(entry.aggregationFn || 'sum', entry.weightField);
-    const strategy = normalizePropagationFormulaValue(entry.strategy, null);
-    const strategyLabel = strategy ? ` using ${strategy} formula` : '';
-    if (updatedRowCount > 0) {
-        return `Propagated ${aggregationLabel} on ${targetColumn} to ${updatedRowCount} source row${updatedRowCount === 1 ? '' : 's'}${strategyLabel}.`;
-    }
-    return `Applied ${aggregationLabel} edit on ${targetColumn}${strategyLabel}.`;
-};
-
-const isEditableKeyboardTarget = (target) => {
-    if (!target || typeof target !== 'object') return false;
-    const tagName = typeof target.tagName === 'string' ? target.tagName.toUpperCase() : '';
-    return Boolean(
-        target.isContentEditable
-        || tagName === 'INPUT'
-        || tagName === 'TEXTAREA'
-        || tagName === 'SELECT'
-    );
-};
-
-const normalizeTreeConfigValue = (value) => {
-    const source = value && typeof value === 'object' ? value : {};
-    const sourceType = normalizeTreeSourceTypeValue(
-        source.sourceType
-        || source.source_type
-        || source.mode
-        || source.treeDataMode
-        || source.tree_data_mode
-    );
-    const valueFields = Array.isArray(source.valueFields)
-        ? source.valueFields.filter((field) => typeof field === 'string' && field)
-        : [];
-    const extraFields = Array.isArray(source.extraFields)
-        ? source.extraFields.filter((field) => typeof field === 'string' && field)
-        : [];
-    const defaultOpenValue = Object.prototype.hasOwnProperty.call(source, 'openByDefault')
-        ? source.openByDefault
-        : source.open_by_default;
-    const groupDefaultExpandedSource = Array.isArray(defaultOpenValue)
-        ? undefined
-        : (
-            defaultOpenValue !== undefined
-                ? defaultOpenValue
-                : (
-                    source.groupDefaultExpanded !== undefined
-                        ? source.groupDefaultExpanded
-                        : (
-                            source.group_default_expanded !== undefined
-                                ? source.group_default_expanded
-                                : source.defaultOpenDepth
-                        )
-                )
-        );
-    const defaultOpenPaths = normalizeTreeDefaultOpenPathsValue(
-        Array.isArray(defaultOpenValue)
-            ? defaultOpenValue
-            : (source.defaultOpenPaths || source.default_open_paths)
-    );
-    return {
-        sourceType,
-        idField: typeof (source.idField || source.id_field) === 'string' && (source.idField || source.id_field) ? (source.idField || source.id_field) : 'id',
-        parentIdField: typeof (source.parentIdField || source.parent_id_field || source.treeDataParentIdField) === 'string' && (source.parentIdField || source.parent_id_field || source.treeDataParentIdField)
-            ? (source.parentIdField || source.parent_id_field || source.treeDataParentIdField)
-            : 'parent_id',
-        pathField: typeof (source.pathField || source.path_field || source.treeDataPathField || source.dataPathField) === 'string' && (source.pathField || source.path_field || source.treeDataPathField || source.dataPathField)
-            ? (source.pathField || source.path_field || source.treeDataPathField || source.dataPathField)
-            : 'path',
-        pathSeparator: typeof (source.pathSeparator || source.path_separator) === 'string' && (source.pathSeparator || source.path_separator) ? (source.pathSeparator || source.path_separator) : '|||',
-        childrenField: typeof (source.childrenField || source.children_field || source.treeDataChildrenField) === 'string' && (source.childrenField || source.children_field || source.treeDataChildrenField)
-            ? (source.childrenField || source.children_field || source.treeDataChildrenField)
-            : 'children',
-        labelField: typeof (source.labelField || source.label_field) === 'string' && (source.labelField || source.label_field) ? (source.labelField || source.label_field) : 'name',
-        sortBy: typeof (source.sortBy || source.sort_by) === 'string' && (source.sortBy || source.sort_by) ? (source.sortBy || source.sort_by) : null,
-        sortDir: (source.sortDir || source.sort_dir) === 'desc' ? 'desc' : 'asc',
-        valueFields,
-        extraFields,
-        displayMode: normalizeTreeDisplayModeValue(source.displayMode || source.display_mode || source.treeDataDisplayType || source.tree_data_display_type),
-        groupDefaultExpanded: normalizeTreeGroupDefaultExpandedValue(groupDefaultExpandedSource),
-        defaultOpenPaths,
-        suppressGroupRowsSticky: Boolean(
-            source.suppressGroupRowsSticky
-            || source.suppress_group_rows_sticky
-            || source.disableStickyGroups
-            || source.disable_sticky_groups
-        ),
-        levelLabels: normalizeTreeLevelLabelsValue(source.levelLabels || source.level_labels),
-    };
-};
-
-const normalizeDetailConfigValue = (value) => {
-    const source = value && typeof value === 'object' ? value : {};
-    const defaultKind = typeof source.defaultKind === 'string' && source.defaultKind.trim()
-        ? source.defaultKind.trim().toLowerCase()
-        : 'records';
-    return {
-        enabled: source.enabled !== false,
-        defaultKind,
-        allowPerRowKind: (source.allowPerRowKind !== false) && (source.allow_per_row_kind !== false),
-        inlineHeight: Number.isFinite(Number(source.inlineHeight || source.inline_height)) ? Math.max(220, Math.floor(Number(source.inlineHeight || source.inline_height))) : 280,
-        sidepanelWidth: Number.isFinite(Number(source.sidepanelWidth || source.sidepanel_width)) ? Math.max(320, Math.floor(Number(source.sidepanelWidth || source.sidepanel_width))) : 480,
-        drawerHeight: Number.isFinite(Number(source.drawerHeight || source.drawer_height)) ? Math.max(240, Math.floor(Number(source.drawerHeight || source.drawer_height))) : 320,
-        keepDetailRows: Boolean(source.keepDetailRows || source.keep_detail_rows),
-        keepDetailRowsCount: clampOptionalInteger(
-            source.keepDetailRowsCount !== undefined
-                ? source.keepDetailRowsCount
-                : source.keep_detail_rows_count,
-            1,
-            1000
-        ) || 10,
-        refreshStrategy: normalizeDetailRefreshStrategyValue(source.refreshStrategy || source.refresh_strategy),
-    };
-};
-
-const hasTreeDefaultExpansionConfig = (treeConfig) => {
-    if (!treeConfig || typeof treeConfig !== 'object') return false;
-    if (Number.isFinite(Number(treeConfig.groupDefaultExpanded)) && Number(treeConfig.groupDefaultExpanded) !== 0) {
-        return true;
-    }
-    return Array.isArray(treeConfig.defaultOpenPaths) && treeConfig.defaultOpenPaths.length > 0;
-};
-
-const normalizeLegacyPivotModeValue = (value) => (
-    value === 'report' || value === 'pivot' ? value : null
-);
-
-const normalizeReportTopN = (value) => (
-    Number.isFinite(Number(value)) && Number(value) > 0
-        ? Math.floor(Number(value))
-        : null
-);
-
-const normalizeReportNodeValue = (value) => {
-    const source = value && typeof value === 'object' ? value : {};
-    const normalized = {
-        ...source,
-        field: typeof source.field === 'string' ? source.field : '',
-        label: typeof source.label === 'string' ? source.label : '',
-        topN: normalizeReportTopN(source.topN),
-        sortBy: typeof source.sortBy === 'string' && source.sortBy.trim()
-            ? source.sortBy.trim()
-            : null,
-        sortDir: source.sortDir === 'asc' ? 'asc' : 'desc',
-    };
-
-    const childrenSource = source.childrenByValue && typeof source.childrenByValue === 'object'
-        ? source.childrenByValue
-        : (
-            source.conditionalChildren && typeof source.conditionalChildren === 'object'
-                ? source.conditionalChildren
-                : null
-        );
-    if (childrenSource) {
-        const normalizedChildrenByValue = Object.entries(childrenSource).reduce((acc, [key, rule]) => {
-            if (key === undefined || key === null) return acc;
-            if (String(key) === '*') return acc;
-            acc[String(key)] = normalizeReportNodeValue(rule);
-            return acc;
-        }, {});
-        if (Object.keys(normalizedChildrenByValue).length > 0) {
-            normalized.childrenByValue = normalizedChildrenByValue;
-        } else {
-            delete normalized.childrenByValue;
-        }
-    } else {
-        delete normalized.childrenByValue;
-    }
-
-    const defaultChildSource = source.defaultChild && typeof source.defaultChild === 'object'
-        ? source.defaultChild
-        : (
-            childrenSource && childrenSource['*'] && typeof childrenSource['*'] === 'object'
-                ? childrenSource['*']
-                : null
-        );
-    if (defaultChildSource) {
-        normalized.defaultChild = normalizeReportNodeValue(defaultChildSource);
-    } else {
-        delete normalized.defaultChild;
-    }
-
-    return normalized;
-};
-
-const convertLegacyLevelsToReportNode = (levels, index = 0, overrideRule = null) => {
-    const baseRule = overrideRule && typeof overrideRule === 'object'
-        ? overrideRule
-        : (Array.isArray(levels) ? levels[index] : null);
-    if (!baseRule || typeof baseRule !== 'object') return null;
-
-    const normalizedBase = normalizeReportNodeValue(baseRule);
-    const nextDefaultNode = index + 1 < (Array.isArray(levels) ? levels.length : 0)
-        ? convertLegacyLevelsToReportNode(levels, index + 1)
-        : null;
-    const legacyConditional = baseRule.conditionalChildren && typeof baseRule.conditionalChildren === 'object'
-        ? baseRule.conditionalChildren
-        : null;
-
-    if (legacyConditional) {
-        const childrenByValue = Object.entries(legacyConditional).reduce((acc, [key, childRule]) => {
-            if (key === '*' || !childRule || typeof childRule !== 'object') return acc;
-            const childNode = convertLegacyLevelsToReportNode(levels, index + 1, childRule);
-            if (childNode) acc[String(key)] = childNode;
-            return acc;
-        }, {});
-        if (Object.keys(childrenByValue).length > 0) {
-            normalizedBase.childrenByValue = childrenByValue;
-        }
-        if (legacyConditional['*'] && typeof legacyConditional['*'] === 'object') {
-            normalizedBase.defaultChild = convertLegacyLevelsToReportNode(levels, index + 1, legacyConditional['*']);
-        } else if (nextDefaultNode) {
-            normalizedBase.defaultChild = nextDefaultNode;
-        }
-    } else if (nextDefaultNode) {
-        normalizedBase.defaultChild = nextDefaultNode;
-    }
-
-    return normalizedBase;
-};
-
-const normalizeReportDefValue = (value) => {
-    const source = value && typeof value === 'object' ? value : {};
-    const normalizedLevels = Array.isArray(source.levels)
-        ? source.levels.map((level) => normalizeReportNodeValue(level))
-        : [];
-    const normalizedRootFromProp = source.root && typeof source.root === 'object'
-        ? normalizeReportNodeValue(source.root)
-        : null;
-    const normalizedRoot = normalizedRootFromProp && normalizedRootFromProp.field
-        ? normalizedRootFromProp
-        : (normalizedLevels.length > 0 ? convertLegacyLevelsToReportNode(source.levels) : null);
-    return {
-        ...source,
-        root: normalizedRoot,
-        levels: normalizedLevels,
-    };
-};
-
-const collectReportFields = (reportDef) => {
-    const ordered = [];
-    const seen = new Set();
-    const visit = (node) => {
-        if (!node || typeof node !== 'object') return;
-        if (node.field && !seen.has(node.field)) {
-            seen.add(node.field);
-            ordered.push(node.field);
-        }
-        if (node.defaultChild) visit(node.defaultChild);
-        if (node.childrenByValue && typeof node.childrenByValue === 'object') {
-            Object.values(node.childrenByValue).forEach((childNode) => visit(childNode));
-        }
-    };
-    if (reportDef && typeof reportDef === 'object') visit(reportDef.root);
-    return ordered;
-};
-
-const countReportNodes = (reportDef) => {
-    let count = 0;
-    const visit = (node) => {
-        if (!node || typeof node !== 'object') return;
-        count += 1;
-        if (node.defaultChild) visit(node.defaultChild);
-        if (node.childrenByValue && typeof node.childrenByValue === 'object') {
-            Object.values(node.childrenByValue).forEach((childNode) => visit(childNode));
-        }
-    };
-    if (reportDef && typeof reportDef === 'object') visit(reportDef.root);
-    return count;
-};
-
-const getReportHeaderLabel = (reportDef) => {
-    const root = reportDef && typeof reportDef === 'object' ? reportDef.root : null;
-    if (!root || typeof root !== 'object') return 'Report';
-    if (root.label && root.label.trim()) return root.label.trim();
-    if (root.field && root.field.trim()) return formatDisplayLabel(root.field);
-    return 'Report';
-};
-
-const normalizeSavedReportsValue = (value) => (
-    Array.isArray(value)
-        ? value
-            .filter((report) => report && typeof report === 'object')
-            .map((report, index) => ({
-                ...report,
-                id: typeof report.id === 'string' ? report.id : `report-${index + 1}`,
-                name: typeof report.name === 'string' && report.name.trim()
-                    ? report.name
-                    : 'Saved Report',
-                reportDef: normalizeReportDefValue(report.reportDef),
-            }))
-        : []
-);
-
-const normalizeActiveReportIdValue = (value) => (
-    typeof value === 'string' && value.trim() ? value : null
-);
-
-const clampFloatingChartRect = (rect, containerRect) => {
-    const source = rect && typeof rect === 'object' ? rect : {};
-    const rawWidth = Number(source.width);
-    const rawHeight = Number(source.height);
-    const rawLeft = Number(source.left);
-    const rawTop = Number(source.top);
-    const width = Number.isFinite(rawWidth) ? Math.max(MIN_CHART_PANEL_WIDTH, Math.floor(rawWidth)) : 430;
-    const height = Number.isFinite(rawHeight) ? Math.max(MIN_FLOATING_CHART_PANEL_HEIGHT, Math.floor(rawHeight)) : DEFAULT_FLOATING_CHART_PANEL_HEIGHT;
-    const left = Number.isFinite(rawLeft) ? Math.floor(rawLeft) : 24;
-    const top = Number.isFinite(rawTop) ? Math.floor(rawTop) : 24;
-
-    if (!containerRect || !Number.isFinite(containerRect.width) || !Number.isFinite(containerRect.height)) {
-        return { left: Math.max(0, left), top: Math.max(0, top), width, height };
-    }
-
-    const maxWidth = Math.max(MIN_CHART_PANEL_WIDTH, Math.floor(containerRect.width) - 12);
-    const maxHeight = Math.max(MIN_FLOATING_CHART_PANEL_HEIGHT, Math.floor(containerRect.height) - 12);
-    const safeWidth = Math.max(MIN_CHART_PANEL_WIDTH, Math.min(maxWidth, width));
-    const safeHeight = Math.max(MIN_FLOATING_CHART_PANEL_HEIGHT, Math.min(maxHeight, height));
-    const maxLeft = Math.max(0, Math.floor(containerRect.width) - safeWidth);
-    const maxTop = Math.max(0, Math.floor(containerRect.height) - safeHeight);
-
-    return {
-        left: Math.max(0, Math.min(maxLeft, left)),
-        top: Math.max(0, Math.min(maxTop, top)),
-        width: safeWidth,
-        height: safeHeight,
-    };
-};
-
-const normalizeChartDefinition = (value, fallback = {}) => {
-    const source = value && typeof value === 'object' ? value : {};
-    const fallbackSource = fallback && typeof fallback === 'object' ? fallback : {};
-    const chartType = VALID_CHART_TYPES.has(source.chartType) ? source.chartType : (VALID_CHART_TYPES.has(fallbackSource.chartType) ? fallbackSource.chartType : 'bar');
-    const barLayout = source.barLayout === 'stacked' || source.barLayout === 'grouped'
-        ? source.barLayout
-        : (fallbackSource.barLayout === 'stacked' ? 'stacked' : 'grouped');
-    const axisMode = source.axisMode === 'horizontal' || source.axisMode === 'vertical'
-        ? source.axisMode
-        : (fallbackSource.axisMode === 'horizontal' ? 'horizontal' : 'vertical');
-    const orientation = source.orientation === 'columns' || source.orientation === 'rows'
-        ? source.orientation
-        : (fallbackSource.orientation === 'columns' ? 'columns' : 'rows');
-    const interactionMode = VALID_CHART_INTERACTION_MODES.has(source.interactionMode)
-        ? source.interactionMode
-        : (VALID_CHART_INTERACTION_MODES.has(fallbackSource.interactionMode) ? fallbackSource.interactionMode : 'focus');
-    const sortMode = VALID_CHART_SORT_MODES.has(source.sortMode)
-        ? source.sortMode
-        : (VALID_CHART_SORT_MODES.has(fallbackSource.sortMode) ? fallbackSource.sortMode : 'natural');
-    const serverScope = VALID_CHART_SERVER_SCOPES.has(source.serverScope)
-        ? source.serverScope
-        : (VALID_CHART_SERVER_SCOPES.has(fallbackSource.serverScope) ? fallbackSource.serverScope : 'viewport');
-    const hierarchyLevel = source.hierarchyLevel === 'all' || (typeof source.hierarchyLevel === 'number' && source.hierarchyLevel >= 1)
-        ? source.hierarchyLevel
-        : (fallbackSource.hierarchyLevel === 'all' || (typeof fallbackSource.hierarchyLevel === 'number' && fallbackSource.hierarchyLevel >= 1)
-            ? fallbackSource.hierarchyLevel
-            : 'all');
-    const rowLimit = Number.isFinite(Number(source.rowLimit))
-        ? Math.max(1, Math.floor(Number(source.rowLimit)))
-        : (Number.isFinite(Number(fallbackSource.rowLimit)) ? Math.max(1, Math.floor(Number(fallbackSource.rowLimit))) : DEFAULT_CHART_PANEL_ROW_LIMIT);
-    const columnLimit = Number.isFinite(Number(source.columnLimit))
-        ? Math.max(1, Math.floor(Number(source.columnLimit)))
-        : (Number.isFinite(Number(fallbackSource.columnLimit)) ? Math.max(1, Math.floor(Number(fallbackSource.columnLimit))) : DEFAULT_CHART_PANEL_COLUMN_LIMIT);
-    const width = Number.isFinite(Number(source.width))
-        ? Math.max(MIN_CHART_PANEL_WIDTH, Math.min(MAX_CHART_PANEL_WIDTH, Math.floor(Number(source.width))))
-        : (Number.isFinite(Number(fallbackSource.width))
-            ? Math.max(MIN_CHART_PANEL_WIDTH, Math.min(MAX_CHART_PANEL_WIDTH, Math.floor(Number(fallbackSource.width))))
-            : 430);
-    const chartHeight = Number.isFinite(Number(source.chartHeight))
-        ? Math.max(180, Math.floor(Number(source.chartHeight)))
-        : (Number.isFinite(Number(fallbackSource.chartHeight))
-            ? Math.max(180, Math.floor(Number(fallbackSource.chartHeight)))
-            : DEFAULT_CHART_GRAPH_HEIGHT);
-
-    return {
-        id: sanitizeChartDefinitionName(source.id || fallbackSource.id || createChartDefinitionId('chart'), 'chart'),
-        name: sanitizeChartDefinitionName(source.name || fallbackSource.name || 'Live Chart', 'Live Chart'),
-        chartTitle: sanitizeChartDefinitionName(source.chartTitle || fallbackSource.chartTitle || source.name || fallbackSource.name || 'Chart', 'Chart'),
-        source: source.source === 'selection' || source.source === 'pivot'
-            ? source.source
-            : (fallbackSource.source === 'selection' ? 'selection' : 'pivot'),
-        chartType,
-        barLayout,
-        axisMode,
-        orientation,
-        hierarchyLevel,
-        rowLimit,
-        columnLimit,
-        width,
-        chartHeight,
-        sortMode,
-        interactionMode,
-        serverScope,
-        chartLayers: cloneSerializable(
-            Array.isArray(source.chartLayers)
-                ? source.chartLayers
-                : (Array.isArray(fallbackSource.chartLayers) ? fallbackSource.chartLayers : []),
-            []
-        ),
-    };
-};
-
-const sanitizeChartDefinitions = (definitions, fallbackDefinition) => {
-    const sourceDefinitions = Array.isArray(definitions) ? definitions : [];
-    const normalized = sourceDefinitions
-        .filter((item) => item && typeof item === 'object')
-        .map((item, index) => normalizeChartDefinition(item, {
-            ...fallbackDefinition,
-            id: item.id || `chart-${index + 1}`,
-            name: item.name || `Chart ${index + 1}`,
-        }));
-
-    if (normalized.length > 0) return normalized;
-    return [normalizeChartDefinition(fallbackDefinition, fallbackDefinition)];
-};
-
-const serializeChartColumn = (column) => {
-    if (!column || typeof column !== 'object') return null;
-    const columnMeta = (column.columnDef && column.columnDef.meta) || column.meta || null;
-    if (columnMeta && columnMeta.isSparklineSummary) return null;
-    return {
-        id: column.id || null,
-        headerVal: column.headerVal !== undefined ? column.headerVal : null,
-        columnDef: column.columnDef
-            ? {
-                header: typeof column.columnDef.header === 'string' ? column.columnDef.header : null,
-                headerVal: column.columnDef.headerVal !== undefined ? column.columnDef.headerVal : null,
-            }
-            : null,
-        parent: column.parent ? serializeChartColumn(column.parent) : null,
-    };
-};
-
-const serializeChartColumns = (columns) => (
-    Array.isArray(columns)
-        ? columns.map((column) => serializeChartColumn(column)).filter(Boolean)
-        : []
-);
-
-const getRequestedChartSeriesColumnIds = (chartType, chartLayers) => (
-    chartType === 'combo'
-        ? Array.from(new Set(
-            (Array.isArray(chartLayers) ? chartLayers : [])
-                .map((layer) => (layer && typeof layer.columnId === 'string' ? layer.columnId.trim() : ''))
-                .filter(Boolean)
-        ))
-        : []
-);
-
-const normalizeChartResponseColumn = (column, fallbackId = null) => {
-    const source = column && typeof column === 'object' ? column : {};
-    const columnId = source.id || (typeof column === 'string' ? column : fallbackId) || null;
-    if (!columnId) return null;
-    const headerVal = source.headerVal !== undefined
-        ? source.headerVal
-        : (source.header !== undefined ? source.header : null);
-    const header = source.columnDef && typeof source.columnDef === 'object'
-        ? (typeof source.columnDef.header === 'string'
-            ? source.columnDef.header
-            : (typeof source.header === 'string' ? source.header : (headerVal !== null && headerVal !== undefined ? String(headerVal) : String(columnId))))
-        : (typeof source.header === 'string' ? source.header : (headerVal !== null && headerVal !== undefined ? String(headerVal) : String(columnId)));
-    return {
-        id: columnId,
-        headerVal,
-        columnDef: {
-            header,
-            headerVal: source.columnDef && source.columnDef.headerVal !== undefined
-                ? source.columnDef.headerVal
-                : headerVal,
-        },
-        parent: source.parent ? normalizeChartResponseColumn(source.parent) : null,
-    };
-};
-
-const normalizeChartResponseColumns = (columns) => (
-    Array.isArray(columns)
-        ? columns.map((column) => normalizeChartResponseColumn(column)).filter(Boolean)
-        : []
-);
-
-const buildChartColumnsFromSchema = (colSchema) => (
-    colSchema && Array.isArray(colSchema.columns)
-        ? colSchema.columns
-            .map((column) => normalizeChartResponseColumn({
-                id: column && column.id ? column.id : null,
-                header: column && typeof column.header === 'string' ? column.header : null,
-                headerVal: column && column.headerVal !== undefined ? column.headerVal : (column && column.id ? column.id : null),
-            }))
-            .filter(Boolean)
-        : []
-);
-
-const resolveChartModelColumns = (chartDataEntry, fallbackColumns = []) => {
-    const responseColumns = normalizeChartResponseColumns(chartDataEntry && chartDataEntry.columns);
-    return responseColumns.length > 0 ? responseColumns : serializeChartColumns(fallbackColumns);
-};
-
-const resolveChartAvailableColumns = (chartDataEntry, fallbackColumns = []) => {
-    const responseColumns = normalizeChartResponseColumns(chartDataEntry && chartDataEntry.columns);
-    const schemaColumns = buildChartColumnsFromSchema(chartDataEntry && chartDataEntry.colSchema);
-    const fallbackSerialized = serializeChartColumns(fallbackColumns);
-    if (schemaColumns.length === 0) {
-        return responseColumns.length > 0 ? responseColumns : fallbackSerialized;
-    }
-    const responseById = new Map(responseColumns.map((column) => [column.id, column]));
-    const fallbackById = new Map(fallbackSerialized.map((column) => [column.id, column]));
-    const merged = schemaColumns.map((column) => responseById.get(column.id) || fallbackById.get(column.id) || column);
-    const knownIds = new Set(merged.map((column) => column.id));
-    responseColumns.forEach((column) => {
-        if (!knownIds.has(column.id)) {
-            merged.push(column);
-            knownIds.add(column.id);
-        }
-    });
-    fallbackSerialized.forEach((column) => {
-        if (!knownIds.has(column.id)) {
-            merged.push(column);
-            knownIds.add(column.id);
-        }
-    });
-    return merged;
-};
-
-const coerceTransportNumber = (value, fallback = null) => {
-    if (value === null || value === undefined || value === '') return fallback;
-    const numeric = Number(value);
-    return Number.isFinite(numeric) ? numeric : fallback;
-};
-
-const isColSchemaTransportColumn = (column) => {
-    const columnId = column && typeof column === 'object' ? column.id : column;
-    return String(columnId || '').trim() === '__col_schema';
-};
-
-const extractColSchemaFromTransportColumns = (columns) => {
-    if (!Array.isArray(columns)) return null;
-    const schemaEntry = columns.find((column) => (
-        column
-        && typeof column === 'object'
-        && column.id === '__col_schema'
-        && column.col_schema
-        && typeof column.col_schema === 'object'
-    ));
-    return schemaEntry ? schemaEntry.col_schema : null;
-};
-
-const normalizeTransportColumns = (columns, fallbackColumns = []) => {
-    const sourceColumns = Array.isArray(columns)
-        ? columns
-        : (Array.isArray(fallbackColumns) ? fallbackColumns : []);
-    return sourceColumns.filter((column) => !isColSchemaTransportColumn(column));
-};
-
-const normalizeRuntimeDataEnvelope = (payload, fallback = {}) => {
-    const source = payload && typeof payload === 'object' ? payload : {};
-    const colSchema = (
-        source.colSchema
-        || source.col_schema
-        || extractColSchemaFromTransportColumns(source.columns)
-        || fallback.colSchema
-        || fallback.col_schema
-        || extractColSchemaFromTransportColumns(fallback.columns)
-        || null
-    );
-    return {
-        data: Array.isArray(source.data) ? source.data : (Array.isArray(fallback.data) ? fallback.data : []),
-        rowCount: coerceTransportNumber(source.rowCount, coerceTransportNumber(fallback.rowCount, null)),
-        columns: normalizeTransportColumns(source.columns, fallback.columns),
-        colSchema,
-        dataOffset: coerceTransportNumber(source.dataOffset, coerceTransportNumber(fallback.dataOffset, 0)),
-        dataVersion: coerceTransportNumber(source.dataVersion, coerceTransportNumber(fallback.dataVersion, 0)),
-    };
-};
-
-const resolveTransportRowId = (row) => {
-    if (!row || typeof row !== 'object') return null;
-    if (row._isTotal || row._path === '__grand_total__' || row._id === 'Grand Total' || row.__isGrandTotal__) {
-        return '__grand_total__';
-    }
-    if (row._path !== undefined && row._path !== null && row._path !== '') return String(row._path);
-    if (row.id !== undefined && row.id !== null && row.id !== '') return String(row.id);
-    if (row._id !== undefined && row._id !== null && row._id !== '') return String(row._id);
-    return null;
-};
-
-const applyRuntimePatchEnvelope = (patch, fallback = {}) => {
-    const source = patch && typeof patch === 'object' ? patch : {};
-    const previousState = fallback && typeof fallback === 'object' ? fallback : {};
-    const previousData = Array.isArray(previousState.data) ? previousState.data : [];
-    const patchRows = Array.isArray(source.rows) ? source.rows.filter((row) => row && typeof row === 'object') : [];
-
-    if (patchRows.length === 0) {
-        return normalizeRuntimeDataEnvelope({
-            data: previousData,
-            rowCount: source.rowCount,
-            columns: source.columns,
-            colSchema: source.colSchema || source.col_schema,
-            dataOffset: source.dataOffset,
-            dataVersion: source.dataVersion,
-        }, previousState);
-    }
-
-    const patchByRowId = new Map();
-    patchRows.forEach((row) => {
-        const rowId = resolveTransportRowId(row);
-        if (!rowId) return;
-        patchByRowId.set(rowId, row);
-    });
-
-    const mergedData = previousData.map((row) => {
-        const rowId = resolveTransportRowId(row);
-        if (!rowId || !patchByRowId.has(rowId)) return row;
-        return { ...row, ...patchByRowId.get(rowId) };
-    });
-
-    return normalizeRuntimeDataEnvelope({
-        data: mergedData,
-        rowCount: source.rowCount,
-        columns: source.columns,
-        colSchema: source.colSchema || source.col_schema,
-        dataOffset: source.dataOffset,
-        dataVersion: source.dataVersion,
-    }, previousState);
-};
-
-const normalizeLockedChartRequest = (value) => {
-    if (!value || typeof value !== 'object') return null;
-    return {
-        request: value.request && typeof value.request === 'object' ? cloneSerializable(value.request, null) : null,
-        stateOverride: value.stateOverride && typeof value.stateOverride === 'object' ? cloneSerializable(value.stateOverride, null) : null,
-        visibleColumns: Array.isArray(value.visibleColumns) ? cloneSerializable(value.visibleColumns, []) : [],
-        requestSignature: typeof value.requestSignature === 'string' ? value.requestSignature : null,
-    };
-};
-
-const normalizeChartDockPosition = (value, fallback = 'right') => (
-    VALID_CHART_DOCK_POSITIONS.has(value) ? value : fallback
-);
-
-const normalizeChartCanvasPane = (value, fallbackDefinition, index = 0) => {
-    const source = value && typeof value === 'object' ? value : {};
-    const normalizedDefinition = normalizeChartDefinition(source, {
-        ...fallbackDefinition,
-        id: source.id || `chart-pane-${index + 1}`,
-        name: source.name || `Chart Pane ${index + 1}`,
-    });
-    const numericSize = Number(source.size);
-    return {
-        ...normalizedDefinition,
-        size: Number.isFinite(numericSize) && numericSize > 0 ? numericSize : 1,
-        dockPosition: normalizeChartDockPosition(source.dockPosition || source.dock_position, 'right'),
-        floating: Boolean(source.floating),
-        floatingRect: clampFloatingChartRect(source.floatingRect, null),
-        locked: Boolean(source.locked),
-        lockedModel: cloneSerializable(source.lockedModel, null),
-        lockedRequest: normalizeLockedChartRequest(source.lockedRequest),
-        immersiveMode: Boolean(source.immersiveMode),
-    };
-};
-
-const sanitizeChartCanvasPanes = (panes, fallbackDefinition) => (
-    Array.isArray(panes)
-        ? panes
-            .filter((pane) => pane && typeof pane === 'object')
-            .map((pane, index) => normalizeChartCanvasPane(pane, fallbackDefinition, index))
-        : []
-);
-
-const getChartPanelWidthBounds = (layoutWidth) => {
-    if (!Number.isFinite(layoutWidth) || layoutWidth <= 0) {
-        return { minWidth: MIN_CHART_PANEL_WIDTH, maxWidth: MAX_CHART_PANEL_WIDTH };
-    }
-
-    const minWidth = Math.min(320, Math.max(MIN_CHART_PANEL_WIDTH, Math.floor(layoutWidth * 0.3)));
-    const maxWidth = Math.min(
-        MAX_CHART_PANEL_WIDTH,
-        Math.max(minWidth, Math.floor(layoutWidth - Math.min(MIN_TABLE_PANEL_WIDTH, layoutWidth * 0.45)))
-    );
-
-    return { minWidth, maxWidth };
-};
-
-const normalizeChartServerWindowConfig = (value) => {
-    if (!value || typeof value !== 'object') {
-        return { enabled: false, rows: null, columns: null, scope: 'viewport' };
-    }
-
-    const normalizedRows = Number(value.rows);
-    const normalizedColumns = Number(value.columns);
-    const rows = Number.isFinite(normalizedRows) && normalizedRows > 0 ? Math.max(1, Math.floor(normalizedRows)) : null;
-    const columns = Number.isFinite(normalizedColumns) && normalizedColumns > 0 ? Math.max(1, Math.floor(normalizedColumns)) : null;
-    const enabled = value.enabled === undefined
-        ? (rows !== null || columns !== null)
-        : Boolean(value.enabled);
-
-    return {
-        enabled,
-        rows: enabled ? rows : null,
-        columns: enabled ? columns : null,
-        scope: VALID_CHART_SERVER_SCOPES.has(value.scope) ? value.scope : 'viewport',
-    };
-};
-
-const getOrCreateSessionId = (componentId = 'pivot-grid') => {
-    if (typeof window === 'undefined') {
-        return `${componentId}-server-session`;
-    }
-
-    const storageKey = `${componentId}-client-session-id`;
-    try {
-        const fromStorage = window.sessionStorage.getItem(storageKey);
-        if (fromStorage) return fromStorage;
-    } catch (e) {
-        // no-op: storage may be blocked in some browser privacy modes
-    }
-
-    let generated = null;
-    if (window.crypto && typeof window.crypto.randomUUID === 'function') {
-        generated = window.crypto.randomUUID();
-    } else {
-        generated = `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}`;
-    }
-
-    try {
-        window.sessionStorage.setItem(storageKey, generated);
-    } catch (e) {
-        // no-op
-    }
-
-    return generated;
-};
-
-const createClientInstanceId = (componentId = 'pivot-grid') => {
-    if (typeof window !== 'undefined' && window.crypto && typeof window.crypto.randomUUID === 'function') {
-        return `${componentId}-${window.crypto.randomUUID()}`;
-    }
-    return `${componentId}-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}`;
-};
-
-const clampSidebarWidth = (value, fallback = 288) => {
-    const normalized = Number(value);
-    return Number.isFinite(normalized)
-        ? Math.max(200, Math.min(520, Math.floor(normalized)))
-        : fallback;
-};
-
-const SUPPORTED_DEFAULT_NUMBER_FORMATS = new Set(['', 'currency', 'accounting', 'percent', 'scientific']);
-
-const clampDecimalPlaces = (value, fallback = 0) => {
-    const normalized = Number(value);
-    if (!Number.isFinite(normalized)) return fallback;
-    return Math.max(0, Math.min(6, Math.floor(normalized)));
-};
-
-const normalizeDefaultValueFormat = (value) => {
-    const normalized = typeof value === 'string' ? value.trim() : '';
-    if (normalized.startsWith('currency:') || normalized.startsWith('accounting:')) return normalized;
-    return SUPPORTED_DEFAULT_NUMBER_FORMATS.has(normalized) ? normalized : '';
-};
-
-const mergeSparseColSchema = (previousSchema, incomingSchema, fallbackSize = 140) => {
-    if (!incomingSchema || typeof incomingSchema !== 'object') return previousSchema;
-    const totalRaw = Number(incomingSchema.total_center_cols);
-    if (!Number.isFinite(totalRaw) || totalRaw < 0) return previousSchema;
-
-    const total = Math.max(0, Math.floor(totalRaw));
-    const nextColumns = Array.from({ length: total }, (_, index) => {
-        const previousColumn = previousSchema
-            && previousSchema.total_center_cols === total
-            && Array.isArray(previousSchema.columns)
-            ? previousSchema.columns[index]
-            : null;
-        return previousColumn || null;
-    });
-
-    for (const rawColumn of (incomingSchema.columns || [])) {
-        if (!rawColumn || typeof rawColumn !== 'object') continue;
-        const indexRaw = Number(rawColumn.index);
-        if (!Number.isFinite(indexRaw)) continue;
-        const index = Math.floor(indexRaw);
-        if (index < 0 || index >= total) continue;
-        nextColumns[index] = {
-            ...rawColumn,
-            index,
-            size: Number.isFinite(Number(rawColumn.size))
-                ? Number(rawColumn.size)
-                : fallbackSize,
-        };
-    }
-
-    return {
-        total_center_cols: total,
-        columns: nextColumns,
-    };
-};
-
-const isSparseSchemaRangeLoaded = (schema, start, end) => {
-    if (!schema || !Array.isArray(schema.columns)) return false;
-    const total = Number.isFinite(Number(schema.total_center_cols))
-        ? Math.max(0, Math.floor(Number(schema.total_center_cols)))
-        : schema.columns.length;
-    if (total === 0) return true;
-    if (start === null || start === undefined || end === null || end === undefined) return false;
-    const safeStart = Math.max(0, Math.min(Math.floor(start), total - 1));
-    const safeEnd = Math.max(safeStart, Math.min(Math.floor(end), total - 1));
-    for (let index = safeStart; index <= safeEnd; index += 1) {
-        const entry = schema.columns[index];
-        if (!entry || typeof entry.id !== 'string' || !entry.id) return false;
-    }
-    return true;
-};
 
 const loadingAnimationStyles = `
 @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@300;500&family=Plus+Jakarta+Sans:wght@300;500;800&display=swap');
@@ -1142,150 +220,427 @@ const loadingAnimationStyles = `
 const getStickyHeaderHeight = (headerGroupCount, rowHeight, showFloatingFilters) =>
     (headerGroupCount * rowHeight) + (showFloatingFilters ? rowHeight : 0);
 
-const normalizePerformanceConfigValue = (value) => {
-    const source = value && typeof value === 'object' ? value : {};
-    return {
-        cacheBlockSize: clampOptionalInteger(source.cacheBlockSize, 16, 1024),
-        maxBlocksInCache: clampOptionalInteger(source.maxBlocksInCache, 8, 5000),
-        blockLoadDebounceMs: clampOptionalInteger(source.blockLoadDebounceMs, 0, 500),
-        rowOverscan: clampOptionalInteger(source.rowOverscan, 0, 64),
-        columnOverscan: clampOptionalInteger(source.columnOverscan, 0, 16),
-        prefetchColumns: clampOptionalInteger(source.prefetchColumns, 0, 32),
-    };
+const getSparklineValueConfigIdentity = (config) => {
+    if (!config || typeof config !== 'object') return '';
+    const field = config.field === undefined || config.field === null ? '' : String(config.field);
+    const agg = config.agg === undefined || config.agg === null ? '' : String(config.agg);
+    return `${field}::${agg}`;
 };
 
-const buildLargeColumnAdvisory = ({ serverSide, totalCenterCols, colFields }) => {
-    const normalizedCount = Number(totalCenterCols);
-    if (!serverSide || !Number.isFinite(normalizedCount) || normalizedCount < SOFT_CENTER_COLUMN_WARNING_THRESHOLD) {
-        return null;
-    }
-
-    const safeCount = Math.max(0, Math.floor(normalizedCount));
-    const tone = safeCount >= HARD_CENTER_COLUMN_WARNING_THRESHOLD ? 'warning' : 'info';
-    const formattedCount = new Intl.NumberFormat().format(safeCount);
-    const fieldLabel = Array.isArray(colFields) && colFields.length > 0
-        ? colFields.map((field) => formatDisplayLabel(field)).join(' × ')
-        : 'the current column shape';
-
-    return {
-        tone,
-        label: tone === 'warning' ? `Wide pivot: ${formattedCount} cols` : `${formattedCount} cols`,
-        detail: `${fieldLabel} creates ${formattedCount} center columns. Bucket numeric fields, roll up dates, or move one field to Rows or Filters for smoother interaction.`,
-        notification: `${fieldLabel} creates ${formattedCount} center columns. For smoother interaction, bucket numeric fields, roll up dates, or move one field to Rows or Filters.`,
-    };
-};
-
-const hasActiveFilterValue = (value) => {
-    if (value === null || value === undefined) return false;
-    if (typeof value === 'string') return value.trim().length > 0;
-    if (Array.isArray(value)) return value.length > 0;
-    if (typeof value === 'object') {
-        return Object.keys(value).length > 0;
-    }
-    return true;
-};
-
-const countActiveFilters = (filters) => {
-    if (!filters || typeof filters !== 'object') return 0;
-    return Object.values(filters).reduce(
-        (count, value) => count + (hasActiveFilterValue(value) ? 1 : 0),
-        0
-    );
-};
-
-const PAGE_SIZE_OPTIONS = [10, 25, 50, 100, 200];
-const PaginationBar = React.memo(function PaginationBar({ table, theme, pageSize, onPageSizeChange }) {
-    const pageCount = table.getPageCount();
-    const pageIndex = table.getState().pagination?.pageIndex ?? 0;
-    const totalRows = table.getPrePaginationRowModel().rows.length;
-    const rangeStart = pageIndex * pageSize + 1;
-    const rangeEnd = Math.min((pageIndex + 1) * pageSize, totalRows);
-    const btnStyle = (disabled) => ({
-        border: `1px solid ${theme.border}`,
-        borderRadius: '4px',
-        background: disabled ? 'transparent' : (theme.headerSubtleBg || theme.hover),
-        color: disabled ? (theme.textSec || '#999') : theme.text,
-        padding: '3px 10px',
-        fontSize: '11px',
-        fontWeight: 600,
-        cursor: disabled ? 'not-allowed' : 'pointer',
-        opacity: disabled ? 0.5 : 1,
+const getFixedSparklineConfigMap = (fixedConfigs) => {
+    const fixedMap = new Map();
+    if (!Array.isArray(fixedConfigs)) return fixedMap;
+    fixedConfigs.forEach((config) => {
+        if (!config || typeof config !== 'object' || !config.sparkline || config.sparkline === false) return;
+        const identity = getSparklineValueConfigIdentity(config);
+        if (!identity) return;
+        const sparkline = config.sparkline === true
+            ? {}
+            : (typeof config.sparkline === 'object' ? config.sparkline : {});
+        fixedMap.set(identity, { ...sparkline, placement: 'before' });
     });
+    return fixedMap;
+};
+
+const normalizeSparklineValConfigsForView = (configs, fixedConfigs = []) => {
+    const fixedMap = getFixedSparklineConfigMap(fixedConfigs);
+    return Array.isArray(configs)
+        ? configs.map((config) => {
+            if (!config || typeof config !== 'object') return config;
+            const fixedSparkline = fixedMap.get(getSparklineValueConfigIdentity(config));
+            const removesFixedSparkline = Boolean(
+                fixedSparkline
+                && config.sparkline
+                && typeof config.sparkline === 'object'
+                && config.sparkline.enabled === false
+            );
+            const sourceSparkline = (
+                removesFixedSparkline
+                || config.sparkline === false
+                || config.sparkline === null
+                || config.sparkline === undefined
+            ) ? fixedSparkline : config.sparkline;
+            if (!sourceSparkline) return config;
+            const sparkline = sourceSparkline === true
+                ? {}
+                : (typeof sourceSparkline === 'object' ? sourceSparkline : {});
+            return {
+                ...config,
+                sparkline: {
+                    ...sparkline,
+                    placement: 'before',
+                },
+            };
+        })
+        : [];
+};
+
+const formatSparklineDetailValue = (value, maximumFractionDigits = 4) => {
+    const numeric = Number(value);
+    if (Number.isFinite(numeric)) {
+        return numeric.toLocaleString(undefined, { maximumFractionDigits });
+    }
+    return value === null || value === undefined ? '' : String(value);
+};
+
+const getSparklineDetailNumericValues = (points) => (
+    (Array.isArray(points) ? points : [])
+        .map((point) => Number(point && point.value))
+        .filter((value) => Number.isFinite(value))
+);
+
+const formatSparklineDetailExtremum = (points, mode) => {
+    const values = getSparklineDetailNumericValues(points);
+    if (values.length === 0) return '';
+    return formatSparklineDetailValue(mode === 'min' ? Math.min(...values) : Math.max(...values));
+};
+
+const resolveSparklineDetailRange = (values, type) => {
+    if (!Array.isArray(values) || values.length === 0) {
+        return { min: 0, max: 1 };
+    }
+    let minValue = Math.min(...values);
+    let maxValue = Math.max(...values);
+    if (type === 'column' || type === 'bar') {
+        minValue = Math.min(minValue, 0);
+        maxValue = Math.max(maxValue, 0);
+    }
+    if (minValue === maxValue) {
+        const spread = Math.max(1, Math.abs(minValue) * 0.08);
+        return { min: minValue - spread, max: maxValue + spread };
+    }
+    return { min: minValue, max: maxValue };
+};
+
+const scaleSparklineDetailValue = (value, minValue, maxValue, minAxis, maxAxis) => {
+    if (maxValue === minValue) return (minAxis + maxAxis) / 2;
+    const normalized = (Number(value) - minValue) / (maxValue - minValue);
+    return maxAxis - ((maxAxis - minAxis) * normalized);
+};
+
+function SparklineDetailGraph({ modal, theme }) {
+    const points = Array.isArray(modal && modal.points) ? modal.points : [];
+    const sparklineConfig = modal && modal.sparklineConfig ? modal.sparklineConfig : {};
+    const type = ['line', 'area', 'column', 'bar'].includes(sparklineConfig.type) ? sparklineConfig.type : 'line';
+    const width = 640;
+    const height = 300;
+    const padding = 46;
+    const [hoverIndex, setHoverIndex] = React.useState(null);
+    const [zoomWindow, setZoomWindow] = React.useState(null);
+    React.useEffect(() => {
+        setHoverIndex(null);
+        setZoomWindow(null);
+    }, [points.length, type]);
+    const normalizedZoomWindow = React.useMemo(() => {
+        const lastIndex = Math.max(0, points.length - 1);
+        if (!zoomWindow || points.length === 0) return { start: 0, end: lastIndex };
+        const start = Math.max(0, Math.min(lastIndex, Math.floor(Number(zoomWindow.start) || 0)));
+        const end = Math.max(start, Math.min(lastIndex, Math.floor(Number(zoomWindow.end) || lastIndex)));
+        return { start, end };
+    }, [points.length, zoomWindow]);
+    const visiblePoints = React.useMemo(
+        () => points.slice(normalizedZoomWindow.start, normalizedZoomWindow.end + 1),
+        [normalizedZoomWindow, points]
+    );
+    const visiblePointCount = visiblePoints.length;
+    const canZoom = points.length > 4;
+    const canZoomIn = canZoom && visiblePointCount > 4;
+    const isZoomed = canZoom && (normalizedZoomWindow.start > 0 || normalizedZoomWindow.end < points.length - 1);
+    const geometry = React.useMemo(
+        () => buildSparklineGeometry({ points: visiblePoints, type, width, height, padding }),
+        [visiblePoints, type]
+    );
+    const values = getSparklineDetailNumericValues(visiblePoints);
+    const valueRange = React.useMemo(
+        () => resolveSparklineDetailRange(values, type),
+        [values, type]
+    );
+    const chartMarks = React.useMemo(() => {
+        if (type === 'bar') {
+            return geometry.bars.map((bar, index) => ({
+                ...bar,
+                pointIndex: index,
+                fullIndex: normalizedZoomWindow.start + index,
+                markerX: Number(bar.value) >= 0 ? bar.x + bar.width : bar.x,
+                markerY: bar.y + (bar.height / 2),
+            }));
+        }
+        if (type === 'column') {
+            return geometry.bars.map((bar, index) => ({
+                ...bar,
+                pointIndex: index,
+                fullIndex: normalizedZoomWindow.start + index,
+                markerX: bar.x + (bar.width / 2),
+                markerY: Number(bar.value) >= 0 ? bar.y : bar.y + bar.height,
+            }));
+        }
+        return geometry.points.map((point, index) => ({
+            ...point,
+            pointIndex: index,
+            fullIndex: normalizedZoomWindow.start + index,
+            markerX: point.x,
+            markerY: point.y,
+        }));
+    }, [geometry.bars, geometry.points, normalizedZoomWindow.start, type]);
+    const yTicks = React.useMemo(() => {
+        const tickCount = 5;
+        return Array.from({ length: tickCount }, (_, index) => {
+            const ratio = tickCount === 1 ? 0 : index / (tickCount - 1);
+            const value = valueRange.max - ((valueRange.max - valueRange.min) * ratio);
+            return {
+                value,
+                y: padding + ((height - (padding * 2)) * ratio),
+            };
+        });
+    }, [height, padding, valueRange]);
+    const xTicks = React.useMemo(() => {
+        if (!Array.isArray(visiblePoints) || visiblePoints.length === 0) return [];
+        const lastIndex = visiblePoints.length - 1;
+        const indexes = Array.from(new Set([
+            0,
+            Math.floor(lastIndex * 0.25),
+            Math.floor(lastIndex * 0.5),
+            Math.floor(lastIndex * 0.75),
+            lastIndex,
+        ]));
+        return indexes
+            .map((index) => {
+                const point = visiblePoints[index];
+                const mark = chartMarks.find((candidate) => candidate.pointIndex === index);
+                if (!point || !mark) return null;
+                return { index, label: point.label, x: mark.markerX };
+            })
+            .filter(Boolean);
+    }, [chartMarks, visiblePoints]);
+    const strokeColor = sparklineConfig.color || theme.primary || '#2563EB';
+    const positiveColor = sparklineConfig.positiveColor || (theme.isDark ? '#86EFAC' : '#2F855A');
+    const negativeColor = sparklineConfig.negativeColor || (theme.isDark ? '#FDA4AF' : '#B91C1C');
+    const minLabel = values.length ? formatSparklineDetailValue(Math.min(...values)) : '';
+    const maxLabel = values.length ? formatSparklineDetailValue(Math.max(...values)) : '';
+    const firstPoint = visiblePoints[0];
+    const lastPoint = visiblePoints[visiblePoints.length - 1];
+    const zeroY = valueRange.min < 0 && valueRange.max > 0
+        ? scaleSparklineDetailValue(0, valueRange.min, valueRange.max, padding, height - padding)
+        : null;
+    const activeMark = hoverIndex !== null && chartMarks[hoverIndex] ? chartMarks[hoverIndex] : null;
+    const tooltipWidth = 172;
+    const tooltipHeight = 54;
+    const tooltipX = activeMark
+        ? Math.max(10, Math.min(width - tooltipWidth - 10, activeMark.markerX + (activeMark.markerX > width * 0.66 ? -tooltipWidth - 14 : 14)))
+        : 0;
+    const tooltipY = activeMark
+        ? Math.max(10, Math.min(height - tooltipHeight - 10, activeMark.markerY + (activeMark.markerY > height * 0.55 ? -tooltipHeight - 14 : 14)))
+        : 0;
+    const handleGraphPointerMove = React.useCallback((event) => {
+        if (!chartMarks.length) return;
+        const rect = event.currentTarget.getBoundingClientRect();
+        const svgX = ((event.clientX - rect.left) / Math.max(rect.width, 1)) * width;
+        const svgY = ((event.clientY - rect.top) / Math.max(rect.height, 1)) * height;
+        let nearestIndex = 0;
+        let nearestScore = Number.POSITIVE_INFINITY;
+        chartMarks.forEach((mark, index) => {
+            const dx = svgX - mark.markerX;
+            const dy = svgY - mark.markerY;
+            const score = type === 'bar' ? (dx * dx) + (dy * dy) : Math.abs(dx) + (Math.abs(dy) * 0.08);
+            if (score < nearestScore) {
+                nearestScore = score;
+                nearestIndex = index;
+            }
+        });
+        setHoverIndex(nearestIndex);
+    }, [chartMarks, height, type, width]);
+    const setZoomRange = React.useCallback((start, end) => {
+        if (points.length <= 0) {
+            setZoomWindow(null);
+            return;
+        }
+        const lastIndex = points.length - 1;
+        const minWindowSize = Math.min(4, points.length);
+        const boundedStart = Math.max(0, Math.min(lastIndex, Math.floor(start)));
+        const boundedEnd = Math.max(boundedStart, Math.min(lastIndex, Math.floor(end)));
+        if (boundedEnd - boundedStart + 1 >= points.length) {
+            setZoomWindow(null);
+            return;
+        }
+        if (boundedEnd - boundedStart + 1 < minWindowSize) {
+            const center = Math.round((boundedStart + boundedEnd) / 2);
+            const half = Math.floor(minWindowSize / 2);
+            const nextStart = Math.max(0, Math.min(lastIndex - minWindowSize + 1, center - half));
+            setZoomWindow({ start: nextStart, end: nextStart + minWindowSize - 1 });
+            return;
+        }
+        setZoomWindow({ start: boundedStart, end: boundedEnd });
+    }, [points.length]);
+    const zoomByFactor = React.useCallback((factor) => {
+        if (!canZoom) return;
+        const currentStart = normalizedZoomWindow.start;
+        const currentEnd = normalizedZoomWindow.end;
+        const currentLength = currentEnd - currentStart + 1;
+        const minLength = Math.min(4, points.length);
+        const nextLength = Math.max(minLength, Math.min(points.length, Math.round(currentLength * factor)));
+        const center = activeMark
+            ? activeMark.fullIndex
+            : Math.round((currentStart + currentEnd) / 2);
+        const nextStart = Math.max(0, Math.min(points.length - nextLength, Math.round(center - (nextLength / 2))));
+        setZoomRange(nextStart, nextStart + nextLength - 1);
+    }, [activeMark, canZoom, normalizedZoomWindow, points.length, setZoomRange]);
+    const resetZoom = React.useCallback(() => {
+        setHoverIndex(null);
+        setZoomWindow(null);
+    }, []);
+    const handleGraphWheel = React.useCallback((event) => {
+        if (!canZoom) return;
+        event.preventDefault();
+        zoomByFactor(event.deltaY < 0 ? 0.68 : 1.42);
+    }, [canZoom, zoomByFactor]);
+
     return (
-        <div style={{
-            display: 'flex', alignItems: 'center', justifyContent: 'space-between',
-            padding: '6px 12px', borderTop: `1px solid ${theme.border}`,
-            background: theme.headerBg || theme.background, flexShrink: 0,
-            fontSize: '11px', color: theme.text, gap: '8px',
-        }}>
-            <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
-                <span style={{ color: theme.textSec }}>Rows per page</span>
-                <select
-                    value={pageSize}
-                    onChange={(e) => onPageSizeChange(Number(e.target.value))}
-                    style={{
-                        border: `1px solid ${theme.border}`, borderRadius: '4px',
-                        background: theme.surfaceBg || theme.background, color: theme.text,
-                        padding: '2px 4px', fontSize: '11px',
-                    }}
+        <div
+            data-pivot-sparkline-detail-graph="true"
+            style={{
+                flex: '1 1 430px',
+                minWidth: '300px',
+                padding: '14px',
+                borderRight: `1px solid ${theme.border}`,
+                background: theme.headerSubtleBg || theme.background,
+            }}
+        >
+            {canZoom && (
+                <div
+                    data-pivot-sparkline-zoom-controls="true"
+                    style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '10px', marginBottom: '8px' }}
                 >
-                    {PAGE_SIZE_OPTIONS.map((s) => <option key={s} value={s}>{s}</option>)}
-                </select>
-            </div>
-            <span style={{ color: theme.textSec }}>
-                {totalRows > 0 ? `${rangeStart}–${rangeEnd} of ${totalRows}` : '0 rows'}
-            </span>
-            <div style={{ display: 'flex', gap: '4px' }}>
-                <button style={btnStyle(!table.getCanPreviousPage())} onClick={() => table.setPageIndex(0)} disabled={!table.getCanPreviousPage()}>{'«'}</button>
-                <button style={btnStyle(!table.getCanPreviousPage())} onClick={() => table.previousPage()} disabled={!table.getCanPreviousPage()}>{'‹'}</button>
-                <span style={{ padding: '3px 8px', fontSize: '11px', fontWeight: 600 }}>
-                    {pageIndex + 1} / {pageCount || 1}
-                </span>
-                <button style={btnStyle(!table.getCanNextPage())} onClick={() => table.nextPage()} disabled={!table.getCanNextPage()}>{'›'}</button>
-                <button style={btnStyle(!table.getCanNextPage())} onClick={() => table.setPageIndex(pageCount - 1)} disabled={!table.getCanNextPage()}>{'»'}</button>
+                    <span style={{ fontSize: '11px', fontWeight: 700, color: theme.textSec }}>
+                        {isZoomed
+                            ? `${normalizedZoomWindow.start + 1}-${normalizedZoomWindow.end + 1} of ${points.length}`
+                            : `${points.length} points`}
+                    </span>
+                    <div style={{ display: 'flex', gap: '6px', alignItems: 'center' }}>
+                        <button
+                            type="button"
+                            data-pivot-sparkline-zoom-in="true"
+                            disabled={!canZoomIn}
+                            onClick={() => zoomByFactor(0.62)}
+                            style={{ border: `1px solid ${theme.border}`, background: canZoomIn ? theme.background : theme.headerSubtleBg, color: canZoomIn ? theme.text : theme.textSec, borderRadius: '6px', padding: '4px 8px', fontSize: '11px', fontWeight: 700, cursor: canZoomIn ? 'pointer' : 'default', opacity: canZoomIn ? 1 : 0.55 }}
+                        >
+                            Zoom In
+                        </button>
+                        <button
+                            type="button"
+                            data-pivot-sparkline-zoom-out="true"
+                            disabled={!isZoomed}
+                            onClick={() => zoomByFactor(1.62)}
+                            style={{ border: `1px solid ${theme.border}`, background: isZoomed ? theme.background : theme.headerSubtleBg, color: isZoomed ? theme.text : theme.textSec, borderRadius: '6px', padding: '4px 8px', fontSize: '11px', fontWeight: 700, cursor: isZoomed ? 'pointer' : 'default', opacity: isZoomed ? 1 : 0.55 }}
+                        >
+                            Zoom Out
+                        </button>
+                        <button
+                            type="button"
+                            data-pivot-sparkline-zoom-reset="true"
+                            disabled={!isZoomed}
+                            onClick={resetZoom}
+                            style={{ border: `1px solid ${theme.border}`, background: isZoomed ? theme.background : theme.headerSubtleBg, color: isZoomed ? theme.text : theme.textSec, borderRadius: '6px', padding: '4px 8px', fontSize: '11px', fontWeight: 700, cursor: isZoomed ? 'pointer' : 'default', opacity: isZoomed ? 1 : 0.55 }}
+                        >
+                            Reset
+                        </button>
+                    </div>
+                </div>
+            )}
+            <svg
+                data-pivot-sparkline-detail-svg="true"
+                viewBox={`0 0 ${width} ${height}`}
+                aria-label="Sparkline detail chart"
+                onMouseMove={handleGraphPointerMove}
+                onMouseLeave={() => setHoverIndex(null)}
+                onWheel={handleGraphWheel}
+                style={{ display: 'block', width: '100%', height: '320px', cursor: chartMarks.length ? 'crosshair' : 'default' }}
+            >
+                <rect x="0" y="0" width={width} height={height} fill={theme.background || '#fff'} opacity="0.72" />
+                {yTicks.map((tick, index) => (
+                    <g key={`y-tick-${index}`}>
+                        <line x1={padding} y1={tick.y} x2={width - padding} y2={tick.y} stroke={theme.border} strokeWidth="1" opacity={index === yTicks.length - 1 ? 0.9 : 0.45} strokeDasharray={index === yTicks.length - 1 ? '' : '4 6'} />
+                        <text x={padding - 8} y={tick.y + 4} fill={theme.textSec} fontSize="10" textAnchor="end">{formatSparklineDetailValue(tick.value)}</text>
+                    </g>
+                ))}
+                {xTicks.map((tick) => (
+                    <g key={`x-tick-${tick.index}`}>
+                        <line x1={tick.x} y1={padding} x2={tick.x} y2={height - padding} stroke={theme.border} strokeWidth="1" opacity="0.28" strokeDasharray="3 8" />
+                        <text x={tick.x} y={height - 12} fill={theme.textSec} fontSize="10" textAnchor="middle">{String(tick.label || '').slice(0, 18)}</text>
+                    </g>
+                ))}
+                {zeroY !== null ? (
+                    <line x1={padding} y1={zeroY} x2={width - padding} y2={zeroY} stroke={theme.textSec} strokeWidth="1.2" opacity="0.5" />
+                ) : null}
+                <line x1={padding} y1={height - padding} x2={width - padding} y2={height - padding} stroke={theme.border} strokeWidth="1.2" />
+                <line x1={padding} y1={padding} x2={padding} y2={height - padding} stroke={theme.border} strokeWidth="1.2" />
+                {type === 'area' && geometry.areaPath ? (
+                    <path d={geometry.areaPath} fill={strokeColor} opacity={sparklineConfig.areaOpacity || 0.14} />
+                ) : null}
+                {type === 'line' || type === 'area' ? (
+                    <>
+                        {geometry.linePath ? (
+                            <path d={geometry.linePath} fill="none" stroke={strokeColor} strokeWidth="3" strokeLinecap="round" strokeLinejoin="round" />
+                        ) : null}
+                        {chartMarks.map((point, index) => (
+                            <circle
+                                key={`${point.label || 'point'}-${index}`}
+                                data-pivot-sparkline-detail-point="true"
+                                cx={point.markerX}
+                                cy={point.markerY}
+                                r={activeMark && activeMark.pointIndex === point.pointIndex ? '5.4' : '3.6'}
+                                fill={strokeColor}
+                                stroke={theme.background}
+                                strokeWidth="1.4"
+                            >
+                                <title>{`${point.label}: ${formatSparklineDetailValue(point.value, 6)}`}</title>
+                            </circle>
+                        ))}
+                    </>
+                ) : null}
+                {type === 'column' || type === 'bar' ? (
+                    chartMarks.map((bar, index) => (
+                        <rect
+                            key={`${bar.label || 'bar'}-${index}`}
+                            x={bar.x}
+                            y={bar.y}
+                            width={bar.width}
+                            height={bar.height}
+                            rx="2"
+                            ry="2"
+                            fill={bar.positive ? positiveColor : negativeColor}
+                            opacity={activeMark && activeMark.fullIndex === bar.fullIndex ? 1 : 0.88}
+                        >
+                            <title>{`${bar.label}: ${formatSparklineDetailValue(bar.value, 6)}`}</title>
+                        </rect>
+                    ))
+                ) : null}
+                {activeMark ? (
+                    <g data-pivot-sparkline-tooltip="true" pointerEvents="none">
+                        {type !== 'bar' ? (
+                            <line x1={activeMark.markerX} y1={padding} x2={activeMark.markerX} y2={height - padding} stroke={strokeColor} strokeWidth="1" opacity="0.55" strokeDasharray="5 5" />
+                        ) : null}
+                        <circle cx={activeMark.markerX} cy={activeMark.markerY} r="6.4" fill={strokeColor} stroke={theme.background} strokeWidth="2" />
+                        <rect x={tooltipX} y={tooltipY} width={tooltipWidth} height={tooltipHeight} rx="7" fill={theme.background || '#fff'} stroke={theme.border} strokeWidth="1.2" opacity="0.98" />
+                        <text x={tooltipX + 10} y={tooltipY + 18} fill={theme.textSec} fontSize="10" fontWeight="700">{String(activeMark.label || activeMark.pointIndex + 1).slice(0, 28)}</text>
+                        <text x={tooltipX + 10} y={tooltipY + 38} fill={theme.text} fontSize="15" fontWeight="800">{formatSparklineDetailValue(activeMark.value, 6)}</text>
+                    </g>
+                ) : null}
+                {geometry.maxValue !== null ? (
+                    <text x={width - padding} y="22" fill={theme.textSec} fontSize="11" fontWeight="700" textAnchor="end">Max {maxLabel}</text>
+                ) : null}
+                {geometry.minValue !== null ? (
+                    <text x={width - padding} y={height - 28} fill={theme.textSec} fontSize="11" fontWeight="700" textAnchor="end">Min {minLabel}</text>
+                ) : null}
+                <rect data-pivot-sparkline-hover-target="true" x="0" y="0" width={width} height={height} fill="transparent" />
+            </svg>
+            <div style={{ display: 'flex', justifyContent: 'space-between', gap: '10px', marginTop: '6px', fontSize: '11px', color: theme.textSec }}>
+                <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{firstPoint ? firstPoint.label : ''}</span>
+                <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', textAlign: 'right' }}>{lastPoint ? lastPoint.label : ''}</span>
             </div>
         </div>
     );
-});
+}
 
-const GRAND_TOTAL_ROW_ID = '__grand_total__';
-const MISSING_PERSISTED_VALUE = Symbol('missing-persisted-value');
-
-const normalizeRowPinningState = (value) => ({
-    top: Array.isArray(value && value.top) ? value.top : [],
-    bottom: Array.isArray(value && value.bottom) ? value.bottom : [],
-});
-
-const getPinnedSideForRow = (rowPinning, rowId) => {
-    const normalized = normalizeRowPinningState(rowPinning);
-    if (normalized.top.includes(rowId)) return 'top';
-    if (normalized.bottom.includes(rowId)) return 'bottom';
-    return null;
-};
-
-const sanitizeGrandTotalPinOverride = (value) => (
-    value === 'top' || value === 'bottom' || value === false ? value : null
-);
-
-const resolveGrandTotalPinState = (showColTotals, grandTotalPosition, grandTotalPinOverride) => {
-    if (!showColTotals) return false;
-    if (grandTotalPinOverride === false || grandTotalPinOverride === 'top' || grandTotalPinOverride === 'bottom') {
-        return grandTotalPinOverride;
-    }
-    return grandTotalPosition === 'bottom' ? 'bottom' : 'top';
-};
-
-const applyRowPinning = (rowPinning, rowId, pinState) => {
-    const normalized = normalizeRowPinningState(rowPinning);
-    const next = {
-        ...normalized,
-        top: normalized.top.filter(id => id !== rowId),
-        bottom: normalized.bottom.filter(id => id !== rowId),
-    };
-    if (pinState === 'top') next.top.push(rowId);
-    if (pinState === 'bottom') next.bottom.push(rowId);
-    return next;
-};
 
 export default function DashTanstackPivot(props) {
     const { 
@@ -1327,6 +682,7 @@ export default function DashTanstackPivot(props) {
         sortLock = false,
         defaultTheme = 'flash',
         availableFieldList,
+        sparklineFields = null,
         table: tableName,
         runtimeResponse = null,
         viewMode: externalViewMode,
@@ -1450,6 +806,17 @@ export default function DashTanstackPivot(props) {
         () => normalizeActiveReportIdValue(externalActiveReportId),
         [externalActiveReportId]
     );
+    const normalizedInitialValConfigs = useMemo(
+        () => normalizeSparklineValConfigsForView(initialValConfigs),
+        [initialValConfigs]
+    );
+    const fixedSparklineValueKeys = useMemo(
+        () => normalizedInitialValConfigs
+            .filter((config) => config && config.sparkline)
+            .map(getSparklineValueConfigIdentity)
+            .filter(Boolean),
+        [normalizedInitialValConfigs]
+    );
 
     // Register sortOptions with Dash's callback State store on mount.
     // Without this, State(id, "sortOptions") returns None in Python callbacks
@@ -1568,8 +935,8 @@ export default function DashTanstackPivot(props) {
 
         const [rowFields, setRowFields] = useState(initialRowFields);
         const [colFields, setColFields] = useState(initialColFields);
-        const [valConfigs, setValConfigs] = useState(initialValConfigs);
-        const valConfigsRef = useRef(initialValConfigs);
+        const [valConfigs, setValConfigs] = useState(normalizedInitialValConfigs);
+        const valConfigsRef = useRef(normalizedInitialValConfigs);
         valConfigsRef.current = valConfigs;
         const [filters, setFilters] = useState(initialFilters);
         const [sorting, setSorting] = useState(initialSorting);
@@ -1814,9 +1181,9 @@ export default function DashTanstackPivot(props) {
             setColFields(initialColFields);
             // Preserve user-added formula columns through resets (they survive dataframe switches)
             const formulaColsToPreserve = valConfigsRef.current.filter(c => c && c.agg === 'formula');
-            const resetValConfigs = formulaColsToPreserve.length > 0
-                ? [...initialValConfigs.filter(c => c && c.agg !== 'formula'), ...formulaColsToPreserve]
-                : initialValConfigs;
+            const resetValConfigs = normalizeSparklineValConfigsForView(formulaColsToPreserve.length > 0
+                ? [...normalizedInitialValConfigs.filter(c => c && c.agg !== 'formula'), ...formulaColsToPreserve]
+                : normalizedInitialValConfigs);
             setValConfigs(resetValConfigs);
             setFilters({});
             setSorting([]);
@@ -1901,7 +1268,7 @@ export default function DashTanstackPivot(props) {
                 });
             }
         }
-    }, [reset, initialRowFields, initialColFields, initialValConfigs, initialColumnPinning, initialRowPinning, initialChartDefinition, initialChartDefinitions, normalizedInitialFieldPanelSizes, normalizedInitialDecimalPlaces, normalizedInitialDefaultValueFormat, normalizedInitialNumberGroupSeparator, normalizedInitialViewMode, normalizedInitialDetailMode, normalizedInitialTreeConfig, normalizedInitialDetailConfig, hasExternalReportDef, normalizedInitialReportDef, hasExternalSavedReports, normalizedInitialSavedReports, hasExternalActiveReportId, normalizedInitialActiveReportId]);
+    }, [reset, initialRowFields, initialColFields, normalizedInitialValConfigs, initialColumnPinning, initialRowPinning, initialChartDefinition, initialChartDefinitions, normalizedInitialFieldPanelSizes, normalizedInitialDecimalPlaces, normalizedInitialDefaultValueFormat, normalizedInitialNumberGroupSeparator, normalizedInitialViewMode, normalizedInitialDetailMode, normalizedInitialTreeConfig, normalizedInitialDetailConfig, hasExternalReportDef, normalizedInitialReportDef, hasExternalSavedReports, normalizedInitialSavedReports, hasExternalActiveReportId, normalizedInitialActiveReportId]);
 
         // Save Persistence
         useEffect(() => {
@@ -2068,14 +1435,14 @@ export default function DashTanstackPivot(props) {
             if (normalizedNextMode === 'pivot' && frozenPivotConfig) {
                 setRowFields(frozenPivotConfig.rowFields || []);
                 setColFields(frozenPivotConfig.colFields || []);
-                setValConfigs(frozenPivotConfig.valConfigs || []);
+                setValConfigs(normalizeSparklineValConfigsForView(frozenPivotConfig.valConfigs || [], normalizedInitialValConfigs));
                 setFrozenPivotConfig(null);
             }
             setExpanded({});
         }
 
         setViewMode(normalizedNextMode);
-    }, [viewMode, rowFields, colFields, valConfigs, reportDef, frozenPivotConfig]);
+    }, [viewMode, rowFields, colFields, valConfigs, reportDef, frozenPivotConfig, normalizedInitialValConfigs]);
 
     const handleSetPivotMode = useCallback((nextMode) => {
         applyViewMode(nextMode === 'report' ? 'report' : 'pivot');
@@ -2259,7 +1626,7 @@ export default function DashTanstackPivot(props) {
         }
         if (Array.isArray(restored.rowFields)) setRowFields(restored.rowFields);
         if (Array.isArray(restored.colFields)) setColFields(restored.colFields);
-        if (Array.isArray(restored.valConfigs)) setValConfigs(restored.valConfigs);
+        if (Array.isArray(restored.valConfigs)) setValConfigs(normalizeSparklineValConfigsForView(restored.valConfigs, normalizedInitialValConfigs));
         if (sanitizedFilters) setFilters(sanitizedFilters);
         if (Array.isArray(restored.sorting)) setSorting(restored.sorting);
         if (restored.expanded && typeof restored.expanded === 'object') setExpanded(restored.expanded);
@@ -2438,7 +1805,7 @@ export default function DashTanstackPivot(props) {
                 if (typeof savedScroll.left === 'number') parentRef.current.scrollLeft = savedScroll.left;
             });
         }
-    }, [viewState, initialChartDefinition]);
+    }, [viewState, initialChartDefinition, normalizedInitialValConfigs]);
 
     useEffect(() => {
         if (themes[defaultTheme]) {
@@ -2622,12 +1989,12 @@ export default function DashTanstackPivot(props) {
     }, [chartCanvasPanes, tableCanvasSize]);
 
     useEffect(() => {
-        const serializedExternal = JSON.stringify(initialValConfigs || []);
+        const serializedExternal = JSON.stringify(normalizedInitialValConfigs || []);
         if (serializedExternal === lastValConfigsPropRef.current) return;
         lastValConfigsPropRef.current = serializedExternal;
         if (!Array.isArray(initialValConfigs)) return;
-        setValConfigs(initialValConfigs);
-    }, [initialValConfigs]);
+        setValConfigs(normalizedInitialValConfigs);
+    }, [initialValConfigs, normalizedInitialValConfigs]);
 
     useEffect(() => {
         const normalizedExternal = clampDecimalPlaces(externalDecimalPlaces, 0);
@@ -3325,9 +2692,9 @@ export default function DashTanstackPivot(props) {
 
         // Helper: Excel-style Ctrl+Arrow — jumps to edge of contiguous data block.
         // Rules (mirroring Excel):
-        //   - current cell empty  → jump to next non-empty in direction (or edge if all empty)
-        //   - current non-empty, next is empty → jump to next non-empty past the gap (or edge)
-        //   - current non-empty, next is non-empty → jump to last non-empty before a gap (end of block)
+        //   - current cell empty  â†’ jump to next non-empty in direction (or edge if all empty)
+        //   - current non-empty, next is empty â†’ jump to next non-empty past the gap (or edge)
+        //   - current non-empty, next is non-empty â†’ jump to last non-empty before a gap (end of block)
         const ctrlArrowRow = (dir) => {
             const colId = (visibleLeafColumns[colIndex] && visibleLeafColumns[colIndex].id);
             if (!colId) return dir > 0 ? visibleRowsAll.length - 1 : 0;
@@ -4850,7 +4217,7 @@ export default function DashTanstackPivot(props) {
                 return;
             }
 
-            // Mark ancestors as propagated (children→parent always happens)
+            // Mark ancestors as propagated (childrenâ†’parent always happens)
             const pathParts = normalizedRowId.split('|||');
             for (let depth = pathParts.length - 1; depth >= 1; depth -= 1) {
                 markCell(pathParts.slice(0, depth).join('|||'), colId, 'propagated');
@@ -5089,8 +4456,11 @@ export default function DashTanstackPivot(props) {
 
     const setValConfigsWithHistory = useCallback((updater, source = 'layout:values') => {
         requestLayoutHistoryCapture(source);
-        setValConfigs(updater);
-    }, [requestLayoutHistoryCapture]);
+        setValConfigs((previousConfigs) => normalizeSparklineValConfigsForView(
+            typeof updater === 'function' ? updater(previousConfigs) : updater,
+            normalizedInitialValConfigs
+        ));
+    }, [normalizedInitialValConfigs, requestLayoutHistoryCapture]);
 
     const pushImmediateLayoutHistoryEntry = useCallback((sliceKey, updater, source) => {
         const beforeSnapshot = cloneSerializable(layoutHistorySnapshotRef.current || layoutHistorySnapshot || {}, null) || {};
@@ -5147,7 +4517,7 @@ export default function DashTanstackPivot(props) {
         if (!snapshot || typeof snapshot !== 'object') return;
         setRowFields(Array.isArray(snapshot.rowFields) ? snapshot.rowFields : []);
         setColFields(Array.isArray(snapshot.colFields) ? snapshot.colFields : []);
-        setValConfigs(Array.isArray(snapshot.valConfigs) ? snapshot.valConfigs : []);
+        setValConfigs(normalizeSparklineValConfigsForView(Array.isArray(snapshot.valConfigs) ? snapshot.valConfigs : [], normalizedInitialValConfigs));
         setFilters(snapshot.filters && typeof snapshot.filters === 'object' ? snapshot.filters : {});
         setSorting(Array.isArray(snapshot.sorting) ? snapshot.sorting : []);
         setExpanded(snapshot.expanded && typeof snapshot.expanded === 'object' ? snapshot.expanded : {});
@@ -5169,7 +4539,7 @@ export default function DashTanstackPivot(props) {
                 ? snapshot.grandTotalPinOverride
                 : false
         );
-    }, []);
+    }, [normalizedInitialValConfigs]);
 
     const clearTransactionHistory = useCallback(() => {
         transactionUndoStackRef.current = [];
@@ -6661,7 +6031,7 @@ export default function DashTanstackPivot(props) {
                 frozenPivotConfig,
                 rowFields,
                 colFields,
-                valConfigs,
+                valConfigs: normalizeSparklineValConfigsForView(valConfigs, normalizedInitialValConfigs),
                 filters: normalizedFilters,
                 sorting,
                 expanded,
@@ -6743,6 +6113,7 @@ export default function DashTanstackPivot(props) {
         };
     }, [
         tableName,
+        normalizedInitialValConfigs,
         rowFields,
         colFields,
         valConfigs,
@@ -6847,7 +6218,7 @@ export default function DashTanstackPivot(props) {
         detailConfig: normalizedInitialDetailConfig,
         rowFields: initialRowFields,
         colFields: initialColFields,
-        valConfigs: initialValConfigs,
+        valConfigs: normalizedInitialValConfigs,
         filters: {},
         sorting: [],
         sortOptions: effectiveSortOptions,
@@ -6922,7 +6293,7 @@ export default function DashTanstackPivot(props) {
                 // Extend the row window to cover the block immediately after the anchor block.
                 // When expanding a row near the END of its block (e.g. row 95 in block 0),
                 // new children overflow into block N+1. Without this extension, those rows have
-                // no cache entry → they flash with skeleton loaders until a follow-up fetch lands.
+                // no cache entry â†’ they flash with skeleton loaders until a follow-up fetch lands.
                 // pendingExpansionRef.current is already set by onExpandedChange (same event,
                 // before this effect runs), so anchorBlock is available here.
                 const anchorBlockHint = (pendingExpansionRef.current && pendingExpansionRef.current.anchorBlock != null ? pendingExpansionRef.current.anchorBlock : -1);
@@ -7289,7 +6660,7 @@ export default function DashTanstackPivot(props) {
                 showNotification('No value columns matched the current selection.', 'warning');
                 return prev;
             }
-            return next;
+            return normalizeSparklineValConfigsForView(next, normalizedInitialValConfigs);
         });
 
         if (!normalizedFormat) {
@@ -7297,7 +6668,7 @@ export default function DashTanstackPivot(props) {
         } else {
             showNotification(`Format applied: ${normalizedFormat}`, 'success');
         }
-    }, [getSelectedColumnIds, getDefaultFormatForSelection, matchesSelectedColumnToValueConfig, setValConfigs, showNotification]);
+    }, [getSelectedColumnIds, getDefaultFormatForSelection, matchesSelectedColumnToValueConfig, normalizedInitialValConfigs, setValConfigs, showNotification]);
 
     const selectedValueColumnIds = useMemo(
         () => getSelectedColumnIds(selectedCells).filter(id => id !== 'hierarchy' && id !== '__row_number__'),
@@ -8730,7 +8101,7 @@ export default function DashTanstackPivot(props) {
         let posInRange; // 0=low extreme, 1=high extreme, 0.5=neutral
         const hasZeroCrossing = stats.min < 0 && stats.max > 0;
         if (hasZeroCrossing) {
-            // Map negative values [min,0] → [0,0.5] and positive [0,max] → [0.5,1]
+            // Map negative values [min,0] â†’ [0,0.5] and positive [0,max] â†’ [0.5,1]
             if (value <= 0) {
                 posInRange = 0.5 * (value - stats.min) / (0 - stats.min);
             } else {
@@ -8742,7 +8113,7 @@ export default function DashTanstackPivot(props) {
         const clamped = Math.max(0, Math.min(1, posInRange));
 
         // Transparency: fully transparent at midpoint (0.5), max opacity at extremes
-        // alpha range 0.06 → 0.82 for a clean gradient feel
+        // alpha range 0.06 â†’ 0.82 for a clean gradient feel
         const distFromMid = Math.abs(clamped - 0.5) * 2; // 0 at mid, 1 at extremes
         const alpha = 0.06 + distFromMid * 0.76;
 
@@ -8978,7 +8349,7 @@ export default function DashTanstackPivot(props) {
                 // Find which path was toggled so we know which block to defer-invalidate
                 // after the expansion response lands (see pendingExpansionRef effect).
                 // Value-diff: detect any key whose boolean value flipped (covers
-                // both key-add/remove AND false→true / true→false toggles).
+                // both key-add/remove AND falseâ†’true / trueâ†’false toggles).
                 const oldExp = expanded || {};
                 const newExp = newExpanded || {};
                 const allKeys = new Set([...Object.keys(oldExp), ...Object.keys(newExp)]);
@@ -10456,13 +9827,13 @@ export default function DashTanstackPivot(props) {
     };
 
     // Memoized lookup structure for the header render path.
-    // centerColIndexMap: O(1) id→index lookup; only rebuilt when the column list changes.
+    // centerColIndexMap: O(1) idâ†’index lookup; only rebuilt when the column list changes.
     const centerColIndexMap = useMemo(
         () => new Map(centerCols.map((c, i) => [c.id, i])),
         [centerCols]
     );
 
-    // O(1) colId → visible-leaf-index map for renderCell; rebuilt only when column list changes.
+    // O(1) colId â†’ visible-leaf-index map for renderCell; rebuilt only when column list changes.
     const visibleLeafColIndexMap = useMemo(
         () => new Map(visibleLeafColumns.map((c, i) => [c.id, i])),
         [visibleLeafColumns]
@@ -10658,7 +10029,13 @@ export default function DashTanstackPivot(props) {
             if (srcZone==='vals') setValConfigsWithHistory((p) => p.filter((_, i) => i !== srcIdx), 'layout:zone-drop');
             if (targetZone==='rows') setRowFieldsWithHistory((p) => (p.includes(fieldName) ? p : insertItem(p, targetIdx, fieldName)), 'layout:zone-drop');
             if (targetZone==='cols') setColFieldsWithHistory((p) => (p.includes(fieldName) ? p : insertItem(p, targetIdx, fieldName)), 'layout:zone-drop');
-            if (targetZone==='vals') setValConfigsWithHistory((p) => insertItem(p, targetIdx, draggedValueConfig || {field: fieldName, agg:'sum'}), 'layout:zone-drop');
+            if (targetZone==='vals') {
+                const autoSparklineCfg = sparklineFields && sparklineFields[fieldName];
+                const defaultConfig = autoSparklineCfg
+                    ? { field: fieldName, agg: 'array_agg', sparkline: autoSparklineCfg }
+                    : { field: fieldName, agg: 'sum' };
+                setValConfigsWithHistory((p) => insertItem(p, targetIdx, draggedValueConfig || defaultConfig), 'layout:zone-drop');
+            }
             if (targetZone==='filter' && !filters.hasOwnProperty(fieldName)) {
                 requestLayoutHistoryCapture('layout:zone-drop');
                 setFilters(p => ({ ...p, [fieldName]: '' }));
@@ -11609,9 +10986,11 @@ export default function DashTanstackPivot(props) {
                         rowFields={rowFields} setRowFields={setRowFieldsWithHistory}
                         colFields={colFields} setColFields={setColFieldsWithHistory}
                         valConfigs={valConfigs} setValConfigs={setValConfigsWithHistory}
+                        fixedSparklineValueKeys={fixedSparklineValueKeys}
                         columnVisibility={columnVisibility} setColumnVisibility={setColumnVisibility}
                         columnPinning={columnPinning} setColumnPinning={setColumnPinningWithHistory}
                         availableFields={availableFields}
+                        sparklineFields={sparklineFields}
                         table={table}
                         pinningPresets={pinningPresets}
                         showNotification={showNotification}
@@ -11876,9 +11255,9 @@ export default function DashTanstackPivot(props) {
                             border: `1px solid ${theme.border}`,
                             borderRadius: '12px',
                             boxShadow: '0 8px 32px rgba(0,0,0,0.22)',
-                            minWidth: '300px',
-                            maxWidth: '520px',
-                            maxHeight: '70vh',
+                            width: 'min(940px, 94vw)',
+                            maxWidth: '94vw',
+                            maxHeight: '82vh',
                             display: 'flex',
                             flexDirection: 'column',
                             fontFamily: "'Inter', ui-sans-serif, system-ui, sans-serif",
@@ -11896,35 +11275,45 @@ export default function DashTanstackPivot(props) {
                                 style={{ background: 'none', border: 'none', cursor: 'pointer', color: theme.textSec, fontSize: '18px', lineHeight: 1, padding: '2px 4px' }}
                             >×</button>
                         </div>
-                        {/* Data table */}
-                        <div style={{ overflow: 'auto', flex: 1 }}>
-                            <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '12px' }}>
-                                <thead>
-                                    <tr style={{ background: theme.headerBg || theme.headerSubtleBg }}>
-                                        <th style={{ textAlign: 'left', padding: '7px 14px', color: theme.textSec, fontWeight: 600, fontSize: '10px', textTransform: 'uppercase', letterSpacing: '0.05em', borderBottom: `1px solid ${theme.border}` }}>Period</th>
-                                        <th style={{ textAlign: 'right', padding: '7px 14px', color: theme.textSec, fontWeight: 600, fontSize: '10px', textTransform: 'uppercase', letterSpacing: '0.05em', borderBottom: `1px solid ${theme.border}` }}>Value</th>
-                                    </tr>
-                                </thead>
-                                <tbody>
-                                    {(sparklineDataModal.points || []).map((point, i) => (
-                                        <tr key={i} style={{ borderBottom: `1px solid ${theme.border}`, background: i % 2 === 0 ? 'transparent' : (theme.headerSubtleBg || 'rgba(0,0,0,0.02)') }}>
-                                            <td style={{ padding: '6px 14px', color: theme.textSec }}>{point.label}</td>
-                                            <td style={{ padding: '6px 14px', textAlign: 'right', fontVariantNumeric: 'tabular-nums', fontWeight: 600, color: theme.text }}>{typeof point.value === 'number' ? point.value.toLocaleString(undefined, { maximumFractionDigits: 6 }) : point.value}</td>
+                        <div style={{ display: 'flex', flexWrap: 'wrap', overflow: 'hidden', flex: 1, minHeight: 0 }}>
+                            <SparklineDetailGraph modal={sparklineDataModal} theme={theme} />
+                            <div
+                                data-pivot-sparkline-detail-table="true"
+                                style={{
+                                    flex: '1 1 280px',
+                                    minWidth: '260px',
+                                    maxHeight: 'calc(82vh - 118px)',
+                                    overflow: 'auto',
+                                }}
+                            >
+                                <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '12px' }}>
+                                    <thead>
+                                        <tr style={{ background: theme.headerBg || theme.headerSubtleBg }}>
+                                            <th style={{ textAlign: 'left', padding: '7px 14px', color: theme.textSec, fontWeight: 600, fontSize: '10px', textTransform: 'uppercase', letterSpacing: '0.05em', borderBottom: `1px solid ${theme.border}` }}>Period</th>
+                                            <th style={{ textAlign: 'right', padding: '7px 14px', color: theme.textSec, fontWeight: 600, fontSize: '10px', textTransform: 'uppercase', letterSpacing: '0.05em', borderBottom: `1px solid ${theme.border}` }}>Value</th>
                                         </tr>
-                                    ))}
-                                    {(sparklineDataModal.points || []).length === 0 && (
-                                        <tr><td colSpan={2} style={{ padding: '16px 14px', color: theme.textSec, textAlign: 'center' }}>No data</td></tr>
-                                    )}
-                                </tbody>
-                            </table>
+                                    </thead>
+                                    <tbody>
+                                        {(sparklineDataModal.points || []).map((point, i) => (
+                                            <tr key={i} style={{ borderBottom: `1px solid ${theme.border}`, background: i % 2 === 0 ? 'transparent' : (theme.headerSubtleBg || 'rgba(0,0,0,0.02)') }}>
+                                                <td style={{ padding: '6px 14px', color: theme.textSec }}>{point.label}</td>
+                                                <td style={{ padding: '6px 14px', textAlign: 'right', fontVariantNumeric: 'tabular-nums', fontWeight: 600, color: theme.text }}>{formatSparklineDetailValue(point.value, 6)}</td>
+                                            </tr>
+                                        ))}
+                                        {(sparklineDataModal.points || []).length === 0 && (
+                                            <tr><td colSpan={2} style={{ padding: '16px 14px', color: theme.textSec, textAlign: 'center' }}>No data</td></tr>
+                                        )}
+                                    </tbody>
+                                </table>
+                            </div>
                         </div>
                         {/* Footer summary */}
                         {(sparklineDataModal.points || []).length > 0 && (
-                            <div style={{ borderTop: `1px solid ${theme.border}`, padding: '8px 14px', display: 'flex', gap: '16px', fontSize: '11px', color: theme.textSec, background: theme.headerSubtleBg || theme.headerBg }}>
+                            <div style={{ borderTop: `1px solid ${theme.border}`, padding: '8px 14px', display: 'flex', flexWrap: 'wrap', gap: '16px', fontSize: '11px', color: theme.textSec, background: theme.headerSubtleBg || theme.headerBg }}>
                                 <span>{(sparklineDataModal.points || []).length} points</span>
-                                <span>Min: <b style={{ color: theme.text }}>{Math.min(...(sparklineDataModal.points || []).map(p => p.value)).toLocaleString(undefined, { maximumFractionDigits: 4 })}</b></span>
-                                <span>Max: <b style={{ color: theme.text }}>{Math.max(...(sparklineDataModal.points || []).map(p => p.value)).toLocaleString(undefined, { maximumFractionDigits: 4 })}</b></span>
-                                <span>Last: <b style={{ color: theme.primary }}>{(sparklineDataModal.points || [])[(sparklineDataModal.points || []).length - 1]?.value?.toLocaleString(undefined, { maximumFractionDigits: 4 })}</b></span>
+                                <span>Min: <b style={{ color: theme.text }}>{formatSparklineDetailExtremum(sparklineDataModal.points, 'min')}</b></span>
+                                <span>Max: <b style={{ color: theme.text }}>{formatSparklineDetailExtremum(sparklineDataModal.points, 'max')}</b></span>
+                                <span>Last: <b style={{ color: theme.primary }}>{formatSparklineDetailValue((sparklineDataModal.points || [])[(sparklineDataModal.points || []).length - 1]?.value)}</b></span>
                             </div>
                         )}
                     </div>
@@ -11960,6 +11349,7 @@ DashTanstackPivot.propTypes = {
                 'weighted_avg',
                 'wavg',
                 'weighted_mean',
+                'array_agg',
                 'formula',
             ]),
             weightField: PropTypes.string,
@@ -12071,6 +11461,7 @@ DashTanstackPivot.propTypes = {
     defaultTheme: PropTypes.string,
     sortEvent: PropTypes.object,
     availableFieldList: PropTypes.arrayOf(PropTypes.string),
+    sparklineFields: PropTypes.object,
     reportDef: PropTypes.object,
     savedReports: PropTypes.arrayOf(PropTypes.object),
     activeReportId: PropTypes.string,

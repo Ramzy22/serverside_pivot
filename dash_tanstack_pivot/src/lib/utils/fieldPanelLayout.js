@@ -1,30 +1,30 @@
 const DEFAULT_PANEL_LIMITS = Object.freeze({
-    minWidth: 180,
+    minWidth: 120,
     maxWidth: 520,
-    minHeight: 88,
+    minHeight: 44,
     maxHeight: 560,
 });
 
 export const FIELD_PANEL_SIZE_LIMITS = Object.freeze({
     availableFields: Object.freeze({
         ...DEFAULT_PANEL_LIMITS,
-        minHeight: 120,
+        minHeight: 56,
     }),
     rows: Object.freeze({
         ...DEFAULT_PANEL_LIMITS,
-        minHeight: 72,
+        minHeight: 40,
     }),
     cols: Object.freeze({
         ...DEFAULT_PANEL_LIMITS,
-        minHeight: 72,
+        minHeight: 40,
     }),
     vals: Object.freeze({
         ...DEFAULT_PANEL_LIMITS,
-        minHeight: 104,
+        minHeight: 56,
     }),
     filter: Object.freeze({
         ...DEFAULT_PANEL_LIMITS,
-        minHeight: 72,
+        minHeight: 40,
     }),
 });
 

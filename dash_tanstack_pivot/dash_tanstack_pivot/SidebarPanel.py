@@ -32,8 +32,8 @@ Keyword arguments:
 
     def __init__(
         self,
-        pivotMode = None,
-        savedReports = None,
+        fixedSparklineValueKeys = None,
+        sparklineFields = None,
         **kwargs
     ):
         self._prop_names = []

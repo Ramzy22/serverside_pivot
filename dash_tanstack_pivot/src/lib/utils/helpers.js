@@ -108,9 +108,32 @@ const formatCurrencyWithSymbol = (value, symbol, decimalPlaces, groupSeparator, 
     return `${safeSymbol}${absFormatted}`;
 };
 
+const formatNonScalarValue = (value) => {
+    if (typeof value === 'string') return value;
+    if (typeof value === 'boolean') return value ? 'true' : 'false';
+    if (Array.isArray(value)) {
+        if (value.length === 0) return '';
+        const first = value[0];
+        if (first && typeof first === 'object' && ('x' in first || 'y' in first || 'value' in first)) {
+            return `${value.length} points`;
+        }
+        return `${value.length} items`;
+    }
+    if (value && typeof value === 'object') {
+        if ('x' in value && 'y' in value) return `${value.x}: ${value.y}`;
+        if ('label' in value && 'value' in value) return `${value.label}: ${value.value}`;
+        try {
+            return JSON.stringify(value);
+        } catch (error) {
+            return String(value);
+        }
+    }
+    return String(value);
+};
+
 export const formatValue = (value, fmt, decimalPlaces, groupSeparator = DEFAULT_NUMBER_GROUP_SEPARATOR) => {
     if (value === null || value === undefined) return '';
-    if (typeof value !== 'number') return value;
+    if (typeof value !== 'number') return formatNonScalarValue(value);
     if (!fmt) {
         if (decimalPlaces !== undefined && decimalPlaces !== null) {
             return formatNumberWithOptions(value, {

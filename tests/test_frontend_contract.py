@@ -80,12 +80,57 @@ def test_dash_presentation_app_includes_single_pivot_sparkline_modes_demo():
     ).read_text(encoding="utf-8")
 
     assert 'id="sparkline-modes-pivot-grid"' in app_source
-    assert '"In-Cell Sparkline Modes"' in app_source
+    assert '"Linked Sparkline Columns"' in app_source
+    assert '"Values Plus Trend"' in app_source
+    assert "app.validation_layout = html.Div" in app_source
+    assert "mount_field_sparkline_demo(None)" in app_source
     assert '"sparkline_demo_data"' in app_source
     assert '"type": "line"' in app_source
     assert '"type": "area"' in app_source
     assert '"type": "column"' in app_source
-    assert '"type": "bar"' in app_source
+    assert '"hideColumns": False' in app_source
+    assert '"nasdaq_trader_demo_pnl_series"' in app_source
+    assert '"pnl_20d"' in app_source
+    assert '"price_20d"' in app_source
+    assert '"day_pnl_20d"' in app_source
+    assert '"volume_20d"' in app_source
+    assert '"market_value_20d"' in app_source
+    assert "_TRADER_SERIES_POINT_FIELDS" in app_source
+    assert '"source": "field"' in app_source
+    assert '"displayMode": "trend"' in app_source
+    assert '"displayMode": "value"' in app_source
+    assert '"overflowY": "auto"' in app_source
+
+
+def test_sidebar_field_panels_allow_compact_minimum_sizes():
+    field_layout_source = Path(
+        os.path.join(
+            os.getcwd(),
+            "dash_tanstack_pivot",
+            "src",
+            "lib",
+            "utils",
+            "fieldPanelLayout.js",
+        )
+    ).read_text(encoding="utf-8")
+    sidebar_source = Path(
+        os.path.join(
+            os.getcwd(),
+            "dash_tanstack_pivot",
+            "src",
+            "lib",
+            "components",
+            "Sidebar",
+            "SidebarPanel.js",
+        )
+    ).read_text(encoding="utf-8")
+
+    assert "minWidth: 120" in field_layout_source
+    assert "minHeight: 44" in field_layout_source
+    assert "minHeight: 56" in field_layout_source
+    assert "minHeight: 40" in field_layout_source
+    assert "minHeight: '24px'" in sidebar_source
+    assert "padding: '4px 8px'" in sidebar_source
 
 
 def test_chart_panel_source_grows_for_settings_instead_of_splitting_canvas():
@@ -110,6 +155,16 @@ def test_chart_panel_source_grows_for_settings_instead_of_splitting_canvas():
             "DashTanstackPivot.react.js",
         )
     ).read_text(encoding="utf-8")
+    normalization_source = Path(
+        os.path.join(
+            os.getcwd(),
+            "dash_tanstack_pivot",
+            "src",
+            "lib",
+            "hooks",
+            "usePivotNormalization.js",
+        )
+    ).read_text(encoding="utf-8")
 
     assert "settingsPanelWidth: controlledSettingsPanelWidth" in chart_source
     assert "onSettingsPanelWidthChange" in chart_source
@@ -122,9 +177,9 @@ def test_chart_panel_source_grows_for_settings_instead_of_splitting_canvas():
     assert "Dock chart pane to the bottom" in chart_source
     assert "data-chart-modal-position={position}" in chart_source
     assert "const [chartCanvasPaneWidthHints, setChartCanvasPaneWidthHints] = useState({});" in component_source
-    assert "VALID_CHART_DOCK_POSITIONS = new Set(['left', 'right', 'top', 'bottom'])" in component_source
+    assert "VALID_CHART_DOCK_POSITIONS = new Set(['left', 'right', 'top', 'bottom'])" in normalization_source
     assert "normalizeChartDockPosition" in component_source
-    assert "dockPosition: normalizeChartDockPosition(source.dockPosition || source.dock_position, 'right')" in component_source
+    assert "dockPosition: normalizeChartDockPosition(source.dockPosition || source.dock_position, 'right')" in normalization_source
     assert "data-docked-chart-pane-position={normalizedDockPosition}" in component_source
     assert "renderHorizontalDockGroup(dockedChartCanvasPanesByPosition.left, 'left')" in component_source
     assert "renderVerticalDockGroup(dockedChartCanvasPanesByPosition.top, 'top')" in component_source
@@ -1511,9 +1566,9 @@ async def test_topn_query_skips_column_discovery_when_materialized_values_are_pr
     original_execute = adapter.controller._execute_ibis_expr_async
     execute_calls = []
 
-    async def recording_execute(expr):
+    async def recording_execute(expr, table_name=None):
         execute_calls.append(expr)
-        return await original_execute(expr)
+        return await original_execute(expr, table_name)
 
     monkeypatch.setattr(adapter.controller, "_execute_ibis_expr_async", recording_execute)
 
@@ -1670,11 +1725,21 @@ def test_large_column_guardrail_source_warns_without_disabling_features():
             "StatusBar.js",
         )
     ).read_text(encoding="utf-8")
+    normalization_source = Path(
+        os.path.join(
+            os.getcwd(),
+            "dash_tanstack_pivot",
+            "src",
+            "lib",
+            "hooks",
+            "usePivotNormalization.js",
+        )
+    ).read_text(encoding="utf-8")
 
     assert "SOFT_CENTER_COLUMN_WARNING_THRESHOLD" in component_source
     assert "HARD_CENTER_COLUMN_WARNING_THRESHOLD" in component_source
     assert "buildLargeColumnAdvisory" in component_source
-    assert "bucket numeric fields, roll up dates, or move one field to Rows or Filters" in component_source
+    assert "bucket numeric fields, roll up dates, or move one field to Rows or Filters" in normalization_source
     assert "columnAdvisory" in status_source
     assert "totalCenterColumns" in status_source
 
@@ -1851,6 +1916,16 @@ def test_cell_sparkline_source_supports_pivot_summary_and_ag_grid_style_series()
             "sparklines.js",
         )
     ).read_text(encoding="utf-8")
+    helper_source = Path(
+        os.path.join(
+            os.getcwd(),
+            "dash_tanstack_pivot",
+            "src",
+            "lib",
+            "utils",
+            "helpers.js",
+        )
+    ).read_text(encoding="utf-8")
     sparkline_cell_source = Path(
         os.path.join(
             os.getcwd(),
@@ -1883,6 +1958,16 @@ def test_cell_sparkline_source_supports_pivot_summary_and_ag_grid_style_series()
             "DashTanstackPivot.react.js",
         )
     ).read_text(encoding="utf-8")
+    normalization_source = Path(
+        os.path.join(
+            os.getcwd(),
+            "dash_tanstack_pivot",
+            "src",
+            "lib",
+            "hooks",
+            "usePivotNormalization.js",
+        )
+    ).read_text(encoding="utf-8")
     python_source = Path(
         os.path.join(
             os.getcwd(),
@@ -1895,23 +1980,57 @@ def test_cell_sparkline_source_supports_pivot_summary_and_ag_grid_style_series()
     assert "SparklineCell" in column_source
     assert "renderConfiguredInlineSparkline" in column_source
     assert "buildSparklineSummaryColumns" in column_source
+    assert "sparklineConfig.source !== 'field'" in column_source
+    assert "sparklineConfig.displayMode === 'value'" in column_source
+    assert "data-pivot-sparkline-display=\"value\"" in column_source
+    assert "renderInlinePivotSparkline" not in column_source
     assert "__sparkline__" in column_source
     assert "isSparklineSummary: true" in column_source
     assert "normalizeSparklineConfig" in sparkline_utils_source
+    assert "displayMode:" in sparkline_utils_source
     assert "source.enabled === false" in sparkline_utils_source
     assert "normalizeSparklinePoints" in sparkline_utils_source
     assert "buildPivotSparklinePoints" in sparkline_utils_source
     assert "resolveSparklineMetricValue" in sparkline_utils_source
+    assert "formatNonScalarValue" in helper_source
+    assert "return `${value.length} points`;" in helper_source
     assert "data-pivot-sparkline-cell=\"true\"" in sparkline_cell_source
     assert "data-pivot-sparkline-current=\"true\"" in sparkline_cell_source
     assert "data-pivot-sparkline-delta=\"true\"" in sparkline_cell_source
+    assert "buildSparklineGeometry" in component_source
+    assert "data-pivot-sparkline-detail-graph=\"true\"" in component_source
+    assert "data-pivot-sparkline-hover-target=\"true\"" in component_source
+    assert "data-pivot-sparkline-tooltip=\"true\"" in component_source
+    assert "data-pivot-sparkline-detail-point=\"true\"" in component_source
+    assert "data-pivot-sparkline-zoom-controls=\"true\"" in component_source
+    assert "data-pivot-sparkline-zoom-in=\"true\"" in component_source
+    assert "data-pivot-sparkline-zoom-reset=\"true\"" in component_source
+    assert "data-pivot-sparkline-detail-table=\"true\"" in component_source
+    assert "normalizeSparklineValConfigsForView" in component_source
+    assert "getFixedSparklineConfigMap" in component_source
+    assert "removesFixedSparkline" in component_source
+    assert "fixedSparklineValueKeys" in component_source
+    assert "setValConfigs(normalizeSparklineValConfigsForView(restored.valConfigs, normalizedInitialValConfigs))" in component_source
+    assert "valConfigs: normalizeSparklineValConfigsForView(valConfigs, normalizedInitialValConfigs)" in component_source
     assert "sparkline: PropTypes.oneOfType([PropTypes.bool, PropTypes.object])" in component_source
+    assert "'array_agg'" in component_source
     assert "\"sparkline\": NotRequired[typing.Union[bool, dict]]" in python_source
     assert "- sparkline (boolean | dict; optional)" in python_source
-    assert "if (columnMeta && columnMeta.isSparklineSummary) return null;" in component_source
+    assert '"array_agg"' in python_source
+    assert "if (columnMeta && columnMeta.isSparklineSummary) return null;" in normalization_source
+    assert "const placement = sparklineConfig.placement || 'before';" in column_source
+    assert "placement: 'before'" in sparkline_utils_source
+    assert "placement: 'before'" in sidebar_source
     assert "data-value-sparkline-toggle=\"true\"" in sidebar_source
     assert "data-value-sparkline-settings=\"true\"" in sidebar_source
+    assert "data-value-sparkline-fixed=\"true\"" in sidebar_source
+    assert "data-value-sparkline-available=" in sidebar_source
+    assert "data-value-sparkline-unavailable=\"true\"" in sidebar_source
+    assert "getValueSparklineCapabilities" in sidebar_source
+    assert "This trend is defined by the app" in sidebar_source
+    assert '<option value="array_agg">Series</option>' in sidebar_source
     assert "sanitizeValueSparklineConfig" in sidebar_source
+    assert "Cell display" in sidebar_source
 
 
 def test_frontend_sorting_source_preserves_multisort_priority_and_metadata():
@@ -2191,6 +2310,16 @@ def test_frontend_chart_surface_includes_inline_settings_sparkline_and_resize_re
             "DashTanstackPivot.react.js",
         )
     ).read_text(encoding="utf-8")
+    normalization_source = Path(
+        os.path.join(
+            os.getcwd(),
+            "dash_tanstack_pivot",
+            "src",
+            "lib",
+            "hooks",
+            "usePivotNormalization.js",
+        )
+    ).read_text(encoding="utf-8")
     column_virtualizer_source = Path(
         os.path.join(
             os.getcwd(),
@@ -2215,7 +2344,7 @@ def test_frontend_chart_surface_includes_inline_settings_sparkline_and_resize_re
     assert "onChange('sparkline')" in chart_source
     assert "chartType === 'sparkline'" in chart_source
     assert "showLegend={!isSparklineChart}" in chart_source
-    assert "VALID_CHART_TYPES = new Set(['bar', 'line', 'area', 'sparkline'" in component_source
+    assert "VALID_CHART_TYPES = new Set(['bar', 'line', 'area', 'sparkline'" in normalization_source
     assert "setTableCanvasSize((previousSize) => Math.max(DEFAULT_TABLE_CANVAS_SIZE" in component_source
     assert "const remeasure = () => {" in column_virtualizer_source
     assert "observer.observe(scrollEl);" in column_virtualizer_source

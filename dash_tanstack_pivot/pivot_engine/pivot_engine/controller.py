@@ -104,18 +104,14 @@ class PivotController:
         self._cache_hits = 0
         self._cache_misses = 0
 
-    def run_hierarchical_pivot(self, spec: Dict[str, Any], flatten: bool = False, start_row: int = 0, end_row: int = None, expanded_paths: List[List[str]] = None) -> Dict[str, Any]:
-        import asyncio
-        # Since run_hierarchical_pivot is called synchronously but the underlying method is async,
-        # we need to handle this appropriately. For now, we'll use asyncio.run if not in an event loop
-        try:
-            loop = asyncio.get_running_loop()
-            # If we're in a loop, we can't use asyncio.run, so we return a coroutine
-            # This is a limitation - callers from sync context will need to handle this differently
-            return self.tree_manager.run_hierarchical_pivot(spec, flatten=flatten, start_row=start_row, end_row=end_row, expanded_paths=expanded_paths)
-        except RuntimeError:
-            # No event loop, safe to use asyncio.run
-            return asyncio.run(self.tree_manager.run_hierarchical_pivot(spec, flatten=flatten, start_row=start_row, end_row=end_row, expanded_paths=expanded_paths))
+    @staticmethod
+    def _cache_table_key(table_name: Any) -> str:
+        raw = str(table_name or "__unknown__")
+        safe = "".join(
+            char if char.isalnum() or char in "_.-" else "_"
+            for char in raw
+        ).strip("._-")
+        return (safe or "__unknown__")[:128]
 
     def toggle_expansion(self, spec_hash: str, path: List[str]) -> Dict[str, Any]:
         return self.tree_manager.toggle_expansion(spec_hash, path)
@@ -576,11 +572,15 @@ class PivotController:
                 cache_epoch = str(delta_info[table_name].last_timestamp)
             key_str = f"{compiled_sql}-{spec_hash}-{cache_epoch}"
             key_hash = hashlib.sha256(key_str.encode()).hexdigest()[:32]
-            return f"pivot_ibis:query:{key_hash}"
+            table_key = self._cache_table_key(table_name)
+            return f"pivot_ibis:query:{table_key}:{key_hash}"
         except Exception as e:
             # Fallback if compilation fails (e.g., incomplete expression)
             print(f"Warning: Could not compile Ibis expression for cache key: {e}")
-            return f"pivot_ibis:query_fallback:{hashlib.sha256(str(ibis_expr).encode()).hexdigest()[:32]}"
+            table_key = self._cache_table_key(
+                spec.to_dict().get("table") if hasattr(spec, "to_dict") else getattr(spec, "table", None)
+            )
+            return f"pivot_ibis:query_fallback:{table_key}:{hashlib.sha256(str(ibis_expr).encode()).hexdigest()[:32]}"
 
     async def run_hierarchical_pivot(
         self,

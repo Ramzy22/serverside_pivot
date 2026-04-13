@@ -25,63 +25,9 @@ class IbisExpressionBuilder:
         all_expressions = []
 
         for f in filters:
-            # Case 1: This is a composite filter object like {op: 'AND', conditions: [...]}
-            if ('op' in f or 'operator' in f) and 'conditions' in f:
-                sub_expressions = []
-                for sub_cond in f.get('conditions', []):
-                    field = sub_cond.get("field")
-                    if not field:
-                        continue
-                    
-                    if field not in table.columns:
-                        if not is_post_agg:
-                            print(f"Warning: Filter field '{field}' not found in table columns during sub-expression build.")
-                            continue
-                        # For post-agg, we assume the field exists in the aggregated table schema
-                        # passed in, or we build a dummy expression if needed, but usually 'table'
-                        # here IS the aggregated table for HAVING clause.
-                    
-                    expr = self._build_single_filter(
-                        table[field],
-                        sub_cond.get('op', '='),
-                        sub_cond.get('value'),
-                        sub_cond.get('caseSensitive', False)
-                    )
-                    if expr is not None:
-                        sub_expressions.append(expr)
-                
-                if not sub_expressions:
-                    continue
-
-                # Combine the sub-expressions with AND or OR
-                combined_sub = sub_expressions[0]
-                op = (f.get('op') or f.get('operator')).upper()
-                if op == 'AND':
-                    for expr in sub_expressions[1:]:
-                        combined_sub &= expr
-                else: # OR
-                    for expr in sub_expressions[1:]:
-                        combined_sub |= expr
-                all_expressions.append(combined_sub)
-
-            # Case 2: This is a simple filter object like {field: ..., op: ..., value: ...}
-            elif 'field' in f:
-                field = f.get("field")
-                if not field or field not in table.columns:
-                    if not is_post_agg:
-                         print(f"Warning: Filter field '{field}' not found in table columns.")
-                    continue
-
-                expr = self._build_single_filter(
-                    table[field],
-                    f.get('op', '='),
-                    f.get('value'),
-                    f.get('caseSensitive', False)
-                )
-                if expr is not None:
-                    all_expressions.append(expr)
-            else:
-                print(f"Warning: Malformed filter object skipped: {f}")
+            expr = self._build_filter_object(table, f, is_post_agg=is_post_agg)
+            if expr is not None:
+                all_expressions.append(expr)
 
 
         if not all_expressions:
@@ -93,6 +39,52 @@ class IbisExpressionBuilder:
             final_expression &= expr
             
         return final_expression
+
+    def _build_filter_object(self, table: IbisTable, filter_spec: Dict[str, Any], is_post_agg: bool = False) -> Optional[IbisExpr]:
+        if not isinstance(filter_spec, dict):
+            print(f"Warning: Malformed filter object skipped: {filter_spec}")
+            return None
+
+        # Composite filter object like {operator: 'AND', conditions: [...]}.
+        # Conditions may themselves be composite, which is required for exact
+        # OR-of-AND hierarchy parent-path filtering.
+        if ('op' in filter_spec or 'operator' in filter_spec) and 'conditions' in filter_spec:
+            sub_expressions = []
+            for sub_cond in filter_spec.get('conditions', []):
+                expr = self._build_filter_object(table, sub_cond, is_post_agg=is_post_agg)
+                if expr is not None:
+                    sub_expressions.append(expr)
+
+            if not sub_expressions:
+                return None
+
+            combined_sub = sub_expressions[0]
+            op = str(filter_spec.get('op') or filter_spec.get('operator') or "OR").upper()
+            if op == 'AND':
+                for expr in sub_expressions[1:]:
+                    combined_sub &= expr
+            else:
+                for expr in sub_expressions[1:]:
+                    combined_sub |= expr
+            return combined_sub
+
+        # Simple filter object like {field: ..., op: ..., value: ...}
+        if 'field' in filter_spec:
+            field = filter_spec.get("field")
+            if not field or field not in table.columns:
+                if not is_post_agg:
+                    print(f"Warning: Filter field '{field}' not found in table columns.")
+                return None
+
+            return self._build_single_filter(
+                table[field],
+                filter_spec.get('op', '='),
+                filter_spec.get('value'),
+                filter_spec.get('caseSensitive', False)
+            )
+
+        print(f"Warning: Malformed filter object skipped: {filter_spec}")
+        return None
 
     def _build_single_filter(self, col: IbisColumn, op: str, value: Any, case_sensitive: bool = False) -> Optional[IbisExpr]:
         """Internal helper to build a single condition for a column."""

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import re
+import threading
 import time
 from typing import Any, Callable, Dict, List, Optional
 
@@ -29,6 +30,56 @@ class PivotRuntimeService:
         self._debug = debug
         self._tree_service = TreeRuntimeService(debug=debug)
         self._detail_service = DetailRuntimeService(self._tree_service, debug=debug)
+        self._active_request_lock = threading.Lock()
+        self._active_request_tasks: Dict[tuple[str, str, str], asyncio.Task] = {}
+        self._superseded_tasks: set[asyncio.Task] = set()
+
+    @staticmethod
+    def _active_request_key(context: PivotRequestContext) -> Optional[tuple[str, str, str]]:
+        if context.intent == "chart":
+            lane = "chart"
+        elif context.intent in {"viewport", "structural"}:
+            lane = "data"
+        else:
+            return None
+        return (
+            str(context.session_id or "anonymous"),
+            str(context.client_instance or "default"),
+            lane,
+        )
+
+    def _replace_active_request_task(self, context: PivotRequestContext) -> bool:
+        key = self._active_request_key(context)
+        current_task = asyncio.current_task()
+        if key is None or current_task is None:
+            return False
+        with self._active_request_lock:
+            previous_task = self._active_request_tasks.get(key)
+            if previous_task is not None and previous_task is not current_task and not previous_task.done():
+                self._superseded_tasks.add(previous_task)
+                previous_task.cancel()
+            self._active_request_tasks[key] = current_task
+        return True
+
+    def _release_active_request_task(self, context: PivotRequestContext) -> None:
+        key = self._active_request_key(context)
+        current_task = asyncio.current_task()
+        if key is None or current_task is None:
+            return
+        with self._active_request_lock:
+            if self._active_request_tasks.get(key) is current_task:
+                self._active_request_tasks.pop(key, None)
+            self._superseded_tasks.discard(current_task)
+
+    def _consume_superseded_cancel(self) -> bool:
+        current_task = asyncio.current_task()
+        if current_task is None:
+            return False
+        with self._active_request_lock:
+            if current_task not in self._superseded_tasks:
+                return False
+            self._superseded_tasks.discard(current_task)
+            return True
 
     async def process_async(
         self,
@@ -380,6 +431,7 @@ class PivotRuntimeService:
         )
 
         execution_started_at = time.perf_counter()
+        active_request_registered = self._replace_active_request_task(context)
         try:
             if state.view_mode == "tree" and trigger_kind != "chart":
                 response_state = await self._tree_service.handle_data_request(
@@ -453,6 +505,17 @@ class PivotRuntimeService:
                     )
                 else:
                     response = await adapter.handle_request(request)
+        except asyncio.CancelledError:
+            execution_finished_at = time.perf_counter()
+            if self._consume_superseded_cancel():
+                return PivotServiceResponse(
+                    status="stale",
+                    profile=build_profile(
+                        execution_started_at=execution_started_at,
+                        execution_finished_at=execution_finished_at,
+                    ),
+                )
+            raise
         except Exception as exc:
             execution_finished_at = time.perf_counter()
             if self._debug:
@@ -467,6 +530,9 @@ class PivotRuntimeService:
                     execution_finished_at=execution_finished_at,
                 ),
             )
+        finally:
+            if active_request_registered:
+                self._release_active_request_task(context)
         execution_finished_at = time.perf_counter()
 
         response_version = context.window_seq if context.window_seq is not None else response.version

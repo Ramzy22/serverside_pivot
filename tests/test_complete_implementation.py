@@ -96,11 +96,12 @@ def test_controller_directly():
     print(f"[SUCCESS] Returned {len(result['rows'])} rows")
 
     # Test hierarchical pivot
-    hier_result = controller.run_hierarchical_pivot(spec.to_dict())
+    import asyncio
+    hier_result = asyncio.run(controller.run_hierarchical_pivot(spec.to_dict()))
     print(f"[SUCCESS] Hierarchical pivot operation successful")
     print(f"[SUCCESS] Has expansion state: {{'expansion_state' in hier_result}}")
 
-    return True
+    assert hier_result is not None
 
 
 def test_scalable_features():

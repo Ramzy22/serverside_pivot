@@ -100,6 +100,7 @@ class ScalablePivotController(PivotController):
         enable_incremental_views: bool = True,
         tile_size: int = 100,
         cache_ttl: int = 300,
+        max_hierarchy_rows: Optional[int] = None,
         **cache_options: Any
     ):
         # Initialize base PivotController
@@ -189,6 +190,11 @@ class ScalablePivotController(PivotController):
         self._hierarchy_grand_total_cache_ttl = 30.0
         self._hierarchy_grand_total_cache_size = 64
         self._sparse_materialized_pivot_threshold = 8
+        try:
+            configured_hierarchy_cap = int(max_hierarchy_rows) if max_hierarchy_rows is not None else 0
+        except (TypeError, ValueError):
+            configured_hierarchy_cap = 0
+        self.max_hierarchy_rows = configured_hierarchy_cap if configured_hierarchy_cap > 0 else None
 
     @staticmethod
     def _profile_ms(start: Optional[float], end: Optional[float]) -> Optional[float]:
@@ -313,7 +319,8 @@ class ScalablePivotController(PivotController):
             payload["pivot_config"] = {}
         payload["pivot_config"]["materialized_column_values"] = list(column_values or [])
         key_hash = hashlib.sha256(self._stable_json(payload).encode()).hexdigest()[:32]
-        return f"pivot_sparse:{key_hash}"
+        table_key = self._cache_table_key(getattr(spec, "table", None))
+        return f"pivot_sparse:{table_key}:{key_hash}"
 
     def _build_sparse_materialized_column_filter(self, base_table: IbisTable, spec: PivotSpec, column_values: List[str]):
         column_dims = list(spec.columns or [])
@@ -656,9 +663,11 @@ class ScalablePivotController(PivotController):
         parent_paths: List[List[str]],
     ) -> List[Dict[str, Any]]:
         """
-        Build broad-but-safe batch filters for many parent paths.
+        Build exact batch filters for many parent paths.
         For 1 dim: exact IN list.
-        For multi-dim: per-dim IN lists (superset), then strict parent-key filtering after query.
+        For multi-dim: OR of exact per-path AND groups, so the database
+        filters to the requested hierarchy parents instead of fetching the
+        Cartesian superset and relying on Python post-filtering.
         """
         if not parent_dims or not parent_paths:
             return []
@@ -670,21 +679,35 @@ class ScalablePivotController(PivotController):
                 "value": [path[0] for path in parent_paths if len(path) >= 1],
             }]
 
-        filters = []
-        for dim_idx, dim in enumerate(parent_dims):
-            vals = []
-            seen = set()
-            for path in parent_paths:
-                if len(path) <= dim_idx:
-                    continue
+        path_groups: List[Dict[str, Any]] = []
+        seen_paths: set[tuple] = set()
+        for path in parent_paths:
+            if not isinstance(path, list) or len(path) < len(parent_dims):
+                continue
+            path_tuple = tuple(path[:len(parent_dims)])
+            if path_tuple in seen_paths:
+                continue
+            seen_paths.add(path_tuple)
+
+            conditions = []
+            for dim_idx, dim in enumerate(parent_dims):
                 value = path[dim_idx]
-                marker = (type(value), value)
-                if marker in seen:
-                    continue
-                seen.add(marker)
-                vals.append(value)
-            filters.append({"field": dim, "op": "in", "value": vals})
-        return filters
+                conditions.append(
+                    {"field": dim, "op": "is null"}
+                    if value is None
+                    else {"field": dim, "op": "=", "value": value}
+                )
+
+            if len(conditions) == 1:
+                path_groups.append(conditions[0])
+            else:
+                path_groups.append({"operator": "AND", "conditions": conditions})
+
+        if not path_groups:
+            return []
+        if len(path_groups) == 1:
+            return [path_groups[0]]
+        return [{"operator": "OR", "conditions": path_groups}]
 
     @staticmethod
     def _path_key(parts: List[Any]) -> str:
@@ -1363,7 +1386,7 @@ class ScalablePivotController(PivotController):
         # 1) Root level is always fetched.
         root_spec = spec.copy()
         root_spec.rows = rows[:1]
-        root_spec.limit = 100000
+        root_spec.limit = self.max_hierarchy_rows
         col_sort_opts = spec.column_sort_options
         root_spec.sort = self._build_group_rows_sort(root_spec.rows, spec.sort, col_sort_opts)
         root_spec.totals = bool(spec.totals)
@@ -1418,7 +1441,7 @@ class ScalablePivotController(PivotController):
 
             level_spec = spec.copy()
             level_spec.rows = group_rows
-            level_spec.limit = 100000
+            level_spec.limit = self.max_hierarchy_rows
             level_spec.sort = self._build_group_rows_sort(group_rows, spec.sort, col_sort_opts)
             # Only root level should carry totals. Deeper totals create duplicate subtotal
             # rows and inflate collapsed row counts.
@@ -1518,6 +1541,169 @@ class ScalablePivotController(PivotController):
         traverse("")
         return visible_rows
 
+    def _flatten_hierarchy_rows_window(
+        self,
+        spec: PivotSpec,
+        hierarchy_result: Dict[str, List[Dict[str, Any]]],
+        expanded_paths: List[List[str]],
+        start_row: Optional[int] = None,
+        end_row: Optional[int] = None,
+        collect_formula_source_rows: bool = False,
+    ) -> Dict[str, Any]:
+        """Flatten hierarchy into only the requested window while counting the full visible size."""
+        if start_row is None or end_row is None:
+            rows = self._flatten_hierarchy_rows(spec, hierarchy_result, expanded_paths)
+            return {
+                "rows": rows,
+                "total_rows": len(rows),
+                "grand_total_row": self._find_grand_total_row(rows),
+                "grand_total_formula_source_rows": [
+                    dict(row)
+                    for row in rows
+                    if isinstance(row, dict) and not self._is_hierarchy_grand_total(row) and row.get("depth") == 0
+                ] if collect_formula_source_rows else [],
+                "color_scale_stats": self._compute_color_scale_stats(
+                    rows,
+                    spec.rows,
+                    getattr(spec, "columns", []),
+                ),
+                "full_rows": rows,
+            }
+
+        safe_start = max(int(start_row or 0), 0)
+        safe_end = max(int(end_row), safe_start)
+        window_rows: List[Dict[str, Any]] = []
+        total_rows = 0
+        grand_total_row = None
+        grand_total_emitted = False
+        grand_total_formula_source_rows: List[Dict[str, Any]] = []
+
+        meta_keys = {
+            '_id', '_path', '_isTotal', 'depth', '_depth', '_level', '_expanded',
+            '_parentPath', '_has_children', '_is_expanded', 'subRows', 'uuid',
+            '__virtualIndex',
+        }
+        for field in (spec.rows or []):
+            meta_keys.add(field)
+        for field in (getattr(spec, "columns", []) or []):
+            meta_keys.add(field)
+
+        by_col: Dict[str, Dict[str, float]] = {}
+        table_min = float('inf')
+        table_max = float('-inf')
+
+        def accumulate_color_stats(row: Dict[str, Any]) -> None:
+            nonlocal table_min, table_max
+            if not isinstance(row, dict) or self._is_hierarchy_grand_total(row):
+                return
+            for key, value in row.items():
+                if key in meta_keys or not isinstance(value, (int, float)):
+                    continue
+                if value != value:
+                    continue
+                existing = by_col.get(key)
+                if existing is None:
+                    by_col[key] = {'min': value, 'max': value}
+                else:
+                    if value < existing['min']:
+                        existing['min'] = value
+                    if value > existing['max']:
+                        existing['max'] = value
+                if value < table_min:
+                    table_min = value
+                if value > table_max:
+                    table_max = value
+
+        expand_all = expanded_paths == [['__ALL__']] or any(path == ['__ALL__'] for path in (expanded_paths or []))
+        expanded_path_set = {
+            "|||".join(str(item) for item in path)
+            for path in (expanded_paths or [])
+            if isinstance(path, list) and path and path != ['__ALL__']
+        }
+
+        def emit(row: Dict[str, Any]) -> None:
+            nonlocal total_rows, grand_total_row
+            row_index = total_rows
+            total_rows += 1
+            if self._is_hierarchy_grand_total(row):
+                grand_total_row = dict(row)
+            elif collect_formula_source_rows and row.get("depth") == 0:
+                grand_total_formula_source_rows.append(dict(row))
+            accumulate_color_stats(row)
+            if safe_start <= row_index <= safe_end:
+                window_rows.append(dict(row))
+
+        def traverse(parent_key: str):
+            nonlocal grand_total_emitted
+            nodes = hierarchy_result.get(parent_key, [])
+            current_depth = len(parent_key.split('|||')) if parent_key else 0
+
+            for node in nodes:
+                if not isinstance(node, dict):
+                    continue
+
+                row = dict(node)
+                first_dim = spec.rows[0] if spec.rows else None
+                is_grand_total = (
+                    current_depth == 0
+                    and first_dim is not None
+                    and row.get(first_dim) is None
+                )
+                if is_grand_total:
+                    if grand_total_emitted:
+                        continue
+                    grand_total_emitted = True
+
+                target_dim_idx = current_depth
+                if target_dim_idx < len(spec.rows):
+                    target_dim = spec.rows[target_dim_idx]
+                    if current_depth > 0 and row.get(target_dim) is None:
+                        continue
+                    if current_depth == 0 and row.get(target_dim) is None:
+                        row['_id'] = 'Grand Total'
+                        row['_isTotal'] = True
+                    elif target_dim in row:
+                        row['_id'] = row[target_dim]
+
+                row['depth'] = current_depth
+                emit(row)
+
+                child_path_parts = parent_key.split('|||') if parent_key else []
+                if target_dim_idx < len(spec.rows):
+                    current_dim = spec.rows[target_dim_idx]
+                    if current_dim in row and row[current_dim] is not None:
+                        child_path_parts.append(str(row[current_dim]))
+                        child_key = "|||".join(child_path_parts)
+                        if child_key in hierarchy_result and (expand_all or child_key in expanded_path_set):
+                            traverse(child_key)
+
+        traverse("")
+        table_stats = None
+        if table_min != float('inf') and table_max != float('-inf'):
+            table_stats = {'min': table_min, 'max': table_max}
+
+        return {
+            "rows": window_rows,
+            "total_rows": total_rows,
+            "grand_total_row": grand_total_row,
+            "grand_total_formula_source_rows": grand_total_formula_source_rows,
+            "color_scale_stats": {'byCol': by_col, 'table': table_stats},
+            "full_rows": None,
+        }
+
+    @staticmethod
+    def _is_hierarchy_grand_total(row: Dict[str, Any]) -> bool:
+        if not isinstance(row, dict):
+            return False
+        return bool(
+            row.get("_isTotal")
+            or row.get("_path") == "__grand_total__"
+            or row.get("_id") == "Grand Total"
+        )
+
+    def _find_grand_total_row(self, rows: List[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
+        return next((dict(row) for row in rows if self._is_hierarchy_grand_total(row)), None)
+
     def _compute_color_scale_stats(
         self,
         rows: list,
@@ -1614,11 +1800,13 @@ class ScalablePivotController(PivotController):
             cache_lookup_finished_at = time.perf_counter()
 
             hierarchy_result: Dict[str, List[Dict[str, Any]]]
-            visible_rows: List[Dict[str, Any]]
+            cached_visible_rows: Optional[List[Dict[str, Any]]] = None
             hierarchy_load_started_at = None
             hierarchy_load_finished_at = None
             flatten_started_at = None
             flatten_finished_at = None
+            window_slice_started_at = None
+            window_slice_finished_at = None
             reused_cache = False
             cache_hit = cached_view is not None
             cached_expanded_count = 0
@@ -1626,7 +1814,7 @@ class ScalablePivotController(PivotController):
 
             if cached_view is not None:
                 hierarchy_result = cached_view["hierarchy_result"]
-                visible_rows = cached_view["visible_rows"]
+                cached_visible_rows = cached_view.get("visible_rows") or None
             else:
                 hierarchy_load_started_at = time.perf_counter()
                 reusable_view = self._find_reusable_hierarchy_cache_entry(spec_fingerprint, requested_expanded_set)
@@ -1646,56 +1834,57 @@ class ScalablePivotController(PivotController):
                         for parent_key, rows in (delta_hierarchy or {}).items():
                             hierarchy_result[str(parent_key)] = self._clone_hierarchy_rows(rows)
                     hierarchy_load_finished_at = time.perf_counter()
-                    flatten_started_at = time.perf_counter()
-                    visible_rows = self._flatten_hierarchy_rows(spec, hierarchy_result, target_paths)
-                    flatten_finished_at = time.perf_counter()
                 else:
                     hierarchy_result = await self.run_hierarchical_pivot_batch_load(
                         spec.to_dict(), target_paths, max_levels=len(spec.rows)
                     )
                     hierarchy_load_finished_at = time.perf_counter()
-                    flatten_started_at = time.perf_counter()
-                    visible_rows = self._flatten_hierarchy_rows(spec, hierarchy_result, target_paths)
-                    flatten_finished_at = time.perf_counter()
 
-            total_rows = len(visible_rows)
-
-            def _is_grand_total(row: Dict[str, Any]) -> bool:
-                if not isinstance(row, dict):
-                    return False
-                return bool(
-                    row.get("_isTotal")
-                    or row.get("_path") == "__grand_total__"
-                    or row.get("_id") == "Grand Total"
-                )
-
-            grand_total_row = next((dict(row) for row in visible_rows if _is_grand_total(row)), None)
-            grand_total_formula_source_rows = [
-                dict(row)
-                for row in visible_rows
-                if isinstance(row, dict) and not _is_grand_total(row) and row.get("depth") == 0
-            ]
-
-            # Compute color scale stats from ALL visible rows (excluding totals and row fields)
             color_scale_started_at = time.perf_counter()
-            color_scale_stats = self._compute_color_scale_stats(
-                visible_rows, spec.rows, getattr(spec, 'columns', [])
-            )
-            color_scale_finished_at = time.perf_counter()
-
-            window_slice_started_at = time.perf_counter()
-            if start_row is not None and end_row is not None:
-                window_rows = visible_rows[start_row:end_row + 1]
+            if cached_visible_rows is not None:
+                total_rows = len(cached_visible_rows)
+                grand_total_row = self._find_grand_total_row(cached_visible_rows)
+                grand_total_formula_source_rows = [
+                    dict(row)
+                    for row in cached_visible_rows
+                    if isinstance(row, dict) and not self._is_hierarchy_grand_total(row) and row.get("depth") == 0
+                ] if include_grand_total_row else []
+                color_scale_stats = self._compute_color_scale_stats(
+                    cached_visible_rows, spec.rows, getattr(spec, 'columns', [])
+                )
+                color_scale_finished_at = time.perf_counter()
+                window_slice_started_at = time.perf_counter()
+                if start_row is not None and end_row is not None:
+                    window_rows = cached_visible_rows[start_row:end_row + 1]
+                else:
+                    window_rows = cached_visible_rows
+                window_slice_finished_at = time.perf_counter()
+                visible_rows_to_cache = cached_visible_rows
             else:
-                window_rows = visible_rows
-            window_slice_finished_at = time.perf_counter()
+                flatten_started_at = time.perf_counter()
+                flattened = self._flatten_hierarchy_rows_window(
+                    spec,
+                    hierarchy_result,
+                    target_paths,
+                    start_row,
+                    end_row,
+                    collect_formula_source_rows=include_grand_total_row,
+                )
+                flatten_finished_at = time.perf_counter()
+                window_rows = flattened["rows"]
+                total_rows = flattened["total_rows"]
+                grand_total_row = flattened["grand_total_row"]
+                grand_total_formula_source_rows = flattened["grand_total_formula_source_rows"]
+                color_scale_stats = flattened["color_scale_stats"]
+                color_scale_finished_at = time.perf_counter()
+                visible_rows_to_cache = flattened.get("full_rows") or []
 
             cache_store_started_at = time.perf_counter()
             self._hierarchy_view_cache_set(cache_key, {
                 "spec_fingerprint": spec_fingerprint,
                 "expanded_set": set(normalized_expanded),
                 "hierarchy_result": hierarchy_result,
-                "visible_rows": visible_rows,
+                "visible_rows": visible_rows_to_cache,
                 "grand_total_row": grand_total_row,
                 "grand_total_formula_source_rows": grand_total_formula_source_rows,
             })
@@ -2939,20 +3128,6 @@ class ScalablePivotController(PivotController):
         )
         return matched_row_count if base_delta != 0 else remainder_count
 
-    def _execute_parameterized_fetchall(self, sql: str, params: List[Any]) -> list:
-        con = self.planner.con
-        if hasattr(con, "con"):
-            result = con.con.execute(sql, [*params])
-        elif hasattr(con, "execute"):
-            result = con.execute(sql, [*params])
-        else:
-            raise NotImplementedError("Backend does not support parameterized SQL queries")
-        if hasattr(result, "fetchall"):
-            return result.fetchall()
-        if isinstance(result, list):
-            return result
-        return []
-
     def _apply_integer_proportional_sync(
         self,
         table_name: str,
@@ -2993,14 +3168,22 @@ class ScalablePivotController(PivotController):
                 idx = i % len(scaled)
                 rid, val = scaled[idx]
                 scaled[idx] = (rid, val + step)
-        updated = 0
+        value_rows_sql = ", ".join(["(?, ?)"] * len(scaled))
+        update_params: List[Any] = []
         for rid, new_val in scaled:
-            self._execute_parameterized_mutation(
-                f"UPDATE {table_name} SET {target_column} = ? WHERE rowid = ?",
-                [int(new_val), rid],
-            )
-            updated += 1
-        return updated
+            update_params.extend([rid, int(new_val)])
+
+        self._execute_parameterized_mutation(
+            (
+                f"WITH scaled(target_rowid, new_value) AS (VALUES {value_rows_sql}) "
+                f"UPDATE {table_name} "
+                f"SET {target_column} = scaled.new_value "
+                f"FROM scaled "
+                f"WHERE {table_name}.rowid = scaled.target_rowid"
+            ),
+            update_params,
+        )
+        return len(scaled)
 
     def _apply_set_based_aggregate_edit_sync(
         self,
@@ -3815,7 +3998,13 @@ class ScalablePivotController(PivotController):
 
         result = await loop.run_in_executor(None, execute_transaction)
         if any(result["applied"].values()):
-            self._clear_mutation_caches()
+            applied_counts = result.get("applied") or {}
+            structural_changed = bool(
+                (applied_counts.get("add") or 0)
+                or (applied_counts.get("remove") or 0)
+                or (applied_counts.get("upsertInserted") or 0)
+            )
+            self._clear_mutation_caches(table_name, structural=structural_changed)
         return result
 
     async def update_record(self, table_name: str, key_columns: Dict[str, Any], updates: Dict[str, Any]) -> bool:
@@ -3829,13 +4018,49 @@ class ScalablePivotController(PivotController):
         )
         return bool(updated_count)
 
-    def _clear_mutation_caches(self) -> None:
-        if hasattr(self.cache, "clear"):
+    def _delete_cache_keys(self, predicate: Callable[[str], bool]) -> bool:
+        if not hasattr(self.cache, "get_all_keys") or not hasattr(self.cache, "delete"):
+            return False
+        for raw_key in list(self.cache.get_all_keys() or []):
+            key = raw_key.decode("utf-8") if isinstance(raw_key, bytes) else str(raw_key)
+            if predicate(key):
+                self.cache.delete(raw_key)
+        return True
+
+    def _clear_mutation_caches(self, table_name: Optional[str] = None, structural: bool = False) -> None:
+        """Invalidate caches affected by row mutations without flushing unrelated cache namespaces."""
+        table_key = self._cache_table_key(table_name)
+        table_scoped_prefixes = (
+            f"pivot_ibis:query:{table_key}:",
+            f"pivot_ibis:query_fallback:{table_key}:",
+            f"pivot_sparse:{table_key}:",
+        )
+        legacy_query_prefixes = (
+            "pivot_ibis:query:",
+            "pivot_ibis:query_fallback:",
+            "pivot_sparse:",
+        )
+
+        def should_delete_query_cache(key: str) -> bool:
+            if key.startswith(table_scoped_prefixes):
+                return True
+            # Legacy keys did not carry table identity, so they must be dropped
+            # once after a mutation to avoid serving pre-upgrade stale results.
+            for legacy_prefix in legacy_query_prefixes:
+                if key.startswith(legacy_prefix):
+                    return ":" not in key[len(legacy_prefix):]
+            return False
+
+        if not self._delete_cache_keys(should_delete_query_cache) and hasattr(self.cache, "clear"):
             self.cache.clear()
+
+        # Row-data edits do not change root count/page membership, but they do
+        # change aggregate values and grand totals for hierarchy views.
         self._hierarchy_view_cache.clear()
-        self._hierarchy_root_count_cache.clear()
-        self._hierarchy_root_page_cache.clear()
         self._hierarchy_grand_total_cache.clear()
+        if structural:
+            self._hierarchy_root_count_cache.clear()
+            self._hierarchy_root_page_cache.clear()
 
     def _execute_parameterized_mutation(self, sql: str, params: List[Any]) -> None:
         con = self.planner.con
@@ -3880,5 +4105,5 @@ class ScalablePivotController(PivotController):
             self._execute_parameterized_mutation(sql, [value, row_id])
 
         await loop.run_in_executor(None, execute_update)
-        self._clear_mutation_caches()
+        self._clear_mutation_caches(table_name)
         return {"status": "success", "updated": 1}

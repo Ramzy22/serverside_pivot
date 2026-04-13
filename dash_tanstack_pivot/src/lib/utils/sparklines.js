@@ -73,9 +73,10 @@ export const normalizeSparklineConfig = (value, fallbackType = 'line') => {
         source: (typeof source.source === 'string' && source.source.trim().toLowerCase() === 'field')
             ? 'field'
             : 'pivot',
-        placement: (typeof source.placement === 'string' && ['after', 'before', 'end'].includes(source.placement.trim().toLowerCase()))
-            ? source.placement.trim().toLowerCase()
-            : 'after',
+        displayMode: (typeof source.displayMode === 'string' && source.displayMode.trim().toLowerCase() === 'value')
+            ? 'value'
+            : 'trend',
+        placement: 'before',
     };
 };
 

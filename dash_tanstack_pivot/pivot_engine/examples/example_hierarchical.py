@@ -2,10 +2,11 @@
 Example usage of the pivot_engine with hierarchical data.
 """
 import os
+import asyncio
 from pivot_engine.controller import PivotController
 import json
 
-def main():
+async def main():
     # Construct the path to the database file
     db_path = os.path.join(os.path.dirname(__file__), "sales.duckdb")
     
@@ -30,7 +31,7 @@ def main():
     print(json.dumps(spec, indent=2))
 
     # Run the hierarchical pivot query
-    result = controller.run_hierarchical_pivot(spec)
+    result = await controller.run_hierarchical_pivot(spec)
 
     print("\nHierarchical pivot result (top level only):")
     print(json.dumps(result["rows"], indent=2))
@@ -62,7 +63,7 @@ def main():
 
             # In a real application, you would re-run the *same* spec.
             # The controller and its tree manager will use the cached expansion state.
-            result_after_expand = controller.run_hierarchical_pivot(spec)
+            result_after_expand = await controller.run_hierarchical_pivot(spec)
 
             print(f"\nHierarchical pivot result (with '{first_region}' expanded):")
             print(json.dumps(result_after_expand["rows"], indent=2))
@@ -76,7 +77,7 @@ def main():
             controller.toggle_expansion(spec_hash, path_to_expand)
 
             print("\nRe-running pivot after collapsing node:")
-            result_after_collapse = controller.run_hierarchical_pivot(spec)
+            result_after_collapse = await controller.run_hierarchical_pivot(spec)
 
             print(f"\nHierarchical pivot result (with '{first_region}' collapsed again):")
             print(json.dumps(result_after_collapse["rows"], indent=2))
@@ -87,4 +88,4 @@ def main():
 
 
 if __name__ == "__main__":
-    main()
+    asyncio.run(main())

@@ -208,6 +208,17 @@ export function useColumnDefs({
             if (typeof resolveCellDisplayValue !== 'function') return rawValue;
             return resolveCellDisplayValue(getCellRowId(info), info.column && info.column.id, rawValue);
         };
+        const getFieldSparklineRawValue = (info, config, columnId) => {
+            const rowData = info && info.row ? info.row.original : null;
+            if (!rowData) return getResolvedCellValue(info);
+            const rawColumnValue = columnId ? rowData[columnId] : undefined;
+            const rawFieldValue = config && config.field ? rowData[config.field] : undefined;
+            const rawValue = rawColumnValue !== undefined && rawColumnValue !== null
+                ? rawColumnValue
+                : rawFieldValue;
+            if (typeof resolveCellDisplayValue !== 'function') return rawValue;
+            return resolveCellDisplayValue(getCellRowId(info), columnId, rawValue);
+        };
         const renderSparklineCellContent = ({
             info,
             points,
@@ -245,22 +256,32 @@ export function useColumnDefs({
         };
         const renderConfiguredInlineSparkline = (info, config) => {
             const sparklineConfig = getSparklineConfig(config);
-            if (!sparklineConfig) return null;
-            const points = normalizeSparklinePoints(getResolvedCellValue(info));
+            if (!sparklineConfig || sparklineConfig.source !== 'field') return null;
+            const columnId = info && info.column ? info.column.id : null;
+            const points = normalizeSparklinePoints(getFieldSparklineRawValue(info, config, columnId));
             if (points.length === 0) return null;
+            if (sparklineConfig.displayMode === 'value') {
+                return renderSparklineValueCellContent({
+                    info,
+                    points,
+                    config,
+                    sparklineConfig,
+                    columnId,
+                });
+            }
             return renderSparklineCellContent({
                 info,
                 points,
                 config,
                 sparklineConfig,
-                columnId: info && info.column ? info.column.id : null,
+                columnId,
                 compact: true,
             });
         };
         /**
          * resolveSparklineSourceColumnIds — finds all source column IDs that
-         * match a sparkline-configured metric.  Lifted to this scope so both
-         * renderInlinePivotSparkline and buildSparklineSummaryColumns can use it.
+         * match a sparkline-configured metric. Lifted to this scope so both
+         * source-column hiding and buildSparklineSummaryColumns can use it.
          */
         const resolveSparklineSourceColumnIds = (config, colSchema, auxIds) => {
             if (!config) return [];
@@ -285,46 +306,6 @@ export function useColumnDefs({
             schemaCols.forEach((entry) => pushId(entry && entry.id));
             aux.forEach(pushId);
             return collected;
-        };
-        /**
-         * renderInlinePivotSparkline — renders an inline sparkline in a pivot
-         * source-column cell when the column's valConfig has a sparkline config
-         * with source !== 'field' (i.e. a pivot sparkline).
-         *
-         * The sparkline data is built from ALL matching source column values in
-         * the row (same as buildPivotSparklinePoints does for summary columns).
-         *
-         * Returns the SparklineCell element, or null if not applicable.
-         */
-        const renderInlinePivotSparkline = (info, config, sparklineConfig, colSchema, auxIds, colLabelMap) => {
-            if (!config || !sparklineConfig) return null;
-            if (sparklineConfig.source === 'field') return null;
-            const rowData = info && info.row ? info.row.original : null;
-            if (!rowData) return null;
-            const columnId = info && info.column ? info.column.id : null;
-            if (!columnId) return null;
-            const sourceColumnIds = resolveSparklineSourceColumnIds(config, colSchema, auxIds);
-            if (sourceColumnIds.length === 0) return null;
-            const rowPath = getCellRowId(info);
-            const points = buildPivotSparklinePoints({
-                rowData,
-                columnIds: sourceColumnIds,
-                resolveValue: (sourceColumnId, rawValue) => (
-                    typeof resolveCellDisplayValue === 'function'
-                        ? resolveCellDisplayValue(rowPath, sourceColumnId, rawValue)
-                        : rawValue
-                ),
-                resolveLabel: (sourceColumnId) => colLabelMap ? colLabelMap.get(sourceColumnId) || extractColumnHeaderText(sourceColumnId, sourceColumnId) : extractColumnHeaderText(sourceColumnId, sourceColumnId),
-            });
-            if (points.length === 0) return null;
-            return renderSparklineCellContent({
-                info,
-                points,
-                config,
-                sparklineConfig,
-                columnId,
-                compact: true,
-            });
         };
         const resolveEditableCellState = (info, config, defaultEditable = false) => {
             if (typeof resolveEditorPresentation !== 'function') return null;
@@ -459,6 +440,38 @@ export function useColumnDefs({
                 ? { ...CELL_CONTENT_RESET_STYLE, color: 'red' }
                 : CELL_CONTENT_RESET_STYLE;
             return { formatted, contentStyle };
+        };
+
+        const renderSparklineValueCellContent = ({
+            info,
+            points,
+            config,
+            sparklineConfig,
+            columnId,
+            onDoubleClick = null,
+        }) => {
+            const metricValue = resolveSparklineMetricValue(points, sparklineConfig.metric);
+            const deltaMetric = resolveSparklineDeltaValue(points);
+            const rowPath = getCellRowId(info);
+            const { formatted, contentStyle } = renderNumericCell(metricValue, getConfigDisplayFormat(config), rowPath, columnId);
+            const headerLabel = buildSparklineHeader(config, config && config.field ? config.field : columnId);
+            return (
+                <div
+                    data-pivot-sparkline-value-cell="true"
+                    data-pivot-sparkline-display="value"
+                    data-pivot-sparkline-points={Array.isArray(points) ? points.length : 0}
+                    style={{ width:'100%', height:'100%', display:'flex', alignItems:'center', justifyContent:'flex-end', paddingRight:'8px', ...contentStyle }}
+                    onDoubleClick={onDoubleClick || undefined}
+                    title={buildSparklineCellTitle(
+                        headerLabel,
+                        points,
+                        formatSparklineMetricValue(metricValue, config, columnId),
+                        formatSparklineMetricValue(deltaMetric, config, columnId),
+                    )}
+                >
+                    {formatted}
+                </div>
+            );
         };
 
         // Enhanced Sorting Logic (Tree-aware + Natural + Customization)
@@ -891,6 +904,7 @@ export function useColumnDefs({
             dataCols = valConfigs.filter(c => !isSparklineHiddenColumn(getValKey(c))).map(c => {
                 const fsc = getSparklineConfig(c);
                 const isFieldSpark = Boolean(fsc && fsc.source === 'field');
+                const isFieldSparkValueMode = Boolean(isFieldSpark && fsc.displayMode === 'value');
                 // Use the agg-suffixed key so it matches what the backend returns
                 // (e.g. price_norm_history_last). Fall back to bare field name when
                 // data is passed directly without a backend aggregation step.
@@ -899,30 +913,49 @@ export function useColumnDefs({
                     id: colId,
                     accessorFn: row => {
                         const v = row[colId];
-                        return (isFieldSpark && (v === undefined || v === null)) ? row[c.field] : v;
+                        const rawValue = (isFieldSpark && (v === undefined || v === null)) ? row[c.field] : v;
+                        return isFieldSparkValueMode
+                            ? resolveSparklineMetricValue(normalizeSparklinePoints(rawValue), fsc.metric)
+                            : rawValue;
                     },
-                    header: isFieldSpark ? buildSparklineHeader(c, c.field) : getValHeader(c),
-                    size: isFieldSpark ? defaultColumnWidths.measure + 64 : defaultColumnWidths.measure,
+                    header: isFieldSpark
+                        ? (isFieldSparkValueMode ? (c.label || getValHeader(c)) : buildSparklineHeader(c, c.field))
+                        : getValHeader(c),
+                    size: isFieldSpark && !isFieldSparkValueMode ? defaultColumnWidths.measure + 64 : defaultColumnWidths.measure,
                     enablePinning: true,
                     sortingFn,
-                    enableSorting: !isFieldSpark,
+                    enableSorting: !isFieldSpark || isFieldSparkValueMode,
                     cell: info => {
                         if (isFieldSpark) {
-                            const points = normalizeSparklinePoints(getResolvedCellValue(info));
+                            const points = normalizeSparklinePoints(getFieldSparklineRawValue(info, c, colId));
                             if (points.length > 0) {
+                                const openDataModal = (event) => {
+                                    if (event && typeof event.stopPropagation === 'function') {
+                                        event.stopPropagation();
+                                    }
+                                    if (openSparklineDataModalRef && openSparklineDataModalRef.current) {
+                                        openSparklineDataModalRef.current({
+                                            points,
+                                            headerLabel: buildSparklineHeader(c, c.field),
+                                            config: c,
+                                            sparklineConfig: fsc,
+                                        });
+                                    }
+                                };
+                                if (isFieldSparkValueMode) {
+                                    return renderSparklineValueCellContent({
+                                        info,
+                                        points,
+                                        config: c,
+                                        sparklineConfig: fsc,
+                                        columnId: colId,
+                                        onDoubleClick: openDataModal,
+                                    });
+                                }
                                 return (
                                     <div
                                         style={{ width: '100%', height: '100%', display: 'flex', alignItems: 'center' }}
-                                        onDoubleClick={() => {
-                                            if (openSparklineDataModalRef && openSparklineDataModalRef.current) {
-                                                openSparklineDataModalRef.current({
-                                                    points,
-                                                    headerLabel: buildSparklineHeader(c, c.field),
-                                                    config: c,
-                                                    sparklineConfig: fsc,
-                                                });
-                                            }
-                                        }}
+                                        onDoubleClick={openDataModal}
                                         title="Double-click to view data"
                                     >
                                         {renderSparklineCellContent({
@@ -969,35 +1002,54 @@ export function useColumnDefs({
                 const matchedConfig = getConfigForColumnId(columnId);
                 const fieldSparklineConfig = matchedConfig && getSparklineConfig(matchedConfig);
                 const isFieldSparkline = Boolean(fieldSparklineConfig && fieldSparklineConfig.source === 'field');
+                const isFieldSparklineValueMode = Boolean(isFieldSparkline && fieldSparklineConfig.displayMode === 'value');
                 // Use a wider default for field-array sparkline columns
-                const effectiveSize = isFieldSparkline && sizeOverride === defaultColumnWidths.subtotal
+                const effectiveSize = isFieldSparkline && !isFieldSparklineValueMode && sizeOverride === defaultColumnWidths.subtotal
                     ? defaultColumnWidths.subtotal + 64
                     : sizeOverride;
                 return {
                     id: columnId,
-                    accessorFn: row => row[columnId],
+                    accessorFn: row => (
+                        isFieldSparklineValueMode
+                            ? resolveSparklineMetricValue(normalizeSparklinePoints(row[columnId]), fieldSparklineConfig.metric)
+                            : row[columnId]
+                    ),
                     header: columnId,
                     size: Number.isFinite(Number(effectiveSize)) ? Number(effectiveSize) : defaultColumnWidths.subtotal,
                     sortingFn,
-                    enableSorting: !isFieldSparkline,
+                    enableSorting: !isFieldSparkline || isFieldSparklineValueMode,
                     cell: info => {
                         // Field-array sparkline: cell value IS the series, render full-size
                         if (isFieldSparkline) {
-                            const points = normalizeSparklinePoints(getResolvedCellValue(info));
+                            const points = normalizeSparklinePoints(getFieldSparklineRawValue(info, matchedConfig, columnId));
                             if (points.length > 0) {
+                                const openDataModal = (event) => {
+                                    if (event && typeof event.stopPropagation === 'function') {
+                                        event.stopPropagation();
+                                    }
+                                    if (openSparklineDataModalRef && openSparklineDataModalRef.current) {
+                                        openSparklineDataModalRef.current({
+                                            points,
+                                            headerLabel: buildSparklineHeader(matchedConfig, columnId),
+                                            config: matchedConfig,
+                                            sparklineConfig: fieldSparklineConfig,
+                                        });
+                                    }
+                                };
+                                if (isFieldSparklineValueMode) {
+                                    return renderSparklineValueCellContent({
+                                        info,
+                                        points,
+                                        config: matchedConfig,
+                                        sparklineConfig: fieldSparklineConfig,
+                                        columnId,
+                                        onDoubleClick: openDataModal,
+                                    });
+                                }
                                 return (
                                     <div
                                         style={{ width: '100%', height: '100%', display: 'flex', alignItems: 'center' }}
-                                        onDoubleClick={() => {
-                                            if (openSparklineDataModalRef && openSparklineDataModalRef.current) {
-                                                openSparklineDataModalRef.current({
-                                                    points,
-                                                    headerLabel: buildSparklineHeader(matchedConfig, columnId),
-                                                    config: matchedConfig,
-                                                    sparklineConfig: fieldSparklineConfig,
-                                                });
-                                            }
-                                        }}
+                                        onDoubleClick={openDataModal}
                                         title="Double-click to view data"
                                     >
                                         {renderSparklineCellContent({
@@ -1012,41 +1064,6 @@ export function useColumnDefs({
                                 );
                             }
                             return null;
-                        }
-                        // Pivot sparkline: render inline sparkline in each source column cell
-                        const inlinePivotSparkline = renderInlinePivotSparkline(info, matchedConfig, fieldSparklineConfig, schemaColumns, auxiliaryIds, sparklineColumnLabelById);
-                        if (inlinePivotSparkline) {
-                            return (
-                                <div
-                                    style={{ width: '100%', height: '100%', display: 'flex', alignItems: 'center' }}
-                                    onDoubleClick={() => {
-                                        if (openSparklineDataModalRef && openSparklineDataModalRef.current) {
-                                            const rowData = info && info.row ? info.row.original : null;
-                                            const rowPath = getCellRowId(info);
-                                            const sourceColumnIds = resolveSparklineSourceColumnIds(matchedConfig, schemaColumns, auxiliaryIds);
-                                            const pts = buildPivotSparklinePoints({
-                                                rowData,
-                                                columnIds: sourceColumnIds,
-                                                resolveValue: (sourceColumnId, rawValue) => (
-                                                    typeof resolveCellDisplayValue === 'function'
-                                                        ? resolveCellDisplayValue(rowPath, sourceColumnId, rawValue)
-                                                        : rawValue
-                                                ),
-                                                resolveLabel: (sourceColumnId) => sparklineColumnLabelById ? sparklineColumnLabelById.get(sourceColumnId) || extractColumnHeaderText(sourceColumnId, sourceColumnId) : extractColumnHeaderText(sourceColumnId, sourceColumnId),
-                                            });
-                                            openSparklineDataModalRef.current({
-                                                points: pts,
-                                                headerLabel: buildSparklineHeader(matchedConfig, columnId),
-                                                config: matchedConfig,
-                                                sparklineConfig: fieldSparklineConfig,
-                                            });
-                                        }
-                                    }}
-                                    title="Double-click to view data"
-                                >
-                                    {inlinePivotSparkline}
-                                </div>
-                            );
                         }
                         const sparklineCell = renderConfiguredInlineSparkline(info, matchedConfig);
                         if (sparklineCell) {
@@ -1098,15 +1115,20 @@ export function useColumnDefs({
                     let measureStr = "";
                     const matchedConfig = getConfigForColumnId(key);
                     if (matchedConfig) {
+                        const matchedSparklineConfig = getSparklineConfig(matchedConfig);
                         const suffix = matchedConfig.agg === 'formula'
                             ? `_${matchedConfig.field}`
                             : `_${matchedConfig.field}_${matchedConfig.agg}`;
                         if (key.toLowerCase().endsWith(suffix.toLowerCase())) {
                             dimStr = key.substring(0, key.length - suffix.length);
                         }
-                        measureStr = matchedConfig.agg === 'formula'
-                            ? (matchedConfig.label || matchedConfig.field)
-                            : `${formatDisplayLabel(matchedConfig.field)} (${formatAggLabel(matchedConfig.agg, matchedConfig.weightField)})`;
+                        measureStr = matchedSparklineConfig && matchedSparklineConfig.source === 'field'
+                            ? (matchedSparklineConfig.displayMode === 'value'
+                                ? (matchedConfig.label || formatDisplayLabel(matchedConfig.field))
+                                : buildSparklineHeader(matchedConfig, matchedConfig.field))
+                            : (matchedConfig.agg === 'formula'
+                                ? (matchedConfig.label || matchedConfig.field)
+                                : `${formatDisplayLabel(matchedConfig.field)} (${formatAggLabel(matchedConfig.agg, matchedConfig.weightField)})`);
                     }
                     if (!matchedConfig) {
                          const parts = key.split('_');
@@ -1252,9 +1274,8 @@ export function useColumnDefs({
                     if (!sparklineConfig) return;
                     // Field-array sparklines render inline from cell value — no pivot collection needed
                     if (sparklineConfig.source === 'field') return;
-                    // When sparkline is inline (hideColumns is NOT set), skip the summary column
-                    // since each source column cell already renders the sparkline inline
-                    if (!sparklineConfig.hideColumns) return;
+                    // Pivot-source sparklines are linked summary columns. hideColumns only
+                    // controls whether the numeric source columns remain visible.
                     const sourceColumnIds = resolveSparklineSourceColumnIds(config, schemaColumns, auxiliaryIds);
                     if (sourceColumnIds.length === 0) return;
                     const sparklineColumnId = `__sparkline__${getValKey(config)}`;
@@ -1309,7 +1330,10 @@ export function useColumnDefs({
                             return (
                                 <div
                                     style={{ width: '100%', height: '100%', display: 'flex', alignItems: 'center' }}
-                                    onDoubleClick={() => {
+                                    onDoubleClick={(event) => {
+                                        if (event && typeof event.stopPropagation === 'function') {
+                                            event.stopPropagation();
+                                        }
                                         if (openSparklineDataModalRef && openSparklineDataModalRef.current) {
                                             openSparklineDataModalRef.current({
                                                 points,
@@ -1334,9 +1358,9 @@ export function useColumnDefs({
             const sparklineSummaryMap = new Map(sparklineSummaryCols.map(col => [col.id, col]));
 
             // Build trigger maps so column-building loops can inject sparklines at the right slot.
-            // placement='after'  → inject immediately after the last matching source column
-            // placement='before' → inject immediately before the first matching source column
-            // placement='end'    → inject after all data columns (fallback / explicit)
+            // placement='before' -> inject immediately before the first matching source column
+            // placement='after'  -> legacy saved views; normalized configs no longer emit it
+            // placement='end'    -> legacy fallback for configs without matching source columns
             const sparklineBeforeTriggers = new Map(); // firstMatchId -> [sparklineColumnId, ...]
             const sparklineAfterTriggers  = new Map(); // lastMatchId  -> [sparklineColumnId, ...]
             const sparklineEndList        = [];        // placement='end' or no source columns found
@@ -1344,7 +1368,7 @@ export function useColumnDefs({
                 const sparklineConfig = col.meta && col.meta.sparklineConfig;
                 if (!sparklineConfig) return;
                 const sourceColumnIds = col.meta && col.meta.sparklineSourceColumnIds ? col.meta.sparklineSourceColumnIds : [];
-                const placement = sparklineConfig.placement || 'after';
+                const placement = sparklineConfig.placement || 'before';
                 const firstMatchId = sourceColumnIds.length > 0 ? sourceColumnIds[0] : null;
                 const lastMatchId  = sourceColumnIds.length > 0 ? sourceColumnIds[sourceColumnIds.length - 1] : null;
                 if (placement === 'before' && firstMatchId) {
