@@ -1497,6 +1497,18 @@ export const PivotAppBar = React.memo(function PivotAppBar({
                     <Icons.Menu />
                     <span style={{fontSize: '13px', fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.04em'}}>Menu</span>
                 </button>}
+                <button
+                    style={{...(canUndoTransactions && !transactionHistoryPending ? btnGhost : { ...btnGhost, opacity: 0.35, cursor: 'not-allowed' }), padding:'6px 8px', display:'inline-flex', alignItems:'center'}}
+                    onClick={onUndoTransaction}
+                    title="Undo the last edit or layout change (Ctrl/Cmd+Z)"
+                    disabled={!canUndoTransactions || transactionHistoryPending}
+                ><Icons.Undo /></button>
+                <button
+                    style={{...(canRedoTransactions && !transactionHistoryPending ? btnGhost : { ...btnGhost, opacity: 0.35, cursor: 'not-allowed' }), padding:'6px 8px', display:'inline-flex', alignItems:'center'}}
+                    onClick={onRedoTransaction}
+                    title="Redo the last edit or layout change (Ctrl+Y or Cmd/Ctrl+Shift+Z)"
+                    disabled={!canRedoTransactions || transactionHistoryPending}
+                ><Icons.Redo /></button>
                 {SHOW_PIVOT_MODE_TOGGLE ? (
                     <div style={{
                         display: 'flex',
@@ -1602,23 +1614,6 @@ export const PivotAppBar = React.memo(function PivotAppBar({
                     </div>
                 </div>
                 {uiConfig.showEditing !== false && <>
-                <div style={innerDividerStyle} />
-                <button
-                    style={{...(canUndoTransactions && !transactionHistoryPending ? btnSubtle : { ...btnSubtle, opacity: 0.45, cursor: 'not-allowed' }), display:'inline-flex', alignItems:'center', gap:'5px'}}
-                    onClick={onUndoTransaction}
-                    title="Undo the last edit or layout change (Ctrl/Cmd+Z)"
-                    disabled={!canUndoTransactions || transactionHistoryPending}
-                >
-                    <Icons.Undo /> Undo
-                </button>
-                <button
-                    style={{...(canRedoTransactions && !transactionHistoryPending ? btnSubtle : { ...btnSubtle, opacity: 0.45, cursor: 'not-allowed' }), display:'inline-flex', alignItems:'center', gap:'5px'}}
-                    onClick={onRedoTransaction}
-                    title="Redo the last edit or layout change (Ctrl+Y or Cmd/Ctrl+Shift+Z)"
-                    disabled={!canRedoTransactions || transactionHistoryPending}
-                >
-                    <Icons.Redo /> Redo
-                </button>
                 <div style={innerDividerStyle} />
                 <div style={valueModeFrameStyle} title="Switch between current edited values and the original values captured before this session's active edits">
                     <button

@@ -366,20 +366,6 @@ const StatusBar = ({
                         theme={theme}
                         tone="info"
                     />
-                    <StatusActionButton
-                        id="undo"
-                        label="Undo"
-                        onClick={actionSummary.onUndo}
-                        disabled={!actionSummary.canUndo}
-                        theme={theme}
-                    />
-                    <StatusActionButton
-                        id="redo"
-                        label="Redo"
-                        onClick={actionSummary.onRedo}
-                        disabled={!actionSummary.canRedo}
-                        theme={theme}
-                    />
                 </div>
             </div>
         </div>

@@ -97,8 +97,8 @@ def register_pivot_app(
     """
     Wire a pivot component into a Dash app with minimal boilerplate.
 
-    Internally manages the ``SessionRequestGate`` and ``PivotRuntimeService``
-    singletons and registers the ``/api/drill-through`` Flask endpoint.
+    Internally manages one ``SessionRequestGate`` and ``PivotRuntimeService``
+    for this registration and registers the ``/api/drill-through`` Flask endpoint.
 
     Parameters
     ----------
@@ -119,9 +119,13 @@ def register_pivot_app(
     if debug is None:
         debug = os.environ.get("PIVOT_DEBUG_OUTPUT", "1").lower() in {"1", "true", "yes"}
 
-    # --- singletons (one per register_pivot_app call) ---
+    # --- per-registration runtime state ---
     _session_gate = SessionRequestGate()
     _runtime_service = _RuntimeServiceHolder()
+    try:
+        request_timeout_seconds = float(os.environ.get("PIVOT_REQUEST_TIMEOUT_SECONDS", "300") or 300)
+    except (TypeError, ValueError):
+        request_timeout_seconds = 300.0
 
     def _get_runtime_service():
         if _runtime_service.service is None:
@@ -129,6 +133,7 @@ def register_pivot_app(
                 adapter_getter=adapter_getter,
                 session_gate=_session_gate,
                 debug=debug,
+                request_timeout_seconds=request_timeout_seconds,
             )
         return _runtime_service.service
 

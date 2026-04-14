@@ -3,17 +3,31 @@
 from __future__ import annotations
 
 import asyncio
+import inspect
+import os
 import re
 import threading
 import time
-from typing import Any, Callable, Dict, List, Optional
+from typing import Any, Awaitable, Callable, Dict, List, Optional, Tuple
 
 from ..tanstack_adapter import TanStackOperation, TanStackRequest, TanStackResponse
 
 from .models import PivotRequestContext, PivotServiceResponse, PivotViewState, first_present, safe_int
+from .resilience import CircuitBreaker, CircuitBreakerOpen, PivotRequestTimeout
 from .session_gate import SessionRequestGate
 from .detail_service import DetailRuntimeService
 from .tree_service import TreeRuntimeService
+
+
+def _env_float(name: str, default: float) -> float:
+    raw_value = os.environ.get(name)
+    if raw_value is None:
+        return default
+    try:
+        parsed = float(raw_value)
+    except (TypeError, ValueError):
+        return default
+    return parsed if parsed > 0 else default
 
 
 class PivotRuntimeService:
@@ -24,12 +38,25 @@ class PivotRuntimeService:
         adapter_getter: Callable[[], Any],
         session_gate: Optional[SessionRequestGate] = None,
         debug: bool = False,
+        request_timeout_seconds: Optional[float] = None,
+        circuit_breaker: Optional[CircuitBreaker] = None,
+        circuit_breaker_failures: int = 5,
+        circuit_breaker_cooldown_seconds: float = 30.0,
     ):
         self._adapter_getter = adapter_getter
         self._session_gate = session_gate or SessionRequestGate()
         self._debug = debug
         self._tree_service = TreeRuntimeService(debug=debug)
         self._detail_service = DetailRuntimeService(self._tree_service, debug=debug)
+        try:
+            explicit_timeout = float(request_timeout_seconds) if request_timeout_seconds is not None else None
+        except (TypeError, ValueError):
+            explicit_timeout = None
+        self._request_timeout_seconds = explicit_timeout if explicit_timeout and explicit_timeout > 0 else _env_float("PIVOT_REQUEST_TIMEOUT_SECONDS", 300.0)
+        self._circuit_breaker = circuit_breaker or CircuitBreaker(
+            failure_threshold=circuit_breaker_failures,
+            cooldown_seconds=circuit_breaker_cooldown_seconds,
+        )
         self._active_request_lock = threading.Lock()
         self._active_request_tasks: Dict[tuple[str, str, str], asyncio.Task] = {}
         self._superseded_tasks: set[asyncio.Task] = set()
@@ -80,6 +107,42 @@ class PivotRuntimeService:
                 return False
             self._superseded_tasks.discard(current_task)
             return True
+
+    @staticmethod
+    def _backend_circuit_key(context: PivotRequestContext, trigger_kind: Optional[str]) -> Tuple[str, str]:
+        intent = trigger_kind or context.intent or "structural"
+        return (str(context.table or "default"), str(intent))
+
+    async def _run_backend_operation(
+        self,
+        context: PivotRequestContext,
+        trigger_kind: Optional[str],
+        operation: Callable[[], Awaitable[Any]],
+    ) -> Any:
+        circuit_key = self._backend_circuit_key(context, trigger_kind)
+        self._circuit_breaker.before_request(circuit_key)
+        try:
+            awaitable = operation()
+            if not inspect.isawaitable(awaitable):
+                self._circuit_breaker.record_success(circuit_key)
+                return awaitable
+            if self._request_timeout_seconds:
+                result = await asyncio.wait_for(awaitable, timeout=self._request_timeout_seconds)
+            else:
+                result = await awaitable
+        except asyncio.TimeoutError as exc:
+            self._circuit_breaker.record_failure(circuit_key)
+            raise PivotRequestTimeout(
+                f"Pivot backend request exceeded {self._request_timeout_seconds:g}s timeout."
+            ) from exc
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            self._circuit_breaker.record_failure(circuit_key)
+            raise
+        else:
+            self._circuit_breaker.record_success(circuit_key)
+            return result
 
     async def process_async(
         self,
@@ -253,7 +316,35 @@ class PivotRuntimeService:
         if trigger_kind == "detail" and state.detail_request:
             execution_started_at = time.perf_counter()
             try:
-                detail_result = await self._detail_service.handle_request(adapter, request, state, context)
+                detail_result = await self._run_backend_operation(
+                    context,
+                    trigger_kind,
+                    lambda: self._detail_service.handle_request(adapter, request, state, context),
+                )
+            except CircuitBreakerOpen as exc:
+                execution_finished_at = time.perf_counter()
+                return PivotServiceResponse(
+                    status="error",
+                    message=str(exc),
+                    data=[],
+                    total_rows=0,
+                    profile=build_profile(
+                        execution_started_at=execution_started_at,
+                        execution_finished_at=execution_finished_at,
+                    ),
+                )
+            except PivotRequestTimeout as exc:
+                execution_finished_at = time.perf_counter()
+                return PivotServiceResponse(
+                    status="timeout",
+                    message=str(exc),
+                    data=[],
+                    total_rows=0,
+                    profile=build_profile(
+                        execution_started_at=execution_started_at,
+                        execution_finished_at=execution_finished_at,
+                    ),
+                )
             except Exception as exc:  # pragma: no cover - defensive
                 execution_finished_at = time.perf_counter()
                 if self._debug:
@@ -298,7 +389,33 @@ class PivotRuntimeService:
             )
             execution_started_at = time.perf_counter()
             try:
-                drill_result = await adapter.handle_drill_through(request, state.drill_through)
+                drill_result = await self._run_backend_operation(
+                    context,
+                    trigger_kind,
+                    lambda: adapter.handle_drill_through(request, state.drill_through),
+                )
+            except CircuitBreakerOpen as exc:
+                execution_finished_at = time.perf_counter()
+                return PivotServiceResponse(
+                    status="error",
+                    message=str(exc),
+                    drill_records=[],
+                    profile=build_profile(
+                        execution_started_at=execution_started_at,
+                        execution_finished_at=execution_finished_at,
+                    ),
+                )
+            except PivotRequestTimeout as exc:
+                execution_finished_at = time.perf_counter()
+                return PivotServiceResponse(
+                    status="timeout",
+                    message=str(exc),
+                    drill_records=[],
+                    profile=build_profile(
+                        execution_started_at=execution_started_at,
+                        execution_finished_at=execution_finished_at,
+                    ),
+                )
             except Exception as exc:  # pragma: no cover - defensive
                 execution_finished_at = time.perf_counter()
                 if self._debug:
@@ -343,12 +460,40 @@ class PivotRuntimeService:
             execution_started_at = time.perf_counter()
             try:
                 if hasattr(adapter, "handle_transaction"):
-                    transaction_result = await adapter.handle_transaction(request, transaction_request_payload)
+                    transaction_result = await self._run_backend_operation(
+                        context,
+                        trigger_kind,
+                        lambda: adapter.handle_transaction(request, transaction_request_payload),
+                    )
                 else:
                     transaction_result = {
                         "status": "unsupported",
                         "message": "Adapter does not support row transactions.",
                     }
+            except CircuitBreakerOpen as exc:
+                execution_finished_at = time.perf_counter()
+                return PivotServiceResponse(
+                    status="error",
+                    message=str(exc),
+                    data=[],
+                    total_rows=0,
+                    profile=build_profile(
+                        execution_started_at=execution_started_at,
+                        execution_finished_at=execution_finished_at,
+                    ),
+                )
+            except PivotRequestTimeout as exc:
+                execution_finished_at = time.perf_counter()
+                return PivotServiceResponse(
+                    status="timeout",
+                    message=str(exc),
+                    data=[],
+                    total_rows=0,
+                    profile=build_profile(
+                        execution_started_at=execution_started_at,
+                        execution_finished_at=execution_finished_at,
+                    ),
+                )
             except Exception as exc:  # pragma: no cover - defensive
                 execution_finished_at = time.perf_counter()
                 if self._debug:
@@ -414,11 +559,17 @@ class PivotRuntimeService:
                 if isinstance(update_payload, dict)
             )
             try:
-                if hasattr(adapter, "handle_updates"):
-                    await adapter.handle_updates(request, update_payloads)
-                else:
-                    for update_payload in update_payloads:
-                        await adapter.handle_update(request, update_payload)
+                async def _apply_updates():
+                    if hasattr(adapter, "handle_updates"):
+                        await adapter.handle_updates(request, update_payloads)
+                    else:
+                        for update_payload in update_payloads:
+                            await adapter.handle_update(request, update_payload)
+
+                await self._run_backend_operation(context, trigger_kind, _apply_updates)
+            except (CircuitBreakerOpen, PivotRequestTimeout) as exc:
+                if self._debug:
+                    print(f"Cell update skipped: {exc}")
             except Exception as exc:  # pragma: no cover - defensive
                 if self._debug:
                     print(f"Cell update failed: {exc}")
@@ -433,69 +584,69 @@ class PivotRuntimeService:
         execution_started_at = time.perf_counter()
         active_request_registered = self._replace_active_request_task(context)
         try:
-            if state.view_mode == "tree" and trigger_kind != "chart":
-                response_state = await self._tree_service.handle_data_request(
-                    adapter,
-                    request,
-                    state,
-                    context,
-                    expanded_paths,
-                )
-                response = TanStackResponse(
-                    data=list(response_state.data or []),
-                    columns=list(response_state.columns or []),
-                    total_rows=response_state.total_rows,
-                    version=context.window_seq,
-                )
-            elif (
-                trigger_kind != "chart"
-                and state.view_mode == "report"
-                and self._has_branching_report_root(state.report_def)
-            ):
-                response = await self._handle_branching_report_request(
-                    adapter,
-                    request,
-                    state,
-                    context,
-                    expanded_paths,
-                )
-            elif trigger_kind == "chart":
-                requested_series_ids = (
-                    [
-                        value for value in (state.chart_request or {}).get("series_column_ids", [])
-                        if isinstance(value, str) and value
-                    ]
-                    if isinstance((state.chart_request or {}).get("series_column_ids"), list)
-                    else None
-                )
-                response = await adapter.handle_virtual_scroll_request(
-                    request,
-                    context.start_row,
-                    context.end_row if context.end_row is not None else context.start_row,
-                    expanded_paths,
-                    col_start=context.col_start,
-                    col_end=context.col_end,
-                    needs_col_schema=bool((state.chart_request or {}).get("needs_col_schema", False)),
-                    include_grand_total=context.include_grand_total,
-                    requested_center_ids=requested_series_ids,
-                    profiling=profiling_enabled,
-                )
-            elif context.viewport_active and context.end_row is not None:
-                response = await adapter.handle_virtual_scroll_request(
-                    request,
-                    context.start_row,
-                    context.end_row,
-                    expanded_paths,
-                    col_start=context.col_start,
-                    col_end=context.col_end,
-                    needs_col_schema=effective_needs_col_schema,
-                    include_grand_total=context.include_grand_total,
-                    profiling=profiling_enabled,
-                )
-            else:
+            async def _execute_data_request():
+                if state.view_mode == "tree" and trigger_kind != "chart":
+                    response_state = await self._tree_service.handle_data_request(
+                        adapter,
+                        request,
+                        state,
+                        context,
+                        expanded_paths,
+                    )
+                    return TanStackResponse(
+                        data=list(response_state.data or []),
+                        columns=list(response_state.columns or []),
+                        total_rows=response_state.total_rows,
+                        version=context.window_seq,
+                    )
+                if (
+                    trigger_kind != "chart"
+                    and state.view_mode == "report"
+                    and self._has_branching_report_root(state.report_def)
+                ):
+                    return await self._handle_branching_report_request(
+                        adapter,
+                        request,
+                        state,
+                        context,
+                        expanded_paths,
+                    )
+                if trigger_kind == "chart":
+                    requested_series_ids = (
+                        [
+                            value for value in (state.chart_request or {}).get("series_column_ids", [])
+                            if isinstance(value, str) and value
+                        ]
+                        if isinstance((state.chart_request or {}).get("series_column_ids"), list)
+                        else None
+                    )
+                    return await adapter.handle_virtual_scroll_request(
+                        request,
+                        context.start_row,
+                        context.end_row if context.end_row is not None else context.start_row,
+                        expanded_paths,
+                        col_start=context.col_start,
+                        col_end=context.col_end,
+                        needs_col_schema=bool((state.chart_request or {}).get("needs_col_schema", False)),
+                        include_grand_total=context.include_grand_total,
+                        requested_center_ids=requested_series_ids,
+                        profiling=profiling_enabled,
+                    )
+                if context.viewport_active and context.end_row is not None:
+                    return await adapter.handle_virtual_scroll_request(
+                        request,
+                        context.start_row,
+                        context.end_row,
+                        expanded_paths,
+                        col_start=context.col_start,
+                        col_end=context.col_end,
+                        needs_col_schema=effective_needs_col_schema,
+                        include_grand_total=context.include_grand_total,
+                        profiling=profiling_enabled,
+                    )
                 if state.row_fields:
                     initial_end_row = min(request.pagination.get("pageSize", 1000), 100) - 1
-                    response = await adapter.handle_virtual_scroll_request(
+                    return await adapter.handle_virtual_scroll_request(
                         request,
                         0,
                         initial_end_row,
@@ -503,8 +654,9 @@ class PivotRuntimeService:
                         needs_col_schema=True,
                         profiling=profiling_enabled,
                     )
-                else:
-                    response = await adapter.handle_request(request)
+                return await adapter.handle_request(request)
+
+            response = await self._run_backend_operation(context, trigger_kind, _execute_data_request)
         except asyncio.CancelledError:
             execution_finished_at = time.perf_counter()
             if self._consume_superseded_cancel():
@@ -516,6 +668,30 @@ class PivotRuntimeService:
                     ),
                 )
             raise
+        except CircuitBreakerOpen as exc:
+            execution_finished_at = time.perf_counter()
+            return PivotServiceResponse(
+                status="error",
+                message=str(exc),
+                data=[],
+                total_rows=0,
+                profile=build_profile(
+                    execution_started_at=execution_started_at,
+                    execution_finished_at=execution_finished_at,
+                ),
+            )
+        except PivotRequestTimeout as exc:
+            execution_finished_at = time.perf_counter()
+            return PivotServiceResponse(
+                status="timeout",
+                message=str(exc),
+                data=[],
+                total_rows=0,
+                profile=build_profile(
+                    execution_started_at=execution_started_at,
+                    execution_finished_at=execution_finished_at,
+                ),
+            )
         except Exception as exc:
             execution_finished_at = time.perf_counter()
             if self._debug:

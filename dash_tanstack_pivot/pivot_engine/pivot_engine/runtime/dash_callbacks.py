@@ -124,6 +124,33 @@ def _coerce_runtime_request_payload(runtime_request: Dict[str, Any]) -> Dict[str
     }
 
 
+def _extract_request_state_override(request_payload: Any) -> Optional[Dict[str, Any]]:
+    if not isinstance(request_payload, dict):
+        return None
+    override = request_payload.get("state_override")
+    if override is None:
+        override = request_payload.get("stateOverride")
+    return override if isinstance(override, dict) else None
+
+
+def _state_override_value(
+    state_override: Optional[Dict[str, Any]],
+    key: str,
+    fallback: Any,
+    expected_type: Optional[Any] = None,
+    *,
+    allow_none: bool = False,
+) -> Any:
+    if not isinstance(state_override, dict) or key not in state_override:
+        return fallback
+    value = state_override.get(key)
+    if value is None:
+        return None if allow_none else fallback
+    if expected_type is not None and not isinstance(value, expected_type):
+        return fallback
+    return value
+
+
 def _merge_profiles(*profiles: Optional[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
     merged: Dict[str, Any] = {}
     for profile in profiles:
@@ -460,20 +487,65 @@ def register_dash_pivot_transport_callback(
             trigger_prop=effective_trigger_prop,
             viewport=active_request_meta,
         )
-        chart_state_override = (
-            request_payload.get("state_override")
-            if request_kind == "chart" and isinstance(request_payload, dict)
-            else None
+        request_state_override = _extract_request_state_override(request_payload)
+        effective_row_fields = _state_override_value(request_state_override, "rowFields", row_fields or [], list)
+        effective_col_fields = _state_override_value(request_state_override, "colFields", col_fields or [], list)
+        effective_val_configs = _state_override_value(request_state_override, "valConfigs", val_configs or [], list)
+        effective_filters = _state_override_value(request_state_override, "filters", filters or {}, dict)
+        effective_sorting = _state_override_value(request_state_override, "sorting", sorting or [], list)
+        effective_sort_options = _state_override_value(
+            request_state_override,
+            "sortOptions",
+            sort_options or sort_options_default or {},
+            dict,
         )
-        effective_row_fields = chart_state_override.get("rowFields") if isinstance(chart_state_override, dict) and isinstance(chart_state_override.get("rowFields"), list) else (row_fields or [])
-        effective_col_fields = chart_state_override.get("colFields") if isinstance(chart_state_override, dict) and isinstance(chart_state_override.get("colFields"), list) else (col_fields or [])
-        effective_val_configs = chart_state_override.get("valConfigs") if isinstance(chart_state_override, dict) and isinstance(chart_state_override.get("valConfigs"), list) else (val_configs or [])
-        effective_filters = chart_state_override.get("filters") if isinstance(chart_state_override, dict) and isinstance(chart_state_override.get("filters"), dict) else (filters or {})
-        effective_sorting = chart_state_override.get("sorting") if isinstance(chart_state_override, dict) and isinstance(chart_state_override.get("sorting"), list) else (sorting or [])
-        effective_sort_options = chart_state_override.get("sortOptions") if isinstance(chart_state_override, dict) and isinstance(chart_state_override.get("sortOptions"), dict) else (sort_options or sort_options_default or {})
-        effective_expanded = chart_state_override.get("expanded") if isinstance(chart_state_override, dict) else expanded
-        effective_show_row_totals = chart_state_override.get("showRowTotals") if isinstance(chart_state_override, dict) and chart_state_override.get("showRowTotals") is not None else resolved_show_row_totals
-        effective_show_col_totals = chart_state_override.get("showColTotals") if isinstance(chart_state_override, dict) and chart_state_override.get("showColTotals") is not None else resolved_show_col_totals
+        effective_expanded = _state_override_value(request_state_override, "expanded", expanded, (dict, bool))
+        effective_immersive_mode = _state_override_value(request_state_override, "immersiveMode", bool(immersive_mode), bool)
+        effective_show_row_totals = _state_override_value(
+            request_state_override,
+            "showRowTotals",
+            resolved_show_row_totals,
+            bool,
+        )
+        effective_show_col_totals = _state_override_value(
+            request_state_override,
+            "showColTotals",
+            resolved_show_col_totals,
+            bool,
+        )
+        effective_view_mode = _state_override_value(
+            request_state_override,
+            "viewMode",
+            view_mode if isinstance(view_mode, str) else "pivot",
+            str,
+        )
+        effective_detail_mode = _state_override_value(
+            request_state_override,
+            "detailMode",
+            detail_mode if isinstance(detail_mode, str) else "none",
+            str,
+        )
+        effective_tree_config = _state_override_value(
+            request_state_override,
+            "treeConfig",
+            tree_config if isinstance(tree_config, dict) else None,
+            dict,
+            allow_none=True,
+        )
+        effective_detail_config = _state_override_value(
+            request_state_override,
+            "detailConfig",
+            detail_config if isinstance(detail_config, dict) else None,
+            dict,
+            allow_none=True,
+        )
+        effective_report_def = _state_override_value(
+            request_state_override,
+            "reportDef",
+            report_def if isinstance(report_def, dict) else None,
+            dict,
+            allow_none=True,
+        )
         runtime_single_update = None
         runtime_batch_updates = []
         runtime_transaction_request = None
@@ -508,7 +580,7 @@ def register_dash_pivot_transport_callback(
             sorting=effective_sorting,
             sort_options=effective_sort_options,
             expanded=effective_expanded,
-            immersive_mode=bool(immersive_mode),
+            immersive_mode=bool(effective_immersive_mode),
             show_row_totals=effective_show_row_totals,
             show_col_totals=effective_show_col_totals,
             cell_update=runtime_single_update or (cell_update if isinstance(cell_update, dict) else None),
@@ -522,11 +594,11 @@ def register_dash_pivot_transport_callback(
             detail_request=request_payload if request_kind == "detail" and isinstance(request_payload, dict) else None,
             viewport=request_payload if isinstance(request_payload, dict) else {},
             chart_request=request_payload if request_kind == "chart" and isinstance(request_payload, dict) else {},
-            view_mode=view_mode if isinstance(view_mode, str) else "pivot",
-            detail_mode=detail_mode if isinstance(detail_mode, str) else "none",
-            tree_config=tree_config if isinstance(tree_config, dict) else None,
-            detail_config=detail_config if isinstance(detail_config, dict) else None,
-            report_def=report_def if isinstance(report_def, dict) else None,
+            view_mode=effective_view_mode,
+            detail_mode=effective_detail_mode,
+            tree_config=effective_tree_config,
+            detail_config=effective_detail_config,
+            report_def=effective_report_def,
         )
         state_built_at = time.perf_counter()
 

@@ -1087,6 +1087,7 @@ export default function DashTanstackPivot(props) {
         const pinnedColumnMetaRef = useRef({ leftCount: 0, centerCount: 0, rightCount: 0 });
         const previousRowFieldsRef = useRef(initialRowFields);
         const pendingServerFilterOptionsRef = useRef(null);
+        const handledRuntimeResponseKeysRef = useRef(new Set());
         const normalizedChartServerWindow = useMemo(
             () => normalizeChartServerWindowConfig(chartServerWindow),
             [chartServerWindow]
@@ -1629,7 +1630,13 @@ export default function DashTanstackPivot(props) {
         if (Array.isArray(restored.valConfigs)) setValConfigs(normalizeSparklineValConfigsForView(restored.valConfigs, normalizedInitialValConfigs));
         if (sanitizedFilters) setFilters(sanitizedFilters);
         if (Array.isArray(restored.sorting)) setSorting(restored.sorting);
-        if (restored.expanded && typeof restored.expanded === 'object') setExpanded(restored.expanded);
+        if (
+            restored.expanded === true
+            || restored.expanded === false
+            || (restored.expanded && typeof restored.expanded === 'object')
+        ) {
+            setExpanded(restored.expanded);
+        }
         if (typeof restored.immersiveMode === 'boolean') setImmersiveMode(restored.immersiveMode);
         if (typeof restored.showRowTotals === 'boolean') setShowRowTotals(restored.showRowTotals);
         if (typeof restored.showColTotals === 'boolean') setShowColTotals(restored.showColTotals);
@@ -5812,30 +5819,79 @@ export default function DashTanstackPivot(props) {
         return () => window.removeEventListener('keydown', handleGlobalEditShortcut);
     }, [handleRedo, handleUndo]);
 
-    const buildChartStateOverrideSnapshot = useCallback(() => {
-        const normalizedFilters = { ...(filters || {}) };
+    const buildRuntimeRequestStateOverride = useCallback((source = null) => {
+        const snapshot = source && typeof source === 'object' ? source : {};
+        const resolvedValConfigs = Object.prototype.hasOwnProperty.call(snapshot, 'valConfigs')
+            ? snapshot.valConfigs
+            : valConfigs;
         return cloneSerializable({
-            rowFields,
-            colFields,
-            valConfigs,
-            filters: normalizedFilters,
-            sorting,
-            sortOptions: effectiveSortOptions,
-            expanded,
-            showRowTotals,
-            showColTotals,
+            viewMode: Object.prototype.hasOwnProperty.call(snapshot, 'viewMode') ? snapshot.viewMode : viewMode,
+            detailMode: Object.prototype.hasOwnProperty.call(snapshot, 'detailMode') ? snapshot.detailMode : detailMode,
+            treeConfig: Object.prototype.hasOwnProperty.call(snapshot, 'treeConfig') ? snapshot.treeConfig : treeConfig,
+            detailConfig: Object.prototype.hasOwnProperty.call(snapshot, 'detailConfig') ? snapshot.detailConfig : detailConfig,
+            reportDef: Object.prototype.hasOwnProperty.call(snapshot, 'reportDef') ? snapshot.reportDef : reportDef,
+            rowFields: Object.prototype.hasOwnProperty.call(snapshot, 'rowFields') ? snapshot.rowFields : rowFields,
+            colFields: Object.prototype.hasOwnProperty.call(snapshot, 'colFields') ? snapshot.colFields : colFields,
+            valConfigs: normalizeSparklineValConfigsForView(resolvedValConfigs, normalizedInitialValConfigs),
+            filters: Object.prototype.hasOwnProperty.call(snapshot, 'filters')
+                ? { ...(snapshot.filters || {}) }
+                : { ...(filters || {}) },
+            sorting: Object.prototype.hasOwnProperty.call(snapshot, 'sorting') ? snapshot.sorting : sorting,
+            sortOptions: Object.prototype.hasOwnProperty.call(snapshot, 'sortOptions') ? snapshot.sortOptions : effectiveSortOptions,
+            expanded: Object.prototype.hasOwnProperty.call(snapshot, 'expanded') ? snapshot.expanded : expanded,
+            immersiveMode: Object.prototype.hasOwnProperty.call(snapshot, 'immersiveMode') ? snapshot.immersiveMode : immersiveMode,
+            showRowTotals: Object.prototype.hasOwnProperty.call(snapshot, 'showRowTotals') ? snapshot.showRowTotals : showRowTotals,
+            showColTotals: Object.prototype.hasOwnProperty.call(snapshot, 'showColTotals') ? snapshot.showColTotals : showColTotals,
         }, null);
     }, [
+        viewMode,
+        detailMode,
+        treeConfig,
+        detailConfig,
+        reportDef,
         rowFields,
         colFields,
         valConfigs,
+        normalizedInitialValConfigs,
         filters,
         sorting,
         effectiveSortOptions,
         expanded,
+        immersiveMode,
         showRowTotals,
         showColTotals,
     ]);
+
+    const buildChartStateOverrideSnapshot = useCallback(() => (
+        buildRuntimeRequestStateOverride()
+    ), [buildRuntimeRequestStateOverride]);
+
+    const dispatchServerSideRuntimeSetProps = useCallback((nextProps) => {
+        const runtimeRequest = nextProps && typeof nextProps === 'object'
+            ? nextProps.runtimeRequest
+            : null;
+        const payload = runtimeRequest && typeof runtimeRequest === 'object' && runtimeRequest.payload && typeof runtimeRequest.payload === 'object'
+            ? runtimeRequest.payload
+            : null;
+        if (
+            payload
+            && !Object.prototype.hasOwnProperty.call(payload, 'state_override')
+            && !Object.prototype.hasOwnProperty.call(payload, 'stateOverride')
+        ) {
+            dispatchSetProps({
+                ...nextProps,
+                runtimeRequest: {
+                    ...runtimeRequest,
+                    payload: {
+                        ...payload,
+                        state_override: buildRuntimeRequestStateOverride() || undefined,
+                    },
+                },
+            });
+            return;
+        }
+        dispatchSetProps(nextProps);
+    }, [buildRuntimeRequestStateOverride, dispatchSetProps]);
 
     const buildChartRequestBase = useCallback((config, stateOverride = null) => {
         if (!serverSide || needsColSchema || totalCenterCols === null) return null;
@@ -6216,6 +6272,7 @@ export default function DashTanstackPivot(props) {
         detailMode: normalizedInitialDetailMode,
         treeConfig: normalizedInitialTreeConfig,
         detailConfig: normalizedInitialDetailConfig,
+        reportDef,
         rowFields: initialRowFields,
         colFields: initialColFields,
         valConfigs: normalizedInitialValConfigs,
@@ -6239,6 +6296,7 @@ export default function DashTanstackPivot(props) {
             detailMode,
             treeConfig,
             detailConfig,
+            reportDef,
             rowFields, colFields, valConfigs, filters, sorting, sortOptions: effectiveSortOptions, expanded,
             immersiveMode, showRowTotals, showColTotals, columnPinning, rowPinning, columnVisibility, columnSizing
         };
@@ -6268,6 +6326,7 @@ export default function DashTanstackPivot(props) {
             const isSortingOnly = serverSide && changedKeys.length > 0 && changedKeys.every(key => key === 'sorting');
             const isUiOnlyChange = changedKeys.length > 0 && changedKeys.every(key => uiOnlyKeys.has(key));
             const grandTotalPinModeChanged = JSON.stringify(serverSidePinsGrandTotal) !== JSON.stringify(lastPropsRef.current.serverSidePinsGrandTotal);
+            const requestStateOverride = buildRuntimeRequestStateOverride(nextProps);
 
             lastPropsRef.current = nextSyncState;
 
@@ -6349,6 +6408,7 @@ export default function DashTanstackPivot(props) {
                             col_end: expansionColumnWindow.end !== null ? expansionColumnWindow.end : undefined,
                             needs_col_schema: needsColSchemaRef.current && serverSide || undefined,
                             include_grand_total: serverSidePinsGrandTotal || undefined,
+                            state_override: requestStateOverride || undefined,
                         },
                     },
                 });
@@ -6395,6 +6455,7 @@ export default function DashTanstackPivot(props) {
                             col_end: sortingColumnWindow.end !== null ? sortingColumnWindow.end : undefined,
                             include_grand_total: serverSidePinsGrandTotal || undefined,
                             immersive_mode: immersiveMode || undefined,
+                            state_override: requestStateOverride || undefined,
                         },
                     },
                 });
@@ -6446,11 +6507,12 @@ export default function DashTanstackPivot(props) {
                         needs_col_schema: serverSide || undefined,
                         include_grand_total: serverSidePinsGrandTotal || undefined,
                         immersive_mode: immersiveMode || undefined,
+                        state_override: requestStateOverride || undefined,
                     },
                 },
             });
         }
-    }, [viewMode, detailMode, treeConfig, detailConfig, rowFields, colFields, valConfigs, filters, sorting, effectiveSortOptions, expanded, immersiveMode, showRowTotals, showColTotals, columnPinning, rowPinning, grandTotalPinOverride, columnVisibility, columnSizing, beginStructuralTransaction, beginExpansionRequest, markRequestPending, resolveStableRequestedColumnWindow, serverSide, serverSideBlockSize, tableName, serverSidePinsGrandTotal]);
+    }, [viewMode, detailMode, treeConfig, detailConfig, reportDef, rowFields, colFields, valConfigs, filters, sorting, effectiveSortOptions, expanded, immersiveMode, showRowTotals, showColTotals, columnPinning, rowPinning, grandTotalPinOverride, columnVisibility, columnSizing, beginStructuralTransaction, beginExpansionRequest, buildRuntimeRequestStateOverride, markRequestPending, resolveStableRequestedColumnWindow, serverSide, serverSideBlockSize, tableName, serverSidePinsGrandTotal]);
 
     useEffect(() => {
         const handleClick = () => setContextMenu(null);
@@ -7535,18 +7597,27 @@ export default function DashTanstackPivot(props) {
         autoSizeVisibleColumns(true);
     }, [autoSizeVisibleColumns]);
 
-    const handleFilterClick = (e, columnId) => {
+    const requestFilterOptions = useCallback((columnId) => {
+        if (!serverSide || !columnId) return false;
+        if (Object.prototype.hasOwnProperty.call(filterOptions || {}, columnId)) {
+            pendingServerFilterOptionsRef.current = null;
+            return false;
+        }
+        if (pendingServerFilterOptionsRef.current === columnId) {
+            return false;
+        }
+        pendingServerFilterOptionsRef.current = columnId;
+        emitRuntimeRequest('filter_options', { columnId, nonce: Date.now() });
+        return true;
+    }, [emitRuntimeRequest, filterOptions, serverSide]);
+
+    const handleFilterClick = useCallback((e, columnId) => {
         if (!uiConfig.showFilters) return;
         e.stopPropagation();
         setActiveFilterCol(columnId);
         setFilterAnchorEl(e.currentTarget);
-        emitRuntimeRequest('filter_options', { columnId, nonce: Date.now() });
-    };
-
-    const requestFilterOptions = useCallback((columnId) => {
-        if (!columnId) return;
-        emitRuntimeRequest('filter_options', { columnId, nonce: Date.now() });
-    }, [emitRuntimeRequest]);
+        requestFilterOptions(columnId);
+    }, [requestFilterOptions, uiConfig.showFilters]);
 
     useEffect(() => {
         if (!serverSide || !activeFilterCol) {
@@ -7557,10 +7628,6 @@ export default function DashTanstackPivot(props) {
             pendingServerFilterOptionsRef.current = null;
             return;
         }
-        if (pendingServerFilterOptionsRef.current === activeFilterCol) {
-            return;
-        }
-        pendingServerFilterOptionsRef.current = activeFilterCol;
         requestFilterOptions(activeFilterCol);
     }, [serverSide, activeFilterCol, filterOptions, requestFilterOptions]);
 
@@ -7706,7 +7773,7 @@ export default function DashTanstackPivot(props) {
         data: filteredData,
         dataOffset: dataOffset || 0,
         dataVersion: dataVersion || 0,
-        setProps: dispatchSetProps,
+        setProps: dispatchServerSideRuntimeSetProps,
         blockSize: serverSideBlockSize,
         maxBlocksInCache: normalizedPerformanceConfig.maxBlocksInCache || 500,
         blockLoadDebounceMs: normalizedPerformanceConfig.blockLoadDebounceMs,
@@ -9515,12 +9582,44 @@ export default function DashTanstackPivot(props) {
         liveChartStateFingerprint,
     ]);
 
+    const buildRuntimeResponseProcessingKey = useCallback((response, payload) => {
+        if (!response || typeof response !== 'object') return null;
+        const kind = response.kind || 'unknown';
+        const status = response.status || 'unknown';
+        const requestId = response.requestId
+            || response.request_id
+            || (payload && (payload.requestId || payload.request_id));
+        if (requestId !== undefined && requestId !== null) {
+            return `${kind}:${status}:${requestId}`;
+        }
+        if (kind === 'filter_options' && payload && typeof payload === 'object') {
+            const columnId = payload.columnId || payload.column_id || '';
+            const optionCount = Array.isArray(payload.options) ? payload.options.length : 0;
+            return `${kind}:${status}:${columnId}:${optionCount}`;
+        }
+        return null;
+    }, []);
+
+    const markRuntimeResponseHandled = useCallback((responseKey) => {
+        if (!responseKey) return true;
+        const handledKeys = handledRuntimeResponseKeysRef.current;
+        if (handledKeys.has(responseKey)) return false;
+        handledKeys.add(responseKey);
+        if (handledKeys.size > 128) {
+            const oldestKey = handledKeys.values().next().value;
+            handledKeys.delete(oldestKey);
+        }
+        return true;
+    }, []);
+
     useEffect(() => {
         if (!runtimeResponse || typeof runtimeResponse !== 'object') return;
-        recordProfilerResponse(runtimeResponse);
         const payload = runtimeResponse.payload && typeof runtimeResponse.payload === 'object'
             ? runtimeResponse.payload
             : {};
+        const responseProcessingKey = buildRuntimeResponseProcessingKey(runtimeResponse, payload);
+        if (responseProcessingKey && !markRuntimeResponseHandled(responseProcessingKey)) return;
+        recordProfilerResponse(runtimeResponse);
 
         if ((runtimeResponse.kind === 'data' || runtimeResponse.kind === 'update' || runtimeResponse.kind === 'transaction') && runtimeResponse.status === 'data') {
             finalizeTransactionHistoryResponse(runtimeResponse, payload);
@@ -9576,18 +9675,35 @@ export default function DashTanstackPivot(props) {
         if (runtimeResponse.kind === 'filter_options' && runtimeResponse.status === 'ok') {
             const columnId = payload.columnId || payload.column_id;
             if (!columnId) return;
-            setTransportFilterOptionsState((previousState) => ({
-                ...(previousState || {}),
-                [columnId]: Array.isArray(payload.options) ? payload.options : [],
-            }));
-            setEditorOptionsLoadingState((previousState) => ({
-                ...previousState,
-                [columnId]: false,
-            }));
+            const nextOptions = Array.isArray(payload.options) ? payload.options : [];
+            if (pendingServerFilterOptionsRef.current === columnId) {
+                pendingServerFilterOptionsRef.current = null;
+            }
+            setTransportFilterOptionsState((previousState) => {
+                const previousOptions = previousState && previousState[columnId];
+                if (
+                    Array.isArray(previousOptions)
+                    && previousOptions.length === nextOptions.length
+                    && previousOptions.every((value, index) => value === nextOptions[index])
+                ) {
+                    return previousState;
+                }
+                return {
+                    ...(previousState || {}),
+                    [columnId]: nextOptions,
+                };
+            });
+            setEditorOptionsLoadingState((previousState) => {
+                if (previousState && previousState[columnId] === false) return previousState;
+                return {
+                    ...previousState,
+                    [columnId]: false,
+                };
+            });
             emitEditLifecycleEvent({
                 kind: 'editor_options_loaded',
                 sourceColumnId: columnId,
-                optionCount: Array.isArray(payload.options) ? payload.options.length : 0,
+                optionCount: nextOptions.length,
             });
             if (profilingEnabledRef.current && runtimeResponse.requestId && pivotProfilerRef.current) {
                 pivotProfilerRef.current.resolve({
@@ -9602,10 +9718,16 @@ export default function DashTanstackPivot(props) {
         if (runtimeResponse.kind === 'filter_options' && runtimeResponse.status === 'error') {
             const columnId = payload.columnId || payload.column_id;
             if (columnId) {
-                setEditorOptionsLoadingState((previousState) => ({
-                    ...previousState,
-                    [columnId]: false,
-                }));
+                if (pendingServerFilterOptionsRef.current === columnId) {
+                    pendingServerFilterOptionsRef.current = null;
+                }
+                setEditorOptionsLoadingState((previousState) => {
+                    if (previousState && previousState[columnId] === false) return previousState;
+                    return {
+                        ...previousState,
+                        [columnId]: false,
+                    };
+                });
             }
             return;
         }
@@ -9653,7 +9775,7 @@ export default function DashTanstackPivot(props) {
                 status: runtimeResponse.status,
             });
         }
-    }, [clearPendingTransactionHistoryRequest, emitEditLifecycleEvent, finalizeTransactionHistoryResponse, hydrateVisibleEditOverlay, reconcileOptimisticCellValuesWithPayload, recordProfilerResponse, runtimeResponse]);
+    }, [buildRuntimeResponseProcessingKey, clearPendingTransactionHistoryRequest, emitEditLifecycleEvent, finalizeTransactionHistoryResponse, hydrateVisibleEditOverlay, markRuntimeResponseHandled, reconcileOptimisticCellValuesWithPayload, recordProfilerResponse, runtimeResponse]);
 
     useEffect(() => {
         if (!chartData || typeof chartData !== 'object') return;
@@ -10007,49 +10129,94 @@ export default function DashTanstackPivot(props) {
             setDropLine({ zone, idx: e.clientY > mid ? idx + 1 : idx });
         }
     };
+    const applyFieldZoneMove = useCallback(({
+        field,
+        srcZone,
+        srcIdx = -1,
+        targetZone,
+        targetIdx = 0,
+        source = 'layout:zone-drop',
+    } = {}) => {
+        const draggedValueConfig = typeof field === 'object' && field ? field : null;
+        const isFormulaValue = Boolean(draggedValueConfig && draggedValueConfig.agg === 'formula');
+        const fieldName = typeof field === 'string' ? field : field.field;
+        if (!fieldName || typeof fieldName !== 'string') return false;
+        if (!['rows', 'cols', 'vals', 'filter'].includes(targetZone)) return false;
+        if (isFormulaValue && targetZone !== 'vals') {
+            showNotification('Formula columns can only stay in Values.', 'warning');
+            return false;
+        }
+        const numericTargetIdx = Number(targetIdx);
+        const safeTargetIdx = Number.isFinite(numericTargetIdx)
+            ? Math.max(0, Math.floor(numericTargetIdx))
+            : 0;
+        const insertItem = (list, idx, item) => {
+            const next = [...list];
+            next.splice(Math.min(Math.max(idx, 0), next.length), 0, item);
+            return next;
+        };
+        const moveItem = (list, idx, target, setList) => {
+            if (!Number.isInteger(idx) || idx < 0 || idx >= list.length) return false;
+            const next = [...list];
+            const [moved] = next.splice(idx, 1);
+            let insertAt = Math.min(Math.max(target, 0), next.length);
+            if (idx < target) insertAt = Math.max(0, insertAt - 1);
+            next.splice(insertAt, 0, moved);
+            setList(next);
+            return true;
+        };
+        const defaultValueConfig = () => {
+            const autoSparklineCfg = sparklineFields && sparklineFields[fieldName];
+            return autoSparklineCfg
+                ? { field: fieldName, agg: 'array_agg', sparkline: { ...autoSparklineCfg } }
+                : { field: fieldName, agg: 'sum' };
+        };
+
+        if (srcZone !== targetZone) {
+            if (srcZone==='rows') setRowFieldsWithHistory((p) => p.filter(f => f !== fieldName), source);
+            if (srcZone==='cols') setColFieldsWithHistory((p) => p.filter(f => f !== fieldName), source);
+            if (srcZone==='vals') {
+                setValConfigsWithHistory((p) => (
+                    Number.isInteger(srcIdx) && srcIdx >= 0
+                        ? p.filter((_, i) => i !== srcIdx)
+                        : p.filter(f => f.field !== fieldName)
+                ), source);
+            }
+            if (targetZone==='rows') setRowFieldsWithHistory((p) => (p.includes(fieldName) ? p : insertItem(p, safeTargetIdx, fieldName)), source);
+            if (targetZone==='cols') setColFieldsWithHistory((p) => (p.includes(fieldName) ? p : insertItem(p, safeTargetIdx, fieldName)), source);
+            if (targetZone==='vals') {
+                setValConfigsWithHistory((p) => insertItem(p, safeTargetIdx, draggedValueConfig ? { ...draggedValueConfig } : defaultValueConfig()), source);
+            }
+            if (targetZone==='filter' && !Object.prototype.hasOwnProperty.call(filters || {}, fieldName)) {
+                requestLayoutHistoryCapture(source);
+                setFilters(p => ({ ...(p || {}), [fieldName]: '' }));
+            }
+            return true;
+        } else {
+            if (targetZone==='rows') return moveItem(rowFields, srcIdx, safeTargetIdx, (next) => setRowFieldsWithHistory(next, source));
+            if (targetZone==='cols') return moveItem(colFields, srcIdx, safeTargetIdx, (next) => setColFieldsWithHistory(next, source));
+            if (targetZone==='vals') return moveItem(valConfigs, srcIdx, safeTargetIdx, (next) => setValConfigsWithHistory(next, source));
+        }
+        return false;
+    }, [
+        colFields,
+        filters,
+        requestLayoutHistoryCapture,
+        rowFields,
+        setColFieldsWithHistory,
+        setFilters,
+        setRowFieldsWithHistory,
+        setValConfigsWithHistory,
+        showNotification,
+        sparklineFields,
+        valConfigs,
+    ]);
     const onDrop = (e, targetZone) => {
         e.preventDefault();
         if (!dragItem) return;
         const { field, zone: srcZone, idx: srcIdx } = dragItem;
-        const draggedValueConfig = typeof field === 'object' && field ? field : null;
-        const isFormulaValue = Boolean(draggedValueConfig && draggedValueConfig.agg === 'formula');
         const targetIdx = (dropLine && dropLine.idx) || 0;
-        const insertItem = (list, idx, item) => { const n = [...list]; n.splice(idx, 0, item); return n; };
-        const fieldName = typeof field === 'string' ? field : field.field;
-        if (!fieldName || typeof fieldName !== 'string') { setDragItem(null); setDropLine(null); return; }
-        if (isFormulaValue && targetZone !== 'vals') {
-            showNotification('Formula columns can only stay in Values.', 'warning');
-            setDragItem(null);
-            setDropLine(null);
-            return;
-        }
-        if (srcZone !== targetZone) {
-            if (srcZone==='rows') setRowFieldsWithHistory((p) => p.filter(f => f !== fieldName), 'layout:zone-drop');
-            if (srcZone==='cols') setColFieldsWithHistory((p) => p.filter(f => f !== fieldName), 'layout:zone-drop');
-            if (srcZone==='vals') setValConfigsWithHistory((p) => p.filter((_, i) => i !== srcIdx), 'layout:zone-drop');
-            if (targetZone==='rows') setRowFieldsWithHistory((p) => (p.includes(fieldName) ? p : insertItem(p, targetIdx, fieldName)), 'layout:zone-drop');
-            if (targetZone==='cols') setColFieldsWithHistory((p) => (p.includes(fieldName) ? p : insertItem(p, targetIdx, fieldName)), 'layout:zone-drop');
-            if (targetZone==='vals') {
-                const autoSparklineCfg = sparklineFields && sparklineFields[fieldName];
-                const defaultConfig = autoSparklineCfg
-                    ? { field: fieldName, agg: 'array_agg', sparkline: autoSparklineCfg }
-                    : { field: fieldName, agg: 'sum' };
-                setValConfigsWithHistory((p) => insertItem(p, targetIdx, draggedValueConfig || defaultConfig), 'layout:zone-drop');
-            }
-            if (targetZone==='filter' && !filters.hasOwnProperty(fieldName)) {
-                requestLayoutHistoryCapture('layout:zone-drop');
-                setFilters(p => ({ ...p, [fieldName]: '' }));
-            }
-        } else {
-            const move = (list, setList) => {
-                const n = [...list]; const [moved] = n.splice(srcIdx, 1);
-                let ins = targetIdx; if (srcIdx < targetIdx) ins -= 1;
-                n.splice(ins, 0, moved); setList(n);
-            };
-            if (targetZone==='rows') move(rowFields, (next) => setRowFieldsWithHistory(next, 'layout:zone-drop'));
-            if (targetZone==='cols') move(colFields, (next) => setColFieldsWithHistory(next, 'layout:zone-drop'));
-            if (targetZone==='vals') move(valConfigs, (next) => setValConfigsWithHistory(next, 'layout:zone-drop'));
-        }
+        applyFieldZoneMove({ field, srcZone, srcIdx, targetZone, targetIdx, source: 'layout:zone-drop' });
         setDragItem(null); setDropLine(null);
     };
 
@@ -11000,6 +11167,7 @@ export default function DashTanstackPivot(props) {
                         selectedCols={selectedCols} setSelectedCols={setSelectedCols}
                         dropLine={dropLine}
                         onDragStart={onDragStart} onDragOver={onDragOver} onDrop={onDrop}
+                        onKeyboardFieldDrop={applyFieldZoneMove}
                         handleHeaderFilter={handleHeaderFilter}
                         handleFilterClick={handleFilterClick}
                         requestFilterOptions={requestFilterOptions}

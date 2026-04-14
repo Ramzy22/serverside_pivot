@@ -2033,6 +2033,30 @@ def test_cell_sparkline_source_supports_pivot_summary_and_ag_grid_style_series()
     assert "Cell display" in sidebar_source
 
 
+def test_sparse_schema_row_totals_do_not_render_blank_placeholders():
+    column_source = Path(
+        os.path.join(
+            os.getcwd(),
+            "dash_tanstack_pivot",
+            "src",
+            "lib",
+            "hooks",
+            "useColumnDefs.js",
+        )
+    ).read_text(encoding="utf-8")
+
+    row_total_guard = "if (isRowTotalColumnId(entryId))"
+    placeholder_emit = "sparseDataCols.push(buildPlaceholderColumn(index, schemaSize));"
+
+    assert "const isRowTotalColumnId = (columnId) => (" in column_source
+    assert ".filter(isRowTotalColumnId)" in column_source
+    assert "Row totals are rendered as auxiliary columns after the pivot tree." in column_source
+    assert row_total_guard in column_source
+    assert column_source.index(row_total_guard) < column_source.index(placeholder_emit)
+    assert "const pivotCols = flatCols.filter(c => !isRowTotalColumnId(c.id));" in column_source
+    assert ".filter(c => isRowTotalColumnId(c.id))" in column_source
+
+
 def test_frontend_sorting_source_preserves_multisort_priority_and_metadata():
     component_source = Path(
         os.path.join(
@@ -2514,6 +2538,108 @@ def test_structural_requests_restart_from_top_window_after_field_changes():
     assert "const structuralEnd = structuralWindowSize - 1;" in source
 
 
+def test_view_state_restore_rehydrates_server_side_runtime_requests():
+    component_source = Path(
+        os.path.join(
+            os.getcwd(),
+            "dash_tanstack_pivot",
+            "src",
+            "lib",
+            "components",
+            "DashTanstackPivot.react.js",
+        )
+    ).read_text(encoding="utf-8")
+    callback_source = Path(
+        os.path.join(
+            os.getcwd(),
+            "dash_tanstack_pivot",
+            "pivot_engine",
+            "pivot_engine",
+            "runtime",
+            "dash_callbacks.py",
+        )
+    ).read_text(encoding="utf-8")
+
+    assert "restored.expanded === true" in component_source
+    assert "restored.expanded === false" in component_source
+    assert "const buildRuntimeRequestStateOverride = useCallback" in component_source
+    assert "state_override: requestStateOverride || undefined" in component_source
+    assert "const dispatchServerSideRuntimeSetProps = useCallback" in component_source
+    assert "setProps: dispatchServerSideRuntimeSetProps" in component_source
+    assert "state_override: buildRuntimeRequestStateOverride() || undefined" in component_source
+    assert "reportDef," in component_source
+
+    assert "_extract_request_state_override" in callback_source
+    assert "request_state_override = _extract_request_state_override(request_payload)" in callback_source
+    assert '_state_override_value(request_state_override, "rowFields", row_fields or [], list)' in callback_source
+    assert '_state_override_value(request_state_override, "expanded", expanded, (dict, bool))' in callback_source
+    assert 'view_mode=effective_view_mode' in callback_source
+    assert 'report_def=effective_report_def' in callback_source
+
+
+def test_filter_open_requests_and_responses_are_idempotent():
+    component_source = Path(
+        os.path.join(
+            os.getcwd(),
+            "dash_tanstack_pivot",
+            "src",
+            "lib",
+            "components",
+            "DashTanstackPivot.react.js",
+        )
+    ).read_text(encoding="utf-8")
+    filter_popover_source = Path(
+        os.path.join(
+            os.getcwd(),
+            "dash_tanstack_pivot",
+            "src",
+            "lib",
+            "components",
+            "Filters",
+            "FilterPopover.js",
+        )
+    ).read_text(encoding="utf-8")
+    column_filter_source = Path(
+        os.path.join(
+            os.getcwd(),
+            "dash_tanstack_pivot",
+            "src",
+            "lib",
+            "components",
+            "Filters",
+            "ColumnFilter.js",
+        )
+    ).read_text(encoding="utf-8")
+    sidebar_filter_item_source = Path(
+        os.path.join(
+            os.getcwd(),
+            "dash_tanstack_pivot",
+            "src",
+            "lib",
+            "components",
+            "Sidebar",
+            "SidebarFilterItem.js",
+        )
+    ).read_text(encoding="utf-8")
+
+    assert "const handledRuntimeResponseKeysRef = useRef(new Set());" in component_source
+    assert "const buildRuntimeResponseProcessingKey = useCallback" in component_source
+    assert "const markRuntimeResponseHandled = useCallback" in component_source
+    assert "if (responseProcessingKey && !markRuntimeResponseHandled(responseProcessingKey)) return;" in component_source
+    assert "Object.prototype.hasOwnProperty.call(filterOptions || {}, columnId)" in component_source
+    assert "pendingServerFilterOptionsRef.current = columnId;" in component_source
+    assert "const handleFilterClick = useCallback" in component_source
+    assert "previousOptions.every((value, index) => value === nextOptions[index])" in component_source
+
+    assert "const columnPositionKey =" in filter_popover_source
+    assert "[anchorEl, columnAnchorTarget, columnPositionKey]" in filter_popover_source
+
+    assert "if (tab !== 'condition') return;" in column_filter_source
+    assert "[options && options.length, isDate, tab]" in column_filter_source
+    assert "const closeFilterEditor = () => setExpanded(false);" in sidebar_filter_item_source
+    assert "onClose={closeFilterEditor}" in sidebar_filter_item_source
+
+
 def test_row_cache_merges_rows_by_stable_identity_when_column_windows_shift():
     source = Path(
         os.path.join(
@@ -2529,6 +2655,77 @@ def test_row_cache_merges_rows_by_stable_identity_when_column_windows_shift():
     assert "getRowMergeKey" in source
     assert "previousByKey" in source
     assert "rows: mergedRows" in source
+
+
+def test_frontend_resilience_source_handles_reset_jank_cell_errors_and_keyboard_dnd():
+    row_model_source = Path(
+        os.path.join(
+            os.getcwd(),
+            "dash_tanstack_pivot",
+            "src",
+            "lib",
+            "hooks",
+            "useServerSideRowModel.js",
+        )
+    ).read_text(encoding="utf-8")
+    render_helpers_source = Path(
+        os.path.join(
+            os.getcwd(),
+            "dash_tanstack_pivot",
+            "src",
+            "lib",
+            "hooks",
+            "useRenderHelpers.js",
+        )
+    ).read_text(encoding="utf-8")
+    sidebar_source = Path(
+        os.path.join(
+            os.getcwd(),
+            "dash_tanstack_pivot",
+            "src",
+            "lib",
+            "components",
+            "Sidebar",
+            "SidebarPanel.js",
+        )
+    ).read_text(encoding="utf-8")
+    component_source = Path(
+        os.path.join(
+            os.getcwd(),
+            "dash_tanstack_pivot",
+            "src",
+            "lib",
+            "components",
+            "DashTanstackPivot.react.js",
+        )
+    ).read_text(encoding="utf-8")
+
+    assert "lifecycleResetRef" in row_model_source
+    assert "resetViewportRequestState" in row_model_source
+    assert "resolveRetentionBufferBlocks" in row_model_source
+    assert "recentFastScroll" in row_model_source
+    assert "hasFreshInflight" in row_model_source
+    assert "const retentionBufferBlocks = resolveRetentionBufferBlocks(2);" in row_model_source
+
+    assert "class CellErrorBoundary extends React.Component" in render_helpers_source
+    assert "data-pivot-cell-error=\"true\"" in render_helpers_source
+    assert "function SafeCellContent({ render })" in render_helpers_source
+    assert "render={() => flexRender(col.columnDef.cell, displayCellLike.getContext())}" in render_helpers_source
+
+    assert "const valueSelectStyle = React.useMemo" in sidebar_source
+    assert "const zoneDescriptors = React.useMemo" in sidebar_source
+    assert "const zoneItemsById = React.useMemo" in sidebar_source
+    assert "keyboardDragItem" in sidebar_source
+    assert "onKeyboardFieldDrop" in sidebar_source
+    assert "data-sidebar-field-chip=\"available\"" in sidebar_source
+    assert "data-sidebar-drop-zone={zone.id}" in sidebar_source
+    assert "aria-grabbed=" in sidebar_source
+    assert "handleDraggableKeyDown" in sidebar_source
+    assert "handleDropZoneKeyDown" in sidebar_source
+
+    assert "const applyFieldZoneMove = useCallback" in component_source
+    assert "source: 'layout:keyboard-drop'" in sidebar_source
+    assert "onKeyboardFieldDrop={applyFieldZoneMove}" in component_source
 
 
 @pytest.mark.asyncio

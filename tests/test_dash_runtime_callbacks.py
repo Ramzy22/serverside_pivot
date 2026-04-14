@@ -20,9 +20,11 @@ from pivot_engine.runtime import (
 )
 from pivot_engine.runtime.dash_callbacks import (
     _build_runtime_response,
+    _extract_request_state_override,
     _format_transport_callback_output,
     _is_bootstrap_without_viewport,
     _normalize_transport_request,
+    _state_override_value,
 )
 from pivot_engine.runtime.async_bridge import run_awaitable_in_worker_thread, run_awaitable_sync
 
@@ -390,6 +392,33 @@ def test_runtime_request_wins_when_present():
 
     assert request["kind"] == "data"
     assert request["request_id"] == "req-runtime"
+
+
+def test_runtime_request_state_override_is_extracted_for_all_request_kinds():
+    override = {
+        "rowFields": ["desk", "book"],
+        "colFields": ["scenario"],
+        "valConfigs": [{"id": "pnl", "field": "pnl", "agg": "sum"}],
+        "filters": {"region": ["EMEA"]},
+        "sorting": [{"id": "pnl_sum", "desc": True}],
+        "sortOptions": {"mode": "absolute"},
+        "expanded": True,
+        "showRowTotals": False,
+        "showColTotals": True,
+        "viewMode": "report",
+        "reportDef": {"levels": [{"field": "desk"}]},
+    }
+
+    assert _extract_request_state_override({"state_override": override}) is override
+    assert _extract_request_state_override({"stateOverride": override}) is override
+    assert _extract_request_state_override({"state_override": []}) is None
+    assert _extract_request_state_override(None) is None
+
+    assert _state_override_value(override, "rowFields", ["stale"], list) == ["desk", "book"]
+    assert _state_override_value(override, "expanded", {}, (dict, bool)) is True
+    assert _state_override_value(override, "showRowTotals", True, bool) is False
+    assert _state_override_value(override, "missing", "fallback", str) == "fallback"
+    assert _state_override_value(override, "rowFields", "fallback", dict) == "fallback"
 
 
 def test_transport_callback_output_is_plain_object_for_single_output():

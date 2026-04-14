@@ -8,11 +8,13 @@ const VIEWPORT_PADDING = 16;
 const FilterPopover = ({ column, anchorEl, onClose, onFilter, currentFilter, options = [], theme }) => {
     const [position, setPosition] = useState(null);
     const popoverRef = useRef(null);
+    const columnAnchorTarget = typeof Element !== 'undefined' && column instanceof Element ? column : null;
+    const columnPositionKey = columnAnchorTarget || (column && (column.id || column.header)) || null;
 
     useEffect(() => {
-        const target = anchorEl || (typeof Element !== 'undefined' && column instanceof Element ? column : null);
+        const target = anchorEl || columnAnchorTarget;
         if (!target) {
-            setPosition(null);
+            setPosition(prevPosition => (prevPosition === null ? prevPosition : null));
             return;
         }
 
@@ -38,7 +40,7 @@ const FilterPopover = ({ column, anchorEl, onClose, onFilter, currentFilter, opt
             }
             return { top, left };
         });
-    }, [anchorEl, column]);
+    }, [anchorEl, columnAnchorTarget, columnPositionKey]);
 
     if (!position) {
         return null;

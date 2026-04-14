@@ -8,6 +8,67 @@ import { formatDisplayLabel } from '../utils/helpers';
 import { EDITED_CELL_FORMAT_KEY } from '../utils/formatting';
 import { findSortSpecifier, isAbsoluteSortSpecifier } from '../utils/sorting';
 
+const CELL_ERROR_FALLBACK_STYLE = {
+    color: 'var(--pivot-danger-color, #b42318)',
+    fontSize: '11px',
+    fontWeight: 600,
+    overflow: 'hidden',
+    textOverflow: 'ellipsis',
+    whiteSpace: 'nowrap',
+};
+
+function isPlainRenderableObject(value) {
+    return value
+        && typeof value === 'object'
+        && !Array.isArray(value)
+        && !React.isValidElement(value);
+}
+
+class CellErrorBoundary extends React.Component {
+    constructor(props) {
+        super(props);
+        this.state = { hasError: false };
+    }
+
+    static getDerivedStateFromError() {
+        return { hasError: true };
+    }
+
+    componentDidUpdate(prevProps) {
+        if (prevProps.resetKey !== this.props.resetKey && this.state.hasError) {
+            this.setState({ hasError: false });
+        }
+    }
+
+    render() {
+        if (this.state.hasError) {
+            return (
+                <span
+                    data-pivot-cell-error="true"
+                    role="status"
+                    aria-label="Cell render failed"
+                    style={CELL_ERROR_FALLBACK_STYLE}
+                >
+                    Cell error
+                </span>
+            );
+        }
+        return this.props.children;
+    }
+}
+
+function SafeCellContent({ render }) {
+    const rendered = render();
+    if (isPlainRenderableObject(rendered) || (Array.isArray(rendered) && rendered.some(isPlainRenderableObject))) {
+        try {
+            return JSON.stringify(rendered);
+        } catch {
+            return String(rendered);
+        }
+    }
+    return rendered;
+}
+
 /**
  * useRenderHelpers — extracts renderCell and renderHeaderCell from DashTanstackPivot.
  *
@@ -254,7 +315,14 @@ export function useRenderHelpers({
             if (showPendingColumnPlaceholder) {
                 cellContent = <span aria-hidden="true" style={SKELETON_CELL_STYLE} />;
             } else {
-                cellContent = flexRender(col.columnDef.cell, displayCellLike.getContext());
+                const resetValue = resolvedCellValue === null || typeof resolvedCellValue !== 'object'
+                    ? String(resolvedCellValue)
+                    : '';
+                cellContent = (
+                    <CellErrorBoundary resetKey={`${cellLike.id}:${editedCellEpoch}:${resetValue}`}>
+                        <SafeCellContent render={() => flexRender(col.columnDef.cell, displayCellLike.getContext())} />
+                    </CellErrorBoundary>
+                );
             }
         }
 

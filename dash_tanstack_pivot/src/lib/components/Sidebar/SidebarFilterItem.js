@@ -6,6 +6,7 @@ import { formatDisplayLabel } from '../../utils/helpers';
 const SidebarFilterItem = ({ column, theme, styles, onFilter, currentFilter, options, onOpen }) => {
     const [expanded, setExpanded] = useState(false);
     const hasFilter = currentFilter && (currentFilter.conditions || currentFilter.value);
+    const closeFilterEditor = () => setExpanded(false);
     const handleToggle = () => {
         const nextExpanded = !expanded;
         setExpanded(nextExpanded);
@@ -41,6 +42,7 @@ const SidebarFilterItem = ({ column, theme, styles, onFilter, currentFilter, opt
                         currentFilter={currentFilter}
                         options={options}
                         theme={theme}
+                        onClose={closeFilterEditor}
                     />
                 </div>
             )}

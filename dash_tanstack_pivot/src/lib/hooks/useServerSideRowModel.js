@@ -168,6 +168,56 @@ export const useServerSideRowModel = ({
     const lastHandledColumnRangeUrgencyRef = useRef(0);
     // Throttle pruneToRange: only run when the viewport block range shifts by ≥1 block.
     const lastPrunedRangeRef = useRef({ startBlock: -1, endBlock: -1 });
+    const lifecycleResetRef = useRef({
+        initialized: false,
+        serverSide: false,
+        stateEpoch: null,
+        cacheKey: null,
+        abortGeneration: null,
+    });
+
+    const resetViewportRequestState = useCallback(({
+        resetColumnWindow = false,
+        abort = false,
+        urgencyToken = 0,
+    } = {}) => {
+        inflightRequestRef.current = null;
+        pendingViewportRef.current = null;
+        queuedViewportRef.current = null;
+        if (resetColumnWindow) {
+            lastRequestedColStartRef.current = null;
+            lastRequestedColEndRef.current = null;
+        }
+        lastViewportDispatchAtRef.current = 0;
+        lastObservedScrollTopRef.current = parentRef.current ? parentRef.current.scrollTop : 0;
+        lastFastScrollDispatchRef.current = { startBlock: -1, endBlock: -1, dispatchedAt: 0 };
+        lastImmediateViewportRef.current = {
+            startBlock: -1,
+            endBlock: -1,
+            colStart: null,
+            colEnd: null,
+            dispatchedAt: 0,
+        };
+        lastHandledColumnRangeUrgencyRef.current = urgencyToken;
+        lastPrunedRangeRef.current = { startBlock: -1, endBlock: -1 };
+        if (viewportFlushTimerRef.current) {
+            clearTimeout(viewportFlushTimerRef.current);
+            viewportFlushTimerRef.current = null;
+        }
+        if (abort && viewportAbortControllerRef.current) {
+            viewportAbortControllerRef.current.abort();
+            viewportAbortControllerRef.current = new AbortController();
+        }
+    }, [parentRef]);
+
+    const resolveRetentionBufferBlocks = useCallback((base = 2) => {
+        const now = Date.now();
+        const recentFastScroll = lastFastScrollDispatchRef.current.dispatchedAt > 0
+            && (now - lastFastScrollDispatchRef.current.dispatchedAt) < 650;
+        const hasFreshInflight = inflightRequestRef.current
+            && (now - inflightRequestRef.current.timestamp) < 1500;
+        return recentFastScroll || hasFreshInflight ? Math.max(base, 8) : base;
+    }, []);
 
     useEffect(() => {
         isMountedRef.current = true;
@@ -212,86 +262,65 @@ export const useServerSideRowModel = ({
     }, [serverSide, rowCount, rowHeight, rowVirtualizer]);
 
     useEffect(() => {
-        if (!serverSide) return;
-        setCurrentEpoch(stateEpoch);
-        inflightRequestRef.current = null;
-        queuedViewportRef.current = null;
-        lastRequestedColStartRef.current = null;
-        lastRequestedColEndRef.current = null;
-        lastViewportDispatchAtRef.current = 0;
-        lastObservedScrollTopRef.current = parentRef.current ? parentRef.current.scrollTop : 0;
-        lastFastScrollDispatchRef.current = { startBlock: -1, endBlock: -1, dispatchedAt: 0 };
-        lastImmediateViewportRef.current = {
-            startBlock: -1,
-            endBlock: -1,
-            colStart: null,
-            colEnd: null,
-            dispatchedAt: 0,
-        };
-        lastHandledColumnRangeUrgencyRef.current = columnRangeUrgencyToken;
-        if (viewportFlushTimerRef.current) {
-            clearTimeout(viewportFlushTimerRef.current);
-            viewportFlushTimerRef.current = null;
+        const previous = lifecycleResetRef.current;
+        if (!serverSide) {
+            lifecycleResetRef.current = {
+                initialized: false,
+                serverSide: false,
+                stateEpoch,
+                cacheKey,
+                abortGeneration,
+            };
+            return;
         }
-    }, [serverSide, stateEpoch, setCurrentEpoch]);
 
-    useEffect(() => {
-        if (!serverSide || !clearCache) return;
-        clearCache();
-        inflightRequestRef.current = null;
-        pendingViewportRef.current = null;
-        queuedViewportRef.current = null;
-        lastRequestedColStartRef.current = null;
-        lastRequestedColEndRef.current = null;
-        lastViewportDispatchAtRef.current = 0;
-        lastObservedScrollTopRef.current = parentRef.current ? parentRef.current.scrollTop : 0;
-        lastFastScrollDispatchRef.current = { startBlock: -1, endBlock: -1, dispatchedAt: 0 };
-        lastImmediateViewportRef.current = {
-            startBlock: -1,
-            endBlock: -1,
-            colStart: null,
-            colEnd: null,
-            dispatchedAt: 0,
-        };
-        lastHandledColumnRangeUrgencyRef.current = columnRangeUrgencyToken;
-        if (viewportFlushTimerRef.current) {
-            clearTimeout(viewportFlushTimerRef.current);
-            viewportFlushTimerRef.current = null;
-        }
-        if (!externalRequestVersionRef) {
-            requestVersionRef.current = 0;
-        }
-        // Reset the grand total when filters/fields change (cacheKey change) so that a
-        // pre-filter grand total value is never shown alongside post-filter row data.
-        // The grand total is re-populated once the first response containing it arrives.
-        setGrandTotalRow(null);
-    }, [serverSide, cacheKey, clearCache, externalRequestVersionRef, requestVersionRef]);
+        const firstRun = !previous.initialized || !previous.serverSide;
+        const epochChanged = firstRun || previous.stateEpoch !== stateEpoch;
+        const cacheKeyChanged = firstRun || previous.cacheKey !== cacheKey;
+        const abortGenerationChanged = firstRun || previous.abortGeneration !== abortGeneration;
 
-    useEffect(() => {
-        if (!serverSide) return;
-        // Cooperative cancel point: invalidate inflight viewport intents from prior abort generation.
-        inflightRequestRef.current = null;
-        pendingViewportRef.current = null;
-        queuedViewportRef.current = null;
-        lastObservedScrollTopRef.current = parentRef.current ? parentRef.current.scrollTop : 0;
-        lastFastScrollDispatchRef.current = { startBlock: -1, endBlock: -1, dispatchedAt: 0 };
-        lastImmediateViewportRef.current = {
-            startBlock: -1,
-            endBlock: -1,
-            colStart: null,
-            colEnd: null,
-            dispatchedAt: 0,
+        if (epochChanged) {
+            setCurrentEpoch(stateEpoch);
+        }
+
+        if (cacheKeyChanged && clearCache) {
+            clearCache();
+            if (!externalRequestVersionRef) {
+                requestVersionRef.current = 0;
+            }
+            // Reset the grand total when filters/fields change (cacheKey change) so that a
+            // pre-filter grand total value is never shown alongside post-filter row data.
+            // The grand total is re-populated once the first response containing it arrives.
+            setGrandTotalRow(null);
+        }
+
+        if (epochChanged || cacheKeyChanged || abortGenerationChanged) {
+            resetViewportRequestState({
+                resetColumnWindow: epochChanged || cacheKeyChanged,
+                abort: epochChanged || abortGenerationChanged,
+                urgencyToken: columnRangeUrgencyToken,
+            });
+        }
+
+        lifecycleResetRef.current = {
+            initialized: true,
+            serverSide: true,
+            stateEpoch,
+            cacheKey,
+            abortGeneration,
         };
-        lastHandledColumnRangeUrgencyRef.current = columnRangeUrgencyToken;
-        if (viewportFlushTimerRef.current) {
-            clearTimeout(viewportFlushTimerRef.current);
-            viewportFlushTimerRef.current = null;
-        }
-        if (viewportAbortControllerRef.current) {
-            viewportAbortControllerRef.current.abort();
-            viewportAbortControllerRef.current = new AbortController();
-        }
-    }, [serverSide, abortGeneration, stateEpoch]);
+    }, [
+        abortGeneration,
+        cacheKey,
+        clearCache,
+        columnRangeUrgencyToken,
+        externalRequestVersionRef,
+        requestVersionRef,
+        resetViewportRequestState,
+        serverSide,
+        setCurrentEpoch,
+        stateEpoch,
+    ]);
 
     useEffect(() => {
         if (!serverSide || !parentRef.current) return;
@@ -619,7 +648,7 @@ export const useServerSideRowModel = ({
         for (let b = minBlock; b <= maxBlock; b++) {
             setBlockLoading(b, newVersion, stateEpoch);
         }
-        setPinnedRange(minBlock, maxBlock, 2, stateEpoch);
+        setPinnedRange(minBlock, maxBlock, resolveRetentionBufferBlocks(2), stateEpoch);
 
         const reqCount = reqEnd - reqStart + 1;
         inflightRequestRef.current = {
@@ -726,6 +755,7 @@ export const useServerSideRowModel = ({
         excludeGrandTotal,
         onViewportRequest,
         prefetchColumns,
+        resolveRetentionBufferBlocks,
         setPinnedRange,
         immersiveMode,
     ]);
@@ -797,7 +827,7 @@ export const useServerSideRowModel = ({
 
         const queued = queuedViewportRef.current;
         if (queued && queued.blocksNeeded.length > 0) {
-            setPinnedRange(queued.blocksNeeded[0], queued.blocksNeeded[queued.blocksNeeded.length - 1], 2, stateEpoch);
+            setPinnedRange(queued.blocksNeeded[0], queued.blocksNeeded[queued.blocksNeeded.length - 1], resolveRetentionBufferBlocks(2), stateEpoch);
         }
 
         if (viewportFlushTimerRef.current) {
@@ -831,7 +861,7 @@ export const useServerSideRowModel = ({
             flushQueuedViewport(immediate);
         }, debounceMs);
         return true;
-    }, [abortGeneration, blockLoadDebounceMs, colEnd, colStart, columnRangeUrgencyToken, flushQueuedViewport, prefetchColumns, setPinnedRange, stateEpoch]);
+    }, [abortGeneration, blockLoadDebounceMs, colEnd, colStart, columnRangeUrgencyToken, flushQueuedViewport, prefetchColumns, resolveRetentionBufferBlocks, setPinnedRange, stateEpoch]);
 
     const requestUrgentColumnViewport = useCallback((overrideColStart, overrideColEnd) => {
         if (!serverSide || !parentRef.current || structuralInFlight) return false;
@@ -1007,7 +1037,7 @@ export const useServerSideRowModel = ({
 
         const firstRow = virtualRows[0].index;
         const lastRow = virtualRows[virtualRows.length - 1].index;
-        const retentionBufferBlocks = 2;
+        const retentionBufferBlocks = resolveRetentionBufferBlocks(2);
         const { startBlock, endBlock, blocksNeeded } = collectBlocksNeeded(firstRow, lastRow);
         const previousRange = lastPrunedRangeRef.current;
         const blockJumpDistance = previousRange.startBlock >= 0
@@ -1084,6 +1114,7 @@ export const useServerSideRowModel = ({
         cacheVersion,
         collectBlocksNeeded,
         enqueueViewportRequest,
+        resolveRetentionBufferBlocks,
         setPinnedRange,
         colStart,
         colEnd,
@@ -1095,7 +1126,7 @@ export const useServerSideRowModel = ({
 
         const pending = pendingViewportRef.current;
         pendingViewportRef.current = null;
-        const retentionBufferBlocks = 2;
+        const retentionBufferBlocks = resolveRetentionBufferBlocks(2);
 
         const { startBlock, endBlock, blocksNeeded } = pending.blocksNeeded && pending.blocksNeeded.length > 0
             ? {
@@ -1111,7 +1142,7 @@ export const useServerSideRowModel = ({
         if (blocksNeeded.length > 0) {
             enqueueViewportRequest(pending.firstRow, pending.lastRow, blocksNeeded, { immediate: true });
         }
-    }, [serverSide, structuralInFlight, virtualRows, blockSize, pruneToRange, stateEpoch, collectBlocksNeeded, enqueueViewportRequest, setPinnedRange]);
+    }, [serverSide, structuralInFlight, virtualRows, blockSize, pruneToRange, stateEpoch, collectBlocksNeeded, enqueueViewportRequest, resolveRetentionBufferBlocks, setPinnedRange]);
 
     // 4. Check Viewport & Trigger Fetch (with Debounce)
     useEffect(() => {
@@ -1126,7 +1157,7 @@ export const useServerSideRowModel = ({
             const blocksNeeded = [];
             const startBlock = Math.floor(firstRow / blockSize);
             const endBlock = Math.floor(lastRow / blockSize);
-            const retentionBufferBlocks = 2;
+            const retentionBufferBlocks = resolveRetentionBufferBlocks(2);
 
             // Only prune when the visible block range actually shifts — avoids redundant
             // cache churn on every debounced pass while the viewport hasn't moved a full block.
@@ -1196,7 +1227,7 @@ export const useServerSideRowModel = ({
 
         return () => clearTimeout(timer);
 
-    }, [virtualRows, serverSide, getBlock, setProps, blockSize, pruneToRange, stateEpoch, structuralInFlight, requestViewport, inflightClearedAt, cacheVersion, colStart, colEnd]);
+    }, [virtualRows, serverSide, getBlock, setProps, blockSize, pruneToRange, stateEpoch, structuralInFlight, requestViewport, inflightClearedAt, cacheVersion, colStart, colEnd, resolveRetentionBufferBlocks]);
 
     useEffect(() => {
         if (!serverSide || structuralInFlight || !pendingViewportRef.current || virtualRows.length === 0 || viewportSchedulingEnabled) return;
@@ -1206,7 +1237,7 @@ export const useServerSideRowModel = ({
 
         const startBlock = Math.floor(pending.firstRow / blockSize);
         const endBlock = Math.floor(pending.lastRow / blockSize);
-        const retentionBufferBlocks = 2;
+        const retentionBufferBlocks = resolveRetentionBufferBlocks(2);
 
         pruneToRange(startBlock, endBlock, retentionBufferBlocks, stateEpoch);
 
@@ -1250,7 +1281,7 @@ export const useServerSideRowModel = ({
             }
             requestViewport(pending.firstRow, pending.lastRow, blocksNeeded);
         }
-    }, [serverSide, structuralInFlight, virtualRows, blockSize, getBlock, pruneToRange, requestViewport, stateEpoch, colStart, colEnd, abortGeneration]);
+    }, [serverSide, structuralInFlight, virtualRows, blockSize, getBlock, pruneToRange, requestViewport, stateEpoch, colStart, colEnd, abortGeneration, resolveRetentionBufferBlocks]);
 
     // 5. Cleanup Effect
     useEffect(() => {

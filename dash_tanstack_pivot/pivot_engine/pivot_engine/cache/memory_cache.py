@@ -12,14 +12,6 @@ class MemoryCache:
     """
     An in-memory cache for various data types including PyArrow Tables with a time-to-live (TTL) and LRU eviction.
     """
-    _instance = None
-
-    def __new__(cls, *args, **kwargs):
-        # Singleton pattern to ensure one cache instance per process
-        if not cls._instance:
-            cls._instance = super(MemoryCache, cls).__new__(cls)
-        return cls._instance
-
     def __init__(self, ttl: int = 300, max_size: int = 1000):
         """
         Initialize the cache.

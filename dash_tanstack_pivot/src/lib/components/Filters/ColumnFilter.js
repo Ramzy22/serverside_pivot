@@ -28,12 +28,13 @@ const ColumnFilter = ({ column, onFilter, currentFilter, options = [], theme, on
 
     // Auto-select tab based on available options
     useEffect(() => {
-        if (tab === 'condition' && options && options.length > 0) {
+        if (tab !== 'condition') return;
+        if (options && options.length > 0) {
             setTab('values');
-        } else if (isDate && tab === 'condition') {
-             setTab('date');
+        } else if (isDate) {
+            setTab('date');
         }
-    }, [options, isDate]);
+    }, [options && options.length, isDate, tab]);
 
     // --- Existing Condition Logic ---
     const isMulti = currentFilter && currentFilter.conditions;

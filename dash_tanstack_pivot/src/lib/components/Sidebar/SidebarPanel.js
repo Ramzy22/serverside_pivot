@@ -91,6 +91,11 @@ function updateValueConfig(setValConfigs, idx, updater) {
     });
 }
 
+function isKeyboardControlTarget(target) {
+    if (!target || typeof target.closest !== 'function') return false;
+    return Boolean(target.closest('button, input, select, textarea, [contenteditable="true"]'));
+}
+
 function getValueConfigSparklineIdentity(config) {
     if (!config || typeof config !== 'object') return '';
     const field = config.field === undefined || config.field === null ? '' : String(config.field);
@@ -957,6 +962,7 @@ function ValueSparklineControls({ item, idx, setValConfigs, theme, colFields = [
     return (
         <div
             data-value-sparkline-controls="true"
+            data-value-sparkline-available={capabilities.canUseAny ? 'true' : 'false'}
             data-value-sparkline-enabled={enabled ? 'true' : 'false'}
             onMouseDown={stopProp}
             onClick={stopProp}
@@ -980,6 +986,35 @@ function ValueSparklineControls({ item, idx, setValConfigs, theme, colFields = [
                 }}
                 title="Configure sparkline"
             >Settings</button>
+            {isFixedSparkline && (
+                <span
+                    data-value-sparkline-fixed="true"
+                    style={{ fontSize: '10px', color: theme.textSec, flexShrink: 0 }}
+                    title="This trend is defined by the app"
+                >
+                    App trend
+                </span>
+            )}
+            {!isFixedSparkline && (
+                <button
+                    type="button"
+                    data-value-sparkline-toggle="true"
+                    onClick={toggleSparkline}
+                    style={{
+                        border: `1px solid ${theme.border}`,
+                        background: theme.background,
+                        color: theme.textSec,
+                        borderRadius: '6px',
+                        cursor: 'pointer',
+                        padding: '3px 8px',
+                        fontSize: '10px',
+                        lineHeight: '16px',
+                        fontWeight: 600,
+                        flexShrink: 0,
+                    }}
+                    title="Remove trend"
+                >Remove Trend</button>
+            )}
             {enabled && !modalOpen && (
                 <span style={{ fontSize: '10px', color: theme.primary, flex: 1, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
                     {((item.sparkline && item.sparkline.source) === 'field') ? `series ${(item.sparkline && item.sparkline.displayMode) === 'value' ? 'value' : 'trend'}` : 'linked pivot'} | {['line','area','column','bar'].includes(item.sparkline && item.sparkline.type) ? item.sparkline.type : 'line'} | {(item.sparkline && item.sparkline.metric) || 'last'}
@@ -2143,6 +2178,7 @@ export const SidebarPanel = React.memo(function SidebarPanel({
     colTypeFilter, setColTypeFilter,
     selectedCols, setSelectedCols,
     dropLine, onDragStart, onDragOver, onDrop,
+    onKeyboardFieldDrop,
     handleHeaderFilter, handleFilterClick, requestFilterOptions,
     handleExpandAllRows, handlePinColumn,
     toggleAllColumnsPinned,
@@ -2169,6 +2205,7 @@ export const SidebarPanel = React.memo(function SidebarPanel({
     const sidebarScrollTopRef = React.useRef(0);
     const resizeDragRef = React.useRef(null);
     const dragScrollRafRef = React.useRef(null);
+    const [keyboardDragItem, setKeyboardDragItem] = React.useState(null);
     const fixedSparklineValueKeySet = React.useMemo(
         () => new Set(Array.isArray(fixedSparklineValueKeys) ? fixedSparklineValueKeys : []),
         [fixedSparklineValueKeys]
@@ -2213,6 +2250,83 @@ export const SidebarPanel = React.memo(function SidebarPanel({
         () => valConfigs.filter((config) => config && config.agg !== 'formula').length,
         [valConfigs]
     );
+    const zoneDescriptors = React.useMemo(() => ([
+        {id:'rows', label:'Rows', icon: <Icons.List/>},
+        {id:'cols', label:'Columns', icon: <Icons.Columns/>},
+        {id:'vals', label:'Values', icon: <Icons.Sigma/>},
+        {id:'filter', label:'Filters', icon: <Icons.Filter/>}
+    ]), []);
+    const zoneItemsById = React.useMemo(() => ({
+        filter: Object.keys(filters || {}).filter(k => k !== 'global'),
+        rows: rowFields || [],
+        cols: colFields || [],
+        vals: valConfigs || [],
+    }), [colFields, filters, rowFields, valConfigs]);
+    const cancelKeyboardFieldDrag = React.useCallback(() => {
+        if (keyboardDragItem && showNotification) {
+            showNotification('Keyboard move cancelled.', 'info');
+        }
+        setKeyboardDragItem(null);
+    }, [keyboardDragItem, showNotification]);
+    const startKeyboardFieldDrag = React.useCallback((field, zone, idx, label) => {
+        if (typeof onKeyboardFieldDrop !== 'function') return;
+        const nextItem = { field, zone, idx, label };
+        setKeyboardDragItem(nextItem);
+        if (showNotification) {
+            showNotification(`Picked up ${label}. Focus a target field or zone and press Enter.`, 'info');
+        }
+    }, [onKeyboardFieldDrop, showNotification]);
+    const dropKeyboardField = React.useCallback((targetZone, targetIdx = null) => {
+        if (!keyboardDragItem || typeof onKeyboardFieldDrop !== 'function') return false;
+        const zoneItems = zoneItemsById[targetZone] || [];
+        const numericTargetIdx = Number(targetIdx);
+        const resolvedTargetIdx = Number.isFinite(numericTargetIdx)
+            ? Math.max(0, Math.min(Math.floor(numericTargetIdx), zoneItems.length))
+            : zoneItems.length;
+        const applied = onKeyboardFieldDrop({
+            field: keyboardDragItem.field,
+            srcZone: keyboardDragItem.zone,
+            srcIdx: keyboardDragItem.idx,
+            targetZone,
+            targetIdx: resolvedTargetIdx,
+            source: 'layout:keyboard-drop',
+        });
+        if (applied !== false) {
+            if (showNotification) showNotification(`Moved ${keyboardDragItem.label}.`, 'success');
+            setKeyboardDragItem(null);
+        }
+        return applied !== false;
+    }, [keyboardDragItem, onKeyboardFieldDrop, showNotification, zoneItemsById]);
+    const handleDraggableKeyDown = React.useCallback((event, field, zone, idx, label) => {
+        if (isKeyboardControlTarget(event.target)) return;
+        if (event.key === 'Escape') {
+            event.preventDefault();
+            event.stopPropagation();
+            cancelKeyboardFieldDrag();
+            return;
+        }
+        if (event.key !== 'Enter' && event.key !== ' ') return;
+        event.preventDefault();
+        event.stopPropagation();
+        if (keyboardDragItem) {
+            dropKeyboardField(zone, idx);
+        } else {
+            startKeyboardFieldDrag(field, zone, idx, label);
+        }
+    }, [cancelKeyboardFieldDrag, dropKeyboardField, keyboardDragItem, startKeyboardFieldDrag]);
+    const handleDropZoneKeyDown = React.useCallback((event, zoneId) => {
+        if (isKeyboardControlTarget(event.target)) return;
+        if (event.key === 'Escape') {
+            event.preventDefault();
+            event.stopPropagation();
+            cancelKeyboardFieldDrag();
+            return;
+        }
+        if (!keyboardDragItem || (event.key !== 'Enter' && event.key !== ' ')) return;
+        event.preventDefault();
+        event.stopPropagation();
+        dropKeyboardField(zoneId, (zoneItemsById[zoneId] || []).length);
+    }, [cancelKeyboardFieldDrag, dropKeyboardField, keyboardDragItem, zoneItemsById]);
 
     // Sidebar resize drag handlers
     const onResizeMouseDown = React.useCallback((e) => {
@@ -2275,7 +2389,7 @@ export const SidebarPanel = React.memo(function SidebarPanel({
 
         return Array.from(unique).sort();
     }, [filterOptions, table]);
-    const valueSelectStyle = {
+    const valueSelectStyle = React.useMemo(() => ({
         border: `1px solid ${theme.border}`,
         background: theme.headerSubtleBg || theme.surfaceInset || theme.background,
         color: theme.text,
@@ -2286,7 +2400,7 @@ export const SidebarPanel = React.memo(function SidebarPanel({
         padding: '1px 4px',
         minHeight: '20px',
         outline: 'none',
-    };
+    }), [theme.background, theme.border, theme.headerSubtleBg, theme.radiusSm, theme.surfaceInset, theme.text]);
     const handleValueAggChange = React.useCallback((measureIndex, nextAgg) => {
         setValConfigs((prev) => {
             const next = [...prev];
@@ -2426,6 +2540,12 @@ export const SidebarPanel = React.memo(function SidebarPanel({
     return (
         <div style={{position:'relative', display:'flex', flexShrink:0}}>
                 <div ref={sidebarRef} style={{...styles.sidebar, width:`${w}px`, minWidth:`${w}px`}} role="complementary" aria-label="Tool Panel" onDragOver={startDragScroll} onDragLeave={stopDragScroll} onDrop={stopDragScroll}>
+                    <div
+                        id="pivot-sidebar-keyboard-dnd-help"
+                        style={{position:'absolute', width:1, height:1, padding:0, margin:-1, overflow:'hidden', clip:'rect(0 0 0 0)', whiteSpace:'nowrap', border:0}}
+                    >
+                        Press Enter or Space on a field to pick it up. Focus a target field or zone and press Enter or Space to drop it. Press Escape to cancel.
+                    </div>
                     {isReportMode ? (
                         <div style={{display: 'flex', borderBottom: `1px solid ${theme.border}`, marginBottom: '16px'}}>
                             <div
@@ -2556,7 +2676,18 @@ export const SidebarPanel = React.memo(function SidebarPanel({
                                         }}
                                     >
                                         {availableFields.map(f => (
-                                            <div key={f} draggable onDragStart={e=>onDragStart(e,f,'pool')} style={{
+                                            <div
+                                                key={f}
+                                                draggable
+                                                data-sidebar-field-chip="available"
+                                                role="button"
+                                                tabIndex={0}
+                                                aria-describedby="pivot-sidebar-keyboard-dnd-help"
+                                                aria-grabbed={keyboardDragItem && keyboardDragItem.zone === 'pool' && keyboardDragItem.field === f ? 'true' : 'false'}
+                                                aria-label={`Move ${formatDisplayLabel(f)}`}
+                                                onDragStart={e=>onDragStart(e,f,'pool')}
+                                                onKeyDown={(e) => handleDraggableKeyDown(e, f, 'pool', -1, formatDisplayLabel(f))}
+                                                style={{
                                                 padding: '4px 8px',
                                                 fontSize: '11px',
                                                 lineHeight: 1.2,
@@ -2579,12 +2710,9 @@ export const SidebarPanel = React.memo(function SidebarPanel({
                                     </ResizableFieldPanel>
                                 </div>
                             )}
-                            {[
-                                {id:'rows', label:'Rows', icon: <Icons.List/>},
-                                {id:'cols', label:'Columns', icon: <Icons.Columns/>},
-                                {id:'vals', label:'Values', icon: <Icons.Sigma/>},
-                                {id:'filter', label:'Filters', icon: <Icons.Filter/>}
-                            ].map(zone => (
+                            {zoneDescriptors.map(zone => {
+                                const zoneItems = zoneItemsById[zone.id] || [];
+                                return (
                                 <div key={zone.id} style={{marginBottom: '20px'}}>
                                     <div style={styles.sectionTitle}>{zone.icon}{zone.label}</div>
                                     {zone.id === 'vals' && (
@@ -2638,14 +2766,35 @@ export const SidebarPanel = React.memo(function SidebarPanel({
                                         outerStyle={dropZoneBaseStyle}
                                         contentStyle={{padding: `${dropZonePadding} 12px 12px ${dropZonePadding}`}}
                                     >
-                                        <div onDragOver={e=>e.preventDefault()} onDrop={e=>onDrop(e, zone.id)}>
-                                            {(zone.id==='filter' ? Object.keys(filters).filter(k=>k!=='global') : zone.id==='rows'?rowFields:zone.id==='cols'?colFields:valConfigs).map((item, idx) => {
+                                        <div
+                                            data-sidebar-drop-zone={zone.id}
+                                            role="group"
+                                            tabIndex={0}
+                                            aria-label={`${zone.label} drop zone`}
+                                            aria-describedby="pivot-sidebar-keyboard-dnd-help"
+                                            onKeyDown={(e) => handleDropZoneKeyDown(e, zone.id)}
+                                            onDragOver={e=>e.preventDefault()}
+                                            onDrop={e=>onDrop(e, zone.id)}
+                                        >
+                                            {zoneItems.map((item, idx) => {
                                                 const label = zone.id==='vals' ? item.field : item;
                                                 const displayLabel = zone.id === 'vals'
                                                     ? (item.agg === 'formula' ? (item.label || 'Formula') : formatDisplayLabel(item.field))
                                                     : formatDisplayLabel(item);
                                                 return (
-                                                    <div key={idx} draggable onDragStart={e=>onDragStart(e,item,zone.id,idx)} onDragOver={e=>onDragOver(e,zone.id,idx)}>
+                                                    <div
+                                                        key={idx}
+                                                        draggable
+                                                        data-sidebar-field-chip="zone"
+                                                        role="button"
+                                                        tabIndex={0}
+                                                        aria-describedby="pivot-sidebar-keyboard-dnd-help"
+                                                        aria-grabbed={keyboardDragItem && keyboardDragItem.zone === zone.id && keyboardDragItem.idx === idx ? 'true' : 'false'}
+                                                        aria-label={`Move ${displayLabel}`}
+                                                        onKeyDown={(e) => handleDraggableKeyDown(e, item, zone.id, idx, displayLabel)}
+                                                        onDragStart={e=>onDragStart(e,item,zone.id,idx)}
+                                                        onDragOver={e=>onDragOver(e,zone.id,idx)}
+                                                    >
                                                         {zone.id === 'vals' && item.agg === 'formula' ? (
                                                             <FormulaListItem
                                                                 item={item}
@@ -2723,14 +2872,15 @@ export const SidebarPanel = React.memo(function SidebarPanel({
                                                     </div>
                                                 )
                                             })}
-                                            {(zone.id==='filter' ? Object.keys(filters).filter(k=>k!=='global') : zone.id==='rows'?rowFields:zone.id==='cols'?colFields:valConfigs).length === 0 && (
+                                            {zoneItems.length === 0 && (
                                                 <div style={{opacity:0.5, fontSize:'11px', padding:'8px', textAlign:'center', pointerEvents:'none'}}>Drag fields here</div>
                                             )}
-                                            <div style={{height:20}} onDragOver={e=>onDragOver(e,zone.id,(zone.id==='rows'?rowFields:zone.id==='cols'?colFields:zone.id==='vals'?valConfigs:Object.keys(filters).filter(k=>k!=='global')).length)} />
+                                            <div style={{height:20}} onDragOver={e=>onDragOver(e,zone.id,zoneItems.length)} />
                                         </div>
                                     </ResizableFieldPanel>
                                 </div>
-                            ))}
+                                );
+                            })}
                         </>
                     ) : (
                         <div style={{display: 'flex', flexDirection: 'column', gap: '16px', height: '100%', overflow: 'hidden'}}>

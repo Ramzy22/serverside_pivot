@@ -1228,6 +1228,9 @@ export function useColumnDefs({
 
             const auxiliaryIds = [];
             const seenAuxiliaryIds = new Set();
+            const isRowTotalColumnId = (columnId) => (
+                typeof columnId === 'string' && columnId.startsWith('__RowTotal__')
+            );
             const pushAuxiliaryId = (rawId) => {
                 const id = typeof rawId === 'string' ? rawId : null;
                 if (!id || id === '__col_schema' || seenAuxiliaryIds.has(id)) return;
@@ -1242,7 +1245,7 @@ export function useColumnDefs({
             }
 
             const rowTotalCols = auxiliaryIds
-                .filter(columnId => columnId.startsWith('__RowTotal__'))
+                .filter(isRowTotalColumnId)
                 .map(columnId => decorateRowTotalColumn(buildServerValueColumn(columnId)))
                 .filter(Boolean);
 
@@ -1411,13 +1414,20 @@ export function useColumnDefs({
                         const entryId = schemaEntry.id;
                         // Skip sparkline-hidden columns entirely — no placeholder slot
                         if (isSparklineHiddenColumn(entryId)) continue;
+                        // Row totals are rendered as auxiliary columns after the pivot tree.
+                        // If they fall through here they become blank schema placeholders
+                        // immediately before the real total columns.
+                        if (isRowTotalColumnId(entryId)) {
+                            flushLoadedSegment();
+                            continue;
+                        }
                         // Inject 'before' sparklines immediately before the first matching column
                         if (sparklineBeforeTriggers.has(entryId)) {
                             flushLoadedSegment();
                             injectSparklineCols(sparklineBeforeTriggers.get(entryId));
                         }
                         const valueColumn = buildServerValueColumn(entryId, schemaSize);
-                        if (valueColumn && !valueColumn.id.startsWith('__RowTotal__')) {
+                        if (valueColumn && !isRowTotalColumnId(valueColumn.id)) {
                             loadedSegment.push(valueColumn);
                             // Inject 'after' sparklines immediately after the last matching column
                             if (sparklineAfterTriggers.has(entryId)) {
@@ -1501,9 +1511,9 @@ export function useColumnDefs({
                             return buildServerValueColumn(columnId);
                         })
                         .filter(Boolean);
-                    const pivotCols = flatCols.filter(c => !c.id.startsWith('__RowTotal__'));
+                    const pivotCols = flatCols.filter(c => !isRowTotalColumnId(c.id));
                     const fallbackRowTotalCols = flatCols
-                        .filter(c => c.id.startsWith('__RowTotal__'))
+                        .filter(c => isRowTotalColumnId(c.id))
                         .map(decorateRowTotalColumn)
                         .filter(Boolean);
                     dataCols = [...buildRecursiveTree(pivotCols), ...fallbackRowTotalCols];

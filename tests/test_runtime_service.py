@@ -164,6 +164,101 @@ def test_runtime_service_cancels_superseded_viewport_work():
     asyncio.run(_run())
 
 
+def test_runtime_service_times_out_slow_backend_request():
+    class SlowAdapter:
+        async def handle_virtual_scroll_request(self, *args, **kwargs):
+            await asyncio.sleep(1)
+            return TanStackResponse(data=[], columns=[], total_rows=0)
+
+    async def _run():
+        adapter = SlowAdapter()
+        service = PivotRuntimeService(
+            adapter_getter=lambda: adapter,
+            session_gate=SessionRequestGate(),
+            request_timeout_seconds=0.01,
+            circuit_breaker_failures=10,
+        )
+        state = PivotViewState(
+            row_fields=["region"],
+            val_configs=[{"field": "sales", "agg": "sum"}],
+        )
+        context = PivotRequestContext.from_frontend(
+            table="sales_data",
+            trigger_prop="custom.viewport",
+            viewport={
+                "start": 0,
+                "end": 20,
+                "window_seq": 1,
+                "state_epoch": 1,
+                "abort_generation": 1,
+                "session_id": "sess-timeout",
+                "client_instance": "grid-timeout",
+                "intent": "viewport",
+            },
+        )
+
+        response = await service.process_async(state, context)
+
+        assert response.status == "timeout"
+        assert "timeout" in response.message.lower()
+
+    asyncio.run(_run())
+
+
+def test_runtime_service_opens_circuit_after_backend_failures():
+    class FailingAdapter:
+        def __init__(self):
+            self.calls = 0
+
+        async def handle_virtual_scroll_request(self, *args, **kwargs):
+            self.calls += 1
+            raise RuntimeError("backend boom")
+
+    async def _run():
+        adapter = FailingAdapter()
+        service = PivotRuntimeService(
+            adapter_getter=lambda: adapter,
+            session_gate=SessionRequestGate(),
+            request_timeout_seconds=1,
+            circuit_breaker_failures=1,
+            circuit_breaker_cooldown_seconds=60,
+        )
+        state = PivotViewState(
+            row_fields=["region"],
+            val_configs=[{"field": "sales", "agg": "sum"}],
+        )
+        base_viewport = {
+            "start": 0,
+            "end": 20,
+            "state_epoch": 1,
+            "abort_generation": 1,
+            "session_id": "sess-circuit",
+            "client_instance": "grid-circuit",
+            "intent": "viewport",
+        }
+        first_context = PivotRequestContext.from_frontend(
+            table="sales_data",
+            trigger_prop="custom.viewport",
+            viewport={**base_viewport, "window_seq": 1},
+        )
+        second_context = PivotRequestContext.from_frontend(
+            table="sales_data",
+            trigger_prop="custom.viewport",
+            viewport={**base_viewport, "window_seq": 2},
+        )
+
+        first_response = await service.process_async(state, first_context)
+        second_response = await service.process_async(state, second_context)
+
+        assert first_response.status == "error"
+        assert "backend boom" in first_response.message
+        assert second_response.status == "error"
+        assert "circuit" in second_response.message.lower()
+        assert adapter.calls == 1
+
+    asyncio.run(_run())
+
+
 def test_runtime_service_includes_profile_when_requested():
     adapter = _make_adapter()
     service = PivotRuntimeService(adapter_getter=lambda: adapter, session_gate=SessionRequestGate())

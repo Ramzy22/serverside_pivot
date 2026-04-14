@@ -178,6 +178,18 @@ def test_memory_cache_get_all_keys_is_lock_guarded():
     assert cache.get_all_keys() == ["a"]
 
 
+def test_memory_cache_instances_are_isolated_by_default():
+    first = MemoryCache(ttl=300)
+    second = MemoryCache(ttl=300)
+    first.clear()
+    second.clear()
+
+    first.set("shared", "first")
+
+    assert first.get("shared") == "first"
+    assert second.get("shared") is None
+
+
 def test_observability_metrics_noops_without_instrumentator(monkeypatch):
     import pivot_engine.observability as observability
 
