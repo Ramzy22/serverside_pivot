@@ -39,7 +39,7 @@ const resolveBufferedColumnWindow = (colStart, colEnd, prefetchColumnCountOverri
     }
 
     const visibleColumnCount = Math.max(0, colEnd - colStart + 1);
-    const prefetchColumnCount = Number.isFinite(Number(prefetchColumnCountOverride))
+    const prefetchColumnCount = (prefetchColumnCountOverride !== null && prefetchColumnCountOverride !== undefined && Number.isFinite(Number(prefetchColumnCountOverride)))
         ? Math.max(0, Math.floor(Number(prefetchColumnCountOverride)))
         : Math.max(2, Math.min(4, Math.ceil(Math.max(visibleColumnCount, 1) / 2)));
     const requestedColStart = Math.max(0, colStart - prefetchColumnCount);
@@ -508,6 +508,38 @@ export const useServerSideRowModel = ({
         }
     }, [data, dataOffset, dataVersion, excludeGrandTotal, serverSide, blockSize, rowCount, setBlockLoaded, stateEpoch, responseColStart, responseColEnd]);
 
+    const blockNeedsViewportRequest = useCallback((
+        blockIndex,
+        currentInflight = inflightRequestRef.current,
+        overrideColStart = colStart,
+        overrideColEnd = colEnd,
+        now = Date.now(),
+    ) => {
+        const block = getBlock(blockIndex, stateEpoch);
+        if (!block || block.status === 'error') return true;
+
+        const isStale = block.status === 'loading' && (now - block.timestamp > 1500);
+        const isPartial = block.status === 'partial';
+        const blockStart = blockIndex * blockSize;
+        const blockEnd = (blockIndex + 1) * blockSize - 1;
+        const isOrphaned = block.status === 'loading' && !isStale && !(
+            currentInflight &&
+            currentInflight.abortGeneration === abortGeneration &&
+            currentInflight.stateEpoch === stateEpoch &&
+            currentInflight.start <= blockStart &&
+            currentInflight.end >= blockEnd
+        );
+        const isColMismatch = block.status === 'loaded' && !blockMatchesColumnWindow(block, overrideColStart, overrideColEnd);
+        const inflightColMismatch = block.status === 'loading' && currentInflight && !columnWindowCovers(
+            currentInflight.colStart,
+            currentInflight.colEnd,
+            overrideColStart,
+            overrideColEnd
+        );
+
+        return isStale || isPartial || isOrphaned || isColMismatch || inflightColMismatch;
+    }, [abortGeneration, blockSize, colEnd, colStart, getBlock, stateEpoch]);
+
     const collectBlocksNeeded = useCallback((
         firstRow,
         lastRow,
@@ -518,28 +550,10 @@ export const useServerSideRowModel = ({
         const startBlock = Math.floor(firstRow / blockSize);
         const endBlock = Math.floor(lastRow / blockSize);
         const blocksNeeded = [];
+        const now = Date.now();
 
         for (let b = startBlock; b <= endBlock; b++) {
-            const block = getBlock(b, stateEpoch);
-            const isStale = block && block.status === 'loading' && (Date.now() - block.timestamp > 1500);
-            const isPartial = block && block.status === 'partial';
-            const blockStart = b * blockSize;
-            const blockEnd = (b + 1) * blockSize - 1;
-            const isOrphaned = block && block.status === 'loading' && !isStale && !(
-                currentInflight &&
-                currentInflight.abortGeneration === abortGeneration &&
-                currentInflight.stateEpoch === stateEpoch &&
-                currentInflight.start <= blockStart &&
-                currentInflight.end >= blockEnd
-            );
-            const isColMismatch = block && block.status === 'loaded' && !blockMatchesColumnWindow(block, overrideColStart, overrideColEnd);
-            const inflightColMismatch = block && block.status === 'loading' && currentInflight && !columnWindowCovers(
-                currentInflight.colStart,
-                currentInflight.colEnd,
-                overrideColStart,
-                overrideColEnd
-            );
-            if (!block || block.status === 'error' || isStale || isPartial || isOrphaned || isColMismatch || inflightColMismatch) {
+            if (blockNeedsViewportRequest(b, currentInflight, overrideColStart, overrideColEnd, now)) {
                 blocksNeeded.push(b);
             }
         }
@@ -561,7 +575,7 @@ export const useServerSideRowModel = ({
             endBlock,
             blocksNeeded: [...new Set(blocksNeeded)].sort((left, right) => left - right),
         };
-    }, [abortGeneration, blockSize, colEnd, colStart, getBlock, stateEpoch]);
+    }, [blockNeedsViewportRequest, blockSize, colEnd, colStart, getBlock, stateEpoch]);
 
     const requestViewport = useCallback((
         firstRow,
@@ -576,8 +590,31 @@ export const useServerSideRowModel = ({
         const abortSignal = viewportAbortControllerRef.current ? viewportAbortControllerRef.current.signal : null;
         if (abortSignal && abortSignal.aborted) return false;
 
-        const minBlock = Math.min(...blocksNeeded);
-        const maxBlock = Math.max(...blocksNeeded);
+        const dispatchCheckStartedAt = Date.now();
+        const dispatchBlocksNeeded = [...new Set(blocksNeeded)]
+            .filter(blockIndex => blockNeedsViewportRequest(
+                blockIndex,
+                inflightRequestRef.current,
+                overrideColStart,
+                overrideColEnd,
+                dispatchCheckStartedAt
+            ))
+            .sort((left, right) => left - right);
+        if (dispatchBlocksNeeded.length === 0) {
+            debugLog('skip-obsolete-viewport', {
+                firstRow,
+                lastRow,
+                blocksNeeded,
+                visibleColStart: overrideColStart,
+                visibleColEnd: overrideColEnd,
+                stateEpoch,
+                abortGeneration
+            });
+            return false;
+        }
+
+        const minBlock = Math.min(...dispatchBlocksNeeded);
+        const maxBlock = Math.max(...dispatchBlocksNeeded);
         const reqStart = minBlock * blockSize;
         const reqEnd = (maxBlock + 1) * blockSize - 1;
 
@@ -718,7 +755,7 @@ export const useServerSideRowModel = ({
         debugLog('request-viewport', {
             firstRow,
             lastRow,
-            blocksNeeded,
+            blocksNeeded: dispatchBlocksNeeded,
             reqStart,
             reqEnd,
             previousColStart,
@@ -740,11 +777,11 @@ export const useServerSideRowModel = ({
         return true;
     }, [
         setProps,
+        blockNeedsViewportRequest,
         blockSize,
         abortGeneration,
         stateEpoch,
         requestVersionRef,
-        getBlock,
         setBlockLoading,
         sessionId,
         clientInstance,

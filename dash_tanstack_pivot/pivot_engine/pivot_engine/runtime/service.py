@@ -891,17 +891,28 @@ class PivotRuntimeService:
                 # Formula columns are computed post-aggregation; pass through as metadata only
                 formula_label = measure.get("label") or field
                 formula_ref = measure.get("formulaRef") or measure.get("referenceKey") or PivotRuntimeService._normalize_formula_reference_key(formula_label, field)
-                columns.append(
-                    {
-                        "id": field,
-                        "header": formula_label,
-                        "accessorKey": field,
-                        "formulaExpr": measure.get("formula", ""),
-                        "formulaRef": formula_ref,
-                        "formulaLabel": formula_label,
-                        "isFormula": True,
-                    }
+                formula_column = {
+                    "id": field,
+                    "header": formula_label,
+                    "accessorKey": field,
+                    "formulaExpr": measure.get("formula", ""),
+                    "formulaRef": formula_ref,
+                    "formulaLabel": formula_label,
+                    "isFormula": True,
+                }
+                raw_formula_scope = (
+                    measure.get("formulaScope")
+                    or measure.get("formula_scope")
+                    or measure.get("scope")
                 )
+                if raw_formula_scope is not None:
+                    normalized_scope = str(raw_formula_scope).strip().lower()
+                    formula_column["formulaScope"] = (
+                        "columns"
+                        if normalized_scope in {"columns", "display", "displayed", "displayed_columns", "rendered", "rendered_columns"}
+                        else "measures"
+                    )
+                columns.append(formula_column)
                 continue
             columns.append(
                 {

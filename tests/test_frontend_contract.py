@@ -100,6 +100,39 @@ def test_dash_presentation_app_includes_single_pivot_sparkline_modes_demo():
     assert '"displayMode": "trend"' in app_source
     assert '"displayMode": "value"' in app_source
     assert '"overflowY": "auto"' in app_source
+    assert '"formulaScope": "columns"' in app_source
+    assert '"formula": "[Cash Equity_day_pnl_sum] - [ETF_day_pnl_sum]"' in app_source
+
+
+def test_displayed_column_formula_scope_is_exposed_in_sidebar_and_component():
+    sidebar_source = Path(
+        os.path.join(
+            os.getcwd(),
+            "dash_tanstack_pivot",
+            "src",
+            "lib",
+            "components",
+            "Sidebar",
+            "SidebarPanel.js",
+        )
+    ).read_text(encoding="utf-8")
+    component_source = Path(
+        os.path.join(
+            os.getcwd(),
+            "dash_tanstack_pivot",
+            "src",
+            "lib",
+            "components",
+            "DashTanstackPivot.react.js",
+        )
+    ).read_text(encoding="utf-8")
+
+    assert "const COLUMN_FORMULA_REFERENCE_RE" in sidebar_source
+    assert "formulaScope: normalizeFormulaScope(item.formulaScope)" in sidebar_source
+    assert '<option value="columns">Displayed columns</option>' in sidebar_source
+    assert "formatColumnFormulaReference(column.id)" in sidebar_source
+    assert "displayedColumnOptions={displayedFormulaColumnOptions}" in component_source
+    assert "formulaScope: PropTypes.oneOf(['measures', 'columns'])" in component_source
 
 
 def test_sidebar_field_panels_allow_compact_minimum_sizes():
@@ -2634,8 +2667,9 @@ def test_filter_open_requests_and_responses_are_idempotent():
     assert "const columnPositionKey =" in filter_popover_source
     assert "[anchorEl, columnAnchorTarget, columnPositionKey]" in filter_popover_source
 
-    assert "if (tab !== 'condition') return;" in column_filter_source
-    assert "[options && options.length, isDate, tab]" in column_filter_source
+    assert "const tabAutoInitialized = useRef(false);" in column_filter_source
+    assert "if (tabAutoInitialized.current) return;" in column_filter_source
+    assert "[options && options.length, isDate]" in column_filter_source
     assert "const closeFilterEditor = () => setExpanded(false);" in sidebar_filter_item_source
     assert "onClose={closeFilterEditor}" in sidebar_filter_item_source
 
@@ -2706,6 +2740,10 @@ def test_frontend_resilience_source_handles_reset_jank_cell_errors_and_keyboard_
     assert "recentFastScroll" in row_model_source
     assert "hasFreshInflight" in row_model_source
     assert "const retentionBufferBlocks = resolveRetentionBufferBlocks(2);" in row_model_source
+    assert "const blockNeedsViewportRequest = useCallback" in row_model_source
+    assert "const dispatchBlocksNeeded = [...new Set(blocksNeeded)]" in row_model_source
+    assert "debugLog('skip-obsolete-viewport'" in row_model_source
+    assert "blocksNeeded: dispatchBlocksNeeded" in row_model_source
 
     assert "class CellErrorBoundary extends React.Component" in render_helpers_source
     assert "data-pivot-cell-error=\"true\"" in render_helpers_source

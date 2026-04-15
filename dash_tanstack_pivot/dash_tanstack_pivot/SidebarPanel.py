@@ -34,6 +34,7 @@ Keyword arguments:
         self,
         fixedSparklineValueKeys = None,
         sparklineFields = None,
+        displayedColumnOptions = None,
         **kwargs
     ):
         self._prop_names = []

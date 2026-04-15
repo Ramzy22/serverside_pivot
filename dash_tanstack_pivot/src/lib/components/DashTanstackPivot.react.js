@@ -3135,6 +3135,35 @@ export default function DashTanstackPivot(props) {
     );
     const lastColumnAdvisoryRef = useRef('');
 
+    const displayedFormulaColumnOptions = useMemo(() => {
+        const groupingIds = new Set(Array.isArray(rowFields) ? rowFields : []);
+        const options = [];
+        const seen = new Set();
+        const pushColumn = (column) => {
+            const columnId = column && typeof column === 'object' ? column.id : column;
+            const normalizedId = String(columnId || '').trim();
+            if (
+                !normalizedId
+                || normalizedId === '__col_schema'
+                || normalizedId.startsWith('__sparkline__')
+                || groupingIds.has(normalizedId)
+                || seen.has(normalizedId)
+            ) {
+                return;
+            }
+            const label = column && typeof column === 'object'
+                ? (column.header || column.headerVal || column.accessorKey || normalizedId)
+                : normalizedId;
+            seen.add(normalizedId);
+            options.push({ id: normalizedId, label: String(label || normalizedId) });
+        };
+        if (cachedColSchema && Array.isArray(cachedColSchema.columns)) {
+            cachedColSchema.columns.forEach(pushColumn);
+        }
+        (Array.isArray(responseColumns) ? responseColumns : []).forEach(pushColumn);
+        return options;
+    }, [cachedColSchema, responseColumns, rowFields]);
+
     useEffect(() => {
         if (!columnAdvisory) {
             lastColumnAdvisoryRef.current = '';
@@ -11154,6 +11183,7 @@ export default function DashTanstackPivot(props) {
                         colFields={colFields} setColFields={setColFieldsWithHistory}
                         valConfigs={valConfigs} setValConfigs={setValConfigsWithHistory}
                         fixedSparklineValueKeys={fixedSparklineValueKeys}
+                        displayedColumnOptions={displayedFormulaColumnOptions}
                         columnVisibility={columnVisibility} setColumnVisibility={setColumnVisibility}
                         columnPinning={columnPinning} setColumnPinning={setColumnPinningWithHistory}
                         availableFields={availableFields}
@@ -11532,6 +11562,7 @@ DashTanstackPivot.propTypes = {
             formula: PropTypes.string,
             label: PropTypes.string,
             formulaRef: PropTypes.string,
+            formulaScope: PropTypes.oneOf(['measures', 'columns']),
             sparkline: PropTypes.oneOfType([PropTypes.bool, PropTypes.object]),
         })),
         filters: PropTypes.object,

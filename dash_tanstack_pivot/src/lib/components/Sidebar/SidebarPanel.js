@@ -18,6 +18,7 @@ import { usePivotRenderCounter } from '../../hooks/usePivotRenderCounter';
 import { ReportEditor } from './ReportEditor';
 
 const FORMULA_REFERENCE_RE = /\b[A-Za-z_][A-Za-z0-9_]*\b/g;
+const COLUMN_FORMULA_REFERENCE_RE = /\[([^\]]+)\]/g;
 const DEFAULT_VALUE_SPARKLINE_CONFIG = {
     type: 'line',
     metric: 'last',
@@ -52,6 +53,36 @@ function getFormulaReferenceKey(config) {
         || config.field
         || ''
     ).trim();
+}
+
+function normalizeFormulaScope(value) {
+    const scope = String(value || '').trim().toLowerCase();
+    return ['columns', 'display', 'displayed', 'displayed_columns', 'rendered', 'rendered_columns'].includes(scope)
+        ? 'columns'
+        : 'measures';
+}
+
+function isColumnFormulaScope(value) {
+    return normalizeFormulaScope(value) === 'columns';
+}
+
+function extractColumnFormulaReferences(expression) {
+    const refs = [];
+    const seen = new Set();
+    String(expression || '').replace(COLUMN_FORMULA_REFERENCE_RE, (_match, rawRef) => {
+        const ref = String(rawRef || '').trim();
+        if (ref && !seen.has(ref)) {
+            refs.push(ref);
+            seen.add(ref);
+        }
+        return '';
+    });
+    return refs;
+}
+
+function formatColumnFormulaReference(columnId) {
+    const id = String(columnId || '').trim();
+    return id ? `[${id}]` : '';
 }
 
 function buildFormulaReferenceKey(label, valConfigs, fallback = 'formula') {
@@ -176,6 +207,15 @@ function buildSuggestedFormula(baseValues) {
     return `${baseValues[0].field} - ${baseValues[1].field}`;
 }
 
+function buildSuggestedColumnFormula(displayedColumnOptions) {
+    const ids = (Array.isArray(displayedColumnOptions) ? displayedColumnOptions : [])
+        .map((option) => option && option.id)
+        .filter(Boolean);
+    if (ids.length === 0) return '';
+    if (ids.length === 1) return `${formatColumnFormulaReference(ids[0])} * 100`;
+    return `${formatColumnFormulaReference(ids[0])} - ${formatColumnFormulaReference(ids[1])}`;
+}
+
 function createFormulaFieldId(valConfigs) {
     const takenIds = new Set(
         (Array.isArray(valConfigs) ? valConfigs : [])
@@ -187,20 +227,22 @@ function createFormulaFieldId(valConfigs) {
     return `formula_${nextIndex}`;
 }
 
-function inspectFormulaExpression(formula, valueConfigs, currentField = null, currentFormulaRef = null) {
+function inspectFormulaExpression(
+    formula,
+    valueConfigs,
+    currentField = null,
+    currentFormulaRef = null,
+    formulaScope = 'measures',
+    displayedColumnOptions = []
+) {
     const trimmed = String(formula || '').trim();
+    const columnFormulaScope = isColumnFormulaScope(formulaScope);
     if (!trimmed) {
         return {
             tone: 'muted',
-            text: 'Use arithmetic with the value fields below. Example: sales - cost',
-        };
-    }
-
-    const allConfigs = Array.isArray(valueConfigs) ? valueConfigs.filter((value) => value && value.field) : [];
-    if (allConfigs.length === 0) {
-        return {
-            tone: 'warning',
-            text: 'Add at least one value or formula reference before creating formulas.',
+            text: columnFormulaScope
+                ? 'Use bracketed rendered columns. Example: [Cash Equity_day_pnl_sum] - [ETF_day_pnl_sum]'
+                : 'Use arithmetic with the value fields below. Example: sales - cost',
         };
     }
 
@@ -214,6 +256,57 @@ function inspectFormulaExpression(formula, valueConfigs, currentField = null, cu
     }
     if (parenDepth !== 0) {
         return { tone: 'warning', text: 'Parentheses are unbalanced.' };
+    }
+
+    if (columnFormulaScope) {
+        const displayedOptions = Array.isArray(displayedColumnOptions) ? displayedColumnOptions : [];
+        const availableColumnIds = new Set(
+            displayedOptions
+                .map((option) => option && option.id)
+                .filter(Boolean)
+        );
+        const columnReferences = extractColumnFormulaReferences(trimmed);
+        if (columnReferences.length === 0) {
+            return {
+                tone: 'warning',
+                text: 'Insert at least one rendered column reference like [column_id].',
+            };
+        }
+        const expressionWithoutColumnRefs = trimmed.replace(COLUMN_FORMULA_REFERENCE_RE, '');
+        const unbracketedIdentifiers = Array.from(new Set(expressionWithoutColumnRefs.match(FORMULA_REFERENCE_RE) || []));
+        if (unbracketedIdentifiers.length > 0) {
+            return {
+                tone: 'warning',
+                text: `Rendered columns must use brackets: ${unbracketedIdentifiers.join(', ')}`,
+            };
+        }
+        if (availableColumnIds.size > 0) {
+            const unknownColumns = columnReferences.filter((columnId) => !availableColumnIds.has(columnId));
+            if (unknownColumns.length > 0) {
+                return {
+                    tone: 'warning',
+                    text: `Unknown rendered columns: ${unknownColumns.join(', ')}`,
+                };
+            }
+        }
+        if (currentField && columnReferences.includes(currentField)) {
+            return {
+                tone: 'warning',
+                text: 'A displayed-column formula cannot reference its own output column.',
+            };
+        }
+        return {
+            tone: 'success',
+            text: `Using rendered columns: ${columnReferences.join(', ')}`,
+        };
+    }
+
+    const allConfigs = Array.isArray(valueConfigs) ? valueConfigs.filter((value) => value && value.field) : [];
+    if (allConfigs.length === 0) {
+        return {
+            tone: 'warning',
+            text: 'Add at least one value or formula reference before creating formulas.',
+        };
     }
 
     const formulaConfigs = allConfigs.filter((config) => config.agg === 'formula');
@@ -523,6 +616,21 @@ function buildFormulaTemplates(baseValues) {
         { label: 'Difference', value: `${baseValues[0].field} - ${baseValues[1].field}` },
         { label: 'Ratio %', value: `(${baseValues[0].field} / ${baseValues[1].field}) * 100` },
         { label: 'Margin %', value: `((${baseValues[0].field} - ${baseValues[1].field}) / ${baseValues[0].field}) * 100` },
+    ];
+}
+
+function buildColumnFormulaTemplates(displayedColumnOptions) {
+    const ids = (Array.isArray(displayedColumnOptions) ? displayedColumnOptions : [])
+        .map((option) => option && option.id)
+        .filter(Boolean);
+    if (ids.length === 0) return [];
+    if (ids.length === 1) {
+        return [{ label: 'Scale x100', value: `${formatColumnFormulaReference(ids[0])} * 100` }];
+    }
+    return [
+        { label: 'Difference', value: `${formatColumnFormulaReference(ids[0])} - ${formatColumnFormulaReference(ids[1])}` },
+        { label: 'Ratio %', value: `(${formatColumnFormulaReference(ids[0])} / ${formatColumnFormulaReference(ids[1])}) * 100` },
+        { label: 'Spread %', value: `((${formatColumnFormulaReference(ids[0])} - ${formatColumnFormulaReference(ids[1])}) / ${formatColumnFormulaReference(ids[0])}) * 100` },
     ];
 }
 
@@ -1075,6 +1183,9 @@ function FormulaListItem({ item, idx, selected, onSelect, onRemove, setValConfig
                         <span style={{ fontSize: '10px', color: theme.textSec, fontFamily: 'monospace', flexShrink: 0 }}>
                             {getFormulaReferenceKey(item)}
                         </span>
+                        <span style={{ fontSize: '9px', color: theme.textSec, border: `1px solid ${theme.border}`, borderRadius: '999px', padding: '1px 6px', flexShrink: 0 }}>
+                            {isColumnFormulaScope(item.formulaScope) ? 'columns' : 'values'}
+                        </span>
                     </div>
                     <div style={{
                         marginTop: '2px',
@@ -1568,21 +1679,30 @@ function FormulaEditor({ item, idx, valConfigs, setValConfigs, theme, onRemove }
     );
 }
 
-function FormulaEditorModal({ item, idx, valConfigs, setValConfigs, theme, onClose, onRemove }) {
+function FormulaEditorModal({ item, idx, valConfigs, setValConfigs, theme, onClose, onRemove, displayedColumnOptions = [] }) {
     const inputRef = React.useRef(null);
     const [draft, setDraft] = React.useState({
         label: item.label || '',
         formula: item.formula || '',
         formulaRef: getFormulaReferenceKey(item),
+        formulaScope: normalizeFormulaScope(item.formulaScope),
     });
 
+    // Only reset the draft when a DIFFERENT formula is selected (item.field changes).
+    // Do NOT include item.label/formula/formulaRef here — external valConfig updates
+    // (e.g. sparkline toggle) can change the object reference and reset the user's
+    // in-progress edits mid-keystroke.
+    const itemRef = React.useRef(item);
+    itemRef.current = item;
     React.useEffect(() => {
+        const it = itemRef.current;
         setDraft({
-            label: item.label || '',
-            formula: item.formula || '',
-            formulaRef: getFormulaReferenceKey(item),
+            label: it.label || '',
+            formula: it.formula || '',
+            formulaRef: getFormulaReferenceKey(it),
+            formulaScope: normalizeFormulaScope(it.formulaScope),
         });
-    }, [item.field, item.formula, item.formulaRef, item.label]);
+    }, [item.field]); // eslint-disable-line react-hooks/exhaustive-deps
 
     React.useEffect(() => {
         if (!inputRef.current) return;
@@ -1603,25 +1723,42 @@ function FormulaEditorModal({ item, idx, valConfigs, setValConfigs, theme, onClo
         () => referenceConfigs.filter((config) => config.agg === 'formula' && config.field !== item.field),
         [item.field, referenceConfigs]
     );
+    const columnReferenceOptions = React.useMemo(
+        () => (Array.isArray(displayedColumnOptions) ? displayedColumnOptions : [])
+            .filter((column) => column && column.id && column.id !== item.field),
+        [displayedColumnOptions, item.field]
+    );
     const formulaStatus = React.useMemo(
-        () => inspectFormulaExpression(draft.formula, referenceConfigs, item.field, draft.formulaRef),
-        [draft.formula, draft.formulaRef, item.field, referenceConfigs]
+        () => inspectFormulaExpression(
+            draft.formula,
+            referenceConfigs,
+            item.field,
+            draft.formulaRef,
+            draft.formulaScope,
+            columnReferenceOptions
+        ),
+        [columnReferenceOptions, draft.formula, draft.formulaRef, draft.formulaScope, item.field, referenceConfigs]
     );
     const statusStyle = React.useMemo(
         () => getFormulaStatusStyles(theme, formulaStatus.tone),
         [formulaStatus.tone, theme]
     );
     const templateButtons = React.useMemo(
-        () => buildFormulaTemplates(measureReferences),
-        [measureReferences]
+        () => (isColumnFormulaScope(draft.formulaScope)
+            ? buildColumnFormulaTemplates(columnReferenceOptions)
+            : buildFormulaTemplates(measureReferences)),
+        [columnReferenceOptions, draft.formulaScope, measureReferences]
     );
     const placeholder = React.useMemo(
-        () => buildSuggestedFormula(measureReferences) || `${draft.formulaRef || item.field} * 100`,
-        [draft.formulaRef, item.field, measureReferences]
+        () => (isColumnFormulaScope(draft.formulaScope)
+            ? (buildSuggestedColumnFormula(columnReferenceOptions) || '[column_id] - [other_column_id]')
+            : (buildSuggestedFormula(measureReferences) || `${draft.formulaRef || item.field} * 100`)),
+        [columnReferenceOptions, draft.formulaRef, draft.formulaScope, item.field, measureReferences]
     );
     const hasPendingChanges = draft.label !== (item.label || '')
         || draft.formula !== (item.formula || '')
-        || draft.formulaRef !== getFormulaReferenceKey(item);
+        || draft.formulaRef !== getFormulaReferenceKey(item)
+        || draft.formulaScope !== normalizeFormulaScope(item.formulaScope);
 
     const applyDraft = React.useCallback(() => {
         const nextFormulaRef = normalizeFormulaReferenceKey(draft.formulaRef, item.field);
@@ -1653,6 +1790,7 @@ function FormulaEditorModal({ item, idx, valConfigs, setValConfigs, theme, onClo
                 label: draft.label,
                 formula: draft.formula,
                 formulaRef: uniqueFormulaRef,
+                formulaScope: draft.formulaScope,
             };
 
             if (oldFormulaRef && oldFormulaRef !== uniqueFormulaRef) {
@@ -1668,16 +1806,17 @@ function FormulaEditorModal({ item, idx, valConfigs, setValConfigs, theme, onClo
             }
             return next;
         });
-    }, [draft.formula, draft.formulaRef, draft.label, idx, item.field, setValConfigs]);
+    }, [draft.formula, draft.formulaRef, draft.formulaScope, draft.label, idx, item.field, setValConfigs]);
 
     const closeModal = React.useCallback(() => {
         setDraft({
             label: item.label || '',
             formula: item.formula || '',
             formulaRef: getFormulaReferenceKey(item),
+            formulaScope: normalizeFormulaScope(item.formulaScope),
         });
         onClose();
-    }, [item.field, item.formula, item.formulaRef, item.label, onClose]);
+    }, [item.field, item.formula, item.formulaRef, item.formulaScope, item.label, onClose]);
 
     const insertAtCursor = React.useCallback((text) => {
         const el = inputRef.current;
@@ -1815,6 +1954,36 @@ function FormulaEditorModal({ item, idx, valConfigs, setValConfigs, theme, onClo
                             }}
                         />
                     </label>
+                    <label style={{ minWidth: '180px', flex: '0 0 auto', display: 'flex', flexDirection: 'column', gap: '4px' }}>
+                        <span style={{ fontSize: '10px', color: theme.textSec, textTransform: 'uppercase', letterSpacing: '0.5px' }}>Formula type</span>
+                        <select
+                            value={draft.formulaScope}
+                            onChange={(event) => {
+                                const nextScope = normalizeFormulaScope(event.target.value);
+                                setDraft((prev) => ({
+                                    ...prev,
+                                    formulaScope: nextScope,
+                                    formula: prev.formula || (
+                                        nextScope === 'columns'
+                                            ? buildSuggestedColumnFormula(columnReferenceOptions)
+                                            : buildSuggestedFormula(measureReferences)
+                                    ),
+                                }));
+                            }}
+                            style={{
+                                border: `1px solid ${theme.border}`,
+                                background: theme.headerSubtleBg || theme.background,
+                                color: theme.text,
+                                borderRadius: '8px',
+                                padding: '8px 10px',
+                                fontSize: '12px',
+                                outline: 'none',
+                            }}
+                        >
+                            <option value="measures">Value formula</option>
+                            <option value="columns">Displayed columns</option>
+                        </select>
+                    </label>
                 </div>
 
                 <div style={{ marginBottom: '12px' }}>
@@ -1884,24 +2053,49 @@ function FormulaEditorModal({ item, idx, valConfigs, setValConfigs, theme, onClo
                 </div>
 
                 <div style={{ display: 'grid', gridTemplateColumns: '1fr', gap: '12px', marginBottom: '14px' }}>
-                    <div>
-                        <div style={{ fontSize: '10px', color: theme.textSec, textTransform: 'uppercase', letterSpacing: '0.5px', marginBottom: '6px' }}>Measures</div>
-                        <div style={{ display: 'flex', gap: '6px', flexWrap: 'wrap' }}>
-                            {measureReferences.map((config) => (
-                                <button
-                                    key={config.field}
-                                    type="button"
-                                    onMouseDown={(event) => event.preventDefault()}
-                                    onClick={() => insertAtCursor(config.field)}
-                                    style={tokenButtonStyle}
-                                    title={`Insert ${config.field}`}
-                                >
-                                    {config.field}
-                                </button>
-                            ))}
+                    {isColumnFormulaScope(draft.formulaScope) ? (
+                        <div>
+                            <div style={{ fontSize: '10px', color: theme.textSec, textTransform: 'uppercase', letterSpacing: '0.5px', marginBottom: '6px' }}>Rendered Columns</div>
+                            <div style={{ display: 'flex', gap: '6px', flexWrap: 'wrap' }}>
+                                {columnReferenceOptions.map((column) => (
+                                    <button
+                                        key={column.id}
+                                        type="button"
+                                        onMouseDown={(event) => event.preventDefault()}
+                                        onClick={() => insertAtCursor(formatColumnFormulaReference(column.id))}
+                                        style={tokenButtonStyle}
+                                        title={`Insert ${column.id}`}
+                                    >
+                                        {column.label || column.id}
+                                    </button>
+                                ))}
+                                {columnReferenceOptions.length === 0 && (
+                                    <span style={{ fontSize: '11px', color: theme.textSec }}>
+                                        Render the pivot once, or type a bracketed column id directly.
+                                    </span>
+                                )}
+                            </div>
                         </div>
-                    </div>
-                    {formulaReferences.length > 0 && (
+                    ) : (
+                        <div>
+                            <div style={{ fontSize: '10px', color: theme.textSec, textTransform: 'uppercase', letterSpacing: '0.5px', marginBottom: '6px' }}>Measures</div>
+                            <div style={{ display: 'flex', gap: '6px', flexWrap: 'wrap' }}>
+                                {measureReferences.map((config) => (
+                                    <button
+                                        key={config.field}
+                                        type="button"
+                                        onMouseDown={(event) => event.preventDefault()}
+                                        onClick={() => insertAtCursor(config.field)}
+                                        style={tokenButtonStyle}
+                                        title={`Insert ${config.field}`}
+                                    >
+                                        {config.field}
+                                    </button>
+                                ))}
+                            </div>
+                        </div>
+                    )}
+                    {!isColumnFormulaScope(draft.formulaScope) && formulaReferences.length > 0 && (
                         <div>
                             <div style={{ fontSize: '10px', color: theme.textSec, textTransform: 'uppercase', letterSpacing: '0.5px', marginBottom: '6px' }}>Formula References</div>
                             <div style={{ display: 'flex', gap: '6px', flexWrap: 'wrap' }}>
@@ -2188,6 +2382,7 @@ export const SidebarPanel = React.memo(function SidebarPanel({
     fieldPanelSizes, setFieldPanelSizes,
     fixedSparklineValueKeys = [],
     sparklineFields = null,
+    displayedColumnOptions = [],
 }) {
     usePivotRenderCounter('SidebarPanel');
     const { theme, styles } = usePivotTheme();
@@ -2465,6 +2660,7 @@ export const SidebarPanel = React.memo(function SidebarPanel({
                 label: nextLabel,
                 formula: nextFormula,
                 formulaRef: nextFormulaRef,
+                formulaScope: 'measures',
             },
         ]);
         if (showNotification) {
@@ -3310,6 +3506,7 @@ export const SidebarPanel = React.memo(function SidebarPanel({
                     theme={theme}
                     onClose={() => setFormulaModalField(null)}
                     onRemove={removeValueAtIndex}
+                    displayedColumnOptions={displayedColumnOptions}
                 />
             )}
             {/* Resize handle */}

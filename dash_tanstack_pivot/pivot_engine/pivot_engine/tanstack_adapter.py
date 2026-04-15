@@ -811,14 +811,33 @@ class TanStackPivotAdapter(FormulaEngineMixin):
             for col in (request.columns or [])
             if isinstance(col, dict)
             and col.get("id")
-            and (col.get("aggregationFn") or col.get("isFormula"))
+            and (col.get("aggregationFn") or self._is_measure_formula_column(col))
+        ]
+        column_formula_ids = [
+            str(col.get("id"))
+            for col in (request.columns or [])
+            if self._is_column_formula_column(col) and col.get("id")
         ]
         if not requested_dynamic_ids:
-            return [
+            observed_list = [
                 str(col_id)
                 for col_id in (observed_ids or [])
                 if isinstance(col_id, str)
             ]
+            if not column_formula_ids:
+                return observed_list
+            observed_set = set(observed_list)
+            ordered: list[str] = []
+            seen: set[str] = set()
+            for formula_id in column_formula_ids:
+                if formula_id in observed_set and formula_id not in seen:
+                    ordered.append(formula_id)
+                    seen.add(formula_id)
+            for col_id in observed_list:
+                if col_id not in seen:
+                    ordered.append(col_id)
+                    seen.add(col_id)
+            return ordered
 
         observed_list = [
             str(col_id)
@@ -857,6 +876,11 @@ class TanStackPivotAdapter(FormulaEngineMixin):
                 if dynamic_id in observed_set and dynamic_id not in seen:
                     ordered.append(dynamic_id)
                     seen.add(dynamic_id)
+
+        for formula_id in column_formula_ids:
+            if formula_id in observed_set and formula_id not in seen:
+                ordered.append(formula_id)
+                seen.add(formula_id)
 
         for col_id in observed_list:
             if col_id not in seen:
@@ -976,7 +1000,15 @@ class TanStackPivotAdapter(FormulaEngineMixin):
             for col in (request.columns or [])
             if isinstance(col, dict)
             and col.get("id")
-            and (col.get("aggregationFn") or col.get("isFormula"))
+            and (col.get("aggregationFn") or FormulaEngineMixin._is_measure_formula_column(col))
+        ]
+
+    @staticmethod
+    def _column_formula_request_ids(request: "TanStackRequest") -> list[str]:
+        return [
+            str(col.get("id"))
+            for col in (request.columns or [])
+            if FormulaEngineMixin._is_column_formula_column(col) and col.get("id")
         ]
 
     def _build_center_col_ids_from_discovered_values(
@@ -993,6 +1025,9 @@ class TanStackPivotAdapter(FormulaEngineMixin):
             prefix = str(raw_value)
             for dynamic_id in dynamic_ids:
                 ordered.append(f"{prefix}_{dynamic_id}")
+
+        for formula_id in self._column_formula_request_ids(request):
+            ordered.append(formula_id)
 
         if request.row_totals:
             for dynamic_id in dynamic_ids:
@@ -1045,7 +1080,24 @@ class TanStackPivotAdapter(FormulaEngineMixin):
         ordered_values: list[str] = []
         seen_values: set[str] = set()
 
-        for col_id in window_center_ids:
+        source_center_ids = list(window_center_ids)
+        visible_center_ids = set(
+            col_id for col_id in window_center_ids
+            if isinstance(col_id, str)
+        )
+        for col in (request.columns or []):
+            if not self._is_column_formula_column(col):
+                continue
+            formula_id = str(col.get("id") or "")
+            if not formula_id or formula_id not in visible_center_ids:
+                continue
+            source_center_ids.extend(
+                reference
+                for reference in self._extract_column_formula_references(col.get("formulaExpr", ""))
+                if reference not in visible_center_ids
+            )
+
+        for col_id in source_center_ids:
             if not isinstance(col_id, str) or col_id.startswith("__RowTotal__"):
                 continue
             for dynamic_id in dynamic_ids:
@@ -1173,11 +1225,20 @@ class TanStackPivotAdapter(FormulaEngineMixin):
             self._center_col_ids_cache[cache_key] = center_col_ids
         else:
             center_col_ids = self._center_col_ids_cache[cache_key]
-            if tanstack_result.columns:
-                _, authoritative_columns = self._build_authoritative_response_columns(
-                    tanstack_result, request, row_meta_keys, excluded_ids
-                )
-                tanstack_result.columns = authoritative_columns
+            # Always rebuild columns from rows to catch newly-materialized center columns.
+            # The cache may have been populated with an empty list before data arrived,
+            # so we must re-scan rows even when cache exists.
+            _, authoritative_columns = self._build_authoritative_response_columns(
+                tanstack_result, request, row_meta_keys, excluded_ids
+            )
+            tanstack_result.columns = authoritative_columns
+            # If the rebuilt center columns differ from cached, update the cache
+            fresh_center_col_ids = self._get_center_col_ids_from_columns(
+                authoritative_columns, excluded_ids
+            )
+            if fresh_center_col_ids and fresh_center_col_ids != center_col_ids:
+                center_col_ids = self._reorder_materialized_dynamic_ids(fresh_center_col_ids, request)
+                self._center_col_ids_cache[cache_key] = center_col_ids
 
         effective_window_ids = self._resolve_center_window_ids(
             center_col_ids,
@@ -3395,7 +3456,7 @@ class TanStackPivotAdapter(FormulaEngineMixin):
                     ).data
                     if normalized_total:
                         grand_total_row = normalized_total[0]
-                formula_ids = self._formula_ids_from_request(request)
+                formula_ids = self._measure_formula_ids_from_request(request)
                 if isinstance(grand_total_row, dict) and formula_source_rows and formula_ids:
                     source_rows = self.convert_pivot_result_to_tanstack_format(
                         formula_source_rows,

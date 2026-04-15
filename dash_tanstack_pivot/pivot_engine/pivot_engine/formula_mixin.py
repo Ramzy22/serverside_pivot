@@ -14,6 +14,7 @@ if TYPE_CHECKING:
     from .tanstack_adapter import TanStackRequest
 
 _FORMULA_IDENTIFIER_RE = re.compile(r"\b[A-Za-z_][A-Za-z0-9_]*\b")
+_COLUMN_FORMULA_REF_RE = re.compile(r"\[([^\]]+)\]")
 MISSING_FORMULA_VALUE = object()
 
 
@@ -97,6 +98,64 @@ class FormulaEngineMixin:
         if not isinstance(column_id, str) or not isinstance(formula_id, str):
             return False
         return column_id == formula_id or column_id.endswith(f"_{formula_id}")
+
+    @staticmethod
+    def _formula_scope(column: Dict[str, Any]) -> str:
+        scope = str(
+            column.get("formulaScope")
+            or column.get("formula_scope")
+            or column.get("scope")
+            or "measures"
+        ).strip().lower()
+        if scope in {"columns", "display", "displayed", "displayed_columns", "rendered", "rendered_columns"}:
+            return "columns"
+        return "measures"
+
+    @staticmethod
+    def _is_column_formula_column(column: Any) -> bool:
+        return isinstance(column, dict) and column.get("isFormula") and FormulaEngineMixin._formula_scope(column) == "columns"
+
+    @staticmethod
+    def _is_measure_formula_column(column: Any) -> bool:
+        return isinstance(column, dict) and column.get("isFormula") and FormulaEngineMixin._formula_scope(column) != "columns"
+
+    @staticmethod
+    def _extract_column_formula_references(expression: Any) -> List[str]:
+        if not isinstance(expression, str):
+            return []
+        references = []
+        seen = set()
+        for match in _COLUMN_FORMULA_REF_RE.finditer(expression):
+            reference = str(match.group(1) or "").strip()
+            if reference and reference not in seen:
+                references.append(reference)
+                seen.add(reference)
+        return references
+
+    def _canonicalize_column_formula_expression(
+        self,
+        expression: Any,
+        row: Dict[str, Any],
+    ) -> tuple[str, Dict[str, Any]]:
+        if not isinstance(expression, str):
+            return "", {}
+
+        namespace: Dict[str, Any] = {}
+        reference_tokens: Dict[str, str] = {}
+
+        def replace_reference(match: Any) -> str:
+            reference = str(match.group(1) or "").strip()
+            if not reference:
+                return "missing_column"
+            token = reference_tokens.get(reference)
+            if token is None:
+                token = f"col_{len(reference_tokens) + 1}"
+                reference_tokens[reference] = token
+                namespace[token] = _formula_namespace_value(self._numeric_or_none(row.get(reference)))
+            return token
+
+        normalized = _COLUMN_FORMULA_REF_RE.sub(replace_reference, expression)
+        return normalized, namespace
 
     @staticmethod
     def _extract_formula_identifiers(expression: Any) -> List[str]:
@@ -187,6 +246,14 @@ class FormulaEngineMixin:
             str(col.get("id"))
             for col in (request.columns or [])
             if isinstance(col, dict) and col.get("isFormula") and col.get("id")
+        }
+
+    @staticmethod
+    def _measure_formula_ids_from_request(request: TanStackRequest) -> set[str]:
+        return {
+            str(col.get("id"))
+            for col in (request.columns or [])
+            if FormulaEngineMixin._is_measure_formula_column(col) and col.get("id")
         }
 
     def _build_formula_rollup_values(self, rows: List[Dict[str, Any]], formula_ids: set[str]) -> Dict[str, Optional[float]]:
@@ -401,6 +468,61 @@ class FormulaEngineMixin:
 
         return sorted_rows + grand_total_rows
 
+    def _apply_column_formula_columns(
+        self,
+        rows: List[Dict[str, Any]],
+        formula_cols: List[Dict[str, Any]],
+        parser: Any,
+    ) -> None:
+        if not rows or not formula_cols:
+            return
+
+        formula_plan, unresolved_formula_ids = self._build_formula_evaluation_plan(formula_cols)
+        formula_alias_map: Dict[str, str] = {}
+        for col in formula_cols:
+            if not isinstance(col, dict) or not col.get("id"):
+                continue
+            formula_id = str(col.get("id"))
+            formula_alias_map[formula_id.lower()] = formula_id
+            formula_ref = self._formula_reference_key(col)
+            if formula_ref:
+                formula_alias_map[formula_ref.lower()] = formula_id
+
+        for row in rows:
+            if not isinstance(row, dict):
+                continue
+            formula_namespace: Dict[str, Any] = {}
+            for fcol in formula_plan:
+                formula_id = str(fcol.get("id") or "")
+                formula_expr = self._canonicalize_formula_expression(
+                    fcol.get("formulaExpr", ""),
+                    formula_alias_map,
+                )
+                if not formula_id or not formula_expr:
+                    continue
+                prepared_expr, column_namespace = self._canonicalize_column_formula_expression(
+                    formula_expr,
+                    row,
+                )
+                namespace = {
+                    **column_namespace,
+                    **formula_namespace,
+                }
+                result = self._evaluate_formula_expression(parser, prepared_expr, namespace)
+                row[formula_id] = result
+                formula_namespace[formula_id] = _formula_namespace_value(result)
+                formula_ref = self._formula_reference_key(fcol)
+                if formula_ref:
+                    formula_namespace[formula_ref] = _formula_namespace_value(result)
+
+            for formula_id in unresolved_formula_ids:
+                row[formula_id] = None
+                formula_namespace[formula_id] = MISSING_FORMULA_VALUE
+                unresolved_col = next((col for col in formula_cols if col.get("id") == formula_id), None)
+                formula_ref = self._formula_reference_key(unresolved_col or {})
+                if formula_ref:
+                    formula_namespace[formula_ref] = MISSING_FORMULA_VALUE
+
     def _apply_formula_columns(self, rows: List[Dict[str, Any]], request: TanStackRequest) -> None:
         """
         Apply formula columns (post-aggregation calculated fields) to each row.
@@ -420,14 +542,22 @@ class FormulaEngineMixin:
         ]
         if not formula_cols:
             return
+        measure_formula_cols = [
+            col for col in formula_cols
+            if self._is_measure_formula_column(col)
+        ]
+        column_formula_cols = [
+            col for col in formula_cols
+            if self._is_column_formula_column(col)
+        ]
         formula_ids = {
             str(col.get("id"))
-            for col in formula_cols
+            for col in measure_formula_cols
             if isinstance(col, dict) and col.get("id")
         }
-        formula_plan, unresolved_formula_ids = self._build_formula_evaluation_plan(formula_cols)
+        formula_plan, unresolved_formula_ids = self._build_formula_evaluation_plan(measure_formula_cols)
         formula_alias_map = {}
-        for col in formula_cols:
+        for col in measure_formula_cols:
             if not isinstance(col, dict) or not col.get("id"):
                 continue
             formula_id = str(col.get("id"))
@@ -439,6 +569,10 @@ class FormulaEngineMixin:
         from .planner.expression_parser import SafeExpressionParser
 
         parser = SafeExpressionParser()
+
+        if not measure_formula_cols:
+            self._apply_column_formula_columns(rows, column_formula_cols, parser)
+            return
 
         # Gather all row keys once to detect pivot prefixes.
         all_keys: set = set()
@@ -518,7 +652,7 @@ class FormulaEngineMixin:
                     for formula_id in unresolved_formula_ids:
                         row[f"{prefix}_{formula_id}"] = None
                         namespace[formula_id] = MISSING_FORMULA_VALUE
-                        unresolved_col = next((col for col in formula_cols if col.get("id") == formula_id), None)
+                        unresolved_col = next((col for col in measure_formula_cols if col.get("id") == formula_id), None)
                         formula_ref = self._formula_reference_key(unresolved_col or {})
                         if formula_ref:
                             namespace[formula_ref] = MISSING_FORMULA_VALUE
@@ -570,10 +704,12 @@ class FormulaEngineMixin:
                 for formula_id in unresolved_formula_ids:
                     row[formula_id] = None
                     namespace[formula_id] = MISSING_FORMULA_VALUE
-                    unresolved_col = next((col for col in formula_cols if col.get("id") == formula_id), None)
+                    unresolved_col = next((col for col in measure_formula_cols if col.get("id") == formula_id), None)
                     formula_ref = self._formula_reference_key(unresolved_col or {})
                     if formula_ref:
                         namespace[formula_ref] = MISSING_FORMULA_VALUE
+
+        self._apply_column_formula_columns(rows, column_formula_cols, parser)
 
         grand_total_rows = [row for row in rows if isinstance(row, dict) and _is_grand_total_row(row)]
         regular_rows = [row for row in rows if isinstance(row, dict) and not _is_grand_total_row(row)]

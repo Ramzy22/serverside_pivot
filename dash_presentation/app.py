@@ -482,7 +482,7 @@ app.layout = html.Div(
                 build_panel(
                     "Performance Baseline",
                     "NASDAQ Snapshot — No Trendlines",
-                    "Plain numeric pivot on the snapshot table. Use this to benchmark rendering and scroll performance.",
+                    "Plain numeric pivot with a displayed-column formula: Cash Equity Day PnL minus ETF Day PnL.",
                     DashTanstackPivot(
                         id="perf-baseline-grid",
                         style={"height": "860px", "width": "100%"},
@@ -495,6 +495,15 @@ app.layout = html.Div(
                             {"field": "market_value", "agg": "sum", "format": "fixed:0", "label": "Mkt Val"},
                             {"field": "net_exposure", "agg": "sum", "format": "fixed:0", "label": "Net Exp"},
                             {"field": "position_qty", "agg": "sum", "format": "fixed:0", "label": "Qty"},
+                            {
+                                "field": "formula_1",
+                                "agg": "formula",
+                                "format": "fixed:0",
+                                "label": "Cash - ETF PnL",
+                                "formula": "[Cash Equity_day_pnl_sum] - [ETF_day_pnl_sum]",
+                                "formulaRef": "cash_vs_etf_pnl",
+                                "formulaScope": "columns",
+                            },
                         ],
                         filters={},
                         sorting=[],

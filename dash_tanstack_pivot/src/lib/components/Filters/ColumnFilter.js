@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import Icons from '../../utils/Icons';
 import { getStyles } from '../../utils/styles';
 import DateRangeFilter from './DateRangeFilter';
@@ -25,16 +25,19 @@ const ColumnFilter = ({ column, onFilter, currentFilter, options = [], theme, on
     const isNumeric = (leaf.columnDef && leaf.columnDef.meta && leaf.columnDef.meta.type === 'number') || colId.includes('sales') || colId.includes('cost') || colId.includes('amount') || colId.includes('price');
 
     const [tab, setTab] = useState('condition');
+    const tabAutoInitialized = useRef(false);
 
-    // Auto-select tab based on available options
+    // Auto-select tab on first mount only; never override a user-driven tab change
     useEffect(() => {
-        if (tab !== 'condition') return;
+        if (tabAutoInitialized.current) return;
         if (options && options.length > 0) {
+            tabAutoInitialized.current = true;
             setTab('values');
         } else if (isDate) {
+            tabAutoInitialized.current = true;
             setTab('date');
         }
-    }, [options && options.length, isDate, tab]);
+    }, [options && options.length, isDate]); // eslint-disable-line react-hooks/exhaustive-deps
 
     // --- Existing Condition Logic ---
     const isMulti = currentFilter && currentFilter.conditions;

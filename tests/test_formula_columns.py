@@ -64,6 +64,27 @@ def test_runtime_service_build_request_columns_generates_formula_ref_from_label_
     assert formula_column["formulaRef"] == "formula1"
 
 
+def test_runtime_service_build_request_columns_preserves_column_formula_scope():
+    columns = PivotRuntimeService._build_request_columns(
+        row_fields=["region"],
+        col_fields=["product"],
+        val_configs=[
+            {"field": "sales", "agg": "sum"},
+            {
+                "field": "formula_1",
+                "agg": "formula",
+                "label": "Laptop minus Phone",
+                "formula": "[Laptop_sales_sum] - [Phone_sales_sum]",
+                "formulaScope": "columns",
+            },
+        ],
+    )
+
+    formula_column = next(column for column in columns if column.get("isFormula"))
+    assert formula_column["formulaScope"] == "columns"
+    assert formula_column["formulaExpr"] == "[Laptop_sales_sum] - [Phone_sales_sum]"
+
+
 @pytest.mark.asyncio
 async def test_formula_columns_are_applied_in_flat_mode():
     adapter = create_tanstack_adapter(backend_uri=":memory:")
@@ -178,6 +199,130 @@ async def test_formula_columns_are_dynamic_in_pivot_mode_without_placeholder_col
         for column in response.columns
         if isinstance(column, dict)
     )
+
+
+@pytest.mark.asyncio
+async def test_column_scoped_formula_uses_materialized_pivot_columns():
+    adapter = create_tanstack_adapter(backend_uri=":memory:")
+    adapter.controller.load_data_from_arrow(
+        "sales_data",
+        pa.Table.from_pydict(
+            {
+                "region": ["North", "North", "South", "South"],
+                "product": ["Laptop", "Phone", "Laptop", "Phone"],
+                "sales": [100, 60, 90, 50],
+                "cost": [70, 20, 30, 10],
+            }
+        ),
+    )
+
+    request = TanStackRequest(
+        operation=TanStackOperation.GET_DATA,
+        table="sales_data",
+        columns=[
+            {"id": "region"},
+            {"id": "product"},
+            {"id": "sales_sum", "aggregationField": "sales", "aggregationFn": "sum"},
+            {"id": "cost_sum", "aggregationField": "cost", "aggregationFn": "sum"},
+            {
+                "id": "formula_1",
+                "header": "Laptop minus Phone",
+                "accessorKey": "formula_1",
+                "formulaExpr": "[Laptop_sales_sum] - [Phone_sales_sum]",
+                "formulaLabel": "Laptop minus Phone",
+                "formulaScope": "columns",
+                "isFormula": True,
+            },
+        ],
+        filters={},
+        sorting=[],
+        grouping=["region"],
+        aggregations=[],
+    )
+
+    response = await adapter.handle_request(request)
+    north_row = next(
+        row for row in response.data
+        if isinstance(row, dict) and row.get("region") == "North" and not row.get("_isTotal")
+    )
+
+    assert north_row["formula_1"] == pytest.approx(40.0)
+    assert "Laptop_formula_1" not in north_row
+    assert "Phone_formula_1" not in north_row
+
+    response_ids = [
+        column.get("id")
+        for column in response.columns
+        if isinstance(column, dict)
+    ]
+    assert "formula_1" in response_ids
+    assert "Laptop_formula_1" not in response_ids
+    assert "Phone_formula_1" not in response_ids
+
+
+@pytest.mark.asyncio
+async def test_column_scoped_formula_survives_virtual_scroll_schema_window():
+    adapter = create_tanstack_adapter(backend_uri=":memory:")
+    adapter.controller.load_data_from_arrow(
+        "sales_data",
+        pa.Table.from_pydict(
+            {
+                "region": ["North", "North", "South", "South"],
+                "product": ["Laptop", "Phone", "Laptop", "Phone"],
+                "sales": [100, 60, 90, 50],
+            }
+        ),
+    )
+
+    request = TanStackRequest(
+        operation=TanStackOperation.GET_DATA,
+        table="sales_data",
+        columns=[
+            {"id": "region"},
+            {"id": "product"},
+            {"id": "sales_sum", "aggregationField": "sales", "aggregationFn": "sum"},
+            {
+                "id": "formula_1",
+                "header": "Laptop minus Phone",
+                "accessorKey": "formula_1",
+                "formulaExpr": "[Laptop_sales_sum] - [Phone_sales_sum]",
+                "formulaLabel": "Laptop minus Phone",
+                "formulaScope": "columns",
+                "isFormula": True,
+            },
+        ],
+        filters={},
+        sorting=[],
+        grouping=["region"],
+        aggregations=[],
+        totals=True,
+        row_totals=True,
+    )
+
+    response = await adapter.handle_virtual_scroll_request(
+        request,
+        start_row=0,
+        end_row=10,
+        expanded_paths=True,
+        col_start=0,
+        col_end=20,
+        needs_col_schema=True,
+        include_grand_total=True,
+    )
+
+    schema_ids = [
+        column.get("id")
+        for column in (response.col_schema or {}).get("columns", [])
+        if isinstance(column, dict)
+    ]
+    assert "formula_1" in schema_ids
+    assert "Laptop_formula_1" not in schema_ids
+
+    north_row = next(
+        row for row in response.data
+        if isinstance(row, dict) and row.get("region") == "North" and not row.get("_isTotal")
+    )
+    assert north_row["formula_1"] == pytest.approx(40.0)
 
 
 @pytest.mark.asyncio
