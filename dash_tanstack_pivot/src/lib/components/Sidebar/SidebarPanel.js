@@ -2731,8 +2731,8 @@ export const SidebarPanel = React.memo(function SidebarPanel({
         }
     }, [activeFormulaField, formulaConfigs, formulaModalField, setValConfigs, valConfigs]);
 
-    const w = sidebarWidth || 288;
     const isReportMode = pivotMode === 'report';
+    const w = Math.max(sidebarWidth || 288, isReportMode ? 380 : 0);
     return (
         <div style={{position:'relative', display:'flex', flexShrink:0}}>
                 <div ref={sidebarRef} style={{...styles.sidebar, width:`${w}px`, minWidth:`${w}px`}} role="complementary" aria-label="Tool Panel" onDragOver={startDragScroll} onDragLeave={stopDragScroll} onDrop={stopDragScroll}>

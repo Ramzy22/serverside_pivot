@@ -1,507 +1,658 @@
-import React, { useCallback, useEffect, useMemo, useState } from 'react';
+import React, { useState, useCallback, useMemo } from 'react';
 import Icons from '../../utils/Icons';
 import { formatAggLabel, formatDisplayLabel } from '../../utils/helpers';
 
-const REPORT_PATH_SEPARATOR = '|||';
-const REPORT_META_FIELD_SET = new Set([
-    'depth',
-    '_id',
-    '_path',
-    '_levelLabel',
-    '_levelField',
-    '_pathFields',
-    '_has_children',
-    '_is_expanded',
-    '__col_schema',
+// ─── IDs ──────────────────────────────────────────────────────────────────────
+const uid = () => `r${Date.now().toString(36)}${Math.random().toString(36).slice(2, 6)}`;
+
+// ─── Operators ────────────────────────────────────────────────────────────────
+const OPERATORS = [
+    { value: 'eq',          label: '= equals' },
+    { value: 'not_eq',      label: '≠ not equals' },
+    { value: 'in',          label: '∈ in list' },
+    { value: 'not_in',      label: '∉ not in list' },
+    { value: 'contains',    label: '~ contains' },
+    { value: 'not_contains',label: '!~ not contains' },
+    { value: 'gt',          label: '> greater than' },
+    { value: 'gte',         label: '≥ greater or equal' },
+    { value: 'lt',          label: '< less than' },
+    { value: 'lte',         label: '≤ less or equal' },
+];
+const LIST_OPS = new Set(['in', 'not_in']);
+const OP_SYMBOL = { eq:'=', not_eq:'≠', in:'∈', not_in:'∉', contains:'~', not_contains:'!~', gt:'>', gte:'≥', lt:'<', lte:'≤' };
+
+const REPORT_META = new Set([
+    'depth','_id','_path','_levelLabel','_levelField','_pathFields',
+    '_has_children','_is_expanded','__col_schema',
 ]);
 
-const createNodeId = () => `report-node-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 7)}`;
-
-const createNode = (field = '') => ({
-    _id: createNodeId(),
-    field,
-    label: '',
-    topN: null,
-    sortBy: null,
-    sortDir: 'desc',
-    defaultChild: null,
-    childrenByValue: {},
+// ─── Constructors ─────────────────────────────────────────────────────────────
+const createClause  = (field = '') => ({ _id: uid(), field, operator: 'eq', value: '', values: [] });
+const createCondition = ()         => ({ op: 'AND', clauses: [] });
+const createBranch  = ()           => ({ _id: uid(), label: '', condition: createCondition(), child: null });
+const createNode    = (field = '') => ({
+    _id: uid(), field, label: '', topN: null,
+    sortBy: null, sortDir: 'desc', defaultChild: null, branches: [],
 });
 
-const normalizeNode = (value) => {
-    const source = value && typeof value === 'object' ? value : {};
-    const children = source.childrenByValue && typeof source.childrenByValue === 'object'
-        ? source.childrenByValue
-        : {};
+// ─── Normalize ────────────────────────────────────────────────────────────────
+const normalizeClause = (c) => {
+    if (!c || typeof c.field !== 'string' || !c.field) return null;
     return {
-        ...source,
-        _id: typeof source._id === 'string' ? source._id : createNodeId(),
-        field: typeof source.field === 'string' ? source.field : '',
-        label: typeof source.label === 'string' ? source.label : '',
-        topN: Number.isFinite(Number(source.topN)) && Number(source.topN) > 0 ? Math.floor(Number(source.topN)) : null,
-        sortBy: typeof source.sortBy === 'string' && source.sortBy.trim() ? source.sortBy.trim() : null,
-        sortDir: source.sortDir === 'asc' ? 'asc' : 'desc',
-        defaultChild: source.defaultChild ? normalizeNode(source.defaultChild) : null,
-        childrenByValue: Object.entries(children).reduce((acc, [key, child]) => {
-            if (!key) return acc;
-            acc[String(key)] = normalizeNode(child);
-            return acc;
-        }, {}),
+        _id: typeof c._id === 'string' ? c._id : uid(),
+        field: c.field,
+        operator: OPERATORS.find(o => o.value === c.operator) ? c.operator : 'eq',
+        value: (c.value !== undefined && c.value !== null) ? String(c.value) : '',
+        values: Array.isArray(c.values) ? c.values.map(String).filter(Boolean) : [],
     };
 };
 
-const cloneNode = (node) => (node ? normalizeNode(JSON.parse(JSON.stringify(node))) : null);
+const normalizeCondition = (c) => ({
+    op: c && c.op === 'OR' ? 'OR' : 'AND',
+    clauses: Array.isArray(c && c.clauses) ? c.clauses.map(normalizeClause).filter(Boolean) : [],
+});
 
-const countNodes = (node) => {
-    if (!node) return 0;
-    let total = 1;
-    if (node.defaultChild) total += countNodes(node.defaultChild);
-    Object.values(node.childrenByValue || {}).forEach((child) => { total += countNodes(child); });
-    return total;
+const normalizeBranch = (b) => {
+    if (!b || typeof b !== 'object') return null;
+    return {
+        _id: typeof b._id === 'string' ? b._id : uid(),
+        label: typeof b.label === 'string' ? b.label : '',
+        condition: normalizeCondition(b.condition),
+        // eslint-disable-next-line no-use-before-define
+        child: b.child ? normalizeNode(b.child) : null,
+    };
 };
 
-const parsePathValues = (row) => {
-    if (!row || typeof row !== 'object') return [];
-    if (typeof row._path !== 'string' || !row._path || row._path === '__grand_total__') return [];
-    return row._path.split(REPORT_PATH_SEPARATOR).map((value) => String(value));
-};
+function normalizeNode(n) {
+    if (!n || typeof n !== 'object') return null;
 
-const pathMatches = (rowPathValues, ancestorValues) => {
-    if (rowPathValues.length < ancestorValues.length) return false;
-    for (let index = 0; index < ancestorValues.length; index += 1) {
-        if (String(rowPathValues[index]) !== String(ancestorValues[index])) return false;
+    // Migration: old childrenByValue dict → branches array
+    let branches = Array.isArray(n.branches) ? n.branches.map(normalizeBranch).filter(Boolean) : [];
+    if (branches.length === 0 && n.childrenByValue && typeof n.childrenByValue === 'object') {
+        branches = Object.entries(n.childrenByValue)
+            .filter(([key]) => key)
+            .map(([key, child]) => normalizeBranch({
+                label: key,
+                condition: { op: 'AND', clauses: [{ field: n.field || '', operator: 'eq', value: key, values: [] }] },
+                child,
+            }))
+            .filter(Boolean);
     }
-    return true;
+
+    return {
+        _id: typeof n._id === 'string' ? n._id : uid(),
+        field: typeof n.field === 'string' ? n.field : '',
+        label: typeof n.label === 'string' ? n.label : '',
+        topN: Number.isFinite(Number(n.topN)) && Number(n.topN) > 0 ? Math.floor(Number(n.topN)) : null,
+        sortBy: typeof n.sortBy === 'string' && n.sortBy.trim() ? n.sortBy.trim() : null,
+        sortDir: n.sortDir === 'asc' ? 'asc' : 'desc',
+        defaultChild: n.defaultChild ? normalizeNode(n.defaultChild) : null,
+        branches,
+    };
+}
+
+// ─── Field helpers ────────────────────────────────────────────────────────────
+const getSelectableFields = (availableFields, valConfigs) => {
+    const aggIds = new Set(
+        (valConfigs || []).filter(c => c && c.field && c.agg)
+            .map(c => c.agg === 'formula' ? c.field : `${c.field}_${c.agg}`)
+    );
+    return (availableFields || []).filter(f =>
+        f && typeof f === 'string' && !REPORT_META.has(f) && !f.startsWith('_') && !aggIds.has(f)
+    );
 };
 
-const getRowBranchValue = (row, field) => {
-    if (row && row[field] !== undefined && row[field] !== null && row[field] !== '') {
-        return String(row[field]);
-    }
-    if (row && row._id !== undefined && row._id !== null && row._id !== '') {
-        return String(row._id);
-    }
-    const pathValues = parsePathValues(row);
-    return pathValues.length > 0 ? String(pathValues[pathValues.length - 1]) : '';
-};
-
-const collectVisibleBranchValues = (rows, ancestorValues, field) => {
-    if (!field) return [];
-    const seen = new Set();
-    const output = [];
-    (Array.isArray(rows) ? rows : []).forEach((row) => {
-        if (!row || typeof row !== 'object' || row._isTotal) return;
-        if (String(row._levelField || '') !== String(field)) return;
-        const depth = Number.isFinite(Number(row.depth)) ? Number(row.depth) : 0;
-        if (depth !== ancestorValues.length) return;
-        const pathValues = parsePathValues(row);
-        if (!pathMatches(pathValues, ancestorValues)) return;
-        const value = getRowBranchValue(row, field);
-        if (!value || seen.has(value)) return;
-        seen.add(value);
-        output.push({
-            value,
-            isExpanded: Boolean(row._is_expanded),
-            hasChildren: Boolean(row._has_children),
-        });
+const buildSortOptions = (valConfigs) => {
+    const opts = [{ value: '', label: '(default)' }];
+    (valConfigs || []).forEach(cfg => {
+        if (!cfg || !cfg.field || !cfg.agg) return;
+        const value = cfg.agg === 'formula' ? cfg.field : `${cfg.field}_${cfg.agg}`;
+        const label = cfg.agg === 'formula'
+            ? (cfg.label || formatDisplayLabel(cfg.field))
+            : `${formatDisplayLabel(cfg.field)} (${formatAggLabel(cfg.agg, cfg.weightField)})`;
+        opts.push({ value, label });
     });
-    return output;
+    return opts;
 };
 
-const getNodeTitle = (node) => (
-    node.label && node.label.trim()
-        ? node.label.trim()
-        : (node.field ? formatDisplayLabel(node.field) : 'Choose a field')
-);
+// ─── Condition summary ────────────────────────────────────────────────────────
+const formatConditionSummary = (condition) => {
+    if (!condition || !condition.clauses || condition.clauses.length === 0) return 'No filter (default)';
+    const parts = condition.clauses.map(c => {
+        const field = formatDisplayLabel(c.field);
+        const op = OP_SYMBOL[c.operator] || c.operator;
+        if (LIST_OPS.has(c.operator)) {
+            const shown = c.values.slice(0, 3);
+            const extra = c.values.length > 3 ? ` +${c.values.length - 3}` : '';
+            return `${field} ${op} [${shown.join(', ')}${extra}]`;
+        }
+        return `${field} ${op} ${c.value || '…'}`;
+    });
+    return parts.join(` ${condition.op} `);
+};
 
-const makeInputStyle = (theme) => ({
+// ─── Shared style helpers ─────────────────────────────────────────────────────
+const inp = (theme, extra = {}) => ({
     border: `1px solid ${theme.border}`,
-    borderRadius: '9px',
-    padding: '8px 10px',
+    borderRadius: '8px',
+    padding: '5px 8px',
     fontSize: '12px',
     background: theme.background || '#fff',
     color: theme.text,
     outline: 'none',
-    width: '100%',
+    ...extra,
 });
 
-const getReportSelectableFields = (availableFields, valConfigs) => {
-    const aggregatedValueIds = new Set(
-        (Array.isArray(valConfigs) ? valConfigs : [])
-            .filter((config) => config && config.field && config.agg)
-            .map((config) => (config.agg === 'formula' ? config.field : `${config.field}_${config.agg}`))
-    );
-    return (Array.isArray(availableFields) ? availableFields : []).filter((field) => {
-        if (!field || typeof field !== 'string') return false;
-        if (REPORT_META_FIELD_SET.has(field)) return false;
-        if (field.startsWith('_')) return false;
-        if (aggregatedValueIds.has(field)) return false;
-        return true;
-    });
-};
+const ghostBtn = (theme, active = false, danger = false) => ({
+    display: 'inline-flex', alignItems: 'center', gap: '4px',
+    background: danger ? '#FEF2F2' : active ? `${theme.primary || '#2563EB'}12` : theme.hover,
+    border: `1px solid ${danger ? '#FECACA' : active ? `${theme.primary || '#2563EB'}50` : theme.border}`,
+    borderRadius: '7px', padding: '4px 9px',
+    fontSize: '11px', fontWeight: 700,
+    color: danger ? '#DC2626' : active ? (theme.primary || '#2563EB') : theme.textSec,
+    cursor: 'pointer',
+});
 
-function FieldSelectorPanel({ theme, label, hint, availableFields, value = '', onChange, compact = false }) {
-    const inputStyle = makeInputStyle(theme);
-    const options = useMemo(() => {
-        const base = Array.isArray(availableFields) ? availableFields : [];
-        if (value && !base.includes(value)) return [value, ...base];
-        return base;
-    }, [availableFields, value]);
+// ─── ConditionModal ───────────────────────────────────────────────────────────
+function ConditionModal({ condition, allFields, onSave, onClose, theme }) {
+    const [local, setLocal] = useState(() => normalizeCondition(condition));
+
+    const addClause = useCallback(() => {
+        setLocal(prev => ({ ...prev, clauses: [...prev.clauses, createClause(allFields[0] || '')] }));
+    }, [allFields]);
+
+    const updateClause = useCallback((idx, patch) => {
+        setLocal(prev => ({ ...prev, clauses: prev.clauses.map((c, i) => i === idx ? { ...c, ...patch } : c) }));
+    }, []);
+
+    const removeClause = useCallback((idx) => {
+        setLocal(prev => ({ ...prev, clauses: prev.clauses.filter((_, i) => i !== idx) }));
+    }, []);
+
+    const inputStyle = inp(theme);
+
     return (
         <div
-            data-report-field-selector={label}
-            style={{
-                border: `1px solid ${theme.border}`,
-                borderRadius: '12px',
-                background: theme.background || '#fff',
-                padding: compact ? '10px 12px' : '14px',
-                display: 'flex',
-                flexDirection: 'column',
-                gap: '8px',
-            }}
+            style={{ position: 'fixed', inset: 0, zIndex: 9999, background: 'rgba(0,0,0,0.40)', display: 'flex', alignItems: 'center', justifyContent: 'center' }}
+            onClick={onClose}
         >
-            <div style={{ fontSize: compact ? '12px' : '13px', fontWeight: 700, color: theme.text }}>
-                {label}
-            </div>
-            {hint ? (
-                <div style={{ fontSize: '11px', color: theme.textSec, lineHeight: 1.45 }}>
-                    {hint}
-                </div>
-            ) : null}
-            <select
-                value={value || ''}
-                onChange={(event) => {
-                    if (!event.target.value) return;
-                    onChange(event.target.value);
+            <div
+                style={{
+                    background: theme.surfaceBg || theme.background || '#fff',
+                    border: `1px solid ${theme.border}`,
+                    borderRadius: '16px', padding: '22px',
+                    width: '500px', maxWidth: '95vw', maxHeight: '85vh', overflowY: 'auto',
+                    boxShadow: '0 24px 64px rgba(0,0,0,0.18)',
+                    display: 'flex', flexDirection: 'column', gap: '14px',
                 }}
-                style={{ ...inputStyle, cursor: 'pointer' }}
+                onClick={e => e.stopPropagation()}
             >
-                <option value="">Choose field...</option>
-                {options.map((field) => (
-                    <option key={field} value={field}>
-                        {formatDisplayLabel(field)}
-                    </option>
-                ))}
-            </select>
+                {/* Header */}
+                <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+                    <div style={{ fontSize: '14px', fontWeight: 800, color: theme.text }}>Edit Condition</div>
+                    <button onClick={onClose} style={{ background: 'none', border: 'none', cursor: 'pointer', color: theme.textSec }}>
+                        <Icons.Close />
+                    </button>
+                </div>
+
+                {/* AND / OR toggle */}
+                {local.clauses.length > 1 && (
+                    <div style={{ display: 'flex', gap: '6px', alignItems: 'center' }}>
+                        <span style={{ fontSize: '11px', color: theme.textSec, fontWeight: 700 }}>Match:</span>
+                        {['AND', 'OR'].map(op => (
+                            <button
+                                key={op}
+                                onClick={() => setLocal(prev => ({ ...prev, op }))}
+                                style={{
+                                    padding: '4px 14px', borderRadius: '20px',
+                                    fontSize: '11px', fontWeight: 800, border: 'none', cursor: 'pointer',
+                                    background: local.op === op ? (theme.primary || '#2563EB') : theme.hover,
+                                    color: local.op === op ? '#fff' : theme.textSec,
+                                }}
+                            >
+                                {op}
+                            </button>
+                        ))}
+                        <span style={{ fontSize: '11px', color: theme.textSec }}>of the following</span>
+                    </div>
+                )}
+
+                {/* Clauses */}
+                <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
+                    {local.clauses.length === 0 && (
+                        <div style={{ fontSize: '12px', color: theme.textSec, fontStyle: 'italic', padding: '4px 0' }}>
+                            No clauses — this branch matches all rows (acts as default).
+                        </div>
+                    )}
+                    {local.clauses.map((clause, idx) => (
+                        <div
+                            key={clause._id}
+                            style={{
+                                display: 'flex', gap: '6px', alignItems: 'flex-start',
+                                padding: '10px', background: theme.hover, borderRadius: '10px',
+                            }}
+                        >
+                            {/* AND/OR badge (for idx > 0) */}
+                            <div style={{ width: '28px', flexShrink: 0, paddingTop: '6px', textAlign: 'center' }}>
+                                {idx > 0 && (
+                                    <span style={{ fontSize: '9px', fontWeight: 900, color: theme.primary || '#2563EB', letterSpacing: '0.04em' }}>
+                                        {local.op}
+                                    </span>
+                                )}
+                            </div>
+
+                            <div style={{ flex: 1, display: 'flex', flexDirection: 'column', gap: '6px' }}>
+                                {/* Field + operator */}
+                                <div style={{ display: 'flex', gap: '6px' }}>
+                                    <select
+                                        value={clause.field}
+                                        onChange={e => updateClause(idx, { field: e.target.value })}
+                                        style={{ ...inputStyle, flex: 1 }}
+                                    >
+                                        {allFields.map(f => (
+                                            <option key={f} value={f}>{formatDisplayLabel(f)}</option>
+                                        ))}
+                                    </select>
+                                    <select
+                                        value={clause.operator}
+                                        onChange={e => {
+                                            const next = e.target.value;
+                                            const toList = LIST_OPS.has(next);
+                                            const wasScalar = !LIST_OPS.has(clause.operator);
+                                            updateClause(idx, {
+                                                operator: next,
+                                                values: toList ? (wasScalar && clause.value ? [clause.value] : clause.values) : clause.values,
+                                                value: !toList ? (clause.values[0] || clause.value || '') : clause.value,
+                                            });
+                                        }}
+                                        style={{ ...inputStyle, flexShrink: 0 }}
+                                    >
+                                        {OPERATORS.map(o => <option key={o.value} value={o.value}>{o.label}</option>)}
+                                    </select>
+                                </div>
+
+                                {/* Value input */}
+                                {LIST_OPS.has(clause.operator) ? (
+                                    <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
+                                        {clause.values.length > 0 && (
+                                            <div style={{ display: 'flex', flexWrap: 'wrap', gap: '4px' }}>
+                                                {clause.values.map((v, vi) => (
+                                                    <span key={vi} style={{
+                                                        display: 'inline-flex', alignItems: 'center', gap: '4px',
+                                                        background: `${theme.primary || '#2563EB'}18`,
+                                                        color: theme.primary || '#2563EB',
+                                                        borderRadius: '6px', padding: '2px 7px',
+                                                        fontSize: '11px', fontWeight: 700,
+                                                    }}>
+                                                        {v}
+                                                        <button
+                                                            onClick={() => updateClause(idx, { values: clause.values.filter((_, i) => i !== vi) })}
+                                                            style={{ background: 'none', border: 'none', cursor: 'pointer', padding: 0, color: 'inherit', lineHeight: 1, fontSize: '13px' }}
+                                                        >×</button>
+                                                    </span>
+                                                ))}
+                                            </div>
+                                        )}
+                                        <input
+                                            placeholder="Type value and press Enter to add..."
+                                            style={{ ...inputStyle, width: '100%' }}
+                                            onKeyDown={e => {
+                                                if (e.key === 'Enter' && e.target.value.trim()) {
+                                                    const v = e.target.value.trim();
+                                                    if (!clause.values.includes(v)) {
+                                                        updateClause(idx, { values: [...clause.values, v] });
+                                                    }
+                                                    e.target.value = '';
+                                                    e.preventDefault();
+                                                }
+                                            }}
+                                        />
+                                    </div>
+                                ) : (
+                                    <input
+                                        value={clause.value}
+                                        onChange={e => updateClause(idx, { value: e.target.value })}
+                                        placeholder="Value..."
+                                        style={{ ...inputStyle, width: '100%' }}
+                                    />
+                                )}
+                            </div>
+
+                            <button
+                                onClick={() => removeClause(idx)}
+                                style={{ background: 'none', border: 'none', cursor: 'pointer', color: '#DC2626', padding: '4px', flexShrink: 0 }}
+                            >
+                                <Icons.Delete />
+                            </button>
+                        </div>
+                    ))}
+                </div>
+
+                {/* Add clause */}
+                <button
+                    onClick={addClause}
+                    style={{
+                        ...ghostBtn(theme), width: '100%', justifyContent: 'center',
+                        border: `1px dashed ${theme.border}`,
+                    }}
+                >
+                    <Icons.Add /> Add clause
+                </button>
+
+                {/* Footer */}
+                <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '8px', borderTop: `1px solid ${theme.border}`, paddingTop: '14px' }}>
+                    <button onClick={onClose} style={{ ...inp(theme), cursor: 'pointer', fontWeight: 700 }}>
+                        Cancel
+                    </button>
+                    <button
+                        onClick={() => { onSave(local); onClose(); }}
+                        style={{
+                            background: theme.primary || '#2563EB', border: 'none', borderRadius: '8px',
+                            padding: '7px 18px', fontSize: '12px', fontWeight: 800, color: '#fff', cursor: 'pointer',
+                        }}
+                    >
+                        Apply
+                    </button>
+                </div>
+            </div>
         </div>
     );
 }
 
-function ReportNodeCard({
-    node,
-    title,
-    branchValue = null,
-    availableFields,
-    sortByOptions,
-    theme,
-    reportRows,
-    ancestorValues,
-    templateMode = false,
-    onChange,
-    onRemove,
-}) {
-    const [selectedBranchValue, setSelectedBranchValue] = useState('');
-    const current = useMemo(() => normalizeNode(node), [node]);
-    const inputStyle = useMemo(() => makeInputStyle(theme), [theme]);
+// ─── Branch Row ───────────────────────────────────────────────────────────────
+function BranchRow({ branch, depth, stepCounter, allFields, sortByOptions, theme, onUpdate, onRemove }) {
+    const [editingCond, setEditingCond] = useState(false);
+    const [pathOpen, setPathOpen] = useState(branch.child !== null);
+    const hasCustomPath = branch.child !== null;
+    const summary = formatConditionSummary(branch.condition);
+    const primary = theme.primary || '#2563EB';
 
-    const visibleBranches = useMemo(
-        () => (templateMode ? [] : collectVisibleBranchValues(reportRows, ancestorValues, current.field)),
-        [ancestorValues, current.field, reportRows, templateMode]
-    );
-
-    const configuredBranchKeys = useMemo(
-        () => Object.keys(current.childrenByValue || {}),
-        [current.childrenByValue]
-    );
-
-    const displayedBranchKeys = useMemo(() => {
-        const ordered = [];
-        const seen = new Set();
-        visibleBranches.forEach(({ value }) => {
-            if (seen.has(value)) return;
-            seen.add(value);
-            ordered.push(value);
-        });
-        configuredBranchKeys.forEach((value) => {
-            if (seen.has(value)) return;
-            seen.add(value);
-            ordered.push(value);
-        });
-        return ordered;
-    }, [configuredBranchKeys, visibleBranches]);
-
-    useEffect(() => {
-        if (displayedBranchKeys.length === 0) {
-            if (selectedBranchValue) setSelectedBranchValue('');
-            return;
-        }
-        if (!displayedBranchKeys.includes(selectedBranchValue)) {
-            setSelectedBranchValue(displayedBranchKeys[0]);
-        }
-    }, [displayedBranchKeys, selectedBranchValue]);
-
-    const updateNode = useCallback((updates) => {
-        onChange({ ...current, ...updates });
-    }, [current, onChange]);
-
-    const setDefaultChild = useCallback((nextChild) => {
-        updateNode({ defaultChild: nextChild ? normalizeNode(nextChild) : null });
-    }, [updateNode]);
-
-    const setBranchChild = useCallback((value, nextChild) => {
-        const nextChildren = { ...(current.childrenByValue || {}) };
-        if (nextChild) nextChildren[value] = normalizeNode(nextChild);
-        else delete nextChildren[value];
-        updateNode({ childrenByValue: nextChildren });
-    }, [current.childrenByValue, updateNode]);
-
-    const handleDefaultFieldDrop = useCallback((field) => {
-        const nextChild = current.defaultChild
-            ? { ...cloneNode(current.defaultChild), field }
-            : createNode(field);
-        setDefaultChild(nextChild);
-    }, [current.defaultChild, setDefaultChild]);
-
-    const materializeBranchChild = useCallback((value, updates = {}) => {
-        if (!value) return;
-        const existing = current.childrenByValue && current.childrenByValue[value];
-        const baseNode = cloneNode(existing || current.defaultChild || createNode('')) || createNode('');
-        setBranchChild(value, { ...baseNode, ...updates });
-    }, [current.childrenByValue, current.defaultChild, setBranchChild]);
-
-    const selectedExplicitChild = selectedBranchValue
-        ? (current.childrenByValue && current.childrenByValue[selectedBranchValue]) || null
-        : null;
-    const selectedInheritedChild = selectedBranchValue && !selectedExplicitChild && current.defaultChild ? current.defaultChild : null;
-    const selectedBranchChild = selectedExplicitChild || selectedInheritedChild || null;
-    const selectedBranchAncestorValues = templateMode || !selectedBranchValue
-        ? ancestorValues
-        : [...ancestorValues, selectedBranchValue];
-    const selectedBranchNode = useMemo(
-        () => cloneNode(selectedBranchChild) || createNode(''),
-        [selectedBranchChild]
-    );
-
-    const cardStyle = {
-        border: `1px solid ${theme.border}`,
-        borderRadius: '14px',
-        background: theme.surfaceBg || theme.background || '#fff',
-        padding: '14px',
-        display: 'flex',
-        flexDirection: 'column',
-        gap: '12px',
-    };
-    const sectionLabelStyle = {
-        fontSize: '10px',
-        fontWeight: 800,
-        letterSpacing: '0.08em',
-        textTransform: 'uppercase',
-        color: theme.textSec,
-        marginBottom: '6px',
-    };
-    const inputLabelStyle = {
-        fontSize: '10px',
-        fontWeight: 800,
-        letterSpacing: '0.04em',
-        textTransform: 'uppercase',
-        color: theme.textSec,
-        marginBottom: '4px',
-    };
-    const sectionCardStyle = {
-        border: `1px solid ${theme.border}`,
-        borderRadius: '12px',
-        background: theme.background || '#fff',
-        padding: '12px',
-        display: 'flex',
-        flexDirection: 'column',
-        gap: '10px',
-    };
-    const secondaryButtonStyle = {
-        background: theme.hover,
-        border: `1px solid ${theme.border}`,
-        borderRadius: '9px',
-        padding: '7px 10px',
-        fontSize: '11px',
-        fontWeight: 700,
-        color: theme.text,
-        cursor: 'pointer',
-        display: 'inline-flex',
-        alignItems: 'center',
-        gap: '6px',
-    };
+    const open = pathOpen || hasCustomPath;
 
     return (
-        <div
-            data-report-node={current._id}
-            data-report-title={title}
-            data-report-branch={branchValue === null ? '' : String(branchValue)}
-            style={cardStyle}
-        >
-            <div style={{ display: 'flex', alignItems: 'flex-start', gap: '10px' }}>
-                <div style={{ flex: 1, minWidth: 0 }}>
-                    <div style={{ fontSize: '10px', fontWeight: 800, letterSpacing: '0.08em', textTransform: 'uppercase', color: theme.textSec }}>
-                        {title}
-                    </div>
-                    <div style={{ fontSize: '14px', fontWeight: 800, color: theme.text, marginTop: '4px' }}>
-                        {getNodeTitle(current)}
-                    </div>
+        <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
+            {/* Branch header */}
+            <div style={{ display: 'flex', alignItems: 'center', gap: '6px', flexWrap: 'wrap' }}>
+                {/* Condition badge */}
+                <button
+                    onClick={() => setEditingCond(true)}
+                    title={summary}
+                    style={{
+                        display: 'inline-flex', alignItems: 'center', gap: '5px',
+                        background: `${primary}12`, border: `1px solid ${primary}35`,
+                        borderRadius: '7px', padding: '4px 9px',
+                        fontSize: '11px', fontWeight: 700, color: primary, cursor: 'pointer',
+                        maxWidth: '220px', overflow: 'hidden', whiteSpace: 'nowrap', textOverflow: 'ellipsis',
+                    }}
+                >
+                    <Icons.Filter />
+                    <span style={{ overflow: 'hidden', textOverflow: 'ellipsis' }}>{summary}</span>
+                </button>
+
+                <span style={{ fontSize: '12px', color: theme.textSec }}>→</span>
+
+                {/* Display-as label */}
+                <input
+                    value={branch.label}
+                    onChange={e => onUpdate({ ...branch, label: e.target.value })}
+                    placeholder="Display as..."
+                    title="Rename: how matching rows appear in the report"
+                    style={{ ...inp(theme), width: '110px' }}
+                />
+
+                {/* Custom path toggle */}
+                <button
+                    onClick={() => setPathOpen(o => !o)}
+                    style={ghostBtn(theme, hasCustomPath)}
+                    title="Define a custom sub-path for rows matching this condition"
+                >
+                    {hasCustomPath ? 'Custom path ▾' : 'Custom path?'}
+                </button>
+
+                {/* Remove branch */}
+                <button onClick={onRemove} style={{ background: 'none', border: 'none', cursor: 'pointer', color: '#DC2626', padding: '2px' }}>
+                    <Icons.Delete />
+                </button>
+            </div>
+
+            {/* Custom sub-path */}
+            {open && (
+                <div style={{ paddingLeft: '16px', borderLeft: `2px dashed ${primary}30` }}>
+                    {!branch.child ? (
+                        <button
+                            onClick={() => {
+                                onUpdate({ ...branch, child: createNode(allFields[0] || '') });
+                                setPathOpen(true);
+                            }}
+                            style={{
+                                ...ghostBtn(theme, true), border: `1px dashed ${primary}60`,
+                                width: '100%', justifyContent: 'center', padding: '8px',
+                            }}
+                        >
+                            <Icons.Add /> Add custom drilldown for this path
+                        </button>
+                    ) : (
+                        <PipelineStep
+                            node={branch.child}
+                            stepNumber={stepCounter}
+                            depth={depth + 1}
+                            allFields={allFields}
+                            sortByOptions={sortByOptions}
+                            theme={theme}
+                            onChange={nextChild => onUpdate({ ...branch, child: nextChild })}
+                            onRemoveChain={() => onUpdate({ ...branch, child: null })}
+                        />
+                    )}
                 </div>
-                <div style={{ display: 'flex', alignItems: 'center', gap: '6px', flexWrap: 'wrap', justifyContent: 'flex-end' }}>
-                    {branchValue !== null ? (
-                        <span style={{ fontSize: '11px', fontWeight: 700, color: theme.primary || '#2563EB', background: `${theme.primary || '#2563EB'}14`, borderRadius: '999px', padding: '4px 9px' }}>
-                            {branchValue}
+            )}
+
+            {editingCond && (
+                <ConditionModal
+                    condition={branch.condition}
+                    allFields={allFields}
+                    theme={theme}
+                    onSave={nextCond => onUpdate({ ...branch, condition: nextCond })}
+                    onClose={() => setEditingCond(false)}
+                />
+            )}
+        </div>
+    );
+}
+
+// ─── Pipeline Step ────────────────────────────────────────────────────────────
+function PipelineStep({ node, stepNumber, depth, allFields, sortByOptions, theme, onChange, onRemoveChain }) {
+    const [branchesOpen, setBranchesOpen] = useState(false);
+    const current = useMemo(() => normalizeNode(node), [node]);
+    const inputStyle = inp(theme);
+    const primary = theme.primary || '#2563EB';
+    const bulletColor = depth === 0 ? primary : '#8B5CF6';
+
+    const update = useCallback(patch => onChange({ ...current, ...patch }), [current, onChange]);
+    const addBranch = useCallback(() => { update({ branches: [...current.branches, createBranch()] }); setBranchesOpen(true); }, [current.branches, update]);
+    const updateBranch = useCallback((idx, b) => update({ branches: current.branches.map((x, i) => i === idx ? b : x) }), [current.branches, update]);
+    const removeBranch = useCallback((idx) => update({ branches: current.branches.filter((_, i) => i !== idx) }), [current.branches, update]);
+    const addChild = useCallback(() => { if (!current.defaultChild) update({ defaultChild: createNode(allFields[0] || '') }); }, [current.defaultChild, allFields, update]);
+
+    const hasBranches = current.branches.length > 0;
+
+    return (
+        <div style={{ display: 'flex', flexDirection: 'column' }}>
+            <div style={{ display: 'flex', gap: '10px', alignItems: 'stretch' }}>
+                {/* Left track */}
+                <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', flexShrink: 0, width: '22px' }}>
+                    <div style={{
+                        width: '22px', height: '22px', borderRadius: '50%',
+                        background: bulletColor, color: '#fff',
+                        fontSize: '10px', fontWeight: 900,
+                        display: 'flex', alignItems: 'center', justifyContent: 'center',
+                        flexShrink: 0, boxShadow: `0 0 0 3px ${bulletColor}20`,
+                    }}>
+                        {stepNumber}
+                    </div>
+                    <div style={{ width: '2px', flex: 1, minHeight: '16px', background: `${bulletColor}25`, marginTop: '3px' }} />
+                </div>
+
+                {/* Step card */}
+                <div style={{
+                    flex: 1, minWidth: 0,
+                    border: `1px solid ${theme.border}`,
+                    borderRadius: '10px',
+                    background: theme.surfaceBg || theme.background || '#fff',
+                    padding: '10px 12px',
+                    marginBottom: '6px',
+                    display: 'flex', flexDirection: 'column', gap: '8px',
+                }}>
+                    {/* Card header */}
+                    <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+                        <span style={{ fontSize: '9px', fontWeight: 800, textTransform: 'uppercase', letterSpacing: '0.08em', color: theme.textSec }}>
+                            {depth === 0 ? 'Break down by' : 'Then by'}
                         </span>
-                    ) : null}
-                    {onRemove ? (
-                        <button type="button" onClick={onRemove} style={{ ...secondaryButtonStyle, color: '#DC2626' }}>
+                        <button onClick={onRemoveChain} style={{ background: 'none', border: 'none', cursor: 'pointer', color: '#DC2626', padding: '2px' }}>
                             <Icons.Delete />
                         </button>
-                    ) : null}
-                </div>
-            </div>
+                    </div>
 
-            <div style={{ display: 'grid', gridTemplateColumns: '1.2fr 0.7fr 1fr 1fr', gap: '8px' }}>
-                <div>
-                    <div style={inputLabelStyle}>Field</div>
-                    <select
-                        value={current.field}
-                        onChange={(event) => updateNode({ field: event.target.value })}
-                        style={{ ...inputStyle, cursor: 'pointer' }}
-                    >
-                        <option value="">Select field...</option>
-                        {availableFields.map((field) => (
-                            <option key={field} value={field}>
-                                {formatDisplayLabel(field)}
-                            </option>
-                        ))}
-                    </select>
-                </div>
-                <div>
-                    <div style={inputLabelStyle}>Top N</div>
-                    <input
-                        type="number"
-                        min="0"
-                        value={current.topN || ''}
-                        onChange={(event) => {
-                            const nextValue = event.target.value === '' ? null : parseInt(event.target.value, 10);
-                            updateNode({ topN: nextValue && nextValue > 0 ? nextValue : null });
-                        }}
-                        placeholder="All"
-                        style={inputStyle}
-                    />
-                </div>
-                <div>
-                    <div style={inputLabelStyle}>Sort By</div>
-                    <select
-                        value={current.sortBy || ''}
-                        onChange={(event) => updateNode({ sortBy: event.target.value || null })}
-                        style={{ ...inputStyle, cursor: 'pointer' }}
-                    >
-                        {sortByOptions.map((option) => (
-                            <option key={option.value} value={option.value}>
-                                {option.label}
-                            </option>
-                        ))}
-                    </select>
-                </div>
-                <div>
-                    <div style={inputLabelStyle}>Order</div>
-                    <select
-                        value={current.sortDir || 'desc'}
-                        onChange={(event) => updateNode({ sortDir: event.target.value })}
-                        style={{ ...inputStyle, cursor: 'pointer' }}
-                    >
-                        <option value="desc">Desc</option>
-                        <option value="asc">Asc</option>
-                    </select>
-                </div>
-            </div>
+                    {/* Field / Top N / Sort / Dir */}
+                    <div style={{ display: 'grid', gridTemplateColumns: '1fr 52px 1fr 28px', gap: '6px', alignItems: 'center' }}>
+                        <select
+                            value={current.field}
+                            onChange={e => update({ field: e.target.value })}
+                            style={{ ...inputStyle, fontWeight: 700 }}
+                        >
+                            <option value="">Select field…</option>
+                            {allFields.map(f => <option key={f} value={f}>{formatDisplayLabel(f)}</option>)}
+                        </select>
 
-            {current.field ? (
-                <>
-                    <div style={sectionCardStyle}>
-                        <div style={sectionLabelStyle}>Default</div>
-                        {!current.defaultChild ? (
-                            <FieldSelectorPanel
-                                theme={theme}
-                                compact
-                                label="Below"
-                                hint=""
-                                availableFields={availableFields}
-                                onChange={handleDefaultFieldDrop}
-                            />
-                        ) : (
-                            <div style={{ paddingLeft: '14px', borderLeft: `2px solid ${theme.border}` }}>
-                                <ReportNodeCard
-                                    node={current.defaultChild}
-                                    title="Next"
-                                    availableFields={availableFields}
-                                    sortByOptions={sortByOptions}
-                                    theme={theme}
-                                    reportRows={reportRows}
-                                    ancestorValues={ancestorValues}
-                                    templateMode
-                                    onChange={setDefaultChild}
-                                    onRemove={() => setDefaultChild(null)}
-                                />
-                            </div>
+                        <input
+                            type="number" min="1"
+                            value={current.topN || ''}
+                            onChange={e => {
+                                const v = e.target.value === '' ? null : parseInt(e.target.value, 10);
+                                update({ topN: v && v > 0 ? v : null });
+                            }}
+                            placeholder="All"
+                            title="Top N rows (leave empty for all)"
+                            style={{ ...inputStyle, textAlign: 'center' }}
+                        />
+
+                        <select
+                            value={current.sortBy || ''}
+                            onChange={e => update({ sortBy: e.target.value || null })}
+                            style={inputStyle}
+                        >
+                            {sortByOptions.map(o => <option key={o.value} value={o.value}>{o.label}</option>)}
+                        </select>
+
+                        <button
+                            onClick={() => update({ sortDir: current.sortDir === 'asc' ? 'desc' : 'asc' })}
+                            style={{
+                                background: theme.hover, border: `1px solid ${theme.border}`,
+                                borderRadius: '8px', padding: '5px',
+                                cursor: 'pointer', color: theme.text,
+                                display: 'flex', alignItems: 'center', justifyContent: 'center',
+                            }}
+                            title={current.sortDir === 'asc' ? 'Ascending' : 'Descending'}
+                        >
+                            {current.sortDir === 'asc' ? <Icons.SortAsc /> : <Icons.SortDesc />}
+                        </button>
+                    </div>
+
+                    {/* Display label */}
+                    <div>
+                        <div style={{ fontSize: '9px', fontWeight: 800, textTransform: 'uppercase', letterSpacing: '0.06em', color: theme.textSec, marginBottom: '4px' }}>
+                            Header label
+                        </div>
+                        <input
+                            value={current.label}
+                            onChange={e => update({ label: e.target.value })}
+                            placeholder={current.field ? formatDisplayLabel(current.field) : 'Label for this level…'}
+                            title="Rename this level's header in the report output"
+                            style={{ ...inputStyle, width: '100%' }}
+                        />
+                    </div>
+
+                    {/* Branch controls */}
+                    <div style={{ display: 'flex', gap: '6px', flexWrap: 'wrap' }}>
+                        <button onClick={addBranch} style={ghostBtn(theme)}>
+                            <Icons.Branch /> Add split
+                        </button>
+                        {hasBranches && (
+                            <button
+                                onClick={() => setBranchesOpen(o => !o)}
+                                style={ghostBtn(theme, true)}
+                            >
+                                <Icons.Branch />
+                                {current.branches.length} split{current.branches.length !== 1 ? 's' : ''} {branchesOpen ? '▲' : '▼'}
+                            </button>
                         )}
                     </div>
 
-                    {!templateMode ? (
-                        <div style={sectionCardStyle}>
-                            <div style={sectionLabelStyle}>Line</div>
-                            {displayedBranchKeys.length === 0 ? (
-                                <select value="" disabled style={{ ...inputStyle, cursor: 'not-allowed', opacity: 0.6 }}>
-                                    <option>No lines yet</option>
-                                </select>
-                            ) : (
-                                <>
-                                    <select
-                                        value={selectedBranchValue}
-                                        onChange={(event) => setSelectedBranchValue(event.target.value)}
-                                        style={{ ...inputStyle, cursor: 'pointer' }}
-                                    >
-                                        {displayedBranchKeys.map((value) => (
-                                            <option key={`${current._id}-branch-option-${value}`} value={value}>
-                                                {value}
-                                            </option>
-                                        ))}
-                                    </select>
-
-                                    {selectedBranchValue ? (
-                                        <div style={{ paddingLeft: '14px', borderLeft: `2px solid ${theme.border}` }}>
-                                            <ReportNodeCard
-                                                node={selectedBranchNode}
-                                                title="Next"
-                                                branchValue={selectedBranchValue}
-                                                availableFields={availableFields}
-                                                sortByOptions={sortByOptions}
-                                                theme={theme}
-                                                reportRows={reportRows}
-                                                ancestorValues={selectedBranchAncestorValues}
-                                                templateMode={templateMode}
-                                                onChange={(nextChild) => materializeBranchChild(selectedBranchValue, nextChild)}
-                                                onRemove={selectedExplicitChild ? () => setBranchChild(selectedBranchValue, null) : null}
-                                            />
-                                        </div>
-                                    ) : null}
-                                </>
-                            )}
+                    {/* Branches section */}
+                    {hasBranches && branchesOpen && (
+                        <div style={{
+                            borderTop: `1px solid ${theme.border}`, paddingTop: '10px',
+                            display: 'flex', flexDirection: 'column', gap: '10px',
+                        }}>
+                            <div style={{ fontSize: '9px', fontWeight: 800, textTransform: 'uppercase', letterSpacing: '0.06em', color: theme.textSec }}>
+                                Conditional Splits
+                                <span style={{ fontWeight: 500, textTransform: 'none', marginLeft: '6px', color: theme.textSec }}>— first match wins, others use default path</span>
+                            </div>
+                            {current.branches.map((branch, idx) => (
+                                <BranchRow
+                                    key={branch._id}
+                                    branch={branch}
+                                    depth={depth}
+                                    stepCounter={`${stepNumber}.${idx + 1}`}
+                                    allFields={allFields}
+                                    sortByOptions={sortByOptions}
+                                    theme={theme}
+                                    onUpdate={nb => updateBranch(idx, nb)}
+                                    onRemove={() => removeBranch(idx)}
+                                />
+                            ))}
                         </div>
-                    ) : null}
-                </>
-            ) : null}
+                    )}
+                </div>
+            </div>
+
+            {/* Next step in default chain */}
+            <div style={{ paddingLeft: '32px' }}>
+                {current.defaultChild ? (
+                    <PipelineStep
+                        node={current.defaultChild}
+                        stepNumber={stepNumber + 1}
+                        depth={depth}
+                        allFields={allFields}
+                        sortByOptions={sortByOptions}
+                        theme={theme}
+                        onChange={nextChild => update({ defaultChild: nextChild })}
+                        onRemoveChain={() => update({ defaultChild: null })}
+                    />
+                ) : (
+                    <button
+                        onClick={addChild}
+                        style={{
+                            display: 'flex', alignItems: 'center', gap: '6px',
+                            background: 'none', border: `1px dashed ${theme.border}`,
+                            borderRadius: '8px', padding: '7px 14px', cursor: 'pointer',
+                            fontSize: '11px', fontWeight: 700, color: theme.textSec,
+                            marginBottom: '8px',
+                        }}
+                    >
+                        <Icons.Add /> Add next level
+                    </button>
+                )}
+            </div>
         </div>
     );
 }
 
+// ─── ReportEditor (main export) ───────────────────────────────────────────────
 export function ReportEditor({
     reportDef,
     setReportDef,
     availableFields,
     theme,
-    data,
     valConfigs,
     savedReports,
     setSavedReports,
@@ -510,143 +661,68 @@ export function ReportEditor({
     showNotification,
 }) {
     const [reportName, setReportName] = useState('');
-    const currentReport = useMemo(
-        () => ({ ...(reportDef || {}), root: reportDef && reportDef.root ? normalizeNode(reportDef.root) : null }),
+
+    const root = useMemo(
+        () => reportDef && reportDef.root ? normalizeNode(reportDef.root) : null,
         [reportDef]
     );
-    const selectableFields = useMemo(
-        () => getReportSelectableFields(availableFields, valConfigs),
-        [availableFields, valConfigs]
-    );
+    const allFields = useMemo(() => getSelectableFields(availableFields, valConfigs), [availableFields, valConfigs]);
+    const sortByOptions = useMemo(() => buildSortOptions(valConfigs), [valConfigs]);
 
-    const sortByOptions = useMemo(() => {
-        const options = [{ value: '', label: '(default)' }];
-        (valConfigs || []).forEach((config) => {
-            if (!config || !config.field || !config.agg) return;
-            options.push({
-                value: config.agg === 'formula' ? config.field : `${config.field}_${config.agg}`,
-                label: config.agg === 'formula'
-                    ? (config.label || formatDisplayLabel(config.field))
-                    : `${formatDisplayLabel(config.field)} (${formatAggLabel(config.agg, config.weightField)})`,
-            });
-        });
-        return options;
-    }, [valConfigs]);
-
-    const setRoot = useCallback((root) => {
-        setReportDef({ ...(currentReport || {}), root });
-    }, [currentReport, setReportDef]);
-
-    const createRootFromField = useCallback((field) => {
-        setRoot(createNode(field));
-    }, [setRoot]);
+    const setRoot = useCallback(nextRoot => {
+        setReportDef({ ...(reportDef || {}), root: nextRoot });
+    }, [reportDef, setReportDef]);
 
     const saveReport = useCallback(() => {
-        if (!currentReport.root || !currentReport.root.field) return;
+        if (!root || !root.field) return;
         const id = `report-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 6)}`;
         const name = reportName.trim() || `Report ${(savedReports || []).length + 1}`;
         setSavedReports([
             ...(savedReports || []),
-            {
-                id,
-                name,
-                reportDef: JSON.parse(JSON.stringify(currentReport)),
-                createdAt: new Date().toISOString(),
-            },
+            { id, name, reportDef: JSON.parse(JSON.stringify(reportDef)), createdAt: new Date().toISOString() },
         ]);
         setActiveReportId(id);
         setReportName('');
         if (showNotification) showNotification(`Report "${name}" saved`, 'info');
-    }, [currentReport, reportName, savedReports, setActiveReportId, setSavedReports, showNotification]);
+    }, [root, reportName, savedReports, reportDef, setSavedReports, setActiveReportId, showNotification]);
 
-    const sectionLabelStyle = {
-        fontSize: '10px',
-        fontWeight: 800,
-        letterSpacing: '0.08em',
-        textTransform: 'uppercase',
-        color: theme.textSec,
-        display: 'flex',
-        alignItems: 'center',
-        gap: '6px',
-        marginBottom: '10px',
-    };
-    const buttonStyle = {
-        background: theme.hover,
-        border: `1px solid ${theme.border}`,
-        borderRadius: '9px',
-        padding: '8px 12px',
-        fontSize: '12px',
-        fontWeight: 700,
-        color: theme.text,
-        cursor: 'pointer',
-        display: 'inline-flex',
-        alignItems: 'center',
-        gap: '6px',
+    const inputStyle = inp(theme);
+    const labelStyle = {
+        fontSize: '9px', fontWeight: 800, textTransform: 'uppercase',
+        letterSpacing: '0.08em', color: theme.textSec,
+        display: 'flex', alignItems: 'center', gap: '6px', marginBottom: '10px',
     };
 
     return (
-        <div style={{ display: 'flex', flexDirection: 'column', gap: '16px', padding: '6px 0 4px' }}>
-            {(savedReports || []).length > 0 ? (
+        <div style={{ display: 'flex', flexDirection: 'column', gap: '18px', padding: '2px 0 8px' }}>
+            {/* Saved reports */}
+            {(savedReports || []).length > 0 && (
                 <div>
-                    <div style={sectionLabelStyle}>
-                        <Icons.Save />
-                        Saved Reports
-                    </div>
-                    <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
-                        {(savedReports || []).map((report) => (
+                    <div style={labelStyle}><Icons.Save /> Saved Reports</div>
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: '5px' }}>
+                        {(savedReports || []).map(report => (
                             <div
                                 key={report.id}
-                                onClick={() => {
-                                    setReportDef(JSON.parse(JSON.stringify(report.reportDef)));
-                                    setActiveReportId(report.id);
-                                }}
+                                onClick={() => { setReportDef(JSON.parse(JSON.stringify(report.reportDef))); setActiveReportId(report.id); }}
                                 style={{
-                                    display: 'flex',
-                                    alignItems: 'center',
-                                    gap: '10px',
-                                    padding: '10px 12px',
-                                    borderRadius: '12px',
-                                    background: report.id === activeReportId ? (theme.select || '#E8F0FE') : (theme.background || '#fff'),
+                                    display: 'flex', alignItems: 'center', gap: '8px',
+                                    padding: '8px 10px', borderRadius: '10px', cursor: 'pointer',
+                                    background: report.id === activeReportId ? (theme.select || `${theme.primary || '#2563EB'}14`) : (theme.hover || '#F9FAFB'),
                                     border: `1px solid ${report.id === activeReportId ? (theme.primary || '#2563EB') : theme.border}`,
-                                    cursor: 'pointer',
                                 }}
                             >
                                 <Icons.Report />
-                                <div style={{ flex: 1, minWidth: 0 }}>
-                                    <div style={{ fontSize: '12px', fontWeight: report.id === activeReportId ? 800 : 600, color: theme.text }}>
-                                        {report.name}
-                                    </div>
-                                    <div style={{ fontSize: '11px', color: theme.textSec }}>
-                                        {countNodes(report.reportDef && report.reportDef.root)} steps
-                                    </div>
+                                <div style={{ flex: 1, minWidth: 0, fontSize: '12px', fontWeight: 700, color: theme.text, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                                    {report.name}
                                 </div>
                                 <button
                                     type="button"
-                                    onClick={(event) => {
-                                        event.stopPropagation();
-                                        const nextId = `report-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 6)}`;
-                                        setSavedReports([
-                                            ...(savedReports || []),
-                                            {
-                                                ...JSON.parse(JSON.stringify(report)),
-                                                id: nextId,
-                                                name: `${report.name} (copy)`,
-                                                createdAt: new Date().toISOString(),
-                                            },
-                                        ]);
-                                    }}
-                                    style={{ ...buttonStyle, padding: '6px 8px' }}
-                                >
-                                    <Icons.Duplicate />
-                                </button>
-                                <button
-                                    type="button"
-                                    onClick={(event) => {
-                                        event.stopPropagation();
-                                        setSavedReports((savedReports || []).filter((item) => item.id !== report.id));
+                                    onClick={e => {
+                                        e.stopPropagation();
+                                        setSavedReports((savedReports || []).filter(r => r.id !== report.id));
                                         if (activeReportId === report.id) setActiveReportId(null);
                                     }}
-                                    style={{ ...buttonStyle, padding: '6px 8px', color: '#DC2626' }}
+                                    style={{ background: 'none', border: 'none', cursor: 'pointer', color: '#DC2626', padding: '2px', flexShrink: 0 }}
                                 >
                                     <Icons.Delete />
                                 </button>
@@ -654,87 +730,62 @@ export function ReportEditor({
                         ))}
                     </div>
                 </div>
-            ) : null}
+            )}
 
+            {/* Pipeline builder */}
             <div>
-                <div style={sectionLabelStyle}>
-                    <Icons.ReportLevel />
-                    Report Builder
-                </div>
-                <div
-                    style={{
-                        border: `1px solid ${theme.border}`,
-                        borderRadius: '14px',
-                        background: theme.surfaceBg || theme.background || '#fff',
-                        padding: '14px',
-                        minHeight: '240px',
-                        display: 'flex',
-                        flexDirection: 'column',
-                        gap: '12px',
-                    }}
-                >
-                    <div>
-                        <div style={{ fontSize: '10px', fontWeight: 800, letterSpacing: '0.08em', textTransform: 'uppercase', color: theme.textSec }}>
-                            Flow
-                        </div>
-                        <div style={{ fontSize: '13px', color: theme.text, fontWeight: 800, marginTop: '4px' }}>
-                            {currentReport.root ? getNodeTitle(currentReport.root) : 'Pick the first field'}
-                        </div>
-                    </div>
+                <div style={labelStyle}><Icons.ReportLevel /> Report Pipeline</div>
 
-                    {!currentReport.root ? (
-                        <FieldSelectorPanel
-                            theme={theme}
-                            label="First field"
-                            hint=""
-                            availableFields={selectableFields}
-                            onChange={createRootFromField}
-                        />
-                    ) : (
-                        <ReportNodeCard
-                            node={currentReport.root}
-                            title="Step 1"
-                            availableFields={selectableFields}
-                            sortByOptions={sortByOptions}
-                            theme={theme}
-                            reportRows={data}
-                            ancestorValues={[]}
-                            onChange={setRoot}
-                            onRemove={() => setRoot(null)}
-                        />
-                    )}
-                </div>
+                {!root ? (
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
+                        <div style={{ fontSize: '12px', color: theme.textSec }}>Choose the first field to break down by:</div>
+                        <select
+                            value=""
+                            onChange={e => { if (e.target.value) setRoot(createNode(e.target.value)); }}
+                            style={{ ...inputStyle, width: '100%' }}
+                        >
+                            <option value="">Select first field…</option>
+                            {allFields.map(f => <option key={f} value={f}>{formatDisplayLabel(f)}</option>)}
+                        </select>
+                    </div>
+                ) : (
+                    <PipelineStep
+                        node={root}
+                        stepNumber={1}
+                        depth={0}
+                        allFields={allFields}
+                        sortByOptions={sortByOptions}
+                        theme={theme}
+                        onChange={setRoot}
+                        onRemoveChain={() => setRoot(null)}
+                    />
+                )}
             </div>
 
-            <div style={{ borderTop: `1px solid ${theme.border}`, paddingTop: '12px' }}>
-                <div style={sectionLabelStyle}>
-                    <Icons.Save />
-                    Save Report
-                </div>
+            {/* Save */}
+            <div style={{ borderTop: `1px solid ${theme.border}`, paddingTop: '14px' }}>
+                <div style={labelStyle}><Icons.Save /> Save Report</div>
                 <div style={{ display: 'flex', gap: '8px' }}>
                     <input
                         value={reportName}
-                        onChange={(event) => setReportName(event.target.value)}
-                        onKeyDown={(event) => {
-                            if (event.key === 'Enter') saveReport();
-                        }}
-                        placeholder="Report name..."
-                        style={{ ...makeInputStyle(theme), flex: 1 }}
+                        onChange={e => setReportName(e.target.value)}
+                        onKeyDown={e => { if (e.key === 'Enter') saveReport(); }}
+                        placeholder="Report name…"
+                        style={{ ...inputStyle, flex: 1 }}
                     />
                     <button
                         type="button"
                         onClick={saveReport}
-                        disabled={!currentReport.root || !currentReport.root.field}
+                        disabled={!root || !root.field}
                         style={{
-                            ...buttonStyle,
-                            background: theme.primary || '#2563EB',
-                            borderColor: theme.primary || '#2563EB',
-                            color: '#fff',
-                            opacity: (!currentReport.root || !currentReport.root.field) ? 0.55 : 1,
+                            display: 'inline-flex', alignItems: 'center', gap: '6px',
+                            background: theme.primary || '#2563EB', border: 'none',
+                            borderRadius: '8px', padding: '7px 14px',
+                            fontSize: '12px', fontWeight: 800, color: '#fff', cursor: 'pointer',
+                            opacity: (!root || !root.field) ? 0.5 : 1,
                         }}
                     >
-                        <Icons.Save />
-                        Save
+                        <Icons.Save /> Save
                     </button>
                 </div>
             </div>
