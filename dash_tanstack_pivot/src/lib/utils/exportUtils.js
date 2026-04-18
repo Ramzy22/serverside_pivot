@@ -54,7 +54,10 @@ export function buildExportAoa(allRows, table) {
         return typeof colDef.header === 'string' ? colDef.header.length : (h.column.id != null ? h.column.id : '').length;
     });
 
-    const dataRows = allRows.map(r => {
+    const dataRows = allRows.map((r, index) => {
+        // Support both TanStack row objects (have .original) and raw data objects
+        const rowData = r.original !== undefined ? r.original : r;
+        const rowIndex = r.index !== undefined ? r.index : index;
         return leafHeaders.map((h, ci) => {
             const col = h.column;
             const colId = col.id;
@@ -62,13 +65,13 @@ export function buildExportAoa(allRows, table) {
 
             let val;
             if (colId === 'hierarchy') {
-                const depth = (r.original && r.original.depth != null ? r.original.depth : (r.depth != null ? r.depth : 0));
-                const label = (r.original && r.original._isTotal) ? ((r.original && r.original._id != null) ? r.original._id : 'Total') : ((r.original && r.original._id != null) ? r.original._id : '');
+                const depth = (rowData && rowData.depth != null ? rowData.depth : (r.depth != null ? r.depth : 0));
+                const label = (rowData && rowData._isTotal) ? ((rowData._id != null) ? rowData._id : 'Total') : ((rowData && rowData._id != null) ? rowData._id : '');
                 val = '\u00A0\u00A0'.repeat(depth) + label;
             } else if (typeof colDef.accessorFn === 'function') {
-                val = colDef.accessorFn(r.original, r.index);
+                val = colDef.accessorFn(rowData, rowIndex);
             } else if (colDef.accessorKey) {
-                val = (r.original && r.original[colDef.accessorKey]);
+                val = rowData && rowData[colDef.accessorKey];
             } else {
                 val = '';
             }
@@ -94,9 +97,10 @@ export function buildExportAoa(allRows, table) {
 /**
  * Export the current pivot table to CSV or XLSX.
  */
-export function exportPivotTable(table, rowCount) {
+export function exportPivotTable(table, rowCount, rawRowsOverride = null) {
     const XLSX_LIMIT = 500000;
-    const allRows = table.getRowModel().rows;
+    // rawRowsOverride: pass loadedRows (raw data objects) in server-side mode to export all cached data
+    const allRows = rawRowsOverride || table.getRowModel().rows;
 
     const isCSV = (rowCount || 0) > XLSX_LIMIT;
 
@@ -114,18 +118,20 @@ export function exportPivotTable(table, rowCount) {
             const h = (c.columnDef && c.columnDef.header);
             return escape(typeof h === 'string' ? h : (c.id != null ? c.id : ''));
         }).join(',');
-        const lines = allRows.map(r =>
-            leafCols.map(c => {
+        const lines = allRows.map((r, index) => {
+            const rowData = r.original !== undefined ? r.original : r;
+            const rowIndex = r.index !== undefined ? r.index : index;
+            return leafCols.map(c => {
                 if (c.id === 'hierarchy') {
-                    const depth = (r.original && r.original.depth != null ? r.original.depth : (r.depth != null ? r.depth : 0));
-                    return escape('  '.repeat(depth) + (r.original && r.original._id != null ? r.original._id : ''));
+                    const depth = (rowData && rowData.depth != null ? rowData.depth : (r.depth != null ? r.depth : 0));
+                    return escape('  '.repeat(depth) + (rowData && rowData._id != null ? rowData._id : ''));
                 }
                 const val = typeof (c.columnDef && c.columnDef.accessorFn) === 'function'
-                    ? c.columnDef.accessorFn(r.original, r.index)
-                    : ((c.columnDef && c.columnDef.accessorKey) ? (r.original && r.original[c.columnDef.accessorKey]) : '');
+                    ? c.columnDef.accessorFn(rowData, rowIndex)
+                    : ((c.columnDef && c.columnDef.accessorKey) ? (rowData && rowData[c.columnDef.accessorKey]) : '');
                 return escape(val != null ? val : '');
-            }).join(',')
-        );
+            }).join(',');
+        });
         const blob = new Blob([[header, ...lines].join('\n')], { type: 'text/csv;charset=utf-8;' });
         saveAs(blob, 'pivot.csv');
     } else {

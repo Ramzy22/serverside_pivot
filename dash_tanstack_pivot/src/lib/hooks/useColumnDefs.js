@@ -886,6 +886,9 @@ export function useColumnDefs({
                     const value = getResolvedCellValue(info);
                     const rowPath = getCellRowId(info);
                     if (typeof value === 'number') {
+                        if (Number.isNaN(value)) {
+                            return <div style={{ width:'100%', height:'100%' }} />;
+                        }
                         const { formatted, contentStyle } = renderNumericCell(value, null, rowPath, info.column.id);
                         return (
                             <div style={{ width:'100%', height:'100%', display:'flex', alignItems:'center', justifyContent:'flex-end', paddingRight:'8px', ...contentStyle }}>
@@ -895,7 +898,7 @@ export function useColumnDefs({
                     }
                     return (
                         <div style={{ width:'100%', height:'100%', display:'flex', alignItems:'center', paddingRight:'8px' }}>
-                            {value !== undefined && value !== null ? String(value) : ''}
+                            {value !== undefined && value !== null && String(value) !== 'NaN' ? String(value) : ''}
                         </div>
                     );
                 },

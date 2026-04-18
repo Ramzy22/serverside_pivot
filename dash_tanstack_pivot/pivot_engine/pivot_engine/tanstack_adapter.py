@@ -1645,6 +1645,8 @@ class TanStackPivotAdapter(FormulaEngineMixin):
 
         # Hidden sort-key fields are transport-only helpers.
         # Keep them available for backend ORDER BY, but never expose them to the frontend.
+        # Also sanitize NaN floats → None so JSON serialization produces valid null.
+        import math as _math
         if rows:
             for row in rows:
                 if not isinstance(row, dict):
@@ -1655,6 +1657,9 @@ class TanStackPivotAdapter(FormulaEngineMixin):
                 ]
                 for key in hidden_keys:
                     row.pop(key, None)
+                for key, val in row.items():
+                    if isinstance(val, float) and _math.isnan(val):
+                        row[key] = None
         
         # Enrich rows for TanStack Hierarchy display
         hierarchy_cols = tanstack_request.grouping or []

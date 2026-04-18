@@ -466,6 +466,125 @@ def register_dash_pivot_transport_callback(
                 ),
             )
 
+        if request_kind == "export":
+            import io
+            import csv as _csv
+            import base64 as _b64
+            from ..tanstack_adapter import TanStackOperation, TanStackRequest
+
+            export_fmt = (request_payload.get("format") or "csv").lower()
+            resolved_table = table_name or request_payload.get("table")
+            service = runtime_service_getter()
+            adapter = service._adapter_getter()
+            request_columns = PivotRuntimeService._build_request_columns(
+                row_fields or [], col_fields or [], val_configs or []
+            )
+            export_request = TanStackRequest(
+                operation=TanStackOperation.GET_DATA,
+                table=resolved_table,
+                columns=request_columns,
+                filters=filters or {},
+                sorting=[],
+                grouping=row_fields or [],
+                aggregations=[],
+                pagination={"pageIndex": 0, "pageSize": 10_000_000},
+                totals=resolved_show_col_totals,
+                row_totals=resolved_show_row_totals,
+            )
+            response = await _await_if_needed(adapter.handle_request(export_request))
+            all_rows = response.data or []
+
+            # Filter to only rows visible given the current expand/collapse state.
+            # expanded=True means expand all; expanded={} / None means all collapsed (top level only).
+            _expanded_paths = PivotRuntimeService._parse_expanded_paths(expanded)
+            _expand_all = (expanded is True) or _expanded_paths == [["__ALL__"]]
+            if _expand_all:
+                rows = all_rows
+            else:
+                _expanded_set = {"|||".join(p) for p in _expanded_paths}
+                def _is_visible(row):
+                    path = row.get("_path") or ""
+                    if not path:
+                        return True
+                    parts = path.split("|||")
+                    # Every ancestor must be in the expanded set
+                    for i in range(1, len(parts)):
+                        if "|||".join(parts[:i]) not in _expanded_set:
+                            return False
+                    return True
+                rows = [r for r in all_rows if _is_visible(r)]
+
+            # Apply row slice for part exports
+            row_start = int(request_payload.get("rowStart") or 0)
+            row_end_req = request_payload.get("rowEnd")
+            if row_end_req is not None:
+                rows = rows[row_start:int(row_end_req)]
+            elif row_start > 0:
+                rows = rows[row_start:]
+
+            # Build ordered field list: row hierarchy path, then value columns
+            _skip = {"_path", "_isTotal", "_has_children", "depth", "__virtualIndex",
+                     "__colPending", "_parentPath", "_isGrandTotal", "__isGrandTotal__"}
+            if rows:
+                first = rows[0]
+                field_order = (
+                    [k for k in first if k == "_id"]
+                    + [k for k in first if k not in _skip and k != "_id" and not k.startswith("_")]
+                )
+            else:
+                field_order = []
+
+            # Apply column subset for part exports
+            col_ids_req = request_payload.get("colIds")
+            if col_ids_req and isinstance(col_ids_req, list):
+                col_ids_set = set(col_ids_req)
+                field_order = [k for k in field_order if k in col_ids_set or k == "_id"]
+
+            # Build display headers from val_configs where possible
+            _agg_labels = {"sum": "Sum", "avg": "Avg", "count": "Cnt", "min": "Min",
+                           "max": "Max", "weighted_avg": "Weighted Avg"}
+            _vc_map = {}
+            for vc in (val_configs or []):
+                if isinstance(vc, dict):
+                    f, a = vc.get("field", ""), vc.get("agg", "sum")
+                    key = f"{f}_{a}" if a != "formula" else f
+                    lbl = vc.get("label") or f"{f.replace('_', ' ').title()} ({_agg_labels.get(a, a)})"
+                    _vc_map[key] = lbl
+
+            def _display_header(k):
+                if k == "_id":
+                    return "/".join(f.replace("_", " ").title() for f in (row_fields or [])) or "Row"
+                return _vc_map.get(k, k.replace("_", " ").title())
+
+            part_label = request_payload.get("partLabel")
+            delimiter = '\t' if export_fmt == 'tsv' else ','
+            ext = 'tsv' if export_fmt == 'tsv' else 'csv'
+            filename = f"pivot_export_{part_label}.{ext}" if part_label else f"pivot_export.{ext}"
+            import math as _math
+            _value_keys = {k for k in field_order if k != "_id"}
+            def _cell(k, v):
+                # NaN or None on a value column → 0; on the row-label column → ""
+                if v is None or (isinstance(v, float) and _math.isnan(v)):
+                    return 0 if k in _value_keys else ""
+                return v
+
+            buf = io.StringIO()
+            writer = _csv.writer(buf, delimiter=delimiter)
+            if field_order:
+                writer.writerow([_display_header(k) for k in field_order])
+            for row in rows:
+                if isinstance(row, dict):
+                    writer.writerow([_cell(k, row.get(k)) for k in field_order])
+            encoded = _b64.b64encode(buf.getvalue().encode("utf-8")).decode("ascii")
+
+            return _response_tuple(_build_runtime_response(
+                kind="export",
+                request_id=request_id,
+                status="ok",
+                payload={"data": encoded, "format": export_fmt, "filename": filename,
+                         "rows": len(rows), "partId": request_payload.get("partId")},
+            ))
+
         active_request_meta = request_payload
         viewport_table = request_payload.get("table") if isinstance(request_payload, dict) else None
         request_table = active_request_meta.get("table") if isinstance(active_request_meta, dict) else None

@@ -877,7 +877,7 @@ export const PivotAppBar = React.memo(function PivotAppBar({
     autoSizeIncludesHeaderNext,
     colorScaleMode, setColorScaleMode,
     colorPalette, setColorPalette,
-    rowCount, exportPivot,
+    rowCount, exportPivot, isExporting,
     onTransposePivot,
     canTranspose,
     onSaveView,
@@ -1668,14 +1668,14 @@ export const PivotAppBar = React.memo(function PivotAppBar({
                         {immersiveMode ? <Icons.FullscreenExit /> : <Icons.Fullscreen />} Immersive
                     </button>
                     <div style={innerDividerStyle} />
-                    <button style={btnPrimary} onClick={exportPivot}>
-                        <Icons.Export/> {(rowCount || 0) > 500000 ? 'Export CSV' : 'Export'}
+                    <button style={btnPrimary} onClick={exportPivot} disabled={isExporting}>
+                        <Icons.Export/> {isExporting ? 'Exporting…' : (rowCount || 0) > 500000 ? 'Export CSV' : 'Export'}
                     </button>
                 </> : <>
                     <div style={{marginLeft:'auto'}} />
                     <div style={innerDividerStyle} />
-                    <button style={btnPrimary} onClick={exportPivot}>
-                        <Icons.Export/> {(rowCount || 0) > 500000 ? 'Export CSV' : 'Export'}
+                    <button style={btnPrimary} onClick={exportPivot} disabled={isExporting}>
+                        <Icons.Export/> {isExporting ? 'Exporting…' : (rowCount || 0) > 500000 ? 'Export CSV' : 'Export'}
                     </button>
                 </>}
             </div>

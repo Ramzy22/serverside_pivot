@@ -642,6 +642,34 @@ function SparklineDetailGraph({ modal, theme }) {
 }
 
 
+// Build a TSV string directly from raw data objects (server-side loadedRows).
+// visibleCols: array of TanStack leaf column objects (already filtered, no __row_number__).
+function buildTsvFromRawRows(rawRows, withHeaders, visibleCols) {
+    if (!Array.isArray(rawRows) || rawRows.length === 0 || !Array.isArray(visibleCols)) return null;
+    let tsv = '';
+    if (withHeaders) {
+        tsv += visibleCols.map(c => typeof c.columnDef.header === 'string' ? c.columnDef.header : c.id).join('\t') + '\n';
+    }
+    rawRows.forEach(rawRow => {
+        if (!rawRow) return;
+        const vals = visibleCols.map(c => {
+            if (c.id === 'hierarchy') {
+                const depth = rawRow.depth != null ? rawRow.depth : 0;
+                return '  '.repeat(depth) + (rawRow._id || '');
+            }
+            let v;
+            if (typeof c.columnDef.accessorFn === 'function') {
+                v = c.columnDef.accessorFn(rawRow, 0);
+            } else if (c.columnDef.accessorKey) {
+                v = rawRow[c.columnDef.accessorKey];
+            }
+            return v != null ? String(v) : '';
+        });
+        tsv += vals.join('\t') + '\n';
+    });
+    return tsv;
+}
+
 export default function DashTanstackPivot(props) {
     const { 
         id, 
@@ -700,6 +728,7 @@ export default function DashTanstackPivot(props) {
         saveViewTrigger = null,
         uiConfig: externalUiConfig = null,
         paginationConfig: externalPagination = null,
+        mergedHeaderSeparator = ' ',
     } = props;
 
     const normalizedInitialChartServerWindow = normalizeChartServerWindowConfig(chartServerWindow);
@@ -1568,6 +1597,14 @@ export default function DashTanstackPivot(props) {
         isRowSelecting, setIsRowSelecting,
         rowDragStart, setRowDragStart,
     } = useCellInteraction();
+
+    const isSelectAllServerRef = useRef(false);
+    const [isExporting, setIsExporting] = useState(false);
+    const [isCopying, setIsCopying] = useState(false);
+    const pendingCopyIntentRef = useRef(null);
+    const [partModal, setPartModal] = useState(null);
+    const EXPORT_ROW_LIMIT = 100_000;
+    const COPY_ROW_LIMIT = 10_000;
 
     const transactionUndoExecutorRef = useRef(() => {});
     const transactionRedoExecutorRef = useRef(() => {});
@@ -2659,7 +2696,7 @@ export default function DashTanstackPivot(props) {
         const visibleLeafColumnsAll = (tableRef.current && tableRef.current.getVisibleLeafColumns) ? tableRef.current.getVisibleLeafColumns() : [];
         const visibleRowsAll = getDisplayRows();
 
-        // Ctrl+A: select all visible rows and columns
+        // Ctrl+A: select all rows and columns
         if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'a') {
             e.preventDefault();
             const allSelection = {};
@@ -2669,6 +2706,9 @@ export default function DashTanstackPivot(props) {
                 });
             });
             setSelectedCells(allSelection);
+            // In server-side mode only visible rows are in the row model; flag so
+            // Ctrl+C pulls from loadedRows (all cached blocks) instead.
+            isSelectAllServerRef.current = serverSide;
             if (visibleRowsAll.length > 0 && visibleLeafColumnsAll.length > 0) {
                 setLastSelected({ rowIndex: 0, colIndex: 0 });
                 setDragStart({ rowIndex: 0, colIndex: 0 });
@@ -2681,7 +2721,14 @@ export default function DashTanstackPivot(props) {
             const keys = Object.keys(selectedCells);
             if (keys.length === 0) return;
             e.preventDefault();
-            const data = getSelectedData(false);
+            let data;
+            if (isSelectAllServerRef.current && serverSide && Array.isArray(loadedRows) && loadedRows.length > 0) {
+                const SKIP = new Set(['__row_number__']);
+                const cols = (tableRef.current ? tableRef.current.getVisibleLeafColumns() : []).filter(c => !SKIP.has(c.id));
+                data = buildTsvFromRawRows(loadedRows, false, cols);
+            } else {
+                data = getSelectedData(false);
+            }
             if (data) {
                 copyToClipboard(data);
                 showNotification('Copied!', 'success');
@@ -2909,6 +2956,7 @@ export default function DashTanstackPivot(props) {
             return;
         }
 
+        isSelectAllServerRef.current = false;
         setIsDragging(true);
         setDragStart({ rowIndex, colIndex });
         setLastSelected({ rowIndex, colIndex });
@@ -3004,7 +3052,14 @@ export default function DashTanstackPivot(props) {
                 const keys = Object.keys(selectedCells);
                 if (keys.length === 0) return;
                 e.preventDefault();
-                const data = getSelectedData(false);
+                let data;
+                if (isSelectAllServerRef.current && serverSide && Array.isArray(loadedRows) && loadedRows.length > 0) {
+                    const SKIP = new Set(['__row_number__']);
+                    const cols = (tableRef.current ? tableRef.current.getVisibleLeafColumns() : []).filter(c => !SKIP.has(c.id));
+                    data = buildTsvFromRawRows(loadedRows, false, cols);
+                } else {
+                    data = getSelectedData(false);
+                }
                 if (data) {
                     copyToClipboard(data);
                     showNotification('Copied!', 'success');
@@ -3013,7 +3068,7 @@ export default function DashTanstackPivot(props) {
         };
         window.addEventListener('keydown', handleGlobalCopy);
         return () => window.removeEventListener('keydown', handleGlobalCopy);
-    }, [selectedCells]);
+    }, [selectedCells, serverSide, loadedRows]);
 
     const isColExpanded = (key) => colExpanded[key] !== false;
 
@@ -7382,13 +7437,33 @@ export default function DashTanstackPivot(props) {
 
         const hasSelection = Object.keys(selectionForMenu).length > 0;
         
-        const getTableData = (withHeaders) => {
-            const visibleRows = getDisplayRows();
-            const visibleCols = table.getVisibleLeafColumns();
-            let tsv = "";
+        const getTableData = (withHeaders, mergedHeaders = false) => {
+            const SKIP = new Set(['__row_number__']);
+            const visibleCols = table.getVisibleLeafColumns().filter(c => !SKIP.has(c.id));
+
+            let tsv = '';
+
             if (withHeaders) {
-                tsv += visibleCols.map(c => typeof c.columnDef.header === 'string' ? c.columnDef.header : c.id).join('\t') + '\n';
+                const headerRow = visibleCols.map(c => {
+                    if (!mergedHeaders) {
+                        return typeof c.columnDef.header === 'string' ? c.columnDef.header : c.id;
+                    }
+                    // Merge all ancestor labels into one; strip agg suffix (e.g. " (Sum)") from leaf
+                    const stack = getDisplayHeaderTextStackForColumn(c);
+                    if (stack.length <= 1) {
+                        return stack[0] || (typeof c.columnDef.header === 'string' ? c.columnDef.header : c.id);
+                    }
+                    const leafLabel = (stack[stack.length - 1] || '').replace(/\s*\([^)]+\)$/, '');
+                    return [...stack.slice(0, -1), leafLabel].filter(Boolean).join(mergedHeaderSeparator);
+                });
+                tsv += headerRow.join('\t') + '\n';
             }
+
+            // Data body — server-side: use all cached blocks; client-side: use full row model
+            if (serverSide && Array.isArray(loadedRows) && loadedRows.length > 0) {
+                return tsv + (buildTsvFromRawRows(loadedRows, false, visibleCols) || '');
+            }
+            const visibleRows = getDisplayRows();
             visibleRows.forEach(r => {
                 const vals = visibleCols.map(c => {
                     const v = r.getValue(c.id);
@@ -7399,9 +7474,22 @@ export default function DashTanstackPivot(props) {
             return tsv;
         };
 
+        const copyTableServerSide = (withHeaders, mergedHeaders) => {
+            const colIds = getVisibleExportColIds();
+            if (rowCount > COPY_ROW_LIMIT) {
+                setPartModal({ mode: 'copy', copyIntent: { withHeaders, mergedHeaders, mergedHeaderSeparator }, rowsPerPart: COPY_ROW_LIMIT, colsPerPart: colIds.length, totalRows: rowCount, totalCols: colIds.length, visibleColIds: colIds, processingPartId: null, completedParts: new Set() });
+                return;
+            }
+            pendingCopyIntentRef.current = { withHeaders, mergedHeaders, mergedHeaderSeparator };
+            setIsCopying(true);
+            dispatchServerSideRuntimeSetProps({
+                runtimeRequest: { kind: 'export', payload: { format: 'tsv', table: tableName } }
+            });
+        };
         const actions = [
-            { label: 'Copy Table', icon: <Icons.DragIndicator/>, onClick: () => copyToClipboard(getTableData(false)) },
-            { label: 'Copy Table with Headers', onClick: () => copyToClipboard(getTableData(true)) },
+            { label: 'Copy Table', icon: <Icons.DragIndicator/>, onClick: () => serverSide ? copyTableServerSide(false, false) : copyToClipboard(getTableData(false)) },
+            { label: 'Copy Table with Headers', onClick: () => serverSide ? copyTableServerSide(true, false) : copyToClipboard(getTableData(true)) },
+            { label: 'Copy Table - Merged Headers', onClick: () => serverSide ? copyTableServerSide(true, true) : copyToClipboard(getTableData(true, true)) },
         ];
 
         if (hasSelection) {
@@ -9761,6 +9849,59 @@ export default function DashTanstackPivot(props) {
             return;
         }
 
+        if (runtimeResponse.kind === 'export') {
+            const partId = payload.partId;
+            const copyIntent = pendingCopyIntentRef.current;
+            if (partId) {
+                setPartModal(prev => prev ? { ...prev, processingPartId: null, completedParts: new Set([...prev.completedParts, partId]) } : null);
+            } else {
+                setIsExporting(false);
+                setIsCopying(false);
+                pendingCopyIntentRef.current = null;
+            }
+            if (runtimeResponse.status === 'ok') {
+                const b64 = payload.data;
+                if (b64) {
+                    if (copyIntent) {
+                        const text = atob(b64);
+                        const lines = text.split('\n').filter(l => l.length > 0);
+                        let result;
+                        if (!copyIntent.withHeaders) {
+                            result = lines.slice(1).join('\n');
+                        } else if (copyIntent.mergedHeaders) {
+                            const sep = copyIntent.mergedHeaderSeparator ?? ' ';
+                            const headerCells = (lines[0] || '').split('\t').map(
+                                h => h.replace(/\s*\((?:Sum|Avg|Cnt|Min|Max|Weighted Avg)\)\s*$/, '').replace(/ \| /g, sep)
+                            );
+                            result = [headerCells.join('\t'), ...lines.slice(1)].join('\n');
+                        } else {
+                            result = lines.join('\n');
+                        }
+                        copyToClipboard(result);
+                        showNotification(`Copied ${payload.rows ?? ''} rows`, 'success');
+                    } else {
+                        const filename = payload.filename || 'pivot_export.csv';
+                        const bytes = Uint8Array.from(atob(b64), c => c.charCodeAt(0));
+                        const mimeType = payload.format === 'tsv' ? 'text/tab-separated-values' : 'text/csv';
+                        const blob = new Blob([bytes], { type: `${mimeType};charset=utf-8;` });
+                        const url = URL.createObjectURL(blob);
+                        const a = document.createElement('a');
+                        a.href = url;
+                        a.download = filename;
+                        document.body.appendChild(a);
+                        a.click();
+                        document.body.removeChild(a);
+                        URL.revokeObjectURL(url);
+                        showNotification(`Downloaded ${payload.rows ?? ''} rows`, 'success');
+                    }
+                }
+            } else {
+                if (partId) setPartModal(prev => prev ? { ...prev, processingPartId: null } : null);
+                showNotification(copyIntent ? 'Copy failed' : 'Export failed', 'error');
+            }
+            return;
+        }
+
         if (runtimeResponse.kind === 'chart') {
             if (runtimeResponse.status === 'chart_data') {
                 setTransportChartDataState(payload);
@@ -9804,7 +9945,7 @@ export default function DashTanstackPivot(props) {
                 status: runtimeResponse.status,
             });
         }
-    }, [buildRuntimeResponseProcessingKey, clearPendingTransactionHistoryRequest, emitEditLifecycleEvent, finalizeTransactionHistoryResponse, hydrateVisibleEditOverlay, markRuntimeResponseHandled, reconcileOptimisticCellValuesWithPayload, recordProfilerResponse, runtimeResponse]);
+    }, [buildRuntimeResponseProcessingKey, clearPendingTransactionHistoryRequest, emitEditLifecycleEvent, finalizeTransactionHistoryResponse, hydrateVisibleEditOverlay, markRuntimeResponseHandled, reconcileOptimisticCellValuesWithPayload, recordProfilerResponse, runtimeResponse, setIsExporting, setIsCopying, showNotification]);
 
     useEffect(() => {
         if (!chartData || typeof chartData !== 'object') return;
@@ -10254,7 +10395,48 @@ export default function DashTanstackPivot(props) {
 
 
     // buildExportAoa and exportPivot extracted to ../utils/exportUtils.js
-    const exportPivot = useCallback(() => exportPivotTable(table, rowCount), [table, rowCount]);
+    const getVisibleExportColIds = useCallback(() =>
+        table.getVisibleLeafColumns().filter(c => c.id !== '__row_number__').map(c => c.id),
+    [table]);
+
+    const exportPivot = useCallback(() => {
+        if (serverSide) {
+            const colIds = getVisibleExportColIds();
+            if (rowCount > EXPORT_ROW_LIMIT) {
+                setPartModal({ mode: 'export', copyIntent: null, rowsPerPart: EXPORT_ROW_LIMIT, colsPerPart: colIds.length, totalRows: rowCount, totalCols: colIds.length, visibleColIds: colIds, processingPartId: null, completedParts: new Set() });
+                return;
+            }
+            setIsExporting(true);
+            dispatchServerSideRuntimeSetProps({
+                runtimeRequest: { kind: 'export', payload: { format: 'csv', table: tableName } }
+            });
+        } else {
+            exportPivotTable(table, rowCount, null);
+        }
+    }, [serverSide, table, rowCount, tableName, getVisibleExportColIds, EXPORT_ROW_LIMIT, dispatchServerSideRuntimeSetProps]);
+
+    const dispatchExportPart = useCallback((rowBatch, colBatch) => {
+        if (!partModal) return;
+        const { mode, copyIntent, rowsPerPart, colsPerPart, totalRows, visibleColIds } = partModal;
+        const rowStart = rowBatch * rowsPerPart;
+        const rowEnd = Math.min(rowStart + rowsPerPart, totalRows);
+        const colStart = colBatch * colsPerPart;
+        const colEnd = Math.min(colStart + colsPerPart, visibleColIds.length);
+        const colIds = visibleColIds.slice(colStart, colEnd);
+        const partId = `r${rowBatch}_c${colBatch}`;
+        const partLabel = colsPerPart < visibleColIds.length
+            ? `rows${rowStart + 1}-${rowEnd}_cols${colStart + 1}-${colEnd}`
+            : `rows${rowStart + 1}-${rowEnd}`;
+        setPartModal(prev => prev ? { ...prev, processingPartId: partId } : null);
+        if (mode === 'copy') pendingCopyIntentRef.current = copyIntent;
+        else pendingCopyIntentRef.current = null;
+        dispatchServerSideRuntimeSetProps({
+            runtimeRequest: {
+                kind: 'export',
+                payload: { format: mode === 'copy' ? 'tsv' : 'csv', table: tableName, rowStart, rowEnd, colIds, partId, partLabel }
+            }
+        });
+    }, [partModal, tableName, dispatchServerSideRuntimeSetProps]);
 
     const { renderCell, renderVirtualColumnCell, renderHeaderCell } = useRenderHelpers({
         // renderCell dependencies
@@ -11144,7 +11326,7 @@ export default function DashTanstackPivot(props) {
                 canTranspose={rowFields.length > 0 || colFields.length > 0}
                 colorScaleMode={colorScaleMode} setColorScaleMode={setColorScaleMode}
                 colorPalette={colorPalette} setColorPalette={setColorPalette}
-                rowCount={rowCount} exportPivot={exportPivot}
+                rowCount={rowCount} exportPivot={exportPivot} isExporting={isExporting}
                 onSaveView={handleSaveView}
                 pivotTitle={props.pivotTitle}
                 fontFamily={fontFamily} setFontFamily={setFontFamily}
@@ -11441,6 +11623,87 @@ export default function DashTanstackPivot(props) {
             </div>
             {contextMenu && <ContextMenu {...contextMenu} theme={theme} onClose={() => setContextMenu(null)} />}
             {notification && <Notification message={notification.message} type={notification.type} onClose={() => setNotification(null)} />}
+            {partModal && (() => {
+                const { mode, rowsPerPart, colsPerPart, totalRows, totalCols, processingPartId, completedParts } = partModal;
+                const rowBatches = Math.ceil(totalRows / rowsPerPart);
+                const colBatches = colsPerPart < totalCols ? Math.ceil(totalCols / colsPerPart) : 1;
+                const totalParts = rowBatches * colBatches;
+                const tooMany = totalParts > 50;
+                const limit = mode === 'copy' ? COPY_ROW_LIMIT : EXPORT_ROW_LIMIT;
+                const inp = { display:'block', width:'100%', marginTop:'4px', padding:'6px 8px', borderRadius:'6px', border:`1px solid ${theme.border}`, background: theme.input || theme.background, color:theme.text, fontSize:'13px', boxSizing:'border-box' };
+                const btnBase = { padding:'6px 12px', borderRadius:'6px', border:'none', cursor:'pointer', fontSize:'12px', fontWeight:600, transition:'opacity .15s' };
+                return (
+                    <div style={{ position:'fixed', inset:0, background:'rgba(0,0,0,0.5)', zIndex:10002, display:'flex', alignItems:'center', justifyContent:'center' }}>
+                        <div style={{ background:theme.background, color:theme.text, borderRadius:'12px', padding:'24px', boxShadow:'0 8px 32px rgba(0,0,0,0.3)', width:'440px', maxWidth:'94vw', maxHeight:'85vh', display:'flex', flexDirection:'column', gap:'14px', fontFamily:"'Inter',ui-sans-serif,system-ui,sans-serif" }}>
+                            <div style={{ display:'flex', alignItems:'center', justifyContent:'space-between' }}>
+                                <span style={{ fontWeight:700, fontSize:'15px' }}>{mode === 'copy' ? 'Copy Table — Large Dataset' : 'Export — Large Dataset'}</span>
+                                <button onClick={() => setPartModal(null)} style={{ background:'none', border:'none', cursor:'pointer', color:theme.textSec, fontSize:'20px', lineHeight:1, padding:'0 4px' }}>×</button>
+                            </div>
+                            <div style={{ fontSize:'13px', color:theme.textSec || theme.text, opacity:.75 }}>
+                                {totalRows.toLocaleString()} rows × {totalCols} columns — limit is {limit.toLocaleString()} rows. Split into parts below.
+                            </div>
+                            <div style={{ display:'flex', gap:'12px' }}>
+                                <label style={{ flex:1, fontSize:'13px' }}>
+                                    Rows per part
+                                    <input type="number" min={100} max={totalRows} value={rowsPerPart}
+                                        onChange={e => setPartModal(prev => ({ ...prev, rowsPerPart: Math.max(100, Math.min(totalRows, parseInt(e.target.value) || 100)) }))}
+                                        style={inp} />
+                                </label>
+                                <label style={{ flex:1, fontSize:'13px' }}>
+                                    Columns per part
+                                    <input type="number" min={1} max={totalCols} value={colsPerPart}
+                                        onChange={e => setPartModal(prev => ({ ...prev, colsPerPart: Math.max(1, Math.min(totalCols, parseInt(e.target.value) || 1)) }))}
+                                        style={inp} />
+                                </label>
+                            </div>
+                            <div style={{ fontSize:'12px', color:theme.textSec || theme.text, opacity:.7 }}>
+                                → {totalParts} part{totalParts !== 1 ? 's' : ''} ({rowBatches} row × {colBatches} col batch{colBatches !== 1 ? 'es' : ''})
+                            </div>
+                            {tooMany ? (
+                                <div style={{ fontSize:'12px', color:'#e07700', padding:'8px 12px', background:'rgba(224,119,0,.1)', borderRadius:'6px' }}>
+                                    Too many parts ({totalParts}). Increase rows or columns per part to reduce below 50.
+                                </div>
+                            ) : (
+                                <div style={{ display:'flex', flexWrap:'wrap', gap:'8px', overflowY:'auto', maxHeight:'200px' }}>
+                                    {Array.from({ length: rowBatches }, (_, rb) =>
+                                        Array.from({ length: colBatches }, (_, cb) => {
+                                            const pid = `r${rb}_c${cb}`;
+                                            const done = completedParts.has(pid);
+                                            const loading = processingPartId === pid;
+                                            const rowFrom = rb * rowsPerPart + 1;
+                                            const rowTo = Math.min((rb + 1) * rowsPerPart, totalRows);
+                                            const label = colBatches > 1
+                                                ? `R${rb+1}–C${cb+1} (${rowFrom.toLocaleString()}–${rowTo.toLocaleString()})`
+                                                : `Part ${rb + 1}  (rows ${rowFrom.toLocaleString()}–${rowTo.toLocaleString()})`;
+                                            return (
+                                                <button key={pid} disabled={!!processingPartId}
+                                                    onClick={() => dispatchExportPart(rb, cb)}
+                                                    style={{ ...btnBase, background: done ? (theme.accent || '#4f8ef7') : theme.headerBg || theme.border, color: done ? '#fff' : theme.text, opacity: processingPartId && !loading ? 0.5 : 1 }}>
+                                                    {loading ? '⏳ ' : done ? '✓ ' : ''}{label}
+                                                </button>
+                                            );
+                                        })
+                                    )}
+                                </div>
+                            )}
+                        </div>
+                    </div>
+                );
+            })()}
+            {(isExporting || isCopying) && (
+                <div style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.45)', zIndex: 10001, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+                    <div style={{ background: theme.background, color: theme.text, borderRadius: '12px', padding: '28px 36px', boxShadow: '0 8px 32px rgba(0,0,0,0.3)', display: 'flex', flexDirection: 'column', alignItems: 'center', gap: '16px', minWidth: '220px' }}>
+                        <svg width="36" height="36" viewBox="0 0 36 36" fill="none" style={{ animation: 'pivot-spin 0.8s linear infinite' }}>
+                            <style>{`@keyframes pivot-spin { to { transform: rotate(360deg); } }`}</style>
+                            <circle cx="18" cy="18" r="15" stroke={theme.border} strokeWidth="3" fill="none"/>
+                            <path d="M18 3 A15 15 0 0 1 33 18" stroke={theme.accent || '#4f8ef7'} strokeWidth="3" strokeLinecap="round" fill="none"/>
+                        </svg>
+                        <span style={{ fontSize: '14px', fontWeight: 500 }}>
+                            {isCopying ? 'Copying to clipboard…' : 'Exporting all rows…'}
+                        </span>
+                    </div>
+                </div>
+            )}
             {sparklineDataModal && (
                 <div
                     style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.45)', zIndex: 10000, display: 'flex', alignItems: 'center', justifyContent: 'center' }}
@@ -11622,6 +11885,7 @@ DashTanstackPivot.propTypes = {
      * Only applies when serverSide is false.
      */
     paginationConfig: PropTypes.object,
+    mergedHeaderSeparator: PropTypes.string,
     columnPinning: PropTypes.shape({
         left: PropTypes.arrayOf(PropTypes.string),
         right: PropTypes.arrayOf(PropTypes.string)

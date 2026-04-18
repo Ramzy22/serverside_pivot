@@ -134,6 +134,7 @@ const formatNonScalarValue = (value) => {
 export const formatValue = (value, fmt, decimalPlaces, groupSeparator = DEFAULT_NUMBER_GROUP_SEPARATOR) => {
     if (value === null || value === undefined) return '';
     if (typeof value !== 'number') return formatNonScalarValue(value);
+    if (Number.isNaN(value)) return '';
     if (!fmt) {
         if (decimalPlaces !== undefined && decimalPlaces !== null) {
             return formatNumberWithOptions(value, {
