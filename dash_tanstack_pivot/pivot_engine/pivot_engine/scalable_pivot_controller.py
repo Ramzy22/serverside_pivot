@@ -378,7 +378,10 @@ class ScalablePivotController(PivotController):
         return or_expr
 
     def _build_sparse_materialized_source_query(self, spec: PivotSpec, column_values: List[str]):
-        base_table = self.planner.con.table(spec.table)
+        base_table = self.planner.builder.apply_custom_dimensions(
+            self.planner.con.table(spec.table),
+            getattr(spec, "custom_dimensions", []),
+        )
         pre_filters, _post_filters = self._split_pivot_filters(spec)
         if pre_filters:
             filter_expr = self.planner.builder.build_filter_expression(base_table, pre_filters)
@@ -938,7 +941,10 @@ class ScalablePivotController(PivotController):
         if con is None:
             return 0
 
-        base_table = con.table(spec.table)
+        base_table = self.planner.builder.apply_custom_dimensions(
+            con.table(spec.table),
+            getattr(spec, "custom_dimensions", []),
+        )
         if spec.filters:
             filter_expr = self.planner.builder.build_filter_expression(base_table, spec.filters)
             if filter_expr is not None:
@@ -1018,7 +1024,10 @@ class ScalablePivotController(PivotController):
         if con is None:
             return None
 
-        base_table = con.table(spec.table)
+        base_table = self.planner.builder.apply_custom_dimensions(
+            con.table(spec.table),
+            getattr(spec, "custom_dimensions", []),
+        )
         if spec.filters:
             filter_expr = self.planner.builder.build_filter_expression(base_table, spec.filters)
             if filter_expr is not None:
@@ -2534,7 +2543,10 @@ class ScalablePivotController(PivotController):
         import ibis
 
         # We need a fresh query on the base table with filters
-        table_expr = self.planner.con.table(spec.table)
+        table_expr = self.planner.builder.apply_custom_dimensions(
+            self.planner.con.table(spec.table),
+            getattr(spec, "custom_dimensions", []),
+        )
 
         # Merge spec filters and drill filters
         all_filters = (spec.filters or []) + filters

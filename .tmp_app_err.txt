@@ -1,0 +1,132 @@
+WARNING: This is a development server. Do not use it in a production deployment. Use a production WSGI server instead.
+ * Running on http://127.0.0.1:8050
+Press CTRL+C to quit
+127.0.0.1 - - [19/Apr/2026 00:58:55] "GET / HTTP/1.1" 200 -
+127.0.0.1 - - [19/Apr/2026 00:58:55] "GET /_dash-component-suites/dash/deps/polyfill@7.v3_2_0m1773638798.12.1.min.js HTTP/1.1" 200 -
+127.0.0.1 - - [19/Apr/2026 00:58:55] "GET /_dash-component-suites/dash/deps/react@18.v3_2_0m1773638798.3.1.min.js HTTP/1.1" 200 -
+127.0.0.1 - - [19/Apr/2026 00:58:55] "GET /_dash-component-suites/dash/deps/react-dom@18.v3_2_0m1773638798.3.1.min.js HTTP/1.1" 200 -
+127.0.0.1 - - [19/Apr/2026 00:58:55] "GET /_dash-component-suites/dash/deps/prop-types@15.v3_2_0m1773638798.8.1.min.js HTTP/1.1" 200 -
+127.0.0.1 - - [19/Apr/2026 00:58:55] "GET /_dash-component-suites/dash_tanstack_pivot/dash_tanstack_pivot/dash_tanstack_pivot.v0_0_63m1776553087.min.js HTTP/1.1" 200 -
+127.0.0.1 - - [19/Apr/2026 00:58:55] "GET /_dash-component-suites/dash/dash-renderer/build/dash_renderer.v3_2_0m1773638798.min.js HTTP/1.1" 200 -
+127.0.0.1 - - [19/Apr/2026 00:58:55] "GET /_dash-component-suites/dash/dcc/dash_core_components.v3_2_0m1773638798.js HTTP/1.1" 200 -
+127.0.0.1 - - [19/Apr/2026 00:58:55] "GET /_dash-component-suites/dash/dcc/dash_core_components-shared.v3_2_0m1773638798.js HTTP/1.1" 200 -
+127.0.0.1 - - [19/Apr/2026 00:58:55] "GET /_dash-component-suites/dash/html/dash_html_components.v3_0_4m1773638798.min.js HTTP/1.1" 200 -
+127.0.0.1 - - [19/Apr/2026 00:58:55] "GET /_dash-component-suites/dash/dash_table/bundle.v6_0_4m1773638798.js HTTP/1.1" 200 -
+127.0.0.1 - - [19/Apr/2026 00:58:55] "GET /_dash-layout HTTP/1.1" 200 -
+127.0.0.1 - - [19/Apr/2026 00:58:55] "GET /_dash-dependencies HTTP/1.1" 200 -
+127.0.0.1 - - [19/Apr/2026 00:58:55] "GET /_favicon.ico?v=3.2.0 HTTP/1.1" 200 -
+127.0.0.1 - - [19/Apr/2026 00:58:56] "POST /_dash-update-component HTTP/1.1" 200 -
+127.0.0.1 - - [19/Apr/2026 00:58:56] "POST /_dash-update-component HTTP/1.1" 200 -
+127.0.0.1 - - [19/Apr/2026 00:58:56] "POST /_dash-update-component HTTP/1.1" 200 -
+127.0.0.1 - - [19/Apr/2026 00:58:58] "POST /_dash-update-component HTTP/1.1" 200 -
+127.0.0.1 - - [19/Apr/2026 00:59:02] "POST /_dash-update-component HTTP/1.1" 200 -
+127.0.0.1 - - [19/Apr/2026 01:08:40] "GET / HTTP/1.1" 200 -
+127.0.0.1 - - [19/Apr/2026 01:08:40] "GET /_dash-component-suites/dash_tanstack_pivot/dash_tanstack_pivot/dash_tanstack_pivot.v0_0_63m1776553087.min.js HTTP/1.1" 200 -
+127.0.0.1 - - [19/Apr/2026 01:08:41] "GET /_dash-layout HTTP/1.1" 200 -
+127.0.0.1 - - [19/Apr/2026 01:08:41] "GET /_dash-dependencies HTTP/1.1" 200 -
+127.0.0.1 - - [19/Apr/2026 01:08:41] "GET /_favicon.ico?v=3.2.0 HTTP/1.1" 200 -
+127.0.0.1 - - [19/Apr/2026 01:08:41] "POST /_dash-update-component HTTP/1.1" 200 -
+127.0.0.1 - - [19/Apr/2026 01:08:42] "POST /_dash-update-component HTTP/1.1" 200 -
+127.0.0.1 - - [19/Apr/2026 01:08:42] "POST /_dash-update-component HTTP/1.1" 200 -
+127.0.0.1 - - [19/Apr/2026 01:08:46] "POST /_dash-update-component HTTP/1.1" 200 -
+127.0.0.1 - - [19/Apr/2026 01:08:51] "POST /_dash-update-component HTTP/1.1" 200 -
+127.0.0.1 - - [19/Apr/2026 01:09:07] "POST /_dash-update-component HTTP/1.1" 200 -
+127.0.0.1 - - [19/Apr/2026 01:09:10] "POST /_dash-update-component HTTP/1.1" 200 -
+127.0.0.1 - - [19/Apr/2026 01:09:21] "POST /_dash-update-component HTTP/1.1" 200 -
+127.0.0.1 - - [19/Apr/2026 01:12:50] "POST /_dash-update-component HTTP/1.1" 200 -
+127.0.0.1 - - [19/Apr/2026 01:12:52] "POST /_dash-update-component HTTP/1.1" 200 -
+127.0.0.1 - - [19/Apr/2026 01:13:21] "POST /_dash-update-component HTTP/1.1" 200 -
+127.0.0.1 - - [19/Apr/2026 01:13:33] "POST /_dash-update-component HTTP/1.1" 200 -
+127.0.0.1 - - [19/Apr/2026 01:13:41] "POST /_dash-update-component HTTP/1.1" 200 -
+127.0.0.1 - - [19/Apr/2026 01:13:46] "POST /_dash-update-component HTTP/1.1" 200 -
+127.0.0.1 - - [19/Apr/2026 01:13:50] "POST /_dash-update-component HTTP/1.1" 200 -
+127.0.0.1 - - [19/Apr/2026 01:13:51] "POST /_dash-update-component HTTP/1.1" 200 -
+127.0.0.1 - - [19/Apr/2026 01:13:52] "POST /_dash-update-component HTTP/1.1" 200 -
+127.0.0.1 - - [19/Apr/2026 01:20:50] "POST /_dash-update-component HTTP/1.1" 200 -
+127.0.0.1 - - [19/Apr/2026 01:21:48] "GET / HTTP/1.1" 200 -
+127.0.0.1 - - [19/Apr/2026 01:21:48] "GET /_dash-layout HTTP/1.1" 200 -
+127.0.0.1 - - [19/Apr/2026 01:21:48] "GET /_dash-dependencies HTTP/1.1" 200 -
+127.0.0.1 - - [19/Apr/2026 01:21:48] "GET /_favicon.ico?v=3.2.0 HTTP/1.1" 200 -
+127.0.0.1 - - [19/Apr/2026 01:21:48] "POST /_dash-update-component HTTP/1.1" 200 -
+127.0.0.1 - - [19/Apr/2026 01:21:49] "POST /_dash-update-component HTTP/1.1" 200 -
+127.0.0.1 - - [19/Apr/2026 01:21:49] "POST /_dash-update-component HTTP/1.1" 200 -
+127.0.0.1 - - [19/Apr/2026 01:23:07] "GET / HTTP/1.1" 200 -
+127.0.0.1 - - [19/Apr/2026 01:23:07] "GET /_dash-component-suites/dash_tanstack_pivot/dash_tanstack_pivot/dash_tanstack_pivot.v0_0_63m1776554557.min.js HTTP/1.1" 200 -
+127.0.0.1 - - [19/Apr/2026 01:23:07] "GET /_dash-layout HTTP/1.1" 200 -
+127.0.0.1 - - [19/Apr/2026 01:23:07] "GET /_dash-dependencies HTTP/1.1" 200 -
+127.0.0.1 - - [19/Apr/2026 01:23:07] "GET /_favicon.ico?v=3.2.0 HTTP/1.1" 200 -
+127.0.0.1 - - [19/Apr/2026 01:23:08] "POST /_dash-update-component HTTP/1.1" 200 -
+127.0.0.1 - - [19/Apr/2026 01:23:08] "POST /_dash-update-component HTTP/1.1" 200 -
+127.0.0.1 - - [19/Apr/2026 01:23:08] "POST /_dash-update-component HTTP/1.1" 200 -
+127.0.0.1 - - [19/Apr/2026 01:23:10] "POST /_dash-update-component HTTP/1.1" 200 -
+127.0.0.1 - - [19/Apr/2026 01:23:15] "POST /_dash-update-component HTTP/1.1" 200 -
+127.0.0.1 - - [19/Apr/2026 01:23:52] "POST /_dash-update-component HTTP/1.1" 200 -
+127.0.0.1 - - [19/Apr/2026 01:23:55] "POST /_dash-update-component HTTP/1.1" 200 -
+127.0.0.1 - - [19/Apr/2026 01:24:11] "POST /_dash-update-component HTTP/1.1" 200 -
+127.0.0.1 - - [19/Apr/2026 01:24:28] "POST /_dash-update-component HTTP/1.1" 200 -
+127.0.0.1 - - [19/Apr/2026 01:24:29] "POST /_dash-update-component HTTP/1.1" 200 -
+127.0.0.1 - - [19/Apr/2026 01:24:47] "POST /_dash-update-component HTTP/1.1" 200 -
+127.0.0.1 - - [19/Apr/2026 01:29:14] "POST /_dash-update-component HTTP/1.1" 200 -
+127.0.0.1 - - [19/Apr/2026 01:29:15] "POST /_dash-update-component HTTP/1.1" 200 -
+127.0.0.1 - - [19/Apr/2026 01:29:16] "POST /_dash-update-component HTTP/1.1" 200 -
+127.0.0.1 - - [19/Apr/2026 01:29:23] "POST /_dash-update-component HTTP/1.1" 200 -
+127.0.0.1 - - [19/Apr/2026 01:29:24] "POST /_dash-update-component HTTP/1.1" 200 -
+127.0.0.1 - - [19/Apr/2026 01:29:28] "POST /_dash-update-component HTTP/1.1" 200 -
+127.0.0.1 - - [19/Apr/2026 01:29:29] "POST /_dash-update-component HTTP/1.1" 200 -
+127.0.0.1 - - [19/Apr/2026 01:29:33] "POST /_dash-update-component HTTP/1.1" 200 -
+127.0.0.1 - - [19/Apr/2026 01:29:36] "POST /_dash-update-component HTTP/1.1" 200 -
+127.0.0.1 - - [19/Apr/2026 01:29:39] "POST /_dash-update-component HTTP/1.1" 200 -
+127.0.0.1 - - [19/Apr/2026 01:29:39] "POST /_dash-update-component HTTP/1.1" 200 -
+127.0.0.1 - - [19/Apr/2026 01:36:01] "POST /_dash-update-component HTTP/1.1" 200 -
+127.0.0.1 - - [19/Apr/2026 01:36:03] "GET / HTTP/1.1" 200 -
+127.0.0.1 - - [19/Apr/2026 01:36:03] "GET /_dash-component-suites/dash_tanstack_pivot/dash_tanstack_pivot/dash_tanstack_pivot.v0_0_63m1776555024.min.js HTTP/1.1" 200 -
+127.0.0.1 - - [19/Apr/2026 01:36:03] "GET /_dash-layout HTTP/1.1" 200 -
+127.0.0.1 - - [19/Apr/2026 01:36:03] "GET /_dash-dependencies HTTP/1.1" 200 -
+127.0.0.1 - - [19/Apr/2026 01:36:03] "GET /_favicon.ico?v=3.2.0 HTTP/1.1" 200 -
+127.0.0.1 - - [19/Apr/2026 01:36:04] "POST /_dash-update-component HTTP/1.1" 200 -
+127.0.0.1 - - [19/Apr/2026 01:36:04] "POST /_dash-update-component HTTP/1.1" 200 -
+127.0.0.1 - - [19/Apr/2026 01:36:04] "POST /_dash-update-component HTTP/1.1" 200 -
+127.0.0.1 - - [19/Apr/2026 01:36:05] "POST /_dash-update-component HTTP/1.1" 200 -
+127.0.0.1 - - [19/Apr/2026 01:36:06] "POST /_dash-update-component HTTP/1.1" 200 -
+127.0.0.1 - - [19/Apr/2026 01:36:34] "POST /_dash-update-component HTTP/1.1" 200 -
+127.0.0.1 - - [19/Apr/2026 01:36:46] "POST /_dash-update-component HTTP/1.1" 200 -
+127.0.0.1 - - [19/Apr/2026 01:36:48] "POST /_dash-update-component HTTP/1.1" 200 -
+127.0.0.1 - - [19/Apr/2026 01:37:38] "POST /_dash-update-component HTTP/1.1" 200 -
+127.0.0.1 - - [19/Apr/2026 01:38:03] "POST /_dash-update-component HTTP/1.1" 200 -
+127.0.0.1 - - [19/Apr/2026 01:38:34] "POST /_dash-update-component HTTP/1.1" 200 -
+127.0.0.1 - - [19/Apr/2026 01:38:47] "POST /_dash-update-component HTTP/1.1" 200 -
+127.0.0.1 - - [19/Apr/2026 01:39:21] "GET / HTTP/1.1" 200 -
+127.0.0.1 - - [19/Apr/2026 01:39:21] "GET /_dash-layout HTTP/1.1" 200 -
+127.0.0.1 - - [19/Apr/2026 01:39:21] "GET /_dash-dependencies HTTP/1.1" 200 -
+127.0.0.1 - - [19/Apr/2026 01:39:22] "POST /_dash-update-component HTTP/1.1" 200 -
+127.0.0.1 - - [19/Apr/2026 01:39:22] "POST /_dash-update-component HTTP/1.1" 200 -
+127.0.0.1 - - [19/Apr/2026 01:39:23] "POST /_dash-update-component HTTP/1.1" 200 -
+127.0.0.1 - - [19/Apr/2026 01:39:30] "GET / HTTP/1.1" 200 -
+127.0.0.1 - - [19/Apr/2026 01:39:30] "GET /_dash-layout HTTP/1.1" 200 -
+127.0.0.1 - - [19/Apr/2026 01:39:30] "GET /_dash-dependencies HTTP/1.1" 200 -
+127.0.0.1 - - [19/Apr/2026 01:39:30] "POST /_dash-update-component HTTP/1.1" 200 -
+127.0.0.1 - - [19/Apr/2026 01:39:31] "POST /_dash-update-component HTTP/1.1" 200 -
+127.0.0.1 - - [19/Apr/2026 01:39:31] "POST /_dash-update-component HTTP/1.1" 200 -
+127.0.0.1 - - [19/Apr/2026 01:53:50] "GET / HTTP/1.1" 200 -
+127.0.0.1 - - [19/Apr/2026 01:53:50] "GET /_dash-component-suites/dash_tanstack_pivot/dash_tanstack_pivot/dash_tanstack_pivot.v0_0_63m1776556355.min.js HTTP/1.1" 200 -
+127.0.0.1 - - [19/Apr/2026 01:53:50] "GET /_dash-layout HTTP/1.1" 200 -
+127.0.0.1 - - [19/Apr/2026 01:53:50] "GET /_dash-dependencies HTTP/1.1" 200 -
+127.0.0.1 - - [19/Apr/2026 01:53:50] "GET /_favicon.ico?v=3.2.0 HTTP/1.1" 200 -
+127.0.0.1 - - [19/Apr/2026 01:53:51] "POST /_dash-update-component HTTP/1.1" 200 -
+127.0.0.1 - - [19/Apr/2026 01:53:51] "POST /_dash-update-component HTTP/1.1" 200 -
+127.0.0.1 - - [19/Apr/2026 01:53:51] "POST /_dash-update-component HTTP/1.1" 200 -
+127.0.0.1 - - [19/Apr/2026 01:53:52] "POST /_dash-update-component HTTP/1.1" 200 -
+127.0.0.1 - - [19/Apr/2026 01:53:55] "POST /_dash-update-component HTTP/1.1" 200 -
+127.0.0.1 - - [19/Apr/2026 01:54:05] "POST /_dash-update-component HTTP/1.1" 200 -
+Fatal Python error: PyEval_SaveThread: the function must be called with the GIL held, but the GIL is released (the current Python thread state is NULL)
+Python runtime state: initialized
+
+Thread 0x00001ef8 (most recent call first):
+  File "C:\Users\ramzy\anaconda3\Lib\selectors.py", line 314 in _select
+  File "C:\Users\ramzy\anaconda3\Lib\selectors.py", line 323 in select
+  File "C:\Users\ramzy\anaconda3\Lib\socketserver.py", line 233 in serve_forever
+  File "C:\Users\ramzy\anaconda3\Lib\site-packages\werkzeug\serving.py", line 819 in serve_forever
+  File "C:\Users\ramzy\anaconda3\Lib\site-packages\werkzeug\serving.py", line 1125 in run_simple
+  File "C:\Users\ramzy\anaconda3\Lib\site-packages\flask\app.py", line 662 in run
+  File "C:\Users\ramzy\anaconda3\Lib\site-packages\dash\dash.py", line 2373 in run
+  File "<string>", line 1 in <module>

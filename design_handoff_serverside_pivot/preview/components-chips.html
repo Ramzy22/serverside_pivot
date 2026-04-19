@@ -1,0 +1,52 @@
+<!DOCTYPE html>
+<html><head><meta charset="utf-8">
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+<style>
+* { box-sizing: border-box; margin: 0; padding: 0; }
+body { font-family: 'Inter', sans-serif; background: #fff; padding: 16px; }
+.title { font-size: 10px; font-weight: 700; letter-spacing: 0.06em; text-transform: uppercase; color: #94A3B8; margin-bottom: 8px; }
+.chip { background:#fff; border:1px solid #E5E7EB; border-radius:10px; padding:6px 10px; display:flex; align-items:center; justify-content:space-between; box-shadow:0 1px 2px rgba(15,23,42,0.05); font-size:13px; color:#111827; margin-bottom:6px; gap:8px; }
+.drag { color:#9CA3AF; flex-shrink:0; }
+.close-btn { color:#9CA3AF; flex-shrink:0; cursor:pointer; display:flex; }
+.drop-zone { min-height:52px; border:1px solid #F3F4F6; border-radius:10px; padding:8px; background:rgba(249,250,251,0.5); box-shadow:inset 0 1px 0 rgba(255,255,255,0.8); margin-bottom:10px; }
+.label { font-size:10px; font-weight:700; letter-spacing:0.06em; text-transform:uppercase; color:#94A3B8; margin-bottom:6px; display:flex; align-items:center; gap:6px; }
+svg { display:inline-block; }
+</style></head><body>
+
+<div class="title">Field Chips — Draggable</div>
+<div style="width:220px">
+  <div class="chip">
+    <svg width="14" height="14" viewBox="0 0 24 24" fill="#9CA3AF"><path d="M11 18c0 1.1-.9 2-2 2s-2-.9-2-2 .9-2 2-2 2 .9 2 2zm-2-8c-1.1 0-2 .9-2 2s.9 2 2 2 2-.9 2-2-.9-2-2-2zm0-6c-1.1 0-2 .9-2 2s.9 2 2 2 2-.9 2-2-.9-2-2-2zm6 4c1.1 0 2-.9 2-2s-.9-2-2-2-2 .9-2 2 .9 2 2 2zm0 2c-1.1 0-2 .9-2 2s.9 2 2 2 2-.9 2-2-.9-2-2-2zm0 6c-1.1 0-2 .9-2 2s.9 2 2 2 2-.9 2-2-.9-2-2-2z"/></svg>
+    <span style="flex:1">desk</span>
+    <svg width="14" height="14" viewBox="0 0 24 24" fill="#9CA3AF"><path d="M19 6.41L17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12z"/></svg>
+  </div>
+  <div class="chip">
+    <svg width="14" height="14" viewBox="0 0 24 24" fill="#9CA3AF"><path d="M11 18c0 1.1-.9 2-2 2s-2-.9-2-2 .9-2 2-2 2 .9 2 2zm-2-8c-1.1 0-2 .9-2 2s.9 2 2 2 2-.9 2-2-.9-2-2-2zm0-6c-1.1 0-2 .9-2 2s.9 2 2 2 2-.9 2-2-.9-2-2-2zm6 4c1.1 0 2-.9 2-2s-.9-2-2-2-2 .9-2 2 .9 2 2 2zm0 2c-1.1 0-2 .9-2 2s.9 2 2 2 2-.9 2-2-.9-2-2-2zm0 6c-1.1 0-2 .9-2 2s.9 2 2 2 2-.9 2-2-.9-2-2-2z"/></svg>
+    <span style="flex:1">strategy</span>
+    <svg width="14" height="14" viewBox="0 0 24 24" fill="#9CA3AF"><path d="M19 6.41L17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12z"/></svg>
+  </div>
+  <div class="chip" style="border-color:#4F46E5;box-shadow:0 0 0 1px #4F46E5,0 1px 2px rgba(15,23,42,0.05)">
+    <svg width="14" height="14" viewBox="0 0 24 24" fill="#9CA3AF"><path d="M11 18c0 1.1-.9 2-2 2s-2-.9-2-2 .9-2 2-2 2 .9 2 2zm-2-8c-1.1 0-2 .9-2 2s.9 2 2 2 2-.9 2-2-.9-2-2-2zm0-6c-1.1 0-2 .9-2 2s.9 2 2 2 2-.9 2-2-.9-2-2-2zm6 4c1.1 0 2-.9 2-2s-.9-2-2-2-2 .9-2 2 .9 2 2 2zm0 2c-1.1 0-2 .9-2 2s.9 2 2 2 2-.9 2-2-.9-2-2-2zm0 6c-1.1 0-2 .9-2 2s.9 2 2 2 2-.9 2-2-.9-2-2-2z"/></svg>
+    <span style="flex:1;color:#4F46E5;font-weight:500">sector (dragging)</span>
+    <svg width="14" height="14" viewBox="0 0 24 24" fill="#9CA3AF"><path d="M19 6.41L17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12z"/></svg>
+  </div>
+</div>
+
+<div class="title" style="margin-top:12px">Drop Zones</div>
+<div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;width:360px">
+  <div>
+    <div class="label"><svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor"><path d="M4 6h16v2H4zm0 5h16v2H4zm0 5h16v2H4z"/></svg>Rows</div>
+    <div class="drop-zone">
+      <div class="chip">
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="#9CA3AF"><path d="M11 18c0 1.1-.9 2-2 2s-2-.9-2-2 .9-2 2-2 2 .9 2 2zm-2-8c-1.1 0-2 .9-2 2s.9 2 2 2 2-.9 2-2-.9-2-2-2zm0-6c-1.1 0-2 .9-2 2s.9 2 2 2 2-.9 2-2-.9-2-2-2zm6 4c1.1 0 2-.9 2-2s-.9-2-2-2-2 .9-2 2 .9 2 2 2zm0 2c-1.1 0-2 .9-2 2s.9 2 2 2 2-.9 2-2-.9-2-2-2zm0 6c-1.1 0-2 .9-2 2s.9 2 2 2 2-.9 2-2-.9-2-2-2z"/></svg>
+        <span style="flex:1;font-size:12px">instrument</span>
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="#9CA3AF"><path d="M19 6.41L17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12z"/></svg>
+      </div>
+    </div>
+  </div>
+  <div>
+    <div class="label"><svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor"><path d="M10 18h5V5h-5v13zm-6 0h5V5H4v13zM16 5v13h4V5h-4z"/></svg>Columns</div>
+    <div class="drop-zone" style="min-height:52px;display:flex;align-items:center;justify-content:center;color:#D1D5DB;font-size:11px">Drop fields here</div>
+  </div>
+</div>
+</body></html>

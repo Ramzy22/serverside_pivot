@@ -406,7 +406,12 @@ def test_runtime_request_state_override_is_extracted_for_all_request_kinds():
         "showRowTotals": False,
         "showColTotals": True,
         "viewMode": "report",
-        "reportDef": {"levels": [{"field": "desk"}]},
+        "reportDef": {
+            "root": {
+                "field": "desk",
+                "format": {"bold": True, "borderStyle": "solid", "borderWidth": 2},
+            }
+        },
     }
 
     assert _extract_request_state_override({"state_override": override}) is override
@@ -417,6 +422,8 @@ def test_runtime_request_state_override_is_extracted_for_all_request_kinds():
     assert _state_override_value(override, "rowFields", ["stale"], list) == ["desk", "book"]
     assert _state_override_value(override, "expanded", {}, (dict, bool)) is True
     assert _state_override_value(override, "showRowTotals", True, bool) is False
+    restored_report = _state_override_value(override, "reportDef", {}, dict)
+    assert restored_report["root"]["format"]["borderStyle"] == "solid"
     assert _state_override_value(override, "missing", "fallback", str) == "fallback"
     assert _state_override_value(override, "rowFields", "fallback", dict) == "fallback"
 

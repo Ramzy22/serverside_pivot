@@ -1,309 +1,1015 @@
-import React, { useState, useCallback, useMemo } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import Icons from '../../utils/Icons';
 import { formatAggLabel, formatDisplayLabel } from '../../utils/helpers';
+import { formatCustomAwareFieldLabel } from '../../hooks/usePivotNormalization';
 
-// ─── IDs ──────────────────────────────────────────────────────────────────────
 const uid = () => `r${Date.now().toString(36)}${Math.random().toString(36).slice(2, 6)}`;
 
-// ─── Operators ────────────────────────────────────────────────────────────────
 const OPERATORS = [
-    { value: 'eq',          label: '= equals' },
-    { value: 'not_eq',      label: '≠ not equals' },
-    { value: 'in',          label: '∈ in list' },
-    { value: 'not_in',      label: '∉ not in list' },
-    { value: 'contains',    label: '~ contains' },
-    { value: 'not_contains',label: '!~ not contains' },
-    { value: 'gt',          label: '> greater than' },
-    { value: 'gte',         label: '≥ greater or equal' },
-    { value: 'lt',          label: '< less than' },
-    { value: 'lte',         label: '≤ less or equal' },
+    { value: 'eq', label: 'Equals' },
+    { value: 'not_eq', label: 'Not equals' },
+    { value: 'in', label: 'In list' },
+    { value: 'not_in', label: 'Not in list' },
+    { value: 'contains', label: 'Contains' },
+    { value: 'not_contains', label: 'Does not contain' },
+    { value: 'gt', label: 'Greater than' },
+    { value: 'gte', label: 'Greater or equal' },
+    { value: 'lt', label: 'Less than' },
+    { value: 'lte', label: 'Less or equal' },
 ];
+
 const LIST_OPS = new Set(['in', 'not_in']);
-const OP_SYMBOL = { eq:'=', not_eq:'≠', in:'∈', not_in:'∉', contains:'~', not_contains:'!~', gt:'>', gte:'≥', lt:'<', lte:'≤' };
+const OP_SYMBOL = {
+    eq: '=',
+    not_eq: '!=',
+    in: 'in',
+    not_in: 'not in',
+    contains: 'contains',
+    not_contains: 'not contains',
+    gt: '>',
+    gte: '>=',
+    lt: '<',
+    lte: '<=',
+};
 
 const REPORT_META = new Set([
-    'depth','_id','_path','_levelLabel','_levelField','_pathFields',
-    '_has_children','_is_expanded','__col_schema',
+    'depth',
+    '_id',
+    '_path',
+    '_levelLabel',
+    '_levelField',
+    '_pathFields',
+    '_has_children',
+    '_is_expanded',
+    '__col_schema',
 ]);
 
-// ─── Constructors ─────────────────────────────────────────────────────────────
-const createClause  = (field = '') => ({ _id: uid(), field, operator: 'eq', value: '', values: [] });
-const createCondition = ()         => ({ op: 'AND', clauses: [] });
-const createBranch  = ()           => ({ _id: uid(), label: '', condition: createCondition(), child: null });
-const createNode    = (field = '') => ({
-    _id: uid(), field, label: '', topN: null,
-    sortBy: null, sortDir: 'desc', defaultChild: null, branches: [],
+const DEFAULT_SEGMENT = 'default';
+const BRANCH_PREFIX = 'branch:';
+const BORDER_STYLES = ['', 'solid', 'dashed', 'dotted', 'double'];
+
+const DEFAULT_REPORT_FORMAT = {
+    indent: '',
+    bold: false,
+    showSubtotal: true,
+    rowColor: '',
+    labelPrefix: '',
+    labelSuffix: '',
+    numberFormat: '',
+    borderStyle: '',
+    borderColor: '',
+    borderWidth: '',
+};
+
+const createClause = (field = '') => ({ _id: uid(), field, operator: 'eq', value: '', values: [] });
+const createCondition = () => ({ op: 'AND', clauses: [] });
+const createBranch = () => ({ _id: uid(), label: '', condition: createCondition(), child: null });
+const normalizeReportFormat = (format = {}) => {
+    const source = format && typeof format === 'object' ? format : {};
+    const indent = Number(source.indent);
+    const borderWidth = Number(source.borderWidth);
+    const borderStyle = typeof source.borderStyle === 'string' && BORDER_STYLES.includes(source.borderStyle)
+        ? source.borderStyle
+        : '';
+    return {
+        indent: Number.isFinite(indent) && indent >= 0 ? Math.floor(indent) : '',
+        bold: source.bold === true,
+        showSubtotal: source.showSubtotal === false ? false : true,
+        rowColor: typeof source.rowColor === 'string' ? source.rowColor : '',
+        labelPrefix: typeof source.labelPrefix === 'string' ? source.labelPrefix : '',
+        labelSuffix: typeof source.labelSuffix === 'string' ? source.labelSuffix : '',
+        numberFormat: typeof source.numberFormat === 'string' ? source.numberFormat : '',
+        borderStyle,
+        borderColor: typeof source.borderColor === 'string' ? source.borderColor : '',
+        borderWidth: Number.isFinite(borderWidth) && borderWidth > 0 ? Math.floor(borderWidth) : '',
+    };
+};
+const createNode = (field = '') => ({
+    _id: uid(),
+    field,
+    label: '',
+    topN: null,
+    sortBy: null,
+    sortDir: 'desc',
+    filters: null,
+    format: normalizeReportFormat(),
+    defaultChild: null,
+    branches: [],
 });
 
-// ─── Normalize ────────────────────────────────────────────────────────────────
-const normalizeClause = (c) => {
-    if (!c || typeof c.field !== 'string' || !c.field) return null;
+const normalizeClause = (clause) => {
+    if (!clause || typeof clause.field !== 'string' || !clause.field) return null;
     return {
-        _id: typeof c._id === 'string' ? c._id : uid(),
-        field: c.field,
-        operator: OPERATORS.find(o => o.value === c.operator) ? c.operator : 'eq',
-        value: (c.value !== undefined && c.value !== null) ? String(c.value) : '',
-        values: Array.isArray(c.values) ? c.values.map(String).filter(Boolean) : [],
+        _id: typeof clause._id === 'string' ? clause._id : uid(),
+        field: clause.field,
+        operator: OPERATORS.some((operator) => operator.value === clause.operator) ? clause.operator : 'eq',
+        value: clause.value !== undefined && clause.value !== null ? String(clause.value) : '',
+        values: Array.isArray(clause.values) ? clause.values.map(String).filter(Boolean) : [],
     };
 };
 
-const normalizeCondition = (c) => ({
-    op: c && c.op === 'OR' ? 'OR' : 'AND',
-    clauses: Array.isArray(c && c.clauses) ? c.clauses.map(normalizeClause).filter(Boolean) : [],
+const normalizeCondition = (condition) => ({
+    op: condition && condition.op === 'OR' ? 'OR' : 'AND',
+    clauses: Array.isArray(condition && condition.clauses)
+        ? condition.clauses.map(normalizeClause).filter(Boolean)
+        : [],
 });
 
-const normalizeBranch = (b) => {
-    if (!b || typeof b !== 'object') return null;
+const normalizeBranch = (branch) => {
+    if (!branch || typeof branch !== 'object') return null;
     return {
-        _id: typeof b._id === 'string' ? b._id : uid(),
-        label: typeof b.label === 'string' ? b.label : '',
-        condition: normalizeCondition(b.condition),
-        // eslint-disable-next-line no-use-before-define
-        child: b.child ? normalizeNode(b.child) : null,
+        _id: typeof branch._id === 'string' ? branch._id : uid(),
+        label: typeof branch.label === 'string' ? branch.label : '',
+        condition: normalizeCondition(branch.condition),
+        sourceRowPath: Array.isArray(branch.sourceRowPath) ? branch.sourceRowPath.map(String).filter(Boolean) : [],
+        sourcePathFields: Array.isArray(branch.sourcePathFields) ? branch.sourcePathFields.map(String).filter(Boolean) : [],
+        child: branch.child ? normalizeNode(branch.child) : null,
     };
 };
 
-function normalizeNode(n) {
-    if (!n || typeof n !== 'object') return null;
+function normalizeNode(node) {
+    if (!node || typeof node !== 'object') return null;
 
-    // Migration: old childrenByValue dict → branches array
-    let branches = Array.isArray(n.branches) ? n.branches.map(normalizeBranch).filter(Boolean) : [];
-    if (branches.length === 0 && n.childrenByValue && typeof n.childrenByValue === 'object') {
-        branches = Object.entries(n.childrenByValue)
+    let branches = Array.isArray(node.branches) ? node.branches.map(normalizeBranch).filter(Boolean) : [];
+    if (branches.length === 0 && node.childrenByValue && typeof node.childrenByValue === 'object') {
+        branches = Object.entries(node.childrenByValue)
             .filter(([key]) => key)
             .map(([key, child]) => normalizeBranch({
                 label: key,
-                condition: { op: 'AND', clauses: [{ field: n.field || '', operator: 'eq', value: key, values: [] }] },
+                condition: { op: 'AND', clauses: [{ field: node.field || '', operator: 'eq', value: key, values: [] }] },
                 child,
             }))
             .filter(Boolean);
     }
 
+    const rawFilters = node.filters && typeof node.filters === 'object' ? normalizeCondition(node.filters) : null;
     return {
-        _id: typeof n._id === 'string' ? n._id : uid(),
-        field: typeof n.field === 'string' ? n.field : '',
-        label: typeof n.label === 'string' ? n.label : '',
-        topN: Number.isFinite(Number(n.topN)) && Number(n.topN) > 0 ? Math.floor(Number(n.topN)) : null,
-        sortBy: typeof n.sortBy === 'string' && n.sortBy.trim() ? n.sortBy.trim() : null,
-        sortDir: n.sortDir === 'asc' ? 'asc' : 'desc',
-        defaultChild: n.defaultChild ? normalizeNode(n.defaultChild) : null,
+        _id: typeof node._id === 'string' ? node._id : uid(),
+        field: typeof node.field === 'string' ? node.field : '',
+        label: typeof node.label === 'string' ? node.label : '',
+        topN: Number.isFinite(Number(node.topN)) && Number(node.topN) > 0 ? Math.floor(Number(node.topN)) : null,
+        sortBy: typeof node.sortBy === 'string' && node.sortBy.trim() ? node.sortBy.trim() : null,
+        sortDir: node.sortDir === 'asc' ? 'asc' : 'desc',
+        filters: rawFilters && rawFilters.clauses.length > 0 ? rawFilters : null,
+        format: normalizeReportFormat(node.format),
+        defaultChild: node.defaultChild ? normalizeNode(node.defaultChild) : null,
         branches,
     };
 }
 
-// ─── Field helpers ────────────────────────────────────────────────────────────
+const createBranchSegment = (index) => `${BRANCH_PREFIX}${index}`;
+
+const parseBranchIndex = (segment) => {
+    if (typeof segment !== 'string' || !segment.startsWith(BRANCH_PREFIX)) return -1;
+    const value = parseInt(segment.slice(BRANCH_PREFIX.length), 10);
+    return Number.isFinite(value) ? value : -1;
+};
+
 const getSelectableFields = (availableFields, valConfigs) => {
     const aggIds = new Set(
-        (valConfigs || []).filter(c => c && c.field && c.agg)
-            .map(c => c.agg === 'formula' ? c.field : `${c.field}_${c.agg}`)
+        (valConfigs || [])
+            .filter((config) => config && config.field && config.agg)
+            .map((config) => (config.agg === 'formula' ? config.field : `${config.field}_${config.agg}`))
     );
-    return (availableFields || []).filter(f =>
-        f && typeof f === 'string' && !REPORT_META.has(f) && !f.startsWith('_') && !aggIds.has(f)
-    );
+
+    return (availableFields || []).filter((field) => (
+        field &&
+        typeof field === 'string' &&
+        !REPORT_META.has(field) &&
+        !field.startsWith('_') &&
+        !aggIds.has(field)
+    ));
 };
 
 const buildSortOptions = (valConfigs) => {
-    const opts = [{ value: '', label: '(default)' }];
-    (valConfigs || []).forEach(cfg => {
-        if (!cfg || !cfg.field || !cfg.agg) return;
-        const value = cfg.agg === 'formula' ? cfg.field : `${cfg.field}_${cfg.agg}`;
-        const label = cfg.agg === 'formula'
-            ? (cfg.label || formatDisplayLabel(cfg.field))
-            : `${formatDisplayLabel(cfg.field)} (${formatAggLabel(cfg.agg, cfg.weightField)})`;
-        opts.push({ value, label });
+    const options = [{ value: '', label: '(default)' }];
+    (valConfigs || []).forEach((config) => {
+        if (!config || !config.field || !config.agg) return;
+        const value = config.agg === 'formula' ? config.field : `${config.field}_${config.agg}`;
+        const label = config.agg === 'formula'
+            ? (config.label || formatDisplayLabel(config.field))
+            : `${formatDisplayLabel(config.field)} (${formatAggLabel(config.agg, config.weightField)})`;
+        options.push({ value, label });
     });
-    return opts;
+    return options;
 };
 
-// ─── Condition summary ────────────────────────────────────────────────────────
 const formatConditionSummary = (condition) => {
-    if (!condition || !condition.clauses || condition.clauses.length === 0) return 'No filter (default)';
-    const parts = condition.clauses.map(c => {
-        const field = formatDisplayLabel(c.field);
-        const op = OP_SYMBOL[c.operator] || c.operator;
-        if (LIST_OPS.has(c.operator)) {
-            const shown = c.values.slice(0, 3);
-            const extra = c.values.length > 3 ? ` +${c.values.length - 3}` : '';
-            return `${field} ${op} [${shown.join(', ')}${extra}]`;
+    if (!condition || !condition.clauses || condition.clauses.length === 0) return 'No filter';
+
+    return condition.clauses.map((clause) => {
+        const field = formatDisplayLabel(clause.field);
+        const operator = OP_SYMBOL[clause.operator] || clause.operator;
+        if (LIST_OPS.has(clause.operator)) {
+            const shown = clause.values.slice(0, 3);
+            const extra = clause.values.length > 3 ? ` +${clause.values.length - 3}` : '';
+            return `${field} ${operator} [${shown.join(', ')}${extra}]`;
         }
-        return `${field} ${op} ${c.value || '…'}`;
-    });
-    return parts.join(` ${condition.op} `);
+        return `${field} ${operator} ${clause.value || '...'}`;
+    }).join(` ${condition.op} `);
 };
 
-// ─── Shared style helpers ─────────────────────────────────────────────────────
+const getSortOptionLabel = (value, sortByOptions) => {
+    if (!value) return '';
+    const option = (sortByOptions || []).find((item) => item.value === value);
+    return option ? option.label : formatDisplayLabel(value);
+};
+
+const getNodeHeaderLabel = (node) => {
+    if (!node) return 'Select field';
+    return node.label && node.label.trim() ? node.label.trim() : (node.field ? formatDisplayLabel(node.field) : 'Select field');
+};
+
+const isClauseComplete = (clause) => {
+    if (!clause || !clause.field) return false;
+    if (LIST_OPS.has(clause.operator)) return Array.isArray(clause.values) && clause.values.length > 0;
+    return clause.value !== undefined && clause.value !== null && String(clause.value).trim() !== '';
+};
+
+const conditionHasCompleteClauses = (condition) => (
+    Boolean(condition && Array.isArray(condition.clauses) && condition.clauses.length > 0)
+    && condition.clauses.every(isClauseComplete)
+);
+
+const evaluateConditionClause = (clause, row) => {
+    if (!clause || !row || typeof row !== 'object') return false;
+    const rawValue = row[clause.field];
+    const value = rawValue === undefined || rawValue === null ? '' : String(rawValue);
+    const clauseValue = clause.value === undefined || clause.value === null ? '' : String(clause.value);
+    const values = Array.isArray(clause.values) ? clause.values.map(String) : [];
+    const numberValue = Number(value);
+    const numberClauseValue = Number(clauseValue);
+
+    switch (clause.operator) {
+    case 'not_eq':
+        return value !== clauseValue;
+    case 'in':
+        return values.includes(value);
+    case 'not_in':
+        return !values.includes(value);
+    case 'contains':
+        return value.toLowerCase().includes(clauseValue.toLowerCase());
+    case 'not_contains':
+        return !value.toLowerCase().includes(clauseValue.toLowerCase());
+    case 'gt':
+        return Number.isFinite(numberValue) && Number.isFinite(numberClauseValue) && numberValue > numberClauseValue;
+    case 'gte':
+        return Number.isFinite(numberValue) && Number.isFinite(numberClauseValue) && numberValue >= numberClauseValue;
+    case 'lt':
+        return Number.isFinite(numberValue) && Number.isFinite(numberClauseValue) && numberValue < numberClauseValue;
+    case 'lte':
+        return Number.isFinite(numberValue) && Number.isFinite(numberClauseValue) && numberValue <= numberClauseValue;
+    case 'eq':
+    default:
+        return value === clauseValue;
+    }
+};
+
+const conditionMatchesAnyRow = (condition, data) => {
+    if (!conditionHasCompleteClauses(condition) || !Array.isArray(data) || data.length === 0) return true;
+    const usableRows = data.filter((row) => row && typeof row === 'object' && !row._isTotal && !row._isOther);
+    const conditionFieldsAreLoaded = usableRows.some((row) => (
+        condition.clauses.every((clause) => Object.prototype.hasOwnProperty.call(row, clause.field))
+    ));
+    if (!conditionFieldsAreLoaded) return true;
+    return usableRows.some((row) => {
+        if (condition.op === 'OR') return condition.clauses.some((clause) => evaluateConditionClause(clause, row));
+        return condition.clauses.every((clause) => evaluateConditionClause(clause, row));
+    });
+};
+
+const rowPathExistsInData = (sourceRowPath, data) => {
+    if (!Array.isArray(sourceRowPath) || sourceRowPath.length === 0 || !Array.isArray(data) || data.length === 0) return true;
+    const serialized = sourceRowPath.map(String).join('|||');
+    return data.some((row) => row && typeof row === 'object' && row._path === serialized);
+};
+
+const validateReportDefinition = (root, {
+    allFields = [],
+    valConfigs = [],
+    data = [],
+} = {}) => {
+    const errors = [];
+    const warnings = [];
+    const hasMeasure = (valConfigs || []).some((config) => config && config.field && config.agg);
+    const knownFields = new Set(Array.isArray(allFields) ? allFields : []);
+    const headerMap = new Map();
+    const reportRows = Array.isArray(data) ? data : [];
+
+    const pushDuplicateHeader = (header, pathLabel) => {
+        const key = header.trim().toLowerCase();
+        if (!key) return;
+        if (headerMap.has(key)) {
+            errors.push(`Duplicate header "${header}" at ${pathLabel}; already used at ${headerMap.get(key)}.`);
+            return;
+        }
+        headerMap.set(key, pathLabel);
+    };
+
+    const validateNode = (node, pathLabel, stack = new Set()) => {
+        if (!node) return;
+        const nodeId = node._id || `${pathLabel}:${node.field || ''}`;
+        if (stack.has(nodeId)) {
+            errors.push(`Circular row override detected at ${pathLabel}.`);
+            return;
+        }
+        const nextStack = new Set(stack);
+        nextStack.add(nodeId);
+
+        if (!node.field) {
+            errors.push(`Missing field at ${pathLabel}.`);
+        } else if (knownFields.size > 0 && !knownFields.has(node.field)) {
+            errors.push(`Field "${formatDisplayLabel(node.field)}" at ${pathLabel} is no longer available.`);
+        }
+
+        pushDuplicateHeader(getNodeHeaderLabel(node), pathLabel);
+
+        if (node.topN && !hasMeasure) {
+            errors.push(`Top-N at ${pathLabel} needs at least one measure selected.`);
+        }
+
+        if (node.filters && !conditionHasCompleteClauses(node.filters)) {
+            errors.push(`Level filter at ${pathLabel} has incomplete rules.`);
+        } else if (node.filters && !conditionMatchesAnyRow(node.filters, reportRows)) {
+            errors.push(`Level filter at ${pathLabel} does not match any loaded rows.`);
+        }
+
+        if (node.defaultChild) validateNode(node.defaultChild, `${pathLabel} > Default children`, nextStack);
+
+        (node.branches || []).forEach((branch, index) => {
+            const branchLabel = branch.label && branch.label.trim() ? branch.label.trim() : `Row override ${index + 1}`;
+            const branchPathLabel = `${pathLabel} > ${branchLabel}`;
+            if (!conditionHasCompleteClauses(branch.condition)) {
+                errors.push(`Row override "${branchLabel}" needs a complete row rule.`);
+            } else if (!conditionMatchesAnyRow(branch.condition, reportRows)) {
+                errors.push(`Row override "${branchLabel}" does not match any loaded rows.`);
+            }
+            if (
+                Array.isArray(branch.sourcePathFields)
+                && branch.sourcePathFields.length > 0
+                && branch.sourcePathFields[branch.sourcePathFields.length - 1] !== node.field
+            ) {
+                errors.push(`Row override "${branchLabel}" was created for another level and no longer points to this row path.`);
+            }
+            if (!rowPathExistsInData(branch.sourceRowPath, reportRows)) {
+                warnings.push(`Row override "${branchLabel}" points to a row path that is not in the current loaded rows.`);
+            }
+            if (branch.child) validateNode(branch.child, `${branchPathLabel} > Custom children`, nextStack);
+            if (!branch.child) {
+                warnings.push(`Row override "${branchLabel}" has no Custom children; it only renames the matching row.`);
+            }
+        });
+    };
+
+    if (!root) {
+        errors.push('Report needs at least Level 1.');
+    } else {
+        validateNode(root, 'Level 1');
+    }
+
+    return { errors, warnings, valid: errors.length === 0 };
+};
+
+const getNodeTitle = (item) => {
+    if (!item || !item.branchBadge) return `Level ${item ? item.levelNumber : 1}`;
+    if (item.branchDepth === 0) return `Override children ${item.branchBadge}`;
+    return `Override child level ${item.branchBadge}.${item.branchDepth + 1}`;
+};
+
+const getNodeAtPath = (root, path) => {
+    let current = root;
+    for (let index = 0; current && index < path.length; index += 1) {
+        const segment = path[index];
+        if (segment === DEFAULT_SEGMENT) {
+            current = current.defaultChild || null;
+        } else {
+            const branchIndex = parseBranchIndex(segment);
+            current = branchIndex >= 0 && current.branches[branchIndex] ? current.branches[branchIndex].child : null;
+        }
+    }
+    return current || null;
+};
+
+const getBranchAtPath = (root, nodePath, branchIndex) => {
+    const node = getNodeAtPath(root, nodePath);
+    return node && node.branches[branchIndex] ? node.branches[branchIndex] : null;
+};
+
+const updateNodeAtPath = (root, path, updater) => {
+    if (!root) return root;
+
+    const visit = (current, depth) => {
+        if (!current) return current;
+        if (depth >= path.length) return normalizeNode(updater(current));
+
+        const segment = path[depth];
+        if (segment === DEFAULT_SEGMENT) {
+            return normalizeNode({
+                ...current,
+                defaultChild: visit(current.defaultChild, depth + 1),
+            });
+        }
+
+        const branchIndex = parseBranchIndex(segment);
+        if (branchIndex < 0 || branchIndex >= current.branches.length) return current;
+
+        return normalizeNode({
+            ...current,
+            branches: current.branches.map((branch, index) => (
+                index === branchIndex
+                    ? { ...branch, child: visit(branch.child, depth + 1) }
+                    : branch
+            )),
+        });
+    };
+
+    return visit(root, 0);
+};
+
+const updateBranchAtPath = (root, nodePath, branchIndex, updater) => {
+    if (!root) return root;
+    return updateNodeAtPath(root, nodePath, (node) => {
+        if (branchIndex < 0 || branchIndex >= node.branches.length) return node;
+        return {
+            ...node,
+            branches: node.branches.map((branch, index) => (
+                index === branchIndex ? normalizeBranch(updater(branch)) : branch
+            )),
+        };
+    });
+};
+
+const buildOutlineItems = (root) => {
+    if (!root) return [];
+
+    const items = [];
+    const visitNode = (node, meta) => {
+        if (!node) return;
+
+        items.push({
+            kind: 'node',
+            node,
+            nodePath: meta.nodePath,
+            depth: meta.depth,
+            levelNumber: meta.levelNumber,
+            branchBadge: meta.branchBadge,
+            branchDepth: meta.branchDepth,
+        });
+
+        node.branches.forEach((branch, index) => {
+            const badge = `${meta.levelNumber}.${index + 1}`;
+            items.push({
+                kind: 'branch',
+                branch,
+                nodePath: meta.nodePath,
+                branchIndex: index,
+                depth: meta.depth + 1,
+                badge,
+            });
+
+            if (branch.child) {
+                visitNode(branch.child, {
+                    nodePath: [...meta.nodePath, createBranchSegment(index)],
+                    depth: meta.depth + 2,
+                    levelNumber: meta.levelNumber + 1,
+                    branchBadge: badge,
+                    branchDepth: 0,
+                });
+            }
+        });
+
+        if (node.defaultChild) {
+            visitNode(node.defaultChild, {
+                nodePath: [...meta.nodePath, DEFAULT_SEGMENT],
+                depth: meta.depth + 1,
+                levelNumber: meta.levelNumber + 1,
+                branchBadge: meta.branchBadge,
+                branchDepth: meta.branchBadge ? meta.branchDepth + 1 : 0,
+            });
+        }
+    };
+
+    visitNode(root, {
+        nodePath: [],
+        depth: 0,
+        levelNumber: 1,
+        branchBadge: null,
+        branchDepth: 0,
+    });
+
+    return items;
+};
+
+const pathKey = (path = []) => path.join('>');
+
+const isSamePath = (left = [], right = []) => pathKey(left) === pathKey(right);
+
+const normalizeRowPathValue = (value) => (
+    value === undefined || value === null ? '' : String(value)
+);
+
+const selectionKey = (selection) => {
+    if (!selection) return '';
+    if (selection.type === 'node') return `node:${pathKey(selection.path)}`;
+    if (selection.type === 'branch') return `branch:${pathKey(selection.nodePath)}:${selection.branchIndex}`;
+    if (selection.type === 'rowPath') return `rowPath:${pathKey(selection.nodePath)}:${selection.field}:${normalizeRowPathValue(selection.value)}`;
+    return '';
+};
+
+const findNodeItem = (items, path) => (
+    (items || []).find((item) => item.kind === 'node' && isSamePath(item.nodePath, path)) || null
+);
+
+const findBranchItem = (items, nodePath, branchIndex) => (
+    (items || []).find((item) => (
+        item.kind === 'branch' &&
+        isSamePath(item.nodePath, nodePath) &&
+        item.branchIndex === branchIndex
+    )) || null
+);
+
+const branchMatchesRowPath = (branch, field, value) => {
+    if (!branch || !field) return false;
+    const expected = normalizeRowPathValue(value);
+    const clauses = branch.condition && Array.isArray(branch.condition.clauses)
+        ? branch.condition.clauses
+        : [];
+    return clauses.some((clause) => {
+        if (!clause || clause.field !== field) return false;
+        if (clause.operator === 'eq' || clause.operator === '=') {
+            return normalizeRowPathValue(clause.value) === expected;
+        }
+        if (clause.operator === 'in') {
+            return Array.isArray(clause.values) && clause.values.map(normalizeRowPathValue).includes(expected);
+        }
+        return false;
+    });
+};
+
+const createRowPathBranch = (field, value, label, childField = '') => ({
+    ...createBranch(),
+    label: normalizeRowPathValue(label || value),
+    condition: {
+        op: 'AND',
+        clauses: [{
+            ...createClause(field),
+            operator: 'eq',
+            value: normalizeRowPathValue(value),
+            values: [],
+        }],
+    },
+    child: createNode(childField),
+});
+
+const cloneNode = (node) => {
+    if (!node) return null;
+    try {
+        return normalizeNode(JSON.parse(JSON.stringify(node)));
+    } catch (error) {
+        return normalizeNode(node);
+    }
+};
+
+const levelPathForIndex = (index) => (
+    Array.from({ length: Math.max(0, index) }, () => DEFAULT_SEGMENT)
+);
+
+const buildDefaultLevelItems = (root, startLevelNumber = 1, pathPrefix = []) => {
+    const items = [];
+    let current = root;
+    let index = 0;
+    let currentPath = Array.isArray(pathPrefix) ? [...pathPrefix] : [];
+    while (current) {
+        items.push({
+            node: current,
+            path: [...currentPath],
+            index,
+            levelNumber: startLevelNumber + index,
+        });
+        current = current.defaultChild || null;
+        currentPath = [...currentPath, DEFAULT_SEGMENT];
+        index += 1;
+    }
+    return items;
+};
+
+const stripDefaultChild = (node) => (
+    node ? { ...cloneNode(node), defaultChild: null } : null
+);
+
+const rebuildDefaultChain = (nodes) => {
+    if (!Array.isArray(nodes) || nodes.length === 0) return null;
+    let child = null;
+    for (let index = nodes.length - 1; index >= 0; index -= 1) {
+        child = normalizeNode({
+            ...stripDefaultChild(nodes[index]),
+            defaultChild: child,
+        });
+    }
+    return child;
+};
+
+const reorderDefaultChain = (root, fromIndex, toIndex) => {
+    const chain = buildDefaultLevelItems(root).map((item) => item.node);
+    if (
+        fromIndex < 0 ||
+        toIndex < 0 ||
+        fromIndex >= chain.length ||
+        toIndex >= chain.length ||
+        fromIndex === toIndex
+    ) {
+        return root;
+    }
+    const next = [...chain];
+    const [moved] = next.splice(fromIndex, 1);
+    next.splice(toIndex, 0, moved);
+    return rebuildDefaultChain(next);
+};
+
+const isUsableNode = (node) => Boolean(node && node.field);
+
+const pruneDraftChild = (node) => {
+    const normalized = cloneNode(node);
+    if (!normalized || !normalized.field) return null;
+    return normalized;
+};
+
+const findSelectionItem = (items, selection) => {
+    if (!selection) return null;
+    if (selection.type === 'node') return findNodeItem(items, selection.path);
+    if (selection.type === 'branch') return findBranchItem(items, selection.nodePath, selection.branchIndex);
+    return null;
+};
+
+const buildTrailItems = (items, selection) => {
+    if (!selection) return [];
+
+    const trail = [];
+    const pushNode = (path) => {
+        const item = findNodeItem(items, path);
+        if (item) trail.push(item);
+    };
+    const pushBranch = (nodePath, branchIndex) => {
+        const item = findBranchItem(items, nodePath, branchIndex);
+        if (item) trail.push(item);
+    };
+
+    const walkNodePath = (nodePath) => {
+        pushNode([]);
+        if (!Array.isArray(nodePath) || nodePath.length === 0) return;
+
+        let currentPath = [];
+        nodePath.forEach((segment) => {
+            if (segment === DEFAULT_SEGMENT) {
+                currentPath = [...currentPath, segment];
+                pushNode(currentPath);
+                return;
+            }
+
+            const branchIndex = parseBranchIndex(segment);
+            if (branchIndex >= 0) {
+                pushBranch(currentPath, branchIndex);
+                currentPath = [...currentPath, segment];
+                pushNode(currentPath);
+            }
+        });
+    };
+
+    if (selection.type === 'node') {
+        walkNodePath(selection.path);
+        return trail;
+    }
+
+    walkNodePath(selection.nodePath);
+    pushBranch(selection.nodePath, selection.branchIndex);
+    return trail;
+};
+
+const buildDirectChildItems = (items, selection) => {
+    if (!selection) return [];
+
+    if (selection.type === 'node') {
+        const children = [];
+        const defaultChild = findNodeItem(items, [...selection.path, DEFAULT_SEGMENT]);
+        if (defaultChild) children.push(defaultChild);
+
+        const branchChildren = (items || [])
+            .filter((item) => item.kind === 'branch' && isSamePath(item.nodePath, selection.path))
+            .sort((left, right) => left.branchIndex - right.branchIndex);
+
+        return [...children, ...branchChildren];
+    }
+
+    const customChildren = findNodeItem(items, [...selection.nodePath, createBranchSegment(selection.branchIndex)]);
+    return customChildren ? [customChildren] : [];
+};
+
 const inp = (theme, extra = {}) => ({
     border: `1px solid ${theme.border}`,
-    borderRadius: '8px',
-    padding: '5px 8px',
+    borderRadius: '10px',
+    padding: '8px 10px',
     fontSize: '12px',
+    lineHeight: 1.4,
     background: theme.background || '#fff',
     color: theme.text,
     outline: 'none',
+    width: '100%',
     ...extra,
 });
 
 const ghostBtn = (theme, active = false, danger = false) => ({
-    display: 'inline-flex', alignItems: 'center', gap: '4px',
-    background: danger ? '#FEF2F2' : active ? `${theme.primary || '#2563EB'}12` : theme.hover,
-    border: `1px solid ${danger ? '#FECACA' : active ? `${theme.primary || '#2563EB'}50` : theme.border}`,
-    borderRadius: '7px', padding: '4px 9px',
-    fontSize: '11px', fontWeight: 700,
-    color: danger ? '#DC2626' : active ? (theme.primary || '#2563EB') : theme.textSec,
+    display: 'inline-flex',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: '6px',
+    background: danger ? '#FEF2F2' : active ? `${theme.primary || '#2563EB'}12` : (theme.hover || '#F9FAFB'),
+    border: `1px solid ${danger ? '#FECACA' : active ? `${theme.primary || '#2563EB'}45` : theme.border}`,
+    borderRadius: '9px',
+    padding: '7px 11px',
+    fontSize: '11px',
+    fontWeight: 700,
+    color: danger ? '#B91C1C' : active ? (theme.primary || '#2563EB') : theme.textSec,
     cursor: 'pointer',
 });
 
-// ─── ConditionModal ───────────────────────────────────────────────────────────
-function ConditionModal({ condition, allFields, onSave, onClose, theme }) {
+const sectionLabelStyle = (theme) => ({
+    fontSize: '9px',
+    fontWeight: 800,
+    textTransform: 'uppercase',
+    letterSpacing: '0.08em',
+    color: theme.textSec,
+    display: 'flex',
+    alignItems: 'center',
+    gap: '6px',
+    marginBottom: '10px',
+});
+
+const panelCardStyle = (theme) => ({
+    border: `1px solid ${theme.border}`,
+    borderRadius: '14px',
+    background: theme.surfaceBg || theme.background || '#fff',
+    padding: '14px',
+    display: 'flex',
+    flexDirection: 'column',
+    gap: '12px',
+});
+
+const reportSectionStyle = (theme) => ({
+    borderTop: `2px solid ${theme.textSec || '#334155'}`,
+    paddingTop: '14px',
+    display: 'flex',
+    flexDirection: 'column',
+    gap: '12px',
+});
+
+const outlineItemStyle = (theme, selected, depth) => ({
+    width: `calc(100% - ${depth * 14}px)`,
+    marginLeft: `${depth * 14}px`,
+    border: `1px solid ${selected ? (theme.primary || '#2563EB') : theme.border}`,
+    borderRadius: '12px',
+    background: selected ? (theme.select || `${theme.primary || '#2563EB'}14`) : (theme.surfaceBg || theme.background || '#fff'),
+    padding: '12px',
+    textAlign: 'left',
+    cursor: 'pointer',
+    display: 'flex',
+    flexDirection: 'column',
+    gap: '7px',
+});
+
+function SummaryChip({ children, theme, tone = 'neutral' }) {
+    const palette = tone === 'primary'
+        ? { background: `${theme.primary || '#2563EB'}12`, border: `${theme.primary || '#2563EB'}30`, color: theme.primary || '#2563EB' }
+        : { background: theme.hover || '#F3F4F6', border: theme.border, color: theme.textSec };
+
+    return (
+        <span
+            style={{
+                display: 'inline-flex',
+                alignItems: 'center',
+                gap: '4px',
+                padding: '3px 7px',
+                borderRadius: '999px',
+                fontSize: '10px',
+                fontWeight: 700,
+                border: `1px solid ${palette.border}`,
+                background: palette.background,
+                color: palette.color,
+            }}
+        >
+            {children}
+        </span>
+    );
+}
+
+function ReportSection({
+    theme,
+    title,
+    description,
+    icon,
+    action = null,
+    sectionId,
+    children,
+}) {
+    return (
+        <section data-report-section={sectionId || title} style={reportSectionStyle(theme)}>
+            <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', gap: '12px' }}>
+                <div style={{ display: 'flex', alignItems: 'flex-start', gap: '8px', minWidth: 0 }}>
+                    <div style={{ color: theme.textSec, display: 'flex', alignItems: 'center', paddingTop: '1px', flexShrink: 0 }}>
+                        {icon}
+                    </div>
+                    <div style={{ minWidth: 0 }}>
+                        <div style={{ fontSize: '13px', fontWeight: 900, color: theme.text }}>
+                            {title}
+                        </div>
+                        {description && (
+                            <div style={{ fontSize: '11px', color: theme.textSec, lineHeight: 1.45, marginTop: '2px' }}>
+                                {description}
+                            </div>
+                        )}
+                    </div>
+                </div>
+                {action && <div style={{ flexShrink: 0 }}>{action}</div>}
+            </div>
+            <div style={{ display: 'flex', flexDirection: 'column', gap: '10px' }}>
+                {children}
+            </div>
+        </section>
+    );
+}
+
+function ConditionModal({ condition, allFields, getFieldLabel = formatDisplayLabel, onSave, onClose, theme, title, description }) {
     const [local, setLocal] = useState(() => normalizeCondition(condition));
+    const inputStyle = inp(theme);
 
     const addClause = useCallback(() => {
-        setLocal(prev => ({ ...prev, clauses: [...prev.clauses, createClause(allFields[0] || '')] }));
+        setLocal((prev) => ({ ...prev, clauses: [...prev.clauses, createClause(allFields[0] || '')] }));
     }, [allFields]);
 
-    const updateClause = useCallback((idx, patch) => {
-        setLocal(prev => ({ ...prev, clauses: prev.clauses.map((c, i) => i === idx ? { ...c, ...patch } : c) }));
+    const updateClause = useCallback((index, patch) => {
+        setLocal((prev) => ({
+            ...prev,
+            clauses: prev.clauses.map((clause, clauseIndex) => (clauseIndex === index ? { ...clause, ...patch } : clause)),
+        }));
     }, []);
 
-    const removeClause = useCallback((idx) => {
-        setLocal(prev => ({ ...prev, clauses: prev.clauses.filter((_, i) => i !== idx) }));
+    const removeClause = useCallback((index) => {
+        setLocal((prev) => ({
+            ...prev,
+            clauses: prev.clauses.filter((_, clauseIndex) => clauseIndex !== index),
+        }));
     }, []);
-
-    const inputStyle = inp(theme);
 
     return (
         <div
-            style={{ position: 'fixed', inset: 0, zIndex: 9999, background: 'rgba(0,0,0,0.40)', display: 'flex', alignItems: 'center', justifyContent: 'center' }}
+            style={{
+                position: 'fixed',
+                inset: 0,
+                zIndex: 9999,
+                background: 'rgba(15, 23, 42, 0.45)',
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'center',
+            }}
             onClick={onClose}
         >
             <div
                 style={{
-                    background: theme.surfaceBg || theme.background || '#fff',
-                    border: `1px solid ${theme.border}`,
-                    borderRadius: '16px', padding: '22px',
-                    width: '500px', maxWidth: '95vw', maxHeight: '85vh', overflowY: 'auto',
-                    boxShadow: '0 24px 64px rgba(0,0,0,0.18)',
-                    display: 'flex', flexDirection: 'column', gap: '14px',
+                    ...panelCardStyle(theme),
+                    width: '520px',
+                    maxWidth: '95vw',
+                    maxHeight: '85vh',
+                    overflowY: 'auto',
+                    boxShadow: '0 24px 64px rgba(15, 23, 42, 0.22)',
                 }}
-                onClick={e => e.stopPropagation()}
+                onClick={(event) => event.stopPropagation()}
             >
-                {/* Header */}
-                <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
-                    <div style={{ fontSize: '14px', fontWeight: 800, color: theme.text }}>Edit Condition</div>
-                    <button onClick={onClose} style={{ background: 'none', border: 'none', cursor: 'pointer', color: theme.textSec }}>
+                <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '10px' }}>
+                    <div>
+                        <div style={{ fontSize: '14px', fontWeight: 800, color: theme.text }}>{title || 'Edit row override rule'}</div>
+                        <div style={{ fontSize: '12px', color: theme.textSec, marginTop: '2px' }}>
+                            {description || 'Add one or more clauses to decide when this row override should be used.'}
+                        </div>
+                    </div>
+                    <button type="button" onClick={onClose} style={{ background: 'none', border: 'none', cursor: 'pointer', color: theme.textSec }}>
                         <Icons.Close />
                     </button>
                 </div>
 
-                {/* AND / OR toggle */}
                 {local.clauses.length > 1 && (
-                    <div style={{ display: 'flex', gap: '6px', alignItems: 'center' }}>
+                    <div style={{ display: 'flex', gap: '6px', alignItems: 'center', flexWrap: 'wrap' }}>
                         <span style={{ fontSize: '11px', color: theme.textSec, fontWeight: 700 }}>Match:</span>
-                        {['AND', 'OR'].map(op => (
+                        {['AND', 'OR'].map((operator) => (
                             <button
-                                key={op}
-                                onClick={() => setLocal(prev => ({ ...prev, op }))}
+                                key={operator}
+                                type="button"
+                                onClick={() => setLocal((prev) => ({ ...prev, op: operator }))}
                                 style={{
-                                    padding: '4px 14px', borderRadius: '20px',
-                                    fontSize: '11px', fontWeight: 800, border: 'none', cursor: 'pointer',
-                                    background: local.op === op ? (theme.primary || '#2563EB') : theme.hover,
-                                    color: local.op === op ? '#fff' : theme.textSec,
+                                    padding: '5px 12px',
+                                    borderRadius: '999px',
+                                    fontSize: '11px',
+                                    fontWeight: 800,
+                                    border: 'none',
+                                    cursor: 'pointer',
+                                    background: local.op === operator ? (theme.primary || '#2563EB') : (theme.hover || '#F3F4F6'),
+                                    color: local.op === operator ? '#fff' : theme.textSec,
                                 }}
                             >
-                                {op}
+                                {operator}
                             </button>
                         ))}
-                        <span style={{ fontSize: '11px', color: theme.textSec }}>of the following</span>
                     </div>
                 )}
 
-                {/* Clauses */}
                 <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
                     {local.clauses.length === 0 && (
-                        <div style={{ fontSize: '12px', color: theme.textSec, fontStyle: 'italic', padding: '4px 0' }}>
-                            No clauses — this branch matches all rows (acts as default).
+                        <div style={{ fontSize: '12px', color: theme.textSec, fontStyle: 'italic' }}>
+                            No clauses means this row override matches every row at this level.
                         </div>
                     )}
-                    {local.clauses.map((clause, idx) => (
+
+                    {local.clauses.map((clause, index) => (
                         <div
                             key={clause._id}
                             style={{
-                                display: 'flex', gap: '6px', alignItems: 'flex-start',
-                                padding: '10px', background: theme.hover, borderRadius: '10px',
+                                border: `1px solid ${theme.border}`,
+                                borderRadius: '12px',
+                                background: theme.hover || '#F8FAFC',
+                                padding: '10px',
+                                display: 'flex',
+                                gap: '8px',
+                                alignItems: 'flex-start',
                             }}
                         >
-                            {/* AND/OR badge (for idx > 0) */}
-                            <div style={{ width: '28px', flexShrink: 0, paddingTop: '6px', textAlign: 'center' }}>
-                                {idx > 0 && (
-                                    <span style={{ fontSize: '9px', fontWeight: 900, color: theme.primary || '#2563EB', letterSpacing: '0.04em' }}>
-                                        {local.op}
-                                    </span>
-                                )}
+                            <div style={{ width: '32px', paddingTop: '6px', textAlign: 'center', fontSize: '10px', fontWeight: 800, color: theme.textSec }}>
+                                {index > 0 ? local.op : ''}
                             </div>
 
-                            <div style={{ flex: 1, display: 'flex', flexDirection: 'column', gap: '6px' }}>
-                                {/* Field + operator */}
-                                <div style={{ display: 'flex', gap: '6px' }}>
+                            <div style={{ flex: 1, display: 'flex', flexDirection: 'column', gap: '8px' }}>
+                                <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap' }}>
                                     <select
                                         value={clause.field}
-                                        onChange={e => updateClause(idx, { field: e.target.value })}
-                                        style={{ ...inputStyle, flex: 1 }}
+                                        onChange={(event) => updateClause(index, { field: event.target.value })}
+                                        style={{ ...inputStyle, flex: 1, minWidth: '140px' }}
                                     >
-                                        {allFields.map(f => (
-                                            <option key={f} value={f}>{formatDisplayLabel(f)}</option>
+                                        {allFields.map((field) => (
+                                            <option key={field} value={field}>{getFieldLabel(field)}</option>
                                         ))}
                                     </select>
                                     <select
                                         value={clause.operator}
-                                        onChange={e => {
-                                            const next = e.target.value;
-                                            const toList = LIST_OPS.has(next);
-                                            const wasScalar = !LIST_OPS.has(clause.operator);
-                                            updateClause(idx, {
+                                        onChange={(event) => {
+                                            const next = event.target.value;
+                                            const nextIsList = LIST_OPS.has(next);
+                                            const prevIsList = LIST_OPS.has(clause.operator);
+                                            updateClause(index, {
                                                 operator: next,
-                                                values: toList ? (wasScalar && clause.value ? [clause.value] : clause.values) : clause.values,
-                                                value: !toList ? (clause.values[0] || clause.value || '') : clause.value,
+                                                values: nextIsList
+                                                    ? (prevIsList ? clause.values : (clause.value ? [clause.value] : []))
+                                                    : clause.values,
+                                                value: nextIsList
+                                                    ? clause.value
+                                                    : (clause.values[0] || clause.value || ''),
                                             });
                                         }}
-                                        style={{ ...inputStyle, flexShrink: 0 }}
+                                        style={{ ...inputStyle, width: '160px', flexShrink: 0 }}
                                     >
-                                        {OPERATORS.map(o => <option key={o.value} value={o.value}>{o.label}</option>)}
+                                        {OPERATORS.map((operator) => (
+                                            <option key={operator.value} value={operator.value}>{operator.label}</option>
+                                        ))}
                                     </select>
                                 </div>
 
-                                {/* Value input */}
                                 {LIST_OPS.has(clause.operator) ? (
-                                    <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
+                                    <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
                                         {clause.values.length > 0 && (
-                                            <div style={{ display: 'flex', flexWrap: 'wrap', gap: '4px' }}>
-                                                {clause.values.map((v, vi) => (
-                                                    <span key={vi} style={{
-                                                        display: 'inline-flex', alignItems: 'center', gap: '4px',
-                                                        background: `${theme.primary || '#2563EB'}18`,
-                                                        color: theme.primary || '#2563EB',
-                                                        borderRadius: '6px', padding: '2px 7px',
-                                                        fontSize: '11px', fontWeight: 700,
-                                                    }}>
-                                                        {v}
+                                            <div style={{ display: 'flex', flexWrap: 'wrap', gap: '6px' }}>
+                                                {clause.values.map((value, valueIndex) => (
+                                                    <SummaryChip key={`${clause._id}-${valueIndex}`} theme={theme} tone="primary">
+                                                        <span>{value}</span>
                                                         <button
-                                                            onClick={() => updateClause(idx, { values: clause.values.filter((_, i) => i !== vi) })}
-                                                            style={{ background: 'none', border: 'none', cursor: 'pointer', padding: 0, color: 'inherit', lineHeight: 1, fontSize: '13px' }}
-                                                        >×</button>
-                                                    </span>
+                                                            type="button"
+                                                            onClick={() => updateClause(index, {
+                                                                values: clause.values.filter((_, currentIndex) => currentIndex !== valueIndex),
+                                                            })}
+                                                            style={{ background: 'none', border: 'none', padding: 0, cursor: 'pointer', color: 'inherit', lineHeight: 1 }}
+                                                        >
+                                                            x
+                                                        </button>
+                                                    </SummaryChip>
                                                 ))}
                                             </div>
                                         )}
                                         <input
-                                            placeholder="Type value and press Enter to add..."
-                                            style={{ ...inputStyle, width: '100%' }}
-                                            onKeyDown={e => {
-                                                if (e.key === 'Enter' && e.target.value.trim()) {
-                                                    const v = e.target.value.trim();
-                                                    if (!clause.values.includes(v)) {
-                                                        updateClause(idx, { values: [...clause.values, v] });
+                                            placeholder="Type a value and press Enter"
+                                            style={inputStyle}
+                                            onKeyDown={(event) => {
+                                                const value = event.target.value.trim();
+                                                if (event.key === 'Enter' && value) {
+                                                    if (!clause.values.includes(value)) {
+                                                        updateClause(index, { values: [...clause.values, value] });
                                                     }
-                                                    e.target.value = '';
-                                                    e.preventDefault();
+                                                    event.target.value = '';
+                                                    event.preventDefault();
                                                 }
                                             }}
                                         />
@@ -311,16 +1017,17 @@ function ConditionModal({ condition, allFields, onSave, onClose, theme }) {
                                 ) : (
                                     <input
                                         value={clause.value}
-                                        onChange={e => updateClause(idx, { value: e.target.value })}
-                                        placeholder="Value..."
-                                        style={{ ...inputStyle, width: '100%' }}
+                                        onChange={(event) => updateClause(index, { value: event.target.value })}
+                                        placeholder="Value"
+                                        style={inputStyle}
                                     />
                                 )}
                             </div>
 
                             <button
-                                onClick={() => removeClause(idx)}
-                                style={{ background: 'none', border: 'none', cursor: 'pointer', color: '#DC2626', padding: '4px', flexShrink: 0 }}
+                                type="button"
+                                onClick={() => removeClause(index)}
+                                style={{ background: 'none', border: 'none', cursor: 'pointer', color: '#B91C1C', padding: '6px' }}
                             >
                                 <Icons.Delete />
                             </button>
@@ -328,27 +1035,37 @@ function ConditionModal({ condition, allFields, onSave, onClose, theme }) {
                     ))}
                 </div>
 
-                {/* Add clause */}
                 <button
+                    type="button"
                     onClick={addClause}
                     style={{
-                        ...ghostBtn(theme), width: '100%', justifyContent: 'center',
-                        border: `1px dashed ${theme.border}`,
+                        ...ghostBtn(theme),
+                        width: '100%',
+                        borderStyle: 'dashed',
                     }}
                 >
                     <Icons.Add /> Add clause
                 </button>
 
-                {/* Footer */}
-                <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '8px', borderTop: `1px solid ${theme.border}`, paddingTop: '14px' }}>
-                    <button onClick={onClose} style={{ ...inp(theme), cursor: 'pointer', fontWeight: 700 }}>
+                <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '8px', borderTop: `1px solid ${theme.border}`, paddingTop: '12px' }}>
+                    <button type="button" onClick={onClose} style={ghostBtn(theme)}>
                         Cancel
                     </button>
                     <button
-                        onClick={() => { onSave(local); onClose(); }}
+                        type="button"
+                        onClick={() => {
+                            onSave(local);
+                            onClose();
+                        }}
                         style={{
-                            background: theme.primary || '#2563EB', border: 'none', borderRadius: '8px',
-                            padding: '7px 18px', fontSize: '12px', fontWeight: 800, color: '#fff', cursor: 'pointer',
+                            background: theme.primary || '#2563EB',
+                            border: 'none',
+                            borderRadius: '9px',
+                            padding: '8px 14px',
+                            fontSize: '12px',
+                            fontWeight: 800,
+                            color: '#fff',
+                            cursor: 'pointer',
                         }}
                     >
                         Apply
@@ -359,354 +1076,1290 @@ function ConditionModal({ condition, allFields, onSave, onClose, theme }) {
     );
 }
 
-// ─── Branch Row ───────────────────────────────────────────────────────────────
-function BranchRow({ branch, depth, stepCounter, allFields, sortByOptions, theme, onUpdate, onRemove }) {
-    const [editingCond, setEditingCond] = useState(false);
-    const [pathOpen, setPathOpen] = useState(branch.child !== null);
-    const hasCustomPath = branch.child !== null;
-    const summary = formatConditionSummary(branch.condition);
-    const primary = theme.primary || '#2563EB';
-
-    const open = pathOpen || hasCustomPath;
+function ReportFormatEditor({ value, onChange, theme }) {
+    const format = normalizeReportFormat(value);
+    const inputStyle = inp(theme);
+    const updateFormat = (patch) => onChange(normalizeReportFormat({ ...format, ...patch }));
 
     return (
-        <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
-            {/* Branch header */}
-            <div style={{ display: 'flex', alignItems: 'center', gap: '6px', flexWrap: 'wrap' }}>
-                {/* Condition badge */}
-                <button
-                    onClick={() => setEditingCond(true)}
-                    title={summary}
-                    style={{
-                        display: 'inline-flex', alignItems: 'center', gap: '5px',
-                        background: `${primary}12`, border: `1px solid ${primary}35`,
-                        borderRadius: '7px', padding: '4px 9px',
-                        fontSize: '11px', fontWeight: 700, color: primary, cursor: 'pointer',
-                        maxWidth: '220px', overflow: 'hidden', whiteSpace: 'nowrap', textOverflow: 'ellipsis',
-                    }}
-                >
-                    <Icons.Filter />
-                    <span style={{ overflow: 'hidden', textOverflow: 'ellipsis' }}>{summary}</span>
-                </button>
-
-                <span style={{ fontSize: '12px', color: theme.textSec }}>→</span>
-
-                {/* Display-as label */}
-                <input
-                    value={branch.label}
-                    onChange={e => onUpdate({ ...branch, label: e.target.value })}
-                    placeholder="Display as..."
-                    title="Rename: how matching rows appear in the report"
-                    style={{ ...inp(theme), width: '110px' }}
-                />
-
-                {/* Custom path toggle */}
-                <button
-                    onClick={() => setPathOpen(o => !o)}
-                    style={ghostBtn(theme, hasCustomPath)}
-                    title="Define a custom sub-path for rows matching this condition"
-                >
-                    {hasCustomPath ? 'Custom path ▾' : 'Custom path?'}
-                </button>
-
-                {/* Remove branch */}
-                <button onClick={onRemove} style={{ background: 'none', border: 'none', cursor: 'pointer', color: '#DC2626', padding: '2px' }}>
-                    <Icons.Delete />
-                </button>
+        <div style={{ display: 'flex', flexDirection: 'column', gap: '10px' }}>
+            <div style={sectionLabelStyle(theme)}>Presentation</div>
+            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '8px' }}>
+                <label style={{ display: 'flex', flexDirection: 'column', gap: '5px', fontSize: '11px', color: theme.textSec }}>
+                    Indent px
+                    <input type="number" min="0" value={format.indent} onChange={(event) => updateFormat({ indent: event.target.value })} placeholder="Auto" style={inputStyle} />
+                </label>
+                <label style={{ display: 'flex', flexDirection: 'column', gap: '5px', fontSize: '11px', color: theme.textSec }}>
+                    Row color
+                    <input value={format.rowColor} onChange={(event) => updateFormat({ rowColor: event.target.value })} placeholder="#F8FAFC" style={inputStyle} />
+                </label>
+                <label style={{ display: 'flex', flexDirection: 'column', gap: '5px', fontSize: '11px', color: theme.textSec }}>
+                    Label prefix
+                    <input value={format.labelPrefix} onChange={(event) => updateFormat({ labelPrefix: event.target.value })} placeholder="Optional" style={inputStyle} />
+                </label>
+                <label style={{ display: 'flex', flexDirection: 'column', gap: '5px', fontSize: '11px', color: theme.textSec }}>
+                    Label suffix
+                    <input value={format.labelSuffix} onChange={(event) => updateFormat({ labelSuffix: event.target.value })} placeholder="Optional" style={inputStyle} />
+                </label>
+                <label style={{ display: 'flex', flexDirection: 'column', gap: '5px', fontSize: '11px', color: theme.textSec, gridColumn: '1 / -1' }}>
+                    Number format override
+                    <input value={format.numberFormat} onChange={(event) => updateFormat({ numberFormat: event.target.value })} placeholder="fixed:2, percent, currency:$" style={inputStyle} />
+                </label>
             </div>
+            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: '8px' }}>
+                <label style={{ display: 'flex', flexDirection: 'column', gap: '5px', fontSize: '11px', color: theme.textSec }}>
+                    Border
+                    <select value={format.borderStyle} onChange={(event) => updateFormat({ borderStyle: event.target.value })} style={inputStyle}>
+                        {BORDER_STYLES.map((style) => (
+                            <option key={style || 'none'} value={style}>{style || 'None'}</option>
+                        ))}
+                    </select>
+                </label>
+                <label style={{ display: 'flex', flexDirection: 'column', gap: '5px', fontSize: '11px', color: theme.textSec }}>
+                    Border color
+                    <input value={format.borderColor} onChange={(event) => updateFormat({ borderColor: event.target.value })} placeholder="#CBD5E1" style={inputStyle} />
+                </label>
+                <label style={{ display: 'flex', flexDirection: 'column', gap: '5px', fontSize: '11px', color: theme.textSec }}>
+                    Width
+                    <input type="number" min="1" value={format.borderWidth} onChange={(event) => updateFormat({ borderWidth: event.target.value })} placeholder="1" style={inputStyle} />
+                </label>
+            </div>
+            <div style={{ display: 'flex', gap: '14px', flexWrap: 'wrap' }}>
+                <label style={{ display: 'inline-flex', alignItems: 'center', gap: '7px', fontSize: '12px', color: theme.text, fontWeight: 700 }}>
+                    <input type="checkbox" checked={format.bold} onChange={(event) => updateFormat({ bold: event.target.checked })} />
+                    Bold row
+                </label>
+                <label style={{ display: 'inline-flex', alignItems: 'center', gap: '7px', fontSize: '12px', color: theme.text, fontWeight: 700 }}>
+                    <input type="checkbox" checked={format.showSubtotal} onChange={(event) => updateFormat({ showSubtotal: event.target.checked })} />
+                    Show subtotal/other rows
+                </label>
+            </div>
+        </div>
+    );
+}
 
-            {/* Custom sub-path */}
-            {open && (
-                <div style={{ paddingLeft: '16px', borderLeft: `2px dashed ${primary}30` }}>
-                    {!branch.child ? (
-                        <button
-                            onClick={() => {
-                                onUpdate({ ...branch, child: createNode(allFields[0] || '') });
-                                setPathOpen(true);
-                            }}
-                            style={{
-                                ...ghostBtn(theme, true), border: `1px dashed ${primary}60`,
-                                width: '100%', justifyContent: 'center', padding: '8px',
-                            }}
-                        >
-                            <Icons.Add /> Add custom drilldown for this path
-                        </button>
-                    ) : (
-                        <PipelineStep
-                            node={branch.child}
-                            stepNumber={stepCounter}
-                            depth={depth + 1}
-                            allFields={allFields}
-                            sortByOptions={sortByOptions}
-                            theme={theme}
-                            onChange={nextChild => onUpdate({ ...branch, child: nextChild })}
-                            onRemoveChain={() => onUpdate({ ...branch, child: null })}
-                        />
-                    )}
+function ValidationPanel({ validation, theme }) {
+    const errors = validation && Array.isArray(validation.errors) ? validation.errors : [];
+    const warnings = validation && Array.isArray(validation.warnings) ? validation.warnings : [];
+    if (errors.length === 0 && warnings.length === 0) return null;
+
+    return (
+        <div data-report-validation="true" style={{ border: `1px solid ${errors.length > 0 ? '#FCA5A5' : '#FDE68A'}`, borderRadius: '12px', padding: '10px 12px', background: errors.length > 0 ? '#FEF2F2' : '#FFFBEB', color: errors.length > 0 ? '#991B1B' : '#92400E', fontSize: '11px', lineHeight: 1.45, display: 'flex', flexDirection: 'column', gap: '6px' }}>
+            {errors.length > 0 && (
+                <div>
+                    <div style={{ fontWeight: 900, marginBottom: '4px' }}>Fix before applying or saving</div>
+                    {errors.map((message) => <div key={`err:${message}`}>{message}</div>)}
                 </div>
             )}
-
-            {editingCond && (
-                <ConditionModal
-                    condition={branch.condition}
-                    allFields={allFields}
-                    theme={theme}
-                    onSave={nextCond => onUpdate({ ...branch, condition: nextCond })}
-                    onClose={() => setEditingCond(false)}
-                />
+            {warnings.length > 0 && (
+                <div>
+                    <div style={{ fontWeight: 900, marginBottom: '4px' }}>Warnings</div>
+                    {warnings.map((message) => <div key={`warn:${message}`}>{message}</div>)}
+                </div>
             )}
         </div>
     );
 }
 
-// ─── Pipeline Step ────────────────────────────────────────────────────────────
-function PipelineStep({ node, stepNumber, depth, allFields, sortByOptions, theme, onChange, onRemoveChain }) {
-    const [branchesOpen, setBranchesOpen] = useState(false);
-    const current = useMemo(() => normalizeNode(node), [node]);
-    const inputStyle = inp(theme);
-    const primary = theme.primary || '#2563EB';
-    const bulletColor = depth === 0 ? primary : '#8B5CF6';
-
-    const update = useCallback(patch => onChange({ ...current, ...patch }), [current, onChange]);
-    const addBranch = useCallback(() => { update({ branches: [...current.branches, createBranch()] }); setBranchesOpen(true); }, [current.branches, update]);
-    const updateBranch = useCallback((idx, b) => update({ branches: current.branches.map((x, i) => i === idx ? b : x) }), [current.branches, update]);
-    const removeBranch = useCallback((idx) => update({ branches: current.branches.filter((_, i) => i !== idx) }), [current.branches, update]);
-    const addChild = useCallback(() => { if (!current.defaultChild) update({ defaultChild: createNode(allFields[0] || '') }); }, [current.defaultChild, allFields, update]);
-
-    const hasBranches = current.branches.length > 0;
+function RowDebugInspector({ debug, theme }) {
+    if (!debug || typeof debug !== 'object') return null;
+    const details = [
+        ['Matched level', debug.matchedLevel || debug.levelLabel || ''],
+        ['Field', debug.levelField || ''],
+        ['Row path', Array.isArray(debug.pathValues) ? debug.pathValues.join(' > ') : (debug.rowPath || '')],
+        ['Children source', debug.childrenSource || 'Default children'],
+        ['Rule', debug.matchedCondition || ''],
+    ].filter(([, value]) => value);
+    if (details.length === 0) return null;
 
     return (
-        <div style={{ display: 'flex', flexDirection: 'column' }}>
-            <div style={{ display: 'flex', gap: '10px', alignItems: 'stretch' }}>
-                {/* Left track */}
-                <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', flexShrink: 0, width: '22px' }}>
-                    <div style={{
-                        width: '22px', height: '22px', borderRadius: '50%',
-                        background: bulletColor, color: '#fff',
-                        fontSize: '10px', fontWeight: 900,
-                        display: 'flex', alignItems: 'center', justifyContent: 'center',
-                        flexShrink: 0, boxShadow: `0 0 0 3px ${bulletColor}20`,
-                    }}>
-                        {stepNumber}
+        <div data-report-debug-inspector="true" style={{ border: `1px solid ${theme.border}`, borderRadius: '12px', padding: '10px', background: theme.hover || '#F8FAFC', display: 'flex', flexDirection: 'column', gap: '7px' }}>
+            <div style={sectionLabelStyle(theme)}>Why Is This Row Here?</div>
+            {details.map(([label, value]) => (
+                <div key={label} style={{ display: 'flex', justifyContent: 'space-between', gap: '10px', fontSize: '11px' }}>
+                    <span style={{ color: theme.textSec, fontWeight: 800 }}>{label}</span>
+                    <span style={{ color: theme.text, textAlign: 'right', overflowWrap: 'anywhere' }}>{value}</span>
+                </div>
+            ))}
+        </div>
+    );
+}
+
+function CollapsibleLevelSection({
+    title,
+    summary,
+    theme,
+    defaultOpen = false,
+    children,
+}) {
+    const [open, setOpen] = useState(defaultOpen);
+
+    return (
+        <div
+            data-report-level-collapsible="true"
+            data-report-level-collapsed={open ? 'false' : 'true'}
+            style={{
+                border: `1px solid ${theme.border}`,
+                borderRadius: '12px',
+                background: theme.surfaceBg || theme.background || '#fff',
+                overflow: 'hidden',
+            }}
+        >
+            <button
+                type="button"
+                onClick={() => setOpen((current) => !current)}
+                style={{
+                    width: '100%',
+                    border: 'none',
+                    background: open ? (theme.hover || '#F8FAFC') : 'transparent',
+                    color: theme.text,
+                    cursor: 'pointer',
+                    padding: '10px 12px',
+                    display: 'flex',
+                    alignItems: 'center',
+                    gap: '8px',
+                    textAlign: 'left',
+                }}
+                aria-expanded={open}
+            >
+                <span style={{ display: 'inline-flex', color: theme.textSec, flexShrink: 0 }}>
+                    {open ? <Icons.ChevronDown /> : <Icons.ChevronRight />}
+                </span>
+                <span style={{ flex: 1, minWidth: 0 }}>
+                    <span style={{ display: 'block', fontSize: '12px', fontWeight: 900, color: theme.text }}>
+                        {title}
+                    </span>
+                    {summary && (
+                        <span style={{ display: 'block', fontSize: '11px', color: theme.textSec, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', marginTop: '2px' }}>
+                            {summary}
+                        </span>
+                    )}
+                </span>
+            </button>
+            {open && (
+                <div style={{ borderTop: `1px solid ${theme.border}`, padding: '12px', display: 'flex', flexDirection: 'column', gap: '12px' }}>
+                    {children}
+                </div>
+            )}
+        </div>
+    );
+}
+
+function OutlineNodeRow({ item, selected, theme, sortByOptions, getFieldLabel = formatDisplayLabel, onSelect }) {
+    const node = item.node;
+    const title = getNodeTitle(item);
+    const fieldLabel = node.field ? getFieldLabel(node.field) : 'Select field';
+    const headerLabel = getNodeHeaderLabel(node);
+    const sortLabel = getSortOptionLabel(node.sortBy, sortByOptions);
+
+    return (
+        <button type="button" onClick={onSelect} style={outlineItemStyle(theme, selected, item.depth)}>
+            <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', gap: '10px' }}>
+                <div style={{ minWidth: 0, display: 'flex', flexDirection: 'column', gap: '7px' }}>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '6px', flexWrap: 'wrap' }}>
+                        <SummaryChip theme={theme} tone={item.branchBadge ? 'primary' : 'neutral'}>{title}</SummaryChip>
+                        <span style={{ fontSize: '12px', fontWeight: 800, color: theme.text }}>{fieldLabel}</span>
                     </div>
-                    <div style={{ width: '2px', flex: 1, minHeight: '16px', background: `${bulletColor}25`, marginTop: '3px' }} />
+                    <div style={{ fontSize: '11px', color: theme.textSec }}>
+                        Header: {headerLabel}
+                    </div>
+                    <div style={{ display: 'flex', gap: '6px', flexWrap: 'wrap' }}>
+                        <SummaryChip theme={theme}>{node.topN ? `Top ${node.topN}` : 'All rows'}</SummaryChip>
+                        <SummaryChip theme={theme}>{sortLabel ? `Sort ${node.sortDir} by ${sortLabel}` : 'Default sort'}</SummaryChip>
+                        {node.defaultChild && <SummaryChip theme={theme}>Has next level</SummaryChip>}
+                        {node.branches.length > 0 && (
+                            <SummaryChip theme={theme} tone="primary">
+                                {node.branches.length} row override{node.branches.length === 1 ? '' : 's'}
+                            </SummaryChip>
+                        )}
+                    </div>
+                </div>
+                <span style={{ color: selected ? (theme.primary || '#2563EB') : theme.textSec, flexShrink: 0 }}>
+                    <Icons.ChevronRight />
+                </span>
+            </div>
+        </button>
+    );
+}
+
+function OutlineBranchRow({ item, selected, theme, onSelect }) {
+    const branch = item.branch;
+    const name = branch.label && branch.label.trim() ? branch.label.trim() : 'Display original label';
+
+    return (
+        <button type="button" onClick={onSelect} style={outlineItemStyle(theme, selected, item.depth)}>
+            <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', gap: '10px' }}>
+                <div style={{ minWidth: 0, display: 'flex', flexDirection: 'column', gap: '7px' }}>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '6px', flexWrap: 'wrap' }}>
+                        <SummaryChip theme={theme} tone="primary">{`Row override ${item.badge}`}</SummaryChip>
+                        <span style={{ fontSize: '12px', fontWeight: 800, color: theme.text }}>{name}</span>
+                    </div>
+                    <div style={{ fontSize: '11px', color: theme.textSec, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                        {formatConditionSummary(branch.condition)}
+                    </div>
+                    <div style={{ display: 'flex', gap: '6px', flexWrap: 'wrap' }}>
+                        <SummaryChip theme={theme}>{branch.child ? 'Custom children' : 'Default children'}</SummaryChip>
+                    </div>
+                </div>
+                <span style={{ color: selected ? (theme.primary || '#2563EB') : theme.textSec, flexShrink: 0 }}>
+                    <Icons.ChevronRight />
+                </span>
+            </div>
+        </button>
+    );
+}
+
+function LevelRow({
+    item,
+    selected,
+    theme,
+    sortByOptions,
+    getFieldLabel = formatDisplayLabel,
+    onSelect,
+    onDragStart,
+    onDragOver,
+    onDrop,
+}) {
+    const node = item.node;
+    const fieldLabel = node.field ? getFieldLabel(node.field) : 'Select field';
+    const title = node.label && node.label.trim() ? node.label.trim() : fieldLabel;
+    const sortLabel = getSortOptionLabel(node.sortBy, sortByOptions);
+
+    return (
+        <button
+            type="button"
+            draggable
+            onDragStart={onDragStart}
+            onDragOver={onDragOver}
+            onDrop={onDrop}
+            onClick={onSelect}
+            style={{
+                width: '100%',
+                border: `1px solid ${selected ? (theme.primary || '#2563EB') : theme.border}`,
+                borderRadius: '12px',
+                background: selected ? (theme.select || `${theme.primary || '#2563EB'}14`) : (theme.surfaceBg || theme.background || '#fff'),
+                padding: '10px 12px',
+                textAlign: 'left',
+                cursor: 'pointer',
+                display: 'flex',
+                alignItems: 'center',
+                gap: '10px',
+            }}
+        >
+            <span style={{ cursor: 'grab', display: 'inline-flex' }}>
+                <Icons.DragIndicator />
+            </span>
+            <div style={{ flex: 1, minWidth: 0 }}>
+                <div style={{ display: 'flex', alignItems: 'center', gap: '7px', minWidth: 0 }}>
+                    <span style={{ fontSize: '11px', fontWeight: 800, color: theme.textSec, flexShrink: 0 }}>
+                        Level {item.levelNumber}
+                    </span>
+                    <span style={{ fontSize: '12px', fontWeight: 800, color: theme.text, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                        {title}
+                    </span>
+                </div>
+                <div style={{ fontSize: '11px', color: theme.textSec, marginTop: '3px', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                    {fieldLabel}
+                    {sortLabel ? ` · ${node.sortDir === 'asc' ? 'Asc' : 'Desc'} by ${sortLabel}` : ''}
+                    {node.topN ? ` · Top ${node.topN}` : ''}
+                    {node.filters && node.filters.clauses && node.filters.clauses.length > 0 ? ` · ${node.filters.clauses.length} filter${node.filters.clauses.length === 1 ? '' : 's'}` : ''}
+                </div>
+            </div>
+            <span style={{ color: selected ? (theme.primary || '#2563EB') : theme.textSec, flexShrink: 0 }}>
+                <Icons.ChevronRight />
+            </span>
+        </button>
+    );
+}
+
+function NodeInspector({
+    item,
+    node,
+    allFields,
+    getFieldLabel = formatDisplayLabel,
+    sortByOptions,
+    theme,
+    onUpdate,
+    onApply,
+    onRemove,
+    onEditFilter,
+    titleLabel = 'Title',
+    canRemove = true,
+}) {
+    const inputStyle = inp(theme);
+    const title = item && item.levelNumber ? `Level ${item.levelNumber}` : 'Level';
+    const hasFilter = Boolean(node.filters && node.filters.clauses && node.filters.clauses.length > 0);
+    const fieldLabel = node.field ? getFieldLabel(node.field) : 'Select field';
+    const summaryParts = [
+        fieldLabel,
+        node.label && node.label.trim() ? `Title: ${node.label.trim()}` : null,
+        node.topN ? `Top ${node.topN}` : null,
+        hasFilter ? `${node.filters.clauses.length} filter${node.filters.clauses.length === 1 ? '' : 's'}` : null,
+    ].filter(Boolean);
+
+    return (
+        <div style={panelCardStyle(theme)}>
+            <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', gap: '12px' }}>
+                <div>
+                    <div style={{ fontSize: '14px', fontWeight: 800, color: theme.text }}>{title}</div>
+                </div>
+                <div style={{ display: 'flex', gap: '8px', flexShrink: 0 }}>
+                    <button
+                        type="button"
+                        onClick={onApply}
+                        style={{
+                            background: theme.primary || '#2563EB',
+                            border: 'none',
+                            borderRadius: '9px',
+                            padding: '8px 14px',
+                            fontSize: '12px',
+                            fontWeight: 800,
+                            color: '#fff',
+                            cursor: 'pointer',
+                        }}
+                    >
+                        Apply
+                    </button>
+                    {canRemove && (
+                        <button type="button" onClick={onRemove} style={ghostBtn(theme, false, true)}>
+                            <Icons.Delete /> {item && item.path && item.path.length === 0 ? 'Clear report' : 'Remove level'}
+                        </button>
+                    )}
+                </div>
+            </div>
+
+            <CollapsibleLevelSection
+                title={`${title} settings`}
+                summary={summaryParts.join(' · ')}
+                theme={theme}
+                defaultOpen={false}
+            >
+                <div>
+                    <div style={sectionLabelStyle(theme)}>Break Down By</div>
+                    <select
+                        value={node.field}
+                        onChange={(event) => onUpdate({ ...node, field: event.target.value })}
+                        style={inputStyle}
+                    >
+                        <option value="">Select field...</option>
+                        {allFields.map((field) => (
+                            <option key={field} value={field}>{getFieldLabel(field)}</option>
+                        ))}
+                    </select>
                 </div>
 
-                {/* Step card */}
-                <div style={{
-                    flex: 1, minWidth: 0,
-                    border: `1px solid ${theme.border}`,
-                    borderRadius: '10px',
-                    background: theme.surfaceBg || theme.background || '#fff',
-                    padding: '10px 12px',
-                    marginBottom: '6px',
-                    display: 'flex', flexDirection: 'column', gap: '8px',
-                }}>
-                    {/* Card header */}
-                    <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
-                        <span style={{ fontSize: '9px', fontWeight: 800, textTransform: 'uppercase', letterSpacing: '0.08em', color: theme.textSec }}>
-                            {depth === 0 ? 'Break down by' : 'Then by'}
-                        </span>
-                        <button onClick={onRemoveChain} style={{ background: 'none', border: 'none', cursor: 'pointer', color: '#DC2626', padding: '2px' }}>
-                            <Icons.Delete />
-                        </button>
-                    </div>
+                <div>
+                    <div style={sectionLabelStyle(theme)}>{titleLabel}</div>
+                    <input
+                        value={node.label}
+                        onChange={(event) => onUpdate({ ...node, label: event.target.value })}
+                        placeholder={node.field ? getFieldLabel(node.field) : 'Label for this level'}
+                        style={inputStyle}
+                    />
+                </div>
 
-                    {/* Field / Top N / Sort / Dir */}
-                    <div style={{ display: 'grid', gridTemplateColumns: '1fr 52px 1fr 28px', gap: '6px', alignItems: 'center' }}>
-                        <select
-                            value={current.field}
-                            onChange={e => update({ field: e.target.value })}
-                            style={{ ...inputStyle, fontWeight: 700 }}
-                        >
-                            <option value="">Select field…</option>
-                            {allFields.map(f => <option key={f} value={f}>{formatDisplayLabel(f)}</option>)}
-                        </select>
-
+                <div>
+                    <div style={sectionLabelStyle(theme)}>Ranking And Sort</div>
+                    <div style={{ display: 'grid', gridTemplateColumns: '82px 1fr 42px', gap: '8px', alignItems: 'stretch' }}>
                         <input
-                            type="number" min="1"
-                            value={current.topN || ''}
-                            onChange={e => {
-                                const v = e.target.value === '' ? null : parseInt(e.target.value, 10);
-                                update({ topN: v && v > 0 ? v : null });
+                            type="number"
+                            min="1"
+                            value={node.topN || ''}
+                            onChange={(event) => {
+                                const value = event.target.value === '' ? null : parseInt(event.target.value, 10);
+                                onUpdate({ ...node, topN: value && value > 0 ? value : null });
                             }}
                             placeholder="All"
-                            title="Top N rows (leave empty for all)"
                             style={{ ...inputStyle, textAlign: 'center' }}
                         />
-
                         <select
-                            value={current.sortBy || ''}
-                            onChange={e => update({ sortBy: e.target.value || null })}
+                            value={node.sortBy || ''}
+                            onChange={(event) => onUpdate({ ...node, sortBy: event.target.value || null })}
                             style={inputStyle}
                         >
-                            {sortByOptions.map(o => <option key={o.value} value={o.value}>{o.label}</option>)}
+                            {sortByOptions.map((option) => (
+                                <option key={option.value} value={option.value}>{option.label}</option>
+                            ))}
                         </select>
-
                         <button
-                            onClick={() => update({ sortDir: current.sortDir === 'asc' ? 'desc' : 'asc' })}
+                            type="button"
+                            onClick={() => onUpdate({ ...node, sortDir: node.sortDir === 'asc' ? 'desc' : 'asc' })}
                             style={{
-                                background: theme.hover, border: `1px solid ${theme.border}`,
-                                borderRadius: '8px', padding: '5px',
-                                cursor: 'pointer', color: theme.text,
-                                display: 'flex', alignItems: 'center', justifyContent: 'center',
+                                border: `1px solid ${theme.border}`,
+                                borderRadius: '10px',
+                                background: theme.hover || '#F3F4F6',
+                                color: theme.text,
+                                cursor: 'pointer',
+                                display: 'flex',
+                                alignItems: 'center',
+                                justifyContent: 'center',
                             }}
-                            title={current.sortDir === 'asc' ? 'Ascending' : 'Descending'}
+                            title={node.sortDir === 'asc' ? 'Ascending' : 'Descending'}
                         >
-                            {current.sortDir === 'asc' ? <Icons.SortAsc /> : <Icons.SortDesc />}
+                            {node.sortDir === 'asc' ? <Icons.SortAsc /> : <Icons.SortDesc />}
                         </button>
                     </div>
+                </div>
 
-                    {/* Display label */}
-                    <div>
-                        <div style={{ fontSize: '9px', fontWeight: 800, textTransform: 'uppercase', letterSpacing: '0.06em', color: theme.textSec, marginBottom: '4px' }}>
-                            Header label
-                        </div>
-                        <input
-                            value={current.label}
-                            onChange={e => update({ label: e.target.value })}
-                            placeholder={current.field ? formatDisplayLabel(current.field) : 'Label for this level…'}
-                            title="Rename this level's header in the report output"
-                            style={{ ...inputStyle, width: '100%' }}
-                        />
-                    </div>
-
-                    {/* Branch controls */}
-                    <div style={{ display: 'flex', gap: '6px', flexWrap: 'wrap' }}>
-                        <button onClick={addBranch} style={ghostBtn(theme)}>
-                            <Icons.Branch /> Add split
+                <div>
+                    <div style={sectionLabelStyle(theme)}>Level Filter</div>
+                    <div style={{ display: 'flex', gap: '8px', alignItems: 'stretch' }}>
+                        <button
+                            type="button"
+                            onClick={onEditFilter}
+                            style={inp(theme, {
+                                flex: 1,
+                                display: 'flex',
+                                alignItems: 'center',
+                                gap: '8px',
+                                textAlign: 'left',
+                                cursor: 'pointer',
+                                background: hasFilter ? `${theme.primary || '#2563EB'}08` : (theme.hover || '#F8FAFC'),
+                                borderColor: hasFilter ? `${theme.primary || '#2563EB'}45` : undefined,
+                            })}
+                        >
+                            <Icons.Filter />
+                            <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', flex: 1 }}>
+                                {hasFilter ? formatConditionSummary(node.filters) : 'No filter (show all rows)'}
+                            </span>
                         </button>
-                        {hasBranches && (
+                        {hasFilter && (
                             <button
-                                onClick={() => setBranchesOpen(o => !o)}
-                                style={ghostBtn(theme, true)}
+                                type="button"
+                                onClick={() => onUpdate({ ...node, filters: null })}
+                                style={{
+                                    border: `1px solid ${theme.border}`,
+                                    borderRadius: '10px',
+                                    background: theme.hover || '#F3F4F6',
+                                    color: '#B91C1C',
+                                    cursor: 'pointer',
+                                    display: 'flex',
+                                    alignItems: 'center',
+                                    justifyContent: 'center',
+                                    padding: '0 10px',
+                                    flexShrink: 0,
+                                }}
+                                title="Clear filter"
                             >
-                                <Icons.Branch />
-                                {current.branches.length} split{current.branches.length !== 1 ? 's' : ''} {branchesOpen ? '▲' : '▼'}
+                                <Icons.Close />
                             </button>
                         )}
                     </div>
+                    <div style={{ fontSize: '11px', color: theme.textSec, marginTop: '6px', lineHeight: 1.4 }}>
+                        Rows that don't match the filter are grouped into "Others" to keep totals intact.
+                    </div>
+                </div>
 
-                    {/* Branches section */}
-                    {hasBranches && branchesOpen && (
-                        <div style={{
-                            borderTop: `1px solid ${theme.border}`, paddingTop: '10px',
-                            display: 'flex', flexDirection: 'column', gap: '10px',
-                        }}>
-                            <div style={{ fontSize: '9px', fontWeight: 800, textTransform: 'uppercase', letterSpacing: '0.06em', color: theme.textSec }}>
-                                Conditional Splits
-                                <span style={{ fontWeight: 500, textTransform: 'none', marginLeft: '6px', color: theme.textSec }}>— first match wins, others use default path</span>
-                            </div>
-                            {current.branches.map((branch, idx) => (
-                                <BranchRow
-                                    key={branch._id}
-                                    branch={branch}
-                                    depth={depth}
-                                    stepCounter={`${stepNumber}.${idx + 1}`}
-                                    allFields={allFields}
-                                    sortByOptions={sortByOptions}
-                                    theme={theme}
-                                    onUpdate={nb => updateBranch(idx, nb)}
-                                    onRemove={() => removeBranch(idx)}
-                                />
-                            ))}
-                        </div>
-                    )}
+                <ReportFormatEditor
+                    value={node.format}
+                    theme={theme}
+                    onChange={(format) => onUpdate({ ...node, format })}
+                />
+            </CollapsibleLevelSection>
+
+        </div>
+    );
+}
+
+function RowOverrideInspector({
+    draft,
+    allFields,
+    getFieldLabel = formatDisplayLabel,
+    sortByOptions,
+    theme,
+    onChange,
+    onApply,
+    onCancel,
+}) {
+    const [dragIndex, setDragIndex] = useState(null);
+    const [rowFilterModalOpen, setRowFilterModalOpen] = useState(false);
+    const childRoot = draft && draft.child ? draft.child : createNode('');
+    const selectedPath = Array.isArray(draft && draft.selectedPath) ? draft.selectedPath : [];
+    const selectedNode = getNodeAtPath(childRoot, selectedPath) || childRoot;
+    const rowHasFilter = Boolean(selectedNode.filters && selectedNode.filters.clauses && selectedNode.filters.clauses.length > 0);
+    const levelItems = buildDefaultLevelItems(childRoot, draft.childLevelNumber || 2);
+    const selectedIndex = Math.max(0, selectedPath.length);
+    const selectedLevelNumber = (draft && Number.isFinite(Number(draft.childLevelNumber))
+        ? Number(draft.childLevelNumber)
+        : 2) + selectedPath.length;
+    const inputStyle = inp(theme);
+    const rowOverrideSummaryParts = [
+        selectedNode.field ? getFieldLabel(selectedNode.field) : 'Select field',
+        draft.title && draft.title.trim() ? `Title: ${draft.title.trim()}` : null,
+        selectedNode.topN ? `Top ${selectedNode.topN}` : null,
+        rowHasFilter ? `${selectedNode.filters.clauses.length} filter${selectedNode.filters.clauses.length === 1 ? '' : 's'}` : null,
+    ].filter(Boolean);
+    const updateSelectedNode = (nextNode) => {
+        onChange({
+            ...draft,
+            child: updateNodeAtPath(childRoot, selectedPath, () => nextNode),
+        });
+    };
+
+    const openDraftLevel = (index) => {
+        onChange({
+            ...draft,
+            selectedPath: levelPathForIndex(index),
+        });
+    };
+
+    const addNextLevel = () => {
+        const nextPath = [...selectedPath, DEFAULT_SEGMENT];
+        onChange({
+            ...draft,
+            child: updateNodeAtPath(childRoot, selectedPath, (node) => ({
+                ...node,
+                defaultChild: node.defaultChild || createNode(''),
+            })),
+            selectedPath: nextPath,
+        });
+    };
+
+    const removeNextLevel = () => {
+        onChange({
+            ...draft,
+            child: updateNodeAtPath(childRoot, selectedPath, (node) => ({
+                ...node,
+                defaultChild: null,
+            })),
+        });
+    };
+
+    const reorderDraftLevels = (fromIndex, toIndex) => {
+        if (fromIndex === null || fromIndex === toIndex) return;
+        onChange({
+            ...draft,
+            child: reorderDefaultChain(childRoot, fromIndex, toIndex),
+            selectedPath: levelPathForIndex(toIndex),
+        });
+        setDragIndex(null);
+    };
+
+    return (
+    <>
+        <div style={panelCardStyle(theme)}>
+            <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', gap: '12px' }}>
+                <div>
+                    <div style={{ fontSize: '14px', fontWeight: 800, color: theme.text }}>
+                        {draft.rowLabel || 'Selected row'}
+                    </div>
+                    <div style={{ fontSize: '12px', color: theme.textSec, marginTop: '2px' }}>
+                        Override applies to this row only.
+                    </div>
+                </div>
+                <div style={{ display: 'flex', gap: '8px', flexShrink: 0 }}>
+                    <button type="button" onClick={onCancel} style={ghostBtn(theme)}>
+                        <Icons.Close /> Close
+                    </button>
+                    <button
+                        type="button"
+                        onClick={onApply}
+                        style={{
+                            background: theme.primary || '#2563EB',
+                            border: 'none',
+                            borderRadius: '9px',
+                            padding: '8px 14px',
+                            fontSize: '12px',
+                            fontWeight: 800,
+                            color: '#fff',
+                            cursor: 'pointer',
+                        }}
+                    >
+                        Apply
+                    </button>
                 </div>
             </div>
 
-            {/* Next step in default chain */}
-            <div style={{ paddingLeft: '32px' }}>
-                {current.defaultChild ? (
-                    <PipelineStep
-                        node={current.defaultChild}
-                        stepNumber={stepNumber + 1}
-                        depth={depth}
-                        allFields={allFields}
-                        sortByOptions={sortByOptions}
-                        theme={theme}
-                        onChange={nextChild => update({ defaultChild: nextChild })}
-                        onRemoveChain={() => update({ defaultChild: null })}
+            <div>
+                <div style={sectionLabelStyle(theme)}>Level</div>
+                <div style={{ fontSize: '12px', fontWeight: 800, color: theme.text }}>
+                    {`Level ${selectedLevelNumber}`}
+                </div>
+            </div>
+
+            <RowDebugInspector debug={draft.request && draft.request.debug} theme={theme} />
+
+            {levelItems.length > 1 && (
+                <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
+                    {levelItems.map((item) => (
+                        <LevelRow
+                            key={`draft-level:${item.index}:${item.node._id}`}
+                            item={item}
+                            selected={selectedIndex === item.index}
+                            theme={theme}
+                            sortByOptions={sortByOptions}
+                            getFieldLabel={getFieldLabel}
+                            onSelect={() => openDraftLevel(item.index)}
+                            onDragStart={(event) => {
+                                setDragIndex(item.index);
+                                event.dataTransfer.effectAllowed = 'move';
+                            }}
+                            onDragOver={(event) => event.preventDefault()}
+                            onDrop={(event) => {
+                                event.preventDefault();
+                                reorderDraftLevels(dragIndex, item.index);
+                            }}
+                        />
+                    ))}
+                </div>
+            )}
+
+            <CollapsibleLevelSection
+                title={`Level ${selectedLevelNumber} settings`}
+                summary={rowOverrideSummaryParts.join(' · ')}
+                theme={theme}
+                defaultOpen={false}
+            >
+                <div>
+                    <div style={sectionLabelStyle(theme)}>Title</div>
+                    <input
+                        value={draft.title}
+                        onChange={(event) => onChange({ ...draft, title: event.target.value })}
+                        placeholder={draft.rowLabel || 'Row title'}
+                        style={inputStyle}
                     />
-                ) : (
-                    <button
-                        onClick={addChild}
-                        style={{
-                            display: 'flex', alignItems: 'center', gap: '6px',
-                            background: 'none', border: `1px dashed ${theme.border}`,
-                            borderRadius: '8px', padding: '7px 14px', cursor: 'pointer',
-                            fontSize: '11px', fontWeight: 700, color: theme.textSec,
-                            marginBottom: '8px',
-                        }}
+                </div>
+
+                <div>
+                    <div style={sectionLabelStyle(theme)}>Break Down By</div>
+                    <select
+                        value={selectedNode.field}
+                        onChange={(event) => updateSelectedNode({ ...selectedNode, field: event.target.value })}
+                        style={inputStyle}
                     >
-                        <Icons.Add /> Add next level
+                        <option value="">Select field...</option>
+                        {allFields.map((field) => (
+                            <option key={field} value={field}>{getFieldLabel(field)}</option>
+                        ))}
+                    </select>
+                </div>
+
+                <div>
+                    <div style={sectionLabelStyle(theme)}>Ranking And Sort</div>
+                    <div style={{ display: 'grid', gridTemplateColumns: '82px 1fr 42px', gap: '8px', alignItems: 'stretch' }}>
+                        <input
+                            type="number"
+                            min="1"
+                            value={selectedNode.topN || ''}
+                            onChange={(event) => {
+                                const value = event.target.value === '' ? null : parseInt(event.target.value, 10);
+                                updateSelectedNode({ ...selectedNode, topN: value && value > 0 ? value : null });
+                            }}
+                            placeholder="All"
+                            style={{ ...inputStyle, textAlign: 'center' }}
+                        />
+                        <select
+                            value={selectedNode.sortBy || ''}
+                            onChange={(event) => updateSelectedNode({ ...selectedNode, sortBy: event.target.value || null })}
+                            style={inputStyle}
+                        >
+                            {sortByOptions.map((option) => (
+                                <option key={option.value} value={option.value}>{option.label}</option>
+                            ))}
+                        </select>
+                        <button
+                            type="button"
+                            onClick={() => updateSelectedNode({ ...selectedNode, sortDir: selectedNode.sortDir === 'asc' ? 'desc' : 'asc' })}
+                            style={{
+                                border: `1px solid ${theme.border}`,
+                                borderRadius: '10px',
+                                background: theme.hover || '#F3F4F6',
+                                color: theme.text,
+                                cursor: 'pointer',
+                                display: 'flex',
+                                alignItems: 'center',
+                                justifyContent: 'center',
+                            }}
+                            title={selectedNode.sortDir === 'asc' ? 'Ascending' : 'Descending'}
+                        >
+                            {selectedNode.sortDir === 'asc' ? <Icons.SortAsc /> : <Icons.SortDesc />}
+                        </button>
+                    </div>
+                </div>
+
+                <div>
+                    <div style={sectionLabelStyle(theme)}>Filter (this row's children only)</div>
+                    <div style={{ display: 'flex', gap: '8px', alignItems: 'stretch' }}>
+                        <button
+                            type="button"
+                            onClick={() => setRowFilterModalOpen(true)}
+                            style={inp(theme, {
+                                flex: 1,
+                                display: 'flex',
+                                alignItems: 'center',
+                                gap: '8px',
+                                textAlign: 'left',
+                                cursor: 'pointer',
+                                background: rowHasFilter ? `${theme.primary || '#2563EB'}08` : (theme.hover || '#F8FAFC'),
+                                borderColor: rowHasFilter ? `${theme.primary || '#2563EB'}45` : undefined,
+                            })}
+                        >
+                            <Icons.Filter />
+                            <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', flex: 1 }}>
+                                {rowHasFilter ? formatConditionSummary(selectedNode.filters) : 'No filter (show all children)'}
+                            </span>
+                        </button>
+                        {rowHasFilter && (
+                            <button
+                                type="button"
+                                onClick={() => updateSelectedNode({ ...selectedNode, filters: null })}
+                                style={{
+                                    border: `1px solid ${theme.border}`,
+                                    borderRadius: '10px',
+                                    background: theme.hover || '#F3F4F6',
+                                    color: '#B91C1C',
+                                    cursor: 'pointer',
+                                    display: 'flex',
+                                    alignItems: 'center',
+                                    justifyContent: 'center',
+                                    padding: '0 10px',
+                                    flexShrink: 0,
+                                }}
+                                title="Clear filter"
+                            >
+                                <Icons.Close />
+                            </button>
+                        )}
+                    </div>
+                    <div style={{ fontSize: '11px', color: theme.textSec, marginTop: '6px', lineHeight: 1.4 }}>
+                        Filtered-out children are grouped into "Others" to keep totals intact.
+                    </div>
+                </div>
+
+                <ReportFormatEditor
+                    value={selectedNode.format}
+                    theme={theme}
+                    onChange={(format) => updateSelectedNode({ ...selectedNode, format })}
+                />
+
+                <div style={{ display: 'flex', flexWrap: 'wrap', gap: '8px' }}>
+                    <button
+                        type="button"
+                        onClick={addNextLevel}
+                        disabled={!selectedNode.field}
+                        style={{ ...ghostBtn(theme, Boolean(selectedNode.defaultChild)), opacity: selectedNode.field ? 1 : 0.5 }}
+                    >
+                        <Icons.Add /> {selectedNode.defaultChild ? 'Open next level' : 'Add next level'}
+                    </button>
+                    {selectedNode.defaultChild && (
+                        <button type="button" onClick={removeNextLevel} style={ghostBtn(theme, false, true)}>
+                            <Icons.Delete /> Remove next level
+                        </button>
+                    )}
+                </div>
+            </CollapsibleLevelSection>
+
+        </div>
+
+        {rowFilterModalOpen && (
+            <ConditionModal
+                title={`Filter children of "${draft.rowLabel || 'this row'}"`}
+                description="Only children matching this filter are shown. Filtered-out rows are grouped into 'Others' to keep totals intact."
+                condition={selectedNode.filters || createCondition()}
+                allFields={allFields}
+                getFieldLabel={getFieldLabel}
+                theme={theme}
+                onSave={(nextCondition) => {
+                    updateSelectedNode({
+                        ...selectedNode,
+                        filters: nextCondition.clauses.length > 0 ? nextCondition : null,
+                    });
+                }}
+                onClose={() => setRowFilterModalOpen(false)}
+            />
+        )}
+    </>
+    );
+}
+
+function BranchInspector({
+    item,
+    branch,
+    theme,
+    onUpdate,
+    onEditCondition,
+    onOpenCustomChildren,
+    onRemoveCustomChildren,
+    onRemove,
+}) {
+    const inputStyle = inp(theme);
+    const summary = formatConditionSummary(branch.condition);
+
+    return (
+        <div style={panelCardStyle(theme)}>
+            <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', gap: '12px' }}>
+                <div>
+                    <div style={{ fontSize: '14px', fontWeight: 800, color: theme.text }}>{`Row override ${item.badge}`}</div>
+                    <div style={{ fontSize: '12px', color: theme.textSec, marginTop: '2px' }}>
+                        Use a row override when matching rows need a different label or child breakdown.
+                    </div>
+                </div>
+                <button type="button" onClick={onRemove} style={ghostBtn(theme, false, true)}>
+                    <Icons.Delete /> Remove override
+                </button>
+            </div>
+
+            <div>
+                <div style={sectionLabelStyle(theme)}>Display As</div>
+                <input
+                    value={branch.label}
+                    onChange={(event) => onUpdate({ ...branch, label: event.target.value })}
+                    placeholder="Label to show for matching rows"
+                    style={inputStyle}
+                />
+            </div>
+
+            <div>
+                <div style={sectionLabelStyle(theme)}>Rule</div>
+                <button
+                    type="button"
+                    onClick={onEditCondition}
+                    title={summary}
+                    style={{
+                        ...inp(theme),
+                        display: 'flex',
+                        alignItems: 'center',
+                        gap: '8px',
+                        textAlign: 'left',
+                        cursor: 'pointer',
+                        background: theme.hover || '#F8FAFC',
+                    }}
+                >
+                    <Icons.Filter />
+                    <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{summary}</span>
+                </button>
+            </div>
+
+            <div style={{ display: 'flex', flexWrap: 'wrap', gap: '8px' }}>
+                <button type="button" onClick={onOpenCustomChildren} style={ghostBtn(theme, Boolean(branch.child))}>
+                    <Icons.Add /> {branch.child ? 'Open Custom children' : 'Add Custom children'}
+                </button>
+                {branch.child && (
+                    <button type="button" onClick={onRemoveCustomChildren} style={ghostBtn(theme, false, true)}>
+                        <Icons.Delete /> Remove Custom children
                     </button>
                 )}
+            </div>
+
+            <div
+                style={{
+                    borderRadius: '10px',
+                    padding: '10px 12px',
+                    background: theme.hover || '#F8FAFC',
+                    color: theme.textSec,
+                    fontSize: '11px',
+                    lineHeight: 1.5,
+                }}
+            >
+                Override applies to this row only. Rows without this override continue with Default children.
             </div>
         </div>
     );
 }
 
-// ─── ReportEditor (main export) ───────────────────────────────────────────────
 export function ReportEditor({
     reportDef,
     setReportDef,
     availableFields,
+    customDimensions = [],
     theme,
+    data = [],
     valConfigs,
     savedReports,
     setSavedReports,
     activeReportId,
     setActiveReportId,
     showNotification,
+    requestedSelection = null,
+    showReportConfigColumn = true,
+    setShowReportConfigColumn,
 }) {
     const [reportName, setReportName] = useState('');
+    const [selection, setSelection] = useState(null);
+    const [editingCondition, setEditingCondition] = useState(null);
+    const [editingNodeFilter, setEditingNodeFilter] = useState(null);
+    const [rowOverrideDraft, setRowOverrideDraft] = useState(null);
+    const [draggingLevelIndex, setDraggingLevelIndex] = useState(null);
+    const selectedLineRef = useRef(null);
+    const pendingExternalSelectionScrollRef = useRef(false);
+    const lastProcessedRequestedSelectionRef = useRef(null);
 
     const root = useMemo(
-        () => reportDef && reportDef.root ? normalizeNode(reportDef.root) : null,
+        () => (reportDef && reportDef.root ? normalizeNode(reportDef.root) : null),
         [reportDef]
     );
-    const allFields = useMemo(() => getSelectableFields(availableFields, valConfigs), [availableFields, valConfigs]);
-    const sortByOptions = useMemo(() => buildSortOptions(valConfigs), [valConfigs]);
+    const allFields = useMemo(
+        () => getSelectableFields(availableFields, valConfigs),
+        [availableFields, valConfigs]
+    );
+    const getFieldLabel = useCallback(
+        (field) => formatCustomAwareFieldLabel(field, customDimensions),
+        [customDimensions]
+    );
+    const sortByOptions = useMemo(
+        () => buildSortOptions(valConfigs),
+        [valConfigs]
+    );
+    const reportValidation = useMemo(
+        () => validateReportDefinition(root, { allFields, valConfigs, data }),
+        [root, allFields, valConfigs, data]
+    );
 
-    const setRoot = useCallback(nextRoot => {
-        setReportDef({ ...(reportDef || {}), root: nextRoot });
-    }, [reportDef, setReportDef]);
+    const setRoot = useCallback((nextRootOrUpdater) => {
+        setReportDef((prev) => {
+            const prevDef = prev && typeof prev === 'object' ? prev : {};
+            const prevRoot = prevDef.root ? normalizeNode(prevDef.root) : null;
+            const nextRoot = typeof nextRootOrUpdater === 'function'
+                ? nextRootOrUpdater(prevRoot)
+                : nextRootOrUpdater;
+            return { ...prevDef, root: nextRoot };
+        });
+    }, [setReportDef]);
+
+    const outlineItems = useMemo(() => buildOutlineItems(root), [root]);
+    const defaultLevelItems = useMemo(() => buildDefaultLevelItems(root), [root]);
+    const selectedOutlineItem = useMemo(
+        () => findSelectionItem(outlineItems, selection),
+        [outlineItems, selection]
+    );
+    const trailItems = useMemo(
+        () => buildTrailItems(outlineItems, selection),
+        [outlineItems, selection]
+    );
+    const directChildItems = useMemo(
+        () => buildDirectChildItems(outlineItems, selection),
+        [outlineItems, selection]
+    );
+
+    const selectedItem = useMemo(() => {
+        if (!root || !selection) return null;
+        if (selection.type === 'node') {
+            const node = getNodeAtPath(root, selection.path);
+            return node ? { type: 'node', node } : null;
+        }
+        if (selection.type === 'branch') {
+            const branch = getBranchAtPath(root, selection.nodePath, selection.branchIndex);
+            return branch ? { type: 'branch', branch } : null;
+        }
+        return null;
+    }, [root, selection]);
+
+    const editingBranch = useMemo(() => {
+        if (!editingCondition || !root) return null;
+        return getBranchAtPath(root, editingCondition.nodePath, editingCondition.branchIndex);
+    }, [editingCondition, root]);
+
+    const openRowPathOverride = useCallback((request) => {
+        if (!request || request.type !== 'rowPath' || !root) return false;
+
+        const nodePath = Array.isArray(request.nodePath) ? request.nodePath : [];
+        const node = getNodeAtPath(root, nodePath);
+        if (!node) return false;
+
+        const existingBranches = Array.isArray(node.branches) ? node.branches : [];
+        const existingIndex = existingBranches.findIndex((branch) => (
+            branchMatchesRowPath(branch, request.field, request.value)
+        ));
+        const existingBranch = existingIndex >= 0 ? existingBranches[existingIndex] : null;
+        const baseChild = existingBranch && existingBranch.child
+            ? existingBranch.child
+            : (node.defaultChild || createNode(''));
+        const rowLabel = normalizeRowPathValue(request.label || request.value);
+
+        setRowOverrideDraft({
+            request,
+            nodePath,
+            branchIndex: existingIndex,
+            rowLabel,
+            title: existingBranch && existingBranch.label ? existingBranch.label : rowLabel,
+            child: cloneNode(baseChild) || createNode(''),
+            selectedPath: [],
+            childLevelNumber: Number.isFinite(Number(request.levelNumber)) ? Number(request.levelNumber) + 1 : 2,
+        });
+        setSelection({ type: 'node', path: nodePath });
+        return true;
+    }, [root]);
+
+    useEffect(() => {
+        if (!root) {
+            if (selection !== null) setSelection(null);
+            return;
+        }
+
+        if (!selection) return;
+
+        if (selection.type === 'node') {
+            if (!getNodeAtPath(root, selection.path)) {
+                setSelection({ type: 'node', path: [] });
+            }
+            return;
+        }
+
+        if (!getBranchAtPath(root, selection.nodePath, selection.branchIndex)) {
+            setSelection({ type: 'node', path: selection.nodePath });
+        }
+    }, [root, selection]);
+
+    const scrollSelectedLineIntoView = useCallback(() => {
+        const target = selectedLineRef.current;
+        if (!target || typeof target.scrollIntoView !== 'function') return;
+        window.requestAnimationFrame(() => {
+            target.scrollIntoView({ block: 'start', behavior: 'smooth' });
+        });
+    }, []);
+
+    useEffect(() => {
+        if (!requestedSelection) return;
+        if (lastProcessedRequestedSelectionRef.current === requestedSelection) return;
+        lastProcessedRequestedSelectionRef.current = requestedSelection;
+        pendingExternalSelectionScrollRef.current = true;
+        if (requestedSelection.type === 'rowPath') {
+            if (!openRowPathOverride(requestedSelection)) {
+                pendingExternalSelectionScrollRef.current = false;
+            }
+            return;
+        }
+        if (selectionKey(requestedSelection) === selectionKey(selection)) {
+            pendingExternalSelectionScrollRef.current = false;
+            scrollSelectedLineIntoView();
+            return;
+        }
+        setSelection(requestedSelection);
+    }, [openRowPathOverride, requestedSelection, scrollSelectedLineIntoView, selection]);
+
+    useEffect(() => {
+        if (!pendingExternalSelectionScrollRef.current) return;
+        pendingExternalSelectionScrollRef.current = false;
+        scrollSelectedLineIntoView();
+    }, [scrollSelectedLineIntoView, selection]);
+
+    const updateNode = useCallback((path, nextNode) => {
+        setRoot((prevRoot) => updateNodeAtPath(prevRoot, path, () => nextNode));
+    }, [setRoot]);
+
+    const updateBranch = useCallback((nodePath, branchIndex, nextBranch) => {
+        setRoot((prevRoot) => updateBranchAtPath(prevRoot, nodePath, branchIndex, () => nextBranch));
+    }, [setRoot]);
+
+    const addRoot = useCallback((field) => {
+        const nextRoot = createNode(field);
+        setRoot(nextRoot);
+        setRowOverrideDraft(null);
+        setSelection({ type: 'node', path: [] });
+    }, [setRoot]);
+
+    const openDefaultChild = useCallback((nodePath, hasChild) => {
+        if (!hasChild) {
+            setRoot((prevRoot) => updateNodeAtPath(prevRoot, nodePath, (node) => ({
+                ...node,
+                defaultChild: createNode(''),
+            })));
+        }
+        setSelection({ type: 'node', path: [...nodePath, DEFAULT_SEGMENT] });
+    }, [setRoot]);
+
+    const removeDefaultChild = useCallback((nodePath) => {
+        setRoot((prevRoot) => updateNodeAtPath(prevRoot, nodePath, (node) => ({
+            ...node,
+            defaultChild: null,
+        })));
+        setSelection({ type: 'node', path: nodePath });
+    }, [setRoot]);
+
+    const openCustomChildren = useCallback((nodePath, branchIndex, hasChild) => {
+        if (!hasChild) {
+            setRoot((prevRoot) => updateBranchAtPath(prevRoot, nodePath, branchIndex, (branch) => ({
+                ...branch,
+                child: createNode(allFields[0] || ''),
+            })));
+        }
+        setSelection({ type: 'node', path: [...nodePath, createBranchSegment(branchIndex)] });
+    }, [allFields, setRoot]);
+
+    const removeCustomChildren = useCallback((nodePath, branchIndex) => {
+        setRoot((prevRoot) => updateBranchAtPath(prevRoot, nodePath, branchIndex, (branch) => ({
+            ...branch,
+            child: null,
+        })));
+        setSelection({ type: 'branch', nodePath, branchIndex });
+    }, [setRoot]);
+
+    const removeNode = useCallback((path) => {
+        if (path.length === 0) {
+            setRoot(null);
+            setRowOverrideDraft(null);
+            setSelection(null);
+            return;
+        }
+
+        const parentPath = path.slice(0, -1);
+        const segment = path[path.length - 1];
+
+        if (segment === DEFAULT_SEGMENT) {
+            setRoot((prevRoot) => updateNodeAtPath(prevRoot, parentPath, (node) => ({
+                ...node,
+                defaultChild: null,
+            })));
+            setSelection({ type: 'node', path: parentPath });
+            return;
+        }
+
+        const branchIndex = parseBranchIndex(segment);
+        if (branchIndex >= 0) {
+            setRoot((prevRoot) => updateBranchAtPath(prevRoot, parentPath, branchIndex, (branch) => ({
+                ...branch,
+                child: null,
+            })));
+            setSelection({ type: 'branch', nodePath: parentPath, branchIndex });
+        }
+    }, [setRoot]);
+
+    const removeBranch = useCallback((nodePath, branchIndex) => {
+        setRoot((prevRoot) => updateNodeAtPath(prevRoot, nodePath, (node) => ({
+            ...node,
+            branches: node.branches.filter((_, index) => index !== branchIndex),
+        })));
+        setSelection({ type: 'node', path: nodePath });
+    }, [setRoot]);
+
+    const selectDefaultLevel = useCallback((path) => {
+        setRowOverrideDraft(null);
+        setSelection({ type: 'node', path });
+    }, []);
+
+    const selectOutlineItem = useCallback((item) => {
+        if (!item) return;
+        setRowOverrideDraft(null);
+        if (item.kind === 'branch') {
+            setSelection({ type: 'branch', nodePath: item.nodePath, branchIndex: item.branchIndex });
+            return;
+        }
+        setSelection({ type: 'node', path: item.nodePath });
+    }, []);
+
+    const addNextDefaultLevel = useCallback(() => {
+        if (!root || !defaultLevelItems.length) return;
+        const deepestItem = defaultLevelItems[defaultLevelItems.length - 1];
+        if (!deepestItem || !deepestItem.node || !deepestItem.node.field) return;
+        const nextPath = [...deepestItem.path, DEFAULT_SEGMENT];
+        setRowOverrideDraft(null);
+        setRoot((prevRoot) => updateNodeAtPath(prevRoot, deepestItem.path, (node) => ({
+            ...node,
+            defaultChild: node.defaultChild || createNode(''),
+        })));
+        setSelection({ type: 'node', path: nextPath });
+    }, [defaultLevelItems, root, setRoot]);
+
+    const reorderLevels = useCallback((fromIndex, toIndex) => {
+        if (fromIndex === null || fromIndex === toIndex) return;
+        setRoot((prevRoot) => reorderDefaultChain(prevRoot, fromIndex, toIndex));
+        setSelection({ type: 'node', path: levelPathForIndex(toIndex) });
+        setDraggingLevelIndex(null);
+    }, [setRoot]);
+
+    const closeRowOverrideDraft = useCallback(() => {
+        setRowOverrideDraft(null);
+        setSelection(null);
+    }, []);
+
+    const applySelectedLevel = useCallback(() => {
+        if (!reportValidation.valid) {
+            if (showNotification) showNotification(reportValidation.errors[0] || 'Fix report validation errors before applying.', 'error');
+            return;
+        }
+        setSelection(null);
+    }, [reportValidation, showNotification]);
+
+    const applyRowOverrideDraft = useCallback(() => {
+        if (!rowOverrideDraft || !rowOverrideDraft.request) return;
+        const request = rowOverrideDraft.request;
+        const nodePath = Array.isArray(rowOverrideDraft.nodePath) ? rowOverrideDraft.nodePath : [];
+        const nextChild = pruneDraftChild(rowOverrideDraft.child);
+        const nextBranch = {
+            ...createRowPathBranch(request.field, request.value, rowOverrideDraft.title || rowOverrideDraft.rowLabel, ''),
+            label: normalizeRowPathValue(rowOverrideDraft.title || rowOverrideDraft.rowLabel || request.value),
+            sourceRowPath: Array.isArray(request.pathValues) ? request.pathValues.map(String).filter(Boolean) : [],
+            sourcePathFields: Array.isArray(request.pathFields) ? request.pathFields.map(String).filter(Boolean) : [],
+            child: nextChild,
+        };
+
+        const applyBranch = (node) => {
+            const branches = Array.isArray(node.branches) ? node.branches : [];
+            const existingIndex = branches.findIndex((branch) => (
+                branchMatchesRowPath(branch, request.field, request.value)
+            ));
+            if (existingIndex >= 0) {
+                return {
+                    ...node,
+                    branches: branches.map((branch, index) => (
+                        index === existingIndex ? { ...nextBranch, _id: branch._id || nextBranch._id } : branch
+                    )),
+                };
+            }
+            return {
+                ...node,
+                branches: [...branches, nextBranch],
+            };
+        };
+        const projectedRoot = updateNodeAtPath(root, nodePath, applyBranch);
+        const validation = validateReportDefinition(projectedRoot, { allFields, valConfigs, data });
+        if (!validation.valid) {
+            if (showNotification) showNotification(validation.errors[0] || 'Fix report validation errors before applying.', 'error');
+            return;
+        }
+
+        setRoot((prevRoot) => updateNodeAtPath(prevRoot, nodePath, applyBranch));
+
+        setRowOverrideDraft(null);
+        setSelection(null);
+        if (showNotification) showNotification(`Applied settings for ${rowOverrideDraft.rowLabel || 'row'}`, 'info');
+    }, [allFields, data, root, rowOverrideDraft, setRoot, showNotification, valConfigs]);
 
     const saveReport = useCallback(() => {
         if (!root || !root.field) return;
+        if (!reportValidation.valid) {
+            if (showNotification) showNotification(reportValidation.errors[0] || 'Fix report validation errors before saving.', 'error');
+            return;
+        }
+
         const id = `report-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 6)}`;
         const name = reportName.trim() || `Report ${(savedReports || []).length + 1}`;
         setSavedReports([
             ...(savedReports || []),
-            { id, name, reportDef: JSON.parse(JSON.stringify(reportDef)), createdAt: new Date().toISOString() },
+            {
+                id,
+                name,
+                reportDef: JSON.parse(JSON.stringify(reportDef)),
+                createdAt: new Date().toISOString(),
+            },
         ]);
         setActiveReportId(id);
         setReportName('');
         if (showNotification) showNotification(`Report "${name}" saved`, 'info');
-    }, [root, reportName, savedReports, reportDef, setSavedReports, setActiveReportId, showNotification]);
-
-    const inputStyle = inp(theme);
-    const labelStyle = {
-        fontSize: '9px', fontWeight: 800, textTransform: 'uppercase',
-        letterSpacing: '0.08em', color: theme.textSec,
-        display: 'flex', alignItems: 'center', gap: '6px', marginBottom: '10px',
-    };
+    }, [reportDef, reportName, reportValidation, root, savedReports, setActiveReportId, setSavedReports, showNotification]);
 
     return (
         <div style={{ display: 'flex', flexDirection: 'column', gap: '18px', padding: '2px 0 8px' }}>
-            {/* Saved reports */}
             {(savedReports || []).length > 0 && (
                 <div>
-                    <div style={labelStyle}><Icons.Save /> Saved Reports</div>
-                    <div style={{ display: 'flex', flexDirection: 'column', gap: '5px' }}>
-                        {(savedReports || []).map(report => (
+                    <div style={sectionLabelStyle(theme)}><Icons.Save /> Saved Reports</div>
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
+                        {(savedReports || []).map((report) => (
                             <div
                                 key={report.id}
-                                onClick={() => { setReportDef(JSON.parse(JSON.stringify(report.reportDef))); setActiveReportId(report.id); }}
+                                onClick={() => {
+                                    setReportDef(JSON.parse(JSON.stringify(report.reportDef)));
+                                    setActiveReportId(report.id);
+                                    setRowOverrideDraft(null);
+                                    setSelection({ type: 'node', path: [] });
+                                }}
                                 style={{
-                                    display: 'flex', alignItems: 'center', gap: '8px',
-                                    padding: '8px 10px', borderRadius: '10px', cursor: 'pointer',
+                                    display: 'flex',
+                                    alignItems: 'center',
+                                    gap: '8px',
+                                    padding: '8px 10px',
+                                    borderRadius: '10px',
+                                    cursor: 'pointer',
                                     background: report.id === activeReportId ? (theme.select || `${theme.primary || '#2563EB'}14`) : (theme.hover || '#F9FAFB'),
                                     border: `1px solid ${report.id === activeReportId ? (theme.primary || '#2563EB') : theme.border}`,
                                 }}
@@ -717,12 +2370,12 @@ export function ReportEditor({
                                 </div>
                                 <button
                                     type="button"
-                                    onClick={e => {
-                                        e.stopPropagation();
-                                        setSavedReports((savedReports || []).filter(r => r.id !== report.id));
+                                    onClick={(event) => {
+                                        event.stopPropagation();
+                                        setSavedReports((prev) => (prev || []).filter((current) => current.id !== report.id));
                                         if (activeReportId === report.id) setActiveReportId(null);
                                     }}
-                                    style={{ background: 'none', border: 'none', cursor: 'pointer', color: '#DC2626', padding: '2px', flexShrink: 0 }}
+                                    style={{ background: 'none', border: 'none', cursor: 'pointer', color: '#B91C1C', padding: '2px', flexShrink: 0 }}
                                 >
                                     <Icons.Delete />
                                 </button>
@@ -732,63 +2385,279 @@ export function ReportEditor({
                 </div>
             )}
 
-            {/* Pipeline builder */}
-            <div>
-                <div style={labelStyle}><Icons.ReportLevel /> Report Pipeline</div>
-
-                {!root ? (
-                    <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
-                        <div style={{ fontSize: '12px', color: theme.textSec }}>Choose the first field to break down by:</div>
-                        <select
-                            value=""
-                            onChange={e => { if (e.target.value) setRoot(createNode(e.target.value)); }}
-                            style={{ ...inputStyle, width: '100%' }}
+            <ReportSection
+                theme={theme}
+                sectionId="report-levels"
+                title="Report Levels"
+                description="Default hierarchy applied to every row unless a row override changes its children."
+                icon={<Icons.ReportLevel />}
+                action={root && (
+                    <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap', justifyContent: 'flex-end' }}>
+                        {typeof setShowReportConfigColumn === 'function' && (
+                            <button
+                                type="button"
+                                onClick={() => setShowReportConfigColumn((current) => (current === false ? true : false))}
+                                style={ghostBtn(theme, showReportConfigColumn !== false, false)}
+                                title={showReportConfigColumn !== false ? 'Hide row gear column' : 'Show row gear column'}
+                            >
+                                <Icons.Settings /> {showReportConfigColumn !== false ? 'Hide row gears' : 'Show row gears'}
+                            </button>
+                        )}
+                        <button
+                            type="button"
+                            onClick={addNextDefaultLevel}
+                            disabled={!defaultLevelItems.length || !defaultLevelItems[defaultLevelItems.length - 1].node.field}
+                            style={{
+                                ...ghostBtn(theme, false, false),
+                                opacity: (!defaultLevelItems.length || !defaultLevelItems[defaultLevelItems.length - 1].node.field) ? 0.5 : 1,
+                                pointerEvents: (!defaultLevelItems.length || !defaultLevelItems[defaultLevelItems.length - 1].node.field) ? 'none' : 'auto',
+                            }}
                         >
-                            <option value="">Select first field…</option>
-                            {allFields.map(f => <option key={f} value={f}>{formatDisplayLabel(f)}</option>)}
-                        </select>
+                            <Icons.Add /> Add next level
+                        </button>
+                    </div>
+                    )}
+            >
+                {!root ? (
+                    <div style={panelCardStyle(theme)}>
+                        <div style={{ fontSize: '14px', fontWeight: 800, color: theme.text }}>Level 1</div>
+                        <div>
+                            <div style={sectionLabelStyle(theme)}>Break Down By</div>
+                            <select
+                                value=""
+                                onChange={(event) => {
+                                    if (event.target.value) addRoot(event.target.value);
+                                }}
+                                style={inp(theme)}
+                            >
+                                <option value="">Select field...</option>
+                                {allFields.map((field) => (
+                                    <option key={field} value={field}>{getFieldLabel(field)}</option>
+                                ))}
+                            </select>
+                        </div>
                     </div>
                 ) : (
-                    <PipelineStep
-                        node={root}
-                        stepNumber={1}
-                        depth={0}
-                        allFields={allFields}
-                        sortByOptions={sortByOptions}
-                        theme={theme}
-                        onChange={setRoot}
-                        onRemoveChain={() => setRoot(null)}
-                    />
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
+                        {defaultLevelItems.map((item) => (
+                            <LevelRow
+                                key={`default-level:${item.index}:${item.node._id}`}
+                                item={item}
+                                selected={!rowOverrideDraft && selectionKey(selection) === selectionKey({ type: 'node', path: item.path })}
+                                theme={theme}
+                                sortByOptions={sortByOptions}
+                                getFieldLabel={getFieldLabel}
+                                onSelect={() => selectDefaultLevel(item.path)}
+                                onDragStart={(event) => {
+                                    setDraggingLevelIndex(item.index);
+                                    event.dataTransfer.effectAllowed = 'move';
+                                }}
+                                onDragOver={(event) => event.preventDefault()}
+                                onDrop={(event) => {
+                                    event.preventDefault();
+                                    reorderLevels(draggingLevelIndex, item.index);
+                                }}
+                            />
+                        ))}
+                    </div>
                 )}
-            </div>
+            </ReportSection>
 
-            {/* Save */}
-            <div style={{ borderTop: `1px solid ${theme.border}`, paddingTop: '14px' }}>
-                <div style={labelStyle}><Icons.Save /> Save Report</div>
+            {root && (
+                <ReportSection
+                    theme={theme}
+                    sectionId="report-outline"
+                    title="Report Outline"
+                    description="Default levels plus every row override, shown as a separate map of Default children."
+                    icon={<Icons.Report />}
+                >
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
+                        {outlineItems.map((item) => {
+                            if (item.kind === 'branch') {
+                                return (
+                                    <OutlineBranchRow
+                                        key={`outline-branch:${pathKey(item.nodePath)}:${item.branchIndex}:${item.branch._id}`}
+                                        item={item}
+                                        selected={!rowOverrideDraft && selectionKey(selection) === selectionKey({
+                                            type: 'branch',
+                                            nodePath: item.nodePath,
+                                            branchIndex: item.branchIndex,
+                                        })}
+                                        theme={theme}
+                                        onSelect={() => selectOutlineItem(item)}
+                                    />
+                                );
+                            }
+
+                            return (
+                                <OutlineNodeRow
+                                    key={`outline-node:${pathKey(item.nodePath)}:${item.node._id}`}
+                                    item={item}
+                                    selected={!rowOverrideDraft && selectionKey(selection) === selectionKey({ type: 'node', path: item.nodePath })}
+                                    theme={theme}
+                                    sortByOptions={sortByOptions}
+                                    getFieldLabel={getFieldLabel}
+                                    onSelect={() => selectOutlineItem(item)}
+                                />
+                            );
+                        })}
+                    </div>
+                </ReportSection>
+            )}
+
+            {root && rowOverrideDraft && (
+                <div ref={selectedLineRef}>
+                    <ReportSection
+                        theme={theme}
+                        sectionId="selected-row"
+                        title="Selected Row"
+                        description="Configure Custom children for the row gear you clicked."
+                        icon={<Icons.Settings />}
+                    >
+                        <RowOverrideInspector
+                            draft={rowOverrideDraft}
+                            allFields={allFields}
+                            getFieldLabel={getFieldLabel}
+                            sortByOptions={sortByOptions}
+                            theme={theme}
+                            onChange={setRowOverrideDraft}
+                            onApply={applyRowOverrideDraft}
+                            onCancel={closeRowOverrideDraft}
+                        />
+                    </ReportSection>
+                </div>
+            )}
+
+            {root && !rowOverrideDraft && selection && selectedItem && selectedItem.type === 'node' && (
+                <div ref={selectedLineRef}>
+                    <ReportSection
+                        theme={theme}
+                        sectionId="selected-level"
+                        title="Selected Level"
+                        description="Edit the selected default level or override child level."
+                        icon={<Icons.Edit />}
+                    >
+                        <NodeInspector
+                            item={defaultLevelItems.find((item) => isSamePath(item.path, selection.path)) || (selectedOutlineItem
+                                ? { ...selectedOutlineItem, path: selectedOutlineItem.nodePath }
+                                : { path: selection.path, levelNumber: selection.path.length + 1 })}
+                            node={selectedItem.node}
+                            allFields={allFields}
+                            getFieldLabel={getFieldLabel}
+                            sortByOptions={sortByOptions}
+                            theme={theme}
+                            onUpdate={(nextNode) => updateNode(selection.path, nextNode)}
+                            onApply={applySelectedLevel}
+                            onRemove={() => removeNode(selection.path)}
+                            onEditFilter={() => setEditingNodeFilter(selection.path)}
+                            titleLabel="Title"
+                        />
+                    </ReportSection>
+                </div>
+            )}
+
+            {root && !rowOverrideDraft && selection && selectedItem && selectedItem.type === 'branch' && selectedOutlineItem && (
+                <div ref={selectedLineRef}>
+                    <ReportSection
+                        theme={theme}
+                        sectionId="row-override"
+                        title="Row Override"
+                        description="Override applies to this row only. Configure its rule and Custom children."
+                        icon={<Icons.Settings />}
+                    >
+                        <BranchInspector
+                            item={selectedOutlineItem}
+                            branch={selectedItem.branch}
+                            theme={theme}
+                            onUpdate={(nextBranch) => updateBranch(selection.nodePath, selection.branchIndex, nextBranch)}
+                            onEditCondition={() => setEditingCondition({ nodePath: selection.nodePath, branchIndex: selection.branchIndex })}
+                            onOpenCustomChildren={() => openCustomChildren(selection.nodePath, selection.branchIndex, Boolean(selectedItem.branch.child))}
+                            onRemoveCustomChildren={() => removeCustomChildren(selection.nodePath, selection.branchIndex)}
+                            onRemove={() => removeBranch(selection.nodePath, selection.branchIndex)}
+                        />
+                    </ReportSection>
+                </div>
+            )}
+
+            <ReportSection
+                theme={theme}
+                sectionId="save-report"
+                title="Save Report"
+                description="Store the current report levels and row overrides."
+                icon={<Icons.Save />}
+            >
+                <ValidationPanel validation={reportValidation} theme={theme} />
                 <div style={{ display: 'flex', gap: '8px' }}>
                     <input
                         value={reportName}
-                        onChange={e => setReportName(e.target.value)}
-                        onKeyDown={e => { if (e.key === 'Enter') saveReport(); }}
-                        placeholder="Report name…"
-                        style={{ ...inputStyle, flex: 1 }}
+                        onChange={(event) => setReportName(event.target.value)}
+                        onKeyDown={(event) => {
+                            if (event.key === 'Enter') saveReport();
+                        }}
+                        placeholder="Report name..."
+                        style={{ ...inp(theme), flex: 1 }}
                     />
                     <button
                         type="button"
                         onClick={saveReport}
-                        disabled={!root || !root.field}
+                        disabled={!root || !root.field || !reportValidation.valid}
                         style={{
-                            display: 'inline-flex', alignItems: 'center', gap: '6px',
-                            background: theme.primary || '#2563EB', border: 'none',
-                            borderRadius: '8px', padding: '7px 14px',
-                            fontSize: '12px', fontWeight: 800, color: '#fff', cursor: 'pointer',
-                            opacity: (!root || !root.field) ? 0.5 : 1,
+                            display: 'inline-flex',
+                            alignItems: 'center',
+                            gap: '6px',
+                            background: theme.primary || '#2563EB',
+                            border: 'none',
+                            borderRadius: '9px',
+                            padding: '8px 14px',
+                            fontSize: '12px',
+                            fontWeight: 800,
+                            color: '#fff',
+                            cursor: 'pointer',
+                            opacity: (!root || !root.field || !reportValidation.valid) ? 0.5 : 1,
                         }}
                     >
                         <Icons.Save /> Save
                     </button>
                 </div>
-            </div>
+            </ReportSection>
+
+            {editingCondition && editingBranch && (
+                <ConditionModal
+                    condition={editingBranch.condition}
+                    allFields={allFields}
+                    getFieldLabel={getFieldLabel}
+                    theme={theme}
+                    onSave={(nextCondition) => {
+                        updateBranch(editingCondition.nodePath, editingCondition.branchIndex, {
+                            ...editingBranch,
+                            condition: nextCondition,
+                        });
+                    }}
+                    onClose={() => setEditingCondition(null)}
+                />
+            )}
+
+            {editingNodeFilter && (() => {
+                const filterNode = getNodeAtPath(root, editingNodeFilter);
+                if (!filterNode) return null;
+                return (
+                    <ConditionModal
+                        title="Edit level filter"
+                        description="Rows that don't match are grouped into 'Others' to keep totals intact. Applies to this level and all its children."
+                        condition={filterNode.filters || createCondition()}
+                        allFields={allFields}
+                        getFieldLabel={getFieldLabel}
+                        theme={theme}
+                        onSave={(nextCondition) => {
+                            updateNode(editingNodeFilter, {
+                                ...filterNode,
+                                filters: nextCondition.clauses.length > 0 ? nextCondition : null,
+                            });
+                        }}
+                        onClose={() => setEditingNodeFilter(null)}
+                    />
+                );
+            })()}
         </div>
     );
 }

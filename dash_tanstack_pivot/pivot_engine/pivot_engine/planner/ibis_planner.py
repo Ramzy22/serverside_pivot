@@ -366,6 +366,10 @@ class IbisPlanner:
     # _convert_measure_to_ibis removed, using self.builder.build_measure_aggregation
     # _convert_cursor_to_ibis_filter removed, using self.builder.build_cursor_filter_expression
 
+    def _table_for_spec(self, spec: PivotSpec) -> IbisTable:
+        table = self.con.table(spec.table)
+        return self.builder.apply_custom_dimensions(table, getattr(spec, "custom_dimensions", []))
+
     def _plan_standard(self, spec: PivotSpec, columns_top_n: Optional[int],
                        columns_order_by_measure: Optional[Measure],
                        include_metadata: bool) -> Dict[str, Any]:
@@ -373,7 +377,7 @@ class IbisPlanner:
         Standard pivot table planning using Ibis expressions.
         Supports both dimension filters (WHERE) and measure filters (HAVING).
         """
-        base_table = self.con.table(spec.table)
+        base_table = self._table_for_spec(spec)
         
         # Split filters into pre-aggregation (dimensions) and post-aggregation (measures)
         measure_aliases = {m.alias for m in spec.measures}
@@ -675,7 +679,7 @@ class IbisPlanner:
         if spec.columns and columns_top_n and columns_top_n > 0:
             col_ibis_expr = self._build_column_values_query(
                 spec.table, spec.columns, spec.filters,
-                columns_top_n, columns_order_by_measure, None, spec.column_sort_options
+                columns_top_n, columns_order_by_measure, None, spec.column_sort_options, spec.custom_dimensions
             )
             queries.insert(0, col_ibis_expr)
             metadata["needs_column_discovery"] = True
@@ -794,7 +798,7 @@ class IbisPlanner:
         """
         Plan query with GROUPING SETS, CUBE, or ROLLUP using Ibis expressions.
         """
-        base_table = self.con.table(spec.table)
+        base_table = self._table_for_spec(spec)
         
         if spec.filters:
             filter_expr = self.builder.build_filter_expression(base_table, spec.filters)
@@ -879,7 +883,14 @@ class IbisPlanner:
         order_measure = spec.measures[0]
         
         col_ibis_expr = self._build_column_values_query(
-            spec.table, spec.columns, spec.filters, top_n, order_measure, column_cursor, spec.column_sort_options
+            spec.table,
+            spec.columns,
+            spec.filters,
+            top_n,
+            order_measure,
+            column_cursor,
+            spec.column_sort_options,
+            spec.custom_dimensions,
         )
         
         metadata = {
@@ -910,7 +921,7 @@ class IbisPlanner:
         """
         Build actual pivot query as an Ibis expression after discovering column values.
         """
-        base_table = self.con.table(spec.table)
+        base_table = self._table_for_spec(spec)
         
         # Split filters into pre-aggregation (dimensions) and post-aggregation (measures)
         measure_aliases = {m.alias for m in spec.measures}
@@ -1111,7 +1122,7 @@ class IbisPlanner:
         """
         Plan queries for hierarchical drill-down with multiple levels using Ibis expressions.
         """
-        base_table = self.con.table(spec.table)
+        base_table = self._table_for_spec(spec)
         
         if spec.filters:
             filter_expr = self.builder.build_filter_expression(base_table, spec.filters)
@@ -1215,11 +1226,13 @@ class IbisPlanner:
         self, table_name: str, columns: List[str], filters: List[Dict[str, Any]],
         top_n: Optional[int], order_measure: Optional[Measure], column_cursor: Optional[str] = None,
         column_sort_options: Optional[Dict[str, Any]] = None,
+        custom_dimensions: Optional[List[Dict[str, Any]]] = None,
     ) -> IbisTable:
         """
         Builds an Ibis expression to discover pivot column values with optional keyset pagination.
         """
         base_table = self.con.table(table_name)
+        base_table = self.builder.apply_custom_dimensions(base_table, custom_dimensions or [])
         
         filtered_table = base_table
         if filters:

@@ -295,6 +295,7 @@ def register_dash_pivot_transport_callback(
         Input(pivot_id, "colFields"),
         Input(pivot_id, "valConfigs"),
         Input(pivot_id, "filters"),
+        Input(pivot_id, "customDimensions"),
         Input(pivot_id, "sorting"),
         Input(pivot_id, "expanded"),
         Input(pivot_id, "immersiveMode"),
@@ -317,6 +318,7 @@ def register_dash_pivot_transport_callback(
         col_fields,
         val_configs,
         filters,
+        custom_dimensions,
         sorting,
         expanded,
         immersive_mode,
@@ -349,6 +351,10 @@ def register_dash_pivot_transport_callback(
         effective_trigger_prop = synthetic_trigger_prop or triggered_prop
         if isinstance(triggered_prop, str) and not triggered_prop.endswith(".runtimeRequest"):
             effective_trigger_prop = triggered_prop
+            # When a Dash prop (not runtimeRequest) triggers the callback, the request_id
+            # comes from the last runtimeRequest and was already marked as handled by the
+            # frontend's deduplication guard. Generate a fresh id so the response is accepted.
+            request_id = f"prop-refresh:{triggered_prop}:{int(time.time() * 1000)}"
             if triggered_prop.endswith(".cellUpdate") or triggered_prop.endswith(".cellUpdates"):
                 request_kind = "update"
         profiling_enabled = bool(request_payload.get("profile") or request_payload.get("profiling"))
@@ -383,6 +389,28 @@ def register_dash_pivot_transport_callback(
         if request_kind == "filter_options":
             column_id = request_payload.get("columnId") or request_payload.get("column_id")
             resolved_table = table_name or request_payload.get("table")
+            request_state_override = _extract_request_state_override(request_payload)
+            effective_row_fields = _state_override_value(request_state_override, "rowFields", row_fields or [], list)
+            effective_col_fields = _state_override_value(request_state_override, "colFields", col_fields or [], list)
+            effective_val_configs = _state_override_value(request_state_override, "valConfigs", val_configs or [], list)
+            effective_filters = _state_override_value(request_state_override, "filters", filters or {}, dict)
+            effective_custom_dimensions = _state_override_value(request_state_override, "customDimensions", custom_dimensions or [], list)
+            effective_tree_config = _state_override_value(
+                request_state_override,
+                "treeConfig",
+                tree_config if isinstance(tree_config, dict) else None,
+                dict,
+                allow_none=True,
+            )
+            search = str(request_payload.get("search") or "").strip()
+            try:
+                limit = max(1, min(int(request_payload.get("limit", 250)), 500))
+            except (TypeError, ValueError):
+                limit = 250
+            try:
+                offset = max(0, int(request_payload.get("offset", 0)))
+            except (TypeError, ValueError):
+                offset = 0
             filter_started_at = time.perf_counter()
             if not column_id or not resolved_table:
                 callback_finished_at = time.perf_counter()
@@ -403,43 +431,47 @@ def register_dash_pivot_transport_callback(
                     ),
                 )
 
-            _debug_print(debug, "[filter-request]", {"columnId": column_id, "table": resolved_table})
+            _debug_print(debug, "[filter-request]", {"columnId": column_id, "table": resolved_table, "search": search, "offset": offset, "limit": limit})
 
             from ..tanstack_adapter import TanStackOperation, TanStackRequest
 
             service = runtime_service_getter()
             adapter = service._adapter_getter()
             request_columns = PivotRuntimeService._build_request_columns(
-                row_fields or [],
-                col_fields or [],
-                val_configs or [],
+                effective_row_fields or [],
+                effective_col_fields or [],
+                effective_val_configs or [],
             )
-            if isinstance(tree_config, dict):
+            if isinstance(effective_tree_config, dict):
                 for field_name in (
-                    tree_config.get("labelField"),
-                    tree_config.get("idField"),
-                    tree_config.get("parentIdField"),
-                    tree_config.get("pathField"),
+                    effective_tree_config.get("labelField"),
+                    effective_tree_config.get("idField"),
+                    effective_tree_config.get("parentIdField"),
+                    effective_tree_config.get("pathField"),
                 ):
                     if isinstance(field_name, str) and field_name and not any(col.get("id") == field_name for col in request_columns):
                         request_columns.append({"id": field_name})
-                for field_name in (tree_config.get("valueFields") or []):
+                for field_name in (effective_tree_config.get("valueFields") or []):
                     if isinstance(field_name, str) and field_name and not any(col.get("id") == field_name for col in request_columns):
                         request_columns.append({"id": field_name})
             request = TanStackRequest(
                 operation=TanStackOperation.GET_UNIQUE_VALUES,
                 table=resolved_table,
                 columns=request_columns,
-                filters=filters or {},
+                filters=effective_filters or {},
+                custom_dimensions=effective_custom_dimensions or [],
                 sorting=[],
-                grouping=row_fields or [],
+                grouping=effective_row_fields or [],
                 aggregations=[],
-                pagination={"pageIndex": 0, "pageSize": 1000},
+                pagination={"pageIndex": offset // limit if limit else 0, "pageSize": limit, "offset": offset, "search": search},
                 global_filter=column_id,
             )
             response = await _await_if_needed(adapter.handle_request(request))
             next_filter_options = [d.get("value") for d in (response.data or [])]
-            _debug_print(debug, "[filter-response]", {"columnId": column_id, "count": len(next_filter_options)})
+            pagination = response.pagination if isinstance(response.pagination, dict) else {}
+            total_options = pagination.get("totalRows", len(next_filter_options))
+            has_more = bool(pagination.get("hasMore", False))
+            _debug_print(debug, "[filter-response]", {"columnId": column_id, "count": len(next_filter_options), "total": total_options, "hasMore": has_more})
             callback_finished_at = time.perf_counter()
             return _response_tuple(
                 _build_runtime_response(
@@ -449,6 +481,11 @@ def register_dash_pivot_transport_callback(
                     payload={
                         "columnId": column_id,
                         "options": next_filter_options,
+                        "search": search,
+                        "offset": offset,
+                        "limit": limit,
+                        "total": total_options,
+                        "hasMore": has_more,
                     },
                     table=resolved_table,
                     profile={
@@ -457,6 +494,9 @@ def register_dash_pivot_transport_callback(
                             "kind": "filter_options",
                             "table": resolved_table,
                             "columnId": column_id,
+                            "search": search,
+                            "offset": offset,
+                            "limit": limit,
                         },
                         "callback": {
                             "totalMs": round((callback_finished_at - callback_started_at) * 1000, 3),
@@ -484,6 +524,7 @@ def register_dash_pivot_transport_callback(
                 table=resolved_table,
                 columns=request_columns,
                 filters=filters or {},
+                custom_dimensions=custom_dimensions or [],
                 sorting=[],
                 grouping=row_fields or [],
                 aggregations=[],
@@ -586,6 +627,13 @@ def register_dash_pivot_transport_callback(
             ))
 
         active_request_meta = request_payload
+        # When a Dash prop (reportDef, viewMode, etc.) triggers the callback, active_request_meta
+        # carries the previous runtimeRequest with intent="viewport" and a stale window_seq.
+        # The session gate rejects viewport requests whose window_seq isn't strictly increasing,
+        # so prop-triggered refreshes would be silently dropped. Force "structural" so the gate
+        # always accepts them.
+        if not (isinstance(effective_trigger_prop, str) and effective_trigger_prop.endswith(".runtimeRequest")):
+            active_request_meta = {**(active_request_meta if isinstance(active_request_meta, dict) else {}), "intent": "structural"}
         viewport_table = request_payload.get("table") if isinstance(request_payload, dict) else None
         request_table = active_request_meta.get("table") if isinstance(active_request_meta, dict) else None
         resolved_table = table_name or request_table or viewport_table
@@ -606,11 +654,20 @@ def register_dash_pivot_transport_callback(
             trigger_prop=effective_trigger_prop,
             viewport=active_request_meta,
         )
-        request_state_override = _extract_request_state_override(request_payload)
+        # Runtime state_override is a snapshot attached to a specific runtimeRequest.
+        # When a normal Dash prop (viewMode, reportDef, rowFields, etc.) triggers this
+        # callback, reusing the previous runtimeRequest override can force the backend
+        # to process stale mode/fields and leave the UI/data out of sync.
+        request_state_override = (
+            _extract_request_state_override(request_payload)
+            if isinstance(effective_trigger_prop, str) and effective_trigger_prop.endswith(".runtimeRequest")
+            else None
+        )
         effective_row_fields = _state_override_value(request_state_override, "rowFields", row_fields or [], list)
         effective_col_fields = _state_override_value(request_state_override, "colFields", col_fields or [], list)
         effective_val_configs = _state_override_value(request_state_override, "valConfigs", val_configs or [], list)
         effective_filters = _state_override_value(request_state_override, "filters", filters or {}, dict)
+        effective_custom_dimensions = _state_override_value(request_state_override, "customDimensions", custom_dimensions or [], list)
         effective_sorting = _state_override_value(request_state_override, "sorting", sorting or [], list)
         effective_sort_options = _state_override_value(
             request_state_override,
@@ -696,6 +753,7 @@ def register_dash_pivot_transport_callback(
             col_fields=effective_col_fields,
             val_configs=effective_val_configs,
             filters=effective_filters,
+            custom_dimensions=effective_custom_dimensions,
             sorting=effective_sorting,
             sort_options=effective_sort_options,
             expanded=effective_expanded,
@@ -745,6 +803,7 @@ def register_dash_pivot_transport_callback(
                 "chart_request": request_payload if request_kind == "chart" and isinstance(request_payload, dict) else None,
                 "detail_request": request_payload if request_kind == "detail" and isinstance(request_payload, dict) else None,
                 "row_fields": state.row_fields,
+                "custom_dimensions": len(state.custom_dimensions or []),
                 "sorting": state.sorting,
                 "sort_options": state.sort_options,
                 "sort_options_default_used": bool(
@@ -936,6 +995,7 @@ def register_dash_pivot_transport_callback(
                         "dataVersion": result.data_version,
                         "transaction": result.transaction_result,
                         "editOverlay": result.edit_overlay,
+                        "formulaErrors": result.formula_errors or None,
                     },
                     table=resolved_table,
                     session_id=context.session_id,

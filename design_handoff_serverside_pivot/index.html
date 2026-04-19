@@ -1,0 +1,286 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>serverside-pivot UI Kit</title>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=JetBrains+Mono:wght@400;500;700&display=swap" rel="stylesheet">
+<script src="https://unpkg.com/react@18.3.1/umd/react.development.js" integrity="sha384-hD6/rw4ppMLGNu3tX5cjIb+uRZ7UkRJ6BPkLpg4hAu/6onKUg4lLsHAs9EBPT82L" crossorigin="anonymous"></script>
+<script src="https://unpkg.com/react-dom@18.3.1/umd/react-dom.development.js" integrity="sha384-u6aeetuaXnQ38mYT8rp6sbXaQe3NL9t+IBXmnYxwkUI2Hw4bsp2Wvmx4yRQF1uAm" crossorigin="anonymous"></script>
+<script src="https://unpkg.com/@babel/standalone@7.29.0/babel.min.js" integrity="sha384-m08KidiNqLdpJqLq95G/LEi8Qvjl/xUYll3QILypMoQ65QorJ9Lvtp2RXYGBFj1y" crossorigin="anonymous"></script>
+<style>
+  *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+  html, body, #root { height: 100%; width: 100%; overflow: hidden; }
+  body { font-family: 'Inter', ui-sans-serif, system-ui, sans-serif; -webkit-font-smoothing: antialiased; }
+  ::-webkit-scrollbar { width: 6px; height: 6px; }
+  ::-webkit-scrollbar-track { background: transparent; }
+  ::-webkit-scrollbar-thumb { background: rgba(150,150,150,0.3); border-radius: 3px; }
+  ::-webkit-scrollbar-thumb:hover { background: rgba(150,150,150,0.5); }
+</style>
+</head>
+<body>
+<div id="root"></div>
+
+<!-- Load component modules in dependency order -->
+<script type="text/babel" src="AppBar.jsx"></script>
+<script type="text/babel" src="SidebarPanel.jsx"></script>
+<script type="text/babel" src="PivotTable.jsx"></script>
+<script type="text/babel" src="StatusBar.jsx"></script>
+
+<script type="text/babel">
+// ── Theme definitions (from styles.js) ─────────────────────────────────
+const themes = {
+  flash: {
+    name:'flash', primary:'#4F46E5', border:'#E5E7EB', borderStrong:'#D7DDEA',
+    headerBg:'#FFFFFF', headerSubtleBg:'#F9FAFB', pageBg:'#FFFFFF', surfaceBg:'#FFFFFF',
+    surfaceMuted:'#F8FAFC', surfaceInset:'#F5F7FB', hierarchyBg:'#EDF4FF',
+    sortedHeaderBg:'rgba(79,70,229,0.06)', sortedHeaderBorder:'#4F46E5', sortedHeaderText:'#3730A3',
+    text:'#111827', textSec:'#475569', textSoft:'#64748B',
+    hover:'#F8FAFC', hoverStrong:'#F3F4F6', select:'rgba(79,70,229,0.08)',
+    totalBg:'rgba(238,242,255,0.82)', totalBgStrong:'rgba(224,231,255,0.95)',
+    totalText:'#3730A3', totalTextStrong:'#312E81',
+    editedCellBg:'#EDF7EF', editedCellBorder:'#82B38B', editedCellText:'#2C4636',
+    sidebarBg:'#FFFFFF',
+    shadowSm:'0 1px 2px rgba(15,23,42,0.05)',
+    shadowMd:'0 10px 24px rgba(15,23,42,0.06), 0 2px 8px rgba(15,23,42,0.04)',
+    shadowInset:'inset 0 1px 0 rgba(255,255,255,0.8)',
+    radius:'16px', radiusSm:'10px',
+  },
+  dark: {
+    name:'dark', isDark:true, primary:'#818CF8', border:'rgba(255,255,255,0.10)', borderStrong:'rgba(255,255,255,0.16)',
+    headerBg:'#111318', headerSubtleBg:'#171A21', pageBg:'#0A0C10', surfaceBg:'#090C11',
+    surfaceMuted:'#0D1117', surfaceInset:'#11161E', hierarchyBg:'#0F141C',
+    sortedHeaderBg:'rgba(129,140,248,0.12)', sortedHeaderBorder:'#818CF8', sortedHeaderText:'#C7D2FE',
+    text:'#F8FAFC', textSec:'#CBD5E1', textSoft:'#94A3B8',
+    hover:'#171B22', hoverStrong:'#1C212B', select:'rgba(129,140,248,0.16)',
+    totalBg:'rgba(129,140,248,0.18)', totalBgStrong:'#818CF8', totalText:'#EEF2FF', totalTextStrong:'#0A0C10',
+    editedCellBg:'#203A36', editedCellBorder:'#6AB7A8', editedCellText:'#F3FCFA',
+    sidebarBg:'#10141B',
+    shadowSm:'0 1px 2px rgba(0,0,0,0.35)',
+    shadowMd:'0 18px 40px rgba(0,0,0,0.42), 0 2px 10px rgba(0,0,0,0.28)',
+    shadowInset:'inset 0 1px 0 rgba(255,255,255,0.03)',
+    radius:'16px', radiusSm:'10px',
+  },
+  bloomblerg_black: {
+    name:'bloomblerg_black', isDark:true, primary:'#F59E0B', border:'rgba(255,255,255,0.18)', borderStrong:'rgba(255,255,255,0.28)',
+    headerBg:'#000000', headerSubtleBg:'#0A0A0A', pageBg:'#000000', surfaceBg:'#000000',
+    surfaceMuted:'#050505', surfaceInset:'#0B0B0B', hierarchyBg:'#080808',
+    sortedHeaderBg:'rgba(245,158,11,0.22)', sortedHeaderBorder:'#F59E0B', sortedHeaderText:'#FFFFFF',
+    text:'#FFFFFF', textSec:'rgba(255,255,255,0.88)', textSoft:'rgba(255,255,255,0.68)',
+    hover:'#101010', hoverStrong:'#171717', select:'rgba(245,158,11,0.20)',
+    totalBg:'rgba(245,158,11,0.20)', totalBgStrong:'#F59E0B', totalText:'#FFFFFF', totalTextStrong:'#000000',
+    editedCellBg:'#1B302C', editedCellBorder:'#72C1AD', editedCellText:'#F4FCF8',
+    sidebarBg:'#020202',
+    shadowSm:'0 1px 2px rgba(0,0,0,0.35)',
+    shadowMd:'0 18px 40px rgba(0,0,0,0.45), 0 2px 10px rgba(0,0,0,0.30)',
+    shadowInset:'inset 0 1px 0 rgba(255,255,255,0.06)',
+    radius:'12px', radiusSm:'8px',
+  },
+  blooomberg: {
+    name:'blooomberg', isDark:true, primary:'#F59E0B', border:'rgba(255,255,255,0.10)',
+    headerBg:'#14181E', headerSubtleBg:'#1A2028', pageBg:'#0A0D12', surfaceBg:'#080B10',
+    surfaceMuted:'#0D1219', surfaceInset:'#111822', hierarchyBg:'#0F151E',
+    sortedHeaderBg:'rgba(245,158,11,0.16)', sortedHeaderBorder:'#F59E0B', sortedHeaderText:'#FCD34D',
+    text:'#F3F4F6', textSec:'#D1D5DB', textSoft:'#9CA3AF',
+    hover:'#1A212B', hoverStrong:'#202833', select:'rgba(245,158,11,0.18)',
+    totalBg:'rgba(245,158,11,0.16)', totalBgStrong:'#F59E0B', totalText:'#111111', totalTextStrong:'#000000',
+    sidebarBg:'#10151D',
+    shadowSm:'0 1px 2px rgba(0,0,0,0.35)', shadowMd:'0 18px 40px rgba(0,0,0,0.45)',
+    shadowInset:'inset 0 1px 0 rgba(255,255,255,0.03)',
+    radius:'12px', radiusSm:'8px',
+  },
+  strata: {
+    name:'strata', isDark:true, primary:'#00f2ff', border:'rgba(255,255,255,0.08)',
+    headerBg:'rgba(12,12,18,0.98)', pageBg:'#0d0d12', surfaceBg:'#0d0d12',
+    sortedHeaderBg:'rgba(0,242,255,0.08)', sortedHeaderBorder:'#00f2ff', sortedHeaderText:'#00f2ff',
+    text:'#e0e0e6', textSec:'#8a8a98', hover:'rgba(255,255,255,0.04)', select:'rgba(0,242,255,0.12)',
+    totalBg:'rgba(0,242,255,0.10)', totalBgStrong:'rgba(0,242,255,0.18)', totalText:'#00f2ff', totalTextStrong:'#00f2ff',
+    sidebarBg:'#0a0a10', hierarchyBg:'rgba(0,242,255,0.06)',
+    shadowMd:'0 18px 40px rgba(0,0,0,0.5)', shadowInset:'inset 0 1px 0 rgba(255,255,255,0.02)',
+    radius:'8px', radiusSm:'6px',
+  },
+  alabaster: {
+    name:'alabaster', primary:'#2563eb', border:'rgba(0,0,0,0.06)',
+    headerBg:'#fcfcfc', pageBg:'#ffffff', surfaceBg:'#ffffff',
+    sortedHeaderBg:'rgba(37,99,235,0.05)', sortedHeaderBorder:'#2563eb', sortedHeaderText:'#1e40af',
+    text:'#0a0a0a', textSec:'#666666', hover:'rgba(37,99,235,0.04)', select:'rgba(37,99,235,0.08)',
+    totalBg:'rgba(37,99,235,0.08)', totalBgStrong:'rgba(37,99,235,0.14)', totalText:'#1e40af', totalTextStrong:'#1e3a8a',
+    sidebarBg:'#fcfcfc', hierarchyBg:'rgba(37,99,235,0.05)',
+    shadowSm:'0 1px 2px rgba(0,0,0,0.04)', shadowMd:'0 8px 24px rgba(0,0,0,0.06)',
+    shadowInset:'inset 0 1px 0 rgba(255,255,255,0.9)',
+    radius:'8px', radiusSm:'6px',
+  },
+};
+
+// ── Demo data ───────────────────────────────────────────────────────────
+const AVAILABLE_FIELDS = ['desk','strategy','asset_class','sector','symbol','instrument','day_pnl','market_value','net_exposure','delta_usd','vega_usd','position_qty','price_20d'];
+
+const DEMO_DATA = [
+  { key:'eq', label:'Equity', depth:0, hasChildren:true, day_pnl:'+24,840', market_value:'4,320,000', net_exposure:'1,200,000', delta_usd:'+840,000', vega_usd:'—' },
+  { key:'eq-tech', label:'Technology', depth:1, hasChildren:true, day_pnl:'+14,200', market_value:'2,100,000', net_exposure:'800,000', delta_usd:'+560,000', vega_usd:'—' },
+  { key:'aapl', label:'AAPL', depth:2, day_pnl:'+8,240', market_value:'1,240,000', net_exposure:'480,000', delta_usd:'+320,000', vega_usd:'—' },
+  { key:'msft', label:'MSFT', depth:2, day_pnl:'+4,120', market_value:'860,000', net_exposure:'320,000', delta_usd:'+180,000', vega_usd:'—' },
+  { key:'nvda', label:'NVDA', depth:2, day_pnl:'+1,840', market_value:'—', net_exposure:'—', delta_usd:'—', vega_usd:'—' },
+  { key:'eq-fin', label:'Financials', depth:1, hasChildren:true, day_pnl:'+10,640', market_value:'2,220,000', net_exposure:'400,000', delta_usd:'+280,000', vega_usd:'—' },
+  { key:'jpm', label:'JPM', depth:2, day_pnl:'+6,400', market_value:'1,420,000', net_exposure:'240,000', delta_usd:'+160,000', vega_usd:'—' },
+  { key:'gs', label:'GS', depth:2, day_pnl:'+4,240', market_value:'800,000', net_exposure:'160,000', delta_usd:'+120,000', vega_usd:'—' },
+  { key:'opt', label:'Options', depth:0, hasChildren:true, day_pnl:'−3,200', market_value:'980,000', net_exposure:'−320,000', delta_usd:'−240,000', vega_usd:'+48,000' },
+  { key:'opt-spx', label:'SPX Puts', depth:1, day_pnl:'−3,200', market_value:'980,000', net_exposure:'−320,000', delta_usd:'−240,000', vega_usd:'+48,000' },
+  { key:'fix', label:'Fixed Income', depth:0, hasChildren:false, day_pnl:'+1,480', market_value:'6,100,000', net_exposure:'5,400,000', delta_usd:'—', vega_usd:'—' },
+];
+
+const COLS = [
+  { key:'hier', label:'Instrument' },
+  { key:'day_pnl', label:'Day PnL', total:'+23,120', grandTotal:'+23,120' },
+  { key:'market_value', label:'Mkt Val', total:'11,400,000', grandTotal:'11,400,000' },
+  { key:'net_exposure', label:'Net Exp', total:'6,280,000', grandTotal:'6,280,000' },
+  { key:'delta_usd', label:'Delta USD', total:'+600,000', grandTotal:'+600,000' },
+  { key:'vega_usd', label:'Vega USD', total:'+48,000', grandTotal:'+48,000' },
+];
+
+// ── Main App ────────────────────────────────────────────────────────────
+function App() {
+  const saved = (() => { try { return JSON.parse(localStorage.getItem('sp-kit-state') || '{}'); } catch { return {}; } })();
+
+  const [themeName, setThemeNameRaw] = React.useState(saved.themeName || 'flash');
+  const [sidebarOpen, setSidebarOpen] = React.useState(saved.sidebarOpen !== false);
+  const [density, setDensityRaw] = React.useState(saved.density ?? 1);
+  const [sortCol, setSortCol] = React.useState(null);
+  const [showSparkline, setShowSparkline] = React.useState(saved.showSparkline !== false);
+  const [rowFields, setRowFields] = React.useState(['instrument']);
+  const [colFields, setColFields] = React.useState([]);
+  const [valFields, setValFields] = React.useState([
+    { field:'day_pnl', agg:'sum', label:'Day PnL' },
+    { field:'market_value', agg:'sum', label:'Mkt Val' },
+    { field:'net_exposure', agg:'sum', label:'Net Exp' },
+  ]);
+
+  const setThemeName = (v) => { setThemeNameRaw(v); persist({ themeName: v }); };
+  const setDensity = (v) => { setDensityRaw(v); persist({ density: v }); };
+  const persist = (patch) => {
+    try {
+      const cur = JSON.parse(localStorage.getItem('sp-kit-state') || '{}');
+      localStorage.setItem('sp-kit-state', JSON.stringify({ ...cur, ...patch }));
+    } catch {}
+  };
+
+  const theme = themes[themeName] || themes.flash;
+  const r = theme.radius || '16px';
+
+  // Tweaks
+  const [tweaksVisible, setTweaksVisible] = React.useState(false);
+  React.useEffect(() => {
+    window.addEventListener('message', (e) => {
+      if (e.data?.type === '__activate_edit_mode') setTweaksVisible(true);
+      if (e.data?.type === '__deactivate_edit_mode') setTweaksVisible(false);
+    });
+    window.parent.postMessage({ type: '__edit_mode_available' }, '*');
+  }, []);
+
+  return (
+    <div style={{ height: '100%', display: 'flex', flexDirection: 'column', background: theme.pageBg || '#F4F7FB', fontFamily: "'Inter', ui-sans-serif, system-ui, sans-serif" }}>
+      {/* Page header */}
+      <div style={{ padding: '16px 24px 0', display: 'flex', alignItems: 'center', gap: '12px', flexShrink: 0 }}>
+        <div style={{ fontSize: '11px', fontWeight: 700, letterSpacing: '0.06em', textTransform: 'uppercase', color: theme.textSoft || '#94A3B8' }}>Trader Monitor</div>
+        <div style={{ fontSize: '11px', fontWeight: 500, color: theme.textSoft || '#94A3B8', background: theme.surfaceMuted || '#F8FAFC', border: `1px solid ${theme.border}`, borderRadius: '999px', padding: '3px 10px' }}>
+          NASDAQ Snapshot · {DEMO_DATA.length} instruments
+        </div>
+        <div style={{ marginLeft: 'auto', display: 'flex', gap: '8px', alignItems: 'center' }}>
+          <label style={{ display: 'flex', alignItems: 'center', gap: '6px', fontSize: '11px', color: theme.textSec, cursor: 'pointer' }}>
+            <input type="checkbox" checked={showSparkline} onChange={e => setShowSparkline(e.target.checked)} style={{ accentColor: theme.primary }} />
+            Sparklines
+          </label>
+        </div>
+      </div>
+
+      {/* Main pivot panel */}
+      <div style={{ flex: 1, padding: '12px 24px 24px', minHeight: 0, display: 'flex', flexDirection: 'column' }}>
+        <div style={{
+          flex: 1, display: 'flex', flexDirection: 'column', minHeight: 0,
+          background: theme.pageBg || theme.background || '#fff',
+          border: `1px solid ${theme.border}`,
+          borderRadius: r,
+          overflow: 'hidden',
+          boxShadow: theme.shadowMd || '0 10px 24px rgba(15,23,42,0.06)',
+        }}>
+          {/* AppBar */}
+          <PivotAppBar
+            theme={theme} themes={themes} themeName={themeName} setThemeName={setThemeName}
+            sidebarOpen={sidebarOpen} setSidebarOpen={setSidebarOpen}
+            title="NASDAQ 20D PnL Series"
+            rowCount={DEMO_DATA.length}
+            density={density} setDensity={setDensity}
+          />
+          {/* Body: sidebar + table */}
+          <div style={{ flex: 1, display: 'flex', minHeight: 0, overflow: 'hidden' }}>
+            {sidebarOpen && (
+              <SidebarPanel
+                theme={theme}
+                fields={AVAILABLE_FIELDS}
+                rowFields={rowFields} setRowFields={setRowFields}
+                colFields={colFields} setColFields={setColFields}
+                valFields={valFields} setValFields={setValFields}
+              />
+            )}
+            <PivotTable
+              theme={theme}
+              data={DEMO_DATA}
+              cols={COLS}
+              showSparkline={showSparkline}
+              density={density}
+              sortCol={sortCol}
+              setSortCol={setSortCol}
+            />
+          </div>
+          {/* Status bar */}
+          <StatusBar theme={theme} rowCount={DEMO_DATA.length} selectedCount={0} density={density} />
+        </div>
+      </div>
+
+      {/* Tweaks panel */}
+      {tweaksVisible && (
+        <div style={{
+          position: 'fixed', bottom: '20px', right: '20px', zIndex: 99999,
+          background: theme.surfaceBg || '#fff', border: `1px solid ${theme.border}`,
+          borderRadius: theme.radiusSm || '10px', padding: '14px 16px',
+          boxShadow: theme.shadowMd || '0 8px 24px rgba(0,0,0,0.12)',
+          minWidth: '220px', color: theme.text,
+        }}>
+          <div style={{ fontSize: '11px', fontWeight: 700, letterSpacing: '0.06em', textTransform: 'uppercase', color: theme.textSec, marginBottom: '12px' }}>Tweaks</div>
+          <div style={{ marginBottom: '10px' }}>
+            <div style={{ fontSize: '11px', color: theme.textSec, marginBottom: '6px' }}>Theme</div>
+            <select value={themeName} onChange={e => setThemeName(e.target.value)} style={{ width: '100%', border: `1px solid ${theme.border}`, borderRadius: '8px', padding: '6px 8px', background: theme.surfaceBg || '#fff', color: theme.text, fontSize: '12px', fontFamily: 'inherit', cursor: 'pointer' }}>
+              {THEME_ORDER.map(n => <option key={n} value={n}>{THEME_LABELS[n] || n}</option>)}
+            </select>
+          </div>
+          <div style={{ marginBottom: '10px' }}>
+            <div style={{ fontSize: '11px', color: theme.textSec, marginBottom: '6px' }}>Density</div>
+            <div style={{ display: 'flex', gap: '4px' }}>
+              {DENSITY_LABELS.map((l, i) => (
+                <button key={l} onClick={() => setDensity(i)} style={{ flex: 1, padding: '5px', borderRadius: '6px', border: `1px solid ${theme.border}`, background: density === i ? theme.primary : 'transparent', color: density === i ? '#fff' : theme.text, fontSize: '11px', cursor: 'pointer', fontFamily: 'inherit' }}>{l}</button>
+              ))}
+            </div>
+          </div>
+          <div>
+            <label style={{ display: 'flex', alignItems: 'center', gap: '8px', fontSize: '12px', cursor: 'pointer', color: theme.text }}>
+              <input type="checkbox" checked={showSparkline} onChange={e => setShowSparkline(e.target.checked)} style={{ accentColor: theme.primary }} />
+              Show Sparklines
+            </label>
+          </div>
+          <div style={{ marginTop: '10px' }}>
+            <label style={{ display: 'flex', alignItems: 'center', gap: '8px', fontSize: '12px', cursor: 'pointer', color: theme.text }}>
+              <input type="checkbox" checked={sidebarOpen} onChange={e => setSidebarOpen(e.target.checked)} style={{ accentColor: theme.primary }} />
+              Show Sidebar
+            </label>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+const root = ReactDOM.createRoot(document.getElementById('root'));
+root.render(<App />);
+</script>
+</body>
+</html>

@@ -135,6 +135,137 @@ def test_displayed_column_formula_scope_is_exposed_in_sidebar_and_component():
     assert "formulaScope: PropTypes.oneOf(['measures', 'columns'])" in component_source
 
 
+def test_report_editor_lists_outline_and_uses_row_override_language():
+    report_source = Path(
+        os.path.join(
+            os.getcwd(),
+            "dash_tanstack_pivot",
+            "src",
+            "lib",
+            "components",
+            "Sidebar",
+            "ReportEditor.js",
+        )
+    ).read_text(encoding="utf-8")
+
+    assert "Report Outline" in report_source
+    assert "data-report-section={sectionId || title}" in report_source
+    assert 'sectionId="report-levels"' in report_source
+    assert 'sectionId="report-outline"' in report_source
+    assert 'sectionId="selected-level"' in report_source
+    assert "borderTop: `2px solid ${theme.textSec || '#334155'}`" in report_source
+    assert "linear-gradient" not in report_source
+    assert "borderLeft" not in report_source
+    assert "Default levels plus every row override" in report_source
+    assert "OutlineNodeRow" in report_source
+    assert "OutlineBranchRow" in report_source
+    assert "selectedItem.type === 'branch'" in report_source
+    assert "Row override ${item.badge}" in report_source
+    assert "Edit row override rule" in report_source
+    assert "Custom children" in report_source
+    assert "Default children" in report_source
+    assert "Override applies to this row only" in report_source
+    assert "Open Custom children" in report_source
+    assert "Add Custom children" in report_source
+    assert "Edit spl" + "it rule" not in report_source
+    assert "Custom " + "path" not in report_source
+    assert "Default " + "path" not in report_source
+
+
+def test_report_mode_supports_formatting_validation_debug_and_collapsed_levels():
+    report_source = Path(
+        os.path.join(
+            os.getcwd(),
+            "dash_tanstack_pivot",
+            "src",
+            "lib",
+            "components",
+            "Sidebar",
+            "ReportEditor.js",
+        )
+    ).read_text(encoding="utf-8")
+    column_source = Path(
+        os.path.join(
+            os.getcwd(),
+            "dash_tanstack_pivot",
+            "src",
+            "lib",
+            "hooks",
+            "useColumnDefs.js",
+        )
+    ).read_text(encoding="utf-8")
+    render_source = Path(
+        os.path.join(
+            os.getcwd(),
+            "dash_tanstack_pivot",
+            "src",
+            "lib",
+            "hooks",
+            "useRenderHelpers.js",
+        )
+    ).read_text(encoding="utf-8")
+    normalization_source = Path(
+        os.path.join(
+            os.getcwd(),
+            "dash_tanstack_pivot",
+            "src",
+            "lib",
+            "hooks",
+            "usePivotNormalization.js",
+        )
+    ).read_text(encoding="utf-8")
+    component_source = Path(
+        os.path.join(
+            os.getcwd(),
+            "dash_tanstack_pivot",
+            "src",
+            "lib",
+            "components",
+            "DashTanstackPivot.react.js",
+        )
+    ).read_text(encoding="utf-8")
+
+    assert "DEFAULT_REPORT_FORMAT" in report_source
+    assert "Manual Report Rows" not in report_source
+    assert "Add rows like Strategic Accounts" not in report_source
+    assert "Number format override" in report_source
+    assert "Show subtotal/other rows" in report_source
+    assert "data-report-validation=\"true\"" in report_source
+    assert "validateReportDefinition" in report_source
+    assert "Circular row override detected" in report_source
+    assert "Top-N at" in report_source
+    assert "does not match any loaded rows" in report_source
+    assert "sourceRowPath" in report_source
+    assert "Why Is This Row Here?" in report_source
+    assert "function CollapsibleLevelSection" in report_source
+    assert 'data-report-level-collapsible="true"' in report_source
+    assert "data-report-level-collapsed={open ? 'false' : 'true'}" in report_source
+    assert "defaultOpen={false}" in report_source
+    assert "Hide row gears" in report_source
+    assert "Show row gears" in report_source
+    assert "setShowReportConfigColumn((current) => (current === false ? true : false))" in report_source
+
+    assert "_reportFormat" in column_source
+    assert "reportFormat.numberFormat" in column_source
+    assert "_reportDisplayLabel" in column_source
+    assert "const HIERARCHY_INDENT_PX = 32;" in column_source
+    assert "depth * HIERARCHY_INDENT_PX" in column_source
+    assert "getReportIndentPx" in column_source
+    assert "id.startsWith('_report')" in column_source
+    assert "showReportConfigColumn !== false && typeof onConfigureReportLine" in column_source
+    assert "reportFormat.borderStyle" in render_source
+    assert "reportFormat.rowColor" in render_source
+    assert "reportFormat && reportFormat.bold" in render_source
+    assert "delete normalized.manualRows" in normalization_source
+    assert "debug: rowData._reportDebug || null" in component_source
+    assert "reportDef: Object.prototype.hasOwnProperty.call(snapshot, 'reportDef')" in component_source
+    assert "showReportConfigColumn: showReportConfigColumn !== false && !immersiveMode" in component_source
+    assert (
+        "const shouldShowReportConfigGutter = pivotMode === 'report' && "
+        "showReportConfigColumn !== false && !immersiveMode"
+    ) in component_source
+
+
 def test_sidebar_field_panels_allow_compact_minimum_sizes():
     field_layout_source = Path(
         os.path.join(
@@ -2228,8 +2359,11 @@ def test_frontend_editable_cells_flow_through_column_metadata_and_transaction_hi
     assert "if (!editingEnabled) return null;" in component_source
     assert "const getRenderedCellWidthForColumn = useCallback((columnId) => {" in component_source
     assert "const getAutoSizeSampleRows = useCallback((rows) => {" in component_source
-    assert "const renderedCellWidth = (columnId !== 'hierarchy' && columnId !== '__row_number__')" in component_source
-    assert "const measuredFromCells = (col.id !== 'hierarchy' && col.id !== '__row_number__')" in component_source
+    assert "const renderedCellWidth = (columnId !== 'hierarchy' && columnId !== '__row_number__' && columnId !== '__report_config__')" in component_source
+    assert "const measuredFromCells = (col.id !== 'hierarchy' && col.id !== '__row_number__' && col.id !== '__report_config__')" in component_source
+    assert "const reportDefRef = useRef(reportDef);" in component_source
+    assert "reportDefRef.current = reportDef;" in component_source
+    assert "buildReportEditorSelectionFromRow(reportDefRef.current, rowData)" in component_source
     assert "Math.min(Math.max(measuredWithCells, autoSizeBounds.minWidth), autoSizeBounds.maxWidth)" in component_source
     assert "Math.ceil(renderedHeaderWidth)" in component_source
     assert "contentWidth + horizontalChrome + autoSizeBounds.cellOverscan" in component_source
@@ -2401,7 +2535,9 @@ def test_frontend_chart_surface_includes_inline_settings_sparkline_and_resize_re
     assert "onChange('sparkline')" in chart_source
     assert "chartType === 'sparkline'" in chart_source
     assert "showLegend={!isSparklineChart}" in chart_source
-    assert "VALID_CHART_TYPES = new Set(['bar', 'line', 'area', 'sparkline'" in normalization_source
+    assert "VALID_CHART_TYPES = new Set([" in normalization_source
+    assert "'bar3d'" in normalization_source
+    assert "'sparkline'" in normalization_source
     assert "setTableCanvasSize((previousSize) => Math.max(DEFAULT_TABLE_CANVAS_SIZE" in component_source
     assert "const remeasure = () => {" in column_virtualizer_source
     assert "observer.observe(scrollEl);" in column_virtualizer_source
@@ -2601,13 +2737,70 @@ def test_view_state_restore_rehydrates_server_side_runtime_requests():
     assert "setProps: dispatchServerSideRuntimeSetProps" in component_source
     assert "state_override: buildRuntimeRequestStateOverride() || undefined" in component_source
     assert "reportDef," in component_source
+    assert "customDimensions" in component_source
 
     assert "_extract_request_state_override" in callback_source
-    assert "request_state_override = _extract_request_state_override(request_payload)" in callback_source
+    assert "request_state_override = (" in callback_source
+    assert 'effective_trigger_prop.endswith(".runtimeRequest")' in callback_source
     assert '_state_override_value(request_state_override, "rowFields", row_fields or [], list)' in callback_source
+    assert '_state_override_value(request_state_override, "customDimensions", custom_dimensions or [], list)' in callback_source
     assert '_state_override_value(request_state_override, "expanded", expanded, (dict, bool))' in callback_source
     assert 'view_mode=effective_view_mode' in callback_source
     assert 'report_def=effective_report_def' in callback_source
+    assert 'custom_dimensions=effective_custom_dimensions' in callback_source
+
+
+def test_client_side_custom_categories_materialize_before_filtering():
+    component_source = Path(
+        os.path.join(
+            os.getcwd(),
+            "dash_tanstack_pivot",
+            "src",
+            "lib",
+            "components",
+            "DashTanstackPivot.react.js",
+        )
+    ).read_text(encoding="utf-8")
+    normalization_source = Path(
+        os.path.join(
+            os.getcwd(),
+            "dash_tanstack_pivot",
+            "src",
+            "lib",
+            "hooks",
+            "usePivotNormalization.js",
+        )
+    ).read_text(encoding="utf-8")
+
+    assert "export const evaluateCustomCategoryDimension" in normalization_source
+    assert "export const evaluateCustomCategoryCondition" in normalization_source
+    assert "export const applyCustomDimensionsToRows" in normalization_source
+    assert "evaluateCustomCategoryDimension(nextRow, dimension)" in normalization_source
+    assert "serverSide ? cleanData : applyCustomDimensionsToRows(cleanData, customDimensions)" in component_source
+    assert "const filteredData = useFilteredData(customAwareData, filters, serverSide);" in component_source
+    assert component_source.index("const filteredData = useFilteredData") < component_source.index("} = useServerSideViewportController({")
+    assert "targetZone === 'vals' && isCustomCategoryField(fieldName)" in component_source
+
+
+def test_custom_category_editor_uses_modal_and_validates_rules():
+    sidebar_source = Path(
+        os.path.join(
+            os.getcwd(),
+            "dash_tanstack_pivot",
+            "src",
+            "lib",
+            "components",
+            "Sidebar",
+            "SidebarPanel.js",
+        )
+    ).read_text(encoding="utf-8")
+
+    assert 'role="dialog"' in sidebar_source
+    assert "getAllowedCustomCategoryDependencies" in sidebar_source
+    assert "Rules can use base fields and categories defined before this one." in sidebar_source
+    assert 'A category named "${normalized.name}" already exists.' in sidebar_source
+    assert "does not match any current row" in sidebar_source
+    assert "createCustomCategoryRule(conditionFieldOptions" in sidebar_source
 
 
 def test_filter_open_requests_and_responses_are_idempotent():
@@ -2643,6 +2836,17 @@ def test_filter_open_requests_and_responses_are_idempotent():
             "ColumnFilter.js",
         )
     ).read_text(encoding="utf-8")
+    multi_select_source = Path(
+        os.path.join(
+            os.getcwd(),
+            "dash_tanstack_pivot",
+            "src",
+            "lib",
+            "components",
+            "Filters",
+            "MultiSelectFilter.js",
+        )
+    ).read_text(encoding="utf-8")
     sidebar_filter_item_source = Path(
         os.path.join(
             os.getcwd(),
@@ -2654,15 +2858,35 @@ def test_filter_open_requests_and_responses_are_idempotent():
             "SidebarFilterItem.js",
         )
     ).read_text(encoding="utf-8")
+    sidebar_panel_source = Path(
+        os.path.join(
+            os.getcwd(),
+            "dash_tanstack_pivot",
+            "src",
+            "lib",
+            "components",
+            "Sidebar",
+            "SidebarPanel.js",
+        )
+    ).read_text(encoding="utf-8")
 
     assert "const handledRuntimeResponseKeysRef = useRef(new Set());" in component_source
     assert "const buildRuntimeResponseProcessingKey = useCallback" in component_source
     assert "const markRuntimeResponseHandled = useCallback" in component_source
     assert "if (responseProcessingKey && !markRuntimeResponseHandled(responseProcessingKey)) return;" in component_source
     assert "Object.prototype.hasOwnProperty.call(filterOptions || {}, columnId)" in component_source
-    assert "pendingServerFilterOptionsRef.current = columnId;" in component_source
+    assert "pendingServerFilterOptionsRef.current = requestKey;" in component_source
     assert "const handleFilterClick = useCallback" in component_source
-    assert "previousOptions.every((value, index) => value === nextOptions[index])" in component_source
+    assert "previousOptions.every((value, index) => value === mergedOptions[index])" in component_source
+    assert "const collectDataFieldIds = (rows) =>" in component_source
+    assert "return collectDataFieldIds(data);" in component_source
+    assert "const clientFilterOptionMap = useMemo" in component_source
+    assert "buildClientFilterOptionMap(customAwareData, availableFieldsWithCustomDimensions)" in component_source
+    assert "if (!serverSide && clientFilterOptionMap[activeFilterCol])" in component_source
+    assert "const FILTER_OPTION_PAGE_SIZE = 250;" in component_source
+    assert "setTransportFilterOptionMetaState" in component_source
+    assert "payload: {" in component_source and "search," in component_source and "offset," in component_source
+    assert "state_override: buildRuntimeRequestStateOverride() || undefined" in component_source
 
     assert "const columnPositionKey =" in filter_popover_source
     assert "[anchorEl, columnAnchorTarget, columnPositionKey]" in filter_popover_source
@@ -2670,6 +2894,12 @@ def test_filter_open_requests_and_responses_are_idempotent():
     assert "const tabAutoInitialized = useRef(false);" in column_filter_source
     assert "if (tabAutoInitialized.current) return;" in column_filter_source
     assert "[options && options.length, isDate]" in column_filter_source
+    assert "onSearchOptions={onSearchOptions}" in column_filter_source
+    assert "const LOCAL_RENDER_LIMIT = 250;" in multi_select_source
+    assert "onSearchOptions(search);" in multi_select_source
+    assert "onLoadMoreOptions(search, loadedCount);" in multi_select_source
+    assert "Showing first {LOCAL_RENDER_LIMIT}" in multi_select_source
+    assert "clientFilterOptionMap && clientFilterOptionMap[columnId]" in sidebar_panel_source
     assert "const closeFilterEditor = () => setExpanded(false);" in sidebar_filter_item_source
     assert "onClose={closeFilterEditor}" in sidebar_filter_item_source
 

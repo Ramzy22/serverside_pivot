@@ -49,6 +49,10 @@ import {
     SUPPORTED_DEFAULT_NUMBER_FORMATS,
     GRAND_TOTAL_ROW_ID,
     MISSING_PERSISTED_VALUE,
+    normalizeCustomDimensionsValue,
+    applyCustomDimensionsToRows,
+    isCustomCategoryField,
+    decorateAvailableFieldsWithCustomDimensions,
     // Chart utilities
     getPreferredChartOrientation,
     sanitizeChartDefinitionName,
@@ -220,6 +224,61 @@ const loadingAnimationStyles = `
 const getStickyHeaderHeight = (headerGroupCount, rowHeight, showFloatingFilters) =>
     (headerGroupCount * rowHeight) + (showFloatingFilters ? rowHeight : 0);
 
+const FILTER_OPTION_PAGE_SIZE = 250;
+
+const isAutoDataFieldId = (field) => (
+    field !== undefined
+    && field !== null
+    && String(field).trim() !== ''
+    && field !== '__col_schema'
+);
+
+const collectDataFieldIds = (rows) => {
+    const fields = [];
+    const seen = new Set();
+    if (!Array.isArray(rows)) return fields;
+    rows.forEach((row) => {
+        if (!row || typeof row !== 'object') return;
+        Object.keys(row).forEach((field) => {
+            if (!isAutoDataFieldId(field) || seen.has(field)) return;
+            seen.add(field);
+            fields.push(field);
+        });
+    });
+    return fields;
+};
+
+const compareFilterOptionValues = (left, right) => {
+    const leftNumber = Number(left);
+    const rightNumber = Number(right);
+    if (Number.isFinite(leftNumber) && Number.isFinite(rightNumber)) {
+        return leftNumber - rightNumber;
+    }
+    return String(left).localeCompare(String(right), undefined, { numeric: true, sensitivity: 'base' });
+};
+
+const buildClientFilterOptionMap = (rows, fields) => {
+    const result = {};
+    const sourceRows = Array.isArray(rows) ? rows : [];
+    const fieldList = Array.isArray(fields) && fields.length > 0 ? fields : collectDataFieldIds(sourceRows);
+    fieldList.forEach((field) => {
+        if (!isAutoDataFieldId(field)) return;
+        const values = [];
+        const seen = new Set();
+        sourceRows.forEach((row) => {
+            if (!row || typeof row !== 'object' || !Object.prototype.hasOwnProperty.call(row, field)) return;
+            const value = row[field];
+            if (value === null || value === undefined || value === '') return;
+            const key = `${typeof value}:${String(value)}`;
+            if (seen.has(key)) return;
+            seen.add(key);
+            values.push(value);
+        });
+        result[field] = values.sort(compareFilterOptionValues);
+    });
+    return result;
+};
+
 const getSparklineValueConfigIdentity = (config) => {
     if (!config || typeof config !== 'object') return '';
     const field = config.field === undefined || config.field === null ? '' : String(config.field);
@@ -240,6 +299,259 @@ const getFixedSparklineConfigMap = (fixedConfigs) => {
         fixedMap.set(identity, { ...sparkline, placement: 'before' });
     });
     return fixedMap;
+};
+
+const REPORT_EDITOR_DEFAULT_SEGMENT = 'default';
+const REPORT_EDITOR_BRANCH_PREFIX = 'branch:';
+
+const createReportEditorBranchSegment = (index) => `${REPORT_EDITOR_BRANCH_PREFIX}${index}`;
+
+const normalizeReportEditorRowValue = (value) => (
+    value === undefined || value === null ? '' : String(value)
+);
+
+const reportEditorBranchMatchesRowValue = (branch, field, value) => {
+    if (!branch || !field) return false;
+    const expected = normalizeReportEditorRowValue(value);
+    const clauses = branch.condition && Array.isArray(branch.condition.clauses)
+        ? branch.condition.clauses
+        : [];
+    return clauses.some((clause) => {
+        if (!clause || clause.field !== field) return false;
+        if (clause.operator === 'eq' || clause.operator === '=') {
+            return normalizeReportEditorRowValue(clause.value) === expected;
+        }
+        if (clause.operator === 'in') {
+            return Array.isArray(clause.values)
+                && clause.values.map(normalizeReportEditorRowValue).includes(expected);
+        }
+        return false;
+    });
+};
+
+const getReportNodeChildCandidates = (node) => {
+    const candidates = [];
+    if (!node || typeof node !== 'object') return candidates;
+
+    if (node.defaultChild && typeof node.defaultChild === 'object') {
+        candidates.push({
+            kind: 'default',
+            segment: REPORT_EDITOR_DEFAULT_SEGMENT,
+            child: node.defaultChild,
+        });
+    }
+
+    if (Array.isArray(node.branches)) {
+        node.branches.forEach((branch, index) => {
+            if (branch && branch.child && typeof branch.child === 'object') {
+                candidates.push({
+                    kind: 'branch',
+                    segment: createReportEditorBranchSegment(index),
+                    child: branch.child,
+                    branch,
+                });
+            }
+        });
+        return candidates;
+    }
+
+    if (node.childrenByValue && typeof node.childrenByValue === 'object') {
+        Object.entries(node.childrenByValue).forEach(([valueKey, child], index) => {
+            if (child && typeof child === 'object') {
+                candidates.push({
+                    kind: 'value',
+                    segment: createReportEditorBranchSegment(index),
+                    child,
+                    valueKey,
+                });
+            }
+        });
+    }
+
+    return candidates;
+};
+
+const parseReportRowPathValues = (rowData) => {
+    if (!rowData || typeof rowData !== 'object') return [];
+    if (Array.isArray(rowData._pathValues)) {
+        return rowData._pathValues.map(normalizeReportEditorRowValue);
+    }
+    if (typeof rowData._path === 'string' && rowData._path && rowData._path !== '__grand_total__') {
+        return rowData._path.split('|||').map(normalizeReportEditorRowValue);
+    }
+    return [];
+};
+
+const getReportRowPathValueAt = (rowData, fieldSequence, index) => {
+    const pathValues = parseReportRowPathValues(rowData);
+    if (index >= 0 && index < pathValues.length) return pathValues[index];
+    const field = Array.isArray(fieldSequence) ? fieldSequence[index] : null;
+    if (field && Object.prototype.hasOwnProperty.call(rowData || {}, field)) {
+        return rowData[field];
+    }
+    if (index === (Array.isArray(fieldSequence) ? fieldSequence.length - 1 : -1)) {
+        return rowData && rowData._id !== undefined && rowData._id !== null ? rowData._id : rowData && rowData._label;
+    }
+    return undefined;
+};
+
+const findReportEditorNodePathForRow = (root, fieldSequence, targetIndex, rowData) => {
+    if (!root || typeof root !== 'object' || !Array.isArray(fieldSequence) || targetIndex < 0) {
+        return null;
+    }
+
+    let current = root;
+    const currentPath = [];
+
+    for (let fieldIndex = 0; fieldIndex <= targetIndex; fieldIndex += 1) {
+        if (!current || typeof current !== 'object') return null;
+        const expectedField = fieldSequence[fieldIndex];
+        if (expectedField && current.field && current.field !== expectedField) return null;
+        if (fieldIndex === targetIndex) return currentPath;
+
+        const currentField = current.field || expectedField;
+        const currentValue = getReportRowPathValueAt(rowData, fieldSequence, fieldIndex);
+        const nextField = fieldSequence[fieldIndex + 1];
+        const candidates = getReportNodeChildCandidates(current);
+        if (candidates.length === 0) return null;
+
+        const valueMatches = candidates.filter((candidate) => {
+            if (candidate.kind === 'branch') {
+                return reportEditorBranchMatchesRowValue(candidate.branch, currentField, currentValue);
+            }
+            if (candidate.kind === 'value') {
+                return normalizeReportEditorRowValue(candidate.valueKey) === normalizeReportEditorRowValue(currentValue);
+            }
+            return false;
+        });
+        const valueAndFieldMatches = valueMatches.filter(({ child }) => (
+            !nextField || !child || child.field === nextField
+        ));
+        const fieldMatches = candidates.filter(({ child }) => (
+            !nextField || !child || child.field === nextField
+        ));
+        const ordered = valueAndFieldMatches.length > 0
+            ? valueAndFieldMatches
+            : (valueMatches.length > 0 ? valueMatches : fieldMatches);
+        const selected = ordered[0] || candidates[0];
+        if (!selected) return null;
+
+        currentPath.push(selected.segment);
+        current = selected.child;
+    }
+
+    return currentPath;
+};
+
+const findReportEditorNodePathByField = (root, targetField, targetDepth = null) => {
+    if (!root || typeof root !== 'object' || !targetField) return null;
+    const matches = [];
+    const visit = (node, path, depth) => {
+        if (!node || typeof node !== 'object') return;
+        if (node.field === targetField) {
+            matches.push({
+                path,
+                score: Number.isFinite(Number(targetDepth))
+                    ? Math.abs(depth - Number(targetDepth))
+                    : depth,
+            });
+        }
+        getReportNodeChildCandidates(node).forEach(({ segment, child }) => {
+            visit(child, [...path, segment], depth + 1);
+        });
+    };
+    visit(root, [], 0);
+    if (matches.length === 0) return null;
+    matches.sort((left, right) => left.score - right.score || left.path.length - right.path.length);
+    return matches[0].path;
+};
+
+const buildReportEditorSelectionFromRow = (reportDef, rowData) => {
+    const root = reportDef && typeof reportDef === 'object' ? reportDef.root : null;
+    if (!root || typeof root !== 'object' || !rowData || typeof rowData !== 'object') return null;
+    if (rowData._isOther) return null;
+
+    const pathFields = Array.isArray(rowData._pathFields)
+        ? rowData._pathFields.filter((field) => typeof field === 'string' && field.trim())
+        : [];
+    const numericDepth = Number.isFinite(Number(rowData.depth))
+        ? Math.max(0, Math.floor(Number(rowData.depth)))
+        : null;
+    const levelField = typeof rowData._levelField === 'string' && rowData._levelField.trim()
+        ? rowData._levelField.trim()
+        : (
+            pathFields.length > 0
+                ? pathFields[Math.min(
+                    pathFields.length - 1,
+                    numericDepth !== null ? numericDepth : (pathFields.length - 1)
+                )]
+                : (typeof root.field === 'string' ? root.field : '')
+        );
+
+    if (!levelField) return null;
+
+    const fieldSequence = pathFields.length > 0 ? pathFields : [levelField];
+    const targetIndex = numericDepth !== null && numericDepth < fieldSequence.length
+        ? numericDepth
+        : fieldSequence.lastIndexOf(levelField);
+
+    if (targetIndex < 0) return null;
+
+    const visit = (node, fieldIndex, currentPath) => {
+        if (!node || typeof node !== 'object') return null;
+
+        const expectedField = fieldSequence[fieldIndex];
+        if (expectedField && node.field && node.field !== expectedField) return null;
+        if (fieldIndex === targetIndex) return currentPath;
+
+        const nextField = fieldSequence[fieldIndex + 1];
+        const candidates = getReportNodeChildCandidates(node);
+        const prioritized = candidates.filter(({ child }) => child && child.field === nextField);
+        const ordered = prioritized.length > 0 ? prioritized : candidates;
+
+        for (const candidate of ordered) {
+            const matchedPath = visit(candidate.child, fieldIndex + 1, [...currentPath, candidate.segment]);
+            if (matchedPath) return matchedPath;
+        }
+
+        return null;
+    };
+
+    const matchedPath = findReportEditorNodePathForRow(root, fieldSequence, targetIndex, rowData)
+        || visit(root, 0, []);
+    const fallbackPath = matchedPath || findReportEditorNodePathByField(root, levelField, numericDepth);
+    if (!fallbackPath) return null;
+
+    const pathValues = parseReportRowPathValues(rowData);
+    const pathValueAtLevel = targetIndex >= 0 && targetIndex < pathValues.length
+        ? pathValues[targetIndex]
+        : undefined;
+    const rowValue = Object.prototype.hasOwnProperty.call(rowData, levelField)
+        ? rowData[levelField]
+        : (
+            pathValueAtLevel !== undefined && pathValueAtLevel !== null && pathValueAtLevel !== ''
+                ? pathValueAtLevel
+                : (
+                    rowData._id !== undefined && rowData._id !== null && rowData._id !== ''
+                        ? rowData._id
+                        : rowData._label
+                )
+        );
+    if (rowValue === undefined || rowValue === null || rowValue === '') {
+        return { type: 'node', path: fallbackPath };
+    }
+
+    return {
+        type: 'rowPath',
+        nodePath: fallbackPath,
+        field: levelField,
+        value: rowValue,
+        label: rowData._reportDisplayLabel || rowData._label || rowData._id || String(rowValue),
+        levelNumber: targetIndex + 1,
+        pathValues,
+        pathFields,
+        debug: rowData._reportDebug || null,
+    };
 };
 
 const normalizeSparklineValConfigsForView = (configs, fixedConfigs = []) => {
@@ -706,6 +1018,7 @@ export default function DashTanstackPivot(props) {
         reportDef: externalReportDef,
         savedReports: externalSavedReports,
         activeReportId: externalActiveReportId,
+        customDimensions: externalCustomDimensions = [],
         reset,
         sortLock = false,
         defaultTheme = 'flash',
@@ -823,6 +1136,7 @@ export default function DashTanstackPivot(props) {
     const hasExternalReportDef = externalReportDef !== undefined;
     const hasExternalSavedReports = externalSavedReports !== undefined;
     const hasExternalActiveReportId = externalActiveReportId !== undefined;
+    const hasExternalCustomDimensions = props.customDimensions !== undefined;
     const normalizedInitialReportDef = useMemo(
         () => normalizeReportDefValue(externalReportDef),
         [externalReportDef]
@@ -834,6 +1148,10 @@ export default function DashTanstackPivot(props) {
     const normalizedInitialActiveReportId = useMemo(
         () => normalizeActiveReportIdValue(externalActiveReportId),
         [externalActiveReportId]
+    );
+    const normalizedInitialCustomDimensions = useMemo(
+        () => normalizeCustomDimensionsValue(externalCustomDimensions),
+        [externalCustomDimensions]
     );
     const normalizedInitialValConfigs = useMemo(
         () => normalizeSparklineValConfigsForView(initialValConfigs),
@@ -859,6 +1177,7 @@ export default function DashTanstackPivot(props) {
     // --- Persistence Helper ---
     const { load: loadPersistedState, save: savePersistedState } = usePersistence(id, persistence, persistence_type);
 
+        const [formulaErrors, setFormulaErrors] = useState({});
         const [transportDataState, setTransportDataState] = useState(() => normalizeRuntimeDataEnvelope({
             data: Array.isArray(inputData) ? inputData : [],
             rowCount: serverSide ? null : (Array.isArray(inputData) ? inputData.length : 0),
@@ -867,6 +1186,7 @@ export default function DashTanstackPivot(props) {
             dataVersion: 0,
         }));
         const [transportFilterOptionsState, setTransportFilterOptionsState] = useState(() => ({}));
+        const [transportFilterOptionMetaState, setTransportFilterOptionMetaState] = useState(() => ({}));
         const [editorOptionsLoadingState, setEditorOptionsLoadingState] = useState(() => ({}));
         const [transportChartDataState, setTransportChartDataState] = useState(() => (null));
 
@@ -877,6 +1197,7 @@ export default function DashTanstackPivot(props) {
         const dataOffset = transportDataState.dataOffset;
         const dataVersion = transportDataState.dataVersion;
         const filterOptions = transportFilterOptionsState;
+        const filterOptionMeta = transportFilterOptionMetaState;
         const chartData = transportChartDataState;
 
         const [notification, setNotification] = useState(null);
@@ -919,10 +1240,10 @@ export default function DashTanstackPivot(props) {
             if (serverSide && responseColumns) {
                 return responseColumns
                     .map(c => (c && typeof c === 'object' ? c.id : c))
-                    .filter(id => id && id !== '__col_schema');
+                    .filter(isAutoDataFieldId);
             }
 
-            return data && data.length ? Object.keys(data[0]) : [];
+            return collectDataFieldIds(data);
 
         }, [data, responseColumns, serverSide, availableFieldList]);
 
@@ -967,6 +1288,15 @@ export default function DashTanstackPivot(props) {
         const [valConfigs, setValConfigs] = useState(normalizedInitialValConfigs);
         const valConfigsRef = useRef(normalizedInitialValConfigs);
         valConfigsRef.current = valConfigs;
+        const [customDimensions, setCustomDimensions] = useState(() => (
+            hasExternalCustomDimensions
+                ? normalizedInitialCustomDimensions
+                : normalizeCustomDimensionsValue(loadPersistedState('customDimensions', normalizedInitialCustomDimensions))
+        ));
+        const availableFieldsWithCustomDimensions = useMemo(
+            () => decorateAvailableFieldsWithCustomDimensions(availableFields, customDimensions),
+            [availableFields, customDimensions]
+        );
         const [filters, setFilters] = useState(initialFilters);
         const [sorting, setSorting] = useState(initialSorting);
         const [expanded, setExpanded] = useState(initialExpanded);
@@ -1003,6 +1333,7 @@ export default function DashTanstackPivot(props) {
             normalizeActiveReportIdValue,
             loadPersistedState,
         });
+        const [reportEditorSelection, setReportEditorSelection] = useState(null);
         const [detailMode, setDetailMode] = useState(() => (
             hasExternalDetailMode
                 ? normalizedInitialDetailMode
@@ -1095,17 +1426,19 @@ export default function DashTanstackPivot(props) {
         const lastDefaultValueFormatPropRef = useRef(null);
         const lastNumberGroupSeparatorPropRef = useRef(null);
         const lastReportDefPropRef = useRef(null);
-        const lastSavedReportsPropRef = useRef(null);
-        const lastActiveReportIdPropRef = useRef(null);
-        const lastViewModePropRef = useRef(null);
-        const lastDetailModePropRef = useRef(null);
-        const lastTreeConfigPropRef = useRef(null);
-        const lastDetailConfigPropRef = useRef(null);
-        const didPublishDecimalPlacesRef = useRef(false);
-        const didPublishFieldPanelSizesRef = useRef(false);
-        const didPublishDefaultValueFormatRef = useRef(false);
-        const didPublishNumberGroupSeparatorRef = useRef(false);
-        const didPublishReportStateRef = useRef(false);
+    const lastSavedReportsPropRef = useRef(null);
+    const lastActiveReportIdPropRef = useRef(null);
+    const lastViewModePropRef = useRef(null);
+    const lastDetailModePropRef = useRef(null);
+    const lastTreeConfigPropRef = useRef(null);
+    const lastDetailConfigPropRef = useRef(null);
+    const reportDefRef = useRef(reportDef);
+    reportDefRef.current = reportDef;
+    const didPublishDecimalPlacesRef = useRef(false);
+    const didPublishFieldPanelSizesRef = useRef(false);
+    const didPublishDefaultValueFormatRef = useRef(false);
+    const didPublishNumberGroupSeparatorRef = useRef(false);
+    const didPublishReportStateRef = useRef(false);
         const tableRef = useRef(null);
         const displayRowsRef = useRef([]);
         const displayRowIndexRef = useRef(new Map());
@@ -1207,6 +1540,7 @@ export default function DashTanstackPivot(props) {
             const resetReportDef = hasExternalReportDef ? normalizedInitialReportDef : { levels: [] };
             const resetSavedReports = hasExternalSavedReports ? normalizedInitialSavedReports : [];
             const resetActiveReportId = hasExternalActiveReportId ? normalizedInitialActiveReportId : null;
+            const resetCustomDimensions = hasExternalCustomDimensions ? normalizedInitialCustomDimensions : [];
             setRowFields(initialRowFields);
             setColFields(initialColFields);
             // Preserve user-added formula columns through resets (they survive dataframe switches)
@@ -1215,6 +1549,7 @@ export default function DashTanstackPivot(props) {
                 ? [...normalizedInitialValConfigs.filter(c => c && c.agg !== 'formula'), ...formulaColsToPreserve]
                 : normalizedInitialValConfigs);
             setValConfigs(resetValConfigs);
+            setCustomDimensions(resetCustomDimensions);
             setFilters({});
             setSorting([]);
             setExpanded({});
@@ -1266,6 +1601,7 @@ export default function DashTanstackPivot(props) {
             setReportDef(resetReportDef);
             setSavedReports(resetSavedReports);
             setActiveReportId(resetActiveReportId);
+            setShowReportConfigColumn(true);
             setFrozenPivotConfig(null);
             setColumnFormatOverrides({});
             setColumnGroupSeparatorOverrides({});
@@ -1286,6 +1622,8 @@ export default function DashTanstackPivot(props) {
                     reportDef: resetReportDef,
                     savedReports: resetSavedReports,
                     activeReportId: resetActiveReportId,
+                    showReportConfigColumn: true,
+                    customDimensions: resetCustomDimensions,
                     filters: {},
                     sorting: [],
                     expanded: {},
@@ -1298,7 +1636,7 @@ export default function DashTanstackPivot(props) {
                 });
             }
         }
-    }, [reset, initialRowFields, initialColFields, normalizedInitialValConfigs, initialColumnPinning, initialRowPinning, initialChartDefinition, initialChartDefinitions, normalizedInitialFieldPanelSizes, normalizedInitialDecimalPlaces, normalizedInitialDefaultValueFormat, normalizedInitialNumberGroupSeparator, normalizedInitialViewMode, normalizedInitialDetailMode, normalizedInitialTreeConfig, normalizedInitialDetailConfig, hasExternalReportDef, normalizedInitialReportDef, hasExternalSavedReports, normalizedInitialSavedReports, hasExternalActiveReportId, normalizedInitialActiveReportId]);
+    }, [reset, initialRowFields, initialColFields, normalizedInitialValConfigs, initialColumnPinning, initialRowPinning, initialChartDefinition, initialChartDefinitions, normalizedInitialFieldPanelSizes, normalizedInitialDecimalPlaces, normalizedInitialDefaultValueFormat, normalizedInitialNumberGroupSeparator, normalizedInitialViewMode, normalizedInitialDetailMode, normalizedInitialTreeConfig, normalizedInitialDetailConfig, hasExternalReportDef, normalizedInitialReportDef, hasExternalSavedReports, normalizedInitialSavedReports, hasExternalActiveReportId, normalizedInitialActiveReportId, hasExternalCustomDimensions, normalizedInitialCustomDimensions]);
 
         // Save Persistence
         useEffect(() => {
@@ -1328,6 +1666,7 @@ export default function DashTanstackPivot(props) {
             savePersistedState('reportDef', reportDef);
             savePersistedState('savedReports', savedReports);
             savePersistedState('activeReportId', activeReportId);
+            savePersistedState('customDimensions', customDimensions);
             savePersistedState('frozenPivotConfig', frozenPivotConfig);
         }, [
             id,
@@ -1354,6 +1693,7 @@ export default function DashTanstackPivot(props) {
             reportDef,
             savedReports,
             activeReportId,
+            customDimensions,
             frozenPivotConfig,
         ]);
 
@@ -1372,8 +1712,13 @@ export default function DashTanstackPivot(props) {
     const immersiveMode = uiConfig.lockImmersiveMode ? true : immersiveModeState;
     const setImmersiveMode = uiConfig.lockImmersiveMode ? () => {} : setImmersiveModeState;
     const [immersiveModeHovering, setImmersiveModeHovering] = useState(false);
+    const [showReportConfigColumn, setShowReportConfigColumn] = useState(() => loadPersistedState('showReportConfigColumn', true) !== false);
     const [showRowTotals, setShowRowTotals] = useState(initialShowRowTotals);
     const [showColTotals, setShowColTotals] = useState(initialShowColTotals);
+    useEffect(() => {
+        if (!persistence) return;
+        savePersistedState('showReportConfigColumn', showReportConfigColumn !== false);
+    }, [persistence, savePersistedState, showReportConfigColumn]);
     const effectiveGrandTotalPinState = useMemo(
         () => resolveGrandTotalPinState(showColTotals, grandTotalPosition, grandTotalPinOverride),
         [showColTotals, grandTotalPosition, grandTotalPinOverride]
@@ -1422,6 +1767,12 @@ export default function DashTanstackPivot(props) {
         window.addEventListener('keydown', handleGlobalKeyDown);
         return () => window.removeEventListener('keydown', handleGlobalKeyDown);
     }, [normalizeTrackedEventIds]);
+
+    const handleConfigureReportLine = useCallback((rowData) => {
+        setSidebarOpen(true);
+        const nextSelection = buildReportEditorSelectionFromRow(reportDefRef.current, rowData) || { type: 'node', path: [] };
+        setReportEditorSelection(nextSelection);
+    }, [setSidebarOpen]);
 
     // --- Formatting/display state extracted to useFormatState hook ---
     const {
@@ -1662,6 +2013,9 @@ export default function DashTanstackPivot(props) {
                 ? restored.frozenPivotConfig
                 : null);
         }
+        if (Object.prototype.hasOwnProperty.call(restored, 'customDimensions')) {
+            setCustomDimensions(normalizeCustomDimensionsValue(restored.customDimensions));
+        }
         if (Array.isArray(restored.rowFields)) setRowFields(restored.rowFields);
         if (Array.isArray(restored.colFields)) setColFields(restored.colFields);
         if (Array.isArray(restored.valConfigs)) setValConfigs(normalizeSparklineValConfigsForView(restored.valConfigs, normalizedInitialValConfigs));
@@ -1678,6 +2032,7 @@ export default function DashTanstackPivot(props) {
         if (typeof restored.showRowTotals === 'boolean') setShowRowTotals(restored.showRowTotals);
         if (typeof restored.showColTotals === 'boolean') setShowColTotals(restored.showColTotals);
         if (typeof restored.showRowNumbers === 'boolean') setShowRowNumbers(restored.showRowNumbers);
+        if (typeof restored.showReportConfigColumn === 'boolean') setShowReportConfigColumn(restored.showReportConfigColumn);
         if (typeof restored.sidebarOpen === 'boolean') setSidebarOpen(restored.sidebarOpen);
         if (typeof restored.sidebarWidth === 'number') setSidebarWidth(clampSidebarWidth(restored.sidebarWidth, 288));
         if (typeof restored.sidebarTab === 'string') setSidebarTab(restored.sidebarTab);
@@ -2039,6 +2394,15 @@ export default function DashTanstackPivot(props) {
         if (!Array.isArray(initialValConfigs)) return;
         setValConfigs(normalizedInitialValConfigs);
     }, [initialValConfigs, normalizedInitialValConfigs]);
+
+    const lastCustomDimensionsPropRef = useRef(JSON.stringify(normalizedInitialCustomDimensions || []));
+    useEffect(() => {
+        if (!hasExternalCustomDimensions) return;
+        const serializedExternal = JSON.stringify(normalizedInitialCustomDimensions || []);
+        if (serializedExternal === lastCustomDimensionsPropRef.current) return;
+        lastCustomDimensionsPropRef.current = serializedExternal;
+        setCustomDimensions(normalizedInitialCustomDimensions);
+    }, [hasExternalCustomDimensions, normalizedInitialCustomDimensions]);
 
     useEffect(() => {
         const normalizedExternal = clampDecimalPlaces(externalDecimalPlaces, 0);
@@ -2693,7 +3057,9 @@ export default function DashTanstackPivot(props) {
             }
         }
 
-        const visibleLeafColumnsAll = (tableRef.current && tableRef.current.getVisibleLeafColumns) ? tableRef.current.getVisibleLeafColumns() : [];
+        const visibleLeafColumnsAll = (tableRef.current && tableRef.current.getVisibleLeafColumns)
+            ? tableRef.current.getVisibleLeafColumns().filter(c => c.id !== '__report_config__')
+            : [];
         const visibleRowsAll = getDisplayRows();
 
         // Ctrl+A: select all rows and columns
@@ -2723,7 +3089,7 @@ export default function DashTanstackPivot(props) {
             e.preventDefault();
             let data;
             if (isSelectAllServerRef.current && serverSide && Array.isArray(loadedRows) && loadedRows.length > 0) {
-                const SKIP = new Set(['__row_number__']);
+                const SKIP = new Set(['__row_number__', '__report_config__']);
                 const cols = (tableRef.current ? tableRef.current.getVisibleLeafColumns() : []).filter(c => !SKIP.has(c.id));
                 data = buildTsvFromRawRows(loadedRows, false, cols);
             } else {
@@ -3054,7 +3420,7 @@ export default function DashTanstackPivot(props) {
                 e.preventDefault();
                 let data;
                 if (isSelectAllServerRef.current && serverSide && Array.isArray(loadedRows) && loadedRows.length > 0) {
-                    const SKIP = new Set(['__row_number__']);
+                    const SKIP = new Set(['__row_number__', '__report_config__']);
                     const cols = (tableRef.current ? tableRef.current.getVisibleLeafColumns() : []).filter(c => !SKIP.has(c.id));
                     data = buildTsvFromRawRows(loadedRows, false, cols);
                 } else {
@@ -3138,6 +3504,43 @@ export default function DashTanstackPivot(props) {
     });
     const profilerComponentIdRef = useRef(id || 'pivot-grid');
     profilerComponentIdRef.current = id || 'pivot-grid';
+
+    // Extract color scale stats sentinel injected by the server, strip it from rows.
+    const { cleanData, serverColorScaleStats } = useMemo(() => {
+        const sentinelIdx = data.findIndex(r => r && r._path === '__color_scale_stats__');
+        if (sentinelIdx === -1) return { cleanData: data, serverColorScaleStats: null };
+        const stats = data[sentinelIdx]._colorScaleStats || null;
+        const rows = data.filter((_, i) => i !== sentinelIdx);
+        return { cleanData: rows, serverColorScaleStats: stats };
+    }, [data]);
+
+    const customAwareData = useMemo(() => (
+        serverSide ? cleanData : applyCustomDimensionsToRows(cleanData, customDimensions)
+    ), [cleanData, customDimensions, serverSide]);
+
+    const clientFilterOptionMap = useMemo(() => (
+        serverSide ? {} : buildClientFilterOptionMap(customAwareData, availableFieldsWithCustomDimensions)
+    ), [availableFieldsWithCustomDimensions, customAwareData, serverSide]);
+
+    const serverFilterOptionContextKey = useMemo(() => (
+        serverSide
+            ? JSON.stringify({
+                table: tableName || '',
+                filters: filters || {},
+                customDimensions: customDimensions || [],
+            })
+            : ''
+    ), [customDimensions, filters, serverSide, tableName]);
+
+    useEffect(() => {
+        if (!serverSide) return;
+        pendingServerFilterOptionsRef.current = null;
+        setTransportFilterOptionsState({});
+        setTransportFilterOptionMetaState({});
+    }, [serverFilterOptionContextKey, serverSide]);
+
+    const filteredData = useFilteredData(customAwareData, filters, serverSide);
+
     const {
         cachedColSchema,
         colRequestEnd,
@@ -3865,7 +4268,7 @@ export default function DashTanstackPivot(props) {
         const rowId = row && row.original && row.original._path ? row.original._path : row.id;
         return tableRef.current.getVisibleLeafColumns().reduce((acc, column) => {
             if (!column || !column.id) return acc;
-            if (column.id === 'hierarchy' || column.id === '__row_number__' || String(column.id).startsWith('__tree_level__')) return acc;
+            if (column.id === 'hierarchy' || column.id === '__row_number__' || column.id === '__report_config__' || String(column.id).startsWith('__tree_level__')) return acc;
             if (column.columnDef && column.columnDef.meta && column.columnDef.meta.isSchemaPlaceholder) return acc;
             const columnConfig = resolveAggregationConfigForColumnId(column.id);
             const currentValue = typeof row.getValue === 'function'
@@ -5914,6 +6317,9 @@ export default function DashTanstackPivot(props) {
             treeConfig: Object.prototype.hasOwnProperty.call(snapshot, 'treeConfig') ? snapshot.treeConfig : treeConfig,
             detailConfig: Object.prototype.hasOwnProperty.call(snapshot, 'detailConfig') ? snapshot.detailConfig : detailConfig,
             reportDef: Object.prototype.hasOwnProperty.call(snapshot, 'reportDef') ? snapshot.reportDef : reportDef,
+            customDimensions: Object.prototype.hasOwnProperty.call(snapshot, 'customDimensions')
+                ? normalizeCustomDimensionsValue(snapshot.customDimensions)
+                : normalizeCustomDimensionsValue(customDimensions),
             rowFields: Object.prototype.hasOwnProperty.call(snapshot, 'rowFields') ? snapshot.rowFields : rowFields,
             colFields: Object.prototype.hasOwnProperty.call(snapshot, 'colFields') ? snapshot.colFields : colFields,
             valConfigs: normalizeSparklineValConfigsForView(resolvedValConfigs, normalizedInitialValConfigs),
@@ -5933,6 +6339,7 @@ export default function DashTanstackPivot(props) {
         treeConfig,
         detailConfig,
         reportDef,
+        customDimensions,
         rowFields,
         colFields,
         valConfigs,
@@ -6169,6 +6576,7 @@ export default function DashTanstackPivot(props) {
                 savedReports,
                 activeReportId,
                 frozenPivotConfig,
+                customDimensions,
                 rowFields,
                 colFields,
                 valConfigs: normalizeSparklineValConfigsForView(valConfigs, normalizedInitialValConfigs),
@@ -6178,6 +6586,7 @@ export default function DashTanstackPivot(props) {
                 showRowTotals,
                 showColTotals,
                 showRowNumbers,
+                showReportConfigColumn,
                 sidebarOpen,
                 sidebarWidth,
                 sidebarTab,
@@ -6265,12 +6674,14 @@ export default function DashTanstackPivot(props) {
         savedReports,
         activeReportId,
         frozenPivotConfig,
+        customDimensions,
         filters,
         sorting,
         expanded,
         showRowTotals,
         showColTotals,
         showRowNumbers,
+        showReportConfigColumn,
         sidebarOpen,
         sidebarWidth,
         sidebarTab,
@@ -6357,6 +6768,7 @@ export default function DashTanstackPivot(props) {
         treeConfig: normalizedInitialTreeConfig,
         detailConfig: normalizedInitialDetailConfig,
         reportDef,
+        customDimensions: normalizedInitialCustomDimensions,
         rowFields: initialRowFields,
         colFields: initialColFields,
         valConfigs: normalizedInitialValConfigs,
@@ -6381,6 +6793,7 @@ export default function DashTanstackPivot(props) {
             treeConfig,
             detailConfig,
             reportDef,
+            customDimensions,
             rowFields, colFields, valConfigs, filters, sorting, sortOptions: effectiveSortOptions, expanded,
             immersiveMode, showRowTotals, showColTotals, columnPinning, rowPinning, columnVisibility, columnSizing
         };
@@ -6596,7 +7009,7 @@ export default function DashTanstackPivot(props) {
                 },
             });
         }
-    }, [viewMode, detailMode, treeConfig, detailConfig, reportDef, rowFields, colFields, valConfigs, filters, sorting, effectiveSortOptions, expanded, immersiveMode, showRowTotals, showColTotals, columnPinning, rowPinning, grandTotalPinOverride, columnVisibility, columnSizing, beginStructuralTransaction, beginExpansionRequest, buildRuntimeRequestStateOverride, markRequestPending, resolveStableRequestedColumnWindow, serverSide, serverSideBlockSize, tableName, serverSidePinsGrandTotal]);
+    }, [viewMode, detailMode, treeConfig, detailConfig, reportDef, customDimensions, rowFields, colFields, valConfigs, filters, sorting, effectiveSortOptions, expanded, immersiveMode, showRowTotals, showColTotals, columnPinning, rowPinning, grandTotalPinOverride, columnVisibility, columnSizing, beginStructuralTransaction, beginExpansionRequest, buildRuntimeRequestStateOverride, markRequestPending, resolveStableRequestedColumnWindow, serverSide, serverSideBlockSize, tableName, serverSidePinsGrandTotal]);
 
     useEffect(() => {
         const handleClick = () => setContextMenu(null);
@@ -6707,7 +7120,7 @@ export default function DashTanstackPivot(props) {
 
     const getDefaultFormatForSelection = useCallback((selectionMap) => {
         const selectedColIds = getSelectedColumnIds(selectionMap)
-            .filter(id => id !== 'hierarchy' && id !== '__row_number__');
+            .filter(id => id !== 'hierarchy' && id !== '__row_number__' && id !== '__report_config__');
         const matchedIndexes = getSelectedMeasureIndexes(selectedColIds);
         if (matchedIndexes.length === 0) return 'fixed:2';
 
@@ -6722,7 +7135,7 @@ export default function DashTanstackPivot(props) {
 
     const getCurrentFormatForSelection = useCallback((selectionMap) => {
         const selectedColIds = getSelectedColumnIds(selectionMap)
-            .filter(id => id !== 'hierarchy' && id !== '__row_number__');
+            .filter(id => id !== 'hierarchy' && id !== '__row_number__' && id !== '__report_config__');
         const matchedIndexes = getSelectedMeasureIndexes(selectedColIds);
         if (matchedIndexes.length === 0) return '';
 
@@ -6736,7 +7149,7 @@ export default function DashTanstackPivot(props) {
 
     const applyDataBarsFromSelection = useCallback((selectionMap, mode = 'col') => {
         const selectedColIds = getSelectedColumnIds(selectionMap)
-            .filter(id => id !== 'hierarchy' && id !== '__row_number__');
+            .filter(id => id !== 'hierarchy' && id !== '__row_number__' && id !== '__report_config__');
         if (selectedColIds.length === 0) {
             showNotification('Select at least one value cell first.', 'warning');
             return;
@@ -6766,7 +7179,7 @@ export default function DashTanstackPivot(props) {
 
     const applyFormatToSelection = useCallback((selectionMap, formatOverride = null) => {
         const selectedColIds = getSelectedColumnIds(selectionMap)
-            .filter(id => id !== 'hierarchy' && id !== '__row_number__');
+            .filter(id => id !== 'hierarchy' && id !== '__row_number__' && id !== '__report_config__');
         if (selectedColIds.length === 0) {
             showNotification('Select at least one value cell first.', 'warning');
             return;
@@ -6817,7 +7230,7 @@ export default function DashTanstackPivot(props) {
     }, [getSelectedColumnIds, getDefaultFormatForSelection, matchesSelectedColumnToValueConfig, normalizedInitialValConfigs, setValConfigs, showNotification]);
 
     const selectedValueColumnIds = useMemo(
-        () => getSelectedColumnIds(selectedCells).filter(id => id !== 'hierarchy' && id !== '__row_number__'),
+        () => getSelectedColumnIds(selectedCells).filter(id => id !== 'hierarchy' && id !== '__row_number__' && id !== '__report_config__'),
         [getSelectedColumnIds, selectedCells]
     );
     const canApplySelectionValueFormat = useMemo(
@@ -7023,7 +7436,7 @@ export default function DashTanstackPivot(props) {
     const getPivotColumnSortField = useCallback((header, level = 0) => {
         if (!serverSide || !Array.isArray(colFields) || colFields.length === 0 || !header || !header.column) return null;
         const columnId = header.column.id;
-        if (!columnId || columnId === 'hierarchy' || columnId === '__row_number__' || columnId.startsWith('__RowTotal__')) return null;
+        if (!columnId || columnId === 'hierarchy' || columnId === '__row_number__' || columnId === '__report_config__' || columnId.startsWith('__RowTotal__')) return null;
         if (rowFields.includes(columnId)) return null;
 
         const isGroupHeader = header.column.columns && header.column.columns.length > 0;
@@ -7156,16 +7569,42 @@ export default function DashTanstackPivot(props) {
         setColumnPinning(prev => {
             let nextLeft = [...(prev.left || [])];
             let changed = false;
+            const shouldPinHierarchy = (layoutMode === 'hierarchy' && rowFields.length > 0) || pivotMode === 'report';
+            const shouldShowReportConfigGutter = pivotMode === 'report' && showReportConfigColumn !== false && !immersiveMode;
 
             // 1. Enforce Hierarchy Pinning
-            if (layoutMode === 'hierarchy' && rowFields.length > 0) {
+            if (shouldPinHierarchy) {
                 if (!nextLeft.includes('hierarchy')) {
                      nextLeft = ['hierarchy', ...nextLeft];
                      changed = true;
                 }
             }
 
-            // 2. Enforce Row Number Pinning (User Request: Always utmost left)
+            // 2. Keep report row settings in a detached gutter immediately left of the hierarchy.
+            if (shouldShowReportConfigGutter) {
+                if (!nextLeft.includes('__report_config__')) {
+                    const hierarchyIndex = nextLeft.indexOf('hierarchy');
+                    if (hierarchyIndex >= 0) {
+                        nextLeft.splice(hierarchyIndex, 0, '__report_config__');
+                    } else {
+                        nextLeft.push('__report_config__');
+                    }
+                    changed = true;
+                }
+                const reportConfigIndex = nextLeft.indexOf('__report_config__');
+                const hierarchyIndex = nextLeft.indexOf('hierarchy');
+                if (reportConfigIndex >= 0 && hierarchyIndex >= 0 && reportConfigIndex !== hierarchyIndex - 1) {
+                    nextLeft.splice(reportConfigIndex, 1);
+                    const nextHierarchyIndex = nextLeft.indexOf('hierarchy');
+                    nextLeft.splice(nextHierarchyIndex, 0, '__report_config__');
+                    changed = true;
+                }
+            } else if (nextLeft.includes('__report_config__')) {
+                nextLeft = nextLeft.filter(id => id !== '__report_config__');
+                changed = true;
+            }
+
+            // 3. Enforce Row Number Pinning (User Request: Always utmost left)
             if (showRowNumbers) {
                 if (!nextLeft.includes('__row_number__')) {
                     nextLeft = ['__row_number__', ...nextLeft];
@@ -7192,10 +7631,10 @@ export default function DashTanstackPivot(props) {
             }
             return prev;
         });
-    }, [layoutMode, rowFields.length, showRowNumbers]);
+    }, [immersiveMode, layoutMode, pivotMode, rowFields.length, showReportConfigColumn, showRowNumbers]);
 
     const applyHeaderSort = (colId, desc, sortMetadata = {}, append = false) => {
-        if (!colId || colId === '__row_number__') return;
+        if (!colId || colId === '__row_number__' || colId === '__report_config__') return;
         const nextSorting = updateSortingForColumn({
             sorting,
             columnId: colId,
@@ -7438,7 +7877,7 @@ export default function DashTanstackPivot(props) {
         const hasSelection = Object.keys(selectionForMenu).length > 0;
         
         const getTableData = (withHeaders, mergedHeaders = false) => {
-            const SKIP = new Set(['__row_number__']);
+            const SKIP = new Set(['__row_number__', '__report_config__']);
             const visibleCols = table.getVisibleLeafColumns().filter(c => !SKIP.has(c.id));
 
             let tsv = '';
@@ -7561,15 +8000,6 @@ export default function DashTanstackPivot(props) {
         });
     };
 
-    // Extract color scale stats sentinel injected by the server, strip it from rows
-    const { cleanData, serverColorScaleStats } = useMemo(() => {
-        const sentinelIdx = data.findIndex(r => r && r._path === '__color_scale_stats__');
-        if (sentinelIdx === -1) return { cleanData: data, serverColorScaleStats: null };
-        const stats = data[sentinelIdx]._colorScaleStats || null;
-        const rows = data.filter((_, i) => i !== sentinelIdx);
-        return { cleanData: rows, serverColorScaleStats: stats };
-    }, [data]);
-
     useEffect(() => {
         const nextRowPaths = [];
         const seenPaths = new Set();
@@ -7597,8 +8027,6 @@ export default function DashTanstackPivot(props) {
         });
         visiblePatchCenterIdsRef.current = nextCenterIds;
     }, [responseColumns, rowFields]);
-
-    const filteredData = useFilteredData(cleanData, filters, serverSide);
 
     const staticTotal = useMemo(() => ({ _isTotal: true, _path: '__grand_total__', _id: 'Grand Total', __isGrandTotal__: true }), []);
     const staticMinMax = useMemo(() => ({}), []);
@@ -7682,7 +8110,7 @@ export default function DashTanstackPivot(props) {
             if (width > maxWidth) maxWidth = width;
         });
 
-        const renderedCellWidth = (columnId !== 'hierarchy' && columnId !== '__row_number__')
+        const renderedCellWidth = (columnId !== 'hierarchy' && columnId !== '__row_number__' && columnId !== '__report_config__')
             ? getRenderedCellWidthForColumn(columnId)
             : null;
         if (Number.isFinite(renderedCellWidth)) {
@@ -7714,19 +8142,56 @@ export default function DashTanstackPivot(props) {
         autoSizeVisibleColumns(true);
     }, [autoSizeVisibleColumns]);
 
-    const requestFilterOptions = useCallback((columnId) => {
+    const requestFilterOptions = useCallback((columnId, options = {}) => {
         if (!serverSide || !columnId) return false;
-        if (Object.prototype.hasOwnProperty.call(filterOptions || {}, columnId)) {
+        const search = options && options.search !== undefined && options.search !== null
+            ? String(options.search)
+            : '';
+        const requestedOffset = Number(options && options.offset);
+        const offset = Number.isFinite(requestedOffset) && requestedOffset > 0
+            ? Math.floor(requestedOffset)
+            : 0;
+        const limit = FILTER_OPTION_PAGE_SIZE;
+        const requestKey = `${columnId}::${search}::${offset}`;
+        const previousMeta = filterOptionMeta && filterOptionMeta[columnId] ? filterOptionMeta[columnId] : null;
+        if (
+            offset === 0
+            && Object.prototype.hasOwnProperty.call(filterOptions || {}, columnId)
+            && previousMeta
+            && previousMeta.search === search
+            && previousMeta.loading !== true
+        ) {
             pendingServerFilterOptionsRef.current = null;
             return false;
         }
-        if (pendingServerFilterOptionsRef.current === columnId) {
+        if (pendingServerFilterOptionsRef.current === requestKey) {
             return false;
         }
-        pendingServerFilterOptionsRef.current = columnId;
-        emitRuntimeRequest('filter_options', { columnId, nonce: Date.now() });
+        pendingServerFilterOptionsRef.current = requestKey;
+        setTransportFilterOptionMetaState((previousState) => ({
+            ...(previousState || {}),
+            [columnId]: {
+                ...((previousState && previousState[columnId]) || {}),
+                search,
+                offset,
+                limit,
+                loading: true,
+            },
+        }));
+        dispatchServerSideRuntimeSetProps({
+            runtimeRequest: {
+                kind: 'filter_options',
+                payload: {
+                    columnId,
+                    search,
+                    offset,
+                    limit,
+                    nonce: `${Date.now()}:${requestKey}`,
+                },
+            },
+        });
         return true;
-    }, [emitRuntimeRequest, filterOptions, serverSide]);
+    }, [dispatchServerSideRuntimeSetProps, filterOptionMeta, filterOptions, serverSide]);
 
     const handleFilterClick = useCallback((e, columnId) => {
         if (!uiConfig.showFilters) return;
@@ -7854,7 +8319,8 @@ export default function DashTanstackPivot(props) {
         rowFields,
         colFields,
         valConfigs,
-    }), [sorting, filters, rowFields, colFields, valConfigs]);
+        customDimensions,
+    }), [sorting, filters, rowFields, colFields, valConfigs, customDimensions]);
     // Viewport reset key: only changes that semantically restart the user's view
     // (new sort/filter/fields). rowCount is excluded because it changes when rows
     // are expanded, which must NOT scroll back to the top.
@@ -7864,7 +8330,8 @@ export default function DashTanstackPivot(props) {
         rowFields,
         colFields,
         valConfigs,
-    }), [sorting, filters, rowFields, colFields, valConfigs]);
+        customDimensions,
+    }), [sorting, filters, rowFields, colFields, valConfigs, customDimensions]);
 
     const effectiveRowCount = serverSidePinsGrandTotal && rowCount ? Math.max(rowCount - 1, 0) : rowCount;
     const statusRowCount = serverSidePinsGrandTotal && rowCount ? Math.max(rowCount - 1, 0) : rowCount;
@@ -7943,6 +8410,7 @@ export default function DashTanstackPivot(props) {
         rowFields,
         colFields,
         valConfigs,
+        customDimensions,
         treeConfig,
         minMax,
         colorScaleMode,
@@ -7951,6 +8419,7 @@ export default function DashTanstackPivot(props) {
         rowDragStart,
         props,
         cachedColSchema,
+        responseColumns,
         filteredData,
         rowCount,
         // Render-time closures (stable refs or render-time reads)
@@ -7986,6 +8455,8 @@ export default function DashTanstackPivot(props) {
         cellFormatRules,
         pivotMode,
         reportDef,
+        showReportConfigColumn: showReportConfigColumn !== false && !immersiveMode,
+        onConfigureReportLine: handleConfigureReportLine,
         detailMode,
         isDetailOpenForRow: (rowPath) => Boolean(detailSurface && detailSurface.rowPath === rowPath),
         onToggleDetail: (row) => {
@@ -8015,7 +8486,7 @@ export default function DashTanstackPivot(props) {
                 Math.max(maxWidth, ctx.measureText(headerText).width + autoSizeBounds.headerPadding + autoSizeBounds.headerOverscan)
             ), autoSizeBounds.minWidth);
             const measuredFromDom = getRenderedHeaderWidthForColumn(col.id);
-            const measuredFromCells = (col.id !== 'hierarchy' && col.id !== '__row_number__')
+            const measuredFromCells = (col.id !== 'hierarchy' && col.id !== '__row_number__' && col.id !== '__report_config__')
                 ? getRenderedCellWidthForColumn(col.id)
                 : null;
             const measured = Number.isFinite(measuredFromDom)
@@ -8656,6 +9127,7 @@ export default function DashTanstackPivot(props) {
     const activeFilterOptions = useMemo(() => {
         if (!activeFilterCol) return [];
         if (filterOptions[activeFilterCol]) return filterOptions[activeFilterCol];
+        if (!serverSide && clientFilterOptionMap[activeFilterCol]) return clientFilterOptionMap[activeFilterCol];
         
         const col = table.getColumn(activeFilterCol);
         if (!col) return [];
@@ -8667,8 +9139,8 @@ export default function DashTanstackPivot(props) {
             if (val !== null && val !== undefined) unique.add(val);
         });
         
-        return Array.from(unique).sort();
-    }, [activeFilterCol, filterOptions, table]);
+        return Array.from(unique).sort(compareFilterOptionValues);
+    }, [activeFilterCol, clientFilterOptionMap, filterOptions, serverSide, table]);
 
     const { rows } = table.getRowModel();
     let topRows = [];
@@ -9711,8 +10183,10 @@ export default function DashTanstackPivot(props) {
         }
         if (kind === 'filter_options' && payload && typeof payload === 'object') {
             const columnId = payload.columnId || payload.column_id || '';
+            const search = payload.search === undefined || payload.search === null ? '' : String(payload.search);
+            const offset = payload.offset === undefined || payload.offset === null ? 0 : payload.offset;
             const optionCount = Array.isArray(payload.options) ? payload.options.length : 0;
-            return `${kind}:${status}:${columnId}:${optionCount}`;
+            return `${kind}:${status}:${columnId}:${search}:${offset}:${optionCount}`;
         }
         return null;
     }, []);
@@ -9747,6 +10221,11 @@ export default function DashTanstackPivot(props) {
                 dataVersion: coerceTransportNumber(payload.dataVersion, null),
                 rowCount: coerceTransportNumber(payload.rowCount, null),
             };
+            if (payload.formulaErrors && typeof payload.formulaErrors === 'object') {
+                setFormulaErrors(payload.formulaErrors);
+            } else if (payload.formulaErrors === null) {
+                setFormulaErrors({});
+            }
             setTransportDataState((previousState) => normalizeRuntimeDataEnvelope(payload, previousState));
             return;
         }
@@ -9793,23 +10272,49 @@ export default function DashTanstackPivot(props) {
             const columnId = payload.columnId || payload.column_id;
             if (!columnId) return;
             const nextOptions = Array.isArray(payload.options) ? payload.options : [];
-            if (pendingServerFilterOptionsRef.current === columnId) {
+            const search = payload.search !== undefined && payload.search !== null ? String(payload.search) : '';
+            const offset = coerceTransportNumber(payload.offset, 0) || 0;
+            const limit = coerceTransportNumber(payload.limit, FILTER_OPTION_PAGE_SIZE) || FILTER_OPTION_PAGE_SIZE;
+            const total = coerceTransportNumber(payload.total, nextOptions.length);
+            const hasMore = payload.hasMore === true;
+            const responseRequestKey = `${columnId}::${search}::${offset}`;
+            if (pendingServerFilterOptionsRef.current === responseRequestKey || pendingServerFilterOptionsRef.current === columnId) {
                 pendingServerFilterOptionsRef.current = null;
             }
             setTransportFilterOptionsState((previousState) => {
                 const previousOptions = previousState && previousState[columnId];
+                const mergedOptions = offset > 0 && Array.isArray(previousOptions)
+                    ? [
+                        ...previousOptions,
+                        ...nextOptions.filter((value) => !previousOptions.some((existing) => (
+                            String(existing) === String(value)
+                        ))),
+                    ]
+                    : nextOptions;
                 if (
                     Array.isArray(previousOptions)
-                    && previousOptions.length === nextOptions.length
-                    && previousOptions.every((value, index) => value === nextOptions[index])
+                    && previousOptions.length === mergedOptions.length
+                    && previousOptions.every((value, index) => value === mergedOptions[index])
                 ) {
                     return previousState;
                 }
                 return {
                     ...(previousState || {}),
-                    [columnId]: nextOptions,
+                    [columnId]: mergedOptions,
                 };
             });
+            setTransportFilterOptionMetaState((previousState) => ({
+                ...(previousState || {}),
+                [columnId]: {
+                    ...((previousState && previousState[columnId]) || {}),
+                    search,
+                    offset,
+                    limit,
+                    total,
+                    hasMore,
+                    loading: false,
+                },
+            }));
             setEditorOptionsLoadingState((previousState) => {
                 if (previousState && previousState[columnId] === false) return previousState;
                 return {
@@ -9835,9 +10340,16 @@ export default function DashTanstackPivot(props) {
         if (runtimeResponse.kind === 'filter_options' && runtimeResponse.status === 'error') {
             const columnId = payload.columnId || payload.column_id;
             if (columnId) {
-                if (pendingServerFilterOptionsRef.current === columnId) {
+                if (pendingServerFilterOptionsRef.current && String(pendingServerFilterOptionsRef.current).startsWith(`${columnId}::`)) {
                     pendingServerFilterOptionsRef.current = null;
                 }
+                setTransportFilterOptionMetaState((previousState) => ({
+                    ...(previousState || {}),
+                    [columnId]: {
+                        ...((previousState && previousState[columnId]) || {}),
+                        loading: false,
+                    },
+                }));
                 setEditorOptionsLoadingState((previousState) => {
                     if (previousState && previousState[columnId] === false) return previousState;
                     return {
@@ -10239,6 +10751,11 @@ export default function DashTanstackPivot(props) {
             setDragItem(null);
             return;
         }
+        if (targetZone === 'vals' && isCustomCategoryField(fieldName)) {
+            showNotification('Custom categories are dimensions. Use them in Rows, Columns, or Filters.', 'warning');
+            setDragItem(null);
+            return;
+        }
 
         // Check for Pinning (Drag-to-Pin)
         const targetIsPinned = getPinningState(targetColId);
@@ -10314,6 +10831,10 @@ export default function DashTanstackPivot(props) {
         if (!['rows', 'cols', 'vals', 'filter'].includes(targetZone)) return false;
         if (isFormulaValue && targetZone !== 'vals') {
             showNotification('Formula columns can only stay in Values.', 'warning');
+            return false;
+        }
+        if (targetZone === 'vals' && isCustomCategoryField(fieldName)) {
+            showNotification('Custom categories are dimensions. Use them in Rows, Columns, or Filters.', 'warning');
             return false;
         }
         const numericTargetIdx = Number(targetIdx);
@@ -10396,7 +10917,7 @@ export default function DashTanstackPivot(props) {
 
     // buildExportAoa and exportPivot extracted to ../utils/exportUtils.js
     const getVisibleExportColIds = useCallback(() =>
-        table.getVisibleLeafColumns().filter(c => c.id !== '__row_number__').map(c => c.id),
+        table.getVisibleLeafColumns().filter(c => c.id !== '__row_number__' && c.id !== '__report_config__').map(c => c.id),
     [table]);
 
     const exportPivot = useCallback(() => {
@@ -10477,6 +10998,8 @@ export default function DashTanstackPivot(props) {
         filterAnchorEl,
         closeFilterPopover,
         activeFilterOptions,
+        activeFilterOptionMeta: activeFilterCol ? filterOptionMeta[activeFilterCol] : null,
+        requestFilterOptions,
         filters,
         selectedCols,
         getHeaderStickyStyle,
@@ -11273,6 +11796,7 @@ export default function DashTanstackPivot(props) {
                 reportDef={reportDef} setReportDef={setReportDef}
                 savedReports={savedReports} setSavedReports={setSavedReports}
                 activeReportId={activeReportId} setActiveReportId={setActiveReportId}
+                customDimensions={customDimensions} setCustomDimensions={setCustomDimensions}
                 showFloatingFilters={showFloatingFilters} setShowFloatingFilters={setShowFloatingFilters}
                 stickyHeaders={stickyHeaders} setStickyHeaders={setStickyHeaders}
                 showColTotals={showColTotals} setShowColTotals={setShowColTotals}
@@ -11368,7 +11892,7 @@ export default function DashTanstackPivot(props) {
                         displayedColumnOptions={displayedFormulaColumnOptions}
                         columnVisibility={columnVisibility} setColumnVisibility={setColumnVisibility}
                         columnPinning={columnPinning} setColumnPinning={setColumnPinningWithHistory}
-                        availableFields={availableFields}
+                        availableFields={availableFieldsWithCustomDimensions}
                         sparklineFields={sparklineFields}
                         table={table}
                         pinningPresets={pinningPresets}
@@ -11389,11 +11913,18 @@ export default function DashTanstackPivot(props) {
                         activeFilterCol={activeFilterCol}
                         closeFilterPopover={closeFilterPopover}
                         filterOptions={filterOptions}
+                        filterOptionMeta={filterOptionMeta}
+                        clientFilterOptionMap={clientFilterOptionMap}
                         data={data}
                         sidebarWidth={sidebarWidth}
                         setSidebarWidth={setSidebarWidth}
                         fieldPanelSizes={fieldPanelSizes}
                         setFieldPanelSizes={setFieldPanelSizes}
+                        reportEditorSelection={reportEditorSelection}
+                        showReportConfigColumn={showReportConfigColumn}
+                        setShowReportConfigColumn={setShowReportConfigColumn}
+                        formulaErrors={formulaErrors}
+                        serverSide={serverSide}
                     />
                 )}
                 <div ref={chartCanvasLayoutRef} style={{ display:'flex', flexDirection:'column', flex:1, minWidth:0, minHeight:0, overflowX:'hidden', overflowY: (dockedChartCanvasPanesByPosition.top.length > 0 || dockedChartCanvasPanesByPosition.bottom.length > 0) ? 'auto' : 'hidden', position:'relative' }}>
@@ -11925,6 +12456,7 @@ DashTanstackPivot.propTypes = {
     sortEvent: PropTypes.object,
     availableFieldList: PropTypes.arrayOf(PropTypes.string),
     sparklineFields: PropTypes.object,
+    customDimensions: PropTypes.arrayOf(PropTypes.object),
     reportDef: PropTypes.object,
     savedReports: PropTypes.arrayOf(PropTypes.object),
     activeReportId: PropTypes.string,

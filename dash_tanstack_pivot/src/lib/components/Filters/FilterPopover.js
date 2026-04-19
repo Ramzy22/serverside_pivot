@@ -5,7 +5,7 @@ const FALLBACK_WIDTH = 300;
 const FALLBACK_HEIGHT = 400;
 const VIEWPORT_PADDING = 16;
 
-const FilterPopover = ({ column, anchorEl, onClose, onFilter, currentFilter, options = [], theme }) => {
+const FilterPopover = ({ column, anchorEl, onClose, onFilter, currentFilter, options = [], optionMeta = null, onSearchOptions, onLoadMoreOptions, theme }) => {
     const [position, setPosition] = useState(null);
     const popoverRef = useRef(null);
     const columnAnchorTarget = typeof Element !== 'undefined' && column instanceof Element ? column : null;
@@ -69,6 +69,9 @@ const FilterPopover = ({ column, anchorEl, onClose, onFilter, currentFilter, opt
                 onFilter={onFilter} 
                 currentFilter={currentFilter} 
                 options={options} 
+                optionMeta={optionMeta}
+                onSearchOptions={onSearchOptions}
+                onLoadMoreOptions={onLoadMoreOptions}
                 theme={theme} 
                 onClose={onClose} 
             />

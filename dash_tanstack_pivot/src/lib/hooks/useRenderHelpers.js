@@ -3,7 +3,7 @@ import React from 'react';
 import Icons from '../utils/Icons';
 import FilterPopover from '../components/Filters/FilterPopover';
 import { flexRender } from '@tanstack/react-table';
-import { buildEditedCellVisualStyle, mergeStateStyles } from '../utils/styles';
+import { buildEditedCellVisualStyle, mergeStateStyles, withAlpha } from '../utils/styles';
 import { formatDisplayLabel } from '../utils/helpers';
 import { EDITED_CELL_FORMAT_KEY } from '../utils/formatting';
 import { findSortSpecifier, isAbsoluteSortSpecifier } from '../utils/sorting';
@@ -122,6 +122,8 @@ export function useRenderHelpers({
     filterAnchorEl,
     closeFilterPopover,
     activeFilterOptions,
+    activeFilterOptionMeta,
+    requestFilterOptions,
     filters,
     selectedCols,
     getHeaderStickyStyle,
@@ -173,6 +175,12 @@ export function useRenderHelpers({
         border: `1px solid ${isDarkTheme(theme) ? '#000' : '#fff'}`,
         borderRadius: '1px',
     }), [theme, isDarkTheme]);
+
+    const grandTotalBorderStyle = useMemo(() => ({
+        borderTop: `2px solid ${theme.primary}`,
+        borderBottom: `2px solid ${theme.primary}`,
+        borderRight: `1px solid ${withAlpha(theme.primary, 0.4) || theme.primary}`,
+    }), [theme.primary]);
 
     // Pre-computed theme backgrounds — avoids repeated ternary chains per cell.
     const themeBgs = useMemo(() => ({
@@ -226,10 +234,11 @@ export function useRenderHelpers({
             );
         }
         const colIndex = visibleLeafColIndexMap.get(col.id) !== undefined ? visibleLeafColIndexMap.get(col.id) : -1;
+        const isReportConfigGutter = Boolean(col.columnDef && col.columnDef.meta && col.columnDef.meta.reportConfigGutter);
         const isHierarchy = col.id === 'hierarchy';
         const colParentHeader = col.parent && typeof col.parent.columnDef?.header === 'string' ? col.parent.columnDef.header : '';
-        const isTotalCol = !isHierarchy && (colParentHeader === 'Grand Total' || colParentHeader.startsWith('Grand Total'));
-        const isSelected = Object.prototype.hasOwnProperty.call(
+        const isTotalCol = !isHierarchy && !isReportConfigGutter && (colParentHeader === 'Grand Total' || colParentHeader.startsWith('Grand Total'));
+        const isSelected = !isReportConfigGutter && Object.prototype.hasOwnProperty.call(
             selectedCells || {},
             `${row.id}:${col.id}`
         );
@@ -269,19 +278,37 @@ export function useRenderHelpers({
             : null;
 
         const isGrandTotalRow = !!(row.original && row.original._isTotal);
+        const reportFormat = row.original
+            && row.original._reportFormat
+            && typeof row.original._reportFormat === 'object'
+            && !isReportConfigGutter
+            ? row.original._reportFormat
+            : null;
+        const reportCellStyle = reportFormat ? {} : EMPTY_STYLE;
+        if (reportFormat && reportFormat.rowColor) {
+            reportCellStyle.background = reportFormat.rowColor;
+        }
+        if (reportFormat && reportFormat.borderStyle) {
+            const reportBorderWidth = Number.isFinite(Number(reportFormat.borderWidth))
+                ? Math.max(1, Number(reportFormat.borderWidth))
+                : 1;
+            reportCellStyle.border = `${reportBorderWidth}px ${reportFormat.borderStyle} ${reportFormat.borderColor || theme.border}`;
+        }
         const themeBackground = isGrandTotalRow
             ? themeBgs.grandTotal
             : isTotalCol
                 ? themeBgs.total
-                : isHierarchy ? themeBgs.hierarchy : themeBgs.normal;
-        const condStyle = getConditionalStyle(col.id, resolvedCellValue, row.original, row.id);
+                : isReportConfigGutter
+                    ? (theme.background || theme.surfaceBg || '#fff')
+                    : isHierarchy ? themeBgs.hierarchy : themeBgs.normal;
+        const condStyle = isReportConfigGutter ? EMPTY_STYLE : getConditionalStyle(col.id, resolvedCellValue, row.original, row.id);
         const editedVisualStyle = editedMarker
             ? buildEditedCellVisualStyle(theme, editedCellFmt, editedMarker, { emphasizeText: true })
             : null;
         const editedBaseStyle = editedVisualStyle || EMPTY_STYLE;
         const stickyBaseStyle = cellFmt && cellFmt.bg
-            ? mergeStateStyles({ background: themeBackground }, condStyle, editedBaseStyle, { background: cellFmt.bg })
-            : mergeStateStyles({ background: themeBackground }, condStyle, editedBaseStyle);
+            ? mergeStateStyles({ background: themeBackground }, reportCellStyle, condStyle, editedBaseStyle, { background: cellFmt.bg })
+            : mergeStateStyles({ background: themeBackground }, reportCellStyle, condStyle, editedBaseStyle);
         const stickyStyle = disableSticky
             ? { background: stickyBaseStyle.background || stickyBaseStyle.backgroundColor }
             : getStickyStyle(cellLike.column, stickyBaseStyle.background || stickyBaseStyle.backgroundColor);
@@ -308,6 +335,7 @@ export function useRenderHelpers({
                 serverSide &&
                 !!rowData.__colPending &&
                 !isHierarchy &&
+                !isReportConfigGutter &&
                 col.id !== '__row_number__' &&
                 !hasFetchedColumn
             );
@@ -329,6 +357,7 @@ export function useRenderHelpers({
         // Data bars
         const rawNumValue = resolvedCellValue;
         const isDataBar = !isHierarchy
+            && !isReportConfigGutter
             && dataBarsColumns && dataBarsColumns.has(col.id)
             && typeof rawNumValue === 'number'
             && !Number.isNaN(rawNumValue)
@@ -370,21 +399,24 @@ export function useRenderHelpers({
                 data-rowid={row.id}
                 data-colid={col.id}
                 data-rowspan={rowSpanHeight ? rowSpanState.rowSpan : undefined}
-                onMouseDown={(e) => handleCellMouseDown(e, virtualRowIndex, colIndex, row.id, col.id, resolvedCellValue)}
-                onMouseEnter={() => handleCellMouseEnter(virtualRowIndex, colIndex)}
+                data-report-config-gutter={isReportConfigGutter ? 'true' : undefined}
+                onMouseDown={isReportConfigGutter ? undefined : (e) => handleCellMouseDown(e, virtualRowIndex, colIndex, row.id, col.id, resolvedCellValue)}
+                onMouseEnter={isReportConfigGutter ? undefined : () => handleCellMouseEnter(virtualRowIndex, colIndex)}
                 style={{
                     ...baseCellStyle,
                     width: col.getSize(),
                     height: rowSpanHeight || '100%',
                     minHeight: rowSpanHeight || undefined,
                     alignSelf: rowSpanHeight ? 'flex-start' : undefined,
-                    justifyContent: isHierarchy ? 'flex-start' : 'flex-end',
-                    fontVariantNumeric: isHierarchy ? undefined : 'tabular-nums',
+                    justifyContent: isReportConfigGutter ? 'center' : isHierarchy ? 'flex-start' : 'flex-end',
+                    fontVariantNumeric: (isHierarchy || isReportConfigGutter) ? undefined : 'tabular-nums',
                     fontWeight: cellFmt && cellFmt.bold
                         ? 'bold'
                         : (editedVisualStyle && editedVisualStyle.fontWeight)
                             ? editedVisualStyle.fontWeight
-                            : (isGrandTotalRow ? 700 : isTotalCol ? 600 : ((isHierarchy && row.getIsGrouped()) ? 500 : 400)),
+                            : (reportFormat && reportFormat.bold)
+                                ? 700
+                                : (isGrandTotalRow ? 700 : isTotalCol ? 600 : ((isHierarchy && row.getIsGrouped()) ? 500 : 400)),
                     fontStyle: cellFmt && cellFmt.italic
                         ? 'italic'
                         : (editedVisualStyle && editedVisualStyle.fontStyle ? editedVisualStyle.fontStyle : undefined),
@@ -392,7 +424,7 @@ export function useRenderHelpers({
                         ? cellFmt.color
                         : (editedVisualStyle && editedVisualStyle.color)
                             ? editedVisualStyle.color
-                            : (isHierarchy ? undefined : (
+                            : ((isHierarchy || isReportConfigGutter) ? undefined : (
                                 isGrandTotalRow
                                     ? themeBgs.grandTotalText
                                     : isTotalCol ? themeBgs.totalText : theme.textSec
@@ -402,8 +434,18 @@ export function useRenderHelpers({
                     zIndex: rowSpanHeight
                         ? Math.max(Number(cellStateStyle.zIndex) || 0, 6)
                         : cellStateStyle.zIndex,
+                    ...(isGrandTotalRow ? grandTotalBorderStyle : {}),
+                    ...(isReportConfigGutter ? {
+                        padding: 0,
+                        borderLeft: 'none',
+                        borderRight: 'none',
+                        borderBottom: `1px solid ${theme.border}`,
+                        background: theme.background || theme.surfaceBg || '#fff',
+                        boxShadow: 'none',
+                        color: theme.textSec,
+                    } : {}),
                 }}
-                onContextMenu={e => handleContextMenu(e, resolvedCellValue, col.id, row)}
+                onContextMenu={isReportConfigGutter ? undefined : e => handleContextMenu(e, resolvedCellValue, col.id, row)}
             >
                 {dataBarEl}
                 <span style={dataBarEl ? DATA_BAR_SPAN_STYLE : undefined}>{cellContent}</span>
@@ -440,6 +482,7 @@ export function useRenderHelpers({
         fillOverlayRef,
         fillHandleStyle,
         themeBgs,
+        grandTotalBorderStyle,
         EMPTY_STYLE,
         DATA_BAR_SPAN_STYLE,
         SKELETON_CELL_STYLE,
@@ -554,8 +597,9 @@ export function useRenderHelpers({
     // when only unrelated parent state (sidebar, charts, context menus) changes.
     const renderHeaderCell = useCallback((header, level, renderSection = 'center', overrideWidth = null, disableSticky = false) => {
         const isGroupHeader = header.column.columns && header.column.columns.length > 0;
+        const isReportConfigGutter = Boolean(header.column.columnDef && header.column.columnDef.meta && header.column.columnDef.meta.reportConfigGutter);
         const isHierarchyHeader = header.column.id === 'hierarchy';
-        const isMeasureSubHeader = !isGroupHeader && !isHierarchyHeader && header.column.id !== '__row_number__';
+        const isMeasureSubHeader = !isGroupHeader && !isHierarchyHeader && !isReportConfigGutter && header.column.id !== '__row_number__';
         const headerText = typeof header.column.columnDef.header === 'string' ? header.column.columnDef.header : '';
         const parentText = header.column.parent && typeof header.column.parent.columnDef?.header === 'string' ? header.column.parent.columnDef.header : '';
         const isTotalGroupHeader = isGroupHeader && (headerText === 'Grand Total' || headerText.startsWith('Grand Total'));
@@ -582,6 +626,38 @@ export function useRenderHelpers({
             .filter(column => sectionLeafIds.has(column.id))
             .reduce((sum, column) => sum + column.getSize(), 0);
         const headerWidth = overrideWidth !== null ? overrideWidth : (sectionWidth || header.getSize());
+        if (isReportConfigGutter) {
+            const gutterBackground = theme.background || theme.surfaceBg || '#fff';
+            const gutterStickyStyle = disableSticky
+                ? { background: gutterBackground }
+                : getHeaderStickyStyle(header, level, renderSection, gutterBackground);
+            return (
+                <div
+                    key={header.id}
+                    style={{
+                        ...styles.headerCell,
+                        ...gutterStickyStyle,
+                        width: headerWidth,
+                        minWidth: headerWidth,
+                        flexShrink: 0,
+                        height: rowHeight,
+                        padding: 0,
+                        cursor: 'default',
+                        background: gutterBackground,
+                        borderLeft: 'none',
+                        borderRight: 'none',
+                        borderBottom: `1px solid ${theme.border}`,
+                        boxShadow: 'none',
+                        color: theme.textSec,
+                        position: gutterStickyStyle.position || 'relative',
+                    }}
+                    data-header-column-id={String(header.column.id)}
+                    data-report-config-gutter="true"
+                    role="columnheader"
+                    aria-label="Report row settings"
+                />
+            );
+        }
         const sortedHeaderStyle = !isGroupHeader && isSorted ? {
             background: theme.sortedHeaderBg || theme.select,
             borderBottom: `1px solid ${theme.sortedHeaderBorder || theme.primary}`,
@@ -737,6 +813,9 @@ export function useRenderHelpers({
                     onFilter={(type, val) => handleHeaderFilter(header.column.id, type, val)}
                     currentFilter={filters[header.column.id]}
                     options={activeFilterCol === header.column.id ? activeFilterOptions : []}
+                    optionMeta={activeFilterCol === header.column.id ? activeFilterOptionMeta : null}
+                    onSearchOptions={serverSide ? (search) => requestFilterOptions && requestFilterOptions(header.column.id, { search, offset: 0 }) : undefined}
+                    onLoadMoreOptions={serverSide ? (search, offset) => requestFilterOptions && requestFilterOptions(header.column.id, { search, offset }) : undefined}
                     theme={theme}
                     />
                 )}
@@ -789,10 +868,12 @@ export function useRenderHelpers({
         activeFilterCol,
         filterAnchorEl,
         activeFilterOptions,
+        activeFilterOptionMeta,
         autoSizeColumn,
         handleHeaderContextMenu,
         handleFilterClick,
         handleHeaderFilter,
+        requestFilterOptions,
         closeFilterPopover,
         setHoveredHeaderId,
         setFocusedHeaderId,

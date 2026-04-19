@@ -77,6 +77,7 @@ class PivotSpec:
     columns: List[str] = field(default_factory=list)
     measures: List[Measure] = field(default_factory=list)
     filters: List[Dict[str, Any]] = field(default_factory=list)
+    custom_dimensions: List[Dict[str, Any]] = field(default_factory=list)
     sort: Optional[Union[Dict[str, Any], List[Dict[str, Any]]]] = field(default_factory=list)
     limit: int = 1000
     offset: int = 0
@@ -107,6 +108,7 @@ class PivotSpec:
             columns=d.get("columns", []),
             measures=measures,
             filters=d.get("filters", []),
+            custom_dimensions=d.get("custom_dimensions", d.get("customDimensions", [])),
             sort=d.get("sort", []),
             limit=d.get("limit", 1000),
             offset=d.get("offset", 0),
@@ -129,6 +131,7 @@ class PivotSpec:
             "columns": self.columns,
             "measures": [m.__dict__ for m in self.measures],
             "filters": self.filters,
+            "custom_dimensions": self.custom_dimensions,
             "sort": self.sort,
             "limit": self.limit,
             "offset": self.offset,

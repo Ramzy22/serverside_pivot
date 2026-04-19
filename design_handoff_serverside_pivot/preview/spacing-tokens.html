@@ -1,0 +1,65 @@
+<!DOCTYPE html>
+<html><head><meta charset="utf-8">
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+<style>
+* { box-sizing: border-box; margin: 0; padding: 0; }
+body { font-family: 'Inter', sans-serif; background: #fff; padding: 16px; }
+.title { font-size: 10px; font-weight: 700; letter-spacing: 0.06em; text-transform: uppercase; color: #94A3B8; margin-bottom: 8px; }
+.section { margin-bottom: 14px; }
+.row { display: flex; gap: 8px; flex-wrap: wrap; margin-bottom: 6px; }
+.radius-demo { display: flex; flex-direction: column; align-items: center; gap: 6px; }
+.radius-box { width: 56px; height: 36px; background: #EEF2FF; border: 1.5px solid #4F46E5; }
+.radius-label { font-size: 10px; color: #64748B; text-align: center; font-family: monospace; }
+.shadow-card { width: 100px; height: 48px; background: #fff; display: flex; align-items: center; justify-content: center; border-radius: 8px; }
+.shadow-label { font-size: 10px; color: #64748B; text-align: center; margin-top: 4px; }
+.shadow-wrap { display: flex; flex-direction: column; align-items: center; }
+.density-row { display: flex; gap: 8px; }
+.density-cell { flex: 1; display: flex; align-items: center; padding: 0 10px; border: 1px solid #E5E7EB; border-radius: 4px; font-size: 11px; color: #475569; }
+</style></head><body>
+
+<div class="section">
+  <div class="title">Border Radius</div>
+  <div class="row">
+    <div class="radius-demo"><div class="radius-box" style="border-radius:4px"></div><div class="radius-label">4px<br>light/balham</div></div>
+    <div class="radius-demo"><div class="radius-box" style="border-radius:8px"></div><div class="radius-label">8px<br>alabaster/satin</div></div>
+    <div class="radius-demo"><div class="radius-box" style="border-radius:10px"></div><div class="radius-label">10px<br>radiusSm flash</div></div>
+    <div class="radius-demo"><div class="radius-box" style="border-radius:12px"></div><div class="radius-label">12px<br>bloomberg</div></div>
+    <div class="radius-demo"><div class="radius-box" style="border-radius:14px"></div><div class="radius-label">14px<br>dialogs</div></div>
+    <div class="radius-demo"><div class="radius-box" style="border-radius:16px"></div><div class="radius-label">16px<br>flash/dark radius</div></div>
+    <div class="radius-demo"><div class="radius-box" style="border-radius:18px"></div><div class="radius-label">18px<br>panels/cards</div></div>
+    <div class="radius-demo"><div class="radius-box" style="border-radius:999px; width:80px"></div><div class="radius-label">999px<br>badges/pills</div></div>
+  </div>
+</div>
+
+<div class="section">
+  <div class="title">Shadow System</div>
+  <div class="row">
+    <div class="shadow-wrap">
+      <div class="shadow-card" style="box-shadow:0 1px 2px rgba(15,23,42,0.05)">sm</div>
+      <div class="shadow-label">shadow-sm<br>0 1px 2px</div>
+    </div>
+    <div class="shadow-wrap">
+      <div class="shadow-card" style="box-shadow:0 10px 24px rgba(15,23,42,0.06), 0 2px 8px rgba(15,23,42,0.04)">md</div>
+      <div class="shadow-label">shadow-md<br>0 10px 24px</div>
+    </div>
+    <div class="shadow-wrap">
+      <div class="shadow-card" style="box-shadow:inset 0 1px 0 rgba(255,255,255,0.8); background:#F9FAFB">inset</div>
+      <div class="shadow-label">shadow-inset<br>inset 0 1px 0</div>
+    </div>
+    <div class="shadow-wrap">
+      <div class="shadow-card" style="box-shadow:0 20px 48px rgba(15,23,42,0.24)">dialog</div>
+      <div class="shadow-label">dialog<br>0 20px 48px</div>
+    </div>
+  </div>
+</div>
+
+<div class="section">
+  <div class="title">Row Density</div>
+  <div class="density-row">
+    <div class="density-cell" style="height:36px">Compact — 36px</div>
+    <div class="density-cell" style="height:44px">Normal — 44px</div>
+    <div class="density-cell" style="height:56px">Loose — 56px</div>
+  </div>
+</div>
+
+</body></html>

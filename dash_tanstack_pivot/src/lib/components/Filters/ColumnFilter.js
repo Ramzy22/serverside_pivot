@@ -5,7 +5,7 @@ import DateRangeFilter from './DateRangeFilter';
 import NumericRangeFilter from './NumericRangeFilter';
 import MultiSelectFilter from './MultiSelectFilter';
 
-const ColumnFilter = ({ column, onFilter, currentFilter, options = [], theme, onClose }) => {
+const ColumnFilter = ({ column, onFilter, currentFilter, options = [], optionMeta = null, onSearchOptions, onLoadMoreOptions, theme, onClose }) => {
     const styles = getStyles(theme || { primary: '#1976d2', border: '#e0e0e0', headerBg: '#f5f5f5', text: '#212121' });
     const isLeaf = column.getLeafColumns
         ? column.getLeafColumns().length === 1
@@ -107,7 +107,16 @@ const ColumnFilter = ({ column, onFilter, currentFilter, options = [], theme, on
             
             <div style={{maxHeight: '300px', overflowY: 'auto', display: 'flex', flexDirection: 'column', gap: '8px'}}>
                 {tab === 'values' && (
-                    <MultiSelectFilter options={options} onFilter={onFilter} currentFilter={currentFilter} onClose={onClose} theme={theme} />
+                    <MultiSelectFilter
+                        options={options}
+                        optionMeta={optionMeta}
+                        onSearchOptions={onSearchOptions}
+                        onLoadMoreOptions={onLoadMoreOptions}
+                        onFilter={onFilter}
+                        currentFilter={currentFilter}
+                        onClose={onClose}
+                        theme={theme}
+                    />
                 )}
 
                 {tab === 'date' && (

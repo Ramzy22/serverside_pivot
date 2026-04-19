@@ -1,0 +1,119 @@
+<!DOCTYPE html>
+<html><head><meta charset="utf-8">
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+<style>
+* { box-sizing: border-box; margin: 0; padding: 0; }
+body { font-family: 'Inter', sans-serif; background: #F4F7FB; padding: 16px; }
+.title { font-size: 10px; font-weight: 700; letter-spacing: 0.06em; text-transform: uppercase; color: #94A3B8; margin-bottom: 8px; }
+.grid { display: grid; grid-template-columns: repeat(4, 1fr); gap: 8px; }
+.theme { border-radius: 10px; overflow: hidden; border: 1px solid rgba(0,0,0,0.08); }
+.preview { height: 48px; display: flex; align-items: center; padding: 0 12px; gap: 6px; }
+.dot { width: 10px; height: 10px; border-radius: 50%; flex-shrink: 0; }
+.bar { flex: 1; height: 6px; border-radius: 3px; opacity: 0.4; }
+.meta { padding: 6px 8px; }
+.name { font-size: 11px; font-weight: 600; }
+.mode { font-size: 10px; opacity: 0.55; margin-top: 1px; }
+</style></head><body>
+<div class="title">All 11 Themes</div>
+<div class="grid">
+  <!-- flash -->
+  <div class="theme">
+    <div class="preview" style="background:#fff; border-bottom: 1px solid #E5E7EB">
+      <div class="dot" style="background:#4F46E5"></div>
+      <div class="bar" style="background:#4F46E5"></div>
+      <div class="bar" style="background:#111827; width:60%"></div>
+    </div>
+    <div class="meta" style="background:#F9FAFB"><div class="name" style="color:#111827">Flash</div><div class="mode" style="color:#475569">Light · Indigo</div></div>
+  </div>
+  <!-- dark -->
+  <div class="theme">
+    <div class="preview" style="background:#090C11; border-bottom: 1px solid rgba(255,255,255,0.10)">
+      <div class="dot" style="background:#818CF8"></div>
+      <div class="bar" style="background:#818CF8"></div>
+      <div class="bar" style="background:#F8FAFC; width:60%"></div>
+    </div>
+    <div class="meta" style="background:#111318"><div class="name" style="color:#F8FAFC">Dark</div><div class="mode" style="color:#94A3B8">Dark · Indigo</div></div>
+  </div>
+  <!-- bloomberg black -->
+  <div class="theme">
+    <div class="preview" style="background:#000; border-bottom: 1px solid rgba(255,255,255,0.18)">
+      <div class="dot" style="background:#F59E0B"></div>
+      <div class="bar" style="background:#F59E0B"></div>
+      <div class="bar" style="background:#fff; width:60%"></div>
+    </div>
+    <div class="meta" style="background:#0A0A0A"><div class="name" style="color:#fff">Bloomblerg Black</div><div class="mode" style="color:rgba(255,255,255,0.4)">Dark · Amber</div></div>
+  </div>
+  <!-- blooomberg -->
+  <div class="theme">
+    <div class="preview" style="background:#0A0D12; border-bottom: 1px solid rgba(255,255,255,0.10)">
+      <div class="dot" style="background:#F59E0B"></div>
+      <div class="bar" style="background:#F59E0B"></div>
+      <div class="bar" style="background:#F3F4F6; width:60%"></div>
+    </div>
+    <div class="meta" style="background:#14181E"><div class="name" style="color:#F3F4F6">Blooomberg</div><div class="mode" style="color:#9CA3AF">Dark · Amber</div></div>
+  </div>
+  <!-- strata -->
+  <div class="theme">
+    <div class="preview" style="background:#0d0d12; border-bottom: 1px solid rgba(255,255,255,0.08)">
+      <div class="dot" style="background:#00f2ff"></div>
+      <div class="bar" style="background:#00f2ff"></div>
+      <div class="bar" style="background:#e0e0e6; width:60%"></div>
+    </div>
+    <div class="meta" style="background:#141824"><div class="name" style="color:#e0e0e6">Strata</div><div class="mode" style="color:#8a8a98">Dark · Cyan</div></div>
+  </div>
+  <!-- crystal -->
+  <div class="theme">
+    <div class="preview" style="background:#030712; border-bottom: 1px solid rgba(255,255,255,0.08)">
+      <div class="dot" style="background:#00f2ff"></div>
+      <div class="bar" style="background:#00f2ff"></div>
+      <div class="bar" style="background:#f9fafb; width:60%"></div>
+    </div>
+    <div class="meta" style="background:#0A1428"><div class="name" style="color:#f9fafb">Crystal</div><div class="mode" style="color:#9ca3af">Dark · Cyan</div></div>
+  </div>
+  <!-- light -->
+  <div class="theme">
+    <div class="preview" style="background:#fff; border-bottom: 1px solid #e0e0e0">
+      <div class="dot" style="background:#1976d2"></div>
+      <div class="bar" style="background:#1976d2"></div>
+      <div class="bar" style="background:#212121; width:60%"></div>
+    </div>
+    <div class="meta" style="background:#f5f5f5"><div class="name" style="color:#212121">Light</div><div class="mode" style="color:#757575">Light · Blue</div></div>
+  </div>
+  <!-- material -->
+  <div class="theme">
+    <div class="preview" style="background:#fff; border-bottom: 1px solid #e0e0e0">
+      <div class="dot" style="background:#6200ee"></div>
+      <div class="bar" style="background:#6200ee"></div>
+      <div class="bar" style="background:#000; width:60%"></div>
+    </div>
+    <div class="meta" style="background:#fafafa"><div class="name" style="color:#000">Material</div><div class="mode" style="color:#666">Light · Violet</div></div>
+  </div>
+  <!-- balham -->
+  <div class="theme">
+    <div class="preview" style="background:#fff; border-bottom: 1px solid #BDC3C7">
+      <div class="dot" style="background:#0091ea"></div>
+      <div class="bar" style="background:#0091ea"></div>
+      <div class="bar" style="background:#2c3e50; width:60%"></div>
+    </div>
+    <div class="meta" style="background:#F5F7F7"><div class="name" style="color:#2c3e50">Balham</div><div class="mode" style="color:#7f8c8d">Light · Sky Blue</div></div>
+  </div>
+  <!-- alabaster -->
+  <div class="theme">
+    <div class="preview" style="background:#ffffff; border-bottom: 1px solid rgba(0,0,0,0.06)">
+      <div class="dot" style="background:#2563eb"></div>
+      <div class="bar" style="background:#2563eb"></div>
+      <div class="bar" style="background:#0a0a0a; width:60%"></div>
+    </div>
+    <div class="meta" style="background:#fcfcfc"><div class="name" style="color:#0a0a0a">Alabaster</div><div class="mode" style="color:#666666">Light · Blue</div></div>
+  </div>
+  <!-- satin -->
+  <div class="theme">
+    <div class="preview" style="background:rgba(255,255,255,0.8); border-bottom: 1px solid rgba(0,0,0,0.04)">
+      <div class="dot" style="background:#0f172a"></div>
+      <div class="bar" style="background:#0f172a"></div>
+      <div class="bar" style="background:#0f172a; width:60%; opacity:0.4"></div>
+    </div>
+    <div class="meta" style="background:#F7F2EB"><div class="name" style="color:#0f172a">Satin</div><div class="mode" style="color:#433427">Light · Slate</div></div>
+  </div>
+</div>
+</body></html>

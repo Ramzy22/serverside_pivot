@@ -1,0 +1,82 @@
+<!DOCTYPE html>
+<html><head><meta charset="utf-8">
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+<style>
+* { box-sizing: border-box; margin: 0; padding: 0; }
+body { font-family: 'Inter', sans-serif; background: #fff; padding: 16px; }
+.title { font-size: 10px; font-weight: 700; letter-spacing: 0.06em; text-transform: uppercase; color: #94A3B8; margin-bottom: 8px; }
+.grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; margin-bottom: 12px; }
+.card { border-radius: 8px; border: 1px solid #E5E7EB; overflow: hidden; }
+.demo { height: 44px; display: flex; align-items: center; padding: 0 12px; font-size: 13px; }
+.info { padding: 6px 8px; background: #F8FAFC; }
+.name { font-size: 10px; font-weight: 600; color: #374151; }
+.val { font-size: 10px; color: #9CA3AF; font-family: monospace; margin-top: 1px; }
+</style></head><body>
+
+<div class="title">Row States (Flash Theme)</div>
+<div class="grid">
+  <div class="card">
+    <div class="demo" style="background:#fff; color:#111827">Default Row</div>
+    <div class="info"><div class="name">Default</div><div class="val">bg: #FFFFFF</div></div>
+  </div>
+  <div class="card">
+    <div class="demo" style="background:#F8FAFC; color:#111827">Hovered Row</div>
+    <div class="info"><div class="name">Hover</div><div class="val">bg: #F8FAFC</div></div>
+  </div>
+  <div class="card">
+    <div class="demo" style="background:rgba(79,70,229,0.08); box-shadow:inset 0 0 0 2px #4F46E5; color:#111827; font-weight:600">Selected Cell</div>
+    <div class="info"><div class="name">Selected</div><div class="val">bg: select + inset ring</div></div>
+  </div>
+</div>
+
+<div class="title">Total Row States</div>
+<div class="grid">
+  <div class="card">
+    <div class="demo" style="background:rgba(238,242,255,0.82); color:#3730A3; font-weight:600; font-family:'JetBrains Mono',monospace">12,480</div>
+    <div class="info"><div class="name">Subtotal</div><div class="val">bg: rgba(238,242,255,.82)</div></div>
+  </div>
+  <div class="card">
+    <div class="demo" style="background:rgba(224,231,255,0.95); color:#312E81; font-weight:700; font-family:'JetBrains Mono',monospace">Grand Total</div>
+    <div class="info"><div class="name">Grand Total</div><div class="val">bg: rgba(224,231,255,.95)</div></div>
+  </div>
+  <div class="card">
+    <div class="demo" style="background:#EDF4FF; color:#111827">Hierarchy Col</div>
+    <div class="info"><div class="name">Hierarchy Bg</div><div class="val">#EDF4FF</div></div>
+  </div>
+</div>
+
+<div class="title">Edited Cell States</div>
+<div class="grid">
+  <div class="card">
+    <div class="demo" style="
+      background: #EDF7EF;
+      background-image: linear-gradient(90deg, #82B38B 0px, #82B38B 8px, transparent 8px, transparent 26%), radial-gradient(circle at top right, rgba(130,179,139,0.14) 0%, transparent 58%), linear-gradient(0deg, #EDF7EF 0%, #EDF7EF 100%);
+      box-shadow: inset 3px 0 0 0 #82B38B, inset 0 0 0 1px rgba(44,70,54,0.28);
+      color: #2C4636; font-weight: 600; font-family: 'JetBrains Mono', monospace;">
+      12,480
+    </div>
+    <div class="info"><div class="name">Edited (Direct)</div><div class="val">Green accent, left stripe</div></div>
+  </div>
+  <div class="card">
+    <div class="demo" style="
+      background: #EDF7EF;
+      background-image: linear-gradient(90deg, #82B38B 0px, #82B38B 6px, transparent 6px, transparent 18%), linear-gradient(0deg, #EDF7EF 0%, #EDF7EF 100%);
+      box-shadow: inset 2px 0 0 0 #82B38B, inset 0 0 0 1px rgba(44,70,54,0.18);
+      color: #2C4636; font-family: 'JetBrains Mono', monospace;">
+      8,240
+    </div>
+    <div class="info"><div class="name">Edited (Propagated)</div><div class="val">Thinner stripe variant</div></div>
+  </div>
+  <div class="card">
+    <div class="demo" style="background:#E8F4EA; color:#244233; border-left: 3px solid #7FAE89; font-family:'JetBrains Mono',monospace">4,120</div>
+    <div class="info"><div class="name">Edited (Light theme)</div><div class="val">bg: #E8F4EA, border: #7FAE89</div></div>
+  </div>
+</div>
+
+<div class="title">Data Values</div>
+<div style="display:flex; gap:8px">
+  <div class="card" style="flex:1"><div class="demo" style="color:#2E7D32; font-weight:600; font-family:'JetBrains Mono',monospace">+2,480</div><div class="info"><div class="name">Positive / Up</div><div class="val">#2E7D32</div></div></div>
+  <div class="card" style="flex:1"><div class="demo" style="color:#C62828; font-weight:600; font-family:'JetBrains Mono',monospace">−1,320</div><div class="info"><div class="name">Negative / Down</div><div class="val">#C62828</div></div></div>
+  <div class="card" style="flex:1"><div class="demo" style="color:#111827; font-family:'JetBrains Mono',monospace">0</div><div class="info"><div class="name">Neutral</div><div class="val">#111827</div></div></div>
+</div>
+</body></html>

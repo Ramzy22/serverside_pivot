@@ -33,6 +33,12 @@ class HierarchicalVirtualScrollManager:
     def _uses_duckdb(self) -> bool:
         return getattr(self.planner.con, "name", "").lower() == "duckdb"
 
+    def _table_for_spec(self, spec: PivotSpec):
+        return self.planner.builder.apply_custom_dimensions(
+            self.planner.con.table(spec.table),
+            getattr(spec, "custom_dimensions", []),
+        )
+
     def _to_pyarrow(self, expr):
         if not self._uses_duckdb():
             return expr.to_pyarrow()
@@ -224,7 +230,7 @@ class HierarchicalVirtualScrollManager:
         import ibis
         
         con = self.planner.con
-        source_table = con.table(spec.table)
+        source_table = self._table_for_spec(spec)
         
         pre_filters, post_filters = self._split_filters(spec)
         
@@ -332,7 +338,7 @@ class HierarchicalVirtualScrollManager:
         pre_filters, _ = self._split_filters(spec)
 
         if pivot_col_values and len(pivot_col_values) > 0:
-            source_table = con.table(spec.table)
+            source_table = self._table_for_spec(spec)
             if pre_filters:
                 f_expr = self.planner.builder.build_filter_expression(source_table, pre_filters)
                 if f_expr is not None:
@@ -394,7 +400,7 @@ class HierarchicalVirtualScrollManager:
 
             return self._to_pyarrow(grand_total_row.select(gt_projection))
 
-        source_table = con.table(spec.table)
+        source_table = self._table_for_spec(spec)
         if pre_filters:
              f_expr = self.planner.builder.build_filter_expression(source_table, pre_filters)
              if f_expr is not None:
@@ -453,7 +459,7 @@ class HierarchicalVirtualScrollManager:
 
             if not level_1_success:
                  try:
-                     base_table = self.planner.con.table(spec.table)
+                     base_table = self._table_for_spec(spec)
                      if pre_filters:
                          f_expr = self.planner.builder.build_filter_expression(base_table, pre_filters)
                          if f_expr is not None:
@@ -488,7 +494,7 @@ class HierarchicalVirtualScrollManager:
                                  if f_expr is not None: rollup_table = rollup_table.filter(f_expr)
                              total_count += self._execute_scalar(rollup_table.count())
                          else:
-                             base_table = self.planner.con.table(spec.table)
+                             base_table = self._table_for_spec(spec)
                              if pre_filters:
                                  f_expr = self.planner.builder.build_filter_expression(base_table, pre_filters)
                                  if f_expr is not None:
@@ -533,7 +539,7 @@ class HierarchicalVirtualScrollManager:
 
                      if not rollup_success:
                          try:
-                             table_to_query = self.planner.con.table(spec.table)
+                             table_to_query = self._table_for_spec(spec)
                              if pre_filters:
                                  f_expr = self.planner.builder.build_filter_expression(table_to_query, pre_filters)
                                  if f_expr is not None: table_to_query = table_to_query.filter(f_expr)
@@ -613,7 +619,7 @@ class HierarchicalVirtualScrollManager:
             
             is_using_base = False
             if source_table is None:
-                source_table = con.table(spec.table)
+                source_table = self._table_for_spec(spec)
                 is_using_base = True
                 # Apply Pre-Filters (Dimensions) to Base Table
                 if pre_filters:

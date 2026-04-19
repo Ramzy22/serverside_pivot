@@ -102,6 +102,65 @@ def test_runtime_service_works_without_dash():
     assert response.total_rows >= len(response.data)
 
 
+def test_runtime_service_groups_by_custom_category_dimension():
+    adapter = _make_adapter()
+    service = PivotRuntimeService(adapter_getter=lambda: adapter, session_gate=SessionRequestGate())
+    custom_dimension = {
+        "id": "sales_band",
+        "field": "__custom_category__sales_band",
+        "name": "Sales Band",
+        "fallbackLabel": "Small",
+        "rules": [
+            {
+                "id": "large",
+                "label": "Large",
+                "condition": {
+                    "op": "AND",
+                    "clauses": [
+                        {"field": "sales", "operator": "gte", "value": 100},
+                    ],
+                },
+            }
+        ],
+    }
+
+    context = PivotRequestContext.from_frontend(
+        table="sales_data",
+        trigger_prop="custom.viewport",
+        viewport={
+            "start": 0,
+            "end": 20,
+            "window_seq": 1,
+            "state_epoch": 1,
+            "abort_generation": 1,
+            "session_id": "sess-custom-category",
+            "client_instance": "client-custom-category",
+            "intent": "viewport",
+            "include_grand_total": False,
+        },
+    )
+    state = PivotViewState(
+        row_fields=["__custom_category__sales_band"],
+        val_configs=[{"field": "sales", "agg": "sum"}],
+        custom_dimensions=[custom_dimension],
+        filters={},
+        sorting=[],
+        expanded={},
+        show_row_totals=False,
+        show_col_totals=False,
+    )
+
+    response = service.process(state, context)
+
+    assert response.status == "data"
+    totals_by_band = {
+        row.get("_id"): row.get("sales_sum")
+        for row in response.data
+        if isinstance(row, dict) and not row.get("_isTotal")
+    }
+    assert totals_by_band == {"Large": 220, "Small": 150}
+
+
 def test_runtime_service_cancels_superseded_viewport_work():
     class SlowAdapter:
         def __init__(self):
@@ -2013,15 +2072,148 @@ def test_report_mode_sorts_and_trims_visible_siblings_by_metric():
     assert visible_rows == [
         (0, "South"),
         (1, "Chile"),
+        (1, "Other"),
         (0, "North"),
         (1, "Canada"),
+        (1, "Other"),
+        (0, "Other"),
     ]
-    assert response.total_rows == 4
+    assert response.total_rows == 7
     assert response.data[0].get("_levelLabel") == "Region"
     assert response.data[1].get("_levelLabel") == "Country"
     assert response.data[1].get("_groupTotalCount") == 2
+    assert response.data[2].get("_isOther") is True
+    assert response.data[2].get("sales_sum") == 120
+    assert response.data[5].get("_isOther") is True
+    assert response.data[5].get("sales_sum") == 100
+    assert response.data[6].get("_isOther") is True
+    assert response.data[6].get("sales_sum") == 150
     assert "__reportSortBy" not in response.data[0]
     assert "__reportSortDir" not in response.data[0]
+
+
+def test_branching_report_can_use_custom_category_as_level():
+    adapter = _make_adapter()
+    service = PivotRuntimeService(adapter_getter=lambda: adapter, session_gate=SessionRequestGate())
+    custom_dimension = {
+        "id": "sales_band",
+        "field": "__custom_category__sales_band",
+        "name": "Sales Band",
+        "fallbackLabel": "Small",
+        "rules": [
+            {
+                "id": "large",
+                "label": "Large",
+                "condition": {
+                    "op": "AND",
+                    "clauses": [
+                        {"field": "sales", "operator": "gte", "value": 100},
+                    ],
+                },
+            }
+        ],
+    }
+
+    context = PivotRequestContext.from_frontend(
+        table="sales_data",
+        trigger_prop="pivot-grid.viewport",
+        viewport={
+            "start": 0,
+            "end": 20,
+            "window_seq": 1,
+            "state_epoch": 1,
+            "abort_generation": 1,
+            "session_id": "sess-report-custom-category",
+            "client_instance": "grid-report-custom-category",
+            "intent": "viewport",
+            "include_grand_total": False,
+            "needs_col_schema": True,
+        },
+    )
+    state = PivotViewState(
+        row_fields=["__custom_category__sales_band"],
+        val_configs=[{"field": "sales", "agg": "sum"}],
+        custom_dimensions=[custom_dimension],
+        expanded=True,
+        show_row_totals=False,
+        show_col_totals=False,
+        view_mode="report",
+        report_def={
+            "levels": [
+                {
+                    "field": "__custom_category__sales_band",
+                    "label": "Sales Band",
+                    "sortBy": "sales_sum",
+                    "sortDir": "desc",
+                },
+            ]
+        },
+    )
+
+    response = service.process(state, context)
+
+    assert response.status == "data"
+    visible_rows = [
+        (row.get("_levelLabel"), row.get("_id"), row.get("sales_sum"))
+        for row in response.data
+        if isinstance(row, dict) and not row.get("_isTotal")
+    ]
+    assert visible_rows == [
+        ("Sales Band", "Large", 220),
+        ("Sales Band", "Small", 150),
+    ]
+
+
+def test_branching_report_topn_adds_other_aggregate_row():
+    adapter = _make_adapter()
+    service = PivotRuntimeService(adapter_getter=lambda: adapter, session_gate=SessionRequestGate())
+
+    context = PivotRequestContext.from_frontend(
+        table="sales_data",
+        trigger_prop="pivot-grid.viewport",
+        viewport={
+            "start": 0,
+            "end": 20,
+            "window_seq": 1,
+            "state_epoch": 1,
+            "abort_generation": 1,
+            "session_id": "sess-report-other",
+            "client_instance": "grid-report-other",
+            "intent": "viewport",
+            "include_grand_total": False,
+            "needs_col_schema": True,
+        },
+    )
+    state = PivotViewState(
+        row_fields=["region"],
+        val_configs=[{"field": "sales", "agg": "sum"}],
+        expanded=True,
+        show_row_totals=False,
+        show_col_totals=False,
+        view_mode="report",
+        report_def={
+            "root": {
+                "field": "region",
+                "label": "Region",
+                "topN": 1,
+                "sortBy": "sales_sum",
+                "sortDir": "desc",
+            }
+        },
+    )
+
+    response = service.process(state, context)
+
+    assert response.status == "data"
+    assert [
+        (row.get("depth"), row.get("_id"), row.get("sales_sum"), row.get("_isOther"))
+        for row in response.data
+        if isinstance(row, dict) and not row.get("_isTotal")
+    ] == [
+        (0, "South", 190, None),
+        (0, "Other", 180, True),
+    ]
+    assert response.total_rows == 2
 
 
 def test_report_mode_conditional_children_override_child_rules():
@@ -2088,10 +2280,12 @@ def test_report_mode_conditional_children_override_child_rules():
     assert visible_rows == [
         (0, "North", "Region"),
         (1, "Canada", "Country"),
+        (1, "Other", "Country"),
         (0, "South", "Region"),
         (1, "Brazil", "South Country"),
+        (1, "Other", "South Country"),
     ]
-    assert response.total_rows == 4
+    assert response.total_rows == 6
 
 
 def test_branching_report_root_supports_per_value_child_fields():
@@ -2172,3 +2366,161 @@ def test_branching_report_root_supports_per_value_child_fields():
     assert response.data[1].get("_pathFields") == ["region", "country"]
     assert response.data[4].get("_pathFields") == ["region", "product"]
     assert response.total_rows == 6
+
+
+def test_branching_report_branches_override_default_child_for_matching_row():
+    adapter = create_tanstack_adapter(backend_uri=":memory:")
+    table = pa.Table.from_pydict(
+        {
+            "region": ["North", "North", "East", "East", "East"],
+            "country": ["USA", "Canada", "France", "Germany", "France"],
+            "product": ["A", "B", "C", "D", "C"],
+            "sales": [100, 80, 90, 50, 20],
+        }
+    )
+    adapter.controller.load_data_from_arrow("sales_data", table)
+    service = PivotRuntimeService(adapter_getter=lambda: adapter, session_gate=SessionRequestGate())
+
+    context = PivotRequestContext.from_frontend(
+        table="sales_data",
+        trigger_prop="pivot-grid.viewport",
+        viewport={
+            "start": 0,
+            "end": 20,
+            "window_seq": 1,
+            "state_epoch": 1,
+            "abort_generation": 1,
+            "session_id": "sess-branch-override",
+            "client_instance": "grid-branch-override",
+            "intent": "viewport",
+            "include_grand_total": False,
+            "needs_col_schema": True,
+        },
+    )
+    state = PivotViewState(
+        row_fields=["region", "country", "product"],
+        val_configs=[{"field": "sales", "agg": "sum"}],
+        expanded={"North": True, "East": True},
+        show_row_totals=False,
+        show_col_totals=False,
+        view_mode="report",
+        report_def={
+            "root": {
+                "field": "region",
+                "label": "Region",
+                "sortBy": "sales_sum",
+                "sortDir": "desc",
+                "defaultChild": {
+                    "field": "country",
+                    "label": "Country",
+                    "sortBy": "sales_sum",
+                    "sortDir": "desc",
+                },
+                "branches": [
+                    {
+                        "label": "North Segment",
+                        "condition": {
+                            "op": "AND",
+                            "clauses": [
+                                {
+                                    "field": "region",
+                                    "operator": "eq",
+                                    "value": "North",
+                                    "values": [],
+                                }
+                            ],
+                        },
+                        "child": {
+                            "field": "product",
+                            "label": "North Product",
+                            "sortBy": "sales_sum",
+                            "sortDir": "desc",
+                        },
+                    }
+                ],
+            }
+        },
+    )
+
+    response = service.process(state, context)
+
+    assert response.status == "data"
+    assert [
+        (row.get("depth"), row.get("_id"), row.get("_levelField"))
+        for row in response.data
+        if isinstance(row, dict) and not row.get("_isTotal")
+    ] == [
+        (0, "North", "region"),
+        (1, "A", "product"),
+        (1, "B", "product"),
+        (0, "East", "region"),
+        (1, "France", "country"),
+        (1, "Germany", "country"),
+    ]
+    assert response.data[1].get("_pathFields") == ["region", "product"]
+    assert response.data[4].get("_pathFields") == ["region", "country"]
+    assert response.data[0].get("_id") == "North"
+    assert response.data[0].get("_label") == "North Segment"
+    assert response.total_rows == 6
+
+
+def test_branching_report_emits_format_and_debug_metadata():
+    adapter = _make_adapter()
+    service = PivotRuntimeService(adapter_getter=lambda: adapter, session_gate=SessionRequestGate())
+
+    context = PivotRequestContext.from_frontend(
+        table="sales_data",
+        trigger_prop="pivot-grid.viewport",
+        viewport={
+            "start": 0,
+            "end": 20,
+            "window_seq": 1,
+            "state_epoch": 1,
+            "abort_generation": 1,
+            "session_id": "sess-report-format-debug",
+            "client_instance": "grid-report-format-debug",
+            "intent": "viewport",
+            "include_grand_total": False,
+            "needs_col_schema": True,
+        },
+    )
+    state = PivotViewState(
+        row_fields=["region", "country"],
+        val_configs=[{"field": "sales", "agg": "sum"}],
+        expanded=True,
+        show_row_totals=False,
+        show_col_totals=False,
+        view_mode="report",
+        report_def={
+            "root": {
+                "field": "region",
+                "label": "Region",
+                "format": {
+                    "indent": 12,
+                    "bold": True,
+                    "rowColor": "#eef2ff",
+                    "labelPrefix": "[",
+                    "labelSuffix": "]",
+                    "numberFormat": "currency:$",
+                    "borderStyle": "solid",
+                    "borderColor": "#334155",
+                    "borderWidth": 2,
+                },
+                "defaultChild": {
+                    "field": "country",
+                    "label": "Country",
+                },
+            }
+        },
+    )
+
+    response = service.process(state, context)
+
+    assert response.status == "data"
+    north = next(row for row in response.data if row.get("_id") == "North")
+    assert north.get("_reportDisplayLabel") == "[North]"
+    assert north.get("_reportFormat")["bold"] is True
+    assert north.get("_reportFormat")["borderStyle"] == "solid"
+    assert north.get("_reportFormat")["borderWidth"] == 2
+    assert north.get("_reportDebug")["levelField"] == "region"
+    assert north.get("_reportDebug")["childrenSource"] == "Default children"

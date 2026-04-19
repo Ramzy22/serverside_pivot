@@ -3,7 +3,7 @@ tanstack_adapter.py - Direct TanStack Table/Query adapter for the scalable pivot
 This bypasses the REST API and provides direct integration with TanStack components
 """
 from typing import Dict, Any, List, Optional, Callable, Union
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from enum import Enum
 import asyncio
 import copy
@@ -189,6 +189,7 @@ class TanStackRequest:
     row_totals: Optional[bool] = False
     version: Optional[int] = None
     column_sort_options: Optional[Dict[str, Any]] = None
+    custom_dimensions: List[Dict[str, Any]] = field(default_factory=list)
 
 
 @dataclass
@@ -203,6 +204,7 @@ class TanStackResponse:
     col_schema: Optional[Dict[str, Any]] = None
     color_scale_stats: Optional[Dict[str, Any]] = None
     profile: Optional[Dict[str, Any]] = None
+    formula_errors: Optional[Dict[str, str]] = None
 
 
 class TanStackPivotAdapter(FormulaEngineMixin):
@@ -282,6 +284,7 @@ class TanStackPivotAdapter(FormulaEngineMixin):
             "sorting": request.sorting or [],
             "grouping": request.grouping or [],
             "aggregations": request.aggregations or [],
+            "custom_dimensions": request.custom_dimensions or [],
             "totals": bool(request.totals),
             "row_totals": bool(request.row_totals),
             "column_sort_options": request.column_sort_options or {},
@@ -294,6 +297,7 @@ class TanStackPivotAdapter(FormulaEngineMixin):
             "table": request.table,
             "columns": request.columns or [],
             "filters": request.filters or {},
+            "custom_dimensions": request.custom_dimensions or [],
             "column_sort_options": request.column_sort_options or {},
         }
         return hashlib.sha256(self._stable_json(payload).encode()).hexdigest()[:24]
@@ -1582,6 +1586,7 @@ class TanStackPivotAdapter(FormulaEngineMixin):
             columns=value_cols,  # Map non-grouped dimensions to column pivots
             measures=measures,
             filters=pivot_filters,
+            custom_dimensions=request.custom_dimensions or [],
             sort=pivot_sort,
             limit=limit,
             totals=request.totals if request.totals is not None else True,  # Enable totals computation
@@ -1722,7 +1727,7 @@ class TanStackPivotAdapter(FormulaEngineMixin):
         self._apply_pivot_window_functions(rows, tanstack_request)
 
         # Apply formula columns (post-aggregation calculated fields) after window functions.
-        self._apply_formula_columns(rows, tanstack_request)
+        _formula_errors_main = self._apply_formula_columns(rows, tanstack_request)
         rows = self._sort_rows_for_formula_sort(rows, tanstack_request)
 
         # Calculate pagination info if needed
@@ -1842,7 +1847,7 @@ class TanStackPivotAdapter(FormulaEngineMixin):
         # handle_hierarchical_request, handle_virtual_scroll_request) evaluate
         # formula columns. handle_request also calls _apply_formula_columns after
         # window functions, but that second pass is idempotent so it is safe.
-        self._apply_formula_columns(rows, tanstack_request)
+        _formula_errors = self._apply_formula_columns(rows, tanstack_request)
         rows = self._sort_rows_for_formula_sort(rows, tanstack_request)
 
         return TanStackResponse(
@@ -1850,7 +1855,8 @@ class TanStackPivotAdapter(FormulaEngineMixin):
             columns=response_columns,
             pagination=pagination,
             total_rows=len(rows) if rows else 0,
-            version=version
+            version=version,
+            formula_errors=_formula_errors or None,
         )
     
     async def handle_update(self, request: TanStackRequest, update_payload: Dict[str, Any]) -> bool:
@@ -2928,8 +2934,44 @@ class TanStackPivotAdapter(FormulaEngineMixin):
         if request.operation == TanStackOperation.GET_UNIQUE_VALUES:
             # Logic for unique values (used by Excel-like filter)
             column_id = request.global_filter # Overload global_filter to pass the column
-            unique_values = await self.get_unique_values(request.table, column_id, request.filters)
-            return TanStackResponse(data=[{"value": v} for v in unique_values], columns=[])
+            pagination = request.pagination if isinstance(request.pagination, dict) else {}
+            page_size = pagination.get("pageSize", pagination.get("page_size", 250))
+            page_index = pagination.get("pageIndex", pagination.get("page_index", 0))
+            offset = pagination.get("offset")
+            try:
+                page_size = max(1, min(int(page_size), 500))
+            except (TypeError, ValueError):
+                page_size = 250
+            try:
+                page_index = max(0, int(page_index))
+            except (TypeError, ValueError):
+                page_index = 0
+            try:
+                offset = max(0, int(offset)) if offset is not None else page_index * page_size
+            except (TypeError, ValueError):
+                offset = page_index * page_size
+            search = str(pagination.get("search") or "").strip()
+            unique_values, total_values = await self.get_unique_values(
+                request.table,
+                column_id,
+                request.filters,
+                request.custom_dimensions,
+                search=search,
+                limit=page_size,
+                offset=offset,
+            )
+            return TanStackResponse(
+                data=[{"value": v} for v in unique_values],
+                columns=[],
+                pagination={
+                    "totalRows": total_values,
+                    "pageSize": page_size,
+                    "pageIndex": page_index,
+                    "offset": offset,
+                    "hasMore": offset + len(unique_values) < total_values,
+                    "search": search,
+                },
+            )
 
         # Convert request to pivot spec
         pivot_spec = self.convert_tanstack_request_to_pivot_spec(request)
@@ -3779,10 +3821,19 @@ class TanStackPivotAdapter(FormulaEngineMixin):
         # ... existing ...
         pass
 
-    async def get_unique_values(self, table_name: str, column_id: str, filters: Dict[str, Any] = None) -> List[Any]:
+    async def get_unique_values(
+        self,
+        table_name: str,
+        column_id: str,
+        filters: Dict[str, Any] = None,
+        custom_dimensions: Optional[List[Dict[str, Any]]] = None,
+        search: str = "",
+        limit: int = 250,
+        offset: int = 0,
+    ) -> tuple[List[Any], int]:
         # Skip virtual columns that don't exist in the underlying table
         if not column_id or column_id in ('__row_number__', 'hierarchy'):
-            return []
+            return [], 0
         """Get unique values for a column, potentially filtered"""
         
         # Convert the filters from the request format to the spec format
@@ -3808,13 +3859,24 @@ class TanStackPivotAdapter(FormulaEngineMixin):
                         'value': filter_obj.get('value')
                     })
         
+        try:
+            limit = max(1, min(int(limit), 500))
+        except (TypeError, ValueError):
+            limit = 250
+        try:
+            offset = max(0, int(offset))
+        except (TypeError, ValueError):
+            offset = 0
+
         spec = PivotSpec(
             table=table_name,
             rows=[],
             columns=[],
             measures=[],
             filters=pivot_filters,
-            limit=500 # Cap unique values for UI
+            custom_dimensions=custom_dimensions or [],
+            limit=limit,
+            offset=offset,
         )
         
         # Use Ibis to get distinct values
@@ -3824,14 +3886,28 @@ class TanStackPivotAdapter(FormulaEngineMixin):
         # Apply filters
         from pivot_engine.common.ibis_expression_builder import IbisExpressionBuilder
         builder = IbisExpressionBuilder(con)
+        table = builder.apply_custom_dimensions(table, spec.custom_dimensions)
+        if column_id not in getattr(table, "columns", []):
+            return [], 0
         filter_expr = builder.build_filter_expression(table, spec.filters)
         if filter_expr is not None:
             table = table.filter(filter_expr)
-            
-        # Get distinct values in stable sorted order for the filter list UI.
-        query = table.select(column_id).distinct().order_by(column_id).limit(spec.limit)
+
+        search_text = str(search or "").strip()
+        if search_text:
+            table = table.filter(table[column_id].cast("string").lower().contains(search_text.lower()))
+
+        # Get distinct values in stable sorted order, with explicit paging so
+        # large columns remain usable without shipping every option at once.
+        distinct_query = table.select(column_id).distinct()
+        total_result = distinct_query.count().execute()
+        try:
+            total_values = int(total_result)
+        except (TypeError, ValueError):
+            total_values = 0
+        query = distinct_query.order_by(column_id).limit(spec.limit, offset=spec.offset)
         result = query.execute()
-        return result[column_id].tolist()
+        return result[column_id].tolist(), total_values
 
 
 # Utility function for TanStack integration

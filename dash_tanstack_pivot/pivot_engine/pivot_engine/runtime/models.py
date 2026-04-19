@@ -32,6 +32,7 @@ class PivotViewState:
     col_fields: List[str] = field(default_factory=list)
     val_configs: List[Dict[str, Any]] = field(default_factory=list)
     filters: Dict[str, Any] = field(default_factory=dict)
+    custom_dimensions: List[Dict[str, Any]] = field(default_factory=list)
     sorting: List[Dict[str, Any]] = field(default_factory=list)
     sort_options: Dict[str, Any] = field(default_factory=dict)
     expanded: Any = field(default_factory=dict)
@@ -168,3 +169,4 @@ class PivotServiceResponse:
     patch_payload: Optional[Dict[str, Any]] = None
     edit_overlay: Optional[Dict[str, Any]] = None
     profile: Optional[Dict[str, Any]] = None
+    formula_errors: Optional[Dict[str, str]] = None

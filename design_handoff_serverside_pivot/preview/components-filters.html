@@ -1,0 +1,102 @@
+<!DOCTYPE html>
+<html><head><meta charset="utf-8">
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+<style>
+* { box-sizing: border-box; margin: 0; padding: 0; }
+body { font-family: 'Inter', sans-serif; background: #F4F7FB; padding: 16px; display: flex; gap: 16px; flex-wrap: wrap; }
+.title { font-size: 10px; font-weight: 700; letter-spacing: 0.06em; text-transform: uppercase; color: #94A3B8; margin-bottom: 8px; }
+svg { display: inline-block; vertical-align: middle; flex-shrink: 0; }
+
+/* filter popover */
+.popover { background: #fff; border: 1px solid #E5E7EB; border-radius: 10px; box-shadow: 0 4px 16px rgba(0,0,0,0.12); padding: 12px; min-width: 200px; }
+.pop-title { font-weight: 600; font-size: 13px; color: #111827; margin-bottom: 8px; display: flex; align-items: center; justify-content: space-between; }
+.search-box { display: flex; align-items: center; gap: 6px; background: #F3F4F6; border-radius: 8px; padding: 4px 8px; margin-bottom: 8px; }
+.search-box input { border: none; background: transparent; outline: none; font-size: 12px; font-family: 'Inter', sans-serif; }
+.opt { display: flex; align-items: center; gap: 8px; padding: 5px 2px; font-size: 12px; color: #374151; cursor: pointer; }
+.opt:hover { color: #111827; }
+.cb { width: 14px; height: 14px; border: 1.5px solid #D1D5DB; border-radius: 3px; display: inline-flex; align-items: center; justify-content: center; flex-shrink: 0; }
+.cb.checked { background: #4F46E5; border-color: #4F46E5; }
+.pop-footer { border-top: 1px solid #E5E7EB; padding-top: 8px; margin-top: 8px; display: flex; gap: 6px; }
+.btn { padding: 5px 10px; border-radius: 8px; border: 1px solid #E5E7EB; background: #fff; font-size: 11px; font-weight: 500; cursor: pointer; color: #111827; font-family: 'Inter', sans-serif; }
+.btn-primary { background: #4F46E5; color: #fff; border-color: #4F46E5; }
+
+/* context menu */
+.menu { background: #fff; border: 1px solid #E5E7EB; border-radius: 10px; box-shadow: 0 8px 24px rgba(15,23,42,0.10); padding: 4px 0; min-width: 180px; }
+.menu-item { display: flex; align-items: center; gap: 10px; padding: 8px 12px; font-size: 12px; color: #374151; cursor: pointer; }
+.menu-item:hover { background: #F8FAFC; }
+.menu-item.danger { color: #C62828; }
+.menu-sep { height: 1px; background: #E5E7EB; margin: 4px 0; }
+</style></head><body>
+
+<div>
+  <div class="title">Column Filter</div>
+  <div class="popover">
+    <div class="pop-title">
+      desk
+      <svg width="14" height="14" viewBox="0 0 24 24" fill="#9CA3AF"><path d="M19 6.41L17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12z"/></svg>
+    </div>
+    <div class="search-box">
+      <svg width="12" height="12" viewBox="0 0 24 24" fill="#9CA3AF"><path d="M15.5 14h-.79l-.28-.27C15.41 12.59 16 11.11 16 9.5 16 5.91 13.09 3 9.5 3S3 5.91 3 9.5 5.91 16 9.5 16c1.61 0 3.09-.59 4.23-1.57l.27.28v.79l5 4.99L20.49 19l-4.99-5zm-6 0C7.01 14 5 11.99 5 9.5S7.01 5 9.5 5 14 7.01 14 9.5 11.99 14 9.5 14z"/></svg>
+      <input value="Search…" readonly style="width:130px; font-size:12px; color:#9CA3AF">
+    </div>
+    <div class="opt"><div class="cb checked"><svg width="10" height="10" viewBox="0 0 24 24" fill="#fff"><path d="M9 16.17L4.83 12l-1.42 1.41L9 19 21 7l-1.41-1.41z"/></svg></div> Equity</div>
+    <div class="opt"><div class="cb checked"><svg width="10" height="10" viewBox="0 0 24 24" fill="#fff"><path d="M9 16.17L4.83 12l-1.42 1.41L9 19 21 7l-1.41-1.41z"/></svg></div> Fixed Income</div>
+    <div class="opt"><div class="cb"></div> FX</div>
+    <div class="opt"><div class="cb"></div> Credit</div>
+    <div class="pop-footer">
+      <button class="btn" style="flex:1">Clear</button>
+      <button class="btn btn-primary" style="flex:1">Apply</button>
+    </div>
+  </div>
+</div>
+
+<div>
+  <div class="title">Context Menu</div>
+  <div class="menu">
+    <div class="menu-item"><svg width="14" height="14" viewBox="0 0 24 24" fill="#9CA3AF"><path d="M4 12l1.41 1.41L11 7.83V20h2V7.83l5.58 5.59L20 12l-8-8-8 8z"/></svg> Sort Ascending</div>
+    <div class="menu-item"><svg width="14" height="14" viewBox="0 0 24 24" fill="#9CA3AF"><path d="M20 12l-1.41-1.41L13 16.17V4h-2v12.17l-5.58-5.59L4 12l8 8 8-8z"/></svg> Sort Descending</div>
+    <div class="menu-sep"></div>
+    <!-- Pin Left: bold left bar + column lines -->
+    <div class="menu-item">
+      <svg width="14" height="14" viewBox="0 0 16 16" fill="#9CA3AF">
+        <rect x="1" y="1" width="3" height="14" rx="1.5"/>
+        <rect x="6" y="3" width="9" height="2" rx="1"/>
+        <rect x="6" y="7" width="7" height="2" rx="1"/>
+        <rect x="6" y="11" width="8" height="2" rx="1"/>
+      </svg> Pin Left</div>
+    <!-- Pin Right: mirror -->
+    <div class="menu-item">
+      <svg width="14" height="14" viewBox="0 0 16 16" fill="#9CA3AF">
+        <rect x="12" y="1" width="3" height="14" rx="1.5"/>
+        <rect x="1" y="3" width="9" height="2" rx="1"/>
+        <rect x="1" y="7" width="7" height="2" rx="1"/>
+        <rect x="1" y="11" width="8" height="2" rx="1"/>
+      </svg> Pin Right</div>
+    <!-- Group By: bold header row + vertical bracket + indented children -->
+    <div class="menu-item">
+      <svg width="14" height="14" viewBox="0 0 16 16" fill="#9CA3AF">
+        <!-- header row -->
+        <rect x="1" y="1" width="14" height="2.5" rx="1"/>
+        <!-- vertical bracket bar -->
+        <rect x="2" y="3.5" width="1.5" height="10" rx="0.75"/>
+        <!-- horizontal ticks -->
+        <rect x="2" y="5.5" width="3" height="1.5" rx="0.75"/>
+        <rect x="2" y="10" width="3" height="1.5" rx="0.75"/>
+        <!-- child rows -->
+        <rect x="6" y="5" width="9" height="2" rx="1"/>
+        <rect x="6" y="9.5" width="7" height="2" rx="1"/>
+      </svg> Group By</div>
+    <div class="menu-sep"></div>
+    <!-- Drill Through: magnifying glass (loop) with mini rows inside -->
+    <div class="menu-item">
+      <svg width="14" height="14" viewBox="0 0 16 16" fill="none">
+        <circle cx="6.5" cy="6.5" r="5" stroke="#9CA3AF" stroke-width="1.5"/>
+        <line x1="10.5" y1="10.5" x2="14.5" y2="14.5" stroke="#9CA3AF" stroke-width="1.5" stroke-linecap="round"/>
+        <line x1="4" y1="5.5" x2="9" y2="5.5" stroke="#9CA3AF" stroke-width="1" stroke-linecap="round"/>
+        <line x1="4" y1="7.5" x2="8" y2="7.5" stroke="#9CA3AF" stroke-width="1" stroke-linecap="round"/>
+      </svg> Drill Through</div>
+    <div class="menu-item danger"><svg width="14" height="14" viewBox="0 0 24 24" fill="#C62828"><path d="M6 19c0 1.1.9 2 2 2h8c1.1 0 2-.9 2-2V7H6v12zM19 4h-3.5l-1-1h-5l-1 1H5v2h14V4z"/></svg> Remove Column</div>
+  </div>
+</div>
+
+</body></html>

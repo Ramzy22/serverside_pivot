@@ -14,6 +14,7 @@ import {
     resolveSparklineDeltaValue,
     resolveSparklineMetricValue,
 } from '../utils/sparklines';
+import { formatCustomAwareFieldLabel } from './usePivotNormalization';
 
 const debugLog = process.env.NODE_ENV !== 'production'
     ? (...args) => console.log('[pivot-grid]', ...args)
@@ -46,6 +47,7 @@ export function useColumnDefs({
     rowFields,
     colFields,
     valConfigs,
+    customDimensions,
     treeConfig,
     minMax,
     colorScaleMode,
@@ -54,6 +56,7 @@ export function useColumnDefs({
     rowDragStart,
     props,
     cachedColSchema,
+    responseColumns,
     filteredData,
     rowCount,
     // Render-time closures (not in dep array — stable refs or render-time reads)
@@ -89,6 +92,8 @@ export function useColumnDefs({
     cellFormatRules,
     pivotMode,
     reportDef,
+    showReportConfigColumn = true,
+    onConfigureReportLine,
     detailMode,
     isDetailOpenForRow,
     onToggleDetail,
@@ -99,6 +104,7 @@ export function useColumnDefs({
 }) {
     return useMemo(() => {
         const effectiveLayoutMode = (pivotMode === 'report' || viewMode === 'tree') ? 'hierarchy' : layoutMode;
+        const getFieldLabel = (field) => formatCustomAwareFieldLabel(field, customDimensions);
         const getConfigDisplayFormat = (config) => {
             if (!config) return null;
             if (config.format) return config.format;
@@ -107,9 +113,9 @@ export function useColumnDefs({
         };
         const getSparklineConfig = (config) => normalizeSparklineConfig(config && config.sparkline);
         const extractColumnHeaderText = (columnEntry, fallbackId = null) => {
-            const fallbackText = fallbackId ? formatDisplayLabel(fallbackId) : '';
+            const fallbackText = fallbackId ? getFieldLabel(fallbackId) : '';
             if (!columnEntry) return fallbackText;
-            if (typeof columnEntry === 'string') return formatDisplayLabel(columnEntry);
+            if (typeof columnEntry === 'string') return getFieldLabel(columnEntry);
             if (columnEntry.columnDef && typeof columnEntry.columnDef === 'object') {
                 if (typeof columnEntry.columnDef.header === 'string' && columnEntry.columnDef.header.trim()) {
                     return columnEntry.columnDef.header.trim();
@@ -124,7 +130,7 @@ export function useColumnDefs({
             if (columnEntry.headerVal !== undefined && columnEntry.headerVal !== null) {
                 return String(columnEntry.headerVal);
             }
-            if (columnEntry.id) return formatDisplayLabel(columnEntry.id);
+            if (columnEntry.id) return getFieldLabel(columnEntry.id);
             return fallbackText;
         };
         const formatSparklineMetricValue = (value, config, columnId) => {
@@ -157,7 +163,7 @@ export function useColumnDefs({
         // Helper: return display header for a valConfig
         const getValHeader = (c) => c.agg === 'formula'
             ? (c.label || c.field)
-            : `${formatDisplayLabel(c.field)} (${formatAggLabel(c.agg, c.weightField)})`;
+            : `${getFieldLabel(c.field)} (${formatAggLabel(c.agg, c.weightField)})`;
         const matchesValueConfigColumnId = (columnId, config) => {
             if (!config || typeof columnId !== 'string' || !config.field) return false;
             const normalizedId = columnId.toLowerCase();
@@ -421,8 +427,31 @@ export function useColumnDefs({
             );
         };
 
+        const getReportRowFormat = (rowData) => (
+            pivotMode === 'report'
+            && rowData
+            && rowData._reportFormat
+            && typeof rowData._reportFormat === 'object'
+                ? rowData._reportFormat
+                : null
+        );
+        const getReportRowDisplayLabel = (rowData) => {
+            if (!rowData) return '';
+            return rowData._reportDisplayLabel || rowData._label || rowData._id || '';
+        };
+        const HIERARCHY_INDENT_PX = 32;
+        const getReportIndentPx = (rowData, depth) => {
+            const reportFormat = getReportRowFormat(rowData);
+            const indent = reportFormat && Number(reportFormat.indent);
+            return Number.isFinite(indent) ? Math.max(0, indent) : (depth * HIERARCHY_INDENT_PX);
+        };
+
         // Helper: render a numeric cell value with decimal precision and negative-red coloring
-        const renderNumericCell = (value, fmt, rowPath, colId) => {
+        const renderNumericCell = (value, fmt, rowPath, colId, rowData = null) => {
+            const reportFormat = getReportRowFormat(rowData);
+            const reportNumberFormat = reportFormat && typeof reportFormat.numberFormat === 'string' && reportFormat.numberFormat.trim()
+                ? reportFormat.numberFormat.trim()
+                : null;
             const cellDec = colId !== undefined && columnDecimalOverrides && columnDecimalOverrides[colId] !== undefined
                 ? columnDecimalOverrides[colId]
                 : decimalPlaces;
@@ -431,7 +460,7 @@ export function useColumnDefs({
                 : numberGroupSeparator;
             const effectiveFormat = colId !== undefined && columnFormatOverrides && Object.prototype.hasOwnProperty.call(columnFormatOverrides, colId)
                 ? columnFormatOverrides[colId]
-                : (fmt || defaultValueFormat || null);
+                : (reportNumberFormat || fmt || defaultValueFormat || null);
             const formatted = formatValue(value, effectiveFormat, cellDec, effectiveGroupSeparator);
             const isNegative = typeof value === 'number' && value < 0;
             const cellKey = rowPath && colId ? `${rowPath}:::${colId}` : null;
@@ -453,7 +482,7 @@ export function useColumnDefs({
             const metricValue = resolveSparklineMetricValue(points, sparklineConfig.metric);
             const deltaMetric = resolveSparklineDeltaValue(points);
             const rowPath = getCellRowId(info);
-            const { formatted, contentStyle } = renderNumericCell(metricValue, getConfigDisplayFormat(config), rowPath, columnId);
+            const { formatted, contentStyle } = renderNumericCell(metricValue, getConfigDisplayFormat(config), rowPath, columnId, info.row && info.row.original);
             const headerLabel = buildSparklineHeader(config, config && config.field ? config.field : columnId);
             return (
                 <div
@@ -546,6 +575,7 @@ export function useColumnDefs({
 
         const sortingFn = serverSide ? 'auto' : customSortingFn;
         const hierarchyCols = [];
+        const canConfigureReportLine = pivotMode === 'report' && showReportConfigColumn !== false && typeof onConfigureReportLine === 'function';
 
         if (showRowNumbers) {
                 hierarchyCols.push({
@@ -591,6 +621,75 @@ export function useColumnDefs({
             });
         }
 
+        if (canConfigureReportLine) {
+            hierarchyCols.push({
+                id: '__report_config__',
+                header: '',
+                size: 42,
+                minSize: 42,
+                maxSize: 42,
+                enableSorting: false,
+                enableColumnFilter: false,
+                enableResizing: false,
+                enableHiding: false,
+                enablePinning: false,
+                meta: {
+                    reportConfigGutter: true,
+                },
+                cell: ({ row }) => {
+                    const rowData = row.original || null;
+                    const isConfigurable = !!(
+                        rowData
+                        && !rowData._isTotal
+                        && !rowData._isOther
+                        && rowData._path !== '__grand_total__'
+                        && rowData._id !== 'Grand Total'
+                    );
+                    return (
+                        <div
+                            style={{
+                                width: '100%',
+                                height: '100%',
+                                display: 'flex',
+                                alignItems: 'center',
+                                justifyContent: 'center',
+                                paddingRight: '8px',
+                            }}
+                        >
+                            {isConfigurable ? (
+                                <button
+                                    type="button"
+                                    onClick={(e) => {
+                                        e.stopPropagation();
+                                        onConfigureReportLine(rowData);
+                                    }}
+                                    onMouseDown={(e) => e.stopPropagation()}
+                                    title="Configure this report line"
+                                    aria-label="Configure this report line"
+                                    style={{
+                                        border: 'none',
+                                        background: 'transparent',
+                                        cursor: 'pointer',
+                                        padding: 0,
+                                        width: '26px',
+                                        height: '26px',
+                                        borderRadius: '7px',
+                                        color: theme.textSec,
+                                        display: 'inline-flex',
+                                        alignItems: 'center',
+                                        justifyContent: 'center',
+                                        flexShrink: 0,
+                                    }}
+                                >
+                                    <Icons.Settings />
+                                </button>
+                            ) : null}
+                        </div>
+                    );
+                },
+            });
+        }
+
         if (viewMode === 'tree' && treeDisplayMode === 'multipleColumns') {
             Array.from({ length: Math.max(maxTreeDepth + 1, 1) }).forEach((_, level) => {
                 hierarchyCols.push({
@@ -599,13 +698,14 @@ export function useColumnDefs({
                         const depth = Number.isFinite(Number(row && row._depth))
                             ? Number(row._depth)
                             : (Number.isFinite(Number(row && row.depth)) ? Number(row.depth) : 0);
-                        return depth === level ? (row && (row._label || row._id)) : '';
+                        return depth === level ? getReportRowDisplayLabel(row) : '';
                     },
                     header: getTreeLevelLabel(level),
                     size: level === 0 ? defaultColumnWidths.hierarchy : defaultColumnWidths.dimension,
                     sortingFn,
                     cell: ({ row }) => {
                         const depth = (row.original.depth !== undefined) ? row.original.depth : (row.depth || 0);
+                        const reportFormat = getReportRowFormat(row.original);
                         const showValue = depth === level;
                         const showExpander = showValue && row.getCanExpand() && !(row.original && row.original._isTotal);
                         return (
@@ -615,7 +715,7 @@ export function useColumnDefs({
                                     alignItems: 'center',
                                     width: '100%',
                                     height: '100%',
-                                    fontWeight: (row.original && row.original._isTotal) ? 700 : 400,
+                                    fontWeight: reportFormat && reportFormat.bold ? 700 : ((row.original && row.original._isTotal) ? 700 : 400),
                                 }}
                             >
                                 {showExpander ? (
@@ -634,7 +734,7 @@ export function useColumnDefs({
                                         )}
                                     </button>
                                 ) : <span style={{width:'18px', flexShrink: 0}}/>}
-                                {showValue ? (row.original ? (row.original._label || row.original._id) : '') : ''}
+                                {showValue ? getReportRowDisplayLabel(row.original) : ''}
                                 {showValue && renderDetailToggle(row)}
                                 {showValue && typeof renderRowEditActions === 'function' ? renderRowEditActions(row) : null}
                             </div>
@@ -651,17 +751,19 @@ export function useColumnDefs({
                         ? getReportHeaderLabel()
                         : (viewMode === 'tree'
                             ? getTreeHeaderLabel()
-                            : rowFields.map(formatDisplayLabel).join(' > ')),
+                            : rowFields.map(getFieldLabel).join(' > ')),
                     size: defaultColumnWidths.hierarchy,
                     sortingFn, // Apply sort
                     cell: ({ row }) => {
                         const depth = (row.original.depth !== undefined) ? row.original.depth : (row.depth || 0);
+                        const rowData = row.original || {};
+                        const reportFormat = getReportRowFormat(rowData);
                         // Note: We removed selectedCells from this dependency to avoid unnecessary re-renders
                         // isSelected is calculated dynamically in the renderCell function instead
                         return (
                             <div
                                 style={{
-                                    paddingLeft: `${depth * 24}px`,
+                                    paddingLeft: `${getReportIndentPx(rowData, depth)}px`,
                                     display: 'flex',
                                     alignItems: 'center',
                                     width: '100%',
@@ -685,8 +787,8 @@ export function useColumnDefs({
                                         )}
                                     </button>
                                 ) : <span style={{width:'18px'}}/>}
-                                <span style={{ fontWeight: (row.original && row.original._isTotal) ? 700 : 400 }}>
-                                    {row.original ? (row.original._label || row.original._id) : ''}
+                                <span style={{ fontWeight: reportFormat && reportFormat.bold ? 700 : ((row.original && row.original._isTotal) ? 700 : 400) }}>
+                                    {getReportRowDisplayLabel(row.original)}
                                 </span>
                                 {renderDetailToggle(row)}
                                 {typeof renderRowEditActions === 'function' ? renderRowEditActions(row) : null}
@@ -729,7 +831,7 @@ export function useColumnDefs({
                 hierarchyCols.push({
                     id: field,
                     accessorKey: field,
-                    header: formatDisplayLabel(field),
+                    header: getFieldLabel(field),
                     size: defaultColumnWidths.dimension,
                     enablePinning: true,
                     sortingFn,
@@ -838,6 +940,9 @@ export function useColumnDefs({
                 '_detail_kind',
                 '_label',
                 '_id',
+                '_reportFormat',
+                '_reportDisplayLabel',
+                '_reportDebug',
                 '__virtualIndex',
                 '__col_schema',
                 treeConfig && treeConfig.idField,
@@ -889,7 +994,7 @@ export function useColumnDefs({
                         if (Number.isNaN(value)) {
                             return <div style={{ width:'100%', height:'100%' }} />;
                         }
-                        const { formatted, contentStyle } = renderNumericCell(value, null, rowPath, info.column.id);
+                        const { formatted, contentStyle } = renderNumericCell(value, null, rowPath, info.column.id, info.row && info.row.original);
                         return (
                             <div style={{ width:'100%', height:'100%', display:'flex', alignItems:'center', justifyContent:'flex-end', paddingRight:'8px', ...contentStyle }}>
                                 {formatted}
@@ -980,7 +1085,7 @@ export function useColumnDefs({
                         }
                         const value = getResolvedCellValue(info);
                         const rowPath = getCellRowId(info);
-                        const { formatted, contentStyle } = renderNumericCell(value, getConfigDisplayFormat(c), rowPath, info.column.id);
+                        const { formatted, contentStyle } = renderNumericCell(value, getConfigDisplayFormat(c), rowPath, info.column.id, info.row && info.row.original);
                         return (
                             <div style={{width:'100%', height:'100%', display:'flex', alignItems:'center', justifyContent:'flex-end', paddingRight:'8px', ...contentStyle}} onContextMenu={e => handleContextMenu(e, value, info.column.id, info.row)}>
                                 {formatted}
@@ -1079,7 +1184,7 @@ export function useColumnDefs({
                         }
                         const fmt = getConfigDisplayFormat(matchedConfig);
                         const rowPath = getCellRowId(info);
-                        const { formatted, contentStyle } = renderNumericCell(value, fmt, rowPath, info.column.id);
+                        const { formatted, contentStyle } = renderNumericCell(value, fmt, rowPath, info.column.id, info.row && info.row.original);
                         return (
                             <div style={{width:'100%', height:'100%', display:'flex', alignItems:'center', justifyContent:'flex-end', paddingRight:'8px', ...contentStyle}} onContextMenu={e => handleContextMenu(e, value, info.column.id, info.row)}>
                                 {formatted}
@@ -1219,7 +1324,7 @@ export function useColumnDefs({
                     const config = valConfigs.find(v => decorated.id.includes(v.field));
                     const value = getResolvedCellValue(info);
                     const rowPath = getCellRowId(info);
-                    const { formatted, contentStyle } = renderNumericCell(value, getConfigDisplayFormat(config), rowPath, info.column.id);
+                    const { formatted, contentStyle } = renderNumericCell(value, getConfigDisplayFormat(config), rowPath, info.column.id, info.row && info.row.original);
                     return (
                         <div style={{width:'100%', height:'100%', display:'flex', alignItems:'center', justifyContent:'flex-end', paddingRight:'8px', fontWeight:'bold', ...contentStyle}} onContextMenu={e => handleContextMenu(e, value, info.column.id, info.row)}>
                             {formatted}
@@ -1236,12 +1341,14 @@ export function useColumnDefs({
             );
             const pushAuxiliaryId = (rawId) => {
                 const id = typeof rawId === 'string' ? rawId : null;
-                if (!id || id === '__col_schema' || seenAuxiliaryIds.has(id)) return;
+                if (!id || id === '__col_schema' || id.startsWith('_report') || seenAuxiliaryIds.has(id)) return;
                 seenAuxiliaryIds.add(id);
                 auxiliaryIds.push(id);
             };
 
-            if (props.columns && props.columns.length > 0) {
+            if (serverSide && Array.isArray(responseColumns) && responseColumns.length > 0) {
+                responseColumns.forEach(c => pushAuxiliaryId(c && c.id));
+            } else if (props.columns && props.columns.length > 0) {
                 props.columns.forEach(c => pushAuxiliaryId(c && c.id));
             } else if (filteredData.length > 0) {
                 filteredData.forEach(row => Object.keys(row || {}).forEach(pushAuxiliaryId));
@@ -1460,12 +1567,14 @@ export function useColumnDefs({
                 const seenIds = new Set();
                 const pushId = (rawId) => {
                     const id = typeof rawId === 'string' ? rawId : null;
-                    if (!id || id === '__col_schema' || seenIds.has(id)) return;
+                    if (!id || id === '__col_schema' || id.startsWith('_report') || seenIds.has(id)) return;
                     seenIds.add(id);
                     orderedIds.push(id);
                 };
 
-                if (props.columns && props.columns.length > 0) {
+                if (serverSide && Array.isArray(responseColumns) && responseColumns.length > 0) {
+                    responseColumns.forEach(c => pushId(c && c.id));
+                } else if (props.columns && props.columns.length > 0) {
                     props.columns.forEach(c => pushId(c && c.id));
                 } else if (filteredData.length > 0) {
                     filteredData.forEach(row => Object.keys(row || {}).forEach(pushId));
@@ -1550,6 +1659,7 @@ export function useColumnDefs({
         rowFields,
         colFields,
         valConfigs,
+        customDimensions,
         treeConfig,
         minMax,
         colorScaleMode,
@@ -1559,6 +1669,7 @@ export function useColumnDefs({
         props.columns,
         rowCount,
         cachedColSchema,
+        responseColumns,
         filteredData,
         theme,
         defaultColumnWidths,
@@ -1592,6 +1703,8 @@ export function useColumnDefs({
         cellFormatRules,
         pivotMode,
         reportDef,
+        showReportConfigColumn,
+        onConfigureReportLine,
         detailMode,
         isDetailOpenForRow,
         onToggleDetail,

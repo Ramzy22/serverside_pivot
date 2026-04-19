@@ -1,0 +1,47 @@
+<!DOCTYPE html>
+<html><head><meta charset="utf-8">
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&family=JetBrains+Mono:wght@400;500;700&display=swap" rel="stylesheet">
+<style>
+* { box-sizing: border-box; margin: 0; padding: 0; }
+body { font-family: 'Inter', sans-serif; background: #fff; padding: 16px; }
+.title { font-size: 10px; font-weight: 700; letter-spacing: 0.06em; text-transform: uppercase; color: #94A3B8; margin-bottom: 10px; }
+.card { border: 1px solid #E5E7EB; border-radius: 8px; padding: 12px; margin-bottom: 10px; background: #FAFAFA; }
+.specimen { font-family: 'JetBrains Mono', monospace; color: #111827; margin-bottom: 6px; }
+.info { font-size: 10px; color: #9CA3AF; font-family: monospace; }
+.row { display: flex; gap: 16px; }
+.col { flex: 1; }
+</style></head><body>
+<div class="title">JetBrains Mono — Number Specimens</div>
+<div class="card">
+  <div class="specimen" style="font-size:15px;font-weight:500">1,234,567.89</div>
+  <div class="info">15px / 500 — Number format preview</div>
+</div>
+<div class="card">
+  <div class="row">
+    <div class="col">
+      <div class="specimen" style="font-size:13px;color:#2E7D32">+24,800</div>
+      <div class="info">positive value</div>
+    </div>
+    <div class="col">
+      <div class="specimen" style="font-size:13px;color:#C62828">−8,320</div>
+      <div class="info">negative value</div>
+    </div>
+    <div class="col">
+      <div class="specimen" style="font-size:13px;font-weight:700;color:#3730A3">48,100</div>
+      <div class="info">total row</div>
+    </div>
+  </div>
+</div>
+<div class="card">
+  <div class="specimen" style="font-size:13px">$1,234.56 · 0.0310 · 45.8%</div>
+  <div class="info">currency · rate · percent — 13px / 400</div>
+</div>
+<div class="card" style="background:#111827">
+  <div class="specimen" style="font-size:13px;color:#F8FAFC">1,234,567</div>
+  <div class="info" style="color:#475569">dark theme — white text on dark surface</div>
+</div>
+<div class="card" style="background:#000">
+  <div class="specimen" style="font-size:13px;font-weight:700;color:#F59E0B">24,800.00</div>
+  <div class="info" style="color:#6B7280">bloomberg black — amber total</div>
+</div>
+</body></html>

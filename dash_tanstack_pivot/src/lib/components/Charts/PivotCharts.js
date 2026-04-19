@@ -1,4 +1,6 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import ReactECharts from 'echarts-for-react';
+import 'echarts-gl';
 import Icons from '../../utils/Icons';
 import { usePivotRenderCounter } from '../../hooks/usePivotRenderCounter';
 import { formatDisplayLabel } from '../../utils/helpers';
@@ -57,8 +59,19 @@ const ChartTypeButtons = ({ chartType, onChange, theme, includeHierarchyCharts =
             <button type="button" data-chart-type="combo" aria-pressed={chartType === 'combo'} onClick={() => onChange('combo')} style={buttonStyle('combo')}>Combo</button>
             <button type="button" data-chart-type="pie" aria-pressed={chartType === 'pie'} onClick={() => onChange('pie')} style={buttonStyle('pie')}>Pie</button>
             <button type="button" data-chart-type="donut" aria-pressed={chartType === 'donut'} onClick={() => onChange('donut')} style={buttonStyle('donut')}>Donut</button>
+            <button type="button" data-chart-type="range" aria-pressed={chartType === 'range'} onClick={() => onChange('range')} style={buttonStyle('range')}>Range</button>
             <button type="button" data-chart-type="scatter" aria-pressed={chartType === 'scatter'} onClick={() => onChange('scatter')} style={buttonStyle('scatter')}>Scatter</button>
+            <button type="button" data-chart-type="bar3d" aria-pressed={chartType === 'bar3d'} onClick={() => onChange('bar3d')} style={buttonStyle('bar3d')}>3D Bar</button>
+            <button type="button" data-chart-type="line3d" aria-pressed={chartType === 'line3d'} onClick={() => onChange('line3d')} style={buttonStyle('line3d')}>3D Line</button>
+            <button type="button" data-chart-type="scatter3d" aria-pressed={chartType === 'scatter3d'} onClick={() => onChange('scatter3d')} style={buttonStyle('scatter3d')}>3D Scatter</button>
             <button type="button" data-chart-type="waterfall" aria-pressed={chartType === 'waterfall'} onClick={() => onChange('waterfall')} style={buttonStyle('waterfall')}>Waterfall</button>
+            <button type="button" data-chart-type="heatmap" aria-pressed={chartType === 'heatmap'} onClick={() => onChange('heatmap')} style={buttonStyle('heatmap')}>Heatmap</button>
+            <button type="button" data-chart-type="bubble" aria-pressed={chartType === 'bubble'} onClick={() => onChange('bubble')} style={buttonStyle('bubble')}>Bubble</button>
+            <button type="button" data-chart-type="radar" aria-pressed={chartType === 'radar'} onClick={() => onChange('radar')} style={buttonStyle('radar')}>Radar</button>
+            <button type="button" data-chart-type="funnel" aria-pressed={chartType === 'funnel'} onClick={() => onChange('funnel')} style={buttonStyle('funnel')}>Funnel</button>
+            <button type="button" data-chart-type="histogram" aria-pressed={chartType === 'histogram'} onClick={() => onChange('histogram')} style={buttonStyle('histogram')}>Histogram</button>
+            <button type="button" data-chart-type="boxplot" aria-pressed={chartType === 'boxplot'} onClick={() => onChange('boxplot')} style={buttonStyle('boxplot')}>Box Plot</button>
+            <button type="button" data-chart-type="nightingale" aria-pressed={chartType === 'nightingale'} onClick={() => onChange('nightingale')} style={buttonStyle('nightingale')}>Nightingale</button>
             {includeHierarchyCharts ? (
                 <>
                     <button type="button" data-chart-type="icicle" aria-pressed={chartType === 'icicle'} onClick={() => onChange('icicle')} style={buttonStyle('icicle')}>Icicle</button>
@@ -106,6 +119,16 @@ const ChartLayoutButtons = ({ chartType, barLayout, onChange, canStack, theme })
                 }
             >
                 Stacked
+            </button>
+            <button
+                onClick={() => {
+                    if (!canStack) return;
+                    onChange('stacked100');
+                }}
+                style={buttonStyle('stacked100', !canStack)}
+                title={canStack ? 'Normalize each category to 100%' : 'Needs multiple series'}
+            >
+                100%
             </button>
         </div>
     );
@@ -779,6 +802,31 @@ const exportChartCsv = (model, fileStem) => {
     downloadBlob(new Blob([csv], { type: 'text/csv;charset=utf-8' }), `${fileStem}.csv`);
 };
 
+const ECHARTS_CHART_TYPES = new Set(['bar3d', 'line3d', 'scatter3d', 'range', 'boxplot', 'nightingale']);
+
+const exportEchartsPng = (echartsRef, fileStem) => {
+    const instance = echartsRef && echartsRef.current && echartsRef.current.getEchartsInstance();
+    if (!instance) return;
+    const url = instance.getDataURL({ type: 'png', pixelRatio: 2 });
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `${fileStem}.png`;
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+};
+
+const copyEchartsToClipboard = async (echartsRef) => {
+    const instance = echartsRef && echartsRef.current && echartsRef.current.getEchartsInstance();
+    if (!instance) return;
+    try {
+        const url = instance.getDataURL({ type: 'png', pixelRatio: 2 });
+        const res = await fetch(url);
+        const blob = await res.blob();
+        await navigator.clipboard.write([new ClipboardItem({ [blob.type]: blob })]);
+    } catch (_) {}
+};
+
 const EmptyChartState = ({ message, theme, chartHeight = CHART_HEIGHT }) => (
     <div style={{
         minHeight: `${chartHeight}px`,
@@ -944,6 +992,7 @@ const SparklineBoard = ({
     chartHeight,
     paletteColors,
     valueFormat,
+    referenceLines = [],
 }) => {
     const seriesList = Array.isArray(model && model.series) ? model.series : [];
     const categories = Array.isArray(model && model.categories) ? model.categories : [];
@@ -1038,6 +1087,21 @@ const SparklineBoard = ({
                             {geometry.minPoint ? <circle cx={geometry.minPoint.x} cy={geometry.minPoint.y} r="2.6" fill={theme.surfaceBg || theme.background || '#fff'} stroke={color} strokeWidth="1.4" opacity="0.7" /> : null}
                             {geometry.maxPoint ? <circle cx={geometry.maxPoint.x} cy={geometry.maxPoint.y} r="2.8" fill={theme.surfaceBg || theme.background || '#fff'} stroke={color} strokeWidth="1.6" opacity="0.9" /> : null}
                             {geometry.currentPoint ? <circle cx={geometry.currentPoint.x} cy={geometry.currentPoint.y} r="3.2" fill={color} /> : null}
+                            {referenceLines.map((rl, rli) => {
+                                const numVal = Number(rl.value);
+                                if (!Number.isFinite(numVal) || rl.orient === 'v') return null;
+                                if (geometry.minValue === null || geometry.maxValue === null) return null;
+                                const span = (geometry.maxValue - geometry.minValue) || 1;
+                                const ry = sparkHeight - 10 - ((numVal - geometry.minValue) / span) * (sparkHeight - 20);
+                                if (ry < 0 || ry > sparkHeight) return null;
+                                const rlColor = rl.color || theme.primary;
+                                return (
+                                    <g key={`spark-rl-${rli}`}>
+                                        <line x1={10} y1={ry} x2={sparkWidth - 10} y2={ry} stroke={rlColor} strokeWidth="1" strokeDasharray="4 2" style={{ pointerEvents: 'none' }} />
+                                        {rl.label ? <text x={sparkWidth - 11} y={ry - 2} textAnchor="end" fontSize="8" fontWeight="700" fill={rlColor} style={{ pointerEvents: 'none' }}>{rl.label}</text> : null}
+                                    </g>
+                                );
+                            })}
                         </svg>
                         <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '8px', fontSize: '10px', color: theme.textSec }}>
                             <span>{categories[0] ? truncateChartLabel(String(categories[0]), 14) : 'Start'}</span>
@@ -1066,11 +1130,24 @@ const SvgChart = ({
     showDataLabels = false,
     onCategoryActivate = null,
     svgRef = null,
+    echartsRef = null,
     colorPalette = 'default',
     valueFormat = 'auto',
     yAxisTitle = '',
+    yAxisMin = '',
+    yAxisMax = '',
+    referenceLines = [],
+    labelAngle = 0,
     chartTitle = '',
     onTitleChange = null,
+    tickCount = 5,
+    markerShape = 'circle',
+    markerSize = 4,
+    showGradient = false,
+    seriesColors = {},
+    showAnimations = false,
+    showCalloutLabels = false,
+    subtitle = '',
 }) => {
     const paletteColors = resolvePalette(colorPalette);
     const fmt = (v) => formatChartValue(v, valueFormat);
@@ -1078,7 +1155,37 @@ const SvgChart = ({
     const stackedSeriesBarMode = chartType === 'bar' && barLayout === 'stacked' && !stackedChildBarMode && canStackBarSeries(model);
     const stackedAreaMode = chartType === 'area' && barLayout === 'stacked' && canStackAreaSeries(model);
     const horizontalBarMode = chartType === 'bar' && axisMode === 'horizontal';
+    const stacked100Mode = barLayout === 'stacked100';
+    const effectiveLabelAngle = Number.isFinite(Number(labelAngle)) ? Number(labelAngle) : 0;
     const effectiveChartHeight = chartHeight;
+
+    const resolveSeriesColor = (name, idx) =>
+        (seriesColors && seriesColors[name]) || getColorForIndex(idx, theme, paletteColors);
+
+    const renderMarker = (cx, cy, fill, tipAttrs, clickProps = {}) => {
+        const s = markerSize || 4;
+        const sk = theme.surfaceBg || theme.background || '#fff';
+        const base = { fill, stroke: sk, strokeWidth: '1.5', opacity: '0.82', ...tipAttrs, ...clickProps };
+        switch (markerShape) {
+            case 'square': return <rect x={cx - s} y={cy - s} width={s * 2} height={s * 2} rx="2" {...base} />;
+            case 'diamond': return <polygon points={`${cx},${cy - s} ${cx + s},${cy} ${cx},${cy + s} ${cx - s},${cy}`} {...base} />;
+            case 'cross': return <path d={`M${cx - s},${cy} L${cx + s},${cy} M${cx},${cy - s} L${cx},${cy + s}`} fill="none" stroke={fill} strokeWidth="2.5" strokeLinecap="round" {...tipAttrs} {...clickProps} />;
+            case 'triangle': return <polygon points={`${cx},${cy - s} ${cx + s},${cy + s * 0.85} ${cx - s},${cy + s * 0.85}`} {...base} />;
+            default: return <circle cx={cx} cy={cy} r={s} {...base} />;
+        }
+    };
+
+    const norm100Totals = useMemo(() => {
+        if (!stacked100Mode || !model || !Array.isArray(model.categories)) return null;
+        return model.categories.map((_, catIndex) => {
+            let total = 0;
+            (model.series || []).forEach((s) => {
+                const v = s.values && s.values[catIndex];
+                if (typeof v === 'number' && Number.isFinite(v)) total += Math.abs(v);
+            });
+            return total || 1;
+        });
+    }, [stacked100Mode, model]);
     const hierarchyNodes = Array.isArray(model && model.icicleNodes) ? model.icicleNodes : [];
     const icicleDepth = Math.max(1, Number(model && model.icicleDepth) || 1);
     const chartContainerRef = useRef(null);
@@ -1340,7 +1447,7 @@ const SvgChart = ({
     ) : null;
 
     const geometry = useMemo(() => {
-        if (chartType === 'icicle' || chartType === 'sunburst' || chartType === 'sankey' || chartType === 'pie' || chartType === 'donut' || chartType === 'scatter' || chartType === 'waterfall' || chartType === 'combo' || chartType === 'sparkline') return null;
+        if (chartType === 'heatmap' || chartType === 'icicle' || chartType === 'sunburst' || chartType === 'sankey' || chartType === 'pie' || chartType === 'donut' || chartType === 'scatter' || chartType === 'waterfall' || chartType === 'combo' || chartType === 'sparkline' || chartType === 'bubble' || chartType === 'radar' || chartType === 'funnel' || chartType === 'histogram' || ECHARTS_CHART_TYPES.has(chartType)) return null;
         const flatValues = stackedChildBarMode
             ? (model.stackedGroups || []).reduce((acc, group) => {
                 let positiveTotal = 0;
@@ -1395,13 +1502,21 @@ const SvgChart = ({
             && model.categoryBands.some((band) => band && band.outerLabel);
         let minValue = Math.min(...flatValues, 0);
         let maxValue = Math.max(...flatValues, 0);
-        if (minValue === maxValue) {
-            const padding = Math.abs(maxValue || 1) * 0.15 || 1;
-            minValue -= padding;
-            maxValue += padding;
+        if (stacked100Mode) {
+            minValue = 0;
+            maxValue = 100;
+        } else {
+            if (minValue === maxValue) {
+                const padding = Math.abs(maxValue || 1) * 0.15 || 1;
+                minValue -= padding;
+                maxValue += padding;
+            }
+            if (Number.isFinite(Number(yAxisMin)) && yAxisMin !== '') minValue = Number(yAxisMin);
+            if (Number.isFinite(Number(yAxisMax)) && yAxisMax !== '') maxValue = Number(yAxisMax);
+            if (minValue >= maxValue) maxValue = minValue + 1;
         }
 
-        const tickLabels = niceTickValues(minValue, maxValue, 5).map((v) => fmt(v));
+        const tickLabels = niceTickValues(minValue, maxValue, 5).map((v) => (stacked100Mode ? `${Math.round(v)}%` : fmt(v)));
         const maxTickLabelWidth = tickLabels.reduce((maxWidth, label) => Math.max(maxWidth, estimateTextWidth(label)), 0);
 
         const horizontalInnerLabels = stackedChildBarMode
@@ -1426,9 +1541,14 @@ const SvgChart = ({
             )
             : Math.max(66, maxTickLabelWidth + 18);
 
+        const labelAngleBottom = effectiveLabelAngle === 0 ? 40
+            : effectiveLabelAngle <= 30 ? 62
+            : effectiveLabelAngle <= 45 ? 80
+            : effectiveLabelAngle <= 60 ? 98
+            : 118;
         const margin = horizontalBarMode
             ? { top: 24, right: 18, bottom: 42, left: leftMargin }
-            : { top: 24, right: 18, bottom: hasHierarchicalBands ? 118 : 84, left: leftMargin };
+            : { top: 24, right: 18, bottom: hasHierarchicalBands ? 118 : labelAngleBottom, left: leftMargin };
         const plotWidth = resolvedChartWidth - margin.left - margin.right;
         const plotHeight = effectiveChartHeight - margin.top - margin.bottom;
         const baseline = chartType === 'bar' ? 0 : Math.min(Math.max(0, minValue), maxValue);
@@ -1458,7 +1578,7 @@ const SvgChart = ({
             hasHierarchicalBands,
             horizontalBarMode,
         };
-    }, [axisMode, model, chartType, stackedAreaMode, stackedChildBarMode, stackedSeriesBarMode, horizontalBarMode, effectiveChartHeight, resolvedChartWidth]);
+    }, [axisMode, model, chartType, stackedAreaMode, stackedChildBarMode, stackedSeriesBarMode, horizontalBarMode, effectiveChartHeight, resolvedChartWidth, stacked100Mode, yAxisMin, yAxisMax, effectiveLabelAngle, fmt]);
 
     if (chartType === 'sparkline') {
         return (
@@ -1478,6 +1598,7 @@ const SvgChart = ({
                     chartHeight={effectiveChartHeight}
                     paletteColors={paletteColors}
                     valueFormat={valueFormat}
+                    referenceLines={referenceLines}
                 />
                 {chartTitleOverlay}
             </div>
@@ -1784,7 +1905,7 @@ const SvgChart = ({
                                 : radius * 0.62;
                             const labelPos = polarToCartesian(centerX, centerY, labelRadius, midAngle);
                             const canShowLabel = (slice.endAngle - slice.startAngle) > 0.3;
-                            const outerLabelPos = polarToCartesian(centerX, centerY, radius + 14, midAngle);
+                            const outerLabelPos = polarToCartesian(centerX, centerY, radius + (showCalloutLabels ? 26 : 14), midAngle);
                             const canShowOuterLabel = (slice.endAngle - slice.startAngle) > 0.15;
                             const target = categoryTargets[slice.index] || null;
 
@@ -1821,19 +1942,47 @@ const SvgChart = ({
                                             {(slice.fraction * 100).toFixed(1)}%
                                         </text>
                                     ) : null}
-                                    {showDataLabels && canShowOuterLabel ? (
-                                        <text
-                                            x={outerLabelPos.x}
-                                            y={outerLabelPos.y}
-                                            textAnchor={midAngle > Math.PI / 2 && midAngle < (3 * Math.PI / 2) ? 'end' : 'start'}
-                                            dominantBaseline="central"
-                                            fontSize="9"
-                                            fontWeight="700"
-                                            fill={theme.textSec}
-                                            style={{ pointerEvents: 'none' }}
-                                        >
-                                            {fmt(slice.originalValue)}
-                                        </text>
+                                    {(showDataLabels || showCalloutLabels) && canShowOuterLabel ? (
+                                        <g>
+                                            {showCalloutLabels ? (
+                                                <>
+                                                    <line
+                                                        x1={polarToCartesian(centerX, centerY, radius * 0.97, midAngle).x}
+                                                        y1={polarToCartesian(centerX, centerY, radius * 0.97, midAngle).y}
+                                                        x2={outerLabelPos.x}
+                                                        y2={outerLabelPos.y}
+                                                        stroke={fill}
+                                                        strokeWidth="1"
+                                                        style={{ pointerEvents: 'none' }}
+                                                    />
+                                                    <text
+                                                        x={midAngle > Math.PI / 2 && midAngle < (3 * Math.PI / 2) ? outerLabelPos.x - 4 : outerLabelPos.x + 4}
+                                                        y={outerLabelPos.y + 4}
+                                                        textAnchor={midAngle > Math.PI / 2 && midAngle < (3 * Math.PI / 2) ? 'end' : 'start'}
+                                                        fontSize="9"
+                                                        fontWeight="700"
+                                                        fill={theme.textSec}
+                                                        style={{ pointerEvents: 'none' }}
+                                                    >
+                                                        {truncateChartLabel(slice.category, 14)}
+                                                    </text>
+                                                </>
+                                            ) : null}
+                                            {showDataLabels ? (
+                                                <text
+                                                    x={outerLabelPos.x}
+                                                    y={showCalloutLabels ? outerLabelPos.y + 14 : outerLabelPos.y}
+                                                    textAnchor={midAngle > Math.PI / 2 && midAngle < (3 * Math.PI / 2) ? 'end' : 'start'}
+                                                    dominantBaseline="central"
+                                                    fontSize="9"
+                                                    fontWeight="700"
+                                                    fill={theme.textSec}
+                                                    style={{ pointerEvents: 'none' }}
+                                                >
+                                                    {fmt(slice.originalValue)}
+                                                </text>
+                                            ) : null}
+                                        </g>
                                     ) : null}
                                 </g>
                             );
@@ -1854,6 +2003,777 @@ const SvgChart = ({
                         ) : null}
                     </svg>
                     {chartTitleOverlay}{crosshairElement}{tooltipElement}{zoomBadge}
+                </div>
+                {showLegend ? <ChartLegend items={legendItems} theme={theme} hiddenSet={hiddenSeries} onToggle={toggleHiddenSeries} /> : null}
+            </div>
+        );
+    }
+
+    if (chartType === 'bubble') {
+        const allSeries = Array.isArray(model && model.series) ? model.series.filter(s => !hiddenSeries.has(s.name)) : [];
+        const categories = Array.isArray(model && model.categories) ? model.categories : [];
+        const categoryTargets = Array.isArray(model && model.categoryTargets) ? model.categoryTargets : [];
+        if (allSeries.length < 2) {
+            return <EmptyChartState message="Bubble charts need at least two measures (X and Y). A third measure sets bubble size." theme={theme} chartHeight={effectiveChartHeight} />;
+        }
+        const xSeries = allSeries[0];
+        const ySeries = allSeries[1];
+        const sizeSeries = allSeries[2] || null;
+        const xValues = (xSeries.values || []).filter(v => typeof v === 'number' && Number.isFinite(v));
+        const yValues = (ySeries.values || []).filter(v => typeof v === 'number' && Number.isFinite(v));
+        if (xValues.length === 0 || yValues.length === 0) {
+            return <EmptyChartState message="Not enough numeric data for a bubble chart." theme={theme} chartHeight={effectiveChartHeight} />;
+        }
+        let minX = Math.min(...xValues), maxX = Math.max(...xValues);
+        let minY = Math.min(...yValues), maxY = Math.max(...yValues);
+        if (minX === maxX) { const p = Math.abs(maxX || 1) * 0.15 || 1; minX -= p; maxX += p; }
+        if (minY === maxY) { const p = Math.abs(maxY || 1) * 0.15 || 1; minY -= p; maxY += p; }
+        const xPad = (maxX - minX) * 0.08; const yPad = (maxY - minY) * 0.08;
+        minX -= xPad; maxX += xPad; minY -= yPad; maxY += yPad;
+        const sizeValues = sizeSeries ? (sizeSeries.values || []).filter(v => typeof v === 'number' && Number.isFinite(v)) : [];
+        const minSize = sizeValues.length ? Math.min(...sizeValues) : 0;
+        const maxSize = sizeValues.length ? Math.max(...sizeValues) : 1;
+        const sizeSpan = maxSize - minSize || 1;
+        const resolveRadius = (i) => {
+            if (!sizeSeries) return 7;
+            const sv = sizeSeries.values && sizeSeries.values[i];
+            if (typeof sv !== 'number' || !Number.isFinite(sv)) return 7;
+            return 4 + ((sv - minSize) / sizeSpan) * 20;
+        };
+        const leftMargin = Math.max(52, estimateTextWidth(fmt(maxY), 11) + 16);
+        const margin = { top: 24, right: 20, bottom: 64, left: leftMargin };
+        const plotWidth = resolvedChartWidth - margin.left - margin.right;
+        const plotHeight = effectiveChartHeight - margin.top - margin.bottom;
+        const scaleX = v => margin.left + ((v - minX) / (maxX - minX)) * plotWidth;
+        const scaleY = v => margin.top + ((maxY - v) / (maxY - minY)) * plotHeight;
+        const xTicks = niceTickValues(minX, maxX, 5);
+        const yTicks = niceTickValues(minY, maxY, 5);
+        const color = resolveSeriesColor(ySeries.name, 0);
+        return (
+            <div style={{ display: 'flex', flexDirection: 'column', gap: '10px' }}>
+                <div ref={chartContainerRef} style={{ width: '100%', minWidth: 0, position: 'relative', ...zoomContainerStyle }} {...chartContainerEvents}>
+                    <svg ref={svgRef} viewBox={`0 0 ${resolvedChartWidth} ${effectiveChartHeight}`} width="100%" preserveAspectRatio="xMidYMid meet" style={{ display: 'block', overflow: 'visible', ...zoomSvgStyle }}>
+                        {yTicks.map((tick, i) => (
+                            <g key={`y-${i}`}>
+                                <line x1={margin.left} y1={scaleY(tick)} x2={resolvedChartWidth - margin.right} y2={scaleY(tick)} stroke={theme.border} strokeDasharray="3 4" />
+                                <text x={margin.left - 8} y={scaleY(tick) + 4} textAnchor="end" fontSize="11" fill={theme.textSec}>{fmt(tick)}</text>
+                            </g>
+                        ))}
+                        {xTicks.map((tick, i) => (
+                            <g key={`x-${i}`}>
+                                <line x1={scaleX(tick)} y1={margin.top} x2={scaleX(tick)} y2={effectiveChartHeight - margin.bottom} stroke={theme.border} strokeDasharray="3 4" />
+                                <text x={scaleX(tick)} y={effectiveChartHeight - margin.bottom + 18} textAnchor="middle" fontSize="11" fill={theme.textSec}>{fmt(tick)}</text>
+                            </g>
+                        ))}
+                        <line x1={margin.left} y1={effectiveChartHeight - margin.bottom} x2={resolvedChartWidth - margin.right} y2={effectiveChartHeight - margin.bottom} stroke={theme.border} />
+                        <line x1={margin.left} y1={margin.top} x2={margin.left} y2={effectiveChartHeight - margin.bottom} stroke={theme.border} />
+                        <text x={resolvedChartWidth / 2} y={effectiveChartHeight - 8} textAnchor="middle" fontSize="11" fontWeight="700" fill={theme.textSec}>{xSeries.name}</text>
+                        {yAxisTitle ? <text x={14} y={(margin.top + effectiveChartHeight - margin.bottom) / 2} textAnchor="middle" fontSize="11" fontWeight="700" fill={theme.textSec} transform={`rotate(-90, 14, ${(margin.top + effectiveChartHeight - margin.bottom) / 2})`}>{yAxisTitle}</text> : null}
+                        {(xSeries.values || []).map((xVal, i) => {
+                            const yVal = ySeries.values[i];
+                            if (typeof xVal !== 'number' || !Number.isFinite(xVal) || typeof yVal !== 'number' || !Number.isFinite(yVal)) return null;
+                            const r = resolveRadius(i);
+                            const label = categories[i] || `Point ${i + 1}`;
+                            const sizeLabel = sizeSeries ? ` | ${sizeSeries.name}: ${fmt(sizeSeries.values[i])}` : '';
+                            const tipAttrs = { 'data-tip-cat': label, 'data-tip-ser': `${ySeries.name} (X:${fmt(xVal)})${sizeLabel}`, 'data-tip-val': fmt(yVal), 'data-tip-color': color };
+                            const target = categoryTargets[i];
+                            return (
+                                <circle
+                                    key={`bubble-${i}`}
+                                    cx={scaleX(xVal)}
+                                    cy={scaleY(yVal)}
+                                    r={r}
+                                    fill={color}
+                                    opacity="0.72"
+                                    stroke={theme.surfaceBg || theme.background || '#fff'}
+                                    strokeWidth="1.5"
+                                    style={typeof onCategoryActivate === 'function' && target ? { cursor: 'pointer' } : undefined}
+                                    onClick={typeof onCategoryActivate === 'function' && target ? () => onCategoryActivate(target) : undefined}
+                                    {...tipAttrs}
+                                />
+                            );
+                        })}
+                        {showDataLabels && (xSeries.values || []).map((xVal, i) => {
+                            const yVal = ySeries.values[i];
+                            if (typeof xVal !== 'number' || !Number.isFinite(xVal) || typeof yVal !== 'number' || !Number.isFinite(yVal)) return null;
+                            const r = resolveRadius(i);
+                            return <text key={`bubble-lbl-${i}`} x={scaleX(xVal)} y={scaleY(yVal) - r - 4} textAnchor="middle" fontSize="9" fontWeight="700" fill={theme.textSec} style={{ pointerEvents: 'none' }}>{categories[i] || fmt(yVal)}</text>;
+                        })}
+                    </svg>
+                    {chartTitleOverlay}{crosshairElement}{tooltipElement}{zoomBadge}
+                </div>
+                {showLegend ? <ChartLegend items={[{ label: `${xSeries.name} vs ${ySeries.name}${sizeSeries ? ` (size: ${sizeSeries.name})` : ''}`, color }]} theme={theme} hiddenSet={hiddenSeries} onToggle={toggleHiddenSeries} /> : null}
+            </div>
+        );
+    }
+
+    if (chartType === 'radar') {
+        const categories = Array.isArray(model && model.categories) ? model.categories : [];
+        const series = Array.isArray(model && model.series) ? model.series.filter(s => !hiddenSeries.has(s.name)) : [];
+        if (categories.length < 3) {
+            return <EmptyChartState message="Radar charts need at least 3 categories (spokes)." theme={theme} chartHeight={effectiveChartHeight} />;
+        }
+        if (series.length === 0) {
+            return <EmptyChartState message="Radar charts need at least one measure series." theme={theme} chartHeight={effectiveChartHeight} />;
+        }
+        const allVals = series.flatMap(s => (s.values || []).filter(v => typeof v === 'number' && Number.isFinite(v)));
+        const maxVal = allVals.length ? Math.max(...allVals, 0) : 1;
+        const padding = 60;
+        const cx = resolvedChartWidth / 2;
+        const cy = effectiveChartHeight / 2;
+        const radius = Math.min(cx, cy) - padding;
+        const n = categories.length;
+        const angleStep = (2 * Math.PI) / n;
+        const getPoint = (i, val) => {
+            const angle = i * angleStep - Math.PI / 2;
+            const r = radius * (val / (maxVal || 1));
+            return { x: cx + r * Math.cos(angle), y: cy + r * Math.sin(angle) };
+        };
+        const getLabelPoint = (i) => {
+            const angle = i * angleStep - Math.PI / 2;
+            const r = radius + 18;
+            return { x: cx + r * Math.cos(angle), y: cy + r * Math.sin(angle) };
+        };
+        const legendItems = series.map((s, i) => ({ label: s.name, color: resolveSeriesColor(s.name, i) }));
+        return (
+            <div style={{ display: 'flex', flexDirection: 'column', gap: '10px' }}>
+                <div ref={chartContainerRef} style={{ width: '100%', minWidth: 0, position: 'relative', ...zoomContainerStyle }} {...chartContainerEvents}>
+                    <svg ref={svgRef} viewBox={`0 0 ${resolvedChartWidth} ${effectiveChartHeight}`} width="100%" preserveAspectRatio="xMidYMid meet" style={{ display: 'block', ...zoomSvgStyle }}>
+                        {[0.25, 0.5, 0.75, 1.0].map((frac) => {
+                            const pts = categories.map((_, i) => getPoint(i, maxVal * frac));
+                            return <polygon key={`grid-${frac}`} points={pts.map(p => `${p.x},${p.y}`).join(' ')} fill="none" stroke={theme.border} strokeWidth="1" />;
+                        })}
+                        {categories.map((_, i) => {
+                            const outer = getPoint(i, maxVal);
+                            return <line key={`spoke-${i}`} x1={cx} y1={cy} x2={outer.x} y2={outer.y} stroke={theme.border} strokeWidth="1" />;
+                        })}
+                        {categories.map((cat, i) => {
+                            const lp = getLabelPoint(i);
+                            const anchor = Math.abs(lp.x - cx) < 10 ? 'middle' : lp.x < cx ? 'end' : 'start';
+                            return <text key={`spoke-lbl-${i}`} x={lp.x} y={lp.y + 4} textAnchor={anchor} fontSize="10" fill={theme.textSec}>{truncateChartLabel(cat, 14)}</text>;
+                        })}
+                        {series.map((ser, si) => {
+                            const color = resolveSeriesColor(ser.name, si);
+                            const pts = categories.map((_, i) => {
+                                const v = ser.values && ser.values[i];
+                                return getPoint(i, typeof v === 'number' && Number.isFinite(v) ? v : 0);
+                            });
+                            const polyPts = pts.map(p => `${p.x},${p.y}`).join(' ');
+                            return (
+                                <g key={`radar-${si}`}>
+                                    <polygon points={polyPts} fill={color} fillOpacity="0.18" stroke={color} strokeWidth="2" style={{ pointerEvents: 'none' }} />
+                                    {pts.map((p, i) => {
+                                        const v = ser.values && ser.values[i];
+                                        const tipAttrs = { 'data-tip-cat': categories[i], 'data-tip-ser': ser.name, 'data-tip-val': fmt(v), 'data-tip-color': color };
+                                        return <circle key={`radar-dot-${si}-${i}`} cx={p.x} cy={p.y} r="4" fill={color} stroke={theme.surfaceBg || '#fff'} strokeWidth="1.5" {...tipAttrs} />;
+                                    })}
+                                </g>
+                            );
+                        })}
+                        {[0.5, 1.0].map(frac => (
+                            <text key={`scale-${frac}`} x={cx + 4} y={cy - radius * frac + 4} fontSize="9" fill={theme.textSec}>{fmt(maxVal * frac)}</text>
+                        ))}
+                    </svg>
+                    {chartTitleOverlay}{crosshairElement}{tooltipElement}{zoomBadge}
+                </div>
+                {showLegend ? <ChartLegend items={legendItems} theme={theme} hiddenSet={hiddenSeries} onToggle={toggleHiddenSeries} /> : null}
+            </div>
+        );
+    }
+
+    if (chartType === 'funnel') {
+        const categories = Array.isArray(model && model.categories) ? model.categories : [];
+        const series = Array.isArray(model && model.series) && model.series.length > 0 ? model.series[0] : null;
+        if (!series || categories.length === 0) {
+            return <EmptyChartState message="Funnel charts need categories and at least one measure." theme={theme} chartHeight={effectiveChartHeight} />;
+        }
+        const values = categories.map((_, i) => {
+            const v = series.values && series.values[i];
+            return typeof v === 'number' && Number.isFinite(v) ? Math.abs(v) : 0;
+        });
+        const maxVal = Math.max(...values, 1);
+        const margin = { top: 24, right: 20, bottom: 24, left: 20 };
+        const funnelW = resolvedChartWidth - margin.left - margin.right;
+        const funnelH = effectiveChartHeight - margin.top - margin.bottom;
+        const sliceH = funnelH / categories.length;
+        const legendItems = categories.map((cat, i) => ({ label: cat, color: resolveSeriesColor(cat, i) }));
+        return (
+            <div style={{ display: 'flex', flexDirection: 'column', gap: '10px' }}>
+                <div ref={chartContainerRef} style={{ width: '100%', minWidth: 0, position: 'relative', ...zoomContainerStyle }} {...chartContainerEvents}>
+                    <svg ref={svgRef} viewBox={`0 0 ${resolvedChartWidth} ${effectiveChartHeight}`} width="100%" preserveAspectRatio="xMidYMid meet" style={{ display: 'block', ...zoomSvgStyle }}>
+                        {categories.map((cat, i) => {
+                            const topFrac = values[i] / maxVal;
+                            const botFrac = i + 1 < categories.length ? values[i + 1] / maxVal : values[i] / maxVal * 0.5;
+                            const topW = funnelW * topFrac;
+                            const botW = funnelW * botFrac;
+                            const fcx = resolvedChartWidth / 2;
+                            const y = margin.top + i * sliceH;
+                            const color = resolveSeriesColor(cat, i);
+                            const points = [
+                                `${fcx - topW / 2},${y}`,
+                                `${fcx + topW / 2},${y}`,
+                                `${fcx + botW / 2},${y + sliceH - 1}`,
+                                `${fcx - botW / 2},${y + sliceH - 1}`,
+                            ].join(' ');
+                            return (
+                                <g key={`funnel-${i}`}>
+                                    <polygon
+                                        points={points}
+                                        fill={color}
+                                        opacity="0.88"
+                                        stroke={theme.surfaceBg || '#fff'}
+                                        strokeWidth="1.5"
+                                        data-tip-cat={cat}
+                                        data-tip-ser={series.name}
+                                        data-tip-val={fmt(values[i])}
+                                        data-tip-color={color}
+                                    />
+                                    <text x={fcx} y={y + sliceH / 2 + 4} textAnchor="middle" fontSize="11" fontWeight="700" fill="#fff" style={{ pointerEvents: 'none' }}>
+                                        {truncateChartLabel(cat, Math.max(4, Math.floor(topW / 7)))} {showDataLabels ? `\u2014 ${fmt(values[i])}` : ''}
+                                    </text>
+                                </g>
+                            );
+                        })}
+                    </svg>
+                    {chartTitleOverlay}{crosshairElement}{tooltipElement}{zoomBadge}
+                </div>
+                {showLegend ? <ChartLegend items={legendItems} theme={theme} hiddenSet={hiddenSeries} onToggle={toggleHiddenSeries} /> : null}
+            </div>
+        );
+    }
+
+    if (chartType === 'histogram') {
+        const series = Array.isArray(model && model.series) && model.series.length > 0 ? model.series[0] : null;
+        if (!series) {
+            return <EmptyChartState message="Histogram needs at least one numeric measure." theme={theme} chartHeight={effectiveChartHeight} />;
+        }
+        const rawValues = (series.values || []).filter(v => typeof v === 'number' && Number.isFinite(v));
+        if (rawValues.length === 0) {
+            return <EmptyChartState message="No numeric values for histogram." theme={theme} chartHeight={effectiveChartHeight} />;
+        }
+        const binCount = Math.max(4, Math.min(20, Math.ceil(1 + Math.log2(rawValues.length))));
+        const minV = Math.min(...rawValues);
+        const maxV = Math.max(...rawValues);
+        const binWidth = (maxV - minV) / binCount || 1;
+        const bins = Array.from({ length: binCount }, (_, i) => ({
+            low: minV + i * binWidth,
+            high: minV + (i + 1) * binWidth,
+            count: 0,
+        }));
+        rawValues.forEach(v => {
+            const idx = Math.min(Math.floor((v - minV) / binWidth), binCount - 1);
+            bins[idx].count++;
+        });
+        const maxCount = Math.max(...bins.map(b => b.count), 1);
+        const leftMargin = Math.max(46, estimateTextWidth(String(maxCount), 11) + 16);
+        const margin = { top: 24, right: 16, bottom: 44, left: leftMargin };
+        const plotW = resolvedChartWidth - margin.left - margin.right;
+        const plotH = effectiveChartHeight - margin.top - margin.bottom;
+        const barW = plotW / binCount;
+        const scaleY = v => margin.top + ((maxCount - v) / maxCount) * plotH;
+        const color = resolveSeriesColor(series.name, 0);
+        const yTicks = niceTickValues(0, maxCount, tickCount || 5);
+        return (
+            <div style={{ display: 'flex', flexDirection: 'column', gap: '10px' }}>
+                <div ref={chartContainerRef} style={{ width: '100%', minWidth: 0, position: 'relative', ...zoomContainerStyle }} {...chartContainerEvents}>
+                    <svg ref={svgRef} viewBox={`0 0 ${resolvedChartWidth} ${effectiveChartHeight}`} width="100%" preserveAspectRatio="xMidYMid meet" style={{ display: 'block', ...zoomSvgStyle }}>
+                        {yTicks.map((tick, i) => (
+                            <g key={`htick-${i}`}>
+                                <line x1={margin.left} y1={scaleY(tick)} x2={resolvedChartWidth - margin.right} y2={scaleY(tick)} stroke={theme.border} strokeDasharray="3 4" />
+                                <text x={margin.left - 8} y={scaleY(tick) + 4} textAnchor="end" fontSize="11" fill={theme.textSec}>{tick}</text>
+                            </g>
+                        ))}
+                        <line x1={margin.left} y1={margin.top + plotH} x2={resolvedChartWidth - margin.right} y2={margin.top + plotH} stroke={theme.textSec} strokeWidth="1" />
+                        {bins.map((bin, i) => {
+                            const x = margin.left + i * barW;
+                            const y = scaleY(bin.count);
+                            const h = Math.max(1, (margin.top + plotH) - y);
+                            return (
+                                <g key={`hbar-${i}`}>
+                                    <rect x={x} y={y} width={Math.max(1, barW - 1)} height={h} fill={color} opacity="0.88"
+                                        data-tip-cat={`${fmt(bin.low)}\u2013${fmt(bin.high)}`}
+                                        data-tip-ser="Count"
+                                        data-tip-val={String(bin.count)}
+                                        data-tip-color={color}
+                                    />
+                                    {showDataLabels && bin.count > 0 ? <text x={x + barW / 2} y={y - 4} textAnchor="middle" fontSize="9" fontWeight="700" fill={theme.textSec} style={{ pointerEvents: 'none' }}>{bin.count}</text> : null}
+                                </g>
+                            );
+                        })}
+                        {bins.filter((_, i) => i % Math.max(1, Math.floor(binCount / 6)) === 0 || i === binCount - 1).map((bin, i) => (
+                            <text key={`hlbl-${i}`} x={margin.left + bins.indexOf(bin) * barW + barW / 2} y={margin.top + plotH + 18} textAnchor="middle" fontSize="10" fill={theme.textSec}>{fmt(bin.low)}</text>
+                        ))}
+                    </svg>
+                    {chartTitleOverlay}{crosshairElement}{tooltipElement}{zoomBadge}
+                </div>
+            </div>
+        );
+    }
+
+    if (chartType === 'boxplot') {
+        const categories = Array.isArray(model && model.categories) ? model.categories : [];
+        const series = Array.isArray(model && model.series) ? model.series.filter(s => !hiddenSeries.has(s.name)) : [];
+        const bg = theme.chartBg || theme.surface || '#fff';
+        const textColor = theme.text || '#333';
+        const axisLineColor = theme.border || '#ccc';
+        const gridLineColor = theme.gridLine || theme.border || '#eee';
+        if (series.length < 5) {
+            return <EmptyChartState message="Box Plot needs 5 measures: Min, Q1, Median, Q3, Max." theme={theme} chartHeight={effectiveChartHeight} />;
+        }
+        const boxData = categories.map((_, ci) => [
+            series[0].values[ci] ?? 0,
+            series[1].values[ci] ?? 0,
+            series[2].values[ci] ?? 0,
+            series[3].values[ci] ?? 0,
+            series[4].values[ci] ?? 0,
+        ]);
+        const color = resolveSeriesColor(series[2].name, 0);
+        const option = {
+            backgroundColor: bg,
+            tooltip: { trigger: 'axis', formatter: (params) => {
+                const p = params[0];
+                return `${p.name}<br/>Min: ${fmt(p.data[1])}<br/>Q1: ${fmt(p.data[2])}<br/>Median: ${fmt(p.data[3])}<br/>Q3: ${fmt(p.data[4])}<br/>Max: ${fmt(p.data[5])}`;
+            }},
+            xAxis: { type: 'category', data: categories.map(c => truncateChartLabel(String(c), 14)), axisLabel: { color: textColor, fontSize: 10 }, axisLine: { lineStyle: { color: axisLineColor } } },
+            yAxis: { type: 'value', axisLabel: { color: textColor, fontSize: 10, formatter: fmt }, axisLine: { lineStyle: { color: axisLineColor } }, splitLine: { lineStyle: { color: gridLineColor } }, name: yAxisTitle || '', nameTextStyle: { color: textColor } },
+            grid: { left: 60, right: 20, top: 20, bottom: 60 },
+            series: [{ type: 'boxplot', data: boxData, itemStyle: { color, borderColor: color } }],
+        };
+        return (
+            <div style={{ width: '100%', height: chartHeight, background: bg, borderRadius: theme.radiusSm || '8px', overflow: 'hidden' }}>
+                <ReactECharts ref={echartsRef} option={option} style={{ width: '100%', height: '100%' }} notMerge={true} />
+            </div>
+        );
+    }
+
+    if (chartType === 'nightingale') {
+        const categories = Array.isArray(model && model.categories) ? model.categories : [];
+        const series = Array.isArray(model && model.series) ? model.series.filter(s => !hiddenSeries.has(s.name)) : [];
+        const bg = theme.chartBg || theme.surface || '#fff';
+        const textColor = theme.text || '#333';
+        if (categories.length === 0 || series.length === 0) {
+            return <EmptyChartState message="Nightingale charts need categories and at least one measure." theme={theme} chartHeight={effectiveChartHeight} />;
+        }
+        const echartsData = categories.map((cat, ci) => {
+            const value = series[0] && series[0].values ? (series[0].values[ci] ?? 0) : 0;
+            return { name: String(cat), value, itemStyle: { color: resolveSeriesColor(String(cat), ci) } };
+        });
+        const option = {
+            backgroundColor: bg,
+            tooltip: { trigger: 'item', formatter: p => `${p.name}: ${fmt(p.value)}` },
+            legend: { show: showLegend, textStyle: { color: textColor }, type: 'scroll' },
+            series: [{
+                type: 'bar',
+                coordinateSystem: 'polar',
+                data: echartsData,
+                label: { show: showDataLabels, position: 'outside', formatter: p => fmt(p.value), color: textColor, fontSize: 10 },
+            }],
+            polar: { radius: ['10%', '75%'] },
+            angleAxis: { type: 'category', data: categories.map(c => truncateChartLabel(String(c), 12)), axisLabel: { color: textColor, fontSize: 9 } },
+            radiusAxis: { axisLabel: { color: textColor, fontSize: 9, formatter: fmt } },
+        };
+        return (
+            <div style={{ width: '100%', height: chartHeight, background: bg, borderRadius: theme.radiusSm || '8px', overflow: 'hidden' }}>
+                <ReactECharts ref={echartsRef} option={option} style={{ width: '100%', height: '100%' }} notMerge={true} />
+            </div>
+        );
+    }
+
+    if (chartType === 'heatmap') {
+        const categories = Array.isArray(model && model.categories) ? model.categories : [];
+        const series = Array.isArray(model && model.series) ? model.series.filter(s => !hiddenSeries.has(s.name)) : [];
+        if (categories.length === 0 || series.length === 0) {
+            return <EmptyChartState message="Heatmap needs categories and at least one measure." theme={theme} chartHeight={effectiveChartHeight} />;
+        }
+        const allVals = series.flatMap(s => (s.values || []).filter(v => typeof v === 'number' && Number.isFinite(v)));
+        const hmMin = allVals.length ? Math.min(...allVals) : 0;
+        const hmMax = allVals.length ? Math.max(...allVals) : 1;
+        const hmSpan = hmMax - hmMin || 1;
+        const heatColor = (value) => {
+            const t = Math.max(0, Math.min(1, (value - hmMin) / hmSpan));
+            const r = Math.round(59 + t * (239 - 59));
+            const g = Math.round(130 - t * (130 - 68));
+            const b = Math.round(246 - t * (246 - 68));
+            return `rgb(${r},${g},${b})`;
+        };
+        const cellPadding = 2;
+        const labelColWidth = Math.min(140, Math.max(60, series.reduce((m, s) => Math.max(m, estimateTextWidth(s.name, 11)), 0) + 10));
+        const labelRowHeight = 32;
+        const svgW = resolvedChartWidth;
+        const svgH = effectiveChartHeight;
+        const gridW = svgW - labelColWidth - 8;
+        const gridH = svgH - labelRowHeight - 8;
+        const cellW = Math.max(20, gridW / categories.length);
+        const cellH = Math.max(20, gridH / series.length);
+        const legendItems = series.map((s, i) => ({ label: s.name, color: getColorForIndex(i, theme, paletteColors) }));
+        return (
+            <div style={{ display: 'flex', flexDirection: 'column', gap: '10px' }}>
+                <div ref={chartContainerRef} style={{ width: '100%', minWidth: 0, position: 'relative', ...zoomContainerStyle }} {...chartContainerEvents}>
+                    <svg
+                        ref={svgRef}
+                        viewBox={`0 0 ${svgW} ${svgH}`}
+                        preserveAspectRatio="xMidYMid meet"
+                        style={{ width: '100%', height: 'auto', display: 'block', maxWidth: '100%', ...zoomSvgStyle }}
+                        role="img"
+                        aria-label={model.title || 'Heatmap'}
+                    >
+                        {categories.map((cat, ci) => (
+                            <text
+                                key={`hm-col-${ci}`}
+                                x={labelColWidth + ci * cellW + cellW / 2}
+                                y={labelRowHeight - 6}
+                                textAnchor="middle"
+                                fontSize="10"
+                                fill={theme.textSec}
+                                style={{ pointerEvents: 'none' }}
+                            >
+                                {truncateChartLabel(cat, Math.max(4, Math.floor(cellW / 6.5)))}
+                            </text>
+                        ))}
+                        {series.map((ser, si) => (
+                            <text
+                                key={`hm-row-${si}`}
+                                x={labelColWidth - 6}
+                                y={labelRowHeight + si * cellH + cellH / 2 + 4}
+                                textAnchor="end"
+                                fontSize="11"
+                                fill={theme.textSec}
+                                style={{ pointerEvents: 'none' }}
+                            >
+                                {truncateChartLabel(ser.name, Math.max(6, Math.floor(labelColWidth / 6.5)))}
+                            </text>
+                        ))}
+                        {series.map((ser, si) =>
+                            categories.map((cat, ci) => {
+                                const rawVal = ser.values && ser.values[ci];
+                                if (rawVal === null || rawVal === undefined) return null;
+                                const cellColor = heatColor(rawVal);
+                                const cx = labelColWidth + ci * cellW;
+                                const cy = labelRowHeight + si * cellH;
+                                return (
+                                    <rect
+                                        key={`hm-cell-${si}-${ci}`}
+                                        x={cx + cellPadding}
+                                        y={cy + cellPadding}
+                                        width={Math.max(1, cellW - cellPadding * 2)}
+                                        height={Math.max(1, cellH - cellPadding * 2)}
+                                        rx="3"
+                                        fill={cellColor}
+                                        data-tip-cat={cat}
+                                        data-tip-ser={ser.name}
+                                        data-tip-val={fmt(rawVal)}
+                                        data-tip-color={cellColor}
+                                    />
+                                );
+                            })
+                        )}
+                        {showDataLabels && series.map((ser, si) =>
+                            categories.map((cat, ci) => {
+                                const rawVal = ser.values && ser.values[ci];
+                                if (rawVal === null || rawVal === undefined) return null;
+                                if (cellW < 36 || cellH < 18) return null;
+                                const t = Math.max(0, Math.min(1, (rawVal - hmMin) / hmSpan));
+                                const textFill = t > 0.5 ? '#fff' : theme.text;
+                                return (
+                                    <text
+                                        key={`hm-label-${si}-${ci}`}
+                                        x={labelColWidth + ci * cellW + cellW / 2}
+                                        y={labelRowHeight + si * cellH + cellH / 2 + 4}
+                                        textAnchor="middle"
+                                        fontSize="9"
+                                        fontWeight="700"
+                                        fill={textFill}
+                                        style={{ pointerEvents: 'none' }}
+                                    >
+                                        {fmt(rawVal)}
+                                    </text>
+                                );
+                            })
+                        )}
+                    </svg>
+                    {chartTitleOverlay}{crosshairElement}{tooltipElement}{zoomBadge}
+                </div>
+                {showLegend ? <ChartLegend items={legendItems} theme={theme} hiddenSet={hiddenSeries} onToggle={toggleHiddenSeries} /> : null}
+            </div>
+        );
+    }
+
+    if (chartType === 'bar3d') {
+        const categories = Array.isArray(model && model.categories) ? model.categories : [];
+        const series = Array.isArray(model && model.series) ? model.series.filter(s => !hiddenSeries.has(s.name)) : [];
+        const bg = theme.chartBg || theme.surface || '#fff';
+        const textColor = theme.text || '#333';
+        const axisLineColor = theme.border || '#ccc';
+        const data = [];
+        series.forEach((ser, si) => {
+            categories.forEach((cat, ci) => {
+                const val = ser.values[ci];
+                if (val !== null && val !== undefined) {
+                    data.push([ci, si, val]);
+                }
+            });
+        });
+        const option = {
+            backgroundColor: bg,
+            legend: {
+                show: showLegend,
+                data: series.map(s => s.name),
+                textStyle: { color: textColor },
+                type: 'scroll',
+            },
+            tooltip: {
+                formatter: (params) => {
+                    const cat = categories[params.value[0]] || '';
+                    const ser = series[params.value[1]] ? series[params.value[1]].name : '';
+                    return `${cat} / ${ser}: <b>${fmt(params.value[2])}</b>`;
+                },
+            },
+            grid3D: {
+                boxWidth: 200,
+                boxDepth: 80,
+                viewControl: { projection: 'perspective', autoRotate: false },
+                light: { main: { intensity: 1.2, shadow: false }, ambient: { intensity: 0.4 } },
+            },
+            xAxis3D: {
+                type: 'category',
+                data: categories.map(c => truncateChartLabel(String(c), 12)),
+                axisLabel: { color: textColor, fontSize: 10 },
+                axisLine: { lineStyle: { color: axisLineColor } },
+                name: '',
+            },
+            yAxis3D: {
+                type: 'category',
+                data: series.map(s => truncateChartLabel(String(s.name), 12)),
+                axisLabel: { color: textColor, fontSize: 10 },
+                axisLine: { lineStyle: { color: axisLineColor } },
+            },
+            zAxis3D: {
+                type: 'value',
+                axisLabel: { color: textColor, fontSize: 10, formatter: fmt },
+                axisLine: { lineStyle: { color: axisLineColor } },
+                name: yAxisTitle || '',
+                nameTextStyle: { color: textColor },
+            },
+            series: [{
+                type: 'bar3D',
+                data: data.map(item => ({
+                    value: item,
+                    itemStyle: { color: getColorForIndex(item[1], theme, paletteColors), opacity: 0.9 },
+                })),
+                shading: 'lambert',
+                label: {
+                    show: showDataLabels,
+                    formatter: p => fmt(p.value[2]),
+                    textStyle: { color: textColor, fontSize: 10 },
+                },
+                emphasis: { label: { show: true }, itemStyle: { opacity: 1 } },
+            }],
+        };
+        return (
+            <div style={{ width: '100%', height: chartHeight, background: bg, borderRadius: theme.radiusSm || '8px', overflow: 'hidden' }}>
+                <ReactECharts ref={echartsRef} option={option} style={{ width: '100%', height: '100%' }} notMerge={true} />
+            </div>
+        );
+    }
+
+    if (chartType === 'line3d') {
+        const categories = Array.isArray(model && model.categories) ? model.categories : [];
+        const series = Array.isArray(model && model.series) ? model.series.filter(s => !hiddenSeries.has(s.name)) : [];
+        const bg = theme.chartBg || theme.surface || '#fff';
+        const textColor = theme.text || '#333';
+        const axisLineColor = theme.border || '#ccc';
+        const echartsSeriesList = series.map((ser, si) => ({
+            type: 'line3D',
+            data: categories.map((_, ci) => {
+                const val = ser.values[ci];
+                return [ci, si, val !== null && val !== undefined ? val : 0];
+            }),
+            lineStyle: { color: getColorForIndex(si, theme, paletteColors), width: 3, opacity: 0.9 },
+            name: ser.name,
+        }));
+        const option = {
+            backgroundColor: bg,
+            legend: { show: showLegend, data: series.map(s => s.name), textStyle: { color: textColor }, type: 'scroll' },
+            tooltip: {
+                formatter: (params) => {
+                    const cat = categories[params.value[0]] || '';
+                    const serName = series[params.value[1]] ? series[params.value[1]].name : '';
+                    return `${cat} / ${serName}: <b>${fmt(params.value[2])}</b>`;
+                },
+            },
+            grid3D: {
+                boxWidth: 200, boxDepth: 80,
+                viewControl: { projection: 'perspective', autoRotate: false },
+                light: { main: { intensity: 1.2, shadow: false }, ambient: { intensity: 0.4 } },
+            },
+            xAxis3D: {
+                type: 'category',
+                data: categories.map(c => truncateChartLabel(String(c), 12)),
+                axisLabel: { color: textColor, fontSize: 10 },
+                axisLine: { lineStyle: { color: axisLineColor } },
+            },
+            yAxis3D: {
+                type: 'category',
+                data: series.map(s => truncateChartLabel(String(s.name), 12)),
+                axisLabel: { color: textColor, fontSize: 10 },
+                axisLine: { lineStyle: { color: axisLineColor } },
+            },
+            zAxis3D: {
+                type: 'value',
+                axisLabel: { color: textColor, fontSize: 10, formatter: fmt },
+                axisLine: { lineStyle: { color: axisLineColor } },
+                name: yAxisTitle || '',
+                nameTextStyle: { color: textColor },
+            },
+            series: echartsSeriesList,
+        };
+        return (
+            <div style={{ width: '100%', height: chartHeight, background: bg, borderRadius: theme.radiusSm || '8px', overflow: 'hidden' }}>
+                <ReactECharts ref={echartsRef} option={option} style={{ width: '100%', height: '100%' }} notMerge={true} />
+            </div>
+        );
+    }
+
+    if (chartType === 'scatter3d') {
+        const categories = Array.isArray(model && model.categories) ? model.categories : [];
+        const series = Array.isArray(model && model.series) ? model.series.filter(s => !hiddenSeries.has(s.name)) : [];
+        const bg = theme.chartBg || theme.surface || '#fff';
+        const textColor = theme.text || '#333';
+        const axisLineColor = theme.border || '#ccc';
+        if (series.length < 2) {
+            return <EmptyChartState message="3D Scatter needs at least two numeric measures (X and Y)." theme={theme} chartHeight={effectiveChartHeight} />;
+        }
+        const xSeries = series[0];
+        const ySeries = series[1];
+        const zSeries = series[2] || null;
+        const scatterData = categories.map((cat, ci) => ({
+            value: [xSeries.values[ci] ?? 0, ySeries.values[ci] ?? 0, zSeries ? (zSeries.values[ci] ?? 0) : ci],
+            name: String(cat),
+        }));
+        const option = {
+            backgroundColor: bg,
+            tooltip: {
+                formatter: (params) => {
+                    const cat = categories[params.dataIndex] || '';
+                    return `${cat}<br/>X=${fmt(params.value[0])}, Y=${fmt(params.value[1])}, Z=${fmt(params.value[2])}`;
+                },
+            },
+            grid3D: {
+                boxWidth: 200, boxDepth: 80,
+                viewControl: { projection: 'perspective', autoRotate: false },
+                light: { main: { intensity: 1.2, shadow: false }, ambient: { intensity: 0.4 } },
+            },
+            xAxis3D: {
+                type: 'value', name: xSeries.name,
+                axisLabel: { color: textColor, fontSize: 10, formatter: fmt },
+                axisLine: { lineStyle: { color: axisLineColor } },
+                nameTextStyle: { color: textColor },
+            },
+            yAxis3D: {
+                type: 'value', name: ySeries.name,
+                axisLabel: { color: textColor, fontSize: 10, formatter: fmt },
+                axisLine: { lineStyle: { color: axisLineColor } },
+                nameTextStyle: { color: textColor },
+            },
+            zAxis3D: {
+                type: 'value', name: zSeries ? zSeries.name : 'Index',
+                axisLabel: { color: textColor, fontSize: 10, formatter: fmt },
+                axisLine: { lineStyle: { color: axisLineColor } },
+                nameTextStyle: { color: textColor },
+            },
+            series: [{
+                type: 'scatter3D',
+                data: scatterData,
+                symbolSize: 8,
+                itemStyle: { color: getColorForIndex(0, theme, paletteColors), opacity: 0.85 },
+                label: {
+                    show: showDataLabels,
+                    formatter: (params) => String(categories[params.dataIndex] || ''),
+                    textStyle: { color: textColor, fontSize: 10 },
+                },
+                emphasis: { itemStyle: { opacity: 1 } },
+            }],
+        };
+        return (
+            <div style={{ width: '100%', height: chartHeight, background: bg, borderRadius: theme.radiusSm || '8px', overflow: 'hidden' }}>
+                <ReactECharts ref={echartsRef} option={option} style={{ width: '100%', height: '100%' }} notMerge={true} />
+            </div>
+        );
+    }
+
+    if (chartType === 'range') {
+        const categories = Array.isArray(model && model.categories) ? model.categories : [];
+        const series = Array.isArray(model && model.series) ? model.series.filter(s => !hiddenSeries.has(s.name)) : [];
+        const bg = theme.chartBg || theme.surface || '#fff';
+        const textColor = theme.text || '#333';
+        const axisLineColor = theme.border || '#ccc';
+        const gridLineColor = theme.gridLine || theme.border || '#eee';
+        if (series.length < 2) {
+            return <EmptyChartState message="Range chart needs at least two measures (low and high values)." theme={theme} chartHeight={effectiveChartHeight} />;
+        }
+        const pairs = [];
+        for (let i = 0; i + 1 < series.length; i += 2) {
+            pairs.push({ low: series[i], high: series[i + 1] });
+        }
+        const echartsSeriesList = [];
+        pairs.forEach((pair, pi) => {
+            const color = getColorForIndex(pi, theme, paletteColors);
+            echartsSeriesList.push({
+                type: 'bar', name: `_base_${pi}`,
+                data: categories.map((_, ci) => Math.min(pair.low.values[ci] ?? 0, pair.high.values[ci] ?? 0)),
+                stack: `range_${pi}`,
+                itemStyle: { opacity: 0 },
+                emphasis: { disabled: true },
+                silent: true, legendHoverLink: false,
+            });
+            echartsSeriesList.push({
+                type: 'bar', name: `${pair.low.name} – ${pair.high.name}`,
+                data: categories.map((_, ci) => Math.abs((pair.high.values[ci] ?? 0) - (pair.low.values[ci] ?? 0))),
+                stack: `range_${pi}`,
+                itemStyle: { color, opacity: 0.9 },
+                label: {
+                    show: showDataLabels, position: 'inside',
+                    formatter: (params) => {
+                        const ci = params.dataIndex;
+                        const lo = pair.low.values[ci] ?? 0;
+                        const hi = pair.high.values[ci] ?? 0;
+                        return `${fmt(Math.min(lo, hi))}–${fmt(Math.max(lo, hi))}`;
+                    },
+                    color: textColor, fontSize: 10,
+                },
+                tooltip: {
+                    formatter: (params) => {
+                        const ci = params.dataIndex;
+                        return `${categories[ci]}<br/>${pair.low.name}: ${fmt(pair.low.values[ci] ?? 0)}<br/>${pair.high.name}: ${fmt(pair.high.values[ci] ?? 0)}`;
+                    },
+                },
+            });
+        });
+        const legendItems = pairs.map((p, pi) => ({ label: `${p.low.name} – ${p.high.name}`, color: getColorForIndex(pi, theme, paletteColors) }));
+        const option = {
+            backgroundColor: bg,
+            tooltip: { trigger: 'axis' },
+            xAxis: {
+                type: 'category',
+                data: categories.map(c => truncateChartLabel(String(c), 14)),
+                axisLabel: { color: textColor, fontSize: 10 },
+                axisLine: { lineStyle: { color: axisLineColor } },
+                splitLine: { show: false },
+            },
+            yAxis: {
+                type: 'value', name: yAxisTitle || '',
+                axisLabel: { color: textColor, fontSize: 10, formatter: fmt },
+                axisLine: { lineStyle: { color: axisLineColor } },
+                splitLine: { lineStyle: { color: gridLineColor } },
+                nameTextStyle: { color: textColor },
+            },
+            grid: { left: 60, right: 20, top: 20, bottom: 60 },
+            series: echartsSeriesList,
+        };
+        return (
+            <div style={{ display: 'flex', flexDirection: 'column', gap: '10px' }}>
+                <div style={{ width: '100%', height: chartHeight, background: bg, borderRadius: theme.radiusSm || '8px', overflow: 'hidden' }}>
+                    <ReactECharts ref={echartsRef} option={option} style={{ width: '100%', height: '100%' }} notMerge={true} />
                 </div>
                 {showLegend ? <ChartLegend items={legendItems} theme={theme} hiddenSet={hiddenSeries} onToggle={toggleHiddenSeries} /> : null}
             </div>
@@ -1891,7 +2811,7 @@ const SvgChart = ({
         const scaleY = (v) => margin.top + ((maxY - v) / (maxY - minY)) * plotHeight;
         const xTicks = niceTickValues(minX, maxX, 5);
         const yTicks = niceTickValues(minY, maxY, 5);
-        const legendItems = ySeries.map((s, i) => ({ label: s.name, color: getColorForIndex(i, theme, paletteColors) }));
+        const legendItems = ySeries.map((s, i) => ({ label: s.name, color: resolveSeriesColor(s.name, i) }));
         const canClick = typeof onCategoryActivate === 'function';
         return (
             <div style={{ display: 'flex', flexDirection: 'column', gap: '10px' }}>
@@ -1922,36 +2842,28 @@ const SvgChart = ({
                             <text x={14} y={(margin.top + effectiveChartHeight - margin.bottom) / 2} textAnchor="middle" fontSize="11" fontWeight="700" fill={theme.textSec} transform={`rotate(-90, 14, ${(margin.top + effectiveChartHeight - margin.bottom) / 2})`} style={{ pointerEvents: 'none' }}>{yAxisTitle}</text>
                         ) : null}
                         {ySeries.map((series, seriesIndex) => {
-                            const color = getColorForIndex(seriesIndex, theme, paletteColors);
+                            const color = resolveSeriesColor(series.name, seriesIndex);
                             return (series.values || []).map((yVal, pointIndex) => {
                                 const xVal = xSeries.values[pointIndex];
                                 if (typeof xVal !== 'number' || !Number.isFinite(xVal) || typeof yVal !== 'number' || !Number.isFinite(yVal)) return null;
-                                const cx = scaleX(xVal);
-                                const cy = scaleY(yVal);
+                                const scx = scaleX(xVal);
+                                const scy = scaleY(yVal);
                                 const label = categories[pointIndex] || `Point ${pointIndex + 1}`;
                                 const target = categoryTargets[pointIndex];
-                                return (
-                                    <circle
-                                        key={`scatter-${seriesIndex}-${pointIndex}`}
-                                        cx={cx}
-                                        cy={cy}
-                                        r="5"
-                                        fill={color}
-                                        opacity="0.82"
-                                        stroke={theme.surfaceBg || theme.background || '#fff'}
-                                        strokeWidth="1.5"
-                                        data-tip-cat={label}
-                                        data-tip-ser={`${series.name} (${xSeries.name}=${fmt(xVal)})`}
-                                        data-tip-val={fmt(yVal)}
-                                        data-tip-color={color}
-                                        style={canClick && target ? { cursor: 'pointer' } : undefined}
-                                        onClick={canClick && target ? () => onCategoryActivate(target) : undefined}
-                                    />
-                                );
+                                const tipAttrs = {
+                                    'data-tip-cat': label,
+                                    'data-tip-ser': `${series.name} (${xSeries.name}=${fmt(xVal)})`,
+                                    'data-tip-val': fmt(yVal),
+                                    'data-tip-color': color,
+                                };
+                                return React.cloneElement(renderMarker(scx, scy, color, tipAttrs, {
+                                    style: canClick && target ? { cursor: 'pointer' } : undefined,
+                                    onClick: canClick && target ? () => onCategoryActivate(target) : undefined,
+                                }), { key: `scatter-${seriesIndex}-${pointIndex}` });
                             });
                         })}
                         {showDataLabels ? ySeries.map((series, seriesIndex) => {
-                            const color = getColorForIndex(seriesIndex, theme, paletteColors);
+                            const color = resolveSeriesColor(series.name, seriesIndex);
                             return (series.values || []).map((yVal, pointIndex) => {
                                 const xVal = xSeries.values[pointIndex];
                                 if (typeof xVal !== 'number' || !Number.isFinite(xVal) || typeof yVal !== 'number' || !Number.isFinite(yVal)) return null;
@@ -2400,7 +3312,7 @@ const SvgChart = ({
         return <EmptyChartState message="No numeric data available for this chart." theme={theme} chartHeight={effectiveChartHeight} />;
     }
 
-    const ticks = niceTickValues(geometry.minValue, geometry.maxValue, 5);
+    const ticks = niceTickValues(geometry.minValue, geometry.maxValue, tickCount || 5);
     const stackedLegendLabels = stackedChildBarMode
         ? Array.from(new Set(
             (model.stackedGroups || []).reduce((labels, group) => {
@@ -2419,7 +3331,7 @@ const SvgChart = ({
         ? stackedLegendLabels.map((label) => ({ label, color: stackedColorByLabel[label] || getColorForIndex(0, theme, paletteColors) }))
         : (model.series || []).map((series, index) => ({
             label: series.name,
-            color: getColorForIndex(index, theme, paletteColors),
+            color: resolveSeriesColor(series.name, index),
         }));
     const groupedBands = geometry.hasHierarchicalBands
         ? model.categoryBands.reduce((groups, band, index) => {
@@ -2457,23 +3369,37 @@ const SvgChart = ({
                     role="img"
                     aria-label={model.title}
                 >
+                    {showGradient ? (
+                        <defs>
+                            {(model.series || []).map((ser, si) => {
+                                const c = resolveSeriesColor(ser.name, si);
+                                return (
+                                    <linearGradient key={`grad-${si}`} id={`pg-grad-${si}`} x1="0" y1="0" x2="0" y2="1">
+                                        <stop offset="0%" stopColor={c} stopOpacity="0.55" />
+                                        <stop offset="100%" stopColor={c} stopOpacity="1" />
+                                    </linearGradient>
+                                );
+                            })}
+                        </defs>
+                    ) : null}
                     {ticks.map((tickValue, index) => {
                         const y = geometry.scaleY ? geometry.scaleY(tickValue) : null;
                         const x = geometry.scaleX ? geometry.scaleX(tickValue) : null;
+                        const tickLabel = stacked100Mode ? `${Math.round(tickValue)}%` : fmt(tickValue);
                         return (
                             <g key={`tick-${index}`}>
                                 {geometry.horizontalBarMode ? (
                                     <>
                                         <line x1={x} y1={geometry.margin.top} x2={x} y2={effectiveChartHeight - geometry.margin.bottom} stroke={theme.border} strokeDasharray="3 4" />
                                         <text x={x} y={effectiveChartHeight - geometry.margin.bottom + 18} textAnchor="middle" fontSize="11" fill={theme.textSec}>
-                                            {fmt(tickValue)}
+                                            {tickLabel}
                                         </text>
                                     </>
                                 ) : (
                                     <>
                                         <line x1={geometry.margin.left} y1={y} x2={resolvedChartWidth - geometry.margin.right} y2={y} stroke={theme.border} strokeDasharray="3 4" />
                                         <text x={geometry.margin.left - 8} y={y + 4} textAnchor="end" fontSize="11" fill={theme.textSec}>
-                                            {fmt(tickValue)}
+                                            {tickLabel}
                                         </text>
                                     </>
                                 )}
@@ -2491,6 +3417,31 @@ const SvgChart = ({
                     {yAxisTitle ? (
                         <text x={14} y={(geometry.margin.top + effectiveChartHeight - geometry.margin.bottom) / 2} textAnchor="middle" fontSize="11" fontWeight="700" fill={theme.textSec} transform={`rotate(-90, 14, ${(geometry.margin.top + effectiveChartHeight - geometry.margin.bottom) / 2})`} style={{ pointerEvents: 'none' }}>{yAxisTitle}</text>
                     ) : null}
+                    {Array.isArray(referenceLines) && referenceLines.length > 0 && referenceLines.map((refLine, refIdx) => {
+                        const numVal = Number(refLine.value);
+                        if (!Number.isFinite(numVal)) return null;
+                        const lineColor = refLine.color || theme.primary;
+                        const isVertical = refLine.orient === 'v';
+                        if (isVertical) {
+                            const rx = geometry.margin.left + numVal * geometry.step;
+                            if (rx < geometry.margin.left - 2 || rx > resolvedChartWidth - geometry.margin.right + 2) return null;
+                            return (
+                                <g key={`ref-line-${refIdx}`}>
+                                    <line x1={rx} y1={geometry.margin.top} x2={rx} y2={effectiveChartHeight - geometry.margin.bottom} stroke={lineColor} strokeWidth="1.5" strokeDasharray="6 3" style={{ pointerEvents: 'none' }} />
+                                    {refLine.label ? <text x={rx + 4} y={geometry.margin.top + 12} textAnchor="start" fontSize="10" fontWeight="700" fill={lineColor} style={{ pointerEvents: 'none' }}>{refLine.label}</text> : null}
+                                </g>
+                            );
+                        }
+                        if (!geometry.scaleY) return null;
+                        const ry = geometry.scaleY(numVal);
+                        if (ry < geometry.margin.top - 2 || ry > effectiveChartHeight - geometry.margin.bottom + 2) return null;
+                        return (
+                            <g key={`ref-line-${refIdx}`}>
+                                <line x1={geometry.margin.left} y1={ry} x2={resolvedChartWidth - geometry.margin.right} y2={ry} stroke={lineColor} strokeWidth="1.5" strokeDasharray="6 3" style={{ pointerEvents: 'none' }} />
+                                {refLine.label ? <text x={resolvedChartWidth - geometry.margin.right - 4} y={ry - 4} textAnchor="end" fontSize="10" fontWeight="700" fill={lineColor} style={{ pointerEvents: 'none' }}>{refLine.label}</text> : null}
+                            </g>
+                        );
+                    })}
 
                     {geometry.hasHierarchicalBands && groupedBands.map((group, groupIndex) => {
                         if (groupIndex === groupedBands.length - 1) return null;
@@ -2598,7 +3549,7 @@ const SvgChart = ({
                     const slotStart = geometry.horizontalBarMode
                         ? geometry.margin.top + categoryIndex * geometry.step + (geometry.step - geometry.groupWidth) / 2
                         : geometry.margin.left + categoryIndex * geometry.step + (geometry.step - geometry.groupWidth) / 2;
-                    const barThickness = stackedSeriesBarMode
+                    const barThickness = (stackedSeriesBarMode || stacked100Mode)
                         ? Math.max(14, geometry.groupWidth * 0.64)
                         : Math.max(6, (geometry.groupWidth / Math.max(model.series.length, 1)) - 4);
                     let positiveOffset = 0;
@@ -2609,13 +3560,17 @@ const SvgChart = ({
                                 if (hiddenSeries.has(series.name)) return null;
                                 const value = series.values[categoryIndex];
                                 if (value === null || value === undefined) return null;
-                                const barColor = getColorForIndex(seriesIndex, theme, paletteColors);
-                                if (stackedSeriesBarMode) {
-                                    const startValue = value >= 0 ? positiveOffset : negativeOffset;
-                                    const endValue = startValue + value;
-                                    if (value >= 0) positiveOffset = endValue;
+                                const barColor = resolveSeriesColor(series.name, seriesIndex);
+                                const barFill = showGradient ? `url(#pg-grad-${seriesIndex})` : barColor;
+                                if (stackedSeriesBarMode || stacked100Mode) {
+                                    const catTotal = stacked100Mode && norm100Totals ? norm100Totals[categoryIndex] : null;
+                                    const plotValue = stacked100Mode && catTotal ? (value / catTotal) * 100 : value;
+                                    const startValue = plotValue >= 0 ? positiveOffset : negativeOffset;
+                                    const endValue = startValue + plotValue;
+                                    if (plotValue >= 0) positiveOffset = endValue;
                                     else negativeOffset = endValue;
-                                    const tipAttrs = { 'data-tip-cat': category, 'data-tip-ser': series.name, 'data-tip-val': fmt(value), 'data-tip-color': barColor };
+                                    const tipVal = stacked100Mode ? `${(Math.abs(value / catTotal) * 100).toFixed(1)}% (${fmt(value)})` : fmt(value);
+                                    const tipAttrs = { 'data-tip-cat': category, 'data-tip-ser': series.name, 'data-tip-val': tipVal, 'data-tip-color': barColor };
                                     if (geometry.horizontalBarMode) {
                                         const x1 = geometry.scaleX(startValue);
                                         const x2 = geometry.scaleX(endValue);
@@ -2627,8 +3582,9 @@ const SvgChart = ({
                                                 width={Math.max(1, Math.abs(x2 - x1))}
                                                 height={barThickness}
                                                 rx="3"
-                                                fill={barColor}
+                                                fill={barFill}
                                                 opacity="0.92"
+                                                style={{ transition: showAnimations ? 'width 0.35s ease, x 0.35s ease' : undefined }}
                                                 {...tipAttrs}
                                             />
                                         );
@@ -2643,8 +3599,9 @@ const SvgChart = ({
                                             width={barThickness}
                                             height={Math.max(1, Math.abs(y2 - y1))}
                                             rx="3"
-                                            fill={barColor}
+                                            fill={barFill}
                                             opacity="0.92"
+                                            style={{ transition: showAnimations ? 'height 0.35s ease, y 0.35s ease' : undefined }}
                                             {...tipAttrs}
                                         />
                                     );
@@ -2660,8 +3617,9 @@ const SvgChart = ({
                                                 width={Math.max(1, Math.abs(geometry.baselineX - x))}
                                                 height={barThickness}
                                                 rx="3"
-                                                fill={barColor}
+                                                fill={barFill}
                                                 opacity="0.9"
+                                                style={{ transition: showAnimations ? 'width 0.35s ease, x 0.35s ease' : undefined }}
                                                 data-tip-cat={category}
                                                 data-tip-ser={series.name}
                                                 data-tip-val={fmt(value)}
@@ -2694,8 +3652,9 @@ const SvgChart = ({
                                             width={barThickness}
                                             height={height}
                                             rx="3"
-                                            fill={barColor}
+                                            fill={barFill}
                                             opacity="0.9"
+                                            style={{ transition: showAnimations ? 'height 0.35s ease, y 0.35s ease' : undefined }}
                                             data-tip-cat={category}
                                             data-tip-ser={series.name}
                                             data-tip-val={fmt(value)}
@@ -2726,15 +3685,17 @@ const SvgChart = ({
                     const negativeOffsets = model.categories.map(() => 0);
                     return model.series.map((series, seriesIndex) => {
                         if (hiddenSeries.has(series.name)) return null;
-                        const stroke = getColorForIndex(seriesIndex, theme, paletteColors);
+                        const stroke = resolveSeriesColor(series.name, seriesIndex);
                         const points = model.categories.map((_, categoryIndex) => {
                             const rawValue = series.values[categoryIndex];
                             if (rawValue === null || rawValue === undefined) return null;
                             const x = geometry.margin.left + (categoryIndex * geometry.step) + (geometry.step / 2);
-                            if (stackedAreaMode) {
-                                const startValue = rawValue >= 0 ? positiveOffsets[categoryIndex] : negativeOffsets[categoryIndex];
-                                const endValue = startValue + rawValue;
-                                if (rawValue >= 0) positiveOffsets[categoryIndex] = endValue;
+                            if (stackedAreaMode || stacked100Mode) {
+                                const catTotal = stacked100Mode && norm100Totals ? norm100Totals[categoryIndex] : null;
+                                const plotValue = stacked100Mode && catTotal ? (rawValue / catTotal) * 100 : rawValue;
+                                const startValue = plotValue >= 0 ? positiveOffsets[categoryIndex] : negativeOffsets[categoryIndex];
+                                const endValue = startValue + plotValue;
+                                if (plotValue >= 0) positiveOffsets[categoryIndex] = endValue;
                                 else negativeOffsets[categoryIndex] = endValue;
                                 return {
                                     x,
@@ -2755,7 +3716,7 @@ const SvgChart = ({
                         return (
                             <g key={`${series.name}-${chartType}`}>
                                 {chartType === 'area' && areaPath && (
-                                    <path d={areaPath} fill={stroke} opacity={stackedAreaMode ? '0.46' : '0.16'} style={{ pointerEvents: 'none' }} />
+                                    <path d={areaPath} fill={showGradient ? `url(#pg-grad-${seriesIndex})` : stroke} opacity={(stackedAreaMode || stacked100Mode) ? '0.46' : '0.16'} style={{ pointerEvents: 'none' }} />
                                 )}
                                 {linePath && (
                                     <path d={linePath} fill="none" stroke={stroke} strokeWidth="3" strokeLinejoin="round" strokeLinecap="round" style={{ pointerEvents: 'none' }} />
@@ -2764,18 +3725,12 @@ const SvgChart = ({
                                     if (!point) return null;
                                     return (
                                         <React.Fragment key={`${series.name}-${pointIndex}`}>
-                                            <circle
-                                                cx={point.x}
-                                                cy={point.y}
-                                                r="4"
-                                                fill={stroke}
-                                                stroke={theme.surfaceBg || theme.background || '#fff'}
-                                                strokeWidth="2"
-                                                data-tip-cat={model.categories[pointIndex]}
-                                                data-tip-ser={series.name}
-                                                data-tip-val={fmt(point.rawValue)}
-                                                data-tip-color={stroke}
-                                            />
+                                            {React.cloneElement(renderMarker(point.x, point.y, stroke, {
+                                                'data-tip-cat': model.categories[pointIndex],
+                                                'data-tip-ser': series.name,
+                                                'data-tip-val': fmt(point.rawValue),
+                                                'data-tip-color': stroke,
+                                            }), { key: `marker-${seriesIndex}-${pointIndex}` })}
                                             {showDataLabels ? (
                                                 <text
                                                     x={point.x}
@@ -2929,8 +3884,8 @@ const SvgChart = ({
                     model.categories.map((category, categoryIndex) => {
                         const x = geometry.margin.left + (categoryIndex * geometry.step) + (geometry.step / 2);
                         return (
-                            <g key={`label-${categoryIndex}`} transform={`translate(${x}, ${effectiveChartHeight - geometry.margin.bottom + 18}) rotate(28)`}>
-                                <text textAnchor="start" fontSize="11" fill={theme.textSec}>
+                            <g key={`label-${categoryIndex}`} transform={`translate(${x}, ${effectiveChartHeight - geometry.margin.bottom + 18}) rotate(${effectiveLabelAngle})`}>
+                                <text textAnchor={effectiveLabelAngle === 0 ? 'middle' : 'start'} fontSize="11" fill={theme.textSec}>
                                     {truncateChartLabel(category, 20)}
                                 </text>
                             </g>
@@ -3010,6 +3965,20 @@ const ChartSurface = ({
     const [colorPalette, setColorPalette] = useState('default');
     const [valueFormat, setValueFormat] = useState('auto');
     const [yAxisTitle, setYAxisTitle] = useState('');
+    const [yAxisMin, setYAxisMin] = useState('');
+    const [yAxisMax, setYAxisMax] = useState('');
+    const [referenceLines, setReferenceLines] = useState([]);
+    const [refLineDraft, setRefLineDraft] = useState({ value: '', label: '', orient: 'h' });
+    const [labelAngle, setLabelAngle] = useState(0);
+    const [chartSubtitle, setChartSubtitle] = useState('');
+    const [tickCount, setTickCount] = useState(5);
+    const [markerShape, setMarkerShape] = useState('circle');
+    const [markerSize, setMarkerSize] = useState(4);
+    const [showGradient, setShowGradient] = useState(false);
+    const [seriesColors, setSeriesColors] = useState({});
+    const [showAnimations, setShowAnimations] = useState(false);
+    const [showCalloutLabels, setShowCalloutLabels] = useState(false);
+    const paletteColors = resolvePalette(colorPalette);
     const chartHeightResizeRef = useRef(null);
     const settingsPaneResizeRef = useRef(null);
     const immersiveContainerRef = useRef(null);
@@ -3026,6 +3995,7 @@ const ChartSurface = ({
         ? Math.max(180, immersiveAutoHeight)
         : Math.max(180, Number.isFinite(Number(chartHeightProp)) ? Number(chartHeightProp) : CHART_HEIGHT);
     const svgRef = useRef(null);
+    const echartsRef = useRef(null);
     const maxHierarchyLevel = (model && model.maxHierarchyLevel) || 1;
     const showHierarchySection = typeof onHierarchyLevelChange === 'function' && maxHierarchyLevel > 1;
     const configButtonStyle = {
@@ -3190,17 +4160,19 @@ const ChartSurface = ({
                         theme={theme}
                     />
                     <div style={{ display: 'flex', alignItems: 'center', gap: '6px', flexWrap: 'wrap', justifyContent: 'flex-end' }}>
+                        {!ECHARTS_CHART_TYPES.has(chartType) && (
+                            <button
+                                type="button"
+                                onClick={() => exportSvgNode(svgRef.current, 'pivot-chart')}
+                                style={exportButtonStyle}
+                                title="Export chart as SVG"
+                            >
+                                SVG
+                            </button>
+                        )}
                         <button
                             type="button"
-                            onClick={() => exportSvgNode(svgRef.current, 'pivot-chart')}
-                            style={exportButtonStyle}
-                            title="Export chart as SVG"
-                        >
-                            SVG
-                        </button>
-                        <button
-                            type="button"
-                            onClick={() => exportSvgAsPng(svgRef.current, 'pivot-chart')}
+                            onClick={() => ECHARTS_CHART_TYPES.has(chartType) ? exportEchartsPng(echartsRef, 'pivot-chart') : exportSvgAsPng(svgRef.current, 'pivot-chart')}
                             style={exportButtonStyle}
                             title="Export chart as PNG"
                         >
@@ -3208,7 +4180,7 @@ const ChartSurface = ({
                         </button>
                         <button
                             type="button"
-                            onClick={() => copySvgToClipboard(svgRef.current)}
+                            onClick={() => ECHARTS_CHART_TYPES.has(chartType) ? copyEchartsToClipboard(echartsRef) : copySvgToClipboard(svgRef.current)}
                             style={exportButtonStyle}
                             title="Copy chart to clipboard"
                         >
@@ -3269,7 +4241,8 @@ const ChartSurface = ({
                     && chartType !== 'sunburst'
                     && chartType !== 'sankey'
                     ? <EmptyChartState message={model.emptyMessage || 'No chart data available.'} theme={theme} chartHeight={chartHeight} />
-                    : <SvgChart model={model} chartType={chartType} barLayout={barLayout} axisMode={axisMode} theme={theme} chartHeight={chartHeight} showLegend={!isSparklineChart} showDataLabels={showDataLabels} onCategoryActivate={onCategoryActivate} svgRef={svgRef} colorPalette={colorPalette} valueFormat={valueFormat} yAxisTitle={yAxisTitle} chartTitle={resolvedTitle} onTitleChange={onTitleChange} />)}
+                    : <SvgChart model={model} chartType={chartType} barLayout={barLayout} axisMode={axisMode} theme={theme} chartHeight={chartHeight} showLegend={!isSparklineChart} showDataLabels={showDataLabels} onCategoryActivate={onCategoryActivate} svgRef={svgRef} echartsRef={echartsRef} colorPalette={colorPalette} valueFormat={valueFormat} yAxisTitle={yAxisTitle} yAxisMin={yAxisMin} yAxisMax={yAxisMax} referenceLines={referenceLines} labelAngle={labelAngle} chartTitle={resolvedTitle} onTitleChange={onTitleChange} subtitle={chartSubtitle} tickCount={tickCount} markerShape={markerShape} markerSize={markerSize} showGradient={showGradient} seriesColors={seriesColors} showAnimations={showAnimations} showCalloutLabels={showCalloutLabels} />)}
+                    {chartSubtitle ? <div style={{ textAlign: 'center', fontSize: '11px', color: theme.textSec, padding: '4px 8px 0', fontStyle: 'italic' }}>{chartSubtitle}</div> : null}
             {!immersiveMode && typeof onChartHeightChange === 'function' ? (
                 <div
                     onMouseDown={(event) => {
@@ -3428,6 +4401,15 @@ const ChartSurface = ({
                             theme={theme}
                         />
                     </ChartConfigField>
+                    <ChartConfigField label="Subtitle" theme={theme} controlMinWidth="100%">
+                        <input
+                            type="text"
+                            value={chartSubtitle}
+                            onChange={e => setChartSubtitle(e.target.value)}
+                            placeholder="Chart subtitle"
+                            style={{ ...compactInputStyle, width: '100%' }}
+                        />
+                    </ChartConfigField>
                 </ChartConfigSection>
 
                 <ChartConfigSection title="Type" theme={theme} defaultCollapsed={false}>
@@ -3436,8 +4418,29 @@ const ChartSurface = ({
                     </ChartConfigField>
                 </ChartConfigSection>
 
+                {chartType !== 'heatmap' && chartType !== 'icicle' && chartType !== 'sunburst' && chartType !== 'sankey' && chartType !== 'pie' && chartType !== 'donut' && !ECHARTS_CHART_TYPES.has(chartType) ? (
+                <ChartConfigSection title="Thresholds" theme={theme}>
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
+                        {referenceLines.map((line, lineIdx) => (
+                            <div key={line.id} style={{ display: 'flex', gap: '4px', alignItems: 'center' }}>
+                                <button type="button" onClick={() => setReferenceLines(prev => prev.map((l, j) => j === lineIdx ? { ...l, orient: l.orient === 'v' ? 'h' : 'v' } : l))} style={{ ...exportButtonStyle, padding: '4px 7px', flexShrink: 0, fontWeight: 800, color: line.orient === 'v' ? theme.primary : theme.textSec }} title={line.orient === 'v' ? 'Vertical line (click for horizontal)' : 'Horizontal line (click for vertical)'}>{line.orient === 'v' ? '|' : '—'}</button>
+                                <input type="number" value={line.value} onChange={(e) => setReferenceLines(prev => prev.map((l, j) => j === lineIdx ? { ...l, value: e.target.value } : l))} placeholder={line.orient === 'v' ? 'Cat index' : 'Value'} style={{ ...compactInputStyle, width: '64px', flexShrink: 0 }} />
+                                <input type="text" value={line.label} onChange={(e) => setReferenceLines(prev => prev.map((l, j) => j === lineIdx ? { ...l, label: e.target.value } : l))} placeholder="Label" style={{ ...compactInputStyle, flex: 1, minWidth: 0 }} />
+                                <button type="button" onClick={() => setReferenceLines(prev => prev.filter((_, j) => j !== lineIdx))} style={{ ...exportButtonStyle, padding: '4px 7px', color: theme.danger || '#ef4444', flexShrink: 0 }}>✕</button>
+                            </div>
+                        ))}
+                        <div style={{ display: 'flex', gap: '4px' }}>
+                            <button type="button" onClick={() => setRefLineDraft(d => ({ ...d, orient: d.orient === 'v' ? 'h' : 'v' }))} style={{ ...exportButtonStyle, padding: '4px 7px', flexShrink: 0, fontWeight: 800, color: refLineDraft.orient === 'v' ? theme.primary : theme.textSec }} title={refLineDraft.orient === 'v' ? 'Vertical' : 'Horizontal'}>{refLineDraft.orient === 'v' ? '|' : '—'}</button>
+                            <input type="number" value={refLineDraft.value} onChange={(e) => setRefLineDraft(d => ({ ...d, value: e.target.value }))} placeholder={refLineDraft.orient === 'v' ? 'Cat index' : 'Value'} style={{ ...compactInputStyle, width: '64px', flexShrink: 0 }} />
+                            <input type="text" value={refLineDraft.label} onChange={(e) => setRefLineDraft(d => ({ ...d, label: e.target.value }))} placeholder="Label (optional)" style={{ ...compactInputStyle, flex: 1, minWidth: 0 }} />
+                            <button type="button" onClick={() => { if (refLineDraft.value === '') return; setReferenceLines(prev => [...prev, { id: Date.now(), value: refLineDraft.value, label: refLineDraft.label, orient: refLineDraft.orient }]); setRefLineDraft({ value: '', label: '', orient: refLineDraft.orient }); }} style={{ ...exportButtonStyle, padding: '4px 10px', flexShrink: 0 }}>+</button>
+                        </div>
+                    </div>
+                </ChartConfigSection>
+                ) : null}
+
                 <ChartConfigSection title="View" theme={theme} defaultCollapsed={false}>
-                    {(chartType !== 'icicle' && chartType !== 'sunburst' && chartType !== 'sankey' && chartType !== 'pie' && chartType !== 'donut' && chartType !== 'scatter' && chartType !== 'waterfall' && !isComboChart) ? (
+                    {(chartType !== 'heatmap' && chartType !== 'icicle' && chartType !== 'sunburst' && chartType !== 'sankey' && chartType !== 'pie' && chartType !== 'donut' && chartType !== 'scatter' && chartType !== 'waterfall' && !ECHARTS_CHART_TYPES.has(chartType) && !isComboChart) ? (
                         <ChartConfigField label="Source" theme={theme}>
                             <ChartOrientationButtons orientation={orientation} onChange={onOrientationChange} theme={theme} />
                         </ChartConfigField>
@@ -3477,7 +4480,7 @@ const ChartSurface = ({
                             </button>
                         </ChartConfigField>
                     ) : null}
-                    {chartType !== 'icicle' && chartType !== 'sunburst' && chartType !== 'sankey' && chartType !== 'pie' && chartType !== 'donut' ? (
+                    {chartType !== 'heatmap' && chartType !== 'icicle' && chartType !== 'sunburst' && chartType !== 'sankey' && chartType !== 'pie' && chartType !== 'donut' ? (
                         <ChartConfigField label="Format" theme={theme} controlMinWidth="100%">
                             <select
                                 value={valueFormat}
@@ -3500,7 +4503,7 @@ const ChartSurface = ({
                             </select>
                         </ChartConfigField>
                     ) : null}
-                    {chartType !== 'icicle' && chartType !== 'sunburst' && chartType !== 'sankey' && chartType !== 'pie' && chartType !== 'donut' && chartType !== 'sparkline' ? (
+                    {chartType !== 'heatmap' && chartType !== 'icicle' && chartType !== 'sunburst' && chartType !== 'sankey' && chartType !== 'pie' && chartType !== 'donut' && chartType !== 'sparkline' ? (
                         <ChartConfigField label="Y-Axis" theme={theme} controlMinWidth="100%">
                             <input
                                 type="text"
@@ -3520,7 +4523,141 @@ const ChartSurface = ({
                             />
                         </ChartConfigField>
                     ) : null}
+                    {chartType !== 'heatmap' && chartType !== 'icicle' && chartType !== 'sunburst' && chartType !== 'sankey' && chartType !== 'pie' && chartType !== 'donut' && chartType !== 'sparkline' && !ECHARTS_CHART_TYPES.has(chartType) ? (
+                        <ChartConfigField label="Y Range" theme={theme} controlMinWidth="100%">
+                            <div style={{ display: 'flex', gap: '6px' }}>
+                                <input
+                                    type="number"
+                                    value={yAxisMin}
+                                    onChange={(e) => setYAxisMin(e.target.value)}
+                                    placeholder="Min"
+                                    style={{ ...compactInputStyle, width: '50%' }}
+                                />
+                                <input
+                                    type="number"
+                                    value={yAxisMax}
+                                    onChange={(e) => setYAxisMax(e.target.value)}
+                                    placeholder="Max"
+                                    style={{ ...compactInputStyle, width: '50%' }}
+                                />
+                            </div>
+                        </ChartConfigField>
+                    ) : null}
+                    {chartType !== 'heatmap' && chartType !== 'icicle' && chartType !== 'sunburst' && chartType !== 'sankey' && chartType !== 'pie' && chartType !== 'donut' && chartType !== 'sparkline' && !ECHARTS_CHART_TYPES.has(chartType) && axisMode !== 'horizontal' ? (
+                        <ChartConfigField label="X Labels" theme={theme} controlMinWidth="100%">
+                            <select
+                                value={labelAngle}
+                                onChange={(e) => setLabelAngle(Number(e.target.value))}
+                                style={{ ...compactInputStyle, width: '100%' }}
+                            >
+                                <option value={0}>Flat (0°)</option>
+                                <option value={30}>Angled (30°)</option>
+                                <option value={45}>Angled (45°)</option>
+                                <option value={60}>Steep (60°)</option>
+                                <option value={90}>Vertical (90°)</option>
+                            </select>
+                        </ChartConfigField>
+                    ) : null}
+                    {chartType !== 'heatmap' && chartType !== 'icicle' && chartType !== 'sunburst' && chartType !== 'sankey' && chartType !== 'pie' && chartType !== 'donut' && chartType !== 'sparkline' && !ECHARTS_CHART_TYPES.has(chartType) ? (
+                        <ChartConfigField label="Y Ticks" theme={theme} controlMinWidth="80px">
+                            <input type="number" min="2" max="20" value={tickCount} onChange={e => setTickCount(Math.max(2, Math.min(20, Number(e.target.value) || 5)))} style={{ ...compactInputStyle, width: '80px' }} />
+                        </ChartConfigField>
+                    ) : null}
+                    <ChartConfigField label="Animate" theme={theme}>
+                        <button type="button" onClick={() => setShowAnimations(v => !v)} style={{ border: `1px solid ${showAnimations ? theme.primary : theme.border}`, background: showAnimations ? theme.select : (theme.headerSubtleBg || theme.hover), color: showAnimations ? theme.primary : theme.text, borderRadius: theme.radiusSm || '8px', padding: '6px 8px', fontSize: '11px', fontWeight: 700, cursor: 'pointer' }}>
+                            {showAnimations ? 'On' : 'Off'}
+                        </button>
+                    </ChartConfigField>
+                    {chartType !== 'heatmap' && chartType !== 'icicle' && chartType !== 'sunburst' && chartType !== 'sankey' && chartType !== 'pie' && chartType !== 'donut' && chartType !== 'sparkline' && !ECHARTS_CHART_TYPES.has(chartType) ? (
+                        <ChartConfigField label="Gradient" theme={theme}>
+                            <button type="button" onClick={() => setShowGradient(v => !v)} style={{ border: `1px solid ${showGradient ? theme.primary : theme.border}`, background: showGradient ? theme.select : (theme.headerSubtleBg || theme.hover), color: showGradient ? theme.primary : theme.text, borderRadius: theme.radiusSm || '8px', padding: '6px 8px', fontSize: '11px', fontWeight: 700, cursor: 'pointer' }}>
+                                {showGradient ? 'On' : 'Off'}
+                            </button>
+                        </ChartConfigField>
+                    ) : null}
+                    {(chartType === 'line' || chartType === 'scatter' || chartType === 'bubble' || chartType === 'area' || chartType === 'radar' || isComboChart) ? (
+                        <>
+                            <ChartConfigField label="Marker" theme={theme} controlMinWidth="100%">
+                                <select value={markerShape} onChange={e => setMarkerShape(e.target.value)} style={{ ...compactInputStyle, width: '100%' }}>
+                                    <option value="circle">Circle</option>
+                                    <option value="square">Square</option>
+                                    <option value="diamond">Diamond</option>
+                                    <option value="triangle">Triangle</option>
+                                    <option value="cross">Cross</option>
+                                </select>
+                            </ChartConfigField>
+                            <ChartConfigField label="Marker Size" theme={theme} controlMinWidth="80px">
+                                <select value={markerSize} onChange={e => setMarkerSize(Number(e.target.value))} style={{ ...compactInputStyle, width: '80px' }}>
+                                    <option value={3}>Small</option>
+                                    <option value={5}>Medium</option>
+                                    <option value={7}>Large</option>
+                                    <option value={10}>XLarge</option>
+                                </select>
+                            </ChartConfigField>
+                        </>
+                    ) : null}
+                    {(chartType === 'pie' || chartType === 'donut') ? (
+                        <ChartConfigField label="Callouts" theme={theme}>
+                            <button type="button" onClick={() => setShowCalloutLabels(v => !v)} style={{ border: `1px solid ${showCalloutLabels ? theme.primary : theme.border}`, background: showCalloutLabels ? theme.select : (theme.headerSubtleBg || theme.hover), color: showCalloutLabels ? theme.primary : theme.text, borderRadius: theme.radiusSm || '8px', padding: '6px 8px', fontSize: '11px', fontWeight: 700, cursor: 'pointer' }}>
+                                {showCalloutLabels ? 'On' : 'Off'}
+                            </button>
+                        </ChartConfigField>
+                    ) : null}
                 </ChartConfigSection>
+                {false ? (
+                <ChartConfigSection title="Thresholds-OLD" theme={theme}>
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
+                        {referenceLines.map((line, lineIdx) => (
+                            <div key={line.id} style={{ display: 'flex', gap: '4px', alignItems: 'center' }}>
+                                <input
+                                    type="number"
+                                    value={line.value}
+                                    onChange={(e) => setReferenceLines((prev) => prev.map((l, j) => j === lineIdx ? { ...l, value: e.target.value } : l))}
+                                    placeholder="Value"
+                                    style={{ ...compactInputStyle, width: '68px', flexShrink: 0 }}
+                                />
+                                <input
+                                    type="text"
+                                    value={line.label}
+                                    onChange={(e) => setReferenceLines((prev) => prev.map((l, j) => j === lineIdx ? { ...l, label: e.target.value } : l))}
+                                    placeholder="Label"
+                                    style={{ ...compactInputStyle, flex: 1, minWidth: 0 }}
+                                />
+                                <button
+                                    type="button"
+                                    onClick={() => setReferenceLines((prev) => prev.filter((_, j) => j !== lineIdx))}
+                                    style={{ ...exportButtonStyle, padding: '4px 7px', color: theme.danger || '#ef4444', flexShrink: 0 }}
+                                >✕</button>
+                            </div>
+                        ))}
+                        <div style={{ display: 'flex', gap: '4px' }}>
+                            <input
+                                type="number"
+                                value={refLineDraft.value}
+                                onChange={(e) => setRefLineDraft((d) => ({ ...d, value: e.target.value }))}
+                                placeholder="Value"
+                                style={{ ...compactInputStyle, width: '68px', flexShrink: 0 }}
+                            />
+                            <input
+                                type="text"
+                                value={refLineDraft.label}
+                                onChange={(e) => setRefLineDraft((d) => ({ ...d, label: e.target.value }))}
+                                placeholder="Label (optional)"
+                                style={{ ...compactInputStyle, flex: 1, minWidth: 0 }}
+                            />
+                            <button
+                                type="button"
+                                onClick={() => {
+                                    if (refLineDraft.value === '') return;
+                                    setReferenceLines((prev) => [...prev, { id: Date.now(), value: refLineDraft.value, label: refLineDraft.label }]);
+                                    setRefLineDraft({ value: '', label: '' });
+                                }}
+                                style={{ ...exportButtonStyle, padding: '4px 10px', flexShrink: 0 }}
+                            >+</button>
+                        </div>
+                    </div>
+                </ChartConfigSection>
+                ) : null}
 
                 <ChartConfigSection title="Colors" theme={theme}>
                     <div style={{ display: 'flex', flexWrap: 'wrap', gap: '6px' }}>
@@ -3569,6 +4706,26 @@ const ChartSurface = ({
                             );
                         })}
                     </div>
+                    {Array.isArray(model && model.series) && model.series.length > 0 && model.series.length <= 12 ? (
+                        <div style={{ marginTop: '8px', display: 'flex', flexDirection: 'column', gap: '4px' }}>
+                            <div style={{ fontSize: '10px', fontWeight: 700, color: theme.textSec, textTransform: 'uppercase', letterSpacing: '0.05em', marginBottom: '2px' }}>Override</div>
+                            {model.series.map((ser, si) => (
+                                <div key={ser.name || si} style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+                                    <input
+                                        type="color"
+                                        value={seriesColors[ser.name] || getColorForIndex(si, theme, paletteColors)}
+                                        onChange={(e) => setSeriesColors(prev => ({ ...prev, [ser.name]: e.target.value }))}
+                                        style={{ width: '28px', height: '22px', padding: 0, border: `1px solid ${theme.border}`, borderRadius: '4px', cursor: 'pointer', background: 'none' }}
+                                        title={`Override color for ${ser.name}`}
+                                    />
+                                    <span style={{ fontSize: '11px', color: theme.text, flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{ser.name || `Series ${si + 1}`}</span>
+                                    {seriesColors[ser.name] ? (
+                                        <button type="button" onClick={() => setSeriesColors(prev => { const next = { ...prev }; delete next[ser.name]; return next; })} style={{ border: 'none', background: 'none', color: theme.textSec, cursor: 'pointer', fontSize: '10px', padding: '0 2px' }} title="Reset to palette">{'\u21BA'}</button>
+                                    ) : null}
+                                </div>
+                            ))}
+                        </div>
+                    ) : null}
                 </ChartConfigSection>
 
                 {isComboChart ? (

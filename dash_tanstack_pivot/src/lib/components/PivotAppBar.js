@@ -7,7 +7,7 @@ import { usePivotTheme } from '../contexts/PivotThemeContext';
 import { usePivotConfig } from '../contexts/PivotConfigContext';
 import { usePivotRenderCounter } from '../hooks/usePivotRenderCounter';
 
-const SHOW_PIVOT_MODE_TOGGLE = false;
+const SHOW_PIVOT_MODE_TOGGLE = true;
 
 const COLOR_PALETTE_OPTIONS = [
     { value: 'redGreen',   label: 'Red to Green' },

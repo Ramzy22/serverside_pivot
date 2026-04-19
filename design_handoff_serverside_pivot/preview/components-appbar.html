@@ -1,0 +1,53 @@
+<!DOCTYPE html>
+<html><head><meta charset="utf-8">
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+<style>
+* { box-sizing: border-box; margin: 0; padding: 0; }
+body { font-family: 'Inter', sans-serif; background: #F4F7FB; padding: 16px; }
+.title { font-size: 10px; font-weight: 700; letter-spacing: 0.06em; text-transform: uppercase; color: #94A3B8; margin-bottom: 8px; }
+svg { display: inline-block; vertical-align: middle; flex-shrink: 0; }
+.appbar { min-height: 60px; border-bottom: 1px solid #E5E7EB; display: flex; align-items: center; padding: 0 18px; justify-content: space-between; background: #FFFFFF; box-shadow: inset 0 1px 0 rgba(255,255,255,0.8); border-radius: 16px 16px 0 0; gap: 12px; }
+.left { display: flex; align-items: center; gap: 8px; }
+.right { display: flex; align-items: center; gap: 6px; }
+.search { display: flex; align-items: center; background: #F3F4F6; border-radius: 10px; padding: 4px 8px; width: 180px; gap: 6px; }
+.search input { border: none; background: transparent; outline: none; font-size: 12px; color: #111827; font-family: 'Inter', sans-serif; width: 100%; }
+.btn { padding: 4px 10px; border-radius: 10px; border: 1px solid transparent; background: transparent; cursor: pointer; font-size: 12px; display: inline-flex; align-items: center; gap: 5px; font-weight: 500; color: #111827; white-space: nowrap; }
+.btn-border { border-color: #E5E7EB; }
+.sep { width: 1px; height: 20px; background: #E5E7EB; margin: 0 2px; }
+.theme-pill { display: flex; align-items: center; gap: 6px; padding: 5px 10px; border-radius: 10px; border: 1px solid #E5E7EB; background: #F9FAFB; cursor: pointer; font-size: 12px; font-weight: 500; color: #111827; }
+.dot { width: 10px; height: 10px; border-radius: 50%; background: #4F46E5; }
+.title-text { font-size: 15px; font-weight: 700; color: #111827; white-space: nowrap; }
+</style></head><body>
+<div class="title">AppBar / Toolbar — Flash Theme</div>
+<div style="border: 1px solid #E5E7EB; border-radius: 16px; overflow: hidden; box-shadow: 0 10px 24px rgba(15,23,42,0.06);">
+  <div class="appbar">
+    <div class="left">
+      <button class="btn" style="padding:6px">
+        <svg width="18" height="18" viewBox="0 0 24 24" fill="currentColor"><path d="M3 18h18v-2H3v2zm0-5h18v-2H3v2zm0-7v2h18V6H3z"/></svg>
+      </button>
+      <div class="title-text">NASDAQ 20D PnL Series</div>
+      <div class="sep"></div>
+      <div class="search">
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="#9CA3AF"><path d="M15.5 14h-.79l-.28-.27C15.41 12.59 16 11.11 16 9.5 16 5.91 13.09 3 9.5 3S3 5.91 3 9.5 5.91 16 9.5 16c1.61 0 3.09-.59 4.23-1.57l.27.28v.79l5 4.99L20.49 19l-4.99-5zm-6 0C7.01 14 5 11.99 5 9.5S7.01 5 9.5 5 14 7.01 14 9.5 11.99 14 9.5 14z"/></svg>
+        <input placeholder="Search columns…" readonly>
+      </div>
+    </div>
+    <div class="right">
+      <button class="btn"><svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor"><path d="M12.5 8c-2.65 0-5.05.99-6.9 2.6L2 7v9h9l-3.62-3.62c1.39-1.16 3.16-1.88 5.12-1.88 3.54 0 6.55 2.31 7.6 5.5l2.37-.78C21.08 11.03 17.15 8 12.5 8z"/></svg></button>
+      <button class="btn"><svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor"><path d="M18.4 10.6C16.55 8.99 14.15 8 11.5 8c-4.65 0-8.58 3.03-9.96 7.22L3.9 15.7c1.05-3.19 4.05-5.5 7.6-5.5 1.95 0 3.73.72 5.12 1.88L13 15.5h9v-9l-3.6 3.1z"/></svg></button>
+      <div class="sep"></div>
+      <button class="btn btn-border"><svg width="18" height="18" viewBox="0 0 24 24" fill="currentColor"><path d="M19 9h-4V3H9v6H5l7 7 7-7zM5 18v2h14v-2H5z"/></svg> Export</button>
+      <div class="sep"></div>
+      <div class="theme-pill"><div class="dot"></div>Flash <svg width="14" height="14" viewBox="0 0 24 24" fill="#9CA3AF"><path d="M16.59 8.59L12 13.17 7.41 8.59 6 10l6 6 6-6z"/></svg></div>
+      <button class="btn" style="padding:6px"><svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor"><path d="M5 5h5v2H7v3H5V5zm9 0h5v5h-2V7h-3V5zM5 14h2v3h3v2H5v-5zm12 3v-3h2v5h-5v-2h3z"/></svg></button>
+    </div>
+  </div>
+  <!-- fake table header peek -->
+  <div style="background:#fff;border-bottom:1px solid #E5E7EB;display:flex;height:36px">
+    <div style="width:180px;padding:0 12px;display:flex;align-items:center;font-size:13px;font-weight:600;color:#111827;border-right:1px solid #E5E7EB">Instrument</div>
+    <div style="flex:1;padding:0 12px;display:flex;align-items:center;font-size:13px;font-weight:600;color:#3730A3;border-right:1px solid #E5E7EB;background:rgba(79,70,229,0.06)">Price 20D <svg width="14" height="14" viewBox="0 0 24 24" fill="#4F46E5" style="margin-left:4px"><path d="M4 12l1.41 1.41L11 7.83V20h2V7.83l5.58 5.59L20 12l-8-8-8 8z"/></svg></div>
+    <div style="flex:1;padding:0 12px;display:flex;align-items:center;font-size:13px;font-weight:600;color:#111827;border-right:1px solid #E5E7EB">PnL 20D</div>
+    <div style="flex:1;padding:0 12px;display:flex;align-items:center;font-size:13px;font-weight:600;color:#111827">Volume 20D</div>
+  </div>
+</div>
+</body></html>

@@ -148,7 +148,10 @@ class ProgressiveDataLoader:
         # If filters are present, we likely need exact count as metadata is usually table-wide
         # Exception: Partition filters if we can detect them (future optimization)
         
-        ibis_table = self.backend.table(spec.table)
+        ibis_table = self.builder.apply_custom_dimensions(
+            self.backend.table(spec.table),
+            getattr(spec, "custom_dimensions", []),
+        )
         
         # 1. If no filters, try fast metadata count
         if not spec.filters:
@@ -192,7 +195,10 @@ class ProgressiveDataLoader:
     
     def _build_chunk_ibis_expression(self, spec: PivotSpec, offset: Optional[int], chunk_size: int, cursor: Optional[Dict[str, Any]] = None) -> IbisTable:
         """Build Ibis expression for a specific chunk."""
-        base_table = self.backend.table(spec.table)
+        base_table = self.builder.apply_custom_dimensions(
+            self.backend.table(spec.table),
+            getattr(spec, "custom_dimensions", []),
+        )
 
         # Apply filters
         filtered_table = base_table
@@ -253,7 +259,10 @@ class ProgressiveDataLoader:
         if not current_dimension:
             return None
             
-        base_table = self.backend.table(base_spec.table)
+        base_table = self.builder.apply_custom_dimensions(
+            self.backend.table(base_spec.table),
+            getattr(base_spec, "custom_dimensions", []),
+        )
 
         # Build filters based on parent path
         all_filters_dicts = base_spec.filters or []

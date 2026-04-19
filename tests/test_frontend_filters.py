@@ -36,6 +36,128 @@ def adapter():
     create_test_data(adapter)
     return adapter
 
+
+@pytest.mark.asyncio
+async def test_server_filter_options_are_paged_searchable_and_need_no_developer_supplied_values(adapter):
+    rows = 650
+    table = pa.Table.from_pydict(
+        {
+            "code": [f"code-{idx:03d}" for idx in range(rows)],
+            "region": ["North" if idx % 2 == 0 else "South" for idx in range(rows)],
+            "sales": list(range(rows)),
+        }
+    )
+    adapter.controller.load_data_from_arrow("complete_filter_data", table)
+
+    request = TanStackRequest(
+        operation=TanStackOperation.GET_UNIQUE_VALUES,
+        table="complete_filter_data",
+        columns=[],
+        filters={
+            "code": {
+                "operator": "AND",
+                "conditions": [{"type": "in", "value": ["code-001"]}],
+            }
+        },
+        sorting=[],
+        grouping=[],
+        aggregations=[],
+        pagination={"pageIndex": 0, "pageSize": 250, "offset": 0},
+        global_filter="code",
+    )
+
+    response = await adapter.handle_request(request)
+
+    options = [row["value"] for row in response.data]
+    assert len(options) == 250
+    assert options[0] == "code-000"
+    assert options[-1] == "code-249"
+    assert response.pagination["totalRows"] == rows
+    assert response.pagination["hasMore"] is True
+
+    next_page_request = TanStackRequest(
+        operation=TanStackOperation.GET_UNIQUE_VALUES,
+        table="complete_filter_data",
+        columns=[],
+        filters={},
+        sorting=[],
+        grouping=[],
+        aggregations=[],
+        pagination={"pageIndex": 1, "pageSize": 250, "offset": 250},
+        global_filter="code",
+    )
+    next_page = await adapter.handle_request(next_page_request)
+    next_options = [row["value"] for row in next_page.data]
+    assert next_options[0] == "code-250"
+    assert next_options[-1] == "code-499"
+
+    search_request = TanStackRequest(
+        operation=TanStackOperation.GET_UNIQUE_VALUES,
+        table="complete_filter_data",
+        columns=[],
+        filters={},
+        sorting=[],
+        grouping=[],
+        aggregations=[],
+        pagination={"pageIndex": 0, "pageSize": 250, "offset": 0, "search": "64"},
+        global_filter="code",
+    )
+    search_response = await adapter.handle_request(search_request)
+    search_options = [row["value"] for row in search_response.data]
+    assert "code-064" in search_options
+    assert "code-640" in search_options
+    assert search_response.pagination["hasMore"] is False
+
+
+@pytest.mark.asyncio
+async def test_server_filter_options_include_custom_category_fields(adapter):
+    table = pa.Table.from_pydict(
+        {
+            "region": ["North", "South", "East", "West"],
+            "sales": [100, 200, 300, 400],
+        }
+    )
+    adapter.controller.load_data_from_arrow("custom_category_filter_data", table)
+    category_field = "__custom_category__market_bucket"
+
+    request = TanStackRequest(
+        operation=TanStackOperation.GET_UNIQUE_VALUES,
+        table="custom_category_filter_data",
+        columns=[],
+        filters={},
+        sorting=[],
+        grouping=[],
+        aggregations=[],
+        pagination={"pageIndex": 0, "pageSize": 250, "offset": 0},
+        global_filter=category_field,
+        custom_dimensions=[
+            {
+                "id": "market_bucket",
+                "field": category_field,
+                "name": "Market Bucket",
+                "fallbackLabel": "Other Markets",
+                "rules": [
+                    {
+                        "id": "north_south",
+                        "label": "Core Markets",
+                        "condition": {
+                            "op": "OR",
+                            "clauses": [
+                                {"field": "region", "operator": "eq", "value": "North"},
+                                {"field": "region", "operator": "eq", "value": "South"},
+                            ],
+                        },
+                    }
+                ],
+            }
+        ],
+    )
+
+    response = await adapter.handle_request(request)
+    options = [row["value"] for row in response.data]
+
+    assert options == ["Core Markets", "Other Markets"]
+
 @pytest.mark.asyncio
 async def test_floating_filter_backend_logic(adapter):
     """

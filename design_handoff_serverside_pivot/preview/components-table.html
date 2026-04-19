@@ -1,0 +1,70 @@
+<!DOCTYPE html>
+<html><head><meta charset="utf-8">
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+<style>
+* { box-sizing: border-box; margin: 0; padding: 0; }
+body { font-family: 'Inter', sans-serif; background: #fff; padding: 16px; }
+.title { font-size: 10px; font-weight: 700; letter-spacing: 0.06em; text-transform: uppercase; color: #94A3B8; margin-bottom: 8px; }
+.table { border: 1px solid #E5E7EB; border-radius: 10px; overflow: hidden; margin-bottom: 12px; font-size: 13px; }
+.hrow { display: flex; background: #FFFFFF; border-bottom: 1px solid #E5E7EB; box-shadow: inset 0 1px 0 rgba(255,255,255,0.8); }
+.hcell { padding: 0 12px; height: 36px; display: flex; align-items: center; font-weight: 600; color: #111827; border-right: 1px solid #E5E7EB; flex: 1; gap: 4px; }
+.hcell.sorted { background: rgba(79,70,229,0.06); color: #3730A3; border-bottom: 1px solid #4F46E5; }
+.row { display: flex; border-bottom: 1px solid #E5E7EB; }
+.row:last-child { border-bottom: none; }
+.cell { padding: 0 12px; height: 44px; display: flex; align-items: center; color: #111827; border-right: 1px solid #E5E7EB; flex: 1; font-family: 'JetBrains Mono', monospace; }
+.cell.dim { font-family: 'Inter', sans-serif; font-weight: 500; background: #EDF4FF; }
+.row.hover .cell { background: #F8FAFC; }
+.row.total .cell { background: rgba(238,242,255,0.82); color: #3730A3; font-weight: 600; }
+.row.grand .cell { background: rgba(224,231,255,0.95); color: #312E81; font-weight: 700; border-right: 1px solid #A5B4FC; }
+.row.selected .cell { background: rgba(79,70,229,0.08); }
+.row.selected .cell.sel { box-shadow: inset 0 0 0 2px #4F46E5; position: relative; z-index: 1; }
+svg { flex-shrink: 0; }
+</style></head><body>
+<div class="title">Table — Row & Header States (Flash Theme)</div>
+<div class="table">
+  <div class="hrow">
+    <div class="hcell dim" style="max-width:130px;font-family:'Inter',sans-serif">Instrument</div>
+    <div class="hcell sorted">
+      Day PnL
+      <svg width="14" height="14" viewBox="0 0 24 24" fill="#4F46E5"><path d="M4 12l1.41 1.41L11 7.83V20h2V7.83l5.58 5.59L20 12l-8-8-8 8z"/></svg>
+    </div>
+    <div class="hcell">Mkt Val</div>
+    <div class="hcell">Net Exp</div>
+  </div>
+  <!-- default row -->
+  <div class="row">
+    <div class="cell dim" style="max-width:130px">AAPL</div>
+    <div class="cell" style="color:#2E7D32">+8,240</div>
+    <div class="cell">1,240,000</div>
+    <div class="cell" style="color:#C62828">−320,000</div>
+  </div>
+  <!-- hover row -->
+  <div class="row hover">
+    <div class="cell dim" style="max-width:130px">MSFT</div>
+    <div class="cell" style="color:#2E7D32">+4,120</div>
+    <div class="cell">980,000</div>
+    <div class="cell">120,000</div>
+  </div>
+  <!-- selected row -->
+  <div class="row selected">
+    <div class="cell dim" style="max-width:130px">NVDA</div>
+    <div class="cell sel">+12,480</div>
+    <div class="cell">2,100,000</div>
+    <div class="cell">580,000</div>
+  </div>
+  <!-- total row -->
+  <div class="row total">
+    <div class="cell dim" style="max-width:130px;background:rgba(238,242,255,0.82)">Total</div>
+    <div class="cell">24,840</div>
+    <div class="cell">4,320,000</div>
+    <div class="cell">380,000</div>
+  </div>
+  <!-- grand total -->
+  <div class="row grand" style="border-top: 2px solid #4F46E5">
+    <div class="cell dim" style="max-width:130px;background:rgba(224,231,255,0.95)">Grand Total</div>
+    <div class="cell">24,840</div>
+    <div class="cell">4,320,000</div>
+    <div class="cell">380,000</div>
+  </div>
+</div>
+</body></html>

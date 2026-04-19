@@ -28,7 +28,7 @@ export const DEFAULT_TABLE_CANVAS_SIZE = 1.4;
 export const TABLE_OVERLAY_CHART_PANE_ID = '__table_overlay_chart__';
 export const MAX_AUTO_SIZE_SAMPLE_ROWS = 300;
 export const MAX_PENDING_ROW_TRANSITIONS = 128;
-export const VALID_CHART_TYPES = new Set(['bar', 'line', 'area', 'sparkline', 'combo', 'pie', 'donut', 'scatter', 'waterfall', 'icicle', 'sunburst', 'sankey']);
+export const VALID_CHART_TYPES = new Set(['bar', 'bar3d', 'line3d', 'scatter3d', 'range', 'line', 'area', 'sparkline', 'combo', 'pie', 'donut', 'scatter', 'waterfall', 'icicle', 'sunburst', 'sankey', 'heatmap', 'bubble', 'radar', 'funnel', 'histogram', 'boxplot', 'nightingale']);
 export const VALID_CHART_SORT_MODES = new Set(['natural', 'value_desc', 'value_asc', 'label_asc', 'label_desc']);
 export const VALID_CHART_INTERACTION_MODES = new Set(['focus', 'filter', 'event']);
 export const VALID_CHART_SERVER_SCOPES = new Set(['viewport', 'root']);
@@ -47,6 +47,252 @@ export const HARD_CENTER_COLUMN_WARNING_THRESHOLD = 10000;
 export const SUPPORTED_DEFAULT_NUMBER_FORMATS = new Set(['', 'currency', 'accounting', 'percent', 'scientific']);
 export const GRAND_TOTAL_ROW_ID = '__grand_total__';
 export const MISSING_PERSISTED_VALUE = Symbol('missing-persisted-value');
+export const CUSTOM_CATEGORY_FIELD_PREFIX = '__custom_category__';
+export const CUSTOM_CATEGORY_OPERATORS = new Set([
+    'eq',
+    'ne',
+    'not_eq',
+    'contains',
+    'starts_with',
+    'ends_with',
+    'gt',
+    'gte',
+    'lt',
+    'lte',
+    'in',
+    'not_in',
+    'is_null',
+    'is_not_null',
+]);
+
+export const normalizeCustomCategoryId = (value, fallback = 'category') => {
+    const raw = value === undefined || value === null ? '' : String(value);
+    const normalized = raw
+        .trim()
+        .toLowerCase()
+        .replace(/[^a-z0-9_]+/g, '_')
+        .replace(/^_+|_+$/g, '');
+    const fallbackBase = String(fallback || 'category')
+        .trim()
+        .toLowerCase()
+        .replace(/[^a-z0-9_]+/g, '_')
+        .replace(/^_+|_+$/g, '') || 'category';
+    const base = normalized || fallbackBase;
+    return /^[a-z_]/.test(base) ? base : `c_${base}`;
+};
+
+export const buildCustomCategoryFieldId = (id) => (
+    `${CUSTOM_CATEGORY_FIELD_PREFIX}${normalizeCustomCategoryId(id)}`
+);
+
+export const isCustomCategoryField = (field) => (
+    typeof field === 'string' && field.startsWith(CUSTOM_CATEGORY_FIELD_PREFIX)
+);
+
+export const getCustomDimensionFieldId = (dimension) => {
+    if (!dimension || typeof dimension !== 'object') return '';
+    if (typeof dimension.field === 'string' && isCustomCategoryField(dimension.field)) {
+        return dimension.field;
+    }
+    return buildCustomCategoryFieldId(dimension.id || dimension.name || dimension.label || 'category');
+};
+
+const normalizeCustomCategoryOperator = (value) => {
+    const raw = String(value || 'eq').trim();
+    if (raw === '=') return 'eq';
+    if (raw === '!=') return 'ne';
+    const normalized = raw.replace(/\s+/g, '_').toLowerCase();
+    if (normalized === 'startswith') return 'starts_with';
+    if (normalized === 'endswith') return 'ends_with';
+    return CUSTOM_CATEGORY_OPERATORS.has(normalized) ? normalized : 'eq';
+};
+
+const normalizeCustomCategoryClause = (clause, fallbackField = '') => {
+    if (!clause || typeof clause !== 'object') return null;
+    const field = typeof clause.field === 'string' && clause.field.trim()
+        ? clause.field.trim()
+        : fallbackField;
+    if (!field) return null;
+    const operator = normalizeCustomCategoryOperator(clause.operator || clause.op || clause.type);
+    const rawValues = Array.isArray(clause.values)
+        ? clause.values
+        : (Array.isArray(clause.value) ? clause.value : []);
+    const values = rawValues
+        .map((item) => (item === undefined || item === null ? '' : String(item).trim()))
+        .filter((item) => item !== '');
+    const value = clause.value === undefined || clause.value === null ? '' : String(clause.value);
+    return {
+        field,
+        operator,
+        value,
+        values,
+        caseSensitive: clause.caseSensitive === true,
+    };
+};
+
+export const normalizeCustomCategoryCondition = (condition, fallbackField = '') => {
+    const rawCondition = condition && typeof condition === 'object' ? condition : {};
+    const op = String(rawCondition.op || rawCondition.operator || 'AND').trim().toUpperCase() === 'OR' ? 'OR' : 'AND';
+    const sourceClauses = Array.isArray(rawCondition.clauses)
+        ? rawCondition.clauses
+        : (Array.isArray(rawCondition.conditions) ? rawCondition.conditions : []);
+    const clauses = sourceClauses
+        .map((clause) => normalizeCustomCategoryClause(clause, fallbackField))
+        .filter(Boolean);
+    if (clauses.length === 0 && (rawCondition.field || fallbackField)) {
+        const singleClause = normalizeCustomCategoryClause(rawCondition, fallbackField);
+        if (singleClause) clauses.push(singleClause);
+    }
+    return { op, clauses };
+};
+
+export const normalizeCustomDimensionsValue = (value) => {
+    if (!Array.isArray(value)) return [];
+    const usedFields = new Set();
+    return value.map((entry, index) => {
+        if (!entry || typeof entry !== 'object') return null;
+        const rawName = typeof entry.name === 'string' && entry.name.trim()
+            ? entry.name.trim()
+            : (typeof entry.label === 'string' && entry.label.trim() ? entry.label.trim() : `Custom Category ${index + 1}`);
+        const id = normalizeCustomCategoryId(entry.id || rawName, `category_${index + 1}`);
+        let field = getCustomDimensionFieldId({ ...entry, id, name: rawName });
+        if (usedFields.has(field)) {
+            field = buildCustomCategoryFieldId(`${id}_${index + 1}`);
+        }
+        usedFields.add(field);
+        const rules = (Array.isArray(entry.rules) ? entry.rules : [])
+            .map((rule, ruleIndex) => {
+                if (!rule || typeof rule !== 'object') return null;
+                const label = typeof rule.label === 'string' && rule.label.trim()
+                    ? rule.label.trim()
+                    : `Rule ${ruleIndex + 1}`;
+                const condition = normalizeCustomCategoryCondition(rule.condition || rule, rule.field || '');
+                if (!condition.clauses.length) return null;
+                return {
+                    id: typeof rule.id === 'string' && rule.id.trim()
+                        ? rule.id.trim()
+                        : `${id}_rule_${ruleIndex + 1}`,
+                    label,
+                    condition,
+                };
+            })
+            .filter(Boolean);
+        return {
+            id,
+            field,
+            name: rawName,
+            fallbackLabel: typeof entry.fallbackLabel === 'string' && entry.fallbackLabel.trim()
+                ? entry.fallbackLabel.trim()
+                : (typeof entry.defaultLabel === 'string' && entry.defaultLabel.trim() ? entry.defaultLabel.trim() : 'Other'),
+            rules,
+        };
+    }).filter(Boolean);
+};
+
+export const getCustomDimensionLabel = (customDimensions, field) => {
+    if (!isCustomCategoryField(field)) return '';
+    const match = (Array.isArray(customDimensions) ? customDimensions : [])
+        .find((dimension) => getCustomDimensionFieldId(dimension) === field);
+    return match && match.name ? match.name : '';
+};
+
+export const formatCustomAwareFieldLabel = (field, customDimensions = []) => (
+    getCustomDimensionLabel(customDimensions, field) || formatDisplayLabel(field)
+);
+
+const isBlankCustomCategoryValue = (value) => (
+    value === null || value === undefined || (typeof value === 'string' && value.trim() === '')
+);
+
+const normalizeCustomCategoryComparable = (value, caseSensitive = false) => {
+    const text = value === null || value === undefined ? '' : String(value);
+    return caseSensitive ? text : text.toLowerCase();
+};
+
+const evaluateCustomCategoryClause = (row, clause) => {
+    if (!row || !clause || !clause.field) return false;
+    const operator = normalizeCustomCategoryOperator(clause.operator || clause.op || clause.type);
+    const rowValue = row[clause.field];
+
+    if (operator === 'is_null') return isBlankCustomCategoryValue(rowValue);
+    if (operator === 'is_not_null') return !isBlankCustomCategoryValue(rowValue);
+
+    const caseSensitive = clause.caseSensitive === true;
+    const rawValue = clause.value;
+    const left = normalizeCustomCategoryComparable(rowValue, caseSensitive);
+    const right = normalizeCustomCategoryComparable(rawValue, caseSensitive);
+
+    if (operator === 'eq') return left === right;
+    if (operator === 'ne' || operator === 'not_eq') return left !== right;
+    if (operator === 'contains') return left.includes(right);
+    if (operator === 'starts_with') return left.startsWith(right);
+    if (operator === 'ends_with') return left.endsWith(right);
+
+    if (operator === 'in' || operator === 'not_in') {
+        const rawValues = Array.isArray(clause.values)
+            ? clause.values
+            : (Array.isArray(clause.value) ? clause.value : []);
+        const candidates = rawValues.map((item) => normalizeCustomCategoryComparable(item, caseSensitive));
+        const matched = candidates.includes(left);
+        return operator === 'not_in' ? !matched : matched;
+    }
+
+    const leftNumber = Number(rowValue);
+    const rightNumber = Number(rawValue);
+    const hasNumericPair = Number.isFinite(leftNumber) && Number.isFinite(rightNumber);
+    const compareLeft = hasNumericPair ? leftNumber : left;
+    const compareRight = hasNumericPair ? rightNumber : right;
+    if (operator === 'gt') return compareLeft > compareRight;
+    if (operator === 'gte') return compareLeft >= compareRight;
+    if (operator === 'lt') return compareLeft < compareRight;
+    if (operator === 'lte') return compareLeft <= compareRight;
+
+    return false;
+};
+
+export const evaluateCustomCategoryCondition = (row, condition) => {
+    const normalized = normalizeCustomCategoryCondition(condition);
+    if (!normalized.clauses.length) return false;
+    const results = normalized.clauses.map((clause) => evaluateCustomCategoryClause(row, clause));
+    return normalized.op === 'OR' ? results.some(Boolean) : results.every(Boolean);
+};
+
+export const evaluateCustomCategoryDimension = (row, dimension) => {
+    const normalized = normalizeCustomDimensionsValue([dimension])[0];
+    if (!normalized) return '';
+    const matchingRule = normalized.rules.find((rule) => (
+        evaluateCustomCategoryCondition(row, rule.condition)
+    ));
+    return matchingRule ? matchingRule.label : normalized.fallbackLabel;
+};
+
+export const applyCustomDimensionsToRows = (rows, customDimensions = []) => {
+    if (!Array.isArray(rows) || rows.length === 0) return Array.isArray(rows) ? rows : [];
+    const dimensions = normalizeCustomDimensionsValue(customDimensions);
+    if (!dimensions.length) return rows;
+    return rows.map((row) => {
+        if (!row || typeof row !== 'object') return row;
+        const nextRow = { ...row };
+        dimensions.forEach((dimension) => {
+            nextRow[dimension.field] = evaluateCustomCategoryDimension(nextRow, dimension);
+        });
+        return nextRow;
+    });
+};
+
+export const decorateAvailableFieldsWithCustomDimensions = (availableFields, customDimensions = []) => {
+    const fields = Array.isArray(availableFields) ? availableFields.filter(Boolean) : [];
+    const next = [...fields];
+    const seen = new Set(next);
+    (Array.isArray(customDimensions) ? customDimensions : []).forEach((dimension) => {
+        const field = getCustomDimensionFieldId(dimension);
+        if (field && !seen.has(field)) {
+            seen.add(field);
+            next.push(field);
+        }
+    });
+    return next;
+};
 
 // ─── Chart Utilities ───────────────────────────────────────────────────────
 
@@ -420,7 +666,7 @@ export const normalizeReportNodeValue = (value) => {
             return acc;
         }, {});
         if (Object.keys(normalizedChildrenByValue).length > 0) {
-            normalizedBase.childrenByValue = normalizedChildrenByValue;
+            normalized.childrenByValue = normalizedChildrenByValue;
         } else {
             delete normalized.childrenByValue;
         }
@@ -440,6 +686,28 @@ export const normalizeReportNodeValue = (value) => {
     } else {
         delete normalized.defaultChild;
     }
+
+    if (Array.isArray(source.branches)) {
+        const normalizedBranches = source.branches
+            .filter((branch) => branch && typeof branch === 'object')
+            .map((branch) => ({
+                ...branch,
+                label: typeof branch.label === 'string' ? branch.label : '',
+                condition: branch.condition && typeof branch.condition === 'object' ? branch.condition : { op: 'AND', clauses: [] },
+                child: branch.child && typeof branch.child === 'object'
+                    ? normalizeReportNodeValue(branch.child)
+                    : null,
+            }));
+        if (normalizedBranches.length > 0) {
+            normalized.branches = normalizedBranches;
+        } else {
+            delete normalized.branches;
+        }
+    } else {
+        delete normalized.branches;
+    }
+
+    delete normalized.manualRows;
 
     return normalized;
 };
@@ -508,6 +776,11 @@ export const collectReportFields = (reportDef) => {
             ordered.push(node.field);
         }
         if (node.defaultChild) visit(node.defaultChild);
+        if (Array.isArray(node.branches)) {
+            node.branches.forEach((branch) => {
+                if (branch && branch.child) visit(branch.child);
+            });
+        }
         if (node.childrenByValue && typeof node.childrenByValue === 'object') {
             Object.values(node.childrenByValue).forEach((childNode) => visit(childNode));
         }
@@ -522,6 +795,11 @@ export const countReportNodes = (reportDef) => {
         if (!node || typeof node !== 'object') return;
         count += 1;
         if (node.defaultChild) visit(node.defaultChild);
+        if (Array.isArray(node.branches)) {
+            node.branches.forEach((branch) => {
+                if (branch && branch.child) visit(branch.child);
+            });
+        }
         if (node.childrenByValue && typeof node.childrenByValue === 'object') {
             Object.values(node.childrenByValue).forEach((childNode) => visit(childNode));
         }

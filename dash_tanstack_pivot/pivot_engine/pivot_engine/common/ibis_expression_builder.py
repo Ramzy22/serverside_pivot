@@ -3,6 +3,7 @@ Unified Ibis Expression Builder module to eliminate duplication
 between IbisPlanner, ProgressiveDataLoader, and HierarchicalVirtualScrollManager
 """
 from typing import List, Dict, Any, Optional, Union
+import re
 import ibis
 from ibis import BaseBackend as IbisBaseBackend
 from ibis.expr.api import Table as IbisTable, Expr as IbisExpr, Column as IbisColumn
@@ -16,6 +17,143 @@ class IbisExpressionBuilder:
     
     def __init__(self, backend: IbisBaseBackend):
         self.backend = backend
+
+    @staticmethod
+    def _custom_category_field_id(dimension: Dict[str, Any]) -> str:
+        prefix = "__custom_category__"
+        raw_field = dimension.get("field") if isinstance(dimension, dict) else None
+        if isinstance(raw_field, str) and raw_field.startswith(prefix):
+            return raw_field
+        raw_id = ""
+        if isinstance(dimension, dict):
+            raw_id = str(dimension.get("id") or dimension.get("name") or dimension.get("label") or "category")
+        slug = re.sub(r"[^a-z0-9_]+", "_", raw_id.strip().lower()).strip("_") or "category"
+        if not re.match(r"^[a-z_]", slug):
+            slug = f"c_{slug}"
+        return f"{prefix}{slug}"
+
+    @staticmethod
+    def _normalize_custom_category_operator(value: Any) -> str:
+        raw = str(value or "eq").strip()
+        aliases = {
+            "=": "=",
+            "eq": "=",
+            "==": "=",
+            "!=": "!=",
+            "<>": "!=",
+            "ne": "!=",
+            "not_eq": "!=",
+            "not eq": "!=",
+            "lt": "<",
+            "lte": "<=",
+            "gt": ">",
+            "gte": ">=",
+            "startsWith": "starts_with",
+            "endsWith": "ends_with",
+            "is_null": "is null",
+            "is null": "is null",
+            "is_not_null": "is not null",
+            "is not null": "is not null",
+            "not_in": "not in",
+            "not in": "not in",
+        }
+        normalized = aliases.get(raw)
+        if normalized:
+            return normalized
+        normalized = raw.replace(" ", "_").lower()
+        return aliases.get(normalized, normalized)
+
+    def _normalize_custom_category_clause(self, clause: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+        if not isinstance(clause, dict):
+            return None
+        field = clause.get("field")
+        if not isinstance(field, str) or not field.strip():
+            return None
+        operator = self._normalize_custom_category_operator(
+            clause.get("operator", clause.get("op", clause.get("type", "eq")))
+        )
+        if operator in {"in", "not in"}:
+            raw_values = clause.get("values")
+            if raw_values is None:
+                raw_values = clause.get("value")
+            if isinstance(raw_values, str):
+                values = [item.strip() for item in raw_values.split(",") if item.strip()]
+            elif isinstance(raw_values, (list, tuple, set)):
+                values = list(raw_values)
+            else:
+                values = [] if raw_values is None else [raw_values]
+            value = values
+        else:
+            value = clause.get("value")
+        return {
+            "field": field.strip(),
+            "op": operator,
+            "value": value,
+            "caseSensitive": bool(clause.get("caseSensitive", False)),
+        }
+
+    def _normalize_custom_category_condition(self, condition: Any) -> Optional[Dict[str, Any]]:
+        if not isinstance(condition, dict):
+            return None
+        op = str(condition.get("op") or condition.get("operator") or "AND").upper()
+        op = "OR" if op == "OR" else "AND"
+        source = condition.get("clauses")
+        if source is None:
+            source = condition.get("conditions")
+        if isinstance(source, list):
+            clauses = [
+                normalized
+                for normalized in (self._normalize_custom_category_clause(item) for item in source)
+                if normalized is not None
+            ]
+        else:
+            single_clause = self._normalize_custom_category_clause(condition)
+            clauses = [single_clause] if single_clause else []
+        if not clauses:
+            return None
+        return {"op": op, "conditions": clauses}
+
+    def build_custom_category_expression(self, table: IbisTable, dimension: Dict[str, Any]) -> Optional[IbisExpr]:
+        if not isinstance(dimension, dict):
+            return None
+        field_id = self._custom_category_field_id(dimension)
+        fallback_label = (
+            dimension.get("fallbackLabel")
+            or dimension.get("defaultLabel")
+            or dimension.get("fallback")
+            or "Other"
+        )
+        expr = ibis.literal(str(fallback_label))
+        rules = dimension.get("rules") if isinstance(dimension.get("rules"), list) else []
+
+        for rule in reversed(rules):
+            if not isinstance(rule, dict):
+                continue
+            label = str(rule.get("label") or "").strip()
+            if not label:
+                continue
+            condition = self._normalize_custom_category_condition(rule.get("condition") or rule)
+            if not condition:
+                continue
+            condition_expr = self._build_filter_object(table, condition)
+            if condition_expr is None:
+                continue
+            expr = condition_expr.ifelse(ibis.literal(label), expr)
+
+        return expr.name(field_id)
+
+    def apply_custom_dimensions(self, table: IbisTable, custom_dimensions: Optional[List[Dict[str, Any]]]) -> IbisTable:
+        """Attach user-defined category columns before filters/grouping are planned."""
+        if not custom_dimensions:
+            return table
+        current_table = table
+        for dimension in custom_dimensions:
+            expr = self.build_custom_category_expression(current_table, dimension)
+            if expr is None:
+                continue
+            field_id = self._custom_category_field_id(dimension)
+            current_table = current_table.mutate(**{field_id: expr})
+        return current_table
 
     def build_filter_expression(self, table: IbisTable, filters: List[Dict[str, Any]], is_post_agg: bool = False) -> Optional[IbisExpr]:
         """Converts a list of filter dictionaries into a single Ibis boolean expression."""
@@ -88,7 +226,7 @@ class IbisExpressionBuilder:
 
     def _build_single_filter(self, col: IbisColumn, op: str, value: Any, case_sensitive: bool = False) -> Optional[IbisExpr]:
         """Internal helper to build a single condition for a column."""
-        op = op.lower()
+        op = self._normalize_custom_category_operator(op).lower()
         
         # Helper to cast value to column type for strict comparisons
         def cast_val(v, c):
@@ -171,6 +309,17 @@ class IbisExpressionBuilder:
                     except: pass
                 return col.isin(vals)
             return col == cast_val(value, col) # Fallback for single value
+
+        if op == "not in":
+            if isinstance(value, (list, tuple, set)):
+                vals = [cast_val(v, col) for v in value]
+                if not case_sensitive:
+                    try:
+                        if col.type().is_string():
+                            return ~col.lower().isin([str(v).lower() for v in vals])
+                    except: pass
+                return ~col.isin(vals)
+            return col != cast_val(value, col)
 
         if op == "between":
             if isinstance(value, (list, tuple)) and len(value) == 2:
@@ -531,6 +680,7 @@ class IbisExpressionBuilder:
         Builds a base table with filters applied
         """
         base_table = self.backend.table(spec.table)
+        base_table = self.apply_custom_dimensions(base_table, getattr(spec, "custom_dimensions", []))
 
         # Apply filters
         filtered_table = base_table

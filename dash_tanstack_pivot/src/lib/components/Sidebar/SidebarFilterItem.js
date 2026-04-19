@@ -3,7 +3,7 @@ import Icons from '../../utils/Icons';
 import ColumnFilter from '../Filters/ColumnFilter';
 import { formatDisplayLabel } from '../../utils/helpers';
 
-const SidebarFilterItem = ({ column, theme, styles, onFilter, currentFilter, options, onOpen }) => {
+const SidebarFilterItem = ({ column, theme, styles, onFilter, currentFilter, options, optionMeta, onSearchOptions, onLoadMoreOptions, onOpen }) => {
     const [expanded, setExpanded] = useState(false);
     const hasFilter = currentFilter && (currentFilter.conditions || currentFilter.value);
     const closeFilterEditor = () => setExpanded(false);
@@ -41,6 +41,9 @@ const SidebarFilterItem = ({ column, theme, styles, onFilter, currentFilter, opt
                         onFilter={onFilter}
                         currentFilter={currentFilter}
                         options={options}
+                        optionMeta={optionMeta}
+                        onSearchOptions={onSearchOptions}
+                        onLoadMoreOptions={onLoadMoreOptions}
                         theme={theme}
                         onClose={closeFilterEditor}
                     />

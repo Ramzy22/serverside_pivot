@@ -1,14 +1,14 @@
 import ast
+import math
 import operator
-from typing import Dict, Any, Union
+from typing import Dict, Any
 
 class SafeExpressionParser:
     """
     Safely parses and evaluates arithmetic expressions using Python's AST.
     Replaces unsafe eval() calls.
     """
-    
-    # Whitelisted operators
+
     operators = {
         ast.Add: operator.add,
         ast.Sub: operator.sub,
@@ -18,10 +18,19 @@ class SafeExpressionParser:
         ast.Pow: operator.pow,
     }
 
+    safe_functions = {
+        'abs': abs,
+        'round': round,
+        'ceil': math.ceil,
+        'floor': math.floor,
+        'max': max,
+        'min': min,
+        'int': int,
+        'float': float,
+    }
+
     def evaluate(self, expression: str, context: Dict[str, Any]) -> Any:
-        """
-        Evaluate a math expression with a given context (variable map).
-        """
+        """Evaluate a math expression with a given context (variable map)."""
         try:
             node = ast.parse(expression, mode='eval')
             return self._eval_node(node.body, context)
@@ -29,7 +38,7 @@ class SafeExpressionParser:
             raise ValueError(f"Invalid expression '{expression}': {e}")
 
     def _eval_node(self, node: ast.AST, context: Dict[str, Any]) -> Any:
-        if isinstance(node, ast.Constant):  # Python >= 3.8
+        if isinstance(node, ast.Constant):
             return node.value
         elif isinstance(node, ast.Name):
             if node.id in context:
@@ -48,5 +57,13 @@ class SafeExpressionParser:
                 operand = self._eval_node(node.operand, context)
                 return self.operators[op_type](operand)
             raise ValueError(f"Unsupported unary operator: {op_type}")
+        elif isinstance(node, ast.Call):
+            if isinstance(node.func, ast.Name) and node.func.id in self.safe_functions:
+                fn = self.safe_functions[node.func.id]
+                args = [self._eval_node(arg, context) for arg in node.args]
+                return fn(*args)
+            func_name = node.func.id if isinstance(node.func, ast.Name) else "unknown"
+            allowed = ", ".join(sorted(self.safe_functions))
+            raise ValueError(f"Unsupported function: {func_name}. Allowed: {allowed}")
         else:
             raise ValueError(f"Unsupported syntax: {type(node)}")

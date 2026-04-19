@@ -1,0 +1,333 @@
+/*
+ * serverside-pivot Design System
+ * colors_and_type.css — CSS custom properties for all design tokens
+ *
+ * Default theme: "flash" (light, indigo primary)
+ * Import Inter + JetBrains Mono from Google Fonts in your HTML:
+ *   <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=JetBrains+Mono:wght@400;500;700&display=swap" rel="stylesheet">
+ */
+
+/* ─── FLASH THEME (default) ─────────────────────────────────────────── */
+:root,
+[data-theme="flash"] {
+  /* Primary */
+  --color-primary:              #4F46E5;
+  --color-primary-hover:        #4338CA;
+  --color-primary-soft:         rgba(79, 70, 229, 0.08);
+  --color-primary-muted:        rgba(79, 70, 229, 0.06);
+
+  /* Backgrounds */
+  --color-page-bg:              #FFFFFF;
+  --color-surface-bg:           #FFFFFF;
+  --color-surface-muted:        #F8FAFC;
+  --color-surface-inset:        #F5F7FB;
+  --color-header-bg:            #FFFFFF;
+  --color-header-subtle:        #F9FAFB;
+  --color-sidebar-bg:           #FFFFFF;
+  --color-hierarchy-bg:         #EDF4FF;
+
+  /* Text */
+  --color-text:                 #111827;
+  --color-text-sec:             #475569;
+  --color-text-soft:            #64748B;
+  --color-sorted-text:          #3730A3;
+
+  /* Borders */
+  --color-border:               #E5E7EB;
+  --color-border-strong:        #D7DDEA;
+  --color-sorted-border:        #4F46E5;
+
+  /* States */
+  --color-hover:                #F8FAFC;
+  --color-hover-strong:         #F3F4F6;
+  --color-select:               rgba(79, 70, 229, 0.08);
+  --color-sorted-header-bg:     rgba(79, 70, 229, 0.06);
+
+  /* Totals */
+  --color-total-bg:             rgba(238, 242, 255, 0.82);
+  --color-total-bg-strong:      rgba(224, 231, 255, 0.95);
+  --color-total-text:           #3730A3;
+  --color-total-text-strong:    #312E81;
+
+  /* Edited cells */
+  --color-edited-bg:            #EDF7EF;
+  --color-edited-border:        #82B38B;
+  --color-edited-text:          #2C4636;
+
+  /* Shadows */
+  --shadow-sm:                  0 1px 2px rgba(15, 23, 42, 0.05);
+  --shadow-md:                  0 10px 24px rgba(15, 23, 42, 0.06), 0 2px 8px rgba(15, 23, 42, 0.04);
+  --shadow-inset:               inset 0 1px 0 rgba(255, 255, 255, 0.8);
+  --shadow-panel:               0 10px 24px rgba(15, 23, 42, 0.06), 0 2px 8px rgba(15, 23, 42, 0.04);
+  --shadow-pinned:              rgba(79, 70, 229, 0.12);
+
+  /* Border radius */
+  --radius:                     16px;
+  --radius-sm:                  10px;
+  --radius-xs:                  6px;
+
+  /* Negative / red */
+  --color-negative:             #C62828;
+  --color-positive:             #2E7D32;
+}
+
+/* ─── DARK THEME ─────────────────────────────────────────────────────── */
+[data-theme="dark"] {
+  --color-primary:              #818CF8;
+  --color-primary-soft:         rgba(129, 140, 248, 0.16);
+  --color-primary-muted:        rgba(129, 140, 248, 0.12);
+
+  --color-page-bg:              #0A0C10;
+  --color-surface-bg:           #090C11;
+  --color-surface-muted:        #0D1117;
+  --color-surface-inset:        #11161E;
+  --color-header-bg:            #111318;
+  --color-header-subtle:        #171A21;
+  --color-sidebar-bg:           #10141B;
+  --color-hierarchy-bg:         #0F141C;
+
+  --color-text:                 #F8FAFC;
+  --color-text-sec:             #CBD5E1;
+  --color-text-soft:            #94A3B8;
+  --color-sorted-text:          #C7D2FE;
+
+  --color-border:               rgba(255, 255, 255, 0.10);
+  --color-border-strong:        rgba(255, 255, 255, 0.16);
+  --color-sorted-border:        #818CF8;
+
+  --color-hover:                #171B22;
+  --color-hover-strong:         #1C212B;
+  --color-select:               rgba(129, 140, 248, 0.16);
+  --color-sorted-header-bg:     rgba(129, 140, 248, 0.12);
+
+  --color-total-bg:             rgba(129, 140, 248, 0.18);
+  --color-total-bg-strong:      #818CF8;
+  --color-total-text:           #EEF2FF;
+  --color-total-text-strong:    #0A0C10;
+
+  --color-edited-bg:            #203A36;
+  --color-edited-border:        #6AB7A8;
+  --color-edited-text:          #F3FCFA;
+
+  --shadow-sm:                  0 1px 2px rgba(0, 0, 0, 0.35);
+  --shadow-md:                  0 18px 40px rgba(0, 0, 0, 0.42), 0 2px 10px rgba(0, 0, 0, 0.28);
+  --shadow-inset:               inset 0 1px 0 rgba(255, 255, 255, 0.03);
+  --shadow-pinned:              rgba(0, 0, 0, 0.65);
+
+  --radius:                     16px;
+  --radius-sm:                  10px;
+}
+
+/* ─── BLOOMBERG BLACK THEME ──────────────────────────────────────────── */
+[data-theme="bloomblerg_black"] {
+  --color-primary:              #F59E0B;
+  --color-primary-soft:         rgba(245, 158, 11, 0.20);
+  --color-primary-muted:        rgba(245, 158, 11, 0.22);
+
+  --color-page-bg:              #000000;
+  --color-surface-bg:           #000000;
+  --color-surface-muted:        #050505;
+  --color-surface-inset:        #0B0B0B;
+  --color-header-bg:            #000000;
+  --color-header-subtle:        #0A0A0A;
+  --color-sidebar-bg:           #020202;
+  --color-hierarchy-bg:         #080808;
+
+  --color-text:                 #FFFFFF;
+  --color-text-sec:             rgba(255, 255, 255, 0.88);
+  --color-text-soft:            rgba(255, 255, 255, 0.68);
+
+  --color-border:               rgba(255, 255, 255, 0.18);
+  --color-border-strong:        rgba(255, 255, 255, 0.28);
+
+  --color-hover:                #101010;
+  --color-hover-strong:         #171717;
+  --color-select:               rgba(245, 158, 11, 0.20);
+
+  --color-total-bg:             rgba(245, 158, 11, 0.20);
+  --color-total-bg-strong:      #F59E0B;
+  --color-total-text:           #FFFFFF;
+  --color-total-text-strong:    #000000;
+
+  --color-edited-bg:            #1B302C;
+  --color-edited-border:        #72C1AD;
+  --color-edited-text:          #F4FCF8;
+
+  --radius:                     12px;
+  --radius-sm:                  8px;
+}
+
+/* ─── SPACING / DENSITY TOKENS ───────────────────────────────────────── */
+:root {
+  /* Row heights */
+  --row-height-compact:         36px;
+  --row-height-normal:          44px;
+  --row-height-loose:           56px;
+
+  /* Column widths */
+  --col-width-hierarchy:        320px;
+  --col-width-dimension:        190px;
+  --col-width-measure:          170px;
+  --col-width-row-number:       56px;
+
+  /* Sidebar */
+  --sidebar-width:              288px;
+  --appbar-height:              60px;
+
+  /* Cell padding */
+  --cell-padding-h:             12px;
+  --panel-padding:              18px;
+  --chip-padding:               6px 10px;
+
+  /* Max content width */
+  --content-max-width:          1680px;
+}
+
+/* ─── TYPOGRAPHY ─────────────────────────────────────────────────────── */
+:root {
+  /* Font families */
+  --font-sans:                  'Inter', ui-sans-serif, system-ui, sans-serif;
+  --font-mono:                  'JetBrains Mono', 'Courier New', monospace;
+
+  /* Grid / body text */
+  --text-base:                  13px;
+  --text-sm:                    12px;
+  --text-xs:                    11px;
+
+  /* Section sub-labels */
+  --text-section-label-size:    11px;
+  --text-section-label-weight:  700;
+  --text-section-label-spacing: 0.06em;
+
+  /* Panel titles */
+  --text-panel-title-size:      18px;
+  --text-panel-title-weight:    600;
+
+  /* Font weights */
+  --fw-normal:                  400;
+  --fw-medium:                  500;
+  --fw-semibold:                600;
+  --fw-bold:                    700;
+
+  /* Line heights */
+  --lh-cell:                    1.45;
+  --lh-body:                    1.5;
+}
+
+/* ─── SEMANTIC ELEMENT DEFAULTS ──────────────────────────────────────── */
+.sp-h1 {
+  font-family: var(--font-sans);
+  font-size: var(--text-panel-title-size);
+  font-weight: var(--fw-semibold);
+  color: var(--color-text);
+  line-height: 1.3;
+}
+
+.sp-h2 {
+  font-family: var(--font-sans);
+  font-size: 15px;
+  font-weight: var(--fw-bold);
+  color: var(--color-text);
+}
+
+.sp-h3 {
+  font-family: var(--font-sans);
+  font-size: var(--text-base);
+  font-weight: var(--fw-medium);
+  color: var(--color-text);
+}
+
+.sp-section-label {
+  font-family: var(--font-sans);
+  font-size: var(--text-section-label-size);
+  font-weight: var(--fw-bold);
+  letter-spacing: var(--text-section-label-spacing);
+  text-transform: uppercase;
+  color: var(--color-text-soft);
+}
+
+.sp-body {
+  font-family: var(--font-sans);
+  font-size: var(--text-sm);
+  font-weight: var(--fw-normal);
+  color: var(--color-text-sec);
+  line-height: var(--lh-body);
+}
+
+.sp-code {
+  font-family: var(--font-mono);
+  font-size: var(--text-sm);
+  color: var(--color-text);
+}
+
+.sp-cell {
+  font-family: var(--font-sans);
+  font-size: var(--text-base);
+  line-height: var(--lh-cell);
+  color: var(--color-text);
+}
+
+.sp-cell-mono {
+  font-family: var(--font-mono);
+  font-size: var(--text-base);
+  line-height: var(--lh-cell);
+  color: var(--color-text);
+}
+
+/* ─── UTILITY CLASSES ────────────────────────────────────────────────── */
+.sp-badge {
+  display: inline-flex;
+  align-items: center;
+  font-size: var(--text-xs);
+  font-weight: var(--fw-medium);
+  color: var(--color-text-soft);
+  background: var(--color-surface-muted);
+  border: 1px solid var(--color-border);
+  border-radius: 999px;
+  padding: 4px 10px;
+}
+
+.sp-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 4px 10px;
+  border-radius: var(--radius-sm);
+  border: 1px solid transparent;
+  background: transparent;
+  cursor: pointer;
+  font-size: var(--text-sm);
+  font-weight: var(--fw-medium);
+  color: var(--color-text);
+  white-space: nowrap;
+  line-height: 1.5;
+  transition: background 120ms ease, border-color 120ms ease, box-shadow 120ms ease;
+  font-family: var(--font-sans);
+}
+
+.sp-btn-primary {
+  background: var(--color-primary);
+  color: #fff;
+  border-color: var(--color-primary);
+}
+
+.sp-btn-ghost {
+  background: transparent;
+  border-color: var(--color-border);
+}
+
+.sp-chip {
+  background: #ffffff;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-sm);
+  padding: var(--chip-padding);
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  cursor: grab;
+  box-shadow: var(--shadow-sm);
+  color: var(--color-text);
+  transition: border-color 120ms ease, background 120ms ease, box-shadow 120ms ease;
+  font-family: var(--font-sans);
+  font-size: var(--text-base);
+}

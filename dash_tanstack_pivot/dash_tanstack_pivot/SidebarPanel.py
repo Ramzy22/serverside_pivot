@@ -32,9 +32,14 @@ Keyword arguments:
 
     def __init__(
         self,
+        clientFilterOptionMap = None,
         fixedSparklineValueKeys = None,
         sparklineFields = None,
         displayedColumnOptions = None,
+        reportEditorSelection = None,
+        showReportConfigColumn = None,
+        setShowReportConfigColumn = None,
+        formulaErrors = None,
         **kwargs
     ):
         self._prop_names = []

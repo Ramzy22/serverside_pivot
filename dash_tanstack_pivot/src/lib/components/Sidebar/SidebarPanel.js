@@ -13,6 +13,15 @@ import {
     mergeFieldPanelSize,
     sanitizeFieldPanelSizeEntry,
 } from '../../utils/fieldPanelLayout';
+import {
+    applyCustomDimensionsToRows,
+    buildCustomCategoryFieldId,
+    evaluateCustomCategoryCondition,
+    formatCustomAwareFieldLabel,
+    isCustomCategoryField,
+    normalizeCustomCategoryId,
+    normalizeCustomDimensionsValue,
+} from '../../hooks/usePivotNormalization';
 import { normalizeSparklineConfig } from '../../utils/sparklines';
 import { usePivotRenderCounter } from '../../hooks/usePivotRenderCounter';
 import { ReportEditor } from './ReportEditor';
@@ -64,6 +73,572 @@ function normalizeFormulaScope(value) {
 
 function isColumnFormulaScope(value) {
     return normalizeFormulaScope(value) === 'columns';
+}
+
+const CUSTOM_CATEGORY_OPERATORS = [
+    { value: 'eq', label: 'Equals' },
+    { value: 'ne', label: 'Does not equal' },
+    { value: 'contains', label: 'Contains' },
+    { value: 'starts_with', label: 'Starts with' },
+    { value: 'ends_with', label: 'Ends with' },
+    { value: 'gt', label: '>' },
+    { value: 'gte', label: '>=' },
+    { value: 'lt', label: '<' },
+    { value: 'lte', label: '<=' },
+    { value: 'in', label: 'In list' },
+    { value: 'not_in', label: 'Not in list' },
+    { value: 'is_null', label: 'Is empty' },
+    { value: 'is_not_null', label: 'Is not empty' },
+];
+
+const CUSTOM_CATEGORY_LIST_OPERATORS = new Set(['in', 'not_in']);
+const CUSTOM_CATEGORY_VALUELESS_OPERATORS = new Set(['is_null', 'is_not_null']);
+
+function createCustomCategoryClause(availableFields) {
+    return {
+        field: (availableFields && availableFields[0]) || '',
+        operator: 'eq',
+        value: '',
+        values: [],
+        caseSensitive: false,
+    };
+}
+
+function createCustomCategoryRule(availableFields, index = 0) {
+    return {
+        id: `rule-${Date.now().toString(36)}-${index}`,
+        label: index === 0 ? 'Group A' : `Group ${index + 1}`,
+        condition: {
+            op: 'AND',
+            clauses: [createCustomCategoryClause(availableFields)],
+        },
+    };
+}
+
+function createCustomCategoryDraft(availableFields, existing = null) {
+    if (existing) {
+        const normalized = normalizeCustomDimensionsValue([existing])[0] || existing;
+        return {
+            ...JSON.parse(JSON.stringify(normalized)),
+            __editingField: normalized.field,
+            __editingId: normalized.id,
+        };
+    }
+    const id = normalizeCustomCategoryId(`category_${Date.now().toString(36)}`);
+    return {
+        id,
+        field: buildCustomCategoryFieldId(id),
+        name: 'New Category',
+        fallbackLabel: 'Other',
+        rules: [createCustomCategoryRule(availableFields, 0)],
+        __isNew: true,
+    };
+}
+
+function splitListInput(value) {
+    return String(value || '')
+        .split(',')
+        .map((item) => item.trim())
+        .filter(Boolean);
+}
+
+function normalizeCustomCategoryNameKey(value) {
+    return String(value || '').trim().replace(/\s+/g, ' ').toLowerCase();
+}
+
+function getCustomCategoryDraftField(draft) {
+    return draft && (draft.__editingField || draft.field) ? (draft.__editingField || draft.field) : '';
+}
+
+function getAllowedCustomCategoryDependencies(normalizedDimensions, draft) {
+    const dimensions = Array.isArray(normalizedDimensions) ? normalizedDimensions : [];
+    const editingField = getCustomCategoryDraftField(draft);
+    if (!editingField) return dimensions;
+    const editingIndex = dimensions.findIndex((dimension) => dimension && dimension.field === editingField);
+    return editingIndex >= 0 ? dimensions.slice(0, editingIndex) : dimensions;
+}
+
+function collectCustomCategoryClauseFields(dimension) {
+    const fields = [];
+    (dimension && Array.isArray(dimension.rules) ? dimension.rules : []).forEach((rule) => {
+        const clauses = rule && rule.condition && Array.isArray(rule.condition.clauses)
+            ? rule.condition.clauses
+            : [];
+        clauses.forEach((clause) => {
+            if (clause && clause.field) fields.push(clause.field);
+        });
+    });
+    return Array.from(new Set(fields));
+}
+
+function getCustomCategoryValidationRows(data, dependencyDimensions) {
+    const rows = (Array.isArray(data) ? data : [])
+        .filter((row) => row && typeof row === 'object')
+        .filter((row) => !row._isTotal && row._path !== '__grand_total__' && row._path !== '__color_scale_stats__');
+    return applyCustomDimensionsToRows(rows, dependencyDimensions || []);
+}
+
+function canValidateCustomCategoryRows(rows, clauseFields) {
+    if (!Array.isArray(rows) || rows.length === 0 || !Array.isArray(clauseFields) || clauseFields.length === 0) {
+        return false;
+    }
+    return clauseFields.every((field) => rows.some((row) => (
+        row && Object.prototype.hasOwnProperty.call(row, field)
+    )));
+}
+
+function getCustomCategoryRuleMatchSummary(rows, dimension) {
+    return (dimension && Array.isArray(dimension.rules) ? dimension.rules : []).map((rule) => ({
+        label: rule && rule.label ? rule.label : 'Rule',
+        count: rows.reduce((matches, row) => (
+            evaluateCustomCategoryCondition(row, rule.condition) ? matches + 1 : matches
+        ), 0),
+    }));
+}
+
+function CustomCategoriesEditor({
+    availableFields,
+    customDimensions,
+    setCustomDimensions,
+    data,
+    theme,
+    showNotification,
+    getFieldLabel,
+    onDeleteField,
+}) {
+    const baseFields = React.useMemo(
+        () => (availableFields || []).filter((field) => field && !isCustomCategoryField(field)),
+        [availableFields]
+    );
+    const normalizedDimensions = React.useMemo(
+        () => normalizeCustomDimensionsValue(customDimensions || []),
+        [customDimensions]
+    );
+    const [draft, setDraft] = React.useState(null);
+    const allowedDependencyDimensions = React.useMemo(
+        () => getAllowedCustomCategoryDependencies(normalizedDimensions, draft),
+        [draft, normalizedDimensions]
+    );
+    const conditionFieldOptions = React.useMemo(() => {
+        const seen = new Set();
+        const fields = [];
+        baseFields.forEach((field) => {
+            if (field && !seen.has(field)) {
+                seen.add(field);
+                fields.push(field);
+            }
+        });
+        allowedDependencyDimensions.forEach((dimension) => {
+            if (dimension && dimension.field && !seen.has(dimension.field)) {
+                seen.add(dimension.field);
+                fields.push(dimension.field);
+            }
+        });
+        return fields;
+    }, [allowedDependencyDimensions, baseFields]);
+    const validationRows = React.useMemo(
+        () => getCustomCategoryValidationRows(data, allowedDependencyDimensions),
+        [allowedDependencyDimensions, data]
+    );
+    const inputStyle = React.useMemo(() => ({
+        border: `1px solid ${theme.border}`,
+        background: theme.background,
+        color: theme.text,
+        borderRadius: '8px',
+        fontSize: '12px',
+        padding: '7px 8px',
+        outline: 'none',
+        minWidth: 0,
+    }), [theme.background, theme.border, theme.text]);
+    const smallButtonStyle = React.useCallback((tone = 'default') => ({
+        border: tone === 'primary' ? `1px solid ${theme.primary}` : `1px solid ${theme.border}`,
+        background: tone === 'primary' ? (theme.primary || '#2563EB') : (theme.hover || '#F8FAFC'),
+        color: tone === 'primary' ? '#fff' : theme.text,
+        borderRadius: '8px',
+        fontSize: '11px',
+        fontWeight: 700,
+        padding: '6px 9px',
+        cursor: 'pointer',
+        display: 'inline-flex',
+        alignItems: 'center',
+        gap: '5px',
+    }), [theme.border, theme.hover, theme.primary, theme.text]);
+
+    React.useEffect(() => {
+        if (!draft) return undefined;
+        const handleKeyDown = (event) => {
+            if (event.key === 'Escape') {
+                event.preventDefault();
+                setDraft(null);
+            }
+        };
+        window.addEventListener('keydown', handleKeyDown);
+        return () => window.removeEventListener('keydown', handleKeyDown);
+    }, [draft]);
+
+    const updateRule = React.useCallback((ruleIndex, updater) => {
+        setDraft((current) => {
+            if (!current) return current;
+            const rules = [...(current.rules || [])];
+            rules[ruleIndex] = typeof updater === 'function' ? updater(rules[ruleIndex]) : updater;
+            return { ...current, rules };
+        });
+    }, []);
+
+    const updateClause = React.useCallback((ruleIndex, clauseIndex, patch) => {
+        updateRule(ruleIndex, (rule) => {
+            const condition = rule.condition || { op: 'AND', clauses: [] };
+            const clauses = [...(condition.clauses || [])];
+            clauses[clauseIndex] = { ...clauses[clauseIndex], ...patch };
+            return { ...rule, condition: { ...condition, clauses } };
+        });
+    }, [updateRule]);
+
+    const applyDraft = React.useCallback(() => {
+        const normalized = normalizeCustomDimensionsValue([draft])[0];
+        if (!normalized || !normalized.name || !normalized.rules || normalized.rules.length === 0) {
+            if (showNotification) showNotification('A category needs a name and at least one valid rule.', 'warning');
+            return;
+        }
+        const editingField = getCustomCategoryDraftField(draft);
+        const normalizedName = normalizeCustomCategoryNameKey(normalized.name);
+        const duplicateName = normalizedDimensions.some((dimension) => (
+            dimension
+            && dimension.field !== editingField
+            && normalizeCustomCategoryNameKey(dimension.name) === normalizedName
+        ));
+        if (duplicateName) {
+            if (showNotification) showNotification(`A category named "${normalized.name}" already exists.`, 'warning');
+            return;
+        }
+        const allowedFieldSet = new Set(conditionFieldOptions);
+        const invalidField = collectCustomCategoryClauseFields(normalized).find((field) => !allowedFieldSet.has(field));
+        if (invalidField) {
+            if (showNotification) showNotification('A category can only use base fields or categories defined before it.', 'warning');
+            return;
+        }
+        const clauseFields = collectCustomCategoryClauseFields(normalized);
+        if (canValidateCustomCategoryRows(validationRows, clauseFields)) {
+            const unmatchedRule = getCustomCategoryRuleMatchSummary(validationRows, normalized)
+                .find((summary) => summary.count === 0);
+            if (unmatchedRule) {
+                if (showNotification) showNotification(`"${unmatchedRule.label}" does not match any current row. Adjust the condition before applying.`, 'warning');
+                return;
+            }
+        }
+        setCustomDimensions((previous) => {
+            const existing = normalizeCustomDimensionsValue(previous || []);
+            const withoutCurrent = existing.filter((dimension) => (
+                dimension.id !== normalized.id
+                && dimension.field !== normalized.field
+                && dimension.field !== editingField
+            ));
+            return [...withoutCurrent, normalized];
+        });
+        setDraft(null);
+        if (showNotification) showNotification(`Applied ${normalized.name}.`, 'success');
+    }, [conditionFieldOptions, draft, normalizedDimensions, setCustomDimensions, showNotification, validationRows]);
+
+    const deleteDimension = React.useCallback((dimension) => {
+        const normalized = normalizeCustomDimensionsValue([dimension])[0];
+        if (!normalized) return;
+        setCustomDimensions((previous) => normalizeCustomDimensionsValue(previous || [])
+            .filter((item) => item.field !== normalized.field));
+        if (typeof onDeleteField === 'function') onDeleteField(normalized.field);
+        if (draft && draft.field === normalized.field) setDraft(null);
+        if (showNotification) showNotification(`Removed ${normalized.name}.`, 'success');
+    }, [draft, onDeleteField, setCustomDimensions, showNotification]);
+
+    return (
+        <div style={{
+            border: `1px solid ${theme.border}`,
+            background: theme.headerBg || theme.surfaceInset || theme.background,
+            borderRadius: '12px',
+            padding: '10px',
+            marginBottom: '14px',
+            display: 'flex',
+            flexDirection: 'column',
+            gap: '10px',
+        }}>
+            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '8px' }}>
+                <div>
+                    <div style={{ fontSize: '11px', color: theme.textSec, textTransform: 'uppercase', letterSpacing: '0.5px', fontWeight: 800 }}>
+                        Custom Categories
+                    </div>
+                    <div style={{ fontSize: '11px', color: theme.textSec, marginTop: '2px' }}>
+                        Named filter rules that become fields.
+                    </div>
+                </div>
+                <button
+                    type="button"
+                    onClick={() => setDraft(createCustomCategoryDraft(conditionFieldOptions))}
+                    style={smallButtonStyle('primary')}
+                >
+                    + Category
+                </button>
+            </div>
+
+            {normalizedDimensions.length > 0 && (
+                <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
+                    {normalizedDimensions.map((dimension) => (
+                        <div
+                            key={dimension.field}
+                            style={{
+                                border: `1px solid ${theme.border}`,
+                                background: theme.background,
+                                borderRadius: '10px',
+                                padding: '8px',
+                                display: 'flex',
+                                alignItems: 'center',
+                                gap: '8px',
+                            }}
+                        >
+                            <Icons.Branch />
+                            <div style={{ minWidth: 0, flex: 1 }}>
+                                <div style={{ fontSize: '12px', fontWeight: 800, color: theme.text, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+                                    {dimension.name}
+                                </div>
+                                <div style={{ fontSize: '10px', color: theme.textSec }}>
+                                    {dimension.rules.length} rule{dimension.rules.length === 1 ? '' : 's'} | fallback: {dimension.fallbackLabel}
+                                </div>
+                            </div>
+                            <button type="button" onClick={() => setDraft(createCustomCategoryDraft(baseFields, dimension))} style={smallButtonStyle()}>
+                                <Icons.Edit /> Edit
+                            </button>
+                            <button type="button" onClick={() => deleteDimension(dimension)} style={{ ...smallButtonStyle(), color: '#B91C1C' }}>
+                                <Icons.Delete />
+                            </button>
+                        </div>
+                    ))}
+                </div>
+            )}
+
+            {draft && (
+                <div
+                    role="presentation"
+                    onMouseDown={(event) => {
+                        if (event.target === event.currentTarget) setDraft(null);
+                    }}
+                    style={{
+                        position: 'fixed',
+                        inset: 0,
+                        zIndex: 10000,
+                        background: 'rgba(15, 23, 42, 0.38)',
+                        backdropFilter: 'blur(4px)',
+                        display: 'flex',
+                        alignItems: 'center',
+                        justifyContent: 'center',
+                        padding: '24px',
+                    }}
+                >
+                <div
+                    role="dialog"
+                    aria-modal="true"
+                    aria-label={draft.__editingField ? 'Edit custom category' : 'Add custom category'}
+                    style={{
+                        width: 'min(780px, calc(100vw - 32px))',
+                        maxHeight: 'calc(100vh - 48px)',
+                        border: `1px solid ${theme.primary || '#2563EB'}55`,
+                        background: theme.background,
+                        color: theme.text,
+                        borderRadius: '16px',
+                        boxShadow: '0 24px 80px rgba(15, 23, 42, 0.28)',
+                        overflow: 'hidden',
+                    }}
+                >
+                <div style={{
+                    padding: '14px 16px',
+                    borderBottom: `1px solid ${theme.border}`,
+                    background: theme.headerBg || theme.surfaceInset || theme.background,
+                    display: 'flex',
+                    alignItems: 'center',
+                    justifyContent: 'space-between',
+                    gap: '12px',
+                }}>
+                    <div>
+                        <div style={{ fontSize: '13px', fontWeight: 900, color: theme.text }}>
+                            {draft.__editingField ? 'Edit Custom Category' : 'Add Custom Category'}
+                        </div>
+                        <div style={{ fontSize: '11px', color: theme.textSec, marginTop: '2px' }}>
+                            Rules can use base fields and categories defined before this one.
+                        </div>
+                    </div>
+                    <button type="button" onClick={() => setDraft(null)} style={{ ...smallButtonStyle(), padding: '6px 8px' }} aria-label="Close category editor">
+                        <Icons.Close />
+                    </button>
+                </div>
+                <div style={{
+                    padding: '14px',
+                    overflowY: 'auto',
+                    maxHeight: 'calc(100vh - 128px)',
+                    display: 'flex',
+                    flexDirection: 'column',
+                    gap: '10px',
+                }}>
+                    <div style={{ display: 'grid', gridTemplateColumns: '1fr 120px', gap: '8px' }}>
+                        <label style={{ display: 'flex', flexDirection: 'column', gap: '4px', fontSize: '10px', fontWeight: 800, color: theme.textSec, textTransform: 'uppercase', letterSpacing: '0.4px' }}>
+                            Category Name
+                            <input
+                                value={draft.name || ''}
+                                onChange={(event) => {
+                                    const name = event.target.value;
+                                    const nextId = draft.id || normalizeCustomCategoryId(name);
+                                    setDraft({ ...draft, name, id: nextId, field: draft.field || buildCustomCategoryFieldId(nextId) });
+                                }}
+                                style={inputStyle}
+                                placeholder="Example: Priority Segment"
+                            />
+                        </label>
+                        <label style={{ display: 'flex', flexDirection: 'column', gap: '4px', fontSize: '10px', fontWeight: 800, color: theme.textSec, textTransform: 'uppercase', letterSpacing: '0.4px' }}>
+                            Else
+                            <input
+                                value={draft.fallbackLabel || ''}
+                                onChange={(event) => setDraft({ ...draft, fallbackLabel: event.target.value })}
+                                style={inputStyle}
+                                placeholder="Other"
+                            />
+                        </label>
+                    </div>
+
+                    {(draft.rules || []).map((rule, ruleIndex) => {
+                        const condition = rule.condition || { op: 'AND', clauses: [] };
+                        const clauses = condition.clauses || [];
+                        return (
+                            <div key={rule.id || ruleIndex} style={{
+                                border: `1px solid ${theme.border}`,
+                                borderRadius: '10px',
+                                padding: '8px',
+                                background: theme.hover || '#F8FAFC',
+                                display: 'flex',
+                                flexDirection: 'column',
+                                gap: '8px',
+                            }}>
+                                <div style={{ display: 'grid', gridTemplateColumns: '1fr 78px 28px', gap: '8px', alignItems: 'center' }}>
+                                    <input
+                                        value={rule.label || ''}
+                                        onChange={(event) => updateRule(ruleIndex, { ...rule, label: event.target.value })}
+                                        style={inputStyle}
+                                        placeholder="Category value"
+                                    />
+                                    <select
+                                        value={condition.op || 'AND'}
+                                        onChange={(event) => updateRule(ruleIndex, { ...rule, condition: { ...condition, op: event.target.value } })}
+                                        style={inputStyle}
+                                    >
+                                        <option value="AND">AND</option>
+                                        <option value="OR">OR</option>
+                                    </select>
+                                    <button
+                                        type="button"
+                                        onClick={() => setDraft({ ...draft, rules: (draft.rules || []).filter((_, index) => index !== ruleIndex) })}
+                                        style={{ ...smallButtonStyle(), padding: '6px', justifyContent: 'center', color: '#B91C1C' }}
+                                        title="Remove rule"
+                                    >
+                                        <Icons.Close />
+                                    </button>
+                                </div>
+
+                                {clauses.map((clause, clauseIndex) => {
+                                    const valueless = CUSTOM_CATEGORY_VALUELESS_OPERATORS.has(clause.operator);
+                                    const listOperator = CUSTOM_CATEGORY_LIST_OPERATORS.has(clause.operator);
+                                    return (
+                                        <div key={`${rule.id || ruleIndex}:${clauseIndex}`} style={{ display: 'grid', gridTemplateColumns: valueless ? '1fr 130px 28px' : '1fr 130px 1fr 28px', gap: '6px', alignItems: 'center' }}>
+                                            <select
+                                                value={clause.field || ''}
+                                                onChange={(event) => updateClause(ruleIndex, clauseIndex, { field: event.target.value })}
+                                                style={inputStyle}
+                                            >
+                                                {conditionFieldOptions.map((field) => (
+                                                    <option key={field} value={field}>{getFieldLabel(field)}</option>
+                                                ))}
+                                            </select>
+                                            <select
+                                                value={clause.operator || 'eq'}
+                                                onChange={(event) => {
+                                                    const operator = event.target.value;
+                                                    updateClause(ruleIndex, clauseIndex, {
+                                                        operator,
+                                                        values: CUSTOM_CATEGORY_LIST_OPERATORS.has(operator)
+                                                            ? (clause.values && clause.values.length ? clause.values : splitListInput(clause.value))
+                                                            : clause.values,
+                                                    });
+                                                }}
+                                                style={inputStyle}
+                                            >
+                                                {CUSTOM_CATEGORY_OPERATORS.map((operator) => (
+                                                    <option key={operator.value} value={operator.value}>{operator.label}</option>
+                                                ))}
+                                            </select>
+                                            {!valueless && (
+                                                <input
+                                                    value={listOperator ? (clause.values || []).join(', ') : (clause.value || '')}
+                                                    onChange={(event) => updateClause(ruleIndex, clauseIndex, listOperator
+                                                        ? { values: splitListInput(event.target.value), value: event.target.value }
+                                                        : { value: event.target.value })}
+                                                    style={inputStyle}
+                                                    placeholder={listOperator ? 'A, B, C' : 'Value'}
+                                                />
+                                            )}
+                                            <button
+                                                type="button"
+                                                onClick={() => updateRule(ruleIndex, {
+                                                    ...rule,
+                                                    condition: {
+                                                        ...condition,
+                                                        clauses: clauses.filter((_, index) => index !== clauseIndex),
+                                                    },
+                                                })}
+                                                style={{ ...smallButtonStyle(), padding: '6px', justifyContent: 'center', color: '#B91C1C' }}
+                                                title="Remove condition"
+                                            >
+                                                <Icons.Close />
+                                            </button>
+                                        </div>
+                                    );
+                                })}
+
+                                <button
+                                    type="button"
+                                    onClick={() => updateRule(ruleIndex, {
+                                        ...rule,
+                                        condition: {
+                                            ...condition,
+                                            clauses: [...clauses, createCustomCategoryClause(conditionFieldOptions)],
+                                        },
+                                    })}
+                                    style={{ ...smallButtonStyle(), alignSelf: 'flex-start' }}
+                                >
+                                    + Condition
+                                </button>
+                            </div>
+                        );
+                    })}
+
+                    <button
+                        type="button"
+                        onClick={() => setDraft({
+                            ...draft,
+                            rules: [...(draft.rules || []), createCustomCategoryRule(conditionFieldOptions, (draft.rules || []).length)],
+                        })}
+                        style={{ ...smallButtonStyle(), alignSelf: 'flex-start' }}
+                    >
+                        + Rule
+                    </button>
+
+                    <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '8px' }}>
+                        <button type="button" onClick={() => setDraft(null)} style={smallButtonStyle()}>
+                            Cancel
+                        </button>
+                        <button type="button" onClick={applyDraft} style={smallButtonStyle('primary')}>
+                            Apply Category
+                        </button>
+                    </div>
+                </div>
+                </div>
+                </div>
+            )}
+        </div>
+    );
 }
 
 function extractColumnFormulaReferences(expression) {
@@ -233,16 +808,17 @@ function inspectFormulaExpression(
     currentField = null,
     currentFormulaRef = null,
     formulaScope = 'measures',
-    displayedColumnOptions = []
+    displayedColumnOptions = [],
+    availableRawFields = []
 ) {
     const trimmed = String(formula || '').trim();
     const columnFormulaScope = isColumnFormulaScope(formulaScope);
     if (!trimmed) {
         return {
-            tone: 'muted',
+            tone: 'warning',
             text: columnFormulaScope
-                ? 'Use bracketed rendered columns. Example: [Cash Equity_day_pnl_sum] - [ETF_day_pnl_sum]'
-                : 'Use arithmetic with the value fields below. Example: sales - cost',
+                ? 'Enter a formula using bracketed rendered columns. Example: [Cash Equity_day_pnl_sum] - [ETF_day_pnl_sum]'
+                : 'Enter a formula using value fields. Example: sales - cost',
         };
     }
 
@@ -328,7 +904,7 @@ function inspectFormulaExpression(
         config.field === currentField
             ? normalizeFormulaReferenceKey(currentFormulaRef || getFormulaReferenceKey(config), config.field)
             : getFormulaReferenceKey(config)
-    )).filter(Boolean)]);
+    )).filter(Boolean), ...(Array.isArray(availableRawFields) ? availableRawFields : [])]);
     const references = Array.from(new Set(trimmed.match(FORMULA_REFERENCE_RE) || []));
     const canonicalReferences = references.map((token) => formulaReferenceMap.get(token) || formulaReferenceMap.get(token.toLowerCase()) || token);
     const unknownReferences = canonicalReferences.filter((token) => !availableTokens.has(token) && !measureTokenSet.has(token));
@@ -1142,8 +1718,8 @@ function ValueSparklineControls({ item, idx, setValConfigs, theme, colFields = [
     );
 }
 
-function FormulaListItem({ item, idx, selected, onSelect, onRemove, setValConfigs, theme, styles, dropLine, zoneId, valueSelectStyle, colFields = [], fixedSparklineValueKeySet = new Set(), showNotification }) {
-    const baseBorder = selected ? `${theme.primary}77` : theme.border;
+function FormulaListItem({ item, idx, selected, onSelect, onRemove, setValConfigs, theme, styles, dropLine, zoneId, valueSelectStyle, colFields = [], fixedSparklineValueKeySet = new Set(), showNotification, serverError = null }) {
+    const baseBorder = selected ? `${theme.primary}77` : (serverError ? '#F59E0B88' : theme.border);
     const background = selected ? (theme.headerBg || `${theme.primary}0f`) : (theme.background || 'transparent');
     const preview = String(item.formula || '').trim() || 'Empty formula';
 
@@ -1199,6 +1775,11 @@ function FormulaListItem({ item, idx, selected, onSelect, onRemove, setValConfig
                     }}>
                         ={preview}
                     </div>
+                    {serverError && (
+                        <div style={{ marginTop: '2px', fontSize: '9px', color: '#B45309' }}>
+                            ⚠ {SERVER_ERROR_LABELS[serverError] || serverError}
+                        </div>
+                    )}
                 </div>
             </div>
             <div style={{ display: 'flex', gap: '4px', marginLeft: '8px', alignItems: 'center', flexShrink: 0 }}>
@@ -1613,6 +2194,11 @@ function FormulaEditor({ item, idx, valConfigs, setValConfigs, theme, onRemove }
                         {formulaStatus.text}
                     </div>
                 </div>
+                {serverError && (
+                    <div style={{ marginBottom: '8px', padding: '6px 8px', borderRadius: '6px', border: '1px solid #F59E0B55', background: '#F59E0B12', color: '#B45309', fontSize: '10px', lineHeight: 1.4 }}>
+                        ⚠ {SERVER_ERROR_LABELS[serverError] || `Server error: ${serverError}`}
+                    </div>
+                )}
                 <div style={{ display: 'flex', gap: '8px', alignItems: 'center', flexWrap: 'wrap', marginBottom: '8px' }}>
                     {templateButtons.length > 0 && (
                         <select
@@ -1679,7 +2265,14 @@ function FormulaEditor({ item, idx, valConfigs, setValConfigs, theme, onRemove }
     );
 }
 
-function FormulaEditorModal({ item, idx, valConfigs, setValConfigs, theme, onClose, onRemove, displayedColumnOptions = [] }) {
+const SERVER_ERROR_LABELS = {
+    self_reference: 'Formula references itself (server)',
+    circular_reference: 'Circular dependency with another formula (server)',
+    expression_error: 'Expression could not be evaluated (server)',
+    missing_reference: 'Unknown field reference (server)',
+};
+
+function FormulaEditorModal({ item, idx, valConfigs, setValConfigs, theme, onClose, onRemove, displayedColumnOptions = [], availableRawFields = [], serverError = null }) {
     const inputRef = React.useRef(null);
     const [draft, setDraft] = React.useState({
         label: item.label || '',
@@ -1728,6 +2321,13 @@ function FormulaEditorModal({ item, idx, valConfigs, setValConfigs, theme, onClo
             .filter((column) => column && column.id && column.id !== item.field),
         [displayedColumnOptions, item.field]
     );
+    const extraRawFields = React.useMemo(
+        () => {
+            const existingFields = new Set(referenceConfigs.map((c) => c.field).filter(Boolean));
+            return (Array.isArray(availableRawFields) ? availableRawFields : []).filter((f) => !existingFields.has(f));
+        },
+        [availableRawFields, referenceConfigs]
+    );
     const formulaStatus = React.useMemo(
         () => inspectFormulaExpression(
             draft.formula,
@@ -1735,9 +2335,10 @@ function FormulaEditorModal({ item, idx, valConfigs, setValConfigs, theme, onClo
             item.field,
             draft.formulaRef,
             draft.formulaScope,
-            columnReferenceOptions
+            columnReferenceOptions,
+            extraRawFields
         ),
-        [columnReferenceOptions, draft.formula, draft.formulaRef, draft.formulaScope, item.field, referenceConfigs]
+        [columnReferenceOptions, draft.formula, draft.formulaRef, draft.formulaScope, item.field, referenceConfigs, extraRawFields]
     );
     const statusStyle = React.useMemo(
         () => getFormulaStatusStyles(theme, formulaStatus.tone),
@@ -2114,6 +2715,25 @@ function FormulaEditorModal({ item, idx, valConfigs, setValConfigs, theme, onClo
                             </div>
                         </div>
                     )}
+                    {!isColumnFormulaScope(draft.formulaScope) && extraRawFields.length > 0 && (
+                        <div>
+                            <div style={{ fontSize: '10px', color: theme.textSec, textTransform: 'uppercase', letterSpacing: '0.5px', marginBottom: '6px' }}>Data Fields (auto-aggregated as sum)</div>
+                            <div style={{ display: 'flex', gap: '6px', flexWrap: 'wrap' }}>
+                                {extraRawFields.map((f) => (
+                                    <button
+                                        key={f}
+                                        type="button"
+                                        onMouseDown={(event) => event.preventDefault()}
+                                        onClick={() => insertAtCursor(f)}
+                                        style={{ ...tokenButtonStyle, borderColor: `${theme.primary}66`, color: theme.primary, background: `${theme.primary}0d` }}
+                                        title={`Insert: ${f}`}
+                                    >
+                                        {formatDisplayLabel(f)}
+                                    </button>
+                                ))}
+                            </div>
+                        </div>
+                    )}
                 </div>
 
                 <div style={{ display: 'flex', justifyContent: 'space-between', gap: '8px', flexWrap: 'wrap' }}>
@@ -2377,12 +2997,19 @@ export const SidebarPanel = React.memo(function SidebarPanel({
     handleExpandAllRows, handlePinColumn,
     toggleAllColumnsPinned,
     activeFilterCol, closeFilterPopover, filterOptions,
+    filterOptionMeta = {},
+    clientFilterOptionMap = {},
     data,
     sidebarWidth, setSidebarWidth,
     fieldPanelSizes, setFieldPanelSizes,
     fixedSparklineValueKeys = [],
     sparklineFields = null,
     displayedColumnOptions = [],
+    reportEditorSelection = null,
+    showReportConfigColumn = true,
+    setShowReportConfigColumn = null,
+    formulaErrors = {},
+    serverSide = false,
 }) {
     usePivotRenderCounter('SidebarPanel');
     const { theme, styles } = usePivotTheme();
@@ -2392,10 +3019,14 @@ export const SidebarPanel = React.memo(function SidebarPanel({
         reportDef, setReportDef,
         savedReports, setSavedReports,
         activeReportId, setActiveReportId,
+        customDimensions, setCustomDimensions,
     } = usePivotConfig();
     const [sidebarFilterState, setSidebarFilterState] = React.useState({ columnId: null, anchorEl: null });
     const [activeFormulaField, setActiveFormulaField] = React.useState(null);
     const [formulaModalField, setFormulaModalField] = React.useState(null);
+    const [reportTab, setReportTab] = React.useState('report');
+    const reportFieldsDragIdx = React.useRef(null);
+    const [reportFieldsDragOver, setReportFieldsDragOver] = React.useState(null);
     const sidebarRef = React.useRef(null);
     const sidebarScrollTopRef = React.useRef(0);
     const resizeDragRef = React.useRef(null);
@@ -2405,6 +3036,25 @@ export const SidebarPanel = React.memo(function SidebarPanel({
         () => new Set(Array.isArray(fixedSparklineValueKeys) ? fixedSparklineValueKeys : []),
         [fixedSparklineValueKeys]
     );
+    const getFieldLabel = React.useCallback(
+        (field) => formatCustomAwareFieldLabel(field, customDimensions),
+        [customDimensions]
+    );
+    const baseAvailableFields = React.useMemo(
+        () => (availableFields || []).filter((field) => field && !isCustomCategoryField(field)),
+        [availableFields]
+    );
+    const handleDeleteCustomCategoryField = React.useCallback((field) => {
+        setRowFields((prev) => (prev || []).filter((item) => item !== field));
+        setColFields((prev) => (prev || []).filter((item) => item !== field));
+        setValConfigs((prev) => (prev || []).filter((item) => !(item && item.field === field)));
+        setFilters((prev) => {
+            if (!prev || !Object.prototype.hasOwnProperty.call(prev, field)) return prev;
+            const next = { ...prev };
+            delete next[field];
+            return next;
+        });
+    }, [setColFields, setFilters, setRowFields, setValConfigs]);
 
     const startDragScroll = React.useCallback((e) => {
         const el = sidebarRef.current;
@@ -2571,6 +3221,7 @@ export const SidebarPanel = React.memo(function SidebarPanel({
     }, [styles.dropZone]);
     const getFilterOptionsForColumn = React.useCallback((columnId) => {
         if (filterOptions && filterOptions[columnId]) return filterOptions[columnId];
+        if (clientFilterOptionMap && clientFilterOptionMap[columnId]) return clientFilterOptionMap[columnId];
         if (!table || !table.getColumn) return [];
         const col = table.getColumn(columnId);
         if (!col) return [];
@@ -2582,8 +3233,10 @@ export const SidebarPanel = React.memo(function SidebarPanel({
             if (val !== null && val !== undefined && val !== '') unique.add(val);
         });
 
-        return Array.from(unique).sort();
-    }, [filterOptions, table]);
+        return Array.from(unique).sort((left, right) => (
+            String(left).localeCompare(String(right), undefined, { numeric: true, sensitivity: 'base' })
+        ));
+    }, [clientFilterOptionMap, filterOptions, table]);
     const valueSelectStyle = React.useMemo(() => ({
         border: `1px solid ${theme.border}`,
         background: theme.headerSubtleBg || theme.surfaceInset || theme.background,
@@ -2603,8 +3256,8 @@ export const SidebarPanel = React.memo(function SidebarPanel({
             if (!current) return prev;
 
             if (isWeightedAverageAgg(nextAgg) && !current.weightField) {
-                const suggestedWeightField = Array.isArray(availableFields) && availableFields.length > 0
-                    ? (availableFields.find((field) => field !== current.field) || availableFields[0])
+                const suggestedWeightField = Array.isArray(baseAvailableFields) && baseAvailableFields.length > 0
+                    ? (baseAvailableFields.find((field) => field !== current.field) || baseAvailableFields[0])
                     : '';
                 const promptValue = typeof window !== 'undefined'
                     ? window.prompt(
@@ -2618,7 +3271,7 @@ export const SidebarPanel = React.memo(function SidebarPanel({
                     if (showNotification) showNotification('Weighted average requires a weight field.', 'warning');
                     return prev;
                 }
-                if (Array.isArray(availableFields) && availableFields.length > 0 && !availableFields.includes(chosenWeightField)) {
+                if (Array.isArray(baseAvailableFields) && baseAvailableFields.length > 0 && !baseAvailableFields.includes(chosenWeightField)) {
                     if (showNotification) showNotification(`Unknown weight field: ${chosenWeightField}`, 'warning');
                     return prev;
                 }
@@ -2630,7 +3283,7 @@ export const SidebarPanel = React.memo(function SidebarPanel({
             next[measureIndex] = { ...current, agg: nextAgg };
             return next;
         });
-    }, [availableFields, setValConfigs, showNotification]);
+    }, [baseAvailableFields, setValConfigs, showNotification]);
     const handleValueWeightFieldChange = React.useCallback((measureIndex, nextWeightField) => {
         if (!nextWeightField) {
             if (showNotification) showNotification('Weighted average requires a weight field.', 'warning');
@@ -2744,17 +3397,25 @@ export const SidebarPanel = React.memo(function SidebarPanel({
                     </div>
                     {isReportMode ? (
                         <div style={{display: 'flex', borderBottom: `1px solid ${theme.border}`, marginBottom: '16px'}}>
-                            <div
-                                style={{
-                                    padding: '8px 16px', cursor: 'default',
-                                    borderBottom: `2px solid ${theme.primary}`,
-                                    fontWeight: 600,
-                                    color: theme.primary,
-                                    display: 'flex', alignItems: 'center', gap: '6px',
-                                }}
-                            >
-                                <Icons.Report /> Report Builder
-                            </div>
+                            {[
+                                { id: 'report', label: 'Builder', icon: <Icons.Report /> },
+                                { id: 'fields', label: 'Fields', icon: <Icons.Sigma /> },
+                                { id: 'columns', label: 'Columns', icon: <Icons.Columns /> },
+                            ].map((t) => (
+                                <div
+                                    key={t.id}
+                                    onClick={() => setReportTab(t.id)}
+                                    style={{
+                                        padding: '8px 14px', cursor: 'pointer',
+                                        borderBottom: reportTab === t.id ? `2px solid ${theme.primary}` : '2px solid transparent',
+                                        fontWeight: reportTab === t.id ? 600 : 400,
+                                        color: reportTab === t.id ? theme.primary : theme.textSec,
+                                        display: 'flex', alignItems: 'center', gap: '5px', fontSize: '13px',
+                                    }}
+                                >
+                                    {t.icon}{t.label}
+                                </div>
+                            ))}
                         </div>
                     ) : (
                     <div style={{display: 'flex', borderBottom: `1px solid ${theme.border}`, marginBottom: '16px'}}>
@@ -2794,12 +3455,13 @@ export const SidebarPanel = React.memo(function SidebarPanel({
                     </div>
                     )}
 
-                    {isReportMode ? (
+                    {isReportMode && reportTab === 'report' ? (
                         <div style={{flex: 1, overflowY: 'auto', padding: '0 12px 12px'}}>
                             <ReportEditor
                                 reportDef={reportDef}
                                 setReportDef={setReportDef}
                                 availableFields={availableFields}
+                                customDimensions={customDimensions}
                                 theme={theme}
                                 styles={styles}
                                 data={data}
@@ -2809,9 +3471,106 @@ export const SidebarPanel = React.memo(function SidebarPanel({
                                 activeReportId={activeReportId}
                                 setActiveReportId={setActiveReportId}
                                 showNotification={showNotification}
+                                requestedSelection={reportEditorSelection}
+                                showReportConfigColumn={showReportConfigColumn}
+                                setShowReportConfigColumn={setShowReportConfigColumn}
                             />
                         </div>
-                    ) : sidebarTab === 'filters' ? (
+                    ) : isReportMode && reportTab === 'fields' ? (
+                        <div style={{padding: '0 4px'}}>
+                            <CustomCategoriesEditor
+                                availableFields={availableFields}
+                                customDimensions={customDimensions}
+                                setCustomDimensions={setCustomDimensions}
+                                data={data}
+                                theme={theme}
+                                showNotification={showNotification}
+                                getFieldLabel={getFieldLabel}
+                                onDeleteField={handleDeleteCustomCategoryField}
+                            />
+                            <div style={{fontSize:'10px',color:theme.textSec,textTransform:'uppercase',letterSpacing:'0.5px',marginBottom:'6px',padding:'0 2px'}}><Icons.Database style={{verticalAlign:'middle',marginRight:'4px'}}/>Available Fields — click to add</div>
+                            <div style={{display:'flex',flexWrap:'wrap',gap:'4px',marginBottom:'14px'}}>
+                                {baseAvailableFields.map(f => {
+                                    const alreadyAdded = valConfigs.some(c => c && c.field === f && c.agg !== 'formula');
+                                    return (
+                                        <div
+                                            key={f}
+                                            onClick={() => {
+                                                if (alreadyAdded) return;
+                                                setValConfigs(prev => [...prev, {field: f, agg: 'sum', label: getFieldLabel(f)}]);
+                                            }}
+                                            style={{
+                                                padding:'3px 9px', fontSize:'11px', lineHeight:1.4, fontWeight:500,
+                                                borderRadius:'999px',
+                                                border:`1px solid ${alreadyAdded ? theme.border : (theme.isDark ? theme.border : '#D7DDEA')}`,
+                                                background: alreadyAdded ? (theme.select||theme.headerBg) : (theme.isDark ? theme.background : '#ffffff'),
+                                                color: alreadyAdded ? theme.primary : theme.text,
+                                                cursor: alreadyAdded ? 'default' : 'pointer',
+                                                opacity: alreadyAdded ? 0.6 : 1,
+                                                userSelect:'none',
+                                            }}
+                                            title={alreadyAdded ? `${getFieldLabel(f)} already in values` : `Add ${getFieldLabel(f)} to values`}
+                                        >
+                                            {getFieldLabel(f)}{alreadyAdded ? ' ✓' : ''}
+                                        </div>
+                                    );
+                                })}
+                            </div>
+                            <div style={{borderTop:`1px solid ${theme.border}`,paddingTop:'10px',marginBottom:'8px'}}>
+                                <div style={{display:'flex', alignItems:'center', gap:'8px', padding:'0 2px 8px 2px', flexWrap:'wrap'}}>
+                                    <button type="button" onClick={handleAddFormulaValue} style={{border:`1px solid ${theme.primary}66`,background:`${theme.primary}12`,color:theme.primary,borderRadius:'999px',cursor:'pointer',padding:'4px 10px',fontSize:'11px',fontWeight:700}}>+ Add Formula</button>
+                                    <span style={{fontSize:'10px',color:theme.textSec}}>{regularValueCount} value{regularValueCount===1?'':'s'} · {formulaCount} formula{formulaCount===1?'':'s'}</span>
+                                </div>
+                            </div>
+                            {valConfigs.map((item, idx) => {
+                                const isFormula = item && item.agg === 'formula';
+                                if (!item) return null;
+                                const isDragOver = reportFieldsDragOver === idx;
+                                return (
+                                    <div
+                                        key={item.field || idx}
+                                        draggable
+                                        onDragStart={() => { reportFieldsDragIdx.current = idx; }}
+                                        onDragOver={(e) => { e.preventDefault(); setReportFieldsDragOver(idx); }}
+                                        onDragLeave={() => setReportFieldsDragOver(null)}
+                                        onDrop={(e) => {
+                                            e.preventDefault();
+                                            const from = reportFieldsDragIdx.current;
+                                            setReportFieldsDragOver(null);
+                                            reportFieldsDragIdx.current = null;
+                                            if (from === null || from === idx) return;
+                                            setValConfigs(prev => {
+                                                const next = [...prev];
+                                                const [moved] = next.splice(from, 1);
+                                                next.splice(idx, 0, moved);
+                                                return next;
+                                            });
+                                        }}
+                                        onDragEnd={() => { reportFieldsDragIdx.current = null; setReportFieldsDragOver(null); }}
+                                        style={{marginBottom:'6px', borderTop: isDragOver ? `2px solid ${theme.primary}` : '2px solid transparent', cursor:'grab'}}
+                                    >
+                                        {isFormula ? (
+                                            <FormulaListItem item={item} idx={idx} selected={item.field===formulaModalField} onSelect={openFormulaModal} onRemove={removeValueAtIndex} setValConfigs={setValConfigs} theme={theme} styles={styles} dropLine={null} zoneId="vals" valueSelectStyle={valueSelectStyle} colFields={colFields} fixedSparklineValueKeySet={fixedSparklineValueKeySet} showNotification={showNotification} serverError={(formulaErrors && formulaErrors[item.field]) || null} />
+                                        ) : (
+                                            <div style={{...styles.chip,flexWrap:'wrap',alignItems:'flex-start'}}>
+                                                <div style={{display:'flex',alignItems:'center',gap:'8px',minWidth:0,flex:1}}>
+                                                    <Icons.DragIndicator style={{flexShrink:0,opacity:0.4}}/>
+                                                    <b style={{fontWeight:500,minWidth:0,whiteSpace:'nowrap',overflow:'hidden',textOverflow:'ellipsis'}}>{getFieldLabel(item.field)}</b>
+                                                </div>
+                                                <div style={{display:'flex',alignItems:'center',gap:'4px',marginLeft:'8px',flexWrap:'nowrap',flexShrink:0}}>
+                                                    <select value={item.agg} onChange={e=>handleValueAggChange(idx,e.target.value)} style={{...valueSelectStyle,width:'74px'}}>
+                                                        <option value="sum">Sum</option><option value="avg">Avg</option><option value="count">Cnt</option><option value="min">Min</option><option value="max">Max</option><option value="weighted_avg">WAvg</option>
+                                                    </select>
+                                                    <span onClick={()=>removeValueAtIndex(idx)} style={{cursor:'pointer',color:'#9CA3AF',display:'flex',alignItems:'center'}}><Icons.Close/></span>
+                                                </div>
+                                            </div>
+                                        )}
+                                    </div>
+                                );
+                            })}
+                            {valConfigs.length === 0 && <div style={{opacity:0.5,fontSize:'11px',padding:'12px',textAlign:'center'}}>No value fields. Click a field above or add a formula.</div>}
+                        </div>
+                    ) : (!isReportMode && sidebarTab === 'filters') ? (
                         <div style={{flex: 1, overflowY: 'auto', display: 'flex', flexDirection: 'column', padding: '8px'}}>
                             <div style={{marginBottom: '10px', display: 'flex', alignItems: 'center', background: theme.background, borderRadius: '6px', padding: '4px 8px', border: `1px solid ${theme.border}`}}>
                                 <Icons.Search />
@@ -2827,7 +3586,7 @@ export const SidebarPanel = React.memo(function SidebarPanel({
                                 const colsForDisplay = allFields.map(field => {
                                     const tableCol = table.getColumn(field);
                                     if (tableCol) return tableCol;
-                                    return { id: field, header: formatDisplayLabel(field), columnDef: { header: formatDisplayLabel(field) } };
+                                    return { id: field, header: getFieldLabel(field), columnDef: { header: getFieldLabel(field) } };
                                 });
                                 const filtered = colsForDisplay.filter(col => {
                                     const header = (col.columnDef && typeof col.columnDef.header === 'string') ? col.columnDef.header : (typeof col.header === 'string' ? col.header : col.id);
@@ -2844,6 +3603,9 @@ export const SidebarPanel = React.memo(function SidebarPanel({
                                                 onFilter={(val) => handleHeaderFilter(col.id, val)}
                                                 currentFilter={filters[col.id]}
                                                 options={getFilterOptionsForColumn(col.id)}
+                                                optionMeta={filterOptionMeta && filterOptionMeta[col.id]}
+                                                onSearchOptions={serverSide ? (search) => requestFilterOptions && requestFilterOptions(col.id, { search, offset: 0 }) : undefined}
+                                                onLoadMoreOptions={serverSide ? (search, offset) => requestFilterOptions && requestFilterOptions(col.id, { search, offset }) : undefined}
                                                 onOpen={requestFilterOptions}
                                             />
                                         ))}
@@ -2851,10 +3613,20 @@ export const SidebarPanel = React.memo(function SidebarPanel({
                                 );
                             })()}
                         </div>
-                    ) : sidebarTab !== 'columns' ? (
+                    ) : (isReportMode ? reportTab !== 'columns' : sidebarTab !== 'columns') ? (
                         <>
                             {sidebarTab === 'fields' && (
                                 <div>
+                                    <CustomCategoriesEditor
+                                        availableFields={availableFields}
+                                        customDimensions={customDimensions}
+                                        setCustomDimensions={setCustomDimensions}
+                                        data={data}
+                                        theme={theme}
+                                        showNotification={showNotification}
+                                        getFieldLabel={getFieldLabel}
+                                        onDeleteField={handleDeleteCustomCategoryField}
+                                    />
                                     <div style={styles.sectionTitleSm}><Icons.Database/> Available Fields</div>
                                     <ResizableFieldPanel
                                         panelId="availableFields"
@@ -2880,9 +3652,9 @@ export const SidebarPanel = React.memo(function SidebarPanel({
                                                 tabIndex={0}
                                                 aria-describedby="pivot-sidebar-keyboard-dnd-help"
                                                 aria-grabbed={keyboardDragItem && keyboardDragItem.zone === 'pool' && keyboardDragItem.field === f ? 'true' : 'false'}
-                                                aria-label={`Move ${formatDisplayLabel(f)}`}
+                                                aria-label={`Move ${getFieldLabel(f)}`}
                                                 onDragStart={e=>onDragStart(e,f,'pool')}
-                                                onKeyDown={(e) => handleDraggableKeyDown(e, f, 'pool', -1, formatDisplayLabel(f))}
+                                                onKeyDown={(e) => handleDraggableKeyDown(e, f, 'pool', -1, getFieldLabel(f))}
                                                 style={{
                                                 padding: '4px 8px',
                                                 fontSize: '11px',
@@ -2900,7 +3672,7 @@ export const SidebarPanel = React.memo(function SidebarPanel({
                                                 userSelect: 'none',
                                                 minHeight: '24px',
                                             }}>
-                                                {formatDisplayLabel(f)}
+                                                {getFieldLabel(f)}
                                             </div>
                                         ))}
                                     </ResizableFieldPanel>
@@ -2975,8 +3747,8 @@ export const SidebarPanel = React.memo(function SidebarPanel({
                                             {zoneItems.map((item, idx) => {
                                                 const label = zone.id==='vals' ? item.field : item;
                                                 const displayLabel = zone.id === 'vals'
-                                                    ? (item.agg === 'formula' ? (item.label || 'Formula') : formatDisplayLabel(item.field))
-                                                    : formatDisplayLabel(item);
+                                                    ? (item.agg === 'formula' ? (item.label || 'Formula') : getFieldLabel(item.field))
+                                                    : getFieldLabel(item);
                                                 return (
                                                     <div
                                                         key={idx}
@@ -3007,6 +3779,7 @@ export const SidebarPanel = React.memo(function SidebarPanel({
                                                                 colFields={colFields}
                                                                 fixedSparklineValueKeySet={fixedSparklineValueKeySet}
                                                                 showNotification={showNotification}
+                                                                serverError={(formulaErrors && formulaErrors[item.field]) || null}
                                                             />
                                                         ) : (
                                                             <div style={{
@@ -3026,8 +3799,8 @@ export const SidebarPanel = React.memo(function SidebarPanel({
                                                                         {isWeightedAverageAgg(item.agg) && (
                                                                             <select value={item.weightField || ''} onChange={e => handleValueWeightFieldChange(idx, e.target.value)} style={{...valueSelectStyle, width:'92px'}} title="Weight field">
                                                                                 <option value="" disabled>Weight</option>
-                                                                                {availableFields.map((fieldName) => (
-                                                                                    <option key={fieldName} value={fieldName}>{formatDisplayLabel(fieldName)}</option>
+                                                                                {baseAvailableFields.map((fieldName) => (
+                                                                                    <option key={fieldName} value={fieldName}>{getFieldLabel(fieldName)}</option>
                                                                                 ))}
                                                                             </select>
                                                                         )}
@@ -3043,7 +3816,18 @@ export const SidebarPanel = React.memo(function SidebarPanel({
                                                                     <span onClick={()=>{ if (zone.id==='filter'){const n={...filters};delete n[label];setFilters(n)} if (zone.id==='rows') setRowFields(p=>p.filter(x=>x!==label)); if (zone.id==='cols') setColFields(p=>p.filter(x=>x!==label)); if (zone.id==='vals') removeValueAtIndex(idx); }} style={{cursor:'pointer', color:'#9CA3AF', display:'flex', alignItems:'center'}}><Icons.Close/></span>
                                                                 </div>
                                                                 {zone.id === 'filter' && sidebarFilterState.columnId === label && (
-                                                                    <FilterPopover column={{header: displayLabel, id: label}} anchorEl={sidebarFilterState.anchorEl} onClose={closeSidebarFilter} onFilter={(filterValue) => handleHeaderFilter(label, filterValue)} currentFilter={filters[label]} options={getFilterOptionsForColumn(label)} theme={theme} />
+                                                                    <FilterPopover
+                                                                        column={{header: displayLabel, id: label}}
+                                                                        anchorEl={sidebarFilterState.anchorEl}
+                                                                        onClose={closeSidebarFilter}
+                                                                        onFilter={(filterValue) => handleHeaderFilter(label, filterValue)}
+                                                                        currentFilter={filters[label]}
+                                                                        options={getFilterOptionsForColumn(label)}
+                                                                        optionMeta={filterOptionMeta && filterOptionMeta[label]}
+                                                                        onSearchOptions={serverSide ? (search) => requestFilterOptions && requestFilterOptions(label, { search, offset: 0 }) : undefined}
+                                                                        onLoadMoreOptions={serverSide ? (search, offset) => requestFilterOptions && requestFilterOptions(label, { search, offset }) : undefined}
+                                                                        theme={theme}
+                                                                    />
                                                                 )}
                                                                 {zone.id === 'vals' && (
                                                                     <ValueSparklineControls
@@ -3507,6 +4291,8 @@ export const SidebarPanel = React.memo(function SidebarPanel({
                     onClose={() => setFormulaModalField(null)}
                     onRemove={removeValueAtIndex}
                     displayedColumnOptions={displayedColumnOptions}
+                    availableRawFields={baseAvailableFields}
+                    serverError={(formulaErrors && formulaErrors[formulaModalConfig.field]) || null}
                 />
             )}
             {/* Resize handle */}

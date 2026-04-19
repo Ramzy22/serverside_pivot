@@ -173,14 +173,14 @@ class FormulaEngineMixin:
             normalized = re.sub(rf"\b{re.escape(alias)}\b", canonical, normalized, flags=re.IGNORECASE)
         return normalized
 
-    def _build_formula_evaluation_plan(self, formula_cols: List[Dict[str, Any]]) -> tuple[List[Dict[str, Any]], set[str]]:
+    def _build_formula_evaluation_plan(self, formula_cols: List[Dict[str, Any]]) -> tuple[List[Dict[str, Any]], set[str], set[str]]:
         formula_by_id = {
             str(col.get("id")): col
             for col in formula_cols
             if isinstance(col, dict) and col.get("id")
         }
         if not formula_by_id:
-            return [], set()
+            return [], set(), set()
 
         formula_alias_to_id: Dict[str, str] = {}
         for formula_id, col in formula_by_id.items():
@@ -219,8 +219,9 @@ class FormulaEngineMixin:
             if not progressed:
                 break
 
-        unresolved = (set(formula_by_id.keys()) - resolved) | self_referencing
-        return plan, unresolved
+        circular = set(formula_by_id.keys()) - resolved - self_referencing
+        unresolved = circular | self_referencing
+        return plan, unresolved, self_referencing
 
     def _evaluate_formula_expression(self, parser: Any, expression: str, namespace: Dict[str, Any]) -> Optional[float]:
         try:
@@ -264,10 +265,12 @@ class FormulaEngineMixin:
         if not regular_rows:
             return {}
 
-        total_source_rows = [
-            row for row in regular_rows
-            if row.get("depth") == 0
-        ] or regular_rows
+        depth_zero = [row for row in regular_rows if row.get("depth") == 0]
+        if depth_zero:
+            total_source_rows = depth_zero
+        else:
+            min_depth = min((row.get("depth") or 0 for row in regular_rows), default=0)
+            total_source_rows = [row for row in regular_rows if (row.get("depth") or 0) == min_depth]
 
         materialized_formula_keys = set()
         for row in total_source_rows:
@@ -473,11 +476,18 @@ class FormulaEngineMixin:
         rows: List[Dict[str, Any]],
         formula_cols: List[Dict[str, Any]],
         parser: Any,
-    ) -> None:
+    ) -> Dict[str, str]:
+        formula_errors: Dict[str, str] = {}
         if not rows or not formula_cols:
-            return
+            return formula_errors
 
-        formula_plan, unresolved_formula_ids = self._build_formula_evaluation_plan(formula_cols)
+        formula_plan, unresolved_formula_ids, self_referencing_ids = self._build_formula_evaluation_plan(formula_cols)
+
+        for formula_id in self_referencing_ids:
+            formula_errors[formula_id] = "self_reference"
+        for formula_id in (unresolved_formula_ids - self_referencing_ids):
+            formula_errors[formula_id] = "circular_reference"
+
         formula_alias_map: Dict[str, str] = {}
         for col in formula_cols:
             if not isinstance(col, dict) or not col.get("id"):
@@ -488,6 +498,7 @@ class FormulaEngineMixin:
             if formula_ref:
                 formula_alias_map[formula_ref.lower()] = formula_id
 
+        expression_errors: set[str] = set()
         for row in rows:
             if not isinstance(row, dict):
                 continue
@@ -509,6 +520,8 @@ class FormulaEngineMixin:
                     **formula_namespace,
                 }
                 result = self._evaluate_formula_expression(parser, prepared_expr, namespace)
+                if result is None and formula_id not in formula_errors:
+                    expression_errors.add(formula_id)
                 row[formula_id] = result
                 formula_namespace[formula_id] = _formula_namespace_value(result)
                 formula_ref = self._formula_reference_key(fcol)
@@ -523,7 +536,12 @@ class FormulaEngineMixin:
                 if formula_ref:
                     formula_namespace[formula_ref] = MISSING_FORMULA_VALUE
 
-    def _apply_formula_columns(self, rows: List[Dict[str, Any]], request: TanStackRequest) -> None:
+        for formula_id in expression_errors:
+            if formula_id not in formula_errors:
+                formula_errors[formula_id] = "expression_error"
+        return formula_errors
+
+    def _apply_formula_columns(self, rows: List[Dict[str, Any]], request: TanStackRequest) -> Dict[str, str]:
         """
         Apply formula columns (post-aggregation calculated fields) to each row.
 
@@ -532,16 +550,19 @@ class FormulaEngineMixin:
         suffix).  At runtime we look for keys of the form <dim_prefix>_<field>_<agg> in each row
         and evaluate the formula for every matching prefix, writing result back as
         <dim_prefix>_<formula_id> (or just <formula_id> in flat mode).
+
+        Returns a dict of {formula_id: error_reason} for any formula that could not be evaluated.
         """
+        formula_errors: Dict[str, str] = {}
         if not rows:
-            return
+            return formula_errors
 
         formula_cols = [
             col for col in (request.columns or [])
             if isinstance(col, dict) and col.get("isFormula")
         ]
         if not formula_cols:
-            return
+            return formula_errors
         measure_formula_cols = [
             col for col in formula_cols
             if self._is_measure_formula_column(col)
@@ -555,7 +576,13 @@ class FormulaEngineMixin:
             for col in measure_formula_cols
             if isinstance(col, dict) and col.get("id")
         }
-        formula_plan, unresolved_formula_ids = self._build_formula_evaluation_plan(measure_formula_cols)
+        formula_plan, unresolved_formula_ids, self_referencing_ids = self._build_formula_evaluation_plan(measure_formula_cols)
+
+        for formula_id in self_referencing_ids:
+            formula_errors[formula_id] = "self_reference"
+        for formula_id in (unresolved_formula_ids - self_referencing_ids):
+            formula_errors[formula_id] = "circular_reference"
+
         formula_alias_map = {}
         for col in measure_formula_cols:
             if not isinstance(col, dict) or not col.get("id"):
@@ -607,6 +634,8 @@ class FormulaEngineMixin:
             for col in (request.columns or [])
         )
 
+        expression_errors: set[str] = set()
+
         if has_column_dimensions:
             # Collect unique dim prefixes across all measure columns.
             # A pivot key looks like: <dim_prefix>_<field>_<agg>
@@ -643,6 +672,8 @@ class FormulaEngineMixin:
                             continue
                         result_key = f"{prefix}_{formula_id}"
                         result = self._evaluate_formula_expression(parser, formula_expr, namespace)
+                        if result is None and formula_id not in formula_errors:
+                            expression_errors.add(formula_id)
                         row[result_key] = result
                         namespace[formula_id] = _formula_namespace_value(result)
                         formula_ref = self._formula_reference_key(fcol)
@@ -695,6 +726,8 @@ class FormulaEngineMixin:
                     if not formula_id or not formula_expr:
                         continue
                     result = self._evaluate_formula_expression(parser, formula_expr, namespace)
+                    if result is None and formula_id not in formula_errors:
+                        expression_errors.add(formula_id)
                     row[formula_id] = result
                     namespace[formula_id] = _formula_namespace_value(result)
                     formula_ref = self._formula_reference_key(fcol)
@@ -709,7 +742,12 @@ class FormulaEngineMixin:
                     if formula_ref:
                         namespace[formula_ref] = MISSING_FORMULA_VALUE
 
-        self._apply_column_formula_columns(rows, column_formula_cols, parser)
+        for formula_id in expression_errors:
+            if formula_id not in formula_errors:
+                formula_errors[formula_id] = "expression_error"
+
+        col_formula_errors = self._apply_column_formula_columns(rows, column_formula_cols, parser)
+        formula_errors.update(col_formula_errors)
 
         grand_total_rows = [row for row in rows if isinstance(row, dict) and _is_grand_total_row(row)]
         regular_rows = [row for row in rows if isinstance(row, dict) and not _is_grand_total_row(row)]
@@ -717,6 +755,8 @@ class FormulaEngineMixin:
             rollup_values = self._build_formula_rollup_values(regular_rows, formula_ids)
             for grand_total_row in grand_total_rows:
                 grand_total_row.update(rollup_values)
+
+        return formula_errors
 
     def _apply_pivot_window_functions(self, rows: List[Dict[str, Any]], request: TanStackRequest) -> None:
         """
@@ -778,7 +818,7 @@ class FormulaEngineMixin:
                     denom = self._numeric_or_none(row.get(row_total_key))
                     if denom is None:
                         denom = sum(self._numeric_or_none(row.get(k)) or 0.0 for k in pivot_keys)
-                    if not denom:
+                    if not denom or not math.isfinite(denom):
                         for key in pivot_keys:
                             if self._numeric_or_none(row.get(key)) is not None:
                                 row[key] = None
@@ -798,7 +838,7 @@ class FormulaEngineMixin:
                     denom = self._numeric_or_none(grand_total_row.get(key)) if isinstance(grand_total_row, dict) else None
                     if denom is None:
                         denom = sum(self._numeric_or_none(row.get(key)) or 0.0 for row in non_grand_rows)
-                    col_denoms[key] = denom or 0.0
+                    col_denoms[key] = denom if (denom and math.isfinite(denom)) else 0.0
 
                 grand_total_value = self._numeric_or_none(grand_total_row.get(row_total_key)) if isinstance(grand_total_row, dict) else None
                 if grand_total_value is None:

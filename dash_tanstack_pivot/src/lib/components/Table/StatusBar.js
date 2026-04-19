@@ -202,7 +202,7 @@ const StatusBar = ({
             data-pivot-status-details-open={showDetails ? 'true' : 'false'}
             style={{
                 borderTop: `1px solid ${theme.border}`,
-                background: theme.headerBg,
+                background: theme.headerSubtleBg || theme.headerBg,
                 display: 'flex',
                 flexDirection: 'column',
                 alignItems: 'stretch',
