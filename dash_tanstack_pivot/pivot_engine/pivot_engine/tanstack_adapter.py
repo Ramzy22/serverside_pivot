@@ -441,8 +441,16 @@ class TanStackPivotAdapter(FormulaEngineMixin):
         if response is None or not isinstance(response.data, list):
             return
 
-        grand_total_row = next((dict(row) for row in response.data if _is_grand_total_row(row)), None)
-        regular_rows = [dict(row) for row in response.data if isinstance(row, dict) and not _is_grand_total_row(row)]
+        grand_total_row = None
+        regular_rows = []
+        for _row in response.data:
+            if not isinstance(_row, dict):
+                continue
+            if _is_grand_total_row(_row):
+                if grand_total_row is None:
+                    grand_total_row = dict(_row)
+            else:
+                regular_rows.append(dict(_row))
 
         if grand_total_row is not None:
             self._cache_store(
@@ -3363,8 +3371,14 @@ class TanStackPivotAdapter(FormulaEngineMixin):
                 else await self.handle_request(request, user=user)
             )
             full_rows = list(full_response.data or [])
-            grand_total_row = next((row for row in full_rows if _is_grand_total_row(row)), None)
-            regular_rows = [row for row in full_rows if not _is_grand_total_row(row)]
+            grand_total_row = None
+            regular_rows = []
+            for _fr in full_rows:
+                if _is_grand_total_row(_fr):
+                    if grand_total_row is None:
+                        grand_total_row = _fr
+                else:
+                    regular_rows.append(_fr)
 
             safe_start = max(int(start_row or 0), 0)
             safe_end = max(int(end_row if end_row is not None else safe_start), safe_start)

@@ -1127,12 +1127,21 @@ class ScalablePivotController(PivotController):
             root_query_finished_at = time.perf_counter()
             root_rows = root_table.to_pylist() if isinstance(root_table, pa.Table) else []
         total_count_started_at = time.perf_counter()
-        total_rows = await self._count_collapsed_root_rows(spec)
+        root_total_rows = await self._count_collapsed_root_rows(spec)
         total_count_finished_at = time.perf_counter()
         grand_total_row = None
         grand_total_formula_source_rows = []
+        grand_total_index = root_total_rows if spec.totals else None
+        natural_grand_total_in_window = (
+            grand_total_index is not None
+            and safe_start <= grand_total_index <= safe_end
+        )
+        should_fetch_grand_total = bool(
+            spec.totals
+            and (include_grand_total_row or natural_grand_total_in_window)
+        )
 
-        if include_grand_total_row:
+        if should_fetch_grand_total:
             total_cache_key = self._hierarchy_spec_fingerprint(spec)
             grand_total_row = self._hierarchy_grand_total_cache_get(total_cache_key)
             if grand_total_row is None:
@@ -1168,9 +1177,8 @@ class ScalablePivotController(PivotController):
                 grand_total_row["_path"] = "__grand_total__"
                 grand_total_row["depth"] = 0
                 grand_total_row["_depth"] = 0
-                total_rows += 1
                 formula_source_root_rows = root_rows
-                if len(root_rows) < max(total_rows - 1, 0):
+                if len(root_rows) < max(root_total_rows, 0):
                     formula_source_spec = spec.copy()
                     formula_source_spec.rows = list(spec.rows[:1])
                     formula_source_spec.limit = 0
@@ -1188,10 +1196,16 @@ class ScalablePivotController(PivotController):
                     for row in formula_source_root_rows
                     if isinstance(row, dict)
                 ]
+                if natural_grand_total_in_window and not include_grand_total_row:
+                    natural_total_row = dict(grand_total_row)
+                    natural_total_row.pop("_depth", None)
+                    root_rows = [*root_rows, natural_total_row]
         else:
             grand_total_query_profile = None
             grand_total_started_at = None
             grand_total_finished_at = None
+
+        total_rows = root_total_rows + (1 if spec.totals else 0)
 
         color_scale_started_at = time.perf_counter()
         color_scale_stats = self._compute_color_scale_stats(root_rows, spec.rows, getattr(spec, "columns", []))
@@ -4076,12 +4090,21 @@ class ScalablePivotController(PivotController):
 
     def _execute_parameterized_mutation(self, sql: str, params: List[Any]) -> None:
         con = self.planner.con
-        if hasattr(con, "con"):
+        if hasattr(con, "con") and hasattr(con.con, "execute"):
             con.con.execute(sql, [*params])
-        elif hasattr(con, "raw_sql"):
-            con.raw_sql(sql)
         elif hasattr(con, "execute"):
             con.execute(sql, [*params])
+        elif hasattr(con, "raw_sql"):
+            # Ibis raw_sql does not accept positional parameters; try to reach the
+            # underlying native connection before falling back (which would drop params).
+            underlying = getattr(con, "_con", None) or getattr(con, "con", None)
+            if underlying is not None and hasattr(underlying, "execute"):
+                underlying.execute(sql, [*params])
+            else:
+                raise NotImplementedError(
+                    "raw_sql backend does not support parameterized queries; "
+                    "use a backend that exposes .execute() or .con.execute()"
+                )
         else:
             raise NotImplementedError("Backend does not support parameterized SQL updates")
 

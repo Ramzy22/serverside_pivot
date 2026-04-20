@@ -158,7 +158,9 @@ def register_pivot_app(
                 error_msg = "Missing required parameter" if not debug else "table param required"
                 return jsonify({"error": error_msg}), 400
 
-            row_fields = [f for f in row_fields_raw.split(",") if f]
+            import re as _re
+            _SAFE_FIELD_RE = _re.compile(r'^[A-Za-z_][A-Za-z0-9_]*$')
+            row_fields = [f for f in row_fields_raw.split(",") if f and _SAFE_FIELD_RE.match(f)]
             path_parts = row_path.split("|||") if row_path else []
 
             drill_filters = []

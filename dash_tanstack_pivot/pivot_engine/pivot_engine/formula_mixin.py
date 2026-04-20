@@ -272,20 +272,20 @@ class FormulaEngineMixin:
             min_depth = min((row.get("depth") or 0 for row in regular_rows), default=0)
             total_source_rows = [row for row in regular_rows if (row.get("depth") or 0) == min_depth]
 
-        materialized_formula_keys = set()
+        # Collect unique string keys across all source rows in one pass, then test
+        # each key against formula_ids once — avoids O(rows × keys × formulas).
+        all_candidate_keys: set = set()
         for row in total_source_rows:
-            for key in row.keys():
-                if not isinstance(key, str):
-                    continue
-                if key in formula_ids or key.startswith("__RowTotal__"):
-                    if key in formula_ids or any(
-                        key == f"__RowTotal__{formula_id}" or self._matches_formula_column_id(key, formula_id)
-                        for formula_id in formula_ids
-                    ):
-                        materialized_formula_keys.add(key)
-                        continue
-                if any(self._matches_formula_column_id(key, formula_id) for formula_id in formula_ids):
-                    materialized_formula_keys.add(key)
+            if isinstance(row, dict):
+                all_candidate_keys.update(k for k in row.keys() if isinstance(k, str))
+
+        rowtotal_keys = {f"__RowTotal__{fid}" for fid in formula_ids}
+        materialized_formula_keys = set()
+        for key in all_candidate_keys:
+            if key in formula_ids or key in rowtotal_keys:
+                materialized_formula_keys.add(key)
+            elif any(self._matches_formula_column_id(key, formula_id) for formula_id in formula_ids):
+                materialized_formula_keys.add(key)
 
         rollups: Dict[str, Optional[float]] = {}
         for key in materialized_formula_keys:
@@ -599,7 +599,7 @@ class FormulaEngineMixin:
 
         if not measure_formula_cols:
             self._apply_column_formula_columns(rows, column_formula_cols, parser)
-            return
+            return formula_errors
 
         # Gather all row keys once to detect pivot prefixes.
         all_keys: set = set()

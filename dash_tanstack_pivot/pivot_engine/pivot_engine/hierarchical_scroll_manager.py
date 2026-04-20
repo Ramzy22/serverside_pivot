@@ -2,15 +2,77 @@
 HierarchicalVirtualScrollManager - Optimized virtual scrolling for hierarchical data
 """
 from typing import Dict, Any, List, Optional, Union
+from functools import cmp_to_key
+import decimal
 import pyarrow as pa
 import pyarrow.compute as pc
 import threading
 import hashlib
 import json
+import math
 
 from pivot_engine.types.pivot_spec import PivotSpec
 from pivot_engine.materialized_hierarchy_manager import MaterializedHierarchyManager
 from pivot_engine.planner.ibis_planner import IbisPlanner
+
+
+def _is_nullish(value: Any) -> bool:
+    if value is None:
+        return True
+    if isinstance(value, float) and math.isnan(value):
+        return True
+    if isinstance(value, decimal.Decimal) and value.is_nan():
+        return True
+    return False
+
+
+def _zero_for_arrow_type(arrow_type: pa.DataType) -> Any:
+    if pa.types.is_null(arrow_type):
+        return None
+    if pa.types.is_decimal(arrow_type):
+        return decimal.Decimal(0)
+    if pa.types.is_floating(arrow_type):
+        return 0.0
+    return 0
+
+
+def _add_measure_value(current: Any, value: Any) -> Any:
+    if _is_nullish(value):
+        return current
+    if current is None:
+        return value
+    try:
+        return current + value
+    except (TypeError, decimal.InvalidOperation):
+        try:
+            return current + float(value)
+        except (TypeError, ValueError, decimal.InvalidOperation):
+            return current
+
+
+def _compare_hierarchy_rows(left: Dict[str, Any], right: Dict[str, Any], sort_fields: List[str], ascending: List[bool]) -> int:
+    for field, is_ascending in zip(sort_fields, ascending):
+        left_value = left.get(field)
+        right_value = right.get(field)
+        left_is_null = _is_nullish(left_value)
+        right_is_null = _is_nullish(right_value)
+
+        if left_is_null or right_is_null:
+            if left_is_null and right_is_null:
+                continue
+            return -1 if left_is_null else 1
+
+        try:
+            comparison = (left_value > right_value) - (left_value < right_value)
+        except TypeError:
+            left_text = str(left_value)
+            right_text = str(right_value)
+            comparison = (left_text > right_text) - (left_text < right_text)
+
+        if comparison != 0:
+            return comparison if is_ascending else -comparison
+
+    return 0
 
 
 class HierarchicalVirtualScrollManager:
@@ -226,10 +288,8 @@ class HierarchicalVirtualScrollManager:
 
     def _fetch_full_hierarchy_optimized(self, spec: PivotSpec, pivot_col_values: List[str] = None) -> Optional[pa.Table]:
         """Fetch ALL rows for the deepest level and reconstruct hierarchy in memory."""
-        import pandas as pd
         import ibis
         
-        con = self.planner.con
         source_table = self._table_for_spec(spec)
         
         pre_filters, post_filters = self._split_filters(spec)
@@ -291,28 +351,47 @@ class HierarchicalVirtualScrollManager:
                 query = query.filter(post_filter_expr)
 
         arrow_table = self._to_pyarrow(query)
-        df = arrow_table.to_pandas()
-        
-        if df.empty:
+
+        if arrow_table.num_rows == 0:
             return arrow_table
-            
-        dfs = [df]
+
+        leaf_rows = arrow_table.to_pylist()
+        columns = list(arrow_table.column_names)
+        measure_cols = [column for column in columns if column not in spec.rows]
+        schema_fields = {field.name: field for field in arrow_table.schema}
+
+        full_rows = [dict(row) for row in leaf_rows]
         for l in range(len(spec.rows) - 1, 0, -1):
             parent_dims = spec.rows[:l]
-            measure_cols = [c for c in df.columns if c not in spec.rows]
-            parent_df = df.groupby(parent_dims)[measure_cols].sum().reset_index()
-            for missing_dim in spec.rows[l:]:
-                parent_df[missing_dim] = None
-            dfs.append(parent_df)
-            
-        full_df = pd.concat(dfs, ignore_index=True)
+            grouped_rows: Dict[tuple, Dict[str, Any]] = {}
+
+            for row in leaf_rows:
+                key = tuple(row.get(dim) for dim in parent_dims)
+                if any(_is_nullish(value) for value in key):
+                    continue
+
+                if key not in grouped_rows:
+                    parent_row = {column: None for column in columns}
+                    for dim, value in zip(parent_dims, key):
+                        parent_row[dim] = value
+                    for measure_col in measure_cols:
+                        field = schema_fields.get(measure_col)
+                        parent_row[measure_col] = _zero_for_arrow_type(field.type) if field else 0
+                    grouped_rows[key] = parent_row
+
+                parent_row = grouped_rows[key]
+                for measure_col in measure_cols:
+                    parent_row[measure_col] = _add_measure_value(parent_row.get(measure_col), row.get(measure_col))
+
+            full_rows.extend(grouped_rows.values())
+
         sort_fields = spec.rows[:1]
         ascending = [True] * len(sort_fields)
 
         if spec.sort:
             for sort_spec in (spec.sort if isinstance(spec.sort, list) else [spec.sort]):
                 field = sort_spec.get('field')
-                if field and field in full_df.columns and field not in sort_fields:
+                if field and field in columns and field not in sort_fields:
                     sort_fields.append(field)
                     ascending.append((sort_spec.get('order') or 'asc').lower() != 'desc')
 
@@ -321,12 +400,23 @@ class HierarchicalVirtualScrollManager:
                 sort_fields.append(dim)
                 ascending.append(True)
 
-        full_df = full_df.sort_values(by=sort_fields, ascending=ascending, na_position='first')
-        
-        for dim in spec.rows:
-            full_df[dim] = full_df[dim].astype(str).replace('None', None).replace('nan', None)
-            
-        return pa.Table.from_pandas(full_df, preserve_index=False)
+        if sort_fields:
+            full_rows.sort(key=cmp_to_key(lambda left, right: _compare_hierarchy_rows(left, right, sort_fields, ascending)))
+
+        for row in full_rows:
+            for dim in spec.rows:
+                if dim in row:
+                    value = row.get(dim)
+                    row[dim] = None if _is_nullish(value) else str(value)
+
+        result_schema = pa.schema(
+            [
+                pa.field(field.name, pa.string(), nullable=True) if field.name in spec.rows else field
+                for field in arrow_table.schema
+            ],
+            metadata=arrow_table.schema.metadata,
+        )
+        return pa.Table.from_pylist(full_rows, schema=result_schema)
 
     def _fetch_grand_total_pyarrow(self, spec: PivotSpec, pivot_col_values: List[str] = None):
         """Fetch just the Grand Total row as a PyArrow table"""

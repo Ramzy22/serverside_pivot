@@ -301,7 +301,8 @@ export function useRenderHelpers({
                 : isReportConfigGutter
                     ? (theme.background || theme.surfaceBg || '#fff')
                     : isHierarchy ? themeBgs.hierarchy : themeBgs.normal;
-        const condStyle = isReportConfigGutter ? EMPTY_STYLE : getConditionalStyle(col.id, resolvedCellValue, row.original, row.id);
+        const isSparklineCol = Boolean(col.columnDef?.meta?.isSparklineSummary);
+        const condStyle = (isReportConfigGutter || isSparklineCol) ? EMPTY_STYLE : getConditionalStyle(col.id, resolvedCellValue, row.original, row.id);
         const editedVisualStyle = editedMarker
             ? buildEditedCellVisualStyle(theme, editedCellFmt, editedMarker, { emphasizeText: true })
             : null;

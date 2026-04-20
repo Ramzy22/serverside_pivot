@@ -18,12 +18,12 @@ from .cache.redis_cache import RedisCache
 from .types.pivot_spec import PivotSpec
 
 def sanitize_column_name(value: str) -> str:
-    """Sanitize column value for use in SQL identifier"""
+    """Sanitize an arbitrary value into a safe SQL identifier (letters, digits, underscore only)."""
     import re
     if not value:
-        return "null"
+        return "_empty"
     sanitized = re.sub(r'[^a-zA-Z0-9_]', '_', str(value))
-    if sanitized and sanitized[0].isdigit():
+    if sanitized[0].isdigit():
         sanitized = f"_{sanitized}"
     return sanitized[:63]
 
@@ -384,52 +384,35 @@ class PivotController:
         if table is None or table.num_rows == 0:
             return {"columns": [], "rows": [], "next_cursor": None}
 
-        rows_as_lists = []
-        try:
-            # 1. Try Vectorized Pandas Conversion (Fastest)
-            df = table.to_pandas()
+        columns = list(table.column_names)
 
-            # Handle Decimal -> Float
-            for col in df.columns:
-                 # Check for object type which might hold Decimals
-                 if df[col].dtype == 'object':
-                     # Heuristic: check first non-null
-                     valid_idx = df[col].first_valid_index()
-                     if valid_idx is not None and isinstance(df[col][valid_idx], decimal.Decimal):
-                         df[col] = df[col].astype(float)
+        def normalize_cell(value: Any) -> Any:
+            if value is None:
+                return None
+            if isinstance(value, decimal.Decimal):
+                return float(value)
+            if isinstance(value, float) and value != value:
+                return None
+            isoformat = getattr(value, "isoformat", None)
+            if callable(isoformat):
+                return isoformat()
+            return value
 
-            # Handle NaN -> None (standard JSON)
-            # Efficiently replace NaN with None using where
-            df = df.where(df.notnull(), None)
-
-            rows_as_lists = df.values.tolist()
-
-        except (ImportError, Exception):
-            columns = list(table.column_names)
-
-            def normalize_cell(value: Any) -> Any:
-                if isinstance(value, decimal.Decimal):
-                    return float(value)
-                if isinstance(value, float) and value != value:
-                    return None
-                if value is None:
-                    return None
-                isoformat = getattr(value, "isoformat", None)
-                if callable(isoformat):
-                    return isoformat()
-                return value
-
+        if columns:
+            column_values = [table.column(column).to_pylist() for column in columns]
             rows_as_lists = [
-                [normalize_cell(row.get(column)) for column in columns]
-                for row in table.to_pylist()
+                [normalize_cell(value) for value in row_values]
+                for row_values in zip(*column_values)
             ]
+        else:
+            rows_as_lists = [[] for _ in range(table.num_rows)]
 
         next_cursor = None
         if spec.limit and table.num_rows == spec.limit:
             next_cursor = self._generate_next_cursor(table, spec)
 
         return {
-            "columns": table.column_names,
+            "columns": columns,
             "rows": rows_as_lists,
             "next_cursor": next_cursor
         }

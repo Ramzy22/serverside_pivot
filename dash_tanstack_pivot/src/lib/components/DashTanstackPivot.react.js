@@ -8773,11 +8773,18 @@ export default function DashTanstackPivot(props) {
         const alpha = 0.06 + distFromMid * 0.76;
 
         const [r, g, b] = clamped <= 0.5 ? low : high;
-        const darkText = clamped <= 0.5 ? darkLow : darkHigh;
+
+        // Use luminance-based neutral text instead of palette's hued dark colors,
+        // which blend into the background at high alpha and become unreadable.
+        // sRGB perceived-luminance weights (ITU-R BT.601)
+        const lum = (0.299 * r + 0.587 * g + 0.114 * b) / 255;
+        const heatTextColor = alpha > 0.5
+            ? (lum > 0.45 ? '#111827' : '#ffffff')
+            : undefined;
 
         const heatStyle = {
             background: `rgba(${r},${g},${b},${alpha.toFixed(3)})`,
-            color: alpha > 0.55 ? darkText : undefined,
+            color: heatTextColor,
         };
         return { ...heatStyle, ...ruleStyle };
     }, [colorScaleMode, colorPalette, colorScaleStats, getRuleBasedStyle]);
@@ -12223,15 +12230,45 @@ export default function DashTanstackPivot(props) {
             })()}
             {(isExporting || isCopying) && (
                 <div style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.45)', zIndex: 10001, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
-                    <div style={{ background: theme.background, color: theme.text, borderRadius: '12px', padding: '28px 36px', boxShadow: '0 8px 32px rgba(0,0,0,0.3)', display: 'flex', flexDirection: 'column', alignItems: 'center', gap: '16px', minWidth: '220px' }}>
-                        <svg width="36" height="36" viewBox="0 0 36 36" fill="none" style={{ animation: 'pivot-spin 0.8s linear infinite' }}>
+                    <div style={{ position: 'relative', background: theme.background, color: theme.text, borderRadius: '14px', padding: '32px 40px 28px', boxShadow: '0 12px 40px rgba(0,0,0,0.35)', display: 'flex', flexDirection: 'column', alignItems: 'center', gap: '14px', minWidth: '240px', border: `1px solid ${theme.border}` }}>
+                        {/* × dismiss */}
+                        <button
+                            onClick={() => { setIsExporting(false); setIsCopying(false); }}
+                            style={{
+                                position: 'absolute', top: '10px', right: '10px',
+                                width: '26px', height: '26px', borderRadius: '50%',
+                                background: '#dc2626', border: 'none', cursor: 'pointer',
+                                color: '#fff', fontSize: '13px', fontWeight: 700, lineHeight: 1,
+                                display: 'flex', alignItems: 'center', justifyContent: 'center',
+                                boxShadow: '0 1px 4px rgba(220,38,38,0.4)',
+                                transition: 'background 0.15s',
+                            }}
+                            onMouseEnter={e => e.currentTarget.style.background = '#b91c1c'}
+                            onMouseLeave={e => e.currentTarget.style.background = '#dc2626'}
+                            title="Cancel"
+                        >✕</button>
+                        {/* spinner */}
+                        <svg width="38" height="38" viewBox="0 0 38 38" fill="none" style={{ animation: 'pivot-spin 0.8s linear infinite' }}>
                             <style>{`@keyframes pivot-spin { to { transform: rotate(360deg); } }`}</style>
-                            <circle cx="18" cy="18" r="15" stroke={theme.border} strokeWidth="3" fill="none"/>
-                            <path d="M18 3 A15 15 0 0 1 33 18" stroke={theme.accent || '#4f8ef7'} strokeWidth="3" strokeLinecap="round" fill="none"/>
+                            <circle cx="19" cy="19" r="16" stroke={theme.border} strokeWidth="3" fill="none"/>
+                            <path d="M19 3 A16 16 0 0 1 35 19" stroke={theme.accent || '#4f8ef7'} strokeWidth="3" strokeLinecap="round" fill="none"/>
                         </svg>
-                        <span style={{ fontSize: '14px', fontWeight: 500 }}>
+                        <span style={{ fontSize: '14px', fontWeight: 600, letterSpacing: '0.01em' }}>
                             {isCopying ? 'Copying to clipboard…' : 'Exporting all rows…'}
                         </span>
+                        {/* Cancel button */}
+                        <button
+                            onClick={() => { setIsExporting(false); setIsCopying(false); }}
+                            style={{
+                                marginTop: '6px', padding: '7px 28px', fontSize: '13px', fontWeight: 600,
+                                background: '#dc2626', border: 'none', borderRadius: '7px',
+                                color: '#fff', cursor: 'pointer', letterSpacing: '0.02em',
+                                boxShadow: '0 2px 8px rgba(220,38,38,0.35)',
+                                transition: 'background 0.15s',
+                            }}
+                            onMouseEnter={e => e.currentTarget.style.background = '#b91c1c'}
+                            onMouseLeave={e => e.currentTarget.style.background = '#dc2626'}
+                        >Cancel</button>
                     </div>
                 </div>
             )}

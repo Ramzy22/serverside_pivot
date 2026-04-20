@@ -558,8 +558,9 @@ def register_dash_pivot_transport_callback(
             # Apply row slice for part exports
             row_start = int(request_payload.get("rowStart") or 0)
             row_end_req = request_payload.get("rowEnd")
-            if row_end_req is not None:
-                rows = rows[row_start:int(row_end_req)]
+            row_end_int = int(row_end_req) if row_end_req is not None else None
+            if row_end_int is not None and row_end_int > 0:
+                rows = rows[row_start:row_end_int]
             elif row_start > 0:
                 rows = rows[row_start:]
 

@@ -6,7 +6,6 @@ import asyncio
 import ibis
 from ibis.expr.api import Table as IbisTable
 from pivot_engine.types.pivot_spec import PivotSpec
-import pandas as pd
 
 class UserPatternAnalyzer:
     def __init__(self, cache):
