@@ -1,5 +1,4 @@
 include dash_tanstack_pivot/*.js
-include dash_tanstack_pivot/*.js.map
 include dash_tanstack_pivot/*.txt
 include dash_tanstack_pivot/package-info.json
 include package.json

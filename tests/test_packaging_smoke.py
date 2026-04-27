@@ -62,9 +62,14 @@ def test_manifest_declares_only_existing_artifacts():
         # Lines are like: include path/to/file  or  recursive-include dir pattern
         parts = line.split()
         if parts[0] == "include" and len(parts) >= 2:
-            declared_path = PKG_DIR / parts[1]
-            if not declared_path.exists():
-                missing.append(str(declared_path))
+            pattern = parts[1]
+            if "*" in pattern or "?" in pattern:
+                if not list(PKG_DIR.glob(pattern)):
+                    missing.append(str(PKG_DIR / pattern))
+            else:
+                declared_path = PKG_DIR / pattern
+                if not declared_path.exists():
+                    missing.append(str(declared_path))
 
     assert not missing, (
         "MANIFEST.in declares artifact paths that do not exist on disk:\n"
