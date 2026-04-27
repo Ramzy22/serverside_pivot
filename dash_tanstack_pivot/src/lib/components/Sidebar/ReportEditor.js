@@ -91,6 +91,7 @@ const createNode = (field = '') => ({
     topN: null,
     sortBy: null,
     sortDir: 'desc',
+    sortAbs: false,
     filters: null,
     format: normalizeReportFormat(),
     defaultChild: null,
@@ -150,6 +151,7 @@ function normalizeNode(node) {
         topN: Number.isFinite(Number(node.topN)) && Number(node.topN) > 0 ? Math.floor(Number(node.topN)) : null,
         sortBy: typeof node.sortBy === 'string' && node.sortBy.trim() ? node.sortBy.trim() : null,
         sortDir: node.sortDir === 'asc' ? 'asc' : 'desc',
+        sortAbs: node.sortAbs === true,
         filters: rawFilters && rawFilters.clauses.length > 0 ? rawFilters : null,
         format: normalizeReportFormat(node.format),
         defaultChild: node.defaultChild ? normalizeNode(node.defaultChild) : null,
@@ -182,7 +184,10 @@ const getSelectableFields = (availableFields, valConfigs) => {
 };
 
 const buildSortOptions = (valConfigs) => {
-    const options = [{ value: '', label: '(default)' }];
+    const options = [
+        { value: '', label: '(default)' },
+        { value: '__field__', label: 'Field value (A→Z / Z→A)' },
+    ];
     (valConfigs || []).forEach((config) => {
         if (!config || !config.field || !config.agg) return;
         const value = config.agg === 'formula' ? config.field : `${config.field}_${config.agg}`;
@@ -1265,7 +1270,7 @@ function OutlineNodeRow({ item, selected, theme, sortByOptions, getFieldLabel = 
                     </div>
                     <div style={{ display: 'flex', gap: '6px', flexWrap: 'wrap' }}>
                         <SummaryChip theme={theme}>{node.topN ? `Top ${node.topN}` : 'All rows'}</SummaryChip>
-                        <SummaryChip theme={theme}>{sortLabel ? `Sort ${node.sortDir} by ${sortLabel}` : 'Default sort'}</SummaryChip>
+                        <SummaryChip theme={theme}>{sortLabel ? `Sort ${node.sortDir}${node.sortAbs ? ' |abs|' : ''} by ${sortLabel}` : 'Default sort'}</SummaryChip>
                         {node.defaultChild && <SummaryChip theme={theme}>Has next level</SummaryChip>}
                         {node.branches.length > 0 && (
                             <SummaryChip theme={theme} tone="primary">
@@ -1360,7 +1365,7 @@ function LevelRow({
                 </div>
                 <div style={{ fontSize: '11px', color: theme.textSec, marginTop: '3px', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
                     {fieldLabel}
-                    {sortLabel ? ` · ${node.sortDir === 'asc' ? 'Asc' : 'Desc'} by ${sortLabel}` : ''}
+                    {sortLabel ? ` · ${node.sortDir === 'asc' ? 'Asc' : 'Desc'}${node.sortAbs ? ' |abs|' : ''} by ${sortLabel}` : ''}
                     {node.topN ? ` · Top ${node.topN}` : ''}
                     {node.filters && node.filters.clauses && node.filters.clauses.length > 0 ? ` · ${node.filters.clauses.length} filter${node.filters.clauses.length === 1 ? '' : 's'}` : ''}
                 </div>
@@ -1460,7 +1465,7 @@ function NodeInspector({
 
                 <div>
                     <div style={sectionLabelStyle(theme)}>Ranking And Sort</div>
-                    <div style={{ display: 'grid', gridTemplateColumns: '82px 1fr 42px', gap: '8px', alignItems: 'stretch' }}>
+                    <div style={{ display: 'grid', gridTemplateColumns: '82px 1fr 42px 42px', gap: '8px', alignItems: 'stretch' }}>
                         <input
                             type="number"
                             min="1"
@@ -1481,6 +1486,25 @@ function NodeInspector({
                                 <option key={option.value} value={option.value}>{option.label}</option>
                             ))}
                         </select>
+                        <button
+                            type="button"
+                            onClick={() => onUpdate({ ...node, sortAbs: !node.sortAbs })}
+                            style={{
+                                border: `1px solid ${node.sortAbs ? (theme.primary || '#2563EB') : theme.border}`,
+                                borderRadius: '10px',
+                                background: node.sortAbs ? `${theme.primary || '#2563EB'}18` : (theme.hover || '#F3F4F6'),
+                                color: node.sortAbs ? (theme.primary || '#2563EB') : theme.text,
+                                cursor: 'pointer',
+                                display: 'flex',
+                                alignItems: 'center',
+                                justifyContent: 'center',
+                                fontSize: '11px',
+                                fontWeight: 700,
+                            }}
+                            title="Sort by absolute value (ignores sign)"
+                        >
+                            |a|
+                        </button>
                         <button
                             type="button"
                             onClick={() => onUpdate({ ...node, sortDir: node.sortDir === 'asc' ? 'desc' : 'asc' })}
@@ -1736,7 +1760,7 @@ function RowOverrideInspector({
 
                 <div>
                     <div style={sectionLabelStyle(theme)}>Ranking And Sort</div>
-                    <div style={{ display: 'grid', gridTemplateColumns: '82px 1fr 42px', gap: '8px', alignItems: 'stretch' }}>
+                    <div style={{ display: 'grid', gridTemplateColumns: '82px 1fr 42px 42px', gap: '8px', alignItems: 'stretch' }}>
                         <input
                             type="number"
                             min="1"
@@ -1757,6 +1781,25 @@ function RowOverrideInspector({
                                 <option key={option.value} value={option.value}>{option.label}</option>
                             ))}
                         </select>
+                        <button
+                            type="button"
+                            onClick={() => updateSelectedNode({ ...selectedNode, sortAbs: !selectedNode.sortAbs })}
+                            style={{
+                                border: `1px solid ${selectedNode.sortAbs ? (theme.primary || '#2563EB') : theme.border}`,
+                                borderRadius: '10px',
+                                background: selectedNode.sortAbs ? `${theme.primary || '#2563EB'}18` : (theme.hover || '#F3F4F6'),
+                                color: selectedNode.sortAbs ? (theme.primary || '#2563EB') : theme.text,
+                                cursor: 'pointer',
+                                display: 'flex',
+                                alignItems: 'center',
+                                justifyContent: 'center',
+                                fontSize: '11px',
+                                fontWeight: 700,
+                            }}
+                            title="Sort by absolute value (ignores sign)"
+                        >
+                            |a|
+                        </button>
                         <button
                             type="button"
                             onClick={() => updateSelectedNode({ ...selectedNode, sortDir: selectedNode.sortDir === 'asc' ? 'desc' : 'asc' })}

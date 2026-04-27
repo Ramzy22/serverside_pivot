@@ -173,6 +173,7 @@ class PivotRuntimeService:
             postprocess_started_at: Optional[float] = None,
             response_rows: Optional[int] = None,
             response_columns: Optional[int] = None,
+            cancellation_outcome: str = "not_cancelled",
             extra: Optional[Dict[str, Any]] = None,
         ) -> Optional[Dict[str, Any]]:
             if not profiling_enabled:
@@ -195,9 +196,11 @@ class PivotRuntimeService:
                     "stateEpoch": context.state_epoch,
                     "windowSeq": context.window_seq,
                     "abortGeneration": context.abort_generation,
+                    "cacheKey": context.cache_key,
                     "lifecycleLane": (
                         RuntimeRequestCoordinator.active_request_key(context) or (None, None, None)
                     )[2],
+                    "cancellationOutcome": cancellation_outcome,
                     "rowFields": len(state.row_fields or []),
                     "colFields": len(state.col_fields or []),
                     "valueFields": len(state.val_configs or []),
@@ -230,7 +233,10 @@ class PivotRuntimeService:
             if not self._request_coordinator.register_request(context):
                 gate_finished_at = time.perf_counter()
                 request_built_at = gate_finished_at
-                return PivotServiceResponse(status="stale", profile=build_profile())
+                return PivotServiceResponse(
+                    status="stale",
+                    profile=build_profile(cancellation_outcome="stale_registration_rejected"),
+                )
 
             gate_finished_at = time.perf_counter()
 
@@ -424,6 +430,7 @@ class PivotRuntimeService:
                     profile=build_profile(
                         execution_started_at=execution_started_at,
                         execution_finished_at=execution_finished_at,
+                        cancellation_outcome="stale_response_dropped",
                     ),
                 )
             detail_result.profile = build_profile(
@@ -656,6 +663,7 @@ class PivotRuntimeService:
                     profile=build_profile(
                         execution_started_at=execution_started_at,
                         execution_finished_at=execution_finished_at,
+                        cancellation_outcome="superseded_cancelled",
                     ),
                 )
             raise
@@ -711,6 +719,7 @@ class PivotRuntimeService:
                     execution_finished_at=execution_finished_at,
                     response_rows=len(response.data or []),
                     response_columns=len(response.columns or []),
+                    cancellation_outcome="stale_response_dropped",
                     extra=(response.profile if isinstance(getattr(response, "profile", None), dict) else None),
                 ),
             )
@@ -1424,6 +1433,7 @@ class PivotRuntimeService:
             "topN": int(node.get("topN")) if isinstance(node.get("topN"), (int, float)) and node.get("topN", 0) > 0 else None,
             "sortBy": node.get("sortBy") if isinstance(node.get("sortBy"), str) and node.get("sortBy") else None,
             "sortDir": "asc" if node.get("sortDir") == "asc" else "desc",
+            "sortAbs": node.get("sortAbs") is True,
             "format": PivotRuntimeService._normalize_report_format(node.get("format")),
         }
 
@@ -1649,15 +1659,17 @@ class PivotRuntimeService:
                 return []
 
             top_n = node.get("topN")
-            sort_by = node.get("sortBy")
+            sort_by_raw = node.get("sortBy")
+            sort_by = node_field if sort_by_raw == "__field__" else sort_by_raw
             sort_dir = node.get("sortDir") or "desc"
+            sort_abs = node.get("sortAbs") is True
             branch_request = TanStackRequest(
                 operation=TanStackOperation.GET_DATA,
                 table=base_request.table,
                 columns=self._build_request_columns([node_field], [], state.val_configs),
                 filters=active_filters,
                 custom_dimensions=base_request.custom_dimensions or [],
-                sorting=[{"id": sort_by, "desc": sort_dir != "asc"}] if sort_by else [],
+                sorting=[{"id": sort_by, "desc": sort_dir != "asc"}] if sort_by and sort_by_raw != "__field__" else [],
                 grouping=[node_field],
                 aggregations=[],
                 pagination={
@@ -1683,7 +1695,7 @@ class PivotRuntimeService:
             if sort_by:
                 visible_rows = sorted(
                     visible_rows,
-                    key=lambda row: self._report_sort_key(row.get(sort_by)),
+                    key=lambda row: self._report_sort_key(row.get(sort_by), sort_abs),
                     reverse=(sort_dir != "asc"),
                 )
 
@@ -1942,13 +1954,14 @@ class PivotRuntimeService:
         return total
 
     @staticmethod
-    def _report_sort_key(value: Any) -> Any:
+    def _report_sort_key(value: Any, abs_sort: bool = False) -> Any:
         if value is None:
             return (2, "", 0)
         if isinstance(value, (int, float)) and not isinstance(value, bool):
             if value != value:
                 return (2, "", 0)
-            return (0, "", float(value))
+            numeric = abs(float(value)) if abs_sort else float(value)
+            return (0, "", numeric)
         return (1, str(value).lower(), 0)
 
     @staticmethod
@@ -1998,9 +2011,13 @@ class PivotRuntimeService:
                 if top_n and isinstance(top_n, (int, float)) and top_n > 0:
                     row["_levelTopN"] = int(top_n)
                 sort_by = rule.get("sortBy")
+                if sort_by == "__field__":
+                    sort_by = rule.get("field") or None
                 if isinstance(sort_by, str) and sort_by:
                     row["__reportSortBy"] = sort_by
                 row["__reportSortDir"] = "asc" if rule.get("sortDir") == "asc" else "desc"
+                if rule.get("sortAbs") is True:
+                    row["__reportSortAbs"] = True
 
             annotated.append(row)
 
@@ -2057,6 +2074,7 @@ class PivotRuntimeService:
             working_nodes = list(nodes)
             sort_by = working_nodes[0]["row"].get("__reportSortBy")
             sort_dir = working_nodes[0]["row"].get("__reportSortDir") or "desc"
+            sort_abs = working_nodes[0]["row"].get("__reportSortAbs") is True
             if isinstance(sort_by, str) and sort_by:
                 sortable_nodes = []
                 missing_nodes = []
@@ -2068,7 +2086,7 @@ class PivotRuntimeService:
                         sortable_nodes.append(node)
                 sortable_nodes = sorted(
                     sortable_nodes,
-                    key=lambda node: PivotRuntimeService._report_sort_key(node["row"].get(sort_by)),
+                    key=lambda node: PivotRuntimeService._report_sort_key(node["row"].get(sort_by), sort_abs),
                     reverse=(sort_dir != "asc"),
                 )
                 working_nodes = sortable_nodes + missing_nodes
@@ -2090,7 +2108,7 @@ class PivotRuntimeService:
             flattened: List[Dict[str, Any]] = []
             for node in working_nodes:
                 row = node["row"]
-                row_out = {k: v for k, v in row.items() if k not in {"__reportSortBy", "__reportSortDir"}}
+                row_out = {k: v for k, v in row.items() if k not in {"__reportSortBy", "__reportSortDir", "__reportSortAbs"}}
                 if top_n and total_count > trimmed_count:
                     row_out["_groupTotalCount"] = total_count
                 child_rows, child_removed = _flatten_report_nodes(node["children"])
