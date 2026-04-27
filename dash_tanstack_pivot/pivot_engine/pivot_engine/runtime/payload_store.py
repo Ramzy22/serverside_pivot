@@ -13,6 +13,8 @@ from datetime import date, datetime
 from decimal import Decimal
 from typing import Any, Dict, Optional
 
+from ..cache_coordinator import CacheCoordinator, CacheNamespaces
+
 
 def _json_default(value: Any) -> Any:
     if isinstance(value, (datetime, date)):
@@ -48,13 +50,25 @@ class RuntimePayloadStore:
         default_ttl_seconds: int = 120,
         max_entries: int = 256,
         max_bytes: int = 128 * 1024 * 1024,
+        cache_coordinator: Optional[CacheCoordinator] = None,
     ) -> None:
         self.default_ttl_seconds = max(1, int(default_ttl_seconds))
         self.max_entries = max(1, int(max_entries))
         self.max_bytes = max(1024, int(max_bytes))
+        self.cache_coordinator = cache_coordinator or CacheCoordinator()
         self._items: OrderedDict[str, RuntimePayload] = OrderedDict()
         self._bytes = 0
         self._lock = threading.Lock()
+        self.cache_coordinator.register_namespace(
+            CacheNamespaces.RUNTIME_PAYLOAD,
+            owner="runtime",
+            key_dimensions=("payload_token", "content_type", "request_id", "state_epoch"),
+            max_entries=self.max_entries,
+            max_bytes=self.max_bytes,
+            ttl_seconds=self.default_ttl_seconds,
+            size_getter=self._size_snapshot,
+            invalidator=lambda _event: self.clear(),
+        )
 
     def put_json(
         self,
@@ -76,11 +90,14 @@ class RuntimePayloadStore:
             size=len(body),
         )
         with self._lock:
-            self._cleanup_expired_locked(now)
+            expired_count, expired_bytes = self._cleanup_expired_locked(now)
             self._items[token] = item
             self._items.move_to_end(token)
             self._bytes += len(body)
-            self._evict_locked()
+            evicted_count, evicted_bytes = self._evict_locked()
+            self._record_expirations(expired_count, expired_bytes)
+            self._record_store()
+            self._record_evictions(evicted_count, evicted_bytes)
         return {
             "id": token,
             "format": "json",
@@ -115,11 +132,14 @@ class RuntimePayloadStore:
             size=len(body_bytes),
         )
         with self._lock:
-            self._cleanup_expired_locked(now)
+            expired_count, expired_bytes = self._cleanup_expired_locked(now)
             self._items[token] = item
             self._items.move_to_end(token)
             self._bytes += len(body_bytes)
-            self._evict_locked()
+            evicted_count, evicted_bytes = self._evict_locked()
+            self._record_expirations(expired_count, expired_bytes)
+            self._record_store()
+            self._record_evictions(evicted_count, evicted_bytes)
         return {
             "id": token,
             "format": "bytes",
@@ -153,11 +173,14 @@ class RuntimePayloadStore:
             size=size,
         )
         with self._lock:
-            self._cleanup_expired_locked(now)
+            expired_count, expired_bytes = self._cleanup_expired_locked(now)
             self._items[token] = item
             self._items.move_to_end(token)
             self._bytes += size
-            self._evict_locked()
+            evicted_count, evicted_bytes = self._evict_locked()
+            self._record_expirations(expired_count, expired_bytes)
+            self._record_store()
+            self._record_evictions(evicted_count, evicted_bytes)
         return {
             "id": token,
             "format": "file",
@@ -171,32 +194,96 @@ class RuntimePayloadStore:
     def get(self, token: str) -> Optional[RuntimePayload]:
         now = time.time()
         with self._lock:
-            self._cleanup_expired_locked(now)
+            expired_count, expired_bytes = self._cleanup_expired_locked(now)
+            self._record_expirations(expired_count, expired_bytes)
             item = self._items.get(str(token))
             if item is None:
+                self.cache_coordinator.record_lookup(CacheNamespaces.RUNTIME_PAYLOAD, hit=False)
                 return None
             if item.expires_at <= now:
-                self._remove_locked(item.token)
+                removed_size = self._remove_locked(item.token)
+                self._record_expirations(1, removed_size)
+                self.cache_coordinator.record_lookup(CacheNamespaces.RUNTIME_PAYLOAD, hit=False, expired=True)
                 return None
             self._items.move_to_end(item.token)
+            self.cache_coordinator.record_lookup(CacheNamespaces.RUNTIME_PAYLOAD, hit=True)
             return item
 
-    def _cleanup_expired_locked(self, now: float) -> None:
-        expired = [token for token, item in self._items.items() if item.expires_at <= now]
-        for token in expired:
-            self._remove_locked(token)
+    def clear(self) -> None:
+        with self._lock:
+            removed_count = len(self._items)
+            removed_bytes = self._bytes
+            for token in list(self._items):
+                self._remove_locked(token)
+            if removed_count:
+                self.cache_coordinator.record_delete(
+                    CacheNamespaces.RUNTIME_PAYLOAD,
+                    count=removed_count,
+                    bytes_removed=removed_bytes,
+                    entries=len(self._items),
+                    bytes_used=self._bytes,
+                    reason="clear",
+                )
 
-    def _evict_locked(self) -> None:
+    def metrics_snapshot(self) -> Dict[str, Any]:
+        return self.cache_coordinator.snapshot((CacheNamespaces.RUNTIME_PAYLOAD,))
+
+    def _size_snapshot(self) -> Dict[str, int]:
+        with self._lock:
+            return {"entries": len(self._items), "bytes": self._bytes}
+
+    def _cleanup_expired_locked(self, now: float) -> tuple[int, int]:
+        expired = [token for token, item in self._items.items() if item.expires_at <= now]
+        removed_bytes = 0
+        for token in expired:
+            removed_bytes += self._remove_locked(token)
+        return len(expired), removed_bytes
+
+    def _evict_locked(self) -> tuple[int, int]:
+        evicted = 0
+        removed_bytes = 0
         while len(self._items) > self.max_entries or (self._bytes > self.max_bytes and len(self._items) > 1):
             token, _item = next(iter(self._items.items()))
-            self._remove_locked(token)
+            removed_bytes += self._remove_locked(token)
+            evicted += 1
+        return evicted, removed_bytes
 
-    def _remove_locked(self, token: str) -> None:
+    def _remove_locked(self, token: str) -> int:
         item = self._items.pop(token, None)
         if item is not None:
-            self._bytes = max(0, self._bytes - int(item.size or len(item.body or b"")))
+            removed_size = int(item.size or len(item.body or b""))
+            self._bytes = max(0, self._bytes - removed_size)
             if item.file_path:
                 try:
                     os.remove(item.file_path)
                 except OSError:
                     pass
+            return removed_size
+        return 0
+
+    def _record_store(self) -> None:
+        self.cache_coordinator.record_store(
+            CacheNamespaces.RUNTIME_PAYLOAD,
+            entries=len(self._items),
+            bytes_used=self._bytes,
+        )
+
+    def _record_evictions(self, count: int, bytes_removed: int) -> None:
+        if count:
+            self.cache_coordinator.record_eviction(
+                CacheNamespaces.RUNTIME_PAYLOAD,
+                count=count,
+                bytes_removed=bytes_removed,
+                entries=len(self._items),
+                bytes_used=self._bytes,
+            )
+
+    def _record_expirations(self, count: int, bytes_removed: int) -> None:
+        if count:
+            self.cache_coordinator.record_expiration(
+                CacheNamespaces.RUNTIME_PAYLOAD,
+                count=count,
+                bytes_removed=bytes_removed,
+                entries=len(self._items),
+                bytes_used=self._bytes,
+            )

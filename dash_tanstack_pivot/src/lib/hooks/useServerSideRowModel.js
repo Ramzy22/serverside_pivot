@@ -744,6 +744,7 @@ export const useServerSideRowModel = ({
                     version: newVersion,
                     window_seq: newVersion,
                     state_epoch: stateEpoch,
+                    cache_key: cacheKey || undefined,
                     session_id: sessionId,
                     client_instance: clientInstance,
                     abort_generation: abortGeneration,

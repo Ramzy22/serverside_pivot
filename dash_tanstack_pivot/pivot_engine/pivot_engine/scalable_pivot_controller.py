@@ -18,6 +18,7 @@ from ibis.expr.api import Table as IbisTable
 from collections import OrderedDict
 
 from .controller import PivotController
+from .cache_coordinator import CacheCoordinator, CacheInvalidationEvent, CacheNamespaces
 from .lifecycle import get_task_manager
 from .tree import TreeExpansionManager
 from .planner.ibis_planner import IbisPlanner
@@ -130,6 +131,17 @@ class ScalablePivotController(PivotController):
             **cache_options
         )
 
+        self.cache_coordinator = CacheCoordinator()
+        self.cache_coordinator.register_namespace(
+            CacheNamespaces.CONTROLLER_QUERY,
+            owner="controller",
+            key_dimensions=("table", "compiled_sql", "pivot_spec", "delta_epoch"),
+            max_entries=getattr(self.cache, "max_size", None),
+            ttl_seconds=getattr(self.cache, "default_ttl", None),
+            size_getter=self._query_cache_size_snapshot,
+            invalidator=self._invalidate_controller_query_cache,
+        )
+
         self.enable_streaming = enable_streaming
         self.enable_incremental_views = enable_incremental_views
         self.task_manager = get_task_manager()
@@ -202,6 +214,7 @@ class ScalablePivotController(PivotController):
         self._hierarchy_grand_total_cache: OrderedDict[str, tuple[Dict[str, Any], float]] = OrderedDict()
         self._hierarchy_grand_total_cache_ttl = 30.0
         self._hierarchy_grand_total_cache_size = 64
+        self._register_hierarchy_cache_namespaces()
         self._sparse_materialized_pivot_threshold = 8
         try:
             configured_hierarchy_cap = int(max_hierarchy_rows) if max_hierarchy_rows is not None else 0
@@ -215,6 +228,108 @@ class ScalablePivotController(PivotController):
         if start is None or end is None:
             return None
         return round((end - start) * 1000, 3)
+
+    def _query_cache_size_snapshot(self) -> Dict[str, int]:
+        if not hasattr(self.cache, "get_all_keys"):
+            return {"entries": 0}
+        count = 0
+        for raw_key in list(self.cache.get_all_keys() or []):
+            key = raw_key.decode("utf-8") if isinstance(raw_key, bytes) else str(raw_key)
+            if (
+                key.startswith("pivot_ibis:query:")
+                or key.startswith("pivot_ibis:query_fallback:")
+                or key.startswith("pivot_sparse:")
+            ):
+                count += 1
+        return {"entries": count}
+
+    def _register_hierarchy_cache_namespaces(self) -> None:
+        self.cache_coordinator.register_namespace(
+            CacheNamespaces.CONTROLLER_HIERARCHY_VIEW,
+            owner="controller.hierarchy",
+            key_dimensions=("table", "spec_fingerprint", "expanded_paths", "row_window"),
+            max_entries=self._hierarchy_view_cache_size,
+            ttl_seconds=self._hierarchy_view_cache_ttl,
+            size_getter=lambda: {"entries": len(self._hierarchy_view_cache)},
+            invalidator=self._invalidate_hierarchy_view_cache,
+        )
+        self.cache_coordinator.register_namespace(
+            CacheNamespaces.CONTROLLER_HIERARCHY_ROOT_COUNT,
+            owner="controller.hierarchy",
+            key_dimensions=("table", "rows", "filters"),
+            max_entries=self._hierarchy_root_count_cache_size,
+            ttl_seconds=self._hierarchy_root_count_cache_ttl,
+            size_getter=lambda: {"entries": len(self._hierarchy_root_count_cache)},
+            invalidator=self._invalidate_hierarchy_root_count_cache,
+        )
+        self.cache_coordinator.register_namespace(
+            CacheNamespaces.CONTROLLER_HIERARCHY_ROOT_PAGE,
+            owner="controller.hierarchy",
+            key_dimensions=("table", "root_count_key", "sort", "row_window"),
+            max_entries=self._hierarchy_root_page_cache_size,
+            ttl_seconds=self._hierarchy_root_page_cache_ttl,
+            size_getter=lambda: {"entries": len(self._hierarchy_root_page_cache)},
+            invalidator=self._invalidate_hierarchy_root_page_cache,
+        )
+        self.cache_coordinator.register_namespace(
+            CacheNamespaces.CONTROLLER_HIERARCHY_GRAND_TOTAL,
+            owner="controller.hierarchy",
+            key_dimensions=("table", "spec_fingerprint", "filters", "measures", "custom_dimensions"),
+            max_entries=self._hierarchy_grand_total_cache_size,
+            ttl_seconds=self._hierarchy_grand_total_cache_ttl,
+            size_getter=lambda: {"entries": len(self._hierarchy_grand_total_cache)},
+            invalidator=self._invalidate_hierarchy_grand_total_cache,
+        )
+
+    def _invalidate_controller_query_cache(self, event: CacheInvalidationEvent) -> None:
+        table_key = self._cache_table_key(event.table)
+        table_scoped_prefixes = (
+            f"pivot_ibis:query:{table_key}:",
+            f"pivot_ibis:query_fallback:{table_key}:",
+            f"pivot_sparse:{table_key}:",
+        )
+        legacy_query_prefixes = (
+            "pivot_ibis:query:",
+            "pivot_ibis:query_fallback:",
+            "pivot_sparse:",
+        )
+
+        def should_delete_query_cache(key: str) -> bool:
+            if key.startswith(table_scoped_prefixes):
+                return True
+            for legacy_prefix in legacy_query_prefixes:
+                if key.startswith(legacy_prefix):
+                    return ":" not in key[len(legacy_prefix):]
+            return False
+
+        if not self._delete_cache_keys(should_delete_query_cache) and hasattr(self.cache, "clear"):
+            self.cache.clear()
+
+    def _invalidate_hierarchy_view_cache(self, _event: CacheInvalidationEvent) -> None:
+        self._hierarchy_view_cache.clear()
+
+    def _invalidate_hierarchy_root_count_cache(self, _event: CacheInvalidationEvent) -> None:
+        self._hierarchy_root_count_cache.clear()
+
+    def _invalidate_hierarchy_root_page_cache(self, _event: CacheInvalidationEvent) -> None:
+        self._hierarchy_root_page_cache.clear()
+
+    def _invalidate_hierarchy_grand_total_cache(self, _event: CacheInvalidationEvent) -> None:
+        self._hierarchy_grand_total_cache.clear()
+
+    def load_data_from_arrow(
+        self,
+        table_name: str,
+        arrow_table: pa.Table,
+        register_checkpoint: bool = True,
+    ):
+        super().load_data_from_arrow(table_name, arrow_table, register_checkpoint=register_checkpoint)
+        self.cache_coordinator.invalidate(
+            event="data_load",
+            reason="load_data_from_arrow",
+            table=table_name,
+            structural=True,
+        )
 
     def _uses_duckdb_ibis(self) -> bool:
         backend_name = getattr(getattr(self.planner, "con", None), "name", "").lower()
@@ -651,6 +766,7 @@ class ScalablePivotController(PivotController):
         target_dim = group_rows[-1] if group_rows else None
         
         adapted = []
+        seen_effective_sorts = set()
         for s in sort_list:
             if not isinstance(s, dict):
                 continue
@@ -669,7 +785,16 @@ class ScalablePivotController(PivotController):
                 for key in ScalablePivotController._DIM_SORT_KEYS:
                     if key in col_opts and col_opts[key] is not None:
                         item[key] = col_opts[key]
-            
+
+            effective_sort_key = (
+                item.get("sortKeyField") or item.get("field"),
+                item.get("order") or "asc",
+                item.get("nulls") or "",
+                bool(item.get("absoluteSort")),
+            )
+            if effective_sort_key in seen_effective_sorts:
+                continue
+            seen_effective_sorts.add(effective_sort_key)
             adapted.append(item)
             
         return adapted
@@ -757,12 +882,19 @@ class ScalablePivotController(PivotController):
     def _hierarchy_view_cache_get(self, cache_key: str) -> Optional[Dict[str, Any]]:
         cached_entry = self._hierarchy_view_cache.get(cache_key)
         if not cached_entry:
+            self.cache_coordinator.record_lookup(CacheNamespaces.CONTROLLER_HIERARCHY_VIEW, hit=False)
             return None
         payload, expires_at = cached_entry
         if time.time() > expires_at:
             self._hierarchy_view_cache.pop(cache_key, None)
+            self.cache_coordinator.record_lookup(
+                CacheNamespaces.CONTROLLER_HIERARCHY_VIEW,
+                hit=False,
+                expired=True,
+            )
             return None
         self._hierarchy_view_cache.move_to_end(cache_key)
+        self.cache_coordinator.record_lookup(CacheNamespaces.CONTROLLER_HIERARCHY_VIEW, hit=True)
         return {
             **payload,
             "expanded_set": set(payload.get("expanded_set") or set()),
@@ -783,8 +915,20 @@ class ScalablePivotController(PivotController):
         }
         self._hierarchy_view_cache[cache_key] = (stored_payload, time.time() + self._hierarchy_view_cache_ttl)
         self._hierarchy_view_cache.move_to_end(cache_key)
+        evicted = 0
         while len(self._hierarchy_view_cache) > self._hierarchy_view_cache_size:
             self._hierarchy_view_cache.popitem(last=False)
+            evicted += 1
+        self.cache_coordinator.record_store(
+            CacheNamespaces.CONTROLLER_HIERARCHY_VIEW,
+            entries=len(self._hierarchy_view_cache),
+        )
+        if evicted:
+            self.cache_coordinator.record_eviction(
+                CacheNamespaces.CONTROLLER_HIERARCHY_VIEW,
+                count=evicted,
+                entries=len(self._hierarchy_view_cache),
+            )
 
     def _find_reusable_hierarchy_cache_entry(self, spec_fingerprint: str, requested_expanded_set: set[tuple]) -> Optional[Dict[str, Any]]:
         if not requested_expanded_set or requested_expanded_set == {("__ALL__",)}:
@@ -794,6 +938,10 @@ class ScalablePivotController(PivotController):
         for cache_key, (payload, expires_at) in list(self._hierarchy_view_cache.items()):
             if time.time() > expires_at:
                 self._hierarchy_view_cache.pop(cache_key, None)
+                self.cache_coordinator.record_expiration(
+                    CacheNamespaces.CONTROLLER_HIERARCHY_VIEW,
+                    entries=len(self._hierarchy_view_cache),
+                )
                 continue
             if payload.get("spec_fingerprint") != spec_fingerprint:
                 continue
@@ -810,29 +958,55 @@ class ScalablePivotController(PivotController):
     def _hierarchy_root_count_cache_get(self, cache_key: str) -> Optional[int]:
         cached_entry = self._hierarchy_root_count_cache.get(cache_key)
         if not cached_entry:
+            self.cache_coordinator.record_lookup(CacheNamespaces.CONTROLLER_HIERARCHY_ROOT_COUNT, hit=False)
             return None
         count, expires_at = cached_entry
         if time.time() > expires_at:
             self._hierarchy_root_count_cache.pop(cache_key, None)
+            self.cache_coordinator.record_lookup(
+                CacheNamespaces.CONTROLLER_HIERARCHY_ROOT_COUNT,
+                hit=False,
+                expired=True,
+            )
             return None
         self._hierarchy_root_count_cache.move_to_end(cache_key)
+        self.cache_coordinator.record_lookup(CacheNamespaces.CONTROLLER_HIERARCHY_ROOT_COUNT, hit=True)
         return int(count)
 
     def _hierarchy_root_count_cache_set(self, cache_key: str, count: int) -> None:
         self._hierarchy_root_count_cache[cache_key] = (int(count), time.time() + self._hierarchy_root_count_cache_ttl)
         self._hierarchy_root_count_cache.move_to_end(cache_key)
+        evicted = 0
         while len(self._hierarchy_root_count_cache) > self._hierarchy_root_count_cache_size:
             self._hierarchy_root_count_cache.popitem(last=False)
+            evicted += 1
+        self.cache_coordinator.record_store(
+            CacheNamespaces.CONTROLLER_HIERARCHY_ROOT_COUNT,
+            entries=len(self._hierarchy_root_count_cache),
+        )
+        if evicted:
+            self.cache_coordinator.record_eviction(
+                CacheNamespaces.CONTROLLER_HIERARCHY_ROOT_COUNT,
+                count=evicted,
+                entries=len(self._hierarchy_root_count_cache),
+            )
 
     def _hierarchy_root_page_cache_get(self, cache_key: str) -> Optional[List[Any]]:
         cached_entry = self._hierarchy_root_page_cache.get(cache_key)
         if not cached_entry:
+            self.cache_coordinator.record_lookup(CacheNamespaces.CONTROLLER_HIERARCHY_ROOT_PAGE, hit=False)
             return None
         values, expires_at = cached_entry
         if time.time() > expires_at:
             self._hierarchy_root_page_cache.pop(cache_key, None)
+            self.cache_coordinator.record_lookup(
+                CacheNamespaces.CONTROLLER_HIERARCHY_ROOT_PAGE,
+                hit=False,
+                expired=True,
+            )
             return None
         self._hierarchy_root_page_cache.move_to_end(cache_key)
+        self.cache_coordinator.record_lookup(CacheNamespaces.CONTROLLER_HIERARCHY_ROOT_PAGE, hit=True)
         return list(values or [])
 
     def _hierarchy_root_page_cache_set(self, cache_key: str, values: List[Any]) -> None:
@@ -841,8 +1015,20 @@ class ScalablePivotController(PivotController):
             time.time() + self._hierarchy_root_page_cache_ttl,
         )
         self._hierarchy_root_page_cache.move_to_end(cache_key)
+        evicted = 0
         while len(self._hierarchy_root_page_cache) > self._hierarchy_root_page_cache_size:
             self._hierarchy_root_page_cache.popitem(last=False)
+            evicted += 1
+        self.cache_coordinator.record_store(
+            CacheNamespaces.CONTROLLER_HIERARCHY_ROOT_PAGE,
+            entries=len(self._hierarchy_root_page_cache),
+        )
+        if evicted:
+            self.cache_coordinator.record_eviction(
+                CacheNamespaces.CONTROLLER_HIERARCHY_ROOT_PAGE,
+                count=evicted,
+                entries=len(self._hierarchy_root_page_cache),
+            )
 
     def _collapsed_root_count_cache_key(self, spec: PivotSpec) -> str:
         payload = {
@@ -870,12 +1056,19 @@ class ScalablePivotController(PivotController):
     def _hierarchy_grand_total_cache_get(self, cache_key: str) -> Optional[Dict[str, Any]]:
         cached_entry = self._hierarchy_grand_total_cache.get(cache_key)
         if not cached_entry:
+            self.cache_coordinator.record_lookup(CacheNamespaces.CONTROLLER_HIERARCHY_GRAND_TOTAL, hit=False)
             return None
         row, expires_at = cached_entry
         if expires_at < time.time():
             self._hierarchy_grand_total_cache.pop(cache_key, None)
+            self.cache_coordinator.record_lookup(
+                CacheNamespaces.CONTROLLER_HIERARCHY_GRAND_TOTAL,
+                hit=False,
+                expired=True,
+            )
             return None
         self._hierarchy_grand_total_cache.move_to_end(cache_key)
+        self.cache_coordinator.record_lookup(CacheNamespaces.CONTROLLER_HIERARCHY_GRAND_TOTAL, hit=True)
         return dict(row) if isinstance(row, dict) else None
 
     def _hierarchy_grand_total_cache_set(self, cache_key: str, row: Dict[str, Any]) -> None:
@@ -886,8 +1079,20 @@ class ScalablePivotController(PivotController):
             time.time() + self._hierarchy_grand_total_cache_ttl,
         )
         self._hierarchy_grand_total_cache.move_to_end(cache_key)
+        evicted = 0
         while len(self._hierarchy_grand_total_cache) > self._hierarchy_grand_total_cache_size:
             self._hierarchy_grand_total_cache.popitem(last=False)
+            evicted += 1
+        self.cache_coordinator.record_store(
+            CacheNamespaces.CONTROLLER_HIERARCHY_GRAND_TOTAL,
+            entries=len(self._hierarchy_grand_total_cache),
+        )
+        if evicted:
+            self.cache_coordinator.record_eviction(
+                CacheNamespaces.CONTROLLER_HIERARCHY_GRAND_TOTAL,
+                count=evicted,
+                entries=len(self._hierarchy_grand_total_cache),
+            )
 
     @staticmethod
     def _filter_refs_measure_alias(filter_spec: Dict[str, Any], measure_aliases: set[str]) -> bool:
@@ -3822,38 +4027,42 @@ class ScalablePivotController(PivotController):
 
     def _clear_mutation_caches(self, table_name: Optional[str] = None, structural: bool = False) -> None:
         """Invalidate caches affected by row mutations without flushing unrelated cache namespaces."""
-        table_key = self._cache_table_key(table_name)
-        table_scoped_prefixes = (
-            f"pivot_ibis:query:{table_key}:",
-            f"pivot_ibis:query_fallback:{table_key}:",
-            f"pivot_sparse:{table_key}:",
-        )
-        legacy_query_prefixes = (
-            "pivot_ibis:query:",
-            "pivot_ibis:query_fallback:",
-            "pivot_sparse:",
-        )
-
-        def should_delete_query_cache(key: str) -> bool:
-            if key.startswith(table_scoped_prefixes):
-                return True
-            # Legacy keys did not carry table identity, so they must be dropped
-            # once after a mutation to avoid serving pre-upgrade stale results.
-            for legacy_prefix in legacy_query_prefixes:
-                if key.startswith(legacy_prefix):
-                    return ":" not in key[len(legacy_prefix):]
-            return False
-
-        if not self._delete_cache_keys(should_delete_query_cache) and hasattr(self.cache, "clear"):
-            self.cache.clear()
-
-        # Row-data edits do not change root count/page membership, but they do
-        # change aggregate values and grand totals for hierarchy views.
-        self._hierarchy_view_cache.clear()
-        self._hierarchy_grand_total_cache.clear()
+        namespaces = [
+            CacheNamespaces.CONTROLLER_QUERY,
+            CacheNamespaces.CONTROLLER_HIERARCHY_VIEW,
+            CacheNamespaces.CONTROLLER_HIERARCHY_GRAND_TOTAL,
+        ]
         if structural:
-            self._hierarchy_root_count_cache.clear()
-            self._hierarchy_root_page_cache.clear()
+            namespaces.extend(
+                [
+                    CacheNamespaces.CONTROLLER_HIERARCHY_ROOT_COUNT,
+                    CacheNamespaces.CONTROLLER_HIERARCHY_ROOT_PAGE,
+                ]
+            )
+        coordinator = getattr(self, "cache_coordinator", None)
+        if coordinator is None:
+            event = CacheInvalidationEvent(
+                sequence=0,
+                event="mutation",
+                namespaces=tuple(namespaces),
+                reason="row_mutation",
+                table=str(table_name) if table_name is not None else None,
+                structural=structural,
+            )
+            self._invalidate_controller_query_cache(event)
+            self._hierarchy_view_cache.clear()
+            self._hierarchy_grand_total_cache.clear()
+            if structural:
+                self._hierarchy_root_count_cache.clear()
+                self._hierarchy_root_page_cache.clear()
+            return
+        coordinator.invalidate(
+            namespaces,
+            event="mutation",
+            reason="row_mutation",
+            table=table_name,
+            structural=structural,
+        )
 
     def _execute_parameterized_mutation(self, sql: str, params: List[Any]) -> None:
         con = self.planner.con

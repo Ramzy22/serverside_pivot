@@ -793,22 +793,6 @@ export function useColumnDefs({
                                 </span>
                                 {renderDetailToggle(row)}
                                 {typeof renderRowEditActions === 'function' ? renderRowEditActions(row) : null}
-                                {/* Report mode: show level label badge */}
-                                {pivotMode === 'report' && row.original && row.original._levelLabel && (
-                                    <span style={{
-                                        fontSize: '9px',
-                                        fontWeight: 600,
-                                        color: theme.primary || '#4F46E5',
-                                        background: `${theme.primary || '#4F46E5'}14`,
-                                        padding: '1px 6px',
-                                        borderRadius: '4px',
-                                        marginLeft: '8px',
-                                        whiteSpace: 'nowrap',
-                                        flexShrink: 0,
-                                    }}>
-                                        {row.original._levelLabel}
-                                    </span>
-                                )}
                                 {/* Report mode: Top N of M indicator */}
                                 {pivotMode === 'report' && row.original && row.original._levelTopN && (
                                     <span style={{
@@ -888,22 +872,6 @@ export function useColumnDefs({
                                     </button>
                                 )}
                                 {showValue ? val : ''}
-                                {/* Report mode: show level label badge */}
-                                {pivotMode === 'report' && showValue && row.original && row.original._levelLabel && (
-                                    <span style={{
-                                        fontSize: '9px',
-                                        fontWeight: 600,
-                                        color: theme.primary || '#4F46E5',
-                                        background: `${theme.primary || '#4F46E5'}14`,
-                                        padding: '1px 6px',
-                                        borderRadius: '4px',
-                                        marginLeft: '6px',
-                                        whiteSpace: 'nowrap',
-                                        flexShrink: 0,
-                                    }}>
-                                        {row.original._levelLabel}
-                                    </span>
-                                )}
                                 {/* Report mode: Top N indicator */}
                                 {pivotMode === 'report' && showValue && row.original && row.original._levelTopN && (
                                     <span style={{

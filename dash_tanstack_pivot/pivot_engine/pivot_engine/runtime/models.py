@@ -75,6 +75,7 @@ class PivotRequestContext:
     start_row: int = 0
     end_row: Optional[int] = None
     request_id: Optional[str] = None
+    cache_key: Optional[str] = None
     profiling: bool = False
 
     @classmethod
@@ -127,6 +128,7 @@ class PivotRequestContext:
             start_row=start_row,
             end_row=end_row,
             request_id=str(first_present(viewport_meta, "requestId", "request_id", default="") or "") or None,
+            cache_key=str(first_present(viewport_meta, "cacheKey", "cache_key", default="") or "") or None,
             profiling=bool(first_present(viewport_meta, "profile", "profiling", default=False)),
         )
 

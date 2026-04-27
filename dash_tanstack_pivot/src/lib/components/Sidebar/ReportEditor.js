@@ -1,7 +1,7 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import Icons from '../../utils/Icons';
 import { formatAggLabel, formatDisplayLabel } from '../../utils/helpers';
-import { formatCustomAwareFieldLabel } from '../../hooks/usePivotNormalization';
+import { formatCustomAwareFieldLabel, isCustomCategoryField } from '../../hooks/usePivotNormalization';
 
 const uid = () => `r${Date.now().toString(36)}${Math.random().toString(36).slice(2, 6)}`;
 
@@ -178,7 +178,7 @@ const getSelectableFields = (availableFields, valConfigs) => {
         field &&
         typeof field === 'string' &&
         !REPORT_META.has(field) &&
-        !field.startsWith('_') &&
+        (!field.startsWith('_') || isCustomCategoryField(field)) &&
         !aggIds.has(field)
     ));
 };

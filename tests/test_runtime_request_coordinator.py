@@ -1,4 +1,5 @@
 import asyncio
+from pathlib import Path
 
 import pytest
 
@@ -28,6 +29,27 @@ def test_runtime_request_coordinator_centralizes_session_gate_checks():
     assert coordinator.register_request(_context(window_seq=2))
     assert coordinator.response_is_current(_context(window_seq=2))
     assert not coordinator.response_is_current(_context(window_seq=1))
+
+
+def test_runtime_request_lifecycle_spec_documents_profile_contract():
+    spec = Path("RUNTIME_REQUEST_LIFECYCLE.md").read_text(encoding="utf-8")
+
+    for required in (
+        "requestId",
+        "sessionId",
+        "clientInstance",
+        "stateEpoch",
+        "windowSeq",
+        "abortGeneration",
+        "cacheKey",
+        "adapter.responseCacheKey",
+        "lifecycleLane",
+        "cancellationOutcome",
+        "stale_registration_rejected",
+        "superseded_cancelled",
+        "stale_response_dropped",
+    ):
+        assert required in spec
 
 
 @pytest.mark.asyncio

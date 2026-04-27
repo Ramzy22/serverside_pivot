@@ -104,6 +104,40 @@ def test_dash_presentation_app_includes_single_pivot_sparkline_modes_demo():
     assert '"formula": "[Cash Equity_day_pnl_sum] - [ETF_day_pnl_sum]"' in app_source
 
 
+def test_export_copy_uses_rich_html_clipboard_and_styled_xls_runtime_export():
+    component_source = Path(
+        os.path.join(
+            os.getcwd(),
+            "dash_tanstack_pivot",
+            "src",
+            "lib",
+            "components",
+            "DashTanstackPivot.react.js",
+        )
+    ).read_text(encoding="utf-8")
+    export_source = Path(
+        os.path.join(
+            os.getcwd(),
+            "dash_tanstack_pivot",
+            "src",
+            "lib",
+            "utils",
+            "exportUtils.js",
+        )
+    ).read_text(encoding="utf-8")
+
+    assert "buildStyledHtmlTableExport" in component_source
+    assert "writeClipboardPayload" in component_source
+    assert "htmlTableToTsv" in component_source
+    assert "format: 'html'" in component_source
+    assert "format: 'xls'" in component_source
+    assert "style: buildExportStyleProfile" in component_source
+    assert "ClipboardItem" in export_source
+    assert "'text/html'" in export_source
+    assert "application/vnd.ms-excel" in export_source
+    assert "downloadHtmlTableAsExcel" in export_source
+
+
 def test_displayed_column_formula_scope_is_exposed_in_sidebar_and_component():
     sidebar_source = Path(
         os.path.join(
@@ -2832,9 +2866,44 @@ def test_client_side_custom_categories_materialize_before_filtering():
     assert "export const applyCustomDimensionsToRows" in normalization_source
     assert "evaluateCustomCategoryDimension(nextRow, dimension)" in normalization_source
     assert "serverSide ? cleanData : applyCustomDimensionsToRows(cleanData, customDimensions)" in component_source
+    assert "data={customAwareData}" in component_source
     assert "const filteredData = useFilteredData(customAwareData, filters, serverSide);" in component_source
     assert component_source.index("const filteredData = useFilteredData") < component_source.index("} = useServerSideViewportController({")
     assert "targetZone === 'vals' && isCustomCategoryField(fieldName)" in component_source
+
+
+def test_custom_categories_are_selectable_report_dimensions():
+    report_source = Path(
+        os.path.join(
+            os.getcwd(),
+            "dash_tanstack_pivot",
+            "src",
+            "lib",
+            "components",
+            "Sidebar",
+            "ReportEditor.js",
+        )
+    ).read_text(encoding="utf-8")
+
+    assert "isCustomCategoryField" in report_source
+    assert "!field.startsWith('_') || isCustomCategoryField(field)" in report_source
+
+
+def test_report_rows_do_not_render_level_label_chips():
+    column_defs_source = Path(
+        os.path.join(
+            os.getcwd(),
+            "dash_tanstack_pivot",
+            "src",
+            "lib",
+            "hooks",
+            "useColumnDefs.js",
+        )
+    ).read_text(encoding="utf-8")
+
+    assert "Report mode: show level label badge" not in column_defs_source
+    assert "row.original._levelLabel" not in column_defs_source
+    assert "Top {row.original._levelTopN}" in column_defs_source
 
 
 def test_custom_category_editor_uses_modal_and_validates_rules():

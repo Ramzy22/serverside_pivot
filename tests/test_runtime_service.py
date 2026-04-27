@@ -187,6 +187,92 @@ def test_runtime_service_export_uses_runtime_viewport_execution_and_returns_file
             os.remove(content_path)
 
 
+def test_runtime_service_export_xls_preserves_inline_table_styles():
+    class ExportAdapter:
+        async def handle_virtual_scroll_request(self, request, start_row, end_row, expanded_paths, **kwargs):
+            return TanStackResponse(
+                data=[
+                    {"_id": "North", "sales_sum": 100, "depth": 0},
+                    {"_id": "South", "sales_sum": 80, "depth": 0},
+                ],
+                columns=[
+                    {"id": "hierarchy", "header": "Region"},
+                    {"id": "sales_sum", "header": "Sales"},
+                ],
+                total_rows=2,
+            )
+
+    service = PivotRuntimeService(adapter_getter=lambda: ExportAdapter(), session_gate=SessionRequestGate())
+    response = service.process(
+        PivotViewState(
+            row_fields=["region"],
+            val_configs=[{"field": "sales", "agg": "sum", "format": "currency:$"}],
+            expanded=True,
+            show_col_totals=True,
+            export_request={
+                "format": "xls",
+                "includeHeaders": True,
+                "rowStart": 0,
+                "rowEnd": 2,
+                "colIds": ["hierarchy", "sales_sum"],
+                "style": {
+                    "fontFamily": "Aptos, sans-serif",
+                    "fontSize": "12px",
+                    "rowHeight": 28,
+                    "theme": {
+                        "headerBg": "#123456",
+                        "headerText": "#ffffff",
+                        "surfaceBg": "#ffffff",
+                        "hierarchyBg": "#f8fafc",
+                        "text": "#111827",
+                        "textSec": "#374151",
+                        "border": "#cbd5e1",
+                    },
+                    "headerLabels": {
+                        "hierarchy": "Region",
+                        "_id": "Region",
+                        "sales_sum": "Styled Sales",
+                    },
+                    "columnWidths": {"hierarchy": 160, "_id": 160, "sales_sum": 120},
+                    "decimalPlaces": 2,
+                    "numberGroupSeparator": "comma",
+                    "cellFormatRules": {
+                        "North:::sales_sum": {"bg": "#ddeeff", "color": "#123123", "bold": True, "italic": True}
+                    },
+                    "conditionalFormatting": [
+                        {"column": "sales_sum", "condition": ">", "value": 90, "style": {"background": "#ffeeaa", "color": "#7c2d12"}}
+                    ],
+                },
+            },
+        ),
+        PivotRequestContext(
+            table="sales_data",
+            trigger_prop="pivot.runtimeRequest",
+            session_id="sess-export-style",
+            client_instance="client-export-style",
+        ),
+    )
+
+    assert response.status == "export"
+    assert response.export_payload["format"] == "xls"
+    assert response.export_payload["filename"] == "pivot_export.xls"
+    assert response.export_payload["contentType"].startswith("application/vnd.ms-excel")
+    assert "content" not in response.export_payload
+    content_path = response.export_payload["contentPath"]
+    try:
+        content = open(content_path, "r", encoding="utf-8").read()
+        assert "<table" in content
+        assert "Styled Sales" in content
+        assert "font-family:Aptos, sans-serif" in content
+        assert "background:#123456" in content
+        assert "background:#ddeeff" in content
+        assert "font-style:italic" in content
+        assert "$100.00" in content
+    finally:
+        if os.path.exists(content_path):
+            os.remove(content_path)
+
+
 def test_runtime_service_works_without_dash():
     adapter = _make_adapter()
     service = PivotRuntimeService(adapter_getter=lambda: adapter, session_gate=SessionRequestGate())
@@ -320,16 +406,18 @@ def test_runtime_service_cancels_superseded_viewport_work():
             "session_id": "sess-cancel",
             "client_instance": "grid-a",
             "intent": "viewport",
+            "cache_key": "client-cache-cancel",
+            "profile": True,
         }
         first_context = PivotRequestContext.from_frontend(
             table="sales_data",
             trigger_prop="custom.viewport",
-            viewport={**base_viewport, "window_seq": 1},
+            viewport={**base_viewport, "window_seq": 1, "requestId": "req-cancel-1"},
         )
         second_context = PivotRequestContext.from_frontend(
             table="sales_data",
             trigger_prop="custom.viewport",
-            viewport={**base_viewport, "window_seq": 2},
+            viewport={**base_viewport, "window_seq": 2, "requestId": "req-cancel-2"},
         )
 
         first_task = asyncio.create_task(service.process_async(state, first_context))
@@ -340,6 +428,10 @@ def test_runtime_service_cancels_superseded_viewport_work():
         assert second_response.status == "data"
         assert first_response.status == "stale"
         assert adapter.first_cancelled
+        assert first_response.profile["request"]["requestId"] == "req-cancel-1"
+        assert first_response.profile["request"]["cacheKey"] == "client-cache-cancel"
+        assert first_response.profile["request"]["cancellationOutcome"] == "superseded_cancelled"
+        assert second_response.profile["request"]["cancellationOutcome"] == "not_cancelled"
 
     asyncio.run(_run())
 
@@ -456,6 +548,7 @@ def test_runtime_service_includes_profile_when_requested():
             "client_instance": "client-profile",
             "intent": "viewport",
             "requestId": "req-profile-1",
+            "cache_key": "client-cache-profile",
             "profile": True,
         },
     )
@@ -475,9 +568,13 @@ def test_runtime_service_includes_profile_when_requested():
     assert response.profile["request"]["stateEpoch"] == 1
     assert response.profile["request"]["windowSeq"] == 2
     assert response.profile["request"]["abortGeneration"] == 1
+    assert response.profile["request"]["cacheKey"] == "client-cache-profile"
     assert response.profile["request"]["lifecycleLane"] == "data"
+    assert response.profile["request"]["cancellationOutcome"] == "not_cancelled"
     assert response.profile["service"]["totalMs"] is not None
     assert response.profile["adapter"]["operation"] == "virtual_scroll"
+    assert response.profile["adapter"]["responseCacheKey"]
+    assert isinstance(response.profile["adapter"]["cacheGeneration"], int)
     assert response.profile["controller"]["operation"] == "hierarchy_view"
 
 
@@ -575,6 +672,7 @@ def test_request_context_accepts_camel_case_runtime_metadata():
             "abortGeneration": 7,
             "sessionId": "sess-camel",
             "clientInstance": "client-camel",
+            "cacheKey": "client-cache-camel",
             "intent": "viewport",
             "colStart": 2,
             "colEnd": 9,
@@ -590,6 +688,7 @@ def test_request_context_accepts_camel_case_runtime_metadata():
     assert context.abort_generation == 7
     assert context.session_id == "sess-camel"
     assert context.client_instance == "client-camel"
+    assert context.cache_key == "client-cache-camel"
     assert context.col_start == 2
     assert context.col_end == 9
     assert context.needs_col_schema is True
@@ -2078,6 +2177,91 @@ def test_curve_pillar_tenor_sort_uses_hidden_sort_key_and_keeps_display_field():
         if isinstance(row, dict) and not row.get("_isTotal")
     ]
     assert ordered_labels == ["1D", "2W", "1M"]
+    assert all(
+        "__sortkey__Curve Pillar" not in row
+        for row in response.data
+        if isinstance(row, dict)
+    )
+
+
+def test_custom_category_parent_expands_curve_pillar_children_with_hidden_sort_key():
+    adapter = create_tanstack_adapter(backend_uri=":memory:")
+    table = pa.Table.from_pydict(
+        {
+            "desk": ["Rates", "Rates", "Rates", "Rates", "Rates", "Credit", "Credit", "Credit", "Credit", "Credit"],
+            "Curve Pillar": ["1M", "2W", "1D", "6Y", "3M", "1M", "2W", "1D", "6Y", "10Y"],
+            "__sortkey__Curve Pillar": [30, 14, 1, 2190, 90, 30, 14, 1, 2190, 3650],
+            "pv01": [10, 20, 30, 40, 50, 15, 25, 35, 45, 55],
+        }
+    )
+    adapter.controller.load_data_from_arrow("curve_data", table)
+    service = PivotRuntimeService(adapter_getter=lambda: adapter, session_gate=SessionRequestGate())
+    category_field = "__custom_category__desk_contains_a"
+    custom_dimension = {
+        "id": "desk_contains_a",
+        "field": category_field,
+        "name": "Desk contains a",
+        "fallbackLabel": "Other",
+        "rules": [
+            {
+                "id": "has_a",
+                "label": "Has A",
+                "condition": {
+                    "op": "AND",
+                    "clauses": [
+                        {"field": "desk", "operator": "contains", "value": "a"},
+                    ],
+                },
+            }
+        ],
+    }
+
+    response = service.process(
+        PivotViewState(
+            row_fields=[category_field, "Curve Pillar"],
+            val_configs=[{"field": "pv01", "agg": "sum"}],
+            custom_dimensions=[custom_dimension],
+            sorting=[{"id": "Curve Pillar", "desc": False}],
+            sort_options={
+                "columnOptions": {
+                    "Curve Pillar": {
+                        "sortType": "curve_pillar_tenor",
+                        "sortKeyField": "__sortkey__Curve Pillar",
+                    }
+                }
+            },
+            expanded={"Has A": True},
+            show_row_totals=False,
+            show_col_totals=False,
+        ),
+        PivotRequestContext.from_frontend(
+            table="curve_data",
+            trigger_prop="curve-pivot-grid.viewport",
+            viewport={
+                "start": 0,
+                "end": 20,
+                "window_seq": 1,
+                "state_epoch": 1,
+                "abort_generation": 1,
+                "session_id": "sess-custom-category-curve",
+                "client_instance": "grid-custom-category-curve",
+                "intent": "viewport",
+                "include_grand_total": False,
+                "needs_col_schema": True,
+            },
+        ),
+    )
+
+    assert response.status == "data"
+    paths = [row.get("_path") for row in response.data if isinstance(row, dict)]
+    assert "Has A|||1D" in paths
+    assert "Has A|||2W" in paths
+    assert "Has A|||1M" in paths
+    assert [
+        row.get("Curve Pillar")
+        for row in response.data
+        if isinstance(row, dict) and row.get("_path", "").startswith("Has A|||")
+    ] == ["1D", "2W", "1M", "3M", "6Y"]
     assert all(
         "__sortkey__Curve Pillar" not in row
         for row in response.data

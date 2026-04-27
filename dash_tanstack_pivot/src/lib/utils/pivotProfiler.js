@@ -85,6 +85,11 @@ const logSummary = (entry) => {
         renderMs: derived.renderMs,
         callbackMs: derived.callbackMs,
         serviceMs: derived.serviceMs,
+        stateEpoch: entry.profile?.request?.stateEpoch ?? entry.meta?.stateEpoch ?? null,
+        abortGeneration: entry.profile?.request?.abortGeneration ?? entry.meta?.abortGeneration ?? null,
+        lifecycleLane: entry.profile?.request?.lifecycleLane ?? entry.meta?.lifecycleLane ?? null,
+        cacheKey: entry.profile?.request?.cacheKey ?? entry.profile?.adapter?.responseCacheKey ?? entry.meta?.cacheKey ?? null,
+        cancellationOutcome: entry.profile?.request?.cancellationOutcome ?? entry.meta?.cancellationOutcome ?? null,
     });
 };
 

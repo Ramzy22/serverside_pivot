@@ -416,6 +416,7 @@ class IbisExpressionBuilder:
 
         sort_list = [sort_specs] if isinstance(sort_specs, dict) else sort_specs
         ibis_sorts = []
+        seen_effective_sorts = set()
 
         for s in sort_list:
             field = s.get("field")
@@ -447,6 +448,16 @@ class IbisExpressionBuilder:
                 "absolute_value",
                 "absolute-value",
             }
+            effective_sort_key = (
+                effective_field,
+                order,
+                nulls,
+                semantic_type if not use_hidden_sort_key else "",
+                absolute_sort,
+            )
+            if effective_sort_key in seen_effective_sorts:
+                continue
+            seen_effective_sorts.add(effective_sort_key)
 
             col = table[effective_field]
             sort_expr = None

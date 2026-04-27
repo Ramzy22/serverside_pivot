@@ -110,12 +110,15 @@ class TanStackPivotAdapter(FormulaEngineMixin):
         self.edit_domain = EditDomainService()
         self.hierarchy_state = {}  # Store expansion state
         self._debug = debug
+        self.cache_coordinator = getattr(controller, "cache_coordinator", None)
         self._viewport_cache = AdapterViewportCache(
             ttl_seconds=_LOCAL_CACHE_TTL_SECONDS,
             pivot_catalog_size=_PIVOT_CATALOG_CACHE_SIZE,
             response_window_size=_RESPONSE_WINDOW_CACHE_SIZE,
             row_block_cache_size=_ROW_BLOCK_CACHE_SIZE,
+            cache_coordinator=self.cache_coordinator,
         )
+        self.cache_coordinator = self._viewport_cache.cache_coordinator
         self._local_cache_lock = self._viewport_cache.lock
         # Compatibility aliases for existing diagnostics/tests. All mutation
         # goes through AdapterViewportCache.
@@ -178,6 +181,7 @@ class TanStackPivotAdapter(FormulaEngineMixin):
         include_grand_total: bool,
         path: str,
         stages: Dict[str, Optional[float]],
+        response_cache_key: Optional[str] = None,
         extra: Optional[Dict[str, Any]] = None,
     ) -> "TanStackResponse":
         response.profile = {
@@ -185,6 +189,9 @@ class TanStackPivotAdapter(FormulaEngineMixin):
                 "operation": "virtual_scroll",
                 "path": path,
                 "table": request.table,
+                "responseCacheKey": response_cache_key,
+                "cacheGeneration": self._cache_generation_value(),
+                "cacheNamespaces": self._viewport_cache.metrics_snapshot().get("namespaces", {}),
                 "rowWindow": [int(start_row or 0), int(end_row if end_row is not None else start_row or 0)],
                 "colWindow": [int(col_start or 0), None if col_end is None else int(col_end)],
                 "needsColSchema": bool(needs_col_schema),
@@ -3096,6 +3103,7 @@ class TanStackPivotAdapter(FormulaEngineMixin):
                 col_end=col_end,
                 needs_col_schema=needs_col_schema,
                 include_grand_total=include_grand_total,
+                response_cache_key=response_cache_key,
                 path="response_cache_hit",
                 stages={
                     "cacheLookupMs": self._profile_ms(cache_lookup_started_at, cache_lookup_finished_at),
@@ -3138,6 +3146,7 @@ class TanStackPivotAdapter(FormulaEngineMixin):
                     col_end=col_end,
                     needs_col_schema=needs_col_schema,
                     include_grand_total=include_grand_total,
+                    response_cache_key=response_cache_key,
                     path="row_block_cache_hit",
                     stages={
                         "cacheLookupMs": self._profile_ms(cache_lookup_started_at, cache_lookup_finished_at),
@@ -3211,6 +3220,7 @@ class TanStackPivotAdapter(FormulaEngineMixin):
                         col_end=col_end,
                         needs_col_schema=needs_col_schema,
                         include_grand_total=include_grand_total,
+                        response_cache_key=response_cache_key,
                         path="row_block_partial_reuse",
                         stages={
                             "cacheLookupMs": self._profile_ms(cache_lookup_started_at, cache_lookup_finished_at),
@@ -3297,6 +3307,7 @@ class TanStackPivotAdapter(FormulaEngineMixin):
                 col_end=col_end,
                 needs_col_schema=needs_col_schema,
                 include_grand_total=include_grand_total,
+                response_cache_key=response_cache_key,
                 path="formula_sort_window",
                 stages={
                     "cacheLookupMs": self._profile_ms(cache_lookup_started_at, cache_lookup_finished_at),
@@ -3436,6 +3447,7 @@ class TanStackPivotAdapter(FormulaEngineMixin):
                 col_end=col_end,
                 needs_col_schema=needs_col_schema,
                 include_grand_total=include_grand_total,
+                response_cache_key=response_cache_key,
                 path="hierarchy_view",
                 stages={
                     "cacheLookupMs": self._profile_ms(cache_lookup_started_at, cache_lookup_finished_at),
@@ -3501,6 +3513,7 @@ class TanStackPivotAdapter(FormulaEngineMixin):
                     col_end=col_end,
                     needs_col_schema=needs_col_schema,
                     include_grand_total=include_grand_total,
+                    response_cache_key=response_cache_key,
                     path="legacy_virtual_scroll",
                     stages={
                         "cacheLookupMs": self._profile_ms(cache_lookup_started_at, cache_lookup_finished_at),
@@ -3553,6 +3566,7 @@ class TanStackPivotAdapter(FormulaEngineMixin):
                     col_end=col_end,
                     needs_col_schema=needs_col_schema,
                     include_grand_total=include_grand_total,
+                    response_cache_key=response_cache_key,
                     path="legacy_virtual_scroll_fallback",
                     stages={
                         "cacheLookupMs": self._profile_ms(cache_lookup_started_at, cache_lookup_finished_at),
@@ -3603,6 +3617,7 @@ class TanStackPivotAdapter(FormulaEngineMixin):
                 col_end=col_end,
                 needs_col_schema=needs_col_schema,
                 include_grand_total=include_grand_total,
+                response_cache_key=response_cache_key,
                 path="hierarchical_fallback",
                 stages={
                     "cacheLookupMs": self._profile_ms(cache_lookup_started_at, cache_lookup_finished_at),
