@@ -118,6 +118,25 @@ def test_package_json_no_broken_prepublish():
     )
 
 
+def test_package_json_uses_strict_docgen_build():
+    """build:py must fail when Dash/react-docgen emits parser errors."""
+    import json
+
+    pkg_json = PKG_DIR / "package.json"
+    data = json.loads(pkg_json.read_text(encoding="utf-8"))
+    scripts = data.get("scripts", {})
+    strict_script = PKG_DIR / "scripts" / "build_py_strict.py"
+
+    assert scripts.get("build:py") == "python scripts/build_py_strict.py"
+    assert strict_script.exists(), "Strict Dash component generator wrapper is missing."
+
+    source = strict_script.read_text(encoding="utf-8")
+    assert "dash.development.component_generator" in source
+    assert "Error with path" in source
+    assert "did not recognize object of type" in source
+    assert "return 1" in source
+
+
 # ---------------------------------------------------------------------------
 # Import smoke
 # ---------------------------------------------------------------------------

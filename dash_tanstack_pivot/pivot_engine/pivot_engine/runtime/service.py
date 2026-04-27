@@ -3,11 +3,14 @@
 from __future__ import annotations
 
 import asyncio
+import csv
+from dataclasses import replace
 from decimal import Decimal
 import inspect
+import math
 import os
 import re
-import threading
+import tempfile
 import time
 from typing import Any, Awaitable, Callable, Dict, List, Optional, Tuple
 
@@ -15,6 +18,7 @@ from ..tanstack_adapter import TanStackOperation, TanStackRequest, TanStackRespo
 
 from .models import PivotRequestContext, PivotServiceResponse, PivotViewState, first_present, safe_int
 from .resilience import CircuitBreaker, CircuitBreakerOpen, PivotRequestTimeout
+from .request_coordinator import RuntimeRequestCoordinator
 from .session_gate import SessionRequestGate
 from .detail_service import DetailRuntimeService
 from .tree_service import TreeRuntimeService
@@ -43,9 +47,10 @@ class PivotRuntimeService:
         circuit_breaker: Optional[CircuitBreaker] = None,
         circuit_breaker_failures: int = 5,
         circuit_breaker_cooldown_seconds: float = 30.0,
+        request_coordinator: Optional[RuntimeRequestCoordinator] = None,
     ):
         self._adapter_getter = adapter_getter
-        self._session_gate = session_gate or SessionRequestGate()
+        self._request_coordinator = request_coordinator or RuntimeRequestCoordinator(session_gate or SessionRequestGate())
         self._debug = debug
         self._tree_service = TreeRuntimeService(debug=debug)
         self._detail_service = DetailRuntimeService(self._tree_service, debug=debug)
@@ -58,56 +63,59 @@ class PivotRuntimeService:
             failure_threshold=circuit_breaker_failures,
             cooldown_seconds=circuit_breaker_cooldown_seconds,
         )
-        self._active_request_lock = threading.Lock()
-        self._active_request_tasks: Dict[tuple[str, str, str], asyncio.Task] = {}
-        self._superseded_tasks: set[asyncio.Task] = set()
 
     @staticmethod
-    def _active_request_key(context: PivotRequestContext) -> Optional[tuple[str, str, str]]:
-        if context.intent == "chart":
-            lane = "chart"
-        elif context.intent in {"viewport", "structural"}:
-            lane = "data"
-        else:
-            return None
-        return (
-            str(context.session_id or "anonymous"),
-            str(context.client_instance or "default"),
-            lane,
+    def _build_tanstack_sorting(state: PivotViewState) -> Tuple[List[Dict[str, Any]], Dict[str, Any]]:
+        """Normalize frontend sorting with static per-column sort metadata."""
+        tanstack_sorting: List[Dict[str, Any]] = []
+        sort_options = state.sort_options if isinstance(state.sort_options, dict) else {}
+        column_sort_options = (
+            sort_options.get("columnOptions")
+            if isinstance(sort_options.get("columnOptions"), dict)
+            else {}
         )
+        # Auto-inject a default ascending sort for the first row field that has
+        # a sortKeyField in columnOptions when the frontend sends no explicit sort.
+        effective_sorting = list(state.sorting or [])
+        if not effective_sorting and state.row_fields and column_sort_options:
+            for rf in (state.row_fields or []):
+                col_opts = column_sort_options.get(rf)
+                if isinstance(col_opts, dict) and col_opts.get("sortKeyField"):
+                    effective_sorting.append({"id": rf, "desc": False})
+                    break
 
-    def _replace_active_request_task(self, context: PivotRequestContext) -> bool:
-        key = self._active_request_key(context)
-        current_task = asyncio.current_task()
-        if key is None or current_task is None:
-            return False
-        with self._active_request_lock:
-            previous_task = self._active_request_tasks.get(key)
-            if previous_task is not None and previous_task is not current_task and not previous_task.done():
-                self._superseded_tasks.add(previous_task)
-                previous_task.cancel()
-            self._active_request_tasks[key] = current_task
-        return True
+        for s in effective_sorting:
+            if not isinstance(s, dict) or s.get("id") is None:
+                continue
 
-    def _release_active_request_task(self, context: PivotRequestContext) -> None:
-        key = self._active_request_key(context)
-        current_task = asyncio.current_task()
-        if key is None or current_task is None:
-            return
-        with self._active_request_lock:
-            if self._active_request_tasks.get(key) is current_task:
-                self._active_request_tasks.pop(key, None)
-            self._superseded_tasks.discard(current_task)
+            sort_id = s.get("id")
+            sort_item: Dict[str, Any] = {"id": sort_id, "desc": bool(s.get("desc", False))}
 
-    def _consume_superseded_cancel(self) -> bool:
-        current_task = asyncio.current_task()
-        if current_task is None:
-            return False
-        with self._active_request_lock:
-            if current_task not in self._superseded_tasks:
-                return False
-            self._superseded_tasks.discard(current_task)
-            return True
+            # Static per-column sort metadata (from sortOptions) is merged first.
+            # Dynamic sorting payload keys override these defaults.
+            # The frontend sends id="hierarchy" for the row-group column;
+            # resolve to the actual row field for sortOptions lookup by
+            # checking all row fields for a matching sortOptions entry.
+            lookup_id = sort_id
+            if lookup_id == "hierarchy" and state.row_fields and column_sort_options:
+                for rf in state.row_fields:
+                    if rf in column_sort_options:
+                        lookup_id = rf
+                        break
+            static_column_sort = column_sort_options.get(lookup_id)
+            if isinstance(static_column_sort, dict):
+                for key in ("semanticType", "sortSemantic", "nulls", "sortType", "sortKeyField", "absoluteSort"):
+                    if key in static_column_sort and static_column_sort.get(key) is not None:
+                        sort_item[key] = static_column_sort.get(key)
+
+            # Preserve optional semantic hints for backend ordering (e.g. tenor sort)
+            # and hidden-key directives for deterministic curve-pillar ordering.
+            for key in ("semanticType", "sortSemantic", "nulls", "sortType", "sortKeyField", "absoluteSort"):
+                if key in s:
+                    sort_item[key] = s.get(key)
+            tanstack_sorting.append(sort_item)
+
+        return tanstack_sorting, column_sort_options
 
     @staticmethod
     def _backend_circuit_key(context: PivotRequestContext, trigger_kind: Optional[str]) -> Tuple[str, str]:
@@ -152,7 +160,7 @@ class PivotRuntimeService:
     ) -> PivotServiceResponse:
         """Process one pivot request and return a transport-neutral response."""
         service_started_at = time.perf_counter()
-        trigger_kind = "transaction" if state.transaction_request else (context.trigger_kind or "data")
+        trigger_kind = "export" if state.export_request else ("transaction" if state.transaction_request else (context.trigger_kind or "data"))
         profiling_enabled = bool(context.profiling)
         adapter_lookup_started_at = service_started_at
         adapter = self._adapter_getter()
@@ -182,6 +190,14 @@ class PivotRuntimeService:
                     "viewMode": state.view_mode,
                     "intent": context.intent,
                     "table": context.table,
+                    "sessionId": context.session_id,
+                    "clientInstance": context.client_instance,
+                    "stateEpoch": context.state_epoch,
+                    "windowSeq": context.window_seq,
+                    "abortGeneration": context.abort_generation,
+                    "lifecycleLane": (
+                        RuntimeRequestCoordinator.active_request_key(context) or (None, None, None)
+                    )[2],
                     "rowFields": len(state.row_fields or []),
                     "colFields": len(state.col_fields or []),
                     "valueFields": len(state.val_configs or []),
@@ -208,70 +224,24 @@ class PivotRuntimeService:
                     profile[key] = value
             return profile
 
-        if not self._session_gate.register_request(
-            session_id=context.session_id,
-            state_epoch=context.state_epoch,
-            window_seq=context.window_seq,
-            abort_generation=context.abort_generation,
-            intent=context.intent,
-            client_instance=context.client_instance,
-        ):
+        if trigger_kind == "export":
             gate_finished_at = time.perf_counter()
-            request_built_at = gate_finished_at
-            return PivotServiceResponse(status="stale", profile=build_profile())
+        else:
+            if not self._request_coordinator.register_request(context):
+                gate_finished_at = time.perf_counter()
+                request_built_at = gate_finished_at
+                return PivotServiceResponse(status="stale", profile=build_profile())
 
-        gate_finished_at = time.perf_counter()
+            gate_finished_at = time.perf_counter()
 
-        tanstack_sorting = []
-        sort_options = state.sort_options if isinstance(state.sort_options, dict) else {}
-        column_sort_options = (
-            sort_options.get("columnOptions")
-            if isinstance(sort_options.get("columnOptions"), dict)
-            else {}
-        )
-        # Auto-inject a default ascending sort for the first row field that has
-        # a sortKeyField in columnOptions when the frontend sends no explicit sort.
-        effective_sorting = list(state.sorting or [])
-        if not effective_sorting and state.row_fields and column_sort_options:
-            for rf in (state.row_fields or []):
-                col_opts = column_sort_options.get(rf)
-                if isinstance(col_opts, dict) and col_opts.get("sortKeyField"):
-                    effective_sorting.append({"id": rf, "desc": False})
-                    break
-
-        for s in effective_sorting:
-            if not isinstance(s, dict) or s.get("id") is None:
-                continue
-
-            sort_id = s.get("id")
-            sort_item = {"id": sort_id, "desc": bool(s.get("desc", False))}
-
-            # Static per-column sort metadata (from sortOptions) is merged first.
-            # Dynamic sorting payload keys override these defaults.
-            # The frontend sends id="hierarchy" for the row-group column;
-            # resolve to the actual row field for sortOptions lookup by
-            # checking all row fields for a matching sortOptions entry.
-            lookup_id = sort_id
-            if lookup_id == "hierarchy" and state.row_fields and column_sort_options:
-                for rf in state.row_fields:
-                    if rf in column_sort_options:
-                        lookup_id = rf
-                        break
-            static_column_sort = column_sort_options.get(lookup_id)
-            if isinstance(static_column_sort, dict):
-                for key in ("semanticType", "sortSemantic", "nulls", "sortType", "sortKeyField", "absoluteSort"):
-                    if key in static_column_sort and static_column_sort.get(key) is not None:
-                        sort_item[key] = static_column_sort.get(key)
-
-            # Preserve optional semantic hints for backend ordering (e.g. tenor sort)
-            # and hidden-key directives for deterministic curve-pillar ordering.
-            for key in ("semanticType", "sortSemantic", "nulls", "sortType", "sortKeyField", "absoluteSort"):
-                if key in s:
-                    sort_item[key] = s.get(key)
-            tanstack_sorting.append(sort_item)
+        tanstack_sorting, column_sort_options = self._build_tanstack_sorting(state)
 
         request_columns = self._build_request_columns(state.row_fields, state.col_fields, state.val_configs)
-        pagination_info = self._build_pagination(context)
+        pagination_info = (
+            self._build_export_pagination(state.export_request)
+            if trigger_kind == "export"
+            else self._build_pagination(context)
+        )
 
         request = TanStackRequest(
             operation=TanStackOperation.GET_DATA,
@@ -313,6 +283,92 @@ class PivotRuntimeService:
                 session_id=context.session_id,
                 client_instance=context.client_instance,
                 rows=rows,
+            )
+
+        if trigger_kind == "export":
+            export_context = self._build_export_request_context(context, state.export_request)
+            export_request = replace(
+                request,
+                pagination=self._build_export_pagination(state.export_request),
+            )
+            export_expanded_paths = self._parse_expanded_paths(state.expanded)
+            execution_started_at = time.perf_counter()
+            try:
+                response = await self._run_backend_operation(
+                    export_context,
+                    trigger_kind,
+                    lambda: self._execute_tanstack_data_request(
+                        adapter,
+                        export_request,
+                        state,
+                        export_context,
+                        export_expanded_paths,
+                        trigger_kind=trigger_kind,
+                        effective_needs_col_schema=True,
+                        profiling_enabled=profiling_enabled,
+                    ),
+                )
+            except CircuitBreakerOpen as exc:
+                execution_finished_at = time.perf_counter()
+                return PivotServiceResponse(
+                    status="error",
+                    message=str(exc),
+                    export_payload={},
+                    profile=build_profile(
+                        execution_started_at=execution_started_at,
+                        execution_finished_at=execution_finished_at,
+                    ),
+                )
+            except PivotRequestTimeout as exc:
+                execution_finished_at = time.perf_counter()
+                return PivotServiceResponse(
+                    status="timeout",
+                    message=str(exc),
+                    export_payload={},
+                    profile=build_profile(
+                        execution_started_at=execution_started_at,
+                        execution_finished_at=execution_finished_at,
+                    ),
+                )
+            except Exception as exc:  # pragma: no cover - defensive
+                execution_finished_at = time.perf_counter()
+                if self._debug:
+                    print(f"Export request failed: {exc}")
+                return PivotServiceResponse(
+                    status="error",
+                    message=str(exc),
+                    export_payload={},
+                    profile=build_profile(
+                        execution_started_at=execution_started_at,
+                        execution_finished_at=execution_finished_at,
+                    ),
+                )
+            execution_finished_at = time.perf_counter()
+            postprocess_started_at = time.perf_counter()
+            export_payload = self._build_export_payload(
+                response,
+                state,
+                state.export_request,
+            )
+            return PivotServiceResponse(
+                status="export",
+                export_payload=export_payload,
+                total_rows=export_payload.get("rows"),
+                profile=build_profile(
+                    execution_started_at=execution_started_at,
+                    execution_finished_at=execution_finished_at,
+                    postprocess_started_at=postprocess_started_at,
+                    response_rows=export_payload.get("rows"),
+                    response_columns=export_payload.get("columns"),
+                    extra={
+                        **(response.profile if isinstance(getattr(response, "profile", None), dict) else {}),
+                        "export": {
+                            "format": export_payload.get("format"),
+                            "bytes": int(export_payload.get("contentLength") or len(export_payload.get("content") or b"")),
+                            "filename": export_payload.get("filename"),
+                        },
+                    },
+                ),
             )
 
         if trigger_kind == "detail" and state.detail_request:
@@ -362,14 +418,7 @@ class PivotRuntimeService:
                     ),
                 )
             execution_finished_at = time.perf_counter()
-            if not self._session_gate.response_is_current(
-                session_id=context.session_id,
-                state_epoch=context.state_epoch,
-                window_seq=context.window_seq,
-                abort_generation=context.abort_generation,
-                intent=context.intent,
-                client_instance=context.client_instance,
-            ):
+            if not self._request_coordinator.response_is_current(context):
                 return PivotServiceResponse(
                     status="stale",
                     profile=build_profile(
@@ -584,84 +633,24 @@ class PivotRuntimeService:
         )
 
         execution_started_at = time.perf_counter()
-        active_request_registered = self._replace_active_request_task(context)
+        active_request_registered = self._request_coordinator.replace_active_request_task(context)
         try:
             async def _execute_data_request():
-                if state.view_mode == "tree" and trigger_kind != "chart":
-                    response_state = await self._tree_service.handle_data_request(
-                        adapter,
-                        request,
-                        state,
-                        context,
-                        expanded_paths,
-                    )
-                    return TanStackResponse(
-                        data=list(response_state.data or []),
-                        columns=list(response_state.columns or []),
-                        total_rows=response_state.total_rows,
-                        version=context.window_seq,
-                    )
-                if (
-                    trigger_kind != "chart"
-                    and state.view_mode == "report"
-                    and self._has_branching_report_root(state.report_def)
-                ):
-                    return await self._handle_branching_report_request(
-                        adapter,
-                        request,
-                        state,
-                        context,
-                        expanded_paths,
-                    )
-                if trigger_kind == "chart":
-                    requested_series_ids = (
-                        [
-                            value for value in (state.chart_request or {}).get("series_column_ids", [])
-                            if isinstance(value, str) and value
-                        ]
-                        if isinstance((state.chart_request or {}).get("series_column_ids"), list)
-                        else None
-                    )
-                    return await adapter.handle_virtual_scroll_request(
-                        request,
-                        context.start_row,
-                        context.end_row if context.end_row is not None else context.start_row,
-                        expanded_paths,
-                        col_start=context.col_start,
-                        col_end=context.col_end,
-                        needs_col_schema=bool((state.chart_request or {}).get("needs_col_schema", False)),
-                        include_grand_total=context.include_grand_total,
-                        requested_center_ids=requested_series_ids,
-                        profiling=profiling_enabled,
-                    )
-                if context.viewport_active and context.end_row is not None:
-                    return await adapter.handle_virtual_scroll_request(
-                        request,
-                        context.start_row,
-                        context.end_row,
-                        expanded_paths,
-                        col_start=context.col_start,
-                        col_end=context.col_end,
-                        needs_col_schema=effective_needs_col_schema,
-                        include_grand_total=context.include_grand_total,
-                        profiling=profiling_enabled,
-                    )
-                if state.row_fields:
-                    initial_end_row = min(request.pagination.get("pageSize", 1000), 100) - 1
-                    return await adapter.handle_virtual_scroll_request(
-                        request,
-                        0,
-                        initial_end_row,
-                        expanded_paths,
-                        needs_col_schema=True,
-                        profiling=profiling_enabled,
-                    )
-                return await adapter.handle_request(request)
+                return await self._execute_tanstack_data_request(
+                    adapter,
+                    request,
+                    state,
+                    context,
+                    expanded_paths,
+                    trigger_kind=trigger_kind,
+                    effective_needs_col_schema=effective_needs_col_schema,
+                    profiling_enabled=profiling_enabled,
+                )
 
             response = await self._run_backend_operation(context, trigger_kind, _execute_data_request)
         except asyncio.CancelledError:
             execution_finished_at = time.perf_counter()
-            if self._consume_superseded_cancel():
+            if self._request_coordinator.consume_superseded_cancel():
                 return PivotServiceResponse(
                     status="stale",
                     profile=build_profile(
@@ -710,18 +699,11 @@ class PivotRuntimeService:
             )
         finally:
             if active_request_registered:
-                self._release_active_request_task(context)
+                self._request_coordinator.release_active_request_task(context)
         execution_finished_at = time.perf_counter()
 
         response_version = context.window_seq if context.window_seq is not None else response.version
-        if not self._session_gate.response_is_current(
-            session_id=context.session_id,
-            state_epoch=context.state_epoch,
-            window_seq=context.window_seq,
-            abort_generation=context.abort_generation,
-            intent=context.intent,
-            client_instance=context.client_instance,
-        ):
+        if not self._request_coordinator.response_is_current(context):
             return PivotServiceResponse(
                 status="stale",
                 profile=build_profile(
@@ -822,6 +804,282 @@ class PivotRuntimeService:
     ) -> PivotServiceResponse:
         """Sync wrapper for sync transports."""
         return asyncio.run(self.process_async(state, context))
+
+    async def _execute_tanstack_data_request(
+        self,
+        adapter: Any,
+        request: TanStackRequest,
+        state: PivotViewState,
+        context: PivotRequestContext,
+        expanded_paths: List[List[str]],
+        *,
+        trigger_kind: str,
+        effective_needs_col_schema: bool,
+        profiling_enabled: bool,
+    ) -> TanStackResponse:
+        if state.view_mode == "tree" and trigger_kind != "chart":
+            response_state = await self._tree_service.handle_data_request(
+                adapter,
+                request,
+                state,
+                context,
+                expanded_paths,
+            )
+            return TanStackResponse(
+                data=list(response_state.data or []),
+                columns=list(response_state.columns or []),
+                total_rows=response_state.total_rows,
+                version=context.window_seq,
+            )
+        if (
+            trigger_kind != "chart"
+            and state.view_mode == "report"
+            and self._has_branching_report_root(state.report_def)
+        ):
+            return await self._handle_branching_report_request(
+                adapter,
+                request,
+                state,
+                context,
+                expanded_paths,
+            )
+        if trigger_kind == "chart":
+            requested_series_ids = (
+                [
+                    value for value in (state.chart_request or {}).get("series_column_ids", [])
+                    if isinstance(value, str) and value
+                ]
+                if isinstance((state.chart_request or {}).get("series_column_ids"), list)
+                else None
+            )
+            return await adapter.handle_virtual_scroll_request(
+                request,
+                context.start_row,
+                context.end_row if context.end_row is not None else context.start_row,
+                expanded_paths,
+                col_start=context.col_start,
+                col_end=context.col_end,
+                needs_col_schema=bool((state.chart_request or {}).get("needs_col_schema", False)),
+                include_grand_total=context.include_grand_total,
+                requested_center_ids=requested_series_ids,
+                profiling=profiling_enabled,
+            )
+        if context.viewport_active and context.end_row is not None:
+            return await adapter.handle_virtual_scroll_request(
+                request,
+                context.start_row,
+                context.end_row,
+                expanded_paths,
+                col_start=context.col_start,
+                col_end=context.col_end,
+                needs_col_schema=effective_needs_col_schema,
+                include_grand_total=context.include_grand_total,
+                profiling=profiling_enabled,
+            )
+        if state.row_fields:
+            initial_end_row = min(request.pagination.get("pageSize", 1000), 100) - 1
+            return await adapter.handle_virtual_scroll_request(
+                request,
+                0,
+                initial_end_row,
+                expanded_paths,
+                needs_col_schema=True,
+                profiling=profiling_enabled,
+            )
+        return await adapter.handle_request(request)
+
+    @staticmethod
+    def _build_export_pagination(export_request: Optional[Dict[str, Any]]) -> Dict[str, Any]:
+        request_payload = export_request if isinstance(export_request, dict) else {}
+        row_start = safe_int(first_present(request_payload, "rowStart", "row_start"), 0)
+        row_end_raw = first_present(request_payload, "rowEnd", "row_end")
+        if row_end_raw is not None:
+            row_end = max(row_start + 1, safe_int(row_end_raw, row_start + 1))
+            page_size = max(1, row_end - row_start)
+        else:
+            page_size = max(1, safe_int(first_present(request_payload, "pageSize", "page_size"), 10_000_000))
+            row_end = row_start + page_size
+        return {
+            "pageIndex": row_start // page_size if page_size else 0,
+            "pageSize": page_size,
+            "startRow": row_start,
+            "endRow": row_end - 1,
+        }
+
+    @staticmethod
+    def _build_export_request_context(
+        context: PivotRequestContext,
+        export_request: Optional[Dict[str, Any]],
+    ) -> PivotRequestContext:
+        pagination = PivotRuntimeService._build_export_pagination(export_request)
+        payload = export_request if isinstance(export_request, dict) else {}
+        return replace(
+            context,
+            original_intent="export",
+            intent="export",
+            viewport_active=True,
+            start_row=safe_int(pagination.get("startRow"), 0),
+            end_row=safe_int(pagination.get("endRow"), 0),
+            needs_col_schema=True,
+            include_grand_total=bool(first_present(payload, "include_grand_total", "includeGrandTotal", default=context.include_grand_total)),
+        )
+
+    @staticmethod
+    def _build_export_payload(
+        response: TanStackResponse,
+        state: PivotViewState,
+        export_request: Optional[Dict[str, Any]],
+    ) -> Dict[str, Any]:
+        request_payload = export_request if isinstance(export_request, dict) else {}
+        export_fmt = str(request_payload.get("format") or "csv").strip().lower()
+        if export_fmt not in {"csv", "tsv"}:
+            export_fmt = "csv"
+        delimiter = "\t" if export_fmt == "tsv" else ","
+        ext = "tsv" if export_fmt == "tsv" else "csv"
+        content_type = "text/tab-separated-values" if export_fmt == "tsv" else "text/csv"
+        part_label = request_payload.get("partLabel")
+        filename = f"pivot_export_{part_label}.{ext}" if part_label else f"pivot_export.{ext}"
+
+        rows = [row for row in (response.data or []) if isinstance(row, dict)]
+        field_order = PivotRuntimeService._resolve_export_field_order(
+            rows,
+            response.columns or [],
+            request_payload.get("colIds"),
+        )
+        header_map = PivotRuntimeService._build_export_header_map(response.columns or [], state)
+
+        value_keys = {key for key in field_order if key != "_id"}
+
+        def _cell(key: str, value: Any) -> Any:
+            if value is None or (isinstance(value, float) and math.isnan(value)):
+                return 0 if key in value_keys else ""
+            return value
+
+        fd, content_path = tempfile.mkstemp(prefix="pivot_export_", suffix=f".{ext}")
+        try:
+            with os.fdopen(fd, "w", encoding="utf-8", newline="") as buf:
+                writer = csv.writer(buf, delimiter=delimiter)
+                if field_order:
+                    writer.writerow([header_map.get(key, PivotRuntimeService._display_export_header(key, state)) for key in field_order])
+                for row in rows:
+                    writer.writerow([_cell(key, row.get(key)) for key in field_order])
+            content_length = os.path.getsize(content_path)
+        except Exception:
+            try:
+                os.close(fd)
+            except OSError:
+                pass
+            try:
+                os.remove(content_path)
+            except OSError:
+                pass
+            raise
+
+        return {
+            "contentPath": content_path,
+            "contentLength": content_length,
+            "contentType": f"{content_type};charset=utf-8",
+            "format": export_fmt,
+            "filename": filename,
+            "rows": len(rows),
+            "columns": len(field_order),
+            "partId": request_payload.get("partId"),
+        }
+
+    @staticmethod
+    def _resolve_export_field_order(
+        rows: List[Dict[str, Any]],
+        columns: List[Dict[str, Any]],
+        col_ids: Any,
+    ) -> List[str]:
+        def _field_from_column_id(column_id: Any) -> Optional[str]:
+            if column_id is None:
+                return None
+            text = str(column_id)
+            return "_id" if text == "hierarchy" else text
+
+        if isinstance(col_ids, list) and col_ids:
+            ordered: List[str] = []
+            seen = set()
+            for column_id in col_ids:
+                field = _field_from_column_id(column_id)
+                if field and field not in seen:
+                    ordered.append(field)
+                    seen.add(field)
+            return ordered
+
+        skip = {
+            "_path",
+            "_isTotal",
+            "_has_children",
+            "depth",
+            "__virtualIndex",
+            "__colPending",
+            "_parentPath",
+            "_isGrandTotal",
+            "__isGrandTotal__",
+        }
+        column_fields: List[str] = []
+        for column in columns or []:
+            if not isinstance(column, dict) or column.get("_isImplicitFormulaRef"):
+                continue
+            column_id = column.get("id") or column.get("accessorKey")
+            field = _field_from_column_id(column_id)
+            if field and field not in skip and not str(field).startswith("_") and field not in column_fields:
+                column_fields.append(field)
+        if column_fields:
+            return (["_id"] if any("_id" in row for row in rows) and "_id" not in column_fields else []) + column_fields
+
+        if not rows:
+            return []
+        first = rows[0]
+        return (
+            [key for key in first if key == "_id"]
+            + [key for key in first if key not in skip and key != "_id" and not key.startswith("_")]
+        )
+
+    @staticmethod
+    def _build_export_header_map(
+        columns: List[Dict[str, Any]],
+        state: PivotViewState,
+    ) -> Dict[str, str]:
+        header_map: Dict[str, str] = {}
+        for column in columns or []:
+            if not isinstance(column, dict):
+                continue
+            column_id = column.get("id") or column.get("accessorKey")
+            if column_id is None:
+                continue
+            field = "_id" if str(column_id) == "hierarchy" else str(column_id)
+            header = column.get("header") or column.get("name") or column.get("label")
+            if header is not None:
+                header_map[field] = str(header)
+
+        agg_labels = {
+            "sum": "Sum",
+            "avg": "Avg",
+            "count": "Cnt",
+            "min": "Min",
+            "max": "Max",
+            "weighted_avg": "Weighted Avg",
+        }
+        for config in state.val_configs or []:
+            if not isinstance(config, dict):
+                continue
+            field = config.get("field", "")
+            agg = config.get("agg", "sum")
+            key = f"{field}_{agg}" if agg != "formula" else field
+            if key and key not in header_map:
+                label = config.get("label") or f"{str(field).replace('_', ' ').title()} ({agg_labels.get(agg, agg)})"
+                header_map[key] = str(label)
+        return header_map
+
+    @staticmethod
+    def _display_export_header(key: str, state: PivotViewState) -> str:
+        if key == "_id":
+            row_fields = state.row_fields or []
+            return "/".join(str(field).replace("_", " ").title() for field in row_fields) or "Row"
+        return str(key).replace("_", " ").title()
 
     @staticmethod
     def _normalize_drill_request_payload(drill_payload: Dict[str, Any]) -> Dict[str, Any]:

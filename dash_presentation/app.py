@@ -483,36 +483,13 @@ app.layout = html.Div(
                     "Performance Baseline",
                     "NASDAQ Snapshot — No Trendlines",
                     "Plain numeric pivot with a displayed-column formula: Cash Equity Day PnL minus ETF Day PnL.",
-                    DashTanstackPivot(
-                        id="perf-baseline-grid",
-                        style={"height": "860px", "width": "100%"},
-                        table="nasdaq_trader_demo_snapshot",
-                        serverSide=True,
-                        rowFields=["desk", "strategy"],
-                        colFields=["asset_class"],
-                        valConfigs=[
-                            {"field": "day_pnl", "agg": "sum", "format": "fixed:0", "label": "Day PnL"},
-                            {"field": "market_value", "agg": "sum", "format": "fixed:0", "label": "Mkt Val"},
-                            {"field": "net_exposure", "agg": "sum", "format": "fixed:0", "label": "Net Exp"},
-                            {"field": "position_qty", "agg": "sum", "format": "fixed:0", "label": "Qty"},
-                            {
-                                "field": "formula_1",
-                                "agg": "formula",
-                                "format": "fixed:0",
-                                "label": "Cash - ETF PnL",
-                                "formula": "[Cash Equity_day_pnl_sum] - [ETF_day_pnl_sum]",
-                                "formulaRef": "cash_vs_etf_pnl",
-                                "formulaScope": "columns",
-                            },
-                        ],
-                        filters={},
-                        sorting=[],
-                        expanded={},
-                        showRowTotals=True,
-                        showColTotals=True,
-                        availableFieldList=_TRADER_AVAILABLE_FIELDS,
-                        defaultTheme="flash",
-                        data=[],
+                    html.Div(
+                        id="perf-baseline-demo-slot",
+                        children=build_lazy_panel_content(
+                            "load-perf-baseline-btn",
+                            "Load Numeric Baseline",
+                            "Deferred so the first screen can paint the primary trader monitor without competing backend work.",
+                        ),
                     ),
                 ),
                 build_panel(
@@ -584,6 +561,45 @@ def persist_saved_view(saved_view):
     if not saved_view:
         return no_update
     return saved_view
+
+
+@app.callback(
+    Output("perf-baseline-demo-slot", "children"),
+    Input("load-perf-baseline-btn", "n_clicks"),
+    prevent_initial_call=True,
+)
+def mount_perf_baseline_demo(_clicks):
+    return DashTanstackPivot(
+        id="perf-baseline-grid",
+        style={"height": "860px", "width": "100%"},
+        table="nasdaq_trader_demo_snapshot",
+        serverSide=True,
+        rowFields=["desk", "strategy"],
+        colFields=["asset_class"],
+        valConfigs=[
+            {"field": "day_pnl", "agg": "sum", "format": "fixed:0", "label": "Day PnL"},
+            {"field": "market_value", "agg": "sum", "format": "fixed:0", "label": "Mkt Val"},
+            {"field": "net_exposure", "agg": "sum", "format": "fixed:0", "label": "Net Exp"},
+            {"field": "position_qty", "agg": "sum", "format": "fixed:0", "label": "Qty"},
+            {
+                "field": "formula_1",
+                "agg": "formula",
+                "format": "fixed:0",
+                "label": "Cash - ETF PnL",
+                "formula": "[Cash Equity_day_pnl_sum] - [ETF_day_pnl_sum]",
+                "formulaRef": "cash_vs_etf_pnl",
+                "formulaScope": "columns",
+            },
+        ],
+        filters={},
+        sorting=[],
+        expanded={},
+        showRowTotals=True,
+        showColTotals=True,
+        availableFieldList=_TRADER_AVAILABLE_FIELDS,
+        defaultTheme="flash",
+        data=[],
+    )
 
 
 @app.callback(
@@ -815,6 +831,7 @@ app.validation_layout = html.Div(
         html.Div(
             style={"display": "none"},
             children=[
+                mount_perf_baseline_demo(None),
                 mount_sparkline_demo(None),
                 mount_field_sparkline_demo(None),
                 mount_curve_demo(None),
@@ -823,28 +840,6 @@ app.validation_layout = html.Div(
         ),
     ]
 )
-
-
-# --- 4. Pivot wiring (one line) ---
-# All pivots share a single adapter singleton.  register_pivot_app wires
-# each pivot_id to the same transport callback; the runtime callback uses
-# a shared PivotRuntimeService so session state is consistent across grids.
-_service = None
-_service_lock = threading.Lock()
-
-
-def _get_service():
-    global _service
-    if _service is not None:
-        return _service
-    with _service_lock:
-        if _service is None:
-            from pivot_engine.runtime import PivotRuntimeService, SessionRequestGate
-            _service = PivotRuntimeService(
-                adapter_getter=get_adapter,
-                session_gate=SessionRequestGate(),
-            )
-    return _service
 
 
 register_pivot_app(app, adapter_getter=get_adapter, pivot_id="pivot-grid")

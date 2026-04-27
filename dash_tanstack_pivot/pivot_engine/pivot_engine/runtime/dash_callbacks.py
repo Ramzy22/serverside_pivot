@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import inspect
 import json
+import os
 import traceback
 import time
 from dataclasses import dataclass
@@ -19,6 +20,7 @@ except ImportError:
 
 from .models import PivotRequestContext, PivotViewState
 from .async_bridge import run_awaitable_sync
+from .payload_store import RuntimePayloadStore
 from .service import PivotRuntimeService
 
 
@@ -151,6 +153,103 @@ def _state_override_value(
     return value
 
 
+@dataclass
+class _RuntimeExportContext:
+    request: Any
+    expanded: Any
+    row_fields: Any
+    val_configs: Any
+
+
+def _build_runtime_export_context(
+    *,
+    request_payload: Dict[str, Any],
+    table_name: Optional[str],
+    row_fields: Any,
+    col_fields: Any,
+    val_configs: Any,
+    filters: Any,
+    custom_dimensions: Any,
+    sorting: Any,
+    sort_options: Any,
+    sort_options_default: Optional[Dict],
+    expanded: Any,
+    show_row_totals: bool,
+    show_col_totals: bool,
+) -> _RuntimeExportContext:
+    """Build the export request from the same effective state as the visible pivot."""
+    from ..tanstack_adapter import TanStackOperation, TanStackRequest
+
+    request_state_override = _extract_request_state_override(request_payload)
+    effective_row_fields = _state_override_value(request_state_override, "rowFields", row_fields or [], list)
+    effective_col_fields = _state_override_value(request_state_override, "colFields", col_fields or [], list)
+    effective_val_configs = _state_override_value(request_state_override, "valConfigs", val_configs or [], list)
+    effective_filters = _state_override_value(request_state_override, "filters", filters or {}, dict)
+    effective_custom_dimensions = _state_override_value(request_state_override, "customDimensions", custom_dimensions or [], list)
+    effective_sorting = _state_override_value(request_state_override, "sorting", sorting or [], list)
+    effective_sort_options = _state_override_value(
+        request_state_override,
+        "sortOptions",
+        sort_options or sort_options_default or {},
+        dict,
+    )
+    effective_expanded = _state_override_value(request_state_override, "expanded", expanded, (dict, bool))
+    effective_show_row_totals = _state_override_value(
+        request_state_override,
+        "showRowTotals",
+        show_row_totals,
+        bool,
+    )
+    effective_show_col_totals = _state_override_value(
+        request_state_override,
+        "showColTotals",
+        show_col_totals,
+        bool,
+    )
+
+    export_state = PivotViewState(
+        row_fields=effective_row_fields,
+        col_fields=effective_col_fields,
+        val_configs=effective_val_configs,
+        filters=effective_filters,
+        custom_dimensions=effective_custom_dimensions,
+        sorting=effective_sorting,
+        sort_options=effective_sort_options,
+        expanded=effective_expanded,
+        show_row_totals=effective_show_row_totals,
+        show_col_totals=effective_show_col_totals,
+    )
+    tanstack_sorting, column_sort_options = PivotRuntimeService._build_tanstack_sorting(export_state)
+    request_columns = PivotRuntimeService._build_request_columns(
+        effective_row_fields or [],
+        effective_col_fields or [],
+        effective_val_configs or [],
+    )
+    resolved_table = table_name or request_payload.get("table")
+    effective_filters = effective_filters or {}
+
+    return _RuntimeExportContext(
+        request=TanStackRequest(
+            operation=TanStackOperation.GET_DATA,
+            table=resolved_table,
+            columns=request_columns,
+            filters=effective_filters,
+            custom_dimensions=effective_custom_dimensions or [],
+            sorting=tanstack_sorting,
+            grouping=effective_row_fields or [],
+            aggregations=[],
+            pagination={"pageIndex": 0, "pageSize": 10_000_000},
+            global_filter=effective_filters.get("global") if isinstance(effective_filters, dict) else None,
+            totals=effective_show_col_totals,
+            row_totals=effective_show_row_totals,
+            column_sort_options=column_sort_options or None,
+        ),
+        expanded=effective_expanded,
+        row_fields=effective_row_fields,
+        val_configs=effective_val_configs,
+    )
+
+
 def _merge_profiles(*profiles: Optional[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
     merged: Dict[str, Any] = {}
     for profile in profiles:
@@ -187,6 +286,7 @@ def _normalize_transport_request(
                 "drill": f"{_normalize_id(pivot_id)}.drillThrough",
                 "detail": f"{_normalize_id(pivot_id)}.detailRequest",
                 "update": f"{_normalize_id(pivot_id)}.cellUpdates",
+                "export": f"{_normalize_id(pivot_id)}.runtimeRequest",
                 "transaction": f"{_normalize_id(pivot_id)}.runtimeRequest",
             }.get(kind, f"{_normalize_id(pivot_id)}.viewport"),
         }
@@ -246,6 +346,201 @@ def _format_transport_callback_output(
     return (runtime_response_payload, drill_payload)
 
 
+def _env_int(name: str, default: int) -> int:
+    try:
+        return int(os.environ.get(name, default))
+    except (TypeError, ValueError):
+        return default
+
+
+def _runtime_payload_refs_enabled() -> bool:
+    return os.environ.get("PIVOT_RUNTIME_PAYLOAD_REFS", "1").lower() not in {"0", "false", "no"}
+
+
+def _contains_nested_sequence(value: Any, *, depth: int = 0, max_depth: int = 4) -> bool:
+    if depth > max_depth:
+        return False
+    if isinstance(value, (str, bytes, bytearray)):
+        return False
+    if isinstance(value, (list, tuple)):
+        return True
+    if isinstance(value, dict):
+        return any(_contains_nested_sequence(item, depth=depth + 1, max_depth=max_depth) for item in value.values())
+    return False
+
+
+def _payload_rows_have_nested_values(rows: Any, *, sample_size: int = 50) -> bool:
+    if not isinstance(rows, list):
+        return False
+    for row in rows[:max(0, sample_size)]:
+        if isinstance(row, dict) and any(_contains_nested_sequence(value) for value in row.values()):
+            return True
+    return False
+
+
+def _get_runtime_payload_store(app: Any) -> RuntimePayloadStore:
+    store = getattr(app, "_pivot_runtime_payload_store", None)
+    if store is None:
+        store = RuntimePayloadStore(
+            default_ttl_seconds=_env_int("PIVOT_RUNTIME_PAYLOAD_TTL_SECONDS", 120),
+            max_entries=_env_int("PIVOT_RUNTIME_PAYLOAD_MAX_ENTRIES", 256),
+            max_bytes=_env_int("PIVOT_RUNTIME_PAYLOAD_MAX_BYTES", 128 * 1024 * 1024),
+        )
+        setattr(app, "_pivot_runtime_payload_store", store)
+    return store
+
+
+def _register_runtime_payload_endpoint(app: Any) -> None:
+    if "_dash_tanstack_pivot_runtime_payload" in getattr(app.server, "view_functions", {}):
+        return
+
+    @app.server.route("/_dash_tanstack_pivot/payload/<token>", methods=["GET"], endpoint="_dash_tanstack_pivot_runtime_payload")
+    def _dash_tanstack_pivot_runtime_payload(token: str):
+        from flask import Response
+
+        store = _get_runtime_payload_store(app)
+        item = store.get(token)
+        if item is None:
+            return Response("payload expired or not found", status=404, content_type="text/plain")
+
+        if item.file_path:
+            try:
+                file_handle = open(item.file_path, "rb")
+            except OSError:
+                return Response("payload expired or not found", status=404, content_type="text/plain")
+
+            def _stream_file():
+                try:
+                    while True:
+                        chunk = file_handle.read(1024 * 1024)
+                        if not chunk:
+                            break
+                        yield chunk
+                finally:
+                    file_handle.close()
+
+            response = Response(_stream_file(), status=200, content_type=item.content_type)
+        else:
+            response = Response(item.body, status=200, content_type=item.content_type)
+        response.headers["Cache-Control"] = "no-store"
+        filename = item.metadata.get("filename") if isinstance(item.metadata, dict) else None
+        if filename:
+            safe_filename = str(filename).replace("\\", "_").replace("/", "_").replace('"', "")
+            response.headers["Content-Disposition"] = f'attachment; filename="{safe_filename}"'
+        response.headers["Content-Length"] = str(int(item.size or len(item.body or b"")))
+        return response
+
+
+def _externalize_data_payload_if_needed(
+    app: Any,
+    payload: Dict[str, Any],
+    *,
+    request_id: Optional[str],
+    context: PivotRequestContext,
+) -> Dict[str, Any]:
+    if not _runtime_payload_refs_enabled() or not isinstance(payload, dict):
+        return payload
+    rows = payload.get("data")
+    if not isinstance(rows, list) or not rows:
+        return payload
+
+    min_rows = max(1, _env_int("PIVOT_RUNTIME_PAYLOAD_REF_MIN_ROWS", 500))
+    nested_values = _payload_rows_have_nested_values(
+        rows,
+        sample_size=max(1, _env_int("PIVOT_RUNTIME_PAYLOAD_REF_NESTED_SAMPLE", 50)),
+    )
+    if len(rows) < min_rows and not nested_values:
+        return payload
+
+    store = _get_runtime_payload_store(app)
+    payload_ref = store.put_json(
+        {"data": rows},
+        metadata={
+            "requestId": request_id,
+            "stateEpoch": context.state_epoch,
+            "windowSeq": context.window_seq,
+            "clientInstance": context.client_instance,
+            "dataVersion": payload.get("dataVersion"),
+            "rowCount": payload.get("rowCount"),
+            "dataOffset": payload.get("dataOffset"),
+        },
+    )
+    return {
+        **payload,
+        "data": [],
+        "payloadRef": payload_ref,
+        "payloadInline": False,
+    }
+
+
+def _externalize_export_payload(
+    app: Any,
+    payload: Dict[str, Any],
+    *,
+    request_id: Optional[str],
+    context: PivotRequestContext,
+) -> Dict[str, Any]:
+    if not isinstance(payload, dict):
+        return {}
+    content_path = payload.get("contentPath") or payload.get("content_path")
+    if isinstance(content_path, str) and content_path:
+        store = _get_runtime_payload_store(app)
+        payload_ref = store.put_file(
+            content_path,
+            content_type=str(payload.get("contentType") or "application/octet-stream"),
+            metadata={
+                "requestId": request_id,
+                "stateEpoch": context.state_epoch,
+                "windowSeq": context.window_seq,
+                "clientInstance": context.client_instance,
+                "filename": payload.get("filename"),
+                "exportFormat": payload.get("format"),
+                "rowCount": payload.get("rows"),
+                "partId": payload.get("partId"),
+            },
+        )
+        return {
+            "payloadRef": payload_ref,
+            "payloadInline": False,
+            "format": payload.get("format"),
+            "filename": payload.get("filename"),
+            "rows": payload.get("rows"),
+            "columns": payload.get("columns"),
+            "partId": payload.get("partId"),
+        }
+    content = payload.get("content")
+    if not isinstance(content, (bytes, bytearray)):
+        return {
+            key: value
+            for key, value in payload.items()
+            if key != "content"
+        }
+    store = _get_runtime_payload_store(app)
+    payload_ref = store.put_bytes(
+        bytes(content),
+        content_type=str(payload.get("contentType") or "application/octet-stream"),
+        metadata={
+            "requestId": request_id,
+            "stateEpoch": context.state_epoch,
+            "windowSeq": context.window_seq,
+            "clientInstance": context.client_instance,
+            "filename": payload.get("filename"),
+            "exportFormat": payload.get("format"),
+            "rowCount": payload.get("rows"),
+            "partId": payload.get("partId"),
+        },
+    )
+    return {
+        "payloadRef": payload_ref,
+        "payloadInline": False,
+        "format": payload.get("format"),
+        "filename": payload.get("filename"),
+        "rows": payload.get("rows"),
+        "columns": payload.get("columns"),
+        "partId": payload.get("partId"),
+    }
+
+
 @dataclass
 class DashPivotInstanceConfig:
     """IDs that define one pivot instance wiring in a Dash app."""
@@ -277,6 +572,7 @@ def register_dash_pivot_transport_callback(
         return False
 
     include_drill_store = drill_store_id is not None
+    _register_runtime_payload_endpoint(app)
 
     outputs = [Output(pivot_id, "runtimeResponse")]
     if include_drill_store:
@@ -506,127 +802,6 @@ def register_dash_pivot_transport_callback(
                 ),
             )
 
-        if request_kind == "export":
-            import io
-            import csv as _csv
-            import base64 as _b64
-            from ..tanstack_adapter import TanStackOperation, TanStackRequest
-
-            export_fmt = (request_payload.get("format") or "csv").lower()
-            resolved_table = table_name or request_payload.get("table")
-            service = runtime_service_getter()
-            adapter = service._adapter_getter()
-            request_columns = PivotRuntimeService._build_request_columns(
-                row_fields or [], col_fields or [], val_configs or []
-            )
-            export_request = TanStackRequest(
-                operation=TanStackOperation.GET_DATA,
-                table=resolved_table,
-                columns=request_columns,
-                filters=filters or {},
-                custom_dimensions=custom_dimensions or [],
-                sorting=[],
-                grouping=row_fields or [],
-                aggregations=[],
-                pagination={"pageIndex": 0, "pageSize": 10_000_000},
-                totals=resolved_show_col_totals,
-                row_totals=resolved_show_row_totals,
-            )
-            response = await _await_if_needed(adapter.handle_request(export_request))
-            all_rows = response.data or []
-
-            # Filter to only rows visible given the current expand/collapse state.
-            # expanded=True means expand all; expanded={} / None means all collapsed (top level only).
-            _expanded_paths = PivotRuntimeService._parse_expanded_paths(expanded)
-            _expand_all = (expanded is True) or _expanded_paths == [["__ALL__"]]
-            if _expand_all:
-                rows = all_rows
-            else:
-                _expanded_set = {"|||".join(p) for p in _expanded_paths}
-                def _is_visible(row):
-                    path = row.get("_path") or ""
-                    if not path:
-                        return True
-                    parts = path.split("|||")
-                    # Every ancestor must be in the expanded set
-                    for i in range(1, len(parts)):
-                        if "|||".join(parts[:i]) not in _expanded_set:
-                            return False
-                    return True
-                rows = [r for r in all_rows if _is_visible(r)]
-
-            # Apply row slice for part exports
-            row_start = int(request_payload.get("rowStart") or 0)
-            row_end_req = request_payload.get("rowEnd")
-            row_end_int = int(row_end_req) if row_end_req is not None else None
-            if row_end_int is not None and row_end_int > 0:
-                rows = rows[row_start:row_end_int]
-            elif row_start > 0:
-                rows = rows[row_start:]
-
-            # Build ordered field list: row hierarchy path, then value columns
-            _skip = {"_path", "_isTotal", "_has_children", "depth", "__virtualIndex",
-                     "__colPending", "_parentPath", "_isGrandTotal", "__isGrandTotal__"}
-            if rows:
-                first = rows[0]
-                field_order = (
-                    [k for k in first if k == "_id"]
-                    + [k for k in first if k not in _skip and k != "_id" and not k.startswith("_")]
-                )
-            else:
-                field_order = []
-
-            # Apply column subset for part exports
-            col_ids_req = request_payload.get("colIds")
-            if col_ids_req and isinstance(col_ids_req, list):
-                col_ids_set = set(col_ids_req)
-                field_order = [k for k in field_order if k in col_ids_set or k == "_id"]
-
-            # Build display headers from val_configs where possible
-            _agg_labels = {"sum": "Sum", "avg": "Avg", "count": "Cnt", "min": "Min",
-                           "max": "Max", "weighted_avg": "Weighted Avg"}
-            _vc_map = {}
-            for vc in (val_configs or []):
-                if isinstance(vc, dict):
-                    f, a = vc.get("field", ""), vc.get("agg", "sum")
-                    key = f"{f}_{a}" if a != "formula" else f
-                    lbl = vc.get("label") or f"{f.replace('_', ' ').title()} ({_agg_labels.get(a, a)})"
-                    _vc_map[key] = lbl
-
-            def _display_header(k):
-                if k == "_id":
-                    return "/".join(f.replace("_", " ").title() for f in (row_fields or [])) or "Row"
-                return _vc_map.get(k, k.replace("_", " ").title())
-
-            part_label = request_payload.get("partLabel")
-            delimiter = '\t' if export_fmt == 'tsv' else ','
-            ext = 'tsv' if export_fmt == 'tsv' else 'csv'
-            filename = f"pivot_export_{part_label}.{ext}" if part_label else f"pivot_export.{ext}"
-            import math as _math
-            _value_keys = {k for k in field_order if k != "_id"}
-            def _cell(k, v):
-                # NaN or None on a value column → 0; on the row-label column → ""
-                if v is None or (isinstance(v, float) and _math.isnan(v)):
-                    return 0 if k in _value_keys else ""
-                return v
-
-            buf = io.StringIO()
-            writer = _csv.writer(buf, delimiter=delimiter)
-            if field_order:
-                writer.writerow([_display_header(k) for k in field_order])
-            for row in rows:
-                if isinstance(row, dict):
-                    writer.writerow([_cell(k, row.get(k)) for k in field_order])
-            encoded = _b64.b64encode(buf.getvalue().encode("utf-8")).decode("ascii")
-
-            return _response_tuple(_build_runtime_response(
-                kind="export",
-                request_id=request_id,
-                status="ok",
-                payload={"data": encoded, "format": export_fmt, "filename": filename,
-                         "rows": len(rows), "partId": request_payload.get("partId")},
-            ))
-
         active_request_meta = request_payload
         # When a Dash prop (reportDef, viewMode, etc.) triggers the callback, active_request_meta
         # carries the previous runtimeRequest with intent="viewport" and a stale window_seq.
@@ -770,6 +945,7 @@ def register_dash_pivot_transport_callback(
             transaction_request=runtime_transaction_request,
             drill_through=request_payload if request_kind == "drill" and isinstance(request_payload, dict) else None,
             detail_request=request_payload if request_kind == "detail" and isinstance(request_payload, dict) else None,
+            export_request=request_payload if request_kind == "export" and isinstance(request_payload, dict) else {},
             viewport=request_payload if isinstance(request_payload, dict) else {},
             chart_request=request_payload if request_kind == "chart" and isinstance(request_payload, dict) else {},
             view_mode=effective_view_mode,
@@ -976,28 +1152,57 @@ def register_dash_pivot_transport_callback(
                 ),
             )
 
+        if result.status == "export":
+            export_payload = _externalize_export_payload(
+                app,
+                result.export_payload or {},
+                request_id=request_id,
+                context=context,
+            )
+            return _response_tuple(
+                _build_runtime_response(
+                    kind="export",
+                    request_id=request_id,
+                    status="ok",
+                    payload=export_payload,
+                    table=resolved_table,
+                    session_id=context.session_id,
+                    client_instance=context.client_instance,
+                    state_epoch=context.state_epoch,
+                    window_seq=context.window_seq,
+                    profile=merged_profile,
+                ),
+            )
+
         if result.status == "data":
             columns_out = result.columns if result.columns is not None else no_update
             data_out = list(result.data or [])
             if result.color_scale_stats is not None:
                 # Prepend a sentinel row the frontend strips before rendering
                 data_out = [{"_path": "__color_scale_stats__", "_colorScaleStats": result.color_scale_stats}] + data_out
+            data_payload = {
+                "data": data_out,
+                "rowCount": result.total_rows if result.total_rows is not None else 0,
+                "columns": columns_out if columns_out is not no_update else None,
+                "colSchema": result.col_schema,
+                "dataOffset": result.data_offset,
+                "dataVersion": result.data_version,
+                "transaction": result.transaction_result,
+                "editOverlay": result.edit_overlay,
+                "formulaErrors": result.formula_errors or None,
+            }
+            data_payload = _externalize_data_payload_if_needed(
+                app,
+                data_payload,
+                request_id=request_id,
+                context=context,
+            )
             return _response_tuple(
                 _build_runtime_response(
                     kind="transaction" if request_kind == "transaction" and result.transaction_result else "data",
                     request_id=request_id,
                     status="data",
-                    payload={
-                        "data": data_out,
-                        "rowCount": result.total_rows if result.total_rows is not None else 0,
-                        "columns": columns_out if columns_out is not no_update else None,
-                        "colSchema": result.col_schema,
-                        "dataOffset": result.data_offset,
-                        "dataVersion": result.data_version,
-                        "transaction": result.transaction_result,
-                        "editOverlay": result.edit_overlay,
-                        "formulaErrors": result.formula_errors or None,
-                    },
+                    payload=data_payload,
                     table=resolved_table,
                     session_id=context.session_id,
                     client_instance=context.client_instance,

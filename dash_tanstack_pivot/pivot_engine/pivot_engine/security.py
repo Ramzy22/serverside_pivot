@@ -83,6 +83,11 @@ JWT_SECRET_KEY = _load_jwt_secret_key()
 JWT_ALGORITHM = os.getenv("JWT_ALGORITHM", "HS256")
 PIVOT_API_KEY = os.getenv("PIVOT_API_KEY")
 
+
+def _load_pivot_api_key() -> Optional[str]:
+    """Resolve API key at request time so tests and app factories can set env late."""
+    return os.getenv("PIVOT_API_KEY") or PIVOT_API_KEY
+
 class UserRole(str):
     ADMIN = "admin"
     EDITOR = "editor"
@@ -114,15 +119,16 @@ async def get_current_user(
     Authenticate user via API Key or JWT Token.
     API Key takes precedence.
     """
+    configured_api_key = _load_pivot_api_key()
     
     # 1. API Key Authentication (Service Account)
     if api_key:
-        if not PIVOT_API_KEY:
+        if not configured_api_key:
             # Dev mode fallback if no key configured
             if _allow_development_auth_fallbacks() and api_key == "dev-key":
                 return _get_development_auth_fallback_user()
         
-        if api_key == PIVOT_API_KEY:
+        if api_key == configured_api_key:
             # Service account typically has full admin rights or specific scope
             return User(
                 id="service-account",
@@ -160,7 +166,7 @@ async def get_current_user(
             )
 
     # 3. Development Fallback (if no auth provided and in dev mode)
-    if not PIVOT_API_KEY and _allow_development_auth_fallbacks():
+    if not configured_api_key and _allow_development_auth_fallbacks():
         return _get_development_auth_fallback_user()
 
     raise HTTPException(

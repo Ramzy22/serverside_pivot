@@ -16,6 +16,7 @@ export default function SparklineCell({
     showDelta = true,
     currentLabel = '',
     deltaLabel = '',
+    deltaValue = null,
     title = '',
     compact = false,
 }) {
@@ -33,7 +34,9 @@ export default function SparklineCell({
     const currentPoint = Array.isArray(geometry.points) && geometry.points.length > 0
         ? geometry.points[geometry.points.length - 1]
         : null;
-    const resolvedDeltaValue = resolveSparklineDeltaValue(points);
+    const resolvedDeltaValue = Number.isFinite(Number(deltaValue))
+        ? Number(deltaValue)
+        : resolveSparklineDeltaValue(points);
     const strokeColor = color || theme.primary || '#2563EB';
     const resolvedPositiveColor = positiveColor || (theme.isDark ? '#86EFAC' : '#2F855A');
     const resolvedNegativeColor = negativeColor || (theme.isDark ? '#FDA4AF' : '#B91C1C');

@@ -5,6 +5,14 @@ import Icons from '../../utils/Icons';
 import { usePivotRenderCounter } from '../../hooks/usePivotRenderCounter';
 import { formatDisplayLabel } from '../../utils/helpers';
 import {
+    getDashArray, DASH_STYLES, GRADIENT_DIRECTIONS, buildGradientStops,
+    LEGEND_POSITIONS, ChartLegendPositionButtons,
+    SERIES_SORT_MODES, applySeriesSort,
+    ChartDataLimitWarning, ChartLineDashEditor,
+    ChartCustomPaletteEditor, ChartReflineRow,
+    ChartTypeGallery,
+} from './chartEnhancements';
+import {
     INTERNAL_COL_IDS, MAX_PANEL_CATEGORIES, MAX_PANEL_SERIES,
     MAX_SELECTION_CATEGORIES, MAX_SELECTION_SERIES,
     CHART_HEIGHT, CHART_WIDTH, DEFAULT_COLORS, COLOR_PALETTES,
@@ -38,49 +46,27 @@ import {
     canStackBarLayout,
 } from '../../utils/chartModelBuilders';
 
-const ChartTypeButtons = ({ chartType, onChange, theme, includeHierarchyCharts = true }) => {
-    const buttonStyle = (type) => ({
-        border: `1px solid ${type === chartType ? theme.primary : theme.border}`,
-        background: type === chartType ? theme.select : (theme.headerSubtleBg || theme.hover),
-        color: type === chartType ? theme.primary : theme.text,
-        borderRadius: theme.radiusSm || '8px',
-        padding: '6px 8px',
-        fontSize: '11px',
-        fontWeight: 700,
-        cursor: 'pointer',
-    });
+const computeLinearTrendline = (values) => {
+    const pts = values.map((v, i) => [i, Number(v)]).filter(([, y]) => Number.isFinite(y));
+    if (pts.length < 2) return null;
+    const n = pts.length;
+    const sumX = pts.reduce((s, [x]) => s + x, 0);
+    const sumY = pts.reduce((s, [, y]) => s + y, 0);
+    const sumXY = pts.reduce((s, [x, y]) => s + x * y, 0);
+    const sumX2 = pts.reduce((s, [x]) => s + x * x, 0);
+    const denom = n * sumX2 - sumX * sumX;
+    if (denom === 0) return null;
+    const slope = (n * sumXY - sumX * sumY) / denom;
+    const intercept = (sumY - slope * sumX) / n;
+    return values.map((_, i) => slope * i + intercept);
+};
 
-    return (
-        <div style={{ display: 'flex', gap: '6px', flexWrap: 'wrap' }}>
-            <button type="button" data-chart-type="bar" aria-pressed={chartType === 'bar'} onClick={() => onChange('bar')} style={buttonStyle('bar')}>Bar</button>
-            <button type="button" data-chart-type="line" aria-pressed={chartType === 'line'} onClick={() => onChange('line')} style={buttonStyle('line')}>Line</button>
-            <button type="button" data-chart-type="area" aria-pressed={chartType === 'area'} onClick={() => onChange('area')} style={buttonStyle('area')}>Area</button>
-            <button type="button" data-chart-type="sparkline" aria-pressed={chartType === 'sparkline'} onClick={() => onChange('sparkline')} style={buttonStyle('sparkline')}>Sparkline</button>
-            <button type="button" data-chart-type="combo" aria-pressed={chartType === 'combo'} onClick={() => onChange('combo')} style={buttonStyle('combo')}>Combo</button>
-            <button type="button" data-chart-type="pie" aria-pressed={chartType === 'pie'} onClick={() => onChange('pie')} style={buttonStyle('pie')}>Pie</button>
-            <button type="button" data-chart-type="donut" aria-pressed={chartType === 'donut'} onClick={() => onChange('donut')} style={buttonStyle('donut')}>Donut</button>
-            <button type="button" data-chart-type="range" aria-pressed={chartType === 'range'} onClick={() => onChange('range')} style={buttonStyle('range')}>Range</button>
-            <button type="button" data-chart-type="scatter" aria-pressed={chartType === 'scatter'} onClick={() => onChange('scatter')} style={buttonStyle('scatter')}>Scatter</button>
-            <button type="button" data-chart-type="bar3d" aria-pressed={chartType === 'bar3d'} onClick={() => onChange('bar3d')} style={buttonStyle('bar3d')}>3D Bar</button>
-            <button type="button" data-chart-type="line3d" aria-pressed={chartType === 'line3d'} onClick={() => onChange('line3d')} style={buttonStyle('line3d')}>3D Line</button>
-            <button type="button" data-chart-type="scatter3d" aria-pressed={chartType === 'scatter3d'} onClick={() => onChange('scatter3d')} style={buttonStyle('scatter3d')}>3D Scatter</button>
-            <button type="button" data-chart-type="waterfall" aria-pressed={chartType === 'waterfall'} onClick={() => onChange('waterfall')} style={buttonStyle('waterfall')}>Waterfall</button>
-            <button type="button" data-chart-type="heatmap" aria-pressed={chartType === 'heatmap'} onClick={() => onChange('heatmap')} style={buttonStyle('heatmap')}>Heatmap</button>
-            <button type="button" data-chart-type="bubble" aria-pressed={chartType === 'bubble'} onClick={() => onChange('bubble')} style={buttonStyle('bubble')}>Bubble</button>
-            <button type="button" data-chart-type="radar" aria-pressed={chartType === 'radar'} onClick={() => onChange('radar')} style={buttonStyle('radar')}>Radar</button>
-            <button type="button" data-chart-type="funnel" aria-pressed={chartType === 'funnel'} onClick={() => onChange('funnel')} style={buttonStyle('funnel')}>Funnel</button>
-            <button type="button" data-chart-type="histogram" aria-pressed={chartType === 'histogram'} onClick={() => onChange('histogram')} style={buttonStyle('histogram')}>Histogram</button>
-            <button type="button" data-chart-type="boxplot" aria-pressed={chartType === 'boxplot'} onClick={() => onChange('boxplot')} style={buttonStyle('boxplot')}>Box Plot</button>
-            <button type="button" data-chart-type="nightingale" aria-pressed={chartType === 'nightingale'} onClick={() => onChange('nightingale')} style={buttonStyle('nightingale')}>Nightingale</button>
-            {includeHierarchyCharts ? (
-                <>
-                    <button type="button" data-chart-type="icicle" aria-pressed={chartType === 'icicle'} onClick={() => onChange('icicle')} style={buttonStyle('icicle')}>Icicle</button>
-                    <button type="button" data-chart-type="sunburst" aria-pressed={chartType === 'sunburst'} onClick={() => onChange('sunburst')} style={buttonStyle('sunburst')}>Sunburst</button>
-                    <button type="button" data-chart-type="sankey" aria-pressed={chartType === 'sankey'} onClick={() => onChange('sankey')} style={buttonStyle('sankey')}>Sankey</button>
-                </>
-            ) : null}
-        </div>
-    );
+const computeMovingAverage = (values, period) => {
+    const p = Math.max(2, Math.floor(Number(period) || 3));
+    return values.map((_, i) => {
+        const win = values.slice(Math.max(0, i - p + 1), i + 1).map(Number).filter(Number.isFinite);
+        return win.length > 0 ? win.reduce((s, v) => s + v, 0) / win.length : null;
+    });
 };
 
 /** Check whether an area chart model has enough series to stack. */
@@ -211,10 +197,19 @@ const ChartHeader = ({ title, subtitle, note, theme }) => (
     )
 );
 
-const ChartConfigSection = ({ title, theme, children, defaultCollapsed = true }) => {
+const ChartConfigSection = ({ title, theme, children, defaultCollapsed = true, focusTrigger = 0 }) => {
     const [collapsed, setCollapsed] = useState(defaultCollapsed);
+    const sectionRef = useRef(null);
+    const prevTrigger = useRef(0);
+    useEffect(() => {
+        if (focusTrigger > 0 && focusTrigger !== prevTrigger.current) {
+            prevTrigger.current = focusTrigger;
+            setCollapsed(false);
+            setTimeout(() => sectionRef.current?.scrollIntoView({ behavior: 'smooth', block: 'nearest' }), 60);
+        }
+    }, [focusTrigger]);
     return (
-        <div style={{
+        <div ref={sectionRef} style={{
             display: 'flex',
             flexDirection: 'column',
             gap: collapsed ? 0 : '8px',
@@ -628,6 +623,18 @@ const ChartLayerEditor = ({
                                 <option value="right">Right Axis</option>
                             </select>
                         </label>
+                        <label style={{ display: 'flex', flexDirection: 'column', gap: '5px' }}>
+                            <span style={{ fontSize: '10px', fontWeight: 800, letterSpacing: '0.06em', textTransform: 'uppercase', color: theme.textSec }}>
+                                Color
+                            </span>
+                            <input
+                                type="color"
+                                value={layer.color || '#6366f1'}
+                                onChange={(event) => updateLayer(layer.id, { color: event.target.value })}
+                                style={{ width: '100%', height: '34px', padding: '2px 4px', border: `1px solid ${theme.border}`, borderRadius: theme.radiusSm || '8px', cursor: 'pointer', background: 'none' }}
+                                title={`Override color for this layer`}
+                            />
+                        </label>
                     </div>
                 </div>
                 );
@@ -893,22 +900,38 @@ const ChartStats = ({ model, theme }) => {
     );
 };
 
-const ChartLegend = ({ items, theme, hiddenSet, onToggle }) => {
+const ChartLegend = ({ items, theme, hiddenSet, onToggle, position = 'bottom', onElementSelect }) => {
+    if (position === 'none') return null;
     if (!Array.isArray(items) || items.length === 0) return null;
     const canToggle = typeof onToggle === 'function' && hiddenSet;
 
     return (
-        <div style={{ display: 'flex', gap: '10px', flexWrap: 'wrap', alignItems: 'center' }}>
+        <div style={{
+            display: 'flex',
+            gap: '10px',
+            flexWrap: 'wrap',
+            alignItems: 'center',
+            justifyContent: position === 'top' ? 'flex-start' : 'flex-start',
+            order: position === 'top' ? -1 : 1,
+            padding: position === 'top' ? '0 0 6px 0' : '6px 0 0 0',
+        }}>
             {items.map((item) => {
                 const isHidden = canToggle && hiddenSet.has(item.label);
                 return (
                     <div
                         key={item.label}
-                        onClick={canToggle ? () => onToggle(item.label) : undefined}
+                        onClick={() => {
+                            if (canToggle) onToggle(item.label);
+                            if (typeof onElementSelect === 'function') onElementSelect('legend', item.label);
+                        }}
+                        role="button"
+                        tabIndex={0}
+                        onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); if (canToggle) onToggle(item.label); if (typeof onElementSelect === 'function') onElementSelect('legend', item.label); } }}
+                        aria-pressed={canToggle ? !isHidden : undefined}
                         style={{
                             display: 'flex', alignItems: 'center', gap: '6px', fontSize: '11px',
                             color: theme.textSec,
-                            cursor: canToggle ? 'pointer' : 'default',
+                            cursor: 'pointer',
                             opacity: isHidden ? 0.35 : 1,
                             textDecoration: isHidden ? 'line-through' : 'none',
                             userSelect: 'none',
@@ -1148,9 +1171,44 @@ const SvgChart = ({
     showAnimations = false,
     showCalloutLabels = false,
     subtitle = '',
+    onReferenceLinesChange = null,
+    showTrendline = false,
+    trendlineMode = 'linear',
+    trendlinePeriod = 3,
+    // new props
+    legendPosition = 'bottom',
+    labelPosition = 'outside',
+    decimalPlaces = -1,
+    gradientDirection = 'vertical',
+    gradientOpacity = 70,
+    trendlineColor = '',
+    trendlineWidth = 2,
+    seriesSort = 'none',
+    lineDashStyles = {},
+    yAxisMinRight = '',
+    yAxisMaxRight = '',
+    customPaletteColors = [],
+    onElementSelect = null,
 }) => {
-    const paletteColors = resolvePalette(colorPalette);
-    const fmt = (v) => formatChartValue(v, valueFormat);
+    const paletteColors = colorPalette === 'custom' && customPaletteColors.length >= 2
+        ? customPaletteColors
+        : resolvePalette(colorPalette);
+    const fmt = (v) => {
+        if (decimalPlaces >= 0 && typeof v === 'number' && Number.isFinite(v)) {
+            const base = formatChartValue(v, valueFormat);
+            // if auto-format produced a compact suffix keep it; otherwise apply fixed decimals
+            if (!/[KMB%$]/.test(base) || valueFormat === 'number') {
+                return v.toFixed(decimalPlaces);
+            }
+        }
+        return formatChartValue(v, valueFormat);
+    };
+    // sorted model.series (non-mutating, applies seriesSort)
+    const sortedModel = useMemo(() => {
+        if (!model || !Array.isArray(model.series) || seriesSort === 'none') return model;
+        return { ...model, series: applySeriesSort(model.series, seriesSort) };
+    }, [model, seriesSort]);
+    const effectiveModel = sortedModel || model;
     const stackedChildBarMode = chartType === 'bar' && barLayout === 'stacked' && Array.isArray(model.stackedGroups) && model.stackedGroups.length > 0;
     const stackedSeriesBarMode = chartType === 'bar' && barLayout === 'stacked' && !stackedChildBarMode && canStackBarSeries(model);
     const stackedAreaMode = chartType === 'area' && barLayout === 'stacked' && canStackAreaSeries(model);
@@ -1163,6 +1221,7 @@ const SvgChart = ({
         (seriesColors && seriesColors[name]) || getColorForIndex(idx, theme, paletteColors);
 
     const renderMarker = (cx, cy, fill, tipAttrs, clickProps = {}) => {
+        if (markerShape === 'none') return null;
         const s = markerSize || 4;
         const sk = theme.surfaceBg || theme.background || '#fff';
         const base = { fill, stroke: sk, strokeWidth: '1.5', opacity: '0.82', ...tipAttrs, ...clickProps };
@@ -1234,11 +1293,25 @@ const SvgChart = ({
         });
     }, []);
     const handleChartMouseLeave = useCallback(() => setTooltipInfo(null), []);
+
+    const handleElementClick = useCallback((e) => {
+        if (!onElementSelect) return;
+        let el = e.target;
+        while (el && el !== e.currentTarget) {
+            const elType = el.getAttribute && el.getAttribute('data-chart-element-type');
+            if (elType) {
+                onElementSelect(elType, el.getAttribute('data-chart-element-id') || '');
+                return;
+            }
+            el = el.parentElement;
+        }
+    }, [onElementSelect]);
+
     const tooltipElement = tooltipInfo ? (
         <div style={{
             position: 'absolute',
-            left: Math.min(tooltipInfo.x + 14, resolvedChartWidth - 160),
-            top: Math.max(0, tooltipInfo.y - 10),
+            left: tooltipInfo.x + 14 + 160 > resolvedChartWidth ? Math.max(0, tooltipInfo.x - 174) : tooltipInfo.x + 14,
+            top: tooltipInfo.y - 10 < 0 ? tooltipInfo.y + 14 : tooltipInfo.y - 10,
             pointerEvents: 'none',
             zIndex: 10,
             background: theme.surfaceBg || theme.background || '#fff',
@@ -1399,11 +1472,13 @@ const SvgChart = ({
         <div
             onMouseDown={handleTitleDragStart}
             onDoubleClick={handleTitleDoubleClick}
+            onClick={onElementSelect && !editingTitle ? () => onElementSelect('title', '') : undefined}
+            data-chart-element-type="title"
             style={{
                 position: 'absolute',
                 ...titleStyle,
                 zIndex: 6,
-                cursor: editingTitle ? 'text' : 'grab',
+                cursor: editingTitle ? 'text' : (onElementSelect ? 'pointer' : 'grab'),
                 userSelect: editingTitle ? 'auto' : 'none',
             }}
         >
@@ -1762,6 +1837,7 @@ const SvgChart = ({
         }
 
         const sankeyLayout = layoutSankey(sankeyNodes, sankeyLinks, resolvedChartWidth, effectiveChartHeight);
+        const sankeyMaxNodeX = sankeyLayout.nodes.length > 0 ? Math.max(...sankeyLayout.nodes.map((n) => n.x)) : 0;
 
         return (
             <div style={{ display: 'flex', flexDirection: 'column', gap: '10px' }}>
@@ -1775,6 +1851,7 @@ const SvgChart = ({
                             height: 'auto',
                             display: 'block',
                             maxWidth: '100%',
+                            overflow: 'visible',
                         }}
                         role="img"
                         aria-label={model.title || 'Sankey chart'}
@@ -1825,9 +1902,9 @@ const SvgChart = ({
                                         data-tip-color={fill}
                                     />
                                     <text
-                                        x={node.x + node.width + 6}
+                                        x={node.x === sankeyMaxNodeX ? node.x - 6 : node.x + node.width + 6}
                                         y={node.y + Math.min(node.height / 2 + 4, node.height - 4)}
-                                        textAnchor="start"
+                                        textAnchor={node.x === sankeyMaxNodeX ? 'end' : 'start'}
                                         fontSize="11"
                                         fill={theme.text}
                                         fontWeight="700"
@@ -2004,7 +2081,7 @@ const SvgChart = ({
                     </svg>
                     {chartTitleOverlay}{crosshairElement}{tooltipElement}{zoomBadge}
                 </div>
-                {showLegend ? <ChartLegend items={legendItems} theme={theme} hiddenSet={hiddenSeries} onToggle={toggleHiddenSeries} /> : null}
+                {showLegend ? <ChartLegend items={legendItems} theme={theme} hiddenSet={hiddenSeries} onToggle={toggleHiddenSeries} position={legendPosition} onElementSelect={onElementSelect} /> : null}
             </div>
         );
     }
@@ -2102,7 +2179,7 @@ const SvgChart = ({
                     </svg>
                     {chartTitleOverlay}{crosshairElement}{tooltipElement}{zoomBadge}
                 </div>
-                {showLegend ? <ChartLegend items={[{ label: `${xSeries.name} vs ${ySeries.name}${sizeSeries ? ` (size: ${sizeSeries.name})` : ''}`, color }]} theme={theme} hiddenSet={hiddenSeries} onToggle={toggleHiddenSeries} /> : null}
+                {showLegend ? <ChartLegend items={[{ label: `${xSeries.name} vs ${ySeries.name}${sizeSeries ? ` (size: ${sizeSeries.name})` : ''}`, color }]} theme={theme} hiddenSet={hiddenSeries} onToggle={toggleHiddenSeries} position={legendPosition} /> : null}
             </div>
         );
     }
@@ -2176,7 +2253,7 @@ const SvgChart = ({
                     </svg>
                     {chartTitleOverlay}{crosshairElement}{tooltipElement}{zoomBadge}
                 </div>
-                {showLegend ? <ChartLegend items={legendItems} theme={theme} hiddenSet={hiddenSeries} onToggle={toggleHiddenSeries} /> : null}
+                {showLegend ? <ChartLegend items={legendItems} theme={theme} hiddenSet={hiddenSeries} onToggle={toggleHiddenSeries} position={legendPosition} onElementSelect={onElementSelect} /> : null}
             </div>
         );
     }
@@ -2237,7 +2314,7 @@ const SvgChart = ({
                     </svg>
                     {chartTitleOverlay}{crosshairElement}{tooltipElement}{zoomBadge}
                 </div>
-                {showLegend ? <ChartLegend items={legendItems} theme={theme} hiddenSet={hiddenSeries} onToggle={toggleHiddenSeries} /> : null}
+                {showLegend ? <ChartLegend items={legendItems} theme={theme} hiddenSet={hiddenSeries} onToggle={toggleHiddenSeries} position={legendPosition} onElementSelect={onElementSelect} /> : null}
             </div>
         );
     }
@@ -2493,7 +2570,7 @@ const SvgChart = ({
                     </svg>
                     {chartTitleOverlay}{crosshairElement}{tooltipElement}{zoomBadge}
                 </div>
-                {showLegend ? <ChartLegend items={legendItems} theme={theme} hiddenSet={hiddenSeries} onToggle={toggleHiddenSeries} /> : null}
+                {showLegend ? <ChartLegend items={legendItems} theme={theme} hiddenSet={hiddenSeries} onToggle={toggleHiddenSeries} position={legendPosition} onElementSelect={onElementSelect} /> : null}
             </div>
         );
     }
@@ -2775,7 +2852,7 @@ const SvgChart = ({
                 <div style={{ width: '100%', height: chartHeight, background: bg, borderRadius: theme.radiusSm || '8px', overflow: 'hidden' }}>
                     <ReactECharts ref={echartsRef} option={option} style={{ width: '100%', height: '100%' }} notMerge={true} />
                 </div>
-                {showLegend ? <ChartLegend items={legendItems} theme={theme} hiddenSet={hiddenSeries} onToggle={toggleHiddenSeries} /> : null}
+                {showLegend ? <ChartLegend items={legendItems} theme={theme} hiddenSet={hiddenSeries} onToggle={toggleHiddenSeries} position={legendPosition} onElementSelect={onElementSelect} /> : null}
             </div>
         );
     }
@@ -2886,7 +2963,7 @@ const SvgChart = ({
                     </svg>
                     {chartTitleOverlay}{crosshairElement}{tooltipElement}{zoomBadge}
                 </div>
-                {showLegend ? <ChartLegend items={legendItems} theme={theme} hiddenSet={hiddenSeries} onToggle={toggleHiddenSeries} /> : null}
+                {showLegend ? <ChartLegend items={legendItems} theme={theme} hiddenSet={hiddenSeries} onToggle={toggleHiddenSeries} position={legendPosition} onElementSelect={onElementSelect} /> : null}
             </div>
         );
     }
@@ -3019,7 +3096,7 @@ const SvgChart = ({
                     </svg>
                     {chartTitleOverlay}{crosshairElement}{tooltipElement}{zoomBadge}
                 </div>
-                {showLegend ? <ChartLegend items={legendItems} theme={theme} hiddenSet={hiddenSeries} onToggle={toggleHiddenSeries} /> : null}
+                {showLegend ? <ChartLegend items={legendItems} theme={theme} hiddenSet={hiddenSeries} onToggle={toggleHiddenSeries} position={legendPosition} onElementSelect={onElementSelect} /> : null}
             </div>
         );
     }
@@ -3054,7 +3131,7 @@ const SvgChart = ({
         const categoryTargets = Array.isArray(model.categoryTargets) ? model.categoryTargets : [];
         const legendItems = comboLayers.map((layer, index) => ({
             label: layer.name,
-            color: getColorForIndex(index, theme, paletteColors),
+            color: layer.color || getColorForIndex(index, theme, paletteColors),
         }));
         const getLayerScale = (layer) => (layer.axis === 'right' ? rightMetrics.scaleY : leftMetrics.scaleY);
         const getLayerBaseline = (layer) => (layer.axis === 'right' ? rightMetrics.baselineY : leftMetrics.baselineY);
@@ -3141,7 +3218,7 @@ const SvgChart = ({
                                 const scaleY = getLayerScale(layer);
                                 const baselineY = getLayerBaseline(layer);
                                 const y = scaleY(value);
-                                const color = getColorForIndex(barLayerIndex, theme, paletteColors);
+                                const color = layer.color || getColorForIndex(barLayerIndex, theme, paletteColors);
                                 const barX = slotStart + (barLayerIndex * (barWidth + barGap));
                                 return (
                                     <React.Fragment key={`${layer.id}-${category}-${barLayerIndex}`}>
@@ -3191,11 +3268,11 @@ const SvgChart = ({
                             });
                             const areaPath = buildAreaBandPath(points);
                             const linePath = buildLinePath(points);
-                            const color = getColorForIndex(barLayers.length + layerIndex, theme, paletteColors);
+                            const color = layer.color || getColorForIndex(barLayers.length + layerIndex, theme, paletteColors);
                             return (
                                 <g key={`combo-area-${layer.id}`}>
                                     {areaPath ? <path d={areaPath} fill={color} opacity="0.16" style={{ pointerEvents: 'none' }} /> : null}
-                                    {linePath ? <path d={linePath} fill="none" stroke={color} strokeWidth="2.5" strokeLinejoin="round" strokeLinecap="round" style={{ pointerEvents: 'none' }} /> : null}
+                                    {linePath ? <path d={linePath} fill="none" stroke={color} strokeWidth="2.5" strokeLinejoin="round" strokeLinecap="round" strokeDasharray={getDashArray(lineDashStyles[layer.name])} style={{ pointerEvents: 'none' }} /> : null}
                                     {points.map((point, pointIndex) => {
                                         if (!point) return null;
                                         return (
@@ -3236,10 +3313,10 @@ const SvgChart = ({
                                 };
                             });
                             const linePath = buildLinePath(points);
-                            const color = getColorForIndex(barLayers.length + areaLayers.length + layerIndex, theme, paletteColors);
+                            const color = layer.color || getColorForIndex(barLayers.length + areaLayers.length + layerIndex, theme, paletteColors);
                             return (
                                 <g key={`combo-line-${layer.id}`}>
-                                    {linePath ? <path d={linePath} fill="none" stroke={color} strokeWidth="3" strokeLinejoin="round" strokeLinecap="round" style={{ pointerEvents: 'none' }} /> : null}
+                                    {linePath ? <path d={linePath} fill="none" stroke={color} strokeWidth="3" strokeLinejoin="round" strokeLinecap="round" strokeDasharray={getDashArray(lineDashStyles[layer.name])} style={{ pointerEvents: 'none' }} /> : null}
                                     {points.map((point, pointIndex) => {
                                         if (!point) return null;
                                         return (
@@ -3303,7 +3380,7 @@ const SvgChart = ({
                     </svg>
                     {chartTitleOverlay}{crosshairElement}{tooltipElement}{zoomBadge}
                 </div>
-                {showLegend ? <ChartLegend items={legendItems} theme={theme} hiddenSet={hiddenSeries} onToggle={toggleHiddenSeries} /> : null}
+                {showLegend ? <ChartLegend items={legendItems} theme={theme} hiddenSet={hiddenSeries} onToggle={toggleHiddenSeries} position={legendPosition} onElementSelect={onElementSelect} /> : null}
             </div>
         );
     }
@@ -3368,15 +3445,18 @@ const SvgChart = ({
                     }}
                     role="img"
                     aria-label={model.title}
+                    onClick={onElementSelect ? handleElementClick : undefined}
                 >
                     {showGradient ? (
                         <defs>
                             {(model.series || []).map((ser, si) => {
                                 const c = resolveSeriesColor(ser.name, si);
+                                const dir = GRADIENT_DIRECTIONS.find(d => d.value === gradientDirection) || GRADIENT_DIRECTIONS[0];
+                                const stops = buildGradientStops(c, gradientOpacity);
                                 return (
-                                    <linearGradient key={`grad-${si}`} id={`pg-grad-${si}`} x1="0" y1="0" x2="0" y2="1">
-                                        <stop offset="0%" stopColor={c} stopOpacity="0.55" />
-                                        <stop offset="100%" stopColor={c} stopOpacity="1" />
+                                    <linearGradient key={`grad-${si}`} id={`pg-grad-${si}`} x1={dir.x1} y1={dir.y1} x2={dir.x2} y2={dir.y2}>
+                                        <stop offset={stops[0].offset} stopColor={c} stopOpacity={stops[0].stopOpacity} />
+                                        <stop offset={stops[1].offset} stopColor={c} stopOpacity={stops[1].stopOpacity} />
                                     </linearGradient>
                                 );
                             })}
@@ -3391,14 +3471,14 @@ const SvgChart = ({
                                 {geometry.horizontalBarMode ? (
                                     <>
                                         <line x1={x} y1={geometry.margin.top} x2={x} y2={effectiveChartHeight - geometry.margin.bottom} stroke={theme.border} strokeDasharray="3 4" />
-                                        <text x={x} y={effectiveChartHeight - geometry.margin.bottom + 18} textAnchor="middle" fontSize="11" fill={theme.textSec}>
+                                                        <text x={x} y={effectiveChartHeight - geometry.margin.bottom + 18} textAnchor="middle" fontSize="11" fill={theme.textSec} data-chart-element-type="axis" data-chart-element-id="x" style={onElementSelect ? { cursor: 'pointer' } : undefined}>
                                             {tickLabel}
                                         </text>
                                     </>
                                 ) : (
                                     <>
                                         <line x1={geometry.margin.left} y1={y} x2={resolvedChartWidth - geometry.margin.right} y2={y} stroke={theme.border} strokeDasharray="3 4" />
-                                        <text x={geometry.margin.left - 8} y={y + 4} textAnchor="end" fontSize="11" fill={theme.textSec}>
+                                        <text x={geometry.margin.left - 8} y={y + 4} textAnchor="end" fontSize="11" fill={theme.textSec} data-chart-element-type="axis" data-chart-element-id="y" style={onElementSelect ? { cursor: 'pointer' } : undefined}>
                                             {tickLabel}
                                         </text>
                                     </>
@@ -3422,12 +3502,13 @@ const SvgChart = ({
                         if (!Number.isFinite(numVal)) return null;
                         const lineColor = refLine.color || theme.primary;
                         const isVertical = refLine.orient === 'v';
+                        const refDashArray = getDashArray(refLine.dash || 'dashed') || '6 3';
                         if (isVertical) {
                             const rx = geometry.margin.left + numVal * geometry.step;
                             if (rx < geometry.margin.left - 2 || rx > resolvedChartWidth - geometry.margin.right + 2) return null;
                             return (
                                 <g key={`ref-line-${refIdx}`}>
-                                    <line x1={rx} y1={geometry.margin.top} x2={rx} y2={effectiveChartHeight - geometry.margin.bottom} stroke={lineColor} strokeWidth="1.5" strokeDasharray="6 3" style={{ pointerEvents: 'none' }} />
+                                    <line x1={rx} y1={geometry.margin.top} x2={rx} y2={effectiveChartHeight - geometry.margin.bottom} stroke={lineColor} strokeWidth="1.5" strokeDasharray={refDashArray} style={{ pointerEvents: 'none' }} />
                                     {refLine.label ? <text x={rx + 4} y={geometry.margin.top + 12} textAnchor="start" fontSize="10" fontWeight="700" fill={lineColor} style={{ pointerEvents: 'none' }}>{refLine.label}</text> : null}
                                 </g>
                             );
@@ -3437,11 +3518,75 @@ const SvgChart = ({
                         if (ry < geometry.margin.top - 2 || ry > effectiveChartHeight - geometry.margin.bottom + 2) return null;
                         return (
                             <g key={`ref-line-${refIdx}`}>
-                                <line x1={geometry.margin.left} y1={ry} x2={resolvedChartWidth - geometry.margin.right} y2={ry} stroke={lineColor} strokeWidth="1.5" strokeDasharray="6 3" style={{ pointerEvents: 'none' }} />
+                                <line x1={geometry.margin.left} y1={ry} x2={resolvedChartWidth - geometry.margin.right} y2={ry} stroke={lineColor} strokeWidth="1.5" strokeDasharray={refDashArray} style={{ pointerEvents: 'none' }} />
                                 {refLine.label ? <text x={resolvedChartWidth - geometry.margin.right - 4} y={ry - 4} textAnchor="end" fontSize="10" fontWeight="700" fill={lineColor} style={{ pointerEvents: 'none' }}>{refLine.label}</text> : null}
+                                {typeof onReferenceLinesChange === 'function' ? (
+                                    <circle
+                                        cx={geometry.margin.left + 22}
+                                        cy={ry}
+                                        r={6}
+                                        fill={lineColor}
+                                        stroke="white"
+                                        strokeWidth="1.5"
+                                        style={{ cursor: 'ns-resize' }}
+                                        onMouseDown={(e) => {
+                                            e.preventDefault();
+                                            e.stopPropagation();
+                                            const startY = e.clientY;
+                                            const startVal = numVal;
+                                            const { plotHeight, maxValue: gMax, minValue: gMin } = geometry;
+                                            const span = gMax - gMin;
+                                            if (span <= 0) return;
+                                            const move = (me) => {
+                                                const nextVal = startVal - ((me.clientY - startY) / plotHeight) * span;
+                                                onReferenceLinesChange((prev) => prev.map((l, j) =>
+                                                    j === refIdx ? { ...l, value: String(Math.round(nextVal * 1000) / 1000) } : l
+                                                ));
+                                            };
+                                            const up = () => {
+                                                window.removeEventListener('mousemove', move);
+                                                window.removeEventListener('mouseup', up);
+                                            };
+                                            window.addEventListener('mousemove', move);
+                                            window.addEventListener('mouseup', up);
+                                        }}
+                                    />
+                                ) : null}
                             </g>
                         );
                     })}
+
+                    {showTrendline && !geometry.horizontalBarMode && (chartType === 'bar' || chartType === 'line' || chartType === 'area' || chartType === 'scatter') && Array.isArray(model.series) && model.series.length > 0 && geometry.scaleY ? (() => {
+                        const trendSeries = model.series.filter(s => !hiddenSeries.has(s.name));
+                        return trendSeries.map((ser, tsi) => {
+                            const primaryValues = ser.values || [];
+                            const trendVals = trendlineMode === 'moving_avg'
+                                ? computeMovingAverage(primaryValues, trendlinePeriod)
+                                : computeLinearTrendline(primaryValues);
+                            if (!trendVals) return null;
+                            const pts = trendVals.map((v, i) => {
+                                if (!Number.isFinite(v)) return null;
+                                return { x: geometry.margin.left + i * geometry.step + geometry.step / 2, y: geometry.scaleY(v) };
+                            });
+                            const d = buildLinePath(pts);
+                            if (!d) return null;
+                            const fallbackColor = resolveSeriesColor(ser.name, tsi);
+                            const resolvedTrendColor = trendlineColor || fallbackColor;
+                            return (
+                                <path
+                                    key={`trendline-${tsi}`}
+                                    d={d}
+                                    fill="none"
+                                    stroke={resolvedTrendColor}
+                                    strokeWidth={String(trendlineWidth || 2)}
+                                    strokeDasharray="8 4"
+                                    strokeLinecap="round"
+                                    opacity="0.78"
+                                    style={{ pointerEvents: 'none' }}
+                                />
+                            );
+                        });
+                    })() : null}
 
                     {geometry.hasHierarchicalBands && groupedBands.map((group, groupIndex) => {
                         if (groupIndex === groupedBands.length - 1) return null;
@@ -3654,11 +3799,13 @@ const SvgChart = ({
                                             rx="3"
                                             fill={barFill}
                                             opacity="0.9"
-                                            style={{ transition: showAnimations ? 'height 0.35s ease, y 0.35s ease' : undefined }}
+                                            style={{ transition: showAnimations ? 'height 0.35s ease, y 0.35s ease' : undefined, cursor: onElementSelect ? 'pointer' : undefined }}
                                             data-tip-cat={category}
                                             data-tip-ser={series.name}
                                             data-tip-val={fmt(value)}
                                             data-tip-color={barColor}
+                                            data-chart-element-type="series"
+                                            data-chart-element-id={series.name}
                                         />
                                         {showDataLabels ? (
                                             <text
@@ -3719,7 +3866,7 @@ const SvgChart = ({
                                     <path d={areaPath} fill={showGradient ? `url(#pg-grad-${seriesIndex})` : stroke} opacity={(stackedAreaMode || stacked100Mode) ? '0.46' : '0.16'} style={{ pointerEvents: 'none' }} />
                                 )}
                                 {linePath && (
-                                    <path d={linePath} fill="none" stroke={stroke} strokeWidth="3" strokeLinejoin="round" strokeLinecap="round" style={{ pointerEvents: 'none' }} />
+                                    <path d={linePath} fill="none" stroke={stroke} strokeWidth="3" strokeLinejoin="round" strokeLinecap="round" strokeDasharray={getDashArray(lineDashStyles[series.name])} style={{ pointerEvents: 'none' }} />
                                 )}
                                 {points.map((point, pointIndex) => {
                                     if (!point) return null;
@@ -3885,7 +4032,7 @@ const SvgChart = ({
                         const x = geometry.margin.left + (categoryIndex * geometry.step) + (geometry.step / 2);
                         return (
                             <g key={`label-${categoryIndex}`} transform={`translate(${x}, ${effectiveChartHeight - geometry.margin.bottom + 18}) rotate(${effectiveLabelAngle})`}>
-                                <text textAnchor={effectiveLabelAngle === 0 ? 'middle' : 'start'} fontSize="11" fill={theme.textSec}>
+                                <text textAnchor={effectiveLabelAngle === 0 ? 'middle' : 'start'} fontSize="11" fill={theme.textSec} data-chart-element-type="axis" data-chart-element-id="x" style={onElementSelect ? { cursor: 'pointer' } : undefined}>
                                     {truncateChartLabel(category, 20)}
                                 </text>
                             </g>
@@ -3895,7 +4042,7 @@ const SvgChart = ({
                 </svg>
                 {chartTitleOverlay}{tooltipElement}
             </div>
-            {showLegend ? <ChartLegend items={legendItems} theme={theme} hiddenSet={hiddenSeries} onToggle={toggleHiddenSeries} /> : null}
+            {showLegend ? <ChartLegend items={legendItems} theme={theme} hiddenSet={hiddenSeries} onToggle={toggleHiddenSeries} position={legendPosition} onElementSelect={onElementSelect} /> : null}
         </div>
     );
 };
@@ -3943,6 +4090,8 @@ const ChartSurface = ({
     onConfigChange,
     settingsPanelWidth: controlledSettingsPanelWidth,
     onSettingsPanelWidthChange,
+    initialSettings = {},
+    onSettingsChange,
 }) => {
     const isComboChart = chartType === 'combo';
     const isSparklineChart = chartType === 'sparkline';
@@ -3961,31 +4110,56 @@ const ChartSurface = ({
     const [uncontrolledConfigOpen, setUncontrolledConfigOpen] = useState(false);
     const configOpen = typeof controlledConfigOpen === 'boolean' ? controlledConfigOpen : uncontrolledConfigOpen;
     const setConfigOpen = typeof onConfigChange === 'function' ? onConfigChange : setUncontrolledConfigOpen;
-    const [showDataLabels, setShowDataLabels] = useState(false);
-    const [colorPalette, setColorPalette] = useState('default');
-    const [valueFormat, setValueFormat] = useState('auto');
-    const [yAxisTitle, setYAxisTitle] = useState('');
-    const [yAxisMin, setYAxisMin] = useState('');
-    const [yAxisMax, setYAxisMax] = useState('');
-    const [referenceLines, setReferenceLines] = useState([]);
+    const [showDataLabels, setShowDataLabels] = useState(() => initialSettings?.showDataLabels ?? false);
+    const [colorPalette, setColorPalette] = useState(() => initialSettings?.colorPalette ?? 'default');
+    const [valueFormat, setValueFormat] = useState(() => initialSettings?.valueFormat ?? 'auto');
+    const [yAxisTitle, setYAxisTitle] = useState(() => initialSettings?.yAxisTitle ?? '');
+    const [yAxisMin, setYAxisMin] = useState(() => initialSettings?.yAxisMin ?? '');
+    const [yAxisMax, setYAxisMax] = useState(() => initialSettings?.yAxisMax ?? '');
+    const [referenceLines, setReferenceLines] = useState(() => initialSettings?.referenceLines ?? []);
     const [refLineDraft, setRefLineDraft] = useState({ value: '', label: '', orient: 'h' });
-    const [labelAngle, setLabelAngle] = useState(0);
-    const [chartSubtitle, setChartSubtitle] = useState('');
-    const [tickCount, setTickCount] = useState(5);
-    const [markerShape, setMarkerShape] = useState('circle');
-    const [markerSize, setMarkerSize] = useState(4);
-    const [showGradient, setShowGradient] = useState(false);
-    const [seriesColors, setSeriesColors] = useState({});
-    const [showAnimations, setShowAnimations] = useState(false);
-    const [showCalloutLabels, setShowCalloutLabels] = useState(false);
+    const [labelAngle, setLabelAngle] = useState(() => initialSettings?.labelAngle ?? 0);
+    const [chartSubtitle, setChartSubtitle] = useState(() => initialSettings?.chartSubtitle ?? '');
+    const [tickCount, setTickCount] = useState(() => initialSettings?.tickCount ?? 5);
+    const [markerShape, setMarkerShape] = useState(() => initialSettings?.markerShape ?? 'circle');
+    const [markerSize, setMarkerSize] = useState(() => initialSettings?.markerSize ?? 4);
+    const [showGradient, setShowGradient] = useState(() => initialSettings?.showGradient ?? false);
+    const [seriesColors, setSeriesColors] = useState(() => initialSettings?.seriesColors ?? {});
+    const [showAnimations, setShowAnimations] = useState(() => initialSettings?.showAnimations ?? true);
+    const [showCalloutLabels, setShowCalloutLabels] = useState(() => initialSettings?.showCalloutLabels ?? false);
+    const [showTrendline, setShowTrendline] = useState(() => initialSettings?.showTrendline ?? false);
+    const [trendlineMode, setTrendlineMode] = useState(() => initialSettings?.trendlineMode ?? 'linear');
+    const [trendlinePeriod, setTrendlinePeriod] = useState(() => initialSettings?.trendlinePeriod ?? 3);
+    // new settings
+    const [legendPosition, setLegendPosition] = useState(() => initialSettings?.legendPosition ?? 'bottom');
+    const [labelPosition, setLabelPosition] = useState(() => initialSettings?.labelPosition ?? 'outside');
+    const [decimalPlaces, setDecimalPlaces] = useState(() => initialSettings?.decimalPlaces ?? -1);
+    const [gradientDirection, setGradientDirection] = useState(() => initialSettings?.gradientDirection ?? 'vertical');
+    const [gradientOpacity, setGradientOpacity] = useState(() => initialSettings?.gradientOpacity ?? 70);
+    const [trendlineColor, setTrendlineColor] = useState(() => initialSettings?.trendlineColor ?? '');
+    const [trendlineWidth, setTrendlineWidth] = useState(() => initialSettings?.trendlineWidth ?? 2);
+    const [seriesSort, setSeriesSort] = useState(() => initialSettings?.seriesSort ?? 'none');
+    const [customPaletteColors, setCustomPaletteColors] = useState(() => initialSettings?.customPaletteColors ?? []);
+    const [lineDashStyles, setLineDashStyles] = useState(() => initialSettings?.lineDashStyles ?? {});
+    const [yAxisMinRight, setYAxisMinRight] = useState(() => initialSettings?.yAxisMinRight ?? '');
+    const [yAxisMaxRight, setYAxisMaxRight] = useState(() => initialSettings?.yAxisMaxRight ?? '');
+    const [elementFocus, setElementFocus] = useState({ section: null, seq: 0 });
+    const handleElementSelect = useCallback((type) => {
+        const map = { series: 'Colors', axis: 'Axes', legend: 'Labels', title: 'General' };
+        const section = map[type];
+        if (!section) return;
+        setConfigOpen(true);
+        setElementFocus(prev => ({ section, seq: prev.seq + 1 }));
+    }, [setConfigOpen]);
     const paletteColors = resolvePalette(colorPalette);
+    const [heightDraft, setHeightDraft] = useState(String(chartHeightProp || CHART_HEIGHT));
     const chartHeightResizeRef = useRef(null);
     const settingsPaneResizeRef = useRef(null);
     const immersiveContainerRef = useRef(null);
     const [immersiveAutoHeight, setImmersiveAutoHeight] = useState(null);
     const [uncontrolledSettingsPanelWidth, setUncontrolledSettingsPanelWidth] = useState(348);
     const settingsPanelWidth = Number.isFinite(Number(controlledSettingsPanelWidth))
-        ? Math.max(300, Math.min(520, Math.floor(Number(controlledSettingsPanelWidth))))
+        ? Math.max(300, Math.min(680, Math.floor(Number(controlledSettingsPanelWidth))))
         : uncontrolledSettingsPanelWidth;
     const setSettingsPanelWidth = typeof onSettingsPanelWidthChange === 'function'
         ? onSettingsPanelWidthChange
@@ -3996,6 +4170,7 @@ const ChartSurface = ({
         : Math.max(180, Number.isFinite(Number(chartHeightProp)) ? Number(chartHeightProp) : CHART_HEIGHT);
     const svgRef = useRef(null);
     const echartsRef = useRef(null);
+    const chartSurfaceMainRef = useRef(null);
     const maxHierarchyLevel = (model && model.maxHierarchyLevel) || 1;
     const showHierarchySection = typeof onHierarchyLevelChange === 'function' && maxHierarchyLevel > 1;
     const configButtonStyle = {
@@ -4087,12 +4262,15 @@ const ChartSurface = ({
         return () => ro.disconnect();
     }, [immersiveMode]);
 
+    const onChartHeightChangeRef = useRef(onChartHeightChange);
+    useEffect(() => { onChartHeightChangeRef.current = onChartHeightChange; });
+
     useEffect(() => {
         const handlePointerMove = (event) => {
-            if (!chartHeightResizeRef.current || typeof onChartHeightChange !== 'function') return;
+            if (!chartHeightResizeRef.current || typeof onChartHeightChangeRef.current !== 'function') return;
             const resizeState = chartHeightResizeRef.current;
             const nextHeight = Math.max(180, resizeState.startHeight + (event.clientY - resizeState.startY));
-            onChartHeightChange(nextHeight);
+            onChartHeightChangeRef.current(nextHeight);
         };
 
         const stopResize = () => {
@@ -4101,16 +4279,14 @@ const ChartSurface = ({
 
         window.addEventListener('mousemove', handlePointerMove);
         window.addEventListener('mouseup', stopResize);
-        window.addEventListener('mouseleave', stopResize);
         window.addEventListener('blur', stopResize);
 
         return () => {
             window.removeEventListener('mousemove', handlePointerMove);
             window.removeEventListener('mouseup', stopResize);
-            window.removeEventListener('mouseleave', stopResize);
             window.removeEventListener('blur', stopResize);
         };
-    }, [onChartHeightChange]);
+    }, []);
 
     useEffect(() => {
         const handlePointerMove = (event) => {
@@ -4119,7 +4295,7 @@ const ChartSurface = ({
             const delta = resizeState.direction === 'left'
                 ? (resizeState.startX - event.clientX)
                 : (event.clientX - resizeState.startX);
-            const nextWidth = Math.max(300, Math.min(520, resizeState.startWidth + delta));
+            const nextWidth = Math.max(300, Math.min(680, resizeState.startWidth + delta));
             setSettingsPanelWidth(nextWidth);
         };
 
@@ -4129,16 +4305,74 @@ const ChartSurface = ({
 
         window.addEventListener('mousemove', handlePointerMove);
         window.addEventListener('mouseup', stopResize);
-        window.addEventListener('mouseleave', stopResize);
         window.addEventListener('blur', stopResize);
 
         return () => {
             window.removeEventListener('mousemove', handlePointerMove);
             window.removeEventListener('mouseup', stopResize);
-            window.removeEventListener('mouseleave', stopResize);
             window.removeEventListener('blur', stopResize);
         };
     }, []);
+
+    useEffect(() => {
+        const el = chartSurfaceMainRef.current;
+        if (!el || typeof ResizeObserver === 'undefined') return undefined;
+        let lastWidth = el.clientWidth;
+        const observer = new ResizeObserver(() => {
+            const nextWidth = el.clientWidth;
+            if (nextWidth !== lastWidth) {
+                lastWidth = nextWidth;
+                const instance = echartsRef.current?.getEchartsInstance?.();
+                if (instance) instance.resize();
+            }
+        });
+        observer.observe(el);
+        return () => observer.disconnect();
+    }, []);
+
+    useEffect(() => { setHeightDraft(String(chartHeight)); }, [chartHeight]);
+
+    const onSettingsChangeRef = useRef(onSettingsChange);
+    useEffect(() => { onSettingsChangeRef.current = onSettingsChange; });
+    const isFirstSettingsSyncRef = useRef(true);
+
+    useEffect(() => {
+        if (isFirstSettingsSyncRef.current) { isFirstSettingsSyncRef.current = false; return; }
+        if (typeof onSettingsChangeRef.current !== 'function') return;
+        onSettingsChangeRef.current({
+            showDataLabels, colorPalette, valueFormat, yAxisTitle,
+            yAxisMin, yAxisMax, referenceLines, labelAngle, chartSubtitle,
+            tickCount, markerShape, markerSize, showGradient, seriesColors,
+            showAnimations, showCalloutLabels, showTrendline, trendlineMode, trendlinePeriod,
+            legendPosition, labelPosition, decimalPlaces,
+            gradientDirection, gradientOpacity,
+            trendlineColor, trendlineWidth,
+            seriesSort, customPaletteColors, lineDashStyles,
+            yAxisMinRight, yAxisMaxRight,
+        });
+    }, [
+        showDataLabels, colorPalette, valueFormat, yAxisTitle,
+        yAxisMin, yAxisMax, referenceLines, labelAngle, chartSubtitle,
+        tickCount, markerShape, markerSize, showGradient, seriesColors,
+        showAnimations, showCalloutLabels, showTrendline, trendlineMode, trendlinePeriod,
+        legendPosition, labelPosition, decimalPlaces,
+        gradientDirection, gradientOpacity, trendlineColor, trendlineWidth,
+        seriesSort, customPaletteColors, lineDashStyles, yAxisMinRight, yAxisMaxRight,
+    ]);
+
+    const yRange = useMemo(() => {
+        if (!model || !Array.isArray(model.series)) return null;
+        let min = Infinity, max = -Infinity;
+        model.series.forEach((ser) => {
+            (ser.values || []).forEach((v) => {
+                if (typeof v === 'number' && Number.isFinite(v)) {
+                    min = Math.min(min, v);
+                    max = Math.max(max, v);
+                }
+            });
+        });
+        return Number.isFinite(min) && min !== max ? { min, max } : null;
+    }, [model]);
 
     return (
         <div
@@ -4207,7 +4441,11 @@ const ChartSurface = ({
                         ) : null}
                         <button
                             type="button"
-                            onClick={() => setConfigOpen(!configOpen)}
+                            onMouseDown={(event) => event.stopPropagation()}
+                            onClick={(event) => {
+                                event.stopPropagation();
+                                setConfigOpen((currentOpen) => !currentOpen);
+                            }}
                             data-chart-settings-toggle="true"
                             style={configButtonStyle}
                             title={configOpen ? 'Hide chart settings' : 'Show chart settings'}
@@ -4220,6 +4458,7 @@ const ChartSurface = ({
             ) : null}
         <div style={{ display: 'flex', minHeight: 0, gap: 0, overflow: 'hidden', flex: '1 1 auto' }}>
         <div
+            ref={chartSurfaceMainRef}
             data-chart-surface-main="true"
             data-chart-surface-scroll="true"
             style={{
@@ -4241,7 +4480,7 @@ const ChartSurface = ({
                     && chartType !== 'sunburst'
                     && chartType !== 'sankey'
                     ? <EmptyChartState message={model.emptyMessage || 'No chart data available.'} theme={theme} chartHeight={chartHeight} />
-                    : <SvgChart model={model} chartType={chartType} barLayout={barLayout} axisMode={axisMode} theme={theme} chartHeight={chartHeight} showLegend={!isSparklineChart} showDataLabels={showDataLabels} onCategoryActivate={onCategoryActivate} svgRef={svgRef} echartsRef={echartsRef} colorPalette={colorPalette} valueFormat={valueFormat} yAxisTitle={yAxisTitle} yAxisMin={yAxisMin} yAxisMax={yAxisMax} referenceLines={referenceLines} labelAngle={labelAngle} chartTitle={resolvedTitle} onTitleChange={onTitleChange} subtitle={chartSubtitle} tickCount={tickCount} markerShape={markerShape} markerSize={markerSize} showGradient={showGradient} seriesColors={seriesColors} showAnimations={showAnimations} showCalloutLabels={showCalloutLabels} />)}
+                    : <SvgChart model={model} chartType={chartType} barLayout={barLayout} axisMode={axisMode} theme={theme} chartHeight={chartHeight} showLegend={!isSparklineChart} showDataLabels={showDataLabels} onCategoryActivate={onCategoryActivate} svgRef={svgRef} echartsRef={echartsRef} colorPalette={colorPalette} valueFormat={valueFormat} yAxisTitle={yAxisTitle} yAxisMin={yAxisMin} yAxisMax={yAxisMax} referenceLines={referenceLines} onReferenceLinesChange={setReferenceLines} labelAngle={labelAngle} chartTitle={resolvedTitle} onTitleChange={onTitleChange} subtitle={chartSubtitle} tickCount={tickCount} markerShape={markerShape} markerSize={markerSize} showGradient={showGradient} seriesColors={seriesColors} showAnimations={showAnimations} showCalloutLabels={showCalloutLabels} showTrendline={showTrendline} trendlineMode={trendlineMode} trendlinePeriod={trendlinePeriod} legendPosition={legendPosition} labelPosition={labelPosition} decimalPlaces={decimalPlaces} gradientDirection={gradientDirection} gradientOpacity={gradientOpacity} trendlineColor={trendlineColor} trendlineWidth={trendlineWidth} seriesSort={seriesSort} lineDashStyles={lineDashStyles} yAxisMinRight={yAxisMinRight} yAxisMaxRight={yAxisMaxRight} customPaletteColors={customPaletteColors} onElementSelect={handleElementSelect} />)}
                     {chartSubtitle ? <div style={{ textAlign: 'center', fontSize: '11px', color: theme.textSec, padding: '4px 8px 0', fontStyle: 'italic' }}>{chartSubtitle}</div> : null}
             {!immersiveMode && typeof onChartHeightChange === 'function' ? (
                 <div
@@ -4280,7 +4519,7 @@ const ChartSurface = ({
                         settingsPaneResizeRef.current = {
                             startX: event.clientX,
                             startWidth: settingsPanelWidth,
-                            direction: 'right',
+                            direction: 'left',
                         };
                     }}
                     style={{
@@ -4309,7 +4548,7 @@ const ChartSurface = ({
                     style={{
                         width: `${settingsPanelWidth}px`,
                         minWidth: '300px',
-                        maxWidth: '520px',
+                        maxWidth: '680px',
                         flexShrink: 0,
                         minHeight: 0,
                         overflow: 'hidden',
@@ -4368,7 +4607,7 @@ const ChartSurface = ({
                         ))}
                     </div>
                 </ChartConfigSection>
-                <ChartConfigSection title="General" theme={theme} defaultCollapsed>
+                <ChartConfigSection title="General" theme={theme} defaultCollapsed focusTrigger={elementFocus.section === 'General' ? elementFocus.seq : 0}>
                     {typeof onTitleChange === 'function' ? (
                         <ChartConfigField label="Title" theme={theme} controlMinWidth="100%">
                             <input
@@ -4386,8 +4625,10 @@ const ChartSurface = ({
                                 type="number"
                                 min="180"
                                 step="20"
-                                value={chartHeight}
-                                onChange={(event) => onChartHeightChange(event.target.value)}
+                                value={heightDraft}
+                                onChange={(event) => setHeightDraft(event.target.value)}
+                                onBlur={() => { if (typeof onChartHeightChange === 'function') onChartHeightChange(heightDraft); }}
+                                onKeyDown={(event) => { if (event.key === 'Enter' && typeof onChartHeightChange === 'function') onChartHeightChange(heightDraft); }}
                                 style={compactInputStyle}
                             />
                         </ChartConfigField>
@@ -4413,33 +4654,39 @@ const ChartSurface = ({
                 </ChartConfigSection>
 
                 <ChartConfigSection title="Type" theme={theme} defaultCollapsed={false}>
-                    <ChartConfigField label="Type" theme={theme} controlMinWidth="100%">
-                        <ChartTypeButtons chartType={chartType} onChange={onChartTypeChange} theme={theme} includeHierarchyCharts={allowHierarchyCharts} />
-                    </ChartConfigField>
+                    <ChartTypeGallery chartType={chartType} onChange={onChartTypeChange} theme={theme} includeHierarchyCharts={allowHierarchyCharts} />
                 </ChartConfigSection>
 
                 {chartType !== 'heatmap' && chartType !== 'icicle' && chartType !== 'sunburst' && chartType !== 'sankey' && chartType !== 'pie' && chartType !== 'donut' && !ECHARTS_CHART_TYPES.has(chartType) ? (
                 <ChartConfigSection title="Thresholds" theme={theme}>
                     <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
                         {referenceLines.map((line, lineIdx) => (
-                            <div key={line.id} style={{ display: 'flex', gap: '4px', alignItems: 'center' }}>
-                                <button type="button" onClick={() => setReferenceLines(prev => prev.map((l, j) => j === lineIdx ? { ...l, orient: l.orient === 'v' ? 'h' : 'v' } : l))} style={{ ...exportButtonStyle, padding: '4px 7px', flexShrink: 0, fontWeight: 800, color: line.orient === 'v' ? theme.primary : theme.textSec }} title={line.orient === 'v' ? 'Vertical line (click for horizontal)' : 'Horizontal line (click for vertical)'}>{line.orient === 'v' ? '|' : '—'}</button>
-                                <input type="number" value={line.value} onChange={(e) => setReferenceLines(prev => prev.map((l, j) => j === lineIdx ? { ...l, value: e.target.value } : l))} placeholder={line.orient === 'v' ? 'Cat index' : 'Value'} style={{ ...compactInputStyle, width: '64px', flexShrink: 0 }} />
-                                <input type="text" value={line.label} onChange={(e) => setReferenceLines(prev => prev.map((l, j) => j === lineIdx ? { ...l, label: e.target.value } : l))} placeholder="Label" style={{ ...compactInputStyle, flex: 1, minWidth: 0 }} />
-                                <button type="button" onClick={() => setReferenceLines(prev => prev.filter((_, j) => j !== lineIdx))} style={{ ...exportButtonStyle, padding: '4px 7px', color: theme.danger || '#ef4444', flexShrink: 0 }}>✕</button>
-                            </div>
+                            <ChartReflineRow
+                                key={line.id}
+                                line={line}
+                                onUpdate={(updated) => setReferenceLines(prev => prev.map((l, j) => j === lineIdx ? updated : l))}
+                                onRemove={() => setReferenceLines(prev => prev.filter((_, j) => j !== lineIdx))}
+                                exportButtonStyle={exportButtonStyle}
+                                compactInputStyle={compactInputStyle}
+                                theme={theme}
+                            />
                         ))}
-                        <div style={{ display: 'flex', gap: '4px' }}>
-                            <button type="button" onClick={() => setRefLineDraft(d => ({ ...d, orient: d.orient === 'v' ? 'h' : 'v' }))} style={{ ...exportButtonStyle, padding: '4px 7px', flexShrink: 0, fontWeight: 800, color: refLineDraft.orient === 'v' ? theme.primary : theme.textSec }} title={refLineDraft.orient === 'v' ? 'Vertical' : 'Horizontal'}>{refLineDraft.orient === 'v' ? '|' : '—'}</button>
-                            <input type="number" value={refLineDraft.value} onChange={(e) => setRefLineDraft(d => ({ ...d, value: e.target.value }))} placeholder={refLineDraft.orient === 'v' ? 'Cat index' : 'Value'} style={{ ...compactInputStyle, width: '64px', flexShrink: 0 }} />
-                            <input type="text" value={refLineDraft.label} onChange={(e) => setRefLineDraft(d => ({ ...d, label: e.target.value }))} placeholder="Label (optional)" style={{ ...compactInputStyle, flex: 1, minWidth: 0 }} />
-                            <button type="button" onClick={() => { if (refLineDraft.value === '') return; setReferenceLines(prev => [...prev, { id: Date.now(), value: refLineDraft.value, label: refLineDraft.label, orient: refLineDraft.orient }]); setRefLineDraft({ value: '', label: '', orient: refLineDraft.orient }); }} style={{ ...exportButtonStyle, padding: '4px 10px', flexShrink: 0 }}>+</button>
+                        <div style={{ display: 'flex', gap: '4px', alignItems: 'center' }}>
+                            <button type="button" onClick={() => setRefLineDraft(d => ({ ...d, orient: d.orient === 'v' ? 'h' : 'v' }))} style={{ ...exportButtonStyle, padding: '4px 7px', flexShrink: 0, fontWeight: 800, color: refLineDraft.orient === 'v' ? theme.primary : theme.textSec }}>{refLineDraft.orient === 'v' ? '|' : '—'}</button>
+                            <input type="number" value={refLineDraft.value} onChange={(e) => setRefLineDraft(d => ({ ...d, value: e.target.value }))} placeholder={refLineDraft.orient === 'v' ? 'Cat index' : 'Value'} style={{ ...compactInputStyle, width: '60px', flexShrink: 0 }} />
+                            <input type="text" value={refLineDraft.label} onChange={(e) => setRefLineDraft(d => ({ ...d, label: e.target.value }))} placeholder="Label" style={{ ...compactInputStyle, flex: 1, minWidth: 0 }} />
+                            <button type="button" onClick={() => { if (refLineDraft.value === '') return; setReferenceLines(prev => [...prev, { id: Date.now(), value: refLineDraft.value, label: refLineDraft.label, orient: refLineDraft.orient, color: '', dash: 'dashed' }]); setRefLineDraft({ value: '', label: '', orient: refLineDraft.orient }); }} style={{ ...exportButtonStyle, padding: '4px 10px', flexShrink: 0 }}>+</button>
                         </div>
+                        {yRange ? (
+                            <div style={{ fontSize: '10px', color: theme.textSec, paddingTop: '2px' }}>
+                                Data range: {formatChartValue(yRange.min, valueFormat)} — {formatChartValue(yRange.max, valueFormat)}
+                            </div>
+                        ) : null}
                     </div>
                 </ChartConfigSection>
                 ) : null}
 
-                <ChartConfigSection title="View" theme={theme} defaultCollapsed={false}>
+                <ChartConfigSection title="Axes" theme={theme} defaultCollapsed={false} focusTrigger={elementFocus.section === 'Axes' ? elementFocus.seq : 0}>
                     {(chartType !== 'heatmap' && chartType !== 'icicle' && chartType !== 'sunburst' && chartType !== 'sankey' && chartType !== 'pie' && chartType !== 'donut' && chartType !== 'scatter' && chartType !== 'waterfall' && !ECHARTS_CHART_TYPES.has(chartType) && !isComboChart) ? (
                         <ChartConfigField label="Source" theme={theme}>
                             <ChartOrientationButtons orientation={orientation} onChange={onOrientationChange} theme={theme} />
@@ -4455,13 +4702,54 @@ const ChartSurface = ({
                             <ChartLayoutButtons chartType={chartType} barLayout={barLayout} onChange={onBarLayoutChange} canStack={canStack} theme={theme} />
                         </ChartConfigField>
                     )}
-                    {typeof onSortModeChange === 'function' ? (
-                        <ChartConfigField label="Sort" theme={theme} controlMinWidth="100%">
-                            <ChartSortButtons sortMode={sortMode} onChange={onSortModeChange} theme={theme} />
+                    {chartType !== 'heatmap' && chartType !== 'icicle' && chartType !== 'sunburst' && chartType !== 'sankey' && chartType !== 'pie' && chartType !== 'donut' && chartType !== 'sparkline' ? (
+                        <ChartConfigField label="Y-Axis" theme={theme} controlMinWidth="100%">
+                            <input
+                                type="text"
+                                value={yAxisTitle}
+                                onChange={(event) => setYAxisTitle(event.target.value)}
+                                placeholder="Y-axis title"
+                                style={{ ...compactInputStyle, width: '100%' }}
+                            />
                         </ChartConfigField>
                     ) : null}
+                    {chartType !== 'heatmap' && chartType !== 'icicle' && chartType !== 'sunburst' && chartType !== 'sankey' && chartType !== 'pie' && chartType !== 'donut' && chartType !== 'sparkline' && !ECHARTS_CHART_TYPES.has(chartType) ? (
+                        <ChartConfigField label="Y Range" theme={theme} controlMinWidth="100%">
+                            <div style={{ display: 'flex', gap: '6px' }}>
+                                <input type="number" value={yAxisMin} onChange={(e) => setYAxisMin(e.target.value)} placeholder="Min" style={{ ...compactInputStyle, width: '50%' }} />
+                                <input type="number" value={yAxisMax} onChange={(e) => setYAxisMax(e.target.value)} placeholder="Max" style={{ ...compactInputStyle, width: '50%' }} />
+                            </div>
+                        </ChartConfigField>
+                    ) : null}
+                    {chartType !== 'heatmap' && chartType !== 'icicle' && chartType !== 'sunburst' && chartType !== 'sankey' && chartType !== 'pie' && chartType !== 'donut' && chartType !== 'sparkline' && !ECHARTS_CHART_TYPES.has(chartType) ? (
+                        <ChartConfigField label="Y Ticks" theme={theme} controlMinWidth="80px">
+                            <input type="number" min="2" max="20" value={tickCount} onChange={e => setTickCount(Math.max(2, Math.min(20, Number(e.target.value) || 5)))} style={{ ...compactInputStyle, width: '80px' }} />
+                        </ChartConfigField>
+                    ) : null}
+                    {chartType !== 'heatmap' && chartType !== 'icicle' && chartType !== 'sunburst' && chartType !== 'sankey' && chartType !== 'pie' && chartType !== 'donut' && chartType !== 'sparkline' && !ECHARTS_CHART_TYPES.has(chartType) ? (
+                        <ChartConfigField label="X Angle" theme={theme} controlMinWidth="80px">
+                            <div style={{ display: 'flex', gap: '4px', alignItems: 'center' }}>
+                                <input
+                                    type="number"
+                                    min="0"
+                                    max="90"
+                                    value={labelAngle}
+                                    onChange={(e) => setLabelAngle(Math.max(0, Math.min(90, Number(e.target.value) || 0)))}
+                                    style={{ ...compactInputStyle, width: '58px' }}
+                                    title="X-axis label angle (0–90°)"
+                                />
+                                <span style={{ fontSize: '11px', color: theme.textSec }}>°</span>
+                                {[0, 30, 45, 90].map(a => (
+                                    <button key={a} type="button" onClick={() => setLabelAngle(a)} style={{ ...compactInputStyle, padding: '4px 6px', background: labelAngle === a ? theme.select : (theme.headerSubtleBg || theme.hover), color: labelAngle === a ? theme.primary : theme.text, border: `1px solid ${labelAngle === a ? theme.primary : theme.border}` }}>{a}°</button>
+                                ))}
+                            </div>
+                        </ChartConfigField>
+                    ) : null}
+                </ChartConfigSection>
+
+                <ChartConfigSection title="Labels" theme={theme} defaultCollapsed focusTrigger={elementFocus.section === 'Labels' ? elementFocus.seq : 0}>
                     {chartType !== 'icicle' && chartType !== 'sunburst' && chartType !== 'sankey' && chartType !== 'sparkline' ? (
-                        <ChartConfigField label="Labels" theme={theme}>
+                        <ChartConfigField label="Values" theme={theme}>
                             <button
                                 type="button"
                                 onClick={() => setShowDataLabels((v) => !v)}
@@ -4476,7 +4764,7 @@ const ChartSurface = ({
                                     cursor: 'pointer',
                                 }}
                             >
-                                {showDataLabels ? 'Values On' : 'Values Off'}
+                                {showDataLabels ? 'On' : 'Off'}
                             </button>
                         </ChartConfigField>
                     ) : null}
@@ -4485,16 +4773,7 @@ const ChartSurface = ({
                             <select
                                 value={valueFormat}
                                 onChange={(event) => setValueFormat(event.target.value)}
-                                style={{
-                                    border: `1px solid ${theme.border}`,
-                                    background: theme.surfaceBg || theme.background || '#fff',
-                                    color: theme.text,
-                                    borderRadius: theme.radiusSm || '8px',
-                                    padding: '6px 8px',
-                                    fontSize: '11px',
-                                    fontWeight: 700,
-                                    width: '100%',
-                                }}
+                                style={{ ...compactInputStyle, width: '100%' }}
                                 title="Value format for axis labels"
                             >
                                 {VALUE_FORMAT_MODES.map((opt) => (
@@ -4503,82 +4782,79 @@ const ChartSurface = ({
                             </select>
                         </ChartConfigField>
                     ) : null}
-                    {chartType !== 'heatmap' && chartType !== 'icicle' && chartType !== 'sunburst' && chartType !== 'sankey' && chartType !== 'pie' && chartType !== 'donut' && chartType !== 'sparkline' ? (
-                        <ChartConfigField label="Y-Axis" theme={theme} controlMinWidth="100%">
-                            <input
-                                type="text"
-                                value={yAxisTitle}
-                                onChange={(event) => setYAxisTitle(event.target.value)}
-                                placeholder="Y-axis title"
-                                style={{
-                                    border: `1px solid ${theme.border}`,
-                                    background: theme.surfaceBg || theme.background || '#fff',
-                                    color: theme.text,
-                                    borderRadius: theme.radiusSm || '8px',
-                                    padding: '6px 8px',
-                                    fontSize: '11px',
-                                    fontWeight: 700,
-                                    width: '100%',
-                                }}
-                            />
-                        </ChartConfigField>
-                    ) : null}
-                    {chartType !== 'heatmap' && chartType !== 'icicle' && chartType !== 'sunburst' && chartType !== 'sankey' && chartType !== 'pie' && chartType !== 'donut' && chartType !== 'sparkline' && !ECHARTS_CHART_TYPES.has(chartType) ? (
-                        <ChartConfigField label="Y Range" theme={theme} controlMinWidth="100%">
-                            <div style={{ display: 'flex', gap: '6px' }}>
-                                <input
-                                    type="number"
-                                    value={yAxisMin}
-                                    onChange={(e) => setYAxisMin(e.target.value)}
-                                    placeholder="Min"
-                                    style={{ ...compactInputStyle, width: '50%' }}
-                                />
-                                <input
-                                    type="number"
-                                    value={yAxisMax}
-                                    onChange={(e) => setYAxisMax(e.target.value)}
-                                    placeholder="Max"
-                                    style={{ ...compactInputStyle, width: '50%' }}
-                                />
-                            </div>
-                        </ChartConfigField>
-                    ) : null}
-                    {chartType !== 'heatmap' && chartType !== 'icicle' && chartType !== 'sunburst' && chartType !== 'sankey' && chartType !== 'pie' && chartType !== 'donut' && chartType !== 'sparkline' && !ECHARTS_CHART_TYPES.has(chartType) && axisMode !== 'horizontal' ? (
-                        <ChartConfigField label="X Labels" theme={theme} controlMinWidth="100%">
-                            <select
-                                value={labelAngle}
-                                onChange={(e) => setLabelAngle(Number(e.target.value))}
-                                style={{ ...compactInputStyle, width: '100%' }}
-                            >
-                                <option value={0}>Flat (0°)</option>
-                                <option value={30}>Angled (30°)</option>
-                                <option value={45}>Angled (45°)</option>
-                                <option value={60}>Steep (60°)</option>
-                                <option value={90}>Vertical (90°)</option>
+                    {chartType !== 'heatmap' && chartType !== 'icicle' && chartType !== 'sunburst' && chartType !== 'sankey' && chartType !== 'sparkline' && !ECHARTS_CHART_TYPES.has(chartType) ? (
+                        <ChartConfigField label="Decimals" theme={theme} controlMinWidth="100%">
+                            <select value={decimalPlaces} onChange={e => setDecimalPlaces(Number(e.target.value))} style={{ ...compactInputStyle, width: '100%' }}>
+                                <option value={-1}>Auto</option>
+                                <option value={0}>0  (e.g. 1,234)</option>
+                                <option value={1}>1  (e.g. 1.2)</option>
+                                <option value={2}>2  (e.g. 1.23)</option>
+                                <option value={3}>3  (e.g. 1.234)</option>
                             </select>
                         </ChartConfigField>
                     ) : null}
-                    {chartType !== 'heatmap' && chartType !== 'icicle' && chartType !== 'sunburst' && chartType !== 'sankey' && chartType !== 'pie' && chartType !== 'donut' && chartType !== 'sparkline' && !ECHARTS_CHART_TYPES.has(chartType) ? (
-                        <ChartConfigField label="Y Ticks" theme={theme} controlMinWidth="80px">
-                            <input type="number" min="2" max="20" value={tickCount} onChange={e => setTickCount(Math.max(2, Math.min(20, Number(e.target.value) || 5)))} style={{ ...compactInputStyle, width: '80px' }} />
+                    {showDataLabels && chartType === 'bar' ? (
+                        <ChartConfigField label="Position" theme={theme} controlMinWidth="100%">
+                            <select value={labelPosition} onChange={e => setLabelPosition(e.target.value)} style={{ ...compactInputStyle, width: '100%' }}>
+                                <option value="outside">Outside</option>
+                                <option value="inside">Inside top</option>
+                                <option value="center">Center</option>
+                            </select>
                         </ChartConfigField>
                     ) : null}
+                    {(chartType === 'pie' || chartType === 'donut') ? (
+                        <ChartConfigField label="Callouts" theme={theme}>
+                            <button type="button" onClick={() => setShowCalloutLabels(v => !v)} style={{ border: `1px solid ${showCalloutLabels ? theme.primary : theme.border}`, background: showCalloutLabels ? theme.select : (theme.headerSubtleBg || theme.hover), color: showCalloutLabels ? theme.primary : theme.text, borderRadius: theme.radiusSm || '8px', padding: '6px 8px', fontSize: '11px', fontWeight: 700, cursor: 'pointer' }}>
+                                {showCalloutLabels ? 'On' : 'Off'}
+                            </button>
+                        </ChartConfigField>
+                    ) : null}
+                    {chartType !== 'sparkline' && !ECHARTS_CHART_TYPES.has(chartType) ? (
+                        <ChartConfigField label="Legend" theme={theme} controlMinWidth="100%">
+                            <ChartLegendPositionButtons legendPosition={legendPosition} onChange={setLegendPosition} theme={theme} />
+                        </ChartConfigField>
+                    ) : null}
+                </ChartConfigSection>
+
+                <ChartConfigSection title="Style" theme={theme} defaultCollapsed>
                     <ChartConfigField label="Animate" theme={theme}>
                         <button type="button" onClick={() => setShowAnimations(v => !v)} style={{ border: `1px solid ${showAnimations ? theme.primary : theme.border}`, background: showAnimations ? theme.select : (theme.headerSubtleBg || theme.hover), color: showAnimations ? theme.primary : theme.text, borderRadius: theme.radiusSm || '8px', padding: '6px 8px', fontSize: '11px', fontWeight: 700, cursor: 'pointer' }}>
                             {showAnimations ? 'On' : 'Off'}
                         </button>
                     </ChartConfigField>
                     {chartType !== 'heatmap' && chartType !== 'icicle' && chartType !== 'sunburst' && chartType !== 'sankey' && chartType !== 'pie' && chartType !== 'donut' && chartType !== 'sparkline' && !ECHARTS_CHART_TYPES.has(chartType) ? (
-                        <ChartConfigField label="Gradient" theme={theme}>
-                            <button type="button" onClick={() => setShowGradient(v => !v)} style={{ border: `1px solid ${showGradient ? theme.primary : theme.border}`, background: showGradient ? theme.select : (theme.headerSubtleBg || theme.hover), color: showGradient ? theme.primary : theme.text, borderRadius: theme.radiusSm || '8px', padding: '6px 8px', fontSize: '11px', fontWeight: 700, cursor: 'pointer' }}>
-                                {showGradient ? 'On' : 'Off'}
-                            </button>
-                        </ChartConfigField>
+                        <>
+                            <ChartConfigField label="Gradient" theme={theme}>
+                                <button type="button" onClick={() => setShowGradient(v => !v)} style={{ border: `1px solid ${showGradient ? theme.primary : theme.border}`, background: showGradient ? theme.select : (theme.headerSubtleBg || theme.hover), color: showGradient ? theme.primary : theme.text, borderRadius: theme.radiusSm || '8px', padding: '6px 8px', fontSize: '11px', fontWeight: 700, cursor: 'pointer' }}>
+                                    {showGradient ? 'On' : 'Off'}
+                                </button>
+                            </ChartConfigField>
+                            {showGradient ? (
+                                <>
+                                    <ChartConfigField label="Grad Dir" theme={theme} controlMinWidth="100%">
+                                        <div style={{ display: 'flex', gap: '5px' }}>
+                                            {GRADIENT_DIRECTIONS.map(d => (
+                                                <button key={d.value} type="button" onClick={() => setGradientDirection(d.value)} style={{ border: `1px solid ${gradientDirection === d.value ? theme.primary : theme.border}`, background: gradientDirection === d.value ? theme.select : (theme.headerSubtleBg || theme.hover), color: gradientDirection === d.value ? theme.primary : theme.text, borderRadius: theme.radiusSm || '8px', padding: '5px 8px', fontSize: '11px', fontWeight: 700, cursor: 'pointer' }}>
+                                                    {d.label}
+                                                </button>
+                                            ))}
+                                        </div>
+                                    </ChartConfigField>
+                                    <ChartConfigField label="Grad Opacity" theme={theme} controlMinWidth="80px">
+                                        <div style={{ display: 'flex', gap: '6px', alignItems: 'center' }}>
+                                            <input type="range" min="10" max="100" step="5" value={gradientOpacity} onChange={e => setGradientOpacity(Number(e.target.value))} style={{ flex: 1 }} />
+                                            <span style={{ fontSize: '11px', color: theme.textSec, minWidth: '30px' }}>{gradientOpacity}%</span>
+                                        </div>
+                                    </ChartConfigField>
+                                </>
+                            ) : null}
+                        </>
                     ) : null}
                     {(chartType === 'line' || chartType === 'scatter' || chartType === 'bubble' || chartType === 'area' || chartType === 'radar' || isComboChart) ? (
                         <>
                             <ChartConfigField label="Marker" theme={theme} controlMinWidth="100%">
                                 <select value={markerShape} onChange={e => setMarkerShape(e.target.value)} style={{ ...compactInputStyle, width: '100%' }}>
+                                    <option value="none">None (line only)</option>
                                     <option value="circle">Circle</option>
                                     <option value="square">Square</option>
                                     <option value="diamond">Diamond</option>
@@ -4596,14 +4872,40 @@ const ChartSurface = ({
                             </ChartConfigField>
                         </>
                     ) : null}
-                    {(chartType === 'pie' || chartType === 'donut') ? (
-                        <ChartConfigField label="Callouts" theme={theme}>
-                            <button type="button" onClick={() => setShowCalloutLabels(v => !v)} style={{ border: `1px solid ${showCalloutLabels ? theme.primary : theme.border}`, background: showCalloutLabels ? theme.select : (theme.headerSubtleBg || theme.hover), color: showCalloutLabels ? theme.primary : theme.text, borderRadius: theme.radiusSm || '8px', padding: '6px 8px', fontSize: '11px', fontWeight: 700, cursor: 'pointer' }}>
-                                {showCalloutLabels ? 'On' : 'Off'}
-                            </button>
-                        </ChartConfigField>
+                </ChartConfigSection>
+
+                {(chartType === 'bar' || chartType === 'line' || chartType === 'area' || chartType === 'scatter' || isComboChart) ? (
+                <ChartConfigSection title="Trendline" theme={theme} defaultCollapsed>
+                    <ChartConfigField label="Show" theme={theme}>
+                        <button type="button" onClick={() => setShowTrendline(v => !v)} style={{ border: `1px solid ${showTrendline ? theme.primary : theme.border}`, background: showTrendline ? theme.select : (theme.headerSubtleBg || theme.hover), color: showTrendline ? theme.primary : theme.text, borderRadius: theme.radiusSm || '8px', padding: '6px 8px', fontSize: '11px', fontWeight: 700, cursor: 'pointer' }}>
+                            {showTrendline ? 'On' : 'Off'}
+                        </button>
+                    </ChartConfigField>
+                    {showTrendline ? (
+                        <>
+                            <ChartConfigField label="Type" theme={theme} controlMinWidth="100%">
+                                <select value={trendlineMode} onChange={e => setTrendlineMode(e.target.value)} style={{ ...compactInputStyle, width: '100%' }}>
+                                    <option value="linear">Linear Regression</option>
+                                    <option value="moving_avg">Moving Average</option>
+                                    <option value="exponential">Exponential Smoothing</option>
+                                </select>
+                            </ChartConfigField>
+                            {trendlineMode === 'moving_avg' ? (
+                                <ChartConfigField label="Period" theme={theme} controlMinWidth="80px">
+                                    <input type="number" min="2" max="50" value={trendlinePeriod} onChange={e => setTrendlinePeriod(Math.max(2, Math.min(50, Number(e.target.value) || 3)))} style={{ ...compactInputStyle, width: '80px' }} />
+                                </ChartConfigField>
+                            ) : null}
+                            <ChartConfigField label="Color" theme={theme}>
+                                <input type="color" value={trendlineColor || '#888888'} onChange={e => setTrendlineColor(e.target.value)} style={{ width: '32px', height: '28px', padding: 0, border: `1px solid ${theme.border}`, borderRadius: '4px', cursor: 'pointer', background: 'none' }} title="Trendline color (blank = match series)" />
+                                {trendlineColor ? <button type="button" onClick={() => setTrendlineColor('')} style={{ border: 'none', background: 'none', color: theme.textSec, cursor: 'pointer', fontSize: '10px', padding: '0 4px' }} title="Reset to auto">↺</button> : null}
+                            </ChartConfigField>
+                            <ChartConfigField label="Width" theme={theme} controlMinWidth="80px">
+                                <input type="number" min="1" max="8" value={trendlineWidth} onChange={e => setTrendlineWidth(Math.max(1, Math.min(8, Number(e.target.value) || 2)))} style={{ ...compactInputStyle, width: '80px' }} />
+                            </ChartConfigField>
+                        </>
                     ) : null}
                 </ChartConfigSection>
+                ) : null}
                 {false ? (
                 <ChartConfigSection title="Thresholds-OLD" theme={theme}>
                     <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
@@ -4659,79 +4961,81 @@ const ChartSurface = ({
                 </ChartConfigSection>
                 ) : null}
 
-                <ChartConfigSection title="Colors" theme={theme}>
+                <ChartConfigSection title="Colors" theme={theme} focusTrigger={elementFocus.section === 'Colors' ? elementFocus.seq : 0}>
                     <div style={{ display: 'flex', flexWrap: 'wrap', gap: '6px' }}>
-                        {COLOR_PALETTE_NAMES.map((name) => {
+                        {[...COLOR_PALETTE_NAMES, ...(customPaletteColors.length >= 2 ? ['custom'] : [])].map((name) => {
                             const active = colorPalette === name;
-                            const swatches = COLOR_PALETTES[name];
+                            const swatches = name === 'custom' ? customPaletteColors : COLOR_PALETTES[name];
                             return (
-                                <button
-                                    key={name}
-                                    type="button"
-                                    onClick={() => setColorPalette(name)}
-                                    title={name.charAt(0).toUpperCase() + name.slice(1)}
-                                    style={{
-                                        display: 'flex',
-                                        alignItems: 'center',
-                                        gap: '3px',
-                                        padding: '3px 6px',
-                                        border: `1.5px solid ${active ? theme.primary : theme.border}`,
-                                        background: active ? theme.select : (theme.headerSubtleBg || theme.hover),
-                                        borderRadius: theme.radiusSm || '8px',
-                                        cursor: 'pointer',
-                                    }}
+                                <button key={name} type="button" onClick={() => setColorPalette(name)} title={name.charAt(0).toUpperCase() + name.slice(1)}
+                                    style={{ display: 'flex', alignItems: 'center', gap: '3px', padding: '3px 6px', border: `1.5px solid ${active ? theme.primary : theme.border}`, background: active ? theme.select : (theme.headerSubtleBg || theme.hover), borderRadius: theme.radiusSm || '8px', cursor: 'pointer' }}
                                 >
-                                    {swatches.slice(0, 4).map((hex, i) => (
-                                        <span
-                                            key={i}
-                                            style={{
-                                                width: '8px',
-                                                height: '8px',
-                                                borderRadius: '50%',
-                                                background: hex,
-                                                flexShrink: 0,
-                                            }}
-                                        />
+                                    {(swatches || []).slice(0, 4).map((hex, i) => (
+                                        <span key={i} style={{ width: '8px', height: '8px', borderRadius: '50%', background: hex, flexShrink: 0 }} />
                                     ))}
-                                    <span style={{
-                                        fontSize: '9px',
-                                        fontWeight: active ? 700 : 600,
-                                        color: active ? theme.primary : theme.textSec,
-                                        marginLeft: '1px',
-                                        textTransform: 'capitalize',
-                                    }}>
+                                    <span style={{ fontSize: '9px', fontWeight: active ? 700 : 600, color: active ? theme.primary : theme.textSec, marginLeft: '1px', textTransform: 'capitalize' }}>
                                         {name === 'a11y' ? 'A11y' : name}
                                     </span>
                                 </button>
                             );
                         })}
                     </div>
-                    {Array.isArray(model && model.series) && model.series.length > 0 && model.series.length <= 12 ? (
+                    {Array.isArray(model && model.series) && model.series.length > 0 ? (
                         <div style={{ marginTop: '8px', display: 'flex', flexDirection: 'column', gap: '4px' }}>
-                            <div style={{ fontSize: '10px', fontWeight: 700, color: theme.textSec, textTransform: 'uppercase', letterSpacing: '0.05em', marginBottom: '2px' }}>Override</div>
-                            {model.series.map((ser, si) => (
-                                <div key={ser.name || si} style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
-                                    <input
-                                        type="color"
-                                        value={seriesColors[ser.name] || getColorForIndex(si, theme, paletteColors)}
-                                        onChange={(e) => setSeriesColors(prev => ({ ...prev, [ser.name]: e.target.value }))}
-                                        style={{ width: '28px', height: '22px', padding: 0, border: `1px solid ${theme.border}`, borderRadius: '4px', cursor: 'pointer', background: 'none' }}
-                                        title={`Override color for ${ser.name}`}
-                                    />
+                            <div style={{ fontSize: '10px', fontWeight: 700, color: theme.textSec, textTransform: 'uppercase', letterSpacing: '0.05em', marginBottom: '2px' }}>Override per series</div>
+                            {model.series.slice(0, 20).map((ser, si) => (
+                                <div key={ser.name || si} style={{ display: 'flex', alignItems: 'center', gap: '5px' }}>
+                                    <div style={{ display: 'flex', gap: '2px', flexShrink: 0 }}>
+                                        {paletteColors.slice(0, 6).map((hex, pi) => (
+                                            <button key={pi} type="button" onClick={() => setSeriesColors(prev => ({ ...prev, [ser.name]: hex }))} style={{ width: '14px', height: '14px', borderRadius: '50%', background: hex, border: `2px solid ${(seriesColors[ser.name] || getColorForIndex(si, theme, paletteColors)) === hex ? theme.text : 'transparent'}`, cursor: 'pointer', padding: 0, flexShrink: 0 }} title={hex} />
+                                        ))}
+                                    </div>
+                                    <input type="color" value={seriesColors[ser.name] || getColorForIndex(si, theme, paletteColors)} onChange={(e) => setSeriesColors(prev => ({ ...prev, [ser.name]: e.target.value }))} style={{ width: '24px', height: '24px', padding: 0, border: `1px solid ${theme.border}`, borderRadius: '4px', cursor: 'pointer', background: 'none', flexShrink: 0 }} title={`Custom color for ${ser.name}`} />
                                     <span style={{ fontSize: '11px', color: theme.text, flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{ser.name || `Series ${si + 1}`}</span>
                                     {seriesColors[ser.name] ? (
-                                        <button type="button" onClick={() => setSeriesColors(prev => { const next = { ...prev }; delete next[ser.name]; return next; })} style={{ border: 'none', background: 'none', color: theme.textSec, cursor: 'pointer', fontSize: '10px', padding: '0 2px' }} title="Reset to palette">{'\u21BA'}</button>
+                                        <button type="button" onClick={() => setSeriesColors(prev => { const next = { ...prev }; delete next[ser.name]; return next; })} style={{ border: 'none', background: 'none', color: theme.textSec, cursor: 'pointer', fontSize: '10px', padding: '0 2px' }} title="Reset to palette">↺</button>
                                     ) : null}
                                 </div>
                             ))}
+                            {model.series.length > 20 ? <div style={{ fontSize: '10px', color: theme.textSec }}>{`…${model.series.length - 20} more`}</div> : null}
                         </div>
                     ) : null}
+                    <div style={{ marginTop: '10px', borderTop: `1px solid ${theme.border}`, paddingTop: '8px' }}>
+                        <div style={{ fontSize: '10px', fontWeight: 700, color: theme.textSec, textTransform: 'uppercase', letterSpacing: '0.05em', marginBottom: '6px' }}>Custom Palette</div>
+                        <ChartCustomPaletteEditor customColors={customPaletteColors} onChange={setCustomPaletteColors} theme={theme} compactInputStyle={compactInputStyle} />
+                        {customPaletteColors.length >= 2 ? (
+                            <button type="button" onClick={() => setColorPalette('custom')} style={{ ...exportButtonStyle, marginTop: '6px', background: colorPalette === 'custom' ? theme.select : undefined, color: colorPalette === 'custom' ? theme.primary : undefined, border: `1px solid ${colorPalette === 'custom' ? theme.primary : theme.border}` }}>
+                                {colorPalette === 'custom' ? 'Custom active' : 'Use custom palette'}
+                            </button>
+                        ) : null}
+                    </div>
                 </ChartConfigSection>
+
+                {(chartType === 'line' || chartType === 'area' || isComboChart) && Array.isArray(model && model.series) && model.series.length > 0 ? (
+                <ChartConfigSection title="Line Style" theme={theme} defaultCollapsed>
+                    <ChartLineDashEditor
+                        series={model.series}
+                        lineDashStyles={lineDashStyles}
+                        onChange={setLineDashStyles}
+                        seriesColors={seriesColors}
+                        paletteColors={paletteColors}
+                        getColorForIndex={getColorForIndex}
+                        theme={theme}
+                        compactInputStyle={compactInputStyle}
+                    />
+                </ChartConfigSection>
+                ) : null}
 
                 {isComboChart ? (
                     <ChartConfigSection title="Layers" theme={theme}>
                         <ChartConfigField label="Stack" theme={theme} controlMinWidth="100%">
                             <ChartLayerEditor layers={chartLayers} onChange={onChartLayersChange} availableColumns={availableColumns} theme={theme} />
+                        </ChartConfigField>
+                        <ChartConfigField label="Right Axis Range" theme={theme} controlMinWidth="100%">
+                            <div style={{ display: 'flex', gap: '6px' }}>
+                                <input type="number" value={yAxisMinRight} onChange={e => setYAxisMinRight(e.target.value)} placeholder="Min" style={{ ...compactInputStyle, width: '50%' }} />
+                                <input type="number" value={yAxisMaxRight} onChange={e => setYAxisMaxRight(e.target.value)} placeholder="Max" style={{ ...compactInputStyle, width: '50%' }} />
+                            </div>
                         </ChartConfigField>
                     </ChartConfigSection>
                 ) : null}
@@ -4745,6 +5049,22 @@ const ChartSurface = ({
                 ) : null}
 
                 <ChartConfigSection title="Actions" theme={theme}>
+                    {typeof onSortModeChange === 'function' ? (
+                        <ChartConfigField label="Sort" theme={theme} controlMinWidth="100%">
+                            <ChartSortButtons sortMode={sortMode} onChange={onSortModeChange} theme={theme} />
+                        </ChartConfigField>
+                    ) : null}
+                    {typeof onSortModeChange === 'function' ? (
+                        <ChartConfigField label="Series Sort" theme={theme} controlMinWidth="100%">
+                            <div style={{ display: 'flex', gap: '5px', flexWrap: 'wrap' }}>
+                                {SERIES_SORT_MODES.map(m => (
+                                    <button key={m.value} type="button" onClick={() => setSeriesSort(m.value)} style={{ border: `1px solid ${seriesSort === m.value ? theme.primary : theme.border}`, background: seriesSort === m.value ? theme.select : (theme.headerSubtleBg || theme.hover), color: seriesSort === m.value ? theme.primary : theme.text, borderRadius: theme.radiusSm || '8px', padding: '5px 8px', fontSize: '11px', fontWeight: 700, cursor: 'pointer' }}>
+                                        {m.label}
+                                    </button>
+                                ))}
+                            </div>
+                        </ChartConfigField>
+                    ) : null}
                     {typeof onInteractionModeChange === 'function' ? (
                         <ChartConfigField label="Click" theme={theme}>
                             <ChartInteractionButtons interactionMode={interactionMode} onChange={onInteractionModeChange} theme={theme} />
@@ -4761,7 +5081,12 @@ const ChartSurface = ({
             </>
         ) : null}
         </div>
-        {showChrome ? <ChartStats model={model} theme={theme} /> : null}
+        {showChrome ? (
+            <div style={{ display: 'flex', gap: '6px', flexWrap: 'wrap', alignItems: 'center' }}>
+                <ChartStats model={model} theme={theme} />
+                <ChartDataLimitWarning model={model} maxCategories={MAX_PANEL_CATEGORIES} maxSeries={MAX_PANEL_SERIES} theme={theme} />
+            </div>
+        ) : null}
     </div>
     );
 };
@@ -4828,14 +5153,19 @@ export const PivotChartPanel = ({
     showResizeHandle = true,
     title = 'Chart Panel',
     showDefinitionManager = true,
+    initialSettings = {},
+    onSettingsChange,
+    initialSettingsPaneOpen = false,
 }) => {
     usePivotRenderCounter('PivotChartPanel', activeChartId);
     const [fullscreenMode, setFullscreenMode] = useState(false);
     const [uncontrolledImmersiveMode, setUncontrolledImmersiveMode] = useState(false);
-    const [settingsPaneOpen, setSettingsPaneOpen] = useState(false);
+    const [settingsPaneOpen, setSettingsPaneOpen] = useState(initialSettingsPaneOpen);
     const [settingsPanelWidth, setSettingsPanelWidth] = useState(348);
     const panelAsideRef = useRef(null);
     const baseDockedPanelWidthRef = useRef(Math.max(width || 430, 430));
+    const onSettingsWidthBudgetChangeRef = useRef(onSettingsWidthBudgetChange);
+    const lastSettingsWidthBudgetRef = useRef(null);
     if (!open) return null;
     const immersiveMode = typeof controlledImmersiveMode === 'boolean' ? controlledImmersiveMode : uncontrolledImmersiveMode;
     const toggleImmersiveMode = () => {
@@ -4882,6 +5212,23 @@ export const PivotChartPanel = ({
     const basePanelWidth = Math.max(width || 430, 430);
     const floatingPanelWidth = (floatingRect && floatingRect.width) || basePanelWidth;
 
+    useEffect(() => {
+        onSettingsWidthBudgetChangeRef.current = onSettingsWidthBudgetChange;
+    }, [onSettingsWidthBudgetChange]);
+
+    const emitSettingsWidthBudget = useCallback((nextWidthHint, options = {}) => {
+        const numericWidthHint = Number(nextWidthHint);
+        const normalizedHint = Number.isFinite(numericWidthHint)
+            ? Math.max(320, Math.ceil(numericWidthHint))
+            : null;
+        if (!options.force && lastSettingsWidthBudgetRef.current === normalizedHint) return;
+        lastSettingsWidthBudgetRef.current = normalizedHint;
+        const callback = onSettingsWidthBudgetChangeRef.current;
+        if (typeof callback === 'function') {
+            callback(normalizedHint);
+        }
+    }, []);
+
     const panelContainerStyle = fullscreenMode
         ? {
             position: 'fixed',
@@ -4920,7 +5267,7 @@ export const PivotChartPanel = ({
         const updateWidth = () => {
             const nextWidth = element.clientWidth;
             if (nextWidth > 0 && !settingsPaneOpen) {
-                baseDockedPanelWidthRef.current = nextWidth;
+                baseDockedPanelWidthRef.current = Math.max(320, nextWidth);
             }
         };
         updateWidth();
@@ -4931,26 +5278,26 @@ export const PivotChartPanel = ({
     }, [floating, fullscreenMode, settingsPaneOpen, standalone]);
 
     useEffect(() => {
-        if (typeof onSettingsWidthBudgetChange !== 'function') return undefined;
         if (!standalone || floating || fullscreenMode || immersiveMode || !settingsPaneOpen) {
-            onSettingsWidthBudgetChange(null);
-            return undefined;
+            emitSettingsWidthBudget(null);
+            return;
         }
         const baseWidthHint = baseDockedPanelWidthRef.current || basePanelWidth;
-        onSettingsWidthBudgetChange(Math.max(320, Math.ceil(baseWidthHint + visibleSettingsWidth)));
-        return () => {
-            onSettingsWidthBudgetChange(null);
-        };
+        emitSettingsWidthBudget(baseWidthHint + visibleSettingsWidth);
     }, [
         basePanelWidth,
+        emitSettingsWidthBudget,
         immersiveMode,
         floating,
         fullscreenMode,
-        onSettingsWidthBudgetChange,
         settingsPaneOpen,
         standalone,
         visibleSettingsWidth,
     ]);
+
+    useEffect(() => () => {
+        emitSettingsWidthBudget(null, { force: true });
+    }, [emitSettingsWidthBudget]);
 
     return (
         <div style={panelContainerStyle}>
@@ -5167,6 +5514,8 @@ export const PivotChartPanel = ({
                     onConfigChange={setSettingsPaneOpen}
                     settingsPanelWidth={settingsPanelWidth}
                     onSettingsPanelWidthChange={setSettingsPanelWidth}
+                    initialSettings={initialSettings}
+                    onSettingsChange={onSettingsChange}
                 />
                 {floating && !fullscreenMode && !locked ? (
                     <>

@@ -250,6 +250,7 @@ export function useColumnDefs({
                     showDelta={compact ? false : sparklineConfig.showDelta}
                     currentLabel={formatSparklineMetricValue(summaryMetric, config, columnId)}
                     deltaLabel={formatSparklineMetricValue(deltaMetric, config, columnId)}
+                    deltaValue={deltaMetric}
                     compact={compact || sparklineConfig.compact}
                     title={buildSparklineCellTitle(
                         headerLabel,

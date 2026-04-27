@@ -1,5 +1,6 @@
 import { useVirtualizer } from '@tanstack/react-virtual';
 import {
+    useCallback,
     useEffect,
     useLayoutEffect,
     useMemo,
@@ -7,6 +8,7 @@ import {
 } from 'react';
 
 const DEFAULT_VISIBLE_RANGE = { start: 0, end: 0 };
+const SERVER_SIDE_HORIZONTAL_METRICS_DEBOUNCE_MS = 96;
 
 // Stable-reference helper: returns the previous array when the ids haven't changed.
 const useStableColumnList = (columns) => {
@@ -41,6 +43,48 @@ export const useColumnVirtualizer = ({
     columnSizing,
     columns,
 }) => {
+    const pendingHorizontalMetricsRef = useRef(null);
+    const horizontalMetricsTimerRef = useRef(null);
+
+    const scheduleHorizontalMetrics = useCallback((metrics, options = {}) => {
+        if (!serverSide || typeof onHorizontalScrollMetrics !== 'function') return;
+
+        const immediate = Boolean(options.immediate);
+        const debounceMs = Number.isFinite(Number(options.debounceMs))
+            ? Math.max(0, Math.floor(Number(options.debounceMs)))
+            : SERVER_SIDE_HORIZONTAL_METRICS_DEBOUNCE_MS;
+
+        if (immediate) {
+            if (horizontalMetricsTimerRef.current) {
+                clearTimeout(horizontalMetricsTimerRef.current);
+                horizontalMetricsTimerRef.current = null;
+            }
+            pendingHorizontalMetricsRef.current = null;
+            onHorizontalScrollMetrics(metrics);
+            return;
+        }
+
+        pendingHorizontalMetricsRef.current = metrics;
+        if (horizontalMetricsTimerRef.current) return;
+
+        horizontalMetricsTimerRef.current = setTimeout(() => {
+            horizontalMetricsTimerRef.current = null;
+            const latestMetrics = pendingHorizontalMetricsRef.current;
+            pendingHorizontalMetricsRef.current = null;
+            if (latestMetrics && typeof onHorizontalScrollMetrics === 'function') {
+                onHorizontalScrollMetrics(latestMetrics);
+            }
+        }, debounceMs);
+    }, [onHorizontalScrollMetrics, serverSide]);
+
+    useEffect(() => () => {
+        if (horizontalMetricsTimerRef.current) {
+            clearTimeout(horizontalMetricsTimerRef.current);
+            horizontalMetricsTimerRef.current = null;
+        }
+        pendingHorizontalMetricsRef.current = null;
+    }, []);
+
     /* eslint-disable react-hooks/exhaustive-deps */
     const leftCols = useStableColumnList(
         useMemo(() => table.getLeftLeafColumns().filter(c => c.getIsVisible()),
@@ -134,6 +178,8 @@ export const useColumnVirtualizer = ({
             scrollEl.scrollLeft = maxScrollLeft;
             columnVirtualizer.scrollOffset = maxScrollLeft;
         }
+        // Measuring on every horizontal virtual-index change makes wide pivots
+        // jank badly. Re-measure only when the column structure/layout changes.
         columnVirtualizer.measure();
 
         const lastCenterIndex = Math.max(centerCols.length - 1, 0);
@@ -148,7 +194,7 @@ export const useColumnVirtualizer = ({
         ) {
             columnVirtualizer.scrollToIndex(lastCenterIndex, { align: 'end' });
         }
-    }, [centerCols.length, columnVirtualizer, lastVirtualCenterIndex, parentRef, totalLayoutWidth]);
+    }, [centerCols.length, columnVirtualizer, parentRef, totalLayoutWidth]);
 
     useLayoutEffect(() => {
         const scrollEl = parentRef.current;
@@ -156,15 +202,15 @@ export const useColumnVirtualizer = ({
 
         const remeasure = () => {
             columnVirtualizer.measure();
-            if (typeof onHorizontalScrollMetrics === 'function' && serverSide) {
-                onHorizontalScrollMetrics({
+            if (serverSide) {
+                scheduleHorizontalMetrics({
                     scrollLeft: scrollEl.scrollLeft,
                     clientWidth: scrollEl.clientWidth,
                     scrollWidth: scrollEl.scrollWidth,
                     leftPinnedWidth,
                     averageCenterColumnWidth,
                     centerColumnCount: centerCols.length,
-                });
+                }, { immediate: true });
             }
         };
 
@@ -189,8 +235,8 @@ export const useColumnVirtualizer = ({
         centerCols.length,
         columnVirtualizer,
         leftPinnedWidth,
-        onHorizontalScrollMetrics,
         parentRef,
+        scheduleHorizontalMetrics,
         serverSide,
     ]);
 
@@ -201,14 +247,14 @@ export const useColumnVirtualizer = ({
 
         const scrollEl = parentRef.current;
         const handleHorizontalScroll = () => {
-            onHorizontalScrollMetrics({
+            scheduleHorizontalMetrics({
                 scrollLeft: scrollEl.scrollLeft,
                 clientWidth: scrollEl.clientWidth,
                 scrollWidth: scrollEl.scrollWidth,
                 leftPinnedWidth,
                 averageCenterColumnWidth,
                 centerColumnCount: centerCols.length,
-            });
+            }, { debounceMs: SERVER_SIDE_HORIZONTAL_METRICS_DEBOUNCE_MS });
         };
 
         scrollEl.addEventListener('scroll', handleHorizontalScroll, { passive: true });
@@ -221,6 +267,7 @@ export const useColumnVirtualizer = ({
         leftPinnedWidth,
         onHorizontalScrollMetrics,
         parentRef,
+        scheduleHorizontalMetrics,
         serverSide,
     ]);
 

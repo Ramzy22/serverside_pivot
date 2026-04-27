@@ -1,6 +1,9 @@
 import { formatDisplayLabel } from './helpers';
 
 const VALID_SPARKLINE_TYPES = new Set(['line', 'area', 'column', 'bar']);
+const GEOMETRY_MAX_POINTS_FLOOR = 24;
+const GEOMETRY_MAX_POINTS_CEIL = 160;
+const normalizedPointCache = typeof WeakMap !== 'undefined' ? new WeakMap() : null;
 const clamp = (value, min, max) => Math.max(min, Math.min(max, value));
 
 const toFiniteNumber = (value) => {
@@ -89,9 +92,16 @@ export const normalizeSparklinePoints = (rawValue) => {
             : rawValue
     );
     if (!Array.isArray(candidateSeries)) return [];
-    return candidateSeries
+    if (normalizedPointCache && normalizedPointCache.has(candidateSeries)) {
+        return normalizedPointCache.get(candidateSeries);
+    }
+    const normalized = candidateSeries
         .map((entry, index) => normalizeSparklinePointEntry(entry, index))
         .filter(Boolean);
+    if (normalizedPointCache) {
+        normalizedPointCache.set(candidateSeries, normalized);
+    }
+    return normalized;
 };
 
 export const buildPivotSparklinePoints = ({
@@ -121,27 +131,42 @@ export const buildPivotSparklinePoints = ({
 
 export const resolveSparklineMetricValue = (points, metric = 'last') => {
     if (!Array.isArray(points) || points.length === 0) return null;
-    const values = points
-        .map((point) => toFiniteNumber(point && point.value))
-        .filter((value) => Number.isFinite(value));
-    if (values.length === 0) return null;
+    let first = null;
+    let last = null;
+    let min = Infinity;
+    let max = -Infinity;
+    let sum = 0;
+    let count = 0;
+
+    for (const point of points) {
+        const value = toFiniteNumber(point && point.value);
+        if (!Number.isFinite(value)) continue;
+        if (first === null) first = value;
+        last = value;
+        if (value < min) min = value;
+        if (value > max) max = value;
+        sum += value;
+        count += 1;
+    }
+    if (count === 0) return null;
+
     switch (metric) {
         case 'first':
-            return values[0];
+            return first;
         case 'min':
-            return Math.min(...values);
+            return min;
         case 'max':
-            return Math.max(...values);
+            return max;
         case 'avg':
         case 'average':
-            return values.reduce((sum, value) => sum + value, 0) / values.length;
+            return sum / count;
         case 'sum':
-            return values.reduce((sum, value) => sum + value, 0);
+            return sum;
         case 'delta':
-            return values.length > 1 ? values[values.length - 1] - values[0] : values[0];
+            return count > 1 ? last - first : first;
         case 'last':
         default:
-            return values[values.length - 1];
+            return last;
     }
 };
 
@@ -159,6 +184,76 @@ const scaleValueToAxis = (value, minValue, maxValue, minAxis, maxAxis) => {
     return minAxis + ((maxAxis - minAxis) * normalized);
 };
 
+const resolveMaxGeometryPoints = (width) => (
+    Math.max(
+        GEOMETRY_MAX_POINTS_FLOOR,
+        Math.min(GEOMETRY_MAX_POINTS_CEIL, Math.floor(Number(width) || GEOMETRY_MAX_POINTS_CEIL))
+    )
+);
+
+const averageBucketPoint = (points, start, end) => {
+    let sum = 0;
+    let count = 0;
+    for (let index = start; index < end; index += 1) {
+        sum += Number(points[index].value);
+        count += 1;
+    }
+    const source = points[start];
+    return {
+        ...source,
+        value: count > 0 ? sum / count : Number(source.value),
+        label: start + 1 === end ? source.label : `${source.label || start + 1}-${points[end - 1].label || end}`,
+    };
+};
+
+const downsampleSparklinePoints = (points, maxPoints, type) => {
+    if (!Array.isArray(points) || points.length <= maxPoints) return points;
+    if (type === 'column' || type === 'bar') {
+        const sampled = [];
+        const bucketSize = points.length / maxPoints;
+        for (let bucket = 0; bucket < maxPoints; bucket += 1) {
+            const start = Math.floor(bucket * bucketSize);
+            const end = Math.min(points.length, Math.max(start + 1, Math.floor((bucket + 1) * bucketSize)));
+            sampled.push(averageBucketPoint(points, start, end));
+        }
+        return sampled;
+    }
+
+    const bucketCount = Math.max(1, Math.floor((maxPoints - 2) / 2));
+    const bucketSize = Math.max(1, (points.length - 2) / bucketCount);
+    const sampled = [points[0]];
+
+    for (let bucket = 0; bucket < bucketCount; bucket += 1) {
+        const start = Math.max(1, Math.floor(1 + (bucket * bucketSize)));
+        const end = Math.min(points.length - 1, Math.floor(1 + ((bucket + 1) * bucketSize)));
+        if (start >= end) continue;
+
+        let minIndex = start;
+        let maxIndex = start;
+        for (let index = start + 1; index < end; index += 1) {
+            const value = Number(points[index].value);
+            if (value < Number(points[minIndex].value)) minIndex = index;
+            if (value > Number(points[maxIndex].value)) maxIndex = index;
+        }
+
+        if (minIndex === maxIndex) {
+            sampled.push(points[minIndex]);
+        } else if (minIndex < maxIndex) {
+            sampled.push(points[minIndex], points[maxIndex]);
+        } else {
+            sampled.push(points[maxIndex], points[minIndex]);
+        }
+    }
+
+    sampled.push(points[points.length - 1]);
+    if (sampled.length <= maxPoints) return sampled;
+
+    const stride = Math.ceil(sampled.length / maxPoints);
+    const thinned = sampled.filter((_, index) => index % stride === 0).slice(0, Math.max(1, maxPoints - 1));
+    thinned.push(points[points.length - 1]);
+    return thinned;
+};
+
 export const buildSparklineGeometry = ({
     points,
     width = 120,
@@ -166,7 +261,21 @@ export const buildSparklineGeometry = ({
     padding = 4,
     type = 'line',
 }) => {
-    const validPoints = Array.isArray(points) ? points.filter((point) => Number.isFinite(toFiniteNumber(point && point.value))) : [];
+    const validPoints = [];
+    let minValue = Infinity;
+    let maxValue = -Infinity;
+    if (Array.isArray(points)) {
+        for (const point of points) {
+            const numericValue = toFiniteNumber(point && point.value);
+            if (!Number.isFinite(numericValue)) continue;
+            const normalizedPoint = point && typeof point === 'object'
+                ? (point.value === numericValue ? point : { ...point, value: numericValue })
+                : { index: validPoints.length, value: numericValue, label: String(validPoints.length + 1) };
+            validPoints.push(normalizedPoint);
+            if (numericValue < minValue) minValue = numericValue;
+            if (numericValue > maxValue) maxValue = numericValue;
+        }
+    }
     if (validPoints.length === 0) {
         return {
             points: [],
@@ -180,9 +289,7 @@ export const buildSparklineGeometry = ({
         };
     }
 
-    const values = validPoints.map((point) => Number(point.value));
-    const minValue = Math.min(...values);
-    const maxValue = Math.max(...values);
+    const displayPoints = downsampleSparklinePoints(validPoints, resolveMaxGeometryPoints(width), type);
     const valueFloor = type === 'column' || type === 'bar' ? Math.min(minValue, 0) : minValue;
     const valueCeil = type === 'column' || type === 'bar' ? Math.max(maxValue, 0) : maxValue;
     const safeWidth = Math.max(width, padding * 2 + 8);
@@ -193,9 +300,9 @@ export const buildSparklineGeometry = ({
     const baselineX = scaleValueToAxis(0, valueFloor, valueCeil, padding, safeWidth - padding);
 
     if (type === 'bar') {
-        const bandHeight = innerHeight / Math.max(validPoints.length, 1);
+        const bandHeight = innerHeight / Math.max(displayPoints.length, 1);
         const barHeight = Math.max(2, bandHeight * 0.62);
-        const bars = validPoints.map((point, index) => {
+        const bars = displayPoints.map((point, index) => {
             const scaledX = scaleValueToAxis(Number(point.value), valueFloor, valueCeil, padding, safeWidth - padding);
             const y = padding + (index * bandHeight) + ((bandHeight - barHeight) / 2);
             return {
@@ -219,8 +326,8 @@ export const buildSparklineGeometry = ({
         };
     }
 
-    const stepX = validPoints.length > 1 ? innerWidth / (validPoints.length - 1) : 0;
-    const laidOutPoints = validPoints.map((point, index) => ({
+    const stepX = displayPoints.length > 1 ? innerWidth / (displayPoints.length - 1) : 0;
+    const laidOutPoints = displayPoints.map((point, index) => ({
         ...point,
         x: padding + (index * stepX),
         y: scaleValueToAxis(Number(point.value), valueFloor, valueCeil, safeHeight - padding, padding),
@@ -228,7 +335,7 @@ export const buildSparklineGeometry = ({
     }));
 
     if (type === 'column') {
-        const barWidth = Math.max(2, Math.min(18, (validPoints.length > 0 ? innerWidth / validPoints.length : innerWidth) * 0.62));
+        const barWidth = Math.max(2, Math.min(18, (displayPoints.length > 0 ? innerWidth / displayPoints.length : innerWidth) * 0.62));
         const bars = laidOutPoints.map((point) => ({
             ...point,
             x: point.x - (barWidth / 2),

@@ -6,7 +6,7 @@
   "scripts": {
     "start": "webpack-dev-server --config ./webpack.serve.config.js --open",
     "build:js": "webpack --mode production",
-    "build:py": "python -m dash.development.component_generator ./src/lib/components dash_tanstack_pivot -p package-info.json",
+    "build:py": "python scripts/build_py_strict.py",
     "build": "npm run build:js && npm run build:py"
   },
   "author": "Gemini",

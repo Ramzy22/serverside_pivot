@@ -31,22 +31,47 @@ _current_path = _os.path.dirname(_os.path.abspath(__file__))
 
 _this_module = _sys.modules[__name__]
 
+def _package_external_url(filename):
+    return 'https://unpkg.com/{}/@{}/{}/{}'.format(
+        package_name,
+        __version__,
+        package_name,
+        filename,
+    )
+
+
+def _discover_async_js_dist():
+    chunk_suffix = '.{}.min.js'.format(package_name)
+    main_bundle = '{}.min.js'.format(package_name)
+    try:
+        filenames = sorted(_os.listdir(_current_path))
+    except OSError:
+        return []
+    return [
+        {
+            'relative_package_path': filename,
+            'external_url': _package_external_url(filename),
+            'namespace': package_name,
+            'dynamic': True,
+        }
+        for filename in filenames
+        if filename.endswith(chunk_suffix) and filename != main_bundle
+    ]
+
+
 _js_dist = [
     {
         'relative_package_path': '{}.min.js'.format(package_name),
-        'external_url': 'https://unpkg.com/{}/@{}/{}/{}.min.js'.format(
-            package_name, __version__, package_name, package_name
-        ),
+        'external_url': _package_external_url('{}.min.js'.format(package_name)),
         'namespace': package_name
     },
     {
         'relative_package_path': '{}.min.js.map'.format(package_name),
-        'external_url': 'https://unpkg.com/{}/@{}/{}/{}.min.js.map'.format(
-            package_name, __version__, package_name, package_name
-        ),
+        'external_url': _package_external_url('{}.min.js.map'.format(package_name)),
         'namespace': package_name,
         'dynamic': True
-    }
+    },
+    *_discover_async_js_dist(),
 ]
 
 _css_dist = []

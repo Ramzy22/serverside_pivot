@@ -82,6 +82,11 @@ const getUrgentJumpRowOverscan = (visibleRows) => {
     return Math.max(8, Math.min(32, Math.ceil(Math.max(numericVisibleRows, 1) / 2)));
 };
 
+const VIEWPORT_BLOCK_STALE_MS = 1500;
+const VIEWPORT_DUPLICATE_REQUEST_WINDOW_MS = 5000;
+const VIEWPORT_FAST_SCROLL_DEBOUNCE_MS = 140;
+const VIEWPORT_FAST_COLUMN_DEBOUNCE_MS = 96;
+
 /**
  * Hook to manage server-side virtualization with caching.
  */
@@ -215,7 +220,7 @@ export const useServerSideRowModel = ({
         const recentFastScroll = lastFastScrollDispatchRef.current.dispatchedAt > 0
             && (now - lastFastScrollDispatchRef.current.dispatchedAt) < 650;
         const hasFreshInflight = inflightRequestRef.current
-            && (now - inflightRequestRef.current.timestamp) < 1500;
+            && (now - inflightRequestRef.current.timestamp) < VIEWPORT_BLOCK_STALE_MS;
         return recentFastScroll || hasFreshInflight ? Math.max(base, 8) : base;
     }, []);
 
@@ -518,7 +523,7 @@ export const useServerSideRowModel = ({
         const block = getBlock(blockIndex, stateEpoch);
         if (!block || block.status === 'error') return true;
 
-        const isStale = block.status === 'loading' && (now - block.timestamp > 1500);
+        const isStale = block.status === 'loading' && (now - block.timestamp > VIEWPORT_BLOCK_STALE_MS);
         const isPartial = block.status === 'partial';
         const blockStart = blockIndex * blockSize;
         const blockEnd = (blockIndex + 1) * blockSize - 1;
@@ -619,7 +624,7 @@ export const useServerSideRowModel = ({
         const reqEnd = (maxBlock + 1) * blockSize - 1;
 
         const inflight = inflightRequestRef.current;
-        const inflightIsFresh = inflight && (Date.now() - inflight.timestamp <= 5000);
+        const inflightIsFresh = inflight && (Date.now() - inflight.timestamp <= VIEWPORT_DUPLICATE_REQUEST_WINDOW_MS);
         const {
             requestedColStart,
             requestedColEnd,
@@ -825,6 +830,8 @@ export const useServerSideRowModel = ({
         blocksNeeded,
         {
             immediate = false,
+            replace = false,
+            debounceMs = null,
             overrideColStart = colStart,
             overrideColEnd = colEnd,
         } = {}
@@ -834,6 +841,7 @@ export const useServerSideRowModel = ({
         const existing = queuedViewportRef.current;
 
         if (
+            !replace &&
             existing &&
             existing.stateEpoch === stateEpoch &&
             existing.abortGeneration === abortGeneration
@@ -886,17 +894,22 @@ export const useServerSideRowModel = ({
         }
 
         const elapsed = Date.now() - lastViewportDispatchAtRef.current;
-        const debounceMs = immediate
+        const resolvedDebounceMs = Number.isFinite(Number(debounceMs))
+            ? Math.max(0, Math.floor(Number(debounceMs)))
+            : null;
+        const effectiveDebounceMs = immediate
             ? 0
-            : (
-                Number.isFinite(Number(blockLoadDebounceMs))
-                    ? Math.max(0, Math.floor(Number(blockLoadDebounceMs)))
-                    : (elapsed >= 80 ? 16 : 48)
-            );
+            : (resolvedDebounceMs !== null
+                ? resolvedDebounceMs
+                : (
+                    Number.isFinite(Number(blockLoadDebounceMs))
+                        ? Math.max(0, Math.floor(Number(blockLoadDebounceMs)))
+                        : (elapsed >= 80 ? 16 : 48)
+                ));
         viewportFlushTimerRef.current = setTimeout(() => {
             viewportFlushTimerRef.current = null;
             flushQueuedViewport(immediate);
-        }, debounceMs);
+        }, effectiveDebounceMs);
         return true;
     }, [abortGeneration, blockLoadDebounceMs, colEnd, colStart, columnRangeUrgencyToken, flushQueuedViewport, prefetchColumns, resolveRetentionBufferBlocks, setPinnedRange, stateEpoch]);
 
@@ -927,8 +940,18 @@ export const useServerSideRowModel = ({
             return false;
         }
 
+        lastImmediateViewportRef.current = {
+            startBlock: Math.min(...blocksNeeded),
+            endBlock: Math.max(...blocksNeeded),
+            colStart: overrideColStart,
+            colEnd: overrideColEnd,
+            dispatchedAt: Date.now(),
+        };
+
         return enqueueViewportRequest(estimatedFirstRow, estimatedLastRow, blocksNeeded, {
-            immediate: true,
+            immediate: false,
+            replace: true,
+            debounceMs: VIEWPORT_FAST_COLUMN_DEBOUNCE_MS,
             overrideColStart,
             overrideColEnd,
         });
@@ -1050,7 +1073,11 @@ export const useServerSideRowModel = ({
                 dispatchedAt: now,
             };
 
-            enqueueViewportRequest(estimatedFirstRow, estimatedLastRow, blocksNeeded, { immediate: true });
+            enqueueViewportRequest(estimatedFirstRow, estimatedLastRow, blocksNeeded, {
+                immediate: false,
+                replace: true,
+                debounceMs: VIEWPORT_FAST_SCROLL_DEBOUNCE_MS,
+            });
         };
 
         scrollEl.addEventListener('scroll', handleScroll, { passive: true });
@@ -1136,7 +1163,19 @@ export const useServerSideRowModel = ({
                 }
                 return;
             }
-            enqueueViewportRequest(firstRow, lastRow, blocksNeeded, { immediate: shouldDispatchImmediately });
+            const coalesceBlockJumpRequest = blockJumpDistance >= 4 && !columnRangeUrgent;
+            const coalesceColumnJumpRequest = columnRangeUrgent || columnJumpDistance >= 12;
+            const coalesceJumpRequest = coalesceBlockJumpRequest || coalesceColumnJumpRequest;
+            enqueueViewportRequest(firstRow, lastRow, blocksNeeded, {
+                immediate: shouldDispatchImmediately && !coalesceJumpRequest,
+                replace: coalesceJumpRequest,
+                debounceMs: coalesceColumnJumpRequest
+                    ? VIEWPORT_FAST_COLUMN_DEBOUNCE_MS
+                    : (coalesceBlockJumpRequest ? VIEWPORT_FAST_SCROLL_DEBOUNCE_MS : null),
+            });
+            if (columnRangeUrgent) {
+                lastHandledColumnRangeUrgencyRef.current = columnRangeUrgencyToken;
+            }
         } else if (columnRangeUrgent) {
             lastHandledColumnRangeUrgencyRef.current = columnRangeUrgencyToken;
         }
@@ -1207,7 +1246,7 @@ export const useServerSideRowModel = ({
             const currentInflight = inflightRequestRef.current;
             for (let b = startBlock; b <= endBlock; b++) {
                 const block = getBlock(b, stateEpoch);
-                const isStale = block && block.status === 'loading' && (Date.now() - block.timestamp > 1500);
+                const isStale = block && block.status === 'loading' && (Date.now() - block.timestamp > VIEWPORT_BLOCK_STALE_MS);
                 const isPartial = block && block.status === 'partial';
                 // A loading block is "orphaned" when the current inflight no longer covers
                 // it (e.g. user scrolled away to a different range). Re-request it so it
@@ -1282,7 +1321,7 @@ export const useServerSideRowModel = ({
         const currentInflight = inflightRequestRef.current;
         for (let b = startBlock; b <= endBlock; b++) {
             const block = getBlock(b, stateEpoch);
-            const isStale = block && block.status === 'loading' && (Date.now() - block.timestamp > 1500);
+            const isStale = block && block.status === 'loading' && (Date.now() - block.timestamp > VIEWPORT_BLOCK_STALE_MS);
             const isPartial = block && block.status === 'partial';
             const blockStart = b * blockSize;
             const blockEnd = (b + 1) * blockSize - 1;

@@ -55,6 +55,7 @@ export const useServerSideViewportController = ({
     const [columnRangeUrgencyToken, setColumnRangeUrgencyToken] = useState(0);
     const lastObservedHorizontalScrollLeftRef = useRef(0);
     const lastFastHorizontalRangeRef = useRef({ start: -1, end: -1, dispatchedAt: 0 });
+    const deferredHorizontalMetricsRef = useRef(null);
 
     const updateVisibleColRange = useCallback((updater) => {
         setVisibleColRange((previousRange) => {
@@ -165,6 +166,43 @@ export const useServerSideViewportController = ({
             }
         }, 200);
     }, [isRequestPending]);
+
+    const resolvePendingRequest = useCallback((requestMeta) => {
+        const normalizedMeta = requestMeta && typeof requestMeta === 'object'
+            ? requestMeta
+            : { version: requestMeta };
+        const numericVersion = Number(
+            normalizedMeta.version !== undefined
+                ? normalizedMeta.version
+                : normalizedMeta.window_seq
+        );
+        if (!Number.isFinite(numericVersion)) return false;
+
+        let changed = false;
+        if (pendingRequestVersionsRef.current.delete(numericVersion)) {
+            changed = true;
+        }
+        if (visiblePendingRequestVersionsRef.current.delete(numericVersion)) {
+            changed = true;
+        }
+        if (pendingHorizontalRequestVersionsRef.current.delete(numericVersion)) {
+            changed = true;
+        }
+        if (!changed) return false;
+
+        if (visiblePendingRequestVersionsRef.current.size === 0) {
+            if (loadingDelayTimerRef.current !== null) {
+                clearTimeout(loadingDelayTimerRef.current);
+                loadingDelayTimerRef.current = null;
+            }
+            setIsRequestPending(false);
+        }
+        if (pendingHorizontalRequestVersionsRef.current.size === 0) {
+            setIsHorizontalColumnRequestPending(false);
+            setPendingHorizontalColumnCount(0);
+        }
+        return true;
+    }, []);
 
     useEffect(() => {
         const numericVersion = Number(dataVersion);
@@ -407,8 +445,12 @@ export const useServerSideViewportController = ({
             return;
         }
 
-        if (structuralInFlight || !serverSide) {
+        if (!serverSide) {
             lastObservedHorizontalScrollLeftRef.current = scrollLeft;
+            return;
+        }
+        if (structuralInFlight || isRequestPending || isHorizontalColumnRequestPending) {
+            deferredHorizontalMetricsRef.current = metrics;
             return;
         }
 
@@ -507,12 +549,35 @@ export const useServerSideViewportController = ({
             urgentViewportRequester(estimatedStart, estimatedEnd);
         }
     }, [
+        isHorizontalColumnRequestPending,
+        isRequestPending,
         requestUrgentColumnViewportRef,
         schemaFallbackWidth,
         serverSide,
         structuralInFlight,
         totalCenterCols,
         updateVisibleColRange,
+    ]);
+
+    useEffect(() => {
+        if (!serverSide || structuralInFlight || isRequestPending || isHorizontalColumnRequestPending) {
+            return undefined;
+        }
+        const deferredMetrics = deferredHorizontalMetricsRef.current;
+        if (!deferredMetrics) return undefined;
+        deferredHorizontalMetricsRef.current = null;
+        const timer = setTimeout(() => {
+            handleHorizontalScrollMetrics(deferredMetrics);
+        }, 0);
+        return () => {
+            clearTimeout(timer);
+        };
+    }, [
+        handleHorizontalScrollMetrics,
+        isHorizontalColumnRequestPending,
+        isRequestPending,
+        serverSide,
+        structuralInFlight,
     ]);
 
     const resetVisibleColRange = useCallback((visibleCountHint = null) => {
@@ -556,6 +621,7 @@ export const useServerSideViewportController = ({
         latestRequestedColumnWindowRef,
         latestRequestedViewportRef,
         markRequestPending,
+        resolvePendingRequest,
         needsColSchema,
         needsColSchemaRef,
         pendingHorizontalColumnCount,

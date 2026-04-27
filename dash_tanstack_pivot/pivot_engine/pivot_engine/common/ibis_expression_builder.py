@@ -143,17 +143,75 @@ class IbisExpressionBuilder:
         return expr.name(field_id)
 
     def apply_custom_dimensions(self, table: IbisTable, custom_dimensions: Optional[List[Dict[str, Any]]]) -> IbisTable:
-        """Attach user-defined category columns before filters/grouping are planned."""
+        """Attach user-defined category columns before filters/grouping are planned.
+
+        Category string column and its optional sort-key column are computed in a
+        single mutate() call so each dimension adds only one subquery layer.
+        """
         if not custom_dimensions:
             return table
         current_table = table
         for dimension in custom_dimensions:
-            expr = self.build_custom_category_expression(current_table, dimension)
-            if expr is None:
-                continue
             field_id = self._custom_category_field_id(dimension)
-            current_table = current_table.mutate(**{field_id: expr})
+            category_expr = self.build_custom_category_expression(current_table, dimension)
+            if category_expr is None:
+                continue
+            mutations: Dict[str, Any] = {field_id: category_expr}
+            sort_key_expr = self._build_category_sort_key_expr(current_table, dimension)
+            if sort_key_expr is not None:
+                mutations[f"__sortkey__{field_id}"] = sort_key_expr
+            current_table = current_table.mutate(**mutations)
         return current_table
+
+    def _build_category_sort_key_expr(self, table: IbisTable, dimension: Dict[str, Any]) -> Optional[IbisExpr]:
+        """Build a numeric hidden sort key for category ordering.
+
+        Built from the RAW row conditions (same pass as the category string) so
+        the database evaluates each rule condition only once per query.
+        alpha / alpha_desc need no hidden key (plain string sort covers them).
+        """
+        order = str(dimension.get("order") or "creation").strip().lower()
+        if order in ("alpha", "alpha_desc"):
+            return None
+        rules = dimension.get("rules", []) if isinstance(dimension.get("rules"), list) else []
+        n = len(rules)
+
+        if order == "creation":
+            expr = ibis.literal(n, type="int64")
+            for i in range(n - 1, -1, -1):
+                rule = rules[i]
+                if not isinstance(rule, dict):
+                    continue
+                condition = self._normalize_custom_category_condition(rule.get("condition") or rule)
+                if not condition:
+                    continue
+                cond_expr = self._build_filter_object(table, condition)
+                if cond_expr is None:
+                    continue
+                expr = cond_expr.ifelse(ibis.literal(i, type="int64"), expr)
+            return expr
+
+        if order in ("numeric", "numeric_desc"):
+            expr = ibis.literal(1e18)
+            for i in range(n - 1, -1, -1):
+                rule = rules[i]
+                if not isinstance(rule, dict):
+                    continue
+                label = str(rule.get("label") or "").strip()
+                try:
+                    num_val = float(label)
+                except (ValueError, TypeError):
+                    continue
+                condition = self._normalize_custom_category_condition(rule.get("condition") or rule)
+                if not condition:
+                    continue
+                cond_expr = self._build_filter_object(table, condition)
+                if cond_expr is None:
+                    continue
+                expr = cond_expr.ifelse(ibis.literal(num_val), expr)
+            return expr
+
+        return None
 
     def build_filter_expression(self, table: IbisTable, filters: List[Dict[str, Any]], is_post_agg: bool = False) -> Optional[IbisExpr]:
         """Converts a list of filter dictionaries into a single Ibis boolean expression."""

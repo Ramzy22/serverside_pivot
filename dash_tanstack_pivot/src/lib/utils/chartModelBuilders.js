@@ -256,6 +256,7 @@ export const normalizeComboLayer = (layer, availableColumns = [], index = 0, fal
                 ? fallback.name.trim()
                 : getComboLayerDefaultName(matchingColumn || fallbackColumn, index)),
         hidden: Boolean(source.hidden),
+        color: typeof source.color === 'string' && source.color ? source.color : (typeof fallback.color === 'string' && fallback.color ? fallback.color : null),
     };
 };
 
@@ -805,7 +806,7 @@ export const layoutSunburstNodes = (nodes, startAngle, endAngle, depth, ringWidt
 export const layoutSankey = (nodes, links, width, height) => {
     if (!Array.isArray(nodes) || nodes.length === 0) return { nodes: [], links: [] };
 
-    const margin = { top: 24, right: 20, bottom: 24, left: 20 };
+    const margin = { top: 24, right: 20, bottom: 40, left: 20 };
     const nodeWidth = 18;
     const levelMap = new Map();
     nodes.forEach((node) => {
@@ -821,26 +822,32 @@ export const layoutSankey = (nodes, links, width, height) => {
     const nodeLookup = new Map();
 
     levelMap.forEach((levelNodes, depth) => {
-        const gap = 16;
+        const gap = 10;
         const availableHeight = Math.max(1, height - margin.top - margin.bottom - (Math.max(levelNodes.length - 1, 0) * gap));
         const totalValue = levelNodes.reduce((sum, node) => sum + Math.max(Math.abs(Number(node.value) || 0), 1), 0);
         const scale = totalValue > 0 ? availableHeight / totalValue : 0;
-        let cursorY = margin.top;
 
-        levelNodes.forEach((node) => {
-            const rawHeight = totalValue > 0
-                ? Math.max(14, Math.abs(Number(node.value) || 0) * scale)
-                : Math.max(18, availableHeight / Math.max(levelNodes.length, 1));
+        const rawHeights = levelNodes.map((node) =>
+            totalValue > 0
+                ? Math.max(8, Math.abs(Number(node.value) || 0) * scale)
+                : Math.max(8, availableHeight / Math.max(levelNodes.length, 1))
+        );
+        const totalRaw = rawHeights.reduce((s, h) => s + h, 0);
+        const heightScale = totalRaw > availableHeight ? availableHeight / totalRaw : 1;
+
+        let cursorY = margin.top;
+        levelNodes.forEach((node, i) => {
+            const finalHeight = Math.max(6, rawHeights[i] * heightScale);
             const positioned = {
                 ...node,
                 x: margin.left + ((depth - 1) * levelGap),
                 y: cursorY,
                 width: nodeWidth,
-                height: rawHeight,
+                height: finalHeight,
             };
             positionedNodes.push(positioned);
             nodeLookup.set(node.rowPath, positioned);
-            cursorY += rawHeight + gap;
+            cursorY += finalHeight + gap;
         });
     });
 

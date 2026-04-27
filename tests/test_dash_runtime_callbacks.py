@@ -1,5 +1,6 @@
 import asyncio
 import inspect
+import json
 import threading
 from pathlib import Path
 
@@ -20,12 +21,17 @@ from pivot_engine.runtime import (
 )
 from pivot_engine.runtime.dash_callbacks import (
     _build_runtime_response,
+    _build_runtime_export_context,
     _extract_request_state_override,
+    _externalize_data_payload_if_needed,
+    _externalize_export_payload,
     _format_transport_callback_output,
     _is_bootstrap_without_viewport,
     _normalize_transport_request,
+    _register_runtime_payload_endpoint,
     _state_override_value,
 )
+from pivot_engine.runtime.models import PivotRequestContext
 from pivot_engine.runtime.async_bridge import run_awaitable_in_worker_thread, run_awaitable_sync
 
 
@@ -81,6 +87,125 @@ def test_register_dash_pivot_transport_callback_without_drill_store():
         app, getter, pivot_id="pivot-only", debug=False
     )
     assert len(app.callback_map) == 1
+
+
+def test_runtime_payload_ref_externalizes_nested_rows_and_serves_json(monkeypatch):
+    monkeypatch.setenv("PIVOT_RUNTIME_PAYLOAD_REF_MIN_ROWS", "9999")
+    app = Dash(__name__)
+    app.layout = html.Div()
+    _register_runtime_payload_endpoint(app)
+    context = PivotRequestContext(
+        table="sales",
+        client_instance="client-a",
+        state_epoch=2,
+        window_seq=5,
+    )
+    payload = {
+        "data": [{"id": "row-1", "trend": [1, 2, 3]}],
+        "rowCount": 1,
+        "dataVersion": 7,
+        "dataOffset": 0,
+    }
+
+    externalized = _externalize_data_payload_if_needed(
+        app,
+        payload,
+        request_id="req-1",
+        context=context,
+    )
+
+    assert externalized["data"] == []
+    assert externalized["payloadInline"] is False
+    payload_ref = externalized["payloadRef"]
+    assert payload_ref["requestId"] == "req-1"
+    assert payload_ref["clientInstance"] == "client-a"
+    assert payload_ref["stateEpoch"] == 2
+    assert payload_ref["windowSeq"] == 5
+    assert payload_ref["dataVersion"] == 7
+
+    response = app.server.test_client().get(payload_ref["url"])
+    assert response.status_code == 200
+    assert json.loads(response.data.decode("utf-8")) == {"data": payload["data"]}
+
+
+def test_export_payload_is_served_as_bytes_without_base64():
+    app = Dash(__name__)
+    app.layout = html.Div()
+    _register_runtime_payload_endpoint(app)
+    context = PivotRequestContext(
+        table="sales",
+        client_instance="client-export",
+        state_epoch=3,
+        window_seq=9,
+    )
+
+    externalized = _externalize_export_payload(
+        app,
+        {
+            "content": b"Region,Sales\r\nNorth,100\r\n",
+            "contentType": "text/csv;charset=utf-8",
+            "format": "csv",
+            "filename": "pivot_export.csv",
+            "rows": 1,
+            "columns": 2,
+            "partId": "part-1",
+        },
+        request_id="req-export",
+        context=context,
+    )
+
+    assert "data" not in externalized
+    assert externalized["payloadInline"] is False
+    assert externalized["rows"] == 1
+    payload_ref = externalized["payloadRef"]
+    assert payload_ref["requestId"] == "req-export"
+    assert payload_ref["filename"] == "pivot_export.csv"
+    assert payload_ref["exportFormat"] == "csv"
+
+    response = app.server.test_client().get(payload_ref["url"])
+    assert response.status_code == 200
+    assert response.data == b"Region,Sales\r\nNorth,100\r\n"
+    assert response.headers["Content-Type"].startswith("text/csv")
+    assert 'filename="pivot_export.csv"' in response.headers["Content-Disposition"]
+
+
+def test_export_payload_file_is_streamed_without_inline_bytes(tmp_path):
+    app = Dash(__name__)
+    app.layout = html.Div()
+    _register_runtime_payload_endpoint(app)
+    content_path = tmp_path / "pivot_export.csv"
+    content_path.write_bytes(b"Region,Sales\r\nNorth,100\r\n")
+    context = PivotRequestContext(
+        table="sales",
+        client_instance="client-export",
+        state_epoch=3,
+        window_seq=9,
+    )
+
+    externalized = _externalize_export_payload(
+        app,
+        {
+            "contentPath": str(content_path),
+            "contentLength": content_path.stat().st_size,
+            "contentType": "text/csv;charset=utf-8",
+            "format": "csv",
+            "filename": "pivot_export.csv",
+            "rows": 1,
+            "columns": 2,
+        },
+        request_id="req-export",
+        context=context,
+    )
+
+    assert "content" not in externalized
+    assert externalized["payloadInline"] is False
+    payload_ref = externalized["payloadRef"]
+    assert payload_ref["format"] == "file"
+
+    response = app.server.test_client().get(payload_ref["url"])
+    assert response.status_code == 200
+    assert response.data == b"Region,Sales\r\nNorth,100\r\n"
+    assert response.headers["Content-Length"] == str(content_path.stat().st_size)
 
 
 def test_register_dash_pivot_transport_callback_uses_dash_async_when_available():
@@ -368,6 +493,21 @@ def test_runtime_request_normalizes_batch_update_alias():
     assert request["trigger_prop"] == "pivot-grid.cellUpdates"
 
 
+def test_runtime_request_normalizes_export_kind_to_runtime_trigger():
+    request = _normalize_transport_request(
+        pivot_id="pivot-grid",
+        runtime_request={
+            "kind": "export",
+            "requestId": "req-export-1",
+            "payload": {"format": "csv", "table": "sales_data"},
+        },
+    )
+
+    assert request["kind"] == "export"
+    assert request["request_id"] == "req-export-1"
+    assert request["trigger_prop"] == "pivot-grid.runtimeRequest"
+
+
 def test_missing_runtime_request_falls_back_to_bootstrap_data_request():
     request = _normalize_transport_request(
         pivot_id="pivot-grid-bootstrap",
@@ -426,6 +566,49 @@ def test_runtime_request_state_override_is_extracted_for_all_request_kinds():
     assert restored_report["root"]["format"]["borderStyle"] == "solid"
     assert _state_override_value(override, "missing", "fallback", str) == "fallback"
     assert _state_override_value(override, "rowFields", "fallback", dict) == "fallback"
+
+
+def test_runtime_export_context_uses_state_override_sorting_and_effective_state():
+    context = _build_runtime_export_context(
+        request_payload={
+            "format": "csv",
+            "table": "fresh_sales",
+            "state_override": {
+                "rowFields": ["region"],
+                "colFields": [],
+                "valConfigs": [{"field": "sales", "agg": "sum"}],
+                "filters": {"region": ["North"]},
+                "sorting": [{"id": "sales_sum", "desc": True}],
+                "sortOptions": {"columnOptions": {"sales_sum": {"absoluteSort": True}}},
+                "expanded": True,
+                "showRowTotals": False,
+                "showColTotals": True,
+            },
+        },
+        table_name="stale_sales",
+        row_fields=["country"],
+        col_fields=[],
+        val_configs=[{"field": "cost", "agg": "sum"}],
+        filters={},
+        custom_dimensions=[],
+        sorting=[],
+        sort_options={},
+        sort_options_default=None,
+        expanded={},
+        show_row_totals=True,
+        show_col_totals=False,
+    )
+
+    assert context.request.table == "stale_sales"
+    assert context.request.grouping == ["region"]
+    assert context.request.columns[0]["id"] == "region"
+    assert context.request.sorting == [{"id": "sales_sum", "desc": True, "absoluteSort": True}]
+    assert context.request.filters == {"region": ["North"]}
+    assert context.request.row_totals is False
+    assert context.request.totals is True
+    assert context.expanded is True
+    assert context.row_fields == ["region"]
+    assert context.val_configs == [{"field": "sales", "agg": "sum"}]
 
 
 def test_transport_callback_output_is_plain_object_for_single_output():

@@ -180,10 +180,6 @@ import {
     buildSelectionChartModel,
     canStackBarLayout,
 } from '../utils/chartModelBuilders';
-import {
-    PivotChartModal,
-    PivotChartPanel,
-} from './Charts/PivotCharts';
 import { useColumnDefs } from '../hooks/useColumnDefs';
 import { useRenderHelpers } from '../hooks/useRenderHelpers';
 import { PivotTableBody } from './Table/PivotTableBody';
@@ -204,6 +200,20 @@ import { normalizeSortingState, updateSortingForColumn } from '../utils/sorting'
 import { buildSparklineGeometry } from '../utils/sparklines';
 
 const EDITING_TEMPORARILY_DISABLED = true;
+const LazyPivotChartModal = React.lazy(() => import('./Charts/PivotCharts').then(module => ({ default: module.PivotChartModal })));
+const LazyPivotChartPanel = React.lazy(() => import('./Charts/PivotCharts').then(module => ({ default: module.PivotChartPanel })));
+
+const PivotChartFallback = () => null;
+const PivotChartModal = (props) => (
+    <React.Suspense fallback={<PivotChartFallback />}>
+        <LazyPivotChartModal {...props} />
+    </React.Suspense>
+);
+const PivotChartPanel = (props) => (
+    <React.Suspense fallback={<PivotChartFallback />}>
+        <LazyPivotChartPanel {...props} />
+    </React.Suspense>
+);
 
 const loadingAnimationStyles = `
 @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@300;500&family=Plus+Jakarta+Sans:wght@300;500;800&display=swap');
@@ -962,7 +972,7 @@ function buildTsvFromRawRows(rawRows, withHeaders, visibleCols) {
     if (withHeaders) {
         tsv += visibleCols.map(c => typeof c.columnDef.header === 'string' ? c.columnDef.header : c.id).join('\t') + '\n';
     }
-    rawRows.forEach(rawRow => {
+    rawRows.forEach((rawRow, rowIndex) => {
         if (!rawRow) return;
         const vals = visibleCols.map(c => {
             if (c.id === 'hierarchy') {
@@ -971,7 +981,7 @@ function buildTsvFromRawRows(rawRows, withHeaders, visibleCols) {
             }
             let v;
             if (typeof c.columnDef.accessorFn === 'function') {
-                v = c.columnDef.accessorFn(rawRow, 0);
+                v = c.columnDef.accessorFn(rawRow, rowIndex);
             } else if (c.columnDef.accessorKey) {
                 v = rawRow[c.columnDef.accessorKey];
             }
@@ -1416,6 +1426,7 @@ export default function DashTanstackPivot(props) {
             DEFAULT_TABLE_CANVAS_SIZE,
         });
         const [chartCanvasPaneWidthHints, setChartCanvasPaneWidthHints] = useState({});
+        const [previewChartPaneId, setPreviewChartPaneId] = useState(null);
         const [sparklineDataModal, setSparklineDataModal] = useState(null);
         const openSparklineDataModalRef = useRef(null);
         openSparklineDataModalRef.current = setSparklineDataModal;
@@ -1648,7 +1659,7 @@ export default function DashTanstackPivot(props) {
             savePersistedState('columnSizing', columnSizing);
             savePersistedState('sidebarWidth', sidebarWidth);
             savePersistedState('fieldPanelSizes', fieldPanelSizes);
-            savePersistedState('chartCanvasPanes', chartCanvasPanes);
+            savePersistedState('chartCanvasPanes', chartCanvasPanes.filter((p) => !p.isPreview));
             savePersistedState('tableCanvasSize', tableCanvasSize);
             savePersistedState('chartPanelFloatingLayout', {
                 floating: chartPanelFloating,
@@ -2587,6 +2598,19 @@ export default function DashTanstackPivot(props) {
             ? chartCanvasLayoutRef.current.getBoundingClientRect()
             : null;
         if (!containerRect || containerRect.width <= 0) return;
+        const resolvePaneWidthPx = (paneKey) => {
+            if (paneKey === 'table') {
+                const tableRect = chartLayoutRef.current
+                    ? chartLayoutRef.current.getBoundingClientRect()
+                    : null;
+                return tableRect && tableRect.width > 0 ? tableRect.width : MIN_TABLE_PANEL_WIDTH;
+            }
+            const paneEl = chartCanvasLayoutRef.current
+                ? chartCanvasLayoutRef.current.querySelector(`[data-docked-chart-pane="${paneKey}"]`)
+                : null;
+            const paneRect = paneEl ? paneEl.getBoundingClientRect() : null;
+            return paneRect && paneRect.width > 0 ? paneRect.width : MIN_CHART_CANVAS_PANE_WIDTH;
+        };
         const chartPaneSizes = chartCanvasPanes.reduce((acc, pane) => {
             acc[pane.id] = pane.size;
             return acc;
@@ -2599,6 +2623,8 @@ export default function DashTanstackPivot(props) {
             totalUnits: tableCanvasSize + chartCanvasPanes.reduce((sum, pane) => sum + pane.size, 0),
             leftSize: leftKey === 'table' ? tableCanvasSize : (chartPaneSizes[leftKey] || 1),
             rightSize: rightKey === 'table' ? tableCanvasSize : (chartPaneSizes[rightKey] || 1),
+            leftWidthPx: resolvePaneWidthPx(leftKey),
+            rightWidthPx: resolvePaneWidthPx(rightKey),
         };
     }, [chartCanvasPanes, tableCanvasSize]);
 
@@ -2612,6 +2638,7 @@ export default function DashTanstackPivot(props) {
             const rightMinPx = resizeState.rightKey === 'table' ? MIN_TABLE_PANEL_WIDTH : MIN_CHART_CANVAS_PANE_WIDTH;
             const leftMinUnits = leftMinPx * pxToUnits;
             const rightMinUnits = rightMinPx * pxToUnits;
+            const deltaPx = event.clientX - resizeState.startX;
             const deltaUnits = ((event.clientX - resizeState.startX) / Math.max(1, resizeState.containerWidth)) * totalUnits;
             const nextLeftSize = Math.max(leftMinUnits, resizeState.leftSize + deltaUnits);
             const nextRightSize = Math.max(rightMinUnits, resizeState.rightSize - deltaUnits);
@@ -2620,6 +2647,17 @@ export default function DashTanstackPivot(props) {
             const correction = targetConsumed > 0 ? targetConsumed / Math.max(consumed, 0.0001) : 1;
             const correctedLeft = nextLeftSize * correction;
             const correctedRight = nextRightSize * correction;
+            const nextLeftWidthPx = Math.max(leftMinPx, resizeState.leftWidthPx + deltaPx);
+            const nextRightWidthPx = Math.max(rightMinPx, resizeState.rightWidthPx - deltaPx);
+            const consumedWidthPx = nextLeftWidthPx + nextRightWidthPx;
+            const targetConsumedWidthPx = resizeState.leftWidthPx + resizeState.rightWidthPx;
+            const widthCorrection = targetConsumedWidthPx > 0
+                ? targetConsumedWidthPx / Math.max(consumedWidthPx, 0.0001)
+                : 1;
+            const correctedLeftWidthPx = nextLeftWidthPx * widthCorrection;
+            const correctedRightWidthPx = nextRightWidthPx * widthCorrection;
+            resizeState.lastLeftWidthPx = correctedLeftWidthPx;
+            resizeState.lastRightWidthPx = correctedRightWidthPx;
 
             if (resizeState.leftKey === 'table') {
                 setTableCanvasSize(correctedLeft);
@@ -2636,21 +2674,73 @@ export default function DashTanstackPivot(props) {
                     pane.id === resizeState.rightKey ? { ...pane, size: correctedRight } : pane
                 )));
             }
+
+            setChartCanvasPaneWidthHints((previousHints) => {
+                if (!previousHints || typeof previousHints !== 'object') return previousHints;
+
+                let nextHints = previousHints;
+                let changed = false;
+                const syncHint = (paneId, paneWidthPx) => {
+                    if (paneId === 'table' || !Object.prototype.hasOwnProperty.call(previousHints, paneId)) return;
+                    const nextWidthPx = Math.max(MIN_CHART_CANVAS_PANE_WIDTH, Math.floor(paneWidthPx));
+                    if (previousHints[paneId] === nextWidthPx) return;
+                    if (nextHints === previousHints) nextHints = { ...previousHints };
+                    nextHints[paneId] = nextWidthPx;
+                    changed = true;
+                };
+
+                syncHint(resizeState.leftKey, correctedLeftWidthPx);
+                syncHint(resizeState.rightKey, correctedRightWidthPx);
+
+                return changed ? nextHints : previousHints;
+            });
         };
 
         const stopResize = () => {
+            const resizeState = chartCanvasResizeRef.current;
             chartCanvasResizeRef.current = null;
+            if (!resizeState) return;
+
+            const syncCommittedWidthHints = () => {
+                setChartCanvasPaneWidthHints((previousHints) => {
+                    if (!previousHints || typeof previousHints !== 'object') return previousHints;
+
+                    let nextHints = previousHints;
+                    let changed = false;
+                    const syncHint = (paneId, paneWidthPx) => {
+                        if (paneId === 'table' || !Object.prototype.hasOwnProperty.call(previousHints, paneId)) return;
+                        if (!Number.isFinite(Number(paneWidthPx))) return;
+                        const nextWidthPx = Math.max(MIN_CHART_CANVAS_PANE_WIDTH, Math.floor(Number(paneWidthPx)));
+                        if (previousHints[paneId] === nextWidthPx) return;
+                        if (nextHints === previousHints) nextHints = { ...previousHints };
+                        nextHints[paneId] = nextWidthPx;
+                        changed = true;
+                    };
+
+                    syncHint(resizeState.leftKey, resizeState.lastLeftWidthPx);
+                    syncHint(resizeState.rightKey, resizeState.lastRightWidthPx);
+
+                    return changed ? nextHints : previousHints;
+                });
+            };
+
+            if (typeof window !== 'undefined' && typeof window.requestAnimationFrame === 'function') {
+                window.requestAnimationFrame(() => {
+                    window.requestAnimationFrame(syncCommittedWidthHints);
+                });
+                return;
+            }
+
+            syncCommittedWidthHints();
         };
 
         window.addEventListener('mousemove', handlePointerMove);
         window.addEventListener('mouseup', stopResize);
-        window.addEventListener('mouseleave', stopResize);
         window.addEventListener('blur', stopResize);
 
         return () => {
             window.removeEventListener('mousemove', handlePointerMove);
             window.removeEventListener('mouseup', stopResize);
-            window.removeEventListener('mouseleave', stopResize);
             window.removeEventListener('blur', stopResize);
         };
     }, []);
@@ -2696,12 +2786,10 @@ export default function DashTanstackPivot(props) {
         };
         window.addEventListener('mousemove', handleVerticalMove);
         window.addEventListener('mouseup', stopVerticalResize);
-        window.addEventListener('mouseleave', stopVerticalResize);
         window.addEventListener('blur', stopVerticalResize);
         return () => {
             window.removeEventListener('mousemove', handleVerticalMove);
             window.removeEventListener('mouseup', stopVerticalResize);
-            window.removeEventListener('mouseleave', stopVerticalResize);
             window.removeEventListener('blur', stopVerticalResize);
         };
     }, []);
@@ -3096,8 +3184,7 @@ export default function DashTanstackPivot(props) {
                 data = getSelectedData(false);
             }
             if (data) {
-                copyToClipboard(data);
-                showNotification('Copied!', 'success');
+                copyTextToClipboard(data);
             }
             return;
         }
@@ -3427,8 +3514,7 @@ export default function DashTanstackPivot(props) {
                     data = getSelectedData(false);
                 }
                 if (data) {
-                    copyToClipboard(data);
-                    showNotification('Copied!', 'success');
+                    copyTextToClipboard(data);
                 }
             }
         };
@@ -3460,6 +3546,7 @@ export default function DashTanstackPivot(props) {
     const profilingEnabledRef = useRef(isPivotProfilingEnabled());
     const pendingDataProfilerCommitRef = useRef(null);
     const pendingDataProfilerFrameRef = useRef(null);
+    const activeRuntimePayloadFetchRef = useRef(null);
     const transactionUndoStackRef = useRef([]);
     const transactionRedoStackRef = useRef([]);
     const pendingTransactionHistoryRef = useRef(new Map());
@@ -3491,6 +3578,13 @@ export default function DashTanstackPivot(props) {
     const propagationLogRef = useRef([]);
     const [propagationLogEpoch, setPropagationLogEpoch] = useState(0);
     const pendingPropagationUpdatesRef = useRef(null);
+
+    useEffect(() => {
+        const numericVersion = Number(dataVersion);
+        if (Number.isFinite(numericVersion)) {
+            latestDataVersionRef.current = Math.max(latestDataVersionRef.current, numericVersion);
+        }
+    }, [dataVersion]);
     const [pendingPropagationUpdates, setPendingPropagationUpdates] = useState(null);
     const [editPanelOpen, setEditPanelOpen] = useState(false);
     const [propagationMethodUI, setPropagationMethodUI] = useState('equal');
@@ -3555,6 +3649,7 @@ export default function DashTanstackPivot(props) {
         latestRequestedColumnWindowRef,
         latestRequestedViewportRef,
         markRequestPending,
+        resolvePendingRequest,
         needsColSchema,
         needsColSchemaRef,
         pendingHorizontalColumnCount,
@@ -6490,25 +6585,26 @@ export default function DashTanstackPivot(props) {
             interactionMode: chartPanelInteractionMode,
             serverScope: chartPanelServerScope,
         }, initialChartDefinition);
-        setChartCanvasPanes((previousPanes) => [
-            ...previousPanes,
-            {
-                ...baseDefinition,
-                size: 1,
-                dockPosition: 'right',
-                floating: false,
-                floatingRect: clampFloatingChartRect({
-                    width: chartPanelWidth,
-                    height: Math.max(DEFAULT_FLOATING_CHART_PANEL_HEIGHT, chartPanelGraphHeight + 180),
-                    left: 48 + (chartCanvasPanes.length * 24),
-                    top: 48 + (chartCanvasPanes.length * 24),
-                }, null),
-                locked: false,
-                lockedModel: null,
-                lockedRequest: null,
-                immersiveMode: false,
-            },
-        ]);
+        const newPane = {
+            ...baseDefinition,
+            size: 1,
+            dockPosition: 'right',
+            floating: false,
+            floatingRect: clampFloatingChartRect({
+                width: chartPanelWidth,
+                height: Math.max(DEFAULT_FLOATING_CHART_PANEL_HEIGHT, chartPanelGraphHeight + 180),
+                left: 48 + (chartCanvasPanes.length * 24),
+                top: 48 + (chartCanvasPanes.length * 24),
+            }, null),
+            locked: false,
+            lockedModel: null,
+            lockedRequest: null,
+            immersiveMode: false,
+            chartSettings: {},
+            isPreview: true,
+        };
+        setChartCanvasPanes((previousPanes) => [...previousPanes, newPane]);
+        setPreviewChartPaneId(newPane.id);
     }, [
         chartCanvasPanes.length,
         chartPanelTitle,
@@ -6528,6 +6624,20 @@ export default function DashTanstackPivot(props) {
         chartPanelServerScope,
         initialChartDefinition,
     ]);
+
+    const handleConfirmPreviewChartPane = useCallback(() => {
+        if (!previewChartPaneId) return;
+        setChartCanvasPanes((prev) => prev.map((pane) =>
+            pane.id === previewChartPaneId ? { ...pane, isPreview: false, openSettingsOnMount: true } : pane
+        ));
+        setPreviewChartPaneId(null);
+    }, [previewChartPaneId]);
+
+    const handleCancelPreviewChartPane = useCallback(() => {
+        if (!previewChartPaneId) return;
+        setChartCanvasPanes((prev) => prev.filter((pane) => pane.id !== previewChartPaneId));
+        setPreviewChartPaneId(null);
+    }, [previewChartPaneId]);
 
     const handleRemoveChartCanvasPane = useCallback((paneId) => {
         setChartCanvasPanes((previousPanes) => {
@@ -6976,12 +7086,20 @@ export default function DashTanstackPivot(props) {
             const structuralStart = 0;
             const structuralEnd = structuralWindowSize - 1;
             const structuralColumnWindow = resolveStableRequestedColumnWindow();
+            const shouldUseFullInitialColumnWindow = (
+                serverSide
+                && Number(latestDataVersionRef.current || 0) === 0
+                && structuralColumnWindow.start === 0
+                && structuralColumnWindow.end === 0
+            );
+            const structuralColStart = shouldUseFullInitialColumnWindow ? null : structuralColumnWindow.start;
+            const structuralColEnd = shouldUseFullInitialColumnWindow ? null : structuralColumnWindow.end;
             markRequestPending({
                 version: tx.version,
                 reqStart: structuralStart,
                 reqEnd: structuralEnd,
-                colStart: structuralColumnWindow.start,
-                colEnd: structuralColumnWindow.end,
+                colStart: structuralColStart,
+                colEnd: structuralColEnd,
             });
             setPropsRef.current({
                 ...nextProps,
@@ -6999,8 +7117,8 @@ export default function DashTanstackPivot(props) {
                         client_instance: clientInstanceRef.current,
                         abort_generation: tx.abortGeneration,
                         intent: 'structural',
-                        col_start: structuralColumnWindow.start !== null ? structuralColumnWindow.start : undefined,
-                        col_end: structuralColumnWindow.end !== null ? structuralColumnWindow.end : undefined,
+                        col_start: structuralColStart !== null ? structuralColStart : undefined,
+                        col_end: structuralColEnd !== null ? structuralColEnd : undefined,
                         needs_col_schema: serverSide || undefined,
                         include_grand_total: serverSidePinsGrandTotal || undefined,
                         immersive_mode: immersiveMode || undefined,
@@ -7018,7 +7136,56 @@ export default function DashTanstackPivot(props) {
     }, []);
 
     const copyToClipboard = (text) => {
-        navigator.clipboard.writeText(text);
+        const value = text === undefined || text === null ? '' : String(text);
+        try {
+            if (navigator.clipboard && typeof navigator.clipboard.writeText === 'function') {
+                return navigator.clipboard.writeText(value);
+            }
+            if (typeof document !== 'undefined' && document.body && typeof document.execCommand === 'function') {
+                const textarea = document.createElement('textarea');
+                textarea.value = value;
+                textarea.setAttribute('readonly', '');
+                textarea.style.position = 'fixed';
+                textarea.style.top = '-1000px';
+                textarea.style.opacity = '0';
+                document.body.appendChild(textarea);
+                textarea.focus();
+                textarea.select();
+                const copied = document.execCommand('copy');
+                document.body.removeChild(textarea);
+                if (copied) {
+                    return Promise.resolve();
+                }
+            }
+        } catch (error) {
+            return Promise.reject(error);
+        }
+        return Promise.reject(new Error('Clipboard API is unavailable.'));
+    };
+
+    const copyTextToClipboard = (text, successMessage='Copied!') => {
+        if (!text) return Promise.resolve(false);
+        return copyToClipboard(text)
+            .then(() => {
+                if (successMessage) {
+                    showNotification(successMessage, 'success');
+                }
+                return true;
+            })
+            .catch((error) => {
+                console.warn('Copy to clipboard failed:', error);
+                showNotification('Copy failed. Check browser clipboard permissions.', 'error');
+                return false;
+            });
+    };
+
+    const triggerExportDownload = (url, filename) => {
+        const a = document.createElement('a');
+        a.href = url;
+        a.download = filename || 'pivot_export.csv';
+        document.body.appendChild(a);
+        a.click();
+        document.body.removeChild(a);
     };
 
     const getSelectedData = (withHeaders = false, selectionMap = selectedCells) => {
@@ -7922,24 +8089,24 @@ export default function DashTanstackPivot(props) {
             pendingCopyIntentRef.current = { withHeaders, mergedHeaders, mergedHeaderSeparator };
             setIsCopying(true);
             dispatchServerSideRuntimeSetProps({
-                runtimeRequest: { kind: 'export', payload: { format: 'tsv', table: tableName } }
+                runtimeRequest: { kind: 'export', payload: { format: 'tsv', table: tableName, colIds, rowStart: 0, rowEnd: rowCount } }
             });
         };
         const actions = [
-            { label: 'Copy Table', icon: <Icons.DragIndicator/>, onClick: () => serverSide ? copyTableServerSide(false, false) : copyToClipboard(getTableData(false)) },
-            { label: 'Copy Table with Headers', onClick: () => serverSide ? copyTableServerSide(true, false) : copyToClipboard(getTableData(true)) },
-            { label: 'Copy Table - Merged Headers', onClick: () => serverSide ? copyTableServerSide(true, true) : copyToClipboard(getTableData(true, true)) },
+            { label: 'Copy Table', icon: <Icons.DragIndicator/>, onClick: () => serverSide ? copyTableServerSide(false, false) : copyTextToClipboard(getTableData(false)) },
+            { label: 'Copy Table with Headers', onClick: () => serverSide ? copyTableServerSide(true, false) : copyTextToClipboard(getTableData(true)) },
+            { label: 'Copy Table - Merged Headers', onClick: () => serverSide ? copyTableServerSide(true, true) : copyTextToClipboard(getTableData(true, true)) },
         ];
 
         if (hasSelection) {
             actions.push('separator');
             actions.push({ label: 'Copy Selection', onClick: () => {
                 const data = getSelectedData(false, selectionForMenu);
-                if (data) copyToClipboard(data);
+                if (data) copyTextToClipboard(data);
             }});
             actions.push({ label: 'Copy Selection with Headers', onClick: () => {
                 const data = getSelectedData(true, selectionForMenu);
-                if (data) copyToClipboard(data);
+                if (data) copyTextToClipboard(data);
             }});
             actions.push({ label: 'Create Range Chart', icon: <Icons.Chart/>, onClick: () => openSelectionChart(selectionForMenu) });
         }
@@ -10210,6 +10377,74 @@ export default function DashTanstackPivot(props) {
         return true;
     }, []);
 
+    const runtimePayloadCommitIsCurrent = useCallback((response, payload, resolvedPayload = null) => {
+        const payloadRef = payload && payload.payloadRef && typeof payload.payloadRef === 'object'
+            ? payload.payloadRef
+            : {};
+        const responseRequestId = response && (response.requestId || response.request_id);
+        const refRequestId = payloadRef.requestId || payloadRef.request_id;
+        if (responseRequestId && refRequestId && String(responseRequestId) !== String(refRequestId)) {
+            return false;
+        }
+
+        const responseClient = response && (response.client_instance || response.clientInstance);
+        const refClient = payloadRef.clientInstance || payloadRef.client_instance;
+        const expectedClient = responseClient || refClient;
+        if (expectedClient && String(expectedClient) !== String(clientInstanceRef.current)) {
+            return false;
+        }
+
+        const stateEpochValue = coerceTransportNumber(
+            response && response.state_epoch !== undefined ? response.state_epoch : payloadRef.stateEpoch,
+            null
+        );
+        if (Number.isFinite(stateEpochValue) && stateEpochValue !== stateEpochRef.current) {
+            return false;
+        }
+
+        const windowSeqValue = coerceTransportNumber(
+            response && response.window_seq !== undefined ? response.window_seq : payloadRef.windowSeq,
+            null
+        );
+        if (Number.isFinite(windowSeqValue) && requestVersionRef.current > windowSeqValue) {
+            return false;
+        }
+
+        const committedPayload = resolvedPayload && typeof resolvedPayload === 'object' ? resolvedPayload : payload;
+        const committedVersion = coerceTransportNumber(
+            committedPayload && committedPayload.dataVersion !== undefined
+                ? committedPayload.dataVersion
+                : payloadRef.dataVersion,
+            null
+        );
+        if (Number.isFinite(committedVersion) && committedVersion < latestDataVersionRef.current) {
+            return false;
+        }
+
+        return true;
+    }, []);
+
+    const commitRuntimeDataPayload = useCallback((response, payload) => {
+        finalizeTransactionHistoryResponse(response, payload);
+        hydrateVisibleEditOverlay(payload.editOverlay);
+        reconcileOptimisticCellValuesWithPayload(payload);
+        pendingDataProfilerCommitRef.current = {
+            requestId: response.requestId || null,
+            dataVersion: coerceTransportNumber(payload.dataVersion, null),
+            rowCount: coerceTransportNumber(payload.rowCount, null),
+        };
+        if (payload.formulaErrors && typeof payload.formulaErrors === 'object') {
+            setFormulaErrors(payload.formulaErrors);
+        } else if (payload.formulaErrors === null) {
+            setFormulaErrors({});
+        }
+        setTransportDataState((previousState) => normalizeRuntimeDataEnvelope(payload, previousState));
+    }, [
+        finalizeTransactionHistoryResponse,
+        hydrateVisibleEditOverlay,
+        reconcileOptimisticCellValuesWithPayload,
+    ]);
+
     useEffect(() => {
         if (!runtimeResponse || typeof runtimeResponse !== 'object') return;
         const payload = runtimeResponse.payload && typeof runtimeResponse.payload === 'object'
@@ -10220,20 +10455,63 @@ export default function DashTanstackPivot(props) {
         recordProfilerResponse(runtimeResponse);
 
         if ((runtimeResponse.kind === 'data' || runtimeResponse.kind === 'update' || runtimeResponse.kind === 'transaction') && runtimeResponse.status === 'data') {
-            finalizeTransactionHistoryResponse(runtimeResponse, payload);
-            hydrateVisibleEditOverlay(payload.editOverlay);
-            reconcileOptimisticCellValuesWithPayload(payload);
-            pendingDataProfilerCommitRef.current = {
-                requestId: runtimeResponse.requestId || null,
-                dataVersion: coerceTransportNumber(payload.dataVersion, null),
-                rowCount: coerceTransportNumber(payload.rowCount, null),
-            };
-            if (payload.formulaErrors && typeof payload.formulaErrors === 'object') {
-                setFormulaErrors(payload.formulaErrors);
-            } else if (payload.formulaErrors === null) {
-                setFormulaErrors({});
+            const payloadRef = payload.payloadRef && typeof payload.payloadRef === 'object'
+                ? payload.payloadRef
+                : null;
+            if (payloadRef && typeof payloadRef.url === 'string' && payloadRef.url) {
+                const fetchToken = payloadRef.id || payloadRef.url;
+                const abortController = new AbortController();
+                activeRuntimePayloadFetchRef.current = {
+                    token: fetchToken,
+                    requestId: runtimeResponse.requestId || null,
+                };
+
+                fetch(payloadRef.url, {
+                    method: 'GET',
+                    headers: { Accept: 'application/json' },
+                    signal: abortController.signal,
+                })
+                    .then((response) => {
+                        if (!response.ok) {
+                            throw new Error(`Payload fetch failed with status ${response.status}`);
+                        }
+                        return response.json();
+                    })
+                    .then((remotePayload) => {
+                        const activeFetch = activeRuntimePayloadFetchRef.current;
+                        if (!activeFetch || activeFetch.token !== fetchToken) return;
+                        const resolvedPayload = {
+                            ...payload,
+                            ...(remotePayload && typeof remotePayload === 'object' ? remotePayload : {}),
+                            payloadRef,
+                        };
+                        if (!runtimePayloadCommitIsCurrent(runtimeResponse, payload, resolvedPayload)) {
+                            resolvePendingRequest(runtimeResponse);
+                            return;
+                        }
+                        commitRuntimeDataPayload(runtimeResponse, resolvedPayload);
+                    })
+                    .catch((error) => {
+                        if (error && error.name === 'AbortError') return;
+                        resolvePendingRequest(runtimeResponse);
+                        console.error('Runtime payload fetch failed:', error);
+                        showNotification('The server data payload expired before it could be loaded.', 'error');
+                        scheduleSilentViewportRefresh();
+                    });
+
+                return () => {
+                    abortController.abort();
+                    const activeFetch = activeRuntimePayloadFetchRef.current;
+                    if (activeFetch && activeFetch.token === fetchToken) {
+                        activeRuntimePayloadFetchRef.current = null;
+                    }
+                };
             }
-            setTransportDataState((previousState) => normalizeRuntimeDataEnvelope(payload, previousState));
+            if (!runtimePayloadCommitIsCurrent(runtimeResponse, payload, payload)) {
+                resolvePendingRequest(runtimeResponse);
+                return;
+            }
+            commitRuntimeDataPayload(runtimeResponse, payload);
             return;
         }
 
@@ -10371,6 +10649,38 @@ export default function DashTanstackPivot(props) {
         if (runtimeResponse.kind === 'export') {
             const partId = payload.partId;
             const copyIntent = pendingCopyIntentRef.current;
+            const payloadRef = payload.payloadRef && typeof payload.payloadRef === 'object'
+                ? payload.payloadRef
+                : null;
+            const filename = payload.filename || (payloadRef && payloadRef.filename) || 'pivot_export.csv';
+            const readExportText = () => {
+                if (payloadRef && typeof payloadRef.url === 'string' && payloadRef.url) {
+                    return fetch(payloadRef.url, {
+                        method: 'GET',
+                        headers: { Accept: 'text/csv,text/tab-separated-values,text/plain,*/*' },
+                    }).then((response) => {
+                        if (!response.ok) {
+                            throw new Error(`Export payload fetch failed with status ${response.status}`);
+                        }
+                        return response.text();
+                    });
+                }
+                if (payload.data) {
+                    return Promise.resolve(atob(payload.data));
+                }
+                return Promise.resolve('');
+            };
+            const downloadLegacyBase64 = () => {
+                const b64 = payload.data;
+                if (!b64) return false;
+                const bytes = Uint8Array.from(atob(b64), c => c.charCodeAt(0));
+                const mimeType = payload.format === 'tsv' ? 'text/tab-separated-values' : 'text/csv';
+                const blob = new Blob([bytes], { type: `${mimeType};charset=utf-8;` });
+                const url = URL.createObjectURL(blob);
+                triggerExportDownload(url, filename);
+                URL.revokeObjectURL(url);
+                return true;
+            };
             if (partId) {
                 setPartModal(prev => prev ? { ...prev, processingPartId: null, completedParts: new Set([...prev.completedParts, partId]) } : null);
             } else {
@@ -10379,39 +10689,39 @@ export default function DashTanstackPivot(props) {
                 pendingCopyIntentRef.current = null;
             }
             if (runtimeResponse.status === 'ok') {
-                const b64 = payload.data;
-                if (b64) {
-                    if (copyIntent) {
-                        const text = atob(b64);
-                        const lines = text.split('\n').filter(l => l.length > 0);
-                        let result;
-                        if (!copyIntent.withHeaders) {
-                            result = lines.slice(1).join('\n');
-                        } else if (copyIntent.mergedHeaders) {
-                            const sep = copyIntent.mergedHeaderSeparator ?? ' ';
-                            const headerCells = (lines[0] || '').split('\t').map(
-                                h => h.replace(/\s*\((?:Sum|Avg|Cnt|Min|Max|Weighted Avg)\)\s*$/, '').replace(/ \| /g, sep)
-                            );
-                            result = [headerCells.join('\t'), ...lines.slice(1)].join('\n');
-                        } else {
-                            result = lines.join('\n');
-                        }
-                        copyToClipboard(result);
-                        showNotification(`Copied ${payload.rows ?? ''} rows`, 'success');
-                    } else {
-                        const filename = payload.filename || 'pivot_export.csv';
-                        const bytes = Uint8Array.from(atob(b64), c => c.charCodeAt(0));
-                        const mimeType = payload.format === 'tsv' ? 'text/tab-separated-values' : 'text/csv';
-                        const blob = new Blob([bytes], { type: `${mimeType};charset=utf-8;` });
-                        const url = URL.createObjectURL(blob);
-                        const a = document.createElement('a');
-                        a.href = url;
-                        a.download = filename;
-                        document.body.appendChild(a);
-                        a.click();
-                        document.body.removeChild(a);
-                        URL.revokeObjectURL(url);
+                if (copyIntent) {
+                    readExportText()
+                        .then((text) => {
+                            const lines = text.split('\n').filter(l => l.length > 0);
+                            let result;
+                            if (!copyIntent.withHeaders) {
+                                result = lines.slice(1).join('\n');
+                            } else if (copyIntent.mergedHeaders) {
+                                const sep = copyIntent.mergedHeaderSeparator ?? ' ';
+                                const headerCells = (lines[0] || '').split('\t').map(
+                                    h => h.replace(/\s*\((?:Sum|Avg|Cnt|Min|Max|Weighted Avg)\)\s*$/, '').replace(/ \| /g, sep)
+                                );
+                                result = [headerCells.join('\t'), ...lines.slice(1)].join('\n');
+                            } else {
+                                result = lines.join('\n');
+                            }
+                            return copyToClipboard(result);
+                        })
+                        .then(() => {
+                            showNotification(`Copied ${payload.rows ?? ''} rows`, 'success');
+                        })
+                        .catch((error) => {
+                            console.error('Copy export payload failed:', error);
+                            showNotification('Copy failed', 'error');
+                        });
+                } else {
+                    if (payloadRef && typeof payloadRef.url === 'string' && payloadRef.url) {
+                        triggerExportDownload(payloadRef.url, filename);
                         showNotification(`Downloaded ${payload.rows ?? ''} rows`, 'success');
+                    } else if (downloadLegacyBase64()) {
+                        showNotification(`Downloaded ${payload.rows ?? ''} rows`, 'success');
+                    } else {
+                        showNotification('Export failed', 'error');
                     }
                 }
             } else {
@@ -10448,6 +10758,19 @@ export default function DashTanstackPivot(props) {
             }
             return;
         }
+        if (
+            (runtimeResponse.status === 'stale' || runtimeResponse.status === 'error')
+            && (
+                runtimeResponse.kind === 'data'
+                || runtimeResponse.kind === 'update'
+                || runtimeResponse.kind === 'transaction'
+            )
+        ) {
+            resolvePendingRequest(runtimeResponse);
+            if (runtimeResponse.status === 'stale') {
+                scheduleSilentViewportRefresh();
+            }
+        }
         if (runtimeResponse.status === 'stale' || runtimeResponse.status === 'error') {
             clearPendingTransactionHistoryRequest(runtimeResponse, true);
         }
@@ -10464,7 +10787,7 @@ export default function DashTanstackPivot(props) {
                 status: runtimeResponse.status,
             });
         }
-    }, [buildRuntimeResponseProcessingKey, clearPendingTransactionHistoryRequest, emitEditLifecycleEvent, finalizeTransactionHistoryResponse, hydrateVisibleEditOverlay, markRuntimeResponseHandled, reconcileOptimisticCellValuesWithPayload, recordProfilerResponse, runtimeResponse, setIsExporting, setIsCopying, showNotification]);
+    }, [buildRuntimeResponseProcessingKey, clearPendingTransactionHistoryRequest, commitRuntimeDataPayload, emitEditLifecycleEvent, finalizeTransactionHistoryResponse, hydrateVisibleEditOverlay, markRuntimeResponseHandled, reconcileOptimisticCellValuesWithPayload, recordProfilerResponse, resolvePendingRequest, runtimePayloadCommitIsCurrent, runtimeResponse, scheduleSilentViewportRefresh, setIsExporting, setIsCopying, showNotification]);
 
     useEffect(() => {
         if (!chartData || typeof chartData !== 'object') return;
@@ -10936,12 +11259,13 @@ export default function DashTanstackPivot(props) {
             }
             setIsExporting(true);
             dispatchServerSideRuntimeSetProps({
-                runtimeRequest: { kind: 'export', payload: { format: 'csv', table: tableName } }
+                runtimeRequest: { kind: 'export', payload: { format: 'csv', table: tableName, colIds, rowStart: 0, rowEnd: rowCount } }
             });
         } else {
-            exportPivotTable(table, rowCount, null);
+            const displayRows = getDisplayRows();
+            exportPivotTable(table, rowCount, displayRows.length > 0 ? displayRows : null);
         }
-    }, [serverSide, table, rowCount, tableName, getVisibleExportColIds, EXPORT_ROW_LIMIT, dispatchServerSideRuntimeSetProps]);
+    }, [serverSide, table, rowCount, tableName, getVisibleExportColIds, EXPORT_ROW_LIMIT, dispatchServerSideRuntimeSetProps, getDisplayRows]);
 
     const dispatchExportPart = useCallback((rowBatch, colBatch) => {
         if (!partModal) return;
@@ -11566,8 +11890,8 @@ export default function DashTanstackPivot(props) {
         });
     }, [chartCanvasPanes]);
 
-    const dockedChartCanvasPanes = chartCanvasPanes.filter((pane) => !pane.floating);
-    const floatingChartCanvasPanes = chartCanvasPanes.filter((pane) => pane.floating);
+    const dockedChartCanvasPanes = chartCanvasPanes.filter((pane) => !pane.floating && !pane.isPreview);
+    const floatingChartCanvasPanes = chartCanvasPanes.filter((pane) => pane.floating && !pane.isPreview);
     const dockedChartCanvasPanesByPosition = useMemo(() => ({
         left: dockedChartCanvasPanes.filter((pane) => normalizeChartDockPosition(pane.dockPosition, 'right') === 'left'),
         right: dockedChartCanvasPanes.filter((pane) => normalizeChartDockPosition(pane.dockPosition, 'right') === 'right'),
@@ -11658,12 +11982,15 @@ export default function DashTanstackPivot(props) {
                     floatingRect={pane.floatingRect}
                     onFloatingDragStart={(event) => handleStartChartCanvasPaneFloatingDrag(pane.id, event)}
                     onFloatingResizeStart={(direction, event) => handleStartChartCanvasPaneFloatingResize(pane.id, direction, event)}
+                    initialSettings={pane.chartSettings || {}}
+                    onSettingsChange={(settings) => updateChartCanvasPane(pane.id, { chartSettings: settings })}
                     standalone
                     showResizeHandle={false}
                     title={pane.name}
                     showDefinitionManager={false}
                     locked={pane.locked}
                     onToggleLock={() => handleToggleChartCanvasPaneLock(pane.id)}
+                    initialSettingsPaneOpen={Boolean(pane.openSettingsOnMount)}
                     immersiveMode={Boolean(pane.immersiveMode)}
                     onImmersiveModeChange={(value) => updateChartCanvasPane(pane.id, { immersiveMode: Boolean(value) })}
                     dockPosition={normalizedDockPosition}
@@ -11682,10 +12009,41 @@ export default function DashTanstackPivot(props) {
     const renderHorizontalDockGroup = (panes, groupPosition) => {
         if (!uiConfig.showCharts) return null;
         if (!Array.isArray(panes) || panes.length === 0) return null;
+        const totalGroupSize = panes.reduce((sum, p) => sum + (Number(p.size) || 1), 0);
+        const paneWidthHints = panes.map((pane) => {
+            const numericHint = Number(chartCanvasPaneWidthHints[pane.id]);
+            return {
+                pane,
+                widthHint: Number.isFinite(numericHint)
+                    ? Math.max(MIN_CHART_CANVAS_PANE_WIDTH, Math.floor(numericHint))
+                    : null,
+            };
+        });
+        const hasPaneWidthHint = paneWidthHints.some(({ widthHint }) => widthHint !== null);
+        const hintedGroupWidth = hasPaneWidthHint
+            ? paneWidthHints.reduce((sum, { pane, widthHint }) => {
+                const fallbackWidth = Math.max(
+                    MIN_CHART_CANVAS_PANE_WIDTH,
+                    Math.floor(Number(pane.width) || MIN_CHART_CANVAS_PANE_WIDTH)
+                );
+                return sum + (widthHint === null ? fallbackWidth : widthHint);
+            }, panes.length * 8)
+            : null;
+        const groupStyle = hasPaneWidthHint
+            ? {
+                display: 'flex',
+                minWidth: `${hintedGroupWidth}px`,
+                width: `${hintedGroupWidth}px`,
+                minHeight: 0,
+                overflow: 'hidden',
+                flex: `0 0 ${hintedGroupWidth}px`,
+                flexShrink: 0,
+            }
+            : { display: 'flex', minWidth: 0, minHeight: 0, overflow: 'hidden', flexShrink: 0, flexGrow: totalGroupSize, flexBasis: 0 };
         return (
             <div
                 data-docked-chart-group={groupPosition}
-                style={{ display: 'flex', minWidth: 0, minHeight: 0, overflow: 'hidden', flexShrink: 0 }}
+                style={groupStyle}
             >
                 {panes.map((pane, index) => {
                     const previousPane = index > 0 ? panes[index - 1] : null;
@@ -12017,6 +12375,7 @@ export default function DashTanstackPivot(props) {
                                     statusModel={statusAccessoryModel}
                                     statusActions={statusAccessoryActions}
                                     treeSuppressGroupRowsSticky={Boolean(viewMode === 'tree' && treeConfig && treeConfig.suppressGroupRowsSticky)}
+                                    immersiveMode={immersiveMode}
                                     editValueDisplayMode={editValueDisplayMode}
                                     detailMode={activeDetailDisplayMode}
                                     detailState={activeDetailDisplayMode === 'inline' ? detailSurface : null}
@@ -12161,6 +12520,78 @@ export default function DashTanstackPivot(props) {
             </div>
             {contextMenu && <ContextMenu {...contextMenu} theme={theme} onClose={() => setContextMenu(null)} />}
             {notification && <Notification message={notification.message} type={notification.type} onClose={() => setNotification(null)} />}
+            {previewChartPaneId && (() => {
+                const previewPane = chartCanvasPanes.find((p) => p.id === previewChartPaneId);
+                if (!previewPane) return null;
+                const btnBase = { padding: '7px 16px', borderRadius: theme.radiusSm || '8px', fontSize: '12px', fontWeight: 700, cursor: 'pointer', border: 'none', display: 'inline-flex', alignItems: 'center', gap: '6px' };
+                return (
+                    <div style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.52)', zIndex: 10050, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+                        <div style={{ background: theme.background, border: `1px solid ${theme.border}`, borderRadius: theme.radius || '16px', boxShadow: '0 12px 48px rgba(0,0,0,0.32)', width: '86vw', maxWidth: '1160px', height: '80vh', maxHeight: '840px', display: 'flex', flexDirection: 'column', overflow: 'hidden', fontFamily: fontFamily }}>
+                            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '14px 20px', borderBottom: `1px solid ${theme.border}`, flexShrink: 0, background: theme.headerBg || theme.surfaceBg || theme.background }}>
+                                <span style={{ fontSize: '14px', fontWeight: 800, color: theme.text }}>New Chart Pane</span>
+                                <div style={{ display: 'flex', gap: '8px', alignItems: 'center' }}>
+                                    <button onClick={handleCancelPreviewChartPane} style={{ ...btnBase, background: theme.headerSubtleBg || theme.hover, color: theme.text, border: `1px solid ${theme.border}` }}>Cancel</button>
+                                    <button onClick={handleConfirmPreviewChartPane} style={{ ...btnBase, background: theme.primary, color: '#fff' }}>Open in Panel</button>
+                                </div>
+                            </div>
+                            <div style={{ flex: 1, minHeight: 0, overflow: 'hidden', display: 'flex' }}>
+                                <PivotChartPanel
+                                    open
+                                    onClose={handleCancelPreviewChartPane}
+                                    source={previewPane.source}
+                                    onSourceChange={(value) => updateChartCanvasPane(previewPane.id, { source: value })}
+                                    chartType={previewPane.chartType}
+                                    onChartTypeChange={(value) => updateChartCanvasPane(previewPane.id, { chartType: value })}
+                                    chartLayers={previewPane.chartLayers}
+                                    onChartLayersChange={(value) => updateChartCanvasPane(previewPane.id, { chartLayers: value })}
+                                    availableColumns={resolveChartAvailableColumns(chartPaneDataById[previewPane.id], visibleLeafColumns)}
+                                    barLayout={previewPane.barLayout}
+                                    onBarLayoutChange={(value) => updateChartCanvasPane(previewPane.id, { barLayout: value })}
+                                    axisMode={previewPane.axisMode}
+                                    onAxisModeChange={(value) => updateChartCanvasPane(previewPane.id, { axisMode: value })}
+                                    orientation={previewPane.orientation}
+                                    onOrientationChange={(value) => updateChartCanvasPane(previewPane.id, { orientation: value })}
+                                    hierarchyLevel={previewPane.hierarchyLevel}
+                                    onHierarchyLevelChange={(value) => updateChartCanvasPane(previewPane.id, { hierarchyLevel: value })}
+                                    chartTitle={previewPane.chartTitle || previewPane.name}
+                                    onChartTitleChange={(value) => updateChartCanvasPane(previewPane.id, { chartTitle: value })}
+                                    rowLimit={previewPane.rowLimit}
+                                    onRowLimitChange={(value) => updateChartCanvasPane(previewPane.id, { rowLimit: value })}
+                                    columnLimit={previewPane.columnLimit}
+                                    onColumnLimitChange={(value) => updateChartCanvasPane(previewPane.id, { columnLimit: value })}
+                                    chartHeight={previewPane.chartHeight || DEFAULT_CHART_GRAPH_HEIGHT}
+                                    onChartHeightChange={(value) => {
+                                        const nextHeight = Number(value);
+                                        updateChartCanvasPane(previewPane.id, {
+                                            chartHeight: Number.isFinite(nextHeight) ? Math.max(180, Math.floor(nextHeight)) : DEFAULT_CHART_GRAPH_HEIGHT,
+                                        });
+                                    }}
+                                    sortMode={previewPane.sortMode}
+                                    onSortModeChange={(value) => updateChartCanvasPane(previewPane.id, { sortMode: value })}
+                                    interactionMode={previewPane.interactionMode}
+                                    onInteractionModeChange={(value) => updateChartCanvasPane(previewPane.id, { interactionMode: value })}
+                                    serverScope={previewPane.serverScope}
+                                    onServerScopeChange={(value) => updateChartCanvasPane(previewPane.id, { serverScope: value })}
+                                    showServerScope={serverSide}
+                                    model={chartCanvasPaneModels[previewPane.id] || null}
+                                    theme={theme}
+                                    onCategoryActivate={(target) => activateChartCategory(previewPane.source, previewPane.interactionMode, target)}
+                                    floating={false}
+                                    initialSettings={previewPane.chartSettings || {}}
+                                    onSettingsChange={(settings) => updateChartCanvasPane(previewPane.id, { chartSettings: settings })}
+                                    standalone
+                                    showResizeHandle={false}
+                                    title={previewPane.name}
+                                    showDefinitionManager={false}
+                                    locked={false}
+                                    dockPosition="right"
+                                    initialSettingsPaneOpen
+                                />
+                            </div>
+                        </div>
+                    </div>
+                );
+            })()}
             {partModal && (() => {
                 const { mode, rowsPerPart, colsPerPart, totalRows, totalCols, processingPartId, completedParts } = partModal;
                 const rowBatches = Math.ceil(totalRows / rowsPerPart);

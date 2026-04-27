@@ -66,6 +66,127 @@ def _make_absolute_sort_adapter():
     return adapter
 
 
+def test_runtime_service_build_tanstack_sorting_preserves_visible_order_metadata():
+    sorting, column_sort_options = PivotRuntimeService._build_tanstack_sorting(
+        PivotViewState(
+            row_fields=["tenor"],
+            sorting=[{"id": "hierarchy", "desc": True}],
+            sort_options={
+                "columnOptions": {
+                    "tenor": {
+                        "sortKeyField": "tenor_order",
+                        "semanticType": "tenor",
+                        "nulls": "last",
+                    }
+                }
+            },
+        )
+    )
+
+    assert sorting == [
+        {
+            "id": "hierarchy",
+            "desc": True,
+            "sortKeyField": "tenor_order",
+            "semanticType": "tenor",
+            "nulls": "last",
+        }
+    ]
+    assert column_sort_options["tenor"]["sortKeyField"] == "tenor_order"
+
+
+def test_runtime_service_build_tanstack_sorting_injects_default_sort_key_field():
+    sorting, _ = PivotRuntimeService._build_tanstack_sorting(
+        PivotViewState(
+            row_fields=["bucket"],
+            sorting=[],
+            sort_options={"columnOptions": {"bucket": {"sortKeyField": "__sortkey__bucket"}}},
+        )
+    )
+
+    assert sorting == [{"id": "bucket", "desc": False, "sortKeyField": "__sortkey__bucket"}]
+
+
+def test_runtime_service_export_uses_runtime_viewport_execution_and_returns_file_payload():
+    class ExportAdapter:
+        def __init__(self):
+            self.handle_request_calls = 0
+            self.virtual_scroll_calls = []
+
+        async def handle_request(self, request):
+            self.handle_request_calls += 1
+            return TanStackResponse(data=[], columns=[], total_rows=0)
+
+        async def handle_virtual_scroll_request(self, request, start_row, end_row, expanded_paths, **kwargs):
+            self.virtual_scroll_calls.append(
+                {
+                    "request": request,
+                    "start": start_row,
+                    "end": end_row,
+                    "expanded": expanded_paths,
+                    "kwargs": kwargs,
+                }
+            )
+            return TanStackResponse(
+                data=[
+                    {"_id": "North", "sales_sum": 100},
+                    {"_id": "South", "sales_sum": 80},
+                ],
+                columns=[
+                    {"id": "hierarchy", "header": "Region"},
+                    {"id": "sales_sum", "header": "Sales"},
+                ],
+                total_rows=2,
+                version=7,
+            )
+
+    adapter = ExportAdapter()
+    service = PivotRuntimeService(adapter_getter=lambda: adapter, session_gate=SessionRequestGate())
+    response = service.process(
+        PivotViewState(
+            row_fields=["region"],
+            val_configs=[{"field": "sales", "agg": "sum"}],
+            expanded=True,
+            show_col_totals=True,
+            export_request={
+                "format": "csv",
+                "rowStart": 0,
+                "rowEnd": 2,
+                "colIds": ["hierarchy", "sales_sum"],
+            },
+        ),
+        PivotRequestContext(
+            table="sales_data",
+            trigger_prop="pivot.runtimeRequest",
+            session_id="sess-export",
+            client_instance="client-export",
+            state_epoch=4,
+            window_seq=7,
+        ),
+    )
+
+    assert response.status == "export"
+    assert adapter.handle_request_calls == 0
+    assert len(adapter.virtual_scroll_calls) == 1
+    call = adapter.virtual_scroll_calls[0]
+    assert call["start"] == 0
+    assert call["end"] == 1
+    assert call["expanded"] == [["__ALL__"]]
+    assert call["request"].grouping == ["region"]
+    assert call["request"].pagination["pageSize"] == 2
+    assert response.export_payload["format"] == "csv"
+    assert response.export_payload["rows"] == 2
+    assert "content" not in response.export_payload
+    content_path = response.export_payload["contentPath"]
+    try:
+        with open(content_path, "rb") as export_file:
+            assert export_file.read() == b"Region,Sales\r\nNorth,100\r\nSouth,80\r\n"
+        assert response.export_payload["contentLength"] == os.path.getsize(content_path)
+    finally:
+        if os.path.exists(content_path):
+            os.remove(content_path)
+
+
 def test_runtime_service_works_without_dash():
     adapter = _make_adapter()
     service = PivotRuntimeService(adapter_getter=lambda: adapter, session_gate=SessionRequestGate())
@@ -349,6 +470,12 @@ def test_runtime_service_includes_profile_when_requested():
     assert response.profile is not None
     assert response.profile["request"]["requestId"] == "req-profile-1"
     assert response.profile["request"]["viewMode"] == "pivot"
+    assert response.profile["request"]["sessionId"] == "sess-profile"
+    assert response.profile["request"]["clientInstance"] == "client-profile"
+    assert response.profile["request"]["stateEpoch"] == 1
+    assert response.profile["request"]["windowSeq"] == 2
+    assert response.profile["request"]["abortGeneration"] == 1
+    assert response.profile["request"]["lifecycleLane"] == "data"
     assert response.profile["service"]["totalMs"] is not None
     assert response.profile["adapter"]["operation"] == "virtual_scroll"
     assert response.profile["controller"]["operation"] == "hierarchy_view"

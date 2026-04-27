@@ -96,10 +96,20 @@ class HierarchicalVirtualScrollManager:
         return getattr(self.planner.con, "name", "").lower() == "duckdb"
 
     def _table_for_spec(self, spec: PivotSpec):
-        return self.planner.builder.apply_custom_dimensions(
-            self.planner.con.table(spec.table),
-            getattr(spec, "custom_dimensions", []),
-        )
+        # Cache per spec object identity to avoid rebuilding the ibis expression
+        # tree (with all CASE WHEN custom-dimension columns) for every sub-query
+        # within a single hierarchical request (up to 7+ calls per request).
+        cache = getattr(self, "_table_for_spec_cache", None)
+        if cache is None:
+            self._table_for_spec_cache = {}
+            cache = self._table_for_spec_cache
+        key = id(spec)
+        if key not in cache:
+            cache[key] = self.planner.builder.apply_custom_dimensions(
+                self.planner.con.table(spec.table),
+                getattr(spec, "custom_dimensions", []),
+            )
+        return cache[key]
 
     def _to_pyarrow(self, expr):
         if not self._uses_duckdb():

@@ -8,6 +8,7 @@ from .dash_callbacks import (
 )
 from .models import PivotRequestContext, PivotServiceResponse, PivotViewState, safe_int
 from .resilience import CircuitBreaker, CircuitBreakerOpen, PivotRequestTimeout
+from .request_coordinator import RuntimeRequestCoordinator
 from .service import PivotRuntimeService
 from .session_gate import SessionRequestGate
 
@@ -17,6 +18,7 @@ __all__ = [
     "PivotServiceResponse",
     "PivotViewState",
     "PivotRuntimeService",
+    "RuntimeRequestCoordinator",
     "CircuitBreaker",
     "CircuitBreakerOpen",
     "PivotRequestTimeout",

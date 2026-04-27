@@ -42,6 +42,7 @@ Keyword arguments:
         showDelta = None,
         currentLabel = None,
         deltaLabel = None,
+        deltaValue = None,
         title = None,
         compact = None,
         **kwargs

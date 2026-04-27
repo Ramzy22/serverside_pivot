@@ -177,6 +177,7 @@ export const normalizeCustomDimensionsValue = (value) => {
                 };
             })
             .filter(Boolean);
+        const VALID_ORDERS = ['creation', 'alpha', 'alpha_desc', 'numeric', 'numeric_desc'];
         return {
             id,
             field,
@@ -185,6 +186,7 @@ export const normalizeCustomDimensionsValue = (value) => {
                 ? entry.fallbackLabel.trim()
                 : (typeof entry.defaultLabel === 'string' && entry.defaultLabel.trim() ? entry.defaultLabel.trim() : 'Other'),
             rules,
+            order: typeof entry.order === 'string' && VALID_ORDERS.includes(entry.order) ? entry.order : 'creation',
         };
     }).filter(Boolean);
 };

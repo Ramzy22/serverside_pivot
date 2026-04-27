@@ -33,6 +33,7 @@ Keyword arguments:
     def __init__(
         self,
         options = None,
+        optionMeta = None,
         **kwargs
     ):
         self._prop_names = []

@@ -341,6 +341,11 @@ def test_chart_panel_source_grows_for_settings_instead_of_splitting_canvas():
     assert "Dock chart pane to the bottom" in chart_source
     assert "data-chart-modal-position={position}" in chart_source
     assert "const [chartCanvasPaneWidthHints, setChartCanvasPaneWidthHints] = useState({});" in component_source
+    assert "const paneWidthHints = panes.map((pane) => {" in component_source
+    assert "const hintedGroupWidth = hasPaneWidthHint" in component_source
+    assert "flex: `0 0 ${hintedGroupWidth}px`" in component_source
+    assert "width: widthHint === null ? undefined : `${widthHint}px`" in component_source
+    assert "width: widthHint === null ? undefined : '100%'" not in component_source
     assert "VALID_CHART_DOCK_POSITIONS = new Set(['left', 'right', 'top', 'bottom'])" in normalization_source
     assert "normalizeChartDockPosition" in component_source
     assert "dockPosition: normalizeChartDockPosition(source.dockPosition || source.dock_position, 'right')" in normalization_source
@@ -351,6 +356,28 @@ def test_chart_panel_source_grows_for_settings_instead_of_splitting_canvas():
     assert "chartModal && chartModalPosition === 'bottom'" in component_source
     assert "handleChartCanvasPaneWidthHintChange" in component_source
     assert "normalizedDockPosition === 'left' || normalizedDockPosition === 'right'" in component_source
+
+
+def test_chart_panel_settings_budget_survives_parent_rerenders():
+    chart_source = Path(
+        os.path.join(
+            os.getcwd(),
+            "dash_tanstack_pivot",
+            "src",
+            "lib",
+            "components",
+            "Charts",
+            "PivotCharts.js",
+        )
+    ).read_text(encoding="utf-8")
+
+    assert "const onSettingsWidthBudgetChangeRef = useRef(onSettingsWidthBudgetChange);" in chart_source
+    assert "const lastSettingsWidthBudgetRef = useRef(null);" in chart_source
+    assert "onSettingsWidthBudgetChangeRef.current = onSettingsWidthBudgetChange;" in chart_source
+    assert "emitSettingsWidthBudget(baseWidthHint + visibleSettingsWidth);" in chart_source
+    assert "onSettingsWidthBudgetChange(null);" not in chart_source
+    assert "onMouseDown={(event) => event.stopPropagation()}" in chart_source
+    assert "setConfigOpen((currentOpen) => !currentOpen);" in chart_source
 
 
 def test_dash_app_get_adapter_initializes_once_under_concurrency(monkeypatch):
@@ -1786,6 +1813,8 @@ def test_row_virtualization_source_has_coalesced_scheduler_and_pinned_cache():
     assert "getServerSideRowOverscan" in source
     assert "getUrgentJumpRowOverscan" in source
     assert "handleScroll" in source
+    assert "VIEWPORT_BLOCK_STALE_MS" in source
+    assert "VIEWPORT_DUPLICATE_REQUEST_WINDOW_MS" in source
     assert "pinnedWindowRef" in cache_source
     assert "evictOverflow" in cache_source
 
@@ -1844,6 +1873,11 @@ def test_server_side_component_source_has_fast_horizontal_dispatch_and_trimmed_r
     assert "columnRangeUrgencyToken" in viewport_hook_source
     assert "handleHorizontalScroll" in hook_source
     assert "onHorizontalScrollMetrics" in hook_source
+    assert "SERVER_SIDE_HORIZONTAL_METRICS_DEBOUNCE_MS" in hook_source
+    assert "scheduleHorizontalMetrics" in hook_source
+    assert "pendingHorizontalMetricsRef" in hook_source
+    assert "Measuring on every horizontal virtual-index change makes wide pivots" in hook_source
+    assert "lastVirtualCenterIndex, parentRef, totalLayoutWidth" not in hook_source
     assert "horizontalOverscan" in hook_source
     assert "totalCenterCols" in hook_source
     assert "columnSizing," in hook_source
@@ -1854,6 +1888,8 @@ def test_server_side_component_source_has_fast_horizontal_dispatch_and_trimmed_r
     assert "edgeSafetyCount" in viewport_hook_source
     assert "largeColumnMode" in viewport_hook_source
     assert "extremeColumnMode" in viewport_hook_source
+    assert "deferredHorizontalMetricsRef" in viewport_hook_source
+    assert "isRequestPending || isHorizontalColumnRequestPending" in viewport_hook_source
     assert "preserveRecentRightEdgeUrgentRange" in viewport_hook_source
     assert "syncPreciseVisibleColRange" in viewport_hook_source
     assert "centerHeaderRenderPlan" in body_source
@@ -1864,6 +1900,8 @@ def test_server_side_component_source_has_fast_horizontal_dispatch_and_trimmed_r
     assert "minIdx" in body_source
     assert "maxIdx" in body_source
     assert "renderVirtualColumnCell" in body_source
+    assert "immersiveMode={immersiveMode}" in source
+    assert "{!immersiveMode && (" in body_source
     assert "_getAllCellsByColumnId" not in body_source
 
 
@@ -2660,6 +2698,23 @@ def test_expansion_request_includes_anchor_block_from_overscan_boundary():
 
     assert "viewportAlignedStart" in source
     assert "Math.min(viewportAlignedStart, anchorBlockHint * expansionBlockSize)" in source
+
+
+def test_runtime_data_drop_resolves_pending_viewport_request():
+    source = Path(
+        os.path.join(
+            os.getcwd(),
+            "dash_tanstack_pivot",
+            "src",
+            "lib",
+            "components",
+            "DashTanstackPivot.react.js",
+        )
+    ).read_text(encoding="utf-8")
+
+    assert "if (!runtimePayloadCommitIsCurrent(runtimeResponse, payload, resolvedPayload)) {" in source
+    assert "resolvePendingRequest(runtimeResponse);" in source
+    assert "if (!runtimePayloadCommitIsCurrent(runtimeResponse, payload, payload)) {" in source
 
 
 def test_expansion_requests_preserve_latest_horizontal_window():

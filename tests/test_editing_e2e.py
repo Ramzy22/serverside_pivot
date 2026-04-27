@@ -1101,7 +1101,10 @@ def test_chart_settings_open_immediately_and_table_refills_after_close(chart_e2e
     settings_pane = WebDriverWait(chrome_driver, 20).until(
         EC.visibility_of_element_located((By.CSS_SELECTOR, '[data-chart-settings-pane="true"]'))
     )
-    assert settings_pane.text.find("Chart Settings") >= 0
+    assert chrome_driver.execute_script(
+        "return arguments[0].innerText.includes('Chart Settings');",
+        settings_pane,
+    )
     settings_pane_width = _element_width(chrome_driver, '[data-chart-settings-pane="true"]')
     assert settings_pane_width >= 300
     assert len(chrome_driver.find_elements(By.CSS_SELECTOR, '[data-chart-settings-pane="true"]')) == 1
@@ -1140,6 +1143,46 @@ def test_chart_settings_open_immediately_and_table_refills_after_close(chart_e2e
         else False
     )
     assert restored_table_width > initial_table_width
+
+
+def test_chart_workspace_resize_updates_fixed_width_docked_pane(chart_e2e_server, chrome_driver):
+    chrome_driver.get(chart_e2e_server)
+
+    WebDriverWait(chrome_driver, 20).until(
+        EC.presence_of_element_located((By.CSS_SELECTOR, '[data-docked-chart-pane]'))
+    )
+    WebDriverWait(chrome_driver, 20).until(
+        EC.element_to_be_clickable((By.CSS_SELECTOR, '[data-chart-settings-toggle="true"]'))
+    ).click()
+
+    WebDriverWait(chrome_driver, 20).until(
+        EC.visibility_of_element_located((By.CSS_SELECTOR, '[data-chart-settings-pane="true"]'))
+    )
+    time.sleep(0.8)
+
+    expanded_group_width = _element_width(chrome_driver, '[data-docked-chart-group]')
+    expanded_chart_pane_width = _element_width(chrome_driver, '[data-docked-chart-pane]')
+    assert expanded_group_width is not None
+    assert expanded_chart_pane_width is not None
+
+    resize_handle = WebDriverWait(chrome_driver, 20).until(
+        EC.element_to_be_clickable((By.CSS_SELECTOR, '[title="Resize workspace panes"]'))
+    )
+    ActionChains(chrome_driver) \
+        .move_to_element(resize_handle) \
+        .click_and_hold(resize_handle) \
+        .move_by_offset(-180, 0) \
+        .pause(0.15) \
+        .release() \
+        .perform()
+
+    resized_group_width = WebDriverWait(chrome_driver, 20).until(
+        lambda driver: _element_width(driver, '[data-docked-chart-group]')
+        if (_element_width(driver, '[data-docked-chart-group]') or 0) > expanded_group_width + 100
+        else False
+    )
+    resized_chart_pane_width = _element_width(chrome_driver, '[data-docked-chart-pane]')
+    assert resized_chart_pane_width >= resized_group_width - 16
 
 
 def test_chart_sparkline_mode_renders_multi_series_board(sparkline_chart_e2e_server, chrome_driver):

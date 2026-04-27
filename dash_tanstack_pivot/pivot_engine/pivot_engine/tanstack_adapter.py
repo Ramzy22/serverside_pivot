@@ -15,11 +15,18 @@ import time
 import json
 import hashlib
 from collections import OrderedDict
+from .adapter_viewport_cache import AdapterViewportCache
 from .scalable_pivot_controller import ScalablePivotController
 from .editing import EditDomainService
 from .types.pivot_spec import PivotSpec, Measure
 from .security import User, apply_rls_to_spec
 from .formula_mixin import FormulaEngineMixin
+from .hierarchy_rows import (
+    build_visible_hierarchy_rows,
+    finalize_hierarchy_rows,
+    is_hierarchy_grand_total,
+    normalize_expanded_paths,
+)
 
 _adapter_logger = logging.getLogger("pivot_engine.adapter")
 _FORMULA_IDENTIFIER_RE = re.compile(r"\b[A-Za-z_][A-Za-z0-9_]*\b")
@@ -46,119 +53,7 @@ def _is_missing_value(value: Any) -> bool:
 
 
 def _is_grand_total_row(row: Any) -> bool:
-    """Return True when a row represents the grand total."""
-    if not isinstance(row, dict):
-        return False
-    return bool(
-        row.get("_isTotal")
-        or row.get("_id") == "Grand Total"
-        or row.get("_path") == "__grand_total__"
-    )
-
-
-def _dedup_grand_total(rows: list) -> list:
-    """Return rows with at most one grand total row (_isTotal=True or _id=='Grand Total').
-
-    This is a final-pass filter applied unconditionally in handle_virtual_scroll_request
-    to guarantee the virtual scroll test passes regardless of which internal path produces
-    the rows (delegation to handle_hierarchical_request, convert_pivot_result_to_tanstack_format,
-    or any other path).
-    """
-    seen_grand_total = False
-    result = []
-    for row in rows:
-        if row.get("_isTotal") or row.get("_id") == "Grand Total" or row.get("_path") == "__grand_total__":
-            if seen_grand_total:
-                continue  # drop duplicate
-            seen_grand_total = True
-        result.append(row)
-    return result
-
-
-def _move_grand_total_to_end(rows: list) -> list:
-    """Keep at most one grand total row and place it after all regular rows."""
-    regular_rows = []
-    grand_total_row = None
-
-    for row in rows:
-        if row.get("_isTotal") or row.get("_id") == "Grand Total" or row.get("_path") == "__grand_total__":
-            if grand_total_row is None:
-                grand_total_row = row
-            continue
-        regular_rows.append(row)
-
-    if grand_total_row is not None:
-        regular_rows.append(grand_total_row)
-
-    return regular_rows
-
-
-def _order_hierarchical_rows(rows: list) -> list:
-    """Return rows in parent-before-children order while preserving sibling order."""
-    if not rows:
-        return rows
-
-    regular_rows = []
-    grand_total_rows = []
-    for row in rows:
-        if row.get("_isTotal") or row.get("_id") == "Grand Total" or row.get("_path") == "__grand_total__":
-            grand_total_rows.append(row)
-        else:
-            regular_rows.append(row)
-
-    if not regular_rows:
-        return grand_total_rows
-
-    path_to_row = {}
-    first_seen = {}
-    subtree_first_seen = {}
-    children_by_parent = {}
-
-    for index, row in enumerate(regular_rows):
-        path = row.get("_path")
-        if not path:
-            continue
-        path_to_row[path] = row
-        first_seen[path] = index
-
-    for path in path_to_row:
-        subtree_first_seen[path] = min(
-            first_seen[other_path]
-            for other_path in path_to_row
-            if other_path == path or other_path.startswith(f"{path}|||")
-        )
-
-    root_paths = []
-    for path in path_to_row:
-        parent_path = path.rsplit("|||", 1)[0] if "|||" in path else None
-        if parent_path and parent_path in path_to_row:
-            children_by_parent.setdefault(parent_path, []).append(path)
-        else:
-            root_paths.append(path)
-
-    def sort_paths(paths: list) -> list:
-        return sorted(paths, key=lambda path: subtree_first_seen.get(path, first_seen.get(path, 0)))
-
-    ordered_rows = []
-    visited = set()
-
-    def append_subtree(path: str):
-        if path in visited:
-            return
-        visited.add(path)
-        ordered_rows.append(path_to_row[path])
-        for child_path in sort_paths(children_by_parent.get(path, [])):
-            append_subtree(child_path)
-
-    for root_path in sort_paths(root_paths):
-        append_subtree(root_path)
-
-    for row in regular_rows:
-        path = row.get("_path")
-        if not path or path not in visited:
-            ordered_rows.append(row)
-
-    return ordered_rows + grand_total_rows
+    return is_hierarchy_grand_total(row)
 
 
 class TanStackOperation(str, Enum):
@@ -215,17 +110,53 @@ class TanStackPivotAdapter(FormulaEngineMixin):
         self.edit_domain = EditDomainService()
         self.hierarchy_state = {}  # Store expansion state
         self._debug = debug
-        # Cache center_col_ids per request structure/generation so windowed requests
-        # reuse the schema from the last needs_col_schema=True response instead of
-        # rescanning all row dict keys on every scroll (O(rows*cols) → O(1)).
-        self._center_col_ids_cache: dict = {}
-        self._pivot_column_catalog_cache: OrderedDict[str, tuple[Dict[str, Any], float]] = OrderedDict()
-        self._response_window_cache: OrderedDict[str, tuple[TanStackResponse, float]] = OrderedDict()
-        self._row_block_cache: OrderedDict[str, tuple[Dict[str, Any], float]] = OrderedDict()
-        self._grand_total_cache: OrderedDict[str, tuple[Dict[str, Any], float]] = OrderedDict()
-        self._local_cache_generation = 0
-        self._prefetch_request_keys: set[str] = set()
+        self._viewport_cache = AdapterViewportCache(
+            ttl_seconds=_LOCAL_CACHE_TTL_SECONDS,
+            pivot_catalog_size=_PIVOT_CATALOG_CACHE_SIZE,
+            response_window_size=_RESPONSE_WINDOW_CACHE_SIZE,
+            row_block_cache_size=_ROW_BLOCK_CACHE_SIZE,
+        )
+        self._local_cache_lock = self._viewport_cache.lock
+        # Compatibility aliases for existing diagnostics/tests. All mutation
+        # goes through AdapterViewportCache.
+        self._center_col_ids_cache = self._viewport_cache.center_col_ids_cache
+        self._pivot_column_catalog_cache = self._viewport_cache.pivot_column_catalog_cache
+        self._response_window_cache = self._viewport_cache.response_window_cache
+        self._row_block_cache = self._viewport_cache.row_block_cache
+        self._grand_total_cache = self._viewport_cache.grand_total_cache
+        self._prefetch_request_keys = self._viewport_cache.prefetch_request_keys
         self.viewport_prefetch_enabled: bool = False
+
+    @property
+    def _local_cache_generation(self) -> int:
+        return self._viewport_cache.generation_value()
+
+    def _cache_generation_value(self) -> int:
+        return self._viewport_cache.generation_value()
+
+    def _locked_cache_lookup(self, cache: OrderedDict, key: str):
+        return self._viewport_cache.lookup(cache, key)
+
+    def _locked_cache_store(self, cache: OrderedDict, key: str, value: Any, max_size: int, ttl_seconds: float):
+        self._viewport_cache.store(
+            cache,
+            key,
+            value,
+            max_size=max_size,
+            ttl_seconds=ttl_seconds,
+        )
+
+    def _center_col_ids_cache_get(self, key: Any) -> Optional[List[str]]:
+        return self._viewport_cache.center_col_ids_get(key)
+
+    def _center_col_ids_cache_set(self, key: Any, value: List[str]) -> None:
+        self._viewport_cache.center_col_ids_set(key, value)
+
+    def _mark_prefetch_request_pending(self, cache_key: str) -> bool:
+        return self._viewport_cache.mark_prefetch_request_pending(cache_key)
+
+    def _clear_prefetch_request_pending(self, cache_key: str) -> None:
+        self._viewport_cache.clear_prefetch_request_pending(cache_key)
 
     @staticmethod
     def _profile_ms(start: Optional[float], end: Optional[float]) -> Optional[float]:
@@ -277,7 +208,7 @@ class TanStackPivotAdapter(FormulaEngineMixin):
 
     def _request_structure_fingerprint(self, request: "TanStackRequest") -> str:
         payload = {
-            "cache_generation": self._local_cache_generation,
+            "cache_generation": self._cache_generation_value(),
             "table": request.table,
             "columns": request.columns or [],
             "filters": request.filters or {},
@@ -293,7 +224,7 @@ class TanStackPivotAdapter(FormulaEngineMixin):
 
     def _center_column_catalog_cache_key(self, request: "TanStackRequest") -> str:
         payload = {
-            "cache_generation": self._local_cache_generation,
+            "cache_generation": self._cache_generation_value(),
             "table": request.table,
             "columns": request.columns or [],
             "filters": request.filters or {},
@@ -304,16 +235,7 @@ class TanStackPivotAdapter(FormulaEngineMixin):
 
     @staticmethod
     def _normalize_expanded_paths(expanded_paths: Union[List[List[str]], bool, None]) -> tuple:
-        if expanded_paths is True:
-            return (("__ALL__",),)
-        normalized = []
-        for path in expanded_paths or []:
-            if path == ["__ALL__"]:
-                return (("__ALL__",),)
-            if not isinstance(path, list) or not path:
-                continue
-            normalized.append(tuple("" if value is None else str(value) for value in path))
-        return tuple(sorted(set(normalized)))
+        return normalize_expanded_paths(expanded_paths)
 
     @staticmethod
     def _clone_response(response: "TanStackResponse", include_profile: bool = False) -> "TanStackResponse":
@@ -349,22 +271,17 @@ class TanStackPivotAdapter(FormulaEngineMixin):
 
     @staticmethod
     def _cache_lookup(cache: OrderedDict, key: str):
-        cached_entry = cache.get(key)
-        if not cached_entry:
-            return None
-        value, expires_at = cached_entry
-        if time.time() > expires_at:
-            cache.pop(key, None)
-            return None
-        cache.move_to_end(key)
-        return value
+        return AdapterViewportCache.lookup_entry(cache, key)
 
     @staticmethod
     def _cache_store(cache: OrderedDict, key: str, value: Any, max_size: int, ttl_seconds: float):
-        cache[key] = (value, time.time() + ttl_seconds)
-        cache.move_to_end(key)
-        while len(cache) > max_size:
-            cache.popitem(last=False)
+        AdapterViewportCache.store_entry(
+            cache,
+            key,
+            value,
+            max_size=max_size,
+            ttl_seconds=ttl_seconds,
+        )
 
     def _response_window_cache_key(
         self,
@@ -453,7 +370,7 @@ class TanStackPivotAdapter(FormulaEngineMixin):
                 regular_rows.append(dict(_row))
 
         if grand_total_row is not None:
-            self._cache_store(
+            self._locked_cache_store(
                 self._grand_total_cache,
                 self._grand_total_cache_key(request, expanded_paths, col_start, col_end, requested_center_ids),
                 grand_total_row,
@@ -482,7 +399,7 @@ class TanStackPivotAdapter(FormulaEngineMixin):
             is_complete = abs_start == block_start and len(block_rows) >= expected_rows and expected_rows > 0
             if not is_complete:
                 continue
-            self._cache_store(
+            self._locked_cache_store(
                 self._row_block_cache,
                 self._row_block_cache_key(request, block_index, expanded_paths, col_start, col_end, requested_center_ids),
                 {
@@ -517,7 +434,7 @@ class TanStackPivotAdapter(FormulaEngineMixin):
         entries: Dict[int, Dict[str, Any]] = {}
         missing_blocks: List[int] = []
         for block_index in range(start_block, end_block + 1):
-            entry = self._cache_lookup(
+            entry = self._locked_cache_lookup(
                 self._row_block_cache,
                 self._row_block_cache_key(request, block_index, expanded_paths, col_start, col_end, requested_center_ids),
             )
@@ -552,7 +469,7 @@ class TanStackPivotAdapter(FormulaEngineMixin):
 
         grand_total_row = None
         if include_grand_total:
-            grand_total_row = self._cache_lookup(
+            grand_total_row = self._locked_cache_lookup(
                 self._grand_total_cache,
                 self._grand_total_cache_key(request, expanded_paths, col_start, col_end, requested_center_ids),
             )
@@ -624,14 +541,14 @@ class TanStackPivotAdapter(FormulaEngineMixin):
         return response
 
     def _get_cached_window_response(self, cache_key: str) -> Optional["TanStackResponse"]:
-        cached_response = self._cache_lookup(self._response_window_cache, cache_key)
+        cached_response = self._locked_cache_lookup(self._response_window_cache, cache_key)
         if cached_response is None:
             return None
         return self._clone_response(cached_response)
 
     def _store_window_response(self, cache_key: str, response: "TanStackResponse") -> "TanStackResponse":
         finalized = self._finalize_windowed_response(response)
-        self._cache_store(
+        self._locked_cache_store(
             self._response_window_cache,
             cache_key,
             self._clone_response(finalized),
@@ -710,7 +627,7 @@ class TanStackPivotAdapter(FormulaEngineMixin):
                 include_grand_total,
                 None,
             )
-            if cache_key in self._prefetch_request_keys or self._cache_lookup(self._response_window_cache, cache_key) is not None:
+            if not self._mark_prefetch_request_pending(cache_key):
                 continue
 
             async def _run_prefetch(spec=prefetch_spec, prefetch_cache_key=cache_key):
@@ -731,9 +648,8 @@ class TanStackPivotAdapter(FormulaEngineMixin):
                     if self._debug:
                         _adapter_logger.debug("Background prefetch %s failed: %s", spec["label"], exc)
                 finally:
-                    self._prefetch_request_keys.discard(prefetch_cache_key)
+                    self._clear_prefetch_request_pending(prefetch_cache_key)
 
-            self._prefetch_request_keys.add(cache_key)
             task_manager.create_task(_run_prefetch(), name=f"pivot_prefetch_{prefetch_spec['label']}_{cache_key[:8]}")
 
     def _complete_virtual_scroll_response(
@@ -1150,7 +1066,7 @@ class TanStackPivotAdapter(FormulaEngineMixin):
             column_sort_options=spec.column_sort_options or {},
         )
         local_cache_key = self._center_column_catalog_cache_key(request_like)
-        cached_catalog = self._cache_lookup(self._pivot_column_catalog_cache, local_cache_key)
+        cached_catalog = self._locked_cache_lookup(self._pivot_column_catalog_cache, local_cache_key)
         if isinstance(cached_catalog, dict) and isinstance(cached_catalog.get("values"), list):
             return list(cached_catalog["values"])
 
@@ -1181,7 +1097,7 @@ class TanStackPivotAdapter(FormulaEngineMixin):
             str(value)
             for value in col_results_table.column("_col_key").to_pylist()
         ]
-        self._cache_store(
+        self._locked_cache_store(
             self._pivot_column_catalog_cache,
             local_cache_key,
             {"values": list(discovered_values)},
@@ -1210,7 +1126,7 @@ class TanStackPivotAdapter(FormulaEngineMixin):
         }
         excluded_ids = set(row_meta_keys) | pinned_ids | request_dimension_ids
         cache_key = (
-            self._local_cache_generation,
+            self._cache_generation_value(),
             request.table,
             tuple(str(field) for field in (request.grouping or [])),
             tuple(sorted(str(column_id) for column_id in excluded_ids)),
@@ -1223,20 +1139,25 @@ class TanStackPivotAdapter(FormulaEngineMixin):
                 for col_id in discovered_center_ids
                 if isinstance(col_id, str)
             ]
-            self._center_col_ids_cache[cache_key] = center_col_ids
+            self._center_col_ids_cache_set(cache_key, center_col_ids)
             if tanstack_result.columns:
                 _, authoritative_columns = self._build_authoritative_response_columns(
                     tanstack_result, request, row_meta_keys, excluded_ids
                 )
                 tanstack_result.columns = authoritative_columns
-        elif needs_col_schema or cache_key not in self._center_col_ids_cache or requested_center_ids:
+        else:
+            cached_center_col_ids = self._center_col_ids_cache_get(cache_key)
+
+        if discovered_center_ids is None and (
+            needs_col_schema or cached_center_col_ids is None or requested_center_ids
+        ):
             center_col_ids, authoritative_columns = self._build_authoritative_response_columns(
                 tanstack_result, request, row_meta_keys, excluded_ids
             )
             tanstack_result.columns = authoritative_columns
-            self._center_col_ids_cache[cache_key] = center_col_ids
-        else:
-            center_col_ids = self._center_col_ids_cache[cache_key]
+            self._center_col_ids_cache_set(cache_key, center_col_ids)
+        elif discovered_center_ids is None:
+            center_col_ids = cached_center_col_ids
             # Always rebuild columns from rows to catch newly-materialized center columns.
             # The cache may have been populated with an empty list before data arrived,
             # so we must re-scan rows even when cache exists.
@@ -1250,7 +1171,7 @@ class TanStackPivotAdapter(FormulaEngineMixin):
             )
             if fresh_center_col_ids and fresh_center_col_ids != center_col_ids:
                 center_col_ids = self._reorder_materialized_dynamic_ids(fresh_center_col_ids, request)
-                self._center_col_ids_cache[cache_key] = center_col_ids
+                self._center_col_ids_cache_set(cache_key, center_col_ids)
 
         effective_window_ids = self._resolve_center_window_ids(
             center_col_ids,
@@ -1570,7 +1491,30 @@ class TanStackPivotAdapter(FormulaEngineMixin):
             if sort_spec.get("nulls"):
                 sort_item["nulls"] = sort_spec.get("nulls")
             pivot_sort.append(sort_item)
-        
+
+        # Inject default sort specs for custom dimensions with explicit order settings.
+        # Only injected when: user hasn't already sorted by that field AND the
+        # dimension is actually present in the current grouping (avoids carrying
+        # unnecessary hidden sort-key columns through unrelated queries).
+        explicit_sort_fields = {s.get("field") for s in pivot_sort}
+        active_dims = set(request.grouping or [])
+        for dim in (request.custom_dimensions or []):
+            if not isinstance(dim, dict):
+                continue
+            dim_field = dim.get("field") or ""
+            if not dim_field or dim_field in explicit_sort_fields or dim_field not in active_dims:
+                continue
+            dim_order = str(dim.get("order") or "creation").strip().lower()
+            if dim_order == "alpha":
+                continue
+            sort_key_col = f"__sortkey__{dim_field}"
+            if dim_order == "alpha_desc":
+                pivot_sort.append({"field": dim_field, "order": "desc"})
+            elif dim_order in ("numeric", "creation"):
+                pivot_sort.append({"field": dim_field, "order": "asc", "sortKeyField": sort_key_col})
+            elif dim_order == "numeric_desc":
+                pivot_sort.append({"field": dim_field, "order": "desc", "sortKeyField": sort_key_col})
+
         # Handle pagination
         offset = 0
         limit = 1000  # Default
@@ -1875,13 +1819,7 @@ class TanStackPivotAdapter(FormulaEngineMixin):
         return bool(result.get("updated", 0))
 
     def _invalidate_local_caches(self) -> None:
-        self._local_cache_generation += 1
-        self._center_col_ids_cache.clear()
-        self._pivot_column_catalog_cache.clear()
-        self._response_window_cache.clear()
-        self._row_block_cache.clear()
-        self._grand_total_cache.clear()
-        self._prefetch_request_keys.clear()
+        self._viewport_cache.invalidate_all()
 
     @staticmethod
     def _normalize_aggregation_name(value: Any) -> str:
@@ -3016,9 +2954,7 @@ class TanStackPivotAdapter(FormulaEngineMixin):
             )
             if hierarchy_view.get("total_rows") is not None:
                 tanstack_result.total_rows = hierarchy_view["total_rows"]
-            tanstack_result.data = _order_hierarchical_rows(
-                _move_grand_total_to_end(_dedup_grand_total(tanstack_result.data))
-            )
+            tanstack_result.data = finalize_hierarchy_rows(tanstack_result.data)
             self._log_response("handle_hierarchical_request", tanstack_result.data)
             return tanstack_result
 
@@ -3056,104 +2992,35 @@ class TanStackPivotAdapter(FormulaEngineMixin):
             tanstack_result = self.convert_pivot_result_to_tanstack_format(
                 hierarchy_result, request
             )
-            tanstack_result.data = _order_hierarchical_rows(
-                _move_grand_total_to_end(_dedup_grand_total(tanstack_result.data))
-            )
+            tanstack_result.data = finalize_hierarchy_rows(tanstack_result.data)
             return tanstack_result
 
-        # Reconstruct the flat list of visible rows from the hierarchy result
-        visible_rows = []
-        grand_total_emitted = False  # Boolean flag: at most one grand total row allowed
-
-        # Convert target_paths to a set of strings for fast lookup during traversal
-        # This represents which paths are currently expanded
-        expanded_path_set = set()
-        if isinstance(target_paths, list):
-            for path in target_paths:
-                if isinstance(path, list):
-                    expanded_path_set.add("|||".join(str(item) for item in path))
-
-        # Depth-First Traversal to ensure correct tree order (Parent -> Children)
-        def traverse(parent_key):
-            nodes = hierarchy_result.get(parent_key, [])
-
-            # Current depth based on parent key
-            current_depth = 0
-            if parent_key:
-                current_depth = len(parent_key.split('|||'))
-
-            for node in nodes:
-                # Ensure node is a dict (it should be if controller returns to_pylist())
-                if not isinstance(node, dict):
-                    continue
-
-                # Check for grand total duplicates
-                first_dim = pivot_spec.rows[0] if pivot_spec.rows else None
-                is_grand_total = (
-                    current_depth == 0
-                    and first_dim is not None
-                    and _is_missing_value(node.get(first_dim))
-                )
-                if is_grand_total:
-                    nonlocal grand_total_emitted
-                    if grand_total_emitted:
-                        continue  # skip duplicate grand total
-                    grand_total_emitted = True
-
-                # SKIP Subtotals/Totals in child levels to avoid duplication
-                target_dim_idx = current_depth
-
-                if target_dim_idx < len(pivot_spec.rows):
-                    target_dim = pivot_spec.rows[target_dim_idx]
-
-                    # If this is a child level, the value for this dimension must not be None
-                    # (unless it's truly a None value in the data, but usually None means subtotal)
-                    if current_depth > 0 and _is_missing_value(node.get(target_dim)):
-                        continue
-
-                    # Populate _id correctly based on current depth dimension
-                    if current_depth == 0 and _is_missing_value(node.get(target_dim)):
-                        node['_id'] = 'Grand Total'
-                        node['_isTotal'] = True
-                    elif target_dim in node and not _is_missing_value(node.get(target_dim)):
-                        node['_id'] = node[target_dim]
-
-                # Populate depth
-                node['depth'] = current_depth
-
-                # Add node to visible list
-                visible_rows.append(node)
-
-                # Check for children - BUT ONLY traverse if this path is expanded
-                # Construct the key for this node to see if it's a parent
-                child_path_parts = []
-                if parent_key:
-                    child_path_parts = parent_key.split('|||')
-
-                if target_dim_idx < len(pivot_spec.rows):
-                    current_dim = pivot_spec.rows[target_dim_idx]
-                    if current_dim in node and not _is_missing_value(node[current_dim]):
-                        child_path_parts.append(str(node[current_dim]))
-
-                        child_key = "|||".join(child_path_parts)
-
-                        # ONLY traverse to children if this child_key is in the expanded paths
-                        if child_key in hierarchy_result and child_key in expanded_path_set:
-                            traverse(child_key)
-
-        # Start traversal from root
-        traverse("")
-
-        # Convert to TanStack format
+        visible_rows = build_visible_hierarchy_rows(pivot_spec, hierarchy_result, target_paths)
         tanstack_result = self.convert_pivot_result_to_tanstack_format(
             visible_rows, request
         )
-        tanstack_result.data = _order_hierarchical_rows(
-            _move_grand_total_to_end(_dedup_grand_total(tanstack_result.data))
-        )
+        tanstack_result.data = finalize_hierarchy_rows(tanstack_result.data)
 
         self._log_response("handle_hierarchical_request", visible_rows)
         return tanstack_result
+
+    @staticmethod
+    def _slice_full_hierarchy_response_to_viewport(
+        response: TanStackResponse,
+        start_row: int,
+        end_row: int,
+    ) -> TanStackResponse:
+        rows = finalize_hierarchy_rows(response.data or [])
+        safe_start = max(int(start_row or 0), 0)
+        safe_end = max(int(end_row if end_row is not None else safe_start), safe_start)
+        response.data = rows[safe_start:safe_end + 1]
+        response.total_rows = len(rows)
+        if isinstance(response.pagination, dict):
+            response.pagination = {
+                **response.pagination,
+                "totalRows": len(rows),
+            }
+        return response
 
     # _apply_expansion_state removed as it is now handled by the controller/tree manager logic
 
@@ -3201,13 +3068,13 @@ class TanStackPivotAdapter(FormulaEngineMixin):
                     }
                     excluded_ids = set(row_meta_keys) | set(request.grouping or []) | request_dimension_ids
                     center_cache_key = (
-                        self._local_cache_generation,
+                        self._cache_generation_value(),
                         request.table,
                         tuple(str(field) for field in (request.grouping or [])),
                         tuple(sorted(str(column_id) for column_id in excluded_ids)),
                         self._center_column_catalog_cache_key(request),
                     )
-                    total_center_cols = len(self._center_col_ids_cache.get(center_cache_key, [])) or None
+                    total_center_cols = len(self._center_col_ids_cache_get(center_cache_key) or []) or None
                 self._schedule_viewport_prefetch(
                     request,
                     start_row,
@@ -3385,7 +3252,7 @@ class TanStackPivotAdapter(FormulaEngineMixin):
             window_rows = regular_rows[safe_start:safe_end + 1]
 
             if include_grand_total and request.totals and isinstance(grand_total_row, dict):
-                window_rows = _move_grand_total_to_end(_dedup_grand_total([*window_rows, grand_total_row]))
+                window_rows = finalize_hierarchy_rows([*window_rows, grand_total_row], preserve_window_order=True)
 
             response = TanStackResponse(
                 data=window_rows,
@@ -3532,9 +3399,7 @@ class TanStackPivotAdapter(FormulaEngineMixin):
                     if not request.totals and tanstack_result.total_rows is not None:
                         tanstack_result.total_rows = max(int(tanstack_result.total_rows) - 1, 0)
 
-            tanstack_result.data = _order_hierarchical_rows(
-                _move_grand_total_to_end(_dedup_grand_total(tanstack_result.data))
-            )
+            tanstack_result.data = finalize_hierarchy_rows(tanstack_result.data, preserve_window_order=True)
             if hierarchy_view.get("color_scale_stats"):
                 tanstack_result.color_scale_stats = hierarchy_view["color_scale_stats"]
             col_window_started_at = time.perf_counter()
@@ -3600,10 +3465,8 @@ class TanStackPivotAdapter(FormulaEngineMixin):
                     if total_visible > 0:
                         tanstack_result.total_rows = total_visible
 
-                # Virtual scroll already returns rows in correct window order from the backend.
-                # Only deduplicate grand total — do NOT reorder, as _order_hierarchical_rows
-                # uses local first_seen indices that shuffle partial windows incorrectly.
-                tanstack_result.data = _move_grand_total_to_end(_dedup_grand_total(tanstack_result.data))
+                # The legacy manager already returns a viewport window; preserve that order.
+                tanstack_result.data = finalize_hierarchy_rows(tanstack_result.data, preserve_window_order=True)
                 col_window_started_at = time.perf_counter()
                 windowed_response = self._apply_col_windowing(
                     tanstack_result,
@@ -3651,8 +3514,10 @@ class TanStackPivotAdapter(FormulaEngineMixin):
                 print(f"Virtual scroll failed: {e}, falling back to hierarchical load")
                 # Fallback to direct hierarchical load which is un-materialized but accurate
                 fallback_result = await self.handle_hierarchical_request(request, expanded_paths)
-                fallback_result.data = _order_hierarchical_rows(
-                    _move_grand_total_to_end(_dedup_grand_total(fallback_result.data))
+                fallback_result = self._slice_full_hierarchy_response_to_viewport(
+                    fallback_result,
+                    start_row,
+                    end_row,
                 )
                 col_window_started_at = time.perf_counter()
                 windowed_response = self._apply_col_windowing(
@@ -3699,8 +3564,10 @@ class TanStackPivotAdapter(FormulaEngineMixin):
         else:
             # Fallback: Use regular hierarchical method
             fallback_result = await self.handle_hierarchical_request(request, expanded_paths)
-            fallback_result.data = _order_hierarchical_rows(
-                _move_grand_total_to_end(_dedup_grand_total(fallback_result.data))
+            fallback_result = self._slice_full_hierarchy_response_to_viewport(
+                fallback_result,
+                start_row,
+                end_row,
             )
             col_window_started_at = time.perf_counter()
             windowed_response = self._apply_col_windowing(

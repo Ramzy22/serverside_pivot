@@ -115,6 +115,7 @@ export const PivotTableBody = React.memo(function PivotTableBody({
     statusModel,
     statusActions,
     treeSuppressGroupRowsSticky,
+    immersiveMode,
     editValueDisplayMode,
     detailMode,
     detailState,
@@ -1025,23 +1026,25 @@ export const PivotTableBody = React.memo(function PivotTableBody({
                     {renderPinnedRowGroup(effectiveBottomRows, 'bottom')}
                  </div>
             </div>
-            <StatusBar
-                statusModel={statusModel || {
-                    selection: { selectedCells },
-                    data: {
-                        rowCount,
-                        visibleRowsCount: rows.length,
-                        totalCenterColumns,
-                        columnAdvisory,
-                    },
-                    runtime: {
-                        loading: isRequestPending,
-                    },
-                }}
-                statusActions={statusActions}
-                theme={theme}
-                numberGroupSeparator={numberGroupSeparator}
-            />
+            {!immersiveMode && (
+                <StatusBar
+                    statusModel={statusModel || {
+                        selection: { selectedCells },
+                        data: {
+                            rowCount,
+                            visibleRowsCount: rows.length,
+                            totalCenterColumns,
+                            columnAdvisory,
+                        },
+                        runtime: {
+                            loading: isRequestPending,
+                        },
+                    }}
+                    statusActions={statusActions}
+                    theme={theme}
+                    numberGroupSeparator={numberGroupSeparator}
+                />
+            )}
         </div>
     );
 });

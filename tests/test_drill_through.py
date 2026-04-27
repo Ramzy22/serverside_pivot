@@ -20,6 +20,15 @@ sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..',
 import pytest
 
 
+DRILL_TABLE = "nasdaq_trader_demo_history"
+ROOT_FIELD = "desk"
+ROOT_VALUE = "Consumer Tactical"
+CHILD_FIELD = "strategy"
+CHILD_VALUE = "Event Driven"
+SORT_FIELD = "day_pnl"
+TEXT_FILTER = "TSLA"
+
+
 # ---------------------------------------------------------------------------
 # Fixture: Flask test client (module-scoped so we pay data-gen cost once)
 # ---------------------------------------------------------------------------
@@ -50,12 +59,14 @@ def test_endpoint_returns_rows(client):
     FAILS (404) until the Flask route is registered in Plan 02.
     """
     resp = client.get(
-        '/api/drill-through'
-        '?table=sales_data'
-        '&row_path=North'
-        '&row_fields=region'
-        '&page=0'
-        '&page_size=10'
+        "/api/drill-through",
+        query_string={
+            "table": DRILL_TABLE,
+            "row_path": ROOT_VALUE,
+            "row_fields": ROOT_FIELD,
+            "page": 0,
+            "page_size": 10,
+        },
     )
     assert resp.status_code == 200, (
         f"Expected 200, got {resp.status_code}. "
@@ -80,20 +91,24 @@ def test_pagination(client):
     """
     page_size = 5
     resp0 = client.get(
-        f'/api/drill-through'
-        f'?table=sales_data'
-        f'&row_path=North'
-        f'&row_fields=region'
-        f'&page=0'
-        f'&page_size={page_size}'
+        "/api/drill-through",
+        query_string={
+            "table": DRILL_TABLE,
+            "row_path": ROOT_VALUE,
+            "row_fields": ROOT_FIELD,
+            "page": 0,
+            "page_size": page_size,
+        },
     )
     resp1 = client.get(
-        f'/api/drill-through'
-        f'?table=sales_data'
-        f'&row_path=North'
-        f'&row_fields=region'
-        f'&page=1'
-        f'&page_size={page_size}'
+        "/api/drill-through",
+        query_string={
+            "table": DRILL_TABLE,
+            "row_path": ROOT_VALUE,
+            "row_fields": ROOT_FIELD,
+            "page": 1,
+            "page_size": page_size,
+        },
     )
     assert resp0.status_code == 200, f"page=0 got {resp0.status_code}"
     assert resp1.status_code == 200, f"page=1 got {resp1.status_code}"
@@ -124,41 +139,45 @@ def test_sort_and_filter(client):
     """
     # Sort check: just verify the endpoint accepts the params and returns rows
     resp_sort = client.get(
-        '/api/drill-through'
-        '?table=sales_data'
-        '&row_path=North'
-        '&row_fields=region'
-        '&sort_col=sales'
-        '&sort_dir=desc'
-        '&page=0'
-        '&page_size=10'
+        "/api/drill-through",
+        query_string={
+            "table": DRILL_TABLE,
+            "row_path": ROOT_VALUE,
+            "row_fields": ROOT_FIELD,
+            "sort_col": SORT_FIELD,
+            "sort_dir": "desc",
+            "page": 0,
+            "page_size": 10,
+        },
     )
     assert resp_sort.status_code == 200, f"sort request got {resp_sort.status_code}"
     sort_rows = resp_sort.get_json()['rows']
     assert isinstance(sort_rows, list), "'rows' must be a list"
 
-    # Filter check: filter=USA should return rows containing "USA"
+    # Filter check: filter=TSLA should return rows containing "TSLA"
     resp_filter = client.get(
-        '/api/drill-through'
-        '?table=sales_data'
-        '&row_path='
-        '&row_fields=region'
-        '&filter=USA'
-        '&page=0'
-        '&page_size=10'
+        "/api/drill-through",
+        query_string={
+            "table": DRILL_TABLE,
+            "row_path": "",
+            "row_fields": ROOT_FIELD,
+            "filter": TEXT_FILTER,
+            "page": 0,
+            "page_size": 10,
+        },
     )
     assert resp_filter.status_code == 200, f"filter request got {resp_filter.status_code}"
     filter_rows = resp_filter.get_json()['rows']
     assert isinstance(filter_rows, list), "'rows' must be a list"
-    # At least one row must contain "USA" in any field value
+    # At least one row must contain the filter text in any field value
     if filter_rows:
-        has_usa = any(
-            'USA' in str(v)
+        has_match = any(
+            TEXT_FILTER in str(v)
             for row in filter_rows
             for v in row.values()
         )
-        assert has_usa, (
-            f"filter=USA was passed but none of the returned rows contain 'USA'. "
+        assert has_match, (
+            f"filter={TEXT_FILTER} was passed but none of the returned rows contain it. "
             f"First row: {filter_rows[0]}"
         )
 
@@ -168,28 +187,29 @@ def test_sort_and_filter(client):
 # ---------------------------------------------------------------------------
 
 def test_coordinate_filters(client):
-    """Passing row_path=North|||USA with row_fields=region,country returns only rows
-    where region='North' AND country='USA'.
+    """Passing row_path with two field values returns only matching rows.
 
     FAILS (404) until the Flask route is registered in Plan 02.
     """
     resp = client.get(
-        '/api/drill-through'
-        '?table=sales_data'
-        '&row_path=North|||USA'
-        '&row_fields=region,country'
-        '&page=0'
-        '&page_size=20'
+        "/api/drill-through",
+        query_string={
+            "table": DRILL_TABLE,
+            "row_path": f"{ROOT_VALUE}|||{CHILD_VALUE}",
+            "row_fields": f"{ROOT_FIELD},{CHILD_FIELD}",
+            "page": 0,
+            "page_size": 20,
+        },
     )
     assert resp.status_code == 200, f"coordinate filter request got {resp.status_code}"
     rows = resp.get_json()['rows']
     assert isinstance(rows, list), "'rows' must be a list"
     for row in rows:
-        assert row.get('region') == 'North', (
-            f"Expected region='North', got {row.get('region')} in row {row}"
+        assert row.get(ROOT_FIELD) == ROOT_VALUE, (
+            f"Expected {ROOT_FIELD}={ROOT_VALUE!r}, got {row.get(ROOT_FIELD)} in row {row}"
         )
-        assert row.get('country') == 'USA', (
-            f"Expected country='USA', got {row.get('country')} in row {row}"
+        assert row.get(CHILD_FIELD) == CHILD_VALUE, (
+            f"Expected {CHILD_FIELD}={CHILD_VALUE!r}, got {row.get(CHILD_FIELD)} in row {row}"
         )
 
 
@@ -203,12 +223,14 @@ def test_total_rows_count_in_response(client):
     FAILS (404 or missing key) until the Flask route is implemented in Plan 02.
     """
     resp = client.get(
-        '/api/drill-through'
-        '?table=sales_data'
-        '&row_path=North'
-        '&row_fields=region'
-        '&page=0'
-        '&page_size=10'
+        "/api/drill-through",
+        query_string={
+            "table": DRILL_TABLE,
+            "row_path": ROOT_VALUE,
+            "row_fields": ROOT_FIELD,
+            "page": 0,
+            "page_size": 10,
+        },
     )
     assert resp.status_code == 200, f"Got {resp.status_code}"
     data = resp.get_json()

@@ -130,6 +130,7 @@ function createCustomCategoryDraft(availableFields, existing = null) {
         field: buildCustomCategoryFieldId(id),
         name: 'New Category',
         fallbackLabel: 'Other',
+        order: 'creation',
         rules: [createCustomCategoryRule(availableFields, 0)],
         __isNew: true,
     };
@@ -475,7 +476,7 @@ function CustomCategoriesEditor({
                     flexDirection: 'column',
                     gap: '10px',
                 }}>
-                    <div style={{ display: 'grid', gridTemplateColumns: '1fr 120px', gap: '8px' }}>
+                    <div style={{ display: 'grid', gridTemplateColumns: '1fr 120px 150px', gap: '8px' }}>
                         <label style={{ display: 'flex', flexDirection: 'column', gap: '4px', fontSize: '10px', fontWeight: 800, color: theme.textSec, textTransform: 'uppercase', letterSpacing: '0.4px' }}>
                             Category Name
                             <input
@@ -497,6 +498,20 @@ function CustomCategoriesEditor({
                                 style={inputStyle}
                                 placeholder="Other"
                             />
+                        </label>
+                        <label style={{ display: 'flex', flexDirection: 'column', gap: '4px', fontSize: '10px', fontWeight: 800, color: theme.textSec, textTransform: 'uppercase', letterSpacing: '0.4px' }}>
+                            Member Order
+                            <select
+                                value={draft.order || 'creation'}
+                                onChange={(event) => setDraft({ ...draft, order: event.target.value })}
+                                style={inputStyle}
+                            >
+                                <option value="creation">Creation Order</option>
+                                <option value="alpha">Alphabetical (A→Z)</option>
+                                <option value="alpha_desc">Alphabetical (Z→A)</option>
+                                <option value="numeric">Numeric (0→9)</option>
+                                <option value="numeric_desc">Numeric (9→0)</option>
+                            </select>
                         </label>
                     </div>
 

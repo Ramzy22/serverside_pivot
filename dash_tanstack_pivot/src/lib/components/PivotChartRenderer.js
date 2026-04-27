@@ -189,13 +189,44 @@ HorizontalResizeHandle.propTypes = {
 /**
  * Renders a group of horizontally docked chart panes (left or right)
  */
-const renderHorizontalDockGroup = (panes, groupPosition, renderPane, onStartChartCanvasResize, showCharts, theme) => {
+const renderHorizontalDockGroup = (panes, groupPosition, renderPane, onStartChartCanvasResize, showCharts, theme, chartCanvasPaneWidthHints = {}) => {
     if (!showCharts) return null;
     if (!Array.isArray(panes) || panes.length === 0) return null;
+    const totalGroupSize = panes.reduce((sum, p) => sum + (Number(p.size) || 1), 0);
+    const paneWidthHints = panes.map((pane) => {
+        const numericHint = Number(chartCanvasPaneWidthHints[pane.id]);
+        return {
+            pane,
+            widthHint: Number.isFinite(numericHint)
+                ? Math.max(MIN_CHART_CANVAS_PANE_WIDTH, Math.floor(numericHint))
+                : null,
+        };
+    });
+    const hasPaneWidthHint = paneWidthHints.some(({ widthHint }) => widthHint !== null);
+    const hintedGroupWidth = hasPaneWidthHint
+        ? paneWidthHints.reduce((sum, { pane, widthHint }) => {
+            const fallbackWidth = Math.max(
+                MIN_CHART_CANVAS_PANE_WIDTH,
+                Math.floor(Number(pane.width) || MIN_CHART_CANVAS_PANE_WIDTH)
+            );
+            return sum + (widthHint === null ? fallbackWidth : widthHint);
+        }, panes.length * 8)
+        : null;
+    const groupStyle = hasPaneWidthHint
+        ? {
+            display: 'flex',
+            minWidth: `${hintedGroupWidth}px`,
+            width: `${hintedGroupWidth}px`,
+            minHeight: 0,
+            overflow: 'hidden',
+            flex: `0 0 ${hintedGroupWidth}px`,
+            flexShrink: 0,
+        }
+        : { display: 'flex', minWidth: 0, minHeight: 0, overflow: 'hidden', flexShrink: 0, flexGrow: totalGroupSize, flexBasis: 0 };
     return (
         <div
             data-docked-chart-group={groupPosition}
-            style={{ display: 'flex', minWidth: 0, minHeight: 0, overflow: 'hidden', flexShrink: 0 }}
+            style={groupStyle}
         >
             {panes.map((pane, index) => {
                 const previousPane = index > 0 ? panes[index - 1] : null;
@@ -396,12 +427,12 @@ export function PivotChartRenderer({
                 ) : null}
 
                 {/* Left Dock Group */}
-                {renderHorizontalDockGroup(dockedChartCanvasPanesByPosition.left, 'left', renderPane, onStartChartCanvasResize, showCharts, theme)}
+                {renderHorizontalDockGroup(dockedChartCanvasPanesByPosition.left, 'left', renderPane, onStartChartCanvasResize, showCharts, theme, chartCanvasPaneWidthHints)}
 
                 {/* Table canvas container would go here (rendered by parent) */}
 
                 {/* Right Dock Group */}
-                {renderHorizontalDockGroup(dockedChartCanvasPanesByPosition.right, 'right', renderPane, onStartChartCanvasResize, showCharts, theme)}
+                {renderHorizontalDockGroup(dockedChartCanvasPanesByPosition.right, 'right', renderPane, onStartChartCanvasResize, showCharts, theme, chartCanvasPaneWidthHints)}
 
                 {/* Chart Modal - Right Position */}
                 {showCharts && chartModal && chartModalPosition === 'right' ? (

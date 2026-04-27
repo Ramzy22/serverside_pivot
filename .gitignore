@@ -49,6 +49,8 @@ coverage.xml
 *.py,cover
 .hypothesis/
 .pytest_cache/
+pytest-cache-files-*/
+dash_tanstack_pivot/pytest-cache-files-*/
 
 # Translations
 *.mo

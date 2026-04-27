@@ -44,6 +44,7 @@ class PivotViewState:
     transaction_request: Optional[Dict[str, Any]] = None
     drill_through: Optional[Dict[str, Any]] = None
     detail_request: Optional[Dict[str, Any]] = None
+    export_request: Dict[str, Any] = field(default_factory=dict)
     viewport: Dict[str, Any] = field(default_factory=dict)
     chart_request: Dict[str, Any] = field(default_factory=dict)
     view_mode: str = "pivot"
@@ -165,6 +166,7 @@ class PivotServiceResponse:
     color_scale_stats: Optional[Dict[str, Any]] = None
     col_schema: Optional[Dict[str, Any]] = None
     chart_data: Optional[Dict[str, Any]] = None
+    export_payload: Optional[Dict[str, Any]] = None
     transaction_result: Optional[Dict[str, Any]] = None
     patch_payload: Optional[Dict[str, Any]] = None
     edit_overlay: Optional[Dict[str, Any]] = None
