@@ -253,9 +253,18 @@ export function useRenderHelpers({
         const rowPath = row.original && row.original._path ? row.original._path : row.id;
         const cellKey = `${rowPath}:::${col.id}`;
         const rawCellValue = cellLike.getValue();
-        const resolvedCellValue = typeof resolveCellDisplayValue === 'function'
-            ? resolveCellDisplayValue(rowPath, col.id, rawCellValue)
-            : rawCellValue;
+        const preserveAccessorDisplayValue = Boolean(
+            col.columnDef
+            && col.columnDef.meta
+            && col.columnDef.meta.preserveAccessorDisplayValue
+        );
+        const resolvedCellValue = preserveAccessorDisplayValue
+            ? rawCellValue
+            : (
+                typeof resolveCellDisplayValue === 'function'
+                    ? resolveCellDisplayValue(rowPath, col.id, rawCellValue)
+                    : rawCellValue
+            );
         const displayCellLike = {
             ...cellLike,
             getValue: () => resolvedCellValue,

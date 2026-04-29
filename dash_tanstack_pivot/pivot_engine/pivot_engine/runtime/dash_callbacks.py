@@ -176,6 +176,7 @@ def _build_runtime_export_context(
     expanded: Any,
     show_row_totals: bool,
     show_col_totals: bool,
+    show_subtotals: bool = True,
 ) -> _RuntimeExportContext:
     """Build the export request from the same effective state as the visible pivot."""
     from ..tanstack_adapter import TanStackOperation, TanStackRequest
@@ -206,6 +207,12 @@ def _build_runtime_export_context(
         show_col_totals,
         bool,
     )
+    effective_show_subtotals = _state_override_value(
+        request_state_override,
+        "showSubtotals",
+        show_subtotals,
+        bool,
+    )
 
     export_state = PivotViewState(
         row_fields=effective_row_fields,
@@ -218,6 +225,7 @@ def _build_runtime_export_context(
         expanded=effective_expanded,
         show_row_totals=effective_show_row_totals,
         show_col_totals=effective_show_col_totals,
+        show_subtotals=effective_show_subtotals,
     )
     tanstack_sorting, column_sort_options = PivotRuntimeService._build_tanstack_sorting(export_state)
     request_columns = PivotRuntimeService._build_request_columns(
@@ -242,6 +250,7 @@ def _build_runtime_export_context(
             global_filter=effective_filters.get("global") if isinstance(effective_filters, dict) else None,
             totals=effective_show_col_totals,
             row_totals=effective_show_row_totals,
+            include_subtotals=effective_show_subtotals,
             column_sort_options=column_sort_options or None,
         ),
         expanded=effective_expanded,
@@ -597,6 +606,7 @@ def register_dash_pivot_transport_callback(
         Input(pivot_id, "immersiveMode"),
         Input(pivot_id, "showRowTotals"),
         Input(pivot_id, "showColTotals"),
+        Input(pivot_id, "showSubtotals"),
         Input(pivot_id, "cellUpdate"),
         Input(pivot_id, "cellUpdates"),
         Input(pivot_id, "runtimeRequest"),
@@ -620,6 +630,7 @@ def register_dash_pivot_transport_callback(
         immersive_mode,
         show_row_totals,
         show_col_totals,
+        show_subtotals,
         cell_update,
         cell_updates,
         runtime_request,
@@ -656,6 +667,7 @@ def register_dash_pivot_transport_callback(
         profiling_enabled = bool(request_payload.get("profile") or request_payload.get("profiling"))
         resolved_show_row_totals = True if show_row_totals is None else bool(show_row_totals)
         resolved_show_col_totals = True if show_col_totals is None else bool(show_col_totals)
+        resolved_show_subtotals = True if show_subtotals is None else bool(show_subtotals)
 
         if request_kind == "data" and _is_bootstrap_without_viewport(triggered_prop, request_payload):
             _debug_print(
@@ -865,6 +877,17 @@ def register_dash_pivot_transport_callback(
             resolved_show_col_totals,
             bool,
         )
+        effective_show_subtotals = _state_override_value(
+            request_state_override,
+            "showSubtotals",
+            resolved_show_subtotals,
+            bool,
+        )
+        # Direct payload override for tabular layout mode (highest priority — beats state_override).
+        # The frontend sends include_subtotals: false when layoutMode === 'tabular' so the backend
+        # switches to the flat leaf-row query path regardless of the showSubtotals Dash prop.
+        if isinstance(request_payload, dict) and request_payload.get("include_subtotals") is not None:
+            effective_show_subtotals = bool(request_payload["include_subtotals"])
         effective_view_mode = _state_override_value(
             request_state_override,
             "viewMode",
@@ -936,6 +959,7 @@ def register_dash_pivot_transport_callback(
             immersive_mode=bool(effective_immersive_mode),
             show_row_totals=effective_show_row_totals,
             show_col_totals=effective_show_col_totals,
+            show_subtotals=effective_show_subtotals,
             cell_update=runtime_single_update or (cell_update if isinstance(cell_update, dict) else None),
             cell_updates=(
                 runtime_batch_updates

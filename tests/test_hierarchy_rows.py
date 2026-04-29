@@ -1,4 +1,5 @@
 import pytest
+import pyarrow as pa
 
 from pivot_engine.hierarchy_rows import (
     build_hierarchy_row_window,
@@ -114,3 +115,126 @@ async def test_adapter_legacy_hierarchy_fallback_slices_viewport_with_shared_pol
     assert [row["_id"] for row in response.data] == ["USA", "Canada"]
     assert [row["_path"] for row in response.data] == ["North|||USA", "North|||Canada"]
     assert response.total_rows == 4
+
+
+@pytest.mark.asyncio
+async def test_adapter_no_subtotal_request_uses_flat_leaf_rows():
+    class FlatOnlyController:
+        def __init__(self):
+            self.calls = []
+
+        async def run_pivot_async(self, spec, return_format="arrow", force_refresh=False, profile_sink=None):
+            self.calls.append({
+                "rows": list(spec.rows or []),
+                "limit": spec.limit,
+                "offset": spec.offset,
+                "totals": spec.totals,
+            })
+            rows = [
+                {"region": "North", "country": "USA", "sales_sum": 60},
+                {"region": "North", "country": "Canada", "sales_sum": 40},
+                {"region": "South", "country": "Brazil", "sales_sum": 80},
+            ]
+            if spec.limit:
+                rows = rows[int(spec.offset or 0):int(spec.offset or 0) + int(spec.limit)]
+            return pa.Table.from_pylist(rows)
+
+    controller = FlatOnlyController()
+    adapter = TanStackPivotAdapter(controller)
+    request = TanStackRequest(
+        operation=TanStackOperation.GET_DATA,
+        table="sales",
+        columns=[
+            {"id": "region"},
+            {"id": "country"},
+            {"id": "sales_sum", "aggregationField": "sales", "aggregationFn": "sum"},
+        ],
+        filters={},
+        sorting=[],
+        grouping=["region", "country"],
+        aggregations=[],
+        pagination={"pageIndex": 0, "pageSize": 1},
+        totals=False,
+        include_subtotals=False,
+    )
+
+    response = await adapter.handle_virtual_scroll_request(
+        request,
+        1,
+        1,
+        expanded_paths=[],
+    )
+
+    assert [row["_id"] for row in response.data] == ["Canada"]
+    assert [row["region"] for row in response.data] == ["North"]
+    assert [row["country"] for row in response.data] == ["Canada"]
+    assert [row["depth"] for row in response.data] == [1]
+    assert [row["_path"] for row in response.data] == ["North|||Canada"]
+    assert response.total_rows == 3
+    assert controller.calls[0]["rows"] == ["region", "country"]
+    assert controller.calls[0]["offset"] == 1
+    assert controller.calls[1]["limit"] == 0
+
+
+def test_iter_visible_hierarchy_rows_sets_path_and_pathfields_before_yield():
+    """_path and _pathFields must be set on every row so tabular layout mode can
+    show parent labels for child rows even when parent field values are absent."""
+    from pivot_engine.hierarchy_rows import iter_visible_hierarchy_rows
+
+    class _Spec:
+        rows = ["region", "country"]
+
+    hierarchy_result = {
+        "": [{"region": "North", "sales_sum": 100}],
+        "North": [
+            # Simulate controller that omits parent field in child rows
+            {"country": "USA", "sales_sum": 60},
+            {"country": "Canada", "sales_sum": 40},
+        ],
+    }
+
+    rows_out = list(iter_visible_hierarchy_rows(_Spec(), hierarchy_result, [["North"]]))
+    north_row = next(r for r in rows_out if r.get("_id") == "North")
+    usa_row = next(r for r in rows_out if r.get("_id") == "USA")
+    canada_row = next(r for r in rows_out if r.get("_id") == "Canada")
+
+    assert north_row["_path"] == "North"
+    assert north_row["_pathFields"] == ["region"]
+    assert north_row["depth"] == 0
+
+    assert usa_row["_path"] == "North|||USA"
+    assert usa_row["_pathFields"] == ["region", "country"]
+    assert usa_row["depth"] == 1
+
+    assert canada_row["_path"] == "North|||Canada"
+    assert canada_row["_pathFields"] == ["region", "country"]
+    assert canada_row["depth"] == 1
+
+
+def test_no_subtotal_flag_participates_in_adapter_cache_fingerprint():
+    class DummyController:
+        pass
+
+    adapter = TanStackPivotAdapter(DummyController())
+    base_request = TanStackRequest(
+        operation=TanStackOperation.GET_DATA,
+        table="sales",
+        columns=[{"id": "region"}],
+        filters={},
+        sorting=[],
+        grouping=["region"],
+        aggregations=[],
+        include_subtotals=True,
+    )
+    no_subtotal_request = TanStackRequest(
+        operation=TanStackOperation.GET_DATA,
+        table="sales",
+        columns=[{"id": "region"}],
+        filters={},
+        sorting=[],
+        grouping=["region"],
+        aggregations=[],
+        include_subtotals=False,
+    )
+
+    assert adapter._request_structure_fingerprint(base_request) != adapter._request_structure_fingerprint(no_subtotal_request)

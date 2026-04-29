@@ -921,6 +921,7 @@ export const PivotAppBar = React.memo(function PivotAppBar({
         stickyHeaders, setStickyHeaders,
         showColTotals, setShowColTotals,
         showRowTotals, setShowRowTotals,
+        showSubtotals, setShowSubtotals,
         showRowNumbers, setShowRowNumbers,
         numberGroupSeparator, setNumberGroupSeparator,
     } = usePivotConfig();
@@ -1234,6 +1235,7 @@ export const PivotAppBar = React.memo(function PivotAppBar({
             {uiConfig.showFilters !== false && <button style={showFloatingFilters ? btnActive : btnSubtle} onClick={() => setShowFloatingFilters(!showFloatingFilters)}>Filters</button>}
             <button style={showRowTotals ? btnActive : btnSubtle} onClick={() => setShowRowTotals(!showRowTotals)}>Row Total</button>
             <button style={showColTotals ? btnActive : btnSubtle} onClick={() => setShowColTotals(!showColTotals)}>Col Total</button>
+            <button style={showSubtotals ? btnActive : btnSubtle} onClick={() => setShowSubtotals(prev => !prev)} title="Toggle hierarchy subtotal rows">Subtotals</button>
             <button
                 style={canTranspose ? btnSubtle : { ...btnSubtle, opacity: 0.45, cursor: 'not-allowed' }}
                 onClick={onTransposePivot}

@@ -1013,6 +1013,7 @@ export default function DashTanstackPivot(props) {
         immersiveMode: initialImmersiveMode = false,
         showRowTotals: initialShowRowTotals = true,
         showColTotals: initialShowColTotals = true,
+        showSubtotals: initialShowSubtotals = true,
         grandTotalPosition = 'top',
         conditionalFormatting = [],
         validationRules = {},
@@ -1731,6 +1732,7 @@ export default function DashTanstackPivot(props) {
     const [showReportConfigColumn, setShowReportConfigColumn] = useState(() => loadPersistedState('showReportConfigColumn', true) !== false);
     const [showRowTotals, setShowRowTotals] = useState(initialShowRowTotals);
     const [showColTotals, setShowColTotals] = useState(initialShowColTotals);
+    const [showSubtotals, setShowSubtotals] = useState(initialShowSubtotals);
     useEffect(() => {
         if (!persistence) return;
         savePersistedState('showReportConfigColumn', showReportConfigColumn !== false);
@@ -2047,6 +2049,7 @@ export default function DashTanstackPivot(props) {
         if (typeof restored.immersiveMode === 'boolean') setImmersiveMode(restored.immersiveMode);
         if (typeof restored.showRowTotals === 'boolean') setShowRowTotals(restored.showRowTotals);
         if (typeof restored.showColTotals === 'boolean') setShowColTotals(restored.showColTotals);
+        if (typeof restored.showSubtotals === 'boolean') setShowSubtotals(restored.showSubtotals);
         if (typeof restored.showRowNumbers === 'boolean') setShowRowNumbers(restored.showRowNumbers);
         if (typeof restored.showReportConfigColumn === 'boolean') setShowReportConfigColumn(restored.showReportConfigColumn);
         if (typeof restored.sidebarOpen === 'boolean') setSidebarOpen(restored.sidebarOpen);
@@ -3745,6 +3748,7 @@ export default function DashTanstackPivot(props) {
         rowPinning,
         showRowTotals,
         showColTotals,
+        showSubtotals,
         grandTotalPinOverride,
     }, null), [
         colExpanded,
@@ -3757,6 +3761,7 @@ export default function DashTanstackPivot(props) {
         rowPinning,
         showColTotals,
         showRowTotals,
+        showSubtotals,
         sorting,
         valConfigs,
     ]);
@@ -5128,6 +5133,7 @@ export default function DashTanstackPivot(props) {
         );
         setShowRowTotals(Boolean(snapshot.showRowTotals));
         setShowColTotals(Boolean(snapshot.showColTotals));
+        setShowSubtotals(Object.prototype.hasOwnProperty.call(snapshot, 'showSubtotals') ? Boolean(snapshot.showSubtotals) : true);
         setGrandTotalPinOverride(
             snapshot.grandTotalPinOverride === 'top' || snapshot.grandTotalPinOverride === 'bottom'
                 ? snapshot.grandTotalPinOverride
@@ -6446,6 +6452,7 @@ export default function DashTanstackPivot(props) {
             immersiveMode: Object.prototype.hasOwnProperty.call(snapshot, 'immersiveMode') ? snapshot.immersiveMode : immersiveMode,
             showRowTotals: Object.prototype.hasOwnProperty.call(snapshot, 'showRowTotals') ? snapshot.showRowTotals : showRowTotals,
             showColTotals: Object.prototype.hasOwnProperty.call(snapshot, 'showColTotals') ? snapshot.showColTotals : showColTotals,
+            showSubtotals: Object.prototype.hasOwnProperty.call(snapshot, 'showSubtotals') ? snapshot.showSubtotals : showSubtotals,
         }, null);
     }, [
         viewMode,
@@ -6465,6 +6472,7 @@ export default function DashTanstackPivot(props) {
         immersiveMode,
         showRowTotals,
         showColTotals,
+        showSubtotals,
     ]);
 
     const buildChartStateOverrideSnapshot = useCallback(() => (
@@ -6714,6 +6722,7 @@ export default function DashTanstackPivot(props) {
                 expanded,
                 showRowTotals,
                 showColTotals,
+                showSubtotals,
                 showRowNumbers,
                 showReportConfigColumn,
                 sidebarOpen,
@@ -6809,6 +6818,7 @@ export default function DashTanstackPivot(props) {
         expanded,
         showRowTotals,
         showColTotals,
+        showSubtotals,
         showRowNumbers,
         showReportConfigColumn,
         sidebarOpen,
@@ -6907,6 +6917,7 @@ export default function DashTanstackPivot(props) {
         expanded: {},
         showRowTotals: initialShowRowTotals,
         showColTotals: initialShowColTotals,
+        showSubtotals: initialShowSubtotals,
         columnPinning: initialColumnPinning,
         rowPinning: initialRowPinning,
         grandTotalPinOverride,
@@ -6924,7 +6935,7 @@ export default function DashTanstackPivot(props) {
             reportDef,
             customDimensions,
             rowFields, colFields, valConfigs, filters, sorting, sortOptions: effectiveSortOptions, expanded,
-            immersiveMode, showRowTotals, showColTotals, columnPinning, rowPinning, columnVisibility, columnSizing
+            immersiveMode, showRowTotals, showColTotals, showSubtotals, columnPinning, rowPinning, columnVisibility, columnSizing
         };
         const nextSyncState = {
             ...nextProps,
@@ -7034,6 +7045,7 @@ export default function DashTanstackPivot(props) {
                             col_end: expansionColumnWindow.end !== null ? expansionColumnWindow.end : undefined,
                             needs_col_schema: needsColSchemaRef.current && serverSide || undefined,
                             include_grand_total: serverSidePinsGrandTotal || undefined,
+                            include_subtotals: showSubtotals ? undefined : false,
                             state_override: requestStateOverride || undefined,
                         },
                     },
@@ -7081,6 +7093,7 @@ export default function DashTanstackPivot(props) {
                             col_end: sortingColumnWindow.end !== null ? sortingColumnWindow.end : undefined,
                             include_grand_total: serverSidePinsGrandTotal || undefined,
                             immersive_mode: immersiveMode || undefined,
+                            include_subtotals: showSubtotals ? undefined : false,
                             state_override: requestStateOverride || undefined,
                         },
                     },
@@ -7141,12 +7154,13 @@ export default function DashTanstackPivot(props) {
                         needs_col_schema: serverSide || undefined,
                         include_grand_total: serverSidePinsGrandTotal || undefined,
                         immersive_mode: immersiveMode || undefined,
+                        include_subtotals: showSubtotals ? undefined : false,
                         state_override: requestStateOverride || undefined,
                     },
                 },
             });
         }
-    }, [viewMode, detailMode, treeConfig, detailConfig, reportDef, customDimensions, rowFields, colFields, valConfigs, filters, sorting, effectiveSortOptions, expanded, immersiveMode, showRowTotals, showColTotals, columnPinning, rowPinning, grandTotalPinOverride, columnVisibility, columnSizing, beginStructuralTransaction, beginExpansionRequest, buildRuntimeRequestStateOverride, markRequestPending, resolveStableRequestedColumnWindow, serverSide, serverSideBlockSize, tableName, serverSidePinsGrandTotal]);
+    }, [viewMode, detailMode, treeConfig, detailConfig, reportDef, customDimensions, rowFields, colFields, valConfigs, filters, sorting, effectiveSortOptions, expanded, immersiveMode, showRowTotals, showColTotals, showSubtotals, columnPinning, rowPinning, grandTotalPinOverride, columnVisibility, columnSizing, beginStructuralTransaction, beginExpansionRequest, buildRuntimeRequestStateOverride, markRequestPending, resolveStableRequestedColumnWindow, serverSide, serverSideBlockSize, tableName, serverSidePinsGrandTotal]);
 
     useEffect(() => {
         const handleClick = () => setContextMenu(null);
@@ -8917,6 +8931,7 @@ export default function DashTanstackPivot(props) {
         responseColEnd: responseSchemaWindow.end,
         needsColSchema: needsColSchema && serverSide,
         onViewportRequest: handleViewportRequestMeta,
+        includeSubtotals: showSubtotals,
     });
     requestUrgentColumnViewportRef.current = requestUrgentColumnViewport;
 
@@ -12576,6 +12591,7 @@ export default function DashTanstackPivot(props) {
                 stickyHeaders={stickyHeaders} setStickyHeaders={setStickyHeaders}
                 showColTotals={showColTotals} setShowColTotals={setShowColTotals}
                 showRowTotals={showRowTotals} setShowRowTotals={setShowRowTotals}
+                showSubtotals={showSubtotals} setShowSubtotals={setShowSubtotals}
                 showRowNumbers={showRowNumbers} setShowRowNumbers={setShowRowNumbers}
                 numberGroupSeparator={numberGroupSeparator} setNumberGroupSeparator={setNumberGroupSeparator}
                 viewMode={viewMode}
@@ -12740,7 +12756,7 @@ export default function DashTanstackPivot(props) {
                         >
                             <div style={{ display:'flex', flex:1, minWidth:0, minHeight:0, overflow:'hidden' }}>
                                 <PivotTableBody
-                                    key={`pivot-body-${editValueDisplayMode}`}
+                                    key={`pivot-body-${editValueDisplayMode}-${layoutMode}-${showSubtotals ? 'with-subtotals' : 'no-subtotals'}`}
                                     parentRef={parentRef}
                                     handleKeyDown={handleKeyDown}
                                     rows={rows}
@@ -13244,6 +13260,7 @@ DashTanstackPivot.propTypes = {
     immersiveMode: PropTypes.bool,
     showRowTotals: PropTypes.bool,
     showColTotals: PropTypes.bool,
+    showSubtotals: PropTypes.bool,
     grandTotalPosition: PropTypes.oneOf(['top', 'bottom']),
     runtimeRequest: PropTypes.object,
     runtimeResponse: PropTypes.object,

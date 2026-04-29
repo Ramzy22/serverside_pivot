@@ -39,6 +39,7 @@ class PivotViewState:
     immersive_mode: bool = False
     show_row_totals: bool = False
     show_col_totals: bool = True
+    show_subtotals: bool = True
     cell_update: Optional[Dict[str, Any]] = None
     cell_updates: List[Dict[str, Any]] = field(default_factory=list)
     transaction_request: Optional[Dict[str, Any]] = None

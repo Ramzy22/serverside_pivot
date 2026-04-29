@@ -110,6 +110,7 @@ def iter_visible_hierarchy_rows(
                 grand_total_emitted = True
 
             target_dim_idx = current_depth
+            child_key = None
             if target_dim_idx < len(rows):
                 target_dim = rows[target_dim_idx]
                 if current_depth > 0 and is_missing_hierarchy_value(row.get(target_dim)):
@@ -120,18 +121,23 @@ def iter_visible_hierarchy_rows(
                     row["_path"] = GRAND_TOTAL_PATH
                 elif target_dim in row and not is_missing_hierarchy_value(row.get(target_dim)):
                     row["_id"] = row[target_dim]
+                    # Build the full path for this row from parent + current dim value.
+                    # Do this before yielding so downstream code (JS tabular mode) always
+                    # gets a correct _path even when parent field values are absent from
+                    # child-level rows returned by the data engine.
+                    child_path_parts = parent_key.split("|||") if parent_key else []
+                    child_path_parts.append(str(row[target_dim]))
+                    child_key = "|||".join(child_path_parts)
+                    if "_path" not in row:
+                        row["_path"] = child_key
+                    if "_pathFields" not in row:
+                        row["_pathFields"] = list(rows[: current_depth + 1])
 
             row["depth"] = current_depth
             yield row
 
-            child_path_parts = parent_key.split("|||") if parent_key else []
-            if target_dim_idx < len(rows):
-                current_dim = rows[target_dim_idx]
-                if current_dim in row and not is_missing_hierarchy_value(row.get(current_dim)):
-                    child_path_parts.append(str(row[current_dim]))
-                    child_key = "|||".join(child_path_parts)
-                    if child_key in hierarchy_result and (expand_all or child_key in expanded_path_set):
-                        yield from traverse(child_key)
+            if child_key is not None and child_key in hierarchy_result and (expand_all or child_key in expanded_path_set):
+                yield from traverse(child_key)
 
     yield from traverse("")
 

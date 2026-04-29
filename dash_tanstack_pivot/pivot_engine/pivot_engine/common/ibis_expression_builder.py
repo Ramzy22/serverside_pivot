@@ -50,12 +50,20 @@ class IbisExpressionBuilder:
             "gte": ">=",
             "startsWith": "starts_with",
             "endsWith": "ends_with",
+            "startswith": "starts_with",
+            "endswith": "ends_with",
+            "notIn": "not in",
+            "isNull": "is null",
+            "isNotNull": "is not null",
             "is_null": "is null",
             "is null": "is null",
             "is_not_null": "is not null",
             "is not null": "is not null",
             "not_in": "not in",
             "not in": "not in",
+            "notin": "not in",
+            "isnull": "is null",
+            "isnotnull": "is not null",
         }
         normalized = aliases.get(raw)
         if normalized:
@@ -63,10 +71,16 @@ class IbisExpressionBuilder:
         normalized = raw.replace(" ", "_").lower()
         return aliases.get(normalized, normalized)
 
-    def _normalize_custom_category_clause(self, clause: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+    def _normalize_custom_category_clause(
+        self,
+        clause: Dict[str, Any],
+        fallback_field: str = "",
+    ) -> Optional[Dict[str, Any]]:
         if not isinstance(clause, dict):
             return None
         field = clause.get("field")
+        if not isinstance(field, str) or not field.strip():
+            field = fallback_field
         if not isinstance(field, str) or not field.strip():
             return None
         operator = self._normalize_custom_category_operator(
@@ -92,7 +106,11 @@ class IbisExpressionBuilder:
             "caseSensitive": bool(clause.get("caseSensitive", False)),
         }
 
-    def _normalize_custom_category_condition(self, condition: Any) -> Optional[Dict[str, Any]]:
+    def _normalize_custom_category_condition(
+        self,
+        condition: Any,
+        fallback_field: str = "",
+    ) -> Optional[Dict[str, Any]]:
         if not isinstance(condition, dict):
             return None
         op = str(condition.get("op") or condition.get("operator") or "AND").upper()
@@ -103,11 +121,14 @@ class IbisExpressionBuilder:
         if isinstance(source, list):
             clauses = [
                 normalized
-                for normalized in (self._normalize_custom_category_clause(item) for item in source)
+                for normalized in (
+                    self._normalize_custom_category_clause(item, fallback_field)
+                    for item in source
+                )
                 if normalized is not None
             ]
         else:
-            single_clause = self._normalize_custom_category_clause(condition)
+            single_clause = self._normalize_custom_category_clause(condition, fallback_field)
             clauses = [single_clause] if single_clause else []
         if not clauses:
             return None
@@ -132,7 +153,10 @@ class IbisExpressionBuilder:
             label = str(rule.get("label") or "").strip()
             if not label:
                 continue
-            condition = self._normalize_custom_category_condition(rule.get("condition") or rule)
+            condition = self._normalize_custom_category_condition(
+                rule.get("condition") or rule,
+                str(rule.get("field") or ""),
+            )
             if not condition:
                 continue
             condition_expr = self._build_filter_object(table, condition)
@@ -182,7 +206,10 @@ class IbisExpressionBuilder:
                 rule = rules[i]
                 if not isinstance(rule, dict):
                     continue
-                condition = self._normalize_custom_category_condition(rule.get("condition") or rule)
+                condition = self._normalize_custom_category_condition(
+                    rule.get("condition") or rule,
+                    str(rule.get("field") or ""),
+                )
                 if not condition:
                     continue
                 cond_expr = self._build_filter_object(table, condition)
@@ -202,7 +229,10 @@ class IbisExpressionBuilder:
                     num_val = float(label)
                 except (ValueError, TypeError):
                     continue
-                condition = self._normalize_custom_category_condition(rule.get("condition") or rule)
+                condition = self._normalize_custom_category_condition(
+                    rule.get("condition") or rule,
+                    str(rule.get("field") or ""),
+                )
                 if not condition:
                     continue
                 cond_expr = self._build_filter_object(table, condition)
@@ -401,10 +431,22 @@ class IbisExpressionBuilder:
             pat = f"%{value}%"
             return str_col.like(pat) if case_sensitive else str_col.ilike(pat)
         
-        # Null checks
+        # Null/empty checks. The custom category UI labels these operators as
+        # "empty" and the client evaluator treats whitespace-only strings as
+        # empty, so keep server-side materialization aligned.
         if op == "is null":
+            try:
+                if col.type().is_string():
+                    return col.isnull() | (col.cast("string").strip() == "")
+            except Exception:
+                pass
             return col.isnull()
         if op == "is not null":
+            try:
+                if col.type().is_string():
+                    return col.notnull() & (col.cast("string").strip() != "")
+            except Exception:
+                pass
             return col.notnull()
         
         return None

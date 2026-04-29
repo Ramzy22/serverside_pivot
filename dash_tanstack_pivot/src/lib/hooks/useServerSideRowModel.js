@@ -123,6 +123,7 @@ export const useServerSideRowModel = ({
     needsColSchema = false,
     columnRangeUrgencyToken = 0,
     onViewportRequest = null,
+    includeSubtotals = true,
 }) => {
     // 1. Initialize Cache
     const {
@@ -754,6 +755,7 @@ export const useServerSideRowModel = ({
                     needs_col_schema: needsColSchema || undefined,
                     include_grand_total: excludeGrandTotal || undefined,
                     immersive_mode: immersiveMode || undefined,
+                    include_subtotals: includeSubtotals ? undefined : false,
                 },
             },
         });
@@ -801,6 +803,7 @@ export const useServerSideRowModel = ({
         resolveRetentionBufferBlocks,
         setPinnedRange,
         immersiveMode,
+        includeSubtotals,
     ]);
 
     const flushQueuedViewport = useCallback((forceImmediate = false) => {

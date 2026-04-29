@@ -2,7 +2,7 @@
 tanstack_adapter.py - Direct TanStack Table/Query adapter for the scalable pivot engine
 This bypasses the REST API and provides direct integration with TanStack components
 """
-from typing import Dict, Any, List, Optional, Callable, Union
+from typing import Dict, Any, List, Optional, Callable, Union, Set
 from dataclasses import dataclass, field
 from enum import Enum
 import asyncio
@@ -82,6 +82,7 @@ class TanStackRequest:
     global_filter: Optional[str] = None
     totals: Optional[bool] = True
     row_totals: Optional[bool] = False
+    include_subtotals: Optional[bool] = True
     version: Optional[int] = None
     column_sort_options: Optional[Dict[str, Any]] = None
     custom_dimensions: List[Dict[str, Any]] = field(default_factory=list)
@@ -225,6 +226,7 @@ class TanStackPivotAdapter(FormulaEngineMixin):
             "custom_dimensions": request.custom_dimensions or [],
             "totals": bool(request.totals),
             "row_totals": bool(request.row_totals),
+            "include_subtotals": bool(request.include_subtotals),
             "column_sort_options": request.column_sort_options or {},
         }
         return hashlib.sha256(self._stable_json(payload).encode()).hexdigest()[:24]
@@ -1628,11 +1630,22 @@ class TanStackPivotAdapter(FormulaEngineMixin):
         # Enrich rows for TanStack Hierarchy display
         hierarchy_cols = tanstack_request.grouping or []
         if hierarchy_cols:
+            max_depth = max(len(hierarchy_cols) - 1, 0)
             for row in rows:
-                # Normalize depth (support both depth and _depth)
+                # Normalize depth (support both depth and _depth).
+                # When depth is absent, infer it from how many consecutive
+                # grouping fields are non-null — this is the only reliable
+                # source when controllers return flat rows without depth metadata.
                 current_depth = row.get('depth')
                 if current_depth is None:
-                    current_depth = row.get('_depth', 0)
+                    current_depth = row.get('_depth')
+                if current_depth is None:
+                    inferred_parts = []
+                    for col in hierarchy_cols:
+                        if _is_missing_value(row.get(col)):
+                            break
+                        inferred_parts.append(str(row[col]))
+                    current_depth = min(max(len(inferred_parts) - 1, 0), max_depth)
                 row['depth'] = current_depth
 
                 # Populate _id if missing
@@ -1644,7 +1657,7 @@ class TanStackPivotAdapter(FormulaEngineMixin):
                         row['_id'] = 'Grand Total'
                         row['_isTotal'] = True
                         is_grand_total = True
-                    
+
                     if not is_grand_total:
                         # Find the correct dimension for this depth
                         if current_depth < len(hierarchy_cols):
@@ -1657,26 +1670,25 @@ class TanStackPivotAdapter(FormulaEngineMixin):
                                 if col in row and not _is_missing_value(row[col]):
                                     row['_id'] = row[col]
                                     break
-                        
+
                         if '_id' not in row:
                             row['_id'] = ""
-                
-                # Populate _path for row identification (critical for expansion)
+
+                # Populate _path for row identification (critical for expansion).
+                # Build the full path from ALL non-null grouping fields up to the
+                # inferred depth so tabular layout mode can retrieve parent labels
+                # (e.g. "USA") for child rows (e.g. depth-1 city rows) even when
+                # the parent field value is absent from the row dict.
                 if '_path' not in row:
                     if row.get('_isTotal'):
                         row['_path'] = '__grand_total__'
                     elif hierarchy_cols:
-                        # Construct path based on depth
                         path_parts = []
-                        target_depth_idx = min(current_depth, len(hierarchy_cols) - 1)
-
-                        for i in range(target_depth_idx + 1):
-                            col = hierarchy_cols[i]
+                        for col in hierarchy_cols[:current_depth + 1]:
                             val = row.get(col)
                             if _is_missing_value(val):
                                 break
                             path_parts.append(str(val))
-                        
                         row['_path'] = "|||".join(path_parts) if path_parts else str(row.get('_id', ''))
                     else:
                         row['_path'] = str(id(row))
@@ -3029,6 +3041,151 @@ class TanStackPivotAdapter(FormulaEngineMixin):
             }
         return response
 
+    @staticmethod
+    def _filter_refs_measure_alias_local(filter_spec: Any, measure_aliases: Set[str]) -> bool:
+        if not filter_spec or not measure_aliases:
+            return False
+        if isinstance(filter_spec, dict):
+            field = filter_spec.get("field") or filter_spec.get("id") or filter_spec.get("column")
+            if field in measure_aliases:
+                return True
+            return any(
+                TanStackPivotAdapter._filter_refs_measure_alias_local(value, measure_aliases)
+                for value in filter_spec.values()
+            )
+        if isinstance(filter_spec, list):
+            return any(
+                TanStackPivotAdapter._filter_refs_measure_alias_local(item, measure_aliases)
+                for item in filter_spec
+            )
+        return False
+
+    async def _count_flat_group_rows_by_materialization(self, spec: PivotSpec) -> int:
+        count_spec = spec.copy()
+        count_spec.limit = 0
+        count_spec.offset = 0
+        count_spec.totals = False
+        count_spec.sort = []
+        count_table = await self.controller.run_pivot_async(
+            count_spec,
+            return_format="arrow",
+            force_refresh=True,
+        )
+        return int(getattr(count_table, "num_rows", 0) or 0)
+
+    async def _count_flat_group_rows(
+        self,
+        spec: PivotSpec,
+        *,
+        first_page_row_count: Optional[int] = None,
+        requested_count: Optional[int] = None,
+        start_row: int = 0,
+    ) -> int:
+        if (
+            start_row == 0
+            and requested_count is not None
+            and first_page_row_count is not None
+            and first_page_row_count < requested_count
+        ):
+            return int(first_page_row_count)
+
+        grouping = [field for field in (spec.rows or []) if field]
+        if not grouping:
+            return 1
+
+        measure_aliases = {
+            str(measure.alias)
+            for measure in (spec.measures or [])
+            if getattr(measure, "alias", None)
+        }
+        controller_filter_checker = getattr(self.controller, "_filter_refs_measure_alias", None)
+        refs_measure_filter = any(
+            (
+                controller_filter_checker(filter_spec, measure_aliases)
+                if callable(controller_filter_checker)
+                else self._filter_refs_measure_alias_local(filter_spec, measure_aliases)
+            )
+            for filter_spec in (spec.filters or [])
+        )
+        if refs_measure_filter:
+            return await self._count_flat_group_rows_by_materialization(spec)
+
+        planner = getattr(self.controller, "planner", None)
+        con = getattr(planner, "con", None)
+        builder = getattr(planner, "builder", None)
+        execute_scalar = getattr(self.controller, "_execute_ibis_scalar_async", None)
+        if con is None or builder is None or not callable(execute_scalar):
+            return await self._count_flat_group_rows_by_materialization(spec)
+
+        try:
+            base_table = builder.apply_custom_dimensions(
+                con.table(spec.table),
+                getattr(spec, "custom_dimensions", []),
+            )
+            table_columns = set(getattr(base_table, "columns", []) or [])
+            if any(field not in table_columns for field in grouping):
+                return await self._count_flat_group_rows_by_materialization(spec)
+            if spec.filters:
+                filter_expr = builder.build_filter_expression(base_table, spec.filters)
+                if filter_expr is not None:
+                    base_table = base_table.filter(filter_expr)
+            count_expr = base_table.select(grouping).distinct().count()
+            return int(await execute_scalar(count_expr, spec.table))
+        except Exception as exc:
+            if self._debug:
+                _adapter_logger.debug("Flat group row count fallback for %s: %s", spec.table, exc)
+            return await self._count_flat_group_rows_by_materialization(spec)
+
+    @staticmethod
+    def _annotate_flat_group_rows(rows: List[Dict[str, Any]], grouping: List[str]) -> None:
+        if not grouping:
+            return
+        max_depth = max(len(grouping) - 1, 0)
+        for row in rows or []:
+            if not isinstance(row, dict) or _is_grand_total_row(row):
+                continue
+            path_parts: List[str] = []
+            for field in grouping:
+                value = row.get(field)
+                if _is_missing_value(value):
+                    break
+                path_parts.append(str(value))
+            depth = min(max(len(path_parts) - 1, 0), max_depth)
+            row["depth"] = depth
+            row["_depth"] = depth
+            row["_id"] = row.get(grouping[depth], "") if grouping else row.get("_id", "")
+            row["_path"] = "|||".join(path_parts) if path_parts else str(row.get("_id", ""))
+            row["_pathFields"] = list(grouping[: len(path_parts)])
+            row["_has_children"] = False
+            row["_is_expanded"] = False
+
+    async def _fetch_flat_grand_total_row(self, pivot_spec: PivotSpec, request: TanStackRequest) -> Optional[Dict[str, Any]]:
+        total_spec = pivot_spec.copy()
+        total_spec.rows = []
+        total_spec.limit = 1
+        total_spec.offset = 0
+        total_spec.totals = False
+        total_spec.sort = []
+        total_table = await self.controller.run_pivot_async(
+            total_spec,
+            return_format="arrow",
+            force_refresh=True,
+        )
+        normalized = self.convert_pivot_result_to_tanstack_format(
+            total_table,
+            request,
+            version=request.version,
+        ).data
+        if not normalized:
+            return None
+        grand_total_row = dict(normalized[0])
+        grand_total_row["_id"] = "Grand Total"
+        grand_total_row["_isTotal"] = True
+        grand_total_row["_path"] = "__grand_total__"
+        grand_total_row["depth"] = 0
+        grand_total_row["_depth"] = 0
+        return grand_total_row
+
     # _apply_expansion_state removed as it is now handled by the controller/tree manager logic
 
     async def handle_virtual_scroll_request(self, request: TanStackRequest,
@@ -3358,6 +3515,117 @@ class TanStackPivotAdapter(FormulaEngineMixin):
         target_paths = expanded_paths or []
         if expanded_paths is True:
             target_paths = [['__ALL__']]
+
+        if request.grouping and request.include_subtotals is False:
+            safe_start = max(int(start_row or 0), 0)
+            safe_end = max(int(end_row if end_row is not None else safe_start), safe_start)
+            requested_count = (safe_end - safe_start) + 1
+
+            flat_spec = pivot_spec.copy()
+            flat_spec.rows = list(request.grouping or [])
+            flat_spec.limit = requested_count
+            flat_spec.offset = safe_start
+            flat_spec.totals = False
+
+            flat_query_profile: Dict[str, Any] = {}
+            flat_query_started_at = time.perf_counter()
+            flat_table = await self.controller.run_pivot_async(
+                flat_spec,
+                return_format="arrow",
+                profile_sink=flat_query_profile if profiling else None,
+            )
+            flat_query_finished_at = time.perf_counter()
+
+            convert_started_at = time.perf_counter()
+            tanstack_result = self.convert_pivot_result_to_tanstack_format(
+                flat_table,
+                request,
+                version=request.version,
+            )
+            self._annotate_flat_group_rows(tanstack_result.data, request.grouping or [])
+            convert_finished_at = time.perf_counter()
+
+            count_started_at = time.perf_counter()
+            flat_row_count = await self._count_flat_group_rows(
+                flat_spec,
+                first_page_row_count=len(tanstack_result.data or []),
+                requested_count=requested_count,
+                start_row=safe_start,
+            )
+            count_finished_at = time.perf_counter()
+            total_rows = flat_row_count + (1 if request.totals else 0)
+            tanstack_result.total_rows = total_rows
+            if isinstance(tanstack_result.pagination, dict):
+                tanstack_result.pagination = {
+                    **tanstack_result.pagination,
+                    "totalRows": total_rows,
+                }
+
+            grand_total_started_at = None
+            grand_total_finished_at = None
+            natural_grand_total_in_window = bool(
+                request.totals
+                and not include_grand_total
+                and safe_start <= flat_row_count <= safe_end
+            )
+            if request.totals and (include_grand_total or natural_grand_total_in_window):
+                grand_total_started_at = time.perf_counter()
+                grand_total_row = await self._fetch_flat_grand_total_row(pivot_spec, request)
+                grand_total_finished_at = time.perf_counter()
+                if isinstance(grand_total_row, dict):
+                    existing_rows = tanstack_result.data or []
+                    if not any(_is_grand_total_row(row) for row in existing_rows):
+                        tanstack_result.data = [*existing_rows, grand_total_row]
+
+            tanstack_result.data = finalize_hierarchy_rows(tanstack_result.data, preserve_window_order=True)
+            col_window_started_at = time.perf_counter()
+            windowed_response = self._apply_col_windowing(
+                tanstack_result,
+                request,
+                col_start,
+                col_end,
+                needs_col_schema,
+                requested_center_ids=requested_center_ids,
+                discovered_center_ids=discovered_center_ids,
+            )
+            col_window_finished_at = time.perf_counter()
+            completed_response = self._complete_virtual_scroll_response(
+                windowed_response,
+                response_cache_key,
+                request,
+                start_row,
+                end_row,
+                expanded_paths,
+                col_start,
+                col_end,
+                include_grand_total,
+                _allow_prefetch,
+                requested_center_ids,
+            )
+            return self._attach_virtual_scroll_profile(
+                completed_response,
+                started_at=request_started_at,
+                request=request,
+                start_row=start_row,
+                end_row=end_row,
+                col_start=col_start,
+                col_end=col_end,
+                needs_col_schema=needs_col_schema,
+                include_grand_total=include_grand_total,
+                response_cache_key=response_cache_key,
+                path="flat_no_subtotals",
+                stages={
+                    "cacheLookupMs": self._profile_ms(cache_lookup_started_at, cache_lookup_finished_at),
+                    "pivotSpecMs": self._profile_ms(pivot_spec_started_at, pivot_spec_finished_at),
+                    "columnCatalogMs": self._profile_ms(column_catalog_started_at, column_catalog_finished_at),
+                    "flatQueryMs": self._profile_ms(flat_query_started_at, flat_query_finished_at),
+                    "flatCountMs": self._profile_ms(count_started_at, count_finished_at),
+                    "grandTotalMs": self._profile_ms(grand_total_started_at, grand_total_finished_at),
+                    "convertMs": self._profile_ms(convert_started_at, convert_finished_at),
+                    "colWindowingMs": self._profile_ms(col_window_started_at, col_window_finished_at),
+                },
+                extra=flat_query_profile if profiling else None,
+            ) if profiling else completed_response
 
         if hasattr(self.controller, 'run_hierarchy_view'):
             try:

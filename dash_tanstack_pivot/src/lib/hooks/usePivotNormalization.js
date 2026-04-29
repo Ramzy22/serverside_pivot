@@ -104,6 +104,9 @@ const normalizeCustomCategoryOperator = (value) => {
     const normalized = raw.replace(/\s+/g, '_').toLowerCase();
     if (normalized === 'startswith') return 'starts_with';
     if (normalized === 'endswith') return 'ends_with';
+    if (normalized === 'notin') return 'not_in';
+    if (normalized === 'isnull') return 'is_null';
+    if (normalized === 'isnotnull') return 'is_not_null';
     return CUSTOM_CATEGORY_OPERATORS.has(normalized) ? normalized : 'eq';
 };
 
@@ -116,7 +119,11 @@ const normalizeCustomCategoryClause = (clause, fallbackField = '') => {
     const operator = normalizeCustomCategoryOperator(clause.operator || clause.op || clause.type);
     const rawValues = Array.isArray(clause.values)
         ? clause.values
-        : (Array.isArray(clause.value) ? clause.value : []);
+        : (Array.isArray(clause.value)
+            ? clause.value
+            : (['in', 'not_in'].includes(operator) && typeof clause.value === 'string'
+                ? clause.value.split(',')
+                : []));
     const values = rawValues
         .map((item) => (item === undefined || item === null ? '' : String(item).trim()))
         .filter((item) => item !== '');

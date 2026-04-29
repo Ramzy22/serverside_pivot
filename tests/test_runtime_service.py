@@ -368,6 +368,88 @@ def test_runtime_service_groups_by_custom_category_dimension():
     assert totals_by_band == {"Large": 220, "Small": 150}
 
 
+def test_runtime_service_custom_category_multi_condition_empty_semantics_match_client():
+    adapter = create_tanstack_adapter(backend_uri=":memory:")
+    table = pa.Table.from_pydict(
+        {
+            "desk": ["", " ", None, "Rates", "FX", "Macro"],
+            "sales": [10, 20, 30, 40, 50, 60],
+        }
+    )
+    adapter.controller.load_data_from_arrow("custom_category_multi_condition_data", table)
+    service = PivotRuntimeService(adapter_getter=lambda: adapter, session_gate=SessionRequestGate())
+    category_field = "__custom_category__desk_bucket"
+    custom_dimension = {
+        "id": "desk_bucket",
+        "field": category_field,
+        "name": "Desk Bucket",
+        "fallbackLabel": "Other",
+        "rules": [
+            {
+                "id": "blank_or_rates",
+                "label": "Blank or Rates",
+                "field": "desk",
+                "condition": {
+                    "op": "OR",
+                    "clauses": [
+                        {"operator": "isNull", "value": ""},
+                        {"operator": "contains", "value": "rate"},
+                    ],
+                },
+            },
+            {
+                "id": "named_high",
+                "label": "Named High",
+                "field": "desk",
+                "condition": {
+                    "op": "AND",
+                    "clauses": [
+                        {"operator": "isNotNull", "value": ""},
+                        {"operator": "notIn", "value": "Macro"},
+                        {"field": "sales", "operator": "gte", "value": 40},
+                    ],
+                },
+            },
+        ],
+    }
+
+    response = service.process(
+        PivotViewState(
+            row_fields=[category_field],
+            val_configs=[{"field": "sales", "agg": "sum"}],
+            custom_dimensions=[custom_dimension],
+            filters={},
+            sorting=[],
+            expanded={},
+            show_row_totals=False,
+            show_col_totals=False,
+        ),
+        PivotRequestContext.from_frontend(
+            table="custom_category_multi_condition_data",
+            trigger_prop="custom-category.viewport",
+            viewport={
+                "start": 0,
+                "end": 20,
+                "window_seq": 1,
+                "state_epoch": 1,
+                "abort_generation": 1,
+                "session_id": "sess-custom-category-multi",
+                "client_instance": "client-custom-category-multi",
+                "intent": "viewport",
+                "include_grand_total": False,
+            },
+        ),
+    )
+
+    assert response.status == "data"
+    totals_by_bucket = {
+        row.get("_id"): row.get("sales_sum")
+        for row in response.data
+        if isinstance(row, dict) and not row.get("_isTotal")
+    }
+    assert totals_by_bucket == {"Blank or Rates": 100, "Named High": 50, "Other": 60}
+
+
 def test_runtime_service_cancels_superseded_viewport_work():
     class SlowAdapter:
         def __init__(self):

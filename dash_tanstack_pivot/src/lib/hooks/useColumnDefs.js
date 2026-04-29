@@ -105,6 +105,35 @@ export function useColumnDefs({
     return useMemo(() => {
         const effectiveLayoutMode = (pivotMode === 'report' || viewMode === 'tree') ? 'hierarchy' : layoutMode;
         const getFieldLabel = (field) => formatCustomAwareFieldLabel(field, customDimensions);
+        const isBlankHierarchyValue = (value) => (
+            value === undefined
+            || value === null
+            || value === ''
+            || (typeof value === 'number' && Number.isNaN(value))
+        );
+        const getTabularPathFieldValue = (rowData, field, index, depth) => {
+            if (!rowData || typeof rowData !== 'object') return undefined;
+            if (rowData._isTotal || rowData._path === '__grand_total__') return undefined;
+            const pathParts = typeof rowData._path === 'string' && rowData._path !== ''
+                ? rowData._path.split('|||')
+                : [];
+            const pathFields = Array.isArray(rowData._pathFields) ? rowData._pathFields : [];
+            const pathFieldIndex = pathFields.indexOf(field);
+            const fallbackPathIndex = pathFieldIndex >= 0 ? pathFieldIndex : index;
+            if (index > depth && pathFieldIndex < 0) return undefined;
+            return pathParts[fallbackPathIndex];
+        };
+        const getTabularRowFieldValue = (rowData, field, index, fallbackValue = undefined) => {
+            const value = fallbackValue !== undefined
+                ? fallbackValue
+                : (rowData && typeof rowData === 'object' ? rowData[field] : undefined);
+            if (effectiveLayoutMode !== 'tabular' || !isBlankHierarchyValue(value)) {
+                return value;
+            }
+            const depth = rowData && rowData.depth !== undefined ? rowData.depth : 0;
+            const pathValue = getTabularPathFieldValue(rowData, field, index, depth);
+            return isBlankHierarchyValue(pathValue) ? value : pathValue;
+        };
         const getConfigDisplayFormat = (config) => {
             if (!config) return null;
             if (config.format) return config.format;
@@ -444,7 +473,7 @@ export function useColumnDefs({
         const getReportIndentPx = (rowData, depth) => {
             const reportFormat = getReportRowFormat(rowData);
             const indent = reportFormat && Number(reportFormat.indent);
-            return Number.isFinite(indent) ? Math.max(0, indent) : (depth * HIERARCHY_INDENT_PX);
+            return (depth * HIERARCHY_INDENT_PX) + (Number.isFinite(indent) ? Math.max(0, indent) : 0);
         };
 
         // Helper: render a numeric cell value with decimal precision and negative-red coloring
@@ -815,30 +844,40 @@ export function useColumnDefs({
             rowFields.forEach((field, i) => {
                 hierarchyCols.push({
                     id: field,
-                    accessorKey: field,
+                    accessorFn: (rowData) => getTabularRowFieldValue(rowData, field, i),
                     header: getFieldLabel(field),
                     size: defaultColumnWidths.dimension,
                     enablePinning: true,
                     sortingFn,
                     meta: {
-                        rowSpan: effectiveLayoutMode === 'tabular',
+                        rowSpan: false,
                         rowSpanGroupIndex: i,
                         rowSpanScope: 'rowFields',
+                        preserveAccessorDisplayValue: effectiveLayoutMode === 'tabular',
                     },
                     cell: ({ row, getValue }) => {
-                        const val = getValue();
+                        const val = getTabularRowFieldValue(row.original, field, i, getValue());
                         // Note: We removed selectedCells from this dependency to avoid unnecessary re-renders
                         // isSelected is calculated dynamically in the renderCell function instead
                         const depth = (row.original.depth !== undefined) ? row.original.depth : (row.depth || 0);
+                        const pathFallbackValue = getTabularPathFieldValue(row.original, field, i, depth);
+                        const displayValue = isBlankHierarchyValue(val)
+                            ? (
+                                effectiveLayoutMode === 'tabular' && i <= depth && !isBlankHierarchyValue(pathFallbackValue)
+                                    ? pathFallbackValue
+                                    : (i === 0 && row.original && row.original._isTotal ? row.original._id : val)
+                            )
+                            : val;
 
                         // Outline: Show only if current column matches depth (step layout)
-                        // Tabular: Show if column is <= depth (repeat labels)
+                        // Tabular: Always show every dimension column so labels repeat on every row.
                         let showValue = true;
                         if (effectiveLayoutMode === 'outline') {
                             if (i !== depth) showValue = false;
                         } else {
-                            // Tabular
-                            if (i > depth) showValue = false;
+                            // Tabular: suppress non-first columns only on the grand total row
+                            const isGrandTotal = row.original && (row.original._isTotal || row.original._path === '__grand_total__');
+                            if (isGrandTotal && i > 0) showValue = false;
                         }
 
                         // Expander only on the active level column
@@ -871,7 +910,7 @@ export function useColumnDefs({
                                         )}
                                     </button>
                                 )}
-                                {showValue ? val : ''}
+                                {showValue ? displayValue : ''}
                                 {/* Report mode: Top N indicator */}
                                 {pivotMode === 'report' && showValue && row.original && row.original._levelTopN && (
                                     <span style={{

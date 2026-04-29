@@ -545,6 +545,7 @@ def test_runtime_request_state_override_is_extracted_for_all_request_kinds():
         "expanded": True,
         "showRowTotals": False,
         "showColTotals": True,
+        "showSubtotals": False,
         "viewMode": "report",
         "reportDef": {
             "root": {
@@ -562,6 +563,7 @@ def test_runtime_request_state_override_is_extracted_for_all_request_kinds():
     assert _state_override_value(override, "rowFields", ["stale"], list) == ["desk", "book"]
     assert _state_override_value(override, "expanded", {}, (dict, bool)) is True
     assert _state_override_value(override, "showRowTotals", True, bool) is False
+    assert _state_override_value(override, "showSubtotals", True, bool) is False
     restored_report = _state_override_value(override, "reportDef", {}, dict)
     assert restored_report["root"]["format"]["borderStyle"] == "solid"
     assert _state_override_value(override, "missing", "fallback", str) == "fallback"
@@ -583,6 +585,7 @@ def test_runtime_export_context_uses_state_override_sorting_and_effective_state(
                 "expanded": True,
                 "showRowTotals": False,
                 "showColTotals": True,
+                "showSubtotals": False,
             },
         },
         table_name="stale_sales",
@@ -597,6 +600,7 @@ def test_runtime_export_context_uses_state_override_sorting_and_effective_state(
         expanded={},
         show_row_totals=True,
         show_col_totals=False,
+        show_subtotals=True,
     )
 
     assert context.request.table == "stale_sales"
@@ -606,6 +610,7 @@ def test_runtime_export_context_uses_state_override_sorting_and_effective_state(
     assert context.request.filters == {"region": ["North"]}
     assert context.request.row_totals is False
     assert context.request.totals is True
+    assert context.request.include_subtotals is False
     assert context.expanded is True
     assert context.row_fields == ["region"]
     assert context.val_configs == [{"field": "sales", "agg": "sum"}]

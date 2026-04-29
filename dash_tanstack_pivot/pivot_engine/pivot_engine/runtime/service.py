@@ -266,6 +266,7 @@ class PivotRuntimeService:
             else None,
             totals=state.show_col_totals,
             row_totals=state.show_row_totals,
+            include_subtotals=state.show_subtotals,
             version=context.window_seq,
             column_sort_options=column_sort_options or None,
         )

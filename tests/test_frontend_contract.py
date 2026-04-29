@@ -284,6 +284,7 @@ def test_report_mode_supports_formatting_validation_debug_and_collapsed_levels()
     assert "_reportDisplayLabel" in column_source
     assert "const HIERARCHY_INDENT_PX = 32;" in column_source
     assert "depth * HIERARCHY_INDENT_PX" in column_source
+    assert "(depth * HIERARCHY_INDENT_PX) + (Number.isFinite(indent)" in column_source
     assert "getReportIndentPx" in column_source
     assert "id.startsWith('_report')" in column_source
     assert "showReportConfigColumn !== false && typeof onConfigureReportLine" in column_source
@@ -2825,6 +2826,7 @@ def test_view_state_restore_rehydrates_server_side_runtime_requests():
     assert "const dispatchServerSideRuntimeSetProps = useCallback" in component_source
     assert "setProps: dispatchServerSideRuntimeSetProps" in component_source
     assert "state_override: buildRuntimeRequestStateOverride() || undefined" in component_source
+    assert "showSubtotals" in component_source
     assert "reportDef," in component_source
     assert "customDimensions" in component_source
 
@@ -2834,9 +2836,70 @@ def test_view_state_restore_rehydrates_server_side_runtime_requests():
     assert '_state_override_value(request_state_override, "rowFields", row_fields or [], list)' in callback_source
     assert '_state_override_value(request_state_override, "customDimensions", custom_dimensions or [], list)' in callback_source
     assert '_state_override_value(request_state_override, "expanded", expanded, (dict, bool))' in callback_source
+    assert '"showSubtotals"' in callback_source
     assert 'view_mode=effective_view_mode' in callback_source
     assert 'report_def=effective_report_def' in callback_source
     assert 'custom_dimensions=effective_custom_dimensions' in callback_source
+
+
+def test_tabular_mode_repeats_labels_and_subtotal_toggle_is_exposed():
+    column_defs_source = Path(
+        os.path.join(
+            os.getcwd(),
+            "dash_tanstack_pivot",
+            "src",
+            "lib",
+            "hooks",
+            "useColumnDefs.js",
+        )
+    ).read_text(encoding="utf-8")
+    appbar_source = Path(
+        os.path.join(
+            os.getcwd(),
+            "dash_tanstack_pivot",
+            "src",
+            "lib",
+            "components",
+            "PivotAppBar.js",
+        )
+    ).read_text(encoding="utf-8")
+    component_source = Path(
+        os.path.join(
+            os.getcwd(),
+            "dash_tanstack_pivot",
+            "src",
+            "lib",
+            "components",
+            "DashTanstackPivot.react.js",
+        )
+    ).read_text(encoding="utf-8")
+    render_helpers_source = Path(
+        os.path.join(
+            os.getcwd(),
+            "dash_tanstack_pivot",
+            "src",
+            "lib",
+            "hooks",
+            "useRenderHelpers.js",
+        )
+    ).read_text(encoding="utf-8")
+
+    assert "rowSpan: false" in column_defs_source
+    assert "rowSpan: effectiveLayoutMode === 'tabular'" not in column_defs_source
+    assert "accessorFn: (rowData) => getTabularRowFieldValue(rowData, field, i)" in column_defs_source
+    assert "getTabularPathFieldValue" in column_defs_source
+    assert "preserveAccessorDisplayValue: effectiveLayoutMode === 'tabular'" in column_defs_source
+    assert "const preserveAccessorDisplayValue = Boolean" in render_helpers_source
+    assert "preserveAccessorDisplayValue" in render_helpers_source
+    assert "_path.split('|||')" in column_defs_source
+    assert "const displayValue = isBlankHierarchyValue(val)" in column_defs_source
+    assert "showSubtotals" in appbar_source
+    assert "Subtotals" in appbar_source
+    assert "setShowSubtotals(prev => !prev)" in appbar_source
+    assert "include_subtotals: showSubtotals ? undefined : false" in component_source
+    assert "includeSubtotals: showSubtotals" in component_source
+    assert "include_subtotals: layoutMode === 'tabular'" not in component_source
+    assert "includeSubtotals: layoutMode !== 'tabular'" not in component_source
 
 
 def test_client_side_custom_categories_materialize_before_filtering():
@@ -2864,6 +2927,9 @@ def test_client_side_custom_categories_materialize_before_filtering():
     assert "export const evaluateCustomCategoryDimension" in normalization_source
     assert "export const evaluateCustomCategoryCondition" in normalization_source
     assert "export const applyCustomDimensionsToRows" in normalization_source
+    assert "if (normalized === 'notin') return 'not_in';" in normalization_source
+    assert "if (normalized === 'isnull') return 'is_null';" in normalization_source
+    assert "clause.value.split(',')" in normalization_source
     assert "evaluateCustomCategoryDimension(nextRow, dimension)" in normalization_source
     assert "serverSide ? cleanData : applyCustomDimensionsToRows(cleanData, customDimensions)" in component_source
     assert "data={customAwareData}" in component_source
