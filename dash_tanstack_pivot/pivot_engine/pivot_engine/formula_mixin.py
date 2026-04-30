@@ -161,17 +161,129 @@ class FormulaEngineMixin:
     def _extract_formula_identifiers(expression: Any) -> List[str]:
         if not isinstance(expression, str):
             return []
-        return list(dict.fromkeys(_FORMULA_IDENTIFIER_RE.findall(expression)))
+        expression_without_bracket_refs = _COLUMN_FORMULA_REF_RE.sub(" ", expression)
+        return list(dict.fromkeys(_FORMULA_IDENTIFIER_RE.findall(expression_without_bracket_refs)))
+
+    @staticmethod
+    def _extract_formula_references(expression: Any) -> List[str]:
+        if not isinstance(expression, str):
+            return []
+        references: List[str] = []
+        seen: set[str] = set()
+
+        def add_reference(value: Any) -> None:
+            reference = str(value or "").strip()
+            if reference and reference not in seen:
+                references.append(reference)
+                seen.add(reference)
+
+        for match in _COLUMN_FORMULA_REF_RE.finditer(expression):
+            add_reference(match.group(1))
+
+        expression_without_bracket_refs = _COLUMN_FORMULA_REF_RE.sub(" ", expression)
+        for identifier in _FORMULA_IDENTIFIER_RE.findall(expression_without_bracket_refs):
+            add_reference(identifier)
+
+        return references
 
     def _canonicalize_formula_expression(self, expression: Any, alias_map: Dict[str, str]) -> str:
-        if not isinstance(expression, str) or not alias_map:
+        if not isinstance(expression, str):
             return str(expression or "")
         normalized = str(expression)
+        if not alias_map:
+            return normalized
+        protected_refs: List[str] = []
+
+        def protect_bracket_reference(match: Any) -> str:
+            protected_refs.append(match.group(0))
+            return f"\x00{len(protected_refs) - 1}\x00"
+
+        normalized = _COLUMN_FORMULA_REF_RE.sub(protect_bracket_reference, normalized)
         for alias, canonical in sorted(alias_map.items(), key=lambda item: len(item[0]), reverse=True):
             if not alias:
                 continue
             normalized = re.sub(rf"\b{re.escape(alias)}\b", canonical, normalized, flags=re.IGNORECASE)
+        for index, raw_reference in enumerate(protected_refs):
+            normalized = normalized.replace(f"\x00{index}\x00", raw_reference)
         return normalized
+
+    def _canonicalize_bracketed_formula_references(
+        self,
+        expression: Any,
+        namespace: Dict[str, Any],
+        alias_map: Optional[Dict[str, str]] = None,
+    ) -> str:
+        if not isinstance(expression, str):
+            return str(expression or "")
+
+        reference_tokens: Dict[str, str] = {}
+        alias_map = alias_map or {}
+
+        def next_reference_token() -> str:
+            token_index = len(reference_tokens) + 1
+            token = f"__formula_ref_{token_index}"
+            while token in namespace:
+                token_index += 1
+                token = f"__formula_ref_{token_index}"
+            return token
+
+        def replace_reference(match: Any) -> str:
+            reference = str(match.group(1) or "").strip()
+            if not reference:
+                return "missing_reference"
+            token = reference_tokens.get(reference)
+            if token is None:
+                token = next_reference_token()
+                reference_tokens[reference] = token
+                target = alias_map.get(reference.lower(), reference)
+                namespace[token] = namespace.get(target, namespace.get(reference, MISSING_FORMULA_VALUE))
+            return token
+
+        return _COLUMN_FORMULA_REF_RE.sub(replace_reference, expression)
+
+    def _canonicalize_named_formula_references(
+        self,
+        expression: Any,
+        namespace: Dict[str, Any],
+    ) -> str:
+        if not isinstance(expression, str):
+            return str(expression or "")
+
+        normalized = expression
+        token_index = 1
+        named_references = sorted(
+            (
+                str(reference)
+                for reference in namespace.keys()
+                if isinstance(reference, str)
+                and reference.strip()
+                and not _FORMULA_IDENTIFIER_RE.fullmatch(reference)
+            ),
+            key=len,
+            reverse=True,
+        )
+        for reference in named_references:
+            pattern = re.compile(rf"(?<![A-Za-z0-9_]){re.escape(reference)}(?![A-Za-z0-9_])")
+            if not pattern.search(normalized):
+                continue
+            token = f"__formula_named_ref_{token_index}"
+            while token in namespace:
+                token_index += 1
+                token = f"__formula_named_ref_{token_index}"
+            namespace[token] = namespace.get(reference, MISSING_FORMULA_VALUE)
+            normalized = pattern.sub(token, normalized)
+            token_index += 1
+        return normalized
+
+    def _prepare_formula_expression(
+        self,
+        expression: Any,
+        alias_map: Dict[str, str],
+        namespace: Dict[str, Any],
+    ) -> str:
+        formula_expr = self._canonicalize_formula_expression(expression, alias_map)
+        formula_expr = self._canonicalize_bracketed_formula_references(formula_expr, namespace, alias_map)
+        return self._canonicalize_named_formula_references(formula_expr, namespace)
 
     def _build_formula_evaluation_plan(self, formula_cols: List[Dict[str, Any]]) -> tuple[List[Dict[str, Any]], set[str], set[str]]:
         formula_by_id = {
@@ -194,7 +306,7 @@ class FormulaEngineMixin:
         ordered_formula_ids = [str(col.get("id")) for col in formula_cols if isinstance(col, dict) and col.get("id")]
 
         for formula_id, col in formula_by_id.items():
-            identifiers = set(self._extract_formula_identifiers(col.get("formulaExpr", "")))
+            identifiers = set(self._extract_formula_references(col.get("formulaExpr", "")))
             canonical_dependencies = {
                 formula_alias_to_id[identifier.lower()]
                 for identifier in identifiers
@@ -667,7 +779,11 @@ class FormulaEngineMixin:
 
                     for fcol in formula_plan:
                         formula_id = fcol.get("id", "")
-                        formula_expr = self._canonicalize_formula_expression(fcol.get("formulaExpr", ""), formula_alias_map)
+                        formula_expr = self._prepare_formula_expression(
+                            fcol.get("formulaExpr", ""),
+                            formula_alias_map,
+                            namespace,
+                        )
                         if not formula_id or not formula_expr:
                             continue
                         result_key = f"{prefix}_{formula_id}"
@@ -722,7 +838,11 @@ class FormulaEngineMixin:
 
                 for fcol in formula_plan:
                     formula_id = fcol.get("id", "")
-                    formula_expr = self._canonicalize_formula_expression(fcol.get("formulaExpr", ""), formula_alias_map)
+                    formula_expr = self._prepare_formula_expression(
+                        fcol.get("formulaExpr", ""),
+                        formula_alias_map,
+                        namespace,
+                    )
                     if not formula_id or not formula_expr:
                         continue
                     result = self._evaluate_formula_expression(parser, formula_expr, namespace)

@@ -85,6 +85,53 @@ def test_runtime_service_build_request_columns_preserves_column_formula_scope():
     assert formula_column["formulaExpr"] == "[Laptop_sales_sum] - [Phone_sales_sum]"
 
 
+def test_runtime_service_build_request_columns_auto_injects_bracketed_field_names():
+    columns = PivotRuntimeService._build_request_columns(
+        row_fields=["region"],
+        col_fields=[],
+        val_configs=[
+            {
+                "field": "formula_1",
+                "agg": "formula",
+                "label": "Spread",
+                "formula": "[Gross Sales] - [Net Cost]",
+            },
+        ],
+    )
+
+    implicit_fields = {
+        column.get("aggregationField")
+        for column in columns
+        if isinstance(column, dict) and column.get("_isImplicitFormulaRef")
+    }
+
+    assert implicit_fields == {"Gross Sales", "Net Cost"}
+    assert "Gross" not in implicit_fields
+    assert "Sales" not in implicit_fields
+
+
+def test_runtime_service_build_request_columns_skips_displayed_column_formula_refs_for_implicit_injection():
+    columns = PivotRuntimeService._build_request_columns(
+        row_fields=["region"],
+        col_fields=["product"],
+        val_configs=[
+            {"field": "sales", "agg": "sum"},
+            {
+                "field": "formula_1",
+                "agg": "formula",
+                "label": "Laptop minus Phone",
+                "formula": "[Laptop_sales_sum] - [Phone_sales_sum]",
+                "formulaScope": "columns",
+            },
+        ],
+    )
+
+    assert not any(
+        isinstance(column, dict) and column.get("_isImplicitFormulaRef")
+        for column in columns
+    )
+
+
 @pytest.mark.asyncio
 async def test_formula_columns_are_applied_in_flat_mode():
     adapter = create_tanstack_adapter(backend_uri=":memory:")
@@ -136,6 +183,102 @@ async def test_formula_columns_are_applied_in_flat_mode():
         for column in response.columns
         if isinstance(column, dict)
     )
+
+
+@pytest.mark.asyncio
+async def test_formula_columns_accept_bracketed_field_names_with_spaces():
+    adapter = create_tanstack_adapter(backend_uri=":memory:")
+    adapter.controller.load_data_from_arrow(
+        "sales_data",
+        pa.Table.from_pydict(
+            {
+                "region": ["North", "South"],
+                "Gross Sales": [100, 200],
+                "Net Cost": [80, 150],
+            }
+        ),
+    )
+
+    request = TanStackRequest(
+        operation=TanStackOperation.GET_DATA,
+        table="sales_data",
+        columns=[
+            {"id": "region"},
+            {"id": "Gross Sales_sum", "aggregationField": "Gross Sales", "aggregationFn": "sum"},
+            {"id": "Net Cost_sum", "aggregationField": "Net Cost", "aggregationFn": "sum"},
+            {
+                "id": "formula_1",
+                "header": "Margin",
+                "accessorKey": "formula_1",
+                "formulaExpr": "[Gross Sales] - [Net Cost]",
+                "formulaLabel": "Margin",
+                "isFormula": True,
+            },
+        ],
+        filters={},
+        sorting=[],
+        grouping=["region"],
+        aggregations=[],
+    )
+
+    response = await adapter.handle_request(request)
+
+    rows = {
+        row["region"]: row
+        for row in response.data
+        if isinstance(row, dict) and not row.get("_isTotal")
+    }
+
+    assert rows["North"]["formula_1"] == pytest.approx(20.0)
+    assert rows["South"]["formula_1"] == pytest.approx(50.0)
+
+
+@pytest.mark.asyncio
+async def test_formula_columns_tolerate_raw_spaced_field_names_when_measure_is_known():
+    adapter = create_tanstack_adapter(backend_uri=":memory:")
+    adapter.controller.load_data_from_arrow(
+        "sales_data",
+        pa.Table.from_pydict(
+            {
+                "region": ["North", "South"],
+                "Gross Sales": [100, 200],
+                "Net Cost": [80, 150],
+            }
+        ),
+    )
+
+    request = TanStackRequest(
+        operation=TanStackOperation.GET_DATA,
+        table="sales_data",
+        columns=[
+            {"id": "region"},
+            {"id": "Gross Sales_sum", "aggregationField": "Gross Sales", "aggregationFn": "sum"},
+            {"id": "Net Cost_sum", "aggregationField": "Net Cost", "aggregationFn": "sum"},
+            {
+                "id": "formula_1",
+                "header": "Margin",
+                "accessorKey": "formula_1",
+                "formulaExpr": "Gross Sales - Net Cost",
+                "formulaLabel": "Margin",
+                "isFormula": True,
+            },
+        ],
+        filters={},
+        sorting=[],
+        grouping=["region"],
+        aggregations=[],
+    )
+
+    response = await adapter.handle_request(request)
+
+    rows = {
+        row["region"]: row
+        for row in response.data
+        if isinstance(row, dict) and not row.get("_isTotal")
+    }
+
+    assert rows["North"]["formula_1"] == pytest.approx(20.0)
+    assert rows["South"]["formula_1"] == pytest.approx(50.0)
 
 
 @pytest.mark.asyncio

@@ -27,7 +27,10 @@ import { usePivotRenderCounter } from '../../hooks/usePivotRenderCounter';
 import { ReportEditor } from './ReportEditor';
 
 const FORMULA_REFERENCE_RE = /\b[A-Za-z_][A-Za-z0-9_]*\b/g;
+const SIMPLE_FORMULA_REFERENCE_RE = /^[A-Za-z_][A-Za-z0-9_]*$/;
 const COLUMN_FORMULA_REFERENCE_RE = /\[([^\]]+)\]/g;
+const FORMULA_FUNCTION_NAMES = new Set(['abs', 'round', 'ceil', 'floor', 'max', 'min', 'int', 'float']);
+const FORMULA_RESERVED_REFERENCES = new Set(['True', 'False', 'None', 'and', 'or', 'not', 'if', 'else', 'in', 'is']);
 const DEFAULT_VALUE_SPARKLINE_CONFIG = {
     type: 'line',
     metric: 'last',
@@ -670,9 +673,49 @@ function extractColumnFormulaReferences(expression) {
     return refs;
 }
 
+function extractValueFormulaReferences(expression, knownReferences = []) {
+    const source = String(expression || '');
+    const references = [];
+    const seen = new Set();
+    const addReference = (value) => {
+        const ref = String(value || '').trim();
+        if (!ref || seen.has(ref)) return;
+        references.push(ref);
+        seen.add(ref);
+    };
+
+    extractColumnFormulaReferences(source).forEach(addReference);
+    let expressionWithoutBracketRefs = source.replace(COLUMN_FORMULA_REFERENCE_RE, ' ');
+    const knownReferenceList = (Array.isArray(knownReferences) ? knownReferences : Array.from(knownReferences || []))
+        .map((reference) => String(reference || '').trim())
+        .filter((reference) => reference && !SIMPLE_FORMULA_REFERENCE_RE.test(reference))
+        .sort((a, b) => b.length - a.length);
+    knownReferenceList.forEach((reference) => {
+        const pattern = new RegExp(`(^|[^A-Za-z0-9_])${escapeRegExp(reference)}(?=$|[^A-Za-z0-9_])`, 'g');
+        expressionWithoutBracketRefs = expressionWithoutBracketRefs.replace(pattern, (match, prefix) => {
+            addReference(reference);
+            return `${prefix} `;
+        });
+    });
+    expressionWithoutBracketRefs.replace(FORMULA_REFERENCE_RE, (token, offset) => {
+        const tail = expressionWithoutBracketRefs.slice(offset + token.length).trimStart();
+        if (FORMULA_RESERVED_REFERENCES.has(token)) return token;
+        if (FORMULA_FUNCTION_NAMES.has(token) && tail.startsWith('(')) return token;
+        addReference(token);
+        return token;
+    });
+    return references;
+}
+
 function formatColumnFormulaReference(columnId) {
     const id = String(columnId || '').trim();
     return id ? `[${id}]` : '';
+}
+
+function formatValueFormulaReference(reference) {
+    const token = String(reference || '').trim();
+    if (!token) return '';
+    return SIMPLE_FORMULA_REFERENCE_RE.test(token) ? token : `[${token}]`;
 }
 
 function buildFormulaReferenceKey(label, valConfigs, fallback = 'formula') {
@@ -700,7 +743,19 @@ function buildFormulaReferenceKey(label, valConfigs, fallback = 'formula') {
 
 function replaceIdentifierToken(expression, oldToken, newToken) {
     if (!expression || !oldToken || oldToken === newToken) return expression;
-    return String(expression).replace(new RegExp(`\\b${escapeRegExp(oldToken)}\\b`, 'g'), newToken);
+    const replacement = formatValueFormulaReference(newToken);
+    const protectedRefs = [];
+    const withProtectedRefs = String(expression).replace(COLUMN_FORMULA_REFERENCE_RE, (match, rawRef) => {
+        if (String(rawRef || '').trim() === oldToken) return replacement;
+        protectedRefs.push(match);
+        return `@@${protectedRefs.length - 1}@@`;
+    });
+    let nextExpression = withProtectedRefs
+        .replace(new RegExp(`\\b${escapeRegExp(oldToken)}\\b`, 'g'), replacement);
+    protectedRefs.forEach((rawRef, index) => {
+        nextExpression = nextExpression.replace(`@@${index}@@`, rawRef);
+    });
+    return nextExpression;
 }
 
 function updateValueConfig(setValConfigs, idx, updater) {
@@ -793,8 +848,12 @@ function sanitizeValueSparklineForCapabilities(value, capabilities) {
 
 function buildSuggestedFormula(baseValues) {
     if (!Array.isArray(baseValues) || baseValues.length === 0) return '';
-    if (baseValues.length === 1) return `${baseValues[0].field} * 100`;
-    return `${baseValues[0].field} - ${baseValues[1].field}`;
+    const refs = baseValues
+        .map((value) => value && formatValueFormulaReference(value.field))
+        .filter(Boolean);
+    if (refs.length === 0) return '';
+    if (refs.length === 1) return `${refs[0]} * 100`;
+    return `${refs[0]} - ${refs[1]}`;
 }
 
 function buildSuggestedColumnFormula(displayedColumnOptions) {
@@ -833,7 +892,7 @@ function inspectFormulaExpression(
             tone: 'warning',
             text: columnFormulaScope
                 ? 'Enter a formula using bracketed rendered columns. Example: [Cash Equity_day_pnl_sum] - [ETF_day_pnl_sum]'
-                : 'Enter a formula using value fields. Example: sales - cost',
+                : 'Enter a formula using value fields. Example: sales - [day pnl]',
         };
     }
 
@@ -920,7 +979,8 @@ function inspectFormulaExpression(
             ? normalizeFormulaReferenceKey(currentFormulaRef || getFormulaReferenceKey(config), config.field)
             : getFormulaReferenceKey(config)
     )).filter(Boolean), ...(Array.isArray(availableRawFields) ? availableRawFields : [])]);
-    const references = Array.from(new Set(trimmed.match(FORMULA_REFERENCE_RE) || []));
+    const knownReferences = Array.from(availableTokens);
+    const references = extractValueFormulaReferences(trimmed, knownReferences);
     const canonicalReferences = references.map((token) => formulaReferenceMap.get(token) || formulaReferenceMap.get(token.toLowerCase()) || token);
     const unknownReferences = canonicalReferences.filter((token) => !availableTokens.has(token) && !measureTokenSet.has(token));
     if (unknownReferences.length > 0) {
@@ -958,7 +1018,7 @@ function inspectFormulaExpression(
                 ? currentToken
                 : getFormulaReferenceKey(config);
             const expr = config.field === currentField ? trimmed : String(config.formula || '');
-            const exprTokens = Array.from(new Set(expr.match(FORMULA_REFERENCE_RE) || []))
+            const exprTokens = extractValueFormulaReferences(expr, knownReferences)
                 .map((token) => formulaReferenceMap.get(token) || formulaReferenceMap.get(token.toLowerCase()) || token)
                 .filter((token) => token !== configToken && formulaConfigs.some((candidate) => getFormulaReferenceKey(candidate) === token || (candidate.field === currentField && currentToken === token)));
             dependencyMap[configToken] = exprTokens;
@@ -1063,21 +1123,8 @@ function FormulaChip({ item, idx, valConfigs, setValConfigs, theme, styles, drop
         flexShrink: 0,
     };
 
-    const placeholder = nonFormulaVals.length >= 2
-        ? `${nonFormulaVals[0].field} - ${nonFormulaVals[1].field}`
-        : nonFormulaVals.length === 1
-            ? `${nonFormulaVals[0].field} * 100`
-            : 'expression...';
-
-    const templateButtons = nonFormulaVals.length >= 2
-        ? [
-            { label: 'Difference', value: `${nonFormulaVals[0].field} - ${nonFormulaVals[1].field}` },
-            { label: 'Ratio %', value: `(${nonFormulaVals[0].field} / ${nonFormulaVals[1].field}) * 100` },
-            { label: 'Margin %', value: `((${nonFormulaVals[0].field} - ${nonFormulaVals[1].field}) / ${nonFormulaVals[0].field}) * 100` },
-        ]
-        : nonFormulaVals.length === 1
-            ? [{ label: 'Scale x100', value: `${nonFormulaVals[0].field} * 100` }]
-            : [];
+    const placeholder = buildSuggestedFormula(nonFormulaVals) || 'expression...';
+    const templateButtons = buildFormulaTemplates(nonFormulaVals);
 
     const statusColors = {
         muted: {
@@ -1128,7 +1175,7 @@ function FormulaChip({ item, idx, valConfigs, setValConfigs, theme, styles, drop
                     <div style={{ fontSize: '9px', color: theme.textSec, textTransform: 'uppercase', letterSpacing: '0.6px', marginBottom: '4px' }}>Fields — click to insert</div>
                     <div style={{ display: 'flex', flexWrap: 'wrap', gap: '4px' }}>
                         {nonFormulaVals.map(v => (
-                            <button key={v.field} type="button" onClick={() => insertAtCursor(v.field)} style={{
+                            <button key={v.field} type="button" onClick={() => insertAtCursor(formatValueFormulaReference(v.field))} style={{
                                 border: `1px solid ${theme.primary}88`,
                                 background: `${theme.primary}14`,
                                 color: theme.primary,
@@ -1200,13 +1247,17 @@ function FormulaChip({ item, idx, valConfigs, setValConfigs, theme, styles, drop
 
 function buildFormulaTemplates(baseValues) {
     if (!Array.isArray(baseValues) || baseValues.length === 0) return [];
-    if (baseValues.length === 1) {
-        return [{ label: 'Scale x100', value: `${baseValues[0].field} * 100` }];
+    const refs = baseValues
+        .map((value) => value && formatValueFormulaReference(value.field))
+        .filter(Boolean);
+    if (refs.length === 0) return [];
+    if (refs.length === 1) {
+        return [{ label: 'Scale x100', value: `${refs[0]} * 100` }];
     }
     return [
-        { label: 'Difference', value: `${baseValues[0].field} - ${baseValues[1].field}` },
-        { label: 'Ratio %', value: `(${baseValues[0].field} / ${baseValues[1].field}) * 100` },
-        { label: 'Margin %', value: `((${baseValues[0].field} - ${baseValues[1].field}) / ${baseValues[0].field}) * 100` },
+        { label: 'Difference', value: `${refs[0]} - ${refs[1]}` },
+        { label: 'Ratio %', value: `(${refs[0]} / ${refs[1]}) * 100` },
+        { label: 'Margin %', value: `((${refs[0]} - ${refs[1]}) / ${refs[0]}) * 100` },
     ];
 }
 
@@ -2265,7 +2316,7 @@ function FormulaEditor({ item, idx, valConfigs, setValConfigs, theme, onRemove }
                                     key={valueConfig.field}
                                     type="button"
                                     onMouseDown={(event) => event.preventDefault()}
-                                    onClick={() => insertAtCursor(valueConfig.field)}
+                                    onClick={() => insertAtCursor(formatValueFormulaReference(valueConfig.field))}
                                     style={chipButtonStyle}
                                     title={`Insert: ${valueConfig.field}`}
                                 >
@@ -2368,7 +2419,7 @@ function FormulaEditorModal({ item, idx, valConfigs, setValConfigs, theme, onClo
     const placeholder = React.useMemo(
         () => (isColumnFormulaScope(draft.formulaScope)
             ? (buildSuggestedColumnFormula(columnReferenceOptions) || '[column_id] - [other_column_id]')
-            : (buildSuggestedFormula(measureReferences) || `${draft.formulaRef || item.field} * 100`)),
+            : (buildSuggestedFormula(measureReferences) || `${formatValueFormulaReference(draft.formulaRef || item.field)} * 100`)),
         [columnReferenceOptions, draft.formulaRef, draft.formulaScope, item.field, measureReferences]
     );
     const hasPendingChanges = draft.label !== (item.label || '')
@@ -2701,7 +2752,7 @@ function FormulaEditorModal({ item, idx, valConfigs, setValConfigs, theme, onClo
                                         key={config.field}
                                         type="button"
                                         onMouseDown={(event) => event.preventDefault()}
-                                        onClick={() => insertAtCursor(config.field)}
+                                        onClick={() => insertAtCursor(formatValueFormulaReference(config.field))}
                                         style={tokenButtonStyle}
                                         title={`Insert ${config.field}`}
                                     >
@@ -2720,7 +2771,7 @@ function FormulaEditorModal({ item, idx, valConfigs, setValConfigs, theme, onClo
                                         key={config.field}
                                         type="button"
                                         onMouseDown={(event) => event.preventDefault()}
-                                        onClick={() => insertAtCursor(getFormulaReferenceKey(config))}
+                                        onClick={() => insertAtCursor(formatValueFormulaReference(getFormulaReferenceKey(config)))}
                                         style={tokenButtonStyle}
                                         title={`${getFormulaReferenceKey(config)}${config.label ? ` (${config.label})` : ''}`}
                                     >
@@ -2739,7 +2790,7 @@ function FormulaEditorModal({ item, idx, valConfigs, setValConfigs, theme, onClo
                                         key={f}
                                         type="button"
                                         onMouseDown={(event) => event.preventDefault()}
-                                        onClick={() => insertAtCursor(f)}
+                                        onClick={() => insertAtCursor(formatValueFormulaReference(f))}
                                         style={{ ...tokenButtonStyle, borderColor: `${theme.primary}66`, color: theme.primary, background: `${theme.primary}0d` }}
                                         title={`Insert: ${f}`}
                                     >

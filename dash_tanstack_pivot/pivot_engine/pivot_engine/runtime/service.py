@@ -1633,13 +1633,48 @@ class PivotRuntimeService:
             if isinstance(measure, dict) and measure.get("agg") == "formula"
         }
         _FORMULA_IDENT_RE = re.compile(r'\b[A-Za-z_][A-Za-z0-9_]*\b')
+        _FORMULA_BRACKET_REF_RE = re.compile(r"\[([^\]]+)\]")
         _RESERVED = {"True", "False", "None", "and", "or", "not", "if", "else", "in", "is"}
+
+        def _extract_formula_references(expression: Any) -> List[str]:
+            references: List[str] = []
+            seen: set = set()
+            text = str(expression or "")
+
+            def add_reference(value: Any) -> None:
+                reference = str(value or "").strip()
+                if reference and reference not in seen:
+                    references.append(reference)
+                    seen.add(reference)
+
+            for match in _FORMULA_BRACKET_REF_RE.finditer(text):
+                add_reference(match.group(1))
+
+            text_without_bracket_refs = _FORMULA_BRACKET_REF_RE.sub(" ", text)
+            for ident in _FORMULA_IDENT_RE.findall(text_without_bracket_refs):
+                add_reference(ident)
+            return references
+
         already_implicit: set = set()
         for measure in (val_configs or []):
             if not isinstance(measure, dict) or measure.get("agg") != "formula":
                 continue
+            raw_formula_scope = (
+                measure.get("formulaScope")
+                or measure.get("formula_scope")
+                or measure.get("scope")
+            )
+            if str(raw_formula_scope or "").strip().lower() in {
+                "columns",
+                "display",
+                "displayed",
+                "displayed_columns",
+                "rendered",
+                "rendered_columns",
+            }:
+                continue
             expr = measure.get("formula") or ""
-            for ident in _FORMULA_IDENT_RE.findall(str(expr)):
+            for ident in _extract_formula_references(expr):
                 if (
                     ident in _RESERVED
                     or ident in existing_agg_fields

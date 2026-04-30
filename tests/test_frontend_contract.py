@@ -169,6 +169,28 @@ def test_displayed_column_formula_scope_is_exposed_in_sidebar_and_component():
     assert "formulaScope: PropTypes.oneOf(['measures', 'columns'])" in component_source
 
 
+def test_value_formula_editor_brackets_field_names_that_are_not_identifiers():
+    sidebar_source = Path(
+        os.path.join(
+            os.getcwd(),
+            "dash_tanstack_pivot",
+            "src",
+            "lib",
+            "components",
+            "Sidebar",
+            "SidebarPanel.js",
+        )
+    ).read_text(encoding="utf-8")
+
+    assert "function formatValueFormulaReference" in sidebar_source
+    assert "SIMPLE_FORMULA_REFERENCE_RE.test(token) ? token : `[${token}]`" in sidebar_source
+    assert "function extractValueFormulaReferences" in sidebar_source
+    assert "knownReferenceList" in sidebar_source
+    assert "extractValueFormulaReferences(trimmed, knownReferences)" in sidebar_source
+    assert "insertAtCursor(formatValueFormulaReference(config.field))" in sidebar_source
+    assert "insertAtCursor(formatValueFormulaReference(f))" in sidebar_source
+
+
 def test_report_editor_lists_outline_and_uses_row_override_language():
     report_source = Path(
         os.path.join(
