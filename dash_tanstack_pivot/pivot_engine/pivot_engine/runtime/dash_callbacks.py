@@ -235,6 +235,9 @@ def _build_runtime_export_context(
     )
     resolved_table = table_name or request_payload.get("table")
     effective_filters = effective_filters or {}
+    request_layout_mode = "hierarchy"
+    if isinstance(request_payload, dict) and request_payload.get("layout_mode"):
+        request_layout_mode = str(request_payload["layout_mode"])
 
     return _RuntimeExportContext(
         request=TanStackRequest(
