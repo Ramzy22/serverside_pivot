@@ -206,7 +206,14 @@ class HierarchicalVirtualScrollManager:
             try:
                 # Only pass dimension filters (pre_filters) to column discovery
                 col_query = self.planner._build_column_values_query(
-                    spec.table, spec.columns, pre_filters, top_n, col_order_measure, None, spec.column_sort_options
+                    spec.table,
+                    spec.columns,
+                    pre_filters,
+                    top_n,
+                    col_order_measure,
+                    None,
+                    spec.column_sort_options,
+                    getattr(spec, "custom_dimensions", []),
                 )
                 col_data = self._to_pyarrow(col_query)
                 pivot_col_values = col_data['_col_key'].to_pylist()
@@ -1056,4 +1063,3 @@ class HierarchicalVirtualScrollManager:
 
         # Final conversion to list of dicts (fastest way from Arrow)
         return result_table.to_pylist()
-

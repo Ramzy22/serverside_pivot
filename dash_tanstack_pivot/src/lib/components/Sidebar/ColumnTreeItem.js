@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import Icons from '../../utils/Icons';
 import { getAllLeafColumns, getAllLeafIdsFromColumn, hasChildrenInZone } from '../../utils/helpers';
 import { formatDisplayLabel } from '../../utils/helpers';
@@ -7,6 +7,7 @@ const ColumnTreeItem = ({ column, level, theme, styles, handlePinColumn, colSear
     const [expanded, setExpanded] = useState(level < 1); // Only expand root level by default
     const [isHovered, setIsHovered] = useState(false);
     const [isDragging, setIsDragging] = useState(false);
+    const checkboxRef = useRef(null);
     
     const isGroup = column.columns && column.columns.length > 0;
     
@@ -24,7 +25,15 @@ const ColumnTreeItem = ({ column, level, theme, styles, handlePinColumn, colSear
     
     const pin = column.getIsPinned();
     const isVisible = column.getIsVisible();
-    const isSelected = selectedCols.has(column.id);
+    const selectionIds = isGroup ? getAllLeafIdsFromColumn(column) : [column.id];
+    const isSelected = selectionIds.length > 0 && selectionIds.every(id => selectedCols.has(id));
+    const isPartiallySelected = !isSelected && selectionIds.some(id => selectedCols.has(id));
+
+    useEffect(() => {
+        if (checkboxRef.current) {
+            checkboxRef.current.indeterminate = isPartiallySelected;
+        }
+    }, [isPartiallySelected]);
 
     if (colSearch && !label.toLowerCase().includes(colSearch.toLowerCase())) {
         if (isGroup) {
@@ -131,26 +140,27 @@ const ColumnTreeItem = ({ column, level, theme, styles, handlePinColumn, colSear
             onDragOver={e => e.preventDefault()}
             onDrop={handleItemDrop}
             role="treeitem"
-            aria-selected={isSelected}
+            aria-selected={isSelected || isPartiallySelected}
             aria-expanded={expanded}
         >
             <div 
                 style={{
                     ...styles.columnItem,
                     paddingLeft: `${level * 12 + 8}px`, // Reduced indentation step
-                    background: isSelected ? theme.select : (isHovered ? theme.hover : 'transparent'),
+                    background: (isSelected || isPartiallySelected) ? theme.select : (isHovered ? theme.hover : 'transparent'),
                     borderLeft: pin ? `3px solid ${theme.primary}` : '3px solid transparent'
                 }} 
-                onMouseEnter={e => !isSelected && setIsHovered(true)} 
-                onMouseLeave={e => !isSelected && setIsHovered(false)}
+                onMouseEnter={e => !(isSelected || isPartiallySelected) && setIsHovered(true)}
+                onMouseLeave={e => !(isSelected || isPartiallySelected) && setIsHovered(false)}
                 tabIndex={0}
                 onKeyDown={handleKeyDown}
             >
                 <input 
+                    ref={checkboxRef}
                     type="checkbox" 
                     checked={isSelected} 
                     onChange={toggleSelection}
-                    onClick={(e) => { e.stopPropagation(); toggleSelection(e); }}
+                    onClick={(e) => e.stopPropagation()}
                     style={{ margin: 0, cursor: 'pointer', pointerEvents: 'auto' }}
                     tabIndex={-1} 
                 />

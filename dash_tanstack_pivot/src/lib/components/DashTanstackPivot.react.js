@@ -7045,7 +7045,8 @@ export default function DashTanstackPivot(props) {
                             col_end: expansionColumnWindow.end !== null ? expansionColumnWindow.end : undefined,
                             needs_col_schema: needsColSchemaRef.current && serverSide || undefined,
                             include_grand_total: serverSidePinsGrandTotal || undefined,
-                            include_subtotals: showSubtotals ? undefined : false,
+                            layout_mode: layoutMode,
+                            show_subtotal_footers: showSubtotals || undefined,
                             state_override: requestStateOverride || undefined,
                         },
                     },
@@ -7093,7 +7094,8 @@ export default function DashTanstackPivot(props) {
                             col_end: sortingColumnWindow.end !== null ? sortingColumnWindow.end : undefined,
                             include_grand_total: serverSidePinsGrandTotal || undefined,
                             immersive_mode: immersiveMode || undefined,
-                            include_subtotals: showSubtotals ? undefined : false,
+                            layout_mode: layoutMode,
+                            show_subtotal_footers: showSubtotals || undefined,
                             state_override: requestStateOverride || undefined,
                         },
                     },
@@ -7154,13 +7156,14 @@ export default function DashTanstackPivot(props) {
                         needs_col_schema: serverSide || undefined,
                         include_grand_total: serverSidePinsGrandTotal || undefined,
                         immersive_mode: immersiveMode || undefined,
-                        include_subtotals: showSubtotals ? undefined : false,
+                        layout_mode: layoutMode,
+                        show_subtotal_footers: showSubtotals || undefined,
                         state_override: requestStateOverride || undefined,
                     },
                 },
             });
         }
-    }, [viewMode, detailMode, treeConfig, detailConfig, reportDef, customDimensions, rowFields, colFields, valConfigs, filters, sorting, effectiveSortOptions, expanded, immersiveMode, showRowTotals, showColTotals, showSubtotals, columnPinning, rowPinning, grandTotalPinOverride, columnVisibility, columnSizing, beginStructuralTransaction, beginExpansionRequest, buildRuntimeRequestStateOverride, markRequestPending, resolveStableRequestedColumnWindow, serverSide, serverSideBlockSize, tableName, serverSidePinsGrandTotal]);
+    }, [viewMode, detailMode, treeConfig, detailConfig, reportDef, customDimensions, rowFields, colFields, valConfigs, filters, sorting, effectiveSortOptions, expanded, immersiveMode, showRowTotals, showColTotals, showSubtotals, layoutMode, columnPinning, rowPinning, grandTotalPinOverride, columnVisibility, columnSizing, beginStructuralTransaction, beginExpansionRequest, buildRuntimeRequestStateOverride, markRequestPending, resolveStableRequestedColumnWindow, serverSide, serverSideBlockSize, tableName, serverSidePinsGrandTotal]);
 
     useEffect(() => {
         const handleClick = () => setContextMenu(null);
@@ -8195,6 +8198,8 @@ export default function DashTanstackPivot(props) {
     // 4. FIXED: handleHeaderContextMenu with proper group detection
     const handleHeaderContextMenu = (e, colId, header = null, level = 0) => {
         e.preventDefault();
+        const menuX = e.clientX;
+        const menuY = e.clientY;
         const actions = [];
         const column = table.getColumn(colId);
 
@@ -8269,7 +8274,20 @@ export default function DashTanstackPivot(props) {
             actions.push({
                 label: 'Filter...',
                 icon: <Icons.Filter/>,
-                onClick: () => setActiveFilterCol(colId)
+                onClick: () => {
+                    setFilterAnchorEl({
+                        getBoundingClientRect: () => ({
+                            left: menuX,
+                            right: menuX,
+                            top: menuY,
+                            bottom: menuY,
+                            width: 0,
+                            height: 0,
+                        }),
+                    });
+                    setActiveFilterCol(colId);
+                    requestFilterOptions(colId);
+                }
             });
             actions.push({
                 label: 'Clear Filter',
@@ -8381,8 +8399,8 @@ export default function DashTanstackPivot(props) {
         });
 
         setContextMenu({
-            x: e.clientX,
-            y: e.clientY,
+            x: menuX,
+            y: menuY,
             actions: actions
         });
     };
@@ -8931,7 +8949,8 @@ export default function DashTanstackPivot(props) {
         responseColEnd: responseSchemaWindow.end,
         needsColSchema: needsColSchema && serverSide,
         onViewportRequest: handleViewportRequestMeta,
-        includeSubtotals: showSubtotals,
+        layoutMode,
+        showSubtotals,
     });
     requestUrgentColumnViewportRef.current = requestUrgentColumnViewport;
 

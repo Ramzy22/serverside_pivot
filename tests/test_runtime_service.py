@@ -368,6 +368,158 @@ def test_runtime_service_groups_by_custom_category_dimension():
     assert totals_by_band == {"Large": 220, "Small": 150}
 
 
+def test_runtime_service_pivots_by_custom_category_column_dimension():
+    adapter = _make_adapter()
+    service = PivotRuntimeService(adapter_getter=lambda: adapter, session_gate=SessionRequestGate())
+    custom_dimension = {
+        "id": "sales_band",
+        "field": "__custom_category__sales_band",
+        "name": "Sales Band",
+        "fallbackLabel": "Small",
+        "rules": [
+            {
+                "id": "large",
+                "label": "Large",
+                "condition": {
+                    "op": "AND",
+                    "clauses": [
+                        {"field": "sales", "operator": "gte", "value": 100},
+                    ],
+                },
+            }
+        ],
+    }
+
+    context = PivotRequestContext.from_frontend(
+        table="sales_data",
+        trigger_prop="custom-column.viewport",
+        viewport={
+            "start": 0,
+            "end": 20,
+            "window_seq": 1,
+            "state_epoch": 1,
+            "abort_generation": 1,
+            "session_id": "sess-custom-category-column",
+            "client_instance": "client-custom-category-column",
+            "intent": "viewport",
+            "include_grand_total": False,
+            "needs_col_schema": True,
+        },
+    )
+    state = PivotViewState(
+        row_fields=["region"],
+        col_fields=["__custom_category__sales_band"],
+        val_configs=[{"field": "sales", "agg": "sum"}],
+        custom_dimensions=[custom_dimension],
+        filters={},
+        sorting=[],
+        expanded={},
+        show_row_totals=False,
+        show_col_totals=False,
+    )
+
+    response = service.process(state, context)
+
+    assert response.status == "data"
+    response_ids = {
+        column.get("id")
+        for column in response.columns or []
+        if isinstance(column, dict)
+    }
+    assert "Large_sales_sum" in response_ids
+    assert "Small_sales_sum" in response_ids
+    totals_by_region = {
+        row.get("region"): row
+        for row in response.data or []
+        if isinstance(row, dict) and not row.get("_isTotal")
+    }
+    assert totals_by_region["North"]["Large_sales_sum"] == 100
+    assert totals_by_region["North"]["Small_sales_sum"] == 80
+    assert totals_by_region["South"]["Large_sales_sum"] == 120
+    assert totals_by_region["South"]["Small_sales_sum"] == 70
+
+
+def test_runtime_service_preserves_custom_category_creation_order_on_column_axis():
+    adapter = create_tanstack_adapter(backend_uri=":memory:")
+    table = pa.Table.from_pydict(
+        {
+            "region": ["North", "North", "North"],
+            "desk": ["Beta", "Alpha", "Gamma"],
+            "sales": [10, 20, 30],
+        }
+    )
+    adapter.controller.load_data_from_arrow("category_column_order_data", table)
+    service = PivotRuntimeService(adapter_getter=lambda: adapter, session_gate=SessionRequestGate())
+    category_field = "__custom_category__desk_bucket"
+    custom_dimension = {
+        "id": "desk_bucket",
+        "field": category_field,
+        "name": "Desk Bucket",
+        "fallbackLabel": "Other",
+        "order": "creation",
+        "rules": [
+            {
+                "id": "beta",
+                "label": "Beta",
+                "condition": {
+                    "op": "AND",
+                    "clauses": [
+                        {"field": "desk", "operator": "eq", "value": "Beta"},
+                    ],
+                },
+            },
+            {
+                "id": "alpha",
+                "label": "Alpha",
+                "condition": {
+                    "op": "AND",
+                    "clauses": [
+                        {"field": "desk", "operator": "eq", "value": "Alpha"},
+                    ],
+                },
+            },
+        ],
+    }
+
+    response = service.process(
+        PivotViewState(
+            row_fields=["region"],
+            col_fields=[category_field],
+            val_configs=[{"field": "sales", "agg": "sum"}],
+            custom_dimensions=[custom_dimension],
+            filters={},
+            sorting=[],
+            expanded={},
+            show_row_totals=False,
+            show_col_totals=False,
+        ),
+        PivotRequestContext.from_frontend(
+            table="category_column_order_data",
+            trigger_prop="custom-column-order.viewport",
+            viewport={
+                "start": 0,
+                "end": 20,
+                "window_seq": 1,
+                "state_epoch": 1,
+                "abort_generation": 1,
+                "session_id": "sess-custom-category-column-order",
+                "client_instance": "client-custom-category-column-order",
+                "intent": "viewport",
+                "include_grand_total": False,
+                "needs_col_schema": True,
+            },
+        ),
+    )
+
+    assert response.status == "data"
+    measure_columns = [
+        column.get("id")
+        for column in response.columns or []
+        if isinstance(column, dict) and column.get("id", "").endswith("_sales_sum")
+    ]
+    assert measure_columns == ["Beta_sales_sum", "Alpha_sales_sum", "Other_sales_sum"]
+
+
 def test_runtime_service_custom_category_multi_condition_empty_semantics_match_client():
     adapter = create_tanstack_adapter(backend_uri=":memory:")
     table = pa.Table.from_pydict(

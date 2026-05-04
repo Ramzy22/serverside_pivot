@@ -1244,6 +1244,13 @@ class IbisPlanner:
             raise ValueError("Columns must be non-empty for column values query.")
         
         sort_options = column_sort_options if isinstance(column_sort_options, dict) else {}
+        custom_dimension_by_field: Dict[str, Dict[str, Any]] = {}
+        for dimension in custom_dimensions or []:
+            if not isinstance(dimension, dict):
+                continue
+            dim_field = dimension.get("field") or self.builder._custom_category_field_id(dimension)
+            if dim_field:
+                custom_dimension_by_field[str(dim_field)] = dimension
 
         if len(columns) == 1:
             col_key_expr = lambda table_expr: table_expr[columns[0]].cast('string').name('_col_key')
@@ -1263,7 +1270,26 @@ class IbisPlanner:
 
         normalized_column_sort = []
         for column_index, column_name in enumerate(columns):
-            raw_options = sort_options.get(column_name) if isinstance(sort_options.get(column_name), dict) else {}
+            explicit_options = sort_options.get(column_name) if isinstance(sort_options.get(column_name), dict) else {}
+            default_options: Dict[str, Any] = {}
+            custom_dimension = custom_dimension_by_field.get(column_name)
+            if custom_dimension:
+                dim_order = str(custom_dimension.get("order") or "creation").strip().lower()
+                if dim_order == "alpha_desc":
+                    default_options = {"pivotSortMode": "label", "pivotDirection": "desc"}
+                elif dim_order in {"creation", "numeric"}:
+                    default_options = {
+                        "pivotSortMode": "label",
+                        "pivotDirection": "asc",
+                        "sortKeyField": f"__sortkey__{column_name}",
+                    }
+                elif dim_order == "numeric_desc":
+                    default_options = {
+                        "pivotSortMode": "label",
+                        "pivotDirection": "desc",
+                        "sortKeyField": f"__sortkey__{column_name}",
+                    }
+            raw_options = {**default_options, **explicit_options}
             pivot_sort_mode = str(raw_options.get("pivotSortMode") or "").strip().lower()
             pivot_direction = str(raw_options.get("pivotDirection") or "").strip().lower()
 

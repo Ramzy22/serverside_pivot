@@ -786,7 +786,7 @@ const exportSvgAsPng = async (svgNode, fileStem) => {
 };
 
 const copySvgToClipboard = async (svgNode) => {
-    if (!navigator.clipboard || !navigator.clipboard.write) return false;
+    if (typeof navigator === 'undefined' || !navigator.clipboard || !navigator.clipboard.write) return false;
     const canvas = await svgToCanvas(svgNode);
     if (!canvas) return false;
     try {
@@ -825,13 +825,16 @@ const exportEchartsPng = (echartsRef, fileStem) => {
 
 const copyEchartsToClipboard = async (echartsRef) => {
     const instance = echartsRef && echartsRef.current && echartsRef.current.getEchartsInstance();
-    if (!instance) return;
+    if (!instance || typeof navigator === 'undefined' || !navigator.clipboard || !navigator.clipboard.write) return false;
     try {
         const url = instance.getDataURL({ type: 'png', pixelRatio: 2 });
         const res = await fetch(url);
         const blob = await res.blob();
         await navigator.clipboard.write([new ClipboardItem({ [blob.type]: blob })]);
-    } catch (_) {}
+        return true;
+    } catch (_) {
+        return false;
+    }
 };
 
 const EmptyChartState = ({ message, theme, chartHeight = CHART_HEIGHT }) => (
@@ -4156,6 +4159,7 @@ const ChartSurface = ({
     const chartHeightResizeRef = useRef(null);
     const settingsPaneResizeRef = useRef(null);
     const immersiveContainerRef = useRef(null);
+    const [chartCopyStatus, setChartCopyStatus] = useState(null);
     const [immersiveAutoHeight, setImmersiveAutoHeight] = useState(null);
     const [uncontrolledSettingsPanelWidth, setUncontrolledSettingsPanelWidth] = useState(348);
     const settingsPanelWidth = Number.isFinite(Number(controlledSettingsPanelWidth))
@@ -4249,6 +4253,21 @@ const ChartSurface = ({
         if (!immersiveMode || !configOpen) return;
         setConfigOpen(false);
     }, [immersiveMode, configOpen]);
+
+    useEffect(() => {
+        if (!chartCopyStatus) return undefined;
+        const timer = setTimeout(() => setChartCopyStatus(null), 2500);
+        return () => clearTimeout(timer);
+    }, [chartCopyStatus]);
+
+    const handleCopyChart = useCallback(async () => {
+        const copied = ECHARTS_CHART_TYPES.has(chartType)
+            ? await copyEchartsToClipboard(echartsRef)
+            : await copySvgToClipboard(svgRef.current);
+        setChartCopyStatus(copied
+            ? { tone: 'success', text: 'Copied chart' }
+            : { tone: 'error', text: 'Copy failed' });
+    }, [chartType]);
 
     useEffect(() => {
         if (!immersiveMode) { setImmersiveAutoHeight(null); return; }
@@ -4414,12 +4433,28 @@ const ChartSurface = ({
                         </button>
                         <button
                             type="button"
-                            onClick={() => ECHARTS_CHART_TYPES.has(chartType) ? copyEchartsToClipboard(echartsRef) : copySvgToClipboard(svgRef.current)}
+                            onClick={handleCopyChart}
                             style={exportButtonStyle}
                             title="Copy chart to clipboard"
                         >
                             Copy
                         </button>
+                        {chartCopyStatus ? (
+                            <span
+                                role="status"
+                                style={{
+                                    fontSize: '10px',
+                                    fontWeight: 800,
+                                    color: chartCopyStatus.tone === 'success' ? (theme.primary || '#047857') : '#B91C1C',
+                                    border: `1px solid ${chartCopyStatus.tone === 'success' ? `${theme.primary || '#047857'}55` : '#FCA5A5'}`,
+                                    borderRadius: '999px',
+                                    padding: '3px 7px',
+                                    background: chartCopyStatus.tone === 'success' ? `${theme.primary || '#047857'}10` : '#FEF2F2',
+                                }}
+                            >
+                                {chartCopyStatus.text}
+                            </span>
+                        ) : null}
                         <button
                             type="button"
                             onClick={() => exportChartCsv(model, 'pivot-chart')}
@@ -5091,8 +5126,7 @@ const ChartSurface = ({
     );
 };
 
-export const PivotChartPanel = ({
-    open,
+const PivotChartPanelContent = ({
     onClose,
     source,
     onSourceChange,
@@ -5166,7 +5200,6 @@ export const PivotChartPanel = ({
     const baseDockedPanelWidthRef = useRef(Math.max(width || 430, 430));
     const onSettingsWidthBudgetChangeRef = useRef(onSettingsWidthBudgetChange);
     const lastSettingsWidthBudgetRef = useRef(null);
-    if (!open) return null;
     const immersiveMode = typeof controlledImmersiveMode === 'boolean' ? controlledImmersiveMode : uncontrolledImmersiveMode;
     const toggleImmersiveMode = () => {
         const nextValue = !immersiveMode;
@@ -5251,7 +5284,7 @@ export const PivotChartPanel = ({
                 minHeight: 0,
             }
             : standalone
-                ? { display: 'flex', flex: '1 1 auto', minWidth: 0, minHeight: 0, overflow: 'hidden' }
+                ? { display: 'flex', flex: '1 1 auto', width: '100%', height: '100%', minWidth: 0, minHeight: 0, overflow: 'hidden' }
                 : {
                     display: 'flex',
                     width: `${basePanelWidth + visibleSettingsWidth}px`,
@@ -5536,6 +5569,11 @@ export const PivotChartPanel = ({
             </aside>
         </div>
     );
+};
+
+export const PivotChartPanel = (props) => {
+    if (!props.open) return null;
+    return <PivotChartPanelContent {...props} />;
 };
 
 export const PivotChartModal = ({ chartState, onClose, theme, position = 'right', onPositionChange }) => {

@@ -250,7 +250,9 @@ def _build_runtime_export_context(
             global_filter=effective_filters.get("global") if isinstance(effective_filters, dict) else None,
             totals=effective_show_col_totals,
             row_totals=effective_show_row_totals,
-            include_subtotals=effective_show_subtotals,
+            include_subtotals=True,  # hierarchical always; flat path gated by layout_mode in adapter
+            layout_mode=request_layout_mode,
+            show_subtotal_footers=effective_show_subtotals,
             column_sort_options=column_sort_options or None,
         ),
         expanded=effective_expanded,
@@ -883,11 +885,11 @@ def register_dash_pivot_transport_callback(
             resolved_show_subtotals,
             bool,
         )
-        # Direct payload override for tabular layout mode (highest priority — beats state_override).
-        # The frontend sends include_subtotals: false when layoutMode === 'tabular' so the backend
-        # switches to the flat leaf-row query path regardless of the showSubtotals Dash prop.
-        if isinstance(request_payload, dict) and request_payload.get("include_subtotals") is not None:
-            effective_show_subtotals = bool(request_payload["include_subtotals"])
+        # Read layout_mode from payload — it is local frontend state (not a Dash prop),
+        # so it can only arrive via the request payload.
+        request_layout_mode = "hierarchy"
+        if isinstance(request_payload, dict) and request_payload.get("layout_mode"):
+            request_layout_mode = str(request_payload["layout_mode"])
         effective_view_mode = _state_override_value(
             request_state_override,
             "viewMode",

@@ -3363,6 +3363,18 @@ export const SidebarPanel = React.memo(function SidebarPanel({
             return next;
         });
     }, [setValConfigs, showNotification]);
+    const handleValueWindowFnChange = React.useCallback((measureIndex, nextWindowFn) => {
+        setValConfigs((prev) => {
+            const next = [...prev];
+            const current = next[measureIndex];
+            if (!current) return prev;
+            next[measureIndex] = {
+                ...current,
+                windowFn: nextWindowFn === 'none' ? null : nextWindowFn,
+            };
+            return next;
+        });
+    }, [setValConfigs]);
     const handleAddFormulaValue = React.useCallback(() => {
         const nextFieldId = createFormulaFieldId(valConfigs);
         const baseValues = valConfigs.filter((config) => config && config.agg !== 'formula');
@@ -3870,7 +3882,7 @@ export const SidebarPanel = React.memo(function SidebarPanel({
                                                                                 ))}
                                                                             </select>
                                                                         )}
-                                                                        <select value={item.windowFn || 'none'} onChange={e=>{const n=[...valConfigs];n[idx].windowFn=e.target.value==='none'?null:e.target.value;setValConfigs(n)}} style={{...valueSelectStyle, width:'56px'}}>
+                                                                        <select value={item.windowFn || 'none'} onChange={e=>handleValueWindowFnChange(idx, e.target.value)} style={{...valueSelectStyle, width:'56px'}}>
                                                                             <option value="none">Norm</option><option value="percent_of_row">%Row</option><option value="percent_of_col">%Col</option><option value="percent_of_grand_total">%Tot</option>
                                                                         </select>
                                                                     </div>

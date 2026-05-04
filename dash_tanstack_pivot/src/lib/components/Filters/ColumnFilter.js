@@ -5,27 +5,42 @@ import DateRangeFilter from './DateRangeFilter';
 import NumericRangeFilter from './NumericRangeFilter';
 import MultiSelectFilter from './MultiSelectFilter';
 
+const createDefaultCondition = () => ({type: 'contains', value: '', caseSensitive: false});
+
+const cloneFilterConditions = (filter) => (
+    filter && Array.isArray(filter.conditions)
+        ? filter.conditions.map(condition => ({ ...condition }))
+        : [createDefaultCondition()]
+);
+
 const ColumnFilter = ({ column, onFilter, currentFilter, options = [], optionMeta = null, onSearchOptions, onLoadMoreOptions, theme, onClose }) => {
-    const styles = getStyles(theme || { primary: '#1976d2', border: '#e0e0e0', headerBg: '#f5f5f5', text: '#212121' });
+    const resolvedTheme = theme || { primary: '#1976d2', border: '#e0e0e0', headerBg: '#f5f5f5', text: '#212121', textSec: '#666', background: '#fff' };
+    const styles = getStyles(resolvedTheme);
     const isLeaf = column.getLeafColumns
         ? column.getLeafColumns().length === 1
         : !column.columns;
 
-    if (!isLeaf) {
-        return (
-            <div style={{ padding: '12px', fontSize: '12px', background: theme.background, color: theme.text }}>
-                Filters are available only for value columns.
-            </div>
-        );
-    }
-
-    const leaf = column.getLeafColumns ? column.getLeafColumns()[0] : column;
-    const colId = leaf.id.toLowerCase();
-    const isDate = (leaf.columnDef && leaf.columnDef.meta && leaf.columnDef.meta.type === 'date') || colId.includes('date') || colId.includes('time');
-    const isNumeric = (leaf.columnDef && leaf.columnDef.meta && leaf.columnDef.meta.type === 'number') || colId.includes('sales') || colId.includes('cost') || colId.includes('amount') || colId.includes('price');
+    const leaf = isLeaf
+        ? (column.getLeafColumns ? column.getLeafColumns()[0] : column)
+        : null;
+    const colId = String((leaf && leaf.id) || (column && column.id) || '').toLowerCase();
+    const columnLabel = (
+        (typeof column.header === 'string' && column.header)
+        || (column.columnDef && typeof column.columnDef.header === 'string' && column.columnDef.header)
+        || (leaf && leaf.columnDef && typeof leaf.columnDef.header === 'string' && leaf.columnDef.header)
+        || (leaf && leaf.id)
+        || (column && column.id)
+        || ''
+    );
+    const isDate = (leaf && leaf.columnDef && leaf.columnDef.meta && leaf.columnDef.meta.type === 'date') || colId.includes('date') || colId.includes('time');
+    const isNumeric = (leaf && leaf.columnDef && leaf.columnDef.meta && leaf.columnDef.meta.type === 'number') || colId.includes('sales') || colId.includes('cost') || colId.includes('amount') || colId.includes('price');
 
     const [tab, setTab] = useState('condition');
     const tabAutoInitialized = useRef(false);
+    const selectTab = (nextTab) => {
+        tabAutoInitialized.current = true;
+        setTab(nextTab);
+    };
 
     // Auto-select tab on first mount only; never override a user-driven tab change
     useEffect(() => {
@@ -41,24 +56,35 @@ const ColumnFilter = ({ column, onFilter, currentFilter, options = [], optionMet
 
     // --- Existing Condition Logic ---
     const isMulti = currentFilter && currentFilter.conditions;
-    const [operator, setOperator] = useState(isMulti ? currentFilter.operator : 'AND');
-    const [conditions, setConditions] = useState(
-        isMulti ? currentFilter.conditions : [{type: 'contains', value: '', caseSensitive: false}]
-    );
+    const [operator, setOperator] = useState(isMulti ? (currentFilter.operator || 'AND') : 'AND');
+    const [conditions, setConditions] = useState(() => cloneFilterConditions(currentFilter));
+
+    useEffect(() => {
+        const nextIsMulti = currentFilter && currentFilter.conditions;
+        setOperator(nextIsMulti ? (currentFilter.operator || 'AND') : 'AND');
+        setConditions(cloneFilterConditions(currentFilter));
+    }, [currentFilter]);
+
+    if (!isLeaf) {
+        return (
+            <div style={{ padding: '12px', fontSize: '12px', background: resolvedTheme.background, color: resolvedTheme.text }}>
+                Filters are available only for value columns.
+            </div>
+        );
+    }
 
     const updateCondition = (index, key, value) => {
-        const newConditions = [...conditions];
-        newConditions[index][key] = value;
-        setConditions(newConditions);
+        setConditions(previousConditions => previousConditions.map((condition, conditionIndex) => (
+            conditionIndex === index ? { ...condition, [key]: value } : condition
+        )));
     };
     
     const addCondition = () => {
-        setConditions([...conditions, {type: 'contains', value: '', caseSensitive: false}]);
+        setConditions(previousConditions => [...previousConditions, createDefaultCondition()]);
     };
 
     const removeCondition = (index) => {
-        const newConditions = conditions.filter((_, i) => i !== index);
-        setConditions(newConditions);
+        setConditions(previousConditions => previousConditions.filter((_, i) => i !== index));
     };
 
     const handleApply = () => {
@@ -94,14 +120,14 @@ const ColumnFilter = ({ column, onFilter, currentFilter, options = [], optionMet
     };
 
     return (
-        <div style={{display: 'flex', flexDirection: 'column', gap: '8px', color: '#333'}}>
-            <div style={{fontWeight: 600, fontSize: '12px', borderBottom: '1px solid #eee', paddingBottom: '8px', display: 'flex', justifyContent: 'space-between', alignItems: 'center'}}>
-                <span>Filter: {column.header}</span>
-                <div style={{display: 'flex', background: '#f5f5f5', borderRadius: '4px', padding: '2px'}}>
-                    <div onClick={() => setTab('condition')} style={{padding:'2px 8px', fontSize:'10px', cursor:'pointer', borderRadius:'3px', background: tab==='condition'?'#fff':'transparent', boxShadow: tab==='condition'?'0 1px 2px rgba(0,0,0,0.1)':'none'}}>Rules</div>
-                    <div onClick={() => setTab('values')} style={{padding:'2px 8px', fontSize:'10px', cursor:'pointer', borderRadius:'3px', background: tab==='values'?'#fff':'transparent', boxShadow: tab==='values'?'0 1px 2px rgba(0,0,0,0.1)':'none'}}>List</div>
-                    {isDate && <div onClick={() => setTab('date')} style={{padding:'2px 8px', fontSize:'10px', cursor:'pointer', borderRadius:'3px', background: tab==='date'?'#fff':'transparent', boxShadow: tab==='date'?'0 1px 2px rgba(0,0,0,0.1)':'none'}}>Date</div>}
-                    {isNumeric && <div onClick={() => setTab('numeric')} style={{padding:'2px 8px', fontSize:'10px', cursor:'pointer', borderRadius:'3px', background: tab==='numeric'?'#fff':'transparent', boxShadow: tab==='numeric'?'0 1px 2px rgba(0,0,0,0.1)':'none'}}>Range</div>}
+        <div style={{display: 'flex', flexDirection: 'column', gap: '8px', color: resolvedTheme.text}}>
+            <div style={{fontWeight: 600, fontSize: '12px', borderBottom: `1px solid ${resolvedTheme.border || '#eee'}`, paddingBottom: '8px', display: 'flex', justifyContent: 'space-between', alignItems: 'center'}}>
+                <span>Filter: {columnLabel}</span>
+                <div style={{display: 'flex', background: resolvedTheme.headerSubtleBg || resolvedTheme.headerBg || resolvedTheme.background || '#f5f5f5', borderRadius: '4px', padding: '2px'}}>
+                    <div onClick={() => selectTab('condition')} style={{padding:'2px 8px', fontSize:'10px', cursor:'pointer', borderRadius:'3px', background: tab==='condition'?(resolvedTheme.surfaceBg || resolvedTheme.background || '#fff'):'transparent', boxShadow: tab==='condition'?'0 1px 2px rgba(0,0,0,0.1)':'none'}}>Rules</div>
+                    <div onClick={() => selectTab('values')} style={{padding:'2px 8px', fontSize:'10px', cursor:'pointer', borderRadius:'3px', background: tab==='values'?(resolvedTheme.surfaceBg || resolvedTheme.background || '#fff'):'transparent', boxShadow: tab==='values'?'0 1px 2px rgba(0,0,0,0.1)':'none'}}>List</div>
+                    {isDate && <div onClick={() => selectTab('date')} style={{padding:'2px 8px', fontSize:'10px', cursor:'pointer', borderRadius:'3px', background: tab==='date'?(resolvedTheme.surfaceBg || resolvedTheme.background || '#fff'):'transparent', boxShadow: tab==='date'?'0 1px 2px rgba(0,0,0,0.1)':'none'}}>Date</div>}
+                    {isNumeric && <div onClick={() => selectTab('numeric')} style={{padding:'2px 8px', fontSize:'10px', cursor:'pointer', borderRadius:'3px', background: tab==='numeric'?(resolvedTheme.surfaceBg || resolvedTheme.background || '#fff'):'transparent', boxShadow: tab==='numeric'?'0 1px 2px rgba(0,0,0,0.1)':'none'}}>Range</div>}
                 </div>
             </div>
             
@@ -115,23 +141,23 @@ const ColumnFilter = ({ column, onFilter, currentFilter, options = [], optionMet
                         onFilter={onFilter}
                         currentFilter={currentFilter}
                         onClose={onClose}
-                        theme={theme}
+                        theme={resolvedTheme}
                     />
                 )}
 
                 {tab === 'date' && (
-                    <DateRangeFilter onFilter={onFilter} currentFilter={currentFilter} theme={theme} />
+                    <DateRangeFilter onFilter={onFilter} currentFilter={currentFilter} theme={resolvedTheme} onClose={onClose} />
                 )}
 
                 {tab === 'numeric' && (
-                    <NumericRangeFilter onFilter={onFilter} currentFilter={currentFilter} theme={theme} />
+                    <NumericRangeFilter onFilter={onFilter} currentFilter={currentFilter} theme={resolvedTheme} onClose={onClose} />
                 )}
 
                 {tab === 'condition' && (
                     <>
                         <div style={{display: 'flex', justifyContent: 'flex-end', gap: '4px', marginBottom: '4px'}}>
-                            <button onClick={() => setOperator('AND')} style={{padding: '2px 6px', fontSize: '10px', background: operator === 'AND' ? theme.primary: '#eee', color: operator === 'AND' ? '#fff' : '#333', border: 'none', borderRadius: '2px'}}>AND</button>
-                            <button onClick={() => setOperator('OR')} style={{padding: '2px 6px', fontSize: '10px', background: operator === 'OR' ? theme.primary: '#eee', color: operator === 'OR' ? '#fff' : '#333', border: 'none', borderRadius: '2px'}}>OR</button>
+                            <button onClick={() => setOperator('AND')} style={{padding: '2px 6px', fontSize: '10px', background: operator === 'AND' ? resolvedTheme.primary: (resolvedTheme.headerSubtleBg || '#eee'), color: operator === 'AND' ? '#fff' : resolvedTheme.text, border: 'none', borderRadius: '2px'}}>AND</button>
+                            <button onClick={() => setOperator('OR')} style={{padding: '2px 6px', fontSize: '10px', background: operator === 'OR' ? resolvedTheme.primary: (resolvedTheme.headerSubtleBg || '#eee'), color: operator === 'OR' ? '#fff' : resolvedTheme.text, border: 'none', borderRadius: '2px'}}>OR</button>
                         </div>
                         <div style={{display: 'flex', flexDirection: 'column', gap: '12px', paddingRight: '8px'}}>
                         {conditions.map((cond, index) => (
@@ -198,7 +224,7 @@ const ColumnFilter = ({ column, onFilter, currentFilter, options = [], optionMet
                 <div style={{display: 'flex', gap: '8px'}}>
                     {onClose && <button onClick={onClose} style={{padding: '4px 8px', border:'none', background:'none', cursor:'pointer', fontSize: '11px'}}>Close</button>}
                     {tab === 'condition' && (
-                        <button onClick={handleApply} style={{padding: '4px 12px', background: theme.primary, color: '#fff', border:'none', borderRadius: '2px', cursor:'pointer', fontSize: '11px'}}>
+                        <button onClick={handleApply} style={{padding: '4px 12px', background: resolvedTheme.primary, color: '#fff', border:'none', borderRadius: '2px', cursor:'pointer', fontSize: '11px'}}>
                             Apply
                         </button>
                     )}

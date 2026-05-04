@@ -880,8 +880,13 @@ export function useColumnDefs({
                             if (isGrandTotal && i > 0) showValue = false;
                         }
 
-                        // Expander only on the active level column
-                        const showExpander = (i === depth) && row.getCanExpand() && !(row.original && row.original._isTotal);
+                        // Expander only on the active level column; never on subtotal/footer rows
+                        const isSubtotalFooter = row.original && row.original._isSubtotalFooter;
+                        const isTabularSubtotal = row.original && row.original._isTabularSubtotal;
+                        const isSubtotalRow = isSubtotalFooter || isTabularSubtotal;
+                        const showExpander = (i === depth) && row.getCanExpand()
+                            && !(row.original && row.original._isTotal)
+                            && !isSubtotalRow;
 
                         return (
                             <div
@@ -890,7 +895,8 @@ export function useColumnDefs({
                                     alignItems: 'center',
                                     width: '100%',
                                     height: '100%',
-                                    fontWeight: (row.original && row.original._isTotal) ? 700 : 400
+                                    fontWeight: (row.original && row.original._isTotal) ? 700 : (isSubtotalRow ? 600 : 400),
+                                    fontStyle: isSubtotalRow ? 'italic' : undefined,
                                     // isSelected styling will be applied in renderCell
                                 }}
                             >

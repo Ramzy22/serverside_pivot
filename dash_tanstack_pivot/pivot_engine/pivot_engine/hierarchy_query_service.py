@@ -16,6 +16,8 @@ class HierarchyQuery:
     end_row: Optional[int] = None
     include_grand_total_row: bool = False
     profiling: bool = False
+    show_subtotal_footers: bool = False
+    tabular_subtotals: bool = False
 
 
 @dataclass
@@ -90,6 +92,8 @@ class LegacyHierarchyAdapter:
             end_row=query.end_row,
             include_grand_total_row=query.include_grand_total_row,
             profiling=query.profiling,
+            show_subtotal_footers=query.show_subtotal_footers,
+            tabular_subtotals=query.tabular_subtotals,
         )
         result = HierarchyResult.from_response(response, execution_mode=self.execution_mode)
         if query.profiling:

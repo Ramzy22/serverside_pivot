@@ -2624,10 +2624,16 @@ def test_frontend_chart_surface_includes_inline_settings_sparkline_and_resize_re
     assert "data-chart-settings-resizer=\"true\"" in chart_source
     assert "data-chart-sparkline-board=\"true\"" in chart_source
     assert "data-chart-sparkline-card=" in chart_source
+    assert "const PivotChartPanelContent = ({" in chart_source
+    assert "export const PivotChartPanel = (props) => {" in chart_source
+    assert "if (!props.open) return null;" in chart_source
+    assert "return <PivotChartPanelContent {...props} />;" in chart_source
+    assert "const handleCopyChart = useCallback(async () => {" in chart_source
+    assert "setChartCopyStatus(copied" in chart_source
     assert "const isSparklineChart = chartType === 'sparkline';" in chart_source
     assert "overscrollBehavior: 'contain'" in chart_source
     assert "applyChartPreset" in chart_source
-    assert "onChange('sparkline')" in chart_source
+    assert "onChartTypeChange('sparkline')" in chart_source
     assert "chartType === 'sparkline'" in chart_source
     assert "showLegend={!isSparklineChart}" in chart_source
     assert "VALID_CHART_TYPES = new Set([" in normalization_source
@@ -2918,8 +2924,8 @@ def test_tabular_mode_repeats_labels_and_subtotal_toggle_is_exposed():
     assert "showSubtotals" in appbar_source
     assert "Subtotals" in appbar_source
     assert "setShowSubtotals(prev => !prev)" in appbar_source
-    assert "include_subtotals: showSubtotals ? undefined : false" in component_source
-    assert "includeSubtotals: showSubtotals" in component_source
+    assert "show_subtotal_footers: showSubtotals || undefined" in component_source
+    assert "showSubtotals," in component_source
     assert "include_subtotals: layoutMode === 'tabular'" not in component_source
     assert "includeSubtotals: layoutMode !== 'tabular'" not in component_source
 
@@ -3048,6 +3054,28 @@ def test_filter_open_requests_and_responses_are_idempotent():
             "ColumnFilter.js",
         )
     ).read_text(encoding="utf-8")
+    date_filter_source = Path(
+        os.path.join(
+            os.getcwd(),
+            "dash_tanstack_pivot",
+            "src",
+            "lib",
+            "components",
+            "Filters",
+            "DateRangeFilter.js",
+        )
+    ).read_text(encoding="utf-8")
+    numeric_filter_source = Path(
+        os.path.join(
+            os.getcwd(),
+            "dash_tanstack_pivot",
+            "src",
+            "lib",
+            "components",
+            "Filters",
+            "NumericRangeFilter.js",
+        )
+    ).read_text(encoding="utf-8")
     multi_select_source = Path(
         os.path.join(
             os.getcwd(),
@@ -3089,6 +3117,9 @@ def test_filter_open_requests_and_responses_are_idempotent():
     assert "Object.prototype.hasOwnProperty.call(filterOptions || {}, columnId)" in component_source
     assert "pendingServerFilterOptionsRef.current = requestKey;" in component_source
     assert "const handleFilterClick = useCallback" in component_source
+    assert "setFilterAnchorEl({" in component_source
+    assert "getBoundingClientRect: () => ({" in component_source
+    assert "requestFilterOptions(colId);" in component_source
     assert "previousOptions.every((value, index) => value === mergedOptions[index])" in component_source
     assert "const collectDataFieldIds = (rows) =>" in component_source
     assert "return collectDataFieldIds(data);" in component_source
@@ -3102,10 +3133,27 @@ def test_filter_open_requests_and_responses_are_idempotent():
 
     assert "const columnPositionKey =" in filter_popover_source
     assert "[anchorEl, columnAnchorTarget, columnPositionKey]" in filter_popover_source
+    assert "typeof target.getBoundingClientRect !== 'function'" in filter_popover_source
+    assert "window.addEventListener('resize', updatePosition);" in filter_popover_source
+    assert "window.addEventListener('scroll', updatePosition, true);" in filter_popover_source
+    assert "background: resolvedTheme.surfaceBg" in filter_popover_source
 
     assert "const tabAutoInitialized = useRef(false);" in column_filter_source
+    assert "const cloneFilterConditions = (filter)" in column_filter_source
+    assert "filter.conditions.map(condition => ({ ...condition }))" in column_filter_source
+    assert "conditionIndex === index ? { ...condition, [key]: value } : condition" in column_filter_source
+    assert "const selectTab = (nextTab) =>" in column_filter_source
+    assert "selectTab('condition')" in column_filter_source
     assert "if (tabAutoInitialized.current) return;" in column_filter_source
     assert "[options && options.length, isDate]" in column_filter_source
+    assert "DateRangeFilter onFilter={onFilter} currentFilter={currentFilter} theme={resolvedTheme} onClose={onClose}" in column_filter_source
+    assert "NumericRangeFilter onFilter={onFilter} currentFilter={currentFilter} theme={resolvedTheme} onClose={onClose}" in column_filter_source
+    assert "formatLocalDate" in date_filter_source
+    assert "toISOString().split('T')[0]" not in date_filter_source
+    assert "onClose) onClose();" in date_filter_source
+    assert "Number.isFinite(numericValue)" in numeric_filter_source
+    assert "Min must be less than or equal to max." in numeric_filter_source
+    assert "onClose) onClose();" in numeric_filter_source
     assert "onSearchOptions={onSearchOptions}" in column_filter_source
     assert "const LOCAL_RENDER_LIMIT = 250;" in multi_select_source
     assert "onSearchOptions(search);" in multi_select_source
@@ -3114,6 +3162,27 @@ def test_filter_open_requests_and_responses_are_idempotent():
     assert "clientFilterOptionMap && clientFilterOptionMap[columnId]" in sidebar_panel_source
     assert "const closeFilterEditor = () => setExpanded(false);" in sidebar_filter_item_source
     assert "onClose={closeFilterEditor}" in sidebar_filter_item_source
+
+
+def test_sidebar_group_selection_uses_leaf_selection_state():
+    column_tree_source = Path(
+        os.path.join(
+            os.getcwd(),
+            "dash_tanstack_pivot",
+            "src",
+            "lib",
+            "components",
+            "Sidebar",
+            "ColumnTreeItem.js",
+        )
+    ).read_text(encoding="utf-8")
+
+    assert "const selectionIds = isGroup ? getAllLeafIdsFromColumn(column) : [column.id];" in column_tree_source
+    assert "selectionIds.every(id => selectedCols.has(id))" in column_tree_source
+    assert "selectionIds.some(id => selectedCols.has(id))" in column_tree_source
+    assert "checkboxRef.current.indeterminate = isPartiallySelected;" in column_tree_source
+    assert "onClick={(e) => e.stopPropagation()}" in column_tree_source
+    assert "onClick={(e) => { e.stopPropagation(); toggleSelection(e); }}" not in column_tree_source
 
 
 def test_row_cache_merges_rows_by_stable_identity_when_column_windows_shift():
@@ -3191,8 +3260,14 @@ def test_frontend_resilience_source_handles_reset_jank_cell_errors_and_keyboard_
     assert "data-pivot-cell-error=\"true\"" in render_helpers_source
     assert "function SafeCellContent({ render })" in render_helpers_source
     assert "render={() => flexRender(col.columnDef.cell, displayCellLike.getContext())}" in render_helpers_source
+    assert "import { useCallback, useEffect, useMemo, useRef } from 'react';" in render_helpers_source
+    assert "useEffect(() => { leafColumnsCacheRef.current = new Map(); }" in render_helpers_source
+    assert "useMemo(() => { leafColumnsCacheRef.current = new Map(); }" not in render_helpers_source
 
     assert "const valueSelectStyle = React.useMemo" in sidebar_source
+    assert "const handleValueWindowFnChange = React.useCallback" in sidebar_source
+    assert "windowFn: nextWindowFn === 'none' ? null : nextWindowFn" in sidebar_source
+    assert ".windowFn=e.target.value" not in sidebar_source
     assert "const zoneDescriptors = React.useMemo" in sidebar_source
     assert "const zoneItemsById = React.useMemo" in sidebar_source
     assert "keyboardDragItem" in sidebar_source

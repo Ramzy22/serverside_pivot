@@ -86,6 +86,8 @@ class TanStackRequest:
     version: Optional[int] = None
     column_sort_options: Optional[Dict[str, Any]] = None
     custom_dimensions: List[Dict[str, Any]] = field(default_factory=list)
+    layout_mode: Optional[str] = None          # 'hierarchy' | 'outline' | 'tabular'
+    show_subtotal_footers: Optional[bool] = False
 
 
 @dataclass
@@ -1069,6 +1071,7 @@ class TanStackPivotAdapter(FormulaEngineMixin):
                 } for measure in (spec.measures or []))
             ],
             filters=spec.filters or [],
+            custom_dimensions=spec.custom_dimensions or [],
             sorting=[],
             grouping=spec.rows or [],
             aggregations=[],
@@ -1088,6 +1091,7 @@ class TanStackPivotAdapter(FormulaEngineMixin):
             order_measure,
             spec.pivot_config.column_cursor if spec.pivot_config else None,
             spec.column_sort_options,
+            spec.custom_dimensions,
         )
 
         col_cache_key = self.controller._cache_key_for_query(col_query, spec)
@@ -3516,7 +3520,18 @@ class TanStackPivotAdapter(FormulaEngineMixin):
         if expanded_paths is True:
             target_paths = [['__ALL__']]
 
-        if request.grouping and request.include_subtotals is False:
+        # Flat path: tabular layout with subtotals OFF.  Layout-mode is the
+        # primary signal; include_subtotals is kept as a backward-compat fallback
+        # for callers that predate the layout_mode field.
+        _request_layout_mode = getattr(request, "layout_mode", None) or ""
+        _show_subtotal_footers = bool(getattr(request, "show_subtotal_footers", False))
+        _use_flat_path = (
+            request.grouping and (
+                (_request_layout_mode == "tabular" and not _show_subtotal_footers)
+                or (not _request_layout_mode and request.include_subtotals is False)
+            )
+        )
+        if _use_flat_path:
             safe_start = max(int(start_row or 0), 0)
             safe_end = max(int(end_row if end_row is not None else safe_start), safe_start)
             requested_count = (safe_end - safe_start) + 1
@@ -3627,6 +3642,9 @@ class TanStackPivotAdapter(FormulaEngineMixin):
                 extra=flat_query_profile if profiling else None,
             ) if profiling else completed_response
 
+        _hier_show_subtotal_footers = _show_subtotal_footers and _request_layout_mode != "tabular"
+        _hier_tabular_subtotals = _show_subtotal_footers and _request_layout_mode == "tabular"
+
         if hasattr(self.controller, 'run_hierarchy_view'):
             try:
                 hierarchy_view_started_at = time.perf_counter()
@@ -3637,6 +3655,8 @@ class TanStackPivotAdapter(FormulaEngineMixin):
                     end_row,
                     include_grand_total_row=include_grand_total,
                     profiling=profiling,
+                    show_subtotal_footers=_hier_show_subtotal_footers,
+                    tabular_subtotals=_hier_tabular_subtotals,
                 )
                 hierarchy_view_finished_at = time.perf_counter()
             except TypeError:

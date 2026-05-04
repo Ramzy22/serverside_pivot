@@ -69,24 +69,42 @@ def build_visible_hierarchy_rows(
     spec: Any,
     hierarchy_result: Dict[str, List[Dict[str, Any]]],
     expanded_paths: Any,
+    *,
+    show_subtotal_footers: bool = False,
+    tabular_subtotals: bool = False,
 ) -> List[Dict[str, Any]]:
-    return list(iter_visible_hierarchy_rows(spec, hierarchy_result, expanded_paths))
+    return list(iter_visible_hierarchy_rows(
+        spec, hierarchy_result, expanded_paths,
+        show_subtotal_footers=show_subtotal_footers,
+        tabular_subtotals=tabular_subtotals,
+    ))
 
 
 def iter_visible_hierarchy_rows(
     spec: Any,
     hierarchy_result: Dict[str, List[Dict[str, Any]]],
     expanded_paths: Any,
+    *,
+    show_subtotal_footers: bool = False,
+    tabular_subtotals: bool = False,
 ):
     """Build visible rows from batch-loaded hierarchy levels.
 
     This is the single policy for hierarchy row construction: normalize expanded
     paths, skip subtotal placeholders below root, emit at most one grand total,
     assign display id/depth metadata, and traverse parent before children.
+
+    show_subtotal_footers: hierarchy/outline — after each expanded group's
+        children emit a copy of the group row marked _isSubtotalFooter=True.
+    tabular_subtotals: tabular layout — post-order traversal (children first,
+        then parent as _isTabularSubtotal=True); all groups are force-expanded.
     """
     rows = _row_fields(spec)
     grand_total_emitted = False
     expand_all, expanded_path_set = expanded_path_state(expanded_paths)
+
+    if tabular_subtotals:
+        expand_all = True  # always show all levels in tabular subtotals mode
 
     def traverse(parent_key: str):
         nonlocal grand_total_emitted
@@ -108,6 +126,12 @@ def iter_visible_hierarchy_rows(
                 if grand_total_emitted:
                     continue
                 grand_total_emitted = True
+                row["_id"] = GRAND_TOTAL_ID
+                row["_isTotal"] = True
+                row["_path"] = GRAND_TOTAL_PATH
+                row["depth"] = current_depth
+                yield row
+                continue
 
             target_dim_idx = current_depth
             child_key = None
@@ -115,11 +139,7 @@ def iter_visible_hierarchy_rows(
                 target_dim = rows[target_dim_idx]
                 if current_depth > 0 and is_missing_hierarchy_value(row.get(target_dim)):
                     continue
-                if current_depth == 0 and is_missing_hierarchy_value(row.get(target_dim)):
-                    row["_id"] = GRAND_TOTAL_ID
-                    row["_isTotal"] = True
-                    row["_path"] = GRAND_TOTAL_PATH
-                elif target_dim in row and not is_missing_hierarchy_value(row.get(target_dim)):
+                if target_dim in row and not is_missing_hierarchy_value(row.get(target_dim)):
                     row["_id"] = row[target_dim]
                     # Build the full path for this row from parent + current dim value.
                     # Do this before yielding so downstream code (JS tabular mode) always
@@ -134,10 +154,31 @@ def iter_visible_hierarchy_rows(
                         row["_pathFields"] = list(rows[: current_depth + 1])
 
             row["depth"] = current_depth
-            yield row
+            is_expanded = (
+                child_key is not None
+                and child_key in hierarchy_result
+                and (expand_all or child_key in expanded_path_set)
+            )
 
-            if child_key is not None and child_key in hierarchy_result and (expand_all or child_key in expanded_path_set):
-                yield from traverse(child_key)
+            if tabular_subtotals:
+                # Post-order: children first, then this group row as a subtotal marker.
+                # Leaf nodes (not expanded) are emitted as regular data rows.
+                if is_expanded:
+                    yield from traverse(child_key)
+                    subtotal_row = dict(row)
+                    subtotal_row["_isTabularSubtotal"] = True
+                    yield subtotal_row
+                else:
+                    yield row
+            else:
+                # Pre-order: group row first, then children, then optional footer.
+                yield row
+                if is_expanded:
+                    yield from traverse(child_key)
+                    if show_subtotal_footers:
+                        footer_row = dict(row)
+                        footer_row["_isSubtotalFooter"] = True
+                        yield footer_row
 
     yield from traverse("")
 
@@ -306,10 +347,16 @@ def build_hierarchy_row_window(
     start_row: Optional[int] = None,
     end_row: Optional[int] = None,
     collect_formula_source_rows: bool = False,
+    show_subtotal_footers: bool = False,
+    tabular_subtotals: bool = False,
 ) -> Dict[str, Any]:
     has_window = start_row is not None and end_row is not None
     if not has_window:
-        rows = build_visible_hierarchy_rows(spec, hierarchy_result, expanded_paths)
+        rows = build_visible_hierarchy_rows(
+            spec, hierarchy_result, expanded_paths,
+            show_subtotal_footers=show_subtotal_footers,
+            tabular_subtotals=tabular_subtotals,
+        )
         finalized_rows = finalize_hierarchy_rows(rows, preserve_window_order=False)
         grand_total_row = find_hierarchy_grand_total_row(finalized_rows)
         grand_total_formula_source_rows = [
@@ -341,7 +388,11 @@ def build_hierarchy_row_window(
     table_min = float("inf")
     table_max = float("-inf")
 
-    for row in iter_visible_hierarchy_rows(spec, hierarchy_result, expanded_paths):
+    for row in iter_visible_hierarchy_rows(
+        spec, hierarchy_result, expanded_paths,
+        show_subtotal_footers=show_subtotal_footers,
+        tabular_subtotals=tabular_subtotals,
+    ):
         if is_hierarchy_grand_total(row):
             if grand_total_row is None:
                 grand_total_row = dict(row)

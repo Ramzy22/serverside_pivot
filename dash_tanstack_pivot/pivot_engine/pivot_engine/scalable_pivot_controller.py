@@ -1738,6 +1738,8 @@ class ScalablePivotController(PivotController):
         start_row: Optional[int] = None,
         end_row: Optional[int] = None,
         collect_formula_source_rows: bool = False,
+        show_subtotal_footers: bool = False,
+        tabular_subtotals: bool = False,
     ) -> Dict[str, Any]:
         """Flatten hierarchy into only the requested window while counting the full visible size."""
         return build_hierarchy_row_window(
@@ -1747,6 +1749,8 @@ class ScalablePivotController(PivotController):
             start_row=start_row,
             end_row=end_row,
             collect_formula_source_rows=collect_formula_source_rows,
+            show_subtotal_footers=show_subtotal_footers,
+            tabular_subtotals=tabular_subtotals,
         )
 
     @staticmethod
@@ -1779,6 +1783,8 @@ class ScalablePivotController(PivotController):
         end_row: Optional[int] = None,
         include_grand_total_row: bool = False,
         profiling: bool = False,
+        show_subtotal_footers: bool = False,
+        tabular_subtotals: bool = False,
     ) -> Dict[str, Any]:
         """Run hierarchy query through the adapter service boundary."""
         return await self.hierarchy_query_service.execute(
@@ -1789,6 +1795,8 @@ class ScalablePivotController(PivotController):
                 end_row=end_row,
                 include_grand_total_row=include_grand_total_row,
                 profiling=profiling,
+                show_subtotal_footers=show_subtotal_footers,
+                tabular_subtotals=tabular_subtotals,
             )
         )
 
@@ -1800,6 +1808,8 @@ class ScalablePivotController(PivotController):
         end_row: Optional[int] = None,
         include_grand_total_row: bool = False,
         profiling: bool = False,
+        show_subtotal_footers: bool = False,
+        tabular_subtotals: bool = False,
     ) -> Dict[str, Any]:
         """Single hierarchy pipeline for full hierarchical and virtual-window requests."""
         with self.hierarchy_request_lock:
@@ -1822,7 +1832,7 @@ class ScalablePivotController(PivotController):
 
             spec_fingerprint = self._hierarchy_spec_fingerprint(spec)
             normalized_expanded = self._normalize_expanded_paths(target_paths)
-            cache_key = f"{spec_fingerprint}:{hashlib.sha256(self._stable_json(normalized_expanded).encode()).hexdigest()[:16]}"
+            cache_key = f"{spec_fingerprint}:{hashlib.sha256(self._stable_json(normalized_expanded).encode()).hexdigest()[:16]}:sf{int(show_subtotal_footers)}:ts{int(tabular_subtotals)}"
             cache_lookup_started_at = time.perf_counter()
             cached_view = self._hierarchy_view_cache_get(cache_key)
             cache_lookup_finished_at = time.perf_counter()
@@ -1897,6 +1907,8 @@ class ScalablePivotController(PivotController):
                     start_row,
                     end_row,
                     collect_formula_source_rows=include_grand_total_row,
+                    show_subtotal_footers=show_subtotal_footers,
+                    tabular_subtotals=tabular_subtotals,
                 )
                 flatten_finished_at = time.perf_counter()
                 window_rows = flattened["rows"]

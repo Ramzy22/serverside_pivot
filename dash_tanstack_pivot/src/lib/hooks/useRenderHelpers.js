@@ -1,4 +1,4 @@
-import { useCallback, useMemo, useRef } from 'react';
+import { useCallback, useEffect, useMemo, useRef } from 'react';
 import React from 'react';
 import Icons from '../utils/Icons';
 import FilterPopover from '../components/Filters/FilterPopover';
@@ -534,7 +534,7 @@ export function useRenderHelpers({
     // Cache getLeafColumns() results by column id to avoid repeated tree walks.
     // Cleared when column structure changes (tracked via the section sets above).
     const leafColumnsCacheRef = useRef(new Map());
-    useMemo(() => { leafColumnsCacheRef.current = new Map(); }, [leftColIdSet, rightColIdSet, centerColIdSet]);
+    useEffect(() => { leafColumnsCacheRef.current = new Map(); }, [leftColIdSet, rightColIdSet, centerColIdSet]);
 
     // Stable header style objects — rebuilt only on theme change.
     const headerContentBaseStyle = useMemo(() => ({
