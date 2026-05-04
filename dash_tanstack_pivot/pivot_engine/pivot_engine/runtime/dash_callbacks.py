@@ -253,7 +253,7 @@ def _build_runtime_export_context(
             global_filter=effective_filters.get("global") if isinstance(effective_filters, dict) else None,
             totals=effective_show_col_totals,
             row_totals=effective_show_row_totals,
-            include_subtotals=True,  # hierarchical always; flat path gated by layout_mode in adapter
+            include_subtotals=effective_show_subtotals,
             layout_mode=request_layout_mode,
             show_subtotal_footers=effective_show_subtotals,
             column_sort_options=column_sort_options or None,
