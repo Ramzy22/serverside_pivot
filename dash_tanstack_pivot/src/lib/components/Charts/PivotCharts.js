@@ -4168,13 +4168,13 @@ const ChartSurface = ({
     const [lineDashStyles, setLineDashStyles] = useState(() => initialSettings?.lineDashStyles ?? {});
     const [yAxisMinRight, setYAxisMinRight] = useState(() => initialSettings?.yAxisMinRight ?? '');
     const [yAxisMaxRight, setYAxisMaxRight] = useState(() => initialSettings?.yAxisMaxRight ?? '');
-    const [elementFocus, setElementFocus] = useState({ section: null, seq: 0 });
+    const [settingsTab, setSettingsTab] = useState('data');
     const handleElementSelect = useCallback((type) => {
-        const map = { series: 'Colors', axis: 'Axes', legend: 'Labels', title: 'General' };
-        const section = map[type];
-        if (!section) return;
+        const tabMap = { series: 'style', axis: 'axes', legend: 'labels', title: 'data' };
+        const tab = tabMap[type];
+        if (!tab) return;
         setConfigOpen(true);
-        setElementFocus(prev => ({ section, seq: prev.seq + 1 }));
+        setSettingsTab(tab);
     }, [setConfigOpen]);
     const paletteColors = resolvePalette(colorPalette);
     const [heightDraft, setHeightDraft] = useState(String(chartHeightProp || CHART_HEIGHT));
@@ -4615,135 +4615,70 @@ const ChartSurface = ({
                         flexDirection: 'column',
                     }}
                 >
+                <div style={{
+                    display: 'flex',
+                    alignItems: 'stretch',
+                    borderBottom: `1px solid ${theme.border}`,
+                    background: theme.sidebarBg || theme.surfaceBg || theme.background,
+                    flexShrink: 0,
+                }}>
+                    {[
+                        { id: 'data', label: 'Data' },
+                        { id: 'axes', label: 'Axes' },
+                        { id: 'style', label: 'Style' },
+                        { id: 'labels', label: 'Labels' },
+                    ].map(tab => (
+                        <button
+                            key={tab.id}
+                            type="button"
+                            onClick={() => setSettingsTab(tab.id)}
+                            style={{
+                                flex: 1,
+                                padding: '9px 4px 7px',
+                                fontSize: '11px',
+                                fontWeight: settingsTab === tab.id ? 800 : 600,
+                                color: settingsTab === tab.id ? theme.primary : theme.textSec,
+                                background: 'none',
+                                border: 'none',
+                                borderBottom: `2px solid ${settingsTab === tab.id ? theme.primary : 'transparent'}`,
+                                cursor: 'pointer',
+                                letterSpacing: '0.03em',
+                            }}
+                        >{tab.label}</button>
+                    ))}
+                    <button
+                        type="button"
+                        onClick={() => setConfigOpen(false)}
+                        style={{
+                            padding: '9px 12px',
+                            background: 'none',
+                            border: 'none',
+                            borderBottom: '2px solid transparent',
+                            color: theme.textSec,
+                            cursor: 'pointer',
+                            fontSize: '14px',
+                            lineHeight: 1,
+                        }}
+                        title="Close settings"
+                    >✕</button>
+                </div>
                 <div
                     data-chart-settings-scroll="true"
                     style={{
                         overflowY: 'auto',
                         overflowX: 'hidden',
                         overscrollBehavior: 'contain',
-                        padding: '14px',
+                        padding: '12px',
                         display: 'flex',
                         flexDirection: 'column',
-                        gap: '10px',
+                        gap: '8px',
                         flex: 1,
                         minHeight: 0,
                         background: theme.sidebarBg || theme.surfaceBg || theme.background,
                     }}
                 >
-                    <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '6px' }}>
-                        <div style={{ fontSize: '15px', fontWeight: 800, color: theme.text }}>Chart Settings</div>
-                        <button
-                            type="button"
-                            onClick={() => setConfigOpen(false)}
-                            style={exportButtonStyle}
-                        >
-                            Close
-                        </button>
-                    </div>
-                <ChartConfigSection title="Presets" theme={theme} defaultCollapsed>
-                    <div style={{ display: 'grid', gridTemplateColumns: 'repeat(2, minmax(0, 1fr))', gap: '6px' }}>
-                        {[
-                            { key: 'trend', label: 'Trend' },
-                            { key: 'compare', label: 'Compare' },
-                            { key: 'composition', label: 'Composition' },
-                            { key: 'flow', label: 'Flow' },
-                            { key: 'sparkline', label: 'Sparkline' },
-                        ].map((preset) => (
-                            <button
-                                key={preset.key}
-                                type="button"
-                                onClick={() => applyChartPreset(preset.key)}
-                                style={{
-                                    ...exportButtonStyle,
-                                    textAlign: 'left',
-                                    justifyContent: 'flex-start',
-                                }}
-                            >
-                                {preset.label}
-                            </button>
-                        ))}
-                    </div>
-                </ChartConfigSection>
-                <ChartConfigSection title="General" theme={theme} defaultCollapsed focusTrigger={elementFocus.section === 'General' ? elementFocus.seq : 0}>
-                    {typeof onTitleChange === 'function' ? (
-                        <ChartConfigField label="Title" theme={theme} controlMinWidth="100%">
-                            <input
-                                type="text"
-                                value={resolvedTitle || ''}
-                                onChange={(event) => onTitleChange(event.target.value)}
-                                placeholder="Chart title"
-                                style={{ ...compactInputStyle, width: '100%' }}
-                            />
-                        </ChartConfigField>
-                    ) : null}
-                    {typeof onChartHeightChange === 'function' ? (
-                        <ChartConfigField label="Height" theme={theme} controlMinWidth="96px">
-                            <input
-                                type="number"
-                                min="180"
-                                step="20"
-                                value={heightDraft}
-                                onChange={(event) => setHeightDraft(event.target.value)}
-                                onBlur={() => { if (typeof onChartHeightChange === 'function') onChartHeightChange(heightDraft); }}
-                                onKeyDown={(event) => { if (event.key === 'Enter' && typeof onChartHeightChange === 'function') onChartHeightChange(heightDraft); }}
-                                style={compactInputStyle}
-                            />
-                        </ChartConfigField>
-                    ) : null}
-                    <ChartConfigField label="Limits" theme={theme} controlMinWidth="100%">
-                        <ChartLimitInputs
-                            rowLimit={rowLimit}
-                            onRowLimitChange={onRowLimitChange}
-                            columnLimit={columnLimit}
-                            onColumnLimitChange={onColumnLimitChange}
-                            theme={theme}
-                        />
-                    </ChartConfigField>
-                    <ChartConfigField label="Subtitle" theme={theme} controlMinWidth="100%">
-                        <input
-                            type="text"
-                            value={chartSubtitle}
-                            onChange={e => setChartSubtitle(e.target.value)}
-                            placeholder="Chart subtitle"
-                            style={{ ...compactInputStyle, width: '100%' }}
-                        />
-                    </ChartConfigField>
-                </ChartConfigSection>
-
-                <ChartConfigSection title="Type" theme={theme} defaultCollapsed={false}>
+                {settingsTab === 'data' && <>
                     <ChartTypeGallery chartType={chartType} onChange={onChartTypeChange} theme={theme} includeHierarchyCharts={allowHierarchyCharts} />
-                </ChartConfigSection>
-
-                {chartType !== 'heatmap' && chartType !== 'icicle' && chartType !== 'sunburst' && chartType !== 'sankey' && chartType !== 'pie' && chartType !== 'donut' && !ECHARTS_CHART_TYPES.has(chartType) ? (
-                <ChartConfigSection title="Thresholds" theme={theme}>
-                    <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
-                        {referenceLines.map((line, lineIdx) => (
-                            <ChartReflineRow
-                                key={line.id}
-                                line={line}
-                                onUpdate={(updated) => setReferenceLines(prev => prev.map((l, j) => j === lineIdx ? updated : l))}
-                                onRemove={() => setReferenceLines(prev => prev.filter((_, j) => j !== lineIdx))}
-                                exportButtonStyle={exportButtonStyle}
-                                compactInputStyle={compactInputStyle}
-                                theme={theme}
-                            />
-                        ))}
-                        <div style={{ display: 'flex', gap: '4px', alignItems: 'center' }}>
-                            <button type="button" onClick={() => setRefLineDraft(d => ({ ...d, orient: d.orient === 'v' ? 'h' : 'v' }))} style={{ ...exportButtonStyle, padding: '4px 7px', flexShrink: 0, fontWeight: 800, color: refLineDraft.orient === 'v' ? theme.primary : theme.textSec }}>{refLineDraft.orient === 'v' ? '|' : '—'}</button>
-                            <input type="number" value={refLineDraft.value} onChange={(e) => setRefLineDraft(d => ({ ...d, value: e.target.value }))} placeholder={refLineDraft.orient === 'v' ? 'Cat index' : 'Value'} style={{ ...compactInputStyle, width: '60px', flexShrink: 0 }} />
-                            <input type="text" value={refLineDraft.label} onChange={(e) => setRefLineDraft(d => ({ ...d, label: e.target.value }))} placeholder="Label" style={{ ...compactInputStyle, flex: 1, minWidth: 0 }} />
-                            <button type="button" onClick={() => { if (refLineDraft.value === '') return; setReferenceLines(prev => [...prev, { id: Date.now(), value: refLineDraft.value, label: refLineDraft.label, orient: refLineDraft.orient, color: '', dash: 'dashed' }]); setRefLineDraft({ value: '', label: '', orient: refLineDraft.orient }); }} style={{ ...exportButtonStyle, padding: '4px 10px', flexShrink: 0 }}>+</button>
-                        </div>
-                        {yRange ? (
-                            <div style={{ fontSize: '10px', color: theme.textSec, paddingTop: '2px' }}>
-                                Data range: {formatChartValue(yRange.min, valueFormat)} — {formatChartValue(yRange.max, valueFormat)}
-                            </div>
-                        ) : null}
-                    </div>
-                </ChartConfigSection>
-                ) : null}
-
-                <ChartConfigSection title="Axes" theme={theme} defaultCollapsed={false} focusTrigger={elementFocus.section === 'Axes' ? elementFocus.seq : 0}>
                     {(chartType !== 'heatmap' && chartType !== 'icicle' && chartType !== 'sunburst' && chartType !== 'sankey' && chartType !== 'pie' && chartType !== 'donut' && chartType !== 'scatter' && chartType !== 'waterfall' && !ECHARTS_CHART_TYPES.has(chartType) && !isComboChart) ? (
                         <ChartConfigField label="Source" theme={theme}>
                             <ChartOrientationButtons orientation={orientation} onChange={onOrientationChange} theme={theme} />
@@ -4759,80 +4694,273 @@ const ChartSurface = ({
                             <ChartLayoutButtons chartType={chartType} barLayout={barLayout} onChange={onBarLayoutChange} canStack={canStack} theme={theme} />
                         </ChartConfigField>
                     )}
-                    {chartType !== 'heatmap' && chartType !== 'icicle' && chartType !== 'sunburst' && chartType !== 'sankey' && chartType !== 'pie' && chartType !== 'donut' && chartType !== 'sparkline' ? (
-                        <ChartConfigField label="Y-Axis" theme={theme} controlMinWidth="100%">
-                            <input
-                                type="text"
-                                value={yAxisTitle}
-                                onChange={(event) => setYAxisTitle(event.target.value)}
-                                placeholder="Y-axis title"
-                                style={{ ...compactInputStyle, width: '100%' }}
-                            />
+                    {showHierarchySection ? (
+                        <ChartConfigField label="Level" theme={theme}>
+                            <ChartHierarchyButtons level={hierarchyLevel} onChange={onHierarchyLevelChange} maxLevel={maxHierarchyLevel} theme={theme} />
                         </ChartConfigField>
                     ) : null}
-                    {chartType !== 'heatmap' && chartType !== 'icicle' && chartType !== 'sunburst' && chartType !== 'sankey' && chartType !== 'pie' && chartType !== 'donut' && chartType !== 'sparkline' && !ECHARTS_CHART_TYPES.has(chartType) ? (
+                    {isComboChart ? (<>
+                        <div style={{ fontSize: '10px', fontWeight: 800, letterSpacing: '0.08em', textTransform: 'uppercase', color: theme.textSec, paddingBottom: '4px', borderBottom: `1px solid ${theme.border}`, marginTop: '4px' }}>Layers</div>
+                        <ChartLayerEditor layers={chartLayers} onChange={onChartLayersChange} availableColumns={availableColumns} theme={theme} />
+                    </>) : null}
+                    <div style={{ fontSize: '10px', fontWeight: 800, letterSpacing: '0.08em', textTransform: 'uppercase', color: theme.textSec, paddingBottom: '4px', borderBottom: `1px solid ${theme.border}`, marginTop: '4px' }}>General</div>
+                    {typeof onTitleChange === 'function' ? (
+                        <ChartConfigField label="Title" theme={theme} controlMinWidth="100%">
+                            <input type="text" value={resolvedTitle || ''} onChange={(event) => onTitleChange(event.target.value)} placeholder="Chart title" style={{ ...compactInputStyle, width: '100%' }} />
+                        </ChartConfigField>
+                    ) : null}
+                    <ChartConfigField label="Subtitle" theme={theme} controlMinWidth="100%">
+                        <input type="text" value={chartSubtitle} onChange={e => setChartSubtitle(e.target.value)} placeholder="Chart subtitle" style={{ ...compactInputStyle, width: '100%' }} />
+                    </ChartConfigField>
+                    {typeof onChartHeightChange === 'function' ? (
+                        <ChartConfigField label="Height" theme={theme} controlMinWidth="96px">
+                            <input type="number" min="180" step="20" value={heightDraft} onChange={(event) => setHeightDraft(event.target.value)} onBlur={() => { if (typeof onChartHeightChange === 'function') onChartHeightChange(heightDraft); }} onKeyDown={(event) => { if (event.key === 'Enter' && typeof onChartHeightChange === 'function') onChartHeightChange(heightDraft); }} style={compactInputStyle} />
+                        </ChartConfigField>
+                    ) : null}
+                    <div style={{ fontSize: '10px', fontWeight: 800, letterSpacing: '0.08em', textTransform: 'uppercase', color: theme.textSec, paddingBottom: '4px', borderBottom: `1px solid ${theme.border}`, marginTop: '4px' }}>Data & Actions</div>
+                    <ChartConfigField label="Limits" theme={theme} controlMinWidth="100%">
+                        <ChartLimitInputs rowLimit={rowLimit} onRowLimitChange={onRowLimitChange} columnLimit={columnLimit} onColumnLimitChange={onColumnLimitChange} theme={theme} />
+                    </ChartConfigField>
+                    {typeof onSortModeChange === 'function' ? (
+                        <ChartConfigField label="Sort" theme={theme} controlMinWidth="100%">
+                            <ChartSortButtons sortMode={sortMode} onChange={onSortModeChange} theme={theme} />
+                        </ChartConfigField>
+                    ) : null}
+                    {typeof onSortModeChange === 'function' ? (
+                        <ChartConfigField label="Series Sort" theme={theme} controlMinWidth="100%">
+                            <div style={{ display: 'flex', gap: '5px', flexWrap: 'wrap' }}>
+                                {SERIES_SORT_MODES.map(m => (
+                                    <button key={m.value} type="button" onClick={() => setSeriesSort(m.value)} style={{ border: `1px solid ${seriesSort === m.value ? theme.primary : theme.border}`, background: seriesSort === m.value ? theme.select : (theme.headerSubtleBg || theme.hover), color: seriesSort === m.value ? theme.primary : theme.text, borderRadius: theme.radiusSm || '8px', padding: '5px 8px', fontSize: '11px', fontWeight: 700, cursor: 'pointer' }}>
+                                        {m.label}
+                                    </button>
+                                ))}
+                            </div>
+                        </ChartConfigField>
+                    ) : null}
+                    {typeof onInteractionModeChange === 'function' ? (
+                        <ChartConfigField label="Click" theme={theme}>
+                            <ChartInteractionButtons interactionMode={interactionMode} onChange={onInteractionModeChange} theme={theme} />
+                        </ChartConfigField>
+                    ) : null}
+                    {showServerScope && typeof onServerScopeChange === 'function' ? (
+                        <ChartConfigField label="Scope" theme={theme}>
+                            <ChartScopeButtons scope={serverScope} onChange={onServerScopeChange} theme={theme} />
+                        </ChartConfigField>
+                    ) : null}
+                    <div style={{ fontSize: '10px', fontWeight: 800, letterSpacing: '0.08em', textTransform: 'uppercase', color: theme.textSec, paddingBottom: '4px', borderBottom: `1px solid ${theme.border}`, marginTop: '4px' }}>Presets</div>
+                    <div style={{ display: 'grid', gridTemplateColumns: 'repeat(2, minmax(0, 1fr))', gap: '6px' }}>
+                        {[
+                            { key: 'trend', label: 'Trend' },
+                            { key: 'compare', label: 'Compare' },
+                            { key: 'composition', label: 'Composition' },
+                            { key: 'flow', label: 'Flow' },
+                            { key: 'sparkline', label: 'Sparkline' },
+                        ].map((preset) => (
+                            <button key={preset.key} type="button" onClick={() => applyChartPreset(preset.key)} style={{ ...exportButtonStyle, textAlign: 'left' }}>
+                                {preset.label}
+                            </button>
+                        ))}
+                    </div>
+                </>}
+                {settingsTab === 'axes' && <>
+                    {chartType !== 'heatmap' && chartType !== 'icicle' && chartType !== 'sunburst' && chartType !== 'sankey' && chartType !== 'pie' && chartType !== 'donut' && chartType !== 'sparkline' ? (
+                        <ChartConfigField label="Y-Axis Title" theme={theme} controlMinWidth="100%">
+                            <input type="text" value={yAxisTitle} onChange={(event) => setYAxisTitle(event.target.value)} placeholder="Y-axis title" style={{ ...compactInputStyle, width: '100%' }} />
+                        </ChartConfigField>
+                    ) : null}
+                    {chartType !== 'heatmap' && chartType !== 'icicle' && chartType !== 'sunburst' && chartType !== 'sankey' && chartType !== 'pie' && chartType !== 'donut' && chartType !== 'sparkline' && !ECHARTS_CHART_TYPES.has(chartType) ? (<>
                         <ChartConfigField label="Y Range" theme={theme} controlMinWidth="100%">
                             <div style={{ display: 'flex', gap: '6px' }}>
                                 <input type="number" value={yAxisMin} onChange={(e) => setYAxisMin(e.target.value)} placeholder="Min" style={{ ...compactInputStyle, width: '50%' }} />
                                 <input type="number" value={yAxisMax} onChange={(e) => setYAxisMax(e.target.value)} placeholder="Max" style={{ ...compactInputStyle, width: '50%' }} />
                             </div>
                         </ChartConfigField>
-                    ) : null}
-                    {chartType !== 'heatmap' && chartType !== 'icicle' && chartType !== 'sunburst' && chartType !== 'sankey' && chartType !== 'pie' && chartType !== 'donut' && chartType !== 'sparkline' && !ECHARTS_CHART_TYPES.has(chartType) ? (
                         <ChartConfigField label="Y Ticks" theme={theme} controlMinWidth="80px">
                             <input type="number" min="2" max="20" value={tickCount} onChange={e => setTickCount(Math.max(2, Math.min(20, Number(e.target.value) || 5)))} style={{ ...compactInputStyle, width: '80px' }} />
                         </ChartConfigField>
-                    ) : null}
-                    {chartType !== 'heatmap' && chartType !== 'icicle' && chartType !== 'sunburst' && chartType !== 'sankey' && chartType !== 'pie' && chartType !== 'donut' && chartType !== 'sparkline' && !ECHARTS_CHART_TYPES.has(chartType) ? (
-                        <ChartConfigField label="X Angle" theme={theme} controlMinWidth="80px">
-                            <div style={{ display: 'flex', gap: '4px', alignItems: 'center' }}>
-                                <input
-                                    type="number"
-                                    min="0"
-                                    max="90"
-                                    value={labelAngle}
-                                    onChange={(e) => setLabelAngle(Math.max(0, Math.min(90, Number(e.target.value) || 0)))}
-                                    style={{ ...compactInputStyle, width: '58px' }}
-                                    title="X-axis label angle (0–90°)"
-                                />
+                        <ChartConfigField label="X Angle" theme={theme} controlMinWidth="100%">
+                            <div style={{ display: 'flex', gap: '4px', alignItems: 'center', flexWrap: 'wrap' }}>
+                                <input type="number" min="0" max="90" value={labelAngle} onChange={(e) => setLabelAngle(Math.max(0, Math.min(90, Number(e.target.value) || 0)))} style={{ ...compactInputStyle, width: '58px' }} title="X-axis label angle (0–90°)" />
                                 <span style={{ fontSize: '11px', color: theme.textSec }}>°</span>
                                 {[0, 30, 45, 90].map(a => (
                                     <button key={a} type="button" onClick={() => setLabelAngle(a)} style={{ ...compactInputStyle, padding: '4px 6px', background: labelAngle === a ? theme.select : (theme.headerSubtleBg || theme.hover), color: labelAngle === a ? theme.primary : theme.text, border: `1px solid ${labelAngle === a ? theme.primary : theme.border}` }}>{a}°</button>
                                 ))}
                             </div>
                         </ChartConfigField>
+                    </>) : null}
+                    {isComboChart ? (
+                        <ChartConfigField label="Right Axis Range" theme={theme} controlMinWidth="100%">
+                            <div style={{ display: 'flex', gap: '6px' }}>
+                                <input type="number" value={yAxisMinRight} onChange={e => setYAxisMinRight(e.target.value)} placeholder="Min" style={{ ...compactInputStyle, width: '50%' }} />
+                                <input type="number" value={yAxisMaxRight} onChange={e => setYAxisMaxRight(e.target.value)} placeholder="Max" style={{ ...compactInputStyle, width: '50%' }} />
+                            </div>
+                        </ChartConfigField>
                     ) : null}
-                </ChartConfigSection>
-
-                <ChartConfigSection title="Labels" theme={theme} defaultCollapsed focusTrigger={elementFocus.section === 'Labels' ? elementFocus.seq : 0}>
+                    {chartType !== 'heatmap' && chartType !== 'icicle' && chartType !== 'sunburst' && chartType !== 'sankey' && chartType !== 'pie' && chartType !== 'donut' && !ECHARTS_CHART_TYPES.has(chartType) ? (<>
+                        <div style={{ fontSize: '10px', fontWeight: 800, letterSpacing: '0.08em', textTransform: 'uppercase', color: theme.textSec, paddingBottom: '4px', borderBottom: `1px solid ${theme.border}`, marginTop: '4px' }}>Reference Lines</div>
+                        <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
+                            {referenceLines.map((line, lineIdx) => (
+                                <ChartReflineRow key={line.id} line={line} onUpdate={(updated) => setReferenceLines(prev => prev.map((l, j) => j === lineIdx ? updated : l))} onRemove={() => setReferenceLines(prev => prev.filter((_, j) => j !== lineIdx))} exportButtonStyle={exportButtonStyle} compactInputStyle={compactInputStyle} theme={theme} />
+                            ))}
+                            <div style={{ display: 'flex', gap: '4px', alignItems: 'center' }}>
+                                <button type="button" onClick={() => setRefLineDraft(d => ({ ...d, orient: d.orient === 'v' ? 'h' : 'v' }))} style={{ ...exportButtonStyle, padding: '4px 7px', flexShrink: 0, fontWeight: 800, color: refLineDraft.orient === 'v' ? theme.primary : theme.textSec }}>{refLineDraft.orient === 'v' ? '|' : '—'}</button>
+                                <input type="number" value={refLineDraft.value} onChange={(e) => setRefLineDraft(d => ({ ...d, value: e.target.value }))} placeholder={refLineDraft.orient === 'v' ? 'Cat index' : 'Value'} style={{ ...compactInputStyle, width: '60px', flexShrink: 0 }} />
+                                <input type="text" value={refLineDraft.label} onChange={(e) => setRefLineDraft(d => ({ ...d, label: e.target.value }))} placeholder="Label" style={{ ...compactInputStyle, flex: 1, minWidth: 0 }} />
+                                <button type="button" onClick={() => { if (refLineDraft.value === '') return; setReferenceLines(prev => [...prev, { id: Date.now(), value: refLineDraft.value, label: refLineDraft.label, orient: refLineDraft.orient, color: '', dash: 'dashed' }]); setRefLineDraft({ value: '', label: '', orient: refLineDraft.orient }); }} style={{ ...exportButtonStyle, padding: '4px 10px', flexShrink: 0 }}>+</button>
+                            </div>
+                            {yRange ? (
+                                <div style={{ fontSize: '10px', color: theme.textSec }}>
+                                    Data range: {formatChartValue(yRange.min, valueFormat)} — {formatChartValue(yRange.max, valueFormat)}
+                                </div>
+                            ) : null}
+                        </div>
+                    </>) : null}
+                </>}
+                {settingsTab === 'style' && <>
+                    <div style={{ fontSize: '10px', fontWeight: 800, letterSpacing: '0.08em', textTransform: 'uppercase', color: theme.textSec, paddingBottom: '4px', borderBottom: `1px solid ${theme.border}` }}>Colors</div>
+                    <div style={{ display: 'flex', flexWrap: 'wrap', gap: '6px' }}>
+                        {[...COLOR_PALETTE_NAMES, ...(customPaletteColors.length >= 2 ? ['custom'] : [])].map((name) => {
+                            const active = colorPalette === name;
+                            const swatches = name === 'custom' ? customPaletteColors : COLOR_PALETTES[name];
+                            return (
+                                <button key={name} type="button" onClick={() => setColorPalette(name)} title={name.charAt(0).toUpperCase() + name.slice(1)}
+                                    style={{ display: 'flex', alignItems: 'center', gap: '3px', padding: '3px 6px', border: `1.5px solid ${active ? theme.primary : theme.border}`, background: active ? theme.select : (theme.headerSubtleBg || theme.hover), borderRadius: theme.radiusSm || '8px', cursor: 'pointer' }}
+                                >
+                                    {(swatches || []).slice(0, 4).map((hex, i) => (
+                                        <span key={i} style={{ width: '8px', height: '8px', borderRadius: '50%', background: hex, flexShrink: 0 }} />
+                                    ))}
+                                    <span style={{ fontSize: '9px', fontWeight: active ? 700 : 600, color: active ? theme.primary : theme.textSec, marginLeft: '1px', textTransform: 'capitalize' }}>
+                                        {name === 'a11y' ? 'A11y' : name}
+                                    </span>
+                                </button>
+                            );
+                        })}
+                    </div>
+                    {Array.isArray(model && model.series) && model.series.length > 0 ? (
+                        <div style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
+                            <div style={{ fontSize: '10px', fontWeight: 700, color: theme.textSec, textTransform: 'uppercase', letterSpacing: '0.05em', marginBottom: '2px' }}>Override per series</div>
+                            {model.series.slice(0, 20).map((ser, si) => (
+                                <div key={ser.name || si} style={{ display: 'flex', alignItems: 'center', gap: '5px' }}>
+                                    <div style={{ display: 'flex', gap: '2px', flexShrink: 0 }}>
+                                        {paletteColors.slice(0, 6).map((hex, pi) => (
+                                            <button key={pi} type="button" onClick={() => setSeriesColors(prev => ({ ...prev, [ser.name]: hex }))} style={{ width: '14px', height: '14px', borderRadius: '50%', background: hex, border: `2px solid ${(seriesColors[ser.name] || getColorForIndex(si, theme, paletteColors)) === hex ? theme.text : 'transparent'}`, cursor: 'pointer', padding: 0, flexShrink: 0 }} title={hex} />
+                                        ))}
+                                    </div>
+                                    <input type="color" value={seriesColors[ser.name] || getColorForIndex(si, theme, paletteColors)} onChange={(e) => setSeriesColors(prev => ({ ...prev, [ser.name]: e.target.value }))} style={{ width: '24px', height: '24px', padding: 0, border: `1px solid ${theme.border}`, borderRadius: '4px', cursor: 'pointer', background: 'none', flexShrink: 0 }} title={`Custom color for ${ser.name}`} />
+                                    <span style={{ fontSize: '11px', color: theme.text, flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{ser.name || `Series ${si + 1}`}</span>
+                                    {seriesColors[ser.name] ? (
+                                        <button type="button" onClick={() => setSeriesColors(prev => { const next = { ...prev }; delete next[ser.name]; return next; })} style={{ border: 'none', background: 'none', color: theme.textSec, cursor: 'pointer', fontSize: '10px', padding: '0 2px' }} title="Reset to palette">↺</button>
+                                    ) : null}
+                                </div>
+                            ))}
+                            {model.series.length > 20 ? <div style={{ fontSize: '10px', color: theme.textSec }}>{`…${model.series.length - 20} more`}</div> : null}
+                        </div>
+                    ) : null}
+                    <div style={{ borderTop: `1px solid ${theme.border}`, paddingTop: '8px' }}>
+                        <div style={{ fontSize: '10px', fontWeight: 700, color: theme.textSec, textTransform: 'uppercase', letterSpacing: '0.05em', marginBottom: '6px' }}>Custom Palette</div>
+                        <ChartCustomPaletteEditor customColors={customPaletteColors} onChange={setCustomPaletteColors} theme={theme} compactInputStyle={compactInputStyle} />
+                        {customPaletteColors.length >= 2 ? (
+                            <button type="button" onClick={() => setColorPalette('custom')} style={{ ...exportButtonStyle, marginTop: '6px', background: colorPalette === 'custom' ? theme.select : undefined, color: colorPalette === 'custom' ? theme.primary : undefined, border: `1px solid ${colorPalette === 'custom' ? theme.primary : theme.border}` }}>
+                                {colorPalette === 'custom' ? 'Custom active' : 'Use custom palette'}
+                            </button>
+                        ) : null}
+                    </div>
+                    <div style={{ fontSize: '10px', fontWeight: 800, letterSpacing: '0.08em', textTransform: 'uppercase', color: theme.textSec, paddingBottom: '4px', borderBottom: `1px solid ${theme.border}`, marginTop: '4px' }}>Effects</div>
+                    <ChartConfigField label="Animate" theme={theme}>
+                        <button type="button" onClick={() => setShowAnimations(v => !v)} style={{ border: `1px solid ${showAnimations ? theme.primary : theme.border}`, background: showAnimations ? theme.select : (theme.headerSubtleBg || theme.hover), color: showAnimations ? theme.primary : theme.text, borderRadius: theme.radiusSm || '8px', padding: '6px 8px', fontSize: '11px', fontWeight: 700, cursor: 'pointer' }}>
+                            {showAnimations ? 'On' : 'Off'}
+                        </button>
+                    </ChartConfigField>
+                    {chartType !== 'heatmap' && chartType !== 'icicle' && chartType !== 'sunburst' && chartType !== 'sankey' && chartType !== 'pie' && chartType !== 'donut' && chartType !== 'sparkline' && !ECHARTS_CHART_TYPES.has(chartType) ? (<>
+                        <ChartConfigField label="Gradient" theme={theme}>
+                            <button type="button" onClick={() => setShowGradient(v => !v)} style={{ border: `1px solid ${showGradient ? theme.primary : theme.border}`, background: showGradient ? theme.select : (theme.headerSubtleBg || theme.hover), color: showGradient ? theme.primary : theme.text, borderRadius: theme.radiusSm || '8px', padding: '6px 8px', fontSize: '11px', fontWeight: 700, cursor: 'pointer' }}>
+                                {showGradient ? 'On' : 'Off'}
+                            </button>
+                        </ChartConfigField>
+                        {showGradient ? (<>
+                            <ChartConfigField label="Grad Dir" theme={theme} controlMinWidth="100%">
+                                <div style={{ display: 'flex', gap: '5px' }}>
+                                    {GRADIENT_DIRECTIONS.map(d => (
+                                        <button key={d.value} type="button" onClick={() => setGradientDirection(d.value)} style={{ border: `1px solid ${gradientDirection === d.value ? theme.primary : theme.border}`, background: gradientDirection === d.value ? theme.select : (theme.headerSubtleBg || theme.hover), color: gradientDirection === d.value ? theme.primary : theme.text, borderRadius: theme.radiusSm || '8px', padding: '5px 8px', fontSize: '11px', fontWeight: 700, cursor: 'pointer' }}>
+                                            {d.label}
+                                        </button>
+                                    ))}
+                                </div>
+                            </ChartConfigField>
+                            <ChartConfigField label="Grad Opacity" theme={theme} controlMinWidth="80px">
+                                <div style={{ display: 'flex', gap: '6px', alignItems: 'center' }}>
+                                    <input type="range" min="10" max="100" step="5" value={gradientOpacity} onChange={e => setGradientOpacity(Number(e.target.value))} style={{ flex: 1 }} />
+                                    <span style={{ fontSize: '11px', color: theme.textSec, minWidth: '30px' }}>{gradientOpacity}%</span>
+                                </div>
+                            </ChartConfigField>
+                        </>) : null}
+                    </>) : null}
+                    {(chartType === 'line' || chartType === 'scatter' || chartType === 'bubble' || chartType === 'area' || chartType === 'radar' || isComboChart) ? (<>
+                        <div style={{ fontSize: '10px', fontWeight: 800, letterSpacing: '0.08em', textTransform: 'uppercase', color: theme.textSec, paddingBottom: '4px', borderBottom: `1px solid ${theme.border}`, marginTop: '4px' }}>Markers</div>
+                        <ChartConfigField label="Shape" theme={theme} controlMinWidth="100%">
+                            <select value={markerShape} onChange={e => setMarkerShape(e.target.value)} style={{ ...compactInputStyle, width: '100%' }}>
+                                <option value="none">None (line only)</option>
+                                <option value="circle">Circle</option>
+                                <option value="square">Square</option>
+                                <option value="diamond">Diamond</option>
+                                <option value="triangle">Triangle</option>
+                                <option value="cross">Cross</option>
+                            </select>
+                        </ChartConfigField>
+                        <ChartConfigField label="Size" theme={theme} controlMinWidth="80px">
+                            <select value={markerSize} onChange={e => setMarkerSize(Number(e.target.value))} style={{ ...compactInputStyle, width: '80px' }}>
+                                <option value={3}>Small</option>
+                                <option value={5}>Medium</option>
+                                <option value={7}>Large</option>
+                                <option value={10}>XLarge</option>
+                            </select>
+                        </ChartConfigField>
+                    </>) : null}
+                    {(chartType === 'line' || chartType === 'area' || isComboChart) && Array.isArray(model && model.series) && model.series.length > 0 ? (<>
+                        <div style={{ fontSize: '10px', fontWeight: 800, letterSpacing: '0.08em', textTransform: 'uppercase', color: theme.textSec, paddingBottom: '4px', borderBottom: `1px solid ${theme.border}`, marginTop: '4px' }}>Line Style</div>
+                        <ChartLineDashEditor series={model.series} lineDashStyles={lineDashStyles} onChange={setLineDashStyles} seriesColors={seriesColors} paletteColors={paletteColors} getColorForIndex={getColorForIndex} theme={theme} compactInputStyle={compactInputStyle} />
+                    </>) : null}
+                    {(chartType === 'bar' || chartType === 'line' || chartType === 'area' || chartType === 'scatter' || isComboChart) ? (<>
+                        <div style={{ fontSize: '10px', fontWeight: 800, letterSpacing: '0.08em', textTransform: 'uppercase', color: theme.textSec, paddingBottom: '4px', borderBottom: `1px solid ${theme.border}`, marginTop: '4px' }}>Trendline</div>
+                        <ChartConfigField label="Show" theme={theme}>
+                            <button type="button" onClick={() => setShowTrendline(v => !v)} style={{ border: `1px solid ${showTrendline ? theme.primary : theme.border}`, background: showTrendline ? theme.select : (theme.headerSubtleBg || theme.hover), color: showTrendline ? theme.primary : theme.text, borderRadius: theme.radiusSm || '8px', padding: '6px 8px', fontSize: '11px', fontWeight: 700, cursor: 'pointer' }}>
+                                {showTrendline ? 'On' : 'Off'}
+                            </button>
+                        </ChartConfigField>
+                        {showTrendline ? (<>
+                            <ChartConfigField label="Type" theme={theme} controlMinWidth="100%">
+                                <select value={trendlineMode} onChange={e => setTrendlineMode(e.target.value)} style={{ ...compactInputStyle, width: '100%' }}>
+                                    <option value="linear">Linear Regression</option>
+                                    <option value="moving_avg">Moving Average</option>
+                                    <option value="exponential">Exponential Smoothing</option>
+                                </select>
+                            </ChartConfigField>
+                            {trendlineMode === 'moving_avg' ? (
+                                <ChartConfigField label="Period" theme={theme} controlMinWidth="80px">
+                                    <input type="number" min="2" max="50" value={trendlinePeriod} onChange={e => setTrendlinePeriod(Math.max(2, Math.min(50, Number(e.target.value) || 3)))} style={{ ...compactInputStyle, width: '80px' }} />
+                                </ChartConfigField>
+                            ) : null}
+                            <ChartConfigField label="Color" theme={theme}>
+                                <input type="color" value={trendlineColor || '#888888'} onChange={e => setTrendlineColor(e.target.value)} style={{ width: '32px', height: '28px', padding: 0, border: `1px solid ${theme.border}`, borderRadius: '4px', cursor: 'pointer', background: 'none' }} title="Trendline color" />
+                                {trendlineColor ? <button type="button" onClick={() => setTrendlineColor('')} style={{ border: 'none', background: 'none', color: theme.textSec, cursor: 'pointer', fontSize: '10px', padding: '0 4px' }} title="Reset to auto">↺</button> : null}
+                            </ChartConfigField>
+                            <ChartConfigField label="Width" theme={theme} controlMinWidth="80px">
+                                <input type="number" min="1" max="8" value={trendlineWidth} onChange={e => setTrendlineWidth(Math.max(1, Math.min(8, Number(e.target.value) || 2)))} style={{ ...compactInputStyle, width: '80px' }} />
+                            </ChartConfigField>
+                        </>) : null}
+                    </>) : null}
+                </>}
+                {settingsTab === 'labels' && <>
                     {chartType !== 'icicle' && chartType !== 'sunburst' && chartType !== 'sankey' && chartType !== 'sparkline' ? (
-                        <ChartConfigField label="Values" theme={theme}>
-                            <button
-                                type="button"
-                                onClick={() => setShowDataLabels((v) => !v)}
-                                style={{
-                                    border: `1px solid ${showDataLabels ? theme.primary : theme.border}`,
-                                    background: showDataLabels ? theme.select : (theme.headerSubtleBg || theme.hover),
-                                    color: showDataLabels ? theme.primary : theme.text,
-                                    borderRadius: theme.radiusSm || '8px',
-                                    padding: '6px 8px',
-                                    fontSize: '11px',
-                                    fontWeight: 700,
-                                    cursor: 'pointer',
-                                }}
-                            >
+                        <ChartConfigField label="Data Labels" theme={theme}>
+                            <button type="button" onClick={() => setShowDataLabels((v) => !v)} style={{ border: `1px solid ${showDataLabels ? theme.primary : theme.border}`, background: showDataLabels ? theme.select : (theme.headerSubtleBg || theme.hover), color: showDataLabels ? theme.primary : theme.text, borderRadius: theme.radiusSm || '8px', padding: '6px 8px', fontSize: '11px', fontWeight: 700, cursor: 'pointer' }}>
                                 {showDataLabels ? 'On' : 'Off'}
                             </button>
                         </ChartConfigField>
                     ) : null}
                     {chartType !== 'heatmap' && chartType !== 'icicle' && chartType !== 'sunburst' && chartType !== 'sankey' && chartType !== 'pie' && chartType !== 'donut' ? (
                         <ChartConfigField label="Format" theme={theme} controlMinWidth="100%">
-                            <select
-                                value={valueFormat}
-                                onChange={(event) => setValueFormat(event.target.value)}
-                                style={{ ...compactInputStyle, width: '100%' }}
-                                title="Value format for axis labels"
-                            >
+                            <select value={valueFormat} onChange={(event) => setValueFormat(event.target.value)} style={{ ...compactInputStyle, width: '100%' }} title="Value format for axis labels">
                                 {VALUE_FORMAT_MODES.map((opt) => (
                                     <option key={opt.value} value={opt.value}>{opt.label}</option>
                                 ))}
@@ -4871,270 +4999,9 @@ const ChartSurface = ({
                             <ChartLegendPositionButtons legendPosition={legendPosition} onChange={setLegendPosition} theme={theme} />
                         </ChartConfigField>
                     ) : null}
-                </ChartConfigSection>
-
-                <ChartConfigSection title="Style" theme={theme} defaultCollapsed>
-                    <ChartConfigField label="Animate" theme={theme}>
-                        <button type="button" onClick={() => setShowAnimations(v => !v)} style={{ border: `1px solid ${showAnimations ? theme.primary : theme.border}`, background: showAnimations ? theme.select : (theme.headerSubtleBg || theme.hover), color: showAnimations ? theme.primary : theme.text, borderRadius: theme.radiusSm || '8px', padding: '6px 8px', fontSize: '11px', fontWeight: 700, cursor: 'pointer' }}>
-                            {showAnimations ? 'On' : 'Off'}
-                        </button>
-                    </ChartConfigField>
-                    {chartType !== 'heatmap' && chartType !== 'icicle' && chartType !== 'sunburst' && chartType !== 'sankey' && chartType !== 'pie' && chartType !== 'donut' && chartType !== 'sparkline' && !ECHARTS_CHART_TYPES.has(chartType) ? (
-                        <>
-                            <ChartConfigField label="Gradient" theme={theme}>
-                                <button type="button" onClick={() => setShowGradient(v => !v)} style={{ border: `1px solid ${showGradient ? theme.primary : theme.border}`, background: showGradient ? theme.select : (theme.headerSubtleBg || theme.hover), color: showGradient ? theme.primary : theme.text, borderRadius: theme.radiusSm || '8px', padding: '6px 8px', fontSize: '11px', fontWeight: 700, cursor: 'pointer' }}>
-                                    {showGradient ? 'On' : 'Off'}
-                                </button>
-                            </ChartConfigField>
-                            {showGradient ? (
-                                <>
-                                    <ChartConfigField label="Grad Dir" theme={theme} controlMinWidth="100%">
-                                        <div style={{ display: 'flex', gap: '5px' }}>
-                                            {GRADIENT_DIRECTIONS.map(d => (
-                                                <button key={d.value} type="button" onClick={() => setGradientDirection(d.value)} style={{ border: `1px solid ${gradientDirection === d.value ? theme.primary : theme.border}`, background: gradientDirection === d.value ? theme.select : (theme.headerSubtleBg || theme.hover), color: gradientDirection === d.value ? theme.primary : theme.text, borderRadius: theme.radiusSm || '8px', padding: '5px 8px', fontSize: '11px', fontWeight: 700, cursor: 'pointer' }}>
-                                                    {d.label}
-                                                </button>
-                                            ))}
-                                        </div>
-                                    </ChartConfigField>
-                                    <ChartConfigField label="Grad Opacity" theme={theme} controlMinWidth="80px">
-                                        <div style={{ display: 'flex', gap: '6px', alignItems: 'center' }}>
-                                            <input type="range" min="10" max="100" step="5" value={gradientOpacity} onChange={e => setGradientOpacity(Number(e.target.value))} style={{ flex: 1 }} />
-                                            <span style={{ fontSize: '11px', color: theme.textSec, minWidth: '30px' }}>{gradientOpacity}%</span>
-                                        </div>
-                                    </ChartConfigField>
-                                </>
-                            ) : null}
-                        </>
-                    ) : null}
-                    {(chartType === 'line' || chartType === 'scatter' || chartType === 'bubble' || chartType === 'area' || chartType === 'radar' || isComboChart) ? (
-                        <>
-                            <ChartConfigField label="Marker" theme={theme} controlMinWidth="100%">
-                                <select value={markerShape} onChange={e => setMarkerShape(e.target.value)} style={{ ...compactInputStyle, width: '100%' }}>
-                                    <option value="none">None (line only)</option>
-                                    <option value="circle">Circle</option>
-                                    <option value="square">Square</option>
-                                    <option value="diamond">Diamond</option>
-                                    <option value="triangle">Triangle</option>
-                                    <option value="cross">Cross</option>
-                                </select>
-                            </ChartConfigField>
-                            <ChartConfigField label="Marker Size" theme={theme} controlMinWidth="80px">
-                                <select value={markerSize} onChange={e => setMarkerSize(Number(e.target.value))} style={{ ...compactInputStyle, width: '80px' }}>
-                                    <option value={3}>Small</option>
-                                    <option value={5}>Medium</option>
-                                    <option value={7}>Large</option>
-                                    <option value={10}>XLarge</option>
-                                </select>
-                            </ChartConfigField>
-                        </>
-                    ) : null}
-                </ChartConfigSection>
-
-                {(chartType === 'bar' || chartType === 'line' || chartType === 'area' || chartType === 'scatter' || isComboChart) ? (
-                <ChartConfigSection title="Trendline" theme={theme} defaultCollapsed>
-                    <ChartConfigField label="Show" theme={theme}>
-                        <button type="button" onClick={() => setShowTrendline(v => !v)} style={{ border: `1px solid ${showTrendline ? theme.primary : theme.border}`, background: showTrendline ? theme.select : (theme.headerSubtleBg || theme.hover), color: showTrendline ? theme.primary : theme.text, borderRadius: theme.radiusSm || '8px', padding: '6px 8px', fontSize: '11px', fontWeight: 700, cursor: 'pointer' }}>
-                            {showTrendline ? 'On' : 'Off'}
-                        </button>
-                    </ChartConfigField>
-                    {showTrendline ? (
-                        <>
-                            <ChartConfigField label="Type" theme={theme} controlMinWidth="100%">
-                                <select value={trendlineMode} onChange={e => setTrendlineMode(e.target.value)} style={{ ...compactInputStyle, width: '100%' }}>
-                                    <option value="linear">Linear Regression</option>
-                                    <option value="moving_avg">Moving Average</option>
-                                    <option value="exponential">Exponential Smoothing</option>
-                                </select>
-                            </ChartConfigField>
-                            {trendlineMode === 'moving_avg' ? (
-                                <ChartConfigField label="Period" theme={theme} controlMinWidth="80px">
-                                    <input type="number" min="2" max="50" value={trendlinePeriod} onChange={e => setTrendlinePeriod(Math.max(2, Math.min(50, Number(e.target.value) || 3)))} style={{ ...compactInputStyle, width: '80px' }} />
-                                </ChartConfigField>
-                            ) : null}
-                            <ChartConfigField label="Color" theme={theme}>
-                                <input type="color" value={trendlineColor || '#888888'} onChange={e => setTrendlineColor(e.target.value)} style={{ width: '32px', height: '28px', padding: 0, border: `1px solid ${theme.border}`, borderRadius: '4px', cursor: 'pointer', background: 'none' }} title="Trendline color (blank = match series)" />
-                                {trendlineColor ? <button type="button" onClick={() => setTrendlineColor('')} style={{ border: 'none', background: 'none', color: theme.textSec, cursor: 'pointer', fontSize: '10px', padding: '0 4px' }} title="Reset to auto">↺</button> : null}
-                            </ChartConfigField>
-                            <ChartConfigField label="Width" theme={theme} controlMinWidth="80px">
-                                <input type="number" min="1" max="8" value={trendlineWidth} onChange={e => setTrendlineWidth(Math.max(1, Math.min(8, Number(e.target.value) || 2)))} style={{ ...compactInputStyle, width: '80px' }} />
-                            </ChartConfigField>
-                        </>
-                    ) : null}
-                </ChartConfigSection>
-                ) : null}
-                {false ? (
-                <ChartConfigSection title="Thresholds-OLD" theme={theme}>
-                    <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
-                        {referenceLines.map((line, lineIdx) => (
-                            <div key={line.id} style={{ display: 'flex', gap: '4px', alignItems: 'center' }}>
-                                <input
-                                    type="number"
-                                    value={line.value}
-                                    onChange={(e) => setReferenceLines((prev) => prev.map((l, j) => j === lineIdx ? { ...l, value: e.target.value } : l))}
-                                    placeholder="Value"
-                                    style={{ ...compactInputStyle, width: '68px', flexShrink: 0 }}
-                                />
-                                <input
-                                    type="text"
-                                    value={line.label}
-                                    onChange={(e) => setReferenceLines((prev) => prev.map((l, j) => j === lineIdx ? { ...l, label: e.target.value } : l))}
-                                    placeholder="Label"
-                                    style={{ ...compactInputStyle, flex: 1, minWidth: 0 }}
-                                />
-                                <button
-                                    type="button"
-                                    onClick={() => setReferenceLines((prev) => prev.filter((_, j) => j !== lineIdx))}
-                                    style={{ ...exportButtonStyle, padding: '4px 7px', color: theme.danger || '#ef4444', flexShrink: 0 }}
-                                >✕</button>
-                            </div>
-                        ))}
-                        <div style={{ display: 'flex', gap: '4px' }}>
-                            <input
-                                type="number"
-                                value={refLineDraft.value}
-                                onChange={(e) => setRefLineDraft((d) => ({ ...d, value: e.target.value }))}
-                                placeholder="Value"
-                                style={{ ...compactInputStyle, width: '68px', flexShrink: 0 }}
-                            />
-                            <input
-                                type="text"
-                                value={refLineDraft.label}
-                                onChange={(e) => setRefLineDraft((d) => ({ ...d, label: e.target.value }))}
-                                placeholder="Label (optional)"
-                                style={{ ...compactInputStyle, flex: 1, minWidth: 0 }}
-                            />
-                            <button
-                                type="button"
-                                onClick={() => {
-                                    if (refLineDraft.value === '') return;
-                                    setReferenceLines((prev) => [...prev, { id: Date.now(), value: refLineDraft.value, label: refLineDraft.label }]);
-                                    setRefLineDraft({ value: '', label: '' });
-                                }}
-                                style={{ ...exportButtonStyle, padding: '4px 10px', flexShrink: 0 }}
-                            >+</button>
-                        </div>
-                    </div>
-                </ChartConfigSection>
-                ) : null}
-
-                <ChartConfigSection title="Colors" theme={theme} focusTrigger={elementFocus.section === 'Colors' ? elementFocus.seq : 0}>
-                    <div style={{ display: 'flex', flexWrap: 'wrap', gap: '6px' }}>
-                        {[...COLOR_PALETTE_NAMES, ...(customPaletteColors.length >= 2 ? ['custom'] : [])].map((name) => {
-                            const active = colorPalette === name;
-                            const swatches = name === 'custom' ? customPaletteColors : COLOR_PALETTES[name];
-                            return (
-                                <button key={name} type="button" onClick={() => setColorPalette(name)} title={name.charAt(0).toUpperCase() + name.slice(1)}
-                                    style={{ display: 'flex', alignItems: 'center', gap: '3px', padding: '3px 6px', border: `1.5px solid ${active ? theme.primary : theme.border}`, background: active ? theme.select : (theme.headerSubtleBg || theme.hover), borderRadius: theme.radiusSm || '8px', cursor: 'pointer' }}
-                                >
-                                    {(swatches || []).slice(0, 4).map((hex, i) => (
-                                        <span key={i} style={{ width: '8px', height: '8px', borderRadius: '50%', background: hex, flexShrink: 0 }} />
-                                    ))}
-                                    <span style={{ fontSize: '9px', fontWeight: active ? 700 : 600, color: active ? theme.primary : theme.textSec, marginLeft: '1px', textTransform: 'capitalize' }}>
-                                        {name === 'a11y' ? 'A11y' : name}
-                                    </span>
-                                </button>
-                            );
-                        })}
-                    </div>
-                    {Array.isArray(model && model.series) && model.series.length > 0 ? (
-                        <div style={{ marginTop: '8px', display: 'flex', flexDirection: 'column', gap: '4px' }}>
-                            <div style={{ fontSize: '10px', fontWeight: 700, color: theme.textSec, textTransform: 'uppercase', letterSpacing: '0.05em', marginBottom: '2px' }}>Override per series</div>
-                            {model.series.slice(0, 20).map((ser, si) => (
-                                <div key={ser.name || si} style={{ display: 'flex', alignItems: 'center', gap: '5px' }}>
-                                    <div style={{ display: 'flex', gap: '2px', flexShrink: 0 }}>
-                                        {paletteColors.slice(0, 6).map((hex, pi) => (
-                                            <button key={pi} type="button" onClick={() => setSeriesColors(prev => ({ ...prev, [ser.name]: hex }))} style={{ width: '14px', height: '14px', borderRadius: '50%', background: hex, border: `2px solid ${(seriesColors[ser.name] || getColorForIndex(si, theme, paletteColors)) === hex ? theme.text : 'transparent'}`, cursor: 'pointer', padding: 0, flexShrink: 0 }} title={hex} />
-                                        ))}
-                                    </div>
-                                    <input type="color" value={seriesColors[ser.name] || getColorForIndex(si, theme, paletteColors)} onChange={(e) => setSeriesColors(prev => ({ ...prev, [ser.name]: e.target.value }))} style={{ width: '24px', height: '24px', padding: 0, border: `1px solid ${theme.border}`, borderRadius: '4px', cursor: 'pointer', background: 'none', flexShrink: 0 }} title={`Custom color for ${ser.name}`} />
-                                    <span style={{ fontSize: '11px', color: theme.text, flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{ser.name || `Series ${si + 1}`}</span>
-                                    {seriesColors[ser.name] ? (
-                                        <button type="button" onClick={() => setSeriesColors(prev => { const next = { ...prev }; delete next[ser.name]; return next; })} style={{ border: 'none', background: 'none', color: theme.textSec, cursor: 'pointer', fontSize: '10px', padding: '0 2px' }} title="Reset to palette">↺</button>
-                                    ) : null}
-                                </div>
-                            ))}
-                            {model.series.length > 20 ? <div style={{ fontSize: '10px', color: theme.textSec }}>{`…${model.series.length - 20} more`}</div> : null}
-                        </div>
-                    ) : null}
-                    <div style={{ marginTop: '10px', borderTop: `1px solid ${theme.border}`, paddingTop: '8px' }}>
-                        <div style={{ fontSize: '10px', fontWeight: 700, color: theme.textSec, textTransform: 'uppercase', letterSpacing: '0.05em', marginBottom: '6px' }}>Custom Palette</div>
-                        <ChartCustomPaletteEditor customColors={customPaletteColors} onChange={setCustomPaletteColors} theme={theme} compactInputStyle={compactInputStyle} />
-                        {customPaletteColors.length >= 2 ? (
-                            <button type="button" onClick={() => setColorPalette('custom')} style={{ ...exportButtonStyle, marginTop: '6px', background: colorPalette === 'custom' ? theme.select : undefined, color: colorPalette === 'custom' ? theme.primary : undefined, border: `1px solid ${colorPalette === 'custom' ? theme.primary : theme.border}` }}>
-                                {colorPalette === 'custom' ? 'Custom active' : 'Use custom palette'}
-                            </button>
-                        ) : null}
-                    </div>
-                </ChartConfigSection>
-
-                {(chartType === 'line' || chartType === 'area' || isComboChart) && Array.isArray(model && model.series) && model.series.length > 0 ? (
-                <ChartConfigSection title="Line Style" theme={theme} defaultCollapsed>
-                    <ChartLineDashEditor
-                        series={model.series}
-                        lineDashStyles={lineDashStyles}
-                        onChange={setLineDashStyles}
-                        seriesColors={seriesColors}
-                        paletteColors={paletteColors}
-                        getColorForIndex={getColorForIndex}
-                        theme={theme}
-                        compactInputStyle={compactInputStyle}
-                    />
-                </ChartConfigSection>
-                ) : null}
-
-                {isComboChart ? (
-                    <ChartConfigSection title="Layers" theme={theme}>
-                        <ChartConfigField label="Stack" theme={theme} controlMinWidth="100%">
-                            <ChartLayerEditor layers={chartLayers} onChange={onChartLayersChange} availableColumns={availableColumns} theme={theme} />
-                        </ChartConfigField>
-                        <ChartConfigField label="Right Axis Range" theme={theme} controlMinWidth="100%">
-                            <div style={{ display: 'flex', gap: '6px' }}>
-                                <input type="number" value={yAxisMinRight} onChange={e => setYAxisMinRight(e.target.value)} placeholder="Min" style={{ ...compactInputStyle, width: '50%' }} />
-                                <input type="number" value={yAxisMaxRight} onChange={e => setYAxisMaxRight(e.target.value)} placeholder="Max" style={{ ...compactInputStyle, width: '50%' }} />
-                            </div>
-                        </ChartConfigField>
-                    </ChartConfigSection>
-                ) : null}
-
-                {showHierarchySection ? (
-                    <ChartConfigSection title="Level" theme={theme}>
-                        <ChartConfigField label="Level" theme={theme}>
-                            <ChartHierarchyButtons level={hierarchyLevel} onChange={onHierarchyLevelChange} maxLevel={maxHierarchyLevel} theme={theme} />
-                        </ChartConfigField>
-                    </ChartConfigSection>
-                ) : null}
-
-                <ChartConfigSection title="Actions" theme={theme}>
-                    {typeof onSortModeChange === 'function' ? (
-                        <ChartConfigField label="Sort" theme={theme} controlMinWidth="100%">
-                            <ChartSortButtons sortMode={sortMode} onChange={onSortModeChange} theme={theme} />
-                        </ChartConfigField>
-                    ) : null}
-                    {typeof onSortModeChange === 'function' ? (
-                        <ChartConfigField label="Series Sort" theme={theme} controlMinWidth="100%">
-                            <div style={{ display: 'flex', gap: '5px', flexWrap: 'wrap' }}>
-                                {SERIES_SORT_MODES.map(m => (
-                                    <button key={m.value} type="button" onClick={() => setSeriesSort(m.value)} style={{ border: `1px solid ${seriesSort === m.value ? theme.primary : theme.border}`, background: seriesSort === m.value ? theme.select : (theme.headerSubtleBg || theme.hover), color: seriesSort === m.value ? theme.primary : theme.text, borderRadius: theme.radiusSm || '8px', padding: '5px 8px', fontSize: '11px', fontWeight: 700, cursor: 'pointer' }}>
-                                        {m.label}
-                                    </button>
-                                ))}
-                            </div>
-                        </ChartConfigField>
-                    ) : null}
-                    {typeof onInteractionModeChange === 'function' ? (
-                        <ChartConfigField label="Click" theme={theme}>
-                            <ChartInteractionButtons interactionMode={interactionMode} onChange={onInteractionModeChange} theme={theme} />
-                        </ChartConfigField>
-                    ) : null}
-                    {showServerScope && typeof onServerScopeChange === 'function' ? (
-                        <ChartConfigField label="Scope" theme={theme}>
-                            <ChartScopeButtons scope={serverScope} onChange={onServerScopeChange} theme={theme} />
-                        </ChartConfigField>
-                    ) : null}
-                </ChartConfigSection>
-            </div>
-            </aside>
+                </>}
+                </div>
+                </aside>
             </>
         ) : null}
         </div>
