@@ -77,6 +77,7 @@ function SafeCellContent({ render }) {
  *     captures fresh values from the hook call boundary on each render.
  *   - handleHeaderContextMenu, autoSizeColumn, autoSizeBounds, setHoveredHeaderId,
  *     setFocusedHeaderId, onDragStart, handleFilterClick, handleHeaderFilter,
+ *     onHeaderDrop, onHeaderDragOver, onHeaderKeyboardMove, onHeaderKeyboardPin,
  *     activeFilterCol, filterAnchorEl, closeFilterPopover, activeFilterOptions,
  *     filters, selectedCols, leftCols, rightCols, centerCols, styles, rowHeight,
  *     hoveredHeaderId, focusedHeaderId, theme — all are read synchronously when
@@ -116,6 +117,13 @@ export function useRenderHelpers({
     focusedHeaderIdRef,
     setFocusedHeaderId,
     onDragStart,
+    onHeaderDrop,
+    onHeaderDragOver,
+    onHeaderDragEnd,
+    onHeaderKeyboardMove,
+    onHeaderKeyboardPin,
+    dragOverHeaderId,
+    dragOverSide,
     handleFilterClick,
     handleHeaderFilter,
     activeFilterCol,
@@ -133,7 +141,21 @@ export function useRenderHelpers({
     resolveEditedCellMarker,
     resolveCellDisplayValue,
     editedCellEpoch,
+    getLocaleText,
 }) {
+    const localize = useCallback((key, fallback, values = {}) => {
+        const rawText = typeof getLocaleText === 'function'
+            ? getLocaleText(key, fallback, values)
+            : fallback;
+        const text = rawText === null || rawText === undefined ? '' : String(rawText);
+        if (!values || typeof values !== 'object') return text;
+        return text.replace(/\{([A-Za-z0-9_]+)\}/g, (match, valueKey) => (
+            Object.prototype.hasOwnProperty.call(values, valueKey)
+                ? String(values[valueKey])
+                : match
+        ));
+    }, [getLocaleText]);
+
     // --- Stable style objects extracted from the per-cell hot path ---
     // These are recreated only when theme/styles change, not per cell per scroll frame.
     const baseCellStyle = useMemo(() => ({
@@ -686,6 +708,14 @@ export function useRenderHelpers({
         const sortAriaDescription = isSorted
             ? ` Sorted ${isSorted === 'desc' ? 'descending' : 'ascending'}${hasSortPriority ? ` with priority ${sortIndex + 1}` : ''}${isAbsoluteSort ? ' by absolute value' : ''}.`
             : '';
+        const sortInstruction = localize('headerSortInstruction', 'Click or press Alt+Up/Down to sort.');
+        const moveInstruction = localize('headerMoveInstruction', 'Press Ctrl+Left or Ctrl+Right to move. Press Alt+Shift+Left or Alt+Shift+Right to pin.');
+        const headerAriaLabel = localize('headerAriaLabel', '{label}.{sort} {sortInstruction} {moveInstruction}', {
+            label: headerLabel,
+            sort: sortAriaDescription,
+            sortInstruction,
+            moveInstruction,
+        });
 
         // Calculate sticky style for pinned headers using the hook
         const stickyStyle = disableSticky
@@ -733,14 +763,30 @@ export function useRenderHelpers({
                 } : {})
             }}
             data-header-column-id={String(header.column.id)}
+            data-pinned={isPinned || undefined}
             role="columnheader"
             aria-sort={isSorted || 'none'}
-            aria-label={`${headerLabel}.${sortAriaDescription} Click or press Alt+Up/Down to sort.`}
+            aria-label={headerAriaLabel}
             tabIndex={0}
             onKeyDown={(e) => {
-                if (e.altKey && (e.key === 'ArrowUp' || e.key === 'ArrowDown')) {
+                if (e.altKey && !e.shiftKey && (e.key === 'ArrowUp' || e.key === 'ArrowDown')) {
                     e.preventDefault();
                     header.column.toggleSorting(e.key === 'ArrowDown', e.shiftKey);
+                    return;
+                }
+                if (!isGroupHeader && (e.ctrlKey || e.metaKey) && !e.altKey && (e.key === 'ArrowLeft' || e.key === 'ArrowRight')) {
+                    e.preventDefault();
+                    if (typeof onHeaderKeyboardMove === 'function') {
+                        onHeaderKeyboardMove(header.column.id, e.key === 'ArrowLeft' ? -1 : 1);
+                    }
+                    return;
+                }
+                if (!isGroupHeader && e.altKey && e.shiftKey && (e.key === 'ArrowLeft' || e.key === 'ArrowRight' || e.key === 'ArrowDown')) {
+                    e.preventDefault();
+                    if (typeof onHeaderKeyboardPin === 'function') {
+                        const side = e.key === 'ArrowLeft' ? 'left' : (e.key === 'ArrowRight' ? 'right' : false);
+                        onHeaderKeyboardPin(header.column.id, side);
+                    }
                 }
             }}
             draggable={!isGroupHeader && header.column.id !== '__row_number__' && !header.column.getIsResizing()}
@@ -752,6 +798,21 @@ export function useRenderHelpers({
                 }
                 if (!isGroupHeader && header.column.id !== '__row_number__') {
                     onDragStart(e, header.column.id, 'cols', -1);
+                }
+            }}
+            onDragOver={(e) => {
+                if (typeof onHeaderDragOver === 'function') {
+                    onHeaderDragOver(e, header.column.id, header);
+                }
+            }}
+            onDrop={(e) => {
+                if (typeof onHeaderDrop === 'function') {
+                    onHeaderDrop(e, header.column.id, header);
+                }
+            }}
+            onDragEnd={(e) => {
+                if (typeof onHeaderDragEnd === 'function') {
+                    onHeaderDragEnd(e, header.column.id, header);
                 }
             }}
             onContextMenu={(e) => handleHeaderContextMenu(e, header.column.id, header, level)}
@@ -770,6 +831,13 @@ export function useRenderHelpers({
                 }}
                 data-header-content="true"
                 data-header-column-id={String(header.column.id)}>
+                {!isGroupHeader && header.column.id !== '__row_number__' && header.column.id !== 'hierarchy' && (
+                    <span
+                        style={{ color: theme.textSec, opacity: 0.4, cursor: 'grab', fontSize: '13px', marginRight: '2px', flexShrink: 0, lineHeight: 1 }}
+                        title="Drag to reorder"
+                        aria-hidden="true"
+                    >⠿</span>
+                )}
                 <span style={headerTextStyle}
                 data-header-text="true">
                     {header.isPlaceholder ? null : (typeof header.column.columnDef.header === 'string'
@@ -779,7 +847,19 @@ export function useRenderHelpers({
 
                 {!isGroupHeader && header.column.id !== 'hierarchy' && header.column.id !== '__row_number__' && !header.isPlaceholder && (
                     <div
-                        onClick={(e) => handleFilterClick(e, header.column.id)}
+                        onClick={(e) => {
+                            e.stopPropagation();
+                            handleFilterClick(e, header.column.id);
+                        }}
+                        onKeyDown={(e) => {
+                            if (e.key === 'Enter' || e.key === ' ') {
+                                e.preventDefault();
+                                e.stopPropagation();
+                                handleFilterClick(e, header.column.id);
+                            }
+                        }}
+                        role="button"
+                        tabIndex={0}
                         style={{
                             display:'flex',
                             alignItems: 'center',
@@ -788,7 +868,8 @@ export function useRenderHelpers({
                             background: filters[header.column.id] ? theme.select : 'transparent',
                             color: filters[header.column.id] ? theme.primary : 'inherit'
                         }}
-                        aria-label="Filter"
+                        aria-label={localize('filterColumn', 'Filter Column')}
+                        title={localize('filterColumn', 'Filter Column')}
                     >
                         <Icons.Filter/>
                     </div>
@@ -808,8 +889,18 @@ export function useRenderHelpers({
 
                 <div
                     onClick={(e) => { e.stopPropagation(); handleHeaderContextMenu(e, header.column.id, header, level); }}
+                    onKeyDown={(e) => {
+                        if (e.key === 'Enter' || e.key === ' ') {
+                            e.preventDefault();
+                            e.stopPropagation();
+                            handleHeaderContextMenu(e, header.column.id, header, level);
+                        }
+                    }}
+                    role="button"
+                    tabIndex={0}
                     style={moreVertStyle}
-                    aria-label="More options"
+                    aria-label={localize('moreColumnOptions', 'More Column Options')}
+                    title={localize('moreColumnOptions', 'More Column Options')}
                 >
                     <Icons.MoreVert/>
                 </div>
@@ -833,6 +924,18 @@ export function useRenderHelpers({
                 <div style={{fontSize: '10px', color: theme.primary, paddingTop: '2px', textAlign: 'center'}}>
                     {filters[header.column.id].conditions.map(c => `${c.type}: ${c.value}${c.caseSensitive ? ' (Match Case)' : ''}`).join(` ${filters[header.column.id].operator} `)}
                 </div>
+                )}
+
+                {dragOverHeaderId === header.column.id && (
+                    <div style={{
+                        position: 'absolute',
+                        top: 0, bottom: 0,
+                        [dragOverSide === 'before' ? 'left' : 'right']: 0,
+                        width: '2px',
+                        background: theme.primary,
+                        zIndex: 200,
+                        pointerEvents: 'none',
+                    }} />
                 )}
 
                 {header.column.getCanResize() && <div
@@ -888,6 +991,14 @@ export function useRenderHelpers({
         setHoveredHeaderId,
         setFocusedHeaderId,
         onDragStart,
+        onHeaderDrop,
+        onHeaderDragOver,
+        onHeaderDragEnd,
+        onHeaderKeyboardMove,
+        onHeaderKeyboardPin,
+        dragOverHeaderId,
+        dragOverSide,
+        localize,
         getHeaderStickyStyle,
         leftColIdSet,
         rightColIdSet,

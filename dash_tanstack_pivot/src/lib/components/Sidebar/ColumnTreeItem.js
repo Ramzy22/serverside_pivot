@@ -172,21 +172,30 @@ const ColumnTreeItem = ({ column, level, theme, styles, handlePinColumn, colSear
                 )}
                 
                 {isGroup ? (
-                    <span onClick={() => setExpanded(!expanded)} style={{ cursor: 'pointer', display: 'flex', opacity: 0.7, marginRight: '4px' }}>
+                    <span
+                        role="button"
+                        tabIndex={0}
+                        aria-expanded={expanded}
+                        aria-label={expanded ? `Collapse ${label}` : `Expand ${label}`}
+                        onClick={() => setExpanded(!expanded)}
+                        onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); setExpanded(!expanded); } }}
+                        style={{ cursor: 'pointer', display: 'flex', opacity: 0.7, marginRight: '4px' }}
+                    >
                         {expanded ? <Icons.ChevronDown /> : <Icons.ChevronRight />}
                     </span>
                 ) : <span style={{ width: '20px' }} />}
                 
-                <span 
+                <span
                     onClick={toggleVisibility}
-                    style={{ 
-                        cursor: 'pointer', 
-                        display: 'flex', 
+                    style={{
+                        cursor: 'pointer',
+                        display: 'flex',
                         color: isVisible ? theme.primary : theme.textSec,
                         opacity: isVisible ? 1 : 0.5,
                         marginRight: '4px'
                     }}
                     title={isVisible ? "Hide Column" : "Show Column"}
+                    aria-label={isVisible ? "Hide Column" : "Show Column"}
                 >
                     {isVisible ? <Icons.Visibility /> : <Icons.VisibilityOff />}
                 </span>
@@ -212,13 +221,13 @@ const ColumnTreeItem = ({ column, level, theme, styles, handlePinColumn, colSear
 
                 {!isGroup && (
                     <div className="pin-controls">
-                        <button onClick={(e) => handlePin(e, 'left')}>
+                        <button onClick={(e) => handlePin(e, 'left')} title="Pin Column Left" aria-label="Pin Column Left">
                             <Icons.PinLeft />
                         </button>
-                        <button onClick={(e) => handlePin(e, false)}>
+                        <button onClick={(e) => handlePin(e, false)} title="Unpin Column" aria-label="Unpin Column">
                             <Icons.Unpin />
                         </button>
-                        <button onClick={(e) => handlePin(e, 'right')}>
+                        <button onClick={(e) => handlePin(e, 'right')} title="Pin Column Right" aria-label="Pin Column Right">
                             <Icons.PinRight />
                         </button>
                     </div>

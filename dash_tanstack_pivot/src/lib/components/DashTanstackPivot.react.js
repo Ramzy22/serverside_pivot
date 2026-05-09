@@ -240,6 +240,164 @@ const getStickyHeaderHeight = (headerGroupCount, rowHeight, showFloatingFilters)
     (headerGroupCount * rowHeight) + (showFloatingFilters ? rowHeight : 0);
 
 const FILTER_OPTION_PAGE_SIZE = 250;
+const MEASURE_AXIS_PLACEMENTS = new Set(['none', 'rows', 'columns']);
+
+const normalizeMeasureAxisValue = (value, fallback = {}) => {
+    const source = value && typeof value === 'object' ? value : {};
+    const fallbackSource = fallback && typeof fallback === 'object' ? fallback : {};
+    const rawPlacement = source.placement || source.axis || source.measureAxis || source.measurePlacement || fallbackSource.placement || 'none';
+    const normalizedPlacement = String(rawPlacement || 'none').trim().toLowerCase();
+    const placement = MEASURE_AXIS_PLACEMENTS.has(normalizedPlacement)
+        ? normalizedPlacement
+        : ({ row: 'rows', column: 'columns', value: 'none', values: 'none', off: 'none' }[normalizedPlacement] || 'none');
+    const labelField = String(
+        source.labelField
+        || source.label_field
+        || source.measureNameField
+        || source.measureLabelField
+        || fallbackSource.labelField
+        || 'Measure Name'
+    ).trim() || 'Measure Name';
+    const valueField = String(
+        source.valueField
+        || source.value_field
+        || source.measureValueField
+        || source.measureAmountField
+        || fallbackSource.valueField
+        || 'Amount'
+    ).trim() || 'Amount';
+    const members = Array.isArray(source.members)
+        ? source.members.filter((member) => member && typeof member === 'object').map((member) => ({ ...member }))
+        : [];
+    return {
+        placement,
+        labelField,
+        valueField,
+        members,
+        suppressEmptyMembers: Boolean(source.suppressEmptyMembers || source.suppress_empty_members),
+        suppressZeroMembers: Boolean(source.suppressZeroMembers || source.suppress_zero_members),
+        totalsPolicy: String(source.totalsPolicy || source.totals_policy || fallbackSource.totalsPolicy || 'per_member'),
+    };
+};
+
+const buildMeasureAxisRuntimeConfig = (measureAxis, valConfigs = []) => {
+    const normalized = normalizeMeasureAxisValue(measureAxis);
+    if (normalized.placement === 'none') return { ...normalized, members: [] };
+    const explicitMembers = Array.isArray(normalized.members) && normalized.members.length > 0
+        ? normalized.members
+        : (Array.isArray(valConfigs) ? valConfigs : [])
+            .filter((config) => config && config.field && config.agg && config.agg !== 'formula')
+            .map((config, index) => {
+                const agg = config.agg || 'sum';
+                const measureAlias = config.alias || config.id || (agg === 'formula' ? config.field : `${config.field}_${agg}`);
+                return ({
+                id: measureAlias,
+                sourceField: config.field,
+                measureAlias,
+                agg,
+                label: config.label || formatDisplayLabel(config.field),
+                order: index,
+                format: config.format,
+                editable: Boolean(config.editable),
+            });
+            });
+    return { ...normalized, members: explicitMembers };
+};
+
+const normalizeColumnOrderValue = (value) => {
+    if (!Array.isArray(value)) return [];
+    const seen = new Set();
+    const result = [];
+    value.forEach((item) => {
+        if (item === null || item === undefined) return;
+        const id = String(item).trim();
+        if (!id || seen.has(id)) return;
+        seen.add(id);
+        result.push(id);
+    });
+    return result;
+};
+
+const collectColumnDefLeafIds = (columnDefs) => {
+    const ids = [];
+    const seen = new Set();
+    const visit = (defs) => {
+        if (!Array.isArray(defs)) return;
+        defs.forEach((columnDef) => {
+            if (!columnDef || typeof columnDef !== 'object') return;
+            if (Array.isArray(columnDef.columns) && columnDef.columns.length > 0) {
+                visit(columnDef.columns);
+                return;
+            }
+            const rawId = columnDef.id || columnDef.accessorKey;
+            if (rawId === null || rawId === undefined) return;
+            const id = String(rawId).trim();
+            if (!id || seen.has(id)) return;
+            seen.add(id);
+            ids.push(id);
+        });
+    };
+    visit(columnDefs);
+    return ids;
+};
+
+const mergeColumnOrderWithIds = (order, availableIds) => {
+    const normalizedOrder = normalizeColumnOrderValue(order);
+    const normalizedAvailable = normalizeColumnOrderValue(availableIds);
+    if (normalizedAvailable.length === 0) return normalizedOrder;
+    const availableSet = new Set(normalizedAvailable);
+    const ordered = normalizedOrder.filter(id => availableSet.has(id));
+    const orderedSet = new Set(ordered);
+    normalizedAvailable.forEach((id) => {
+        if (!orderedSet.has(id)) ordered.push(id);
+    });
+    return ordered;
+};
+
+const areStringArraysEqual = (left, right) => (
+    Array.isArray(left)
+    && Array.isArray(right)
+    && left.length === right.length
+    && left.every((value, index) => value === right[index])
+);
+
+const moveColumnIdInOrder = (order, columnId, targetColumnId, position = 'before') => {
+    const normalizedOrder = normalizeColumnOrderValue(order);
+    const movingId = columnId === null || columnId === undefined ? '' : String(columnId);
+    const targetId = targetColumnId === null || targetColumnId === undefined ? '' : String(targetColumnId);
+    if (!movingId || !targetId || movingId === targetId) return normalizedOrder;
+    const sourceIndex = normalizedOrder.indexOf(movingId);
+    const originalTargetIndex = normalizedOrder.indexOf(targetId);
+    if (sourceIndex < 0 || originalTargetIndex < 0) return normalizedOrder;
+    const next = [...normalizedOrder];
+    const [moved] = next.splice(sourceIndex, 1);
+    let targetIndex = next.indexOf(targetId);
+    if (targetIndex < 0) targetIndex = originalTargetIndex;
+    if (position === 'after') targetIndex += 1;
+    next.splice(Math.max(0, Math.min(targetIndex, next.length)), 0, moved);
+    return next;
+};
+
+const moveColumnIdByDelta = (order, columnId, delta) => {
+    const normalizedOrder = normalizeColumnOrderValue(order);
+    const movingId = columnId === null || columnId === undefined ? '' : String(columnId);
+    const sourceIndex = normalizedOrder.indexOf(movingId);
+    if (sourceIndex < 0) return normalizedOrder;
+    const targetIndex = Math.max(0, Math.min(normalizedOrder.length - 1, sourceIndex + delta));
+    if (targetIndex === sourceIndex) return normalizedOrder;
+    const next = [...normalizedOrder];
+    const [moved] = next.splice(sourceIndex, 1);
+    next.splice(targetIndex, 0, moved);
+    return next;
+};
+
+const formatLocaleTextTemplate = (template, values = {}) => {
+    const text = template === null || template === undefined ? '' : String(template);
+    if (!values || typeof values !== 'object') return text;
+    return text.replace(/\{([A-Za-z0-9_]+)\}/g, (match, key) => (
+        Object.prototype.hasOwnProperty.call(values, key) ? String(values[key]) : match
+    ));
+};
 
 const isAutoDataFieldId = (field) => (
     field !== undefined
@@ -1027,6 +1185,7 @@ export default function DashTanstackPivot(props) {
         pinningPresets = [],
         sortOptions = {},
         columnVisibility: initialColumnVisibility = {},
+        columnOrder: externalColumnOrder = null,
         decimalPlaces: externalDecimalPlaces = 0,
         fieldPanelSizes: externalFieldPanelSizes = null,
         defaultValueFormat: externalDefaultValueFormat = '',
@@ -1035,6 +1194,7 @@ export default function DashTanstackPivot(props) {
         savedReports: externalSavedReports,
         activeReportId: externalActiveReportId,
         customDimensions: externalCustomDimensions = [],
+        measureAxis: externalMeasureAxis = null,
         reset,
         sortLock = false,
         defaultTheme = 'flash',
@@ -1057,6 +1217,7 @@ export default function DashTanstackPivot(props) {
         saveViewTrigger = null,
         uiConfig: externalUiConfig = null,
         paginationConfig: externalPagination = null,
+        localeText: externalLocaleText = null,
         mergedHeaderSeparator = ' ',
     } = props;
 
@@ -1115,6 +1276,16 @@ export default function DashTanstackPivot(props) {
             lockImmersiveMode: src.lockImmersiveMode === true,
         };
     }, [externalUiConfig]);
+    const localeText = useMemo(
+        () => (externalLocaleText && typeof externalLocaleText === 'object' ? externalLocaleText : {}),
+        [externalLocaleText]
+    );
+    const getLocaleText = useCallback((key, fallback, values = {}) => {
+        const template = Object.prototype.hasOwnProperty.call(localeText, key)
+            ? localeText[key]
+            : fallback;
+        return formatLocaleTextTemplate(template, values);
+    }, [localeText]);
     const editingEnabled = !EDITING_TEMPORARILY_DISABLED && uiConfig.showEditing;
     const editPanelEnabled = editingEnabled && uiConfig.showEditPanel;
     const paginationConfig = useMemo(() => {
@@ -1153,6 +1324,7 @@ export default function DashTanstackPivot(props) {
     const hasExternalSavedReports = externalSavedReports !== undefined;
     const hasExternalActiveReportId = externalActiveReportId !== undefined;
     const hasExternalCustomDimensions = props.customDimensions !== undefined;
+    const hasExternalMeasureAxis = props.measureAxis !== undefined;
     const normalizedInitialReportDef = useMemo(
         () => normalizeReportDefValue(externalReportDef),
         [externalReportDef]
@@ -1168,6 +1340,10 @@ export default function DashTanstackPivot(props) {
     const normalizedInitialCustomDimensions = useMemo(
         () => normalizeCustomDimensionsValue(externalCustomDimensions),
         [externalCustomDimensions]
+    );
+    const normalizedInitialMeasureAxis = useMemo(
+        () => normalizeMeasureAxisValue(externalMeasureAxis),
+        [externalMeasureAxis]
     );
     const normalizedInitialValConfigs = useMemo(
         () => normalizeSparklineValConfigsForView(initialValConfigs),
@@ -1309,10 +1485,34 @@ export default function DashTanstackPivot(props) {
                 ? normalizedInitialCustomDimensions
                 : normalizeCustomDimensionsValue(loadPersistedState('customDimensions', normalizedInitialCustomDimensions))
         ));
+        const [measureAxis, setMeasureAxis] = useState(() => (
+            hasExternalMeasureAxis
+                ? normalizedInitialMeasureAxis
+                : normalizeMeasureAxisValue(loadPersistedState('measureAxis', normalizedInitialMeasureAxis), normalizedInitialMeasureAxis)
+        ));
+        const runtimeMeasureAxis = useMemo(
+            () => buildMeasureAxisRuntimeConfig(measureAxis, valConfigs),
+            [measureAxis, valConfigs]
+        );
         const availableFieldsWithCustomDimensions = useMemo(
             () => decorateAvailableFieldsWithCustomDimensions(availableFields, customDimensions),
             [availableFields, customDimensions]
         );
+        useEffect(() => {
+            const normalized = normalizeMeasureAxisValue(measureAxis);
+            const labelField = normalized.labelField;
+            if (!labelField) return;
+            if (normalized.placement === 'rows') {
+                setRowFields((previous) => (previous || []).includes(labelField) ? previous : [...(previous || []), labelField]);
+                setColFields((previous) => (previous || []).filter((field) => field !== labelField));
+            } else if (normalized.placement === 'columns') {
+                setColFields((previous) => (previous || []).includes(labelField) ? previous : [...(previous || []), labelField]);
+                setRowFields((previous) => (previous || []).filter((field) => field !== labelField));
+            } else {
+                setRowFields((previous) => (previous || []).filter((field) => field !== labelField));
+                setColFields((previous) => (previous || []).filter((field) => field !== labelField));
+            }
+        }, [measureAxis]);
         const [filters, setFilters] = useState(initialFilters);
         const [sorting, setSorting] = useState(initialSorting);
         const [expanded, setExpanded] = useState(initialExpanded);
@@ -1368,7 +1568,20 @@ export default function DashTanstackPivot(props) {
 
         // reportDef, savedReports, activeReportId, frozenPivotConfig provided by useReportMode above
         const [columnVisibility, setColumnVisibility] = useState(() => loadPersistedState('columnVisibility', initialColumnVisibility));
+        const [columnOrder, setColumnOrder] = useState(() => (
+            Array.isArray(externalColumnOrder)
+                ? normalizeColumnOrderValue(externalColumnOrder)
+                : normalizeColumnOrderValue(loadPersistedState('columnOrder', []))
+        ));
         const [columnSizing, setColumnSizing] = useState(() => loadPersistedState('columnSizing', {}));
+        const externalColumnOrderKey = useMemo(
+            () => JSON.stringify(normalizeColumnOrderValue(externalColumnOrder)),
+            [externalColumnOrder]
+        );
+        useEffect(() => {
+            if (!Array.isArray(externalColumnOrder)) return;
+            setColumnOrder(normalizeColumnOrderValue(JSON.parse(externalColumnOrderKey)));
+        }, [externalColumnOrderKey]);
         const [autoSizeIncludesHeaderNext, setAutoSizeIncludesHeaderNext] = useState(false);
         const [pivotColumnSorting, setPivotColumnSorting] = useState({});
         const [announcement, setAnnouncement] = useState("");
@@ -1558,6 +1771,7 @@ export default function DashTanstackPivot(props) {
             const resetSavedReports = hasExternalSavedReports ? normalizedInitialSavedReports : [];
             const resetActiveReportId = hasExternalActiveReportId ? normalizedInitialActiveReportId : null;
             const resetCustomDimensions = hasExternalCustomDimensions ? normalizedInitialCustomDimensions : [];
+            const resetMeasureAxis = hasExternalMeasureAxis ? normalizedInitialMeasureAxis : normalizeMeasureAxisValue(null);
             setRowFields(initialRowFields);
             setColFields(initialColFields);
             // Preserve user-added formula columns through resets (they survive dataframe switches)
@@ -1567,6 +1781,7 @@ export default function DashTanstackPivot(props) {
                 : normalizedInitialValConfigs);
             setValConfigs(resetValConfigs);
             setCustomDimensions(resetCustomDimensions);
+            setMeasureAxis(resetMeasureAxis);
             setFilters({});
             setSorting([]);
             setExpanded({});
@@ -1575,6 +1790,7 @@ export default function DashTanstackPivot(props) {
             setGrandTotalPinOverride(getPinnedSideForRow(initialRowPinning, GRAND_TOTAL_ROW_ID));
             setPivotColumnSorting({});
             setColumnVisibility({});
+            setColumnOrder([]);
             setColumnSizing({});
             setChartPanelSource(initialChartDefinition.source);
             setChartPanelType(initialChartDefinition.chartType);
@@ -1641,6 +1857,7 @@ export default function DashTanstackPivot(props) {
                     activeReportId: resetActiveReportId,
                     showReportConfigColumn: true,
                     customDimensions: resetCustomDimensions,
+                    measureAxis: resetMeasureAxis,
                     filters: {},
                     sorting: [],
                     expanded: {},
@@ -1648,12 +1865,13 @@ export default function DashTanstackPivot(props) {
                     rowPinning: initialRowPinning,
                     sortOptions: sortOptions,
                     columnVisibility: {},
+                    columnOrder: [],
                     columnSizing: {},
                     reset: null
                 });
             }
         }
-    }, [reset, initialRowFields, initialColFields, normalizedInitialValConfigs, initialColumnPinning, initialRowPinning, initialChartDefinition, initialChartDefinitions, normalizedInitialFieldPanelSizes, normalizedInitialDecimalPlaces, normalizedInitialDefaultValueFormat, normalizedInitialNumberGroupSeparator, normalizedInitialViewMode, normalizedInitialDetailMode, normalizedInitialTreeConfig, normalizedInitialDetailConfig, hasExternalReportDef, normalizedInitialReportDef, hasExternalSavedReports, normalizedInitialSavedReports, hasExternalActiveReportId, normalizedInitialActiveReportId, hasExternalCustomDimensions, normalizedInitialCustomDimensions]);
+    }, [reset, initialRowFields, initialColFields, normalizedInitialValConfigs, initialColumnPinning, initialRowPinning, initialChartDefinition, initialChartDefinitions, normalizedInitialFieldPanelSizes, normalizedInitialDecimalPlaces, normalizedInitialDefaultValueFormat, normalizedInitialNumberGroupSeparator, normalizedInitialViewMode, normalizedInitialDetailMode, normalizedInitialTreeConfig, normalizedInitialDetailConfig, hasExternalReportDef, normalizedInitialReportDef, hasExternalSavedReports, normalizedInitialSavedReports, hasExternalActiveReportId, normalizedInitialActiveReportId, hasExternalCustomDimensions, normalizedInitialCustomDimensions, hasExternalMeasureAxis, normalizedInitialMeasureAxis]);
 
         // Save Persistence
         useEffect(() => {
@@ -1662,7 +1880,9 @@ export default function DashTanstackPivot(props) {
             savePersistedState('rowPinning', rowPinning);
             savePersistedState('grandTotalPinOverride', grandTotalPinOverride);
             savePersistedState('columnVisibility', columnVisibility);
+            savePersistedState('columnOrder', columnOrder);
             savePersistedState('columnSizing', columnSizing);
+            savePersistedState('measureAxis', measureAxis);
             savePersistedState('sidebarWidth', sidebarWidth);
             savePersistedState('fieldPanelSizes', fieldPanelSizes);
             savePersistedState('chartCanvasPanes', chartCanvasPanes.filter((p) => !p.isPreview));
@@ -1691,6 +1911,7 @@ export default function DashTanstackPivot(props) {
             rowPinning,
             grandTotalPinOverride,
             columnVisibility,
+            columnOrder,
             columnSizing,
             sidebarWidth,
             fieldPanelSizes,
@@ -1711,6 +1932,7 @@ export default function DashTanstackPivot(props) {
             savedReports,
             activeReportId,
             customDimensions,
+            measureAxis,
             frozenPivotConfig,
         ]);
 
@@ -2084,6 +2306,7 @@ export default function DashTanstackPivot(props) {
             setGrandTotalPinOverride(getPinnedSideForRow(restoredRowPinning, GRAND_TOTAL_ROW_ID));
         }
         if (restored.columnVisibility && typeof restored.columnVisibility === 'object') setColumnVisibility(restored.columnVisibility);
+        if (Array.isArray(restored.columnOrder)) setColumnOrder(normalizeColumnOrderValue(restored.columnOrder));
         if (restored.columnSizing && typeof restored.columnSizing === 'object') setColumnSizing(restored.columnSizing);
         if (restored.colExpanded && typeof restored.colExpanded === 'object') setColExpanded(restored.colExpanded);
         if (typeof restored.decimalPlaces === 'number') setDecimalPlaces(restored.decimalPlaces);
@@ -2422,6 +2645,15 @@ export default function DashTanstackPivot(props) {
         lastCustomDimensionsPropRef.current = serializedExternal;
         setCustomDimensions(normalizedInitialCustomDimensions);
     }, [hasExternalCustomDimensions, normalizedInitialCustomDimensions]);
+
+    const lastMeasureAxisPropRef = useRef(JSON.stringify(normalizedInitialMeasureAxis || {}));
+    useEffect(() => {
+        if (!hasExternalMeasureAxis) return;
+        const serializedExternal = JSON.stringify(normalizedInitialMeasureAxis || {});
+        if (serializedExternal === lastMeasureAxisPropRef.current) return;
+        lastMeasureAxisPropRef.current = serializedExternal;
+        setMeasureAxis(normalizedInitialMeasureAxis);
+    }, [hasExternalMeasureAxis, normalizedInitialMeasureAxis]);
 
     useEffect(() => {
         const normalizedExternal = clampDecimalPlaces(externalDecimalPlaces, 0);
@@ -3534,6 +3766,8 @@ export default function DashTanstackPivot(props) {
 
     const [dragItem, setDragItem] = useState(null);
     const [dropLine, setDropLine] = useState(null);
+    const [dragOverHeaderId, setDragOverHeaderId] = useState(null);
+    const [dragOverSide, setDragOverSide] = useState(null);
     const sessionIdRef = useRef(getOrCreateSessionId(id || 'pivot-grid'));
     const clientInstanceRef = useRef(createClientInstanceId(id || 'pivot-grid'));
     const requestVersionRef = useRef(Number(dataVersion) || 0);
@@ -3745,6 +3979,7 @@ export default function DashTanstackPivot(props) {
         expanded,
         colExpanded,
         columnPinning,
+        columnOrder,
         rowPinning,
         showRowTotals,
         showColTotals,
@@ -3753,6 +3988,7 @@ export default function DashTanstackPivot(props) {
     }, null), [
         colExpanded,
         colFields,
+        columnOrder,
         columnPinning,
         expanded,
         filters,
@@ -5107,6 +5343,13 @@ export default function DashTanstackPivot(props) {
         setColumnPinning(updater);
     }, [requestLayoutHistoryCapture]);
 
+    const setColumnOrderWithHistory = useCallback((updater, source = 'layout:column-order') => {
+        requestLayoutHistoryCapture(source);
+        setColumnOrder((previousOrder) => normalizeColumnOrderValue(
+            typeof updater === 'function' ? updater(previousOrder) : updater
+        ));
+    }, [requestLayoutHistoryCapture]);
+
     const setRowPinningWithHistory = useCallback((updater, source = 'layout:row-pinning') => {
         requestLayoutHistoryCapture(source);
         setRowPinning(updater);
@@ -5126,6 +5369,7 @@ export default function DashTanstackPivot(props) {
                 ? snapshot.columnPinning
                 : { left: ['hierarchy'], right: [] }
         );
+        setColumnOrder(Array.isArray(snapshot.columnOrder) ? normalizeColumnOrderValue(snapshot.columnOrder) : []);
         setRowPinning(
             snapshot.rowPinning && typeof snapshot.rowPinning === 'object'
                 ? snapshot.rowPinning
@@ -6440,6 +6684,9 @@ export default function DashTanstackPivot(props) {
             customDimensions: Object.prototype.hasOwnProperty.call(snapshot, 'customDimensions')
                 ? normalizeCustomDimensionsValue(snapshot.customDimensions)
                 : normalizeCustomDimensionsValue(customDimensions),
+            measureAxis: Object.prototype.hasOwnProperty.call(snapshot, 'measureAxis')
+                ? buildMeasureAxisRuntimeConfig(snapshot.measureAxis, resolvedValConfigs)
+                : runtimeMeasureAxis,
             rowFields: Object.prototype.hasOwnProperty.call(snapshot, 'rowFields') ? snapshot.rowFields : rowFields,
             colFields: Object.prototype.hasOwnProperty.call(snapshot, 'colFields') ? snapshot.colFields : colFields,
             valConfigs: normalizeSparklineValConfigsForView(resolvedValConfigs, normalizedInitialValConfigs),
@@ -6461,6 +6708,7 @@ export default function DashTanstackPivot(props) {
         detailConfig,
         reportDef,
         customDimensions,
+        runtimeMeasureAxis,
         rowFields,
         colFields,
         valConfigs,
@@ -6714,6 +6962,7 @@ export default function DashTanstackPivot(props) {
                 activeReportId,
                 frozenPivotConfig,
                 customDimensions,
+                measureAxis: runtimeMeasureAxis,
                 rowFields,
                 colFields,
                 valConfigs: normalizeSparklineValConfigsForView(valConfigs, normalizedInitialValConfigs),
@@ -6747,6 +6996,7 @@ export default function DashTanstackPivot(props) {
                 rowPinning,
                 grandTotalPinOverride,
                 columnVisibility,
+                columnOrder,
                 columnSizing,
                 colExpanded,
                 decimalPlaces,
@@ -6813,6 +7063,7 @@ export default function DashTanstackPivot(props) {
         activeReportId,
         frozenPivotConfig,
         customDimensions,
+        runtimeMeasureAxis,
         filters,
         sorting,
         expanded,
@@ -6843,6 +7094,7 @@ export default function DashTanstackPivot(props) {
         rowPinning,
         grandTotalPinOverride,
         columnVisibility,
+        columnOrder,
         columnSizing,
         colExpanded,
         decimalPlaces,
@@ -6908,6 +7160,7 @@ export default function DashTanstackPivot(props) {
         detailConfig: normalizedInitialDetailConfig,
         reportDef,
         customDimensions: normalizedInitialCustomDimensions,
+        measureAxis: normalizedInitialMeasureAxis,
         rowFields: initialRowFields,
         colFields: initialColFields,
         valConfigs: normalizedInitialValConfigs,
@@ -6923,6 +7176,7 @@ export default function DashTanstackPivot(props) {
         grandTotalPinOverride,
         serverSidePinsGrandTotal,
         columnVisibility: {},
+        columnOrder: [],
         columnSizing: {}
     });
 
@@ -6934,8 +7188,9 @@ export default function DashTanstackPivot(props) {
             detailConfig,
             reportDef,
             customDimensions,
+            measureAxis: runtimeMeasureAxis,
             rowFields, colFields, valConfigs, filters, sorting, sortOptions: effectiveSortOptions, expanded,
-            immersiveMode, showRowTotals, showColTotals, showSubtotals, columnPinning, rowPinning, columnVisibility, columnSizing
+            immersiveMode, showRowTotals, showColTotals, showSubtotals, columnPinning, rowPinning, columnVisibility, columnOrder, columnSizing
         };
         const nextSyncState = {
             ...nextProps,
@@ -6958,7 +7213,7 @@ export default function DashTanstackPivot(props) {
             // In that case we keep the existing cache (no stateEpoch bump) so rows
             // remain visible. A loading row appears below the expanded row via
             // pendingRowTransitions, and the viewport snaps in place.
-            const uiOnlyKeys = new Set(['detailMode', 'detailConfig', 'columnPinning', 'rowPinning', 'grandTotalPinOverride', 'columnVisibility', 'columnSizing']);
+            const uiOnlyKeys = new Set(['detailMode', 'detailConfig', 'columnPinning', 'rowPinning', 'grandTotalPinOverride', 'columnVisibility', 'columnOrder', 'columnSizing']);
             const isExpansionOnly = serverSide && changedKeys.length > 0 && changedKeys.every(key => key === 'expanded');
             const isSortingOnly = serverSide && changedKeys.length > 0 && changedKeys.every(key => key === 'sorting');
             const isUiOnlyChange = changedKeys.length > 0 && changedKeys.every(key => uiOnlyKeys.has(key));
@@ -7163,7 +7418,7 @@ export default function DashTanstackPivot(props) {
                 },
             });
         }
-    }, [viewMode, detailMode, treeConfig, detailConfig, reportDef, customDimensions, rowFields, colFields, valConfigs, filters, sorting, effectiveSortOptions, expanded, immersiveMode, showRowTotals, showColTotals, showSubtotals, layoutMode, columnPinning, rowPinning, grandTotalPinOverride, columnVisibility, columnSizing, beginStructuralTransaction, beginExpansionRequest, buildRuntimeRequestStateOverride, markRequestPending, resolveStableRequestedColumnWindow, serverSide, serverSideBlockSize, tableName, serverSidePinsGrandTotal]);
+    }, [viewMode, detailMode, treeConfig, detailConfig, reportDef, customDimensions, runtimeMeasureAxis, rowFields, colFields, valConfigs, filters, sorting, effectiveSortOptions, expanded, immersiveMode, showRowTotals, showColTotals, showSubtotals, layoutMode, columnPinning, rowPinning, grandTotalPinOverride, columnVisibility, columnOrder, columnSizing, beginStructuralTransaction, beginExpansionRequest, buildRuntimeRequestStateOverride, markRequestPending, resolveStableRequestedColumnWindow, serverSide, serverSideBlockSize, tableName, serverSidePinsGrandTotal]);
 
     useEffect(() => {
         const handleClick = () => setContextMenu(null);
@@ -8212,188 +8467,185 @@ export default function DashTanstackPivot(props) {
         // Determine if this is a group column
         const isGroup = isGroupColumn(column);
 
-        // Only show sort options for leaf columns
+        // Only show sort/filter options for leaf columns
         if (!isGroup) {
-            const hasOtherSorts = Array.isArray(sorting) && sorting.some((sortSpec) => sortSpec && sortSpec.id !== colId);
-            const existingSortIndex = Array.isArray(sorting)
-                ? sorting.findIndex((sortSpec) => sortSpec && sortSpec.id === colId)
-                : -1;
+            const hasOtherSorts = Array.isArray(sorting) && sorting.some((s) => s && s.id !== colId);
+            const existingSortIndex = Array.isArray(sorting) ? sorting.findIndex((s) => s && s.id === colId) : -1;
             const existingSortPriority = existingSortIndex >= 0 ? existingSortIndex + 1 : null;
-            const multiSortActionVerb = existingSortPriority ? `Update Priority ${existingSortPriority}` : 'Add';
-            const absoluteSortMetadata = { sortType: 'absolute', absoluteSort: true };
-            actions.push({
-                label: 'Sort Ascending',
-                icon: <Icons.SortAsc/>,
-                onClick: () => applyHeaderSort(colId, false)
-            });
-            actions.push({
-                label: 'Sort Descending',
-                icon: <Icons.SortDesc/>,
-                onClick: () => applyHeaderSort(colId, true)
-            });
-            if (hasOtherSorts) {
-                actions.push({
-                    label: `${multiSortActionVerb} Ascending Sort`,
-                    icon: <Icons.SortAsc/>,
-                    onClick: () => applyHeaderSort(colId, false, {}, true)
-                });
-                actions.push({
-                    label: `${multiSortActionVerb} Descending Sort`,
-                    icon: <Icons.SortDesc/>,
-                    onClick: () => applyHeaderSort(colId, true, {}, true)
-                });
-            }
-            actions.push({
-                label: 'Sort Absolute Ascending',
-                icon: <Icons.SortAsc/>,
-                onClick: () => applyHeaderSort(colId, false, absoluteSortMetadata)
-            });
-            actions.push({
-                label: 'Sort Absolute Descending',
-                icon: <Icons.SortDesc/>,
-                onClick: () => applyHeaderSort(colId, true, absoluteSortMetadata)
-            });
-            if (hasOtherSorts) {
-                actions.push({
-                    label: `${multiSortActionVerb} Absolute Ascending Sort`,
-                    icon: <Icons.SortAsc/>,
-                    onClick: () => applyHeaderSort(colId, false, absoluteSortMetadata, true)
-                });
-                actions.push({
-                    label: `${multiSortActionVerb} Absolute Descending Sort`,
-                    icon: <Icons.SortDesc/>,
-                    onClick: () => applyHeaderSort(colId, true, absoluteSortMetadata, true)
-                });
-            }
-            actions.push({
-                label: 'Clear Sort',
-                onClick: () => column.clearSorting()
-            });
+            const multiVerb = existingSortPriority ? `Update Priority ${existingSortPriority}` : 'Add';
+            const absortMeta = { sortType: 'absolute', absoluteSort: true };
+            const isSortedAsc = existingSortIndex >= 0 && !sorting[existingSortIndex]?.desc;
+            const isSortedDesc = existingSortIndex >= 0 && sorting[existingSortIndex]?.desc;
 
-            actions.push('separator');
+            const sortChildren = [
+                { label: (isSortedAsc ? '✓ ' : '') + 'Ascending', icon: <Icons.SortAsc/>, onClick: () => applyHeaderSort(colId, false) },
+                { label: (isSortedDesc ? '✓ ' : '') + 'Descending', icon: <Icons.SortDesc/>, onClick: () => applyHeaderSort(colId, true) },
+            ];
+            if (hasOtherSorts) {
+                sortChildren.push('separator');
+                sortChildren.push({ label: `${multiVerb} Ascending`, icon: <Icons.SortAsc/>, onClick: () => applyHeaderSort(colId, false, {}, true) });
+                sortChildren.push({ label: `${multiVerb} Descending`, icon: <Icons.SortDesc/>, onClick: () => applyHeaderSort(colId, true, {}, true) });
+            }
+            sortChildren.push('separator');
+            sortChildren.push({ label: 'Absolute Ascending', icon: <Icons.SortAsc/>, onClick: () => applyHeaderSort(colId, false, absortMeta) });
+            sortChildren.push({ label: 'Absolute Descending', icon: <Icons.SortDesc/>, onClick: () => applyHeaderSort(colId, true, absortMeta) });
+            if (hasOtherSorts) {
+                sortChildren.push({ label: `${multiVerb} Absolute Asc`, icon: <Icons.SortAsc/>, onClick: () => applyHeaderSort(colId, false, absortMeta, true) });
+                sortChildren.push({ label: `${multiVerb} Absolute Desc`, icon: <Icons.SortDesc/>, onClick: () => applyHeaderSort(colId, true, absortMeta, true) });
+            }
+            if (existingSortIndex >= 0) {
+                sortChildren.push('separator');
+                sortChildren.push({ label: 'Clear Sort', onClick: () => column.clearSorting() });
+            }
+            actions.push({ label: 'Sort', icon: <Icons.SortAsc/>, children: sortChildren });
+
             actions.push({
                 label: 'Filter...',
                 icon: <Icons.Filter/>,
                 onClick: () => {
                     setFilterAnchorEl({
-                        getBoundingClientRect: () => ({
-                            left: menuX,
-                            right: menuX,
-                            top: menuY,
-                            bottom: menuY,
-                            width: 0,
-                            height: 0,
-                        }),
+                        getBoundingClientRect: () => ({ left: menuX, right: menuX, top: menuY, bottom: menuY, width: 0, height: 0 }),
                     });
                     setActiveFilterCol(colId);
                     requestFilterOptions(colId);
                 }
             });
-            actions.push({
-                label: 'Clear Filter',
-                onClick: () => handleHeaderFilter(colId, null)
-            });
-
+            actions.push({ label: 'Clear Filter', onClick: () => handleHeaderFilter(colId, null) });
             actions.push('separator');
         }
 
         const pivotSortField = getPivotColumnSortField(header, level);
         const pivotSortState = getPivotColumnSortState(pivotSortField);
         if (pivotSortField) {
-            actions.push({
-                label: 'Header Labels A-Z',
-                icon: <Icons.SortAsc/>,
-                onClick: () => applyPivotColumnSort(pivotSortField, 'label', 'asc')
-            });
-            actions.push({
-                label: 'Header Labels Z-A',
-                icon: <Icons.SortDesc/>,
-                onClick: () => applyPivotColumnSort(pivotSortField, 'label', 'desc')
-            });
-            actions.push({
-                label: 'Column Totals Largest First',
-                icon: <Icons.SortDesc/>,
-                onClick: () => applyPivotColumnSort(pivotSortField, 'total', 'desc')
-            });
-            actions.push({
-                label: 'Column Totals Smallest First',
-                icon: <Icons.SortAsc/>,
-                onClick: () => applyPivotColumnSort(pivotSortField, 'total', 'asc')
-            });
+            const pivotSortChildren = [
+                { label: 'Labels A → Z', icon: <Icons.SortAsc/>, onClick: () => applyPivotColumnSort(pivotSortField, 'label', 'asc') },
+                { label: 'Labels Z → A', icon: <Icons.SortDesc/>, onClick: () => applyPivotColumnSort(pivotSortField, 'label', 'desc') },
+                'separator',
+                { label: 'Totals Largest First', icon: <Icons.SortDesc/>, onClick: () => applyPivotColumnSort(pivotSortField, 'total', 'desc') },
+                { label: 'Totals Smallest First', icon: <Icons.SortAsc/>, onClick: () => applyPivotColumnSort(pivotSortField, 'total', 'asc') },
+            ];
             if (pivotSortState) {
-                actions.push({
-                    label: 'Clear Header Order',
-                    onClick: () => applyPivotColumnSort(pivotSortField, null, null)
-                });
+                pivotSortChildren.push('separator');
+                pivotSortChildren.push({ label: 'Clear Column Order', onClick: () => applyPivotColumnSort(pivotSortField, null, null) });
             }
+            actions.push({ label: 'Column Order', icon: <Icons.SortAsc/>, children: pivotSortChildren });
             actions.push('separator');
         }
 
-        // Pin options for both leaf and group columns
+        // --- Pin submenu ---
         let isPinned = false;
-
+        const pinChildren = [];
         if (isGroup) {
-            // For group columns, check if ALL leaf columns are pinned
             const leafIds = getAllLeafIdsFromColumn(column);
-
             const allPinnedLeft = leafIds.length > 0 && leafIds.every(id => (left || []).includes(id));
             const allPinnedRight = leafIds.length > 0 && leafIds.every(id => (right || []).includes(id));
-
             if (allPinnedLeft) isPinned = 'left';
             else if (allPinnedRight) isPinned = 'right';
-
-            actions.push({
-                label: 'Pin All Children Left',
-                onClick: () => handlePinColumn(colId, 'left')
-            });
-            actions.push({
-                label: 'Pin All Children Right',
-                onClick: () => handlePinColumn(colId, 'right')
-            });
-            if (isPinned) {
-                actions.push({
-                    label: 'Unpin All Children',
-                    onClick: () => handlePinColumn(colId, false)
-                });
-            }
+            pinChildren.push({ label: (isPinned === 'left' ? '✓ ' : '') + 'Pin All Left', icon: <Icons.PinLeft/>, onClick: () => handlePinColumn(colId, 'left') });
+            pinChildren.push({ label: (isPinned === 'right' ? '✓ ' : '') + 'Pin All Right', icon: <Icons.PinRight/>, onClick: () => handlePinColumn(colId, 'right') });
+            if (isPinned) pinChildren.push({ label: 'Unpin All', onClick: () => handlePinColumn(colId, false) });
         } else {
-            // For leaf columns, check directly
             if ((left || []).includes(colId)) isPinned = 'left';
             else if ((right || []).includes(colId)) isPinned = 'right';
-
-            actions.push({
-                label: 'Pin Column Left',
-                onClick: () => handlePinColumn(colId, 'left')
-            });
-            actions.push({
-                label: 'Pin Column Right',
-                onClick: () => handlePinColumn(colId, 'right')
-            });
-            if (isPinned) {
-                actions.push({
-                    label: 'Unpin Column',
-                    onClick: () => handlePinColumn(colId, false)
-                });
-            }
+            pinChildren.push({ label: (isPinned === 'left' ? '✓ ' : '') + 'Pin Left', icon: <Icons.PinLeft/>, onClick: () => handlePinColumn(colId, 'left') });
+            pinChildren.push({ label: (isPinned === 'right' ? '✓ ' : '') + 'Pin Right', icon: <Icons.PinRight/>, onClick: () => handlePinColumn(colId, 'right') });
+            if (isPinned) pinChildren.push({ label: 'Unpin', onClick: () => handlePinColumn(colId, false) });
         }
+        actions.push({ label: isPinned ? `Pin (${isPinned})` : 'Pin', icon: <Icons.PinLeft/>, children: pinChildren });
 
+        // --- Move submenu ---
+        const menuLeafIds = (isGroup ? getAllLeafIdsFromColumn(column) : [colId])
+            .filter(id => id && availableColumnOrderIds.includes(id));
+        const currentOrderForMenu = mergeColumnOrderWithIds(effectiveColumnOrder, availableColumnOrderIds);
+        const menuLeafIndexes = menuLeafIds
+            .map(id => currentOrderForMenu.indexOf(id))
+            .filter(index => index >= 0);
+        const menuBlockStart = menuLeafIndexes.length > 0 ? Math.min(...menuLeafIndexes) : -1;
+        const menuBlockEnd = menuLeafIndexes.length > 0 ? Math.max(...menuLeafIndexes) : -1;
+        const canMoveMenuColumn = menuLeafIds.length > 0 && currentOrderForMenu.length > menuLeafIds.length;
+        const moveMenuColumnBlock = (placement) => {
+            if (!canMoveMenuColumn) return;
+            const leafSet = new Set(menuLeafIds);
+            setColumnOrderWithHistory((previousOrder) => {
+                const order = mergeColumnOrderWithIds(previousOrder, availableColumnOrderIds);
+                const block = order.filter(id => leafSet.has(id));
+                if (block.length === 0) return order;
+                const remainder = order.filter(id => !leafSet.has(id));
+                const firstIndex = order.findIndex(id => leafSet.has(id));
+                const lastIndex = order.reduce((latest, id, index) => leafSet.has(id) ? index : latest, -1);
+                let insertIndex = 0;
+                if (placement === 'last') {
+                    insertIndex = remainder.length;
+                } else if (placement === 'left') {
+                    const previousId = firstIndex > 0
+                        ? [...order.slice(0, firstIndex)].reverse().find(id => !leafSet.has(id))
+                        : null;
+                    insertIndex = previousId ? Math.max(0, remainder.indexOf(previousId)) : 0;
+                } else if (placement === 'right') {
+                    const nextId = lastIndex >= 0
+                        ? order.slice(lastIndex + 1).find(id => !leafSet.has(id))
+                        : null;
+                    insertIndex = nextId ? Math.min(remainder.length, remainder.indexOf(nextId) + 1) : remainder.length;
+                }
+                return [
+                    ...remainder.slice(0, insertIndex),
+                    ...block,
+                    ...remainder.slice(insertIndex),
+                ];
+            }, `layout:column-order-${placement}`);
+        };
+        actions.push({
+            label: isGroup ? 'Move Group' : 'Move Column',
+            icon: <Icons.DragIndicator/>,
+            children: [
+                { label: getLocaleText('menuMoveColumnLeft', isGroup ? 'Move Group Left' : 'Move Left'), disabled: !canMoveMenuColumn || menuBlockStart <= 0, onClick: () => moveMenuColumnBlock('left') },
+                { label: getLocaleText('menuMoveColumnRight', isGroup ? 'Move Group Right' : 'Move Right'), disabled: !canMoveMenuColumn || menuBlockEnd < 0 || menuBlockEnd >= currentOrderForMenu.length - 1, onClick: () => moveMenuColumnBlock('right') },
+                { label: getLocaleText('menuMoveColumnToStart', isGroup ? 'Move Group to Start' : 'Move to Start'), disabled: !canMoveMenuColumn || menuBlockStart <= 0, onClick: () => moveMenuColumnBlock('first') },
+                { label: getLocaleText('menuMoveColumnToEnd', isGroup ? 'Move Group to End' : 'Move to End'), disabled: !canMoveMenuColumn || menuBlockEnd < 0 || menuBlockEnd >= currentOrderForMenu.length - 1, onClick: () => moveMenuColumnBlock('last') },
+                'separator',
+                { label: getLocaleText('menuResetColumnOrder', 'Reset Column Order'), disabled: columnOrder.length === 0, onClick: () => setColumnOrderWithHistory([], 'layout:column-order-reset') },
+            ],
+        });
+
+        // --- Visibility ---
+        actions.push('separator');
+        if (!isGroup && column.getCanHide && column.getCanHide()) {
+            actions.push({
+                label: getLocaleText('menuHideColumn', 'Hide Column'),
+                icon: <Icons.VisibilityOff/>,
+                onClick: () => column.toggleVisibility(false)
+            });
+        }
+        actions.push({
+            label: getLocaleText('menuShowAllColumns', 'Show All Columns'),
+            icon: <Icons.Visibility/>,
+            onClick: () => {
+                if (table && typeof table.getAllLeafColumns === 'function') {
+                    table.getAllLeafColumns().forEach((leafColumn) => {
+                        if (leafColumn && leafColumn.getCanHide && leafColumn.getCanHide()) {
+                            leafColumn.toggleVisibility(true);
+                        }
+                    });
+                }
+            }
+        });
+
+        // --- Expand/Collapse ---
+        actions.push('separator');
+        actions.push({ label: 'Expand All Rows', onClick: () => handleExpandAllRows(true) });
+        actions.push({ label: 'Collapse All Rows', onClick: () => handleExpandAllRows(false) });
+
+        // --- Column size submenu + export ---
         actions.push('separator');
         actions.push({
-            label: 'Expand All Rows',
-            onClick: () => handleExpandAllRows(true)
+            label: 'Column Size',
+            children: [
+                { label: getLocaleText('menuAutoSizeColumn', 'Auto-size Column'), onClick: () => autoSizeColumn(colId) },
+                { label: getLocaleText('menuAutoSizeAllVisibleColumns', 'Auto-size All'), onClick: () => { table.getVisibleLeafColumns().forEach((leafColumn) => autoSizeColumn(leafColumn.id)); } },
+            ],
         });
         actions.push({
-            label: 'Collapse All Rows',
-            onClick: () => handleExpandAllRows(false)
-        });
-
-        actions.push('separator');
-        actions.push({
-            label: 'Auto-size Column',
-            onClick: () => autoSizeColumn(colId)
-        });
-        actions.push({
-            label: 'Export to Excel',
+            label: getLocaleText('menuExportToExcel', 'Export to Excel'),
             icon: <Icons.Export/>,
             onClick: exportPivot
         });
@@ -9041,6 +9293,26 @@ export default function DashTanstackPivot(props) {
         openSparklineDataModalRef,
     });
 
+    const availableColumnOrderIds = useMemo(
+        () => collectColumnDefLeafIds(columns),
+        [columns]
+    );
+    const effectiveColumnOrder = useMemo(
+        () => mergeColumnOrderWithIds(columnOrder, availableColumnOrderIds),
+        [availableColumnOrderIds, columnOrder]
+    );
+    const columnOrderKey = useMemo(
+        () => effectiveColumnOrder.join('\u001f'),
+        [effectiveColumnOrder]
+    );
+
+    useEffect(() => {
+        if (columnOrder.length === 0) return;
+        if (!areStringArraysEqual(columnOrder, effectiveColumnOrder)) {
+            setColumnOrder(effectiveColumnOrder);
+        }
+    }, [columnOrder, effectiveColumnOrder]);
+
     // Auto-size new columns to fit their header text on spawn
     useEffect(() => {
         if (!table || !table.getVisibleLeafColumns) return;
@@ -9463,6 +9735,7 @@ export default function DashTanstackPivot(props) {
             rowPinning: finalRowPinning,
             grouping: viewMode === 'pivot' ? rowFields : [],
             columnVisibility,
+            columnOrder: effectiveColumnOrder,
             columnSizing
         };
         if (paginationConfig.enabled) {
@@ -9477,6 +9750,7 @@ export default function DashTanstackPivot(props) {
         rowFields,
         viewMode,
         columnVisibility,
+        effectiveColumnOrder,
         columnSizing,
         tableData,
         effectiveGrandTotalPinState,
@@ -9632,6 +9906,14 @@ export default function DashTanstackPivot(props) {
         onColumnPinningChange: (updater) => { debugLog('onColumnPinningChange'); setColumnPinningWithHistory(updater, 'layout:column-pinning'); },
         onRowPinningChange: (updater) => { debugLog('onRowPinningChange'); setRowPinningWithHistory(updater, 'layout:row-pinning'); },
         onColumnVisibilityChange: (updater) => { debugLog('onColumnVisibilityChange'); setColumnVisibility(updater); },
+        onColumnOrderChange: (updater) => {
+            debugLog('onColumnOrderChange');
+            setColumnOrderWithHistory((previousOrder) => {
+                const baseOrder = mergeColumnOrderWithIds(previousOrder, availableColumnOrderIds);
+                const nextOrder = typeof updater === 'function' ? updater(baseOrder) : updater;
+                return mergeColumnOrderWithIds(nextOrder, availableColumnOrderIds);
+            }, 'layout:column-order');
+        },
         onColumnSizingChange: (updater) => { debugLog('onColumnSizingChange'); setColumnSizing(updater); },
         getRowId,
         getCoreRowModel: getCoreRowModel(),
@@ -10007,7 +10289,7 @@ export default function DashTanstackPivot(props) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
     const visibleLeafColumns = useMemo(
         () => table.getVisibleLeafColumns(),
-        [columns, columnVisibility, columnPinning, columnSizing]
+        [columns, columnVisibility, columnPinning, columnOrderKey, columnSizing]
     );
     const chartDisplayRows = useMemo(
         () => (
@@ -11358,6 +11640,7 @@ export default function DashTanstackPivot(props) {
         // Column-structure deps for memoized leaf-column lists
         columnVisibility,
         columnPinning,
+        columnOrder: columnOrderKey,
         columnSizing,
         columns,
     });
@@ -11367,6 +11650,12 @@ export default function DashTanstackPivot(props) {
         centerCount: centerCols.length,
         rightCount: rightCols.length
     };
+
+    useLayoutEffect(() => {
+        if (columnVirtualizerRef.current && typeof columnVirtualizerRef.current.measure === 'function') {
+            columnVirtualizerRef.current.measure();
+        }
+    }, [columnOrderKey, columnPinning, columnSizing, totalLayoutWidth]);
 
     // Memoized lookup structure for the header render path.
     // centerColIndexMap: O(1) idâ†’index lookup; only rebuilt when the column list changes.
@@ -11384,11 +11673,11 @@ export default function DashTanstackPivot(props) {
     // Pre-compute header groups so PivotTableBody doesn't need the `table` instance
     // (whose identity changes every render, defeating React.memo).
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    const leftHeaderGroups = useMemo(() => table.getLeftHeaderGroups(), [columns, columnVisibility, columnPinning, columnSizing]);
+    const leftHeaderGroups = useMemo(() => table.getLeftHeaderGroups(), [columns, columnVisibility, columnPinning, columnOrderKey, columnSizing]);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    const rightHeaderGroups = useMemo(() => table.getRightHeaderGroups(), [columns, columnVisibility, columnPinning, columnSizing]);
+    const rightHeaderGroups = useMemo(() => table.getRightHeaderGroups(), [columns, columnVisibility, columnPinning, columnOrderKey, columnSizing]);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    const centerHeaderGroups = useMemo(() => table.getCenterHeaderGroups(), [columns, columnVisibility, columnPinning, columnSizing]);
+    const centerHeaderGroups = useMemo(() => table.getCenterHeaderGroups(), [columns, columnVisibility, columnPinning, columnOrderKey, columnSizing]);
 
     useEffect(() => {
         if (!serverSide || virtualCenterCols.length === 0) return;
@@ -11464,22 +11753,55 @@ export default function DashTanstackPivot(props) {
         return -1;
     };
 
+    const resolveDraggedHeaderItem = (event) => {
+        if (dragItem) return dragItem;
+        if (!event || !event.dataTransfer) return null;
+        try {
+            const raw = event.dataTransfer.getData('application/x-pivot-column');
+            if (!raw) return null;
+            const parsed = JSON.parse(raw);
+            if (!parsed || typeof parsed !== 'object' || !parsed.field) return null;
+            return parsed;
+        } catch (error) {
+            return null;
+        }
+    };
+
+    const resolveHeaderDropPinSide = (event) => {
+        const container = parentRef.current;
+        if (!container || !event || !Number.isFinite(Number(event.clientX))) return null;
+        const rect = container.getBoundingClientRect();
+        if (!rect || !Number.isFinite(rect.left) || !Number.isFinite(rect.right)) return null;
+        const edgeWidth = Math.min(112, Math.max(44, rect.width * 0.1));
+        if (event.clientX <= rect.left + edgeWidth) return 'left';
+        if (event.clientX >= rect.right - edgeWidth) return 'right';
+        return null;
+    };
+
+    const resolveHeaderDropPosition = (event) => {
+        const target = event && event.currentTarget;
+        const rect = target && typeof target.getBoundingClientRect === 'function'
+            ? target.getBoundingClientRect()
+            : null;
+        if (!rect || !Number.isFinite(Number(event.clientX))) return 'before';
+        return event.clientX > rect.left + (rect.width / 2) ? 'after' : 'before';
+    };
+
     const onHeaderDrop = (e, targetColId) => {
         e.preventDefault();
-        if (!dragItem) return;
-        const { field, zone: srcZone } = dragItem;
+        e.stopPropagation();
+        const draggedItem = resolveDraggedHeaderItem(e);
+        if (!draggedItem) return;
+        const { field } = draggedItem;
         const draggedValueConfig = typeof field === 'object' && field ? field : null;
         const isFormulaValue = Boolean(draggedValueConfig && draggedValueConfig.agg === 'formula');
         const fieldName = typeof field === 'string' ? field : field.field;
-        
-        // Handle dropping on the same column (no-op)
-        if (fieldName === targetColId) {
-            setDragItem(null);
-            return;
-        }
-
+        const sourceColumn = tableRef.current && fieldName ? tableRef.current.getColumn(fieldName) : null;
+        const dropPinSide = resolveHeaderDropPinSide(e);
+        const dropPosition = resolveHeaderDropPosition(e);
         const targetZone = getFieldZone(targetColId);
-        if (!targetZone) {
+
+        if (!fieldName || !targetColId) {
             setDragItem(null);
             return;
         }
@@ -11495,54 +11817,77 @@ export default function DashTanstackPivot(props) {
             return;
         }
 
-        // Check for Pinning (Drag-to-Pin)
-        const targetIsPinned = getPinningState(targetColId);
-        if (targetIsPinned) {
-             handlePinColumn(fieldName, targetIsPinned);
-        } else {
-             // If dropping on unpinned, maybe unpin?
-             handlePinColumn(fieldName, false);
+        const canPinDraggedColumn = sourceColumn && fieldName !== '__row_number__' && fieldName !== '__report_config__';
+        if (dropPinSide && canPinDraggedColumn) {
+            handlePinColumn(fieldName, dropPinSide);
+            setAnnouncement(getLocaleText('columnPinnedAnnouncement', '{label} pinned {side}.', {
+                label: formatDisplayLabel(fieldName),
+                side: dropPinSide,
+            }));
+        } else if (canPinDraggedColumn) {
+            const targetIsPinned = getPinningState(targetColId);
+            const sourceIsPinned = getPinningState(fieldName);
+            if (targetIsPinned && targetIsPinned !== sourceIsPinned) {
+                 handlePinColumn(fieldName, targetIsPinned);
+            } else if (!targetIsPinned && sourceIsPinned) {
+                 handlePinColumn(fieldName, false);
+            }
         }
 
-        // Reordering or Pivoting
-        if (srcZone === targetZone) {
-             const srcIdx = getFieldIndex(fieldName, srcZone);
-             const targetIdx = getFieldIndex(targetColId, targetZone);
-             if (srcIdx !== -1 && targetIdx !== -1 && srcIdx !== targetIdx) {
-                 const move = (list, setList) => {
-                    const n = [...list]; 
-                    const [moved] = n.splice(srcIdx, 1);
-                    n.splice(targetIdx, 0, moved); 
-                    setList(n);
-                };
-                if (srcZone==='rows') move(rowFields, (next) => setRowFieldsWithHistory(next, 'layout:header-drop'));
-                if (srcZone==='cols') move(colFields, (next) => setColFieldsWithHistory(next, 'layout:header-drop'));
-                if (srcZone==='vals') move(valConfigs, (next) => setValConfigsWithHistory(next, 'layout:header-drop'));
-             }
-        } else {
-            // Pivoting (Moving between zones)
-            const targetIdx = getFieldIndex(targetColId, targetZone);
-            // Remove from source
-            if (srcZone==='rows') setRowFieldsWithHistory((p) => p.filter(f => f !== fieldName), 'layout:header-drop');
-            if (srcZone==='cols') setColFieldsWithHistory((p) => p.filter(f => f !== fieldName), 'layout:header-drop');
-            if (srcZone==='vals') setValConfigsWithHistory((p) => p.filter(f => f.field !== fieldName), 'layout:header-drop');
+        // Header drag has two jobs: semantic zone moves when the ids are field-zone
+        // backed, and visual column order moves for normal rendered columns.
+        const srcZone = draggedItem.zone || getFieldZone(fieldName);
+        const srcIdx = srcZone ? getFieldIndex(fieldName, srcZone) : -1;
+        const targetIdx = targetZone ? getFieldIndex(targetColId, targetZone) : -1;
+        const canApplySemanticMove = Boolean(srcZone && targetZone && srcIdx >= 0 && targetIdx >= 0);
+        let targetInsertIdx = dropPosition === 'after' ? targetIdx + 1 : targetIdx;
+        if (srcZone === targetZone && srcIdx >= 0 && srcIdx < targetInsertIdx) {
+            targetInsertIdx -= 1;
+        }
+        const didApplySemanticMove = canApplySemanticMove
+            ? applyFieldZoneMove({
+                field,
+                srcZone,
+                srcIdx,
+                targetZone,
+                targetIdx: targetInsertIdx,
+                source: 'layout:header-drop',
+            })
+            : false;
 
-            // Insert into target
-            const insert = (list, setList, item) => {
-                const n = [...list];
-                n.splice(targetIdx, 0, item);
-                setList(n);
-            };
-            if (targetZone==='rows') insert(rowFields, (next) => setRowFieldsWithHistory(next, 'layout:header-drop'), fieldName);
-            if (targetZone==='cols') insert(colFields, (next) => setColFieldsWithHistory(next, 'layout:header-drop'), fieldName);
-            if (targetZone==='vals') insert(valConfigs, (next) => setValConfigsWithHistory(next, 'layout:header-drop'), {field: fieldName, agg:'sum'});
+        if (!didApplySemanticMove && fieldName !== targetColId) {
+            setColumnOrderWithHistory((previousOrder) => {
+                const baseOrder = mergeColumnOrderWithIds(previousOrder, availableColumnOrderIds);
+                return moveColumnIdInOrder(baseOrder, fieldName, targetColId, dropPosition);
+            }, 'layout:header-reorder');
+            setAnnouncement(getLocaleText('columnMovedAnnouncement', '{label} moved {position} {target}.', {
+                label: formatDisplayLabel(fieldName),
+                position: dropPosition,
+                target: formatDisplayLabel(targetColId),
+            }));
         }
         setDragItem(null);
     };
 
     const onDragStart = (e, field, zone, idx) => {
-        setDragItem({ field, zone, idx });
+        const fieldName = typeof field === 'string' ? field : field && field.field;
+        const resolvedZone = getFieldZone(fieldName) || zone;
+        const resolvedIdx = Number.isInteger(idx) && idx >= 0
+            ? idx
+            : getFieldIndex(fieldName, resolvedZone);
+        const nextDragItem = { field, zone: resolvedZone, idx: resolvedIdx };
+        setDragItem(nextDragItem);
         e.dataTransfer.effectAllowed = 'move';
+        try {
+            e.dataTransfer.setData('application/x-pivot-column', JSON.stringify({
+                field: fieldName,
+                zone: resolvedZone,
+                idx: resolvedIdx,
+            }));
+            e.dataTransfer.setData('text/plain', fieldName || '');
+        } catch (error) {
+            // Some browsers restrict custom drag payloads; local React state still carries the drag.
+        }
     };
     const onDragOver = (e, zone, idx) => {
         e.preventDefault();
@@ -11554,6 +11899,63 @@ export default function DashTanstackPivot(props) {
             setDropLine({ zone, idx: e.clientY > mid ? idx + 1 : idx });
         }
     };
+
+    const onHeaderDragOver = (e, columnId) => {
+        const hasHeaderDragPayload = Boolean(
+            dragItem
+            || (
+                e.dataTransfer
+                && e.dataTransfer.types
+                && Array.from(e.dataTransfer.types).includes('application/x-pivot-column')
+            )
+        );
+        if (!hasHeaderDragPayload) return;
+        e.preventDefault();
+        e.stopPropagation();
+        if (e.dataTransfer) e.dataTransfer.dropEffect = 'move';
+        if (columnId && e.currentTarget) {
+            const rect = e.currentTarget.getBoundingClientRect();
+            const side = e.clientX < rect.left + rect.width / 2 ? 'before' : 'after';
+            setDragOverHeaderId(columnId);
+            setDragOverSide(side);
+        }
+    };
+
+    const onHeaderDragEnd = () => {
+        setDragItem(null);
+        setDropLine(null);
+        setDragOverHeaderId(null);
+        setDragOverSide(null);
+    };
+
+    const onHeaderKeyboardMove = (columnId, delta) => {
+        if (!columnId || !availableColumnOrderIds.includes(columnId)) return false;
+        const direction = delta < 0 ? -1 : 1;
+        const baseOrder = mergeColumnOrderWithIds(columnOrder, availableColumnOrderIds);
+        const nextOrder = moveColumnIdByDelta(baseOrder, columnId, direction);
+        const moved = !areStringArraysEqual(baseOrder, nextOrder);
+        if (moved) {
+            setColumnOrderWithHistory(nextOrder, 'layout:header-keyboard-reorder');
+        }
+        if (moved) {
+            setAnnouncement(getLocaleText('columnMovedByKeyboardAnnouncement', '{label} moved {direction}.', {
+                label: formatDisplayLabel(columnId),
+                direction: direction < 0 ? 'left' : 'right',
+            }));
+        }
+        return moved;
+    };
+
+    const onHeaderKeyboardPin = (columnId, side) => {
+        if (!columnId || columnId === '__row_number__' || columnId === '__report_config__') return false;
+        handlePinColumn(columnId, side);
+        setAnnouncement(getLocaleText('columnPinnedAnnouncement', '{label} pinned {side}.', {
+            label: formatDisplayLabel(columnId),
+            side: side || 'center',
+        }));
+        return true;
+    };
+
     const applyFieldZoneMove = useCallback(({
         field,
         srcZone,
@@ -11767,6 +12169,13 @@ export default function DashTanstackPivot(props) {
         focusedHeaderIdRef,
         setFocusedHeaderId,
         onDragStart,
+        onHeaderDrop,
+        onHeaderDragOver,
+        onHeaderDragEnd,
+        onHeaderKeyboardMove,
+        onHeaderKeyboardPin,
+        dragOverHeaderId,
+        dragOverSide,
         handleFilterClick,
         handleHeaderFilter,
         activeFilterCol,
@@ -11784,6 +12193,7 @@ export default function DashTanstackPivot(props) {
         resolveEditedCellMarker,
         resolveCellDisplayValue: resolveDisplayedCellValue,
         editedCellEpoch,
+        getLocaleText,
     });
 
     const srOnly = {
@@ -12428,6 +12838,7 @@ export default function DashTanstackPivot(props) {
                     onFloatingResizeStart={(direction, event) => handleStartChartCanvasPaneFloatingResize(pane.id, direction, event)}
                     initialSettings={pane.chartSettings || {}}
                     onSettingsChange={(settings) => updateChartCanvasPane(pane.id, { chartSettings: settings })}
+                    settingsPanelWidth={pane.settingsPanelWidth || undefined}
                     standalone
                     showResizeHandle={false}
                     title={pane.name}
@@ -12698,6 +13109,7 @@ export default function DashTanstackPivot(props) {
                         rowFields={rowFields} setRowFields={setRowFieldsWithHistory}
                         colFields={colFields} setColFields={setColFieldsWithHistory}
                         valConfigs={valConfigs} setValConfigs={setValConfigsWithHistory}
+                        measureAxis={measureAxis} setMeasureAxis={setMeasureAxis}
                         fixedSparklineValueKeys={fixedSparklineValueKeys}
                         displayedColumnOptions={displayedFormulaColumnOptions}
                         columnVisibility={columnVisibility} setColumnVisibility={setColumnVisibility}
@@ -12959,6 +13371,9 @@ export default function DashTanstackPivot(props) {
                             onToggleLock={() => handleToggleChartCanvasPaneLock(pane.id)}
                             immersiveMode={Boolean(pane.immersiveMode)}
                             onImmersiveModeChange={(value) => updateChartCanvasPane(pane.id, { immersiveMode: Boolean(value) })}
+                            initialSettings={pane.chartSettings || {}}
+                            onSettingsChange={(settings) => updateChartCanvasPane(pane.id, { chartSettings: settings })}
+                            settingsPanelWidth={pane.settingsPanelWidth || undefined}
                         />
                     ))}
                 </div>
@@ -13024,6 +13439,7 @@ export default function DashTanstackPivot(props) {
                                     floating={false}
                                     initialSettings={previewPane.chartSettings || {}}
                                     onSettingsChange={(settings) => updateChartCanvasPane(previewPane.id, { chartSettings: settings })}
+                                    settingsPanelWidth={previewPane.settingsPanelWidth || undefined}
                                     standalone
                                     showResizeHandle={false}
                                     title={previewPane.name}
@@ -13272,6 +13688,15 @@ DashTanstackPivot.propTypes = {
             formulaScope: PropTypes.oneOf(['measures', 'columns']),
             sparkline: PropTypes.oneOfType([PropTypes.bool, PropTypes.object]),
         })),
+        measureAxis: PropTypes.shape({
+            placement: PropTypes.oneOf(['none', 'rows', 'columns']),
+            labelField: PropTypes.string,
+            valueField: PropTypes.string,
+            members: PropTypes.arrayOf(PropTypes.object),
+            suppressEmptyMembers: PropTypes.bool,
+            suppressZeroMembers: PropTypes.bool,
+            totalsPolicy: PropTypes.string,
+        }),
         filters: PropTypes.object,
         sorting: PropTypes.array,
         expanded: PropTypes.oneOfType([PropTypes.object, PropTypes.bool]),
@@ -13342,7 +13767,9 @@ DashTanstackPivot.propTypes = {
     columnPinned: PropTypes.object,
     rowPinned: PropTypes.object,
     columnVisibility: PropTypes.object,
+    columnOrder: PropTypes.arrayOf(PropTypes.string),
     columnSizing: PropTypes.object,
+    localeText: PropTypes.object,
     decimalPlaces: PropTypes.number,
     defaultValueFormat: PropTypes.string,
     fieldPanelSizes: PropTypes.object,
