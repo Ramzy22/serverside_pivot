@@ -625,6 +625,22 @@ const ChartLayerEditor = ({
                         </label>
                         <label style={{ display: 'flex', flexDirection: 'column', gap: '5px' }}>
                             <span style={{ fontSize: '10px', fontWeight: 800, letterSpacing: '0.06em', textTransform: 'uppercase', color: theme.textSec }}>
+                                Format
+                            </span>
+                            <select
+                                value={layer.valueFormat || 'auto'}
+                                onChange={(event) => updateLayer(layer.id, { valueFormat: event.target.value })}
+                                style={inputStyle}
+                            >
+                                <option value="auto">Auto</option>
+                                <option value="number">Number</option>
+                                <option value="compact">Compact (K/M)</option>
+                                <option value="percent">Percent</option>
+                                <option value="currency">Currency ($)</option>
+                            </select>
+                        </label>
+                        <label style={{ display: 'flex', flexDirection: 'column', gap: '5px' }}>
+                            <span style={{ fontSize: '10px', fontWeight: 800, letterSpacing: '0.06em', textTransform: 'uppercase', color: theme.textSec }}>
                                 Color
                             </span>
                             <input
@@ -3043,12 +3059,12 @@ const SvgChart = ({
                             const target = i < categoryTargets.length ? categoryTargets[i] : null;
                             return (
                                 <g key={`wf-bar-${i}`}>
-                                    {i > 0 && i < bars.length - 1 ? (
+                                    {i > 0 ? (
                                         <line
                                             x1={margin.left + (i - 1) * step + step / 2 + barWidth / 2}
-                                            y1={scaleY(bar.start)}
+                                            y1={i === bars.length - 1 ? scaleY(bar.end) : scaleY(bar.start)}
                                             x2={x}
-                                            y2={scaleY(bar.start)}
+                                            y2={i === bars.length - 1 ? scaleY(bar.end) : scaleY(bar.start)}
                                             stroke={theme.textSec}
                                             strokeDasharray="2 2"
                                             strokeOpacity="0.5"
@@ -3138,6 +3154,9 @@ const SvgChart = ({
         }));
         const getLayerScale = (layer) => (layer.axis === 'right' ? rightMetrics.scaleY : leftMetrics.scaleY);
         const getLayerBaseline = (layer) => (layer.axis === 'right' ? rightMetrics.baselineY : leftMetrics.baselineY);
+        const makeLayerFmt = (layer) => (v) => formatChartValue(v, layer.valueFormat || valueFormat || 'auto');
+        const firstRightLayer = comboLayers.find((layer) => layer.axis === 'right');
+        const fmtRight = firstRightLayer ? makeLayerFmt(firstRightLayer) : fmt;
         const barGap = 4;
         const barWidth = Math.max(8, (groupWidth - (Math.max(barLayers.length, 1) - 1) * barGap) / Math.max(barLayers.length, 1));
 
@@ -3195,7 +3214,7 @@ const SvgChart = ({
                                     fontSize="11"
                                     fill={theme.textSec}
                                 >
-                                    {fmt(tickValue)}
+                                    {fmtRight(tickValue)}
                                 </text>
                             );
                         }) : null}
@@ -3223,6 +3242,7 @@ const SvgChart = ({
                                 const y = scaleY(value);
                                 const color = layer.color || getColorForIndex(barLayerIndex, theme, paletteColors);
                                 const barX = slotStart + (barLayerIndex * (barWidth + barGap));
+                                const fmtLayer = makeLayerFmt(layer);
                                 return (
                                     <React.Fragment key={`${layer.id}-${category}-${barLayerIndex}`}>
                                         <rect
@@ -3235,7 +3255,7 @@ const SvgChart = ({
                                             opacity="0.9"
                                             data-tip-cat={category}
                                             data-tip-ser={layer.name}
-                                            data-tip-val={fmt(value)}
+                                            data-tip-val={fmtLayer(value)}
                                             data-tip-color={color}
                                         />
                                         {showDataLabels ? (
@@ -3248,7 +3268,7 @@ const SvgChart = ({
                                                 fill={theme.textSec}
                                                 style={{ pointerEvents: 'none' }}
                                             >
-                                                {fmt(value)}
+                                                {fmtLayer(value)}
                                             </text>
                                         ) : null}
                                     </React.Fragment>
@@ -3272,6 +3292,7 @@ const SvgChart = ({
                             const areaPath = buildAreaBandPath(points);
                             const linePath = buildLinePath(points);
                             const color = layer.color || getColorForIndex(barLayers.length + layerIndex, theme, paletteColors);
+                            const fmtLayer = makeLayerFmt(layer);
                             return (
                                 <g key={`combo-area-${layer.id}`}>
                                     {areaPath ? <path d={areaPath} fill={color} opacity="0.16" style={{ pointerEvents: 'none' }} /> : null}
@@ -3289,12 +3310,12 @@ const SvgChart = ({
                                                     strokeWidth="2"
                                                     data-tip-cat={model.categories[pointIndex]}
                                                     data-tip-ser={layer.name}
-                                                    data-tip-val={fmt(point.rawValue)}
+                                                    data-tip-val={fmtLayer(point.rawValue)}
                                                     data-tip-color={color}
                                                 />
                                                 {showDataLabels ? (
                                                     <text x={point.x} y={point.y - 8} textAnchor="middle" fontSize="9" fontWeight="700" fill={theme.textSec} style={{ pointerEvents: 'none' }}>
-                                                        {fmt(point.rawValue)}
+                                                        {fmtLayer(point.rawValue)}
                                                     </text>
                                                 ) : null}
                                             </React.Fragment>
@@ -3317,6 +3338,7 @@ const SvgChart = ({
                             });
                             const linePath = buildLinePath(points);
                             const color = layer.color || getColorForIndex(barLayers.length + areaLayers.length + layerIndex, theme, paletteColors);
+                            const fmtLayer = makeLayerFmt(layer);
                             return (
                                 <g key={`combo-line-${layer.id}`}>
                                     {linePath ? <path d={linePath} fill="none" stroke={color} strokeWidth="3" strokeLinejoin="round" strokeLinecap="round" strokeDasharray={getDashArray(lineDashStyles[layer.name])} style={{ pointerEvents: 'none' }} /> : null}
@@ -3333,12 +3355,12 @@ const SvgChart = ({
                                                     strokeWidth="2"
                                                     data-tip-cat={model.categories[pointIndex]}
                                                     data-tip-ser={layer.name}
-                                                    data-tip-val={fmt(point.rawValue)}
+                                                    data-tip-val={fmtLayer(point.rawValue)}
                                                     data-tip-color={color}
                                                 />
                                                 {showDataLabels ? (
                                                     <text x={point.x} y={point.y - 8} textAnchor="middle" fontSize="9" fontWeight="700" fill={theme.textSec} style={{ pointerEvents: 'none' }}>
-                                                        {fmt(point.rawValue)}
+                                                        {fmtLayer(point.rawValue)}
                                                     </text>
                                                 ) : null}
                                             </React.Fragment>

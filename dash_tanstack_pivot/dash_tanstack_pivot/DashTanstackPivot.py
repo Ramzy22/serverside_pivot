@@ -70,6 +70,8 @@ Keyword arguments:
 
     - right (list of strings; optional)
 
+- columnOrder (list of strings; optional)
+
 - columnSizing (dict; optional)
 
 - columnVisibility (dict; optional)
@@ -108,6 +110,8 @@ Keyword arguments:
 - filters (dict; optional)
 
 - grandTotalPosition (a value equal to: 'top', 'bottom'; optional)
+
+- localeText (dict; optional)
 
 - numberGroupSeparator (a value equal to: 'comma', 'space', 'thin_space', 'apostrophe', 'none'; optional)
 
@@ -386,7 +390,9 @@ Keyword arguments:
         columnPinned: typing.Optional[dict] = None,
         rowPinned: typing.Optional[dict] = None,
         columnVisibility: typing.Optional[dict] = None,
+        columnOrder: typing.Optional[typing.Sequence[str]] = None,
         columnSizing: typing.Optional[dict] = None,
+        localeText: typing.Optional[dict] = None,
         decimalPlaces: typing.Optional[NumberType] = None,
         defaultValueFormat: typing.Optional[str] = None,
         fieldPanelSizes: typing.Optional[dict] = None,
@@ -408,9 +414,9 @@ Keyword arguments:
         customDimensions: typing.Optional[typing.Sequence[dict]] = None,
         **kwargs
     ):
-        self._prop_names = ['id', 'activeReportId', 'availableFieldList', 'sparklineFields', 'cellUpdate', 'cellUpdates', 'chartCanvasPanes', 'chartDefaults', 'chartDefinitions', 'chartEvent', 'chartServerWindow', 'immersiveMode', 'colFields', 'columnPinned', 'columnPinning', 'columnSizing', 'columnVisibility', 'conditionalFormatting', 'customDimensions', 'data', 'decimalPlaces', 'defaultTheme', 'defaultValueFormat', 'detailConfig', 'detailMode', 'drillEndpoint', 'editLifecycleEvent', 'editState', 'editingConfig', 'expanded', 'fieldPanelSizes', 'filters', 'grandTotalPosition', 'numberGroupSeparator', 'performanceConfig', 'persistence', 'persistence_type', 'pinningOptions', 'pinningPresets', 'pivotTitle', 'reportDef', 'reset', 'rowFields', 'rowMove', 'rowPinned', 'rowPinning', 'runtimeRequest', 'runtimeResponse', 'saveViewTrigger', 'savedReports', 'savedView', 'serverSide', 'showColTotals', 'showRowTotals', 'showSubtotals', 'sortEvent', 'sortLock', 'sortOptions', 'sorting', 'style', 'table', 'tableCanvasSize', 'treeConfig', 'paginationConfig', 'uiConfig', 'valConfigs', 'validationRules', 'viewMode', 'viewState']
+        self._prop_names = ['id', 'activeReportId', 'availableFieldList', 'sparklineFields', 'cellUpdate', 'cellUpdates', 'chartCanvasPanes', 'chartDefaults', 'chartDefinitions', 'chartEvent', 'chartServerWindow', 'immersiveMode', 'colFields', 'columnOrder', 'columnPinned', 'columnPinning', 'columnSizing', 'columnVisibility', 'conditionalFormatting', 'customDimensions', 'data', 'decimalPlaces', 'defaultTheme', 'defaultValueFormat', 'detailConfig', 'detailMode', 'drillEndpoint', 'editLifecycleEvent', 'editState', 'editingConfig', 'expanded', 'fieldPanelSizes', 'filters', 'grandTotalPosition', 'localeText', 'numberGroupSeparator', 'performanceConfig', 'persistence', 'persistence_type', 'pinningOptions', 'pinningPresets', 'pivotTitle', 'reportDef', 'reset', 'rowFields', 'rowMove', 'rowPinned', 'rowPinning', 'runtimeRequest', 'runtimeResponse', 'saveViewTrigger', 'savedReports', 'savedView', 'serverSide', 'showColTotals', 'showRowTotals', 'showSubtotals', 'sortEvent', 'sortLock', 'sortOptions', 'sorting', 'style', 'table', 'tableCanvasSize', 'treeConfig', 'paginationConfig', 'uiConfig', 'valConfigs', 'validationRules', 'viewMode', 'viewState']
         self._valid_wildcard_attributes =            []
-        self.available_properties = ['id', 'activeReportId', 'availableFieldList', 'sparklineFields', 'cellUpdate', 'cellUpdates', 'chartCanvasPanes', 'chartDefaults', 'chartDefinitions', 'chartEvent', 'chartServerWindow', 'immersiveMode', 'colFields', 'columnPinned', 'columnPinning', 'columnSizing', 'columnVisibility', 'conditionalFormatting', 'customDimensions', 'data', 'decimalPlaces', 'defaultTheme', 'defaultValueFormat', 'detailConfig', 'detailMode', 'drillEndpoint', 'editLifecycleEvent', 'editState', 'editingConfig', 'expanded', 'fieldPanelSizes', 'filters', 'grandTotalPosition', 'numberGroupSeparator', 'performanceConfig', 'persistence', 'persistence_type', 'pinningOptions', 'pinningPresets', 'pivotTitle', 'reportDef', 'reset', 'rowFields', 'rowMove', 'rowPinned', 'rowPinning', 'runtimeRequest', 'runtimeResponse', 'saveViewTrigger', 'savedReports', 'savedView', 'serverSide', 'showColTotals', 'showRowTotals', 'showSubtotals', 'sortEvent', 'sortLock', 'sortOptions', 'sorting', 'style', 'table', 'tableCanvasSize', 'treeConfig', 'paginationConfig', 'uiConfig', 'valConfigs', 'validationRules', 'viewMode', 'viewState']
+        self.available_properties = ['id', 'activeReportId', 'availableFieldList', 'sparklineFields', 'cellUpdate', 'cellUpdates', 'chartCanvasPanes', 'chartDefaults', 'chartDefinitions', 'chartEvent', 'chartServerWindow', 'immersiveMode', 'colFields', 'columnOrder', 'columnPinned', 'columnPinning', 'columnSizing', 'columnVisibility', 'conditionalFormatting', 'customDimensions', 'data', 'decimalPlaces', 'defaultTheme', 'defaultValueFormat', 'detailConfig', 'detailMode', 'drillEndpoint', 'editLifecycleEvent', 'editState', 'editingConfig', 'expanded', 'fieldPanelSizes', 'filters', 'grandTotalPosition', 'localeText', 'numberGroupSeparator', 'performanceConfig', 'persistence', 'persistence_type', 'pinningOptions', 'pinningPresets', 'pivotTitle', 'reportDef', 'reset', 'rowFields', 'rowMove', 'rowPinned', 'rowPinning', 'runtimeRequest', 'runtimeResponse', 'saveViewTrigger', 'savedReports', 'savedView', 'serverSide', 'showColTotals', 'showRowTotals', 'showSubtotals', 'sortEvent', 'sortLock', 'sortOptions', 'sorting', 'style', 'table', 'tableCanvasSize', 'treeConfig', 'paginationConfig', 'uiConfig', 'valConfigs', 'validationRules', 'viewMode', 'viewState']
         self.available_wildcard_properties =            []
         _explicit_args = kwargs.pop('_explicit_args')
         _locals = locals()

@@ -257,6 +257,7 @@ export const normalizeComboLayer = (layer, availableColumns = [], index = 0, fal
                 : getComboLayerDefaultName(matchingColumn || fallbackColumn, index)),
         hidden: Boolean(source.hidden),
         color: typeof source.color === 'string' && source.color ? source.color : (typeof fallback.color === 'string' && fallback.color ? fallback.color : null),
+        valueFormat: typeof source.valueFormat === 'string' && source.valueFormat ? source.valueFormat : (typeof fallback.valueFormat === 'string' && fallback.valueFormat ? fallback.valueFormat : 'auto'),
     };
 };
 
