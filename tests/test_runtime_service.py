@@ -233,6 +233,9 @@ def test_runtime_service_export_xls_preserves_inline_table_styles():
                         "_id": "Region",
                         "sales_sum": "Styled Sales",
                     },
+                    "headerFormatting": {
+                        "sales_sum": {"background": "#654321", "color": "#ffeecc"}
+                    },
                     "columnWidths": {"hierarchy": 160, "_id": 160, "sales_sum": 120},
                     "decimalPlaces": 2,
                     "numberGroupSeparator": "comma",
@@ -265,12 +268,36 @@ def test_runtime_service_export_xls_preserves_inline_table_styles():
         assert "Styled Sales" in content
         assert "font-family:Aptos, sans-serif" in content
         assert "background:#123456" in content
+        assert "background:#654321" in content
+        assert "color:#ffeecc" in content
         assert "background:#ddeeff" in content
         assert "font-style:italic" in content
         assert "$100.00" in content
     finally:
         if os.path.exists(content_path):
             os.remove(content_path)
+
+
+def test_runtime_service_export_header_style_uses_measure_header_style():
+    state = PivotViewState(
+        val_configs=[
+            {
+                "field": "sales",
+                "agg": "sum",
+                "headerStyle": {"background": "#112233", "color": "#f8fafc"},
+            }
+        ]
+    )
+
+    style = PivotRuntimeService._export_header_style(
+        "sales_sum",
+        "Sales",
+        {"valConfigs": state.val_configs, "theme": {"headerBg": "#ffffff", "headerText": "#111827"}},
+        state,
+    )
+
+    assert style["background"] == "#112233"
+    assert style["color"] == "#f8fafc"
 
 
 def test_runtime_service_works_without_dash():

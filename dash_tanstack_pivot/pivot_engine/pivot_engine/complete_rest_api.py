@@ -8,7 +8,7 @@ import pyarrow as pa
 from typing import Dict, Any, List, Optional
 from fastapi import FastAPI, HTTPException, Depends, Query, Request
 from fastapi.responses import JSONResponse, StreamingResponse, HTMLResponse
-from pydantic import BaseModel
+from pydantic import BaseModel, ConfigDict, Field
 from pivot_engine.scalable_pivot_controller import ScalablePivotController
 from pivot_engine.types.pivot_spec import PivotSpec
 from pivot_engine.config import get_config
@@ -54,6 +54,8 @@ class PivotConfigRequest(BaseModel):
     null_column_label: str = "(null)"
 
 class PivotSpecRequest(BaseModel):
+    model_config = ConfigDict(populate_by_name=True)
+
     table: str
     rows: List[str] = []
     columns: List[str] = []
@@ -64,6 +66,7 @@ class PivotSpecRequest(BaseModel):
     totals: bool = False
     cursor: Optional[Dict[str, Any]] = None
     pivot_config: Optional[PivotConfigRequest] = None
+    measure_axis: Optional[Dict[str, Any]] = Field(default=None, alias="measureAxis")
 
 class ExportRequest(BaseModel):
     spec: PivotSpecRequest
@@ -71,6 +74,8 @@ class ExportRequest(BaseModel):
 
 class TanStackRequestModel(BaseModel):
     """Pydantic model for TanStack request"""
+    model_config = ConfigDict(populate_by_name=True)
+
     operation: str
     table: str
     columns: List[Dict[str, Any]]
@@ -80,6 +85,7 @@ class TanStackRequestModel(BaseModel):
     aggregations: List[Dict[str, Any]] = []
     pagination: Optional[Dict[str, Any]] = None
     global_filter: Optional[str] = None
+    measure_axis: Optional[Dict[str, Any]] = Field(default=None, alias="measureAxis")
 
 
 class HierarchicalRequest(BaseModel):
@@ -221,7 +227,8 @@ class CompletePivotAPI:
                     grouping=request.grouping,
                     aggregations=request.aggregations,
                     pagination=request.pagination,
-                    global_filter=request.global_filter
+                    global_filter=request.global_filter,
+                    measure_axis=request.measure_axis
                 )
                 
                 result = await self.tanstack_adapter.handle_request(ts_request, user=user)

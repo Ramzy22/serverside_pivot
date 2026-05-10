@@ -170,6 +170,7 @@ def _build_runtime_export_context(
     val_configs: Any,
     filters: Any,
     custom_dimensions: Any,
+    measure_axis: Any = None,
     sorting: Any,
     sort_options: Any,
     sort_options_default: Optional[Dict],
@@ -187,6 +188,7 @@ def _build_runtime_export_context(
     effective_val_configs = _state_override_value(request_state_override, "valConfigs", val_configs or [], list)
     effective_filters = _state_override_value(request_state_override, "filters", filters or {}, dict)
     effective_custom_dimensions = _state_override_value(request_state_override, "customDimensions", custom_dimensions or [], list)
+    effective_measure_axis = _state_override_value(request_state_override, "measureAxis", measure_axis or {}, dict)
     effective_sorting = _state_override_value(request_state_override, "sorting", sorting or [], list)
     effective_sort_options = _state_override_value(
         request_state_override,
@@ -220,6 +222,7 @@ def _build_runtime_export_context(
         val_configs=effective_val_configs,
         filters=effective_filters,
         custom_dimensions=effective_custom_dimensions,
+        measure_axis=effective_measure_axis,
         sorting=effective_sorting,
         sort_options=effective_sort_options,
         expanded=effective_expanded,
@@ -246,6 +249,7 @@ def _build_runtime_export_context(
             columns=request_columns,
             filters=effective_filters,
             custom_dimensions=effective_custom_dimensions or [],
+            measure_axis=effective_measure_axis or None,
             sorting=tanstack_sorting,
             grouping=effective_row_fields or [],
             aggregations=[],
@@ -606,6 +610,7 @@ def register_dash_pivot_transport_callback(
         Input(pivot_id, "valConfigs"),
         Input(pivot_id, "filters"),
         Input(pivot_id, "customDimensions"),
+        Input(pivot_id, "measureAxis"),
         Input(pivot_id, "sorting"),
         Input(pivot_id, "expanded"),
         Input(pivot_id, "immersiveMode"),
@@ -630,6 +635,7 @@ def register_dash_pivot_transport_callback(
         val_configs,
         filters,
         custom_dimensions,
+        measure_axis,
         sorting,
         expanded,
         immersive_mode,
@@ -708,6 +714,7 @@ def register_dash_pivot_transport_callback(
             effective_val_configs = _state_override_value(request_state_override, "valConfigs", val_configs or [], list)
             effective_filters = _state_override_value(request_state_override, "filters", filters or {}, dict)
             effective_custom_dimensions = _state_override_value(request_state_override, "customDimensions", custom_dimensions or [], list)
+            effective_measure_axis = _state_override_value(request_state_override, "measureAxis", measure_axis or {}, dict)
             effective_tree_config = _state_override_value(
                 request_state_override,
                 "treeConfig",
@@ -773,6 +780,7 @@ def register_dash_pivot_transport_callback(
                 columns=request_columns,
                 filters=effective_filters or {},
                 custom_dimensions=effective_custom_dimensions or [],
+                measure_axis=effective_measure_axis or None,
                 sorting=[],
                 grouping=effective_row_fields or [],
                 aggregations=[],
@@ -861,6 +869,7 @@ def register_dash_pivot_transport_callback(
         effective_val_configs = _state_override_value(request_state_override, "valConfigs", val_configs or [], list)
         effective_filters = _state_override_value(request_state_override, "filters", filters or {}, dict)
         effective_custom_dimensions = _state_override_value(request_state_override, "customDimensions", custom_dimensions or [], list)
+        effective_measure_axis = _state_override_value(request_state_override, "measureAxis", measure_axis or {}, dict)
         effective_sorting = _state_override_value(request_state_override, "sorting", sorting or [], list)
         effective_sort_options = _state_override_value(
             request_state_override,
@@ -958,6 +967,7 @@ def register_dash_pivot_transport_callback(
             val_configs=effective_val_configs,
             filters=effective_filters,
             custom_dimensions=effective_custom_dimensions,
+            measure_axis=effective_measure_axis,
             sorting=effective_sorting,
             sort_options=effective_sort_options,
             expanded=effective_expanded,

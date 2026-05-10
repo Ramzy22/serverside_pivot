@@ -62,6 +62,91 @@ class PivotConfig:
     materialized_column_values: Optional[List[str]] = None
 
 @dataclass
+class MeasureAxisConfig:
+    """Configuration for treating selected measures as virtual dimension members."""
+    placement: str = "none"
+    label_field: str = "__measure_name__"
+    value_field: str = "__measure_value__"
+    members: List[Dict[str, Any]] = field(default_factory=list)
+    suppress_empty_members: bool = False
+    suppress_zero_members: bool = False
+    totals_policy: str = "per_member"
+
+    @staticmethod
+    def from_dict(value: Optional[Dict[str, Any]]) -> Optional["MeasureAxisConfig"]:
+        if not isinstance(value, dict):
+            return None
+
+        placement = (
+            value.get("placement")
+            or value.get("axis")
+            or value.get("measureAxis")
+            or value.get("measurePlacement")
+            or "none"
+        )
+        placement = str(placement or "none").strip().lower()
+        placement = {
+            "row": "rows",
+            "rows": "rows",
+            "column": "columns",
+            "columns": "columns",
+            "value": "none",
+            "values": "none",
+            "none": "none",
+            "off": "none",
+            "false": "none",
+        }.get(placement, "none")
+
+        label_field = (
+            value.get("labelField")
+            or value.get("label_field")
+            or value.get("measureNameField")
+            or value.get("measureLabelField")
+            or "__measure_name__"
+        )
+        value_field = (
+            value.get("valueField")
+            or value.get("value_field")
+            or value.get("measureValueField")
+            or value.get("measureAmountField")
+            or "__measure_value__"
+        )
+        members = value.get("members")
+        if members is None:
+            members = value.get("selectedMeasures")
+        if not isinstance(members, list):
+            members = []
+
+        return MeasureAxisConfig(
+            placement=placement,
+            label_field=str(label_field or "__measure_name__"),
+            value_field=str(value_field or "__measure_value__"),
+            members=[member for member in members if isinstance(member, dict)],
+            suppress_empty_members=bool(
+                value.get("suppressEmptyMembers", value.get("suppress_empty_members", False))
+            ),
+            suppress_zero_members=bool(
+                value.get("suppressZeroMembers", value.get("suppress_zero_members", False))
+            ),
+            totals_policy=str(
+                value.get("totalsPolicy")
+                or value.get("totals_policy")
+                or "per_member"
+            ),
+        )
+
+    def to_dict(self) -> Dict[str, Any]:
+        return {
+            "placement": self.placement,
+            "labelField": self.label_field,
+            "valueField": self.value_field,
+            "members": copy.deepcopy(self.members),
+            "suppressEmptyMembers": self.suppress_empty_members,
+            "suppressZeroMembers": self.suppress_zero_members,
+            "totalsPolicy": self.totals_policy,
+        }
+
+@dataclass
 class DrillPath:
     """Represents a drill-down path in hierarchical data"""
     dimensions: List[str]
@@ -87,6 +172,7 @@ class PivotSpec:
     subtotals: Optional[List[str]] = None
     grouping_config: Optional[GroupingConfig] = None
     pivot_config: Optional[PivotConfig] = None
+    measure_axis: Optional[MeasureAxisConfig] = None
     drill_paths: Optional[List[DrillPath]] = None
     column_sort_options: Optional[Dict[str, Any]] = None
 
@@ -99,6 +185,7 @@ class PivotSpec:
         measures = [Measure(**m) if isinstance(m, dict) else m for m in d.get("measures", [])]
         grouping_config = GroupingConfig(**d.get("grouping_config")) if d.get("grouping_config") else None
         pivot_config = PivotConfig(**d.get("pivot_config")) if d.get("pivot_config") else None
+        measure_axis = MeasureAxisConfig.from_dict(d.get("measure_axis", d.get("measureAxis")))
         drill_paths = [DrillPath(**p) for p in d.get("drill_paths", [])] if d.get("drill_paths") else None
 
         return PivotSpec(
@@ -118,6 +205,7 @@ class PivotSpec:
             subtotals=d.get("subtotals"),
             grouping_config=grouping_config,
             pivot_config=pivot_config,
+            measure_axis=measure_axis,
             drill_paths=drill_paths,
             column_sort_options=d.get("column_sort_options"),
         )
@@ -141,6 +229,7 @@ class PivotSpec:
             "subtotals": self.subtotals,
             "grouping_config": self.grouping_config.__dict__ if self.grouping_config else None,
             "pivot_config": self.pivot_config.__dict__ if self.pivot_config else None,
+            "measure_axis": self.measure_axis.to_dict() if self.measure_axis else None,
             "drill_paths": [p.__dict__ for p in self.drill_paths] if self.drill_paths else None,
             "column_sort_options": self.column_sort_options,
         }

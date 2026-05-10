@@ -16,6 +16,7 @@ import {
 import {
     applyCustomDimensionsToRows,
     buildCustomCategoryFieldId,
+    DATE_GROUP_GRANULARITIES,
     evaluateCustomCategoryCondition,
     formatCustomAwareFieldLabel,
     isCustomCategoryField,
@@ -42,6 +43,25 @@ const DEFAULT_VALUE_SPARKLINE_CONFIG = {
     source: 'pivot',
     displayMode: 'trend',
 };
+const MEASURE_AXIS_PLACEMENTS = new Set(['none', 'rows', 'columns']);
+
+function normalizeMeasureAxisPanelValue(value) {
+    const source = value && typeof value === 'object' ? value : {};
+    const rawPlacement = source.placement || source.axis || source.measureAxis || source.measurePlacement || 'none';
+    const normalizedPlacement = String(rawPlacement || 'none').trim().toLowerCase();
+    const placement = MEASURE_AXIS_PLACEMENTS.has(normalizedPlacement)
+        ? normalizedPlacement
+        : ({ row: 'rows', column: 'columns', value: 'none', values: 'none', off: 'none' }[normalizedPlacement] || 'none');
+    return {
+        placement,
+        labelField: String(source.labelField || source.label_field || source.measureNameField || source.measureLabelField || 'Measure Name').trim() || 'Measure Name',
+        valueField: String(source.valueField || source.value_field || source.measureValueField || source.measureAmountField || 'Amount').trim() || 'Amount',
+        members: Array.isArray(source.members) ? source.members.filter((member) => member && typeof member === 'object').map((member) => ({ ...member })) : [],
+        suppressEmptyMembers: Boolean(source.suppressEmptyMembers || source.suppress_empty_members),
+        suppressZeroMembers: Boolean(source.suppressZeroMembers || source.suppress_zero_members),
+        totalsPolicy: String(source.totalsPolicy || source.totals_policy || 'per_member'),
+    };
+}
 
 function escapeRegExp(value) {
     return String(value || '').replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
@@ -135,6 +155,69 @@ function createCustomCategoryDraft(availableFields, existing = null) {
         fallbackLabel: 'Other',
         order: 'creation',
         rules: [createCustomCategoryRule(availableFields, 0)],
+        __isNew: true,
+    };
+}
+
+function inferFieldTypeFromRows(rows, field) {
+    if (!field) return 'string';
+    const sampleRows = Array.isArray(rows) ? rows.slice(0, 250) : [];
+    for (let index = 0; index < sampleRows.length; index += 1) {
+        const row = sampleRows[index];
+        if (!row || typeof row !== 'object') continue;
+        const value = row[field];
+        if (value === null || value === undefined || value === '') continue;
+        if (typeof value === 'number' && Number.isFinite(value)) return 'number';
+        if (value instanceof Date && !Number.isNaN(value.getTime())) return 'date';
+        if (typeof value === 'string') {
+            const trimmed = value.trim();
+            if (!trimmed) continue;
+            if (Number.isFinite(Number(trimmed))) return 'number';
+            const parsedDate = Date.parse(trimmed);
+            if (!Number.isNaN(parsedDate) && /[-/T:]/.test(trimmed)) return 'date';
+            return 'string';
+        }
+    }
+    return 'string';
+}
+
+function getTypedFields(rows, fields, targetType) {
+    const sourceFields = Array.isArray(fields) ? fields : [];
+    return sourceFields.filter((field) => inferFieldTypeFromRows(rows, field) === targetType);
+}
+
+function createDateGroupDraft(availableFields, data) {
+    const dateFields = getTypedFields(data, availableFields, 'date');
+    const sourceField = dateFields[0] || availableFields[0] || '';
+    const id = normalizeCustomCategoryId(`${sourceField || 'date'}_month`);
+    return {
+        id,
+        field: buildCustomCategoryFieldId(id),
+        kind: 'date_group',
+        name: sourceField ? `${formatDisplayLabel(sourceField)} Month` : 'Date Month',
+        sourceField,
+        granularity: 'month',
+        fiscalYearStartMonth: 1,
+        fallbackLabel: 'No date',
+        __isNew: true,
+    };
+}
+
+function createNumberGroupDraft(availableFields, data) {
+    const numberFields = getTypedFields(data, availableFields, 'number');
+    const sourceField = numberFields[0] || availableFields[0] || '';
+    const id = normalizeCustomCategoryId(`${sourceField || 'number'}_bins`);
+    return {
+        id,
+        field: buildCustomCategoryFieldId(id),
+        kind: 'number_group',
+        name: sourceField ? `${formatDisplayLabel(sourceField)} Bins` : 'Number Bins',
+        sourceField,
+        binSize: 10,
+        minValue: '',
+        maxValue: '',
+        precision: 0,
+        fallbackLabel: 'No value',
         __isNew: true,
     };
 }
@@ -240,6 +323,20 @@ function CustomCategoriesEditor({
         });
         return fields;
     }, [allowedDependencyDimensions, baseFields]);
+    const dateFieldOptions = React.useMemo(
+        () => {
+            const detected = getTypedFields(data, baseFields, 'date');
+            return detected.length > 0 ? detected : baseFields;
+        },
+        [baseFields, data]
+    );
+    const numberFieldOptions = React.useMemo(
+        () => {
+            const detected = getTypedFields(data, baseFields, 'number');
+            return detected.length > 0 ? detected : baseFields;
+        },
+        [baseFields, data]
+    );
     const validationRows = React.useMemo(
         () => getCustomCategoryValidationRows(data, allowedDependencyDimensions),
         [allowedDependencyDimensions, data]
@@ -300,8 +397,16 @@ function CustomCategoriesEditor({
 
     const applyDraft = React.useCallback(() => {
         const normalized = normalizeCustomDimensionsValue([draft])[0];
-        if (!normalized || !normalized.name || !normalized.rules || normalized.rules.length === 0) {
-            if (showNotification) showNotification('A category needs a name and at least one valid rule.', 'warning');
+        if (!normalized || !normalized.name) {
+            if (showNotification) showNotification('A grouped field needs a name.', 'warning');
+            return;
+        }
+        if (normalized.kind === 'category' && (!normalized.rules || normalized.rules.length === 0)) {
+            if (showNotification) showNotification('A category needs at least one valid rule.', 'warning');
+            return;
+        }
+        if ((normalized.kind === 'date_group' || normalized.kind === 'number_group') && !normalized.sourceField) {
+            if (showNotification) showNotification('Choose the source field to group.', 'warning');
             return;
         }
         const editingField = getCustomCategoryDraftField(draft);
@@ -315,18 +420,34 @@ function CustomCategoriesEditor({
             if (showNotification) showNotification(`A category named "${normalized.name}" already exists.`, 'warning');
             return;
         }
-        const allowedFieldSet = new Set(conditionFieldOptions);
-        const invalidField = collectCustomCategoryClauseFields(normalized).find((field) => !allowedFieldSet.has(field));
-        if (invalidField) {
-            if (showNotification) showNotification('A category can only use base fields or categories defined before it.', 'warning');
+        if (normalized.kind === 'category') {
+            const allowedFieldSet = new Set(conditionFieldOptions);
+            const invalidField = collectCustomCategoryClauseFields(normalized).find((field) => !allowedFieldSet.has(field));
+            if (invalidField) {
+                if (showNotification) showNotification('A category can only use base fields or categories defined before it.', 'warning');
+                return;
+            }
+            const clauseFields = collectCustomCategoryClauseFields(normalized);
+            if (canValidateCustomCategoryRows(validationRows, clauseFields)) {
+                const unmatchedRule = getCustomCategoryRuleMatchSummary(validationRows, normalized)
+                    .find((summary) => summary.count === 0);
+                if (unmatchedRule) {
+                    if (showNotification) showNotification(`"${unmatchedRule.label}" does not match any current row. Adjust the condition before applying.`, 'warning');
+                    return;
+                }
+            }
+        }
+        if (normalized.kind === 'date_group' && !dateFieldOptions.includes(normalized.sourceField)) {
+            if (showNotification) showNotification('Choose a date field for date grouping.', 'warning');
             return;
         }
-        const clauseFields = collectCustomCategoryClauseFields(normalized);
-        if (canValidateCustomCategoryRows(validationRows, clauseFields)) {
-            const unmatchedRule = getCustomCategoryRuleMatchSummary(validationRows, normalized)
-                .find((summary) => summary.count === 0);
-            if (unmatchedRule) {
-                if (showNotification) showNotification(`"${unmatchedRule.label}" does not match any current row. Adjust the condition before applying.`, 'warning');
+        if (normalized.kind === 'number_group') {
+            if (!numberFieldOptions.includes(normalized.sourceField)) {
+                if (showNotification) showNotification('Choose a numeric field for number grouping.', 'warning');
+                return;
+            }
+            if (!Number.isFinite(Number(normalized.binSize)) || Number(normalized.binSize) <= 0) {
+                if (showNotification) showNotification('Number bins need a positive bin size.', 'warning');
                 return;
             }
         }
@@ -341,7 +462,7 @@ function CustomCategoriesEditor({
         });
         setDraft(null);
         if (showNotification) showNotification(`Applied ${normalized.name}.`, 'success');
-    }, [conditionFieldOptions, draft, normalizedDimensions, setCustomDimensions, showNotification, validationRows]);
+    }, [conditionFieldOptions, dateFieldOptions, draft, normalizedDimensions, numberFieldOptions, setCustomDimensions, showNotification, validationRows]);
 
     const deleteDimension = React.useCallback((dimension) => {
         const normalized = normalizeCustomDimensionsValue([dimension])[0];
@@ -381,39 +502,67 @@ function CustomCategoriesEditor({
                     + Category
                 </button>
             </div>
+            <div style={{ display: 'flex', gap: '6px', flexWrap: 'wrap' }}>
+                <button
+                    type="button"
+                    onClick={() => setDraft(createDateGroupDraft(baseFields, data))}
+                    disabled={dateFieldOptions.length === 0}
+                    style={{ ...smallButtonStyle(), opacity: dateFieldOptions.length === 0 ? 0.5 : 1, cursor: dateFieldOptions.length === 0 ? 'not-allowed' : 'pointer' }}
+                    title={dateFieldOptions.length === 0 ? 'No date fields detected' : 'Create date buckets'}
+                >
+                    <Icons.Group /> Date Group
+                </button>
+                <button
+                    type="button"
+                    onClick={() => setDraft(createNumberGroupDraft(baseFields, data))}
+                    disabled={numberFieldOptions.length === 0}
+                    style={{ ...smallButtonStyle(), opacity: numberFieldOptions.length === 0 ? 0.5 : 1, cursor: numberFieldOptions.length === 0 ? 'not-allowed' : 'pointer' }}
+                    title={numberFieldOptions.length === 0 ? 'No numeric fields detected' : 'Create numeric bins'}
+                >
+                    <Icons.NumberFormat /> Number Bins
+                </button>
+            </div>
 
             {normalizedDimensions.length > 0 && (
                 <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
-                    {normalizedDimensions.map((dimension) => (
-                        <div
-                            key={dimension.field}
-                            style={{
-                                border: `1px solid ${theme.border}`,
-                                background: theme.background,
-                                borderRadius: '10px',
-                                padding: '8px',
-                                display: 'flex',
-                                alignItems: 'center',
-                                gap: '8px',
-                            }}
-                        >
-                            <Icons.Branch />
-                            <div style={{ minWidth: 0, flex: 1 }}>
-                                <div style={{ fontSize: '12px', fontWeight: 800, color: theme.text, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
-                                    {dimension.name}
+                    {normalizedDimensions.map((dimension) => {
+                        const kind = dimension.kind || 'category';
+                        const detail = kind === 'date_group'
+                            ? `${getFieldLabel(dimension.sourceField)} by ${dimension.granularity}`
+                            : (kind === 'number_group'
+                                ? `${getFieldLabel(dimension.sourceField)} every ${dimension.binSize}`
+                                : `${dimension.rules.length} rule${dimension.rules.length === 1 ? '' : 's'} | fallback: ${dimension.fallbackLabel}`);
+                        return (
+                            <div
+                                key={dimension.field}
+                                style={{
+                                    border: `1px solid ${theme.border}`,
+                                    background: theme.background,
+                                    borderRadius: '10px',
+                                    padding: '8px',
+                                    display: 'flex',
+                                    alignItems: 'center',
+                                    gap: '8px',
+                                }}
+                            >
+                                {kind === 'number_group' ? <Icons.NumberFormat /> : <Icons.Branch />}
+                                <div style={{ minWidth: 0, flex: 1 }}>
+                                    <div style={{ fontSize: '12px', fontWeight: 800, color: theme.text, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+                                        {dimension.name}
+                                    </div>
+                                    <div style={{ fontSize: '10px', color: theme.textSec }}>
+                                        {detail}
+                                    </div>
                                 </div>
-                                <div style={{ fontSize: '10px', color: theme.textSec }}>
-                                    {dimension.rules.length} rule{dimension.rules.length === 1 ? '' : 's'} | fallback: {dimension.fallbackLabel}
-                                </div>
+                                <button type="button" onClick={() => setDraft(createCustomCategoryDraft(baseFields, dimension))} style={smallButtonStyle()}>
+                                    <Icons.Edit /> Edit
+                                </button>
+                                <button type="button" onClick={() => deleteDimension(dimension)} style={{ ...smallButtonStyle(), color: '#B91C1C' }}>
+                                    <Icons.Delete />
+                                </button>
                             </div>
-                            <button type="button" onClick={() => setDraft(createCustomCategoryDraft(baseFields, dimension))} style={smallButtonStyle()}>
-                                <Icons.Edit /> Edit
-                            </button>
-                            <button type="button" onClick={() => deleteDimension(dimension)} style={{ ...smallButtonStyle(), color: '#B91C1C' }}>
-                                <Icons.Delete />
-                            </button>
-                        </div>
-                    ))}
+                        );
+                    })}
                 </div>
             )}
 
@@ -438,7 +587,9 @@ function CustomCategoriesEditor({
                 <div
                     role="dialog"
                     aria-modal="true"
-                    aria-label={draft.__editingField ? 'Edit custom category' : 'Add custom category'}
+                    aria-label={draft.kind === 'date_group' || draft.kind === 'number_group'
+                        ? (draft.__editingField ? 'Edit grouped field' : 'Add grouped field')
+                        : (draft.__editingField ? 'Edit custom category' : 'Add custom category')}
                     style={{
                         width: 'min(780px, calc(100vw - 32px))',
                         maxHeight: 'calc(100vh - 48px)',
@@ -461,10 +612,16 @@ function CustomCategoriesEditor({
                 }}>
                     <div>
                         <div style={{ fontSize: '13px', fontWeight: 900, color: theme.text }}>
-                            {draft.__editingField ? 'Edit Custom Category' : 'Add Custom Category'}
+                            {draft.kind === 'date_group' || draft.kind === 'number_group'
+                                ? (draft.__editingField ? 'Edit Grouped Field' : 'Add Grouped Field')
+                                : (draft.__editingField ? 'Edit Custom Category' : 'Add Custom Category')}
                         </div>
                         <div style={{ fontSize: '11px', color: theme.textSec, marginTop: '2px' }}>
-                            Rules can use base fields and categories defined before this one.
+                            {draft.kind === 'date_group'
+                                ? 'Create calendar buckets from a date field.'
+                                : (draft.kind === 'number_group'
+                                    ? 'Create fixed-width numeric bins from a number field.'
+                                    : 'Rules can use base fields and categories defined before this one.')}
                         </div>
                     </div>
                     <button type="button" onClick={() => setDraft(null)} style={{ ...smallButtonStyle(), padding: '6px 8px' }} aria-label="Close category editor">
@@ -518,7 +675,127 @@ function CustomCategoriesEditor({
                         </label>
                     </div>
 
-                    {(draft.rules || []).map((rule, ruleIndex) => {
+                    {draft.kind === 'date_group' && (
+                        <div style={{
+                            border: `1px solid ${theme.border}`,
+                            borderRadius: '10px',
+                            padding: '10px',
+                            background: theme.hover || '#F8FAFC',
+                            display: 'grid',
+                            gridTemplateColumns: '1.4fr 1fr 1fr',
+                            gap: '8px',
+                        }}>
+                            <label style={{ display: 'flex', flexDirection: 'column', gap: '4px', fontSize: '10px', fontWeight: 800, color: theme.textSec, textTransform: 'uppercase', letterSpacing: '0.4px' }}>
+                                Date Field
+                                <select
+                                    value={draft.sourceField || ''}
+                                    onChange={(event) => setDraft({
+                                        ...draft,
+                                        sourceField: event.target.value,
+                                        name: draft.__isNew ? `${getFieldLabel(event.target.value)} ${formatDisplayLabel(draft.granularity || 'month')}` : draft.name,
+                                    })}
+                                    style={inputStyle}
+                                >
+                                    {dateFieldOptions.map((field) => (
+                                        <option key={field} value={field}>{getFieldLabel(field)}</option>
+                                    ))}
+                                </select>
+                            </label>
+                            <label style={{ display: 'flex', flexDirection: 'column', gap: '4px', fontSize: '10px', fontWeight: 800, color: theme.textSec, textTransform: 'uppercase', letterSpacing: '0.4px' }}>
+                                Date Part
+                                <select
+                                    value={draft.granularity || 'month'}
+                                    onChange={(event) => setDraft({ ...draft, granularity: event.target.value })}
+                                    style={inputStyle}
+                                >
+                                    {Array.from(DATE_GROUP_GRANULARITIES).map((granularity) => (
+                                        <option key={granularity} value={granularity}>{formatDisplayLabel(granularity)}</option>
+                                    ))}
+                                </select>
+                            </label>
+                            <label style={{ display: 'flex', flexDirection: 'column', gap: '4px', fontSize: '10px', fontWeight: 800, color: theme.textSec, textTransform: 'uppercase', letterSpacing: '0.4px' }}>
+                                Fiscal Start
+                                <select
+                                    value={draft.fiscalYearStartMonth || 1}
+                                    onChange={(event) => setDraft({ ...draft, fiscalYearStartMonth: Number(event.target.value) })}
+                                    style={inputStyle}
+                                >
+                                    {['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'].map((label, index) => (
+                                        <option key={label} value={index + 1}>{label}</option>
+                                    ))}
+                                </select>
+                            </label>
+                        </div>
+                    )}
+
+                    {draft.kind === 'number_group' && (
+                        <div style={{
+                            border: `1px solid ${theme.border}`,
+                            borderRadius: '10px',
+                            padding: '10px',
+                            background: theme.hover || '#F8FAFC',
+                            display: 'grid',
+                            gridTemplateColumns: '1.4fr 0.8fr 0.8fr 0.8fr 0.7fr',
+                            gap: '8px',
+                        }}>
+                            <label style={{ display: 'flex', flexDirection: 'column', gap: '4px', fontSize: '10px', fontWeight: 800, color: theme.textSec, textTransform: 'uppercase', letterSpacing: '0.4px' }}>
+                                Number Field
+                                <select
+                                    value={draft.sourceField || ''}
+                                    onChange={(event) => setDraft({
+                                        ...draft,
+                                        sourceField: event.target.value,
+                                        name: draft.__isNew ? `${getFieldLabel(event.target.value)} Bins` : draft.name,
+                                    })}
+                                    style={inputStyle}
+                                >
+                                    {numberFieldOptions.map((field) => (
+                                        <option key={field} value={field}>{getFieldLabel(field)}</option>
+                                    ))}
+                                </select>
+                            </label>
+                            <label style={{ display: 'flex', flexDirection: 'column', gap: '4px', fontSize: '10px', fontWeight: 800, color: theme.textSec, textTransform: 'uppercase', letterSpacing: '0.4px' }}>
+                                Bin Size
+                                <input
+                                    type="number"
+                                    value={draft.binSize === undefined ? '' : draft.binSize}
+                                    onChange={(event) => setDraft({ ...draft, binSize: event.target.value })}
+                                    style={inputStyle}
+                                />
+                            </label>
+                            <label style={{ display: 'flex', flexDirection: 'column', gap: '4px', fontSize: '10px', fontWeight: 800, color: theme.textSec, textTransform: 'uppercase', letterSpacing: '0.4px' }}>
+                                Min
+                                <input
+                                    type="number"
+                                    value={draft.minValue === null || draft.minValue === undefined ? '' : draft.minValue}
+                                    onChange={(event) => setDraft({ ...draft, minValue: event.target.value })}
+                                    style={inputStyle}
+                                />
+                            </label>
+                            <label style={{ display: 'flex', flexDirection: 'column', gap: '4px', fontSize: '10px', fontWeight: 800, color: theme.textSec, textTransform: 'uppercase', letterSpacing: '0.4px' }}>
+                                Max
+                                <input
+                                    type="number"
+                                    value={draft.maxValue === null || draft.maxValue === undefined ? '' : draft.maxValue}
+                                    onChange={(event) => setDraft({ ...draft, maxValue: event.target.value })}
+                                    style={inputStyle}
+                                />
+                            </label>
+                            <label style={{ display: 'flex', flexDirection: 'column', gap: '4px', fontSize: '10px', fontWeight: 800, color: theme.textSec, textTransform: 'uppercase', letterSpacing: '0.4px' }}>
+                                Decimals
+                                <input
+                                    type="number"
+                                    min="0"
+                                    max="8"
+                                    value={draft.precision === null || draft.precision === undefined ? '' : draft.precision}
+                                    onChange={(event) => setDraft({ ...draft, precision: event.target.value })}
+                                    style={inputStyle}
+                                />
+                            </label>
+                        </div>
+                    )}
+
+                    {(!draft.kind || draft.kind === 'category') && (draft.rules || []).map((rule, ruleIndex) => {
                         const condition = rule.condition || { op: 'AND', clauses: [] };
                         const clauses = condition.clauses || [];
                         return (
@@ -632,23 +909,25 @@ function CustomCategoriesEditor({
                         );
                     })}
 
-                    <button
-                        type="button"
-                        onClick={() => setDraft({
-                            ...draft,
-                            rules: [...(draft.rules || []), createCustomCategoryRule(conditionFieldOptions, (draft.rules || []).length)],
-                        })}
-                        style={{ ...smallButtonStyle(), alignSelf: 'flex-start' }}
-                    >
-                        + Rule
-                    </button>
+                    {(!draft.kind || draft.kind === 'category') && (
+                        <button
+                            type="button"
+                            onClick={() => setDraft({
+                                ...draft,
+                                rules: [...(draft.rules || []), createCustomCategoryRule(conditionFieldOptions, (draft.rules || []).length)],
+                            })}
+                            style={{ ...smallButtonStyle(), alignSelf: 'flex-start' }}
+                        >
+                            + Rule
+                        </button>
+                    )}
 
                     <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '8px' }}>
                         <button type="button" onClick={() => setDraft(null)} style={smallButtonStyle()}>
                             Cancel
                         </button>
                         <button type="button" onClick={applyDraft} style={smallButtonStyle('primary')}>
-                            Apply Category
+                            {draft.kind === 'date_group' || draft.kind === 'number_group' ? 'Apply Group' : 'Apply Category'}
                         </button>
                     </div>
                 </div>
@@ -3042,11 +3321,91 @@ function ResizableFieldPanel({
     );
 }
 
+function MeasureAxisControls({ measureAxis, setMeasureAxis, theme, valueSelectStyle, regularValueCount }) {
+    const normalized = React.useMemo(() => normalizeMeasureAxisPanelValue(measureAxis), [measureAxis]);
+    const updateMeasureAxis = React.useCallback((patch) => {
+        if (typeof setMeasureAxis !== 'function') return;
+        setMeasureAxis((previous) => ({
+            ...normalizeMeasureAxisPanelValue(previous),
+            ...(typeof patch === 'function' ? patch(normalizeMeasureAxisPanelValue(previous)) : patch),
+        }));
+    }, [setMeasureAxis]);
+
+    const compactInputStyle = {
+        ...valueSelectStyle,
+        width: '112px',
+        padding: '3px 6px',
+        fontSize: '10px',
+    };
+
+    return (
+        <div style={{
+            display: 'flex',
+            alignItems: 'center',
+            gap: '6px',
+            flexWrap: 'wrap',
+            padding: '6px',
+            border: `1px solid ${theme.border}`,
+            borderRadius: theme.radiusSm || '6px',
+            background: theme.surfaceInset || theme.headerSubtleBg || theme.background,
+        }}>
+            <span style={{fontSize:'10px', color: theme.textSec, fontWeight: 700, textTransform:'uppercase'}}>Values as</span>
+            <select
+                value={normalized.placement}
+                onChange={(event) => updateMeasureAxis({ placement: event.target.value })}
+                style={{...valueSelectStyle, width:'98px'}}
+                title="Values placement"
+            >
+                <option value="none">Columns</option>
+                <option value="rows">Rows</option>
+                <option value="columns">Column Axis</option>
+            </select>
+            {normalized.placement !== 'none' && (
+                <>
+                    <input
+                        value={normalized.labelField}
+                        onChange={(event) => updateMeasureAxis({ labelField: event.target.value })}
+                        style={compactInputStyle}
+                        title="Measure label field"
+                    />
+                    <input
+                        value={normalized.valueField}
+                        onChange={(event) => updateMeasureAxis({ valueField: event.target.value })}
+                        style={{...compactInputStyle, width:'82px'}}
+                        title="Measure value field"
+                    />
+                    <label style={{display:'flex', alignItems:'center', gap:'4px', fontSize:'10px', color: theme.textSec}}>
+                        <input
+                            type="checkbox"
+                            checked={normalized.suppressEmptyMembers}
+                            onChange={(event) => updateMeasureAxis({ suppressEmptyMembers: event.target.checked })}
+                        />
+                        Empty
+                    </label>
+                    <label style={{display:'flex', alignItems:'center', gap:'4px', fontSize:'10px', color: theme.textSec}}>
+                        <input
+                            type="checkbox"
+                            checked={normalized.suppressZeroMembers}
+                            onChange={(event) => updateMeasureAxis({ suppressZeroMembers: event.target.checked })}
+                        />
+                        Zero
+                    </label>
+                </>
+            )}
+            <span style={{fontSize:'10px', color: theme.textSec}}>
+                {regularValueCount} selected
+            </span>
+        </div>
+    );
+}
+
 export const SidebarPanel = React.memo(function SidebarPanel({
     sidebarTab, setSidebarTab,
     rowFields, setRowFields,
     colFields, setColFields,
     valConfigs, setValConfigs,
+    measureAxis = {},
+    setMeasureAxis = null,
     columnVisibility, setColumnVisibility,
     columnPinning, setColumnPinning,
     availableFields,
@@ -3599,6 +3958,13 @@ export const SidebarPanel = React.memo(function SidebarPanel({
                                     <button type="button" onClick={handleAddFormulaValue} style={{border:`1px solid ${theme.primary}66`,background:`${theme.primary}12`,color:theme.primary,borderRadius:'999px',cursor:'pointer',padding:'4px 10px',fontSize:'11px',fontWeight:700}}>+ Add Formula</button>
                                     <span style={{fontSize:'10px',color:theme.textSec}}>{regularValueCount} value{regularValueCount===1?'':'s'} · {formulaCount} formula{formulaCount===1?'':'s'}</span>
                                 </div>
+                                <MeasureAxisControls
+                                    measureAxis={measureAxis}
+                                    setMeasureAxis={setMeasureAxis}
+                                    theme={theme}
+                                    valueSelectStyle={valueSelectStyle}
+                                    regularValueCount={regularValueCount}
+                                />
                             </div>
                             {valConfigs.map((item, idx) => {
                                 const isFormula = item && item.agg === 'formula';
@@ -3787,6 +4153,13 @@ export const SidebarPanel = React.memo(function SidebarPanel({
                                                     {formulaCount} formula{formulaCount === 1 ? '' : 's'}
                                                 </span>
                                             )}
+                                            <MeasureAxisControls
+                                                measureAxis={measureAxis}
+                                                setMeasureAxis={setMeasureAxis}
+                                                theme={theme}
+                                                valueSelectStyle={valueSelectStyle}
+                                                regularValueCount={regularValueCount}
+                                            />
                                         </div>
                                     )}
                                     {zone.id === 'rows' && rowFields.length > 0 && (

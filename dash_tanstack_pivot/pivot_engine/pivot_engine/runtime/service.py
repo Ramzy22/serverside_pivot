@@ -257,6 +257,7 @@ class PivotRuntimeService:
             columns=request_columns,
             filters=state.filters or {},
             custom_dimensions=state.custom_dimensions or [],
+            measure_axis=state.measure_axis or None,
             sorting=tanstack_sorting,
             grouping=state.row_fields or [],
             aggregations=[],
@@ -1068,6 +1069,152 @@ class PivotRuntimeService:
         return None
 
     @staticmethod
+    def _normalize_export_header_style(raw_style: Any) -> Dict[str, Any]:
+        if isinstance(raw_style, str):
+            return {"background": raw_style} if raw_style.strip() else {}
+        if not isinstance(raw_style, dict):
+            return {}
+        style_keys = {
+            "background",
+            "backgroundColor",
+            "color",
+            "border",
+            "borderColor",
+            "borderTop",
+            "borderRight",
+            "borderBottom",
+            "borderLeft",
+            "boxShadow",
+            "fontWeight",
+            "fontStyle",
+            "textDecoration",
+            "textTransform",
+            "letterSpacing",
+        }
+        source: Dict[str, Any] = dict(raw_style)
+        nested_style = source.get("style")
+        if isinstance(nested_style, dict):
+            source.update(nested_style)
+        style = {
+            key: value
+            for key, value in source.items()
+            if key in style_keys and value not in (None, False, "")
+        }
+        background = first_present(
+            source,
+            "background",
+            "backgroundColor",
+            "bg",
+            "fill",
+            "headerBg",
+            "headerBackground",
+            "headerBackgroundColor",
+            "headerColor",
+        )
+        if background not in (None, False, ""):
+            style["background"] = background
+            style.pop("backgroundColor", None)
+        color = first_present(
+            source,
+            "color",
+            "textColor",
+            "foreground",
+            "fg",
+            "headerText",
+            "headerTextColor",
+        )
+        if color not in (None, False, ""):
+            style["color"] = color
+        return style
+
+    @staticmethod
+    def _export_header_formatting_style(key: str, header_label: str, style_profile: Dict[str, Any]) -> Dict[str, Any]:
+        formatting = style_profile.get("headerFormatting") if isinstance(style_profile, dict) else None
+        if not formatting:
+            return {}
+        candidates = set()
+        for alias in PivotRuntimeService._export_key_aliases(key):
+            if alias:
+                candidates.add(str(alias))
+                candidates.add(str(alias).lower())
+        if header_label:
+            candidates.add(str(header_label))
+            candidates.add(str(header_label).lower())
+        style: Dict[str, Any] = {}
+
+        def merge(candidate: Any) -> None:
+            style.update(PivotRuntimeService._normalize_export_header_style(candidate))
+
+        def matches_rule(rule: Dict[str, Any]) -> bool:
+            if not isinstance(rule, dict):
+                return False
+            if rule.get("all") or rule.get("default") or rule.get("column") == "*" or rule.get("id") == "*":
+                return True
+            targets: List[Any] = []
+            for prop in ("column", "columnId", "id", "field", "header", "headerLabel", "label", "group", "groupValue"):
+                value = rule.get(prop)
+                if value is not None:
+                    targets.append(value)
+            for prop in ("columns", "ids"):
+                value = rule.get(prop)
+                if isinstance(value, list):
+                    targets.extend(value)
+            if not targets:
+                return True
+            return any(str(target) in candidates or str(target).lower() in candidates for target in targets if target is not None)
+
+        if isinstance(formatting, list):
+            for rule in formatting:
+                if matches_rule(rule):
+                    merge(rule)
+            return style
+
+        if not isinstance(formatting, dict):
+            return style
+
+        for prop in ("default", "defaultStyle", "all", "*"):
+            merge(formatting.get(prop))
+
+        column_map = first_present(formatting, "columns", "byColumn", "columnStyles")
+        if isinstance(column_map, dict):
+            for candidate in candidates:
+                merge(column_map.get(candidate))
+
+        rules = first_present(formatting, "rules", "headerRules", default=[])
+        if isinstance(rules, list):
+            for rule in rules:
+                if matches_rule(rule):
+                    merge(rule)
+
+        style_config_keys = {
+            "background",
+            "backgroundColor",
+            "color",
+            "bg",
+            "fill",
+            "foreground",
+            "fg",
+            "textColor",
+            "headerBg",
+            "headerBackground",
+            "headerBackgroundColor",
+            "headerColor",
+            "headerText",
+            "headerTextColor",
+            "style",
+        }
+        if any(key_name in formatting for key_name in style_config_keys):
+            merge(formatting)
+
+        reserved = {"default", "defaultStyle", "all", "*", "columns", "byColumn", "columnStyles", "rules", "headerRules"}
+        if not isinstance(column_map, dict):
+            for candidate in candidates:
+                if candidate not in reserved:
+                    merge(formatting.get(candidate))
+
+        return style
+
+    @staticmethod
     def _css_property_name(name: str) -> str:
         return re.sub(r"([A-Z])", lambda match: "-" + match.group(1).lower(), str(name or ""))
 
@@ -1350,11 +1497,16 @@ class PivotRuntimeService:
         return style
 
     @staticmethod
-    def _export_header_style(key: str, header_label: str, style_profile: Dict[str, Any]) -> Dict[str, Any]:
+    def _export_header_style(
+        key: str,
+        header_label: str,
+        style_profile: Dict[str, Any],
+        state: Optional[PivotViewState] = None,
+    ) -> Dict[str, Any]:
         theme = style_profile.get("theme") if isinstance(style_profile.get("theme"), dict) else {}
         width = PivotRuntimeService._export_column_width(key, style_profile)
         is_total = str(header_label or "").startswith("Grand Total")
-        return {
+        style = {
             "fontFamily": style_profile.get("fontFamily") or "'Inter', ui-sans-serif, system-ui, sans-serif",
             "fontSize": style_profile.get("fontSize") or "13px",
             "fontWeight": 700,
@@ -1372,6 +1524,13 @@ class PivotRuntimeService:
             "width": f"{width}px" if width else None,
             "minWidth": f"{width}px" if width else None,
         }
+        if state is not None:
+            measure_config = PivotRuntimeService._matching_value_config_for_export(key, state, style_profile)
+            if isinstance(measure_config, dict):
+                style.update(PivotRuntimeService._normalize_export_header_style(measure_config.get("headerStyle")))
+                style.update(PivotRuntimeService._normalize_export_header_style(measure_config))
+        style.update(PivotRuntimeService._export_header_formatting_style(key, header_label, style_profile))
+        return style
 
     @staticmethod
     def _write_styled_html_export(
@@ -1400,7 +1559,7 @@ class PivotRuntimeService:
             buf.write("<tr>")
             for key in field_order:
                 header_label = PivotRuntimeService._export_header_for_key(key, header_map, state, style_profile)
-                css = PivotRuntimeService._style_to_css(PivotRuntimeService._export_header_style(key, header_label, style_profile))
+                css = PivotRuntimeService._style_to_css(PivotRuntimeService._export_header_style(key, header_label, style_profile, state))
                 buf.write(f"<th style=\"{html.escape(css, quote=True)}\">{html.escape(header_label)}</th>")
             buf.write("</tr>")
 
@@ -1606,11 +1765,14 @@ class PivotRuntimeService:
                     )
                 columns.append(formula_column)
                 continue
+            measure_id = measure.get("alias") or f"{field}_{agg}"
             columns.append(
                 {
-                    "id": f"{field}_{agg}",
+                    "id": measure_id,
+                    "header": measure.get("label") or field,
                     "aggregationField": field,
                     "aggregationFn": agg,
+                    "format": measure.get("format"),
                     "windowFn": measure.get("windowFn"),
                     "weightField": measure.get("weightField"),
                 }
@@ -2126,6 +2288,7 @@ class PivotRuntimeService:
                 columns=self._build_request_columns([node_field], [], state.val_configs),
                 filters=active_filters,
                 custom_dimensions=base_request.custom_dimensions or [],
+                measure_axis=base_request.measure_axis or None,
                 sorting=[{"id": sort_by, "desc": sort_dir != "asc"}] if sort_by and sort_by_raw != "__field__" else [],
                 grouping=[node_field],
                 aggregations=[],
@@ -2238,6 +2401,7 @@ class PivotRuntimeService:
                         columns=self._build_request_columns([], [], state.val_configs),
                         filters=self._merge_in_report_filter(active_filters, node_field, other_values),
                         custom_dimensions=base_request.custom_dimensions or [],
+                        measure_axis=base_request.measure_axis or None,
                         sorting=[],
                         grouping=[],
                         aggregations=[],
@@ -2292,6 +2456,7 @@ class PivotRuntimeService:
                 columns=self._build_request_columns([], [], state.val_configs),
                 filters=base_filters,
                 custom_dimensions=base_request.custom_dimensions or [],
+                measure_axis=base_request.measure_axis or None,
                 sorting=[],
                 grouping=[],
                 aggregations=[],

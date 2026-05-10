@@ -204,6 +204,23 @@ export function useColumnDefs({
             const measureSuffix = `_${config.field}_${config.agg}`.toLowerCase();
             return normalizedId === measureId || normalizedId.endsWith(measureSuffix);
         };
+        const measureAxisConfig = props && props.measureAxis && typeof props.measureAxis === 'object'
+            ? props.measureAxis
+            : null;
+        const measureAxisPlacement = measureAxisConfig && typeof measureAxisConfig.placement === 'string'
+            ? measureAxisConfig.placement.toLowerCase()
+            : 'none';
+        const measureAxisValueField = measureAxisConfig && (measureAxisConfig.valueField || measureAxisConfig.value_field)
+            ? String(measureAxisConfig.valueField || measureAxisConfig.value_field)
+            : null;
+        const isMeasureAxisValueColumnId = (columnId) => {
+            if (!measureAxisValueField || !['rows', 'columns'].includes(measureAxisPlacement) || typeof columnId !== 'string') {
+                return false;
+            }
+            return columnId === measureAxisValueField
+                || columnId.endsWith(`_${measureAxisValueField}`)
+                || columnId.startsWith(`__RowTotal__${measureAxisValueField}`);
+        };
         // Field-source sparkline configs: the field's cell value IS the series array.
         // These are matched by exact field name, not by pivot-suffix pattern.
         const fieldSparklineConfigs = (Array.isArray(valConfigs) ? valConfigs : []).filter(c => {
@@ -216,6 +233,28 @@ export function useColumnDefs({
             if (byAgg) return byAgg;
             // Field-source sparklines: match by exact field name (no agg suffix)
             return fieldSparklineConfigs.find(c => c.field === columnId) || null;
+        };
+        const buildMeasureHeaderStyle = (config) => {
+            if (!config || typeof config !== 'object') return undefined;
+            const explicit = config.headerStyle && typeof config.headerStyle === 'object' && !Array.isArray(config.headerStyle)
+                ? { ...config.headerStyle }
+                : {};
+            const background = config.headerBg
+                || config.headerBackground
+                || config.headerBackgroundColor
+                || config.headerFill
+                || config.headerColor;
+            const color = config.headerTextColor
+                || config.headerText
+                || config.headerForeground
+                || config.headerFg;
+            if (background !== undefined && background !== null && background !== '') {
+                explicit.background = background;
+            }
+            if (color !== undefined && color !== null && color !== '') {
+                explicit.color = color;
+            }
+            return Object.keys(explicit).length > 0 ? explicit : undefined;
         };
         // Pre-compute sparkline-hidden set; used in all column-building paths
         const sparklineHideValConfigs = (Array.isArray(valConfigs) ? valConfigs : [])
@@ -1047,6 +1086,9 @@ export function useColumnDefs({
                     enablePinning: true,
                     sortingFn,
                     enableSorting: !isFieldSpark || isFieldSparkValueMode,
+                    meta: {
+                        headerStyle: buildMeasureHeaderStyle(c),
+                    },
                     cell: info => {
                         if (isFieldSpark) {
                             const points = normalizeSparklinePoints(getFieldSparklineRawValue(info, c, colId));
@@ -1113,6 +1155,7 @@ export function useColumnDefs({
             const measureIds = new Set(valConfigs.map(v => getValKey(v)));
             const isRelevantColumnId = (columnId) => {
                 if (!columnId || ignoreKeys.has(columnId)) return false;
+                if (isMeasureAxisValueColumnId(columnId)) return true;
                 if (measureIds.has(columnId)) return true;
                 if (columnId.startsWith('__RowTotal__')) return true;
                 return Boolean(getConfigForColumnId(columnId));
@@ -1140,6 +1183,9 @@ export function useColumnDefs({
                     size: Number.isFinite(Number(effectiveSize)) ? Number(effectiveSize) : defaultColumnWidths.subtotal,
                     sortingFn,
                     enableSorting: !isFieldSparkline || isFieldSparklineValueMode,
+                    meta: {
+                        headerStyle: buildMeasureHeaderStyle(matchedConfig),
+                    },
                     cell: info => {
                         // Field-array sparkline: cell value IS the series, render full-size
                         if (isFieldSparkline) {
@@ -1251,10 +1297,16 @@ export function useColumnDefs({
                             : (matchedConfig.agg === 'formula'
                                 ? (matchedConfig.label || matchedConfig.field)
                                 : `${formatDisplayLabel(matchedConfig.field)} (${formatAggLabel(matchedConfig.agg, matchedConfig.weightField)})`);
+                    } else if (isMeasureAxisValueColumnId(key)) {
+                        const suffix = `_${measureAxisValueField}`;
+                        if (key.endsWith(suffix)) {
+                            dimStr = key.substring(0, key.length - suffix.length);
+                        }
+                        measureStr = measureAxisValueField;
                     }
                     if (!matchedConfig) {
                          const parts = key.split('_');
-                         if (parts.length > 1) {
+                         if (parts.length > 1 && !isMeasureAxisValueColumnId(key)) {
                              dimStr = parts.slice(0, parts.length - 2).join('_');
                              measureStr = parts.slice(parts.length - 2).join(' ');
                              if (!dimStr) dimStr = "Total";
@@ -1432,6 +1484,7 @@ export function useColumnDefs({
                             sparklineSourceColumnIds: sourceColumnIds,
                             sparklineConfig,
                             sparklineValueConfig: config,
+                            headerStyle: buildMeasureHeaderStyle(config),
                         },
                         cell: (info) => {
                             const rowData = info && info.row ? info.row.original : null;
@@ -1681,6 +1734,7 @@ export function useColumnDefs({
         isRowSelecting,
         rowDragStart,
         props.columns,
+        props.measureAxis,
         rowCount,
         cachedColSchema,
         responseColumns,

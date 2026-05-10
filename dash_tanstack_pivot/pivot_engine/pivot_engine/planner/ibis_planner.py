@@ -6,6 +6,7 @@ from typing import List, Dict, Any, Tuple, Optional, Union
 import time
 import re
 import itertools
+import copy
 from dataclasses import dataclass
 import ibis
 # Try to import specific Ibis types, fallback if changed in newer versions
@@ -17,7 +18,7 @@ except ImportError:
     from ibis.expr.api import Table as IbisTable, Column as IbisColumn, Scalar as IbisScalar
     from ibis.expr.api import Expr as IbisExpr
 
-from pivot_engine.types.pivot_spec import PivotSpec, Measure, GroupingConfig, PivotConfig, DrillPath
+from pivot_engine.types.pivot_spec import PivotSpec, Measure, GroupingConfig, PivotConfig, DrillPath, MeasureAxisConfig
 from pivot_engine.common.ibis_expression_builder import IbisExpressionBuilder
 from pivot_engine.planner.expression_parser import SafeExpressionParser
 # Import MaterializedHierarchyManager type for type hinting if needed (avoid circular import if possible)
@@ -239,6 +240,9 @@ class IbisPlanner:
              effective_spec.table = rollup_table
              used_rollup = True
 
+        if not self._measure_axis_uses_aggregate_first(effective_spec):
+            effective_spec = self._prepare_measure_axis_spec(effective_spec)
+
         if effective_spec.pivot_config and effective_spec.pivot_config.enabled:
             plan_result = self._plan_pivot_mode(effective_spec, include_metadata)
         elif effective_spec.grouping_config and effective_spec.grouping_config.mode != "standard":
@@ -366,9 +370,573 @@ class IbisPlanner:
     # _convert_measure_to_ibis removed, using self.builder.build_measure_aggregation
     # _convert_cursor_to_ibis_filter removed, using self.builder.build_cursor_filter_expression
 
+    _MEASURE_AXIS_SUPPORTED_AGGS = {"sum", "avg", "count", "min", "max"}
+
+    @staticmethod
+    def _measure_axis_config(spec: PivotSpec) -> Optional[MeasureAxisConfig]:
+        config = getattr(spec, "measure_axis", None)
+        if not isinstance(config, MeasureAxisConfig):
+            config = MeasureAxisConfig.from_dict(config)
+        if not config or config.placement not in {"rows", "columns"}:
+            return None
+        return config
+
+    @staticmethod
+    def _measure_axis_member_source(member: Dict[str, Any]) -> str:
+        return str(
+            member.get("sourceField")
+            or member.get("source_field")
+            or member.get("field")
+            or ""
+        ).strip()
+
+    @staticmethod
+    def _measure_axis_member_label(member: Dict[str, Any], source_field: str, index: int) -> str:
+        return str(
+            member.get("label")
+            or member.get("name")
+            or member.get("alias")
+            or source_field
+            or f"Measure {index + 1}"
+        )
+
+    @staticmethod
+    def _measure_axis_member_order(member: Dict[str, Any], index: int) -> int:
+        raw_order = member.get("order", member.get("sort", index))
+        try:
+            return int(float(raw_order))
+        except (TypeError, ValueError):
+            return index
+
+    def _normalized_measure_axis_members(
+        self,
+        spec: PivotSpec,
+        config: MeasureAxisConfig,
+    ) -> List[Dict[str, Any]]:
+        measures = list(spec.measures or [])
+        measures_by_alias = {
+            str(measure.alias): measure
+            for measure in measures
+            if getattr(measure, "alias", None)
+        }
+
+        def resolve_member_measure(member: Dict[str, Any], source_field: str, agg: str) -> Optional[Measure]:
+            candidates = [
+                member.get("measureAlias"),
+                member.get("measure_alias"),
+                member.get("alias"),
+                member.get("id"),
+                source_field,
+            ]
+            for candidate in candidates:
+                key = str(candidate or "").strip()
+                if key and key in measures_by_alias:
+                    return measures_by_alias[key]
+
+            for measure in measures:
+                measure_field = str(getattr(measure, "field", None) or "").strip()
+                measure_agg = str(getattr(measure, "agg", None) or "sum").strip().lower()
+                if measure_field and measure_field == source_field and measure_agg == agg:
+                    return measure
+
+            for measure in measures:
+                measure_field = str(getattr(measure, "field", None) or "").strip()
+                if measure_field and measure_field == source_field:
+                    return measure
+            return None
+
+        members = [dict(member) for member in (config.members or []) if isinstance(member, dict)]
+        if not members:
+            members = [
+                {
+                    "id": measure.alias or measure.field or f"measure_{index + 1}",
+                    "sourceField": measure.field,
+                    "measureAlias": measure.alias,
+                    "agg": measure.agg or "sum",
+                    "label": measure.field or measure.alias or f"Measure {index + 1}",
+                    "order": index,
+                }
+                for index, measure in enumerate(spec.measures or [])
+                if measure and getattr(measure, "alias", None)
+            ]
+
+        normalized: List[Dict[str, Any]] = []
+        seen_aliases: set = set()
+        for index, member in enumerate(members):
+            source_field = self._measure_axis_member_source(member)
+            raw_agg = member.get("agg") or member.get("aggregation")
+            agg = str(raw_agg or "sum").strip().lower()
+            measure = resolve_member_measure(member, source_field, agg)
+            if measure is not None and raw_agg is None:
+                agg = str(getattr(measure, "agg", None) or "sum").strip().lower()
+            measure_alias = str(getattr(measure, "alias", None) or member.get("measureAlias") or member.get("id") or source_field or "").strip()
+            if not measure_alias or measure_alias in seen_aliases:
+                continue
+            if not source_field and measure is not None:
+                source_field = str(getattr(measure, "field", None) or measure_alias)
+            seen_aliases.add(measure_alias)
+            normalized.append({
+                **member,
+                "sourceField": source_field,
+                "measureAlias": measure_alias,
+                "agg": agg,
+                "label": self._measure_axis_member_label(member, source_field, index),
+                "order": self._measure_axis_member_order(member, index),
+            })
+
+        if not normalized:
+            raise ValueError("Measure-axis placement requires at least one selected measure.")
+
+        return normalized
+
+    def _measure_axis_can_pre_aggregate(
+        self,
+        spec: PivotSpec,
+        config: MeasureAxisConfig,
+        members: Optional[List[Dict[str, Any]]] = None,
+    ) -> bool:
+        members = members if members is not None else self._normalized_measure_axis_members(spec, config)
+        measures_by_alias = {
+            str(measure.alias): measure
+            for measure in (spec.measures or [])
+            if getattr(measure, "alias", None)
+        }
+
+        aggs = {str(member.get("agg") or "sum").strip().lower() for member in members}
+        if len(aggs) != 1 or any(agg not in self._MEASURE_AXIS_SUPPORTED_AGGS for agg in aggs):
+            return False
+
+        for member in members:
+            measure = measures_by_alias.get(str(member.get("measureAlias") or ""))
+            if measure is None:
+                return False
+            if (
+                getattr(measure, "expression", None)
+                or getattr(measure, "ratio_numerator", None)
+                or getattr(measure, "window_func", None)
+            ):
+                return False
+            if str(member.get("agg") or "sum").strip().lower() != str(getattr(measure, "agg", None) or "sum").strip().lower():
+                return False
+            source_field = str(member.get("sourceField") or "").strip()
+            if not source_field or source_field != str(getattr(measure, "field", None) or "").strip():
+                return False
+
+        return True
+
+    def _measure_axis_uses_aggregate_first(self, spec: PivotSpec) -> bool:
+        if getattr(spec, "_measure_axis_prepared", False):
+            return False
+        config = self._measure_axis_config(spec)
+        if not config:
+            return False
+        members = self._normalized_measure_axis_members(spec, config)
+        return not self._measure_axis_can_pre_aggregate(spec, config, members)
+
+    def _prepare_measure_axis_spec(self, spec: PivotSpec) -> PivotSpec:
+        if getattr(spec, "_measure_axis_prepared", False):
+            return spec
+        config = self._measure_axis_config(spec)
+        if not config:
+            return spec
+
+        members = self._normalized_measure_axis_members(spec, config)
+        if not self._measure_axis_can_pre_aggregate(spec, config, members):
+            next_spec = copy.deepcopy(spec)
+            next_config = copy.deepcopy(config)
+            next_config.members = members
+            next_spec.measure_axis = next_config
+            return next_spec
+
+        label_field = config.label_field or "__measure_name__"
+        value_field = config.value_field or "__measure_value__"
+        member_agg = members[0]["agg"]
+
+        next_spec = copy.deepcopy(spec)
+        next_config = copy.deepcopy(config)
+        next_config.members = members
+        next_spec.measure_axis = next_config
+        setattr(next_spec, "_measure_axis_prepared", True)
+
+        if next_config.placement == "rows":
+            next_spec.rows = list(next_spec.rows or [])
+            if label_field not in next_spec.rows:
+                next_spec.rows.append(label_field)
+            next_spec.columns = [field for field in (next_spec.columns or []) if field != label_field]
+        elif next_config.placement == "columns":
+            next_spec.columns = list(next_spec.columns or [])
+            if label_field not in next_spec.columns:
+                next_spec.columns.append(label_field)
+            next_spec.rows = [field for field in (next_spec.rows or []) if field != label_field]
+
+        next_spec.measures = [
+            Measure(field=value_field, agg=member_agg, alias=value_field)
+        ]
+
+        sort_key_field = f"__sortkey__{label_field}"
+        sort_specs = next_spec.sort if isinstance(next_spec.sort, list) else ([next_spec.sort] if next_spec.sort else [])
+        if not any(
+            isinstance(item, dict)
+            and (
+                item.get("field") == label_field
+                or item.get("sortKeyField") == sort_key_field
+            )
+            for item in sort_specs
+        ):
+            next_spec.sort = [
+                *sort_specs,
+                {"field": label_field, "order": "asc", "sortKeyField": sort_key_field},
+            ]
+
+        return next_spec
+
+    def _apply_measure_axis_table(self, table: IbisTable, spec: PivotSpec) -> IbisTable:
+        config = self._measure_axis_config(spec)
+        if not config:
+            return table
+
+        members = self._normalized_measure_axis_members(spec, config)
+        if not getattr(spec, "_measure_axis_prepared", False) and not self._measure_axis_can_pre_aggregate(spec, config, members):
+            return table
+        label_field = config.label_field or "__measure_name__"
+        value_field = config.value_field or "__measure_value__"
+        sort_key_field = f"__sortkey__{label_field}"
+        reserved = {label_field, value_field, sort_key_field}
+        preserved_columns = [column for column in table.columns if column not in reserved]
+
+        branches: List[IbisTable] = []
+        table_columns = set(table.columns)
+        for index, member in enumerate(members):
+            source_field = member["sourceField"]
+            if source_field not in table_columns:
+                raise ValueError(f"Measure-axis source field '{source_field}' does not exist in table '{spec.table}'.")
+            projection = [table[column] for column in preserved_columns]
+            projection.append(ibis.literal(member["label"]).name(label_field))
+            projection.append(table[source_field].cast("float64").name(value_field))
+            projection.append(ibis.literal(member["order"], type="int64").name(sort_key_field))
+            branch = table.select(projection)
+            if config.suppress_empty_members:
+                branch = branch.filter(branch[value_field].notnull())
+            branches.append(branch)
+
+        if not branches:
+            return table
+        return branches[0].union(*branches[1:], distinct=False)
+
+    def _apply_measure_axis_zero_suppression(self, table: IbisTable, spec: PivotSpec) -> IbisTable:
+        config = self._measure_axis_config(spec)
+        if not config or not config.suppress_zero_members:
+            return table
+
+        value_field = config.value_field or "__measure_value__"
+        candidate_columns = [
+            column
+            for column in table.columns
+            if column == value_field
+            or column.endswith(f"_{value_field}")
+            or column.startswith(f"__RowTotal__{value_field}")
+        ]
+        if not candidate_columns:
+            return table
+
+        keep_expr = None
+        for column in candidate_columns:
+            col_expr = table[column]
+            current = col_expr.notnull() & (col_expr != 0)
+            keep_expr = current if keep_expr is None else (keep_expr | current)
+        return table.filter(keep_expr) if keep_expr is not None else table
+
     def _table_for_spec(self, spec: PivotSpec) -> IbisTable:
         table = self.con.table(spec.table)
-        return self.builder.apply_custom_dimensions(table, getattr(spec, "custom_dimensions", []))
+        table = self.builder.apply_custom_dimensions(table, getattr(spec, "custom_dimensions", []))
+        return self._apply_measure_axis_table(table, spec)
+
+    @staticmethod
+    def _filter_references_field(filter_obj: Any, field_name: str) -> bool:
+        if not isinstance(filter_obj, dict) or not field_name:
+            return False
+        if filter_obj.get("field") == field_name:
+            return True
+        conditions = filter_obj.get("conditions") or filter_obj.get("clauses")
+        if isinstance(conditions, list):
+            return any(IbisPlanner._filter_references_field(item, field_name) for item in conditions)
+        return False
+
+    @staticmethod
+    def _sort_references_field(sort_obj: Any, field_name: str, sort_key_field: str) -> bool:
+        if not isinstance(sort_obj, dict):
+            return False
+        return sort_obj.get("field") == field_name or sort_obj.get("sortKeyField") == sort_key_field
+
+    def _split_measure_axis_filters(
+        self,
+        filters: Optional[List[Dict[str, Any]]],
+        label_field: str,
+    ) -> tuple[List[Dict[str, Any]], List[Dict[str, Any]]]:
+        base_filters: List[Dict[str, Any]] = []
+        axis_filters: List[Dict[str, Any]] = []
+        for filter_obj in filters or []:
+            if self._filter_references_field(filter_obj, label_field):
+                axis_filters.append(filter_obj)
+            else:
+                base_filters.append(filter_obj)
+        return base_filters, axis_filters
+
+    def _base_spec_for_measure_axis_aggregate_first(
+        self,
+        spec: PivotSpec,
+        label_field: str,
+        base_filters: Optional[List[Dict[str, Any]]] = None,
+    ) -> PivotSpec:
+        sort_key_field = f"__sortkey__{label_field}"
+        base_spec = copy.deepcopy(spec)
+        base_spec.measure_axis = None
+        base_spec.rows = [field for field in (base_spec.rows or []) if field != label_field and field != sort_key_field]
+        base_spec.full_rows = [field for field in (base_spec.full_rows or []) if field != label_field and field != sort_key_field]
+        base_spec.columns = [field for field in (base_spec.columns or []) if field != label_field and field != sort_key_field]
+        base_spec.filters = list(base_filters if base_filters is not None else (base_spec.filters or []))
+        sort_specs = base_spec.sort if isinstance(base_spec.sort, list) else ([base_spec.sort] if base_spec.sort else [])
+        base_spec.sort = [
+            item for item in sort_specs
+            if not self._sort_references_field(item, label_field, sort_key_field)
+        ]
+        base_spec.limit = None
+        base_spec.offset = 0
+        base_spec.totals = False
+        if base_spec.pivot_config:
+            base_spec.pivot_config = copy.deepcopy(base_spec.pivot_config)
+            base_spec.pivot_config.enabled = False
+            base_spec.pivot_config.materialized_column_values = None
+        return base_spec
+
+    def _build_measure_axis_aggregate_first_table(self, spec: PivotSpec) -> tuple[IbisTable, List[str], List[str]]:
+        config = self._measure_axis_config(spec)
+        if not config:
+            raise ValueError("Measure-axis aggregate-first table requested without measure-axis config.")
+
+        members = self._normalized_measure_axis_members(spec, config)
+        label_field = config.label_field or "__measure_name__"
+        value_field = config.value_field or "__measure_value__"
+        sort_key_field = f"__sortkey__{label_field}"
+        base_filters, axis_filters = self._split_measure_axis_filters(spec.filters, label_field)
+        base_spec = self._base_spec_for_measure_axis_aggregate_first(spec, label_field, base_filters)
+        base_group_rows = list(base_spec.rows or [])
+        base_group_columns = list(base_spec.columns or [])
+
+        base_plan = self._plan_standard(base_spec, None, None, include_metadata=False)
+        base_queries = base_plan.get("queries", [])
+        if not base_queries:
+            raise ValueError("Measure-axis aggregate-first planning produced no base aggregation query.")
+        aggregated_table = base_queries[0]
+
+        all_measure_aliases = {
+            str(measure.alias)
+            for measure in (spec.measures or [])
+            if getattr(measure, "alias", None)
+        }
+        reserved = all_measure_aliases | {label_field, value_field, sort_key_field}
+        preserved_columns = [column for column in aggregated_table.columns if column not in reserved]
+
+        branches: List[IbisTable] = []
+        table_columns = set(aggregated_table.columns)
+        for member in members:
+            measure_alias = str(member.get("measureAlias") or "").strip()
+            if measure_alias not in table_columns:
+                raise ValueError(
+                    f"Measure-axis member '{member.get('label') or measure_alias}' references missing "
+                    f"aggregated measure alias '{measure_alias}'."
+                )
+            projection = [aggregated_table[column] for column in preserved_columns]
+            projection.append(ibis.literal(member["label"]).name(label_field))
+            projection.append(aggregated_table[measure_alias].cast("float64").name(value_field))
+            projection.append(ibis.literal(member["order"], type="int64").name(sort_key_field))
+            branch = aggregated_table.select(projection)
+            if config.suppress_empty_members:
+                branch = branch.filter(branch[value_field].notnull())
+            branches.append(branch)
+
+        if not branches:
+            raise ValueError("Measure-axis aggregate-first planning requires at least one selected measure.")
+
+        result = branches[0].union(*branches[1:], distinct=False)
+        if axis_filters:
+            filter_expr = self.builder.build_filter_expression(result, axis_filters, is_post_agg=True)
+            if filter_expr is not None:
+                result = result.filter(filter_expr)
+        return result, base_group_rows, base_group_columns
+
+    def _plan_measure_axis_aggregate_first_standard(
+        self,
+        spec: PivotSpec,
+        include_metadata: bool,
+    ) -> Dict[str, Any]:
+        config = self._measure_axis_config(spec)
+        unpivoted, _, _ = self._build_measure_axis_aggregate_first_table(spec)
+        label_field = config.label_field or "__measure_name__"
+        value_field = config.value_field or "__measure_value__"
+        sort_key_field = f"__sortkey__{label_field}"
+
+        group_cols = list(dict.fromkeys(list(spec.rows or []) + list(spec.columns or [])))
+        if config.placement == "rows" and label_field not in group_cols:
+            group_cols.append(label_field)
+        elif config.placement == "columns" and label_field not in group_cols:
+            group_cols.append(label_field)
+
+        hidden_sort_keys = []
+        if sort_key_field in unpivoted.columns and sort_key_field not in group_cols:
+            hidden_sort_keys.append(sort_key_field)
+        sort_specs = spec.sort if isinstance(spec.sort, list) else ([spec.sort] if spec.sort else [])
+        for sort_spec in sort_specs:
+            if not isinstance(sort_spec, dict):
+                continue
+            key = sort_spec.get("sortKeyField")
+            if isinstance(key, str) and key in unpivoted.columns and key not in group_cols and key not in hidden_sort_keys:
+                hidden_sort_keys.append(key)
+
+        projection = []
+        for column in group_cols:
+            if column in unpivoted.columns:
+                projection.append(unpivoted[column])
+        for key in hidden_sort_keys:
+            projection.append(unpivoted[key])
+        projection.append(unpivoted[value_field])
+        result = unpivoted.select(projection)
+        result = self._apply_measure_axis_zero_suppression(result, spec)
+        result = self._apply_stable_ordering(result, spec.sort, group_cols)
+        result = self._apply_limit_offset(result, spec)
+
+        metadata = {
+            "group_by": group_cols,
+            "agg_aliases": [value_field],
+            "measure_axis_execution": "aggregate_first",
+            "measure_axis_members": [member.get("measureAlias") for member in self._normalized_measure_axis_members(spec, config)],
+        }
+        if spec.totals:
+            metadata["needs_totals"] = True
+        if include_metadata:
+            metadata["estimated_complexity"] = "high"
+        return {"queries": [result], "metadata": metadata}
+
+    def _measure_axis_column_key_expr(self, table: IbisTable, columns: List[str]) -> Any:
+        if len(columns) == 1:
+            return table[columns[0]].cast("string")
+        match_col_expr = ibis.literal("")
+        for col_name in columns:
+            match_col_expr = match_col_expr + table[col_name].cast("string") + ibis.literal("|")
+        return match_col_expr.substr(0, match_col_expr.length() - 1)
+
+    def _build_measure_axis_aggregate_first_column_values_query(
+        self,
+        spec: PivotSpec,
+        top_n: Optional[int],
+        column_cursor: Optional[str] = None,
+    ) -> IbisTable:
+        config = self._measure_axis_config(spec)
+        if not config:
+            raise ValueError("Measure-axis column discovery requested without measure-axis config.")
+        unpivoted, _, _ = self._build_measure_axis_aggregate_first_table(spec)
+        value_field = config.value_field or "__measure_value__"
+        label_field = config.label_field or "__measure_name__"
+        columns = list(spec.columns or [])
+        if config.placement == "columns" and label_field not in columns:
+            columns.append(label_field)
+        if not columns:
+            raise ValueError("Columns must be non-empty for measure-axis column values query.")
+
+        sort_key_field = f"__sortkey__{label_field}"
+        aggregations = [unpivoted[value_field].sum().name("__pivot_totalsort__0")]
+        if sort_key_field in unpivoted.columns and label_field in columns:
+            aggregations.append(unpivoted[sort_key_field].min().name(f"__sortkey__{label_field}"))
+
+        grouped = unpivoted.group_by(columns).aggregate(aggregations)
+        col_key_expr = self._measure_axis_column_key_expr(grouped, columns).name("_col_key")
+        projection = [grouped[column] for column in columns]
+        if f"__sortkey__{label_field}" in grouped.columns:
+            projection.append(grouped[f"__sortkey__{label_field}"])
+        projection.append(grouped["__pivot_totalsort__0"])
+        projection.append(col_key_expr)
+        result = grouped.select(projection)
+
+        if column_cursor:
+            result = result.filter(result["_col_key"] > column_cursor)
+
+        order_exprs = []
+        if f"__sortkey__{label_field}" in result.columns:
+            order_exprs.append(result[f"__sortkey__{label_field}"].asc())
+        order_exprs.append(result["__pivot_totalsort__0"].isnull().asc())
+        order_exprs.append(result["__pivot_totalsort__0"].desc())
+        order_exprs.append(result["_col_key"].asc())
+        result = result.order_by(order_exprs)
+
+        if isinstance(top_n, int) and top_n > 0:
+            result = result.limit(top_n)
+        return result
+
+    def _build_measure_axis_aggregate_first_pivot_query(
+        self,
+        spec: PivotSpec,
+        column_values: List[str],
+    ) -> IbisTable:
+        config = self._measure_axis_config(spec)
+        if not config:
+            raise ValueError("Measure-axis pivot query requested without measure-axis config.")
+        unpivoted, _, _ = self._build_measure_axis_aggregate_first_table(spec)
+        value_field = config.value_field or "__measure_value__"
+        label_field = config.label_field or "__measure_name__"
+        sort_key_field = f"__sortkey__{label_field}"
+        columns = list(spec.columns or [])
+        if config.placement == "columns" and label_field not in columns:
+            columns.append(label_field)
+        row_dims = list(spec.rows or [])
+        if config.placement == "rows" and label_field not in row_dims:
+            row_dims.append(label_field)
+
+        if not columns:
+            return self._plan_measure_axis_aggregate_first_standard(spec, include_metadata=False)["queries"][0]
+
+        pivot_aggs = []
+        match_col_expr = self._measure_axis_column_key_expr(unpivoted, columns)
+        for val in column_values:
+            match_expr = match_col_expr == val
+            cond_col = match_expr.ifelse(unpivoted[value_field], ibis.null())
+            pivot_aggs.append(cond_col.sum().name(f"{val}_{value_field}"))
+
+        hidden_sort_keys = []
+        if sort_key_field in unpivoted.columns and sort_key_field not in row_dims:
+            hidden_sort_keys.append(sort_key_field)
+        sort_specs = spec.sort if isinstance(spec.sort, list) else ([spec.sort] if spec.sort else [])
+        for sort_spec in sort_specs:
+            if not isinstance(sort_spec, dict):
+                continue
+            key = sort_spec.get("sortKeyField")
+            if isinstance(key, str) and key in unpivoted.columns and key not in row_dims and key not in hidden_sort_keys:
+                hidden_sort_keys.append(key)
+        for key in hidden_sort_keys:
+            pivot_aggs.append(unpivoted[key].min().name(key))
+
+        aggregation_group_cols = list(dict.fromkeys(row_dims))
+        if aggregation_group_cols:
+            result_expr = unpivoted.group_by(aggregation_group_cols).aggregate(pivot_aggs)
+        else:
+            result_expr = unpivoted.aggregate(pivot_aggs)
+
+        result_expr = self._apply_measure_axis_zero_suppression(result_expr, spec)
+
+        final_projection = []
+        for col in aggregation_group_cols:
+            final_projection.append(result_expr[col])
+        for key in hidden_sort_keys:
+            if key in result_expr.columns:
+                final_projection.append(result_expr[key])
+        for pivot_col in pivot_aggs:
+            pivot_col_name = pivot_col.get_name()
+            if pivot_col_name not in hidden_sort_keys:
+                final_projection.append(result_expr[pivot_col_name])
+
+        result_expr = result_expr.select(final_projection)
+        result_expr = self._apply_stable_ordering(result_expr, spec.sort, row_dims)
+        result_expr = self._apply_limit_offset(result_expr, spec)
+        return result_expr
 
     def _plan_standard(self, spec: PivotSpec, columns_top_n: Optional[int],
                        columns_order_by_measure: Optional[Measure],
@@ -377,6 +945,10 @@ class IbisPlanner:
         Standard pivot table planning using Ibis expressions.
         Supports both dimension filters (WHERE) and measure filters (HAVING).
         """
+        if self._measure_axis_uses_aggregate_first(spec):
+            return self._plan_measure_axis_aggregate_first_standard(spec, include_metadata)
+
+        spec = self._prepare_measure_axis_spec(spec)
         base_table = self._table_for_spec(spec)
         
         # Split filters into pre-aggregation (dimensions) and post-aggregation (measures)
@@ -621,6 +1193,8 @@ class IbisPlanner:
                 if post_filter_expr is not None:
                     aggregated_table = aggregated_table.filter(post_filter_expr)
 
+        aggregated_table = self._apply_measure_axis_zero_suppression(aggregated_table, spec)
+
         # 6. Apply Window Functions (Post-Aggregation)
         if window_measures:
             window_mutations = []
@@ -679,7 +1253,9 @@ class IbisPlanner:
         if spec.columns and columns_top_n and columns_top_n > 0:
             col_ibis_expr = self._build_column_values_query(
                 spec.table, spec.columns, spec.filters,
-                columns_top_n, columns_order_by_measure, None, spec.column_sort_options, spec.custom_dimensions
+                columns_top_n, columns_order_by_measure, None, spec.column_sort_options, spec.custom_dimensions,
+                measure_axis=spec.measure_axis,
+                measures=spec.measures,
             )
             queries.insert(0, col_ibis_expr)
             metadata["needs_column_discovery"] = True
@@ -798,6 +1374,10 @@ class IbisPlanner:
         """
         Plan query with GROUPING SETS, CUBE, or ROLLUP using Ibis expressions.
         """
+        if self._measure_axis_uses_aggregate_first(spec):
+            return self._plan_measure_axis_aggregate_first_standard(spec, include_metadata)
+
+        spec = self._prepare_measure_axis_spec(spec)
         base_table = self._table_for_spec(spec)
         
         if spec.filters:
@@ -849,7 +1429,7 @@ class IbisPlanner:
             if unioned_expr is None:
                 unioned_expr = projected_expr
             else:
-                unioned_expr = unioned_expr.union(projected_expr)
+                unioned_expr = unioned_expr.union(projected_expr, distinct=False)
                 
         if spec.sort:
             ibis_sorts = self.builder.build_sort_expressions(unioned_expr, spec.sort)
@@ -870,6 +1450,33 @@ class IbisPlanner:
         """
         Plan for pivot transformation with dynamic columns using Ibis expressions.
         """
+        if self._measure_axis_uses_aggregate_first(spec):
+            if not spec.columns:
+                return self._plan_measure_axis_aggregate_first_standard(spec, include_metadata)
+
+            top_n = 50
+            column_cursor = None
+            if spec.pivot_config:
+                 top_n = spec.pivot_config.top_n
+                 column_cursor = spec.pivot_config.column_cursor
+
+            col_ibis_expr = self._build_measure_axis_aggregate_first_column_values_query(
+                spec,
+                top_n,
+                column_cursor,
+            )
+            metadata = {
+                "needs_column_discovery": True,
+                "pivot_enabled": True,
+                "top_n": top_n,
+                "measure_axis_execution": "aggregate_first",
+                "measure_aggs": {m.alias: (m.agg or "sum").lower() for m in spec.measures if not m.ratio_numerator},
+            }
+            if spec.totals:
+                metadata["needs_totals"] = True
+            return {"queries": [col_ibis_expr], "metadata": metadata}
+
+        spec = self._prepare_measure_axis_spec(spec)
         if not spec.columns:
             # If no columns to pivot, treat as standard aggregation plan
             return self._plan_standard(spec, None, None, include_metadata)
@@ -891,6 +1498,8 @@ class IbisPlanner:
             column_cursor,
             spec.column_sort_options,
             spec.custom_dimensions,
+            measure_axis=spec.measure_axis,
+            measures=spec.measures,
         )
         
         metadata = {
@@ -921,6 +1530,10 @@ class IbisPlanner:
         """
         Build actual pivot query as an Ibis expression after discovering column values.
         """
+        if self._measure_axis_uses_aggregate_first(spec):
+            return self._build_measure_axis_aggregate_first_pivot_query(spec, column_values)
+
+        spec = self._prepare_measure_axis_spec(spec)
         base_table = self._table_for_spec(spec)
         
         # Split filters into pre-aggregation (dimensions) and post-aggregation (measures)
@@ -1096,15 +1709,22 @@ class IbisPlanner:
             post_filter_expr = self.builder.build_filter_expression(result_expr, post_filters, is_post_agg=True)
             if post_filter_expr is not None:
                 result_expr = result_expr.filter(post_filter_expr)
+
+        result_expr = self._apply_measure_axis_zero_suppression(result_expr, spec)
         
         # Ensure hidden sort keys are in the projection
         final_projection = []
         for col in aggregation_group_cols:
             final_projection.append(result_expr[col])
+        for key in hidden_sort_keys:
+            if key in result_expr.columns:
+                final_projection.append(result_expr[key])
         
         # Add pivot value columns
         for pivot_col in pivot_aggs:
-            final_projection.append(result_expr[pivot_col.get_name()])
+            pivot_col_name = pivot_col.get_name()
+            if pivot_col_name not in hidden_sort_keys:
+                final_projection.append(result_expr[pivot_col_name])
             
         result_expr = result_expr.select(final_projection)
 
@@ -1122,6 +1742,10 @@ class IbisPlanner:
         """
         Plan queries for hierarchical drill-down with multiple levels using Ibis expressions.
         """
+        if self._measure_axis_uses_aggregate_first(spec):
+            return self._plan_measure_axis_aggregate_first_standard(spec, include_metadata)
+
+        spec = self._prepare_measure_axis_spec(spec)
         base_table = self._table_for_spec(spec)
         
         if spec.filters:
@@ -1227,12 +1851,43 @@ class IbisPlanner:
         top_n: Optional[int], order_measure: Optional[Measure], column_cursor: Optional[str] = None,
         column_sort_options: Optional[Dict[str, Any]] = None,
         custom_dimensions: Optional[List[Dict[str, Any]]] = None,
+        measure_axis: Optional[MeasureAxisConfig] = None,
+        measures: Optional[List[Measure]] = None,
     ) -> IbisTable:
         """
         Builds an Ibis expression to discover pivot column values with optional keyset pagination.
         """
-        base_table = self.con.table(table_name)
-        base_table = self.builder.apply_custom_dimensions(base_table, custom_dimensions or [])
+        if measure_axis and measure_axis.placement in {"rows", "columns"}:
+            axis_spec = PivotSpec(
+                table=table_name,
+                rows=[],
+                columns=list(columns or []),
+                measures=list(measures or []),
+                filters=list(filters or []),
+                custom_dimensions=custom_dimensions or [],
+                measure_axis=measure_axis,
+            )
+            if (
+                len(axis_spec.measures or []) == 1
+                and (axis_spec.measures[0].field == (measure_axis.value_field or "__measure_value__"))
+                and (axis_spec.measures[0].alias == (measure_axis.value_field or "__measure_value__"))
+            ):
+                setattr(axis_spec, "_measure_axis_prepared", True)
+            if self._measure_axis_uses_aggregate_first(axis_spec):
+                return self._build_measure_axis_aggregate_first_column_values_query(
+                    axis_spec,
+                    top_n,
+                    column_cursor,
+                )
+            axis_spec = self._prepare_measure_axis_spec(axis_spec)
+            base_table = self._table_for_spec(axis_spec)
+            columns = list(axis_spec.columns or columns or [])
+            measures = list(axis_spec.measures or measures or [])
+            if measures:
+                order_measure = measures[0]
+        else:
+            base_table = self.con.table(table_name)
+            base_table = self.builder.apply_custom_dimensions(base_table, custom_dimensions or [])
         
         filtered_table = base_table
         if filters:
@@ -1410,7 +2065,9 @@ class IbisPlanner:
     def _validate_spec(self, spec: PivotSpec):
         if not spec.table:
             raise ValueError("PivotSpec must include a 'table' name")
-        if not spec.measures:
+        axis_config = self._measure_axis_config(spec)
+        axis_members = axis_config.members if axis_config else []
+        if not spec.measures and not axis_members:
             raise ValueError("PivotSpec must include at least one measure")
         
         aliases = [m.alias for m in spec.measures]

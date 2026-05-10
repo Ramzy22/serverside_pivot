@@ -33,6 +33,7 @@ class PivotViewState:
     val_configs: List[Dict[str, Any]] = field(default_factory=list)
     filters: Dict[str, Any] = field(default_factory=dict)
     custom_dimensions: List[Dict[str, Any]] = field(default_factory=list)
+    measure_axis: Dict[str, Any] = field(default_factory=dict)
     sorting: List[Dict[str, Any]] = field(default_factory=list)
     sort_options: Dict[str, Any] = field(default_factory=dict)
     expanded: Any = field(default_factory=dict)

@@ -38,6 +38,52 @@ Keyword arguments:
 
 - chartCanvasPanes (list of dicts; optional)
 
+    Each dict in `chartCanvasPanes` controls one visible chart pane and accepts all
+    keys from `chartDefinitions` (id, name, chartType, chartTitle, barLayout, axisMode,
+    orientation, source, hierarchyLevel, rowLimit, columnLimit, width, chartHeight,
+    sortMode, interactionMode, serverScope, chartLayers) plus:
+
+    - dockPosition (a value equal to: 'left', 'right', 'top', 'bottom'; default 'right')
+    - floating (boolean; default False) -- True renders as a floating overlay
+    - floatingRect (dict with keys left, top, width, height; optional) -- initial position/size when floating
+    - locked (boolean; default False) -- freeze the chart data
+    - immersiveMode (boolean; default False) -- open in fullscreen mode
+    - size (number; default 1) -- relative flex size when docked alongside other panes
+    - settingsPanelWidth (number; optional) -- initial settings panel width in px (300–680)
+    - chartSettings (dict; optional) -- visual/axis settings for this pane:
+
+        - chartSubtitle (string; default '')
+        - yAxisTitle (string; default '')
+        - yAxisMin (string or number; default '') -- leave empty for auto
+        - yAxisMax (string or number; default '') -- leave empty for auto
+        - yAxisMinRight (string or number; default '') -- right-axis min for combo charts
+        - yAxisMaxRight (string or number; default '') -- right-axis max for combo charts
+        - tickCount (number 2–20; default 5)
+        - labelAngle (number 0–90; default 0) -- X-axis label rotation degrees
+        - colorPalette (string; default 'default') -- named palette or 'custom'
+        - customPaletteColors (list of color strings; default []) -- colors when colorPalette='custom'
+        - seriesColors (dict {seriesName: colorString}; default {}) -- per-series color overrides
+        - valueFormat (a value equal to: 'auto', 'number', 'compact', 'percent', 'currency'; default 'auto')
+        - decimalPlaces (number; default -1 for auto)
+        - showDataLabels (boolean; default False)
+        - labelPosition (a value equal to: 'outside', 'inside', 'center'; default 'outside')
+        - legendPosition (a value equal to: 'bottom', 'top', 'none'; default 'bottom')
+        - showCalloutLabels (boolean; default False) -- pie/donut callout labels
+        - markerShape (a value equal to: 'none', 'circle', 'square', 'diamond', 'triangle', 'cross'; default 'circle')
+        - markerSize (number; default 4)
+        - showGradient (boolean; default False)
+        - gradientDirection (a value equal to: 'vertical', 'horizontal'; default 'vertical')
+        - gradientOpacity (number 0–100; default 70)
+        - showAnimations (boolean; default True)
+        - showTrendline (boolean; default False)
+        - trendlineMode (a value equal to: 'linear', 'moving_avg', 'exponential'; default 'linear')
+        - trendlinePeriod (number; default 3) -- window size for moving average
+        - trendlineColor (string; default '' for auto)
+        - trendlineWidth (number 1–8; default 2)
+        - lineDashStyles (dict {seriesName: dashStyle}; default {})
+        - referenceLines (list of dicts; default []) -- each dict: value, label, orient ('h'|'v'), color, dash
+        - seriesSort (a value equal to: 'none', 'value_desc', 'value_asc', 'alpha_asc', 'alpha_desc'; default 'none')
+
 - chartDefaults (dict; optional)
 
 - chartDefinitions (list of dicts; optional)
@@ -78,6 +124,8 @@ Keyword arguments:
 
 - conditionalFormatting (list of dicts; optional)
 
+- headerFormatting (dict | list of dicts; optional): Per-header color/style overrides. Accepts a mapping such as `{"sales_sum": {"background": "#123456", "color": "#fff"}}` or rule objects.
+
 - customDimensions (list of dicts; optional)
 
 - data (list of dicts; optional)
@@ -112,6 +160,8 @@ Keyword arguments:
 - grandTotalPosition (a value equal to: 'top', 'bottom'; optional)
 
 - localeText (dict; optional)
+
+- measureAxis (dict; optional): Controls whether selected measures are rendered as virtual row or column dimension members. Keys include `placement`, `labelField`, `valueField`, `members`, `suppressEmptyMembers`, `suppressZeroMembers`, and `totalsPolicy`.
 
 - numberGroupSeparator (a value equal to: 'comma', 'space', 'thin_space', 'apostrophe', 'none'; optional)
 
@@ -245,6 +295,14 @@ Keyword arguments:
 
     - formulaRef (string; optional)
 
+    - headerStyle (dict; optional)
+
+    - headerBg (string; optional)
+
+    - headerColor (string; optional)
+
+    - headerTextColor (string; optional)
+
     - sparkline (boolean | dict; optional)
 
 - validationRules (dict; optional)
@@ -269,6 +327,10 @@ Keyword arguments:
             "formula": NotRequired[str],
             "label": NotRequired[str],
             "formulaRef": NotRequired[str],
+            "headerStyle": NotRequired[dict],
+            "headerBg": NotRequired[str],
+            "headerColor": NotRequired[str],
+            "headerTextColor": NotRequired[str],
             "sparkline": NotRequired[typing.Union[bool, dict]]
         }
     )
@@ -362,6 +424,7 @@ Keyword arguments:
         runtimeResponse: typing.Optional[dict] = None,
         viewMode: typing.Optional[Literal["pivot", "report", "tree", "table"]] = None,
         detailMode: typing.Optional[Literal["none", "inline", "sidepanel", "drawer"]] = None,
+        measureAxis: typing.Optional[dict] = None,
         treeConfig: typing.Optional[dict] = None,
         detailConfig: typing.Optional[dict] = None,
         chartEvent: typing.Optional[dict] = None,
@@ -379,6 +442,7 @@ Keyword arguments:
         saveViewTrigger: typing.Optional[typing.Any] = None,
         savedView: typing.Optional[dict] = None,
         conditionalFormatting: typing.Optional[typing.Sequence[dict]] = None,
+        headerFormatting: typing.Optional[typing.Union[dict, typing.Sequence[dict]]] = None,
         validationRules: typing.Optional[dict] = None,
         editingConfig: typing.Optional[dict] = None,
         editLifecycleEvent: typing.Optional[dict] = None,
@@ -414,9 +478,9 @@ Keyword arguments:
         customDimensions: typing.Optional[typing.Sequence[dict]] = None,
         **kwargs
     ):
-        self._prop_names = ['id', 'activeReportId', 'availableFieldList', 'sparklineFields', 'cellUpdate', 'cellUpdates', 'chartCanvasPanes', 'chartDefaults', 'chartDefinitions', 'chartEvent', 'chartServerWindow', 'immersiveMode', 'colFields', 'columnOrder', 'columnPinned', 'columnPinning', 'columnSizing', 'columnVisibility', 'conditionalFormatting', 'customDimensions', 'data', 'decimalPlaces', 'defaultTheme', 'defaultValueFormat', 'detailConfig', 'detailMode', 'drillEndpoint', 'editLifecycleEvent', 'editState', 'editingConfig', 'expanded', 'fieldPanelSizes', 'filters', 'grandTotalPosition', 'localeText', 'numberGroupSeparator', 'performanceConfig', 'persistence', 'persistence_type', 'pinningOptions', 'pinningPresets', 'pivotTitle', 'reportDef', 'reset', 'rowFields', 'rowMove', 'rowPinned', 'rowPinning', 'runtimeRequest', 'runtimeResponse', 'saveViewTrigger', 'savedReports', 'savedView', 'serverSide', 'showColTotals', 'showRowTotals', 'showSubtotals', 'sortEvent', 'sortLock', 'sortOptions', 'sorting', 'style', 'table', 'tableCanvasSize', 'treeConfig', 'paginationConfig', 'uiConfig', 'valConfigs', 'validationRules', 'viewMode', 'viewState']
+        self._prop_names = ['id', 'activeReportId', 'availableFieldList', 'sparklineFields', 'cellUpdate', 'cellUpdates', 'chartCanvasPanes', 'chartDefaults', 'chartDefinitions', 'chartEvent', 'chartServerWindow', 'immersiveMode', 'colFields', 'columnOrder', 'columnPinned', 'columnPinning', 'columnSizing', 'columnVisibility', 'conditionalFormatting', 'headerFormatting', 'customDimensions', 'data', 'decimalPlaces', 'defaultTheme', 'defaultValueFormat', 'detailConfig', 'detailMode', 'drillEndpoint', 'editLifecycleEvent', 'editState', 'editingConfig', 'expanded', 'fieldPanelSizes', 'filters', 'grandTotalPosition', 'localeText', 'measureAxis', 'numberGroupSeparator', 'performanceConfig', 'persistence', 'persistence_type', 'pinningOptions', 'pinningPresets', 'pivotTitle', 'reportDef', 'reset', 'rowFields', 'rowMove', 'rowPinned', 'rowPinning', 'runtimeRequest', 'runtimeResponse', 'saveViewTrigger', 'savedReports', 'savedView', 'serverSide', 'showColTotals', 'showRowTotals', 'showSubtotals', 'sortEvent', 'sortLock', 'sortOptions', 'sorting', 'style', 'table', 'tableCanvasSize', 'treeConfig', 'paginationConfig', 'uiConfig', 'valConfigs', 'validationRules', 'viewMode', 'viewState']
         self._valid_wildcard_attributes =            []
-        self.available_properties = ['id', 'activeReportId', 'availableFieldList', 'sparklineFields', 'cellUpdate', 'cellUpdates', 'chartCanvasPanes', 'chartDefaults', 'chartDefinitions', 'chartEvent', 'chartServerWindow', 'immersiveMode', 'colFields', 'columnOrder', 'columnPinned', 'columnPinning', 'columnSizing', 'columnVisibility', 'conditionalFormatting', 'customDimensions', 'data', 'decimalPlaces', 'defaultTheme', 'defaultValueFormat', 'detailConfig', 'detailMode', 'drillEndpoint', 'editLifecycleEvent', 'editState', 'editingConfig', 'expanded', 'fieldPanelSizes', 'filters', 'grandTotalPosition', 'localeText', 'numberGroupSeparator', 'performanceConfig', 'persistence', 'persistence_type', 'pinningOptions', 'pinningPresets', 'pivotTitle', 'reportDef', 'reset', 'rowFields', 'rowMove', 'rowPinned', 'rowPinning', 'runtimeRequest', 'runtimeResponse', 'saveViewTrigger', 'savedReports', 'savedView', 'serverSide', 'showColTotals', 'showRowTotals', 'showSubtotals', 'sortEvent', 'sortLock', 'sortOptions', 'sorting', 'style', 'table', 'tableCanvasSize', 'treeConfig', 'paginationConfig', 'uiConfig', 'valConfigs', 'validationRules', 'viewMode', 'viewState']
+        self.available_properties = ['id', 'activeReportId', 'availableFieldList', 'sparklineFields', 'cellUpdate', 'cellUpdates', 'chartCanvasPanes', 'chartDefaults', 'chartDefinitions', 'chartEvent', 'chartServerWindow', 'immersiveMode', 'colFields', 'columnOrder', 'columnPinned', 'columnPinning', 'columnSizing', 'columnVisibility', 'conditionalFormatting', 'headerFormatting', 'customDimensions', 'data', 'decimalPlaces', 'defaultTheme', 'defaultValueFormat', 'detailConfig', 'detailMode', 'drillEndpoint', 'editLifecycleEvent', 'editState', 'editingConfig', 'expanded', 'fieldPanelSizes', 'filters', 'grandTotalPosition', 'localeText', 'measureAxis', 'numberGroupSeparator', 'performanceConfig', 'persistence', 'persistence_type', 'pinningOptions', 'pinningPresets', 'pivotTitle', 'reportDef', 'reset', 'rowFields', 'rowMove', 'rowPinned', 'rowPinning', 'runtimeRequest', 'runtimeResponse', 'saveViewTrigger', 'savedReports', 'savedView', 'serverSide', 'showColTotals', 'showRowTotals', 'showSubtotals', 'sortEvent', 'sortLock', 'sortOptions', 'sorting', 'style', 'table', 'tableCanvasSize', 'treeConfig', 'paginationConfig', 'uiConfig', 'valConfigs', 'validationRules', 'viewMode', 'viewState']
         self.available_wildcard_properties =            []
         _explicit_args = kwargs.pop('_explicit_args')
         _locals = locals()

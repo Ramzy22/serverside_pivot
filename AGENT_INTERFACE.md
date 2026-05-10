@@ -229,6 +229,7 @@ All props are keyword arguments to `DashTanstackPivot(...)` in layout. Props mar
 |------|------|---------|
 | `rowFields` | `list[str]` | `["region", "country"]` |
 | `colFields` | `list[str]` | `["year", "quarter"]` |
+| `measureAxis` | `dict` | see section 6.6; moves selected measures into Rows or Columns as virtual members |
 | `valConfigs` | `list[dict]` | see §6.5 |
 | `viewMode` | `"pivot" \| "table" \| "tree" \| "report"` | `"pivot"` |
 | `expanded` | `dict \| bool` | `{}` = all collapsed; `True` = all expanded |
@@ -236,6 +237,7 @@ All props are keyword arguments to `DashTanstackPivot(...)` in layout. Props mar
 | `showColTotals` | `bool` | `True` |
 | `showSubtotals` | `bool` | `False` |
 | `grandTotalPosition` | `"top" \| "bottom"` | `"bottom"` |
+| `headerFormatting` | `dict \| list[dict]` | Per-header color/style overrides |
 
 ### 6.3 Filter Props [reactive]
 
@@ -294,7 +296,7 @@ Each entry in the list is a measure:
 
     # Display
     "label": "Total Sales",     # column header
-    "format": "fixed:2",        # see §6.6
+    "format": "fixed:2",        # see section 6.7
 
     # Optional / aggregation-specific
     "alias": "sales_sum",       # internal alias (auto-generated if omitted)
@@ -320,7 +322,107 @@ Each entry in the list is a measure:
 }
 ```
 
-### 6.6 Number Format Strings
+### 6.6 Measure Axis / Values As Rows or Columns (`measureAxis`)
+
+Use `measureAxis` when a user asks for Excel-style "Values in Rows", "Values in Columns", "show measures as line items", or "make selected measures appear as a dimension". This is not a formula feature and it is not the same as manual category grouping.
+
+The selected physical measures remain in `valConfigs`, but the runtime creates a virtual dimension containing one member per selected measure. That virtual dimension is placed into `rowFields` or `colFields`, and all measure values are aggregated through one virtual value field.
+
+Interaction entry points: in the UI, use the Values area selector labeled "Values as" and choose Columns, Rows, or Column Axis. From Python/Dash or REST/TanStack clients, set the `measureAxis` prop/request field directly.
+
+```python
+DashTanstackPivot(
+    id="pivot",
+    table="risk_explain",
+    serverSide=True,
+    rowFields=["book"],
+    colFields=["portfolio"],
+    valConfigs=[
+        {"field": "delta_explain", "agg": "sum", "alias": "delta_sum", "label": "Delta Explain", "format": "fixed:0"},
+        {"field": "gamma_explain", "agg": "sum", "alias": "gamma_sum", "label": "Gamma Explain", "format": "fixed:0"},
+    ],
+    measureAxis={
+        "placement": "rows",          # "none" | "rows" | "columns"
+        "labelField": "Measure Name", # virtual dimension field shown in rows/cols
+        "valueField": "Amount",       # virtual numeric value field
+        "suppressEmptyMembers": True,
+        "suppressZeroMembers": False,
+        "totalsPolicy": "per_member",
+    },
+)
+```
+
+Runtime shape:
+
+```python
+measureAxis={
+    "placement": "rows",
+    "labelField": "Measure Name",
+    "valueField": "Amount",
+    "members": [
+        {"measureAlias": "delta_sum", "sourceField": "delta_explain", "label": "Delta Explain", "agg": "sum", "order": 0},
+        {"measureAlias": "gamma_sum", "sourceField": "gamma_explain", "label": "Gamma Explain", "agg": "sum", "order": 1},
+    ],
+    "suppressEmptyMembers": True,
+    "suppressZeroMembers": False,
+    "totalsPolicy": "per_member",
+}
+```
+
+Agent decision rules:
+
+| User asks for... | Use |
+|------------------|-----|
+| "Values as rows", "measures down the side", "P&L lines from selected columns" | `measureAxis={"placement": "rows"}` |
+| "Values as columns", "measure names across the top" | `measureAxis={"placement": "columns"}` |
+| A new numeric result like margin, spread, ratio, or difference | `valConfigs` formula measure |
+| Bucketing dates/numbers or named groups such as "Short/Medium/Long" | category/grouping transform, not `measureAxis` |
+| Combining multiple fact tables or DAX-style relationships/measures | data-model work, not `measureAxis` |
+
+Planner execution modes: simple physical measures with one aggregation can use the fast raw-unpivot path. Mixed aggregations, weighted averages, planner expressions, ratio measures, and SQL-planned window measures use aggregate-before-unpivot: the backend first computes the normal pivot measures at the requested grain, then turns selected measure aliases into virtual `labelField` / `valueField` members. This keeps formulas, ratios, averages, and windows mathematically correct.
+
+Implementation contracts agents must preserve:
+
+- `labelField` and `valueField` are virtual fields. They may appear in `rowFields`, `colFields`, `runtimeResponse.columns`, and TanStack column IDs, but they must not be treated as physical columns on the source table.
+- For `placement="rows"`, the UI may send `rowFields=["book", "Measure Name"]`. The planner must group the base table by physical dimensions only, then inject `"Measure Name"` after aggregation.
+- `valConfigs[*].alias` is the authoritative measure identity. If an alias is present, `measureAxis.members[*].measureAlias` must match it exactly; do not silently fall back to `"{field}_{agg}"`.
+- Preserve `label`, `header`, and `format` metadata when normalizing measures, because the virtual member label and formatted cells depend on those values.
+- Dynamic column/window IDs after measure-axis unpivot use the virtual value field, not the original measure alias. With `colFields=["portfolio"]` and `valueField="Amount"`, expected value column IDs are like `Book_Amount` and `Hedge_Amount`, not `Book_delta_sum`.
+- Frontend column builders must render measure-axis value-field columns as real value cells. Seeing `__schema_placeholder__*` cells usually means the backend returned valid schema/data but the React column-definition logic did not recognize the virtual value-field IDs.
+- Collapsed-root paging and other fast paths must opt out when the first visible row/column field is the measure-axis label field, because that field does not exist in the physical table.
+
+Correct aggregate-first SQL shape:
+
+```sql
+WITH base AS (
+  SELECT
+    book,
+    portfolio,
+    SUM(delta_explain) AS delta_sum,
+    AVG(gamma_explain) AS gamma_avg,
+    SUM(price * quantity) / NULLIF(SUM(quantity), 0) AS weighted_price
+  FROM risk_explain
+  GROUP BY book, portfolio
+),
+measure_rows AS (
+  SELECT book, portfolio, 'Delta Explain' AS "Measure Name", delta_sum AS "Amount" FROM base
+  UNION ALL
+  SELECT book, portfolio, 'Gamma Explain' AS "Measure Name", gamma_avg AS "Amount" FROM base
+  UNION ALL
+  SELECT book, portfolio, 'Weighted Price' AS "Measure Name", weighted_price AS "Amount" FROM base
+)
+SELECT
+  book,
+  "Measure Name",
+  SUM(CASE WHEN portfolio = 'Book' THEN "Amount" END) AS Book_Amount,
+  SUM(CASE WHEN portfolio = 'Hedge' THEN "Amount" END) AS Hedge_Amount
+FROM measure_rows
+GROUP BY book, "Measure Name";
+```
+
+The exact SQL emitted by Ibis may differ, but the semantics must match: aggregate physical measures at the requested physical grain first, unpivot aliases into virtual measure members second, then pivot/render the virtual `valueField`.
+
+### 6.7 Number Format Strings
 
 | Format string | Result |
 |--------------|--------|
@@ -331,7 +433,7 @@ Each entry in the list is a measure:
 | `"compact"` | `1.2 K`, `3.4 M` |
 | `"scientific:2"` | `1.23e+3` |
 
-### 6.7 Theme Prop
+### 6.8 Theme Prop
 
 ```python
 defaultTheme="flash"   # 11 built-in themes:
@@ -339,14 +441,14 @@ defaultTheme="flash"   # 11 built-in themes:
 # bloomberg | bloomberg_black | alabaster | strata | crystal | satin
 ```
 
-### 6.8 Detail / Drill-Through Props
+### 6.9 Detail / Drill-Through Props
 
 | Prop | Type | Notes |
 |------|------|-------|
 | `detailMode` | `"none" \| "inline" \| "sidepanel" \| "drawer"` | How drill rows are shown |
 | `drillEndpoint` | `str` | `/api/drill` — backend URL for raw detail rows |
 
-### 6.9 Performance Config
+### 6.10 Performance Config
 
 ```python
 performanceConfig={
@@ -359,7 +461,7 @@ performanceConfig={
 }
 ```
 
-### 6.10 Conditional Formatting
+### 6.11 Conditional Formatting
 
 ```python
 conditionalFormatting=[
@@ -374,7 +476,27 @@ conditionalFormatting=[
 ]
 ```
 
-### 6.11 Chart Props
+Header color/style overrides are separate from cell conditional formatting:
+
+```python
+headerFormatting={
+    "region": {"background": "#E0F2FE", "color": "#0F172A"},
+    "sales_sum": {"background": "#123456", "color": "#FFFFFF"},
+}
+
+valConfigs=[
+    {
+        "field": "sales",
+        "agg": "sum",
+        "label": "Sales",
+        "headerStyle": {"background": "#123456", "color": "#FFFFFF"},
+    }
+]
+```
+
+`headerFormatting` may be keyed by column id, field name, group label, or rendered header label. A list of rules is also accepted, for example `{"columns": ["sales_sum"], "style": {...}}`.
+
+### 6.12 Chart Props
 
 ```python
 chartDefinitions=[
@@ -547,6 +669,9 @@ sortOptions={
 | `table not found` | Table name mismatch | `adapter.load_data(df, "name")` must match `table="name"` in component |
 | Subtotals not showing | `showSubtotals` is `False` | Set `showSubtotals=True` |
 | Weighted avg returns `None` | `weightField` column missing | Ensure weight column is in DataFrame and `availableFieldList` |
+| Measure-axis member is missing | `members[*].measureAlias` does not match a planned measure alias | Use the measure alias/id, or provide `sourceField` + `agg` for physical measures |
+| Measure-axis row/column renders as `__schema_placeholder__*` | Frontend column schema does not recognize virtual `valueField` column IDs | Check `runtimeResponse.columns`, `colSchema`, and `useColumnDefs` measure-axis handling |
+| SQL error for `Measure Name`, `Metric`, or `Value` column | A virtual measure-axis field was treated as a physical source-table field | Remove virtual fields before base aggregation; inject them only after aggregate-first unpivot |
 | `NameError: request_layout_mode` | Bug in older version | Update to ≥ 0.0.71 |
 | `include_subtotals` order bug | Bug in older version | Fixed in 0.0.71 — update |
 
@@ -595,6 +720,25 @@ Confirm:
 - Grand totals appear at bottom
 - Filters work via the filter icon on column headers
 
+For measure-axis changes, keep and run the real browser regression. It covers mixed `sum`, `avg`, and `weighted_avg` measures in one values-as-rows layout and checks the actual DOM cells:
+
+```bash
+pytest tests/test_measure_axis_browser.py -q -s
+```
+
+When the browser view is blank or wrong, debug in this order:
+- Inspect `runtimeResponse.payload.data` to prove the planner returned rows.
+- Inspect `runtimeResponse.payload.columns` and `runtimeResponse.payload.colSchema` to verify value column IDs such as `Book_Value` or `Hedge_Value`.
+- Inspect rendered DOM cells. Placeholder cells with valid response data point to frontend column-definition/schema handling, not SQL.
+- Check browser console logs for severe errors before changing planner code.
+
+Focused regression set used for measure-axis work:
+
+```bash
+pytest tests/test_measure_axis_browser.py tests/test_controller.py tests/test_frontend_contract.py tests/test_dash_runtime_callbacks.py -q
+npm run build:js
+```
+
 ---
 
 ## 12. Where to Look for More Detail
@@ -607,5 +751,7 @@ Confirm:
 | Master feature guide | `PIVOT_MASTER_DOCUMENTATION.md` |
 | Theme tokens / design system | `design_handoff_serverside_pivot/README.md` |
 | React component source | `dash_tanstack_pivot/src/lib/components/DashTanstackPivot.react.js` |
+| Measure-axis planner logic | `dash_tanstack_pivot/pivot_engine/pivot_engine/planner/ibis_planner.py` |
+| Measure-axis browser/runtime/UI tests | `tests/test_measure_axis_browser.py`, `tests/test_controller.py`, `tests/test_frontend_contract.py` |
 | SQL query generation | `dash_tanstack_pivot/pivot_engine/pivot_engine/planner/ibis_planner.py` |
 | All working examples | `examples/` directory |

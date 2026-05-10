@@ -133,6 +133,228 @@ def test_ibis_planner_with_sort(controller: PivotController, sample_data: pa.Tab
     assert result["rows"][0] == ["West", 750]
     assert result["rows"][1] == ["East", 300]
 
+
+def test_measure_axis_rows_virtualizes_wide_physical_measures(controller: PivotController):
+    data = pa.table({
+        "category": ["Equity", "Equity"],
+        "portfolio": ["Book", "Hedge"],
+        "Delta Explain": [100, -80],
+        "Gamma Explain": [25, -10],
+    })
+    controller.load_data_from_arrow("greeks_measure_axis_rows", data)
+
+    spec = {
+        "table": "greeks_measure_axis_rows",
+        "rows": ["category"],
+        "measures": [
+            {"field": "Delta Explain", "agg": "sum", "alias": "delta_sum"},
+            {"field": "Gamma Explain", "agg": "sum", "alias": "gamma_sum"},
+        ],
+        "measureAxis": {
+            "placement": "rows",
+            "labelField": "Explain Line",
+            "valueField": "Amount",
+        },
+        "sort": [{"field": "Explain Line", "order": "asc", "sortKeyField": "__sortkey__Explain Line"}],
+    }
+
+    result = controller.run_pivot(spec, return_format="dict")
+
+    assert result["columns"] == ["category", "Explain Line", "__sortkey__Explain Line", "Amount"]
+    rows = sorted(result["rows"], key=lambda row: row[2])
+    assert rows == [
+        ["Equity", "Delta Explain", 0, 20],
+        ["Equity", "Gamma Explain", 1, 15],
+    ]
+
+
+def test_measure_axis_rows_can_still_pivot_normal_column_dimensions(controller: PivotController):
+    data = pa.table({
+        "category": ["Equity", "Equity"],
+        "portfolio": ["Book", "Hedge"],
+        "Delta Explain": [100, -80],
+        "Gamma Explain": [25, -10],
+    })
+    controller.load_data_from_arrow("greeks_measure_axis_columns", data)
+
+    spec = {
+        "table": "greeks_measure_axis_columns",
+        "rows": ["category"],
+        "columns": ["portfolio"],
+        "measures": [
+            {"field": "Delta Explain", "agg": "sum", "alias": "delta_sum"},
+            {"field": "Gamma Explain", "agg": "sum", "alias": "gamma_sum"},
+        ],
+        "pivot_config": {"enabled": True},
+        "measureAxis": {
+            "placement": "rows",
+            "labelField": "Explain Line",
+            "valueField": "Amount",
+            "members": [
+                {"sourceField": "Delta Explain", "agg": "sum", "label": "Delta Explain", "order": 10},
+                {"sourceField": "Gamma Explain", "agg": "sum", "label": "Gamma Explain", "order": 20},
+            ],
+        },
+    }
+
+    result = controller.run_pivot(spec, return_format="dict")
+
+    assert result["columns"] == [
+        "category",
+        "Explain Line",
+        "__sortkey__Explain Line",
+        "Book_Amount",
+        "Hedge_Amount",
+    ]
+    rows = sorted(result["rows"], key=lambda row: row[2])
+    assert rows == [
+        ["Equity", "Delta Explain", 10, 100, -80],
+        ["Equity", "Gamma Explain", 20, 25, -10],
+    ]
+
+
+def test_measure_axis_aggregate_first_supports_mixed_and_weighted_measures(controller: PivotController):
+    data = pa.table({
+        "category": ["A", "A", "B"],
+        "amount": [10, 20, 5],
+        "price": [2, 10, 100],
+        "quantity": [1, 3, 2],
+    })
+    controller.load_data_from_arrow("mixed_measure_axis", data)
+
+    spec = {
+        "table": "mixed_measure_axis",
+        "rows": ["category"],
+        "measures": [
+            {"field": "amount", "agg": "sum", "alias": "amount_sum"},
+            {"field": "amount", "agg": "avg", "alias": "amount_avg"},
+            {"field": "price", "agg": "weighted_avg", "weighted_field": "quantity", "alias": "weighted_price"},
+        ],
+        "measureAxis": {
+            "placement": "rows",
+            "labelField": "Metric",
+            "valueField": "Value",
+            "members": [
+                {"measureAlias": "amount_sum", "label": "Amount Sum", "order": 0},
+                {"measureAlias": "amount_avg", "label": "Amount Avg", "order": 1},
+                {"measureAlias": "weighted_price", "label": "Weighted Price", "order": 2},
+            ],
+        },
+    }
+
+    result = controller.run_pivot(spec, return_format="dict")
+
+    assert result["columns"] == ["category", "Metric", "__sortkey__Metric", "Value"]
+    rows = sorted(result["rows"], key=lambda row: (row[0], row[2]))
+    assert rows == [
+        ["A", "Amount Sum", 0, 30.0],
+        ["A", "Amount Avg", 1, 15.0],
+        ["A", "Weighted Price", 2, 8.0],
+        ["B", "Amount Sum", 0, 5.0],
+        ["B", "Amount Avg", 1, 5.0],
+        ["B", "Weighted Price", 2, 100.0],
+    ]
+
+
+def test_measure_axis_aggregate_first_supports_formula_ratio_and_window_measures(controller: PivotController):
+    data = pa.table({
+        "category": ["A", "A", "B"],
+        "amount": [10, 20, 5],
+        "cost": [4, 8, 2],
+    })
+    controller.load_data_from_arrow("derived_measure_axis", data)
+
+    spec = {
+        "table": "derived_measure_axis",
+        "rows": ["category"],
+        "measures": [
+            {"field": "amount", "agg": "sum", "alias": "sales"},
+            {"field": "cost", "agg": "sum", "alias": "cost"},
+            {"field": None, "agg": "formula", "alias": "margin", "expression": "sales - cost"},
+            {
+                "field": "amount",
+                "agg": "sum",
+                "alias": "sales_pct_total",
+                "window_func": "percent_of_total",
+            },
+            {
+                "field": None,
+                "agg": "ratio",
+                "alias": "cost_ratio",
+                "ratio_numerator": "cost",
+                "ratio_denominator": "sales",
+            },
+        ],
+        "measureAxis": {
+            "placement": "rows",
+            "labelField": "Metric",
+            "valueField": "Value",
+            "members": [
+                {"measureAlias": "margin", "label": "Margin", "order": 0},
+                {"measureAlias": "cost_ratio", "label": "Cost Ratio", "order": 1},
+                {"measureAlias": "sales_pct_total", "label": "Sales % Total", "order": 2},
+            ],
+        },
+    }
+
+    result = controller.run_pivot(spec, return_format="dict")
+    rows = {
+        (row[0], row[1]): row[3]
+        for row in result["rows"]
+    }
+
+    assert rows[("A", "Margin")] == 18.0
+    assert rows[("B", "Margin")] == 3.0
+    assert rows[("A", "Cost Ratio")] == pytest.approx(0.4)
+    assert rows[("B", "Cost Ratio")] == pytest.approx(0.4)
+    assert rows[("A", "Sales % Total")] == pytest.approx(30 / 35)
+    assert rows[("B", "Sales % Total")] == pytest.approx(5 / 35)
+
+
+def test_measure_axis_aggregate_first_can_pivot_mixed_measures(controller: PivotController):
+    data = pa.table({
+        "category": ["Equity", "Equity"],
+        "portfolio": ["Book", "Hedge"],
+        "delta": [100, -80],
+        "gamma": [25, -10],
+    })
+    controller.load_data_from_arrow("mixed_measure_axis_columns", data)
+
+    spec = {
+        "table": "mixed_measure_axis_columns",
+        "rows": ["category"],
+        "columns": ["portfolio"],
+        "measures": [
+            {"field": "delta", "agg": "sum", "alias": "delta_sum"},
+            {"field": "gamma", "agg": "avg", "alias": "gamma_avg"},
+        ],
+        "pivot_config": {"enabled": True},
+        "measureAxis": {
+            "placement": "rows",
+            "labelField": "Metric",
+            "valueField": "Value",
+            "members": [
+                {"measureAlias": "delta_sum", "label": "Delta Sum", "order": 0},
+                {"measureAlias": "gamma_avg", "label": "Gamma Avg", "order": 1},
+            ],
+        },
+    }
+
+    result = controller.run_pivot(spec, return_format="dict")
+
+    assert result["columns"] == [
+        "category",
+        "Metric",
+        "__sortkey__Metric",
+        "Book_Value",
+        "Hedge_Value",
+    ]
+    rows = sorted(result["rows"], key=lambda row: row[2])
+    assert rows == [
+        ["Equity", "Delta Sum", 0, 100.0, -80.0],
+        ["Equity", "Gamma Avg", 1, 25.0, -10.0],
+    ]
+
 # Conditional import for fakeredis
 try:
     import fakeredis
@@ -242,4 +464,3 @@ def test_cursor_pagination(controller: PivotController):
     assert result3["rows"][0][0] == "City 4"
     assert result3["next_cursor"] is None # Should be the last page
 
-    

@@ -18,7 +18,7 @@ from collections import OrderedDict
 from .adapter_viewport_cache import AdapterViewportCache
 from .scalable_pivot_controller import ScalablePivotController
 from .editing import EditDomainService
-from .types.pivot_spec import PivotSpec, Measure
+from .types.pivot_spec import PivotSpec, Measure, MeasureAxisConfig
 from .security import User, apply_rls_to_spec
 from .formula_mixin import FormulaEngineMixin
 from .hierarchy_rows import (
@@ -86,6 +86,7 @@ class TanStackRequest:
     version: Optional[int] = None
     column_sort_options: Optional[Dict[str, Any]] = None
     custom_dimensions: List[Dict[str, Any]] = field(default_factory=list)
+    measure_axis: Optional[Dict[str, Any]] = None
     layout_mode: Optional[str] = None          # 'hierarchy' | 'outline' | 'tabular'
     show_subtotal_footers: Optional[bool] = False
 
@@ -226,6 +227,7 @@ class TanStackPivotAdapter(FormulaEngineMixin):
             "grouping": request.grouping or [],
             "aggregations": request.aggregations or [],
             "custom_dimensions": request.custom_dimensions or [],
+            "measure_axis": request.measure_axis or None,
             "totals": bool(request.totals),
             "row_totals": bool(request.row_totals),
             "include_subtotals": bool(request.include_subtotals),
@@ -240,6 +242,7 @@ class TanStackPivotAdapter(FormulaEngineMixin):
             "columns": request.columns or [],
             "filters": request.filters or {},
             "custom_dimensions": request.custom_dimensions or [],
+            "measure_axis": request.measure_axis or None,
             "column_sort_options": request.column_sort_options or {},
         }
         return hashlib.sha256(self._stable_json(payload).encode()).hexdigest()[:24]
@@ -934,6 +937,9 @@ class TanStackPivotAdapter(FormulaEngineMixin):
 
     @staticmethod
     def _dynamic_request_ids(request: "TanStackRequest") -> list[str]:
+        measure_axis = MeasureAxisConfig.from_dict(getattr(request, "measure_axis", None))
+        if measure_axis and measure_axis.placement in {"rows", "columns"}:
+            return [measure_axis.value_field or "__measure_value__"]
         return [
             str(col.get("id"))
             for col in (request.columns or [])
@@ -1075,6 +1081,7 @@ class TanStackPivotAdapter(FormulaEngineMixin):
             sorting=[],
             grouping=spec.rows or [],
             aggregations=[],
+            measure_axis=spec.measure_axis.to_dict() if getattr(spec, "measure_axis", None) else None,
             column_sort_options=spec.column_sort_options or {},
         )
         local_cache_key = self._center_column_catalog_cache_key(request_like)
@@ -1092,6 +1099,8 @@ class TanStackPivotAdapter(FormulaEngineMixin):
             spec.pivot_config.column_cursor if spec.pivot_config else None,
             spec.column_sort_options,
             spec.custom_dimensions,
+            measure_axis=spec.measure_axis,
+            measures=spec.measures,
         )
 
         col_cache_key = self.controller._cache_key_for_query(col_query, spec)
@@ -1347,6 +1356,51 @@ class TanStackPivotAdapter(FormulaEngineMixin):
             }
         )
     # Formula engine and window function methods provided by FormulaEngineMixin
+
+    @staticmethod
+    def _derive_measure_axis_members(
+        measure_axis: Optional[MeasureAxisConfig],
+        measures: List[Measure],
+        request_columns: List[Dict[str, Any]],
+    ) -> List[Dict[str, Any]]:
+        if not measure_axis or measure_axis.placement == "none":
+            return []
+
+        configured_members = [
+            dict(member)
+            for member in (measure_axis.members or [])
+            if isinstance(member, dict)
+        ]
+        if configured_members:
+            return configured_members
+
+        columns_by_id = {
+            str(column.get("id")): column
+            for column in (request_columns or [])
+            if isinstance(column, dict) and column.get("id") is not None
+        }
+        derived_members: List[Dict[str, Any]] = []
+        for index, measure in enumerate(measures or []):
+            column = columns_by_id.get(str(measure.alias), {})
+            label = (
+                column.get("header")
+                or column.get("label")
+                or column.get("aggregationLabel")
+                or getattr(measure, "field", None)
+                or getattr(measure, "alias", None)
+            )
+            derived_members.append({
+                "id": getattr(measure, "alias", None) or getattr(measure, "field", None) or f"measure_{index + 1}",
+                "sourceField": getattr(measure, "field", None),
+                "measureAlias": getattr(measure, "alias", None),
+                "agg": getattr(measure, "agg", None) or "sum",
+                "label": str(label or getattr(measure, "alias", None) or f"Measure {index + 1}"),
+                "order": index,
+                "format": column.get("format"),
+                "editable": bool(column.get("editable", False)),
+            })
+        return derived_members
+
     def convert_tanstack_request_to_pivot_spec(self, request: TanStackRequest) -> PivotSpec:
         """Convert TanStack request to PivotSpec format"""
         # Extract grouping columns as hierarchy
@@ -1376,8 +1430,32 @@ class TanStackPivotAdapter(FormulaEngineMixin):
             elif col['id'] not in hierarchy_cols and col['id'] not in ('_id', 'depth', 'hierarchy', 'subRows'):
                 # This is a value column
                 value_cols.append(col['id'])
-        
-        
+
+        measure_axis = MeasureAxisConfig.from_dict(request.measure_axis)
+        if measure_axis and measure_axis.placement != "none":
+            measure_axis.members = self._derive_measure_axis_members(measure_axis, measures, request.columns or [])
+            label_field = measure_axis.label_field
+            if measure_axis.placement == "rows":
+                if label_field not in hierarchy_cols:
+                    hierarchy_cols = list(hierarchy_cols) + [label_field]
+                value_cols = [field for field in value_cols if field != label_field]
+            elif measure_axis.placement == "columns":
+                if label_field not in value_cols:
+                    value_cols = list(value_cols) + [label_field]
+                hierarchy_cols = [field for field in hierarchy_cols if field != label_field]
+
+            sort_key_field = f"__sortkey__{label_field}"
+            has_measure_axis_sort = any(
+                isinstance(item, dict)
+                and (
+                    item.get("field") == label_field
+                    or item.get("sortKeyField") == sort_key_field
+                )
+                for item in (request.sorting or [])
+            )
+        else:
+            has_measure_axis_sort = False
+
         pivot_filters = []
         if request.filters:
             for field_name, filter_obj in request.filters.items():
@@ -1528,6 +1606,15 @@ class TanStackPivotAdapter(FormulaEngineMixin):
             elif dim_order == "numeric_desc":
                 pivot_sort.append({"field": dim_field, "order": "desc", "sortKeyField": sort_key_col})
 
+        if measure_axis and measure_axis.placement != "none" and not has_measure_axis_sort:
+            label_field = measure_axis.label_field
+            if label_field in set(hierarchy_cols or []) or label_field in set(value_cols or []):
+                pivot_sort.append({
+                    "field": label_field,
+                    "order": "asc",
+                    "sortKeyField": f"__sortkey__{label_field}",
+                })
+
         # Handle pagination
         offset = 0
         limit = 1000  # Default
@@ -1552,6 +1639,7 @@ class TanStackPivotAdapter(FormulaEngineMixin):
             measures=measures,
             filters=pivot_filters,
             custom_dimensions=request.custom_dimensions or [],
+            measure_axis=measure_axis,
             sort=pivot_sort,
             limit=limit,
             totals=request.totals if request.totals is not None else True,  # Enable totals computation
@@ -2925,6 +3013,8 @@ class TanStackPivotAdapter(FormulaEngineMixin):
                 column_id,
                 request.filters,
                 request.custom_dimensions,
+                measure_axis=request.measure_axis,
+                request_columns=request.columns,
                 search=search,
                 limit=page_size,
                 offset=offset,
@@ -4011,6 +4101,8 @@ class TanStackPivotAdapter(FormulaEngineMixin):
         column_id: str,
         filters: Dict[str, Any] = None,
         custom_dimensions: Optional[List[Dict[str, Any]]] = None,
+        measure_axis: Optional[Dict[str, Any]] = None,
+        request_columns: Optional[List[Dict[str, Any]]] = None,
         search: str = "",
         limit: int = 250,
         offset: int = 0,
@@ -4052,28 +4144,38 @@ class TanStackPivotAdapter(FormulaEngineMixin):
         except (TypeError, ValueError):
             offset = 0
 
+        axis_config = MeasureAxisConfig.from_dict(measure_axis)
+        request_measures: List[Measure] = []
+        for column in request_columns or []:
+            if not isinstance(column, dict) or not column.get("aggregationFn") or column.get("isFormula"):
+                continue
+            request_measures.append(Measure(
+                field=column.get("aggregationField", column.get("id")),
+                agg=column.get("aggregationFn", "sum"),
+                alias=column.get("id"),
+            ))
+        if axis_config and axis_config.placement != "none":
+            axis_config.members = self._derive_measure_axis_members(axis_config, request_measures, request_columns or [])
+
         spec = PivotSpec(
             table=table_name,
             rows=[],
             columns=[],
-            measures=[],
+            measures=request_measures,
             filters=pivot_filters,
             custom_dimensions=custom_dimensions or [],
+            measure_axis=axis_config,
             limit=limit,
             offset=offset,
         )
         
         # Use Ibis to get distinct values
-        con = self.controller.backend.con
-        table = con.table(table_name)
-        
-        # Apply filters
-        from pivot_engine.common.ibis_expression_builder import IbisExpressionBuilder
-        builder = IbisExpressionBuilder(con)
-        table = builder.apply_custom_dimensions(table, spec.custom_dimensions)
+        table = self.controller.planner._table_for_spec(
+            self.controller.planner._prepare_measure_axis_spec(spec)
+        )
         if column_id not in getattr(table, "columns", []):
             return [], 0
-        filter_expr = builder.build_filter_expression(table, spec.filters)
+        filter_expr = self.controller.planner.builder.build_filter_expression(table, spec.filters)
         if filter_expr is not None:
             table = table.filter(filter_expr)
 

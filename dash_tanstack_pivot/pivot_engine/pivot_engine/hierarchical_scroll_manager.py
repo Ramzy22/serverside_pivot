@@ -214,6 +214,8 @@ class HierarchicalVirtualScrollManager:
                     None,
                     spec.column_sort_options,
                     getattr(spec, "custom_dimensions", []),
+                    measure_axis=getattr(spec, "measure_axis", None),
+                    measures=getattr(spec, "measures", []),
                 )
                 col_data = self._to_pyarrow(col_query)
                 pivot_col_values = col_data['_col_key'].to_pylist()

@@ -40,6 +40,7 @@ export const useColumnVirtualizer = ({
     // When omitted the lists still recompute every render (safe fallback).
     columnVisibility,
     columnPinning,
+    columnOrder,
     columnSizing,
     columns,
 }) => {
@@ -88,15 +89,15 @@ export const useColumnVirtualizer = ({
     /* eslint-disable react-hooks/exhaustive-deps */
     const leftCols = useStableColumnList(
         useMemo(() => table.getLeftLeafColumns().filter(c => c.getIsVisible()),
-            [table, columns, columnVisibility, columnPinning, columnSizing])
+            [table, columns, columnVisibility, columnPinning, columnOrder, columnSizing])
     );
     const rightCols = useStableColumnList(
         useMemo(() => table.getRightLeafColumns().filter(c => c.getIsVisible()),
-            [table, columns, columnVisibility, columnPinning, columnSizing])
+            [table, columns, columnVisibility, columnPinning, columnOrder, columnSizing])
     );
     const centerCols = useStableColumnList(
         useMemo(() => table.getCenterLeafColumns().filter(c => c.getIsVisible()),
-            [table, columns, columnVisibility, columnPinning, columnSizing])
+            [table, columns, columnVisibility, columnPinning, columnOrder, columnSizing])
     );
     /* eslint-enable react-hooks/exhaustive-deps */
 

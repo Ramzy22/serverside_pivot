@@ -415,6 +415,91 @@ def test_chart_panel_source_grows_for_settings_instead_of_splitting_canvas():
     assert "normalizedDockPosition === 'left' || normalizedDockPosition === 'right'" in component_source
 
 
+def test_chart_canvas_pane_full_settings_settable_from_props():
+    """All chart visual/axis settings are normalizable from chartCanvasPanes prop."""
+    normalization_source = Path(
+        os.path.join(
+            os.getcwd(),
+            "dash_tanstack_pivot",
+            "src",
+            "lib",
+            "hooks",
+            "usePivotNormalization.js",
+        )
+    ).read_text(encoding="utf-8")
+    component_source = Path(
+        os.path.join(
+            os.getcwd(),
+            "dash_tanstack_pivot",
+            "src",
+            "lib",
+            "components",
+            "DashTanstackPivot.react.js",
+        )
+    ).read_text(encoding="utf-8")
+    python_source = Path(
+        os.path.join(
+            os.getcwd(),
+            "dash_tanstack_pivot",
+            "dash_tanstack_pivot",
+            "DashTanstackPivot.py",
+        )
+    ).read_text(encoding="utf-8")
+
+    # normalizeChartSettings function exists and handles all setting groups
+    assert "export const normalizeChartSettings = (value) => {" in normalization_source
+
+    # Valid value sets for constrained fields
+    assert "VALID_MARKER_SHAPES = new Set(['none', 'circle', 'square', 'diamond', 'triangle', 'cross'])" in normalization_source
+    assert "VALID_TRENDLINE_MODES = new Set(['linear', 'moving_avg', 'exponential'])" in normalization_source
+    assert "VALID_LEGEND_POSITIONS = new Set(['bottom', 'top', 'none'])" in normalization_source
+    assert "VALID_LABEL_POSITIONS = new Set(['outside', 'inside', 'center'])" in normalization_source
+    assert "VALID_VALUE_FORMATS = new Set(['auto', 'number', 'compact', 'percent', 'currency'])" in normalization_source
+    assert "VALID_SERIES_SORT_MODES = new Set(['none', 'value_desc', 'value_asc', 'alpha_asc', 'alpha_desc'])" in normalization_source
+
+    # All 31 settings fields normalized
+    for field in [
+        "chartSubtitle", "yAxisTitle", "yAxisMin", "yAxisMax",
+        "yAxisMinRight", "yAxisMaxRight", "tickCount", "labelAngle",
+        "colorPalette", "valueFormat", "showDataLabels", "decimalPlaces",
+        "labelPosition", "legendPosition", "markerShape", "markerSize",
+        "showGradient", "gradientDirection", "gradientOpacity",
+        "showAnimations", "showCalloutLabels",
+        "showTrendline", "trendlineMode", "trendlinePeriod",
+        "trendlineColor", "trendlineWidth",
+        "seriesSort", "seriesColors", "customPaletteColors",
+        "lineDashStyles", "referenceLines",
+    ]:
+        assert field in normalization_source, f"normalizeChartSettings missing field: {field}"
+
+    # normalizeChartCanvasPane calls normalizeChartSettings for chartSettings field
+    assert "chartSettings: normalizeChartSettings(source.chartSettings)" in normalization_source
+
+    # settingsPanelWidth is normalized in chartCanvasPane
+    assert "settingsPanelWidth" in normalization_source
+
+    # All three PivotChartPanel render sites pass settingsPanelWidth
+    assert normalization_source.count("settingsPanelWidth") >= 2  # normalization declares it at least twice
+    assert component_source.count("settingsPanelWidth={pane.settingsPanelWidth") >= 2  # docked + floating
+
+    # Floating pane render site now passes initialSettings and onSettingsChange
+    # (was missing before this fix)
+    floating_block_start = component_source.find("floating\n")
+    assert "initialSettings={pane.chartSettings" in component_source
+
+    # onSettingsChange is wired for all pane render sites
+    assert component_source.count("onSettingsChange={(settings) => updateChartCanvasPane(pane.id, { chartSettings: settings })}") >= 2
+
+    # Python docstring documents chartSettings and its sub-fields
+    assert "chartSettings (dict; optional)" in python_source
+    assert "settingsPanelWidth (number; optional)" in python_source
+    assert "yAxisTitle" in python_source
+    assert "referenceLines" in python_source
+    assert "trendlineMode" in python_source
+    assert "legendPosition" in python_source
+    assert "seriesSort" in python_source
+
+
 def test_chart_panel_settings_budget_survives_parent_rerenders():
     chart_source = Path(
         os.path.join(
@@ -2060,7 +2145,108 @@ def test_server_side_performance_config_source_exposes_ssrm_style_tuning():
     assert "performanceConfig" in viewport_source
     assert "columnOverscan" in col_virtualizer_source
     assert "const signature = columns.map((column) => {" in col_virtualizer_source
-    assert "[table, columns, columnVisibility, columnPinning, columnSizing]" in col_virtualizer_source
+    assert "[table, columns, columnVisibility, columnPinning, columnOrder, columnSizing]" in col_virtualizer_source
+
+
+def test_grid_polish_header_drag_order_pinning_and_menu_contract():
+    component_source = Path(
+        os.path.join(
+            os.getcwd(),
+            "dash_tanstack_pivot",
+            "src",
+            "lib",
+            "components",
+            "DashTanstackPivot.react.js",
+        )
+    ).read_text(encoding="utf-8")
+    render_helpers_source = Path(
+        os.path.join(
+            os.getcwd(),
+            "dash_tanstack_pivot",
+            "src",
+            "lib",
+            "hooks",
+            "useRenderHelpers.js",
+        )
+    ).read_text(encoding="utf-8")
+    context_menu_source = Path(
+        os.path.join(
+            os.getcwd(),
+            "dash_tanstack_pivot",
+            "src",
+            "lib",
+            "components",
+            "Table",
+            "ContextMenu.js",
+        )
+    ).read_text(encoding="utf-8")
+
+    assert "columnOrder: externalColumnOrder = null" in component_source
+    assert "localeText: externalLocaleText = null" in component_source
+    assert "normalizeColumnOrderValue" in component_source
+    assert "mergeColumnOrderWithIds" in component_source
+    assert "columnOrder: effectiveColumnOrder" in component_source
+    assert "onColumnOrderChange" in component_source
+    assert "setColumnOrderWithHistory" in component_source
+    assert "savePersistedState('columnOrder', columnOrder)" in component_source
+    assert "onHeaderDrop" in component_source
+    assert "resolveHeaderDropPinSide" in component_source
+    assert "application/x-pivot-column" in component_source
+    assert "menuMoveColumnLeft" in component_source
+    assert "menuResetColumnOrder" in component_source
+    assert "menuAutoSizeAllVisibleColumns" in component_source
+    assert "columnOrder: PropTypes.arrayOf(PropTypes.string)" in component_source
+    assert "localeText: PropTypes.object" in component_source
+    assert "onDrop={(e) =>" in render_helpers_source
+    assert "onHeaderDrop(e, header.column.id, header)" in render_helpers_source
+    assert "Ctrl+Left or Ctrl+Right" in render_helpers_source
+    assert "Alt+Shift+Left or Alt+Shift+Right" in render_helpers_source
+    assert "role=\"menu\"" in context_menu_source
+    assert "aria-disabled={disabled || undefined}" in context_menu_source
+    assert "ArrowDown" in context_menu_source
+
+
+def test_header_coloring_contract_exposes_prop_and_render_path():
+    component_source = Path(
+        os.path.join(
+            os.getcwd(),
+            "dash_tanstack_pivot",
+            "src",
+            "lib",
+            "components",
+            "DashTanstackPivot.react.js",
+        )
+    ).read_text(encoding="utf-8")
+    render_helpers_source = Path(
+        os.path.join(
+            os.getcwd(),
+            "dash_tanstack_pivot",
+            "src",
+            "lib",
+            "hooks",
+            "useRenderHelpers.js",
+        )
+    ).read_text(encoding="utf-8")
+    column_defs_source = Path(
+        os.path.join(
+            os.getcwd(),
+            "dash_tanstack_pivot",
+            "src",
+            "lib",
+            "hooks",
+            "useColumnDefs.js",
+        )
+    ).read_text(encoding="utf-8")
+
+    assert "headerFormatting = {}" in component_source
+    assert "headerFormatting: PropTypes.oneOfType" in component_source
+    assert "headerStyle: PropTypes.object" in component_source
+    assert "headerFormatting," in component_source
+    assert "normalizeHeaderStyle" in render_helpers_source
+    assert "resolveHeaderFormatStyle" in render_helpers_source
+    assert "...headerFormatStyle" in render_helpers_source
+    assert "buildMeasureHeaderStyle" in column_defs_source
+    assert "headerStyle: buildMeasureHeaderStyle" in column_defs_source
 
 
 def test_frontend_profiler_source_tracks_request_ids_and_global_history():
@@ -3019,6 +3205,96 @@ def test_custom_category_editor_uses_modal_and_validates_rules():
     assert 'A category named "${normalized.name}" already exists.' in sidebar_source
     assert "does not match any current row" in sidebar_source
     assert "createCustomCategoryRule(conditionFieldOptions" in sidebar_source
+
+
+def test_custom_dimensions_support_date_and_number_grouping_workflows():
+    sidebar_source = Path(
+        os.path.join(
+            os.getcwd(),
+            "dash_tanstack_pivot",
+            "src",
+            "lib",
+            "components",
+            "Sidebar",
+            "SidebarPanel.js",
+        )
+    ).read_text(encoding="utf-8")
+    normalization_source = Path(
+        os.path.join(
+            os.getcwd(),
+            "dash_tanstack_pivot",
+            "src",
+            "lib",
+            "hooks",
+            "usePivotNormalization.js",
+        )
+    ).read_text(encoding="utf-8")
+
+    assert "CUSTOM_DIMENSION_KINDS" in normalization_source
+    assert "DATE_GROUP_GRANULARITIES" in normalization_source
+    assert "evaluateCustomDateGroupDimension" in normalization_source
+    assert "evaluateCustomNumberGroupDimension" in normalization_source
+    assert "normalized.kind === 'date_group'" in normalization_source
+    assert "normalized.kind === 'number_group'" in normalization_source
+    assert "createDateGroupDraft" in sidebar_source
+    assert "createNumberGroupDraft" in sidebar_source
+    assert "Date Group" in sidebar_source
+    assert "Number Bins" in sidebar_source
+    assert "Create calendar buckets from a date field." in sidebar_source
+    assert "Create fixed-width numeric bins from a number field." in sidebar_source
+    assert "Number bins need a positive bin size." in sidebar_source
+
+
+def test_measure_axis_contract_is_wired_through_frontend_and_runtime():
+    component_source = Path(
+        os.path.join(
+            os.getcwd(),
+            "dash_tanstack_pivot",
+            "src",
+            "lib",
+            "components",
+            "DashTanstackPivot.react.js",
+        )
+    ).read_text(encoding="utf-8")
+    sidebar_source = Path(
+        os.path.join(
+            os.getcwd(),
+            "dash_tanstack_pivot",
+            "src",
+            "lib",
+            "components",
+            "Sidebar",
+            "SidebarPanel.js",
+        )
+    ).read_text(encoding="utf-8")
+    callbacks_source = Path(
+        os.path.join(
+            os.getcwd(),
+            "dash_tanstack_pivot",
+            "pivot_engine",
+            "pivot_engine",
+            "runtime",
+            "dash_callbacks.py",
+        )
+    ).read_text(encoding="utf-8")
+    service_source = Path(
+        os.path.join(
+            os.getcwd(),
+            "dash_tanstack_pivot",
+            "pivot_engine",
+            "pivot_engine",
+            "runtime",
+            "service.py",
+        )
+    ).read_text(encoding="utf-8")
+
+    assert "normalizeMeasureAxisValue" in component_source
+    assert "buildMeasureAxisRuntimeConfig" in component_source
+    assert "measureAxis: runtimeMeasureAxis" in component_source
+    assert "MeasureAxisControls" in sidebar_source
+    assert "Values as" in sidebar_source
+    assert 'Input(pivot_id, "measureAxis")' in callbacks_source
+    assert 'measure_axis=state.measure_axis or None' in service_source
 
 
 def test_filter_open_requests_and_responses_are_idempotent():

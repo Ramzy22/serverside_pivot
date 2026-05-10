@@ -48,6 +48,8 @@ export const SUPPORTED_DEFAULT_NUMBER_FORMATS = new Set(['', 'currency', 'accoun
 export const GRAND_TOTAL_ROW_ID = '__grand_total__';
 export const MISSING_PERSISTED_VALUE = Symbol('missing-persisted-value');
 export const CUSTOM_CATEGORY_FIELD_PREFIX = '__custom_category__';
+export const CUSTOM_DIMENSION_KINDS = new Set(['category', 'date_group', 'number_group']);
+export const DATE_GROUP_GRANULARITIES = new Set(['year', 'quarter', 'month', 'week', 'day']);
 export const CUSTOM_CATEGORY_OPERATORS = new Set([
     'eq',
     'ne',
@@ -88,6 +90,106 @@ export const buildCustomCategoryFieldId = (id) => (
 export const isCustomCategoryField = (field) => (
     typeof field === 'string' && field.startsWith(CUSTOM_CATEGORY_FIELD_PREFIX)
 );
+
+const normalizeCustomDimensionKind = (value) => {
+    const normalized = String(value || 'category').trim().toLowerCase().replace(/[\s-]+/g, '_');
+    if (normalized === 'date' || normalized === 'date_bucket' || normalized === 'date_grouping') return 'date_group';
+    if (normalized === 'number' || normalized === 'numeric' || normalized === 'numeric_bucket' || normalized === 'number_bucket' || normalized === 'number_grouping') return 'number_group';
+    return CUSTOM_DIMENSION_KINDS.has(normalized) ? normalized : 'category';
+};
+
+const normalizeDateGroupGranularity = (value) => {
+    const normalized = String(value || 'month').trim().toLowerCase().replace(/[\s-]+/g, '_');
+    if (normalized === 'yyyy' || normalized === 'yr') return 'year';
+    if (normalized === 'q' || normalized === 'qtr') return 'quarter';
+    if (normalized === 'mon' || normalized === 'year_month' || normalized === 'ym') return 'month';
+    if (normalized === 'weekday') return 'day';
+    return DATE_GROUP_GRANULARITIES.has(normalized) ? normalized : 'month';
+};
+
+const normalizeDateGroupFiscalStartMonth = (value) => {
+    const numeric = Number(value);
+    if (!Number.isFinite(numeric)) return 1;
+    return Math.max(1, Math.min(12, Math.floor(numeric)));
+};
+
+const parseCustomGroupDate = (value) => {
+    if (value instanceof Date && !Number.isNaN(value.getTime())) return value;
+    if (value === null || value === undefined || value === '') return null;
+    const parsed = new Date(value);
+    return Number.isNaN(parsed.getTime()) ? null : parsed;
+};
+
+const pad2 = (value) => String(value).padStart(2, '0');
+
+const getIsoWeekParts = (date) => {
+    const utcDate = new Date(Date.UTC(date.getFullYear(), date.getMonth(), date.getDate()));
+    const dayNum = utcDate.getUTCDay() || 7;
+    utcDate.setUTCDate(utcDate.getUTCDate() + 4 - dayNum);
+    const yearStart = new Date(Date.UTC(utcDate.getUTCFullYear(), 0, 1));
+    const week = Math.ceil((((utcDate - yearStart) / 86400000) + 1) / 7);
+    return { year: utcDate.getUTCFullYear(), week };
+};
+
+const formatNumberGroupBoundary = (value, precision = null) => {
+    const numeric = Number(value);
+    if (!Number.isFinite(numeric)) return '';
+    const resolvedPrecision = precision === null || precision === undefined
+        ? (Math.abs(numeric) < 10 && !Number.isInteger(numeric) ? 2 : 0)
+        : Math.max(0, Math.min(8, Math.floor(Number(precision) || 0)));
+    return numeric.toLocaleString(undefined, {
+        minimumFractionDigits: 0,
+        maximumFractionDigits: resolvedPrecision,
+    });
+};
+
+export const evaluateCustomDateGroupDimension = (row, dimension) => {
+    const sourceField = dimension && dimension.sourceField;
+    const date = parseCustomGroupDate(sourceField ? row && row[sourceField] : null);
+    if (!date) return (dimension && dimension.fallbackLabel) || 'No date';
+    const granularity = normalizeDateGroupGranularity(dimension && dimension.granularity);
+    const fiscalStartMonth = normalizeDateGroupFiscalStartMonth(dimension && dimension.fiscalYearStartMonth);
+    const year = date.getFullYear();
+    const monthIndex = date.getMonth();
+    const month = monthIndex + 1;
+    if (granularity === 'year') return String(year);
+    if (granularity === 'quarter') {
+        if (fiscalStartMonth !== 1) {
+            const fiscalMonthIndex = (monthIndex - (fiscalStartMonth - 1) + 12) % 12;
+            const fiscalQuarter = Math.floor(fiscalMonthIndex / 3) + 1;
+            const fiscalYear = month >= fiscalStartMonth ? year + 1 : year;
+            return `FY${fiscalYear} Q${fiscalQuarter}`;
+        }
+        return `${year} Q${Math.floor(monthIndex / 3) + 1}`;
+    }
+    if (granularity === 'week') {
+        const { year: weekYear, week } = getIsoWeekParts(date);
+        return `${weekYear} W${pad2(week)}`;
+    }
+    if (granularity === 'day') return `${year}-${pad2(month)}-${pad2(date.getDate())}`;
+    return `${year}-${pad2(month)}`;
+};
+
+export const evaluateCustomNumberGroupDimension = (row, dimension) => {
+    const sourceField = dimension && dimension.sourceField;
+    const value = Number(sourceField ? row && row[sourceField] : null);
+    if (!Number.isFinite(value)) return (dimension && dimension.fallbackLabel) || 'No value';
+    const binSize = Math.abs(Number(dimension && dimension.binSize));
+    if (!Number.isFinite(binSize) || binSize <= 0) return (dimension && dimension.fallbackLabel) || 'No value';
+    const precision = dimension && dimension.precision !== null && dimension.precision !== undefined
+        ? Math.max(0, Math.min(8, Math.floor(Number(dimension.precision) || 0)))
+        : null;
+    const hasMin = dimension && dimension.minValue !== null && dimension.minValue !== undefined && Number.isFinite(Number(dimension.minValue));
+    const hasMax = dimension && dimension.maxValue !== null && dimension.maxValue !== undefined && Number.isFinite(Number(dimension.maxValue));
+    const minValue = hasMin ? Number(dimension.minValue) : null;
+    const maxValue = hasMax ? Number(dimension.maxValue) : null;
+    if (hasMin && value < minValue) return `< ${formatNumberGroupBoundary(minValue, precision)}`;
+    if (hasMax && value >= maxValue) return `>= ${formatNumberGroupBoundary(maxValue, precision)}`;
+    const anchor = hasMin ? minValue : (Number.isFinite(Number(dimension && dimension.startValue)) ? Number(dimension.startValue) : 0);
+    const binStart = anchor + Math.floor((value - anchor) / binSize) * binSize;
+    const binEnd = binStart + binSize;
+    return `${formatNumberGroupBoundary(binStart, precision)} - < ${formatNumberGroupBoundary(binEnd, precision)}`;
+};
 
 export const getCustomDimensionFieldId = (dimension) => {
     if (!dimension || typeof dimension !== 'object') return '';
@@ -158,6 +260,7 @@ export const normalizeCustomDimensionsValue = (value) => {
     const usedFields = new Set();
     return value.map((entry, index) => {
         if (!entry || typeof entry !== 'object') return null;
+        const kind = normalizeCustomDimensionKind(entry.kind || entry.type || entry.mode);
         const rawName = typeof entry.name === 'string' && entry.name.trim()
             ? entry.name.trim()
             : (typeof entry.label === 'string' && entry.label.trim() ? entry.label.trim() : `Custom Category ${index + 1}`);
@@ -167,6 +270,53 @@ export const normalizeCustomDimensionsValue = (value) => {
             field = buildCustomCategoryFieldId(`${id}_${index + 1}`);
         }
         usedFields.add(field);
+        const fallbackLabel = typeof entry.fallbackLabel === 'string' && entry.fallbackLabel.trim()
+            ? entry.fallbackLabel.trim()
+            : (typeof entry.defaultLabel === 'string' && entry.defaultLabel.trim() ? entry.defaultLabel.trim() : (kind === 'date_group' ? 'No date' : (kind === 'number_group' ? 'No value' : 'Other')));
+        if (kind === 'date_group') {
+            const sourceField = typeof entry.sourceField === 'string' && entry.sourceField.trim()
+                ? entry.sourceField.trim()
+                : (typeof entry.baseField === 'string' && entry.baseField.trim() ? entry.baseField.trim() : '');
+            if (!sourceField) return null;
+            return {
+                id,
+                field,
+                name: rawName,
+                kind,
+                sourceField,
+                granularity: normalizeDateGroupGranularity(entry.granularity || entry.datePart),
+                fiscalYearStartMonth: normalizeDateGroupFiscalStartMonth(entry.fiscalYearStartMonth),
+                fallbackLabel,
+                order: 'calendar',
+            };
+        }
+        if (kind === 'number_group') {
+            const sourceField = typeof entry.sourceField === 'string' && entry.sourceField.trim()
+                ? entry.sourceField.trim()
+                : (typeof entry.baseField === 'string' && entry.baseField.trim() ? entry.baseField.trim() : '');
+            if (!sourceField) return null;
+            const binSize = Math.abs(Number(entry.binSize || entry.interval || entry.step));
+            if (!Number.isFinite(binSize) || binSize <= 0) return null;
+            const parseOptionalNumber = (candidate) => {
+                if (candidate === '' || candidate === null || candidate === undefined) return null;
+                const numeric = Number(candidate);
+                return Number.isFinite(numeric) ? numeric : null;
+            };
+            return {
+                id,
+                field,
+                name: rawName,
+                kind,
+                sourceField,
+                binSize,
+                startValue: parseOptionalNumber(entry.startValue),
+                minValue: parseOptionalNumber(entry.minValue),
+                maxValue: parseOptionalNumber(entry.maxValue),
+                precision: parseOptionalNumber(entry.precision),
+                fallbackLabel,
+                order: 'numeric',
+            };
+        }
         const rules = (Array.isArray(entry.rules) ? entry.rules : [])
             .map((rule, ruleIndex) => {
                 if (!rule || typeof rule !== 'object') return null;
@@ -189,6 +339,7 @@ export const normalizeCustomDimensionsValue = (value) => {
             id,
             field,
             name: rawName,
+            kind: 'category',
             fallbackLabel: typeof entry.fallbackLabel === 'string' && entry.fallbackLabel.trim()
                 ? entry.fallbackLabel.trim()
                 : (typeof entry.defaultLabel === 'string' && entry.defaultLabel.trim() ? entry.defaultLabel.trim() : 'Other'),
@@ -269,6 +420,12 @@ export const evaluateCustomCategoryCondition = (row, condition) => {
 export const evaluateCustomCategoryDimension = (row, dimension) => {
     const normalized = normalizeCustomDimensionsValue([dimension])[0];
     if (!normalized) return '';
+    if (normalized.kind === 'date_group') {
+        return evaluateCustomDateGroupDimension(row, normalized);
+    }
+    if (normalized.kind === 'number_group') {
+        return evaluateCustomNumberGroupDimension(row, normalized);
+    }
     const matchingRule = normalized.rules.find((rule) => (
         evaluateCustomCategoryCondition(row, rule.condition)
     ));
@@ -1191,6 +1348,54 @@ export const normalizeChartDockPosition = (value, fallback = 'right') => (
     VALID_CHART_DOCK_POSITIONS.has(value) ? value : fallback
 );
 
+const VALID_MARKER_SHAPES = new Set(['none', 'circle', 'square', 'diamond', 'triangle', 'cross']);
+const VALID_TRENDLINE_MODES = new Set(['linear', 'moving_avg', 'exponential']);
+const VALID_LEGEND_POSITIONS = new Set(['bottom', 'top', 'none']);
+const VALID_LABEL_POSITIONS = new Set(['outside', 'inside', 'center']);
+const VALID_VALUE_FORMATS = new Set(['auto', 'number', 'compact', 'percent', 'currency']);
+const VALID_SERIES_SORT_MODES = new Set(['none', 'value_desc', 'value_asc', 'alpha_asc', 'alpha_desc']);
+
+export const normalizeChartSettings = (value) => {
+    const s = value && typeof value === 'object' ? value : {};
+    const yAxisMin = s.yAxisMin !== undefined ? String(s.yAxisMin) : '';
+    const yAxisMax = s.yAxisMax !== undefined ? String(s.yAxisMax) : '';
+    const yAxisMinRight = s.yAxisMinRight !== undefined ? String(s.yAxisMinRight) : '';
+    const yAxisMaxRight = s.yAxisMaxRight !== undefined ? String(s.yAxisMaxRight) : '';
+    return {
+        chartSubtitle: typeof s.chartSubtitle === 'string' ? s.chartSubtitle : '',
+        yAxisTitle: typeof s.yAxisTitle === 'string' ? s.yAxisTitle : '',
+        yAxisMin,
+        yAxisMax,
+        yAxisMinRight,
+        yAxisMaxRight,
+        tickCount: Number.isFinite(Number(s.tickCount)) ? Math.max(2, Math.min(20, Math.floor(Number(s.tickCount)))) : 5,
+        labelAngle: Number.isFinite(Number(s.labelAngle)) ? Math.max(0, Math.min(90, Math.floor(Number(s.labelAngle)))) : 0,
+        colorPalette: typeof s.colorPalette === 'string' && s.colorPalette ? s.colorPalette : 'default',
+        valueFormat: VALID_VALUE_FORMATS.has(s.valueFormat) ? s.valueFormat : 'auto',
+        showDataLabels: Boolean(s.showDataLabels),
+        decimalPlaces: Number.isFinite(Number(s.decimalPlaces)) ? Math.max(-1, Math.floor(Number(s.decimalPlaces))) : -1,
+        labelPosition: VALID_LABEL_POSITIONS.has(s.labelPosition) ? s.labelPosition : 'outside',
+        legendPosition: VALID_LEGEND_POSITIONS.has(s.legendPosition) ? s.legendPosition : 'bottom',
+        markerShape: VALID_MARKER_SHAPES.has(s.markerShape) ? s.markerShape : 'circle',
+        markerSize: Number.isFinite(Number(s.markerSize)) ? Math.max(1, Math.min(20, Math.floor(Number(s.markerSize)))) : 4,
+        showGradient: Boolean(s.showGradient),
+        gradientDirection: s.gradientDirection === 'horizontal' ? 'horizontal' : 'vertical',
+        gradientOpacity: Number.isFinite(Number(s.gradientOpacity)) ? Math.max(0, Math.min(100, Math.floor(Number(s.gradientOpacity)))) : 70,
+        showAnimations: s.showAnimations !== false,
+        showCalloutLabels: Boolean(s.showCalloutLabels),
+        showTrendline: Boolean(s.showTrendline),
+        trendlineMode: VALID_TRENDLINE_MODES.has(s.trendlineMode) ? s.trendlineMode : 'linear',
+        trendlinePeriod: Number.isFinite(Number(s.trendlinePeriod)) ? Math.max(2, Math.min(50, Math.floor(Number(s.trendlinePeriod)))) : 3,
+        trendlineColor: typeof s.trendlineColor === 'string' ? s.trendlineColor : '',
+        trendlineWidth: Number.isFinite(Number(s.trendlineWidth)) ? Math.max(1, Math.min(8, Math.floor(Number(s.trendlineWidth)))) : 2,
+        seriesSort: VALID_SERIES_SORT_MODES.has(s.seriesSort) ? s.seriesSort : 'none',
+        seriesColors: cloneSerializable(s.seriesColors && typeof s.seriesColors === 'object' && !Array.isArray(s.seriesColors) ? s.seriesColors : {}, {}),
+        customPaletteColors: cloneSerializable(Array.isArray(s.customPaletteColors) ? s.customPaletteColors : [], []),
+        lineDashStyles: cloneSerializable(s.lineDashStyles && typeof s.lineDashStyles === 'object' && !Array.isArray(s.lineDashStyles) ? s.lineDashStyles : {}, {}),
+        referenceLines: cloneSerializable(Array.isArray(s.referenceLines) ? s.referenceLines : [], []),
+    };
+};
+
 export const normalizeChartCanvasPane = (value, fallbackDefinition, index = 0) => {
     const source = value && typeof value === 'object' ? value : {};
     const normalizedDefinition = normalizeChartDefinition(source, {
@@ -1199,6 +1404,7 @@ export const normalizeChartCanvasPane = (value, fallbackDefinition, index = 0) =
         name: source.name || `Chart Pane ${index + 1}`,
     });
     const numericSize = Number(source.size);
+    const rawSettingsPanelWidth = Number(source.settingsPanelWidth);
     return {
         ...normalizedDefinition,
         size: Number.isFinite(numericSize) && numericSize > 0 ? numericSize : 1,
@@ -1209,6 +1415,10 @@ export const normalizeChartCanvasPane = (value, fallbackDefinition, index = 0) =
         lockedModel: cloneSerializable(source.lockedModel, null),
         lockedRequest: normalizeLockedChartRequest(source.lockedRequest),
         immersiveMode: Boolean(source.immersiveMode),
+        chartSettings: normalizeChartSettings(source.chartSettings),
+        settingsPanelWidth: Number.isFinite(rawSettingsPanelWidth) && rawSettingsPanelWidth >= 300
+            ? Math.min(680, Math.floor(rawSettingsPanelWidth))
+            : null,
     };
 };
 

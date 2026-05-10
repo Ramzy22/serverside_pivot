@@ -507,10 +507,8 @@ class ScalablePivotController(PivotController):
         return or_expr
 
     def _build_sparse_materialized_source_query(self, spec: PivotSpec, column_values: List[str]):
-        base_table = self.planner.builder.apply_custom_dimensions(
-            self.planner.con.table(spec.table),
-            getattr(spec, "custom_dimensions", []),
-        )
+        spec = self.planner._prepare_measure_axis_spec(spec)
+        base_table = self.planner._table_for_spec(spec)
         pre_filters, _post_filters = self._split_pivot_filters(spec)
         if pre_filters:
             filter_expr = self.planner.builder.build_filter_expression(base_table, pre_filters)
@@ -582,6 +580,7 @@ class ScalablePivotController(PivotController):
         column_values: List[str],
         hidden_sort_keys: List[str],
     ) -> pa.Table:
+        spec = self.planner._prepare_measure_axis_spec(spec)
         row_dims = list(spec.rows or [])
         column_dims = list(spec.columns or [])
         base_measures = [m for m in (spec.measures or []) if not getattr(m, "ratio_numerator", None)]
@@ -1125,6 +1124,13 @@ class ScalablePivotController(PivotController):
         if not spec.rows:
             return False
         if expanded_paths:
+            return False
+        axis_config = self.planner._measure_axis_config(spec)
+        if (
+            axis_config
+            and axis_config.placement == "rows"
+            and spec.rows[0] == axis_config.label_field
+        ):
             return False
         if spec.having:
             return False

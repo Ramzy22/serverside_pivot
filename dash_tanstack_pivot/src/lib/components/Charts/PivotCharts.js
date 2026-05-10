@@ -4168,7 +4168,9 @@ const ChartSurface = ({
     const [lineDashStyles, setLineDashStyles] = useState(() => initialSettings?.lineDashStyles ?? {});
     const [yAxisMinRight, setYAxisMinRight] = useState(() => initialSettings?.yAxisMinRight ?? '');
     const [yAxisMaxRight, setYAxisMaxRight] = useState(() => initialSettings?.yAxisMaxRight ?? '');
-    const [settingsTab, setSettingsTab] = useState('data');
+    const [settingsTab, setSettingsTab] = useState('chart');
+    const [chartTypeOpen, setChartTypeOpen] = useState(true);
+    const [chartParamsOpen, setChartParamsOpen] = useState(true);
     const handleElementSelect = useCallback((type) => {
         const tabMap = { series: 'style', axis: 'axes', legend: 'labels', title: 'data' };
         const tab = tabMap[type];
@@ -4623,6 +4625,7 @@ const ChartSurface = ({
                     flexShrink: 0,
                 }}>
                     {[
+                        { id: 'chart', label: 'Chart' },
                         { id: 'data', label: 'Data' },
                         { id: 'axes', label: 'Axes' },
                         { id: 'style', label: 'Style' },
@@ -4677,32 +4680,49 @@ const ChartSurface = ({
                         background: theme.sidebarBg || theme.surfaceBg || theme.background,
                     }}
                 >
+                {settingsTab === 'chart' && <>
+                    {/* Chart Type collapsible section */}
+                    <button type="button" onClick={() => setChartTypeOpen(o => !o)} style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', width: '100%', background: 'none', border: 'none', borderBottom: `1px solid ${theme.border}`, padding: '4px 0', cursor: 'pointer', marginBottom: chartTypeOpen ? '6px' : 0 }}>
+                        <span style={{ fontSize: '10px', fontWeight: 800, letterSpacing: '0.08em', textTransform: 'uppercase', color: theme.textSec }}>Chart Type</span>
+                        <span style={{ fontSize: '10px', color: theme.textSec, transform: chartTypeOpen ? 'rotate(0deg)' : 'rotate(-90deg)', transition: 'transform 0.15s' }}>▾</span>
+                    </button>
+                    {chartTypeOpen && <ChartTypeGallery chartType={chartType} onChange={onChartTypeChange} theme={theme} includeHierarchyCharts={allowHierarchyCharts} />}
+                    {/* Chart Parameters collapsible section */}
+                    <button type="button" onClick={() => setChartParamsOpen(o => !o)} style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', width: '100%', background: 'none', border: 'none', borderBottom: `1px solid ${theme.border}`, padding: '4px 0', cursor: 'pointer', marginTop: '8px', marginBottom: chartParamsOpen ? '6px' : 0 }}>
+                        <span style={{ fontSize: '10px', fontWeight: 800, letterSpacing: '0.08em', textTransform: 'uppercase', color: theme.textSec }}>Parameters</span>
+                        <span style={{ fontSize: '10px', color: theme.textSec, transform: chartParamsOpen ? 'rotate(0deg)' : 'rotate(-90deg)', transition: 'transform 0.15s' }}>▾</span>
+                    </button>
+                    {chartParamsOpen && <>
+                        {(chartType !== 'heatmap' && chartType !== 'icicle' && chartType !== 'sunburst' && chartType !== 'sankey' && chartType !== 'pie' && chartType !== 'donut' && chartType !== 'scatter' && chartType !== 'waterfall' && !ECHARTS_CHART_TYPES.has(chartType) && !isComboChart) ? (
+                            <ChartConfigField label="Source" theme={theme}>
+                                <ChartOrientationButtons orientation={orientation} onChange={onOrientationChange} theme={theme} />
+                            </ChartConfigField>
+                        ) : null}
+                        {(chartType === 'bar') ? (
+                            <ChartConfigField label="Direction" theme={theme}>
+                                <ChartAxisButtons axisMode={axisMode} onChange={onAxisModeChange} theme={theme} />
+                            </ChartConfigField>
+                        ) : null}
+                        {(chartType === 'bar' || chartType === 'area') && !isComboChart && (
+                            <ChartConfigField label="Layout" theme={theme}>
+                                <ChartLayoutButtons chartType={chartType} barLayout={barLayout} onChange={onBarLayoutChange} canStack={canStack} theme={theme} />
+                            </ChartConfigField>
+                        )}
+                        {showHierarchySection ? (
+                            <ChartConfigField label="Level" theme={theme}>
+                                <ChartHierarchyButtons level={hierarchyLevel} onChange={onHierarchyLevelChange} maxLevel={maxHierarchyLevel} theme={theme} />
+                            </ChartConfigField>
+                        ) : null}
+                        {isComboChart ? (<>
+                            <div style={{ fontSize: '10px', fontWeight: 800, letterSpacing: '0.08em', textTransform: 'uppercase', color: theme.textSec, paddingBottom: '4px', borderBottom: `1px solid ${theme.border}`, marginTop: '4px' }}>Layers</div>
+                            <ChartLayerEditor layers={chartLayers} onChange={onChartLayersChange} availableColumns={availableColumns} theme={theme} />
+                        </>) : null}
+                        {!(chartType !== 'heatmap' && chartType !== 'icicle' && chartType !== 'sunburst' && chartType !== 'sankey' && chartType !== 'pie' && chartType !== 'donut' && chartType !== 'scatter' && chartType !== 'waterfall' && !ECHARTS_CHART_TYPES.has(chartType) && !isComboChart) && !(chartType === 'bar') && !((chartType === 'bar' || chartType === 'area') && !isComboChart) && !showHierarchySection && !isComboChart ? (
+                            <div style={{ fontSize: '11px', color: theme.textSec, padding: '4px 0' }}>No parameters for this chart type.</div>
+                        ) : null}
+                    </>}
+                </>}
                 {settingsTab === 'data' && <>
-                    <ChartTypeGallery chartType={chartType} onChange={onChartTypeChange} theme={theme} includeHierarchyCharts={allowHierarchyCharts} />
-                    {(chartType !== 'heatmap' && chartType !== 'icicle' && chartType !== 'sunburst' && chartType !== 'sankey' && chartType !== 'pie' && chartType !== 'donut' && chartType !== 'scatter' && chartType !== 'waterfall' && !ECHARTS_CHART_TYPES.has(chartType) && !isComboChart) ? (
-                        <ChartConfigField label="Source" theme={theme}>
-                            <ChartOrientationButtons orientation={orientation} onChange={onOrientationChange} theme={theme} />
-                        </ChartConfigField>
-                    ) : null}
-                    {(chartType === 'bar') ? (
-                        <ChartConfigField label="Direction" theme={theme}>
-                            <ChartAxisButtons axisMode={axisMode} onChange={onAxisModeChange} theme={theme} />
-                        </ChartConfigField>
-                    ) : null}
-                    {(chartType === 'bar' || chartType === 'area') && !isComboChart && (
-                        <ChartConfigField label="Layout" theme={theme}>
-                            <ChartLayoutButtons chartType={chartType} barLayout={barLayout} onChange={onBarLayoutChange} canStack={canStack} theme={theme} />
-                        </ChartConfigField>
-                    )}
-                    {showHierarchySection ? (
-                        <ChartConfigField label="Level" theme={theme}>
-                            <ChartHierarchyButtons level={hierarchyLevel} onChange={onHierarchyLevelChange} maxLevel={maxHierarchyLevel} theme={theme} />
-                        </ChartConfigField>
-                    ) : null}
-                    {isComboChart ? (<>
-                        <div style={{ fontSize: '10px', fontWeight: 800, letterSpacing: '0.08em', textTransform: 'uppercase', color: theme.textSec, paddingBottom: '4px', borderBottom: `1px solid ${theme.border}`, marginTop: '4px' }}>Layers</div>
-                        <ChartLayerEditor layers={chartLayers} onChange={onChartLayersChange} availableColumns={availableColumns} theme={theme} />
-                    </>) : null}
                     <div style={{ fontSize: '10px', fontWeight: 800, letterSpacing: '0.08em', textTransform: 'uppercase', color: theme.textSec, paddingBottom: '4px', borderBottom: `1px solid ${theme.border}`, marginTop: '4px' }}>General</div>
                     {typeof onTitleChange === 'function' ? (
                         <ChartConfigField label="Title" theme={theme} controlMinWidth="100%">

@@ -17,6 +17,156 @@ const CELL_ERROR_FALLBACK_STYLE = {
     whiteSpace: 'nowrap',
 };
 
+const HEADER_STYLE_KEYS = new Set([
+    'background',
+    'backgroundColor',
+    'color',
+    'border',
+    'borderColor',
+    'borderTop',
+    'borderRight',
+    'borderBottom',
+    'borderLeft',
+    'boxShadow',
+    'fontWeight',
+    'fontStyle',
+    'textDecoration',
+    'textTransform',
+    'letterSpacing',
+]);
+
+const HEADER_STYLE_CONFIG_KEYS = new Set([
+    ...HEADER_STYLE_KEYS,
+    'bg',
+    'fill',
+    'foreground',
+    'fg',
+    'textColor',
+    'headerBg',
+    'headerBackground',
+    'headerBackgroundColor',
+    'headerColor',
+    'headerText',
+    'headerTextColor',
+    'style',
+]);
+
+const HEADER_FORMATTING_RESERVED_KEYS = new Set([
+    'default',
+    'defaultStyle',
+    'all',
+    '*',
+    'columns',
+    'byColumn',
+    'columnStyles',
+    'rules',
+    'headerRules',
+]);
+
+function normalizeHeaderStyle(rawStyle) {
+    if (!rawStyle) return {};
+    if (typeof rawStyle === 'string') {
+        return rawStyle.trim() ? { background: rawStyle.trim() } : {};
+    }
+    if (typeof rawStyle !== 'object' || Array.isArray(rawStyle)) return {};
+
+    const inlineStyle = rawStyle.style && typeof rawStyle.style === 'object' && !Array.isArray(rawStyle.style)
+        ? rawStyle.style
+        : null;
+    const source = inlineStyle ? { ...rawStyle, ...inlineStyle } : rawStyle;
+    const style = {};
+    HEADER_STYLE_KEYS.forEach((key) => {
+        if (source[key] !== undefined && source[key] !== null && source[key] !== '') {
+            style[key] = source[key];
+        }
+    });
+
+    const background = source.background
+        || source.backgroundColor
+        || source.bg
+        || source.fill
+        || source.headerBg
+        || source.headerBackground
+        || source.headerBackgroundColor
+        || source.headerColor;
+    if (background !== undefined && background !== null && background !== '') {
+        style.background = background;
+        delete style.backgroundColor;
+    }
+
+    const color = source.color
+        || source.textColor
+        || source.foreground
+        || source.fg
+        || source.headerText
+        || source.headerTextColor;
+    if (color !== undefined && color !== null && color !== '') {
+        style.color = color;
+    }
+
+    return style;
+}
+
+function hasHeaderStyleKeys(value) {
+    if (!value || typeof value !== 'object' || Array.isArray(value)) return false;
+    return Object.keys(value).some((key) => HEADER_STYLE_CONFIG_KEYS.has(key));
+}
+
+function addHeaderCandidate(candidates, rawValue) {
+    if (rawValue === undefined || rawValue === null) return;
+    const value = String(rawValue).trim();
+    if (!value) return;
+    candidates.add(value);
+    candidates.add(value.toLowerCase());
+    const display = formatDisplayLabel(value);
+    if (display) {
+        candidates.add(display);
+        candidates.add(String(display).toLowerCase());
+    }
+}
+
+function headerRuleTargetMatches(rule, candidateKeys) {
+    if (!rule || typeof rule !== 'object') return false;
+    if (rule.all || rule.default || rule.column === '*' || rule.id === '*' || rule.field === '*') {
+        return true;
+    }
+    const rawTargets = [
+        rule.column,
+        rule.columnId,
+        rule.id,
+        rule.field,
+        rule.header,
+        rule.headerLabel,
+        rule.label,
+        rule.group,
+        rule.groupValue,
+    ];
+    if (Array.isArray(rule.columns)) rawTargets.push(...rule.columns);
+    if (Array.isArray(rule.ids)) rawTargets.push(...rule.ids);
+    const targets = rawTargets
+        .filter((target) => target !== undefined && target !== null && String(target).trim())
+        .map((target) => String(target).trim());
+    if (targets.length === 0) return true;
+    return targets.some((target) => (
+        candidateKeys.has(target)
+        || candidateKeys.has(target.toLowerCase())
+        || candidateKeys.has(formatDisplayLabel(target))
+        || candidateKeys.has(String(formatDisplayLabel(target)).toLowerCase())
+    ));
+}
+
+function headerRuleKindMatches(rule, level, headerKind) {
+    if (!rule || typeof rule !== 'object') return false;
+    if (rule.level !== undefined && rule.level !== null && Number(rule.level) !== Number(level)) {
+        return false;
+    }
+    if (rule.kind || rule.type) {
+        const expected = String(rule.kind || rule.type).trim().toLowerCase();
+        if (expected && expected !== headerKind) return false;
+    }
+    return true;
+}
+
 function isPlainRenderableObject(value) {
     return value
         && typeof value === 'object'
@@ -73,16 +223,16 @@ function SafeCellContent({ render }) {
  * useRenderHelpers — extracts renderCell and renderHeaderCell from DashTanstackPivot.
  *
  * CODE-03 stale closure audit for renderHeaderCell:
- *   - renderHeaderCell is a plain arrow function (not useCallback), so it always
- *     captures fresh values from the hook call boundary on each render.
+ *   - renderHeaderCell is a useCallback whose dependency list includes the
+ *     values that can change between renders.
  *   - handleHeaderContextMenu, autoSizeColumn, autoSizeBounds, setHoveredHeaderId,
  *     setFocusedHeaderId, onDragStart, handleFilterClick, handleHeaderFilter,
  *     onHeaderDrop, onHeaderDragOver, onHeaderKeyboardMove, onHeaderKeyboardPin,
  *     activeFilterCol, filterAnchorEl, closeFilterPopover, activeFilterOptions,
- *     filters, selectedCols, leftCols, rightCols, centerCols, styles, rowHeight,
+ *     filters, selectedCols, leftCols, rightCols, centerCols, headerFormatting,
+ *     styles, rowHeight,
  *     hoveredHeaderId, focusedHeaderId, theme — all are read synchronously when
  *     renderHeaderCell is called, capturing the value from the current render pass.
- *     No ref-guard is missing because the function is recreated every render.
  */
 export function useRenderHelpers({
     // renderCell dependencies
@@ -141,6 +291,7 @@ export function useRenderHelpers({
     resolveEditedCellMarker,
     resolveCellDisplayValue,
     editedCellEpoch,
+    headerFormatting,
     getLocaleText,
 }) {
     const localize = useCallback((key, fallback, values = {}) => {
@@ -622,6 +773,113 @@ export function useRenderHelpers({
         ? sorting.map((sortSpec) => `${sortSpec && sortSpec.id}:${sortSpec && sortSpec.desc ? 'desc' : 'asc'}:${isAbsoluteSortSpecifier(sortSpec) ? 'abs' : ''}`).join('|')
         : '';
 
+    const normalizedHeaderFormatting = useMemo(() => {
+        const normalized = {
+            defaultStyle: {},
+            columnStyles: new Map(),
+            rules: [],
+        };
+        const mergeDefault = (style) => {
+            const normalizedStyle = normalizeHeaderStyle(style);
+            if (Object.keys(normalizedStyle).length > 0) {
+                normalized.defaultStyle = { ...normalized.defaultStyle, ...normalizedStyle };
+            }
+        };
+        const addColumnStyle = (key, style) => {
+            if (key === undefined || key === null) return;
+            const normalizedStyle = normalizeHeaderStyle(style);
+            if (Object.keys(normalizedStyle).length === 0) return;
+            const rawKey = String(key).trim();
+            if (!rawKey) return;
+            normalized.columnStyles.set(rawKey, {
+                ...(normalized.columnStyles.get(rawKey) || {}),
+                ...normalizedStyle,
+            });
+            normalized.columnStyles.set(rawKey.toLowerCase(), {
+                ...(normalized.columnStyles.get(rawKey.toLowerCase()) || {}),
+                ...normalizedStyle,
+            });
+        };
+
+        if (Array.isArray(headerFormatting)) {
+            normalized.rules = headerFormatting.filter(rule => rule && typeof rule === 'object');
+            return normalized;
+        }
+        if (!headerFormatting || typeof headerFormatting !== 'object') {
+            return normalized;
+        }
+
+        mergeDefault(headerFormatting.default);
+        mergeDefault(headerFormatting.defaultStyle);
+        mergeDefault(headerFormatting.all);
+        mergeDefault(headerFormatting['*']);
+
+        const explicitColumnMap = headerFormatting.columns || headerFormatting.byColumn || headerFormatting.columnStyles;
+        if (explicitColumnMap && typeof explicitColumnMap === 'object' && !Array.isArray(explicitColumnMap)) {
+            Object.entries(explicitColumnMap).forEach(([key, style]) => addColumnStyle(key, style));
+        }
+
+        const explicitRules = Array.isArray(headerFormatting.rules)
+            ? headerFormatting.rules
+            : (Array.isArray(headerFormatting.headerRules) ? headerFormatting.headerRules : []);
+        normalized.rules = explicitRules.filter(rule => rule && typeof rule === 'object');
+
+        if (hasHeaderStyleKeys(headerFormatting)) {
+            mergeDefault(headerFormatting);
+        }
+
+        if (!explicitColumnMap) {
+            Object.entries(headerFormatting).forEach(([key, style]) => {
+                if (HEADER_FORMATTING_RESERVED_KEYS.has(key) || HEADER_STYLE_CONFIG_KEYS.has(key)) return;
+                addColumnStyle(key, style);
+            });
+        }
+
+        return normalized;
+    }, [headerFormatting]);
+
+    const resolveHeaderFormatStyle = useCallback((header, level, headerKind) => {
+        const style = {};
+        const mergeStyle = (candidateStyle) => {
+            const normalizedStyle = normalizeHeaderStyle(candidateStyle);
+            if (Object.keys(normalizedStyle).length > 0) {
+                Object.assign(style, normalizedStyle);
+            }
+        };
+        const columnDef = header && header.column ? header.column.columnDef || {} : {};
+        const candidates = new Set();
+        if (header) addHeaderCandidate(candidates, header.id);
+        if (header && header.column) {
+            addHeaderCandidate(candidates, header.column.id);
+            addHeaderCandidate(candidates, header.column.accessorKey);
+        }
+        addHeaderCandidate(candidates, columnDef.id);
+        addHeaderCandidate(candidates, columnDef.accessorKey);
+        addHeaderCandidate(candidates, columnDef.headerVal);
+        addHeaderCandidate(candidates, columnDef.groupValue);
+        if (typeof columnDef.header === 'string') {
+            addHeaderCandidate(candidates, columnDef.header);
+        }
+
+        mergeStyle(normalizedHeaderFormatting.defaultStyle);
+        candidates.forEach((candidateKey) => {
+            const candidateStyle = normalizedHeaderFormatting.columnStyles.get(candidateKey);
+            if (candidateStyle) mergeStyle(candidateStyle);
+        });
+        normalizedHeaderFormatting.rules.forEach((rule) => {
+            if (headerRuleTargetMatches(rule, candidates) && headerRuleKindMatches(rule, level, headerKind)) {
+                mergeStyle(rule);
+            }
+        });
+        if (columnDef.meta && columnDef.meta.headerStyle) {
+            mergeStyle(columnDef.meta.headerStyle);
+        }
+        if (columnDef.headerStyle) {
+            mergeStyle(columnDef.headerStyle);
+        }
+        return style;
+    }, [normalizedHeaderFormatting]);
+
     // Render Header Cell for Split Sections
     // overrideWidth: when set, replaces the computed section width (used for partially-visible
     // group headers during center-column virtualization so the width matches only the visible leaves).
@@ -636,6 +894,16 @@ export function useRenderHelpers({
         const parentText = header.column.parent && typeof header.column.parent.columnDef?.header === 'string' ? header.column.parent.columnDef.header : '';
         const isTotalGroupHeader = isGroupHeader && (headerText === 'Grand Total' || headerText.startsWith('Grand Total'));
         const isUnderTotalGroup = isMeasureSubHeader && (parentText === 'Grand Total' || parentText.startsWith('Grand Total'));
+        const headerKind = isHierarchyHeader
+            ? 'hierarchy'
+            : (isTotalGroupHeader || isUnderTotalGroup)
+                ? 'total'
+                : isGroupHeader
+                    ? 'group'
+                    : isMeasureSubHeader
+                        ? 'measure'
+                        : 'leaf';
+        const headerFormatStyle = resolveHeaderFormatStyle(header, level, headerKind);
         const isSorted = header.column.getIsSorted();
         const sortIndex = header.column.getSortIndex();
         const sortSpecifier = findSortSpecifier(sorting, header.column.id);
@@ -719,12 +987,12 @@ export function useRenderHelpers({
 
         // Calculate sticky style for pinned headers using the hook
         const stickyStyle = disableSticky
-            ? { background: mergeStateStyles({ background: headerBaseBackground }, sortedHeaderStyle).background }
+            ? { background: mergeStateStyles({ background: headerBaseBackground }, sortedHeaderStyle, headerFormatStyle).background }
             : getHeaderStickyStyle(
                 header,
                 level,
                 renderSection,
-                mergeStateStyles({ background: headerBaseBackground }, sortedHeaderStyle).background
+                mergeStateStyles({ background: headerBaseBackground }, sortedHeaderStyle, headerFormatStyle).background
             );
         const headerStateStyle = mergeStateStyles(
             styles.headerCell,
@@ -760,7 +1028,8 @@ export function useRenderHelpers({
                     letterSpacing: '0.04em',
                     color: isUnderTotalGroup ? (theme.totalTextStrong || theme.primary) : theme.textSec,
                     background: isUnderTotalGroup ? (theme.totalBgStrong || theme.totalBg || theme.select) : undefined,
-                } : {})
+                } : {}),
+                ...headerFormatStyle
             }}
             data-header-column-id={String(header.column.id)}
             data-pinned={isPinned || undefined}
@@ -1009,6 +1278,7 @@ export function useRenderHelpers({
         moreVertStyle,
         sortPriorityBadgeStyle,
         absoluteSortBadgeStyle,
+        resolveHeaderFormatStyle,
         sortingSignature,
     ]);
 
