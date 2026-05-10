@@ -232,8 +232,8 @@ def test_measure_axis_aggregate_first_supports_mixed_and_weighted_measures(contr
         ],
         "measureAxis": {
             "placement": "rows",
-            "labelField": "Metric",
-            "valueField": "Value",
+            "labelField": "Measure Name",
+            "valueField": "Amount",
             "members": [
                 {"measureAlias": "amount_sum", "label": "Amount Sum", "order": 0},
                 {"measureAlias": "amount_avg", "label": "Amount Avg", "order": 1},
@@ -244,7 +244,7 @@ def test_measure_axis_aggregate_first_supports_mixed_and_weighted_measures(contr
 
     result = controller.run_pivot(spec, return_format="dict")
 
-    assert result["columns"] == ["category", "Metric", "__sortkey__Metric", "Value"]
+    assert result["columns"] == ["category", "Measure Name", "__sortkey__Measure Name", "Amount"]
     rows = sorted(result["rows"], key=lambda row: (row[0], row[2]))
     assert rows == [
         ["A", "Amount Sum", 0, 30.0],
@@ -287,8 +287,8 @@ def test_measure_axis_aggregate_first_supports_formula_ratio_and_window_measures
         ],
         "measureAxis": {
             "placement": "rows",
-            "labelField": "Metric",
-            "valueField": "Value",
+            "labelField": "Measure Name",
+            "valueField": "Amount",
             "members": [
                 {"measureAlias": "margin", "label": "Margin", "order": 0},
                 {"measureAlias": "cost_ratio", "label": "Cost Ratio", "order": 1},
@@ -331,8 +331,8 @@ def test_measure_axis_aggregate_first_can_pivot_mixed_measures(controller: Pivot
         "pivot_config": {"enabled": True},
         "measureAxis": {
             "placement": "rows",
-            "labelField": "Metric",
-            "valueField": "Value",
+            "labelField": "Measure Name",
+            "valueField": "Amount",
             "members": [
                 {"measureAlias": "delta_sum", "label": "Delta Sum", "order": 0},
                 {"measureAlias": "gamma_avg", "label": "Gamma Avg", "order": 1},
@@ -344,10 +344,10 @@ def test_measure_axis_aggregate_first_can_pivot_mixed_measures(controller: Pivot
 
     assert result["columns"] == [
         "category",
-        "Metric",
-        "__sortkey__Metric",
-        "Book_Value",
-        "Hedge_Value",
+        "Measure Name",
+        "__sortkey__Measure Name",
+        "Book_Amount",
+        "Hedge_Amount",
     ]
     rows = sorted(result["rows"], key=lambda row: row[2])
     assert rows == [

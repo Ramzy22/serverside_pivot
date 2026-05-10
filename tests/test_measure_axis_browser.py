@@ -51,6 +51,7 @@ def _build_measure_axis_app():
         pa.Table.from_pydict(
             {
                 "portfolio": ["Book", "Book", "Hedge", "Hedge"],
+                "Metric": ["physical-metric-a", "physical-metric-a", "physical-metric-b", "physical-metric-b"],
                 "delta": [100.0, 20.0, -80.0, -20.0],
                 "gamma": [25.0, 35.0, -10.0, -20.0],
                 "price": [2.0, 10.0, 4.0, 8.0],
@@ -68,7 +69,7 @@ def _build_measure_axis_app():
                 style={"height": "620px", "width": "100%"},
                 table="measure_axis_browser",
                 serverSide=True,
-                rowFields=["Metric"],
+                rowFields=["Measure Name"],
                 colFields=["portfolio"],
                 valConfigs=[
                     {"field": "delta", "agg": "sum", "alias": "delta_sum", "label": "Delta Sum"},
@@ -83,8 +84,8 @@ def _build_measure_axis_app():
                 ],
                 measureAxis={
                     "placement": "rows",
-                    "labelField": "Metric",
-                    "valueField": "Value",
+                    "labelField": "Measure Name",
+                    "valueField": "Amount",
                     "members": [
                         {"measureAlias": "delta_sum", "label": "Delta Sum", "order": 0},
                         {"measureAlias": "gamma_avg", "label": "Gamma Avg", "order": 1},
@@ -203,12 +204,12 @@ def test_measure_axis_rows_browser_renders_aggregate_first_pivot(measure_axis_br
     )
     assert values_as_select.get_attribute("value") == "rows"
 
-    _wait_for_numeric_cell(chrome_driver, "Delta Sum", "Book_Value", 120.0)
-    _wait_for_numeric_cell(chrome_driver, "Delta Sum", "Hedge_Value", -100.0)
-    _wait_for_numeric_cell(chrome_driver, "Gamma Avg", "Book_Value", 30.0)
-    _wait_for_numeric_cell(chrome_driver, "Gamma Avg", "Hedge_Value", -15.0)
-    _wait_for_numeric_cell(chrome_driver, "Weighted Price", "Book_Value", 8.0)
-    _wait_for_numeric_cell(chrome_driver, "Weighted Price", "Hedge_Value", 6.0)
+    _wait_for_numeric_cell(chrome_driver, "Delta Sum", "Book_Amount", 120.0)
+    _wait_for_numeric_cell(chrome_driver, "Delta Sum", "Hedge_Amount", -100.0)
+    _wait_for_numeric_cell(chrome_driver, "Gamma Avg", "Book_Amount", 30.0)
+    _wait_for_numeric_cell(chrome_driver, "Gamma Avg", "Hedge_Amount", -15.0)
+    _wait_for_numeric_cell(chrome_driver, "Weighted Price", "Book_Amount", 8.0)
+    _wait_for_numeric_cell(chrome_driver, "Weighted Price", "Hedge_Amount", 6.0)
 
     severe_logs = _severe_browser_logs(chrome_driver)
     assert severe_logs == []

@@ -384,6 +384,7 @@ Planner execution modes: simple physical measures with one aggregation can use t
 Implementation contracts agents must preserve:
 
 - `labelField` and `valueField` are virtual fields. They may appear in `rowFields`, `colFields`, `runtimeResponse.columns`, and TanStack column IDs, but they must not be treated as physical columns on the source table.
+- If the source data already has a physical column such as `Metric`, keep that field available normally and choose a different virtual `labelField`, usually `Measure Name`.
 - For `placement="rows"`, the UI may send `rowFields=["book", "Measure Name"]`. The planner must group the base table by physical dimensions only, then inject `"Measure Name"` after aggregation.
 - `valConfigs[*].alias` is the authoritative measure identity. If an alias is present, `measureAxis.members[*].measureAlias` must match it exactly; do not silently fall back to `"{field}_{agg}"`.
 - Preserve `label`, `header`, and `format` metadata when normalizing measures, because the virtual member label and formatted cells depend on those values.
@@ -671,7 +672,7 @@ sortOptions={
 | Weighted avg returns `None` | `weightField` column missing | Ensure weight column is in DataFrame and `availableFieldList` |
 | Measure-axis member is missing | `members[*].measureAlias` does not match a planned measure alias | Use the measure alias/id, or provide `sourceField` + `agg` for physical measures |
 | Measure-axis row/column renders as `__schema_placeholder__*` | Frontend column schema does not recognize virtual `valueField` column IDs | Check `runtimeResponse.columns`, `colSchema`, and `useColumnDefs` measure-axis handling |
-| SQL error for `Measure Name`, `Metric`, or `Value` column | A virtual measure-axis field was treated as a physical source-table field | Remove virtual fields before base aggregation; inject them only after aggregate-first unpivot |
+| SQL error for a virtual measure-axis label/value column | A virtual measure-axis field such as `Measure Name` or `Amount` was treated as a physical source-table field | Remove virtual fields before base aggregation; inject them only after aggregate-first unpivot |
 | `NameError: request_layout_mode` | Bug in older version | Update to ≥ 0.0.71 |
 | `include_subtotals` order bug | Bug in older version | Fixed in 0.0.71 — update |
 
@@ -728,7 +729,7 @@ pytest tests/test_measure_axis_browser.py -q -s
 
 When the browser view is blank or wrong, debug in this order:
 - Inspect `runtimeResponse.payload.data` to prove the planner returned rows.
-- Inspect `runtimeResponse.payload.columns` and `runtimeResponse.payload.colSchema` to verify value column IDs such as `Book_Value` or `Hedge_Value`.
+- Inspect `runtimeResponse.payload.columns` and `runtimeResponse.payload.colSchema` to verify value column IDs such as `Book_Amount` or `Hedge_Amount`.
 - Inspect rendered DOM cells. Placeholder cells with valid response data point to frontend column-definition/schema handling, not SQL.
 - Check browser console logs for severe errors before changing planner code.
 

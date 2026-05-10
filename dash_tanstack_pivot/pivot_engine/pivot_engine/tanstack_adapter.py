@@ -1401,6 +1401,73 @@ class TanStackPivotAdapter(FormulaEngineMixin):
             })
         return derived_members
 
+    @staticmethod
+    def _formula_alias_lookup_from_request_columns(request_columns: List[Dict[str, Any]]) -> Dict[str, str]:
+        lookup: Dict[str, str] = {}
+
+        def add_alias(alias: Any, target: str) -> None:
+            key = str(alias or "").strip()
+            if not key:
+                return
+            lookup.setdefault(key, target)
+            lookup.setdefault(key.lower(), target)
+
+        for column in request_columns or []:
+            if not isinstance(column, dict) or not column.get("id"):
+                continue
+            column_id = str(column.get("id"))
+            add_alias(column_id, column_id)
+            if column.get("aggregationFn"):
+                add_alias(column.get("aggregationField"), column_id)
+                add_alias(column.get("header"), column_id)
+                add_alias(column.get("label"), column_id)
+                add_alias(column.get("aggregationLabel"), column_id)
+            elif column.get("isFormula"):
+                add_alias(column.get("formulaRef"), column_id)
+                add_alias(column.get("formulaLabel"), column_id)
+                add_alias(column.get("header"), column_id)
+        return lookup
+
+    @staticmethod
+    def _canonicalize_measure_formula_expression(expression: Any, alias_lookup: Dict[str, str]) -> str:
+        text = str(expression or "")
+        if not text:
+            return ""
+
+        reserved = {
+            "True", "False", "None", "and", "or", "not", "if", "else", "in", "is",
+            "abs", "round", "ceil", "floor", "max", "min", "int", "float",
+        }
+
+        def resolve_alias(value: str) -> str:
+            return alias_lookup.get(value, alias_lookup.get(value.lower(), value))
+
+        def replace_bracket(match: re.Match) -> str:
+            resolved = resolve_alias(match.group(1))
+            return f"[{resolved}]" if not _FORMULA_IDENTIFIER_RE.fullmatch(resolved) else resolved
+
+        bracketed = re.sub(r"\[([^\]]+)\]", replace_bracket, text)
+
+        protected: Dict[str, str] = {}
+
+        def protect_bracket(match: re.Match) -> str:
+            token = f"__formula_bracket_{len(protected)}__"
+            protected[token] = match.group(0)
+            return token
+
+        protected_text = re.sub(r"\[[^\]]+\]", protect_bracket, bracketed)
+
+        def replace_identifier(match: re.Match) -> str:
+            token = match.group(0)
+            if token in protected or token in reserved:
+                return token
+            return resolve_alias(token)
+
+        normalized = _FORMULA_IDENTIFIER_RE.sub(replace_identifier, protected_text)
+        for token, value in protected.items():
+            normalized = normalized.replace(token, value)
+        return normalized
+
     def convert_tanstack_request_to_pivot_spec(self, request: TanStackRequest) -> PivotSpec:
         """Convert TanStack request to PivotSpec format"""
         # Extract grouping columns as hierarchy
@@ -1409,10 +1476,39 @@ class TanStackPivotAdapter(FormulaEngineMixin):
         # Extract measure columns
         measures = []
         value_cols = []
+        measure_axis = MeasureAxisConfig.from_dict(request.measure_axis)
+        measure_axis_active = bool(measure_axis and measure_axis.placement != "none")
+        measure_axis_member_aliases = {
+            str(
+                member.get("measureAlias")
+                or member.get("measure_alias")
+                or member.get("alias")
+                or member.get("id")
+                or ""
+            ).strip()
+            for member in ((measure_axis.members if measure_axis else []) or [])
+            if isinstance(member, dict)
+        }
+        measure_axis_member_aliases.discard("")
+        formula_alias_lookup = self._formula_alias_lookup_from_request_columns(request.columns or [])
         
         for col in request.columns:
             if col.get('isFormula'):
-                # Formula columns are post-aggregation; skip from SQL planner
+                if (
+                    measure_axis_active
+                    and not self._is_column_formula_column(col)
+                    and col.get("id")
+                    and (not measure_axis_member_aliases or str(col.get("id")) in measure_axis_member_aliases)
+                ):
+                    measures.append(Measure(
+                        field=None,
+                        agg="formula",
+                        alias=str(col.get("id")),
+                        expression=self._canonicalize_measure_formula_expression(
+                            col.get("formulaExpr", ""),
+                            formula_alias_lookup,
+                        ),
+                    ))
                 continue
             if col.get('aggregationFn'):
                 # This is an aggregation column
@@ -1431,7 +1527,6 @@ class TanStackPivotAdapter(FormulaEngineMixin):
                 # This is a value column
                 value_cols.append(col['id'])
 
-        measure_axis = MeasureAxisConfig.from_dict(request.measure_axis)
         if measure_axis and measure_axis.placement != "none":
             measure_axis.members = self._derive_measure_axis_members(measure_axis, measures, request.columns or [])
             label_field = measure_axis.label_field
@@ -1790,8 +1885,16 @@ class TanStackPivotAdapter(FormulaEngineMixin):
         self._apply_pivot_window_functions(rows, tanstack_request)
 
         # Apply formula columns (post-aggregation calculated fields) after window functions.
-        _formula_errors_main = self._apply_formula_columns(rows, tanstack_request)
-        rows = self._sort_rows_for_formula_sort(rows, tanstack_request)
+        measure_axis_for_response = MeasureAxisConfig.from_dict(getattr(tanstack_request, "measure_axis", None))
+        formulas_materialized_by_measure_axis = bool(
+            measure_axis_for_response
+            and measure_axis_for_response.placement in {"rows", "columns"}
+            and any(isinstance(column, dict) and column.get("isFormula") for column in (tanstack_request.columns or []))
+        )
+        _formula_errors_main = {}
+        if not formulas_materialized_by_measure_axis:
+            _formula_errors_main = self._apply_formula_columns(rows, tanstack_request)
+            rows = self._sort_rows_for_formula_sort(rows, tanstack_request)
 
         # Calculate pagination info if needed
         pagination = None
@@ -1910,8 +2013,10 @@ class TanStackPivotAdapter(FormulaEngineMixin):
         # handle_hierarchical_request, handle_virtual_scroll_request) evaluate
         # formula columns. handle_request also calls _apply_formula_columns after
         # window functions, but that second pass is idempotent so it is safe.
-        _formula_errors = self._apply_formula_columns(rows, tanstack_request)
-        rows = self._sort_rows_for_formula_sort(rows, tanstack_request)
+        _formula_errors = {}
+        if not formulas_materialized_by_measure_axis:
+            _formula_errors = self._apply_formula_columns(rows, tanstack_request)
+            rows = self._sort_rows_for_formula_sort(rows, tanstack_request)
 
         return TanStackResponse(
             data=rows,

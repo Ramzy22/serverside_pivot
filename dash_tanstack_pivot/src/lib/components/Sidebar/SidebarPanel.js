@@ -3457,6 +3457,7 @@ export const SidebarPanel = React.memo(function SidebarPanel({
     const resizeDragRef = React.useRef(null);
     const dragScrollRafRef = React.useRef(null);
     const [keyboardDragItem, setKeyboardDragItem] = React.useState(null);
+    const [availableFieldSearch, setAvailableFieldSearch] = React.useState('');
     const fixedSparklineValueKeySet = React.useMemo(
         () => new Set(Array.isArray(fixedSparklineValueKeys) ? fixedSparklineValueKeys : []),
         [fixedSparklineValueKeys]
@@ -3465,9 +3466,54 @@ export const SidebarPanel = React.memo(function SidebarPanel({
         (field) => formatCustomAwareFieldLabel(field, customDimensions),
         [customDimensions]
     );
-    const baseAvailableFields = React.useMemo(
-        () => (availableFields || []).filter((field) => field && !isCustomCategoryField(field)),
+    const normalizedMeasureAxis = React.useMemo(
+        () => normalizeMeasureAxisPanelValue(measureAxis),
+        [measureAxis]
+    );
+    const measureAxisLabelField = normalizedMeasureAxis.labelField || 'Measure Name';
+    const allAvailableFields = React.useMemo(
+        () => (availableFields || []).filter((field) => field),
         [availableFields]
+    );
+    const baseAvailableFields = React.useMemo(
+        () => allAvailableFields.filter((field) => field && !isCustomCategoryField(field)),
+        [allAvailableFields]
+    );
+    const showMeasureAxisAvailableField = (
+        Array.isArray(valConfigs)
+        && valConfigs.length > 0
+        && measureAxisLabelField
+        && !allAvailableFields.includes(measureAxisLabelField)
+    );
+    const displayAvailableFields = React.useMemo(
+        () => showMeasureAxisAvailableField
+            ? [measureAxisLabelField, ...allAvailableFields]
+            : allAvailableFields,
+        [allAvailableFields, measureAxisLabelField, showMeasureAxisAvailableField]
+    );
+    const normalizedAvailableFieldSearch = availableFieldSearch.trim().toLowerCase();
+    const matchesAvailableFieldSearch = React.useCallback((field) => {
+        if (!normalizedAvailableFieldSearch) return true;
+        const virtualSearchText = showMeasureAxisAvailableField && field === measureAxisLabelField
+            ? 'measure name measure names metric metrics value values'
+            : '';
+        return (
+            String(field || '').toLowerCase().includes(normalizedAvailableFieldSearch)
+            || String(getFieldLabel(field) || '').toLowerCase().includes(normalizedAvailableFieldSearch)
+            || virtualSearchText.includes(normalizedAvailableFieldSearch)
+        );
+    }, [getFieldLabel, measureAxisLabelField, normalizedAvailableFieldSearch, showMeasureAxisAvailableField]);
+    const visibleAvailableFields = React.useMemo(
+        () => displayAvailableFields.length > 8
+            ? displayAvailableFields.filter(matchesAvailableFieldSearch)
+            : displayAvailableFields,
+        [displayAvailableFields, matchesAvailableFieldSearch]
+    );
+    const visibleBaseAvailableFields = React.useMemo(
+        () => baseAvailableFields.length > 8
+            ? baseAvailableFields.filter(matchesAvailableFieldSearch)
+            : baseAvailableFields,
+        [baseAvailableFields, matchesAvailableFieldSearch]
     );
     const handleDeleteCustomCategoryField = React.useCallback((field) => {
         setRowFields((prev) => (prev || []).filter((item) => item !== field));
@@ -3823,6 +3869,64 @@ export const SidebarPanel = React.memo(function SidebarPanel({
 
     const isReportMode = pivotMode === 'report';
     const w = Math.max(sidebarWidth || 288, isReportMode ? 380 : 0);
+    const renderAvailableFieldSearch = (fieldCount, visibleCount) => {
+        if (fieldCount <= 8) return null;
+        const hasQuery = availableFieldSearch.trim().length > 0;
+        return (
+            <div style={{
+                display: 'flex',
+                alignItems: 'center',
+                gap: '6px',
+                margin: '0 2px 8px',
+                padding: '5px 8px',
+                border: `1px solid ${theme.border}`,
+                borderRadius: theme.radiusSm || '8px',
+                background: theme.headerSubtleBg || theme.surfaceInset || theme.background,
+            }}>
+                <Icons.Search style={{flexShrink: 0, color: theme.textSec}} />
+                <input
+                    type="search"
+                    aria-label="Search available fields"
+                    placeholder={`Search ${fieldCount} fields...`}
+                    value={availableFieldSearch}
+                    onChange={(event) => setAvailableFieldSearch(event.target.value)}
+                    style={{
+                        flex: 1,
+                        minWidth: 0,
+                        border: 'none',
+                        outline: 'none',
+                        background: 'transparent',
+                        color: theme.text,
+                        fontSize: '12px',
+                    }}
+                />
+                {hasQuery && (
+                    <button
+                        type="button"
+                        aria-label="Clear available field search"
+                        title="Clear search"
+                        onClick={() => setAvailableFieldSearch('')}
+                        style={{
+                            border: 'none',
+                            background: 'transparent',
+                            color: theme.textSec,
+                            cursor: 'pointer',
+                            padding: 0,
+                            display: 'flex',
+                            alignItems: 'center',
+                        }}
+                    >
+                        <Icons.Close />
+                    </button>
+                )}
+                {hasQuery && (
+                    <span style={{fontSize: '10px', color: theme.textSec, whiteSpace: 'nowrap'}}>
+                        {visibleCount}/{fieldCount}
+                    </span>
+                )}
+            </div>
+        );
+    };
     return (
         <div style={{position:'relative', display:'flex', flexShrink:0}}>
                 <div ref={sidebarRef} style={{...styles.sidebar, width:`${w}px`, minWidth:`${w}px`}} role="complementary" aria-label="Tool Panel" onDragOver={startDragScroll} onDragLeave={stopDragScroll} onDrop={stopDragScroll}>
@@ -3926,8 +4030,9 @@ export const SidebarPanel = React.memo(function SidebarPanel({
                                 onDeleteField={handleDeleteCustomCategoryField}
                             />
                             <div style={{fontSize:'10px',color:theme.textSec,textTransform:'uppercase',letterSpacing:'0.5px',marginBottom:'6px',padding:'0 2px'}}><Icons.Database style={{verticalAlign:'middle',marginRight:'4px'}}/>Available Fields — click to add</div>
+                            {renderAvailableFieldSearch(baseAvailableFields.length, visibleBaseAvailableFields.length)}
                             <div style={{display:'flex',flexWrap:'wrap',gap:'4px',marginBottom:'14px'}}>
-                                {baseAvailableFields.map(f => {
+                                {visibleBaseAvailableFields.map(f => {
                                     const alreadyAdded = valConfigs.some(c => c && c.field === f && c.agg !== 'formula');
                                     return (
                                         <div
@@ -3952,6 +4057,11 @@ export const SidebarPanel = React.memo(function SidebarPanel({
                                         </div>
                                     );
                                 })}
+                                {baseAvailableFields.length > 8 && visibleBaseAvailableFields.length === 0 && (
+                                    <div style={{width:'100%',padding:'8px 2px',fontSize:'11px',color:theme.textSec}}>
+                                        No fields match the current search.
+                                    </div>
+                                )}
                             </div>
                             <div style={{borderTop:`1px solid ${theme.border}`,paddingTop:'10px',marginBottom:'8px'}}>
                                 <div style={{display:'flex', alignItems:'center', gap:'8px', padding:'0 2px 8px 2px', flexWrap:'wrap'}}>
@@ -4072,6 +4182,7 @@ export const SidebarPanel = React.memo(function SidebarPanel({
                                         onDeleteField={handleDeleteCustomCategoryField}
                                     />
                                     <div style={styles.sectionTitleSm}><Icons.Database/> Available Fields</div>
+                                    {renderAvailableFieldSearch(displayAvailableFields.length, visibleAvailableFields.length)}
                                     <ResizableFieldPanel
                                         panelId="availableFields"
                                         panelLabel="Available Fields"
@@ -4087,38 +4198,51 @@ export const SidebarPanel = React.memo(function SidebarPanel({
                                             padding: '2px 12px 12px 2px',
                                         }}
                                     >
-                                        {availableFields.map(f => (
-                                            <div
-                                                key={f}
-                                                draggable
-                                                data-sidebar-field-chip="available"
-                                                role="button"
-                                                tabIndex={0}
-                                                aria-describedby="pivot-sidebar-keyboard-dnd-help"
-                                                aria-grabbed={keyboardDragItem && keyboardDragItem.zone === 'pool' && keyboardDragItem.field === f ? 'true' : 'false'}
-                                                aria-label={`Move ${getFieldLabel(f)}`}
-                                                onDragStart={e=>onDragStart(e,f,'pool')}
-                                                onKeyDown={(e) => handleDraggableKeyDown(e, f, 'pool', -1, getFieldLabel(f))}
-                                                style={{
-                                                padding: '4px 8px',
-                                                fontSize: '11px',
-                                                lineHeight: 1.2,
-                                                fontWeight: 500,
-                                                fontFamily: "'Inter', ui-sans-serif, system-ui, sans-serif",
-                                                borderRadius: theme.radiusSm || theme.radius || '10px',
-                                                border: `1px solid ${theme.isDark ? theme.border : '#D7DDEA'}`,
-                                                background: theme.isDark ? theme.background : (theme.surfaceInset || '#ffffff'),
-                                                color: theme.isDark ? theme.text : '#334155',
-                                                display: 'inline-flex',
-                                                alignItems: 'center',
-                                                boxShadow: theme.isDark ? 'none' : (theme.shadowInset || '0 1px 2px rgba(0,0,0,0.04)'),
-                                                cursor: 'grab',
-                                                userSelect: 'none',
-                                                minHeight: '24px',
-                                            }}>
-                                                {getFieldLabel(f)}
+                                        {visibleAvailableFields.map(f => {
+                                            const isMeasureAxisVirtualField = showMeasureAxisAvailableField && f === measureAxisLabelField;
+                                            const fieldLabel = isMeasureAxisVirtualField ? 'Measure Names' : getFieldLabel(f);
+                                            const sourceZone = isMeasureAxisVirtualField ? 'measureAxis' : 'pool';
+                                            return (
+                                                <div
+                                                    key={isMeasureAxisVirtualField ? `__measure_axis__${f}` : f}
+                                                    draggable
+                                                    data-sidebar-field-chip={isMeasureAxisVirtualField ? 'measure-axis-label' : 'available'}
+                                                    role="button"
+                                                    tabIndex={0}
+                                                    aria-describedby="pivot-sidebar-keyboard-dnd-help"
+                                                    aria-grabbed={keyboardDragItem && keyboardDragItem.zone === sourceZone && keyboardDragItem.field === f ? 'true' : 'false'}
+                                                    aria-label={`Move ${fieldLabel}`}
+                                                    onDragStart={e=>onDragStart(e,f,sourceZone)}
+                                                    onKeyDown={(e) => handleDraggableKeyDown(e, f, sourceZone, -1, fieldLabel)}
+                                                    title={isMeasureAxisVirtualField ? 'Drag to Rows or Columns to show measure names' : `Move ${getFieldLabel(f)}`}
+                                                    style={{
+                                                    padding: '4px 8px',
+                                                    fontSize: '11px',
+                                                    lineHeight: 1.2,
+                                                    fontWeight: isMeasureAxisVirtualField ? 700 : 500,
+                                                    fontFamily: "'Inter', ui-sans-serif, system-ui, sans-serif",
+                                                    borderRadius: theme.radiusSm || theme.radius || '10px',
+                                                    border: isMeasureAxisVirtualField ? `1px dashed ${theme.primary}` : `1px solid ${theme.isDark ? theme.border : '#D7DDEA'}`,
+                                                    background: isMeasureAxisVirtualField ? `${theme.primary}12` : (theme.isDark ? theme.background : (theme.surfaceInset || '#ffffff')),
+                                                    color: isMeasureAxisVirtualField ? theme.primary : (theme.isDark ? theme.text : '#334155'),
+                                                    display: 'inline-flex',
+                                                    alignItems: 'center',
+                                                    gap: '4px',
+                                                    boxShadow: theme.isDark ? 'none' : (theme.shadowInset || '0 1px 2px rgba(0,0,0,0.04)'),
+                                                    cursor: 'grab',
+                                                    userSelect: 'none',
+                                                    minHeight: '24px',
+                                                }}>
+                                                    {isMeasureAxisVirtualField && <Icons.Sigma />}
+                                                    {fieldLabel}
+                                                </div>
+                                            );
+                                        })}
+                                        {displayAvailableFields.length > 8 && visibleAvailableFields.length === 0 && (
+                                            <div style={{width:'100%',padding:'8px 2px',fontSize:'11px',color:theme.textSec}}>
+                                                No fields match the current search.
                                             </div>
-                                        ))}
+                                        )}
                                     </ResizableFieldPanel>
                                 </div>
                             )}
@@ -4200,6 +4324,11 @@ export const SidebarPanel = React.memo(function SidebarPanel({
                                                 const displayLabel = zone.id === 'vals'
                                                     ? (item.agg === 'formula' ? (item.label || 'Formula') : getFieldLabel(item.field))
                                                     : getFieldLabel(item);
+                                                const isMeasureAxisZoneField = (
+                                                    (zone.id === 'rows' || zone.id === 'cols')
+                                                    && label === measureAxisLabelField
+                                                    && normalizedMeasureAxis.placement !== 'none'
+                                                );
                                                 return (
                                                     <div
                                                         key={idx}
@@ -4264,7 +4393,19 @@ export const SidebarPanel = React.memo(function SidebarPanel({
                                                                     {zone.id==='filter' && (
                                                                         <div onClick={(e) => openSidebarFilter(e, label)} style={{cursor:'pointer', display:'flex', alignItems:'center', padding: '2px', borderRadius: '4px'}}><Icons.Filter /></div>
                                                                     )}
-                                                                    <span onClick={()=>{ if (zone.id==='filter'){const n={...filters};delete n[label];setFilters(n)} if (zone.id==='rows') setRowFields(p=>p.filter(x=>x!==label)); if (zone.id==='cols') setColFields(p=>p.filter(x=>x!==label)); if (zone.id==='vals') removeValueAtIndex(idx); }} style={{cursor:'pointer', color:'#9CA3AF', display:'flex', alignItems:'center'}}><Icons.Close/></span>
+                                                                    <span onClick={()=>{
+                                                                        if (isMeasureAxisZoneField && typeof setMeasureAxis === 'function') {
+                                                                            setMeasureAxis((previous) => ({
+                                                                                ...normalizeMeasureAxisPanelValue(previous),
+                                                                                placement: 'none',
+                                                                            }));
+                                                                            return;
+                                                                        }
+                                                                        if (zone.id==='filter'){const n={...filters};delete n[label];setFilters(n)}
+                                                                        if (zone.id==='rows') setRowFields(p=>p.filter(x=>x!==label));
+                                                                        if (zone.id==='cols') setColFields(p=>p.filter(x=>x!==label));
+                                                                        if (zone.id==='vals') removeValueAtIndex(idx);
+                                                                    }} style={{cursor:'pointer', color:'#9CA3AF', display:'flex', alignItems:'center'}}><Icons.Close/></span>
                                                                 </div>
                                                                 {zone.id === 'filter' && sidebarFilterState.columnId === label && (
                                                                     <FilterPopover

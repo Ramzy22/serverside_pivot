@@ -186,6 +186,67 @@ async def test_formula_columns_are_applied_in_flat_mode():
 
 
 @pytest.mark.asyncio
+async def test_measure_axis_rows_can_include_formula_value_members():
+    adapter = create_tanstack_adapter(backend_uri=":memory:")
+    adapter.controller.load_data_from_arrow(
+        "measure_axis_formula_data",
+        pa.Table.from_pydict(
+            {
+                "category": ["A", "A", "B"],
+                "sales": [10, 20, 5],
+                "cost": [4, 8, 2],
+            }
+        ),
+    )
+
+    request = TanStackRequest(
+        operation=TanStackOperation.GET_DATA,
+        table="measure_axis_formula_data",
+        columns=[
+            {"id": "category"},
+            {"id": "Measure Name"},
+            {"id": "sales_sum", "aggregationField": "sales", "aggregationFn": "sum", "header": "Sales"},
+            {"id": "cost_sum", "aggregationField": "cost", "aggregationFn": "sum", "header": "Cost"},
+            {
+                "id": "formula_1",
+                "accessorKey": "formula_1",
+                "isFormula": True,
+                "formulaExpr": "sales - cost",
+                "formulaLabel": "Margin",
+                "formulaRef": "margin",
+            },
+        ],
+        filters={},
+        sorting=[],
+        grouping=["category", "Measure Name"],
+        aggregations=[],
+        pagination={"pageIndex": 0, "pageSize": 100},
+        measure_axis={
+            "placement": "rows",
+            "labelField": "Measure Name",
+            "valueField": "Amount",
+            "members": [
+                {"measureAlias": "sales_sum", "label": "Sales", "order": 0},
+                {"measureAlias": "formula_1", "label": "Margin", "order": 1},
+            ],
+        },
+    )
+
+    response = await adapter.handle_request(request)
+    rows = {
+        (row["category"], row["Measure Name"]): row["Amount"]
+        for row in response.data
+        if row.get("category")
+    }
+
+    assert rows[("A", "Sales")] == pytest.approx(30.0)
+    assert rows[("A", "Margin")] == pytest.approx(18.0)
+    assert rows[("B", "Sales")] == pytest.approx(5.0)
+    assert rows[("B", "Margin")] == pytest.approx(3.0)
+    assert response.formula_errors is None
+
+
+@pytest.mark.asyncio
 async def test_formula_columns_accept_bracketed_field_names_with_spaces():
     adapter = create_tanstack_adapter(backend_uri=":memory:")
     adapter.controller.load_data_from_arrow(

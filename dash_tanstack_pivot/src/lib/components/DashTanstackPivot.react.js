@@ -286,7 +286,7 @@ const buildMeasureAxisRuntimeConfig = (measureAxis, valConfigs = []) => {
     const explicitMembers = Array.isArray(normalized.members) && normalized.members.length > 0
         ? normalized.members
         : (Array.isArray(valConfigs) ? valConfigs : [])
-            .filter((config) => config && config.field && config.agg && config.agg !== 'formula')
+            .filter((config) => config && config.field && config.agg)
             .map((config, index) => {
                 const agg = config.agg || 'sum';
                 const measureAlias = config.alias || config.id || (agg === 'formula' ? config.field : `${config.field}_${agg}`);
@@ -11971,10 +11971,6 @@ export default function DashTanstackPivot(props) {
         const fieldName = typeof field === 'string' ? field : field.field;
         if (!fieldName || typeof fieldName !== 'string') return false;
         if (!['rows', 'cols', 'vals', 'filter'].includes(targetZone)) return false;
-        if (isFormulaValue && targetZone !== 'vals') {
-            showNotification('Formula columns can only stay in Values.', 'warning');
-            return false;
-        }
         if (targetZone === 'vals' && isCustomCategoryField(fieldName)) {
             showNotification('Custom categories are dimensions. Use them in Rows, Columns, or Filters.', 'warning');
             return false;
@@ -12004,6 +12000,59 @@ export default function DashTanstackPivot(props) {
                 ? { field: fieldName, agg: 'array_agg', sparkline: { ...autoSparklineCfg } }
                 : { field: fieldName, agg: 'sum' };
         };
+        const normalizedAxis = normalizeMeasureAxisValue(measureAxis);
+        const measureAxisLabelField = normalizedAxis.labelField || 'Measure Name';
+        const draggedValueIndex = Number.isInteger(srcIdx) && srcIdx >= 0
+            ? srcIdx
+            : valConfigs.findIndex((config) => matchesValueConfigId(fieldName, config));
+        const sourceValueConfig = draggedValueConfig || (draggedValueIndex >= 0 ? valConfigs[draggedValueIndex] : null);
+        const isMeasureAxisLabelField = (
+            fieldName === measureAxisLabelField
+            && (srcZone === 'measureAxis' || normalizedAxis.placement !== 'none')
+        );
+        const isValueMeasureDragToAxis = Boolean(
+            sourceValueConfig
+            && (srcZone === 'vals' || draggedValueConfig)
+            && (targetZone === 'rows' || targetZone === 'cols')
+        );
+        const placeMeasureAxisLabel = (placement) => {
+            const insertLabel = (list, idx) => insertItem((list || []).filter((item) => item !== measureAxisLabelField), idx, measureAxisLabelField);
+            requestLayoutHistoryCapture(source);
+            setMeasureAxis((previous) => ({
+                ...normalizeMeasureAxisValue(previous),
+                placement,
+                labelField: measureAxisLabelField,
+            }));
+            if (placement === 'rows') {
+                setRowFieldsWithHistory((previous) => insertLabel(previous, safeTargetIdx), source);
+                setColFieldsWithHistory((previous) => (previous || []).filter((item) => item !== measureAxisLabelField), source);
+            } else if (placement === 'columns') {
+                setColFieldsWithHistory((previous) => insertLabel(previous, safeTargetIdx), source);
+                setRowFieldsWithHistory((previous) => (previous || []).filter((item) => item !== measureAxisLabelField), source);
+            }
+            if (showNotification) {
+                showNotification(`Showing measure names in ${placement === 'rows' ? 'Rows' : 'Columns'}.`, 'success');
+            }
+        };
+
+        if (isMeasureAxisLabelField) {
+            if (targetZone === 'rows' || targetZone === 'cols') {
+                placeMeasureAxisLabel(targetZone === 'rows' ? 'rows' : 'columns');
+                return true;
+            }
+            showNotification('Measure names can be placed in Rows or Columns.', 'warning');
+            return false;
+        }
+
+        if (isValueMeasureDragToAxis) {
+            placeMeasureAxisLabel(targetZone === 'rows' ? 'rows' : 'columns');
+            return true;
+        }
+
+        if (isFormulaValue && targetZone !== 'vals') {
+            showNotification('Formula columns can only stay in Values.', 'warning');
+            return false;
+        }
 
         if (srcZone !== targetZone) {
             if (srcZone==='rows') setRowFieldsWithHistory((p) => p.filter(f => f !== fieldName), source);
@@ -12034,10 +12083,13 @@ export default function DashTanstackPivot(props) {
     }, [
         colFields,
         filters,
+        matchesValueConfigId,
+        measureAxis,
         requestLayoutHistoryCapture,
         rowFields,
         setColFieldsWithHistory,
         setFilters,
+        setMeasureAxis,
         setRowFieldsWithHistory,
         setValConfigsWithHistory,
         showNotification,

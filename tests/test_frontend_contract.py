@@ -3207,6 +3207,28 @@ def test_custom_category_editor_uses_modal_and_validates_rules():
     assert "createCustomCategoryRule(conditionFieldOptions" in sidebar_source
 
 
+def test_available_fields_search_only_appears_for_larger_field_lists():
+    sidebar_source = Path(
+        os.path.join(
+            os.getcwd(),
+            "dash_tanstack_pivot",
+            "src",
+            "lib",
+            "components",
+            "Sidebar",
+            "SidebarPanel.js",
+        )
+    ).read_text(encoding="utf-8")
+
+    assert "const [availableFieldSearch, setAvailableFieldSearch] = React.useState('');" in sidebar_source
+    assert "displayAvailableFields.length > 8" in sidebar_source
+    assert "baseAvailableFields.length > 8" in sidebar_source
+    assert 'aria-label="Search available fields"' in sidebar_source
+    assert "visibleAvailableFields.map" in sidebar_source
+    assert "visibleBaseAvailableFields.map" in sidebar_source
+    assert "No fields match the current search." in sidebar_source
+
+
 def test_custom_dimensions_support_date_and_number_grouping_workflows():
     sidebar_source = Path(
         os.path.join(
@@ -3291,8 +3313,13 @@ def test_measure_axis_contract_is_wired_through_frontend_and_runtime():
     assert "normalizeMeasureAxisValue" in component_source
     assert "buildMeasureAxisRuntimeConfig" in component_source
     assert "measureAxis: runtimeMeasureAxis" in component_source
+    assert "isValueMeasureDragToAxis" in component_source
+    assert "placeMeasureAxisLabel" in component_source
     assert "MeasureAxisControls" in sidebar_source
     assert "Values as" in sidebar_source
+    assert "showMeasureAxisAvailableField" in sidebar_source
+    assert "data-sidebar-field-chip={isMeasureAxisVirtualField ? 'measure-axis-label' : 'available'}" in sidebar_source
+    assert "Drag to Rows or Columns to show measure names" in sidebar_source
     assert 'Input(pivot_id, "measureAxis")' in callbacks_source
     assert 'measure_axis=state.measure_axis or None' in service_source
 
@@ -3548,7 +3575,7 @@ def test_frontend_resilience_source_handles_reset_jank_cell_errors_and_keyboard_
     assert "const zoneItemsById = React.useMemo" in sidebar_source
     assert "keyboardDragItem" in sidebar_source
     assert "onKeyboardFieldDrop" in sidebar_source
-    assert "data-sidebar-field-chip=\"available\"" in sidebar_source
+    assert "data-sidebar-field-chip={isMeasureAxisVirtualField ? 'measure-axis-label' : 'available'}" in sidebar_source
     assert "data-sidebar-drop-zone={zone.id}" in sidebar_source
     assert "aria-grabbed=" in sidebar_source
     assert "handleDraggableKeyDown" in sidebar_source
