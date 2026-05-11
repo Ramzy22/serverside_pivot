@@ -1284,6 +1284,7 @@ export default function DashTanstackPivot(props) {
         paginationConfig: externalPagination = null,
         localeText: externalLocaleText = null,
         mergedHeaderSeparator = ' ',
+        rowSelection: externalRowSelection = false,
     } = props;
 
     const normalizedInitialChartServerWindow = normalizeChartServerWindowConfig(chartServerWindow);
@@ -1339,6 +1340,7 @@ export default function DashTanstackPivot(props) {
             showEditing: !EDITING_TEMPORARILY_DISABLED && src.showEditing !== false,
             showEditPanel: !EDITING_TEMPORARILY_DISABLED && src.showEditPanel !== false,
             lockImmersiveMode: src.lockImmersiveMode === true,
+            wrapHeaders: src.wrapHeaders === true,
         };
     }, [externalUiConfig]);
     const localeText = useMemo(
@@ -1353,6 +1355,32 @@ export default function DashTanstackPivot(props) {
     }, [localeText]);
     const editingEnabled = !EDITING_TEMPORARILY_DISABLED && uiConfig.showEditing;
     const editPanelEnabled = editingEnabled && uiConfig.showEditPanel;
+
+    // Row checkbox selection
+    const rowCheckboxMode = externalRowSelection === 'single' ? 'single'
+        : externalRowSelection === 'multiple' || externalRowSelection === true ? 'multiple'
+        : null;
+    const [selectedRowKeys, setSelectedRowKeys] = useState(() => new Set());
+    const toggleRowCheckbox = useCallback((key) => {
+        setSelectedRowKeys((prev) => {
+            const next = new Set(rowCheckboxMode === 'multiple' ? prev : []);
+            if (prev.has(key)) { next.delete(key); } else { next.add(key); }
+            return next;
+        });
+    }, [rowCheckboxMode]);
+    useEffect(() => {
+        if (!rowCheckboxMode) return;
+        if (typeof props.setProps === 'function') {
+            props.setProps({ selectedRows: [...selectedRowKeys] });
+        }
+    }, [selectedRowKeys, rowCheckboxMode, props.setProps]);
+    // Clear selection when row structure changes (new data, sort, filter)
+    const rowStructureKey = [rowFields, colFields, sorting, filters].map(x => JSON.stringify(x)).join('|');
+    useEffect(() => {
+        if (rowCheckboxMode) setSelectedRowKeys(new Set());
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [rowStructureKey]);
+
     const paginationConfig = useMemo(() => {
         if (serverSide) return { enabled: false, pageSize: 50 };
         const src = externalPagination && typeof externalPagination === 'object' ? externalPagination : {};
@@ -9400,6 +9428,9 @@ export default function DashTanstackPivot(props) {
         editValueDisplayMode,
         editingEnabled,
         openSparklineDataModalRef,
+        rowCheckboxSelection: rowCheckboxMode,
+        selectedRowKeys,
+        toggleRowCheckbox,
     });
 
     const availableColumnOrderIds = useMemo(
@@ -12376,6 +12407,11 @@ export default function DashTanstackPivot(props) {
         editedCellEpoch,
         headerFormatting,
         getLocaleText,
+        wrapHeaders: uiConfig.wrapHeaders,
+        table,
+        selectedRowKeys,
+        toggleRowCheckbox,
+        rowCheckboxMode,
     });
 
     const srOnly = {
@@ -13981,4 +14017,9 @@ DashTanstackPivot.propTypes = {
     reportDef: PropTypes.object,
     savedReports: PropTypes.arrayOf(PropTypes.object),
     activeReportId: PropTypes.string,
+    rowSelection: PropTypes.oneOfType([
+        PropTypes.oneOf(['single', 'multiple']),
+        PropTypes.bool,
+    ]),
+    selectedRows: PropTypes.arrayOf(PropTypes.string),
 };

@@ -102,6 +102,10 @@ export function useColumnDefs({
     editValueDisplayMode,
     // Stable ref — not in dep array; read at cell render time
     openSparklineDataModalRef,
+    // Row checkbox selection
+    rowCheckboxSelection,
+    selectedRowKeys,
+    toggleRowCheckbox,
 }) {
     return useMemo(() => {
         const effectiveLayoutMode = (pivotMode === 'report' || viewMode === 'tree') ? 'hierarchy' : layoutMode;
@@ -687,6 +691,52 @@ export function useColumnDefs({
         const sortingFn = serverSide ? 'auto' : customSortingFn;
         const hierarchyCols = [];
         const canConfigureReportLine = pivotMode === 'report' && showReportConfigColumn !== false && typeof onConfigureReportLine === 'function';
+
+        if (rowCheckboxSelection) {
+            const getRowKey = (row) => (row.original && row.original._path) ? row.original._path : row.id;
+            const isDataRow = (row) => !!(row.original && !row.original._isTotal && row.original._path !== '__grand_total__');
+            hierarchyCols.push({
+                id: '__row_checkbox__',
+                header: '__row_checkbox_header__',
+                size: 36,
+                minSize: 36,
+                maxSize: 36,
+                enableSorting: false,
+                enableColumnFilter: false,
+                enableResizing: false,
+                enableHiding: false,
+                enablePinning: false,
+                meta: { rowCheckbox: true },
+                cell: ({ row }) => {
+                    if (!isDataRow(row)) return null;
+                    const key = getRowKey(row);
+                    const checked = Boolean(selectedRowKeys && selectedRowKeys.has(key));
+                    return (
+                        <div style={{
+                            width: '100%', height: '100%',
+                            display: 'flex', alignItems: 'center', justifyContent: 'center',
+                            cursor: 'pointer',
+                        }}
+                        onClick={(e) => { e.stopPropagation(); if (typeof toggleRowCheckbox === 'function') toggleRowCheckbox(key); }}
+                        onKeyDown={(e) => { if (e.key === ' ' || e.key === 'Enter') { e.preventDefault(); if (typeof toggleRowCheckbox === 'function') toggleRowCheckbox(key); } }}
+                        role="checkbox"
+                        aria-checked={checked}
+                        tabIndex={0}
+                        >
+                            <input
+                                type="checkbox"
+                                checked={checked}
+                                onChange={() => {}}
+                                onClick={(e) => { e.stopPropagation(); if (typeof toggleRowCheckbox === 'function') toggleRowCheckbox(key); }}
+                                style={{ cursor: 'pointer', width: 14, height: 14 }}
+                                tabIndex={-1}
+                                aria-hidden="true"
+                            />
+                        </div>
+                    );
+                },
+            });
+        }
 
         if (showRowNumbers) {
                 hierarchyCols.push({
@@ -1854,5 +1904,8 @@ export function useColumnDefs({
         onToggleDetail,
         resolveCellDisplayValue,
         editValueDisplayMode,
+        rowCheckboxSelection,
+        selectedRowKeys,
+        toggleRowCheckbox,
     ]);
 }

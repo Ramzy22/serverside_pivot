@@ -293,6 +293,11 @@ export function useRenderHelpers({
     editedCellEpoch,
     headerFormatting,
     getLocaleText,
+    wrapHeaders,
+    table,
+    selectedRowKeys,
+    toggleRowCheckbox,
+    rowCheckboxMode,
 }) {
     const localize = useCallback((key, fallback, values = {}) => {
         const rawText = typeof getLocaleText === 'function'
@@ -720,13 +725,19 @@ export function useRenderHelpers({
         minWidth: autoSizeBounds.minWidth,
     }), [autoSizeBounds.minWidth]);
 
-    const headerTextStyle = useMemo(() => ({
+    const headerTextStyle = useMemo(() => wrapHeaders ? ({
+        flex: 1,
+        minWidth: 0,
+        whiteSpace: 'normal',
+        wordBreak: 'break-word',
+        lineHeight: 1.3,
+    }) : ({
         overflow: 'hidden',
         textOverflow: 'ellipsis',
         whiteSpace: 'nowrap',
         flex: 1,
         minWidth: 0,
-    }), []);
+    }), [wrapHeaders]);
 
     const moreVertStyle = useMemo(() => ({
         display: 'flex',
@@ -926,6 +937,59 @@ export function useRenderHelpers({
             .filter(column => sectionLeafIds.has(column.id))
             .reduce((sum, column) => sum + column.getSize(), 0);
         const headerWidth = overrideWidth !== null ? overrideWidth : (sectionWidth || header.getSize());
+        if (header.column.id === '__row_checkbox__') {
+            const isMulti = rowCheckboxMode === 'multiple';
+            const allDataRows = table ? table.getRowModel().rows.filter(
+                r => r.original && !r.original._isTotal && r.original._path !== '__grand_total__'
+            ) : [];
+            const allKeys = allDataRows.map(r => r.original._path || r.id);
+            const allChecked = allKeys.length > 0 && allKeys.every(k => selectedRowKeys && selectedRowKeys.has(k));
+            const someChecked = allKeys.some(k => selectedRowKeys && selectedRowKeys.has(k));
+            const cbBg = theme.headerBg || theme.surfaceBg || '#fff';
+            const checkboxStickyStyle = disableSticky ? { background: cbBg } : getHeaderStickyStyle(header, level, renderSection, cbBg);
+            return (
+                <div
+                    key={header.id}
+                    style={{
+                        ...styles.headerCell,
+                        ...checkboxStickyStyle,
+                        width: headerWidth,
+                        minWidth: headerWidth,
+                        flexShrink: 0,
+                        height: rowHeight,
+                        display: 'flex',
+                        alignItems: 'center',
+                        justifyContent: 'center',
+                        cursor: isMulti ? 'pointer' : 'default',
+                        borderBottom: `1px solid ${theme.border}`,
+                        position: checkboxStickyStyle.position || 'relative',
+                    }}
+                    data-header-column-id="__row_checkbox__"
+                    role="columnheader"
+                    aria-label={isMulti ? localize('selectAllRows', 'Select all rows') : localize('rowSelection', 'Row selection')}
+                >
+                    {isMulti && allKeys.length > 0 && (
+                        <input
+                            type="checkbox"
+                            checked={allChecked}
+                            ref={(el) => { if (el) el.indeterminate = someChecked && !allChecked; }}
+                            onChange={() => {
+                                if (typeof toggleRowCheckbox === 'function') {
+                                    allKeys.forEach(k => {
+                                        const shouldSelect = !allChecked;
+                                        const isSelected = selectedRowKeys && selectedRowKeys.has(k);
+                                        if (shouldSelect !== isSelected) toggleRowCheckbox(k);
+                                    });
+                                }
+                            }}
+                            style={{ cursor: 'pointer', width: 14, height: 14 }}
+                            aria-label={localize('selectAllRows', 'Select all rows')}
+                        />
+                    )}
+                </div>
+            );
+        }
+
         if (isReportConfigGutter) {
             const gutterBackground = theme.background || theme.surfaceBg || '#fff';
             const gutterStickyStyle = disableSticky
@@ -1007,7 +1071,8 @@ export function useRenderHelpers({
                 width: headerWidth,
                 minWidth: headerWidth,
                 flexShrink: 0,
-                height: rowHeight,
+                height: wrapHeaders ? 'auto' : rowHeight,
+                minHeight: rowHeight,
                 cursor: 'pointer',
                 // Position is handled by getHeaderStickyStyle or parent container
                 position: headerStateStyle.position || 'relative',
@@ -1280,6 +1345,11 @@ export function useRenderHelpers({
         absoluteSortBadgeStyle,
         resolveHeaderFormatStyle,
         sortingSignature,
+        wrapHeaders,
+        table,
+        selectedRowKeys,
+        toggleRowCheckbox,
+        rowCheckboxMode,
     ]);
 
     return { renderCell, renderVirtualColumnCell, renderHeaderCell };
