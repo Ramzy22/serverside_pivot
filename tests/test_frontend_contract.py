@@ -3309,12 +3309,23 @@ def test_measure_axis_contract_is_wired_through_frontend_and_runtime():
             "service.py",
         )
     ).read_text(encoding="utf-8")
+    column_defs_source = Path(
+        os.path.join(
+            os.getcwd(),
+            "dash_tanstack_pivot",
+            "src",
+            "lib",
+            "hooks",
+            "useColumnDefs.js",
+        )
+    ).read_text(encoding="utf-8")
 
     assert "normalizeMeasureAxisValue" in component_source
     assert "buildMeasureAxisRuntimeConfig" in component_source
     assert "measureAxis: runtimeMeasureAxis" in component_source
     assert "isValueMeasureDragToAxis" in component_source
     assert "placeMeasureAxisLabel" in component_source
+    assert "valueConfig.alias || valueConfig.id" in component_source
     assert "MeasureAxisControls" in sidebar_source
     assert "Values as" in sidebar_source
     assert "showMeasureAxisAvailableField" in sidebar_source
@@ -3322,6 +3333,8 @@ def test_measure_axis_contract_is_wired_through_frontend_and_runtime():
     assert "Drag to Rows or Columns to show measure names" in sidebar_source
     assert 'Input(pivot_id, "measureAxis")' in callbacks_source
     assert 'measure_axis=state.measure_axis or None' in service_source
+    assert "c.alias || c.id || getKey('', c.field, c.agg)" in column_defs_source
+    assert "getMeasureAxisRowValueConfig" in column_defs_source
 
 
 def test_filter_open_requests_and_responses_are_idempotent():

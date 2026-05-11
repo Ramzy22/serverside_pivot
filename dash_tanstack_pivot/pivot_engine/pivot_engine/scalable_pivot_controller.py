@@ -878,6 +878,19 @@ class ScalablePivotController(PivotController):
             for parent_key, child_rows in (hierarchy_result or {}).items()
         }
 
+    @staticmethod
+    def _mark_measure_axis_exact_layout(spec: PivotSpec) -> PivotSpec:
+        """Keep hierarchy level queries at their requested row/column prefix.
+
+        The normal flat pivot path auto-adds the measure-axis label field to the
+        configured axis. Hierarchy loading intentionally queries one prefix at a
+        time, so the virtual measure-name dimension must appear only when that
+        prefix has reached its level.
+        """
+        if getattr(spec, "measure_axis", None) is not None:
+            setattr(spec, "_measure_axis_exact_layout", True)
+        return spec
+
     def _hierarchy_view_cache_get(self, cache_key: str) -> Optional[Dict[str, Any]]:
         cached_entry = self._hierarchy_view_cache.get(cache_key)
         if not cached_entry:
@@ -1297,6 +1310,7 @@ class ScalablePivotController(PivotController):
 
         root_spec = spec.copy()
         root_spec.rows = list(spec.rows[:1])
+        self._mark_measure_axis_exact_layout(root_spec)
         root_spec.totals = False
         root_spec.sort = self._build_group_rows_sort(root_spec.rows, spec.sort, spec.column_sort_options)
 
@@ -1373,6 +1387,7 @@ class ScalablePivotController(PivotController):
             if grand_total_row is None:
                 total_spec = spec.copy()
                 total_spec.rows = []
+                self._mark_measure_axis_exact_layout(total_spec)
                 total_spec.limit = 1
                 total_spec.offset = 0
                 total_spec.totals = False
@@ -1407,6 +1422,7 @@ class ScalablePivotController(PivotController):
                 if len(root_rows) < max(root_total_rows, 0):
                     formula_source_spec = spec.copy()
                     formula_source_spec.rows = list(spec.rows[:1])
+                    self._mark_measure_axis_exact_layout(formula_source_spec)
                     formula_source_spec.limit = 0
                     formula_source_spec.offset = 0
                     formula_source_spec.totals = False
@@ -1635,6 +1651,7 @@ class ScalablePivotController(PivotController):
         # 1) Root level is always fetched.
         root_spec = spec.copy()
         root_spec.rows = rows[:1]
+        self._mark_measure_axis_exact_layout(root_spec)
         root_spec.limit = self.max_hierarchy_rows
         col_sort_opts = spec.column_sort_options
         root_spec.sort = self._build_group_rows_sort(root_spec.rows, spec.sort, col_sort_opts)
@@ -1690,6 +1707,7 @@ class ScalablePivotController(PivotController):
 
             level_spec = spec.copy()
             level_spec.rows = group_rows
+            self._mark_measure_axis_exact_layout(level_spec)
             level_spec.limit = self.max_hierarchy_rows
             level_spec.sort = self._build_group_rows_sort(group_rows, spec.sort, col_sort_opts)
             # Only root level should carry totals. Deeper totals create duplicate subtotal

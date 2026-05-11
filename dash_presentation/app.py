@@ -258,38 +258,64 @@ app = Dash(
 
 _PAGE_STYLE = {
     "fontFamily": "'Inter', ui-sans-serif, system-ui, sans-serif",
-    "background": "#FAFAFA",
+    "background": "#0A0D12",
     "minHeight": "100vh",
     "margin": 0,
     "padding": 0,
+    "color": "#F3F4F6",
+}
+
+_HEADER_STYLE = {
+    "background": "linear-gradient(135deg, #161B22 0%, #0D1117 100%)",
+    "borderBottom": "1px solid #21262D",
+    "padding": "20px 32px",
+    "display": "flex",
+    "alignItems": "center",
+    "justifyContent": "space-between",
+    "gap": "24px",
+}
+
+_APP_TITLE_STYLE = {
+    "fontSize": "22px",
+    "fontWeight": "700",
+    "color": "#F3F4F6",
+    "letterSpacing": "-0.02em",
+    "margin": 0,
+}
+
+_APP_SUBTITLE_STYLE = {
+    "fontSize": "12px",
+    "color": "#7D8590",
+    "fontWeight": "400",
 }
 
 _SECTION_HEADER_STYLE = {
     "fontSize": "11px",
     "fontWeight": "700",
-    "letterSpacing": "0.06em",
+    "letterSpacing": "0.08em",
     "textTransform": "uppercase",
-    "color": "#94A3B8",
-    "padding": "0 0 10px 0",
+    "color": "#7D8590",
+    "padding": "0 0 10px 4px",
 }
 
 _SECTION_CARD_STYLE = {"padding": "0"}
 
 _MAIN_CONTENT_STYLE = {
-    "padding": "24px",
+    "padding": "24px 32px",
     "display": "flex",
     "flexDirection": "column",
-    "gap": "20px",
-    "maxWidth": "1680px",
+    "gap": "32px",
+    "maxWidth": "1800px",
     "margin": "0 auto",
 }
 
 _PANEL_STYLE = {
-    "background": "#FFFFFF",
-    "border": "1px solid #E5E7EB",
-    "borderRadius": "18px",
-    "boxShadow": "0 10px 24px rgba(15,23,42,0.06), 0 2px 8px rgba(15,23,42,0.04)",
-    "padding": "18px",
+    "background": "#111827",
+    "border": "1px solid #1F2937",
+    "borderRadius": "12px",
+    "boxShadow": "0 20px 25px -5px rgba(0, 0, 0, 0.2), 0 10px 10px -5px rgba(0, 0, 0, 0.1)",
+    "padding": "20px",
+    "overflow": "hidden",
 }
 
 _PANEL_HEADER_STYLE = {
@@ -297,37 +323,37 @@ _PANEL_HEADER_STYLE = {
     "alignItems": "center",
     "justifyContent": "space-between",
     "gap": "12px",
-    "marginBottom": "14px",
+    "marginBottom": "18px",
 }
 
 _PANEL_TITLE_STYLE = {
-    "fontSize": "18px",
+    "fontSize": "16px",
     "fontWeight": "600",
-    "color": "#111827",
+    "color": "#F9FAFB",
 }
 
 _PANEL_META_STYLE = {
-    "fontSize": "12px",
+    "fontSize": "11px",
     "fontWeight": "500",
-    "color": "#64748B",
-    "background": "#F8FAFC",
-    "border": "1px solid #E5E7EB",
-    "borderRadius": "999px",
-    "padding": "6px 10px",
+    "color": "#9CA3AF",
+    "background": "#1F2937",
+    "border": "1px solid #374151",
+    "borderRadius": "6px",
+    "padding": "4px 10px",
 }
 
 _LAZY_PLACEHOLDER_STYLE = {
     "display": "flex",
     "flexDirection": "column",
     "alignItems": "flex-start",
-    "gap": "12px",
-    "padding": "12px 4px 2px 4px",
+    "gap": "14px",
+    "padding": "24px 8px",
 }
 
 _LAZY_COPY_STYLE = {
     "fontSize": "13px",
-    "lineHeight": "1.5",
-    "color": "#64748B",
+    "lineHeight": "1.6",
+    "color": "#9CA3AF",
     "maxWidth": "720px",
 }
 
@@ -336,15 +362,16 @@ _LAZY_LOAD_BTN_STYLE = {
     "alignItems": "center",
     "justifyContent": "center",
     "gap": "8px",
-    "minHeight": "38px",
-    "padding": "0 14px",
-    "borderRadius": "10px",
-    "border": "1px solid #CBD5E1",
-    "background": "#F8FAFC",
-    "color": "#0F172A",
-    "fontSize": "13px",
+    "minHeight": "36px",
+    "padding": "0 16px",
+    "borderRadius": "8px",
+    "border": "1px solid #374151",
+    "background": "#1F2937",
+    "color": "#F3F4F6",
+    "fontSize": "12px",
     "fontWeight": "600",
     "cursor": "pointer",
+    "transition": "all 0.2s ease",
 }
 
 
@@ -381,17 +408,52 @@ def build_lazy_panel_content(button_id, button_label, description):
 
 
 app.layout = html.Div(
-    style={
-        **_PAGE_STYLE,
-        "width": "100%",
-        "height": "100vh",
-        "minHeight": "100vh",
-        "overflowX": "hidden",
-        "overflowY": "auto",
-        "background": "#F4F7FB",
-    },
+    style=_PAGE_STYLE,
     children=[
         dcc.Store(id="saved-view-store"),
+        
+        # New Header
+        html.Header(
+            style=_HEADER_STYLE,
+            children=[
+                html.Div(
+                    children=[
+                        html.H1("Server-Side Pivot Engine", style=_APP_TITLE_STYLE),
+                        html.Div("Enterprise Financial Analytics · DuckDB · TanStack", style=_APP_SUBTITLE_STYLE),
+                    ],
+                ),
+                html.Div(
+                    style={"display": "flex", "alignItems": "center", "gap": "16px"},
+                    children=[
+                        html.Div(
+                            style={
+                                "background": "rgba(245, 158, 11, 0.1)",
+                                "color": "#F59E0B",
+                                "border": "1px solid rgba(245, 158, 11, 0.2)",
+                                "padding": "4px 12px",
+                                "borderRadius": "6px",
+                                "fontSize": "11px",
+                                "fontWeight": "700",
+                            },
+                            children="BLOOMBERG THEME",
+                        ),
+                        html.Div(
+                            style={
+                                "background": "rgba(16, 185, 129, 0.1)",
+                                "color": "#10B981",
+                                "border": "1px solid rgba(16, 185, 129, 0.2)",
+                                "padding": "4px 12px",
+                                "borderRadius": "6px",
+                                "fontSize": "11px",
+                                "fontWeight": "700",
+                            },
+                            children="LIVE DATA",
+                        ),
+                    ],
+                ),
+            ],
+        ),
+
         html.Main(
             style=_MAIN_CONTENT_STYLE,
             children=[
@@ -475,7 +537,7 @@ app.layout = html.Div(
                         showColTotals=False,
                         availableFieldList=_TRADER_AVAILABLE_FIELDS,
                         sparklineFields=_TRADER_SPARKLINE_FIELDS,
-                        defaultTheme="flash",
+                        defaultTheme="blooomberg",
                         data=[],
                     ),
                 ),
@@ -597,7 +659,7 @@ def mount_perf_baseline_demo(_clicks):
         showRowTotals=True,
         showColTotals=True,
         availableFieldList=_TRADER_AVAILABLE_FIELDS,
-        defaultTheme="flash",
+        defaultTheme="blooomberg",
         data=[],
     )
 
@@ -663,7 +725,7 @@ def mount_sparkline_demo(_clicks):
         showRowTotals=False,
         showColTotals=False,
         availableFieldList=_TRADER_AVAILABLE_FIELDS,
-        defaultTheme="flash",
+        defaultTheme="blooomberg",
         data=[],
     )
 
@@ -754,7 +816,7 @@ def mount_field_sparkline_demo(_clicks):
             "desk", "sector", "asset_class", "symbol", "instrument",
             "price_20d", "day_pnl_20d", "volume_20d", "pnl_20d",
         ],
-        defaultTheme="flash",
+        defaultTheme="blooomberg",
         data=[],
     )
 
@@ -789,6 +851,7 @@ def mount_curve_demo(_clicks):
         showRowTotals=False,
         showColTotals=False,
         availableFieldList=["desk", "Curve Pillar", "pv01", "dv01"],
+        defaultTheme="blooomberg",
         data=[],
     )
 
@@ -821,6 +884,7 @@ def mount_tenor_demo(_clicks):
         showRowTotals=False,
         showColTotals=False,
         availableFieldList=["book", "tenor", "rate", "notional"],
+        defaultTheme="blooomberg",
         data=[],
     )
 

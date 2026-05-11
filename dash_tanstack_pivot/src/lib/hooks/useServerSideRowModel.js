@@ -98,6 +98,7 @@ export const useServerSideRowModel = ({
     data, // The window of data received from backend
     dataOffset = 0, // The starting index of that window
     dataVersion = 0, // Data version from backend to prevent stale updates
+    dataStateEpoch = null, // State epoch echoed by the backend for this data window
     setProps,
     blockSize = 100,
     maxBlocksInCache = 500,
@@ -348,6 +349,20 @@ export const useServerSideRowModel = ({
     useEffect(() => {
         if (!serverSide || !data) return;
 
+        const responseStateEpoch = Number(dataStateEpoch);
+        const targetStateEpoch = Number.isFinite(responseStateEpoch)
+            ? responseStateEpoch
+            : stateEpoch;
+        if (targetStateEpoch < stateEpoch) {
+            debugLog('drop-stale-data-epoch', {
+                dataStateEpoch,
+                targetStateEpoch,
+                stateEpoch,
+                dataVersion,
+            });
+            return;
+        }
+
         let normalizedData = data;
         let normalizedOffset = dataOffset;
 
@@ -458,13 +473,14 @@ export const useServerSideRowModel = ({
                     blockRows,
                     dataVersion,
                     isCompleteBlock,
-                    stateEpoch,
+                    targetStateEpoch,
                     effectiveResponseColStart,
                     effectiveResponseColEnd
                 );
                 debugLog('sync-block', {
                     blockIndex: b,
-                    stateEpoch,
+                    stateEpoch: targetStateEpoch,
+                    renderStateEpoch: stateEpoch,
                     normalizedOffset,
                     dataOffset,
                     dataVersion,
@@ -513,7 +529,7 @@ export const useServerSideRowModel = ({
                 });
             }
         }
-    }, [data, dataOffset, dataVersion, excludeGrandTotal, serverSide, blockSize, rowCount, setBlockLoaded, stateEpoch, responseColStart, responseColEnd]);
+    }, [data, dataOffset, dataVersion, dataStateEpoch, excludeGrandTotal, serverSide, blockSize, rowCount, setBlockLoaded, stateEpoch, responseColStart, responseColEnd]);
 
     const blockNeedsViewportRequest = useCallback((
         blockIndex,

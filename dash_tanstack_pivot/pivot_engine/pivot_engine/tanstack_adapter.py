@@ -735,6 +735,79 @@ class TanStackPivotAdapter(FormulaEngineMixin):
             seen.add(col_id)
         return ordered
 
+    def _measure_axis_placeholder_center_ids(self, request: "TanStackRequest") -> set[str]:
+        """Return request measure placeholders hidden by measure-axis rendering."""
+        measure_axis = MeasureAxisConfig.from_dict(getattr(request, "measure_axis", None))
+        if not measure_axis or measure_axis.placement not in {"rows", "columns"}:
+            return set()
+
+        # Only hide columns that are actual measure-axis members.  If the user
+        # has configured a partial member list (e.g. ["Sales", "Cost"] out of
+        # ["Sales", "Cost", "Delta"]) non-member aggregation columns must remain
+        # visible — they are not replaced by the single valueField column.
+        member_aliases: set[str] = set()
+        for m in measure_axis.members or []:
+            if isinstance(m, dict):
+                alias = m.get("measureAlias") or m.get("alias") or m.get("id") or ""
+                if alias:
+                    member_aliases.add(str(alias))
+
+        placeholder_ids: set[str] = set()
+        for col in request.columns or []:
+            if not isinstance(col, dict) or not col.get("id"):
+                continue
+            if col.get("aggregationFn") or self._is_measure_formula_column(col):
+                col_id = str(col.get("id"))
+                # When no members are configured every measure participates; when
+                # members are configured only those members are replaced.
+                if not member_aliases or col_id in member_aliases:
+                    placeholder_ids.add(col_id)
+        return placeholder_ids
+
+    @staticmethod
+    def _implicit_formula_ref_request_ids(request: "TanStackRequest") -> set[str]:
+        """Return aggregate request ids used only as hidden formula inputs."""
+        return {
+            str(col.get("id"))
+            for col in (request.columns or [])
+            if isinstance(col, dict) and col.get("_isImplicitFormulaRef") and col.get("id")
+        }
+
+    @staticmethod
+    def _matches_materialized_request_id(column_id: Any, request_id: Any) -> bool:
+        if not isinstance(column_id, str) or not isinstance(request_id, str) or not request_id:
+            return False
+        return (
+            column_id == request_id
+            or column_id.endswith(f"_{request_id}")
+            or column_id == f"__RowTotal__{request_id}"
+        )
+
+    def _is_implicit_formula_ref_center_id(self, column_id: Any, request: "TanStackRequest") -> bool:
+        return any(
+            self._matches_materialized_request_id(column_id, request_id)
+            for request_id in self._implicit_formula_ref_request_ids(request)
+        )
+
+    def _filter_implicit_formula_ref_columns(
+        self,
+        columns: Optional[List[Dict[str, Any]]],
+        request: "TanStackRequest",
+    ) -> List[Dict[str, Any]]:
+        if not columns:
+            return []
+        return [
+            col
+            for col in columns
+            if not (
+                isinstance(col, dict)
+                and (
+                    col.get("_isImplicitFormulaRef")
+                    or self._is_implicit_formula_ref_center_id(col.get("id"), request)
+                )
+            )
+        ]
+
     def _reorder_materialized_dynamic_ids(
         self,
         observed_ids: list,
@@ -748,13 +821,7 @@ class TanStackPivotAdapter(FormulaEngineMixin):
         the end of the schema in arbitrary set/dict insertion order, which breaks
         the horizontal window contract expected by the client.
         """
-        requested_dynamic_ids = [
-            str(col.get("id"))
-            for col in (request.columns or [])
-            if isinstance(col, dict)
-            and col.get("id")
-            and (col.get("aggregationFn") or self._is_measure_formula_column(col))
-        ]
+        requested_dynamic_ids = self._dynamic_request_ids(request)
         column_formula_ids = [
             str(col.get("id"))
             for col in (request.columns or [])
@@ -906,6 +973,18 @@ class TanStackPivotAdapter(FormulaEngineMixin):
             if col_id not in seen_center_ids:
                 center_col_ids.append(col_id)
                 seen_center_ids.add(col_id)
+        measure_axis_placeholder_ids = self._measure_axis_placeholder_center_ids(request)
+        if measure_axis_placeholder_ids:
+            center_col_ids = [
+                col_id
+                for col_id in center_col_ids
+                if col_id not in measure_axis_placeholder_ids
+            ]
+        center_col_ids = [
+            col_id
+            for col_id in center_col_ids
+            if not self._is_implicit_formula_ref_center_id(col_id, request)
+        ]
         center_col_ids = self._reorder_materialized_dynamic_ids(center_col_ids, request)
 
         authoritative_columns: list[Dict[str, Any]] = []
@@ -945,6 +1024,7 @@ class TanStackPivotAdapter(FormulaEngineMixin):
             for col in (request.columns or [])
             if isinstance(col, dict)
             and col.get("id")
+            and not col.get("_isImplicitFormulaRef")
             and (col.get("aggregationFn") or FormulaEngineMixin._is_measure_formula_column(col))
         ]
 
@@ -1138,7 +1218,8 @@ class TanStackPivotAdapter(FormulaEngineMixin):
 
         row_meta_keys = {
             '_id', '_path', '_isTotal', '_level', '_expanded', '_parentPath',
-            '_has_children', '_is_expanded', 'depth', '_depth', 'uuid', 'subRows'
+            '_has_children', '_is_expanded', 'depth', '_depth', 'uuid', 'subRows',
+            '_pathFields'
         }
         pinned_ids = set(request.grouping or [])
         request_dimension_ids = {
@@ -1960,6 +2041,8 @@ class TanStackPivotAdapter(FormulaEngineMixin):
                     continue
                 if isinstance(key, str) and key.startswith(hidden_sort_prefix):
                     continue
+                if self._is_implicit_formula_ref_center_id(key, tanstack_request):
+                    continue
                 materialized_ids.append(key)
 
             materialized_ids = self._reorder_materialized_dynamic_ids(
@@ -2008,6 +2091,7 @@ class TanStackPivotAdapter(FormulaEngineMixin):
                 and col.get("id").startswith(hidden_sort_prefix)
             )
         ]
+        response_columns = self._filter_implicit_formula_ref_columns(response_columns, tanstack_request)
 
         # Apply formula columns here so that all call paths (handle_request,
         # handle_hierarchical_request, handle_virtual_scroll_request) evaluate
@@ -3422,7 +3506,8 @@ class TanStackPivotAdapter(FormulaEngineMixin):
                 elif request.grouping:
                     row_meta_keys = {
                         '_id', '_path', '_isTotal', '_level', '_expanded', '_parentPath',
-                        '_has_children', '_is_expanded', 'depth', '_depth', 'uuid', 'subRows'
+                        '_has_children', '_is_expanded', 'depth', '_depth', 'uuid', 'subRows',
+                        '_pathFields'
                     }
                     request_dimension_ids = {
                         col.get("id")

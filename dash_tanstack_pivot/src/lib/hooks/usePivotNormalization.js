@@ -1262,6 +1262,8 @@ export const normalizeTransportColumns = (columns, fallbackColumns = []) => {
 
 export const normalizeRuntimeDataEnvelope = (payload, fallback = {}) => {
     const source = payload && typeof payload === 'object' ? payload : {};
+    const sourceStateEpoch = source.stateEpoch !== undefined ? source.stateEpoch : source.state_epoch;
+    const fallbackStateEpoch = fallback.stateEpoch !== undefined ? fallback.stateEpoch : fallback.state_epoch;
     const colSchema = (
         source.colSchema
         || source.col_schema
@@ -1278,6 +1280,7 @@ export const normalizeRuntimeDataEnvelope = (payload, fallback = {}) => {
         colSchema,
         dataOffset: coerceTransportNumber(source.dataOffset, coerceTransportNumber(fallback.dataOffset, 0)),
         dataVersion: coerceTransportNumber(source.dataVersion, coerceTransportNumber(fallback.dataVersion, 0)),
+        stateEpoch: coerceTransportNumber(sourceStateEpoch, coerceTransportNumber(fallbackStateEpoch, null)),
     };
 };
 
@@ -1306,6 +1309,7 @@ export const applyRuntimePatchEnvelope = (patch, fallback = {}) => {
             colSchema: source.colSchema || source.col_schema,
             dataOffset: source.dataOffset,
             dataVersion: source.dataVersion,
+            stateEpoch: source.stateEpoch !== undefined ? source.stateEpoch : source.state_epoch,
         }, previousState);
     }
 
@@ -1329,6 +1333,7 @@ export const applyRuntimePatchEnvelope = (patch, fallback = {}) => {
         colSchema: source.colSchema || source.col_schema,
         dataOffset: source.dataOffset,
         dataVersion: source.dataVersion,
+        stateEpoch: source.stateEpoch !== undefined ? source.stateEpoch : source.state_epoch,
     }, previousState);
 };
 

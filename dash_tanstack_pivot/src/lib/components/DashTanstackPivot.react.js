@@ -1377,6 +1377,7 @@ export default function DashTanstackPivot(props) {
             columns: [],
             dataOffset: 0,
             dataVersion: 0,
+            stateEpoch: 0,
         }));
         const [transportFilterOptionsState, setTransportFilterOptionsState] = useState(() => ({}));
         const [transportFilterOptionMetaState, setTransportFilterOptionMetaState] = useState(() => ({}));
@@ -1389,6 +1390,7 @@ export default function DashTanstackPivot(props) {
         const responseColSchema = transportDataState.colSchema;
         const dataOffset = transportDataState.dataOffset;
         const dataVersion = transportDataState.dataVersion;
+        const responseStateEpoch = transportDataState.stateEpoch;
         const filterOptions = transportFilterOptionsState;
         const filterOptionMeta = transportFilterOptionMetaState;
         const chartData = transportChartDataState;
@@ -1403,6 +1405,7 @@ export default function DashTanstackPivot(props) {
                 columns: previousState.columns,
                 dataOffset: 0,
                 dataVersion: previousState.dataVersion,
+                stateEpoch: previousState.stateEpoch,
             }, previousState));
         }, [inputData, serverSide]);
 
@@ -1503,11 +1506,14 @@ export default function DashTanstackPivot(props) {
             const normalized = normalizeMeasureAxisValue(measureAxis);
             const labelField = normalized.labelField;
             if (!labelField) return;
+            // Only remove the labelField from the wrong axis — never auto-append it to the end
+            // of an axis. Position must be set explicitly: either via the rowFields/colFields
+            // prop or via the drag interaction (placeMeasureAxisLabel handles insertion at the
+            // correct index). Silently appending to the end corrupts hierarchy order when the
+            // measure dimension is intended to sit between other row dimensions.
             if (normalized.placement === 'rows') {
-                setRowFields((previous) => (previous || []).includes(labelField) ? previous : [...(previous || []), labelField]);
                 setColFields((previous) => (previous || []).filter((field) => field !== labelField));
             } else if (normalized.placement === 'columns') {
-                setColFields((previous) => (previous || []).includes(labelField) ? previous : [...(previous || []), labelField]);
                 setRowFields((previous) => (previous || []).filter((field) => field !== labelField));
             } else {
                 setRowFields((previous) => (previous || []).filter((field) => field !== labelField));
@@ -2193,6 +2199,7 @@ export default function DashTanstackPivot(props) {
     const isSelectAllServerRef = useRef(false);
     const [isExporting, setIsExporting] = useState(false);
     const [isCopying, setIsCopying] = useState(false);
+    const [exportProgress, setExportProgress] = useState(null); // null = indeterminate, 0-100 = known %
     const pendingCopyIntentRef = useRef(null);
     const [partModal, setPartModal] = useState(null);
     const EXPORT_ROW_LIMIT = 100_000;
@@ -4526,9 +4533,9 @@ export default function DashTanstackPivot(props) {
                 const formulaId = String(config.field).trim().toLowerCase();
                 return normalizedId === formulaId || normalizedId.endsWith(`_${formulaId}`);
             }
-            const measureId = getKey('', config.field, config.agg).toLowerCase();
+            const measureId = String(config.alias || config.id || getKey('', config.field, config.agg)).trim().toLowerCase();
             const measureSuffix = `_${config.field}_${config.agg}`.toLowerCase();
-            return normalizedId === measureId || normalizedId.endsWith(measureSuffix);
+            return normalizedId === measureId || normalizedId.endsWith(`_${measureId}`) || normalizedId.endsWith(measureSuffix);
         }) || null;
         if (!matchedConfig) return null;
         return {
@@ -7376,11 +7383,32 @@ export default function DashTanstackPivot(props) {
             const structuralStart = 0;
             const structuralEnd = structuralWindowSize - 1;
             const structuralColumnWindow = resolveStableRequestedColumnWindow();
+            const schemaShapeChangeKeys = new Set([
+                'viewMode',
+                'detailMode',
+                'treeConfig',
+                'detailConfig',
+                'reportDef',
+                'customDimensions',
+                'measureAxis',
+                'rowFields',
+                'colFields',
+                'valConfigs',
+                'showRowTotals',
+                'showColTotals',
+                'showSubtotals',
+            ]);
+            const schemaShapeChanged = serverSide && changedKeys.some(key => schemaShapeChangeKeys.has(key));
             const shouldUseFullInitialColumnWindow = (
                 serverSide
-                && Number(latestDataVersionRef.current || 0) === 0
-                && structuralColumnWindow.start === 0
-                && structuralColumnWindow.end === 0
+                && (
+                    schemaShapeChanged
+                    || (
+                        Number(latestDataVersionRef.current || 0) === 0
+                        && structuralColumnWindow.start === 0
+                        && structuralColumnWindow.end === 0
+                    )
+                )
             );
             const structuralColStart = shouldUseFullInitialColumnWindow ? null : structuralColumnWindow.start;
             const structuralColEnd = shouldUseFullInitialColumnWindow ? null : structuralColumnWindow.end;
@@ -7943,6 +7971,7 @@ export default function DashTanstackPivot(props) {
             : (serverSide && Array.isArray(loadedRows) && loadedRows.length > 0 ? loadedRows : getDisplayRows());
         if (!Array.isArray(exportRows) || exportRows.length === 0 || exportColumns.length === 0) return null;
         return buildStyledHtmlTableExport({
+            table,
             rows: exportRows,
             columns: exportColumns,
             includeHeaders: withHeaders,
@@ -9180,6 +9209,7 @@ export default function DashTanstackPivot(props) {
         data: filteredData,
         dataOffset: dataOffset || 0,
         dataVersion: dataVersion || 0,
+        dataStateEpoch: responseStateEpoch,
         setProps: dispatchServerSideRuntimeSetProps,
         blockSize: serverSideBlockSize,
         maxBlocksInCache: normalizedPerformanceConfig.maxBlocksInCache || 500,
@@ -9243,6 +9273,7 @@ export default function DashTanstackPivot(props) {
         isRowSelecting,
         rowDragStart,
         props,
+        measureAxis: runtimeMeasureAxis,
         cachedColSchema,
         responseColumns,
         filteredData,
@@ -11090,14 +11121,6 @@ export default function DashTanstackPivot(props) {
             return false;
         }
 
-        const windowSeqValue = coerceTransportNumber(
-            response && response.window_seq !== undefined ? response.window_seq : payloadRef.windowSeq,
-            null
-        );
-        if (Number.isFinite(windowSeqValue) && requestVersionRef.current > windowSeqValue) {
-            return false;
-        }
-
         const committedPayload = resolvedPayload && typeof resolvedPayload === 'object' ? resolvedPayload : payload;
         const committedVersion = coerceTransportNumber(
             committedPayload && committedPayload.dataVersion !== undefined
@@ -11126,7 +11149,11 @@ export default function DashTanstackPivot(props) {
         } else if (payload.formulaErrors === null) {
             setFormulaErrors({});
         }
-        setTransportDataState((previousState) => normalizeRuntimeDataEnvelope(payload, previousState));
+        setTransportDataState((previousState) => normalizeRuntimeDataEnvelope({
+            ...payload,
+            stateEpoch: response && response.state_epoch !== undefined ? response.state_epoch : payload.stateEpoch,
+            windowSeq: response && response.window_seq !== undefined ? response.window_seq : payload.windowSeq,
+        }, previousState));
     }, [
         finalizeTransactionHistoryResponse,
         hydrateVisibleEditOverlay,
@@ -11221,6 +11248,9 @@ export default function DashTanstackPivot(props) {
                 dataVersion: payload.dataVersion,
                 rowCount: payload.rowCount,
                 columns: payload.columns,
+                stateEpoch: runtimeResponse && runtimeResponse.state_epoch !== undefined
+                    ? runtimeResponse.state_epoch
+                    : payload.stateEpoch,
             }, previousState));
             if (payload.transaction && payload.transaction.deferredViewportRefresh) {
                 scheduleSilentViewportRefresh();
@@ -11736,8 +11766,10 @@ export default function DashTanstackPivot(props) {
         if (valueConfig.agg === 'formula') {
             return columnId === valueConfig.field || columnId.endsWith(`_${valueConfig.field}`);
         }
-        const flatMeasureId = `${valueConfig.field}_${valueConfig.agg}`;
-        return columnId === flatMeasureId || columnId.endsWith(`_${valueConfig.field}_${valueConfig.agg}`);
+        const flatMeasureId = valueConfig.alias || valueConfig.id || `${valueConfig.field}_${valueConfig.agg}`;
+        return columnId === flatMeasureId
+            || columnId.endsWith(`_${flatMeasureId}`)
+            || columnId.endsWith(`_${valueConfig.field}_${valueConfig.agg}`);
     };
 
     const getFieldZone = (id) => {
@@ -12137,19 +12169,38 @@ export default function DashTanstackPivot(props) {
                 }
             });
         } else {
-            const displayRows = getDisplayRows();
-            exportPivotTable(table, rowCount, displayRows.length > 0 ? displayRows : null, {
-                filename: 'pivot.xls',
-                columns: getExportColumns(),
-                getHeaderLabel: (column) => getExportHeaderLabel(column, true, mergedHeaderSeparator),
-                getHeaderStyle: (column) => getExportHeaderStyle(column),
-                getCellValue: (rowLike, column, rowIndex) => getExportCellDisplayValue(rowLike, column, rowIndex),
-                getCellStyle: (rowLike, column, _value, rowIndex) => getExportCellStyle(rowLike, column, rowIndex),
-                tableStyle: {
-                    fontFamily: fontFamily || "'Inter', ui-sans-serif, system-ui, sans-serif",
-                    fontSize: fontSize || '13px',
-                },
-            });
+            setIsExporting(true);
+            setExportProgress(null);
+            // Defer export one tick so the overlay renders before the sync work blocks the browser
+            setTimeout(() => {
+                try {
+                    const displayRows = getDisplayRows();
+                    exportPivotTable(table, rowCount, displayRows.length > 0 ? displayRows : null, {
+                        filename: 'pivot.xls',
+                        columns: getExportColumns(),
+                        getHeaderLabel: (column) => getExportHeaderLabel(column, true, mergedHeaderSeparator),
+                        getCellValue: (rowLike, column, rowIndex) => getExportCellDisplayValue(rowLike, column, rowIndex),
+                        getCellRawValue: (rowLike, column, rowIndex) => getExportRawCellValue(rowLike, column, rowIndex),
+                        isHierarchyCol: (column) => !!(column && column.id === 'hierarchy'),
+                        isHeaderTotalCol: (column) => {
+                            const pt = column && column.parent ? getDisplayHeaderTextForColumn(column.parent) : '';
+                            return !!(pt && (pt === 'Grand Total' || String(pt).startsWith('Grand Total')));
+                        },
+                        isTotalRow: (rowLike) => {
+                            const d = (rowLike && rowLike.original !== undefined ? rowLike.original : rowLike) || {};
+                            return !!(d._isTotal || d.__isGrandTotal__ || d._path === '__grand_total__' || d._id === 'Grand Total');
+                        },
+                        isTotalCol: (column) => {
+                            const pt = column && column.parent ? getDisplayHeaderTextForColumn(column.parent) : '';
+                            return !!(pt && (pt === 'Grand Total' || String(pt).startsWith('Grand Total')));
+                        },
+                        themeColors: theme,
+                    });
+                } finally {
+                    setIsExporting(false);
+                    setExportProgress(null);
+                }
+            }, 50);
         }
     };
 
@@ -13577,42 +13628,32 @@ export default function DashTanstackPivot(props) {
             })()}
             {(isExporting || isCopying) && (
                 <div style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.45)', zIndex: 10001, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
-                    <div style={{ position: 'relative', background: theme.background, color: theme.text, borderRadius: '14px', padding: '32px 40px 28px', boxShadow: '0 12px 40px rgba(0,0,0,0.35)', display: 'flex', flexDirection: 'column', alignItems: 'center', gap: '14px', minWidth: '240px', border: `1px solid ${theme.border}` }}>
-                        {/* × dismiss */}
+                    <div style={{ position: 'relative', background: theme.background, color: theme.text, borderRadius: '14px', padding: '32px 40px 28px', boxShadow: '0 12px 40px rgba(0,0,0,0.35)', display: 'flex', flexDirection: 'column', alignItems: 'center', gap: '16px', minWidth: '280px', border: `1px solid ${theme.border}`, fontFamily: "'Inter',ui-sans-serif,system-ui,sans-serif" }}>
                         <button
-                            onClick={() => { setIsExporting(false); setIsCopying(false); }}
-                            style={{
-                                position: 'absolute', top: '10px', right: '10px',
-                                width: '26px', height: '26px', borderRadius: '50%',
-                                background: '#dc2626', border: 'none', cursor: 'pointer',
-                                color: '#fff', fontSize: '13px', fontWeight: 700, lineHeight: 1,
-                                display: 'flex', alignItems: 'center', justifyContent: 'center',
-                                boxShadow: '0 1px 4px rgba(220,38,38,0.4)',
-                                transition: 'background 0.15s',
-                            }}
+                            onClick={() => { setIsExporting(false); setIsCopying(false); setExportProgress(null); }}
+                            style={{ position: 'absolute', top: '10px', right: '10px', width: '26px', height: '26px', borderRadius: '50%', background: '#dc2626', border: 'none', cursor: 'pointer', color: '#fff', fontSize: '13px', fontWeight: 700, lineHeight: 1, display: 'flex', alignItems: 'center', justifyContent: 'center', boxShadow: '0 1px 4px rgba(220,38,38,0.4)', transition: 'background 0.15s' }}
                             onMouseEnter={e => e.currentTarget.style.background = '#b91c1c'}
                             onMouseLeave={e => e.currentTarget.style.background = '#dc2626'}
                             title="Cancel"
                         >✕</button>
-                        {/* spinner */}
-                        <svg width="38" height="38" viewBox="0 0 38 38" fill="none" style={{ animation: 'pivot-spin 0.8s linear infinite' }}>
-                            <style>{`@keyframes pivot-spin { to { transform: rotate(360deg); } }`}</style>
-                            <circle cx="19" cy="19" r="16" stroke={theme.border} strokeWidth="3" fill="none"/>
-                            <path d="M19 3 A16 16 0 0 1 35 19" stroke={theme.accent || '#4f8ef7'} strokeWidth="3" strokeLinecap="round" fill="none"/>
-                        </svg>
                         <span style={{ fontSize: '14px', fontWeight: 600, letterSpacing: '0.01em' }}>
                             {isCopying ? 'Copying to clipboard…' : 'Exporting all rows…'}
                         </span>
-                        {/* Cancel button */}
+                        {/* Progress bar */}
+                        <div style={{ width: '100%', height: 6, background: theme.border || '#e5e7eb', borderRadius: 3, overflow: 'hidden', position: 'relative' }}>
+                            <style>{`@keyframes pivot-bar-slide{0%{transform:translateX(-150%)}100%{transform:translateX(350%)}}`}</style>
+                            {exportProgress !== null ? (
+                                <div style={{ position: 'absolute', left: 0, top: 0, height: '100%', width: `${exportProgress}%`, borderRadius: 3, background: theme.accent || '#4f8ef7', transition: 'width 0.2s ease' }}/>
+                            ) : (
+                                <div style={{ position: 'absolute', left: 0, top: 0, height: '100%', width: '40%', borderRadius: 3, background: theme.accent || '#4f8ef7', animation: 'pivot-bar-slide 1.4s ease-in-out infinite' }}/>
+                            )}
+                        </div>
+                        {exportProgress !== null && (
+                            <span style={{ fontSize: '12px', color: theme.textSec || theme.text, opacity: 0.8, marginTop: '-8px' }}>{exportProgress}%</span>
+                        )}
                         <button
-                            onClick={() => { setIsExporting(false); setIsCopying(false); }}
-                            style={{
-                                marginTop: '6px', padding: '7px 28px', fontSize: '13px', fontWeight: 600,
-                                background: '#dc2626', border: 'none', borderRadius: '7px',
-                                color: '#fff', cursor: 'pointer', letterSpacing: '0.02em',
-                                boxShadow: '0 2px 8px rgba(220,38,38,0.35)',
-                                transition: 'background 0.15s',
-                            }}
+                            onClick={() => { setIsExporting(false); setIsCopying(false); setExportProgress(null); }}
+                            style={{ marginTop: '4px', padding: '7px 28px', fontSize: '13px', fontWeight: 600, background: '#dc2626', border: 'none', borderRadius: '7px', color: '#fff', cursor: 'pointer', letterSpacing: '0.02em', boxShadow: '0 2px 8px rgba(220,38,38,0.35)', transition: 'background 0.15s' }}
                             onMouseEnter={e => e.currentTarget.style.background = '#b91c1c'}
                             onMouseLeave={e => e.currentTarget.style.background = '#dc2626'}
                         >Cancel</button>

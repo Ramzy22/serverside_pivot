@@ -125,6 +125,174 @@ function resolveColumns(table, options) {
     return [];
 }
 
+// ── SpreadsheetML 2003 (Excel XML) helpers ──────────────────────────────────
+
+function _xmlEsc(v) {
+    return String(v == null ? '' : v)
+        .replace(/&/g, '&amp;')
+        .replace(/</g, '&lt;')
+        .replace(/>/g, '&gt;')
+        .replace(/"/g, '&quot;')
+        .replace(/'/g, '&apos;');
+}
+
+function _normColor(css, fallback) {
+    if (!css || typeof css !== 'string') return fallback || null;
+    const s = css.trim();
+    if (/^#[0-9a-f]{6}$/i.test(s)) return s.toUpperCase();
+    if (/^#[0-9a-f]{3}$/i.test(s)) return ('#' + s.slice(1).split('').map(c => c + c).join('')).toUpperCase();
+    if (/^#[0-9a-f]{8}$/i.test(s)) return s.slice(0, 7).toUpperCase();
+    const m = s.match(/^rgba?\s*\(\s*(\d+)\s*,\s*(\d+)\s*,\s*(\d+)/i);
+    if (m) return ('#' + [m[1], m[2], m[3]].map(n => (+n).toString(16).padStart(2, '0')).join('')).toUpperCase();
+    return fallback || null;
+}
+
+function _smlBordersXml(color) {
+    return ['Bottom', 'Left', 'Right', 'Top'].map(p =>
+        `<Border ss:Position="${p}" ss:LineStyle="Continuous" ss:Weight="1" ss:Color="${color}"/>`
+    ).join('');
+}
+
+function _smlStyle(id, { bg, fg, bold, hAlign, wrap, numFmt, borderColor } = {}) {
+    let s = `<Style ss:ID="${id}">`;
+    s += `<Alignment ss:Horizontal="${hAlign || 'General'}" ss:Vertical="Center"${wrap ? ' ss:WrapText="1"' : ''}/>`;
+    if (borderColor) s += `<Borders>${_smlBordersXml(borderColor)}</Borders>`;
+    s += `<Font ss:FontName="Calibri" ss:Size="11"${bold ? ' ss:Bold="1"' : ''}${fg ? ` ss:Color="${fg}"` : ''}/>`;
+    if (bg) s += `<Interior ss:Color="${bg}" ss:Pattern="Solid"/>`;
+    if (numFmt) s += `<NumberFormat ss:Format="${_xmlEsc(numFmt)}"/>`;
+    return s + '</Style>';
+}
+
+function _buildSmlStyles(tc) {
+    const border = _normColor((tc || {}).border, '#CCCCCC');
+    const hdrBg  = _normColor((tc || {}).headerBg || (tc || {}).headerSubtleBg, '#1E3A5F');
+    const hdrFg  = _normColor((tc || {}).headerText, '#FFFFFF');
+    const totBg  = _normColor((tc || {}).totalBgStrong || (tc || {}).totalBg, '#E8EEF8');
+    const totFg  = _normColor((tc || {}).totalText || (tc || {}).text, '#1A2B3C');
+    const dataBg = _normColor((tc || {}).surfaceBg || (tc || {}).background, '#FFFFFF');
+    const dataFg = _normColor((tc || {}).textSec || (tc || {}).text, '#333333');
+    const hierBg = _normColor((tc || {}).hierarchyBg || (tc || {}).surfaceInset, '#F5F7FA');
+    const numFmt = '#,##0.##';
+    return [
+        '<Style ss:ID="Default"><Alignment ss:Vertical="Center"/><Font ss:FontName="Calibri" ss:Size="11"/></Style>',
+        _smlStyle('sHdr',  { bg: hdrBg,  fg: hdrFg,  bold: true, hAlign: 'Center', wrap: true, borderColor: border }),
+        _smlStyle('sHdrT', { bg: totBg,  fg: totFg,  bold: true, hAlign: 'Center', wrap: true, borderColor: border }),
+        _smlStyle('sDtxt', { bg: dataBg, fg: dataFg, hAlign: 'Left',  borderColor: border }),
+        _smlStyle('sDnum', { bg: dataBg, fg: dataFg, hAlign: 'Right', borderColor: border, numFmt }),
+        _smlStyle('sDhir', { bg: hierBg, fg: dataFg, hAlign: 'Left',  borderColor: border }),
+        _smlStyle('sTtxt', { bg: totBg,  fg: totFg,  bold: true, hAlign: 'Left',  borderColor: border }),
+        _smlStyle('sTnum', { bg: totBg,  fg: totFg,  bold: true, hAlign: 'Right', borderColor: border, numFmt }),
+    ].join('');
+}
+
+function _buildSmlHeaderRows(headerGroups, getHeaderLabel, isHeaderTotalCol) {
+    if (!headerGroups || !headerGroups.length) return '';
+    return headerGroups.map((hg) => {
+        let cells = '';
+        let colCursor = 1;       // leaf column position (1-based)
+        let xmlAutoIdx = 1;      // where SpreadsheetML will auto-place next cell
+        hg.headers.forEach((h) => {
+            if (!h.column || SKIP_COL_IDS.has(h.column.id)) return;
+            const span = h.colSpan || 1;
+            if (h.isPlaceholder) { colCursor += span; return; }
+            const rowSpan = h.rowSpan || 1;
+            const label = typeof getHeaderLabel === 'function'
+                ? getHeaderLabel(h.column, colCursor - 1)
+                : defaultHeaderLabel(h.column);
+            const isTotH = typeof isHeaderTotalCol === 'function' ? isHeaderTotalCol(h.column) : false;
+            const sid = isTotH ? 'sHdrT' : 'sHdr';
+            let attrs = `ss:StyleID="${sid}"`;
+            if (colCursor !== xmlAutoIdx) attrs = `ss:Index="${colCursor}" ` + attrs;
+            if (span > 1) attrs += ` ss:MergeAcross="${span - 1}"`;
+            if (rowSpan > 1) attrs += ` ss:MergeDown="${rowSpan - 1}"`;
+            cells += `<Cell ${attrs}><Data ss:Type="String">${_xmlEsc(label)}</Data></Cell>`;
+            colCursor += span;
+            xmlAutoIdx = colCursor;
+        });
+        return `<Row>${cells}</Row>`;
+    }).join('');
+}
+
+function _buildSmlDataRows(rows, exportColumns, getCellValue, getCellRawValue, isHierarchyCol, isTotalRow, isTotalCol) {
+    let xml = '';
+    rows.forEach((rowLike, rowIndex) => {
+        const isTotal = typeof isTotalRow === 'function' && isTotalRow(rowLike);
+        let cells = '';
+        exportColumns.forEach((col) => {
+            const isHier = typeof isHierarchyCol === 'function' && isHierarchyCol(col);
+            const isTotC = !isHier && typeof isTotalCol === 'function' && isTotalCol(col);
+            const displayVal = typeof getCellValue === 'function'
+                ? getCellValue(rowLike, col, rowIndex)
+                : defaultCellValue(rowLike, col, rowIndex);
+            const rawVal = typeof getCellRawValue === 'function'
+                ? getCellRawValue(rowLike, col, rowIndex)
+                : null;
+            const isNum = !isHier && typeof rawVal === 'number' && Number.isFinite(rawVal);
+            let sid;
+            if (isHier)                   sid = 'sDhir';
+            else if (isTotal || isTotC)   sid = isNum ? 'sTnum' : 'sTtxt';
+            else                          sid = isNum ? 'sDnum' : 'sDtxt';
+            if (isNum) {
+                cells += `<Cell ss:StyleID="${sid}"><Data ss:Type="Number">${rawVal}</Data></Cell>`;
+            } else {
+                cells += `<Cell ss:StyleID="${sid}"><Data ss:Type="String">${_xmlEsc(String(displayVal == null ? '' : displayVal))}</Data></Cell>`;
+            }
+        });
+        xml += `<Row>${cells}</Row>`;
+    });
+    return xml;
+}
+
+/**
+ * Export the pivot table as SpreadsheetML 2003 XML (.xls).
+ * Produces a real Excel file with merged headers, typed cells, and cell styles —
+ * no format-mismatch warning, numbers sort/sum correctly in Excel.
+ */
+export function buildSpreadsheetMlExport({
+    table = null,
+    rows = null,
+    columns = null,
+    getHeaderLabel = null,
+    isHeaderTotalCol = null,
+    getCellValue = null,
+    getCellRawValue = null,
+    isHierarchyCol = null,
+    isTotalRow = null,
+    isTotalCol = null,
+    themeColors = {},
+    filename = 'pivot.xls',
+    sheetName = 'Pivot',
+} = {}) {
+    const exportCols = resolveColumns(table, { columns: Array.isArray(columns) ? columns : undefined });
+    const exportRows = Array.isArray(rows) ? rows : resolveRows(table, null);
+    const headerGroups = table && typeof table.getHeaderGroups === 'function' ? table.getHeaderGroups() : [];
+
+    const styles = _buildSmlStyles(themeColors);
+
+    const colDefs = exportCols.map((col) => {
+        const sz = getColumnSize(col);
+        return sz && sz > 0 ? `<Column ss:Width="${Math.round(sz * 0.75)}"/>` : '<Column ss:AutoFitWidth="1" ss:Width="60"/>';
+    }).join('');
+
+    const headerRowsXml = _buildSmlHeaderRows(headerGroups, getHeaderLabel, isHeaderTotalCol);
+    const dataRowsXml   = _buildSmlDataRows(exportRows, exportCols, getCellValue, getCellRawValue, isHierarchyCol, isTotalRow, isTotalCol);
+
+    const hdrCount = headerGroups.length;
+    const freezeXml = hdrCount > 0
+        ? `<WorksheetOptions xmlns="urn:schemas-microsoft-com:office:excel"><FreezePanes/><FrozenNoSplit/><SplitHorizontal>${hdrCount}</SplitHorizontal><TopRowBottomPane>${hdrCount}</TopRowBottomPane></WorksheetOptions>`
+        : '';
+
+    const xml = `<?xml version="1.0"?>\n<?mso-application progid="Excel.Sheet"?>\n<Workbook xmlns="urn:schemas-microsoft-com:office:spreadsheet" xmlns:ss="urn:schemas-microsoft-com:office:spreadsheet" xmlns:x="urn:schemas-microsoft-com:office:excel"><Styles>${styles}</Styles><Worksheet ss:Name="${_xmlEsc(sheetName)}"><Table ss:DefaultRowHeight="18">${colDefs}${headerRowsXml}${dataRowsXml}</Table>${freezeXml}</Worksheet></Workbook>`;
+
+    const blob = new Blob([xml], { type: 'application/vnd.ms-excel;charset=utf-8' });
+    const safeName = String(filename || 'pivot.xls');
+    saveAs(blob, /\.(xls|xlsx)$/i.test(safeName) ? safeName : safeName + '.xls');
+
+    return { rows: exportRows.length, columns: exportCols.length };
+}
+
+// ── AOA helper (used by legacy paths) ───────────────────────────────────────
+
 /**
  * Build an array-of-arrays (AOA) suitable for simple spreadsheet export from
  * the table's row model and header groups.
@@ -212,23 +380,53 @@ export function buildStyledHtmlTableExport({
     const htmlRows = [];
 
     if (includeHeaders) {
-        const textHeader = [];
-        const htmlHeaderCells = exportColumns.map((column, columnIndex) => {
-            const label = typeof getHeaderLabel === 'function'
-                ? getHeaderLabel(column, columnIndex)
-                : defaultHeaderLabel(column);
-            textHeader.push(escapeTsv(label));
-            const width = getColumnSize(column);
-            const style = {
-                ...DEFAULT_HEADER_STYLE,
-                width: width ? `${width}px` : undefined,
-                minWidth: width ? `${width}px` : undefined,
-                ...(typeof getHeaderStyle === 'function' ? getHeaderStyle(column, columnIndex) : null),
-            };
-            return `<th style="${escapeHtml(styleObjectToCss(style))}">${escapeHtml(label)}</th>`;
+        // TSV text header is always flat (leaf columns)
+        const textHeader = exportColumns.map((column, columnIndex) => {
+            const label = typeof getHeaderLabel === 'function' ? getHeaderLabel(column, columnIndex) : defaultHeaderLabel(column);
+            return escapeTsv(label);
         });
         textLines.push(textHeader.join('\t'));
-        htmlRows.push(`<tr>${htmlHeaderCells.join('')}</tr>`);
+
+        // HTML header: multi-level when table has multiple header groups
+        const headerGroups = table && typeof table.getHeaderGroups === 'function' ? table.getHeaderGroups() : [];
+        if (headerGroups.length > 1) {
+            headerGroups.forEach((hg) => {
+                let rowCells = '';
+                hg.headers.forEach((h) => {
+                    if (!h.column || SKIP_COL_IDS.has(h.column.id)) return;
+                    if (h.isPlaceholder) return; // covered by parent rowspan
+                    const span = h.colSpan || 1;
+                    const rowSpan = h.rowSpan || 1;
+                    const label = typeof getHeaderLabel === 'function' ? getHeaderLabel(h.column, 0) : defaultHeaderLabel(h.column);
+                    const width = getColumnSize(h.column);
+                    const style = {
+                        ...DEFAULT_HEADER_STYLE,
+                        width: width ? `${width}px` : undefined,
+                        minWidth: width ? `${width}px` : undefined,
+                        ...(typeof getHeaderStyle === 'function' ? getHeaderStyle(h.column, 0) : null),
+                    };
+                    let attrs = `style="${escapeHtml(styleObjectToCss(style))}"`;
+                    if (span > 1) attrs += ` colspan="${span}"`;
+                    if (rowSpan > 1) attrs += ` rowspan="${rowSpan}"`;
+                    rowCells += `<th ${attrs}>${escapeHtml(label)}</th>`;
+                });
+                htmlRows.push(`<tr>${rowCells}</tr>`);
+            });
+        } else {
+            // Single-level: flat header row
+            const htmlHeaderCells = exportColumns.map((column, columnIndex) => {
+                const label = typeof getHeaderLabel === 'function' ? getHeaderLabel(column, columnIndex) : defaultHeaderLabel(column);
+                const width = getColumnSize(column);
+                const style = {
+                    ...DEFAULT_HEADER_STYLE,
+                    width: width ? `${width}px` : undefined,
+                    minWidth: width ? `${width}px` : undefined,
+                    ...(typeof getHeaderStyle === 'function' ? getHeaderStyle(column, columnIndex) : null),
+                };
+                return `<th style="${escapeHtml(styleObjectToCss(style))}">${escapeHtml(label)}</th>`;
+            });
+            htmlRows.push(`<tr>${htmlHeaderCells.join('')}</tr>`);
+        }
     }
 
     exportRows.forEach((rowLike, rowIndex) => {
@@ -333,27 +531,25 @@ export function downloadHtmlTableAsExcel(payload, filename = 'pivot.xls') {
 }
 
 /**
- * Export the current pivot table as Excel-compatible HTML. This preserves
- * inline styles far better than CSV/TSV or community SheetJS XLSX export.
+ * Export the pivot table as a real SpreadsheetML 2003 .xls file.
+ * Merged headers, typed cells (numbers sort/sum in Excel), cell styles, freeze panes.
  */
 export function exportPivotTable(table, rowCount, rawRowsOverride = null, options = {}) {
     const allRows = resolveRows(table, rawRowsOverride);
-    const payload = buildStyledHtmlTableExport({
+    const exportCols = resolveColumns(table, options);
+    buildSpreadsheetMlExport({
         table,
         rows: allRows,
-        columns: resolveColumns(table, options),
-        includeHeaders: options.includeHeaders !== false,
+        columns: exportCols,
         getHeaderLabel: options.getHeaderLabel,
-        getHeaderStyle: options.getHeaderStyle,
+        isHeaderTotalCol: options.isHeaderTotalCol,
         getCellValue: options.getCellValue,
-        getCellStyle: options.getCellStyle,
-        tableStyle: options.tableStyle,
-        bodyStyle: options.bodyStyle,
+        getCellRawValue: options.getCellRawValue,
+        isHierarchyCol: options.isHierarchyCol,
+        isTotalRow: options.isTotalRow,
+        isTotalCol: options.isTotalCol,
+        themeColors: options.themeColors || {},
+        filename: options.filename || 'pivot.xls',
     });
-    downloadHtmlTableAsExcel(payload, options.filename || 'pivot.xls');
-    return {
-        rows: payload.rowCount,
-        columns: payload.columnCount,
-        requestedRows: rowCount || payload.rowCount,
-    };
+    return { rows: allRows.length, columns: exportCols.length, requestedRows: rowCount || allRows.length };
 }

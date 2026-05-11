@@ -38,20 +38,21 @@ app = Dash(
 app.layout = html.Div(
     style={
         "fontFamily": "'Inter', ui-sans-serif, system-ui, sans-serif",
-        "background": "#F4F7FB",
+        "background": "#0A0D12",
         "minHeight": "100vh",
         "margin": 0,
         "padding": "24px",
         "boxSizing": "border-box",
+        "color": "#F3F4F6",
     },
     children=[
         html.Div(
             style={
-                "background": "#FFFFFF",
-                "border": "1px solid #E5E7EB",
-                "borderRadius": "18px",
-                "boxShadow": "0 10px 24px rgba(15,23,42,0.06), 0 2px 8px rgba(15,23,42,0.04)",
-                "padding": "18px",
+                "background": "#111827",
+                "border": "1px solid #1F2937",
+                "borderRadius": "12px",
+                "boxShadow": "0 20px 25px -5px rgba(0, 0, 0, 0.2), 0 10px 10px -5px rgba(0, 0, 0, 0.1)",
+                "padding": "20px",
             },
             children=[
                 html.Div(
@@ -59,22 +60,22 @@ app.layout = html.Div(
                         "display": "flex",
                         "alignItems": "center",
                         "justifyContent": "space-between",
-                        "marginBottom": "14px",
+                        "marginBottom": "18px",
                     },
                     children=[
                         html.Div("Sales Performance", style={
                             "fontSize": "18px",
                             "fontWeight": "600",
-                            "color": "#111827",
+                            "color": "#F9FAFB",
                         }),
                         html.Div("10,000 rows · server-side · infinite scroll", style={
-                            "fontSize": "12px",
+                            "fontSize": "11px",
                             "fontWeight": "500",
-                            "color": "#64748B",
-                            "background": "#F8FAFC",
-                            "border": "1px solid #E5E7EB",
-                            "borderRadius": "999px",
-                            "padding": "6px 10px",
+                            "color": "#9CA3AF",
+                            "background": "#1F2937",
+                            "border": "1px solid #374151",
+                            "borderRadius": "6px",
+                            "padding": "4px 10px",
                         }),
                     ],
                 ),
@@ -110,7 +111,7 @@ app.layout = html.Div(
                     expanded={},
                     showRowTotals=True,
                     showColTotals=True,
-                    defaultTheme="flash",
+                    defaultTheme="blooomberg",
                     data=[],
                     style={"height": "calc(100vh - 120px)", "width": "100%"},
                 ),

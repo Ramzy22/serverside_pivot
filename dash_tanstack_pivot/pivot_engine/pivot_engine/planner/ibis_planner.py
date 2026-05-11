@@ -382,6 +382,10 @@ class IbisPlanner:
         return config
 
     @staticmethod
+    def _measure_axis_exact_layout(spec: PivotSpec) -> bool:
+        return bool(getattr(spec, "_measure_axis_exact_layout", False))
+
+    @staticmethod
     def _measure_axis_member_source(member: Dict[str, Any]) -> str:
         return str(
             member.get("sourceField")
@@ -407,6 +411,38 @@ class IbisPlanner:
             return int(float(raw_order))
         except (TypeError, ValueError):
             return index
+
+    @staticmethod
+    def _ibis_dtype_is_numeric(dtype: Any) -> bool:
+        for method_name in ("is_numeric", "is_integer", "is_floating", "is_decimal"):
+            method = getattr(dtype, method_name, None)
+            if callable(method):
+                try:
+                    if method():
+                        return True
+                except Exception:
+                    continue
+        return False
+
+    def _measure_axis_common_value_cast(self, table: IbisTable, column_names: List[str]) -> Optional[str]:
+        dtypes = []
+        for column_name in column_names:
+            try:
+                dtypes.append(table[column_name].type())
+            except Exception:
+                return "float64"
+        if not dtypes:
+            return "float64"
+        if all(self._ibis_dtype_is_numeric(dtype) for dtype in dtypes):
+            return "float64"
+        first_dtype = str(dtypes[0])
+        if all(str(dtype) == first_dtype for dtype in dtypes):
+            return None
+        return "string"
+
+    @staticmethod
+    def _measure_axis_value_expr(expr: Any, cast_type: Optional[str]) -> Any:
+        return expr.cast(cast_type) if cast_type else expr
 
     def _normalized_measure_axis_members(
         self,
@@ -558,14 +594,36 @@ class IbisPlanner:
         next_spec.measure_axis = next_config
         setattr(next_spec, "_measure_axis_prepared", True)
 
+        exact_layout = self._measure_axis_exact_layout(spec)
         if next_config.placement == "rows":
             next_spec.rows = list(next_spec.rows or [])
-            if label_field not in next_spec.rows:
+            if not exact_layout and label_field not in next_spec.rows:
+                if next_spec.rows:
+                    # rows is non-empty but labelField is absent.  The adapter
+                    # is responsible for inserting it at the correct hierarchy
+                    # position; appending to the end produces wrong subtotal
+                    # nesting.  Warn here so direct planner callers notice the
+                    # issue without breaking existing call-sites.
+                    import warnings
+                    warnings.warn(
+                        f"measure_axis labelField '{label_field}' is not in "
+                        f"spec.rows {next_spec.rows!r}. "
+                        "Insert it at the correct position before planning to get correct subtotals.",
+                        stacklevel=4,
+                    )
                 next_spec.rows.append(label_field)
             next_spec.columns = [field for field in (next_spec.columns or []) if field != label_field]
         elif next_config.placement == "columns":
             next_spec.columns = list(next_spec.columns or [])
-            if label_field not in next_spec.columns:
+            if not exact_layout and label_field not in next_spec.columns:
+                if next_spec.columns:
+                    import warnings
+                    warnings.warn(
+                        f"measure_axis labelField '{label_field}' is not in "
+                        f"spec.columns {next_spec.columns!r}. "
+                        "Insert it at the correct position before planning to get correct subtotals.",
+                        stacklevel=4,
+                    )
                 next_spec.columns.append(label_field)
             next_spec.rows = [field for field in (next_spec.rows or []) if field != label_field]
 
@@ -575,7 +633,8 @@ class IbisPlanner:
 
         sort_key_field = f"__sortkey__{label_field}"
         sort_specs = next_spec.sort if isinstance(next_spec.sort, list) else ([next_spec.sort] if next_spec.sort else [])
-        if not any(
+        label_is_projected = label_field in set(next_spec.rows or []) or label_field in set(next_spec.columns or [])
+        if label_is_projected and not any(
             isinstance(item, dict)
             and (
                 item.get("field") == label_field
@@ -606,13 +665,17 @@ class IbisPlanner:
 
         branches: List[IbisTable] = []
         table_columns = set(table.columns)
+        value_cast = self._measure_axis_common_value_cast(
+            table,
+            [member["sourceField"] for member in members if member.get("sourceField") in table_columns],
+        )
         for index, member in enumerate(members):
             source_field = member["sourceField"]
             if source_field not in table_columns:
                 raise ValueError(f"Measure-axis source field '{source_field}' does not exist in table '{spec.table}'.")
             projection = [table[column] for column in preserved_columns]
             projection.append(ibis.literal(member["label"]).name(label_field))
-            projection.append(table[source_field].cast("float64").name(value_field))
+            projection.append(self._measure_axis_value_expr(table[source_field], value_cast).name(value_field))
             projection.append(ibis.literal(member["order"], type="int64").name(sort_key_field))
             branch = table.select(projection)
             if config.suppress_empty_members:
@@ -739,6 +802,10 @@ class IbisPlanner:
 
         branches: List[IbisTable] = []
         table_columns = set(aggregated_table.columns)
+        value_cast = self._measure_axis_common_value_cast(
+            aggregated_table,
+            [str(member.get("measureAlias") or "").strip() for member in members],
+        )
         for member in members:
             measure_alias = str(member.get("measureAlias") or "").strip()
             if measure_alias not in table_columns:
@@ -748,7 +815,7 @@ class IbisPlanner:
                 )
             projection = [aggregated_table[column] for column in preserved_columns]
             projection.append(ibis.literal(member["label"]).name(label_field))
-            projection.append(aggregated_table[measure_alias].cast("float64").name(value_field))
+            projection.append(self._measure_axis_value_expr(aggregated_table[measure_alias], value_cast).name(value_field))
             projection.append(ibis.literal(member["order"], type="int64").name(sort_key_field))
             branch = aggregated_table.select(projection)
             if config.suppress_empty_members:
@@ -775,32 +842,73 @@ class IbisPlanner:
         label_field = config.label_field or "__measure_name__"
         value_field = config.value_field or "__measure_value__"
         sort_key_field = f"__sortkey__{label_field}"
+        exact_layout = self._measure_axis_exact_layout(spec)
 
         group_cols = list(dict.fromkeys(list(spec.rows or []) + list(spec.columns or [])))
-        if config.placement == "rows" and label_field not in group_cols:
-            group_cols.append(label_field)
-        elif config.placement == "columns" and label_field not in group_cols:
+        if not exact_layout and label_field not in group_cols:
+            if group_cols:
+                # group_cols is non-empty but labelField is absent.  The adapter
+                # is responsible for inserting it at the correct hierarchy
+                # position; appending to the end produces wrong subtotal nesting.
+                import warnings
+                warnings.warn(
+                    f"measure_axis labelField '{label_field}' is missing from "
+                    f"group_cols {group_cols!r} in aggregate-first path. "
+                    "Insert it at the correct position in spec.rows/columns before planning.",
+                    stacklevel=4,
+                )
+            # Append so totals are grouped per measure member rather than
+            # collapsed to a single row (also the correct fallback for the
+            # grand-total query where group_cols is intentionally empty).
             group_cols.append(label_field)
 
         hidden_sort_keys = []
-        if sort_key_field in unpivoted.columns and sort_key_field not in group_cols:
+        label_grouped = label_field in group_cols
+        if label_grouped and sort_key_field in unpivoted.columns and sort_key_field not in group_cols:
             hidden_sort_keys.append(sort_key_field)
         sort_specs = spec.sort if isinstance(spec.sort, list) else ([spec.sort] if spec.sort else [])
         for sort_spec in sort_specs:
             if not isinstance(sort_spec, dict):
                 continue
+            if not label_grouped and self._sort_references_field(sort_spec, label_field, sort_key_field):
+                continue
             key = sort_spec.get("sortKeyField")
             if isinstance(key, str) and key in unpivoted.columns and key not in group_cols and key not in hidden_sort_keys:
                 hidden_sort_keys.append(key)
 
-        projection = []
-        for column in group_cols:
-            if column in unpivoted.columns:
-                projection.append(unpivoted[column])
-        for key in hidden_sort_keys:
-            projection.append(unpivoted[key])
-        projection.append(unpivoted[value_field])
-        result = unpivoted.select(projection)
+        value_dtype = unpivoted[value_field].type()
+        value_is_numeric = self._ibis_dtype_is_numeric(value_dtype)
+        if label_grouped:
+            projection = []
+            for column in group_cols:
+                if column in unpivoted.columns:
+                    projection.append(unpivoted[column])
+            for key in hidden_sort_keys:
+                projection.append(unpivoted[key])
+            projection.append(unpivoted[value_field])
+            result = unpivoted.select(projection)
+        else:
+            aggregations = (
+                [unpivoted[value_field].sum().name(value_field)]
+                if value_is_numeric
+                else [unpivoted[value_field].count().name("__measure_axis_count__")]
+            )
+            for key in hidden_sort_keys:
+                aggregations.append(unpivoted[key].min().name(key))
+            if group_cols:
+                result = unpivoted.group_by(group_cols).aggregate(aggregations)
+            else:
+                result = unpivoted.aggregate(aggregations)
+            projection = [result[column] for column in group_cols if column in result.columns]
+            for key in hidden_sort_keys:
+                if key in result.columns:
+                    projection.append(result[key])
+            projection.append(
+                result[value_field]
+                if value_is_numeric
+                else ibis.null().cast(value_dtype).name(value_field)
+            )
+            result = result.select(projection)
         result = self._apply_measure_axis_zero_suppression(result, spec)
         result = self._apply_stable_ordering(result, spec.sort, group_cols)
         result = self._apply_limit_offset(result, spec)
@@ -838,13 +946,19 @@ class IbisPlanner:
         value_field = config.value_field or "__measure_value__"
         label_field = config.label_field or "__measure_name__"
         columns = list(spec.columns or [])
-        if config.placement == "columns" and label_field not in columns:
+        if config.placement == "columns" and not self._measure_axis_exact_layout(spec) and label_field not in columns:
             columns.append(label_field)
         if not columns:
             raise ValueError("Columns must be non-empty for measure-axis column values query.")
 
         sort_key_field = f"__sortkey__{label_field}"
-        aggregations = [unpivoted[value_field].sum().name("__pivot_totalsort__0")]
+        value_is_numeric = self._ibis_dtype_is_numeric(unpivoted[value_field].type())
+        totalsort_expr = (
+            unpivoted[value_field].sum()
+            if value_is_numeric
+            else unpivoted[value_field].count()
+        )
+        aggregations = [totalsort_expr.name("__pivot_totalsort__0")]
         if sort_key_field in unpivoted.columns and label_field in columns:
             aggregations.append(unpivoted[sort_key_field].min().name(f"__sortkey__{label_field}"))
 
@@ -885,10 +999,11 @@ class IbisPlanner:
         label_field = config.label_field or "__measure_name__"
         sort_key_field = f"__sortkey__{label_field}"
         columns = list(spec.columns or [])
-        if config.placement == "columns" and label_field not in columns:
+        exact_layout = self._measure_axis_exact_layout(spec)
+        if config.placement == "columns" and not exact_layout and label_field not in columns:
             columns.append(label_field)
         row_dims = list(spec.rows or [])
-        if config.placement == "rows" and label_field not in row_dims:
+        if config.placement == "rows" and not exact_layout and label_field not in row_dims:
             row_dims.append(label_field)
 
         if not columns:
@@ -896,17 +1011,22 @@ class IbisPlanner:
 
         pivot_aggs = []
         match_col_expr = self._measure_axis_column_key_expr(unpivoted, columns)
+        value_is_numeric = self._ibis_dtype_is_numeric(unpivoted[value_field].type())
         for val in column_values:
             match_expr = match_col_expr == val
             cond_col = match_expr.ifelse(unpivoted[value_field], ibis.null())
-            pivot_aggs.append(cond_col.sum().name(f"{val}_{value_field}"))
+            reducer = cond_col.sum() if value_is_numeric else cond_col.first()
+            pivot_aggs.append(reducer.name(f"{val}_{value_field}"))
 
         hidden_sort_keys = []
-        if sort_key_field in unpivoted.columns and sort_key_field not in row_dims:
+        label_grouped = label_field in row_dims
+        if label_grouped and sort_key_field in unpivoted.columns and sort_key_field not in row_dims:
             hidden_sort_keys.append(sort_key_field)
         sort_specs = spec.sort if isinstance(spec.sort, list) else ([spec.sort] if spec.sort else [])
         for sort_spec in sort_specs:
             if not isinstance(sort_spec, dict):
+                continue
+            if not label_grouped and self._sort_references_field(sort_spec, label_field, sort_key_field):
                 continue
             key = sort_spec.get("sortKeyField")
             if isinstance(key, str) and key in unpivoted.columns and key not in row_dims and key not in hidden_sort_keys:

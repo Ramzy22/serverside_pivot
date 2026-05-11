@@ -55,6 +55,7 @@ export function useColumnDefs({
     isRowSelecting,
     rowDragStart,
     props,
+    measureAxis,
     cachedColSchema,
     responseColumns,
     filteredData,
@@ -188,7 +189,7 @@ export function useColumnDefs({
         };
 
         // Helper: return the data key for a valConfig (formula cols use field directly)
-        const getValKey = (c) => c.agg === 'formula' ? c.field : getKey('', c.field, c.agg);
+        const getValKey = (c) => c.agg === 'formula' ? c.field : (c.alias || c.id || getKey('', c.field, c.agg));
         // Helper: return display header for a valConfig
         const getValHeader = (c) => c.agg === 'formula'
             ? (c.label || c.field)
@@ -202,11 +203,13 @@ export function useColumnDefs({
             }
             const measureId = getValKey(config).toLowerCase();
             const measureSuffix = `_${config.field}_${config.agg}`.toLowerCase();
-            return normalizedId === measureId || normalizedId.endsWith(measureSuffix);
+            return normalizedId === measureId || normalizedId.endsWith(`_${measureId}`) || normalizedId.endsWith(measureSuffix);
         };
-        const measureAxisConfig = props && props.measureAxis && typeof props.measureAxis === 'object'
-            ? props.measureAxis
-            : null;
+        const measureAxisConfig = measureAxis && typeof measureAxis === 'object'
+            ? measureAxis
+            : props && props.measureAxis && typeof props.measureAxis === 'object'
+                ? props.measureAxis
+                : null;
         const measureAxisPlacement = measureAxisConfig && typeof measureAxisConfig.placement === 'string'
             ? measureAxisConfig.placement.toLowerCase()
             : 'none';
@@ -233,6 +236,45 @@ export function useColumnDefs({
             if (byAgg) return byAgg;
             // Field-source sparklines: match by exact field name (no agg suffix)
             return fieldSparklineConfigs.find(c => c.field === columnId) || null;
+        };
+        const getMeasureAxisRowValueConfig = (rowData) => {
+            if (
+                measureAxisPlacement !== 'rows'
+                || !measureAxisConfig
+                || !rowData
+                || typeof rowData !== 'object'
+                || !Array.isArray(valConfigs)
+            ) {
+                return null;
+            }
+            const labelField = String(measureAxisConfig.labelField || measureAxisConfig.label_field || 'Measure Name');
+            const rowLabel = rowData[labelField];
+            if (rowLabel === undefined || rowLabel === null || rowLabel === '') return null;
+            const rowLabelText = String(rowLabel);
+            const members = Array.isArray(measureAxisConfig.members) ? measureAxisConfig.members : [];
+            const member = members.find((candidate) => {
+                if (!candidate || typeof candidate !== 'object') return false;
+                return String(candidate.label || candidate.name || '') === rowLabelText
+                    || String(candidate.measureAlias || candidate.measure_alias || candidate.alias || candidate.id || '') === rowLabelText;
+            });
+            const memberAlias = member
+                ? String(member.measureAlias || member.measure_alias || member.alias || member.id || '')
+                : '';
+            const memberSource = member
+                ? String(member.sourceField || member.source_field || member.field || '')
+                : '';
+            const memberAgg = member
+                ? String(member.agg || member.aggregation || '').toLowerCase()
+                : '';
+            return valConfigs.find((config) => {
+                if (!config || typeof config !== 'object') return false;
+                const configKey = getValKey(config);
+                if (memberAlias && (config.alias === memberAlias || config.id === memberAlias || configKey === memberAlias)) return true;
+                if (memberSource && config.field === memberSource) {
+                    return !memberAgg || String(config.agg || '').toLowerCase() === memberAgg;
+                }
+                return String(config.label || '') === rowLabelText;
+            }) || null;
         };
         const buildMeasureHeaderStyle = (config) => {
             if (!config || typeof config !== 'object') return undefined;
@@ -1062,7 +1104,33 @@ export function useColumnDefs({
                 },
             }));
         } else if (colFields.length === 0) {
-            dataCols = valConfigs.filter(c => !isSparklineHiddenColumn(getValKey(c))).map(c => {
+            if (measureAxisPlacement === 'rows' && measureAxisValueField) {
+                dataCols = [{
+                    id: measureAxisValueField,
+                    accessorFn: row => row[measureAxisValueField],
+                    header: measureAxisValueField,
+                    size: defaultColumnWidths.measure,
+                    enablePinning: true,
+                    sortingFn,
+                    enableSorting: true,
+                    cell: info => {
+                        const rowConfig = getMeasureAxisRowValueConfig(info.row && info.row.original);
+                        const sparklineCell = renderConfiguredInlineSparkline(info, rowConfig);
+                        if (sparklineCell) {
+                            return sparklineCell;
+                        }
+                        const value = getResolvedCellValue(info);
+                        const rowPath = getCellRowId(info);
+                        const { formatted, contentStyle } = renderNumericCell(value, getConfigDisplayFormat(rowConfig), rowPath, info.column.id, info.row && info.row.original);
+                        return (
+                            <div style={{width:'100%', height:'100%', display:'flex', alignItems:'center', justifyContent:'flex-end', paddingRight:'8px', ...contentStyle}} onContextMenu={e => handleContextMenu(e, value, info.column.id, info.row)}>
+                                {formatted}
+                            </div>
+                        );
+                    }
+                }];
+            } else {
+                dataCols = valConfigs.filter(c => !isSparklineHiddenColumn(getValKey(c))).map(c => {
                 const fsc = getSparklineConfig(c);
                 const isFieldSpark = Boolean(fsc && fsc.source === 'field');
                 const isFieldSparkValueMode = Boolean(isFieldSpark && fsc.displayMode === 'value');
@@ -1073,8 +1141,9 @@ export function useColumnDefs({
                 return {
                     id: colId,
                     accessorFn: row => {
-                        const v = row[colId];
-                        const rawValue = (isFieldSpark && (v === undefined || v === null)) ? row[c.field] : v;
+                        const v = row && row[colId] !== undefined ? row[colId] : undefined;
+                        const rawFieldValue = row && row[c.field] !== undefined ? row[c.field] : undefined;
+                        const rawValue = (isFieldSpark && (v === undefined || v === null)) ? rawFieldValue : v;
                         return isFieldSparkValueMode
                             ? resolveSparklineMetricValue(normalizeSparklinePoints(rawValue), fsc.metric)
                             : rawValue;
@@ -1150,8 +1219,9 @@ export function useColumnDefs({
                     }
                 };
             });
+            }
         } else if (serverSide) {
-            const ignoreKeys = new Set(['_id', 'depth', '_isTotal', '_path', 'uuid', ...rowFields, ...colFields]);
+            const ignoreKeys = new Set(['_id', 'depth', '_isTotal', '_path', '_pathFields', 'uuid', ...rowFields, ...colFields]);
             const measureIds = new Set(valConfigs.map(v => getValKey(v)));
             const isRelevantColumnId = (columnId) => {
                 if (!columnId || ignoreKeys.has(columnId)) return false;
@@ -1164,29 +1234,34 @@ export function useColumnDefs({
             const buildServerValueColumn = (columnId, sizeOverride = defaultColumnWidths.subtotal) => {
                 if (!isRelevantColumnId(columnId)) return null;
                 if (isSparklineHiddenColumn(columnId)) return null;
-                const matchedConfig = getConfigForColumnId(columnId);
-                const fieldSparklineConfig = matchedConfig && getSparklineConfig(matchedConfig);
-                const isFieldSparkline = Boolean(fieldSparklineConfig && fieldSparklineConfig.source === 'field');
-                const isFieldSparklineValueMode = Boolean(isFieldSparkline && fieldSparklineConfig.displayMode === 'value');
+                const columnConfig = getConfigForColumnId(columnId);
+                const columnSparklineConfig = columnConfig && getSparklineConfig(columnConfig);
+                const isColumnFieldSparkline = Boolean(columnSparklineConfig && columnSparklineConfig.source === 'field');
+                const isColumnFieldSparklineValueMode = Boolean(isColumnFieldSparkline && columnSparklineConfig.displayMode === 'value');
                 // Use a wider default for field-array sparkline columns
-                const effectiveSize = isFieldSparkline && !isFieldSparklineValueMode && sizeOverride === defaultColumnWidths.subtotal
+                const effectiveSize = isColumnFieldSparkline && !isColumnFieldSparklineValueMode && sizeOverride === defaultColumnWidths.subtotal
                     ? defaultColumnWidths.subtotal + 64
                     : sizeOverride;
                 return {
                     id: columnId,
-                    accessorFn: row => (
-                        isFieldSparklineValueMode
-                            ? resolveSparklineMetricValue(normalizeSparklinePoints(row[columnId]), fieldSparklineConfig.metric)
-                            : row[columnId]
-                    ),
+                    accessorFn: row => {
+                        const rawValue = row && row[columnId] !== undefined ? row[columnId] : undefined;
+                        return isColumnFieldSparklineValueMode
+                            ? resolveSparklineMetricValue(normalizeSparklinePoints(rawValue), columnSparklineConfig.metric)
+                            : rawValue;
+                    },
                     header: columnId,
                     size: Number.isFinite(Number(effectiveSize)) ? Number(effectiveSize) : defaultColumnWidths.subtotal,
                     sortingFn,
-                    enableSorting: !isFieldSparkline || isFieldSparklineValueMode,
+                    enableSorting: !isColumnFieldSparkline || isColumnFieldSparklineValueMode,
                     meta: {
-                        headerStyle: buildMeasureHeaderStyle(matchedConfig),
+                        headerStyle: buildMeasureHeaderStyle(columnConfig),
                     },
                     cell: info => {
+                        const matchedConfig = getMeasureAxisRowValueConfig(info.row && info.row.original) || columnConfig;
+                        const fieldSparklineConfig = matchedConfig && getSparklineConfig(matchedConfig);
+                        const isFieldSparkline = Boolean(fieldSparklineConfig && fieldSparklineConfig.source === 'field');
+                        const isFieldSparklineValueMode = Boolean(isFieldSparkline && fieldSparklineConfig.displayMode === 'value');
                         // Field-array sparkline: cell value IS the series, render full-size
                         if (isFieldSparkline) {
                             const points = normalizeSparklinePoints(getFieldSparklineRawValue(info, matchedConfig, columnId));
@@ -1734,6 +1809,7 @@ export function useColumnDefs({
         isRowSelecting,
         rowDragStart,
         props.columns,
+        measureAxis,
         props.measureAxis,
         rowCount,
         cachedColSchema,

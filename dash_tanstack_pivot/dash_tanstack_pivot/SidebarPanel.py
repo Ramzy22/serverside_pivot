@@ -32,6 +32,8 @@ Keyword arguments:
 
     def __init__(
         self,
+        measureAxis = None,
+        setMeasureAxis = None,
         filterOptionMeta = None,
         clientFilterOptionMap = None,
         fixedSparklineValueKeys = None,

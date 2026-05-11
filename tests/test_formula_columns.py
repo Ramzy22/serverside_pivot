@@ -133,6 +133,193 @@ def test_runtime_service_build_request_columns_skips_displayed_column_formula_re
 
 
 @pytest.mark.asyncio
+async def test_formula_removed_visible_dependency_calculates_with_hidden_input_column():
+    adapter = create_tanstack_adapter(backend_uri=":memory:")
+    adapter.controller.load_data_from_arrow(
+        "sales_data",
+        pa.Table.from_pydict(
+            {
+                "region": ["North", "South"],
+                "sales": [100, 200],
+                "cost": [80, 150],
+            }
+        ),
+    )
+    columns = PivotRuntimeService._build_request_columns(
+        row_fields=["region"],
+        col_fields=[],
+        val_configs=[
+            {"field": "sales", "agg": "sum"},
+            {
+                "field": "formula_1",
+                "agg": "formula",
+                "label": "Margin",
+                "formula": "sales - cost",
+            },
+        ],
+    )
+
+    assert any(column.get("id") == "cost_sum" and column.get("_isImplicitFormulaRef") for column in columns)
+
+    request = TanStackRequest(
+        operation=TanStackOperation.GET_DATA,
+        table="sales_data",
+        columns=columns,
+        filters={},
+        sorting=[],
+        grouping=["region"],
+        aggregations=[],
+    )
+
+    response = await adapter.handle_virtual_scroll_request(
+        request,
+        start_row=0,
+        end_row=100,
+        needs_col_schema=True,
+    )
+    rows = {
+        row["region"]: row
+        for row in response.data
+        if isinstance(row, dict) and row.get("region")
+    }
+    response_ids = [column.get("id") for column in response.columns if isinstance(column, dict)]
+    schema_ids = [
+        column.get("id")
+        for column in (response.col_schema or {}).get("columns", [])
+        if isinstance(column, dict)
+    ]
+
+    assert rows["North"]["formula_1"] == pytest.approx(20.0)
+    assert rows["South"]["formula_1"] == pytest.approx(50.0)
+    assert "cost_sum" not in response_ids
+    assert "cost_sum" not in schema_ids
+    assert all("cost_sum" not in row for row in rows.values())
+
+
+@pytest.mark.asyncio
+async def test_formula_restored_visible_dependency_returns_to_display_schema():
+    adapter = create_tanstack_adapter(backend_uri=":memory:")
+    adapter.controller.load_data_from_arrow(
+        "sales_data",
+        pa.Table.from_pydict(
+            {
+                "region": ["North", "South"],
+                "sales": [100, 200],
+                "cost": [80, 150],
+            }
+        ),
+    )
+    columns = PivotRuntimeService._build_request_columns(
+        row_fields=["region"],
+        col_fields=[],
+        val_configs=[
+            {"field": "sales", "agg": "sum"},
+            {"field": "cost", "agg": "sum"},
+            {
+                "field": "formula_1",
+                "agg": "formula",
+                "label": "Margin",
+                "formula": "sales - cost",
+            },
+        ],
+    )
+
+    assert not any(column.get("_isImplicitFormulaRef") for column in columns)
+
+    request = TanStackRequest(
+        operation=TanStackOperation.GET_DATA,
+        table="sales_data",
+        columns=columns,
+        filters={},
+        sorting=[],
+        grouping=["region"],
+        aggregations=[],
+    )
+
+    response = await adapter.handle_virtual_scroll_request(
+        request,
+        start_row=0,
+        end_row=100,
+        needs_col_schema=True,
+    )
+    rows = {
+        row["region"]: row
+        for row in response.data
+        if isinstance(row, dict) and row.get("region")
+    }
+    schema_ids = [
+        column.get("id")
+        for column in (response.col_schema or {}).get("columns", [])
+        if isinstance(column, dict)
+    ]
+
+    assert rows["North"]["formula_1"] == pytest.approx(20.0)
+    assert "cost_sum" in schema_ids
+    assert rows["North"]["cost_sum"] == pytest.approx(80.0)
+
+
+@pytest.mark.asyncio
+async def test_formula_hidden_dependency_is_not_exposed_as_dynamic_pivot_column():
+    adapter = create_tanstack_adapter(backend_uri=":memory:")
+    adapter.controller.load_data_from_arrow(
+        "sales_data",
+        pa.Table.from_pydict(
+            {
+                "region": ["North", "North", "South", "South"],
+                "product": ["Laptop", "Phone", "Laptop", "Phone"],
+                "sales": [100, 60, 90, 50],
+                "cost": [70, 20, 30, 10],
+            }
+        ),
+    )
+    columns = PivotRuntimeService._build_request_columns(
+        row_fields=["region"],
+        col_fields=["product"],
+        val_configs=[
+            {"field": "sales", "agg": "sum"},
+            {
+                "field": "formula_1",
+                "agg": "formula",
+                "label": "Margin",
+                "formula": "sales - cost",
+            },
+        ],
+    )
+    request = TanStackRequest(
+        operation=TanStackOperation.GET_DATA,
+        table="sales_data",
+        columns=columns,
+        filters={},
+        sorting=[],
+        grouping=["region"],
+        aggregations=[],
+    )
+
+    response = await adapter.handle_virtual_scroll_request(
+        request,
+        start_row=0,
+        end_row=100,
+        needs_col_schema=True,
+    )
+    north_row = next(
+        row
+        for row in response.data
+        if isinstance(row, dict) and row.get("region") == "North"
+    )
+    schema_ids = [
+        column.get("id")
+        for column in (response.col_schema or {}).get("columns", [])
+        if isinstance(column, dict)
+    ]
+
+    assert north_row["Laptop_formula_1"] == pytest.approx(30.0)
+    assert north_row["Phone_formula_1"] == pytest.approx(40.0)
+    assert any(column_id.endswith("_formula_1") for column_id in schema_ids)
+    assert not any(column_id.endswith("_cost_sum") for column_id in schema_ids)
+    assert not any(key.endswith("_cost_sum") for key in north_row)
+
+
+@pytest.mark.asyncio
 async def test_formula_columns_are_applied_in_flat_mode():
     adapter = create_tanstack_adapter(backend_uri=":memory:")
     adapter.controller.load_data_from_arrow(
