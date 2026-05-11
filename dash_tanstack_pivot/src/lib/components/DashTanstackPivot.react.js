@@ -280,28 +280,92 @@ const normalizeMeasureAxisValue = (value, fallback = {}) => {
     };
 };
 
+const getMeasureAxisAggForValueConfig = (config) => {
+    const agg = String((config && config.agg) || 'sum').trim();
+    return agg || 'sum';
+};
+
+const getMeasureAxisAliasForValueConfig = (config) => {
+    if (!config || typeof config !== 'object' || !config.field) return '';
+    const agg = getMeasureAxisAggForValueConfig(config);
+    return String(
+        config.alias
+        || config.id
+        || (agg === 'formula' ? config.field : `${config.field}_${agg}`)
+    ).trim();
+};
+
+const getMeasureAxisAliasForMember = (member) => (
+    String(
+        (member && (
+            member.measureAlias
+            || member.measure_alias
+            || member.alias
+            || member.id
+        )) || ''
+    ).trim()
+);
+
+const getMeasureAxisSourceFieldForMember = (member) => (
+    String(
+        (member && (
+            member.sourceField
+            || member.source_field
+            || member.field
+            || member.aggregationField
+            || member.aggregation_field
+        )) || ''
+    ).trim()
+);
+
 const buildMeasureAxisRuntimeConfig = (measureAxis, valConfigs = []) => {
     const normalized = normalizeMeasureAxisValue(measureAxis);
     if (normalized.placement === 'none') return { ...normalized, members: [] };
-    const explicitMembers = Array.isArray(normalized.members) && normalized.members.length > 0
-        ? normalized.members
-        : (Array.isArray(valConfigs) ? valConfigs : [])
-            .filter((config) => config && config.field && config.agg)
-            .map((config, index) => {
-                const agg = config.agg || 'sum';
-                const measureAlias = config.alias || config.id || (agg === 'formula' ? config.field : `${config.field}_${agg}`);
-                return ({
-                id: measureAlias,
-                sourceField: config.field,
-                measureAlias,
-                agg,
-                label: config.label || formatDisplayLabel(config.field),
-                order: index,
-                format: config.format,
-                editable: Boolean(config.editable),
-            });
-            });
-    return { ...normalized, members: explicitMembers };
+    const valueConfigs = (Array.isArray(valConfigs) ? valConfigs : [])
+        .filter((config) => config && config.field && config.agg);
+    const explicitMembers = Array.isArray(normalized.members) ? normalized.members : [];
+    const explicitByAlias = new Map();
+    const explicitBySourceAgg = new Map();
+    explicitMembers.forEach((member) => {
+        if (!member || typeof member !== 'object') return;
+        const alias = getMeasureAxisAliasForMember(member);
+        if (alias && !explicitByAlias.has(alias)) {
+            explicitByAlias.set(alias, member);
+        }
+        const sourceField = getMeasureAxisSourceFieldForMember(member);
+        const agg = String(member.agg || member.aggregation || 'sum').trim().toLowerCase();
+        if (sourceField) {
+            const key = `${sourceField}|||${agg}`;
+            if (!explicitBySourceAgg.has(key)) explicitBySourceAgg.set(key, member);
+        }
+    });
+
+    const seenAliases = new Set();
+    const runtimeMembers = valueConfigs.reduce((members, config) => {
+        const agg = getMeasureAxisAggForValueConfig(config);
+        const normalizedAgg = String(agg || 'sum').trim().toLowerCase();
+        const measureAlias = getMeasureAxisAliasForValueConfig(config);
+        if (!measureAlias || seenAliases.has(measureAlias)) return members;
+        const sourceField = String(config.field || '').trim();
+        const explicitMember = explicitByAlias.get(measureAlias)
+            || explicitBySourceAgg.get(`${sourceField}|||${normalizedAgg}`)
+            || {};
+        seenAliases.add(measureAlias);
+        members.push({
+            ...explicitMember,
+            id: measureAlias,
+            sourceField,
+            measureAlias,
+            agg,
+            label: config.label || explicitMember.label || formatDisplayLabel(sourceField),
+            order: members.length,
+            format: config.format !== undefined ? config.format : explicitMember.format,
+            editable: config.editable !== undefined ? Boolean(config.editable) : Boolean(explicitMember.editable),
+            weightField: config.weightField || explicitMember.weightField,
+        });
+        return members;
+    }, []);
+    return { ...normalized, members: runtimeMembers };
 };
 
 const normalizeColumnOrderValue = (value) => {
@@ -1520,6 +1584,17 @@ export default function DashTanstackPivot(props) {
                 setColFields((previous) => (previous || []).filter((field) => field !== labelField));
             }
         }, [measureAxis]);
+        useEffect(() => {
+            if (hasExternalMeasureAxis) return;
+            setMeasureAxis((previous) => {
+                const normalizedPrevious = normalizeMeasureAxisValue(previous);
+                if (normalizedPrevious.placement === 'none') return previous;
+                const nextMeasureAxis = buildMeasureAxisRuntimeConfig(normalizedPrevious, valConfigs);
+                return JSON.stringify(normalizedPrevious) === JSON.stringify(nextMeasureAxis)
+                    ? previous
+                    : nextMeasureAxis;
+            });
+        }, [hasExternalMeasureAxis, valConfigs]);
         const [filters, setFilters] = useState(initialFilters);
         const [sorting, setSorting] = useState(initialSorting);
         const [expanded, setExpanded] = useState(initialExpanded);
@@ -6683,6 +6758,9 @@ export default function DashTanstackPivot(props) {
         const resolvedValConfigs = Object.prototype.hasOwnProperty.call(snapshot, 'valConfigs')
             ? snapshot.valConfigs
             : valConfigs;
+        const resolvedMeasureAxis = Object.prototype.hasOwnProperty.call(snapshot, 'measureAxis')
+            ? snapshot.measureAxis
+            : measureAxis;
         return cloneSerializable({
             viewMode: Object.prototype.hasOwnProperty.call(snapshot, 'viewMode') ? snapshot.viewMode : viewMode,
             detailMode: Object.prototype.hasOwnProperty.call(snapshot, 'detailMode') ? snapshot.detailMode : detailMode,
@@ -6692,9 +6770,7 @@ export default function DashTanstackPivot(props) {
             customDimensions: Object.prototype.hasOwnProperty.call(snapshot, 'customDimensions')
                 ? normalizeCustomDimensionsValue(snapshot.customDimensions)
                 : normalizeCustomDimensionsValue(customDimensions),
-            measureAxis: Object.prototype.hasOwnProperty.call(snapshot, 'measureAxis')
-                ? buildMeasureAxisRuntimeConfig(snapshot.measureAxis, resolvedValConfigs)
-                : runtimeMeasureAxis,
+            measureAxis: buildMeasureAxisRuntimeConfig(resolvedMeasureAxis, resolvedValConfigs),
             rowFields: Object.prototype.hasOwnProperty.call(snapshot, 'rowFields') ? snapshot.rowFields : rowFields,
             colFields: Object.prototype.hasOwnProperty.call(snapshot, 'colFields') ? snapshot.colFields : colFields,
             valConfigs: normalizeSparklineValConfigsForView(resolvedValConfigs, normalizedInitialValConfigs),
@@ -6716,7 +6792,7 @@ export default function DashTanstackPivot(props) {
         detailConfig,
         reportDef,
         customDimensions,
-        runtimeMeasureAxis,
+        measureAxis,
         rowFields,
         colFields,
         valConfigs,

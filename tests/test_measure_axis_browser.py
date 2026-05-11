@@ -577,6 +577,64 @@ def _build_value_removal_expand_app():
     return app
 
 
+def _build_measure_axis_value_removal_expand_app():
+    adapter = create_tanstack_adapter(backend_uri=":memory:")
+    adapter.controller.load_data_from_arrow(
+        "measure_axis_value_removal_expand_browser",
+        pa.Table.from_pydict(
+            {
+                "region": ["North", "North", "South", "South"],
+                "desk": ["Rates", "Credit", "Rates", "Credit"],
+                "sales": [100.0, 50.0, 80.0, 20.0],
+                "cost": [40.0, 10.0, 30.0, 5.0],
+            }
+        ),
+    )
+
+    app = Dash(__name__)
+    app.layout = html.Div(
+        style={"padding": "12px"},
+        children=[
+            DashTanstackPivot(
+                id="pivot-grid",
+                style={"height": "620px", "width": "100%"},
+                table="measure_axis_value_removal_expand_browser",
+                serverSide=True,
+                rowFields=["region", "Measure Name", "desk"],
+                colFields=[],
+                valConfigs=[
+                    {"field": "sales", "agg": "sum", "alias": "sales_sum", "label": "Sales"},
+                    {"field": "cost", "agg": "sum", "alias": "cost_sum", "label": "Cost"},
+                ],
+                measureAxis={
+                    "placement": "rows",
+                    "labelField": "Measure Name",
+                    "valueField": "Amount",
+                    "members": [
+                        {"measureAlias": "sales_sum", "label": "Sales", "order": 0},
+                        {"measureAlias": "cost_sum", "label": "Cost", "order": 1},
+                    ],
+                },
+                filters={},
+                sorting=[
+                    {
+                        "id": "Measure Name",
+                        "desc": False,
+                        "sortKeyField": "__sortkey__Measure Name",
+                    }
+                ],
+                expanded={},
+                showRowTotals=False,
+                showColTotals=False,
+                availableFieldList=["region", "desk", "sales", "cost"],
+                data=[],
+            )
+        ],
+    )
+    register_pivot_app(app, adapter_getter=lambda: adapter, pivot_id="pivot-grid", debug=False)
+    return app
+
+
 @pytest.fixture
 def measure_axis_browser_server():
     app = _build_measure_axis_app()
@@ -752,6 +810,64 @@ def formula_dependency_toggle_browser_server():
 
 
 @pytest.fixture
+def value_removal_expand_browser_server():
+    app = _build_value_removal_expand_app()
+    host = "127.0.0.1"
+    port = _find_free_port()
+    server = _DashServerThread(app, host, port)
+    server.start()
+
+    base_url = f"http://{host}:{port}"
+    deadline = time.time() + 20
+    last_error = None
+    while time.time() < deadline:
+        try:
+            response = requests.get(base_url, timeout=1.5)
+            if response.ok:
+                break
+        except Exception as exc:
+            last_error = exc
+        time.sleep(0.2)
+    else:
+        server.shutdown()
+        raise RuntimeError(f"Dash test server did not start: {last_error}")
+
+    try:
+        yield base_url
+    finally:
+        server.shutdown()
+
+
+@pytest.fixture
+def measure_axis_value_removal_expand_browser_server():
+    app = _build_measure_axis_value_removal_expand_app()
+    host = "127.0.0.1"
+    port = _find_free_port()
+    server = _DashServerThread(app, host, port)
+    server.start()
+
+    base_url = f"http://{host}:{port}"
+    deadline = time.time() + 20
+    last_error = None
+    while time.time() < deadline:
+        try:
+            response = requests.get(base_url, timeout=1.5)
+            if response.ok:
+                break
+        except Exception as exc:
+            last_error = exc
+        time.sleep(0.2)
+    else:
+        server.shutdown()
+        raise RuntimeError(f"Dash test server did not start: {last_error}")
+
+    try:
+        yield base_url
+    finally:
+        server.shutdown()
+
+
+@pytest.fixture
 def measure_axis_internal_hierarchy_browser_server():
     app = _build_measure_axis_hierarchy_internal_state_app(include_columns=False)
     host = "127.0.0.1"
@@ -875,6 +991,28 @@ def _find_sidebar_chip(driver, selector, text, timeout=30):
         return False
 
     return wait.until(_match)
+
+
+def _remove_sidebar_value_chip(driver, label):
+    result = driver.execute_script(
+        """
+        const label = String(arguments[0] || '').trim().toLowerCase();
+        const chips = Array.from(document.querySelectorAll('[data-sidebar-drop-zone="vals"] [data-sidebar-field-chip="zone"]'));
+        const chip = chips.find((element) => element.innerText.toLowerCase().includes(label));
+        if (!chip) {
+            return {ok: false, chips: chips.map((element) => element.innerText)};
+        }
+        const spans = Array.from(chip.querySelectorAll('span'));
+        const removeButton = spans[spans.length - 1];
+        if (!removeButton) {
+            return {ok: false, reason: 'missing remove button', text: chip.innerText};
+        }
+        removeButton.click();
+        return {ok: true};
+        """,
+        label,
+    )
+    assert result["ok"], result
 
 
 def _html5_drag_start(driver, source):
@@ -1100,6 +1238,71 @@ def test_formula_dependency_toggle_browser_keeps_grid_populated(
     _wait_for_numeric_cell(chrome_driver, "North", "sales_sum", 100.0)
     _wait_for_numeric_cell(chrome_driver, "North", "formula_1", 20.0)
     _wait_for_cell_absent(chrome_driver, "North", "cost_sum")
+
+    severe_logs = _severe_browser_logs(chrome_driver)
+    assert severe_logs == []
+
+
+def test_value_removal_then_expand_browser_keeps_visible_measure_populated(
+    value_removal_expand_browser_server,
+    chrome_driver,
+):
+    chrome_driver.get(value_removal_expand_browser_server)
+
+    _wait_for_numeric_cell(chrome_driver, "North", "sales_sum", 150.0)
+    _wait_for_numeric_cell(chrome_driver, "North", "cost_sum", 50.0)
+
+    chrome_driver.find_element(By.ID, "remove-cost-value").click()
+    WebDriverWait(chrome_driver, 30).until(
+        EC.text_to_be_present_in_element((By.ID, "value-mode-label"), "sales-only")
+    )
+    _wait_for_numeric_cell(chrome_driver, "North", "sales_sum", 150.0)
+    _wait_for_cell_absent(chrome_driver, "North", "cost_sum")
+
+    _click_row_expander(chrome_driver, "North")
+    _wait_for_numeric_cell(chrome_driver, "North|||Rates", "sales_sum", 100.0)
+    _wait_for_numeric_cell(chrome_driver, "North|||Credit", "sales_sum", 50.0)
+    _wait_for_cell_absent(chrome_driver, "North|||Rates", "cost_sum")
+    _wait_for_cell_absent(chrome_driver, "North|||Credit", "cost_sum")
+
+    severe_logs = _severe_browser_logs(chrome_driver)
+    assert severe_logs == []
+
+
+def test_measure_axis_value_removal_and_restore_keep_hierarchy_populated(
+    measure_axis_value_removal_expand_browser_server,
+    chrome_driver,
+):
+    chrome_driver.get(measure_axis_value_removal_expand_browser_server)
+
+    values_as_select = WebDriverWait(chrome_driver, 30).until(
+        EC.presence_of_element_located((By.CSS_SELECTOR, 'select[title="Values placement"]'))
+    )
+    assert values_as_select.get_attribute("value") == "rows"
+
+    _wait_for_numeric_cell(chrome_driver, "North", "Amount", 200.0)
+
+    _remove_sidebar_value_chip(chrome_driver, "Cost")
+    _wait_for_numeric_cell(chrome_driver, "North", "Amount", 150.0)
+
+    _click_row_expander(chrome_driver, "North")
+    _wait_for_numeric_cell(chrome_driver, "North|||Sales", "Amount", 150.0)
+    _wait_for_cell_absent(chrome_driver, "North|||Cost", "Amount", timeout=5)
+
+    _click_row_expander(chrome_driver, "North|||Sales")
+    _wait_for_numeric_cell(chrome_driver, "North|||Sales|||Rates", "Amount", 100.0)
+    _wait_for_numeric_cell(chrome_driver, "North|||Sales|||Credit", "Amount", 50.0)
+
+    cost_chip = _find_sidebar_chip(
+        chrome_driver,
+        '[data-sidebar-field-chip="available"]',
+        "Cost",
+    )
+    _drag_sidebar_chip_to_zone(chrome_driver, cost_chip, "vals")
+
+    _wait_for_numeric_cell(chrome_driver, "North", "Amount", 200.0)
+    _wait_for_numeric_cell(chrome_driver, "North|||Sales", "Amount", 150.0)
+    _wait_for_numeric_cell(chrome_driver, "North|||Cost", "Amount", 50.0)
 
     severe_logs = _severe_browser_logs(chrome_driver)
     assert severe_logs == []

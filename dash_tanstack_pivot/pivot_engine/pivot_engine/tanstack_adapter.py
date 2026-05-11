@@ -1453,7 +1453,65 @@ class TanStackPivotAdapter(FormulaEngineMixin):
             if isinstance(member, dict)
         ]
         if configured_members:
-            return configured_members
+            if not measures:
+                return configured_members
+            measures_by_alias = {
+                str(getattr(measure, "alias", "")): measure
+                for measure in (measures or [])
+                if getattr(measure, "alias", None)
+            }
+
+            def resolve_configured_member(member: Dict[str, Any]) -> Optional[Measure]:
+                candidates = [
+                    member.get("measureAlias"),
+                    member.get("measure_alias"),
+                    member.get("alias"),
+                    member.get("id"),
+                ]
+                for candidate in candidates:
+                    key = str(candidate or "").strip()
+                    if key and key in measures_by_alias:
+                        return measures_by_alias[key]
+
+                source_field = str(
+                    member.get("sourceField")
+                    or member.get("source_field")
+                    or member.get("field")
+                    or member.get("aggregationField")
+                    or member.get("aggregation_field")
+                    or ""
+                ).strip()
+                agg = str(member.get("agg") or member.get("aggregation") or "sum").strip().lower()
+                for measure in measures or []:
+                    measure_field = str(getattr(measure, "field", None) or "").strip()
+                    measure_agg = str(getattr(measure, "agg", None) or "sum").strip().lower()
+                    if source_field and measure_field == source_field and measure_agg == agg:
+                        return measure
+                for measure in measures or []:
+                    measure_field = str(getattr(measure, "field", None) or "").strip()
+                    if source_field and measure_field == source_field:
+                        return measure
+                return None
+
+            valid_configured_members: List[Dict[str, Any]] = []
+            seen_aliases: set = set()
+            for member in configured_members:
+                measure = resolve_configured_member(member)
+                if measure is None:
+                    continue
+                measure_alias = str(getattr(measure, "alias", "") or "").strip()
+                if not measure_alias or measure_alias in seen_aliases:
+                    continue
+                seen_aliases.add(measure_alias)
+                valid_configured_members.append({
+                    **member,
+                    "id": measure_alias,
+                    "sourceField": getattr(measure, "field", None),
+                    "measureAlias": measure_alias,
+                    "agg": getattr(measure, "agg", None) or member.get("agg") or "sum",
+                    "order": len(valid_configured_members),
+                })
+            return valid_configured_members
 
         columns_by_id = {
             str(column.get("id")): column

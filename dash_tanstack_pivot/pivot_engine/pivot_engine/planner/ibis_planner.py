@@ -503,6 +503,8 @@ class IbisPlanner:
             raw_agg = member.get("agg") or member.get("aggregation")
             agg = str(raw_agg or "sum").strip().lower()
             measure = resolve_member_measure(member, source_field, agg)
+            if measure is None and measures and not getattr(spec, "_measure_axis_prepared", False):
+                continue
             if measure is not None and raw_agg is None:
                 agg = str(getattr(measure, "agg", None) or "sum").strip().lower()
             measure_alias = str(getattr(measure, "alias", None) or member.get("measureAlias") or member.get("id") or source_field or "").strip()
@@ -684,7 +686,7 @@ class IbisPlanner:
 
         if not branches:
             return table
-        return branches[0].union(*branches[1:], distinct=False)
+        return branches[0] if len(branches) == 1 else branches[0].union(*branches[1:], distinct=False)
 
     def _apply_measure_axis_zero_suppression(self, table: IbisTable, spec: PivotSpec) -> IbisTable:
         config = self._measure_axis_config(spec)
@@ -825,7 +827,7 @@ class IbisPlanner:
         if not branches:
             raise ValueError("Measure-axis aggregate-first planning requires at least one selected measure.")
 
-        result = branches[0].union(*branches[1:], distinct=False)
+        result = branches[0] if len(branches) == 1 else branches[0].union(*branches[1:], distinct=False)
         if axis_filters:
             filter_expr = self.builder.build_filter_expression(result, axis_filters, is_post_agg=True)
             if filter_expr is not None:
