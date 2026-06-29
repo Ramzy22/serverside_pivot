@@ -2,6 +2,11 @@ import React, { useState, useEffect, useMemo } from 'react';
 
 const LOCAL_RENDER_LIMIT = 250;
 
+const parseFilterListText = (text) => String(text || '')
+    .split(/[\r\n\t,;]+/)
+    .map(value => value.trim())
+    .filter(Boolean);
+
 const MultiSelectFilter = ({ options = [], optionMeta = null, onSearchOptions, onLoadMoreOptions, onFilter, currentFilter, onClose, theme }) => {
     const [search, setSearch] = useState('');
     const [selected, setSelected] = useState(new Set());
@@ -11,7 +16,8 @@ const MultiSelectFilter = ({ options = [], optionMeta = null, onSearchOptions, o
     useEffect(() => {
         // Initialize from current filter if it's an 'in' type
         if (currentFilter && currentFilter.conditions && currentFilter.conditions[0] && currentFilter.conditions[0].type === 'in') {
-            setSelected(new Set(currentFilter.conditions[0].value));
+            const currentValue = currentFilter.conditions[0].value;
+            setSelected(new Set(Array.isArray(currentValue) ? currentValue : parseFilterListText(currentValue)));
         } else {
             setSelected(new Set());
         }
@@ -61,13 +67,19 @@ const MultiSelectFilter = ({ options = [], optionMeta = null, onSearchOptions, o
         setSelected(newSet);
     };
 
-    const addManualValue = () => {
-        const value = manualValue.trim();
-        if (!value) return;
+    const addManualValues = (values) => {
+        const parsedValues = Array.isArray(values)
+            ? values.map(value => String(value || '').trim()).filter(Boolean)
+            : parseFilterListText(values);
+        if (parsedValues.length === 0) return;
         const newSet = new Set(selected);
-        newSet.add(value);
+        parsedValues.forEach(value => newSet.add(value));
         setSelected(newSet);
         setManualValue('');
+    };
+
+    const addManualValue = () => {
+        addManualValues(manualValue);
     };
 
     const apply = () => {
@@ -99,9 +111,16 @@ const MultiSelectFilter = ({ options = [], optionMeta = null, onSearchOptions, o
             </div>
             <div style={{display:'flex', gap:'6px'}}>
                 <input
-                    placeholder="Add value..."
+                    placeholder="Add or paste values..."
                     value={manualValue}
                     onChange={e => setManualValue(e.target.value)}
+                    onPaste={e => {
+                        const pastedText = e.clipboardData && e.clipboardData.getData('text');
+                        const pastedValues = parseFilterListText(pastedText);
+                        if (pastedValues.length <= 1) return;
+                        e.preventDefault();
+                        addManualValues(pastedValues);
+                    }}
                     onKeyDown={e => {
                         if (e.key === 'Enter') {
                             e.preventDefault();

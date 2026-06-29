@@ -7,6 +7,14 @@ import MultiSelectFilter from './MultiSelectFilter';
 
 const createDefaultCondition = () => ({type: 'contains', value: '', caseSensitive: false});
 
+const parseFilterListText = (value) => {
+    const text = Array.isArray(value) ? value.join('\n') : String(value || '');
+    return text
+        .split(/[\r\n\t,;]+/)
+        .map(item => item.trim())
+        .filter(Boolean);
+};
+
 const cloneFilterConditions = (filter) => (
     filter && Array.isArray(filter.conditions)
         ? filter.conditions.map(condition => ({ ...condition }))
@@ -90,6 +98,7 @@ const ColumnFilter = ({ column, onFilter, currentFilter, options = [], optionMet
     const handleApply = () => {
         const validConditions = conditions.filter(c => {
              if (c.type === 'between') return c.value && c.value2;
+             if (c.type === 'in') return parseFilterListText(c.value).length > 0;
              return String(c.value).trim() !== '';
         });
         
@@ -99,6 +108,13 @@ const ColumnFilter = ({ column, onFilter, currentFilter, options = [], optionMet
                  let finalVal = c.value;
                  let finalVal2 = c.value2;
                  
+                 if (c.type === 'in') {
+                     const listValues = parseFilterListText(finalVal).map(value => (
+                         isNumeric && value !== '' && !isNaN(Number(value)) ? Number(value) : value
+                     ));
+                     return { ...c, value: listValues };
+                 }
+
                  if (isNumeric) {
                      if (finalVal !== '' && !isNaN(Number(finalVal))) finalVal = Number(finalVal);
                      if (finalVal2 !== '' && !isNaN(Number(finalVal2))) finalVal2 = Number(finalVal2);
@@ -195,9 +211,17 @@ const ColumnFilter = ({ column, onFilter, currentFilter, options = [], optionMet
                                     </div>
                                 ) : (
                                     <input 
-                                        placeholder="Value..." 
-                                        value={cond.value} 
+                                        placeholder={cond.type === 'in' ? "Paste or enter values..." : "Value..."}
+                                        value={Array.isArray(cond.value) ? cond.value.join(', ') : cond.value}
                                         onChange={e => updateCondition(index, 'value', e.target.value)} 
+                                        onPaste={e => {
+                                            if (cond.type !== 'in') return;
+                                            const pastedText = e.clipboardData && e.clipboardData.getData('text');
+                                            const pastedValues = parseFilterListText(pastedText);
+                                            if (pastedValues.length <= 1) return;
+                                            e.preventDefault();
+                                            updateCondition(index, 'value', pastedValues.join(', '));
+                                        }}
                                         style={{padding:'6px', borderRadius:'2px', border:'1px solid #ddd', fontSize: '13px'}}
                                     />
                                 )}

@@ -3512,7 +3512,7 @@ export default function DashTanstackPivot(props) {
             });
             setSelectedCells(allSelection);
             // In server-side mode only visible rows are in the row model; flag so
-            // Ctrl+C pulls from loadedRows (all cached blocks) instead.
+            // Ctrl+C can request a backend export for the full selected table.
             isSelectAllServerRef.current = serverSide;
             if (visibleRowsAll.length > 0 && visibleLeafColumnsAll.length > 0) {
                 setLastSelected({ rowIndex: 0, colIndex: 0 });
@@ -3526,14 +3526,11 @@ export default function DashTanstackPivot(props) {
             const keys = Object.keys(selectedCells);
             if (keys.length === 0) return;
             e.preventDefault();
-            let payload;
-            if (isSelectAllServerRef.current && serverSide && Array.isArray(loadedRows) && loadedRows.length > 0) {
-                const SKIP = new Set(['__row_number__', '__report_config__']);
-                const cols = (tableRef.current ? tableRef.current.getVisibleLeafColumns() : []).filter(c => !SKIP.has(c.id));
-                payload = buildTableClipboardPayload({ withHeaders: false, rows: loadedRows, columns: cols });
-            } else {
-                payload = buildSelectedClipboardPayload(false, selectedCells);
+            if (isSelectAllServerRef.current && serverSide) {
+                copyServerTableToClipboard(false, false);
+                return;
             }
+            const payload = buildSelectedClipboardPayload(false, selectedCells);
             if (payload) {
                 copyRichToClipboard(payload);
             }
@@ -3856,14 +3853,11 @@ export default function DashTanstackPivot(props) {
                 const keys = Object.keys(selectedCells);
                 if (keys.length === 0) return;
                 e.preventDefault();
-                let payload;
-                if (isSelectAllServerRef.current && serverSide && Array.isArray(loadedRows) && loadedRows.length > 0) {
-                    const SKIP = new Set(['__row_number__', '__report_config__']);
-                    const cols = (tableRef.current ? tableRef.current.getVisibleLeafColumns() : []).filter(c => !SKIP.has(c.id));
-                    payload = buildTableClipboardPayload({ withHeaders: false, rows: loadedRows, columns: cols });
-                } else {
-                    payload = buildSelectedClipboardPayload(false, selectedCells);
+                if (isSelectAllServerRef.current && serverSide) {
+                    copyServerTableToClipboard(false, false);
+                    return;
                 }
+                const payload = buildSelectedClipboardPayload(false, selectedCells);
                 if (payload) {
                     copyRichToClipboard(payload);
                 }
@@ -7897,12 +7891,98 @@ export default function DashTanstackPivot(props) {
             .filter(Boolean);
     }, []);
 
+    const EXPORT_SKIP_COL_IDS = new Set(['__row_number__', '__report_config__']);
+
+    function isExportableColumnId(columnId) {
+        const id = String(columnId || '');
+        return !!id && !EXPORT_SKIP_COL_IDS.has(id) && !id.startsWith('__schema_placeholder__');
+    }
+
+    const getInstantiatedExportColIds = useCallback(() => {
+        const columns = table && typeof table.getVisibleLeafColumns === 'function'
+            ? table.getVisibleLeafColumns()
+            : [];
+        const ids = [];
+        const seen = new Set();
+        columns.forEach((column) => {
+            const columnId = column && column.id;
+            if (!isExportableColumnId(columnId) || seen.has(columnId)) return;
+            ids.push(columnId);
+            seen.add(columnId);
+        });
+        return ids;
+    }, [table]);
+
+    const getCompleteServerExportColIds = useCallback(() => {
+        const knownIds = getInstantiatedExportColIds();
+        if (!serverSide) return knownIds;
+
+        const schemaTotal = cachedColSchema && Number.isFinite(Number(cachedColSchema.total_center_cols))
+            ? Math.max(0, Math.floor(Number(cachedColSchema.total_center_cols)))
+            : null;
+        const schemaColumns = cachedColSchema && Array.isArray(cachedColSchema.columns)
+            ? cachedColSchema.columns
+            : [];
+        if (schemaTotal && schemaTotal > 0) {
+            if (schemaColumns.length < schemaTotal) return null;
+            const centerIds = [];
+            const seenCenterIds = new Set();
+            for (let index = 0; index < schemaTotal; index += 1) {
+                const entry = schemaColumns[index];
+                const columnId = entry && entry.id;
+                if (!isExportableColumnId(columnId)) return null;
+                if (seenCenterIds.has(columnId)) continue;
+                centerIds.push(columnId);
+                seenCenterIds.add(columnId);
+            }
+
+            const orderedIds = [];
+            const seen = new Set();
+            const pushId = (columnId) => {
+                if (!isExportableColumnId(columnId) || seen.has(columnId)) return;
+                orderedIds.push(columnId);
+                seen.add(columnId);
+            };
+            knownIds
+                .filter(columnId => !seenCenterIds.has(columnId) && !String(columnId).startsWith('__RowTotal__'))
+                .forEach(pushId);
+            centerIds.forEach(pushId);
+            knownIds
+                .filter(columnId => String(columnId).startsWith('__RowTotal__'))
+                .forEach(pushId);
+            return orderedIds.length > 0 ? orderedIds : null;
+        }
+
+        return null;
+    }, [cachedColSchema, getInstantiatedExportColIds, serverSide]);
+
+    const getServerExportColumnTarget = useCallback(() => {
+        const knownColIds = getInstantiatedExportColIds();
+        const completeColIds = getCompleteServerExportColIds();
+        if (Array.isArray(completeColIds) && completeColIds.length > 0) {
+            return {
+                mode: 'ids',
+                colIds: completeColIds,
+                knownColIds,
+                totalCols: completeColIds.length,
+            };
+        }
+        const centerCount = Number.isFinite(Number(totalCenterCols))
+            ? Math.max(0, Math.floor(Number(totalCenterCols)))
+            : 0;
+        return {
+            mode: 'window',
+            colIds: null,
+            knownColIds,
+            totalCols: Math.max(centerCount, knownColIds.length, 1),
+        };
+    }, [getCompleteServerExportColIds, getInstantiatedExportColIds, totalCenterCols]);
+
     function getExportColumns(columnsOverride = null) {
-        const SKIP = new Set(['__row_number__', '__report_config__']);
         const columns = Array.isArray(columnsOverride)
             ? columnsOverride
             : (table && typeof table.getVisibleLeafColumns === 'function' ? table.getVisibleLeafColumns() : []);
-        return columns.filter(column => column && !SKIP.has(column.id));
+        return columns.filter(column => column && isExportableColumnId(column.id));
     }
 
     function getExportHeaderLabel(column, mergedHeaders = false, separator = mergedHeaderSeparator) {
@@ -8125,9 +8205,8 @@ export default function DashTanstackPivot(props) {
         });
 
         if (minR === Infinity) return null;
-        const SKIP = new Set(['__row_number__', '__report_config__']);
         const exportRows = visibleRows.slice(minR, maxR + 1);
-        const exportColumns = visibleCols.slice(minC, maxC + 1).filter(column => column && !SKIP.has(column.id));
+        const exportColumns = visibleCols.slice(minC, maxC + 1).filter(column => column && isExportableColumnId(column.id));
         if (exportRows.length === 0 || exportColumns.length === 0) return null;
         return buildStyledHtmlTableExport({
             rows: exportRows,
@@ -8167,7 +8246,9 @@ export default function DashTanstackPivot(props) {
                 if (column && column.id) columnsById.set(column.id, column);
             });
         }
-        const requestedIds = Array.isArray(colIds) ? colIds : getVisibleExportColIds();
+        const requestedIds = Array.isArray(colIds) && colIds.length > 0
+            ? colIds.filter(isExportableColumnId)
+            : getInstantiatedExportColIds();
         const headerLabels = {};
         const columnWidths = {};
         requestedIds.forEach((columnId) => {
@@ -8818,8 +8899,7 @@ export default function DashTanstackPivot(props) {
         const hasSelection = Object.keys(selectionForMenu).length > 0;
         
         const getTableData = (withHeaders, mergedHeaders = false) => {
-            const SKIP = new Set(['__row_number__', '__report_config__']);
-            const visibleCols = table.getVisibleLeafColumns().filter(c => !SKIP.has(c.id));
+            const visibleCols = table.getVisibleLeafColumns().filter(c => isExportableColumnId(c.id));
 
             let tsv = '';
 
@@ -8855,27 +8935,7 @@ export default function DashTanstackPivot(props) {
         };
 
         const copyTableServerSide = (withHeaders, mergedHeaders) => {
-            const colIds = getVisibleExportColIds();
-            if (rowCount > COPY_ROW_LIMIT) {
-                setPartModal({ mode: 'copy', copyIntent: { withHeaders, mergedHeaders, mergedHeaderSeparator, richHtml: true }, rowsPerPart: COPY_ROW_LIMIT, colsPerPart: colIds.length, totalRows: rowCount, totalCols: colIds.length, visibleColIds: colIds, processingPartId: null, completedParts: new Set() });
-                return;
-            }
-            pendingCopyIntentRef.current = { withHeaders, mergedHeaders, mergedHeaderSeparator, richHtml: true };
-            setIsCopying(true);
-            dispatchServerSideRuntimeSetProps({
-                runtimeRequest: {
-                    kind: 'export',
-                    payload: {
-                        format: 'html',
-                        includeHeaders: withHeaders,
-                        table: tableName,
-                        colIds,
-                        rowStart: 0,
-                        rowEnd: rowCount,
-                        style: buildExportStyleProfile(colIds, { withHeaders, mergedHeaders }),
-                    },
-                }
-            });
+            copyServerTableToClipboard(withHeaders, mergedHeaders);
         };
         const copyTableLocal = (withHeaders, mergedHeaders) => {
             const payload = buildTableClipboardPayload({ withHeaders, mergedHeaders });
@@ -12249,32 +12309,115 @@ export default function DashTanstackPivot(props) {
 
 
     // buildExportAoa and exportPivot extracted to ../utils/exportUtils.js
-    const getVisibleExportColIds = useCallback(() =>
-        table.getVisibleLeafColumns().filter(c => c.id !== '__row_number__' && c.id !== '__report_config__').map(c => c.id),
-    [table]);
+    function getServerExportStyleIds(columnTarget) {
+        if (columnTarget && Array.isArray(columnTarget.colIds) && columnTarget.colIds.length > 0) {
+            return columnTarget.colIds;
+        }
+        return columnTarget && Array.isArray(columnTarget.knownColIds)
+            ? columnTarget.knownColIds
+            : [];
+    }
+
+    function buildServerExportPayload({
+        format,
+        includeHeaders,
+        rowStart,
+        rowEnd,
+        columnTarget,
+        styleOptions,
+        partId,
+        partLabel,
+        colStart = null,
+        colEnd = null,
+    }) {
+        const payload = {
+            format,
+            includeHeaders,
+            table: tableName,
+            rowStart,
+            rowEnd,
+            style: buildExportStyleProfile(getServerExportStyleIds(columnTarget), styleOptions),
+        };
+        if (partId) payload.partId = partId;
+        if (partLabel) payload.partLabel = partLabel;
+        if (columnTarget && Array.isArray(columnTarget.colIds) && columnTarget.colIds.length > 0) {
+            payload.colIds = columnTarget.colIds;
+        }
+        if (Number.isFinite(colStart) && Number.isFinite(colEnd) && colEnd >= colStart) {
+            payload.col_start = colStart;
+            payload.col_end = colEnd;
+        }
+        return payload;
+    }
+
+    function dispatchServerExportRequest(payload, runtimeFields = {}) {
+        dispatchServerSideRuntimeSetProps({
+            runtimeRequest: {
+                kind: 'export',
+                ...runtimeFields,
+                payload,
+            }
+        });
+    }
+
+    function copyServerTableToClipboard(withHeaders = false, mergedHeaders = false) {
+        const columnTarget = getServerExportColumnTarget();
+        if (rowCount > COPY_ROW_LIMIT) {
+            setPartModal({
+                mode: 'copy',
+                copyIntent: { withHeaders, mergedHeaders, mergedHeaderSeparator, richHtml: true },
+                rowsPerPart: COPY_ROW_LIMIT,
+                colsPerPart: columnTarget.totalCols,
+                totalRows: rowCount,
+                totalCols: columnTarget.totalCols,
+                visibleColIds: columnTarget.colIds,
+                knownColIds: columnTarget.knownColIds,
+                columnMode: columnTarget.mode,
+                processingPartId: null,
+                completedParts: new Set(),
+            });
+            return;
+        }
+        pendingCopyIntentRef.current = { withHeaders, mergedHeaders, mergedHeaderSeparator, richHtml: true };
+        setIsCopying(true);
+        dispatchServerExportRequest(buildServerExportPayload({
+            format: 'html',
+            includeHeaders: withHeaders,
+            rowStart: 0,
+            rowEnd: rowCount,
+            columnTarget,
+            styleOptions: { withHeaders, mergedHeaders },
+        }));
+    }
 
     const exportPivot = () => {
         if (serverSide) {
-            const colIds = getVisibleExportColIds();
+            const columnTarget = getServerExportColumnTarget();
             if (rowCount > EXPORT_ROW_LIMIT) {
-                setPartModal({ mode: 'export', copyIntent: null, rowsPerPart: EXPORT_ROW_LIMIT, colsPerPart: colIds.length, totalRows: rowCount, totalCols: colIds.length, visibleColIds: colIds, processingPartId: null, completedParts: new Set() });
+                setPartModal({
+                    mode: 'export',
+                    copyIntent: null,
+                    rowsPerPart: EXPORT_ROW_LIMIT,
+                    colsPerPart: columnTarget.totalCols,
+                    totalRows: rowCount,
+                    totalCols: columnTarget.totalCols,
+                    visibleColIds: columnTarget.colIds,
+                    knownColIds: columnTarget.knownColIds,
+                    columnMode: columnTarget.mode,
+                    processingPartId: null,
+                    completedParts: new Set(),
+                });
                 return;
             }
             setIsExporting(true);
-            dispatchServerSideRuntimeSetProps({
-                runtimeRequest: {
-                    kind: 'export',
-                    payload: {
-                        format: 'xls',
-                        includeHeaders: true,
-                        table: tableName,
-                        colIds,
-                        rowStart: 0,
-                        rowEnd: rowCount,
-                        style: buildExportStyleProfile(colIds, { withHeaders: true, mergedHeaders: true }),
-                    },
-                }
-            });
+            dispatchServerExportRequest(buildServerExportPayload({
+                format: 'xls',
+                includeHeaders: true,
+                rowStart: 0,
+                rowEnd: rowCount,
+                columnTarget,
+                styleOptions: { withHeaders: true, mergedHeaders: true },
+            }));
         } else {
             setIsExporting(true);
             setExportProgress(null);
@@ -12313,39 +12456,49 @@ export default function DashTanstackPivot(props) {
 
     const dispatchExportPart = (rowBatch, colBatch) => {
         if (!partModal) return;
-        const { mode, copyIntent, rowsPerPart, colsPerPart, totalRows, visibleColIds } = partModal;
+        const { mode, copyIntent, rowsPerPart, colsPerPart, totalRows, totalCols, visibleColIds, knownColIds, columnMode } = partModal;
         const rowStart = rowBatch * rowsPerPart;
         const rowEnd = Math.min(rowStart + rowsPerPart, totalRows);
         const colStart = colBatch * colsPerPart;
-        const colEnd = Math.min(colStart + colsPerPart, visibleColIds.length);
-        const colIds = visibleColIds.slice(colStart, colEnd);
+        const colEnd = Math.min(colStart + colsPerPart, totalCols);
+        const colBatches = colsPerPart < totalCols ? Math.ceil(totalCols / colsPerPart) : 1;
+        const useIdColumns = Array.isArray(visibleColIds) && visibleColIds.length > 0;
+        const colIds = useIdColumns ? visibleColIds.slice(colStart, colEnd) : null;
+        const useColumnWindow = !useIdColumns && columnMode === 'window' && colBatches > 1;
         const partId = `r${rowBatch}_c${colBatch}`;
-        const partLabel = colsPerPart < visibleColIds.length
+        const partLabel = colBatches > 1
             ? `rows${rowStart + 1}-${rowEnd}_cols${colStart + 1}-${colEnd}`
             : `rows${rowStart + 1}-${rowEnd}`;
         setPartModal(prev => prev ? { ...prev, processingPartId: partId } : null);
         if (mode === 'copy') pendingCopyIntentRef.current = copyIntent;
         else pendingCopyIntentRef.current = null;
         const isCopyMode = mode === 'copy';
-        dispatchServerSideRuntimeSetProps({
-            runtimeRequest: {
-                kind: 'export',
-                payload: {
-                    format: isCopyMode ? 'html' : 'xls',
-                    includeHeaders: isCopyMode ? !!(copyIntent && copyIntent.withHeaders) : true,
-                    table: tableName,
-                    rowStart,
-                    rowEnd,
-                    colIds,
-                    partId,
-                    partLabel,
-                    style: buildExportStyleProfile(colIds, {
-                        withHeaders: isCopyMode ? !!(copyIntent && copyIntent.withHeaders) : true,
-                        mergedHeaders: isCopyMode ? !!(copyIntent && copyIntent.mergedHeaders) : true,
-                    }),
-                }
-            }
-        });
+        const partColumnTarget = {
+            mode: useIdColumns ? 'ids' : 'window',
+            colIds,
+            knownColIds: Array.isArray(knownColIds) ? knownColIds : [],
+        };
+        const runtimeFields = useColumnWindow
+            ? { col_start: colStart, col_end: colEnd - 1 }
+            : {};
+        dispatchServerExportRequest(
+            buildServerExportPayload({
+                format: isCopyMode ? 'html' : 'xls',
+                includeHeaders: isCopyMode ? !!(copyIntent && copyIntent.withHeaders) : true,
+                rowStart,
+                rowEnd,
+                columnTarget: partColumnTarget,
+                partId,
+                partLabel,
+                colStart: useColumnWindow ? colStart : null,
+                colEnd: useColumnWindow ? colEnd - 1 : null,
+                styleOptions: {
+                    withHeaders: isCopyMode ? !!(copyIntent && copyIntent.withHeaders) : true,
+                    mergedHeaders: isCopyMode ? !!(copyIntent && copyIntent.mergedHeaders) : true,
+                },
+            }),
+            runtimeFields,
+        );
     };
 
     const { renderCell, renderVirtualColumnCell, renderHeaderCell } = useRenderHelpers({

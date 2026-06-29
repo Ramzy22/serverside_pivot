@@ -174,6 +174,8 @@ def test_runtime_service_export_uses_runtime_viewport_execution_and_returns_file
     assert call["expanded"] == [["__ALL__"]]
     assert call["request"].grouping == ["region"]
     assert call["request"].pagination["pageSize"] == 2
+    assert call["kwargs"]["needs_col_schema"] is True
+    assert call["kwargs"]["requested_center_ids"] == ["hierarchy", "sales_sum"]
     assert response.export_payload["format"] == "csv"
     assert response.export_payload["rows"] == 2
     assert "content" not in response.export_payload
@@ -182,6 +184,80 @@ def test_runtime_service_export_uses_runtime_viewport_execution_and_returns_file
         with open(content_path, "rb") as export_file:
             assert export_file.read() == b"Region,Sales\r\nNorth,100\r\nSouth,80\r\n"
         assert response.export_payload["contentLength"] == os.path.getsize(content_path)
+    finally:
+        if os.path.exists(content_path):
+            os.remove(content_path)
+
+
+def test_runtime_service_export_without_col_ids_materializes_full_virtual_columns():
+    class ExportAdapter:
+        def __init__(self):
+            self.virtual_scroll_calls = []
+
+        async def handle_virtual_scroll_request(self, request, start_row, end_row, expanded_paths, **kwargs):
+            self.virtual_scroll_calls.append(
+                {
+                    "request": request,
+                    "start": start_row,
+                    "end": end_row,
+                    "expanded": expanded_paths,
+                    "kwargs": kwargs,
+                }
+            )
+            metrics = {f"metric_{index}": index for index in range(30)}
+            return TanStackResponse(
+                data=[{"_id": "North", "region": "North", "month": "M29", **metrics}],
+                columns=[
+                    {"id": "hierarchy", "header": "Region"},
+                    {"id": "region", "header": "Region"},
+                    {"id": "month", "header": "Month"},
+                    *[
+                        {"id": f"metric_{index}", "header": f"Metric {index}"}
+                        for index in range(30)
+                    ],
+                ],
+                total_rows=1,
+            )
+
+    adapter = ExportAdapter()
+    service = PivotRuntimeService(adapter_getter=lambda: adapter, session_gate=SessionRequestGate())
+    response = service.process(
+        PivotViewState(
+            row_fields=["region"],
+            col_fields=["month"],
+            val_configs=[{"field": "metric", "agg": "sum"}],
+            expanded=True,
+            export_request={
+                "format": "csv",
+                "rowStart": 0,
+                "rowEnd": 1,
+            },
+        ),
+        PivotRequestContext(
+            table="sales_data",
+            trigger_prop="pivot.runtimeRequest",
+            session_id="sess-export-full",
+            client_instance="client-export-full",
+            state_epoch=4,
+            window_seq=8,
+        ),
+    )
+
+    assert response.status == "export"
+    assert len(adapter.virtual_scroll_calls) == 1
+    call = adapter.virtual_scroll_calls[0]
+    assert call["kwargs"]["needs_col_schema"] is False
+    assert call["kwargs"]["requested_center_ids"] is None
+    assert call["kwargs"]["col_end"] is None
+    assert response.export_payload["columns"] == 31
+    content_path = response.export_payload["contentPath"]
+    try:
+        with open(content_path, "rb") as export_file:
+            content = export_file.read().decode("utf-8")
+        assert "Metric 29" in content
+        assert content.splitlines()[0].startswith("Region,Metric 0")
+        assert "North,0,1,2,3,4,5,6,7,8,9" in content
+        assert content.rstrip().endswith(",29")
     finally:
         if os.path.exists(content_path):
             os.remove(content_path)

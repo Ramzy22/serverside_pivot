@@ -878,6 +878,43 @@ class PivotRuntimeService:
                 requested_center_ids=requested_series_ids,
                 profiling=profiling_enabled,
             )
+        if trigger_kind == "export" and context.viewport_active and context.end_row is not None:
+            request_payload = state.export_request if isinstance(state.export_request, dict) else {}
+            raw_col_ids = request_payload.get("colIds")
+            requested_center_ids = None
+            if isinstance(raw_col_ids, list):
+                normalized_col_ids = []
+                for value in raw_col_ids:
+                    if value is None:
+                        continue
+                    column_id = str(value)
+                    if column_id:
+                        normalized_col_ids.append(column_id)
+                requested_center_ids = normalized_col_ids or None
+
+            payload_col_start = safe_int(
+                first_present(request_payload, "colStart", "col_start", default=context.col_start),
+                context.col_start,
+            )
+            payload_col_end_raw = first_present(request_payload, "colEnd", "col_end")
+            payload_col_end = (
+                safe_int(payload_col_end_raw, context.col_end if context.col_end is not None else 0)
+                if payload_col_end_raw is not None
+                else context.col_end
+            )
+            export_needs_col_schema = bool(requested_center_ids or payload_col_end is not None)
+            return await adapter.handle_virtual_scroll_request(
+                request,
+                context.start_row,
+                context.end_row,
+                expanded_paths,
+                col_start=payload_col_start,
+                col_end=payload_col_end,
+                needs_col_schema=export_needs_col_schema,
+                include_grand_total=context.include_grand_total,
+                requested_center_ids=requested_center_ids,
+                profiling=profiling_enabled,
+            )
         if context.viewport_active and context.end_row is not None:
             return await adapter.handle_virtual_scroll_request(
                 request,
@@ -970,6 +1007,7 @@ class PivotRuntimeService:
             rows,
             response.columns or [],
             request_payload.get("colIds"),
+            state,
         )
         header_map = PivotRuntimeService._build_export_header_map(response.columns or [], state)
         style_profile = (
@@ -1581,6 +1619,7 @@ class PivotRuntimeService:
         rows: List[Dict[str, Any]],
         columns: List[Dict[str, Any]],
         col_ids: Any,
+        state: Optional[PivotViewState] = None,
     ) -> List[str]:
         def _field_from_column_id(column_id: Any) -> Optional[str]:
             if column_id is None:
@@ -1598,6 +1637,11 @@ class PivotRuntimeService:
                     seen.add(field)
             return ordered
 
+        dimension_fields = set()
+        if state is not None:
+            dimension_fields.update(str(field) for field in (state.row_fields or []) if field is not None)
+            dimension_fields.update(str(field) for field in (state.col_fields or []) if field is not None)
+
         skip = {
             "_path",
             "_isTotal",
@@ -1608,7 +1652,7 @@ class PivotRuntimeService:
             "_parentPath",
             "_isGrandTotal",
             "__isGrandTotal__",
-        }
+        } | dimension_fields
         column_fields: List[str] = []
         for column in columns or []:
             if not isinstance(column, dict) or column.get("_isImplicitFormulaRef"):
