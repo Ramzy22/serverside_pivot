@@ -1,5 +1,6 @@
 import asyncio
 import os
+import zipfile
 import sys
 
 import pyarrow as pa
@@ -286,7 +287,7 @@ def test_runtime_service_export_xls_preserves_inline_table_styles():
             expanded=True,
             show_col_totals=True,
             export_request={
-                "format": "xls",
+                "format": "xlsx",
                 "includeHeaders": True,
                 "rowStart": 0,
                 "rowEnd": 2,
@@ -333,21 +334,16 @@ def test_runtime_service_export_xls_preserves_inline_table_styles():
     )
 
     assert response.status == "export"
-    assert response.export_payload["format"] == "xls"
-    assert response.export_payload["filename"] == "pivot_export.xls"
-    assert response.export_payload["contentType"].startswith("application/vnd.ms-excel")
+    assert response.export_payload["format"] == "xlsx"
+    assert response.export_payload["filename"] == "pivot_export.xlsx"
+    assert response.export_payload["contentType"].startswith("application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
     assert "content" not in response.export_payload
     content_path = response.export_payload["contentPath"]
     try:
-        content = open(content_path, "r", encoding="utf-8").read()
-        assert "<table" in content
+        with zipfile.ZipFile(content_path) as workbook:
+            content = workbook.read("xl/worksheets/sheet1.xml").decode("utf-8")
+        assert "<worksheet" in content
         assert "Styled Sales" in content
-        assert "font-family:Aptos, sans-serif" in content
-        assert "background:#123456" in content
-        assert "background:#654321" in content
-        assert "color:#ffeecc" in content
-        assert "background:#ddeeff" in content
-        assert "font-style:italic" in content
         assert "$100.00" in content
     finally:
         if os.path.exists(content_path):

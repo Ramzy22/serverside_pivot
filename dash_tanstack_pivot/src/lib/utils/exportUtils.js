@@ -1,4 +1,5 @@
 import { saveAs } from 'file-saver';
+import * as XLSX from 'xlsx';
 
 const SKIP_COL_IDS = new Set(['__row_number__']);
 
@@ -291,6 +292,62 @@ export function buildSpreadsheetMlExport({
     return { rows: exportRows.length, columns: exportCols.length };
 }
 
+/**
+ * Export the pivot table as a real Office Open XML workbook (.xlsx).
+ */
+export function buildXlsxExport({
+    table = null,
+    rows = null,
+    columns = null,
+    getHeaderLabel = null,
+    getCellValue = null,
+    getCellRawValue = null,
+    filename = 'pivot.xlsx',
+    sheetName = 'Pivot',
+} = {}) {
+    const exportCols = resolveColumns(table, { columns: Array.isArray(columns) ? columns : undefined });
+    const exportRows = Array.isArray(rows) ? rows : resolveRows(table, null);
+    const colWidths = exportCols.map((column, columnIndex) => {
+        const label = typeof getHeaderLabel === 'function'
+            ? getHeaderLabel(column, columnIndex)
+            : defaultHeaderLabel(column);
+        return Math.max(String(label || '').length, 8);
+    });
+    const headerRow = exportCols.map((column, columnIndex) => (
+        typeof getHeaderLabel === 'function'
+            ? getHeaderLabel(column, columnIndex)
+            : defaultHeaderLabel(column)
+    ));
+    const dataRows = exportRows.map((rowLike, rowIndex) => (
+        exportCols.map((column, columnIndex) => {
+            const rawValue = typeof getCellRawValue === 'function'
+                ? getCellRawValue(rowLike, column, rowIndex)
+                : undefined;
+            const value = rawValue !== undefined
+                ? rawValue
+                : (typeof getCellValue === 'function'
+                    ? getCellValue(rowLike, column, rowIndex)
+                    : defaultCellValue(rowLike, column, rowIndex));
+            const width = String(value === undefined || value === null ? '' : value).length;
+            if (width > colWidths[columnIndex]) colWidths[columnIndex] = width;
+            return value === undefined || value === null ? '' : value;
+        })
+    ));
+    const worksheet = XLSX.utils.aoa_to_sheet([headerRow, ...dataRows]);
+    worksheet['!cols'] = colWidths.map(width => ({ wch: Math.min(Math.max(width + 2, 8), 60) }));
+    const workbook = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(workbook, worksheet, sheetName);
+    const bytes = XLSX.write(workbook, { bookType: 'xlsx', type: 'array' });
+    const blob = new Blob([bytes], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' });
+    const safeName = String(filename || 'pivot.xlsx');
+    const downloadName = /\.xlsx$/i.test(safeName)
+        ? safeName
+        : (/\.xls$/i.test(safeName) ? safeName.replace(/\.xls$/i, '.xlsx') : `${safeName}.xlsx`);
+    saveAs(blob, downloadName || 'pivot.xlsx');
+
+    return { rows: exportRows.length, columns: exportCols.length };
+}
+
 // ── AOA helper (used by legacy paths) ───────────────────────────────────────
 
 /**
@@ -524,32 +581,29 @@ export function writeClipboardPayload(payload) {
     return Promise.reject(new Error('Clipboard API is unavailable.'));
 }
 
-export function downloadHtmlTableAsExcel(payload, filename = 'pivot.xls') {
+export function downloadHtmlTableAsExcel(payload, filename = 'pivot.xlsx') {
     const html = payload && payload.html ? payload.html : '';
-    const blob = new Blob([html], { type: 'application/vnd.ms-excel;charset=utf-8;' });
-    saveAs(blob, filename);
+    const workbook = XLSX.read(html || '<table></table>', { type: 'string' });
+    const bytes = XLSX.write(workbook, { bookType: 'xlsx', type: 'array' });
+    const blob = new Blob([bytes], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' });
+    const safeName = String(filename || 'pivot.xlsx');
+    saveAs(blob, /\.xlsx$/i.test(safeName) ? safeName : `${safeName.replace(/\.xls$/i, '')}.xlsx`);
 }
 
 /**
- * Export the pivot table as a real SpreadsheetML 2003 .xls file.
- * Merged headers, typed cells (numbers sort/sum in Excel), cell styles, freeze panes.
+ * Export the pivot table as a real .xlsx file.
  */
 export function exportPivotTable(table, rowCount, rawRowsOverride = null, options = {}) {
     const allRows = resolveRows(table, rawRowsOverride);
     const exportCols = resolveColumns(table, options);
-    buildSpreadsheetMlExport({
+    buildXlsxExport({
         table,
         rows: allRows,
         columns: exportCols,
         getHeaderLabel: options.getHeaderLabel,
-        isHeaderTotalCol: options.isHeaderTotalCol,
         getCellValue: options.getCellValue,
         getCellRawValue: options.getCellRawValue,
-        isHierarchyCol: options.isHierarchyCol,
-        isTotalRow: options.isTotalRow,
-        isTotalCol: options.isTotalCol,
-        themeColors: options.themeColors || {},
-        filename: options.filename || 'pivot.xls',
+        filename: options.filename || 'pivot.xlsx',
     });
     return { rows: allRows.length, columns: exportCols.length, requestedRows: rowCount || allRows.length };
 }

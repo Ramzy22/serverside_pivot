@@ -104,7 +104,7 @@ def test_dash_presentation_app_includes_single_pivot_sparkline_modes_demo():
     assert '"formula": "[Cash Equity_day_pnl_sum] - [ETF_day_pnl_sum]"' in app_source
 
 
-def test_export_copy_uses_rich_html_clipboard_and_styled_xls_runtime_export():
+def test_export_copy_uses_rich_html_clipboard_and_styled_xlsx_runtime_export():
     component_source = Path(
         os.path.join(
             os.getcwd(),
@@ -130,11 +130,12 @@ def test_export_copy_uses_rich_html_clipboard_and_styled_xls_runtime_export():
     assert "writeClipboardPayload" in component_source
     assert "htmlTableToTsv" in component_source
     assert "format: 'html'" in component_source
-    assert "format: 'xls'" in component_source
+    assert "format: 'xlsx'" in component_source
     assert "style: buildExportStyleProfile" in component_source
     assert "ClipboardItem" in export_source
     assert "'text/html'" in export_source
-    assert "application/vnd.ms-excel" in export_source
+    assert "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" in export_source
+    assert "XLSX.write" in export_source
     assert "downloadHtmlTableAsExcel" in export_source
 
 

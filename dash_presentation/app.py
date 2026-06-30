@@ -560,6 +560,7 @@ app.layout = html.Div(
                     "Numeric value columns stay available; each metric also gets a linked trend column.",
                     html.Div(
                         id="sparkline-demo-slot",
+                        style={"overflowY": "auto"},
                         children=build_lazy_panel_content(
                             "load-sparkline-demo-btn",
                             "Load Linked Trend Demo",
@@ -574,6 +575,7 @@ app.layout = html.Div(
                     "Switch the series column between trendline and value in the sidebar.",
                     html.Div(
                         id="field-sparkline-demo-slot",
+                        style={"overflowY": "auto"},
                         children=build_lazy_panel_content(
                             "load-field-sparkline-btn",
                             "Load Field-Array Sparkline Demo",

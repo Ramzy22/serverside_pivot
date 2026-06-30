@@ -13,6 +13,7 @@ import os
 import re
 import tempfile
 import time
+import zipfile
 from typing import Any, Awaitable, Callable, Dict, List, Optional, Tuple
 
 from ..tanstack_adapter import TanStackOperation, TanStackRequest, TanStackResponse
@@ -983,16 +984,16 @@ class PivotRuntimeService:
     ) -> Dict[str, Any]:
         request_payload = export_request if isinstance(export_request, dict) else {}
         export_fmt = str(request_payload.get("format") or "csv").strip().lower()
-        if export_fmt == "xlsx":
-            export_fmt = "xls"
-        if export_fmt not in {"csv", "tsv", "html", "xls"}:
+        if export_fmt == "xls":
+            export_fmt = "xlsx"
+        if export_fmt not in {"csv", "tsv", "html", "xlsx"}:
             export_fmt = "csv"
         delimiter = "\t" if export_fmt == "tsv" else ","
-        ext = {"tsv": "tsv", "html": "html", "xls": "xls"}.get(export_fmt, "csv")
+        ext = {"tsv": "tsv", "html": "html", "xlsx": "xlsx"}.get(export_fmt, "csv")
         content_type = {
             "tsv": "text/tab-separated-values",
             "html": "text/html",
-            "xls": "application/vnd.ms-excel",
+            "xlsx": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
         }.get(export_fmt, "text/csv")
         part_label = request_payload.get("partLabel")
         requested_filename = request_payload.get("filename")
@@ -1027,23 +1028,35 @@ class PivotRuntimeService:
 
         fd, content_path = tempfile.mkstemp(prefix="pivot_export_", suffix=f".{ext}")
         try:
-            with os.fdopen(fd, "w", encoding="utf-8", newline="") as buf:
-                if export_fmt in {"html", "xls"}:
-                    PivotRuntimeService._write_styled_html_export(
-                        buf,
-                        rows=rows,
-                        field_order=field_order,
-                        header_map=header_map,
-                        state=state,
-                        style_profile=style_profile,
-                        include_headers=include_headers,
-                    )
-                else:
-                    writer = csv.writer(buf, delimiter=delimiter)
-                    if include_headers and field_order:
-                        writer.writerow([PivotRuntimeService._export_header_for_key(key, header_map, state, style_profile) for key in field_order])
-                    for row in rows:
-                        writer.writerow([_cell(key, row.get(key)) for key in field_order])
+            if export_fmt == "xlsx":
+                os.close(fd)
+                PivotRuntimeService._write_xlsx_export(
+                    content_path,
+                    rows=rows,
+                    field_order=field_order,
+                    header_map=header_map,
+                    state=state,
+                    style_profile=style_profile,
+                    include_headers=include_headers,
+                )
+            else:
+                with os.fdopen(fd, "w", encoding="utf-8", newline="") as buf:
+                    if export_fmt == "html":
+                        PivotRuntimeService._write_styled_html_export(
+                            buf,
+                            rows=rows,
+                            field_order=field_order,
+                            header_map=header_map,
+                            state=state,
+                            style_profile=style_profile,
+                            include_headers=include_headers,
+                        )
+                    else:
+                        writer = csv.writer(buf, delimiter=delimiter)
+                        if include_headers and field_order:
+                            writer.writerow([PivotRuntimeService._export_header_for_key(key, header_map, state, style_profile) for key in field_order])
+                        for row in rows:
+                            writer.writerow([_cell(key, row.get(key)) for key in field_order])
             content_length = os.path.getsize(content_path)
         except Exception:
             try:
@@ -1066,6 +1079,97 @@ class PivotRuntimeService:
             "columns": len(field_order),
             "partId": request_payload.get("partId"),
         }
+
+    @staticmethod
+    def _write_xlsx_export(
+        content_path: str,
+        *,
+        rows: List[Dict[str, Any]],
+        field_order: List[str],
+        header_map: Dict[str, str],
+        state: PivotViewState,
+        style_profile: Dict[str, Any],
+        include_headers: bool,
+    ) -> None:
+        def _col_name(index: int) -> str:
+            name = ""
+            current = index + 1
+            while current:
+                current, remainder = divmod(current - 1, 26)
+                name = chr(65 + remainder) + name
+            return name
+
+        def _xml_text(value: Any) -> str:
+            return html.escape("" if value is None else str(value), quote=True)
+
+        def _is_number(value: Any) -> bool:
+            return isinstance(value, (int, float, Decimal)) and not isinstance(value, bool) and math.isfinite(float(value))
+
+        def _cell_xml(row_index: int, col_index: int, value: Any) -> str:
+            ref = f"{_col_name(col_index)}{row_index}"
+            if value is None or (isinstance(value, float) and math.isnan(value)):
+                value = ""
+            if _is_number(value):
+                return f'<c r="{ref}"><v>{html.escape(str(value), quote=True)}</v></c>'
+            return f'<c r="{ref}" t="inlineStr"><is><t>{_xml_text(value)}</t></is></c>'
+
+        sheet_rows: List[str] = []
+        excel_row = 1
+        if include_headers and field_order:
+            headers = [PivotRuntimeService._export_header_for_key(key, header_map, state, style_profile) for key in field_order]
+            cells = "".join(_cell_xml(excel_row, col_index, header) for col_index, header in enumerate(headers))
+            sheet_rows.append(f'<row r="{excel_row}">{cells}</row>')
+            excel_row += 1
+        for row in rows:
+            values = []
+            for key in field_order:
+                values.append(PivotRuntimeService._formatted_export_value(key, row.get(key), row, state, style_profile))
+            cells = "".join(_cell_xml(excel_row, col_index, value) for col_index, value in enumerate(values))
+            sheet_rows.append(f'<row r="{excel_row}">{cells}</row>')
+            excel_row += 1
+
+        worksheet_xml = (
+            '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>'
+            '<worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" '
+            'xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships">'
+            f'<sheetData>{"".join(sheet_rows)}</sheetData>'
+            '</worksheet>'
+        )
+        workbook_xml = (
+            '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>'
+            '<workbook xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" '
+            'xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships">'
+            '<sheets><sheet name="Pivot" sheetId="1" r:id="rId1"/></sheets>'
+            '</workbook>'
+        )
+        content_types_xml = (
+            '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>'
+            '<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types">'
+            '<Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/>'
+            '<Default Extension="xml" ContentType="application/xml"/>'
+            '<Override PartName="/xl/workbook.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet.main+xml"/>'
+            '<Override PartName="/xl/worksheets/sheet1.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml"/>'
+            '</Types>'
+        )
+        root_rels_xml = (
+            '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>'
+            '<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">'
+            '<Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="xl/workbook.xml"/>'
+            '</Relationships>'
+        )
+        workbook_rels_xml = (
+            '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>'
+            '<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">'
+            '<Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet" Target="worksheets/sheet1.xml"/>'
+            '</Relationships>'
+        )
+
+        with zipfile.ZipFile(content_path, "w", compression=zipfile.ZIP_DEFLATED) as workbook:
+            workbook.writestr("[Content_Types].xml", content_types_xml)
+            workbook.writestr("_rels/.rels", root_rels_xml)
+            workbook.writestr("xl/workbook.xml", workbook_xml)
+            workbook.writestr("xl/_rels/workbook.xml.rels", workbook_rels_xml)
+            workbook.writestr("xl/worksheets/sheet1.xml", worksheet_xml)
 
     @staticmethod
     def _export_key_aliases(key: str) -> List[str]:

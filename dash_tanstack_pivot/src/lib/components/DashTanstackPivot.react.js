@@ -7607,7 +7607,7 @@ export default function DashTanstackPivot(props) {
     const triggerExportDownload = (url, filename) => {
         const a = document.createElement('a');
         a.href = url;
-        a.download = filename || 'pivot_export.xls';
+        a.download = filename || 'pivot_export.xlsx';
         document.body.appendChild(a);
         a.click();
         document.body.removeChild(a);
@@ -11537,7 +11537,7 @@ export default function DashTanstackPivot(props) {
             const payloadRef = payload.payloadRef && typeof payload.payloadRef === 'object'
                 ? payload.payloadRef
                 : null;
-            const filename = payload.filename || (payloadRef && payloadRef.filename) || 'pivot_export.xls';
+            const filename = payload.filename || (payloadRef && payloadRef.filename) || 'pivot_export.xlsx';
             const readExportPayloadText = () => {
                 if (payloadRef && typeof payloadRef.url === 'string' && payloadRef.url) {
                     return fetch(payloadRef.url, {
@@ -11561,7 +11561,9 @@ export default function DashTanstackPivot(props) {
                 const bytes = Uint8Array.from(atob(b64), c => c.charCodeAt(0));
                 const mimeType = payload.format === 'html'
                     ? 'text/html'
-                    : (payload.format === 'xls' ? 'application/vnd.ms-excel' : (payload.format === 'tsv' ? 'text/tab-separated-values' : 'text/csv'));
+                    : (payload.format === 'xlsx' || payload.format === 'xls'
+                        ? 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
+                        : (payload.format === 'tsv' ? 'text/tab-separated-values' : 'text/csv'));
                 const blob = new Blob([bytes], { type: `${mimeType};charset=utf-8;` });
                 const url = URL.createObjectURL(blob);
                 triggerExportDownload(url, filename);
@@ -12411,7 +12413,7 @@ export default function DashTanstackPivot(props) {
             }
             setIsExporting(true);
             dispatchServerExportRequest(buildServerExportPayload({
-                format: 'xls',
+                format: 'xlsx',
                 includeHeaders: true,
                 rowStart: 0,
                 rowEnd: rowCount,
@@ -12426,7 +12428,7 @@ export default function DashTanstackPivot(props) {
                 try {
                     const displayRows = getDisplayRows();
                     exportPivotTable(table, rowCount, displayRows.length > 0 ? displayRows : null, {
-                        filename: 'pivot.xls',
+                        filename: 'pivot.xlsx',
                         columns: getExportColumns(),
                         getHeaderLabel: (column) => getExportHeaderLabel(column, true, mergedHeaderSeparator),
                         getCellValue: (rowLike, column, rowIndex) => getExportCellDisplayValue(rowLike, column, rowIndex),
@@ -12483,7 +12485,7 @@ export default function DashTanstackPivot(props) {
             : {};
         dispatchServerExportRequest(
             buildServerExportPayload({
-                format: isCopyMode ? 'html' : 'xls',
+                format: isCopyMode ? 'html' : 'xlsx',
                 includeHeaders: isCopyMode ? !!(copyIntent && copyIntent.withHeaders) : true,
                 rowStart,
                 rowEnd,
