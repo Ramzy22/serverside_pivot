@@ -4,6 +4,7 @@ import asyncio
 import pyarrow as pa
 import sys
 import os
+import re
 import time
 from pathlib import Path
 from concurrent.futures import ThreadPoolExecutor
@@ -72,6 +73,52 @@ def test_dash_app_registers_local_component_bundle():
         (Path(os.getcwd()) / "dash_tanstack_pivot").resolve()
     )
     assert component_scripts == [expected]
+
+
+def test_server_side_sorting_is_emitted_with_runtime_request_only():
+    component_source = Path(
+        os.path.join(
+            os.getcwd(),
+            "dash_tanstack_pivot",
+            "src",
+            "lib",
+            "components",
+            "DashTanstackPivot.react.js",
+        )
+    ).read_text(encoding="utf-8")
+
+    apply_header_sort = re.search(
+        r"const applyHeaderSort = .*?\n    // 4\. FIXED:",
+        component_source,
+        re.S,
+    )
+    handle_sorting_change = re.search(
+        r"const handleSortingChange = .*?\n\n    const table = useReactTable",
+        component_source,
+        re.S,
+    )
+
+    assert apply_header_sort is not None
+    assert handle_sorting_change is not None
+    assert "if (!serverSide && setPropsRef.current)" in apply_header_sort.group(0)
+    assert "if (!serverSide && setPropsRef.current)" in handle_sorting_change.group(0)
+    assert "will send sorting and the runtimeRequest in one update" in handle_sorting_change.group(0)
+
+
+def test_expansion_anchor_uses_configured_server_side_block_size():
+    component_source = Path(
+        os.path.join(
+            os.getcwd(),
+            "dash_tanstack_pivot",
+            "src",
+            "lib",
+            "components",
+            "DashTanstackPivot.react.js",
+        )
+    ).read_text(encoding="utf-8")
+
+    assert "Math.floor(toggledRow.__virtualIndex / serverSideBlockSize)" in component_source
+    assert "Math.floor(toggledRow.__virtualIndex / 100)" not in component_source
 
 
 def test_dash_presentation_app_includes_single_pivot_sparkline_modes_demo():
@@ -521,6 +568,68 @@ def test_chart_panel_settings_budget_survives_parent_rerenders():
     assert "onSettingsWidthBudgetChange(null);" not in chart_source
     assert "onMouseDown={(event) => event.stopPropagation()}" in chart_source
     assert "setConfigOpen((currentOpen) => !currentOpen);" in chart_source
+
+
+def test_chart_panel_dimensions_use_shared_bounds_and_chrome():
+    chart_source = Path(
+        os.path.join(
+            os.getcwd(),
+            "dash_tanstack_pivot",
+            "src",
+            "lib",
+            "components",
+            "Charts",
+            "PivotCharts.js",
+        )
+    ).read_text(encoding="utf-8")
+    component_source = Path(
+        os.path.join(
+            os.getcwd(),
+            "dash_tanstack_pivot",
+            "src",
+            "lib",
+            "components",
+            "DashTanstackPivot.react.js",
+        )
+    ).read_text(encoding="utf-8")
+    renderer_source = Path(
+        os.path.join(
+            os.getcwd(),
+            "dash_tanstack_pivot",
+            "src",
+            "lib",
+            "components",
+            "PivotChartRenderer.js",
+        )
+    ).read_text(encoding="utf-8")
+    normalization_source = Path(
+        os.path.join(
+            os.getcwd(),
+            "dash_tanstack_pivot",
+            "src",
+            "lib",
+            "hooks",
+            "usePivotNormalization.js",
+        )
+    ).read_text(encoding="utf-8")
+
+    assert "export const CHART_PANEL_VERTICAL_CHROME_HEIGHT = 220;" in normalization_source
+    assert "const clampChartPanelBaseWidth = (value, fallback = 430) => {" in chart_source
+    assert "Math.max(MIN_CHART_PANEL_WIDTH, Math.min(MAX_CHART_PANEL_WIDTH" in chart_source
+    assert "Math.max(MIN_FLOATING_CHART_PANEL_HEIGHT, Math.floor(Number(floatingRect.height)))" in chart_source
+    assert "height: `${floatingPanelHeight}px`" in chart_source
+    assert "Math.max(DEFAULT_FLOATING_CHART_PANEL_HEIGHT, (Number(chartHeight) || CHART_HEIGHT) + CHART_PANEL_VERTICAL_CHROME_HEIGHT)" in chart_source
+    assert "Number(chartState.chartHeight || CHART_HEIGHT) + CHART_PANEL_VERTICAL_CHROME_HEIGHT" in chart_source
+    assert "const maxChartCanvasPaneWidth" in component_source
+    assert "chartCanvasLayoutRef.current.getBoundingClientRect().width" in component_source
+    assert "Math.min(\n                maxChartCanvasPaneWidth," in component_source
+    assert "nextRect.height - CHART_PANEL_VERTICAL_CHROME_HEIGHT" in component_source
+    assert "Math.floor((pane.chartHeight || DEFAULT_CHART_GRAPH_HEIGHT) + CHART_PANEL_VERTICAL_CHROME_HEIGHT)" in component_source
+    assert "Math.floor((pane.chartHeight || DEFAULT_CHART_GRAPH_HEIGHT) + CHART_PANEL_VERTICAL_CHROME_HEIGHT)" in renderer_source
+    assert "Math.max(width || 430, 430)" not in chart_source
+    assert "+ 188" not in component_source
+    assert "- 188" not in component_source
+    assert "+ 188" not in renderer_source
 
 
 def test_dash_app_get_adapter_initializes_once_under_concurrency(monkeypatch):
@@ -3332,7 +3441,8 @@ def test_measure_axis_contract_is_wired_through_frontend_and_runtime():
     assert "showMeasureAxisAvailableField" in sidebar_source
     assert "data-sidebar-field-chip={isMeasureAxisVirtualField ? 'measure-axis-label' : 'available'}" in sidebar_source
     assert "Drag to Rows or Columns to show measure names" in sidebar_source
-    assert 'Input(pivot_id, "measureAxis")' in callbacks_source
+    assert 'State(pivot_id, "measureAxis")' in callbacks_source
+    assert 'Input(pivot_id, "measureAxis")' not in callbacks_source
     assert 'measure_axis=state.measure_axis or None' in service_source
     assert "c.alias || c.id || getKey('', c.field, c.agg)" in column_defs_source
     assert "getMeasureAxisRowValueConfig" in column_defs_source
@@ -3594,6 +3704,13 @@ def test_frontend_resilience_source_handles_reset_jank_cell_errors_and_keyboard_
     assert "aria-grabbed=" in sidebar_source
     assert "handleDraggableKeyDown" in sidebar_source
     assert "handleDropZoneKeyDown" in sidebar_source
+    assert "dragItemRef.current = nextDragItem" in component_source
+    assert "resolveSidebarDropItem" in component_source
+    assert "event.dataTransfer.getData('application/x-pivot-column')" in component_source
+    assert "dropLine && dropLine.zone === targetZone ? dropLine.idx : 0" in component_source
+    assert "onDragStart={onDragStart} onDragOver={onDragOver} onDrop={onDrop} onDragEnd={onHeaderDragEnd}" in component_source
+    assert "onDragEnd={onDragEnd}" in sidebar_source
+    assert "if (e.target === e.currentTarget) onDragOver(e, zone.id, zoneItems.length);" in sidebar_source
 
     assert "const applyFieldZoneMove = useCallback" in component_source
     assert "source: 'layout:keyboard-drop'" in sidebar_source

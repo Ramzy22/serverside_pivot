@@ -3416,7 +3416,7 @@ export const SidebarPanel = React.memo(function SidebarPanel({
     colSearch, setColSearch,
     colTypeFilter, setColTypeFilter,
     selectedCols, setSelectedCols,
-    dropLine, onDragStart, onDragOver, onDrop,
+    dropLine, onDragStart, onDragOver, onDrop, onDragEnd,
     onKeyboardFieldDrop,
     handleHeaderFilter, handleFilterClick, requestFilterOptions,
     handleExpandAllRows, handlePinColumn,
@@ -4213,6 +4213,7 @@ export const SidebarPanel = React.memo(function SidebarPanel({
                                                     aria-grabbed={keyboardDragItem && keyboardDragItem.zone === sourceZone && keyboardDragItem.field === f ? 'true' : 'false'}
                                                     aria-label={`Move ${fieldLabel}`}
                                                     onDragStart={e=>onDragStart(e,f,sourceZone)}
+                                                    onDragEnd={onDragEnd}
                                                     onKeyDown={(e) => handleDraggableKeyDown(e, f, sourceZone, -1, fieldLabel)}
                                                     title={isMeasureAxisVirtualField ? 'Drag to Rows or Columns to show measure names' : `Move ${getFieldLabel(f)}`}
                                                     style={{
@@ -4316,7 +4317,13 @@ export const SidebarPanel = React.memo(function SidebarPanel({
                                             aria-label={`${zone.label} drop zone`}
                                             aria-describedby="pivot-sidebar-keyboard-dnd-help"
                                             onKeyDown={(e) => handleDropZoneKeyDown(e, zone.id)}
-                                            onDragOver={e=>e.preventDefault()}
+                                            onDragOver={(e) => {
+                                                if (e.target === e.currentTarget) onDragOver(e, zone.id, zoneItems.length);
+                                                else {
+                                                    e.preventDefault();
+                                                    if (e.dataTransfer) e.dataTransfer.dropEffect = 'move';
+                                                }
+                                            }}
                                             onDrop={e=>onDrop(e, zone.id)}
                                         >
                                             {zoneItems.map((item, idx) => {
@@ -4342,6 +4349,7 @@ export const SidebarPanel = React.memo(function SidebarPanel({
                                                         onKeyDown={(e) => handleDraggableKeyDown(e, item, zone.id, idx, displayLabel)}
                                                         onDragStart={e=>onDragStart(e,item,zone.id,idx)}
                                                         onDragOver={e=>onDragOver(e,zone.id,idx)}
+                                                        onDragEnd={onDragEnd}
                                                     >
                                                         {zone.id === 'vals' && item.agg === 'formula' ? (
                                                             <FormulaListItem
@@ -4447,7 +4455,7 @@ export const SidebarPanel = React.memo(function SidebarPanel({
                                             {zoneItems.length === 0 && (
                                                 <div style={{opacity:0.5, fontSize:'11px', padding:'8px', textAlign:'center', pointerEvents:'none'}}>Drag fields here</div>
                                             )}
-                                            <div style={{height:20}} onDragOver={e=>onDragOver(e,zone.id,zoneItems.length)} />
+                                            <div style={{height:20}} onDragOver={e=>onDragOver(e,zone.id,zoneItems.length)} onDrop={e=>onDrop(e, zone.id)} />
                                         </div>
                                     </ResizableFieldPanel>
                                 </div>

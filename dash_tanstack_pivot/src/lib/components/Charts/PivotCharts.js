@@ -45,6 +45,22 @@ import {
     canStackBarSeries,
     canStackBarLayout,
 } from '../../utils/chartModelBuilders';
+import {
+    CHART_PANEL_VERTICAL_CHROME_HEIGHT,
+    DEFAULT_FLOATING_CHART_PANEL_HEIGHT,
+    MIN_CHART_PANEL_WIDTH,
+    MAX_CHART_PANEL_WIDTH,
+    MIN_FLOATING_CHART_PANEL_HEIGHT,
+} from '../../hooks/usePivotNormalization';
+
+const clampChartPanelBaseWidth = (value, fallback = 430) => {
+    const numericValue = Number(value);
+    const numericFallback = Number(fallback);
+    const candidate = Number.isFinite(numericValue)
+        ? numericValue
+        : (Number.isFinite(numericFallback) ? numericFallback : 430);
+    return Math.max(MIN_CHART_PANEL_WIDTH, Math.min(MAX_CHART_PANEL_WIDTH, Math.floor(candidate)));
+};
 
 const computeLinearTrendline = (values) => {
     const pts = values.map((v, i) => [i, Number(v)]).filter(([, y]) => Number.isFinite(y));
@@ -5106,7 +5122,7 @@ const PivotChartPanelContent = ({
     const [settingsPaneOpen, setSettingsPaneOpen] = useState(initialSettingsPaneOpen);
     const [settingsPanelWidth, setSettingsPanelWidth] = useState(348);
     const panelAsideRef = useRef(null);
-    const baseDockedPanelWidthRef = useRef(Math.max(width || 430, 430));
+    const baseDockedPanelWidthRef = useRef(clampChartPanelBaseWidth(width));
     const onSettingsWidthBudgetChangeRef = useRef(onSettingsWidthBudgetChange);
     const lastSettingsWidthBudgetRef = useRef(null);
     const immersiveMode = typeof controlledImmersiveMode === 'boolean' ? controlledImmersiveMode : uncontrolledImmersiveMode;
@@ -5151,8 +5167,13 @@ const PivotChartPanelContent = ({
         padding: '6px 10px',
     });
     const visibleSettingsWidth = (!immersiveMode && settingsPaneOpen) ? (settingsPanelWidth + 9) : 0;
-    const basePanelWidth = Math.max(width || 430, 430);
-    const floatingPanelWidth = (floatingRect && floatingRect.width) || basePanelWidth;
+    const basePanelWidth = clampChartPanelBaseWidth(width);
+    const floatingPanelWidth = (floatingRect && Number.isFinite(Number(floatingRect.width)))
+        ? Math.max(MIN_CHART_PANEL_WIDTH, Math.floor(Number(floatingRect.width)))
+        : basePanelWidth;
+    const floatingPanelHeight = (floatingRect && Number.isFinite(Number(floatingRect.height)))
+        ? Math.max(MIN_FLOATING_CHART_PANEL_HEIGHT, Math.floor(Number(floatingRect.height)))
+        : Math.max(DEFAULT_FLOATING_CHART_PANEL_HEIGHT, (Number(chartHeight) || CHART_HEIGHT) + CHART_PANEL_VERTICAL_CHROME_HEIGHT);
 
     useEffect(() => {
         onSettingsWidthBudgetChangeRef.current = onSettingsWidthBudgetChange;
@@ -5186,7 +5207,7 @@ const PivotChartPanelContent = ({
                 left: `${(floatingRect && floatingRect.left) || 24}px`,
                 top: `${(floatingRect && floatingRect.top) || 24}px`,
                 width: `${floatingPanelWidth + visibleSettingsWidth}px`,
-                height: `${(floatingRect && floatingRect.height) || 520}px`,
+                height: `${floatingPanelHeight}px`,
                 zIndex: 240,
                 display: 'flex',
                 minWidth: 0,
@@ -5209,7 +5230,7 @@ const PivotChartPanelContent = ({
         const updateWidth = () => {
             const nextWidth = element.clientWidth;
             if (nextWidth > 0 && !settingsPaneOpen) {
-                baseDockedPanelWidthRef.current = Math.max(320, nextWidth);
+                baseDockedPanelWidthRef.current = Math.max(MIN_CHART_PANEL_WIDTH, nextWidth);
             }
         };
         updateWidth();
@@ -5570,7 +5591,7 @@ export const PivotChartModal = ({ chartState, onClose, theme, position = 'right'
     if (!chartState) return null;
     const isVerticalPosition = position === 'top' || position === 'bottom';
     const panelWidthBudget = Math.max(420, Number.isFinite(Number(settingsWidthBudget)) ? Math.floor(Number(settingsWidthBudget)) : 420);
-    const panelHeightBudget = Math.max(360, Number(chartState.chartHeight || CHART_HEIGHT) + 220);
+    const panelHeightBudget = Math.max(360, Number(chartState.chartHeight || CHART_HEIGHT) + CHART_PANEL_VERTICAL_CHROME_HEIGHT);
 
     const posBtn = (value, label) => ({
         border: `1px solid ${value === position ? theme.primary : theme.border}`,

@@ -14,12 +14,14 @@
 import React from 'react';
 import PropTypes from 'prop-types';
 import { PivotChartPanel, PivotChartModal } from './Charts/PivotCharts';
-import { normalizeChartDockPosition, resolveChartAvailableColumns } from '../hooks/usePivotNormalization';
-
-// Constants (imported from normalization utilities)
-const MIN_CHART_CANVAS_PANE_WIDTH = 320;
-const DEFAULT_DOCKED_CHART_PANE_HEIGHT = 420;
-const DEFAULT_CHART_GRAPH_HEIGHT = 320;
+import {
+    CHART_PANEL_VERTICAL_CHROME_HEIGHT,
+    DEFAULT_CHART_GRAPH_HEIGHT,
+    DEFAULT_DOCKED_CHART_PANE_HEIGHT,
+    MIN_CHART_CANVAS_PANE_WIDTH,
+    normalizeChartDockPosition,
+    resolveChartAvailableColumns,
+} from '../hooks/usePivotNormalization';
 
 /**
  * Renders a single chart canvas pane with proper sizing and docking
@@ -53,7 +55,7 @@ const renderChartCanvasPane = (
         ? {
             display: 'flex',
             width: '100%',
-            height: `${Math.max(DEFAULT_DOCKED_CHART_PANE_HEIGHT, Math.floor((pane.chartHeight || DEFAULT_CHART_GRAPH_HEIGHT) + 188))}px`,
+            height: `${Math.max(DEFAULT_DOCKED_CHART_PANE_HEIGHT, Math.floor((pane.chartHeight || DEFAULT_CHART_GRAPH_HEIGHT) + CHART_PANEL_VERTICAL_CHROME_HEIGHT))}px`,
             minHeight: `${Math.max(280, Math.floor((pane.chartHeight || DEFAULT_CHART_GRAPH_HEIGHT) + 120))}px`,
             minWidth: 0,
             overflow: 'hidden',

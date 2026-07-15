@@ -24,6 +24,7 @@ import {
     DEFAULT_CHART_PANEL_COLUMN_LIMIT,
     DEFAULT_CHART_GRAPH_HEIGHT,
     DEFAULT_FLOATING_CHART_PANEL_HEIGHT,
+    CHART_PANEL_VERTICAL_CHROME_HEIGHT,
     MIN_CHART_PANEL_WIDTH,
     MAX_CHART_PANEL_WIDTH,
     MIN_FLOATING_CHART_PANEL_HEIGHT,
@@ -3127,7 +3128,7 @@ export default function DashTanstackPivot(props) {
                     resizeState.startHeight + (deltaY * sign)
                 )
             );
-            const nextChartHeight = Math.max(120, Math.floor(nextHeight - 188));
+            const nextChartHeight = Math.max(180, Math.floor(nextHeight - CHART_PANEL_VERTICAL_CHROME_HEIGHT));
             setChartCanvasPanes((prev) => prev.map((p) =>
                 p.id === resizeState.paneId ? { ...p, chartHeight: nextChartHeight } : p
             ));
@@ -3156,7 +3157,7 @@ export default function DashTanstackPivot(props) {
                     left: previousRect && Number.isFinite(previousRect.left) ? previousRect.left : 24,
                     top: previousRect && Number.isFinite(previousRect.top) ? previousRect.top : 24,
                     width: previousRect && Number.isFinite(previousRect.width) ? previousRect.width : chartPanelWidth,
-                    height: previousRect && Number.isFinite(previousRect.height) ? previousRect.height : Math.max(DEFAULT_FLOATING_CHART_PANEL_HEIGHT, chartPanelGraphHeight + 180),
+                    height: previousRect && Number.isFinite(previousRect.height) ? previousRect.height : Math.max(DEFAULT_FLOATING_CHART_PANEL_HEIGHT, chartPanelGraphHeight + CHART_PANEL_VERTICAL_CHROME_HEIGHT),
                 }, containerRect));
             } else {
                 setChartPanelWidth((previousWidth) => clampChartPanelWidth(
@@ -3206,7 +3207,7 @@ export default function DashTanstackPivot(props) {
                     left: Number.isFinite(baseRect.left) ? baseRect.left : 36,
                     top: Number.isFinite(baseRect.top) ? baseRect.top : 36,
                     width: Number.isFinite(baseRect.width) ? baseRect.width : pane.width,
-                    height: Number.isFinite(baseRect.height) ? baseRect.height : Math.max(DEFAULT_FLOATING_CHART_PANEL_HEIGHT, (pane.chartHeight || DEFAULT_CHART_GRAPH_HEIGHT) + 180),
+                    height: Number.isFinite(baseRect.height) ? baseRect.height : Math.max(DEFAULT_FLOATING_CHART_PANEL_HEIGHT, (pane.chartHeight || DEFAULT_CHART_GRAPH_HEIGHT) + CHART_PANEL_VERTICAL_CHROME_HEIGHT),
                 }, containerRect),
             };
         });
@@ -3275,7 +3276,7 @@ export default function DashTanstackPivot(props) {
                 setChartPanelFloatingRect(nextRect);
                 setChartPanelWidth(nextRect.width);
                 setChartPanelGraphHeight((previousHeight) => {
-                    const targetHeight = Math.max(180, nextRect.height - 180);
+                    const targetHeight = Math.max(180, nextRect.height - CHART_PANEL_VERTICAL_CHROME_HEIGHT);
                     return previousHeight === targetHeight ? previousHeight : targetHeight;
                 });
                 return;
@@ -3313,7 +3314,7 @@ export default function DashTanstackPivot(props) {
                 updateChartCanvasPane(resizeState.paneId, (pane) => ({
                     ...pane,
                     width: nextRect.width,
-                    chartHeight: Math.max(180, nextRect.height - 180),
+                    chartHeight: Math.max(180, nextRect.height - CHART_PANEL_VERTICAL_CHROME_HEIGHT),
                     floatingRect: nextRect,
                 }));
             }
@@ -3870,6 +3871,7 @@ export default function DashTanstackPivot(props) {
     const isColExpanded = (key) => colExpanded[key] !== false;
 
     const [dragItem, setDragItem] = useState(null);
+    const dragItemRef = useRef(null);
     const [dropLine, setDropLine] = useState(null);
     const [dragOverHeaderId, setDragOverHeaderId] = useState(null);
     const [dragOverSide, setDragOverSide] = useState(null);
@@ -6973,7 +6975,7 @@ export default function DashTanstackPivot(props) {
             floating: false,
             floatingRect: clampFloatingChartRect({
                 width: chartPanelWidth,
-                height: Math.max(DEFAULT_FLOATING_CHART_PANEL_HEIGHT, chartPanelGraphHeight + 180),
+                height: Math.max(DEFAULT_FLOATING_CHART_PANEL_HEIGHT, chartPanelGraphHeight + CHART_PANEL_VERTICAL_CHROME_HEIGHT),
                 left: 48 + (chartCanvasPanes.length * 24),
                 top: 48 + (chartCanvasPanes.length * 24),
             }, null),
@@ -8653,7 +8655,10 @@ export default function DashTanstackPivot(props) {
             append,
         });
         setSorting(nextSorting);
-        if (setPropsRef.current) {
+        // In server-side mode the sync effect below emits sorting together with
+        // runtimeRequest. Sending sorting here would trigger a stale prop-refresh
+        // backend request before the real sort request is queued.
+        if (!serverSide && setPropsRef.current) {
             setPropsRef.current({
                 sorting: nextSorting,
                 sortEvent: {
@@ -10029,7 +10034,9 @@ export default function DashTanstackPivot(props) {
         setSorting(newSorting);
 
         // Fire sort event to backend
-        if (setPropsRef.current) {
+        // In server-side mode, avoid a sorting-only Dash update. The sync effect
+        // will send sorting and the runtimeRequest in one update.
+        if (!serverSide && setPropsRef.current) {
             setPropsRef.current({
                 sorting: newSorting,
                 sortEvent: {
@@ -10083,7 +10090,7 @@ export default function DashTanstackPivot(props) {
                 if (changedPath) {
                     const toggledRow = renderedData.find(r => r && r._path === changedPath);
                     if (toggledRow && typeof toggledRow.__virtualIndex === 'number') {
-                        anchorBlock = Math.floor(toggledRow.__virtualIndex / 100);
+                        anchorBlock = Math.floor(toggledRow.__virtualIndex / serverSideBlockSize);
                         // Record the virtual index for viewport anchor preservation.
                         // When rows are inserted/removed ABOVE the current scroll position
                         // we adjust scrollTop so the same logical rows remain in view.
@@ -12079,6 +12086,7 @@ export default function DashTanstackPivot(props) {
             ? idx
             : getFieldIndex(fieldName, resolvedZone);
         const nextDragItem = { field, zone: resolvedZone, idx: resolvedIdx };
+        dragItemRef.current = nextDragItem;
         setDragItem(nextDragItem);
         e.dataTransfer.effectAllowed = 'move';
         try {
@@ -12094,6 +12102,7 @@ export default function DashTanstackPivot(props) {
     };
     const onDragOver = (e, zone, idx) => {
         e.preventDefault();
+        if (e.dataTransfer) e.dataTransfer.dropEffect = 'move';
         // If hovering over a header, zone might be 'cols' or 'rows' derived from ID
         // For sidebar, we use dropLine logic
         if (['rows', 'cols', 'vals', 'filter'].includes(zone)) {
@@ -12125,10 +12134,42 @@ export default function DashTanstackPivot(props) {
     };
 
     const onHeaderDragEnd = () => {
+        dragItemRef.current = null;
         setDragItem(null);
         setDropLine(null);
         setDragOverHeaderId(null);
         setDragOverSide(null);
+    };
+
+    const resolveSidebarDropItem = (event) => {
+        if (dragItemRef.current) return dragItemRef.current;
+        if (dragItem) return dragItem;
+        if (!event || !event.dataTransfer) return null;
+        try {
+            const rawPayload = event.dataTransfer.getData('application/x-pivot-column');
+            if (rawPayload) {
+                const parsed = JSON.parse(rawPayload);
+                if (parsed && typeof parsed.field === 'string' && parsed.field) {
+                    return {
+                        field: parsed.field,
+                        zone: parsed.zone || getFieldZone(parsed.field) || 'pool',
+                        idx: Number.isInteger(parsed.idx) ? parsed.idx : getFieldIndex(parsed.field, parsed.zone || getFieldZone(parsed.field)),
+                    };
+                }
+            }
+        } catch (error) {
+            // Fall back to text/plain below.
+        }
+        try {
+            const fieldName = event.dataTransfer.getData('text/plain');
+            if (fieldName) {
+                const zone = getFieldZone(fieldName) || 'pool';
+                return { field: fieldName, zone, idx: getFieldIndex(fieldName, zone) };
+            }
+        } catch (error) {
+            return null;
+        }
+        return null;
     };
 
     const onHeaderKeyboardMove = (columnId, delta) => {
@@ -12299,10 +12340,18 @@ export default function DashTanstackPivot(props) {
     ]);
     const onDrop = (e, targetZone) => {
         e.preventDefault();
-        if (!dragItem) return;
-        const { field, zone: srcZone, idx: srcIdx } = dragItem;
-        const targetIdx = (dropLine && dropLine.idx) || 0;
+        e.stopPropagation();
+        const resolvedDragItem = resolveSidebarDropItem(e);
+        if (!resolvedDragItem) {
+            dragItemRef.current = null;
+            setDragItem(null);
+            setDropLine(null);
+            return;
+        }
+        const { field, zone: srcZone, idx: srcIdx } = resolvedDragItem;
+        const targetIdx = dropLine && dropLine.zone === targetZone ? dropLine.idx : 0;
         applyFieldZoneMove({ field, srcZone, srcIdx, targetZone, targetIdx, source: 'layout:zone-drop' });
+        dragItemRef.current = null;
         setDragItem(null); setDropLine(null);
     };
 
@@ -13097,7 +13146,16 @@ export default function DashTanstackPivot(props) {
                 const { [paneId]: _removed, ...rest } = previousHints;
                 return rest;
             }
-            const normalizedWidth = Math.max(MIN_CHART_CANVAS_PANE_WIDTH, Math.floor(Number(nextWidthHint)));
+            const layoutWidth = chartCanvasLayoutRef.current
+                ? chartCanvasLayoutRef.current.getBoundingClientRect().width
+                : 0;
+            const maxChartCanvasPaneWidth = Number.isFinite(layoutWidth) && layoutWidth > 0
+                ? Math.max(MIN_CHART_CANVAS_PANE_WIDTH, Math.floor(layoutWidth - MIN_TABLE_PANEL_WIDTH - 16))
+                : Number.POSITIVE_INFINITY;
+            const normalizedWidth = Math.min(
+                maxChartCanvasPaneWidth,
+                Math.max(MIN_CHART_CANVAS_PANE_WIDTH, Math.floor(Number(nextWidthHint)))
+            );
             if (currentValue === normalizedWidth) return previousHints;
             return {
                 ...previousHints,
@@ -13136,7 +13194,7 @@ export default function DashTanstackPivot(props) {
             ? {
                 display: 'flex',
                 width: '100%',
-                height: `${Math.max(DEFAULT_DOCKED_CHART_PANE_HEIGHT, Math.floor((pane.chartHeight || DEFAULT_CHART_GRAPH_HEIGHT) + 188))}px`,
+                height: `${Math.max(DEFAULT_DOCKED_CHART_PANE_HEIGHT, Math.floor((pane.chartHeight || DEFAULT_CHART_GRAPH_HEIGHT) + CHART_PANEL_VERTICAL_CHROME_HEIGHT))}px`,
                 minHeight: `${Math.max(280, Math.floor((pane.chartHeight || DEFAULT_CHART_GRAPH_HEIGHT) + 120))}px`,
                 minWidth: 0,
                 overflow: 'hidden',
@@ -13497,7 +13555,7 @@ export default function DashTanstackPivot(props) {
                         colTypeFilter={colTypeFilter} setColTypeFilter={setColTypeFilter}
                         selectedCols={selectedCols} setSelectedCols={setSelectedCols}
                         dropLine={dropLine}
-                        onDragStart={onDragStart} onDragOver={onDragOver} onDrop={onDrop}
+                        onDragStart={onDragStart} onDragOver={onDragOver} onDrop={onDrop} onDragEnd={onHeaderDragEnd}
                         onKeyboardFieldDrop={applyFieldZoneMove}
                         handleHeaderFilter={handleHeaderFilter}
                         handleFilterClick={handleFilterClick}

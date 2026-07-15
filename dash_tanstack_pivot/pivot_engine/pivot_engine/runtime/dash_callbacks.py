@@ -65,10 +65,10 @@ def _is_bootstrap_without_viewport(triggered_prop: Optional[str], viewport: Any)
     Detect an initial Dash callback call that has no concrete viewport/session
     metadata from the frontend yet.
 
-    Dash commonly fires the first callback because static props like rowFields
-    are present in layout, before the React component has emitted its first
-    runtimeRequest. In that case we still want a real bootstrap data response,
-    not a stale no-op keyed to anonymous/default window_seq=0 metadata.
+    Dash commonly fires the first callback before the React component has
+    emitted its first runtimeRequest. In that case we still want a real
+    bootstrap data response, not a stale no-op keyed to anonymous/default
+    window_seq=0 metadata.
     """
     if isinstance(triggered_prop, str) and triggered_prop.endswith(".viewport") and not isinstance(viewport, dict):
         return False
@@ -605,31 +605,35 @@ def register_dash_pivot_transport_callback(
 
     callback_args = (
         *outputs,
-        Input(pivot_id, "rowFields"),
-        Input(pivot_id, "colFields"),
-        Input(pivot_id, "valConfigs"),
-        Input(pivot_id, "filters"),
-        Input(pivot_id, "customDimensions"),
-        Input(pivot_id, "measureAxis"),
-        Input(pivot_id, "sorting"),
-        Input(pivot_id, "expanded"),
-        Input(pivot_id, "immersiveMode"),
-        Input(pivot_id, "showRowTotals"),
-        Input(pivot_id, "showColTotals"),
-        Input(pivot_id, "showSubtotals"),
+        Input(pivot_id, "runtimeRequest"),
+        # Legacy command props remain Inputs for backwards compatibility.
         Input(pivot_id, "cellUpdate"),
         Input(pivot_id, "cellUpdates"),
-        Input(pivot_id, "runtimeRequest"),
-        Input(pivot_id, "viewMode"),
-        Input(pivot_id, "detailMode"),
-        Input(pivot_id, "treeConfig"),
-        Input(pivot_id, "detailConfig"),
-        Input(pivot_id, "reportDef"),
+        State(pivot_id, "rowFields"),
+        State(pivot_id, "colFields"),
+        State(pivot_id, "valConfigs"),
+        State(pivot_id, "filters"),
+        State(pivot_id, "customDimensions"),
+        State(pivot_id, "measureAxis"),
+        State(pivot_id, "sorting"),
+        State(pivot_id, "expanded"),
+        State(pivot_id, "immersiveMode"),
+        State(pivot_id, "showRowTotals"),
+        State(pivot_id, "showColTotals"),
+        State(pivot_id, "showSubtotals"),
+        State(pivot_id, "viewMode"),
+        State(pivot_id, "detailMode"),
+        State(pivot_id, "treeConfig"),
+        State(pivot_id, "detailConfig"),
+        State(pivot_id, "reportDef"),
         State(pivot_id, "table"),
         State(pivot_id, "sortOptions"),
     )
 
     async def _update_pivot_table_async(
+        runtime_request,
+        cell_update,
+        cell_updates,
         row_fields,
         col_fields,
         val_configs,
@@ -642,9 +646,6 @@ def register_dash_pivot_transport_callback(
         show_row_totals,
         show_col_totals,
         show_subtotals,
-        cell_update,
-        cell_updates,
-        runtime_request,
         view_mode,
         detail_mode,
         tree_config,
@@ -828,11 +829,10 @@ def register_dash_pivot_transport_callback(
             )
 
         active_request_meta = request_payload
-        # When a Dash prop (reportDef, viewMode, etc.) triggers the callback, active_request_meta
-        # carries the previous runtimeRequest with intent="viewport" and a stale window_seq.
-        # The session gate rejects viewport requests whose window_seq isn't strictly increasing,
-        # so prop-triggered refreshes would be silently dropped. Force "structural" so the gate
-        # always accepts them.
+        # When a non-runtime command prop (legacy cellUpdate/cellUpdates or bootstrap)
+        # triggers the callback, active_request_meta may carry the previous runtimeRequest
+        # with intent="viewport" and a stale window_seq. Force "structural" so the gate
+        # accepts the command instead of treating it as an old viewport refresh.
         if not (isinstance(effective_trigger_prop, str) and effective_trigger_prop.endswith(".runtimeRequest")):
             active_request_meta = {**(active_request_meta if isinstance(active_request_meta, dict) else {}), "intent": "structural"}
         viewport_table = request_payload.get("table") if isinstance(request_payload, dict) else None

@@ -89,6 +89,39 @@ def test_register_dash_pivot_transport_callback_without_drill_store():
     assert len(app.callback_map) == 1
 
 
+def test_transport_callback_uses_runtime_request_as_primary_trigger():
+    app = Dash(__name__)
+    app.layout = html.Div([DashTanstackPivot(id="pivot-only", table="sales")])
+    getter = lambda: _StubRuntimeService()
+
+    assert register_dash_pivot_transport_callback(
+        app, getter, pivot_id="pivot-only", debug=False
+    )
+
+    callback_entry = app.callback_map["pivot-only.runtimeResponse"]
+    input_props = [item["property"] for item in callback_entry["inputs"]]
+    state_props = [item["property"] for item in callback_entry["state"]]
+
+    assert input_props == ["runtimeRequest", "cellUpdate", "cellUpdates"]
+    for view_state_prop in (
+        "rowFields",
+        "colFields",
+        "valConfigs",
+        "filters",
+        "customDimensions",
+        "measureAxis",
+        "sorting",
+        "expanded",
+        "viewMode",
+        "detailMode",
+        "treeConfig",
+        "detailConfig",
+        "reportDef",
+    ):
+        assert view_state_prop not in input_props
+        assert view_state_prop in state_props
+
+
 def test_runtime_payload_ref_externalizes_nested_rows_and_serves_json(monkeypatch):
     monkeypatch.setenv("PIVOT_RUNTIME_PAYLOAD_REF_MIN_ROWS", "9999")
     app = Dash(__name__)
