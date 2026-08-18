@@ -26,6 +26,13 @@ from pivot_engine import create_tanstack_adapter, register_pivot_app
 
 _DEBUG_OUTPUT = os.environ.get("PIVOT_DEBUG_OUTPUT", "1").lower() in {"1", "true", "yes"}
 _EAGER_LOAD_ON_START = os.environ.get("PIVOT_EAGER_LOAD", "1").lower() in {"1", "true", "yes"}
+try:
+    _PROFILER_SLOW_REQUEST_MS = max(
+        1.0,
+        float(os.environ.get("PIVOT_PROFILER_SLOW_REQUEST_MS", "250") or 250),
+    )
+except (TypeError, ValueError):
+    _PROFILER_SLOW_REQUEST_MS = 250.0
 _DATA_DIR = Path(__file__).resolve().parent / "data"
 _TRADER_HISTORY_PATH = _DATA_DIR / "nasdaq_trader_demo_history.parquet"
 _TRADER_SNAPSHOT_PATH = _DATA_DIR / "nasdaq_trader_demo_snapshot.parquet"
@@ -374,6 +381,44 @@ _LAZY_LOAD_BTN_STYLE = {
     "transition": "all 0.2s ease",
 }
 
+_PROFILER_PANEL_STYLE = {
+    "position": "fixed",
+    "right": "18px",
+    "bottom": "18px",
+    "zIndex": 20000,
+    "width": "min(920px, calc(100vw - 36px))",
+    "maxHeight": "68vh",
+    "overflow": "hidden",
+    "background": "rgba(10, 13, 18, 0.97)",
+    "border": "1px solid #374151",
+    "borderRadius": "10px",
+    "boxShadow": "0 20px 48px rgba(0, 0, 0, 0.5)",
+    "color": "#D1D5DB",
+}
+
+_PROFILER_SUMMARY_STYLE = {
+    "cursor": "pointer",
+    "padding": "10px 14px",
+    "fontSize": "12px",
+    "fontWeight": "700",
+    "letterSpacing": "0.04em",
+    "color": "#F9FAFB",
+    "background": "#111827",
+    "borderBottom": "1px solid #1F2937",
+}
+
+_PROFILER_OUTPUT_STYLE = {
+    "margin": 0,
+    "padding": "12px 14px 14px",
+    "maxHeight": "58vh",
+    "overflow": "auto",
+    "whiteSpace": "pre",
+    "fontFamily": "'Cascadia Mono', 'SFMono-Regular', Consolas, monospace",
+    "fontSize": "11px",
+    "lineHeight": "1.55",
+    "color": "#D1D5DB",
+}
+
 
 def build_panel(section_label, title, meta, component):
     return html.Div(
@@ -611,7 +656,166 @@ app.layout = html.Div(
                 ),
             ],
         ),
+        html.Details(
+            open=True,
+            style=_PROFILER_PANEL_STYLE,
+            children=[
+                html.Summary(
+                    f"Live Request Profiler · slow ≥ {_PROFILER_SLOW_REQUEST_MS:g} ms",
+                    style=_PROFILER_SUMMARY_STYLE,
+                ),
+                html.Pre(
+                    "Waiting for the first pivot request…",
+                    id="request-profiler-output",
+                    style=_PROFILER_OUTPUT_STYLE,
+                ),
+                dcc.Interval(
+                    id="request-profiler-refresh",
+                    interval=500,
+                    n_intervals=0,
+                ),
+            ],
+        ),
     ],
+)
+
+
+_PROFILER_CLIENTSIDE_CALLBACK = r"""
+function (_tick) {
+    const profiler = window.__pivotProfiler;
+    if (!profiler || typeof profiler.getHistory !== 'function') {
+        return 'Profiler enabled; waiting for the pivot component to initialize…';
+    }
+
+    const history = profiler.getHistory();
+    if (!Array.isArray(history) || history.length === 0) {
+        return 'Profiler active. Interact with a pivot table to record a request.';
+    }
+
+    const slowThresholdMs = __SLOW_THRESHOLD_MS__;
+    const numeric = (value) => {
+        const parsed = Number(value);
+        return Number.isFinite(parsed) ? parsed : null;
+    };
+    const milliseconds = (value) => {
+        const parsed = numeric(value);
+        return parsed === null ? '-' : parsed.toFixed(parsed >= 100 ? 0 : 1);
+    };
+    const duration = (value) => numeric(value) === null ? '-' : `${milliseconds(value)}ms`;
+    const clip = (value, width) => {
+        const text = value === undefined || value === null ? '-' : String(value);
+        return (text.length > width ? `${text.slice(0, Math.max(0, width - 1))}…` : text).padEnd(width);
+    };
+    const collectTimings = (node, prefix = '', output = []) => {
+        if (!node || typeof node !== 'object' || Array.isArray(node)) return output;
+        Object.entries(node).forEach(([key, value]) => {
+            const path = prefix ? `${prefix}.${key}` : key;
+            if (value && typeof value === 'object' && !Array.isArray(value)) {
+                collectTimings(value, path, output);
+                return;
+            }
+            if (/Ms$/.test(key) && numeric(value) !== null) {
+                output.push({ path, value: numeric(value) });
+            }
+        });
+        return output;
+    };
+    const meaningfulPhases = (entry) => {
+        const timings = collectTimings(entry && entry.profile);
+        return timings
+            .filter((item) => !item.path.endsWith('.totalMs') && item.path !== 'callback.serviceMs')
+            .sort((left, right) => right.value - left.value);
+    };
+    const diagnosticPhases = (entry) => {
+        const derived = (entry && entry.derived) || {};
+        const profile = (entry && entry.profile) || {};
+        const callbackMs = numeric(profile.callback && profile.callback.totalMs);
+        const responseMs = numeric(derived.responseMs);
+        const transportOverheadMs = responseMs !== null
+            ? Math.max(0, responseMs - (callbackMs || 0))
+            : null;
+        return [
+            { path: 'client.render/commitMs', value: numeric(derived.renderMs) },
+            { path: 'client.responseHandoffMs', value: numeric(derived.responseHandoffMs) },
+            { path: 'client.reactCommitMs', value: numeric(derived.reactCommitMs) },
+            { path: 'client.queueMs', value: numeric(derived.queueMs) },
+            { path: 'transport.overheadMs', value: transportOverheadMs },
+            ...meaningfulPhases(entry),
+        ]
+            .filter((item) => item.value !== null)
+            .sort((left, right) => right.value - left.value);
+    };
+    const bottleneck = (entry) => {
+        const phase = diagnosticPhases(entry)[0];
+        if (!phase) return '-';
+        const shortPath = phase.path.split('.').slice(-2).join('.');
+        return `${shortPath} ${milliseconds(phase.value)}ms`;
+    };
+    const totalFor = (entry) => numeric(entry && entry.derived && entry.derived.totalMs) || 0;
+    const slowest = history.reduce(
+        (current, entry) => (!current || totalFor(entry) > totalFor(current) ? entry : current),
+        null
+    );
+    const recent = history.slice(-12).reverse();
+    const summary = typeof profiler.summary === 'function' ? profiler.summary() : null;
+    const lines = [];
+
+    lines.push(
+        `Recorded ${history.length} request(s)`
+        + (summary ? ` · averages: total ${milliseconds(summary.avgTotalMs)}ms, server/transport ${milliseconds(summary.avgResponseMs)}ms, render ${milliseconds(summary.avgRenderMs)}ms` : '')
+    );
+    lines.push('');
+    lines.push(
+        `${clip('flag', 5)} ${clip('total', 8)} ${clip('roundtrip', 10)} ${clip('callback', 9)} `
+        + `${clip('service', 9)} ${clip('render', 8)} ${clip('kind', 12)} ${clip('component', 23)} bottleneck`
+    );
+    lines.push('-'.repeat(112));
+    recent.forEach((entry) => {
+        const derived = entry.derived || {};
+        const profile = entry.profile || {};
+        const total = totalFor(entry);
+        lines.push(
+            `${clip(total >= slowThresholdMs ? 'SLOW' : 'ok', 5)} `
+            + `${clip(duration(total), 8)} `
+            + `${clip(duration(derived.responseMs), 10)} `
+            + `${clip(duration(profile.callback && profile.callback.totalMs), 9)} `
+            + `${clip(duration(profile.service && profile.service.totalMs), 9)} `
+            + `${clip(duration(derived.renderMs), 8)} `
+            + `${clip(entry.kind, 12)} ${clip(entry.componentId, 23)} ${bottleneck(entry)}`
+        );
+    });
+
+    if (slowest) {
+        const request = (slowest.profile && slowest.profile.request) || {};
+        lines.push('');
+        lines.push(`SLOWEST RECORDED REQUEST · ${milliseconds(totalFor(slowest))}ms total`);
+        lines.push(
+            `  id=${slowest.requestId || '-'} · component=${slowest.componentId || '-'} · status=${slowest.status || '-'} `
+            + `· table=${request.table || (slowest.meta && slowest.meta.table) || '-'} · intent=${request.intent || '-'} `
+            + `· rows=${request.startRow === undefined || request.startRow === null ? '-' : request.startRow}`
+            + `..${request.endRow === undefined || request.endRow === null ? '-' : request.endRow}`
+        );
+        const phases = diagnosticPhases(slowest).slice(0, 10);
+        if (phases.length > 0) {
+            lines.push('  Largest measured phases (nested phases can overlap):');
+            phases.forEach((phase) => {
+                lines.push(`    ${clip(phase.path, 48)} ${milliseconds(phase.value)}ms`);
+            });
+        } else {
+            lines.push('  No nested server phases were returned for this request.');
+        }
+    }
+
+    lines.push('');
+    lines.push('Complete request objects are available in DevTools: window.__pivotProfiler.getHistory()');
+    return lines.join('\n');
+}
+""".replace("__SLOW_THRESHOLD_MS__", json.dumps(_PROFILER_SLOW_REQUEST_MS))
+
+app.clientside_callback(
+    _PROFILER_CLIENTSIDE_CALLBACK,
+    Output("request-profiler-output", "children"),
+    Input("request-profiler-refresh", "n_intervals"),
 )
 
 

@@ -510,6 +510,17 @@ export function useRenderHelpers({
             isLastSelected ? focusOverlayRef : EMPTY_STYLE,
             isFillSelected ? fillOverlayRef : EMPTY_STYLE,
         );
+        const cellTextAlign = cellFmt && ['left', 'center', 'right'].includes(cellFmt.textAlign)
+            ? cellFmt.textAlign
+            : null;
+        const cellJustifyContent = cellTextAlign === 'left'
+            ? 'flex-start'
+            : (cellTextAlign === 'center' ? 'center' : (cellTextAlign === 'right' ? 'flex-end' : null));
+        const cellBorderStyle = cellFmt && cellFmt.borderStyle
+            ? {
+                border: `${Math.max(1, Math.min(5, Number(cellFmt.borderWidth) || 1))}px ${cellFmt.borderStyle} ${cellFmt.borderColor || theme.border}`,
+            }
+            : EMPTY_STYLE;
 
         let cellContent;
         if (col.id === '__row_number__' && isVirtualRow) {
@@ -596,7 +607,8 @@ export function useRenderHelpers({
                     height: rowSpanHeight || '100%',
                     minHeight: rowSpanHeight || undefined,
                     alignSelf: rowSpanHeight ? 'flex-start' : undefined,
-                    justifyContent: isReportConfigGutter ? 'center' : isHierarchy ? 'flex-start' : 'flex-end',
+                    justifyContent: isReportConfigGutter ? 'center' : (cellJustifyContent || (isHierarchy ? 'flex-start' : 'flex-end')),
+                    textAlign: cellTextAlign || (isHierarchy ? 'left' : 'right'),
                     fontVariantNumeric: (isHierarchy || isReportConfigGutter) ? undefined : 'tabular-nums',
                     fontWeight: cellFmt && cellFmt.bold
                         ? 'bold'
@@ -623,6 +635,7 @@ export function useRenderHelpers({
                         ? Math.max(Number(cellStateStyle.zIndex) || 0, 6)
                         : cellStateStyle.zIndex,
                     ...(isGrandTotalRow ? grandTotalBorderStyle : {}),
+                    ...cellBorderStyle,
                     ...(isReportConfigGutter ? {
                         padding: 0,
                         borderLeft: 'none',

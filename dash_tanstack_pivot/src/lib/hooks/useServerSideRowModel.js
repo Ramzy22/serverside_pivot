@@ -84,6 +84,12 @@ const getUrgentJumpRowOverscan = (visibleRows) => {
 
 const VIEWPORT_BLOCK_STALE_MS = 1500;
 const VIEWPORT_DUPLICATE_REQUEST_WINDOW_MS = 5000;
+// DuckDB work runs in a worker thread. Cancelling the surrounding async task
+// cannot stop a query that has already entered DuckDB, so immediately sending
+// another viewport request only queues more HTTP callbacks behind the same
+// table lock. Keep one request active and retain only the latest pending window.
+const VIEWPORT_INFLIGHT_SERIALIZE_MS = 5000;
+const VIEWPORT_DIRECTIONAL_PREFETCH_BLOCKS = 1;
 const VIEWPORT_FAST_SCROLL_DEBOUNCE_MS = 140;
 const VIEWPORT_FAST_COLUMN_DEBOUNCE_MS = 96;
 
@@ -163,7 +169,9 @@ export const useServerSideRowModel = ({
     const lastRequestedColEndRef = useRef(null);
     const queuedViewportRef = useRef(null);
     const viewportFlushTimerRef = useRef(null);
+    const viewportRetryTimerRef = useRef(null);
     const lastViewportDispatchAtRef = useRef(0);
+    const lastViewportAnchorRowRef = useRef(null);
     const lastObservedScrollTopRef = useRef(0);
     const lastFastScrollDispatchRef = useRef({ startBlock: -1, endBlock: -1, dispatchedAt: 0 });
     const lastImmediateViewportRef = useRef({
@@ -197,6 +205,7 @@ export const useServerSideRowModel = ({
             lastRequestedColEndRef.current = null;
         }
         lastViewportDispatchAtRef.current = 0;
+        lastViewportAnchorRowRef.current = null;
         lastObservedScrollTopRef.current = parentRef.current ? parentRef.current.scrollTop : 0;
         lastFastScrollDispatchRef.current = { startBlock: -1, endBlock: -1, dispatchedAt: 0 };
         lastImmediateViewportRef.current = {
@@ -212,11 +221,25 @@ export const useServerSideRowModel = ({
             clearTimeout(viewportFlushTimerRef.current);
             viewportFlushTimerRef.current = null;
         }
+        if (viewportRetryTimerRef.current) {
+            clearTimeout(viewportRetryTimerRef.current);
+            viewportRetryTimerRef.current = null;
+        }
         if (abort && viewportAbortControllerRef.current) {
             viewportAbortControllerRef.current.abort();
             viewportAbortControllerRef.current = new AbortController();
         }
     }, [parentRef]);
+
+    const scheduleViewportRetry = useCallback((delayMs) => {
+        if (viewportRetryTimerRef.current) {
+            clearTimeout(viewportRetryTimerRef.current);
+        }
+        viewportRetryTimerRef.current = setTimeout(() => {
+            viewportRetryTimerRef.current = null;
+            setInflightClearedAt(value => value + 1);
+        }, Math.max(25, Math.floor(Number(delayMs) || 0)));
+    }, []);
 
     const resolveRetentionBufferBlocks = useCallback((base = 2) => {
         const now = Date.now();
@@ -242,7 +265,9 @@ export const useServerSideRowModel = ({
         estimateSize: estimateRowHeight || (() => rowHeight),
         overscan: serverSide
             ? (
-                Number.isFinite(Number(rowOverscan))
+                rowOverscan !== null
+                && rowOverscan !== undefined
+                && Number.isFinite(Number(rowOverscan))
                     ? Math.max(0, Math.floor(Number(rowOverscan)))
                     : getServerSideRowOverscan(rowCount)
             )
@@ -406,6 +431,10 @@ export const useServerSideRowModel = ({
                 dataVersion >= inflight.version
             ) {
                 inflightRequestRef.current = null;
+                if (viewportRetryTimerRef.current) {
+                    clearTimeout(viewportRetryTimerRef.current);
+                    viewportRetryTimerRef.current = null;
+                }
                 setInflightClearedAt(t => t + 1);
                 debugLog('clear-inflight', {
                     requestStart: inflight.start,
@@ -515,6 +544,10 @@ export const useServerSideRowModel = ({
                 dataVersion >= inflight.version
             ) {
                 inflightRequestRef.current = null;
+                if (viewportRetryTimerRef.current) {
+                    clearTimeout(viewportRetryTimerRef.current);
+                    viewportRetryTimerRef.current = null;
+                }
                 // Signal to the viewport effect that it should re-run and look for
                 // orphaned loading blocks (blocks whose inflight was superseded by
                 // a faster request and whose stale backend response was dropped).
@@ -636,13 +669,15 @@ export const useServerSideRowModel = ({
             return false;
         }
 
-        const minBlock = Math.min(...dispatchBlocksNeeded);
-        const maxBlock = Math.max(...dispatchBlocksNeeded);
-        const reqStart = minBlock * blockSize;
-        const reqEnd = (maxBlock + 1) * blockSize - 1;
-
+        let minBlock = Math.min(...dispatchBlocksNeeded);
+        let maxBlock = Math.max(...dispatchBlocksNeeded);
         const inflight = inflightRequestRef.current;
-        const inflightIsFresh = inflight && (Date.now() - inflight.timestamp <= VIEWPORT_DUPLICATE_REQUEST_WINDOW_MS);
+
+        let reqStart = minBlock * blockSize;
+        let reqEnd = (maxBlock + 1) * blockSize - 1;
+
+        const inflightAgeMs = inflight ? Date.now() - inflight.timestamp : Number.POSITIVE_INFINITY;
+        const inflightIsFresh = inflight && inflightAgeMs <= VIEWPORT_DUPLICATE_REQUEST_WINDOW_MS;
         const {
             requestedColStart,
             requestedColEnd,
@@ -675,9 +710,69 @@ export const useServerSideRowModel = ({
             return false;
         }
 
+        if (
+            inflight
+            && inflight.abortGeneration === abortGeneration
+            && inflight.stateEpoch === stateEpoch
+            && inflightAgeMs < VIEWPORT_INFLIGHT_SERIALIZE_MS
+        ) {
+            // Replace, rather than merge, so fast scrolling retains only the most
+            // recent visible range while the current uncancellable query finishes.
+            queuedViewportRef.current = {
+                firstRow,
+                lastRow,
+                overrideColStart,
+                overrideColEnd,
+                blocksNeeded: dispatchBlocksNeeded,
+                stateEpoch,
+                abortGeneration,
+                enqueuedAt: queuedAt || Date.now(),
+                updatedAt: Date.now(),
+            };
+            scheduleViewportRetry(VIEWPORT_INFLIGHT_SERIALIZE_MS - inflightAgeMs + 25);
+            debugLog('defer-behind-inflight', {
+                inflightStart: inflight.start,
+                inflightEnd: inflight.end,
+                pendingStart: reqStart,
+                pendingEnd: reqEnd,
+                inflightVersion: inflight.version,
+                inflightAgeMs,
+                stateEpoch,
+                abortGeneration,
+            });
+            return false;
+        }
+
+        // Fetch one block in the current scroll direction. Hierarchy construction
+        // is shared across row windows, so including the adjacent slice is much
+        // cheaper than making the user wait for a second serialized callback at
+        // the next block boundary.
+        const previousAnchorRow = lastViewportAnchorRowRef.current;
+        const scrollDirection = previousAnchorRow !== null && firstRow < previousAnchorRow ? -1 : 1;
+        const numericRowCount = Number(rowCount);
+        const lastAvailableBlock = Number.isFinite(numericRowCount) && numericRowCount > 0
+            ? Math.max(0, Math.ceil(numericRowCount / blockSize) - 1)
+            : null;
+        for (let offset = 1; offset <= VIEWPORT_DIRECTIONAL_PREFETCH_BLOCKS; offset += 1) {
+            const candidateBlock = scrollDirection < 0 ? minBlock - offset : maxBlock + offset;
+            if (candidateBlock < 0 || (lastAvailableBlock !== null && candidateBlock > lastAvailableBlock)) break;
+            if (!blockNeedsViewportRequest(
+                candidateBlock,
+                null,
+                overrideColStart,
+                overrideColEnd,
+                dispatchCheckStartedAt
+            )) break;
+            minBlock = Math.min(minBlock, candidateBlock);
+            maxBlock = Math.max(maxBlock, candidateBlock);
+        }
+        reqStart = minBlock * blockSize;
+        reqEnd = (maxBlock + 1) * blockSize - 1;
+
         const newVersion = requestVersionRef.current + 1;
         const requestId = `viewport:${sessionId}:${clientInstance}:${newVersion}`;
         requestVersionRef.current = newVersion;
+        lastViewportAnchorRowRef.current = firstRow;
         const previousColStart = lastRequestedColStartRef.current;
         const previousColEnd = lastRequestedColEndRef.current;
         const hasColumnWindow = requestedColStart !== null && requestedColEnd !== null;
@@ -823,6 +918,8 @@ export const useServerSideRowModel = ({
         immersiveMode,
         layoutMode,
         showSubtotals,
+        scheduleViewportRetry,
+        rowCount,
     ]);
 
     const flushQueuedViewport = useCallback((forceImmediate = false) => {
@@ -925,7 +1022,9 @@ export const useServerSideRowModel = ({
             : (resolvedDebounceMs !== null
                 ? resolvedDebounceMs
                 : (
-                    Number.isFinite(Number(blockLoadDebounceMs))
+                    blockLoadDebounceMs !== null
+                    && blockLoadDebounceMs !== undefined
+                    && Number.isFinite(Number(blockLoadDebounceMs))
                         ? Math.max(0, Math.floor(Number(blockLoadDebounceMs)))
                         : (elapsed >= 80 ? 16 : 48)
                 ));
@@ -1199,8 +1298,14 @@ export const useServerSideRowModel = ({
             if (columnRangeUrgent) {
                 lastHandledColumnRangeUrgencyRef.current = columnRangeUrgencyToken;
             }
-        } else if (columnRangeUrgent) {
-            lastHandledColumnRangeUrgencyRef.current = columnRangeUrgencyToken;
+        } else {
+            // The current visible range is already satisfied. Any deferred target
+            // belongs to an older scroll position and must not be merged into the
+            // next request after the user moves again.
+            queuedViewportRef.current = null;
+            if (columnRangeUrgent) {
+                lastHandledColumnRangeUrgencyRef.current = columnRangeUrgencyToken;
+            }
         }
     }, [
         virtualRows,
@@ -1393,6 +1498,10 @@ export const useServerSideRowModel = ({
             if (viewportFlushTimerRef.current) {
                 clearTimeout(viewportFlushTimerRef.current);
                 viewportFlushTimerRef.current = null;
+            }
+            if (viewportRetryTimerRef.current) {
+                clearTimeout(viewportRetryTimerRef.current);
+                viewportRetryTimerRef.current = null;
             }
             if (viewportAbortControllerRef.current) {
                 viewportAbortControllerRef.current.abort();

@@ -371,6 +371,54 @@ def test_report_mode_supports_formatting_validation_debug_and_collapsed_levels()
     ) in component_source
 
 
+def test_cell_formatting_persists_colors_borders_and_alignment():
+    component_source = Path(
+        os.path.join(
+            os.getcwd(),
+            "dash_tanstack_pivot",
+            "src",
+            "lib",
+            "components",
+            "DashTanstackPivot.react.js",
+        )
+    ).read_text(encoding="utf-8")
+    app_bar_source = Path(
+        os.path.join(
+            os.getcwd(),
+            "dash_tanstack_pivot",
+            "src",
+            "lib",
+            "components",
+            "PivotAppBar.js",
+        )
+    ).read_text(encoding="utf-8")
+    render_source = Path(
+        os.path.join(
+            os.getcwd(),
+            "dash_tanstack_pivot",
+            "src",
+            "lib",
+            "hooks",
+            "useRenderHelpers.js",
+        )
+    ).read_text(encoding="utf-8")
+
+    assert "if (restored.cellFormatRules && typeof restored.cellFormatRules === 'object') setCellFormatRules(restored.cellFormatRules);" in component_source
+    assert "cellFormatRules," in component_source
+    assert "borderStyle," in app_bar_source
+    assert "borderColor," in app_bar_source
+    assert "borderWidth: Math.max(1, Math.min(5" in app_bar_source
+    assert "textAlign," in app_bar_source
+    assert 'aria-label="Cell formatting preview"' in app_bar_source
+    assert 'type="text"' in app_bar_source
+    assert 'data-cell-format-popover="true"' in app_bar_source
+    assert "anchor.getBoundingClientRect()" in app_bar_source
+    assert "ReactDOM.createPortal(popover, document.body)" in app_bar_source
+    assert "overflowY: 'auto'" in app_bar_source
+    assert "const cellBorderStyle = cellFmt && cellFmt.borderStyle" in render_source
+    assert "textAlign: cellTextAlign" in render_source
+
+
 def test_sidebar_field_panels_allow_compact_minimum_sizes():
     field_layout_source = Path(
         os.path.join(
@@ -630,6 +678,27 @@ def test_chart_panel_dimensions_use_shared_bounds_and_chrome():
     assert "+ 188" not in component_source
     assert "- 188" not in component_source
     assert "+ 188" not in renderer_source
+
+
+def test_resized_chart_panel_samples_dense_axis_labels():
+    chart_source = Path(
+        os.path.join(
+            os.getcwd(),
+            "dash_tanstack_pivot",
+            "src",
+            "lib",
+            "components",
+            "Charts",
+            "PivotCharts.js",
+        )
+    ).read_text(encoding="utf-8")
+
+    assert "const categoryAxisLabelPlan = useMemo(() => {" in chart_source
+    assert "Math.ceil((projectedWidth + 12) / Math.max(geometry.step, 1))" in chart_source
+    assert "categoryAxisLabelPlan.visibleIndexes.has(categoryIndex)" in chart_source
+    assert "<title>{String(category)}</title>" in chart_source
+    assert "const observer = new ResizeObserver(updateWidth);" in chart_source
+    assert "observer.observe(element);" in chart_source
 
 
 def test_dash_app_get_adapter_initializes_once_under_concurrency(monkeypatch):
@@ -2067,6 +2136,11 @@ def test_row_virtualization_source_has_coalesced_scheduler_and_pinned_cache():
     assert "handleScroll" in source
     assert "VIEWPORT_BLOCK_STALE_MS" in source
     assert "VIEWPORT_DUPLICATE_REQUEST_WINDOW_MS" in source
+    assert "VIEWPORT_INFLIGHT_SERIALIZE_MS" in source
+    assert "defer-behind-inflight" in source
+    assert "scheduleViewportRetry" in source
+    assert "VIEWPORT_DIRECTIONAL_PREFETCH_BLOCKS" in source
+    assert "lastViewportAnchorRowRef" in source
     assert "pinnedWindowRef" in cache_source
     assert "evictOverflow" in cache_source
 
@@ -2254,6 +2328,11 @@ def test_server_side_performance_config_source_exposes_ssrm_style_tuning():
     assert "prefetchColumns" in row_model_source
     assert "performanceConfig" in viewport_source
     assert "columnOverscan" in col_virtualizer_source
+    assert "configuredCacheBlockSize !== null" in viewport_source
+    assert "configuredCacheBlockSize !== undefined" in viewport_source
+    assert "rowOverscan !== null" in row_model_source
+    assert "blockLoadDebounceMs !== null" in row_model_source
+    assert "columnOverscan !== null" in col_virtualizer_source
     assert "const signature = columns.map((column) => {" in col_virtualizer_source
     assert "[table, columns, columnVisibility, columnPinning, columnOrder, columnSizing]" in col_virtualizer_source
 
@@ -2394,11 +2473,42 @@ def test_frontend_profiler_source_tracks_request_ids_and_global_history():
     assert "getPivotProfiler" in component_source
     assert "recordProfilerResponse" in component_source
     assert "pendingDataProfilerCommitRef" in component_source
+    assert "layoutCommittedAt" in component_source
+    assert "requestAnimationFrame(finalizeCommit)" not in component_source
     assert "requestId = `viewport:" in row_model_source
     assert "queuedAt" in row_model_source
     assert "window.__pivotProfiler" in profiler_source
     assert "getHistory" in profiler_source
     assert "summary" in profiler_source
+    assert "responseHandoffMs" in profiler_source
+    assert "reactCommitMs" in profiler_source
+
+
+def test_grid_clipboard_shortcuts_preserve_native_editable_input_behavior():
+    component_source = Path(
+        os.path.join(
+            os.getcwd(),
+            "dash_tanstack_pivot",
+            "src",
+            "lib",
+            "components",
+            "DashTanstackPivot.react.js",
+        )
+    ).read_text(encoding="utf-8")
+    normalization_source = Path(
+        os.path.join(
+            os.getcwd(),
+            "dash_tanstack_pivot",
+            "src",
+            "lib",
+            "hooks",
+            "usePivotNormalization.js",
+        )
+    ).read_text(encoding="utf-8")
+
+    assert component_source.count("if (isEditableKeyboardTarget(e.target)) return;") >= 3
+    assert "previously selected grid cell causes the window-level spreadsheet" in component_source
+    assert "[contenteditable=\"plaintext-only\"]" in normalization_source
 
 
 def test_frontend_batch_edit_source_uses_runtime_transaction_requests():
@@ -3156,7 +3266,8 @@ def test_view_state_restore_rehydrates_server_side_runtime_requests():
 
     assert "_extract_request_state_override" in callback_source
     assert "request_state_override = (" in callback_source
-    assert 'effective_trigger_prop.endswith(".runtimeRequest")' in callback_source
+    assert "if request_scoped_trigger" in callback_source
+    assert '(".runtimeRequest", ".viewport")' in callback_source
     assert '_state_override_value(request_state_override, "rowFields", row_fields or [], list)' in callback_source
     assert '_state_override_value(request_state_override, "customDimensions", custom_dimensions or [], list)' in callback_source
     assert '_state_override_value(request_state_override, "expanded", expanded, (dict, bool))' in callback_source

@@ -3407,6 +3407,10 @@ export default function DashTanstackPivot(props) {
     // Clipboard Paste
     useEffect(() => {
         const handlePaste = (e) => {
+            // Text controls own their clipboard behavior. Without this guard a
+            // previously selected grid cell causes the window-level spreadsheet
+            // paste handler to swallow paste in field search and other inputs.
+            if (isEditableKeyboardTarget(e.target)) return;
             if (!lastSelected) return;
             e.preventDefault();
             const clipboardData = e.clipboardData.getData('text');
@@ -3477,9 +3481,11 @@ export default function DashTanstackPivot(props) {
     };
 
     const handleKeyDown = (e) => {
+        // Preserve native editing shortcuts (select all/copy/cut/paste, arrows,
+        // undo/redo) whenever the event originated in a text control.
+        if (isEditableKeyboardTarget(e.target)) return;
         if (
-            !isEditableKeyboardTarget(e.target)
-            && (e.ctrlKey || e.metaKey)
+            (e.ctrlKey || e.metaKey)
             && !e.altKey
             && e.key
         ) {
@@ -3850,6 +3856,7 @@ export default function DashTanstackPivot(props) {
     // This window-level listener acts as fallback when the table isn't focused
     useEffect(() => {
         const handleGlobalCopy = (e) => {
+            if (isEditableKeyboardTarget(e.target)) return;
             if ((e.ctrlKey || e.metaKey) && e.key === 'c') {
                 const keys = Object.keys(selectedCells);
                 if (keys.length === 0) return;
@@ -3894,7 +3901,6 @@ export default function DashTanstackPivot(props) {
     const pivotProfilerRef = useRef(getPivotProfiler());
     const profilingEnabledRef = useRef(isPivotProfilingEnabled());
     const pendingDataProfilerCommitRef = useRef(null);
-    const pendingDataProfilerFrameRef = useRef(null);
     const activeRuntimePayloadFetchRef = useRef(null);
     const transactionUndoStackRef = useRef([]);
     const transactionRedoStackRef = useRef([]);
@@ -8126,13 +8132,17 @@ export default function DashTanstackPivot(props) {
                 ? cellFmt.color
                 : (isGrandTotalRow ? (theme.totalText || theme.text) : (isHierarchy ? theme.text : theme.textSec || theme.text)),
             background,
-            border: reportFormat && reportFormat.borderStyle
-                ? `${Math.max(1, Number(reportFormat.borderWidth) || 1)}px ${reportFormat.borderStyle} ${reportFormat.borderColor || theme.border}`
-                : `1px solid ${theme.border}`,
+            border: cellFmt && cellFmt.borderStyle
+                ? `${Math.max(1, Math.min(5, Number(cellFmt.borderWidth) || 1))}px ${cellFmt.borderStyle} ${cellFmt.borderColor || theme.border}`
+                : (reportFormat && reportFormat.borderStyle
+                    ? `${Math.max(1, Number(reportFormat.borderWidth) || 1)}px ${reportFormat.borderStyle} ${reportFormat.borderColor || theme.border}`
+                    : `1px solid ${theme.border}`),
             padding: isHierarchy
                 ? `4px 10px 4px ${Math.max(10, 10 + (depth * HIERARCHY_INDENT_PX))}px`
                 : '4px 10px',
-            textAlign: isHierarchy ? 'left' : 'right',
+            textAlign: cellFmt && ['left', 'center', 'right'].includes(cellFmt.textAlign)
+                ? cellFmt.textAlign
+                : (isHierarchy ? 'left' : 'right'),
             whiteSpace: isHierarchy ? 'pre' : 'nowrap',
             fontVariantNumeric: isHierarchy ? undefined : 'tabular-nums',
             fontWeight: cellFmt && cellFmt.bold
@@ -11317,6 +11327,7 @@ export default function DashTanstackPivot(props) {
             requestId: response.requestId || null,
             dataVersion: coerceTransportNumber(payload.dataVersion, null),
             rowCount: coerceTransportNumber(payload.rowCount, null),
+            stateQueuedAt: Date.now(),
         };
         if (payload.formulaErrors && typeof payload.formulaErrors === 'object') {
             setFormulaErrors(payload.formulaErrors);
@@ -11415,6 +11426,7 @@ export default function DashTanstackPivot(props) {
                 requestId: runtimeResponse.requestId || null,
                 dataVersion: coerceTransportNumber(payload.dataVersion, null),
                 rowCount: coerceTransportNumber(payload.rowCount, null),
+                stateQueuedAt: Date.now(),
             };
             setTransportDataState((previousState) => applyRuntimePatchEnvelope({
                 ...patchPayload,
@@ -11723,48 +11735,24 @@ export default function DashTanstackPivot(props) {
         }
 
         pendingDataProfilerCommitRef.current = null;
-        if (pendingDataProfilerFrameRef.current !== null && typeof window !== 'undefined' && typeof window.cancelAnimationFrame === 'function') {
-            window.cancelAnimationFrame(pendingDataProfilerFrameRef.current);
-            pendingDataProfilerFrameRef.current = null;
-        }
-
-        const finalizeCommit = () => {
-            pivotProfilerRef.current.resolve({
-                requestId: pendingCommit.requestId,
-                componentId: profilerComponentIdRef.current,
-                kind: 'data',
-                status: 'data',
-                committedAt: Date.now(),
-                meta: {
-                    dataVersion: Number(dataVersion),
-                    rowCount,
-                    dataOffset,
-                    columnsCount: Array.isArray(responseColumns) ? responseColumns.length : 0,
-                },
-            });
-            pendingDataProfilerFrameRef.current = null;
-        };
-
-        if (typeof window !== 'undefined' && typeof window.requestAnimationFrame === 'function') {
-            pendingDataProfilerFrameRef.current = window.requestAnimationFrame(finalizeCommit);
-            return () => {
-                if (pendingDataProfilerFrameRef.current !== null && typeof window.cancelAnimationFrame === 'function') {
-                    window.cancelAnimationFrame(pendingDataProfilerFrameRef.current);
-                    pendingDataProfilerFrameRef.current = null;
-                }
-            };
-        }
-
-        finalizeCommit();
+        const layoutCommittedAt = Date.now();
+        pivotProfilerRef.current.resolve({
+            requestId: pendingCommit.requestId,
+            componentId: profilerComponentIdRef.current,
+            kind: 'data',
+            status: 'data',
+            stateQueuedAt: pendingCommit.stateQueuedAt,
+            layoutCommittedAt,
+            committedAt: layoutCommittedAt,
+            meta: {
+                dataVersion: Number(dataVersion),
+                rowCount,
+                dataOffset,
+                columnsCount: Array.isArray(responseColumns) ? responseColumns.length : 0,
+            },
+        });
         return undefined;
     }, [dataOffset, dataVersion, responseColumns, rowCount]);
-
-    useEffect(() => () => {
-        if (pendingDataProfilerFrameRef.current !== null && typeof window !== 'undefined' && typeof window.cancelAnimationFrame === 'function') {
-            window.cancelAnimationFrame(pendingDataProfilerFrameRef.current);
-            pendingDataProfilerFrameRef.current = null;
-        }
-    }, []);
 
     const treeHasDefaultExpansion = useMemo(
         () => viewMode === 'tree' && hasTreeDefaultExpansionConfig(treeConfig),

@@ -26,6 +26,8 @@ try:
 except ImportError:
     pa = None
 
+from pivot_engine.util.sql_builder import quote_ident
+
 
 class IbisBackend:
     """
@@ -313,11 +315,11 @@ class IbisBackend:
             # Most SQL dialects support "CREATE INDEX [IF NOT EXISTS] name ON table (cols)"
             # We use a generic approach and handle exceptions
             
-            # Sanitize names (basic)
-            safe_table = table_name  # In real app, would need stricter sanitization
-            safe_cols = ", ".join([f'"{c}"' for c in columns])
-            
-            sql = f'CREATE INDEX IF NOT EXISTS "{index_name}" ON "{safe_table}" ({safe_cols})'
+            safe_table = quote_ident(table_name)
+            safe_index_name = quote_ident(index_name)
+            safe_cols = ", ".join(quote_ident(column) for column in columns)
+
+            sql = f"CREATE INDEX IF NOT EXISTS {safe_index_name} ON {safe_table} ({safe_cols})"
             
             # Execute raw SQL
             # Note: Ibis backends might vary in how they expose raw execution

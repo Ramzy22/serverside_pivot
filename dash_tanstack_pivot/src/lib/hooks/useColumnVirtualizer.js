@@ -101,7 +101,11 @@ export const useColumnVirtualizer = ({
     );
     /* eslint-enable react-hooks/exhaustive-deps */
 
-    const horizontalOverscan = Number.isFinite(Number(columnOverscan))
+    const horizontalOverscan = (
+        columnOverscan !== null
+        && columnOverscan !== undefined
+        && Number.isFinite(Number(columnOverscan))
+    )
         ? Math.max(0, Math.floor(Number(columnOverscan)))
         : (
             serverSide && Number.isFinite(Number(totalCenterCols)) && Number(totalCenterCols) >= 5000

@@ -50,12 +50,12 @@ def test_security_accepts_explicit_jwt_secret_in_production(monkeypatch):
     _restore_security_module()
 
 
-def test_security_keeps_development_jwt_secret_fallback(monkeypatch):
+def test_security_disables_jwt_when_secret_and_explicit_dev_opt_in_are_missing(monkeypatch):
     with monkeypatch.context() as env:
-        for name in ("ENV", "APP_ENV", "FLASK_ENV", "DASH_ENV", "JWT_SECRET_KEY"):
+        for name in ("ENV", "APP_ENV", "FLASK_ENV", "DASH_ENV", "JWT_SECRET_KEY", "ALLOW_DEV_AUTH"):
             env.delenv(name, raising=False)
         security = _reload_security()
-        assert security.JWT_SECRET_KEY == "dev-jwt-secret"
+        assert security.JWT_SECRET_KEY is None
 
     _restore_security_module()
 
@@ -96,6 +96,7 @@ def test_security_rejects_dev_auth_fallback_in_staging_even_with_allow_flag(monk
         env.setenv("ALLOW_DEV_AUTH", "1")
         env.delenv("PIVOT_API_KEY", raising=False)
         security = _reload_security()
+        assert security.JWT_SECRET_KEY is None
 
         with pytest.raises(security.HTTPException) as exc_info:
             asyncio.run(security.get_current_user(api_key=None, token=None))
@@ -126,6 +127,7 @@ def test_security_allows_dev_auth_only_with_explicit_local_flag_and_logs(monkeyp
         env.setenv("ALLOW_DEV_AUTH", "1")
         env.delenv("PIVOT_API_KEY", raising=False)
         security = _reload_security()
+        assert security.JWT_SECRET_KEY == "dev-jwt-secret"
 
         with caplog.at_level(logging.WARNING, logger=security.__name__):
             user = asyncio.run(security.get_current_user(api_key=None, token=None))
@@ -133,6 +135,27 @@ def test_security_allows_dev_auth_only_with_explicit_local_flag_and_logs(monkeyp
         assert user.username == "dev_admin"
         assert user.scopes == ["*"]
         assert "development authentication fallback" in caplog.text
+
+    _restore_security_module()
+
+
+def test_security_rejects_public_default_secret_forgery_without_local_opt_in(monkeypatch):
+    with monkeypatch.context() as env:
+        for name in ("ENV", "APP_ENV", "FLASK_ENV", "DASH_ENV", "JWT_SECRET_KEY", "ALLOW_DEV_AUTH"):
+            env.delenv(name, raising=False)
+        security = _reload_security()
+        if not security._jose_available:
+            pytest.skip("python-jose is not installed")
+        forged_token = security.jwt.encode(
+            {"sub": "attacker", "role": "admin", "scopes": ["*"]},
+            "dev-jwt-secret",
+            algorithm="HS256",
+        )
+
+        with pytest.raises(security.HTTPException) as exc_info:
+            asyncio.run(security.get_current_user(api_key=None, token=forged_token))
+
+        assert exc_info.value.status_code == security.status.HTTP_401_UNAUTHORIZED
 
     _restore_security_module()
 

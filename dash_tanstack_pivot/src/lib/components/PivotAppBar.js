@@ -1,4 +1,5 @@
 import React, { useState, useRef, useEffect, useMemo, useLayoutEffect } from 'react';
+import ReactDOM from 'react-dom';
 import Icons from '../utils/Icons';
 import { themes, buildEditedCellVisualStyle, colorToInputHex } from '../utils/styles';
 import { DEFAULT_CURRENCY_SYMBOL, formatValue, normalizeNumberGroupSeparator } from '../utils/helpers';
@@ -399,28 +400,102 @@ function NumberFormatDialog({
     );
 }
 
+const CELL_BORDER_STYLES = [
+    { value: '', label: 'No custom border' },
+    { value: 'solid', label: 'Solid' },
+    { value: 'dashed', label: 'Dashed' },
+    { value: 'dotted', label: 'Dotted' },
+    { value: 'double', label: 'Double' },
+];
+
+function CellColorField({ label, value, onChange, fallback, theme }) {
+    return (
+        <label style={{display: 'flex', flexDirection: 'column', gap: '5px', minWidth: 0}}>
+            <span style={{fontSize: '11px', color: theme.textSec, fontWeight: 600}}>{label}</span>
+            <div style={{display: 'flex', alignItems: 'center', gap: '6px'}}>
+                <input
+                    type="color"
+                    aria-label={`${label} color picker`}
+                    value={colorToInputHex(value, fallback)}
+                    onChange={(event) => onChange(event.target.value)}
+                    style={{width: '34px', height: '30px', border: `1px solid ${theme.border}`, padding: '2px', cursor: 'pointer', borderRadius: '6px', background: theme.background}}
+                />
+                <input
+                    type="text"
+                    aria-label={label}
+                    value={value}
+                    onChange={(event) => onChange(event.target.value)}
+                    placeholder={fallback}
+                    spellCheck={false}
+                    style={{flex: 1, width: 0, minWidth: 0, height: '30px', boxSizing: 'border-box', border: `1px solid ${theme.border}`, borderRadius: '6px', padding: '4px 7px', background: theme.background, color: theme.text, fontFamily: 'monospace', fontSize: '11px'}}
+                />
+            </div>
+        </label>
+    );
+}
+
 function CellFormatPopover({ theme, styles, cellFormatRules, setCellFormatRules, selectedCellKeys, onClose, anchorRef }) {
     const firstKey = selectedCellKeys && selectedCellKeys.length > 0 ? selectedCellKeys[0] : null;
     const current = (firstKey && cellFormatRules && cellFormatRules[firstKey]) || {};
     const editedCurrent = (cellFormatRules && cellFormatRules[EDITED_CELL_FORMAT_KEY]) || {};
-    const [bg, setBg] = useState(current.bg || '#ffffff');
-    const [color, setColor] = useState(current.color || '#000000');
+    const [bg, setBg] = useState(current.bg || '');
+    const [color, setColor] = useState(current.color || '');
     const [bold, setBold] = useState(current.bold || false);
     const [italic, setItalic] = useState(current.italic || false);
+    const [textAlign, setTextAlign] = useState(current.textAlign || '');
+    const [borderStyle, setBorderStyle] = useState(current.borderStyle || '');
+    const [borderColor, setBorderColor] = useState(current.borderColor || '');
+    const [borderWidth, setBorderWidth] = useState(current.borderWidth || 1);
     const [editedBg, setEditedBg] = useState(editedCurrent.bg || theme.editedCellBg || '#E8F1FF');
     const [editedColor, setEditedColor] = useState(editedCurrent.color || theme.editedCellText || theme.text || '#111827');
     const [editedBold, setEditedBold] = useState(editedCurrent.bold || false);
     const [editedItalic, setEditedItalic] = useState(editedCurrent.italic || false);
     const popoverRef = useRef(null);
+    const [popoverPosition, setPopoverPosition] = useState(null);
+
+    useLayoutEffect(() => {
+        const updatePosition = () => {
+            const anchor = anchorRef && anchorRef.current;
+            if (!anchor || typeof window === 'undefined') return;
+            const rect = anchor.getBoundingClientRect();
+            const viewportMargin = 12;
+            const gap = 6;
+            const width = Math.min(360, Math.max(280, window.innerWidth - (viewportMargin * 2)));
+            const left = Math.max(
+                viewportMargin,
+                Math.min(rect.left, window.innerWidth - width - viewportMargin),
+            );
+            const spaceBelow = window.innerHeight - rect.bottom - viewportMargin - gap;
+            const spaceAbove = rect.top - viewportMargin - gap;
+            const openAbove = spaceBelow < 360 && spaceAbove > spaceBelow;
+            const maxHeight = Math.max(240, openAbove ? spaceAbove : spaceBelow);
+            const top = openAbove
+                ? Math.max(viewportMargin, rect.top - Math.min(640, maxHeight) - gap)
+                : rect.bottom + gap;
+            setPopoverPosition({ left, top, width, maxHeight: Math.min(640, maxHeight) });
+        };
+
+        updatePosition();
+        window.addEventListener('resize', updatePosition);
+        window.addEventListener('scroll', updatePosition, true);
+        return () => {
+            window.removeEventListener('resize', updatePosition);
+            window.removeEventListener('scroll', updatePosition, true);
+        };
+    }, [anchorRef]);
 
     // Sync local state when selection changes
     useEffect(() => {
         const rule = (firstKey && cellFormatRules && cellFormatRules[firstKey]) || {};
-        setBg(rule.bg || '#ffffff');
-        setColor(rule.color || '#000000');
+        setBg(rule.bg || '');
+        setColor(rule.color || '');
         setBold(rule.bold || false);
         setItalic(rule.italic || false);
-    }, [firstKey, cellFormatRules]);
+        setTextAlign(rule.textAlign || '');
+        setBorderStyle(rule.borderStyle || '');
+        setBorderColor(rule.borderColor || '');
+        setBorderWidth(rule.borderWidth || 1);
+    }, [firstKey, cellFormatRules, theme.border]);
 
     useEffect(() => {
         const rule = (cellFormatRules && cellFormatRules[EDITED_CELL_FORMAT_KEY]) || {};
@@ -448,7 +523,18 @@ function CellFormatPopover({ theme, styles, cellFormatRules, setCellFormatRules,
         if (cellCount === 0) return;
         setCellFormatRules(prev => {
             const next = { ...prev };
-            selectedCellKeys.forEach(k => { next[k] = { bg, color, bold, italic }; });
+            selectedCellKeys.forEach(k => {
+                next[k] = {
+                    bg,
+                    color,
+                    bold,
+                    italic,
+                    textAlign,
+                    borderStyle,
+                    borderColor,
+                    borderWidth: Math.max(1, Math.min(5, Number(borderWidth) || 1)),
+                };
+            });
             return next;
         });
     };
@@ -487,83 +573,95 @@ function CellFormatPopover({ theme, styles, cellFormatRules, setCellFormatRules,
         { direct: true, propagated: false },
         { emphasizeText: true }
     ) || {};
+    const selectionPreviewStyle = {
+        background: bg || theme.background,
+        color: color || theme.text,
+        fontWeight: bold ? 700 : 400,
+        fontStyle: italic ? 'italic' : 'normal',
+        textAlign: textAlign || 'right',
+        border: borderStyle
+            ? `${Math.max(1, Math.min(5, Number(borderWidth) || 1))}px ${borderStyle} ${borderColor || theme.border}`
+            : `1px solid ${theme.border}`,
+    };
 
-    return (
-        <div ref={popoverRef} style={{
-            position: 'absolute',
-            top: '100%',
-            right: 0,
+    const popover = (
+        <div ref={popoverRef} data-cell-format-popover="true" style={{
+            position: 'fixed',
+            left: popoverPosition ? `${popoverPosition.left}px` : '12px',
+            top: popoverPosition ? `${popoverPosition.top}px` : '12px',
             zIndex: 9999,
             background: theme.background || '#fff',
             border: `1px solid ${theme.border}`,
-            borderRadius: '6px',
+            borderRadius: '10px',
             boxShadow: '0 4px 16px rgba(0,0,0,0.18)',
-            padding: '12px',
-            minWidth: '220px',
-            marginTop: '4px',
+            padding: '14px',
+            boxSizing: 'border-box',
+            width: popoverPosition ? `${popoverPosition.width}px` : 'min(360px, calc(100vw - 24px))',
+            maxWidth: 'calc(100vw - 24px)',
+            maxHeight: popoverPosition ? `${popoverPosition.maxHeight}px` : 'calc(100vh - 24px)',
+            overflowX: 'hidden',
+            overflowY: 'auto',
+            visibility: popoverPosition ? 'visible' : 'hidden',
+            overscrollBehavior: 'contain',
         }}>
-            <div style={{fontWeight: 600, fontSize: '13px', color: theme.text, marginBottom: '8px'}}>
-                Format Cell{cellCount > 1 ? ` (${cellCount} cells)` : ''}
+            <div style={{display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', gap: '12px', marginBottom: '12px'}}>
+                <div>
+                    <div style={{fontWeight: 750, fontSize: '14px', color: theme.text}}>
+                        Format cells
+                    </div>
+                    <div style={{fontSize: '11px', color: theme.textSec, marginTop: '2px'}}>
+                        {cellCount > 0 ? `${cellCount} selected cell${cellCount === 1 ? '' : 's'}` : 'No cells selected'}
+                    </div>
+                </div>
+                <button type="button" aria-label="Close cell formatting" onClick={onClose} style={{...styles.btn, padding: '3px 8px', background: theme.hover}}>×</button>
             </div>
             {cellCount === 0 ? (
                 <div style={{fontSize: '12px', color: theme.textSec, marginBottom: '10px'}}>Select cells to format, or tune the edited-cell highlight below.</div>
             ) : (
                 <>
-                    <div style={{fontSize: '11px', fontWeight: 700, color: theme.textSec, letterSpacing: '0.04em', textTransform: 'uppercase', marginBottom: '6px'}}>Selection</div>
-                    <div style={{display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '8px', marginBottom: '8px'}}>
-                        <div>
-                            <label style={{fontSize: '11px', color: theme.textSec, display: 'block', marginBottom: '3px'}}>Background</label>
-                            <div style={{display: 'flex', gap: '4px', alignItems: 'center'}}>
-                                <input type="color" value={bg} onChange={e => setBg(e.target.value)}
-                                    style={{width: '28px', height: '28px', border: 'none', padding: 0, cursor: 'pointer', borderRadius: '3px'}} />
-                                <span style={{fontSize: '11px', color: theme.textSec}}>{bg}</span>
-                            </div>
+                    <div style={{fontSize: '11px', fontWeight: 700, color: theme.textSec, letterSpacing: '0.04em', textTransform: 'uppercase', marginBottom: '8px'}}>Fill and text</div>
+                    <div style={{display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '10px', marginBottom: '10px'}}>
+                        <CellColorField label="Background" value={bg} onChange={setBg} fallback={colorToInputHex(theme.surfaceBg || theme.background, '#FFFFFF')} theme={theme} />
+                        <CellColorField label="Text color" value={color} onChange={setColor} fallback={colorToInputHex(theme.text, '#111827')} theme={theme} />
+                    </div>
+                    <div style={{display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '10px', marginBottom: '12px'}}>
+                        <div style={{display: 'flex', gap: '5px'}}>
+                            <button type="button" aria-pressed={bold} onClick={() => setBold(b => !b)} style={{...styles.btn, fontWeight: 'bold', background: bold ? theme.select : theme.hover, minWidth: '36px'}} title="Bold">B</button>
+                            <button type="button" aria-pressed={italic} onClick={() => setItalic(i => !i)} style={{...styles.btn, fontStyle: 'italic', background: italic ? theme.select : theme.hover, minWidth: '36px'}} title="Italic"><em>I</em></button>
                         </div>
-                        <div>
-                            <label style={{fontSize: '11px', color: theme.textSec, display: 'block', marginBottom: '3px'}}>Text Color</label>
-                            <div style={{display: 'flex', gap: '4px', alignItems: 'center'}}>
-                                <input type="color" value={color} onChange={e => setColor(e.target.value)}
-                                    style={{width: '28px', height: '28px', border: 'none', padding: 0, cursor: 'pointer', borderRadius: '3px'}} />
-                                <span style={{fontSize: '11px', color: theme.textSec}}>{color}</span>
-                            </div>
+                        <div role="group" aria-label="Cell alignment" style={{display: 'flex', gap: '3px'}}>
+                            {[['left', 'Left'], ['center', 'Center'], ['right', 'Right']].map(([value, label]) => (
+                                <button key={value} type="button" aria-label={`${label} align`} aria-pressed={textAlign === value} onClick={() => setTextAlign(textAlign === value ? '' : value)} style={{...styles.btn, background: textAlign === value ? theme.select : theme.hover, minWidth: '34px', padding: '4px 7px'}}>{label[0]}</button>
+                            ))}
                         </div>
                     </div>
-                    <div style={{display: 'flex', gap: '8px', marginBottom: '10px'}}>
-                        <button onClick={() => setBold(b => !b)}
-                            style={{...styles.btn, fontWeight: 'bold', background: bold ? theme.select : theme.hover, minWidth: '36px'}}
-                            title="Bold">B</button>
-                        <button onClick={() => setItalic(i => !i)}
-                            style={{...styles.btn, fontStyle: 'italic', background: italic ? theme.select : theme.hover, minWidth: '36px'}}
-                            title="Italic"><em>I</em></button>
+                    <div style={{fontSize: '11px', fontWeight: 700, color: theme.textSec, letterSpacing: '0.04em', textTransform: 'uppercase', marginBottom: '8px'}}>Border</div>
+                    <div style={{display: 'grid', gridTemplateColumns: '1.25fr 0.9fr 58px', gap: '8px', alignItems: 'end', marginBottom: '12px'}}>
+                        <label style={{display: 'flex', flexDirection: 'column', gap: '5px', fontSize: '11px', color: theme.textSec, fontWeight: 600}}>
+                            Style
+                            <select aria-label="Border style" value={borderStyle} onChange={(event) => setBorderStyle(event.target.value)} style={{height: '30px', border: `1px solid ${theme.border}`, borderRadius: '6px', background: theme.background, color: theme.text, fontSize: '11px'}}>
+                                {CELL_BORDER_STYLES.map((option) => <option key={option.value || 'none'} value={option.value}>{option.label}</option>)}
+                            </select>
+                        </label>
+                        <CellColorField label="Color" value={borderColor} onChange={setBorderColor} fallback="#CBD5E1" theme={theme} />
+                        <label style={{display: 'flex', flexDirection: 'column', gap: '5px', fontSize: '11px', color: theme.textSec, fontWeight: 600}}>
+                            Width
+                            <input aria-label="Border width" type="number" min="1" max="5" value={borderWidth} onChange={(event) => setBorderWidth(event.target.value)} disabled={!borderStyle} style={{height: '30px', width: '100%', boxSizing: 'border-box', border: `1px solid ${theme.border}`, borderRadius: '6px', padding: '4px 6px', background: theme.background, color: theme.text}} />
+                        </label>
                     </div>
-                    <div style={{display: 'flex', gap: '6px', marginBottom: '12px'}}>
-                        <button onClick={apply} style={{...styles.btn, background: theme.primary, color: '#fff', flex: 1}}>
-                            Apply{cellCount > 1 ? ` (${cellCount})` : ''}
-                        </button>
-                        <button onClick={clear} style={{...styles.btn, background: theme.hover, flex: 1}}>Clear</button>
+                    <div aria-label="Cell formatting preview" style={{...selectionPreviewStyle, borderRadius: '6px', minHeight: '38px', boxSizing: 'border-box', padding: '9px 12px', marginBottom: '12px', fontVariantNumeric: 'tabular-nums'}}>12,480.00</div>
+                    <div style={{display: 'flex', gap: '6px', marginBottom: '14px'}}>
+                        <button type="button" onClick={apply} style={{...styles.btn, background: theme.primary, color: '#fff', flex: 1}}>Apply to {cellCount}</button>
+                        <button type="button" onClick={clear} style={{...styles.btn, background: theme.hover}}>Clear formatting</button>
                     </div>
                 </>
             )}
             <div style={{ borderTop: `1px solid ${theme.border}`, paddingTop: '10px' }}>
-                <div style={{fontSize: '11px', fontWeight: 700, color: theme.textSec, letterSpacing: '0.04em', textTransform: 'uppercase', marginBottom: '4px'}}>Edited Cells</div>
+                <div style={{fontSize: '11px', fontWeight: 700, color: theme.textSec, letterSpacing: '0.04em', textTransform: 'uppercase', marginBottom: '4px'}}>Edited cells</div>
                 <div style={{fontSize: '11px', color: theme.textSec, marginBottom: '8px'}}>Used for direct edits and visible aggregate cells affected by the edit.</div>
-                <div style={{display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '8px', marginBottom: '8px'}}>
-                    <div>
-                        <label style={{fontSize: '11px', color: theme.textSec, display: 'block', marginBottom: '3px'}}>Background</label>
-                        <div style={{display: 'flex', gap: '4px', alignItems: 'center'}}>
-                            <input type="color" value={editedBg} onChange={e => setEditedBg(e.target.value)}
-                                style={{width: '28px', height: '28px', border: 'none', padding: 0, cursor: 'pointer', borderRadius: '3px'}} />
-                            <span style={{fontSize: '11px', color: theme.textSec}}>{editedBg}</span>
-                        </div>
-                    </div>
-                    <div>
-                        <label style={{fontSize: '11px', color: theme.textSec, display: 'block', marginBottom: '3px'}}>Text Color</label>
-                        <div style={{display: 'flex', gap: '4px', alignItems: 'center'}}>
-                            <input type="color" value={editedColor} onChange={e => setEditedColor(e.target.value)}
-                                style={{width: '28px', height: '28px', border: 'none', padding: 0, cursor: 'pointer', borderRadius: '3px'}} />
-                            <span style={{fontSize: '11px', color: theme.textSec}}>{editedColor}</span>
-                        </div>
-                    </div>
+                <div style={{display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '10px', marginBottom: '8px'}}>
+                    <CellColorField label="Background" value={editedBg} onChange={setEditedBg} fallback="#E8F1FF" theme={theme} />
+                    <CellColorField label="Text color" value={editedColor} onChange={setEditedColor} fallback="#111827" theme={theme} />
                 </div>
                 <div style={{display: 'flex', gap: '8px', marginBottom: '10px'}}>
                     <button onClick={() => setEditedBold(b => !b)}
@@ -594,6 +692,10 @@ function CellFormatPopover({ theme, styles, cellFormatRules, setCellFormatRules,
             </div>
         </div>
     );
+
+    return typeof document !== 'undefined'
+        ? ReactDOM.createPortal(popover, document.body)
+        : popover;
 }
 
 const THEME_CORE_COLOR_FIELDS = [

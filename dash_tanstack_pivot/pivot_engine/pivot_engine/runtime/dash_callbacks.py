@@ -92,6 +92,13 @@ def _get_triggered_props(ctx: Any) -> list[str]:
     return props
 
 
+def _is_request_scoped_trigger(trigger_prop: Any) -> bool:
+    """Return whether a Dash trigger carries fresh request-window metadata."""
+    return isinstance(trigger_prop, str) and trigger_prop.endswith(
+        (".runtimeRequest", ".viewport")
+    )
+
+
 def _extract_request_id(payload: Any) -> Optional[str]:
     if not isinstance(payload, dict):
         return None
@@ -829,11 +836,18 @@ def register_dash_pivot_transport_callback(
             )
 
         active_request_meta = request_payload
-        # When a non-runtime command prop (legacy cellUpdate/cellUpdates or bootstrap)
-        # triggers the callback, active_request_meta may carry the previous runtimeRequest
-        # with intent="viewport" and a stale window_seq. Force "structural" so the gate
-        # accepts the command instead of treating it as an old viewport refresh.
-        if not (isinstance(effective_trigger_prop, str) and effective_trigger_prop.endswith(".runtimeRequest")):
+        # Data runtime requests are routed through a synthetic ``.viewport`` trigger so
+        # PivotRequestContext.trigger_kind remains ``viewport``. Treat both that trigger
+        # and the real ``.runtimeRequest`` Dash prop as request-scoped. Otherwise every
+        # scroll request is incorrectly rewritten to ``structural``, which makes the
+        # backend emit structural/schema responses and can create a viewport re-request
+        # loop. A genuine non-request prop refresh can still carry the previous
+        # runtimeRequest value, so only that case is forced to structural.
+        request_scoped_trigger = (
+            _is_request_scoped_trigger(triggered_prop)
+            or _is_request_scoped_trigger(effective_trigger_prop)
+        )
+        if not request_scoped_trigger:
             active_request_meta = {**(active_request_meta if isinstance(active_request_meta, dict) else {}), "intent": "structural"}
         viewport_table = request_payload.get("table") if isinstance(request_payload, dict) else None
         request_table = active_request_meta.get("table") if isinstance(active_request_meta, dict) else None
@@ -861,7 +875,7 @@ def register_dash_pivot_transport_callback(
         # to process stale mode/fields and leave the UI/data out of sync.
         request_state_override = (
             _extract_request_state_override(request_payload)
-            if isinstance(effective_trigger_prop, str) and effective_trigger_prop.endswith(".runtimeRequest")
+            if request_scoped_trigger
             else None
         )
         effective_row_fields = _state_override_value(request_state_override, "rowFields", row_fields or [], list)

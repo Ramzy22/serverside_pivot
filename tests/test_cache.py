@@ -91,3 +91,28 @@ def test_cache_complex_value(cache):
     cache.set("complex", complex_table)
     retrieved = cache.get("complex")
     assert retrieved.equals(complex_table)
+
+
+def test_redis_cache_arrow_ipc_round_trip_without_redis_server():
+    class FakeRedisClient:
+        def __init__(self):
+            self.values = {}
+
+        def set(self, key, value, ex=None):
+            self.values[key] = value
+
+        def get(self, key):
+            return self.values.get(key)
+
+    cache_instance = RedisCache.__new__(RedisCache)
+    cache_instance.client = FakeRedisClient()
+    cache_instance.default_ttl = 10
+    expected = pa.table({"id": [1, 2], "label": ["one", "two"]})
+
+    cache_instance.set("arrow", expected)
+    cache_instance.set("json", {"enabled": True, "count": 2})
+    cache_instance.set("pickle", ("tuple", 3))
+
+    assert cache_instance.get("arrow").equals(expected)
+    assert cache_instance.get("json") == {"enabled": True, "count": 2}
+    assert cache_instance.get("pickle") == ("tuple", 3)

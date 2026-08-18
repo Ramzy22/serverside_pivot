@@ -10,6 +10,7 @@ from typing import Dict, Any, List, Optional, Union
 import ibis
 from ibis import BaseBackend as IbisBaseBackend
 from pivot_engine.types.pivot_spec import PivotSpec
+from pivot_engine.util.sql_builder import quote_ident
 
 
 class MaterializedHierarchyManager:
@@ -167,9 +168,10 @@ class MaterializedHierarchyManager:
             hash_suffix = hashlib.md5(cols_str.encode()).hexdigest()[:8]
             index_name = f"idx_{table_name}_{hash_suffix}"[:63]
             
-            safe_table = table_name
-            safe_cols = ", ".join([f'"{c}"' for c in columns])
-            sql = f'CREATE INDEX IF NOT EXISTS "{index_name}" ON "{safe_table}" ({safe_cols})'
+            safe_table = quote_ident(table_name)
+            safe_index_name = quote_ident(index_name)
+            safe_cols = ", ".join(quote_ident(column) for column in columns)
+            sql = f"CREATE INDEX IF NOT EXISTS {safe_index_name} ON {safe_table} ({safe_cols})"
             
             if hasattr(self.backend, 'raw_sql'):
                  res = self.backend.raw_sql(sql)

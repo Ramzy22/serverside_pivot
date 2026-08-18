@@ -1690,6 +1690,32 @@ const SvgChart = ({
         };
     }, [axisMode, model, chartType, stackedAreaMode, stackedChildBarMode, stackedSeriesBarMode, horizontalBarMode, effectiveChartHeight, resolvedChartWidth, stacked100Mode, yAxisMin, yAxisMax, effectiveLabelAngle, fmt]);
 
+    const categoryAxisLabelPlan = useMemo(() => {
+        if (!geometry || geometry.horizontalBarMode || geometry.hasHierarchicalBands) {
+            return { visibleIndexes: null, maxChars: 20, stride: 1 };
+        }
+        const categories = Array.isArray(model && model.categories) ? model.categories : [];
+        if (categories.length <= 1) return { visibleIndexes: null, maxChars: 20, stride: 1 };
+
+        const maxChars = geometry.step < 42 ? 12 : (geometry.step < 70 ? 16 : 20);
+        const widestLabel = categories.reduce((width, category) => (
+            Math.max(width, estimateTextWidth(truncateChartLabel(category, maxChars), 11))
+        ), 0);
+        const radians = Math.abs(effectiveLabelAngle) * (Math.PI / 180);
+        const projectedWidth = effectiveLabelAngle === 0
+            ? widestLabel
+            : (Math.abs(Math.cos(radians)) * widestLabel) + (Math.abs(Math.sin(radians)) * 12);
+        const stride = Math.max(1, Math.ceil((projectedWidth + 12) / Math.max(geometry.step, 1)));
+        if (stride === 1) return { visibleIndexes: null, maxChars, stride };
+
+        const visibleIndexes = new Set();
+        for (let index = 0; index < categories.length; index += stride) visibleIndexes.add(index);
+        const finalIndex = categories.length - 1;
+        const lastRegularIndex = Math.floor(finalIndex / stride) * stride;
+        if (finalIndex - lastRegularIndex >= Math.ceil(stride * 0.6)) visibleIndexes.add(finalIndex);
+        return { visibleIndexes, maxChars, stride };
+    }, [effectiveLabelAngle, geometry, model]);
+
     if (chartType === 'sparkline') {
         return (
             <div
@@ -4070,11 +4096,13 @@ const SvgChart = ({
                     </>
                 ) : (
                     model.categories.map((category, categoryIndex) => {
+                        if (categoryAxisLabelPlan.visibleIndexes && !categoryAxisLabelPlan.visibleIndexes.has(categoryIndex)) return null;
                         const x = geometry.margin.left + (categoryIndex * geometry.step) + (geometry.step / 2);
                         return (
                             <g key={`label-${categoryIndex}`} transform={`translate(${x}, ${effectiveChartHeight - geometry.margin.bottom + 18}) rotate(${effectiveLabelAngle})`}>
                                 <text textAnchor={effectiveLabelAngle === 0 ? 'middle' : 'start'} fontSize="11" fill={theme.textSec} data-chart-element-type="axis" data-chart-element-id="x" style={onElementSelect ? { cursor: 'pointer' } : undefined}>
-                                    {truncateChartLabel(category, 20)}
+                                    <title>{String(category)}</title>
+                                    {truncateChartLabel(category, categoryAxisLabelPlan.maxChars)}
                                 </text>
                             </g>
                         );

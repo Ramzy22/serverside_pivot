@@ -16,6 +16,7 @@ from .backends.ibis_backend import IbisBackend
 from .cache.memory_cache import MemoryCache
 from .cache.redis_cache import RedisCache
 from .types.pivot_spec import PivotSpec
+from .util.sql_builder import quote_ident
 
 def sanitize_column_name(value: str) -> str:
     """Sanitize an arbitrary value into a safe SQL identifier (letters, digits, underscore only)."""
@@ -660,8 +661,11 @@ class PivotController:
         else:
             # Fallback: try DuckDB-specific approach
             if hasattr(self.backend, 'con'):
-                self.backend.con.execute(f"DROP TABLE IF EXISTS {table_name}")
-                self.backend.con.execute(f"CREATE TABLE {table_name} AS SELECT * FROM arrow_table")
+                quoted_table_name = quote_ident(table_name)
+                self.backend.con.execute(f"DROP TABLE IF EXISTS {quoted_table_name}")
+                self.backend.con.execute(
+                    f"CREATE TABLE {quoted_table_name} AS SELECT * FROM arrow_table"
+                )
 
         if register_checkpoint:
             # Just call the diff_engine method if it exists, otherwise skip

@@ -6,6 +6,12 @@ It supports both polling-based detection (for standard databases) and push-based
 detection (for webhook/event-driven sources).
 """
 import asyncio
+import base64
+import datetime as dt
+import decimal
+import hashlib
+import json
+import math
 import time
 from abc import ABC, abstractmethod
 from typing import Dict, Any, AsyncGenerator, Optional, List, Union
@@ -104,6 +110,54 @@ class PollingCDCProvider(CDCProvider):
         self.backend = backend  # This is an Ibis connection object
         self.table_snapshots: Dict[str, TableSnapshot] = {}
         self.running = False
+
+    @classmethod
+    def _canonical_snapshot_value(cls, value: Any) -> Any:
+        """Return a deterministic, type-preserving JSON representation."""
+        if value is None or isinstance(value, (bool, int, str)):
+            return value
+        if isinstance(value, float):
+            if math.isnan(value):
+                return {"__float__": "nan"}
+            if math.isinf(value):
+                return {"__float__": "inf" if value > 0 else "-inf"}
+            return value
+        if isinstance(value, bytes):
+            return {"__bytes__": base64.b64encode(value).decode("ascii")}
+        if isinstance(value, decimal.Decimal):
+            return {"__decimal__": str(value)}
+        if isinstance(value, (dt.datetime, dt.date, dt.time)):
+            return {f"__{type(value).__name__}__": value.isoformat()}
+        if isinstance(value, dict):
+            return {
+                str(key): cls._canonical_snapshot_value(item)
+                for key, item in sorted(value.items(), key=lambda pair: str(pair[0]))
+            }
+        if isinstance(value, (list, tuple)):
+            return [cls._canonical_snapshot_value(item) for item in value]
+        return {
+            "__type__": f"{type(value).__module__}.{type(value).__qualname__}",
+            "value": repr(value),
+        }
+
+    @classmethod
+    def _table_checksum(cls, arrow_table: Any) -> str:
+        """Hash a table as a row multiset, independent of backend row order."""
+        row_hashes = []
+        for row in arrow_table.to_pylist():
+            canonical_row = cls._canonical_snapshot_value(row)
+            encoded = json.dumps(
+                canonical_row,
+                ensure_ascii=False,
+                sort_keys=True,
+                separators=(",", ":"),
+            ).encode("utf-8")
+            row_hashes.append(hashlib.sha256(encoded).digest())
+
+        digest = hashlib.sha256(str(arrow_table.schema).encode("utf-8"))
+        for row_hash in sorted(row_hashes):
+            digest.update(row_hash)
+        return digest.hexdigest()
         
     async def start_tracking_table(self, table_name: str):
         """Start tracking changes for a specific table"""
@@ -118,33 +172,40 @@ class PollingCDCProvider(CDCProvider):
             del self.table_snapshots[table_name]
     
     async def _take_snapshot(self, table_name: str) -> TableSnapshot:
-        """Take a snapshot of the table data using Ibis expressions."""
+        """Take an exact, order-independent content snapshot of an Ibis table.
+
+        Polling for arbitrary in-place updates requires reading all rows. Callers
+        that need low-overhead CDC for large tables should use PushCDCProvider or
+        a database-native change stream instead.
+        """
         ibis_table = self.backend.table(table_name)
-        
-        # Get row count
-        row_count = ibis_table.count().execute()
-        
-        # Get a simple checksum using row count for backend agnosticism.
-        checksum = str(row_count)
-        
-        # Get sample data
-        sample_data_pyarrow = ibis_table.limit(5).to_pyarrow()
-        sample_data = sample_data_pyarrow.to_pylist() if sample_data_pyarrow.num_rows > 0 else []
-        
-        # Capture incremental markers if available
+
+        snapshot_table = ibis_table.to_pyarrow()
+        row_count = snapshot_table.num_rows
+        sample_data = snapshot_table.slice(0, 5).to_pylist()
+        checksum = self._table_checksum(snapshot_table)
+
+        # Keep incremental markers for identifying newly inserted rows.
         max_id = None
         max_updated_at = None
-        
-        cols = ibis_table.columns
+
+        cols = snapshot_table.column_names
         if 'id' in cols:
             try:
-                max_id = ibis_table['id'].max().execute()
-            except: pass
-            
+                id_values = [value for value in snapshot_table['id'].to_pylist() if value is not None]
+                max_id = max(id_values) if id_values else None
+            except (TypeError, ValueError):
+                max_id = None
+
         if 'updated_at' in cols:
             try:
-                max_updated_at = ibis_table['updated_at'].max().execute()
-            except: pass
+                updated_values = [
+                    value for value in snapshot_table['updated_at'].to_pylist()
+                    if value is not None
+                ]
+                max_updated_at = max(updated_values) if updated_values else None
+            except (TypeError, ValueError):
+                max_updated_at = None
         
         return TableSnapshot(
             table_name=table_name,

@@ -10,6 +10,7 @@ import copy
 from functools import cmp_to_key
 import logging
 import math
+import os
 import re
 import time
 import json
@@ -31,7 +32,20 @@ from .hierarchy_rows import (
 _adapter_logger = logging.getLogger("pivot_engine.adapter")
 _FORMULA_IDENTIFIER_RE = re.compile(r"\b[A-Za-z_][A-Za-z0-9_]*\b")
 _INITIAL_SCHEMA_WINDOW_CENTER_COLS = 24
-_LOCAL_CACHE_TTL_SECONDS = 10.0
+
+
+def _positive_env_float(name: str, default: float) -> float:
+    try:
+        value = float(os.environ.get(name, default))
+    except (TypeError, ValueError):
+        return default
+    return value if value > 0 else default
+
+
+# These caches are generation-keyed and explicitly invalidated after data changes.
+# A 10-second TTL caused periodic full column-catalog and hierarchy recomputation
+# during ordinary scrolling, so keep hot viewport state for a realistic session.
+_LOCAL_CACHE_TTL_SECONDS = _positive_env_float("PIVOT_VIEWPORT_CACHE_TTL_SECONDS", 300.0)
 _PIVOT_CATALOG_CACHE_SIZE = 32
 _RESPONSE_WINDOW_CACHE_SIZE = 128
 _ROW_BLOCK_CACHE_SIZE = 1024

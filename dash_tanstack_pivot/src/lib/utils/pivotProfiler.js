@@ -50,6 +50,8 @@ const deriveTimings = (entry) => {
     const queuedAt = Number.isFinite(entry.queuedAt) ? entry.queuedAt : null;
     const emittedAt = Number.isFinite(entry.emittedAt) ? entry.emittedAt : null;
     const responseReceivedAt = Number.isFinite(entry.responseReceivedAt) ? entry.responseReceivedAt : null;
+    const stateQueuedAt = Number.isFinite(entry.stateQueuedAt) ? entry.stateQueuedAt : null;
+    const layoutCommittedAt = Number.isFinite(entry.layoutCommittedAt) ? entry.layoutCommittedAt : null;
     const committedAt = Number.isFinite(entry.committedAt) ? entry.committedAt : null;
     const finishedAt = Number.isFinite(entry.finishedAt)
         ? entry.finishedAt
@@ -59,7 +61,15 @@ const deriveTimings = (entry) => {
     return {
         queueMs: queuedAt !== null && emittedAt !== null ? roundMs(emittedAt - queuedAt) : null,
         responseMs: emittedAt !== null && responseReceivedAt !== null ? roundMs(responseReceivedAt - emittedAt) : null,
-        renderMs: responseReceivedAt !== null && committedAt !== null ? roundMs(committedAt - responseReceivedAt) : null,
+        responseHandoffMs: responseReceivedAt !== null && stateQueuedAt !== null
+            ? roundMs(stateQueuedAt - responseReceivedAt)
+            : null,
+        reactCommitMs: stateQueuedAt !== null && layoutCommittedAt !== null
+            ? roundMs(layoutCommittedAt - stateQueuedAt)
+            : null,
+        renderMs: responseReceivedAt !== null && layoutCommittedAt !== null
+            ? roundMs(layoutCommittedAt - responseReceivedAt)
+            : null,
         totalMs: startedAt !== null && finishedAt !== null ? roundMs(finishedAt - startedAt) : null,
         callbackMs: entry.profile?.callback?.totalMs ?? null,
         serviceMs: entry.profile?.service?.totalMs ?? null,
@@ -124,6 +134,8 @@ const createPivotProfiler = () => {
             emittedAt: meta.emittedAt ?? null,
             queuedAt: meta.queuedAt ?? null,
             responseReceivedAt: meta.responseReceivedAt ?? null,
+            stateQueuedAt: meta.stateQueuedAt ?? null,
+            layoutCommittedAt: meta.layoutCommittedAt ?? null,
             committedAt: meta.committedAt ?? null,
             finishedAt: meta.finishedAt ?? null,
             profile: meta.profile && typeof meta.profile === 'object' ? { ...meta.profile } : null,

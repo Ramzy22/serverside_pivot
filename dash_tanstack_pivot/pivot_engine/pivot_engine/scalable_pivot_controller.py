@@ -7,6 +7,7 @@ import time
 import decimal
 import datetime
 import math
+import os
 from contextlib import nullcontext
 import re
 import json
@@ -49,6 +50,14 @@ from pivot_engine.cdc.cdc_manager import PivotCDCManager
 from pivot_engine.materialized_hierarchy_manager import MaterializedHierarchyManager
 from pivot_engine.intelligent_prefetch_manager import IntelligentPrefetchManager, UserPatternAnalyzer
 from pivot_engine.pruning_manager import HierarchyPruningManager, ProgressiveHierarchicalLoader
+
+
+def _positive_env_float(name: str, default: float) -> float:
+    try:
+        value = float(os.environ.get(name, default))
+    except (TypeError, ValueError):
+        return default
+    return value if value > 0 else default
 
 
 class QueryStatsTracker:
@@ -202,17 +211,18 @@ class ScalablePivotController(PivotController):
         self.cdc_manager = None  # Will be set via setup_cdc method
         
         self.stats_tracker = QueryStatsTracker()
+        hierarchy_cache_ttl = _positive_env_float("PIVOT_HIERARCHY_CACHE_TTL_SECONDS", 300.0)
         self._hierarchy_view_cache: OrderedDict[str, tuple[Dict[str, Any], float]] = OrderedDict()
-        self._hierarchy_view_cache_ttl = 10.0
+        self._hierarchy_view_cache_ttl = hierarchy_cache_ttl
         self._hierarchy_view_cache_size = 32
         self._hierarchy_root_count_cache: OrderedDict[str, tuple[int, float]] = OrderedDict()
-        self._hierarchy_root_count_cache_ttl = 30.0
+        self._hierarchy_root_count_cache_ttl = hierarchy_cache_ttl
         self._hierarchy_root_count_cache_size = 64
         self._hierarchy_root_page_cache: OrderedDict[str, tuple[List[Any], float]] = OrderedDict()
-        self._hierarchy_root_page_cache_ttl = 30.0
+        self._hierarchy_root_page_cache_ttl = hierarchy_cache_ttl
         self._hierarchy_root_page_cache_size = 128
         self._hierarchy_grand_total_cache: OrderedDict[str, tuple[Dict[str, Any], float]] = OrderedDict()
-        self._hierarchy_grand_total_cache_ttl = 30.0
+        self._hierarchy_grand_total_cache_ttl = hierarchy_cache_ttl
         self._hierarchy_grand_total_cache_size = 64
         self._register_hierarchy_cache_namespaces()
         self._sparse_materialized_pivot_threshold = 8

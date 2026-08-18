@@ -2,6 +2,7 @@ import pytest
 import asyncio
 from unittest.mock import MagicMock, AsyncMock, patch
 from pivot_engine.cdc.cdc_manager import PivotCDCManager
+from pivot_engine.cdc.database_change_detector import PollingCDCProvider
 from pivot_engine.cdc.models import Change
 from pivot_engine.scalable_pivot_controller import ScalablePivotController
 import pyarrow as pa
@@ -171,3 +172,38 @@ async def test_update_affected_cache_keys(cdc_manager):
     # Verify cache invalidation was called
     assert cdc_manager.database.cache._find_and_invalidate_affected_cache_keys.called
     cdc_manager.database.cache._find_and_invalidate_affected_cache_keys.assert_called_with("test_table")
+
+
+@pytest.mark.asyncio
+async def test_polling_cdc_detects_update_outside_previous_five_row_sample():
+    rows = [{"id": index, "value": f"value-{index}"} for index in range(1, 7)]
+
+    class MutableTable:
+        columns = ["id", "value"]
+
+        def to_pyarrow(self):
+            return pa.Table.from_pylist(rows)
+
+        def __getitem__(self, column):
+            mock_column = MagicMock()
+            mock_column.max.return_value.execute.return_value = max(row[column] for row in rows)
+            return mock_column
+
+    class MutableBackend:
+        def table(self, _table_name):
+            return MutableTable()
+
+    provider = PollingCDCProvider(MutableBackend())
+    await provider.start_tracking_table("sales")
+    rows[5]["value"] = "updated-outside-old-sample"
+
+    changes = await provider.detect_changes("sales")
+
+    assert [change.type for change in changes] == ["UPDATE"]
+
+
+def test_polling_cdc_checksum_is_independent_of_backend_row_order():
+    first = pa.Table.from_pylist([{"id": 1, "value": "a"}, {"id": 2, "value": "b"}])
+    reversed_rows = pa.Table.from_pylist([{"id": 2, "value": "b"}, {"id": 1, "value": "a"}])
+
+    assert PollingCDCProvider._table_checksum(first) == PollingCDCProvider._table_checksum(reversed_rows)

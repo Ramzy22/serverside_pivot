@@ -27,6 +27,7 @@ from pivot_engine.runtime.dash_callbacks import (
     _externalize_export_payload,
     _format_transport_callback_output,
     _is_bootstrap_without_viewport,
+    _is_request_scoped_trigger,
     _normalize_transport_request,
     _register_runtime_payload_endpoint,
     _state_override_value,
@@ -565,6 +566,14 @@ def test_runtime_request_wins_when_present():
 
     assert request["kind"] == "data"
     assert request["request_id"] == "req-runtime"
+
+
+def test_runtime_and_viewport_triggers_are_request_scoped():
+    assert _is_request_scoped_trigger("pivot-grid.runtimeRequest") is True
+    assert _is_request_scoped_trigger("pivot-grid.viewport") is True
+    assert _is_request_scoped_trigger("pivot-grid.rowFields") is False
+    assert _is_request_scoped_trigger("pivot-grid.cellUpdates") is False
+    assert _is_request_scoped_trigger(None) is False
 
 
 def test_runtime_request_state_override_is_extracted_for_all_request_kinds():

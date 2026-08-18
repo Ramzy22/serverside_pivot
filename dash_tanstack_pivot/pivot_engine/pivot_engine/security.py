@@ -67,7 +67,7 @@ def _get_development_auth_fallback_user() -> "User":
     return _get_dev_user()
 
 
-def _load_jwt_secret_key() -> str:
+def _load_jwt_secret_key() -> Optional[str]:
     configured_secret = os.getenv("JWT_SECRET_KEY")
     if configured_secret and configured_secret != DEFAULT_JWT_SECRET_KEY:
         return configured_secret
@@ -75,7 +75,16 @@ def _load_jwt_secret_key() -> str:
         raise RuntimeError(
             "JWT_SECRET_KEY must be set to a non-default value in production."
         )
-    return configured_secret or DEFAULT_JWT_SECRET_KEY
+    if _allow_development_auth_fallbacks():
+        _LOGGER.warning(
+            "Using the default JWT secret in an explicitly enabled local "
+            "development environment."
+        )
+        return DEFAULT_JWT_SECRET_KEY
+    # JWT authentication remains disabled when it is not configured. This is
+    # fail-closed without making API-key-only or embedded library use fail at
+    # import time.
+    return None
 
 
 # Configuration
@@ -140,6 +149,17 @@ async def get_current_user(
             
     # 2. JWT Authentication (Human User / OIDC)
     if token:
+        if not _jose_available:
+            raise HTTPException(
+                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                detail="JWT authentication support is unavailable",
+            )
+        if not JWT_SECRET_KEY:
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail="JWT authentication is not configured",
+                headers={"WWW-Authenticate": "Bearer"},
+            )
         try:
             payload = jwt.decode(token, JWT_SECRET_KEY, algorithms=[JWT_ALGORITHM])
             username: str = payload.get("sub")

@@ -1,3 +1,5 @@
+import threading
+
 from pivot_engine.runtime import SessionRequestGate
 
 
@@ -56,3 +58,31 @@ def test_client_instance_isolation_prevents_cross_mount_stale_poisoning():
     assert gate.response_is_current(
         session, state_epoch=1, window_seq=1, abort_generation=1, intent="structural", client_instance="new"
     )
+
+
+def test_concurrent_registration_never_regresses_accepted_window_sequence():
+    gate = SessionRequestGate()
+    barrier = threading.Barrier(64)
+    accepted = []
+    accepted_lock = threading.Lock()
+
+    def register(sequence):
+        barrier.wait()
+        result = gate.register_request(
+            "concurrent",
+            state_epoch=1,
+            window_seq=sequence,
+            abort_generation=0,
+            intent="viewport",
+        )
+        with accepted_lock:
+            accepted.append((sequence, result))
+
+    threads = [threading.Thread(target=register, args=(sequence,)) for sequence in range(1, 65)]
+    for thread in threads:
+        thread.start()
+    for thread in threads:
+        thread.join()
+
+    highest_accepted = max(sequence for sequence, result in accepted if result)
+    assert gate._read_state("concurrent")["window_seq"] == highest_accepted

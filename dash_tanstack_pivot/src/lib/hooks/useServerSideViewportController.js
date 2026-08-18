@@ -595,7 +595,12 @@ export const useServerSideViewportController = ({
 
     const serverSideBlockSize = useMemo(() => {
         if (!serverSide) return 100;
-        const configuredBlockSize = Number.isFinite(Number(performanceConfig && performanceConfig.cacheBlockSize))
+        const configuredCacheBlockSize = performanceConfig && performanceConfig.cacheBlockSize;
+        const configuredBlockSize = (
+            configuredCacheBlockSize !== null
+            && configuredCacheBlockSize !== undefined
+            && Number.isFinite(Number(configuredCacheBlockSize))
+        )
             ? Math.max(16, Math.min(1024, Math.floor(Number(performanceConfig.cacheBlockSize))))
             : null;
         if (configuredBlockSize !== null) return configuredBlockSize;

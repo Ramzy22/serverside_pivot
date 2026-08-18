@@ -674,8 +674,12 @@ export const describeTransactionPropagation = (entry) => {
 export const isEditableKeyboardTarget = (target) => {
     if (!target || typeof target !== 'object') return false;
     const tagName = typeof target.tagName === 'string' ? target.tagName.toUpperCase() : '';
+    const editableAncestor = typeof target.closest === 'function'
+        ? target.closest('input, textarea, select, [contenteditable="true"], [contenteditable="plaintext-only"]')
+        : null;
     return Boolean(
         target.isContentEditable
+        || editableAncestor
         || tagName === 'INPUT'
         || tagName === 'TEXTAREA'
         || tagName === 'SELECT'

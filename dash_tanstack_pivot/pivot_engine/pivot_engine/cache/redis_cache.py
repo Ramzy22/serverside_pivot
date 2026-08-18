@@ -52,10 +52,10 @@ class RedisCache:
         cached_value = self.client.get(key)
         if cached_value:
             try:
-                # Try to deserialize as Arrow table first (for backward compatibility)
+                # Arrow values are written as an IPC stream in set().
                 buffer = pa.py_buffer(cached_value)
-                return ipc.read_table(buffer)
-            except pa.lib.ArrowInvalid:
+                return ipc.open_stream(buffer).read_all()
+            except (pa.ArrowInvalid, OSError):
                 # Try to deserialize as JSON
                 try:
                     return json.loads(cached_value.decode('utf-8'))
@@ -82,8 +82,10 @@ class RedisCache:
 
         # Serialize based on type
         if isinstance(value, pa.Table):
-            # For Arrow tables, use IPC format (optimal)
-            buffer = ipc.serialize_table(value).to_pybytes()
+            sink = pa.BufferOutputStream()
+            with ipc.new_stream(sink, value.schema) as writer:
+                writer.write_table(value)
+            buffer = sink.getvalue().to_pybytes()
         elif isinstance(value, (dict, list, str, int, float, bool, type(None))):
             # For JSON-serializable types, use JSON
             buffer = json.dumps(value).encode('utf-8')
