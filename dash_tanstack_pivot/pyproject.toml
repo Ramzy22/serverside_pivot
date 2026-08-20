@@ -51,6 +51,7 @@ packages = [
     "pivot_engine.cdc",
     "pivot_engine.common",
     "pivot_engine.diff",
+    "pivot_engine.editing",
     "pivot_engine.planner",
     "pivot_engine.runtime",
     "pivot_engine.streaming",
