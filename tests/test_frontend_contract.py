@@ -5,6 +5,8 @@ import pyarrow as pa
 import sys
 import os
 import re
+import shutil
+import subprocess
 import time
 from pathlib import Path
 from concurrent.futures import ThreadPoolExecutor
@@ -16,6 +18,44 @@ sys.path.append(os.path.join(os.getcwd(), 'dash_tanstack_pivot'))
 
 from pivot_engine.tanstack_adapter import create_tanstack_adapter, TanStackRequest, TanStackOperation
 from pivot_engine.types.pivot_spec import PivotSpec, Measure, PivotConfig
+
+
+def test_tabular_value_resolution_executes_source_against_runtime_hierarchy_rows():
+    node = shutil.which("node")
+    if not node:
+        pytest.skip("Node.js is required for the frontend source regression")
+
+    script = Path(__file__).with_name("frontend_tabular_value_resolution.cjs")
+    result = subprocess.run(
+        [node, str(script)],
+        cwd=Path(__file__).resolve().parents[1],
+        capture_output=True,
+        text=True,
+        timeout=30,
+        check=False,
+    )
+
+    assert result.returncode == 0, result.stderr or result.stdout
+    assert "tabular hierarchy value resolution passed" in result.stdout
+
+
+def test_column_virtualizer_refreshes_same_shape_columns_on_layout_transition():
+    node = shutil.which("node")
+    if not node:
+        pytest.skip("Node.js is required for the frontend source regression")
+
+    script = Path(__file__).with_name("frontend_column_list_transition.cjs")
+    result = subprocess.run(
+        [node, str(script)],
+        cwd=Path(__file__).resolve().parents[1],
+        capture_output=True,
+        text=True,
+        timeout=30,
+        check=False,
+    )
+
+    assert result.returncode == 0, result.stderr or result.stdout
+    assert "column virtualizer layout transition passed" in result.stdout
 
 # Reuse the data generation logic from app.py
 def create_test_data(adapter, rows=1000):
@@ -105,6 +145,29 @@ def test_server_side_sorting_is_emitted_with_runtime_request_only():
     assert "will send sorting and the runtimeRequest in one update" in handle_sorting_change.group(0)
 
 
+def test_server_side_sorting_starts_a_new_structural_cache_epoch():
+    component_source = Path(
+        os.path.join(
+            os.getcwd(),
+            "dash_tanstack_pivot",
+            "src",
+            "lib",
+            "components",
+            "DashTanstackPivot.react.js",
+        )
+    ).read_text(encoding="utf-8")
+
+    sorting_only_branch = re.search(
+        r"if \(isSortingOnly\) \{.*?\n\s*return;\n\s*\}",
+        component_source,
+        re.S,
+    )
+
+    assert sorting_only_branch is not None
+    assert "const tx = beginStructuralTransaction();" in sorting_only_branch.group(0)
+    assert "const tx = beginExpansionRequest();" not in sorting_only_branch.group(0)
+
+
 def test_expansion_anchor_uses_configured_server_side_block_size():
     component_source = Path(
         os.path.join(
@@ -119,6 +182,27 @@ def test_expansion_anchor_uses_configured_server_side_block_size():
 
     assert "Math.floor(toggledRow.__virtualIndex / serverSideBlockSize)" in component_source
     assert "Math.floor(toggledRow.__virtualIndex / 100)" not in component_source
+
+
+def test_server_side_single_collapse_preserves_expand_all_default_for_offscreen_rows():
+    component_source = Path(
+        os.path.join(
+            os.getcwd(),
+            "dash_tanstack_pivot",
+            "src",
+            "lib",
+            "components",
+            "DashTanstackPivot.react.js",
+        )
+    ).read_text(encoding="utf-8")
+
+    assert "const EXPAND_ALL_STATE_KEY = '__ALL__';" in component_source
+    assert "expanded[EXPAND_ALL_STATE_KEY] === true" in component_source
+    assert "if (nextExpanded[EXPAND_ALL_STATE_KEY] === true) return nextExpanded;" in component_source
+    assert "Object.keys(table.getRowModel().rowsById).forEach((rowId)" in component_source
+    assert "[EXPAND_ALL_STATE_KEY]: true" in component_source
+    assert "normalizedRawExpanded[toggledExpandedPath] = false;" in component_source
+    assert "delete normalizedRawExpanded[toggledExpandedPath];" in component_source
 
 
 def test_dash_presentation_app_includes_single_pivot_sparkline_modes_demo():
@@ -701,6 +785,57 @@ def test_resized_chart_panel_samples_dense_axis_labels():
     assert "observer.observe(element);" in chart_source
 
 
+def test_chart_panel_immersive_chrome_lock_and_export_menu_are_explicit():
+    chart_source = Path(
+        os.path.join(
+            os.getcwd(),
+            "dash_tanstack_pivot",
+            "src",
+            "lib",
+            "components",
+            "Charts",
+            "PivotCharts.js",
+        )
+    ).read_text(encoding="utf-8")
+
+    assert "const immersiveLegendReserve" in chart_source
+    assert "title={immersiveMode ? resolvedTitle : null}" in chart_source
+    assert "chartTitle={immersiveMode ? '' : resolvedTitle}" in chart_source
+    assert "aria-label=\"Chart export formats\"" in chart_source
+    assert "SVG image" in chart_source
+    assert "PNG image" in chart_source
+    assert "CSV data" in chart_source
+    assert "Data locked" in chart_source
+    assert "Lock data" in chart_source
+    assert "Keep this chart fixed to the current data selection" in chart_source
+
+
+def test_chart_copy_and_exports_compose_visible_title_and_legend():
+    chart_source = Path(
+        os.path.join(
+            os.getcwd(),
+            "dash_tanstack_pivot",
+            "src",
+            "lib",
+            "components",
+            "Charts",
+            "PivotCharts.js",
+        )
+    ).read_text(encoding="utf-8")
+
+    assert "data-chart-export-legend-item=\"true\"" in chart_source
+    assert "const createPresentedSvgNode" in chart_source
+    assert "const echartsToPresentedCanvas" in chart_source
+    assert "const presentation = getChartPresentation();" in chart_source
+    assert "exportSvgNode(svgRef.current, 'pivot-chart', presentation)" in chart_source
+    assert "exportSvgAsPng(svgRef.current, 'pivot-chart', presentation)" in chart_source
+    assert "copySvgToClipboard(svgRef.current, presentation)" in chart_source
+    assert "copyEchartsToClipboard(echartsRef, presentation)" in chart_source
+    assert "exportChartCsv(model, 'pivot-chart', presentation)" in chart_source
+    assert "Title + legend included" in chart_source
+    assert "Title + legend metadata" in chart_source
+
+
 def test_dash_app_get_adapter_initializes_once_under_concurrency(monkeypatch):
     import dash_presentation.app as app_module
 
@@ -838,6 +973,47 @@ async def test_first_expansion_reuses_collapsed_root_cache(adapter):
 
 
 @pytest.mark.asyncio
+async def test_collapse_reuses_cached_expanded_hierarchy_without_reloading(adapter, monkeypatch):
+    spec = PivotSpec(
+        table="sales_data",
+        rows=["region", "country", "product"],
+        measures=[Measure(field="sales", agg="sum", alias="sales_sum")],
+    )
+
+    await adapter.controller.run_hierarchy_view(
+        spec,
+        [["North"], ["South"]],
+        start_row=0,
+        end_row=95,
+        include_grand_total_row=False,
+        profiling=True,
+    )
+
+    async def fail_if_reloaded(*_args, **_kwargs):
+        raise AssertionError("Collapsing a cached hierarchy must not reload it")
+
+    monkeypatch.setattr(
+        adapter.controller,
+        "run_hierarchical_pivot_batch_load",
+        fail_if_reloaded,
+    )
+    collapsed = await adapter.controller.run_hierarchy_view(
+        spec,
+        [["North"]],
+        start_row=0,
+        end_row=95,
+        include_grand_total_row=False,
+        profiling=True,
+    )
+
+    controller_profile = collapsed["profile"]["controller"]
+    assert controller_profile["reusedCache"] is True
+    assert controller_profile["reuseDirection"] == "collapse"
+    assert any(row.get("region") == "North" and row.get("depth") == 1 for row in collapsed["rows"])
+    assert not any(row.get("region") == "South" and row.get("depth") == 1 for row in collapsed["rows"])
+
+
+@pytest.mark.asyncio
 async def test_wide_materialized_window_uses_sparse_materialized_pivot_path(adapter):
     row_count = 40
     bucket_count = 60
@@ -879,6 +1055,166 @@ async def test_wide_materialized_window_uses_sparse_materialized_pivot_path(adap
     assert first_row["row_id"] == 0
     assert first_row["B000_sales_sum"] == 0
     assert first_row["B059_sales_sum"] == 59
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("order", "absolute_sort", "expected_rows", "expected_values"),
+    [
+        ("asc", True, ["Small gain", "Gain", "Loss", "Large loss"], [5, 30, -50, -100]),
+        ("desc", True, ["Large loss", "Loss", "Gain", "Small gain"], [-100, -50, 30, 5]),
+        ("asc", False, ["Large loss", "Loss", "Small gain", "Gain"], [-100, -50, 5, 30]),
+        ("desc", False, ["Gain", "Small gain", "Loss", "Large loss"], [30, 5, -50, -100]),
+    ],
+)
+async def test_sparse_pivot_measure_sort_orders_mixed_sign_values(
+    adapter,
+    order,
+    absolute_sort,
+    expected_rows,
+    expected_values,
+):
+    row_labels = ["Small gain", "Large loss", "Gain", "Loss"]
+    sort_values = [5, -100, 30, -50]
+    buckets = ["Sort"] + [f"Other {index}" for index in range(1, 8)]
+    table = pa.Table.from_pydict(
+        {
+            "row_label": [row for row in row_labels for _ in buckets],
+            "bucket": [bucket for _ in row_labels for bucket in buckets],
+            "pnl": [
+                sort_values[row_index] if bucket == "Sort" else (row_index + 1) * 100 + bucket_index
+                for row_index, _row in enumerate(row_labels)
+                for bucket_index, bucket in enumerate(buckets)
+            ],
+        }
+    )
+    adapter.controller.load_data_from_arrow("absolute_pivot_sort", table)
+
+    spec = PivotSpec(
+        table="absolute_pivot_sort",
+        rows=["row_label"],
+        columns=["bucket"],
+        measures=[Measure(field="pnl", agg="sum", alias="pnl_sum")],
+        filters=[{"field": "row_label", "op": "in", "value": row_labels}],
+        sort=[{
+            "field": "Sort_pnl_sum",
+            "order": order,
+            "sortType": "absolute" if absolute_sort else "value",
+            "absoluteSort": absolute_sort,
+        }],
+        limit=0,
+        offset=0,
+        pivot_config=PivotConfig(enabled=True, materialized_column_values=buckets),
+    )
+
+    profile = {}
+    result = await adapter.controller.run_pivot_async(
+        spec,
+        return_format="arrow",
+        force_refresh=True,
+        profile_sink=profile,
+    )
+
+    assert profile["planner"]["path"] == "sparse_materialized"
+    assert result.column("row_label").to_pylist() == expected_rows
+    assert result.column("Sort_pnl_sum").to_pylist() == expected_values
+
+
+def test_offscreen_dynamic_sort_column_is_kept_as_materialized_dependency(adapter):
+    request = TanStackRequest(
+        operation=TanStackOperation.GET_DATA,
+        table="sales_data",
+        columns=[
+            {"id": "region"},
+            {"id": "pnl_sum", "aggregationField": "sales", "aggregationFn": "sum"},
+        ],
+        filters={},
+        sorting=[{
+            "id": "Sort_pnl_sum",
+            "desc": True,
+            "sortType": "absolute",
+            "absoluteSort": True,
+        }],
+        grouping=["region"],
+        aggregations=[],
+    )
+
+    materialized = adapter._materialized_pivot_values_for_window(
+        ["Other_pnl_sum"],
+        request,
+        ["Other_pnl_sum", "Sort_pnl_sum", "Later_pnl_sum"],
+    )
+
+    assert materialized == ["Other", "Sort"]
+
+
+@pytest.mark.asyncio
+async def test_absolute_sort_order_and_cells_survive_horizontal_window_change(adapter):
+    row_labels = ["Small gain", "Large loss", "Gain", "Loss"]
+    sort_values = [5, -100, 30, -50]
+    products = [f"Product_{index:02d}" for index in range(12)]
+    adapter.controller.load_data_from_arrow(
+        "absolute_sort_window",
+        pa.Table.from_pydict({
+            "row_label": [row for row in row_labels for _ in products],
+            "product": [product for _ in row_labels for product in products],
+            "pnl": [
+                sort_values[row_index] if product == "Product_00" else 1000 + row_index * 100 + product_index
+                for row_index, _row in enumerate(row_labels)
+                for product_index, product in enumerate(products)
+            ],
+        }),
+    )
+    request = TanStackRequest(
+        operation=TanStackOperation.GET_DATA,
+        table="absolute_sort_window",
+        columns=[
+            {"id": "row_label"},
+            {"id": "product"},
+            {"id": "pnl_sum", "aggregationField": "pnl", "aggregationFn": "sum"},
+        ],
+        filters={},
+        sorting=[{
+            "id": "Product_00_pnl_sum",
+            "desc": True,
+            "sortType": "absolute",
+            "absoluteSort": True,
+        }],
+        grouping=["row_label"],
+        aggregations=[],
+        totals=False,
+    )
+
+    schema_response = await adapter.handle_virtual_scroll_request(
+        request,
+        0,
+        3,
+        [],
+        col_start=0,
+        col_end=2,
+        needs_col_schema=True,
+    )
+    schema_ids = [column["id"] for column in schema_response.col_schema["columns"]]
+    right_column_id = "Product_11_pnl_sum"
+    right_column_index = schema_ids.index(right_column_id)
+
+    right_window = await adapter.handle_virtual_scroll_request(
+        request,
+        0,
+        3,
+        [],
+        col_start=right_column_index,
+        col_end=right_column_index,
+        needs_col_schema=False,
+    )
+
+    assert [row["row_label"] for row in schema_response.data] == [
+        "Large loss", "Loss", "Gain", "Small gain",
+    ]
+    assert [row["row_label"] for row in right_window.data] == [
+        "Large loss", "Loss", "Gain", "Small gain",
+    ]
+    assert all(row.get(right_column_id) is not None for row in right_window.data)
 
 @pytest.mark.asyncio
 async def test_filtering(adapter):
@@ -1690,6 +2026,18 @@ async def test_pivot_column_catalog_cache_reuses_discovery(adapter, monkeypatch)
     assert call_count["value"] == 1
 
 
+def test_pivot_column_catalog_cache_ignores_deeper_rows_but_tracks_pivot_columns(adapter):
+    request = make_wide_request()
+    base_spec = adapter.convert_tanstack_request_to_pivot_spec(request)
+    deeper_spec = base_spec.copy()
+    deeper_spec.rows = [*base_spec.rows, "date"]
+    other_columns_spec = base_spec.copy()
+    other_columns_spec.columns = ["date"]
+
+    assert adapter._pivot_column_catalog_cache_key(base_spec) == adapter._pivot_column_catalog_cache_key(deeper_spec)
+    assert adapter._pivot_column_catalog_cache_key(base_spec) != adapter._pivot_column_catalog_cache_key(other_columns_spec)
+
+
 @pytest.mark.asyncio
 async def test_virtual_scroll_response_cache_reuses_identical_window(adapter, monkeypatch):
     make_wide_table(adapter, center_cols=40)
@@ -1736,8 +2084,11 @@ async def test_run_hierarchy_view_reuses_cached_batch_for_incremental_expansion(
     south_rows = [{"region": "South", "country": "Brazil", "sales_sum": 20}]
     call_targets = []
 
-    async def fake_batch_load(spec_dict, target_paths, max_levels=3):
+    call_options = []
+
+    async def fake_batch_load(spec_dict, target_paths, max_levels=3, **options):
         call_targets.append([list(path) for path in target_paths])
+        call_options.append(options)
         result = {"": [dict(row) for row in root_rows]}
         if ["North"] in target_paths:
             result["North"] = [dict(row) for row in north_rows]
@@ -1752,6 +2103,8 @@ async def test_run_hierarchy_view_reuses_cached_batch_for_incremental_expansion(
 
     assert call_targets[0] == [["North"]]
     assert call_targets[1] == [["South"]]
+    assert call_options[0].get("include_root", True) is True
+    assert call_options[1]["include_root"] is False
     assert any(row.get("country") == "USA" for row in second["rows"])
     assert any(row.get("country") == "Brazil" for row in second["rows"])
     assert len(second["rows"]) > len(first["rows"])
@@ -1886,7 +2239,7 @@ async def test_collapsed_root_virtual_scroll_uses_paged_root_query(adapter, monk
         call["rows"] == ["row_id"]
         and call["limit"] is None
         and call["offset"] == 0
-        and call["force_refresh"] is True
+        and call["force_refresh"] is False
         and call["root_filter"] == {
             "op": "in",
             "value_len": 200,
@@ -1987,7 +2340,7 @@ async def test_collapsed_root_virtual_scroll_with_grand_total_uses_paged_root_qu
         call["rows"] == ["row_id"]
         and call["limit"] is None
         and call["offset"] == 0
-        and call["force_refresh"] is True
+        and call["force_refresh"] is False
         and call["root_filter"] == {
             "op": "in",
             "value_len": 200,
@@ -2137,7 +2490,10 @@ def test_row_virtualization_source_has_coalesced_scheduler_and_pinned_cache():
     assert "VIEWPORT_BLOCK_STALE_MS" in source
     assert "VIEWPORT_DUPLICATE_REQUEST_WINDOW_MS" in source
     assert "VIEWPORT_INFLIGHT_SERIALIZE_MS" in source
+    assert "const VIEWPORT_INFLIGHT_SERIALIZE_MS = 450" in source
     assert "defer-behind-inflight" in source
+    assert "retireQueuedBlocksCoveredByResponse" in source
+    assert "retire-satisfied-queued-viewport" in source
     assert "scheduleViewportRetry" in source
     assert "VIEWPORT_DIRECTIONAL_PREFETCH_BLOCKS" in source
     assert "lastViewportAnchorRowRef" in source
@@ -2193,6 +2549,8 @@ def test_server_side_component_source_has_fast_horizontal_dispatch_and_trimmed_r
     assert "getExpandedRowModel: serverSide ? undefined : getExpandedRowModel()" in source
     assert "getGroupedRowModel: serverSide ? undefined : getGroupedRowModel()" in source
     assert "const serverSideBlockSize = useMemo" in viewport_hook_source
+    assert "if (!serverSide) return 48" in viewport_hook_source
+    assert "return 48" in viewport_hook_source
     assert "blockSize: serverSideBlockSize" in source
     assert "lastObservedHorizontalScrollLeftRef" in viewport_hook_source
     assert "lastFastHorizontalRangeRef" in viewport_hook_source
@@ -3277,7 +3635,7 @@ def test_view_state_restore_rehydrates_server_side_runtime_requests():
     assert 'custom_dimensions=effective_custom_dimensions' in callback_source
 
 
-def test_tabular_mode_repeats_labels_and_subtotal_toggle_is_exposed():
+def test_layout_modes_and_subtotal_toggle_have_deterministic_runtime_contracts():
     column_defs_source = Path(
         os.path.join(
             os.getcwd(),
@@ -3318,6 +3676,16 @@ def test_tabular_mode_repeats_labels_and_subtotal_toggle_is_exposed():
             "useRenderHelpers.js",
         )
     ).read_text(encoding="utf-8")
+    layout_rows_source = Path(
+        os.path.join(
+            os.getcwd(),
+            "dash_tanstack_pivot",
+            "src",
+            "lib",
+            "utils",
+            "layoutRows.js",
+        )
+    ).read_text(encoding="utf-8")
 
     assert "rowSpan: false" in column_defs_source
     assert "rowSpan: effectiveLayoutMode === 'tabular'" not in column_defs_source
@@ -3326,12 +3694,22 @@ def test_tabular_mode_repeats_labels_and_subtotal_toggle_is_exposed():
     assert "preserveAccessorDisplayValue: effectiveLayoutMode === 'tabular'" in column_defs_source
     assert "const preserveAccessorDisplayValue = Boolean" in render_helpers_source
     assert "preserveAccessorDisplayValue" in render_helpers_source
-    assert "_path.split('|||')" in column_defs_source
+    assert "_path.split('|||')" in layout_rows_source
     assert "const displayValue = isBlankHierarchyValue(val)" in column_defs_source
     assert "showSubtotals" in appbar_source
     assert "Subtotals" in appbar_source
     assert "setShowSubtotals(prev => !prev)" in appbar_source
-    assert "show_subtotal_footers: showSubtotals || undefined" in component_source
+    assert "const normalizeLayoutModeValue" in component_source
+    assert "normalizeLayoutModeValue(loadPersistedState('layoutMode', 'hierarchy'))" in component_source
+    assert "loadPersistedState('showSubtotals'" in component_source
+    assert "savePersistedState('layoutMode', layoutMode)" in component_source
+    assert "savePersistedState('showSubtotals', showSubtotals)" in component_source
+    assert "layoutMode: 'hierarchy'" in component_source
+    assert "layoutMode,\n            grandTotalPinOverride," in component_source
+    assert "'layoutMode'," in component_source
+    assert "show_subtotal_footers: showSubtotals," in component_source
+    assert "show_subtotal_footers: showSubtotals || undefined" not in component_source
+    assert "setLayoutMode(normalizeLayoutModeValue(restored.layoutMode))" in component_source
     assert "showSubtotals," in component_source
     assert "include_subtotals: layoutMode === 'tabular'" not in component_source
     assert "includeSubtotals: layoutMode !== 'tabular'" not in component_source

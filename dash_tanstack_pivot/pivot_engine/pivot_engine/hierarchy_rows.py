@@ -10,6 +10,29 @@ from typing import Any, Dict, List, Optional, Tuple
 GRAND_TOTAL_ID = "Grand Total"
 GRAND_TOTAL_PATH = "__grand_total__"
 EXPAND_ALL_TOKEN = "__ALL__"
+COLLAPSED_PATH_TOKEN = "__COLLAPSED__"
+HIERARCHY_PATH_SEPARATOR = "|||"
+_NULL_LOOKUP_SEGMENT = "\x00N"
+_EMPTY_LOOKUP_SEGMENT = "\x00E"
+
+
+def hierarchy_lookup_key(parts: Any) -> str:
+    """Build an internal hierarchy bucket key without conflating root and blanks.
+
+    Display paths intentionally keep their historical ``|||`` representation,
+    including leading separators for blank values. Internal lookup keys need one
+    extra distinction: the root parent uses ``""``, so a one-level blank value
+    cannot also use ``""`` or traversal will recurse back into the root bucket.
+    """
+    encoded = []
+    for value in parts or []:
+        if value is None:
+            encoded.append(_NULL_LOOKUP_SEGMENT)
+        elif str(value) == "":
+            encoded.append(_EMPTY_LOOKUP_SEGMENT)
+        else:
+            encoded.append(str(value))
+    return HIERARCHY_PATH_SEPARATOR.join(encoded)
 
 
 def is_missing_hierarchy_value(value: Any) -> bool:
@@ -35,7 +58,7 @@ def is_hierarchy_grand_total(row: Any) -> bool:
 def normalize_expanded_paths(expanded_paths: Any) -> Tuple[Tuple[str, ...], ...]:
     if expanded_paths is True:
         return ((EXPAND_ALL_TOKEN,),)
-    if expanded_paths == [[EXPAND_ALL_TOKEN]] or any(path == [EXPAND_ALL_TOKEN] for path in (expanded_paths or [])):
+    if expanded_paths == [[EXPAND_ALL_TOKEN]]:
         return ((EXPAND_ALL_TOKEN,),)
 
     normalized = []
@@ -46,15 +69,20 @@ def normalize_expanded_paths(expanded_paths: Any) -> Tuple[Tuple[str, ...], ...]
     return tuple(sorted(set(normalized)))
 
 
-def expanded_path_state(expanded_paths: Any) -> Tuple[bool, set[str]]:
+def expanded_path_state(expanded_paths: Any) -> Tuple[bool, set[str], set[str]]:
     normalized = normalize_expanded_paths(expanded_paths)
-    expand_all = normalized == ((EXPAND_ALL_TOKEN,),)
+    expand_all = any(path == (EXPAND_ALL_TOKEN,) for path in normalized)
     expanded_set = {
         "|||".join(path)
         for path in normalized
-        if path != (EXPAND_ALL_TOKEN,)
+        if path != (EXPAND_ALL_TOKEN,) and (not path or path[0] != COLLAPSED_PATH_TOKEN)
     }
-    return expand_all, expanded_set
+    collapsed_set = {
+        "|||".join(path[1:])
+        for path in normalized
+        if len(path) > 1 and path[0] == COLLAPSED_PATH_TOKEN
+    }
+    return expand_all, expanded_set, collapsed_set
 
 
 def clone_hierarchy_rows(rows: Any) -> List[Dict[str, Any]]:
@@ -101,15 +129,19 @@ def iter_visible_hierarchy_rows(
     """
     rows = _row_fields(spec)
     grand_total_emitted = False
-    expand_all, expanded_path_set = expanded_path_state(expanded_paths)
+    expand_all, expanded_path_set, collapsed_path_set = expanded_path_state(expanded_paths)
 
     if tabular_subtotals:
         expand_all = True  # always show all levels in tabular subtotals mode
+        collapsed_path_set = set()  # layout is flat; hierarchy collapse state is inapplicable
 
-    def traverse(parent_key: str):
+    def traverse(parent_key: str, parent_path_parts: Tuple[str, ...] = (), active_keys: frozenset[str] = frozenset()):
         nonlocal grand_total_emitted
+        if parent_key in active_keys or len(parent_path_parts) > len(rows):
+            return
         nodes = hierarchy_result.get(parent_key, [])
-        current_depth = len(parent_key.split("|||")) if parent_key else 0
+        current_depth = len(parent_path_parts)
+        next_active_keys = active_keys | {parent_key}
 
         for node in nodes:
             if not isinstance(node, dict):
@@ -145,11 +177,11 @@ def iter_visible_hierarchy_rows(
                     # Do this before yielding so downstream code (JS tabular mode) always
                     # gets a correct _path even when parent field values are absent from
                     # child-level rows returned by the data engine.
-                    child_path_parts = parent_key.split("|||") if parent_key else []
-                    child_path_parts.append(str(row[target_dim]))
-                    child_key = "|||".join(child_path_parts)
+                    child_path_parts = [*parent_path_parts, str(row[target_dim])]
+                    child_path = HIERARCHY_PATH_SEPARATOR.join(child_path_parts)
+                    child_key = hierarchy_lookup_key(child_path_parts)
                     if "_path" not in row:
-                        row["_path"] = child_key
+                        row["_path"] = child_path
                     if "_pathFields" not in row:
                         row["_pathFields"] = list(rows[: current_depth + 1])
 
@@ -157,14 +189,17 @@ def iter_visible_hierarchy_rows(
             is_expanded = (
                 child_key is not None
                 and child_key in hierarchy_result
-                and (expand_all or child_key in expanded_path_set)
+                and (
+                    (expand_all and row.get("_path") not in collapsed_path_set)
+                    or row.get("_path") in expanded_path_set
+                )
             )
 
             if tabular_subtotals:
                 # Post-order: children first, then this group row as a subtotal marker.
                 # Leaf nodes (not expanded) are emitted as regular data rows.
                 if is_expanded:
-                    yield from traverse(child_key)
+                    yield from traverse(child_key, tuple(child_path_parts), next_active_keys)
                     subtotal_row = dict(row)
                     subtotal_row["_isTabularSubtotal"] = True
                     yield subtotal_row
@@ -174,7 +209,7 @@ def iter_visible_hierarchy_rows(
                 # Pre-order: group row first, then children, then optional footer.
                 yield row
                 if is_expanded:
-                    yield from traverse(child_key)
+                    yield from traverse(child_key, tuple(child_path_parts), next_active_keys)
                     if show_subtotal_footers:
                         footer_row = dict(row)
                         footer_row["_isSubtotalFooter"] = True

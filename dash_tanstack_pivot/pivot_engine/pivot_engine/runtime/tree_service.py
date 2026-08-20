@@ -442,7 +442,15 @@ class TreeRuntimeService:
         return {
             _stringify_path(path)
             for path in expanded_paths
-            if isinstance(path, list) and path and path != ["__ALL__"]
+            if isinstance(path, list) and path and path[0] not in {"__ALL__", "__COLLAPSED__"}
+        }
+
+    @staticmethod
+    def _normalize_collapsed_set(expanded_paths: List[List[str]]) -> Set[str]:
+        return {
+            _stringify_path(path[1:])
+            for path in expanded_paths
+            if isinstance(path, list) and len(path) > 1 and path[0] == "__COLLAPSED__"
         }
 
     @staticmethod
@@ -528,6 +536,8 @@ class TreeRuntimeService:
         id_field = tree_config["idField"]
         label_field = tree_config["labelField"]
         expanded_set = self._normalize_expanded_set(expanded_paths)
+        collapsed_set = self._normalize_collapsed_set(expanded_paths)
+        expanded_all = state.expanded is True or any(path == ["__ALL__"] for path in expanded_paths)
         use_default_expansion = self._should_use_default_tree_expansion(state)
         default_open_depth = tree_config.get("groupDefaultExpanded", 0) if use_default_expansion else 0
         default_open_paths = set(tree_config.get("defaultOpenPaths") or []) if use_default_expansion else set()
@@ -557,7 +567,8 @@ class TreeRuntimeService:
             if child_counts.get(row_id, 0) > 0:
                 has_children_paths.add(node_path)
                 if (
-                    node_path in expanded_set
+                    (expanded_all and node_path not in collapsed_set)
+                    or node_path in expanded_set
                     or (default_open_depth > 0)
                     or (node_path in default_open_paths)
                 ):
@@ -605,7 +616,8 @@ class TreeRuntimeService:
                         has_children_paths.add(child_path)
                         child_depth = depth + 1
                         if (
-                            child_path in expanded_set
+                            (expanded_all and child_path not in collapsed_set)
+                            or child_path in expanded_set
                             or (default_open_depth > child_depth)
                             or (child_path in default_open_paths)
                         ):
@@ -658,6 +670,8 @@ class TreeRuntimeService:
             return nodes, {path for path in has_children_paths if path}
 
         expanded_set = self._normalize_expanded_set(expanded_paths)
+        collapsed_set = self._normalize_collapsed_set(expanded_paths)
+        expanded_all = state.expanded is True or any(path == ["__ALL__"] for path in expanded_paths)
         use_default_expansion = self._should_use_default_tree_expansion(state)
         default_open_depth = tree_config.get("groupDefaultExpanded", 0) if use_default_expansion else 0
         default_open_paths = set(tree_config.get("defaultOpenPaths") or []) if use_default_expansion else set()
@@ -666,6 +680,16 @@ class TreeRuntimeService:
             for expanded_path in expanded_set
             if expanded_path
         }
+        if expanded_all:
+            expanded_root_paths.update(
+                normalized_root
+                for normalized_root in (
+                    _stringify_path(str(row.get(path_field)).split(separator))
+                    for row in root_rows
+                    if row.get(path_field) is not None
+                )
+                if normalized_root not in collapsed_set
+            )
         if default_open_depth > 0:
             expanded_root_paths.update(
                 _stringify_path(str(row.get(path_field)).split(separator))
@@ -895,11 +919,16 @@ class TreeRuntimeService:
         for parent_path, child_paths in list(children_by_parent.items()):
             children_by_parent[parent_path] = sort_paths(child_paths)
 
-        expanded_all = state.expanded is True or expanded_paths == [["__ALL__"]]
+        expanded_all = state.expanded is True or any(path == ["__ALL__"] for path in expanded_paths)
         expanded_set = {
             _stringify_path(path)
             for path in expanded_paths
-            if isinstance(path, list) and path and path != ["__ALL__"]
+            if isinstance(path, list) and path and path[0] not in {"__ALL__", "__COLLAPSED__"}
+        }
+        collapsed_set = {
+            _stringify_path(path[1:])
+            for path in expanded_paths
+            if isinstance(path, list) and len(path) > 1 and path[0] == "__COLLAPSED__"
         }
         default_open_paths = set(tree_config.get("defaultOpenPaths") or [])
         use_default_expansion = (
@@ -921,7 +950,7 @@ class TreeRuntimeService:
             is_expanded = bool(
                 has_children
                 and (
-                    expanded_all
+                    (expanded_all and path not in collapsed_set)
                     or path in expanded_set
                     or (use_default_expansion and default_open_depth > 0 and depth < default_open_depth)
                     or (use_default_expansion and path in default_open_paths)

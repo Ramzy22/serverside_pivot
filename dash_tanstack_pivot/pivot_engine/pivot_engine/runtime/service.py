@@ -269,6 +269,8 @@ class PivotRuntimeService:
             totals=state.show_col_totals,
             row_totals=state.show_row_totals,
             include_subtotals=state.show_subtotals,
+            layout_mode=state.layout_mode,
+            show_subtotal_footers=state.show_subtotals if state.layout_mode else False,
             version=context.window_seq,
             column_sort_options=column_sort_options or None,
         )
@@ -2400,11 +2402,16 @@ class PivotRuntimeService:
         if not report_root:
             return TanStackResponse(data=[], columns=[], total_rows=0)
 
-        expanded_all = expanded_paths == [["__ALL__"]] or state.expanded is True
+        expanded_all = any(path == ["__ALL__"] for path in expanded_paths) or state.expanded is True
         expanded_set = {
             "|||".join(path)
             for path in expanded_paths
-            if isinstance(path, list) and path and path != ["__ALL__"]
+            if isinstance(path, list) and path and path != ["__ALL__"] and path[0] != "__COLLAPSED__"
+        }
+        collapsed_set = {
+            "|||".join(path[1:])
+            for path in expanded_paths
+            if isinstance(path, list) and len(path) > 1 and path[0] == "__COLLAPSED__"
         }
 
         emitted_columns: Optional[List[Dict[str, Any]]] = None
@@ -2495,7 +2502,10 @@ class PivotRuntimeService:
                 branch_match = self._get_branching_report_branch(node, row)
                 child_node = self._get_branching_report_child(node, raw_value, row)
                 has_children = bool(child_node and child_node.get("field"))
-                is_expanded = expanded_all or row_path in expanded_set
+                is_expanded = (
+                    (expanded_all and row_path not in collapsed_set)
+                    or row_path in expanded_set
+                )
 
                 row_out = dict(row)
                 row_out["_id"] = path_token or str(row.get("_id") or "")
@@ -2928,6 +2938,15 @@ class PivotRuntimeService:
         if expanded is None or (isinstance(expanded, dict) and len(expanded) == 0):
             return []
         if isinstance(expanded, dict):
+            if expanded.get("__ALL__") is True:
+                return [
+                    ["__ALL__"],
+                    *[
+                        ["__COLLAPSED__", *k.split("|||")]
+                        for k, v in expanded.items()
+                        if k != "__ALL__" and v is False
+                    ],
+                ]
             return [k.split("|||") for k, v in expanded.items() if v is True]
         if expanded is True:
             return [["__ALL__"]]

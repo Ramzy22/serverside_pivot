@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import gzip
 import json
 import os
 import secrets
@@ -76,8 +77,19 @@ class RuntimePayloadStore:
         *,
         metadata: Optional[Dict[str, Any]] = None,
         ttl_seconds: Optional[int] = None,
+        serialized_body: Optional[bytes] = None,
+        compress: bool = False,
     ) -> Dict[str, Any]:
-        body = json.dumps(payload, separators=(",", ":"), default=_json_default).encode("utf-8")
+        raw_body = (
+            bytes(serialized_body)
+            if serialized_body is not None
+            else self.serialize_json(payload)
+        )
+        body = gzip.compress(raw_body, compresslevel=1) if compress else raw_body
+        item_metadata = dict(metadata or {})
+        if compress:
+            item_metadata["contentEncoding"] = "gzip"
+            item_metadata["uncompressedBytes"] = len(raw_body)
         token = secrets.token_urlsafe(24)
         now = time.time()
         ttl = max(1, int(ttl_seconds or self.default_ttl_seconds))
@@ -86,7 +98,7 @@ class RuntimePayloadStore:
             body=body,
             content_type="application/json",
             expires_at=now + ttl,
-            metadata=dict(metadata or {}),
+            metadata=item_metadata,
             size=len(body),
         )
         with self._lock:
@@ -106,6 +118,11 @@ class RuntimePayloadStore:
             "expiresAt": int(item.expires_at * 1000),
             **item.metadata,
         }
+
+    @staticmethod
+    def serialize_json(payload: Dict[str, Any]) -> bytes:
+        """Encode a JSON payload once so callers can size it before storage."""
+        return json.dumps(payload, separators=(",", ":"), default=_json_default).encode("utf-8")
 
     def put_bytes(
         self,

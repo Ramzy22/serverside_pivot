@@ -778,10 +778,142 @@ const downloadBlob = (blob, filename) => {
     window.URL.revokeObjectURL(url);
 };
 
-const exportSvgNode = async (svgNode, fileStem) => {
+const SVG_NAMESPACE = 'http://www.w3.org/2000/svg';
+
+const normalizeChartPresentation = (presentation = {}) => ({
+    title: String(presentation.title || '').trim(),
+    legendPosition: presentation.legendPosition === 'top' ? 'top' : 'bottom',
+    legendItems: Array.isArray(presentation.legendItems) ? presentation.legendItems.filter(item => item && item.label) : [],
+    background: presentation.background || '#ffffff',
+    textColor: presentation.textColor || '#111827',
+    secondaryTextColor: presentation.secondaryTextColor || '#4b5563',
+});
+
+const readChartPresentation = (container, title, legendPosition, theme) => {
+    const legendItems = container
+        ? Array.from(container.querySelectorAll('[data-chart-export-legend-item="true"]')).map((element) => ({
+            label: element.getAttribute('data-chart-export-label') || element.textContent || '',
+            color: element.getAttribute('data-chart-export-color') || theme.primary || '#2563eb',
+            hidden: element.getAttribute('data-chart-export-hidden') === 'true',
+        })).filter(item => item.label)
+        : [];
+    return normalizeChartPresentation({
+        title,
+        legendPosition,
+        legendItems,
+        background: theme.chartBg || theme.surfaceBg || theme.background || '#ffffff',
+        textColor: theme.text || '#111827',
+        secondaryTextColor: theme.textSec || theme.text || '#4b5563',
+    });
+};
+
+const layoutLegendItems = (items, width, estimateWidth) => {
+    const rows = [];
+    let currentRow = [];
+    let usedWidth = 0;
+    items.forEach((item) => {
+        const itemWidth = Math.max(48, estimateWidth(item.label) + 30);
+        if (currentRow.length > 0 && usedWidth + itemWidth > Math.max(80, width - 24)) {
+            rows.push(currentRow);
+            currentRow = [];
+            usedWidth = 0;
+        }
+        currentRow.push({ ...item, width: itemWidth });
+        usedWidth += itemWidth;
+    });
+    if (currentRow.length > 0) rows.push(currentRow);
+    return rows;
+};
+
+const createPresentedSvgNode = (svgNode, rawPresentation) => {
+    if (!svgNode || typeof document === 'undefined') return null;
+    const presentation = normalizeChartPresentation(rawPresentation);
+    const clone = svgNode.cloneNode(true);
+    const rawViewBox = (clone.getAttribute('viewBox') || '').split(/[\s,]+/).map(Number);
+    const sourceWidth = rawViewBox.length === 4 && rawViewBox[2] > 0
+        ? rawViewBox[2]
+        : (svgNode.clientWidth || 800);
+    const sourceHeight = rawViewBox.length === 4 && rawViewBox[3] > 0
+        ? rawViewBox[3]
+        : (svgNode.clientHeight || 400);
+    const titleHeight = presentation.title ? 42 : 0;
+    const legendRows = layoutLegendItems(
+        presentation.legendItems,
+        sourceWidth,
+        label => String(label || '').length * 6.4,
+    );
+    const legendHeight = legendRows.length > 0 ? legendRows.length * 22 + 14 : 0;
+    const topLegendHeight = presentation.legendPosition === 'top' ? legendHeight : 0;
+    const chartOffsetY = titleHeight + topLegendHeight;
+    const totalHeight = titleHeight + sourceHeight + legendHeight;
+
+    const existingChildren = Array.from(clone.childNodes);
+    const chartGroup = document.createElementNS(SVG_NAMESPACE, 'g');
+    chartGroup.setAttribute('transform', `translate(0 ${chartOffsetY})`);
+    existingChildren.forEach(child => chartGroup.appendChild(child));
+    clone.appendChild(chartGroup);
+    clone.setAttribute('viewBox', `0 0 ${sourceWidth} ${totalHeight}`);
+    clone.setAttribute('width', String(sourceWidth));
+    clone.setAttribute('height', String(totalHeight));
+    clone.setAttribute('xmlns', SVG_NAMESPACE);
+
+    const background = document.createElementNS(SVG_NAMESPACE, 'rect');
+    background.setAttribute('x', '0');
+    background.setAttribute('y', '0');
+    background.setAttribute('width', String(sourceWidth));
+    background.setAttribute('height', String(totalHeight));
+    background.setAttribute('fill', presentation.background);
+    clone.insertBefore(background, chartGroup);
+
+    if (presentation.title) {
+        const titleNode = document.createElementNS(SVG_NAMESPACE, 'text');
+        titleNode.setAttribute('x', '16');
+        titleNode.setAttribute('y', '27');
+        titleNode.setAttribute('fill', presentation.textColor);
+        titleNode.setAttribute('font-size', '16');
+        titleNode.setAttribute('font-weight', '700');
+        titleNode.setAttribute('font-family', 'Inter, Arial, sans-serif');
+        titleNode.textContent = presentation.title;
+        clone.appendChild(titleNode);
+    }
+
+    if (legendRows.length > 0) {
+        const legendStartY = presentation.legendPosition === 'top'
+            ? titleHeight + 16
+            : titleHeight + sourceHeight + 18;
+        legendRows.forEach((row, rowIndex) => {
+            let x = 16;
+            row.forEach((item) => {
+                const y = legendStartY + rowIndex * 22;
+                const marker = document.createElementNS(SVG_NAMESPACE, 'circle');
+                marker.setAttribute('cx', String(x + 5));
+                marker.setAttribute('cy', String(y - 4));
+                marker.setAttribute('r', '5');
+                marker.setAttribute('fill', item.hidden ? presentation.secondaryTextColor : (item.color || '#2563eb'));
+                marker.setAttribute('opacity', item.hidden ? '0.35' : '1');
+                clone.appendChild(marker);
+                const label = document.createElementNS(SVG_NAMESPACE, 'text');
+                label.setAttribute('x', String(x + 16));
+                label.setAttribute('y', String(y));
+                label.setAttribute('fill', presentation.secondaryTextColor);
+                label.setAttribute('font-size', '11');
+                label.setAttribute('font-family', 'Inter, Arial, sans-serif');
+                label.setAttribute('opacity', item.hidden ? '0.45' : '1');
+                label.textContent = item.label;
+                clone.appendChild(label);
+                x += item.width;
+            });
+        });
+    }
+    return clone;
+};
+
+const exportSvgNode = async (svgNode, fileStem, presentation) => {
     if (!svgNode || typeof window === 'undefined') return;
+    const presentedNode = createPresentedSvgNode(svgNode, presentation);
+    if (!presentedNode) return;
     const serializer = new XMLSerializer();
-    const svgText = serializer.serializeToString(svgNode);
+    const svgText = serializer.serializeToString(presentedNode);
     const svgBlob = new Blob([svgText], { type: 'image/svg+xml;charset=utf-8' });
     downloadBlob(svgBlob, `${fileStem}.svg`);
 };
@@ -811,15 +943,15 @@ const svgToCanvas = (svgNode, scale = 2) => new Promise((resolve) => {
     img.src = url;
 });
 
-const exportSvgAsPng = async (svgNode, fileStem) => {
-    const canvas = await svgToCanvas(svgNode);
+const exportSvgAsPng = async (svgNode, fileStem, presentation) => {
+    const canvas = await svgToCanvas(createPresentedSvgNode(svgNode, presentation));
     if (!canvas) return;
     canvas.toBlob((blob) => { if (blob) downloadBlob(blob, `${fileStem}.png`); }, 'image/png');
 };
 
-const copySvgToClipboard = async (svgNode) => {
+const copySvgToClipboard = async (svgNode, presentation) => {
     if (typeof navigator === 'undefined' || !navigator.clipboard || !navigator.clipboard.write) return false;
-    const canvas = await svgToCanvas(svgNode);
+    const canvas = await svgToCanvas(createPresentedSvgNode(svgNode, presentation));
     if (!canvas) return false;
     try {
         const blob = await new Promise((resolve) => canvas.toBlob(resolve, 'image/png'));
@@ -829,7 +961,7 @@ const copySvgToClipboard = async (svgNode) => {
     } catch (_) { return false; }
 };
 
-const exportChartCsv = (model, fileStem) => {
+const exportChartCsv = (model, fileStem, rawPresentation) => {
     if (!model) return;
     const categories = Array.isArray(model.categories) ? model.categories : [];
     const series = Array.isArray(model.series) ? model.series : [];
@@ -837,32 +969,101 @@ const exportChartCsv = (model, fileStem) => {
     const escape = (v) => { const s = String(v ?? ''); return s.includes(',') || s.includes('"') || s.includes('\n') ? `"${s.replace(/"/g, '""')}"` : s; };
     const header = ['Category', ...series.map((s) => s.name)].map(escape).join(',');
     const rows = categories.map((cat, i) => [cat, ...series.map((s) => s.values[i] ?? '')].map(escape).join(','));
-    const csv = [header, ...rows].join('\n');
+    const presentation = normalizeChartPresentation(rawPresentation);
+    const legendLabels = presentation.legendItems.length > 0
+        ? presentation.legendItems.map(item => item.label)
+        : series.map(item => item.name).filter(Boolean);
+    const metadata = [];
+    if (presentation.title) metadata.push(['Title', presentation.title].map(escape).join(','));
+    if (legendLabels.length > 0) metadata.push(['Legend', ...legendLabels].map(escape).join(','));
+    if (metadata.length > 0) metadata.push('');
+    const csv = [...metadata, header, ...rows].join('\n');
     downloadBlob(new Blob([csv], { type: 'text/csv;charset=utf-8' }), `${fileStem}.csv`);
 };
 
 const ECHARTS_CHART_TYPES = new Set(['bar3d', 'line3d', 'scatter3d', 'range', 'boxplot', 'nightingale']);
 
-const exportEchartsPng = (echartsRef, fileStem) => {
+const imageFromUrl = (url) => new Promise((resolve) => {
+    const image = new Image();
+    image.onload = () => resolve(image);
+    image.onerror = () => resolve(null);
+    image.src = url;
+});
+
+const echartsToPresentedCanvas = async (echartsRef, rawPresentation) => {
     const instance = echartsRef && echartsRef.current && echartsRef.current.getEchartsInstance();
-    if (!instance) return;
+    if (!instance) return null;
+    const presentation = normalizeChartPresentation(rawPresentation);
     const url = instance.getDataURL({ type: 'png', pixelRatio: 2 });
-    const a = document.createElement('a');
-    a.href = url;
-    a.download = `${fileStem}.png`;
-    document.body.appendChild(a);
-    a.click();
-    document.body.removeChild(a);
+    const image = await imageFromUrl(url);
+    if (!image) return null;
+    const scale = Math.max(1, image.naturalWidth / Math.max(1, instance.getWidth()));
+    const titleHeight = presentation.title ? Math.round(42 * scale) : 0;
+    const measureCanvas = document.createElement('canvas');
+    const measureContext = measureCanvas.getContext('2d');
+    measureContext.font = '11px Inter, Arial, sans-serif';
+    const legendRows = layoutLegendItems(
+        presentation.legendItems,
+        instance.getWidth(),
+        label => measureContext.measureText(String(label || '')).width,
+    );
+    const legendHeight = legendRows.length > 0 ? Math.round((legendRows.length * 22 + 14) * scale) : 0;
+    const topLegendHeight = presentation.legendPosition === 'top' ? legendHeight : 0;
+    const chartOffsetY = titleHeight + topLegendHeight;
+    const canvas = document.createElement('canvas');
+    canvas.width = image.naturalWidth;
+    canvas.height = titleHeight + image.naturalHeight + legendHeight;
+    const context = canvas.getContext('2d');
+    context.fillStyle = presentation.background;
+    context.fillRect(0, 0, canvas.width, canvas.height);
+    context.drawImage(image, 0, chartOffsetY);
+
+    if (presentation.title) {
+        context.fillStyle = presentation.textColor;
+        context.font = `700 ${Math.round(16 * scale)}px Inter, Arial, sans-serif`;
+        context.textBaseline = 'alphabetic';
+        context.fillText(presentation.title, Math.round(16 * scale), Math.round(27 * scale));
+    }
+    if (legendRows.length > 0) {
+        const legendStartY = presentation.legendPosition === 'top'
+            ? titleHeight + Math.round(16 * scale)
+            : titleHeight + image.naturalHeight + Math.round(18 * scale);
+        context.font = `${Math.round(11 * scale)}px Inter, Arial, sans-serif`;
+        legendRows.forEach((row, rowIndex) => {
+            let x = Math.round(16 * scale);
+            row.forEach((item) => {
+                const y = legendStartY + Math.round(rowIndex * 22 * scale);
+                context.globalAlpha = item.hidden ? 0.35 : 1;
+                context.fillStyle = item.hidden ? presentation.secondaryTextColor : (item.color || '#2563eb');
+                context.beginPath();
+                context.arc(x + Math.round(5 * scale), y - Math.round(4 * scale), Math.round(5 * scale), 0, Math.PI * 2);
+                context.fill();
+                context.globalAlpha = item.hidden ? 0.45 : 1;
+                context.fillStyle = presentation.secondaryTextColor;
+                context.fillText(item.label, x + Math.round(16 * scale), y);
+                context.globalAlpha = 1;
+                x += Math.round(item.width * scale);
+            });
+        });
+    }
+    return canvas;
 };
 
-const copyEchartsToClipboard = async (echartsRef) => {
+const exportEchartsPng = async (echartsRef, fileStem, presentation) => {
+    const canvas = await echartsToPresentedCanvas(echartsRef, presentation);
+    if (!canvas) return;
+    canvas.toBlob((blob) => { if (blob) downloadBlob(blob, `${fileStem}.png`); }, 'image/png');
+};
+
+const copyEchartsToClipboard = async (echartsRef, presentation) => {
     const instance = echartsRef && echartsRef.current && echartsRef.current.getEchartsInstance();
     if (!instance || typeof navigator === 'undefined' || !navigator.clipboard || !navigator.clipboard.write) return false;
     try {
-        const url = instance.getDataURL({ type: 'png', pixelRatio: 2 });
-        const res = await fetch(url);
-        const blob = await res.blob();
-        await navigator.clipboard.write([new ClipboardItem({ [blob.type]: blob })]);
+        const canvas = await echartsToPresentedCanvas(echartsRef, presentation);
+        if (!canvas) return false;
+        const blob = await new Promise(resolve => canvas.toBlob(resolve, 'image/png'));
+        if (!blob) return false;
+        await navigator.clipboard.write([new ClipboardItem({ 'image/png': blob })]);
         return true;
     } catch (_) {
         return false;
@@ -941,7 +1142,7 @@ const ChartLegend = ({ items, theme, hiddenSet, onToggle, position = 'bottom', o
     const canToggle = typeof onToggle === 'function' && hiddenSet;
 
     return (
-        <div style={{
+        <div data-chart-export-legend="true" style={{
             display: 'flex',
             gap: '10px',
             flexWrap: 'wrap',
@@ -955,6 +1156,10 @@ const ChartLegend = ({ items, theme, hiddenSet, onToggle, position = 'bottom', o
                 return (
                     <div
                         key={item.label}
+                        data-chart-export-legend-item="true"
+                        data-chart-export-label={item.label}
+                        data-chart-export-color={isHidden ? theme.border : item.color}
+                        data-chart-export-hidden={isHidden ? 'true' : 'false'}
                         onClick={() => {
                             if (canToggle) onToggle(item.label);
                             if (typeof onElementSelect === 'function') onElementSelect('legend', item.label);
@@ -4228,6 +4433,8 @@ const ChartSurface = ({
     const settingsPaneResizeRef = useRef(null);
     const immersiveContainerRef = useRef(null);
     const [chartCopyStatus, setChartCopyStatus] = useState(null);
+    const [exportMenuOpen, setExportMenuOpen] = useState(false);
+    const exportMenuRef = useRef(null);
     const [immersiveAutoHeight, setImmersiveAutoHeight] = useState(null);
     const [uncontrolledSettingsPanelWidth, setUncontrolledSettingsPanelWidth] = useState(348);
     const settingsPanelWidth = Number.isFinite(Number(controlledSettingsPanelWidth))
@@ -4237,8 +4444,9 @@ const ChartSurface = ({
         ? onSettingsPanelWidthChange
         : setUncontrolledSettingsPanelWidth;
     const showChrome = !immersiveMode;
+    const immersiveLegendReserve = immersiveMode && !isSparklineChart && legendPosition !== 'none' ? 44 : 0;
     const chartHeight = immersiveMode && immersiveAutoHeight
-        ? Math.max(180, immersiveAutoHeight)
+        ? Math.max(180, immersiveAutoHeight - immersiveLegendReserve - 44)
         : Math.max(180, Number.isFinite(Number(chartHeightProp)) ? Number(chartHeightProp) : CHART_HEIGHT);
     const svgRef = useRef(null);
     const echartsRef = useRef(null);
@@ -4328,14 +4536,55 @@ const ChartSurface = ({
         return () => clearTimeout(timer);
     }, [chartCopyStatus]);
 
+    useEffect(() => {
+        if (!exportMenuOpen) return undefined;
+        const closeOnOutsideClick = (event) => {
+            if (exportMenuRef.current && !exportMenuRef.current.contains(event.target)) {
+                setExportMenuOpen(false);
+            }
+        };
+        const closeOnEscape = (event) => {
+            if (event.key === 'Escape') setExportMenuOpen(false);
+        };
+        document.addEventListener('mousedown', closeOnOutsideClick);
+        document.addEventListener('keydown', closeOnEscape);
+        return () => {
+            document.removeEventListener('mousedown', closeOnOutsideClick);
+            document.removeEventListener('keydown', closeOnEscape);
+        };
+    }, [exportMenuOpen]);
+
+    const getChartPresentation = useCallback(() => readChartPresentation(
+        chartSurfaceMainRef.current,
+        resolvedTitle,
+        legendPosition,
+        theme,
+    ), [legendPosition, resolvedTitle, theme]);
+
+    const handleChartExport = useCallback(async (format) => {
+        setExportMenuOpen(false);
+        const presentation = getChartPresentation();
+        if (format === 'svg') {
+            if (!ECHARTS_CHART_TYPES.has(chartType)) await exportSvgNode(svgRef.current, 'pivot-chart', presentation);
+            return;
+        }
+        if (format === 'png') {
+            if (ECHARTS_CHART_TYPES.has(chartType)) await exportEchartsPng(echartsRef, 'pivot-chart', presentation);
+            else await exportSvgAsPng(svgRef.current, 'pivot-chart', presentation);
+            return;
+        }
+        if (format === 'csv') exportChartCsv(model, 'pivot-chart', presentation);
+    }, [chartType, getChartPresentation, model]);
+
     const handleCopyChart = useCallback(async () => {
+        const presentation = getChartPresentation();
         const copied = ECHARTS_CHART_TYPES.has(chartType)
-            ? await copyEchartsToClipboard(echartsRef)
-            : await copySvgToClipboard(svgRef.current);
+            ? await copyEchartsToClipboard(echartsRef, presentation)
+            : await copySvgToClipboard(svgRef.current, presentation);
         setChartCopyStatus(copied
             ? { tone: 'success', text: 'Copied chart' }
             : { tone: 'error', text: 'Copy failed' });
-    }, [chartType]);
+    }, [chartType, getChartPresentation]);
 
     useEffect(() => {
         if (!immersiveMode) { setImmersiveAutoHeight(null); return; }
@@ -4473,37 +4722,87 @@ const ChartSurface = ({
                 overflow: 'hidden',
             }}
         >
-            {showChrome ? (
+            {(showChrome || immersiveMode) ? (
                 <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', gap: '12px' }}>
                     <ChartHeader
+                        title={immersiveMode ? resolvedTitle : null}
                         subtitle={resolvedSubtitle}
                         note={resolvedNote}
                         theme={theme}
                     />
                     <div style={{ display: 'flex', alignItems: 'center', gap: '6px', flexWrap: 'wrap', justifyContent: 'flex-end' }}>
-                        {!ECHARTS_CHART_TYPES.has(chartType) && (
+                        <div ref={exportMenuRef} style={{ position: 'relative' }}>
                             <button
                                 type="button"
-                                onClick={() => exportSvgNode(svgRef.current, 'pivot-chart')}
+                                onClick={() => setExportMenuOpen((isOpen) => !isOpen)}
                                 style={exportButtonStyle}
-                                title="Export chart as SVG"
+                                title="Export chart"
+                                aria-haspopup="menu"
+                                aria-expanded={exportMenuOpen}
                             >
-                                SVG
+                                <span style={{ display: 'inline-flex', alignItems: 'center', gap: '5px' }}>
+                                    Export <Icons.ChevronDown />
+                                </span>
                             </button>
-                        )}
-                        <button
-                            type="button"
-                            onClick={() => ECHARTS_CHART_TYPES.has(chartType) ? exportEchartsPng(echartsRef, 'pivot-chart') : exportSvgAsPng(svgRef.current, 'pivot-chart')}
-                            style={exportButtonStyle}
-                            title="Export chart as PNG"
-                        >
-                            PNG
-                        </button>
+                            {exportMenuOpen ? (
+                                <div
+                                    role="menu"
+                                    aria-label="Chart export formats"
+                                    style={{
+                                        position: 'absolute',
+                                        top: 'calc(100% + 6px)',
+                                        right: 0,
+                                        zIndex: 80,
+                                        minWidth: '176px',
+                                        padding: '6px',
+                                        border: `1px solid ${theme.border}`,
+                                        borderRadius: theme.radiusSm || '8px',
+                                        background: theme.surfaceBg || theme.background || '#fff',
+                                        boxShadow: theme.shadowMd || '0 12px 28px rgba(15,23,42,0.18)',
+                                    }}
+                                >
+                                    {[
+                                        { format: 'svg', label: 'SVG image', hint: 'Title + legend included', disabled: ECHARTS_CHART_TYPES.has(chartType) },
+                                        { format: 'png', label: 'PNG image', hint: 'Title + legend included', disabled: false },
+                                        { format: 'csv', label: 'CSV data', hint: 'Title + legend metadata', disabled: false },
+                                    ].map((item) => (
+                                        <button
+                                            key={item.format}
+                                            type="button"
+                                            role="menuitem"
+                                            disabled={item.disabled}
+                                            onClick={() => handleChartExport(item.format)}
+                                            title={item.disabled ? 'SVG export is unavailable for this chart type' : undefined}
+                                            style={{
+                                                width: '100%',
+                                                display: 'flex',
+                                                flexDirection: 'column',
+                                                alignItems: 'flex-start',
+                                                gap: '2px',
+                                                border: 'none',
+                                                borderRadius: theme.radiusSm || '7px',
+                                                background: 'transparent',
+                                                color: item.disabled ? theme.textSec : theme.text,
+                                                opacity: item.disabled ? 0.45 : 1,
+                                                padding: '8px 9px',
+                                                cursor: item.disabled ? 'not-allowed' : 'pointer',
+                                                textAlign: 'left',
+                                            }}
+                                            onMouseEnter={(event) => { if (!item.disabled) event.currentTarget.style.background = theme.hover; }}
+                                            onMouseLeave={(event) => { event.currentTarget.style.background = 'transparent'; }}
+                                        >
+                                            <span style={{ fontSize: '11px', fontWeight: 800 }}>{item.label}</span>
+                                            <span style={{ fontSize: '10px', color: theme.textSec }}>{item.hint}</span>
+                                        </button>
+                                    ))}
+                                </div>
+                            ) : null}
+                        </div>
                         <button
                             type="button"
                             onClick={handleCopyChart}
                             style={exportButtonStyle}
-                            title="Copy chart to clipboard"
+                            title="Copy chart with title and legend"
                         >
                             Copy
                         </button>
@@ -4523,26 +4822,20 @@ const ChartSurface = ({
                                 {chartCopyStatus.text}
                             </span>
                         ) : null}
-                        <button
-                            type="button"
-                            onClick={() => exportChartCsv(model, 'pivot-chart')}
-                            style={exportButtonStyle}
-                            title="Export chart data as CSV"
-                        >
-                            CSV
-                        </button>
                         {typeof onToggleLock === 'function' ? (
                             <button
                                 type="button"
                                 onClick={onToggleLock}
-                                style={lockButtonStyle}
-                                title={locked ? (floating ? 'Unlock chart request and floating frame' : 'Unlock chart request') : (floating ? 'Lock current chart request and floating frame' : 'Lock current chart request')}
-                                aria-label={locked ? (floating ? 'Unlock chart request and floating frame' : 'Unlock chart request') : (floating ? 'Lock current chart request and floating frame' : 'Lock current chart request')}
+                                style={{ ...lockButtonStyle, width: 'auto', padding: '0 10px', gap: '6px', fontSize: '11px', fontWeight: 800 }}
+                                title={locked ? 'Data is fixed to the saved selection. Click to resume live pivot updates.' : 'Keep this chart fixed to the current data selection while the pivot changes.'}
+                                aria-label={locked ? 'Unlock chart data and resume live updates' : 'Lock chart to the current data selection'}
+                                aria-pressed={locked}
                             >
                                 <Icons.Lock />
+                                <span>{locked ? 'Data locked' : 'Lock data'}</span>
                             </button>
                         ) : null}
-                        <button
+                        {showChrome ? <button
                             type="button"
                             onMouseDown={(event) => event.stopPropagation()}
                             onClick={(event) => {
@@ -4555,7 +4848,7 @@ const ChartSurface = ({
                             aria-label={configOpen ? 'Hide chart settings' : 'Show chart settings'}
                         >
                             <Icons.Settings />
-                        </button>
+                        </button> : null}
                     </div>
                 </div>
             ) : null}
@@ -4583,7 +4876,7 @@ const ChartSurface = ({
                     && chartType !== 'sunburst'
                     && chartType !== 'sankey'
                     ? <EmptyChartState message={model.emptyMessage || 'No chart data available.'} theme={theme} chartHeight={chartHeight} />
-                    : <SvgChart model={model} chartType={chartType} barLayout={barLayout} axisMode={axisMode} theme={theme} chartHeight={chartHeight} showLegend={!isSparklineChart} showDataLabels={showDataLabels} onCategoryActivate={onCategoryActivate} svgRef={svgRef} echartsRef={echartsRef} colorPalette={colorPalette} valueFormat={valueFormat} yAxisTitle={yAxisTitle} yAxisMin={yAxisMin} yAxisMax={yAxisMax} referenceLines={referenceLines} onReferenceLinesChange={setReferenceLines} labelAngle={labelAngle} chartTitle={resolvedTitle} onTitleChange={onTitleChange} subtitle={chartSubtitle} tickCount={tickCount} markerShape={markerShape} markerSize={markerSize} showGradient={showGradient} seriesColors={seriesColors} showAnimations={showAnimations} showCalloutLabels={showCalloutLabels} showTrendline={showTrendline} trendlineMode={trendlineMode} trendlinePeriod={trendlinePeriod} legendPosition={legendPosition} labelPosition={labelPosition} decimalPlaces={decimalPlaces} gradientDirection={gradientDirection} gradientOpacity={gradientOpacity} trendlineColor={trendlineColor} trendlineWidth={trendlineWidth} seriesSort={seriesSort} lineDashStyles={lineDashStyles} yAxisMinRight={yAxisMinRight} yAxisMaxRight={yAxisMaxRight} customPaletteColors={customPaletteColors} onElementSelect={handleElementSelect} />)}
+                    : <SvgChart model={model} chartType={chartType} barLayout={barLayout} axisMode={axisMode} theme={theme} chartHeight={chartHeight} showLegend={!isSparklineChart} showDataLabels={showDataLabels} onCategoryActivate={onCategoryActivate} svgRef={svgRef} echartsRef={echartsRef} colorPalette={colorPalette} valueFormat={valueFormat} yAxisTitle={yAxisTitle} yAxisMin={yAxisMin} yAxisMax={yAxisMax} referenceLines={referenceLines} onReferenceLinesChange={setReferenceLines} labelAngle={labelAngle} chartTitle={immersiveMode ? '' : resolvedTitle} onTitleChange={onTitleChange} subtitle={chartSubtitle} tickCount={tickCount} markerShape={markerShape} markerSize={markerSize} showGradient={showGradient} seriesColors={seriesColors} showAnimations={showAnimations} showCalloutLabels={showCalloutLabels} showTrendline={showTrendline} trendlineMode={trendlineMode} trendlinePeriod={trendlinePeriod} legendPosition={legendPosition} labelPosition={labelPosition} decimalPlaces={decimalPlaces} gradientDirection={gradientDirection} gradientOpacity={gradientOpacity} trendlineColor={trendlineColor} trendlineWidth={trendlineWidth} seriesSort={seriesSort} lineDashStyles={lineDashStyles} yAxisMinRight={yAxisMinRight} yAxisMaxRight={yAxisMaxRight} customPaletteColors={customPaletteColors} onElementSelect={handleElementSelect} />)}
                     {chartSubtitle ? <div style={{ textAlign: 'center', fontSize: '11px', color: theme.textSec, padding: '4px 8px 0', fontStyle: 'italic' }}>{chartSubtitle}</div> : null}
             {!immersiveMode && typeof onChartHeightChange === 'function' ? (
                 <div

@@ -41,6 +41,7 @@ class PivotViewState:
     show_row_totals: bool = False
     show_col_totals: bool = True
     show_subtotals: bool = True
+    layout_mode: Optional[str] = None
     cell_update: Optional[Dict[str, Any]] = None
     cell_updates: List[Dict[str, Any]] = field(default_factory=list)
     transaction_request: Optional[Dict[str, Any]] = None

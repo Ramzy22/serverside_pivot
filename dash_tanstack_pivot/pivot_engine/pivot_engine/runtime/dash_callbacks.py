@@ -160,6 +160,11 @@ def _state_override_value(
     return value
 
 
+def _normalize_request_layout_mode(value: Any) -> str:
+    normalized = str(value or "").strip().lower()
+    return normalized if normalized in {"hierarchy", "outline", "tabular"} else "hierarchy"
+
+
 @dataclass
 class _RuntimeExportContext:
     request: Any
@@ -245,9 +250,9 @@ def _build_runtime_export_context(
     )
     resolved_table = table_name or request_payload.get("table")
     effective_filters = effective_filters or {}
-    request_layout_mode = "hierarchy"
-    if isinstance(request_payload, dict) and request_payload.get("layout_mode"):
-        request_layout_mode = str(request_payload["layout_mode"])
+    request_layout_mode = _normalize_request_layout_mode(
+        request_payload.get("layout_mode") if isinstance(request_payload, dict) else None
+    )
 
     return _RuntimeExportContext(
         request=TanStackRequest(
@@ -382,25 +387,9 @@ def _runtime_payload_refs_enabled() -> bool:
     return os.environ.get("PIVOT_RUNTIME_PAYLOAD_REFS", "1").lower() not in {"0", "false", "no"}
 
 
-def _contains_nested_sequence(value: Any, *, depth: int = 0, max_depth: int = 4) -> bool:
-    if depth > max_depth:
-        return False
-    if isinstance(value, (str, bytes, bytearray)):
-        return False
-    if isinstance(value, (list, tuple)):
-        return True
-    if isinstance(value, dict):
-        return any(_contains_nested_sequence(item, depth=depth + 1, max_depth=max_depth) for item in value.values())
-    return False
-
-
-def _payload_rows_have_nested_values(rows: Any, *, sample_size: int = 50) -> bool:
-    if not isinstance(rows, list):
-        return False
-    for row in rows[:max(0, sample_size)]:
-        if isinstance(row, dict) and any(_contains_nested_sequence(value) for value in row.values()):
-            return True
-    return False
+def _env_flag(name: str, default: bool = False) -> bool:
+    fallback = "1" if default else "0"
+    return os.environ.get(name, fallback).strip().lower() not in {"0", "false", "no", "off"}
 
 
 def _get_runtime_payload_store(app: Any) -> RuntimePayloadStore:
@@ -448,6 +437,9 @@ def _register_runtime_payload_endpoint(app: Any) -> None:
         else:
             response = Response(item.body, status=200, content_type=item.content_type)
         response.headers["Cache-Control"] = "no-store"
+        content_encoding = item.metadata.get("contentEncoding") if isinstance(item.metadata, dict) else None
+        if content_encoding:
+            response.headers["Content-Encoding"] = str(content_encoding)
         filename = item.metadata.get("filename") if isinstance(item.metadata, dict) else None
         if filename:
             safe_filename = str(filename).replace("\\", "_").replace("/", "_").replace('"', "")
@@ -462,6 +454,7 @@ def _externalize_data_payload_if_needed(
     *,
     request_id: Optional[str],
     context: PivotRequestContext,
+    profile_sink: Optional[Dict[str, Any]] = None,
 ) -> Dict[str, Any]:
     if not _runtime_payload_refs_enabled() or not isinstance(payload, dict):
         return payload
@@ -469,17 +462,42 @@ def _externalize_data_payload_if_needed(
     if not isinstance(rows, list) or not rows:
         return payload
 
+    columns = payload.get("columns")
+    col_schema = payload.get("colSchema")
+    remote_payload: Dict[str, Any] = {"data": rows}
+    if isinstance(columns, list):
+        remote_payload["columns"] = columns
+    if isinstance(col_schema, dict):
+        remote_payload["colSchema"] = col_schema
+    encoded_payload = RuntimePayloadStore.serialize_json(remote_payload)
+    raw_payload_bytes = len(encoded_payload)
+    if profile_sink is not None:
+        profile_sink.update({
+            "bytes": raw_payload_bytes,
+            "uncompressedBytes": raw_payload_bytes,
+            "externalized": False,
+            "rowCount": len(rows),
+        })
+
     min_rows = max(1, _env_int("PIVOT_RUNTIME_PAYLOAD_REF_MIN_ROWS", 500))
-    nested_values = _payload_rows_have_nested_values(
-        rows,
-        sample_size=max(1, _env_int("PIVOT_RUNTIME_PAYLOAD_REF_NESTED_SAMPLE", 50)),
+    min_payload_bytes = max(
+        1,
+        _env_int(
+            "PIVOT_RUNTIME_PAYLOAD_REF_MIN_BYTES",
+            _env_int("PIVOT_RUNTIME_PAYLOAD_REF_MIN_NESTED_BYTES", 256 * 1024),
+        ),
     )
-    if len(rows) < min_rows and not nested_values:
+    # Small windows are faster inline. Always measure the actual JSON, though:
+    # shape heuristics can miss a few unusually large columns and leave Dash
+    # serializing a multi-megabyte callback response.
+    if len(rows) < min_rows and len(encoded_payload) < min_payload_bytes:
         return payload
 
     store = _get_runtime_payload_store(app)
     payload_ref = store.put_json(
-        {"data": rows},
+        remote_payload,
+        serialized_body=encoded_payload,
+        compress=_env_flag("PIVOT_RUNTIME_PAYLOAD_REF_GZIP", True),
         metadata={
             "requestId": request_id,
             "stateEpoch": context.state_epoch,
@@ -490,12 +508,24 @@ def _externalize_data_payload_if_needed(
             "dataOffset": payload.get("dataOffset"),
         },
     )
-    return {
+    if profile_sink is not None:
+        profile_sink.update({
+            "bytes": int(payload_ref.get("bytes") or raw_payload_bytes),
+            "uncompressedBytes": int(payload_ref.get("uncompressedBytes") or raw_payload_bytes),
+            "externalized": True,
+            "contentEncoding": payload_ref.get("contentEncoding"),
+        })
+    inline_payload = {
         **payload,
         "data": [],
         "payloadRef": payload_ref,
         "payloadInline": False,
     }
+    if "columns" in remote_payload:
+        inline_payload["columns"] = None
+    if "colSchema" in remote_payload:
+        inline_payload["colSchema"] = None
+    return inline_payload
 
 
 def _externalize_export_payload(
@@ -694,11 +724,12 @@ def register_dash_pivot_transport_callback(
                 "Bootstrap request without viewport/session context detected; using fallback bootstrap viewport.",
             )
             bootstrap_request_id = f"bootstrap:{_normalize_id(pivot_id)}:1"
+            bootstrap_row_count = max(16, _env_int("PIVOT_RUNTIME_INITIAL_ROWS", 48))
             request_payload = {
                 "requestId": bootstrap_request_id,
                 "start": 0,
-                "end": 99,
-                "count": 100,
+                "end": bootstrap_row_count - 1,
+                "count": bootstrap_row_count,
                 "window_seq": 1,
                 "state_epoch": 0,
                 "abort_generation": 0,
@@ -913,9 +944,9 @@ def register_dash_pivot_transport_callback(
         )
         # Read layout_mode from payload — it is local frontend state (not a Dash prop),
         # so it can only arrive via the request payload.
-        request_layout_mode = "hierarchy"
-        if isinstance(request_payload, dict) and request_payload.get("layout_mode"):
-            request_layout_mode = str(request_payload["layout_mode"])
+        request_layout_mode = _normalize_request_layout_mode(
+            request_payload.get("layout_mode") if isinstance(request_payload, dict) else None
+        )
         effective_view_mode = _state_override_value(
             request_state_override,
             "viewMode",
@@ -989,6 +1020,7 @@ def register_dash_pivot_transport_callback(
             show_row_totals=effective_show_row_totals,
             show_col_totals=effective_show_col_totals,
             show_subtotals=effective_show_subtotals,
+            layout_mode=request_layout_mode,
             cell_update=runtime_single_update or (cell_update if isinstance(cell_update, dict) else None),
             cell_updates=(
                 runtime_batch_updates
@@ -1228,6 +1260,7 @@ def register_dash_pivot_transport_callback(
             )
 
         if result.status == "data":
+            payload_build_started_at = time.perf_counter()
             columns_out = result.columns if result.columns is not None else no_update
             data_out = list(result.data or [])
             if result.color_scale_stats is not None:
@@ -1244,12 +1277,31 @@ def register_dash_pivot_transport_callback(
                 "editOverlay": result.edit_overlay,
                 "formulaErrors": result.formula_errors or None,
             }
+            payload_profile: Optional[Dict[str, Any]] = {} if profiling_enabled else None
             data_payload = _externalize_data_payload_if_needed(
                 app,
                 data_payload,
                 request_id=request_id,
                 context=context,
+                profile_sink=payload_profile,
             )
+            if profiling_enabled:
+                payload_build_finished_at = time.perf_counter()
+                if payload_profile:
+                    merged_profile["payload"] = payload_profile
+                callback_profile = merged_profile.setdefault("callback", {})
+                callback_profile["payloadBuildMs"] = round(
+                    (payload_build_finished_at - payload_build_started_at) * 1000,
+                    3,
+                )
+                callback_profile["responseBuildMs"] = round(
+                    (payload_build_finished_at - service_finished_at) * 1000,
+                    3,
+                )
+                callback_profile["totalMs"] = round(
+                    (payload_build_finished_at - callback_started_at) * 1000,
+                    3,
+                )
             return _response_tuple(
                 _build_runtime_response(
                     kind="transaction" if request_kind == "transaction" and result.transaction_result else "data",

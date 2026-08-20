@@ -84,11 +84,12 @@ const getUrgentJumpRowOverscan = (visibleRows) => {
 
 const VIEWPORT_BLOCK_STALE_MS = 1500;
 const VIEWPORT_DUPLICATE_REQUEST_WINDOW_MS = 5000;
-// DuckDB work runs in a worker thread. Cancelling the surrounding async task
-// cannot stop a query that has already entered DuckDB, so immediately sending
-// another viewport request only queues more HTTP callbacks behind the same
-// table lock. Keep one request active and retain only the latest pending window.
-const VIEWPORT_INFLIGHT_SERIALIZE_MS = 5000;
+// DuckDB work runs in a worker thread, so briefly retain only the latest pending
+// viewport while a query starts. Do not serialize behind the full Dash roundtrip:
+// once the short grace period expires the database is usually idle while the old
+// response is still crossing Dash/React. Version checks safely reject that older
+// response if it arrives after the newer viewport.
+const VIEWPORT_INFLIGHT_SERIALIZE_MS = 450;
 const VIEWPORT_DIRECTIONAL_PREFETCH_BLOCKS = 1;
 const VIEWPORT_FAST_SCROLL_DEBOUNCE_MS = 140;
 const VIEWPORT_FAST_COLUMN_DEBOUNCE_MS = 96;
@@ -106,7 +107,7 @@ export const useServerSideRowModel = ({
     dataVersion = 0, // Data version from backend to prevent stale updates
     dataStateEpoch = null, // State epoch echoed by the backend for this data window
     setProps,
-    blockSize = 100,
+    blockSize = 48,
     maxBlocksInCache = 500,
     blockLoadDebounceMs = null,
     rowOverscan = null,
@@ -391,6 +392,63 @@ export const useServerSideRowModel = ({
         let normalizedData = data;
         let normalizedOffset = dataOffset;
 
+        const retireQueuedBlocksCoveredByResponse = (inflight, responseStart, responseEnd) => {
+            const queued = queuedViewportRef.current;
+            if (
+                !inflight
+                || !queued
+                || queued.stateEpoch !== inflight.stateEpoch
+                || queued.abortGeneration !== inflight.abortGeneration
+            ) {
+                return;
+            }
+
+            const availableColStart = responseColStart !== null && responseColStart !== undefined
+                ? responseColStart
+                : inflight.colStart;
+            const availableColEnd = responseColEnd !== null && responseColEnd !== undefined
+                ? responseColEnd
+                : inflight.colEnd;
+            if (!columnWindowCovers(
+                availableColStart,
+                availableColEnd,
+                queued.overrideColStart,
+                queued.overrideColEnd
+            )) {
+                return;
+            }
+
+            const numericRowCount = Number(rowCount);
+            const lastDataRow = Number.isFinite(numericRowCount) && numericRowCount > 0
+                ? numericRowCount - 1
+                : null;
+            const remainingBlocks = queued.blocksNeeded.filter((blockIndex) => {
+                const blockStart = blockIndex * blockSize;
+                const fullBlockEnd = (blockIndex + 1) * blockSize - 1;
+                const blockEnd = lastDataRow === null
+                    ? fullBlockEnd
+                    : Math.min(fullBlockEnd, lastDataRow);
+                return responseStart > blockStart || responseEnd < blockEnd;
+            });
+
+            if (remainingBlocks.length === queued.blocksNeeded.length) return;
+
+            queuedViewportRef.current = remainingBlocks.length > 0
+                ? { ...queued, blocksNeeded: remainingBlocks }
+                : null;
+            if (remainingBlocks.length === 0 && viewportFlushTimerRef.current) {
+                clearTimeout(viewportFlushTimerRef.current);
+                viewportFlushTimerRef.current = null;
+            }
+            debugLog('retire-satisfied-queued-viewport', {
+                requestVersion: inflight.version,
+                responseStart,
+                responseEnd,
+                retiredBlocks: queued.blocksNeeded.filter(blockIndex => !remainingBlocks.includes(blockIndex)),
+                remainingBlocks,
+            });
+        };
+
         if (excludeGrandTotal) {
             const foundGrandTotal = data.find(isGrandTotalRow) || null;
             if (foundGrandTotal) {
@@ -430,6 +488,7 @@ export const useServerSideRowModel = ({
                 (rawResponseEnd >= requiredResponseEnd || coversEmptyDataset) &&
                 dataVersion >= inflight.version
             ) {
+                retireQueuedBlocksCoveredByResponse(inflight, responseStart, rawResponseEnd);
                 inflightRequestRef.current = null;
                 if (viewportRetryTimerRef.current) {
                     clearTimeout(viewportRetryTimerRef.current);
@@ -868,7 +927,7 @@ export const useServerSideRowModel = ({
                     include_grand_total: excludeGrandTotal || undefined,
                     immersive_mode: immersiveMode || undefined,
                     layout_mode: layoutMode,
-                    show_subtotal_footers: showSubtotals || undefined,
+                    show_subtotal_footers: showSubtotals,
                 },
             },
         });

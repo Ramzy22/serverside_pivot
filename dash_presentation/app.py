@@ -24,7 +24,8 @@ from dash import Dash, Input, Output, dcc, html, no_update
 from dash_tanstack_pivot import DashTanstackPivot
 from pivot_engine import create_tanstack_adapter, register_pivot_app
 
-_DEBUG_OUTPUT = os.environ.get("PIVOT_DEBUG_OUTPUT", "1").lower() in {"1", "true", "yes"}
+_DEBUG_OUTPUT = os.environ.get("PIVOT_DEBUG_OUTPUT", "0").lower() in {"1", "true", "yes"}
+_DASH_DEBUG = os.environ.get("PIVOT_DASH_DEBUG", "0").lower() in {"1", "true", "yes"}
 _EAGER_LOAD_ON_START = os.environ.get("PIVOT_EAGER_LOAD", "1").lower() in {"1", "true", "yes"}
 try:
     _PROFILER_SLOW_REQUEST_MS = max(
@@ -787,6 +788,11 @@ function (_tick) {
 
     if (slowest) {
         const request = (slowest.profile && slowest.profile.request) || {};
+        const clientProfile = (slowest.profile && slowest.profile.client) || {};
+        const serverPayloadProfile = (slowest.profile && slowest.profile.payload) || {};
+        const payloadBytes = numeric(clientProfile.payloadBytes) || numeric(serverPayloadProfile.bytes);
+        const payloadRawBytes = numeric(clientProfile.payloadUncompressedBytes) || numeric(serverPayloadProfile.uncompressedBytes);
+        const payloadMode = serverPayloadProfile.externalized === true ? ' ref' : '';
         lines.push('');
         lines.push(`SLOWEST RECORDED REQUEST · ${milliseconds(totalFor(slowest))}ms total`);
         lines.push(
@@ -794,6 +800,10 @@ function (_tick) {
             + `· table=${request.table || (slowest.meta && slowest.meta.table) || '-'} · intent=${request.intent || '-'} `
             + `· rows=${request.startRow === undefined || request.startRow === null ? '-' : request.startRow}`
             + `..${request.endRow === undefined || request.endRow === null ? '-' : request.endRow}`
+            + ` · cols=${request.colStart === undefined || request.colStart === null ? '-' : request.colStart}`
+            + `..${request.colEnd === undefined || request.colEnd === null ? '-' : request.colEnd}`
+            + ` · payload=${payloadBytes ? Math.round(payloadBytes / 1024) + 'KB' + payloadMode : '-'}`
+            + `${payloadRawBytes && payloadRawBytes !== payloadBytes ? '/' + Math.round(payloadRawBytes / 1024) + 'KB raw' : ''}`
         );
         const phases = diagnosticPhases(slowest).slice(0, 10);
         if (phases.length > 0) {
@@ -1124,4 +1134,4 @@ if __name__ == "__main__":
         if _DEBUG_OUTPUT:
             print("Preloading pivot datasets before starting Dash...")
         get_adapter()
-    app.run(debug=True, use_reloader=False, port=8050)
+    app.run(debug=_DASH_DEBUG, use_reloader=False, port=8050)

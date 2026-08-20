@@ -136,6 +136,12 @@ import {
     resolveGrandTotalPinState,
     applyRowPinning,
 } from '../hooks/usePivotNormalization';
+const DEFAULT_SERVER_SIDE_BLOCK_SIZE = 48;
+const EXPAND_ALL_STATE_KEY = '__ALL__';
+const normalizeLayoutModeValue = (value) => {
+    const normalized = typeof value === 'string' ? value.trim().toLowerCase() : '';
+    return normalized === 'outline' || normalized === 'tabular' ? normalized : 'hierarchy';
+};
 const debugLog = (...args) => {
     const buildDebugEnabled = process.env.NODE_ENV !== 'production';
     let runtimeDebugEnabled = false;
@@ -1637,7 +1643,7 @@ export default function DashTanstackPivot(props) {
             const persistedRowPinning = loadPersistedState('rowPinning', initialRowPinning);
             return getPinnedSideForRow(persistedRowPinning, GRAND_TOTAL_ROW_ID);
         });
-        const [layoutMode, setLayoutMode] = useState('hierarchy'); // hierarchy, tabular
+        const [layoutMode, setLayoutMode] = useState(() => normalizeLayoutModeValue(loadPersistedState('layoutMode', 'hierarchy')));
         const {
             viewMode, setViewMode,
             reportDef, setReportDef,
@@ -1896,6 +1902,8 @@ export default function DashTanstackPivot(props) {
             setFilters({});
             setSorting([]);
             setExpanded({});
+            setLayoutMode('hierarchy');
+            setShowSubtotals(initialShowSubtotals);
             setColumnPinning(initialColumnPinning);
             setRowPinning(initialRowPinning);
             setGrandTotalPinOverride(getPinnedSideForRow(initialRowPinning, GRAND_TOTAL_ROW_ID));
@@ -2065,7 +2073,15 @@ export default function DashTanstackPivot(props) {
     const [showReportConfigColumn, setShowReportConfigColumn] = useState(() => loadPersistedState('showReportConfigColumn', true) !== false);
     const [showRowTotals, setShowRowTotals] = useState(initialShowRowTotals);
     const [showColTotals, setShowColTotals] = useState(initialShowColTotals);
-    const [showSubtotals, setShowSubtotals] = useState(initialShowSubtotals);
+    const [showSubtotals, setShowSubtotals] = useState(() => {
+        const persistedShowSubtotals = loadPersistedState('showSubtotals', initialShowSubtotals);
+        return typeof persistedShowSubtotals === 'boolean' ? persistedShowSubtotals : initialShowSubtotals;
+    });
+    useEffect(() => {
+        if (!persistence) return;
+        savePersistedState('layoutMode', layoutMode);
+        savePersistedState('showSubtotals', showSubtotals);
+    }, [layoutMode, persistence, savePersistedState, showSubtotals]);
     useEffect(() => {
         if (!persistence) return;
         savePersistedState('showReportConfigColumn', showReportConfigColumn !== false);
@@ -2401,7 +2417,7 @@ export default function DashTanstackPivot(props) {
         if (restored.editValueDisplayMode === 'original' || restored.editValueDisplayMode === 'edited') {
             setEditValueDisplayMode(restored.editValueDisplayMode);
         }
-        if (typeof restored.layoutMode === 'string') setLayoutMode(restored.layoutMode);
+        if (typeof restored.layoutMode === 'string') setLayoutMode(normalizeLayoutModeValue(restored.layoutMode));
         if (typeof restored.colorScaleMode === 'string') setColorScaleMode(restored.colorScaleMode);
         if (typeof restored.colorPalette === 'string') setColorPalette(restored.colorPalette);
         if (typeof restored.spacingMode === 'number') setSpacingMode(restored.spacingMode);
@@ -3890,7 +3906,7 @@ export default function DashTanstackPivot(props) {
     const abortGenerationRef = useRef(0);
     const structuralPendingVersionRef = useRef(null);
     const expandAllDebounceRef = useRef(false);
-    const latestViewportRef = useRef({ start: 0, end: 99, count: 100 });
+    const latestViewportRef = useRef({ start: 0, end: DEFAULT_SERVER_SIDE_BLOCK_SIZE - 1, count: DEFAULT_SERVER_SIDE_BLOCK_SIZE });
     const [stateEpoch, setStateEpoch] = useState(0);
     const [abortGeneration, setAbortGeneration] = useState(0);
     const [structuralInFlight, setStructuralInFlight] = useState(false);
@@ -4097,6 +4113,7 @@ export default function DashTanstackPivot(props) {
         showRowTotals,
         showColTotals,
         showSubtotals,
+        layoutMode,
         grandTotalPinOverride,
     }, null), [
         colExpanded,
@@ -4111,6 +4128,7 @@ export default function DashTanstackPivot(props) {
         showColTotals,
         showRowTotals,
         showSubtotals,
+        layoutMode,
         sorting,
         valConfigs,
     ]);
@@ -5491,6 +5509,7 @@ export default function DashTanstackPivot(props) {
         setShowRowTotals(Boolean(snapshot.showRowTotals));
         setShowColTotals(Boolean(snapshot.showColTotals));
         setShowSubtotals(Object.prototype.hasOwnProperty.call(snapshot, 'showSubtotals') ? Boolean(snapshot.showSubtotals) : true);
+        setLayoutMode(normalizeLayoutModeValue(snapshot.layoutMode));
         setGrandTotalPinOverride(
             snapshot.grandTotalPinOverride === 'top' || snapshot.grandTotalPinOverride === 'bottom'
                 ? snapshot.grandTotalPinOverride
@@ -5894,11 +5913,11 @@ export default function DashTanstackPivot(props) {
         }
         const showGlobalLoading = shouldShowTransactionLoading(normalizedTransaction);
 
-        const viewportSnapshot = latestRequestedViewportRef.current || latestViewportRef.current || { start: 0, end: 99, count: 100 };
+        const viewportSnapshot = latestRequestedViewportRef.current || latestViewportRef.current || { start: 0, end: DEFAULT_SERVER_SIDE_BLOCK_SIZE - 1, count: DEFAULT_SERVER_SIDE_BLOCK_SIZE };
         const nextStart = Math.max(0, Number.isFinite(Number(viewportSnapshot.start)) ? Number(viewportSnapshot.start) : 0);
         const nextEndCandidate = Number.isFinite(Number(viewportSnapshot.end))
             ? Number(viewportSnapshot.end)
-            : (nextStart + Math.max(1, Number(viewportSnapshot.count) || 100) - 1);
+            : (nextStart + Math.max(1, Number(viewportSnapshot.count) || DEFAULT_SERVER_SIDE_BLOCK_SIZE) - 1);
         const nextEnd = Math.max(nextStart, nextEndCandidate);
         const nextCount = Math.max(1, nextEnd - nextStart + 1);
         const updateColumnWindow = resolveStableRequestedColumnWindow();
@@ -7285,6 +7304,7 @@ export default function DashTanstackPivot(props) {
         showRowTotals: initialShowRowTotals,
         showColTotals: initialShowColTotals,
         showSubtotals: initialShowSubtotals,
+        layoutMode: 'hierarchy',
         columnPinning: initialColumnPinning,
         rowPinning: initialRowPinning,
         grandTotalPinOverride,
@@ -7308,6 +7328,7 @@ export default function DashTanstackPivot(props) {
         };
         const nextSyncState = {
             ...nextProps,
+            layoutMode,
             grandTotalPinOverride,
             serverSidePinsGrandTotal,
         };
@@ -7352,7 +7373,7 @@ export default function DashTanstackPivot(props) {
                 }
                 const tx = beginExpansionRequest();
                 markRequestPending(tx.version);
-                const viewportSnapshot = latestRequestedViewportRef.current || latestViewportRef.current || { start: 0, end: 99, count: 100 };
+                const viewportSnapshot = latestRequestedViewportRef.current || latestViewportRef.current || { start: 0, end: DEFAULT_SERVER_SIDE_BLOCK_SIZE - 1, count: DEFAULT_SERVER_SIDE_BLOCK_SIZE };
                 const expansionColumnWindow = resolveStableRequestedColumnWindow();
 
                 // Extend the row window to cover the block immediately after the anchor block.
@@ -7415,7 +7436,7 @@ export default function DashTanstackPivot(props) {
                             needs_col_schema: needsColSchemaRef.current && serverSide || undefined,
                             include_grand_total: serverSidePinsGrandTotal || undefined,
                             layout_mode: layoutMode,
-                            show_subtotal_footers: showSubtotals || undefined,
+                            show_subtotal_footers: showSubtotals,
                             state_override: requestStateOverride || undefined,
                         },
                     },
@@ -7433,9 +7454,12 @@ export default function DashTanstackPivot(props) {
                     parentRef.current.scrollTop = 0;
                 }
 
-                const tx = beginExpansionRequest();
+                // Sorting changes every virtual row index. Give it a fresh
+                // structural epoch so late blocks from the previous order can
+                // never be merged into the newly sorted row cache.
+                const tx = beginStructuralTransaction();
                 const sortingColumnWindow = resolveStableRequestedColumnWindow();
-                const initialEnd = 99;
+                const initialEnd = DEFAULT_SERVER_SIDE_BLOCK_SIZE - 1;
                 markRequestPending({
                     version: tx.version,
                     reqStart: 0,
@@ -7464,7 +7488,7 @@ export default function DashTanstackPivot(props) {
                             include_grand_total: serverSidePinsGrandTotal || undefined,
                             immersive_mode: immersiveMode || undefined,
                             layout_mode: layoutMode,
-                            show_subtotal_footers: showSubtotals || undefined,
+                            show_subtotal_footers: showSubtotals,
                             state_override: requestStateOverride || undefined,
                         },
                     },
@@ -7481,9 +7505,9 @@ export default function DashTanstackPivot(props) {
                 setPendingColumnSkeletonCount(0);
             }
             const tx = beginStructuralTransaction();
-            const structuralViewportSnapshot = latestRequestedViewportRef.current || latestViewportRef.current || { start: 0, end: 99, count: 100 };
+            const structuralViewportSnapshot = latestRequestedViewportRef.current || latestViewportRef.current || { start: 0, end: DEFAULT_SERVER_SIDE_BLOCK_SIZE - 1, count: DEFAULT_SERVER_SIDE_BLOCK_SIZE };
             const structuralWindowSize = Math.max(
-                100,
+                DEFAULT_SERVER_SIDE_BLOCK_SIZE,
                 Math.max(1, Number.isFinite(Number(structuralViewportSnapshot.count)) ? Number(structuralViewportSnapshot.count) : 0)
             );
             const structuralStart = 0;
@@ -7503,6 +7527,7 @@ export default function DashTanstackPivot(props) {
                 'showRowTotals',
                 'showColTotals',
                 'showSubtotals',
+                'layoutMode',
             ]);
             const schemaShapeChanged = serverSide && changedKeys.some(key => schemaShapeChangeKeys.has(key));
             const shouldUseFullInitialColumnWindow = (
@@ -7547,7 +7572,7 @@ export default function DashTanstackPivot(props) {
                         include_grand_total: serverSidePinsGrandTotal || undefined,
                         immersive_mode: immersiveMode || undefined,
                         layout_mode: layoutMode,
-                        show_subtotal_footers: showSubtotals || undefined,
+                        show_subtotal_footers: showSubtotals,
                         state_override: requestStateOverride || undefined,
                     },
                 },
@@ -9880,14 +9905,18 @@ export default function DashTanstackPivot(props) {
         if (row.original && row.original._isTotal) return false;
 
         if (serverSide) {
-             // 1. "Expand All" mode
-             if (expanded === true) return true;
-             
-             // 2. Explicit Local State (Optimistic)
+             // 1. Explicit Local State (Optimistic)
              // We check if the key exists in the expanded object to respect user interactions
              if (expanded && Object.prototype.hasOwnProperty.call(expanded, row.id)) {
                  return !!expanded[row.id];
              }
+
+             // 2. "Expand All" mode. The object form retains this default while
+             // recording explicit false overrides for individually collapsed rows.
+             if (
+                 expanded === true
+                 || (expanded && expanded[EXPAND_ALL_STATE_KEY] === true)
+             ) return true;
              
              // 3. Server State (Fallback/Source of Truth)
              // If local state doesn't know about this row yet (e.g. initial load), trust the server
@@ -9905,6 +9934,7 @@ export default function DashTanstackPivot(props) {
     const normalizeExpandedStateForTreeDefaults = useCallback((nextExpanded, previousExpanded) => {
         if (!serverSide || viewMode !== 'tree' || !treeHasDefaultExpansion) return nextExpanded;
         if (nextExpanded === true || !nextExpanded || typeof nextExpanded !== 'object') return nextExpanded;
+        if (nextExpanded[EXPAND_ALL_STATE_KEY] === true) return nextExpanded;
 
         const normalizedExpanded = { ...nextExpanded };
         const previous = previousExpanded && typeof previousExpanded === 'object' ? previousExpanded : {};
@@ -10066,20 +10096,69 @@ export default function DashTanstackPivot(props) {
         onSortingChange: (updater) => { handleSortingChange(updater); },
         onExpandedChange: (updater) => {
             captureExpansionScrollPosition();
-            const rawExpanded = typeof updater === 'function' ? updater(expanded) : updater;
-            const newExpanded = normalizeExpandedStateForTreeDefaults(rawExpanded, expanded);
+            const usesExpandAllDefault = (
+                expanded === true
+                || (
+                    expanded
+                    && typeof expanded === 'object'
+                    && expanded[EXPAND_ALL_STATE_KEY] === true
+                )
+            );
+            let updaterBase = expanded;
+            if (usesExpandAllDefault && typeof updater === 'function') {
+                updaterBase = {};
+                const currentOverrides = expanded && typeof expanded === 'object' ? expanded : {};
+                Object.keys(table.getRowModel().rowsById).forEach((rowId) => {
+                    if (currentOverrides[rowId] !== false) updaterBase[rowId] = true;
+                });
+            }
+
+            const rawExpanded = typeof updater === 'function' ? updater(updaterBase) : updater;
+            let toggledExpandedPath = null;
+            let normalizedRawExpanded = rawExpanded;
+            if (
+                usesExpandAllDefault
+                && rawExpanded
+                && typeof rawExpanded === 'object'
+                && rawExpanded !== true
+            ) {
+                const updaterKeys = new Set([
+                    ...Object.keys(updaterBase || {}),
+                    ...Object.keys(rawExpanded),
+                ]);
+                toggledExpandedPath = [...updaterKeys].find((key) => (
+                    !!(updaterBase && updaterBase[key]) !== !!rawExpanded[key]
+                )) || null;
+
+                const previousOverrides = expanded && typeof expanded === 'object' ? expanded : {};
+                normalizedRawExpanded = {
+                    ...previousOverrides,
+                    [EXPAND_ALL_STATE_KEY]: true,
+                };
+                if (toggledExpandedPath) {
+                    if (rawExpanded[toggledExpandedPath]) {
+                        delete normalizedRawExpanded[toggledExpandedPath];
+                    } else {
+                        normalizedRawExpanded[toggledExpandedPath] = false;
+                    }
+                }
+            }
+            const newExpanded = normalizeExpandedStateForTreeDefaults(normalizedRawExpanded, expanded);
 
             if (serverSide) {
                 // Find which path was toggled so we know which block to defer-invalidate
                 // after the expansion response lands (see pendingExpansionRef effect).
                 // Value-diff: detect any key whose boolean value flipped (covers
                 // both key-add/remove AND falseâ†’true / trueâ†’false toggles).
-                const oldExp = expanded || {};
+                const oldExp = expanded && typeof expanded === 'object' ? expanded : {};
                 const newExp = newExpanded || {};
                 const allKeys = new Set([...Object.keys(oldExp), ...Object.keys(newExp)]);
-                const changedPath = [...allKeys].find((key) => (
+                const changedPath = toggledExpandedPath || [...allKeys].find((key) => (
+                    key !== EXPAND_ALL_STATE_KEY
+                    && (
                     Object.prototype.hasOwnProperty.call(oldExp, key) !== Object.prototype.hasOwnProperty.call(newExp, key)
                     || !!oldExp[key] !== !!newExp[key]
+                    )
                 ));
                 if (changedPath) {
                     const isNowExpanded = !!(newExpanded && newExpanded[changedPath]);
@@ -11319,7 +11398,7 @@ export default function DashTanstackPivot(props) {
         return true;
     }, []);
 
-    const commitRuntimeDataPayload = useCallback((response, payload) => {
+    const commitRuntimeDataPayload = useCallback((response, payload, clientProfile = null) => {
         finalizeTransactionHistoryResponse(response, payload);
         hydrateVisibleEditOverlay(payload.editOverlay);
         reconcileOptimisticCellValuesWithPayload(payload);
@@ -11328,6 +11407,7 @@ export default function DashTanstackPivot(props) {
             dataVersion: coerceTransportNumber(payload.dataVersion, null),
             rowCount: coerceTransportNumber(payload.rowCount, null),
             stateQueuedAt: Date.now(),
+            clientProfile: clientProfile && typeof clientProfile === 'object' ? clientProfile : null,
         };
         if (payload.formulaErrors && typeof payload.formulaErrors === 'object') {
             setFormulaErrors(payload.formulaErrors);
@@ -11360,6 +11440,7 @@ export default function DashTanstackPivot(props) {
                 : null;
             if (payloadRef && typeof payloadRef.url === 'string' && payloadRef.url) {
                 const fetchToken = payloadRef.id || payloadRef.url;
+                const payloadFetchStartedAt = Date.now();
                 const abortController = new AbortController();
                 activeRuntimePayloadFetchRef.current = {
                     token: fetchToken,
@@ -11389,7 +11470,12 @@ export default function DashTanstackPivot(props) {
                             resolvePendingRequest(runtimeResponse);
                             return;
                         }
-                        commitRuntimeDataPayload(runtimeResponse, resolvedPayload);
+                        commitRuntimeDataPayload(runtimeResponse, resolvedPayload, {
+                            payloadFetchParseMs: Date.now() - payloadFetchStartedAt,
+                            payloadBytes: coerceTransportNumber(payloadRef.bytes, null),
+                            payloadUncompressedBytes: coerceTransportNumber(payloadRef.uncompressedBytes, null),
+                            payloadCompressed: payloadRef.contentEncoding === 'gzip',
+                        });
                     })
                     .catch((error) => {
                         if (error && error.name === 'AbortError') return;
@@ -11744,6 +11830,7 @@ export default function DashTanstackPivot(props) {
             stateQueuedAt: pendingCommit.stateQueuedAt,
             layoutCommittedAt,
             committedAt: layoutCommittedAt,
+            profile: pendingCommit.clientProfile ? { client: pendingCommit.clientProfile } : undefined,
             meta: {
                 dataVersion: Number(dataVersion),
                 rowCount,

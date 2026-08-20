@@ -453,8 +453,8 @@ defaultTheme="flash"   # 11 built-in themes:
 
 ```python
 performanceConfig={
-    "cacheBlockSize": 100,      # rows per block (default 100)
-    "maxBlocksInCache": 1024,   # LRU block limit (~100 K rows)
+    "cacheBlockSize": 48,       # rows per block (default 48)
+    "maxBlocksInCache": 1024,   # LRU block limit (~50 K rows at the default block size)
     "blockLoadDebounceMs": 50,  # scroll debounce in ms
     "rowOverscan": 10,          # extra rendered rows above/below viewport
     "columnOverscan": 5,

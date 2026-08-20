@@ -1,4 +1,5 @@
 import asyncio
+import gzip
 import inspect
 import json
 import threading
@@ -125,6 +126,7 @@ def test_transport_callback_uses_runtime_request_as_primary_trigger():
 
 def test_runtime_payload_ref_externalizes_nested_rows_and_serves_json(monkeypatch):
     monkeypatch.setenv("PIVOT_RUNTIME_PAYLOAD_REF_MIN_ROWS", "9999")
+    monkeypatch.setenv("PIVOT_RUNTIME_PAYLOAD_REF_MIN_NESTED_BYTES", "1")
     app = Dash(__name__)
     app.layout = html.Div()
     _register_runtime_payload_endpoint(app)
@@ -159,7 +161,93 @@ def test_runtime_payload_ref_externalizes_nested_rows_and_serves_json(monkeypatc
 
     response = app.server.test_client().get(payload_ref["url"])
     assert response.status_code == 200
-    assert json.loads(response.data.decode("utf-8")) == {"data": payload["data"]}
+    assert response.headers["Content-Encoding"] == "gzip"
+    assert json.loads(gzip.decompress(response.data).decode("utf-8")) == {"data": payload["data"]}
+
+
+def test_runtime_payload_ref_keeps_small_nested_windows_inline(monkeypatch):
+    monkeypatch.setenv("PIVOT_RUNTIME_PAYLOAD_REF_MIN_ROWS", "9999")
+    monkeypatch.setenv("PIVOT_RUNTIME_PAYLOAD_REF_MIN_NESTED_BYTES", "262144")
+    app = Dash(__name__)
+    app.layout = html.Div()
+    context = PivotRequestContext(table="sales", client_instance="client-a", state_epoch=1, window_seq=1)
+    payload = {
+        "data": [{"id": f"row-{index}", "trend": list(range(20))} for index in range(48)],
+        "rowCount": 48,
+        "dataVersion": 1,
+        "dataOffset": 0,
+    }
+
+    result = _externalize_data_payload_if_needed(app, payload, request_id="req-inline", context=context)
+
+    assert result is payload
+    assert "payloadRef" not in result
+
+
+def test_runtime_payload_ref_externalizes_wide_flat_rows_and_schema(monkeypatch):
+    monkeypatch.setenv("PIVOT_RUNTIME_PAYLOAD_REF_MIN_ROWS", "9999")
+    monkeypatch.setenv("PIVOT_RUNTIME_PAYLOAD_REF_MIN_NESTED_BYTES", "1024")
+    monkeypatch.setenv("PIVOT_RUNTIME_PAYLOAD_REF_WIDE_KEYS", "16")
+    monkeypatch.setenv("PIVOT_RUNTIME_PAYLOAD_REF_WIDE_SCHEMA_COLUMNS", "16")
+    app = Dash(__name__)
+    app.layout = html.Div()
+    _register_runtime_payload_endpoint(app)
+    context = PivotRequestContext(table="sales", client_instance="client-wide", state_epoch=1, window_seq=2)
+    center_columns = [{"id": f"metric-{index}"} for index in range(80)]
+    payload = {
+        "data": [
+            {"id": f"row-{row_index}", **{f"metric-{index}": row_index + index for index in range(80)}}
+            for row_index in range(48)
+        ],
+        "columns": center_columns,
+        "colSchema": {"columns": center_columns, "total_center_cols": 80},
+        "rowCount": 48,
+        "dataVersion": 2,
+        "dataOffset": 0,
+    }
+
+    result = _externalize_data_payload_if_needed(app, payload, request_id="req-wide", context=context)
+
+    assert result["data"] == []
+    assert result["columns"] is None
+    assert result["colSchema"] is None
+    response = app.server.test_client().get(result["payloadRef"]["url"])
+    remote_payload = json.loads(gzip.decompress(response.data).decode("utf-8"))
+    assert remote_payload["data"] == payload["data"]
+    assert remote_payload["columns"] == center_columns
+    assert remote_payload["colSchema"]["total_center_cols"] == 80
+
+
+def test_runtime_payload_ref_uses_encoded_size_without_shape_heuristics(monkeypatch):
+    monkeypatch.setenv("PIVOT_RUNTIME_PAYLOAD_REF_MIN_ROWS", "9999")
+    monkeypatch.setenv("PIVOT_RUNTIME_PAYLOAD_REF_MIN_BYTES", "1024")
+    app = Dash(__name__)
+    app.layout = html.Div()
+    _register_runtime_payload_endpoint(app)
+    context = PivotRequestContext(table="sales", client_instance="client-bytes", state_epoch=1, window_seq=3)
+    payload = {
+        "data": [
+            {"id": f"row-{row_index}", **{f"metric-{index}": "x" * 200 for index in range(8)}}
+            for row_index in range(8)
+        ],
+        "rowCount": 8,
+        "dataVersion": 3,
+        "dataOffset": 0,
+    }
+    profile = {}
+
+    result = _externalize_data_payload_if_needed(
+        app,
+        payload,
+        request_id="req-bytes",
+        context=context,
+        profile_sink=profile,
+    )
+
+    assert result["payloadInline"] is False
+    assert profile["externalized"] is True
+    assert profile["uncompressedBytes"] > 1024
+    assert profile["bytes"] < profile["uncompressedBytes"]
 
 
 def test_export_payload_is_served_as_bytes_without_base64():
@@ -440,8 +528,8 @@ def test_bootstrap_fallback_viewport_shape_is_complete():
     pivot_id = "pivot-grid"
     fallback_viewport = {
         "start": 0,
-        "end": 99,
-        "count": 100,
+        "end": 47,
+        "count": 48,
         "window_seq": 1,
         "state_epoch": 0,
         "abort_generation": 0,
@@ -451,7 +539,7 @@ def test_bootstrap_fallback_viewport_shape_is_complete():
         "needs_col_schema": True,
     }
     assert fallback_viewport["start"] == 0
-    assert fallback_viewport["end"] == 99
+    assert fallback_viewport["end"] == 47
     assert fallback_viewport["needs_col_schema"] is True
 
 
@@ -656,6 +744,33 @@ def test_runtime_export_context_uses_state_override_sorting_and_effective_state(
     assert context.expanded is True
     assert context.row_fields == ["region"]
     assert context.val_configs == [{"field": "sales", "agg": "sum"}]
+
+
+def test_runtime_export_context_normalizes_layout_mode_and_preserves_subtotal_false():
+    context = _build_runtime_export_context(
+        request_payload={
+            "table": "sales",
+            "layout_mode": "  TABULAR  ",
+            "state_override": {"showSubtotals": False},
+        },
+        table_name="sales",
+        row_fields=["region", "country"],
+        col_fields=[],
+        val_configs=[{"field": "sales", "agg": "sum"}],
+        filters={},
+        custom_dimensions=[],
+        sorting=[],
+        sort_options={},
+        sort_options_default=None,
+        expanded={},
+        show_row_totals=True,
+        show_col_totals=True,
+        show_subtotals=True,
+    )
+
+    assert context.request.layout_mode == "tabular"
+    assert context.request.include_subtotals is False
+    assert context.request.show_subtotal_footers is False
 
 
 def test_transport_callback_output_is_plain_object_for_single_output():

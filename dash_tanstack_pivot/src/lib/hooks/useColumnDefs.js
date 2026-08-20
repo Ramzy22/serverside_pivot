@@ -15,6 +15,11 @@ import {
     resolveSparklineMetricValue,
 } from '../utils/sparklines';
 import { formatCustomAwareFieldLabel } from './usePivotNormalization';
+import {
+    isBlankHierarchyValue,
+    resolveTabularPathFieldValue,
+    resolveTabularRowFieldValue,
+} from '../utils/layoutRows';
 
 const debugLog = process.env.NODE_ENV !== 'production'
     ? (...args) => console.log('[pivot-grid]', ...args)
@@ -110,34 +115,15 @@ export function useColumnDefs({
     return useMemo(() => {
         const effectiveLayoutMode = (pivotMode === 'report' || viewMode === 'tree') ? 'hierarchy' : layoutMode;
         const getFieldLabel = (field) => formatCustomAwareFieldLabel(field, customDimensions);
-        const isBlankHierarchyValue = (value) => (
-            value === undefined
-            || value === null
-            || value === ''
-            || (typeof value === 'number' && Number.isNaN(value))
-        );
-        const getTabularPathFieldValue = (rowData, field, index, depth) => {
-            if (!rowData || typeof rowData !== 'object') return undefined;
-            if (rowData._isTotal || rowData._path === '__grand_total__') return undefined;
-            const pathParts = typeof rowData._path === 'string' && rowData._path !== ''
-                ? rowData._path.split('|||')
-                : [];
-            const pathFields = Array.isArray(rowData._pathFields) ? rowData._pathFields : [];
-            const pathFieldIndex = pathFields.indexOf(field);
-            const fallbackPathIndex = pathFieldIndex >= 0 ? pathFieldIndex : index;
-            if (index > depth && pathFieldIndex < 0) return undefined;
-            return pathParts[fallbackPathIndex];
-        };
+        const getTabularPathFieldValue = resolveTabularPathFieldValue;
         const getTabularRowFieldValue = (rowData, field, index, fallbackValue = undefined) => {
-            const value = fallbackValue !== undefined
-                ? fallbackValue
-                : (rowData && typeof rowData === 'object' ? rowData[field] : undefined);
-            if (effectiveLayoutMode !== 'tabular' || !isBlankHierarchyValue(value)) {
-                return value;
-            }
-            const depth = rowData && rowData.depth !== undefined ? rowData.depth : 0;
-            const pathValue = getTabularPathFieldValue(rowData, field, index, depth);
-            return isBlankHierarchyValue(pathValue) ? value : pathValue;
+            return resolveTabularRowFieldValue(
+                rowData,
+                field,
+                index,
+                effectiveLayoutMode,
+                fallbackValue,
+            );
         };
         const getConfigDisplayFormat = (config) => {
             if (!config) return null;

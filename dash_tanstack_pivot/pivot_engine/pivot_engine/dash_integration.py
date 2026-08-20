@@ -117,7 +117,7 @@ def register_pivot_app(
         you also call ``register_dash_drill_modal_callback`` separately).
     """
     if debug is None:
-        debug = os.environ.get("PIVOT_DEBUG_OUTPUT", "1").lower() in {"1", "true", "yes"}
+        debug = os.environ.get("PIVOT_DEBUG_OUTPUT", "0").lower() in {"1", "true", "yes"}
 
     # --- per-registration runtime state ---
     _session_gate = SessionRequestGate()
@@ -210,4 +210,3 @@ def register_pivot_app(
         debug=debug,
         sort_options_default=_layout_sort_options,
     )
-

@@ -245,6 +245,8 @@ class TanStackPivotAdapter(FormulaEngineMixin):
             "totals": bool(request.totals),
             "row_totals": bool(request.row_totals),
             "include_subtotals": bool(request.include_subtotals),
+            "layout_mode": str(getattr(request, "layout_mode", None) or "").strip().lower(),
+            "show_subtotal_footers": bool(getattr(request, "show_subtotal_footers", False)),
             "column_sort_options": request.column_sort_options or {},
         }
         return hashlib.sha256(self._stable_json(payload).encode()).hexdigest()[:24]
@@ -258,6 +260,27 @@ class TanStackPivotAdapter(FormulaEngineMixin):
             "custom_dimensions": request.custom_dimensions or [],
             "measure_axis": request.measure_axis or None,
             "column_sort_options": request.column_sort_options or {},
+        }
+        return hashlib.sha256(self._stable_json(payload).encode()).hexdigest()[:24]
+
+    def _pivot_column_catalog_cache_key(self, spec: PivotSpec) -> str:
+        """Key column discovery by inputs that can change column membership/order.
+
+        Row hierarchy fields and measures after the first one do not affect the
+        discovered pivot members. Including them caused a catalog query after
+        every deeper row-field change, while omitting ``spec.columns`` could
+        incorrectly reuse a catalog for a different pivot dimension.
+        """
+        order_measure = spec.measures[0] if spec.measures else None
+        payload = {
+            "cache_generation": self._cache_generation_value(),
+            "table": spec.table,
+            "pivot_columns": list(spec.columns or []),
+            "filters": spec.filters or [],
+            "custom_dimensions": spec.custom_dimensions or [],
+            "measure_axis": spec.measure_axis.to_dict() if getattr(spec, "measure_axis", None) else None,
+            "column_sort_options": spec.column_sort_options or {},
+            "order_measure": vars(order_measure) if order_measure is not None else None,
         }
         return hashlib.sha256(self._stable_json(payload).encode()).hexdigest()[:24]
 
@@ -1108,6 +1131,7 @@ class TanStackPivotAdapter(FormulaEngineMixin):
         self,
         window_center_ids: Optional[list[str]],
         request: "TanStackRequest",
+        all_center_ids: Optional[list[str]] = None,
     ) -> Optional[list[str]]:
         if not window_center_ids:
             return None
@@ -1124,6 +1148,23 @@ class TanStackPivotAdapter(FormulaEngineMixin):
             col_id for col_id in window_center_ids
             if isinstance(col_id, str)
         )
+        available_center_ids = set(
+            col_id for col_id in (all_center_ids or window_center_ids)
+            if isinstance(col_id, str)
+        )
+        # A row sort on a pivoted value remains a query dependency even after
+        # horizontal scrolling moves that column off screen. Without it, each
+        # column window can produce a different row order and cached rows appear
+        # blank or attached to the wrong virtual index.
+        for sort_spec in (request.sorting or []):
+            sort_id = sort_spec.get("id") if isinstance(sort_spec, dict) else None
+            if (
+                isinstance(sort_id, str)
+                and sort_id in available_center_ids
+                and sort_id not in visible_center_ids
+            ):
+                source_center_ids.append(sort_id)
+
         for col in (request.columns or []):
             if not self._is_column_formula_column(col):
                 continue
@@ -1155,30 +1196,7 @@ class TanStackPivotAdapter(FormulaEngineMixin):
         if not spec.columns:
             return []
 
-        request_like = TanStackRequest(
-            operation=TanStackOperation.GET_DATA,
-            table=spec.table,
-            columns=[
-                *({"id": row_id} for row_id in (spec.rows or [])),
-                *({
-                    "id": (
-                        measure.alias
-                        or (measure.field if getattr(measure, "agg", None) == "formula" else f"{measure.field}_{measure.agg}")
-                    ),
-                    "aggregationField": measure.field,
-                    "aggregationFn": measure.agg,
-                    "isFormula": getattr(measure, "agg", None) == "formula",
-                } for measure in (spec.measures or []))
-            ],
-            filters=spec.filters or [],
-            custom_dimensions=spec.custom_dimensions or [],
-            sorting=[],
-            grouping=spec.rows or [],
-            aggregations=[],
-            measure_axis=spec.measure_axis.to_dict() if getattr(spec, "measure_axis", None) else None,
-            column_sort_options=spec.column_sort_options or {},
-        )
-        local_cache_key = self._center_column_catalog_cache_key(request_like)
+        local_cache_key = self._pivot_column_catalog_cache_key(spec)
         cached_catalog = self._locked_cache_lookup(self._pivot_column_catalog_cache, local_cache_key)
         if isinstance(cached_catalog, dict) and isinstance(cached_catalog.get("values"), list):
             return list(cached_catalog["values"])
@@ -3862,6 +3880,7 @@ class TanStackPivotAdapter(FormulaEngineMixin):
                     pivot_spec.pivot_config.materialized_column_values = self._materialized_pivot_values_for_window(
                         window_center_ids,
                         request,
+                        discovered_center_ids,
                     )
         else:
             column_catalog_started_at = None
@@ -3875,7 +3894,10 @@ class TanStackPivotAdapter(FormulaEngineMixin):
         # Flat path: tabular layout with subtotals OFF.  Layout-mode is the
         # primary signal; include_subtotals is kept as a backward-compat fallback
         # for callers that predate the layout_mode field.
-        _request_layout_mode = getattr(request, "layout_mode", None) or ""
+        _raw_request_layout_mode = getattr(request, "layout_mode", None)
+        _request_layout_mode = str(_raw_request_layout_mode or "").strip().lower()
+        if _raw_request_layout_mode and _request_layout_mode not in {"hierarchy", "outline", "tabular"}:
+            _request_layout_mode = "hierarchy"
         _show_subtotal_footers = bool(getattr(request, "show_subtotal_footers", False))
         _use_flat_path = (
             request.grouping and (
@@ -3996,6 +4018,12 @@ class TanStackPivotAdapter(FormulaEngineMixin):
 
         _hier_show_subtotal_footers = _show_subtotal_footers and _request_layout_mode != "tabular"
         _hier_tabular_subtotals = _show_subtotal_footers and _request_layout_mode == "tabular"
+        if _hier_tabular_subtotals:
+            # A tabular subtotal view is a flat post-order projection of the full
+            # hierarchy. Expansion/collapse is a presentation concern for the
+            # hierarchy and outline layouts, so load every descendant here even
+            # when the incoming expansion map is empty or contains overrides.
+            target_paths = [["__ALL__"]]
 
         if hasattr(self.controller, 'run_hierarchy_view'):
             try:

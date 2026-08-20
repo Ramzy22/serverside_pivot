@@ -594,7 +594,7 @@ export const useServerSideViewportController = ({
     }, [updateVisibleColRange]);
 
     const serverSideBlockSize = useMemo(() => {
-        if (!serverSide) return 100;
+        if (!serverSide) return 48;
         const configuredCacheBlockSize = performanceConfig && performanceConfig.cacheBlockSize;
         const configuredBlockSize = (
             configuredCacheBlockSize !== null
@@ -606,10 +606,9 @@ export const useServerSideViewportController = ({
         if (configuredBlockSize !== null) return configuredBlockSize;
         const numericRowCount = Number.isFinite(Number(effectiveRowCount)) ? Number(effectiveRowCount) : 0;
         const numericCenterCols = Number.isFinite(Number(totalCenterCols)) ? Number(totalCenterCols) : 0;
-        if (numericCenterCols >= 20000) return 48;
-        if (numericRowCount >= 100000 || numericCenterCols >= 500) return 64;
-        if (numericRowCount >= 25000 || numericCenterCols >= 250) return 80;
-        return 100;
+        if (numericCenterCols >= 20000) return 32;
+        if (numericRowCount >= 100000 || numericCenterCols >= 500) return 40;
+        return 48;
     }, [effectiveRowCount, performanceConfig, serverSide, totalCenterCols]);
 
     return {

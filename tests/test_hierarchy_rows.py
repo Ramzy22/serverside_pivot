@@ -4,9 +4,15 @@ import pyarrow as pa
 from pivot_engine.hierarchy_rows import (
     build_hierarchy_row_window,
     finalize_hierarchy_rows,
+    hierarchy_lookup_key,
     normalize_expanded_paths,
 )
-from pivot_engine.tanstack_adapter import TanStackOperation, TanStackPivotAdapter, TanStackRequest
+from pivot_engine.tanstack_adapter import (
+    TanStackOperation,
+    TanStackPivotAdapter,
+    TanStackRequest,
+    create_tanstack_adapter,
+)
 from pivot_engine.types.pivot_spec import Measure, PivotSpec
 
 
@@ -73,6 +79,186 @@ def test_hierarchy_normalization_and_finalization_are_shared_policy():
     ]
 
 
+def test_expand_all_with_one_collapsed_branch_keeps_lower_sibling_expanded():
+    hierarchy_result = {
+        "": [
+            {"region": "North", "sales_sum": 100},
+            {"region": "South", "sales_sum": 80},
+        ],
+        "North": [
+            {"region": "North", "country": "USA", "sales_sum": 100},
+        ],
+        "South": [
+            {"region": "South", "country": "Brazil", "sales_sum": 80},
+        ],
+    }
+
+    window = build_hierarchy_row_window(
+        _sales_spec(),
+        hierarchy_result,
+        [["__ALL__"], ["__COLLAPSED__", "North"]],
+        start_row=0,
+        end_row=10,
+    )
+
+    assert [row["_path"] for row in window["rows"]] == [
+        "North",
+        "South",
+        "South|||Brazil",
+    ]
+    assert window["total_rows"] == 3
+
+
+def test_tabular_subtotals_ignore_expand_all_collapse_overrides_and_force_all_groups_open():
+    hierarchy_result = {
+        "": [
+            {"region": "North", "sales_sum": 100},
+            {"region": "South", "sales_sum": 80},
+        ],
+        "North": [
+            {"region": "North", "country": "USA", "sales_sum": 60},
+            {"region": "North", "country": "Canada", "sales_sum": 40},
+        ],
+        "South": [
+            {"region": "South", "country": "Brazil", "sales_sum": 80},
+        ],
+    }
+
+    window = build_hierarchy_row_window(
+        _sales_spec(),
+        hierarchy_result,
+        [["__ALL__"], ["__COLLAPSED__", "North"]],
+        start_row=0,
+        end_row=20,
+        tabular_subtotals=True,
+    )
+
+    assert [(row["_path"], bool(row.get("_isTabularSubtotal"))) for row in window["rows"]] == [
+        ("North|||USA", False),
+        ("North|||Canada", False),
+        ("North", True),
+        ("South|||Brazil", False),
+        ("South", True),
+    ]
+
+
+@pytest.mark.asyncio
+async def test_real_adapter_tabular_subtotals_force_loads_all_descendants_without_expansion_state():
+    adapter = create_tanstack_adapter(backend_uri=":memory:")
+    adapter.controller.load_data_from_arrow(
+        "sales_data",
+        pa.Table.from_pydict({
+            "region": ["North", "North", "North", "South"],
+            "country": ["USA", "USA", "Canada", "Brazil"],
+            "instrument": ["Bond", "Equity", "Bond", "Equity"],
+            "sales": [100.0, 50.0, 80.0, 120.0],
+        }),
+    )
+    request = TanStackRequest(
+        operation=TanStackOperation.GET_DATA,
+        table="sales_data",
+        columns=[
+            {"id": "region"},
+            {"id": "country"},
+            {"id": "instrument"},
+            {"id": "sales_sum", "aggregationField": "sales", "aggregationFn": "sum"},
+        ],
+        filters={},
+        sorting=[],
+        grouping=["region", "country", "instrument"],
+        aggregations=[],
+        pagination={"pageIndex": 0, "pageSize": 100},
+        totals=False,
+        include_subtotals=True,
+        layout_mode="tabular",
+        show_subtotal_footers=True,
+    )
+
+    response = await adapter.handle_virtual_scroll_request(
+        request,
+        0,
+        99,
+        expanded_paths=[],
+    )
+
+    leaves = [row for row in response.data if row.get("depth") == 2]
+    assert len(leaves) == 4
+    assert all(row.get("region") and row.get("country") and row.get("instrument") for row in leaves)
+    assert response.total_rows == 9
+
+
+@pytest.mark.parametrize(
+    ("show_subtotal_footers", "expected"),
+    [
+        (False, [("North", False), ("North|||USA", False), ("North|||Canada", False), ("South", False)]),
+        (True, [("North", False), ("North|||USA", False), ("North|||Canada", False), ("North", True), ("South", False)]),
+    ],
+)
+def test_hierarchy_and_outline_row_contracts_insert_only_requested_subtotal_footers(show_subtotal_footers, expected):
+    hierarchy_result = {
+        "": [
+            {"region": "North", "sales_sum": 100},
+            {"region": "South", "sales_sum": 80},
+        ],
+        "North": [
+            {"region": "North", "country": "USA", "sales_sum": 60},
+            {"region": "North", "country": "Canada", "sales_sum": 40},
+        ],
+    }
+
+    window = build_hierarchy_row_window(
+        _sales_spec(),
+        hierarchy_result,
+        [["North"]],
+        start_row=0,
+        end_row=20,
+        show_subtotal_footers=show_subtotal_footers,
+    )
+
+    assert [(row["_path"], bool(row.get("_isSubtotalFooter"))) for row in window["rows"]] == expected
+
+
+@pytest.mark.parametrize("expanded_paths", [[[''], ['', 'Cash Equity']], [['__ALL__']]])
+def test_blank_root_hierarchy_value_has_distinct_lookup_key_and_cannot_recurse(expanded_paths):
+    class _Spec:
+        rows = ["option_right", "strategy", "instrument"]
+
+    blank_key = hierarchy_lookup_key([""])
+    strategy_key = hierarchy_lookup_key(["", "Cash Equity"])
+    assert blank_key != ""
+
+    hierarchy_result = {
+        "": [{"option_right": "", "amount_sum": 30}],
+        blank_key: [
+            {"option_right": "", "strategy": "Cash Equity", "amount_sum": 30},
+        ],
+        strategy_key: [
+            {
+                "option_right": "",
+                "strategy": "Cash Equity",
+                "instrument": "AAPL US Equity",
+                "amount_sum": 30,
+            },
+        ],
+    }
+
+    window = build_hierarchy_row_window(
+        _Spec(),
+        hierarchy_result,
+        expanded_paths,
+        start_row=0,
+        end_row=20,
+    )
+
+    assert [row["_id"] for row in window["rows"]] == ["", "Cash Equity", "AAPL US Equity"]
+    assert [row["depth"] for row in window["rows"]] == [0, 1, 2]
+    assert [row["_path"] for row in window["rows"]] == [
+        "",
+        "|||Cash Equity",
+        "|||Cash Equity|||AAPL US Equity",
+    ]
+
+
 @pytest.mark.asyncio
 async def test_adapter_legacy_hierarchy_fallback_slices_viewport_with_shared_policy():
     class BatchOnlyController:
@@ -118,7 +304,14 @@ async def test_adapter_legacy_hierarchy_fallback_slices_viewport_with_shared_pol
 
 
 @pytest.mark.asyncio
-async def test_adapter_no_subtotal_request_uses_flat_leaf_rows():
+@pytest.mark.parametrize(
+    "request_overrides",
+    [
+        {"include_subtotals": False},
+        {"include_subtotals": True, "layout_mode": "tabular", "show_subtotal_footers": False},
+    ],
+)
+async def test_adapter_tabular_without_subtotals_uses_flat_leaf_rows(request_overrides):
     class FlatOnlyController:
         def __init__(self):
             self.calls = []
@@ -155,7 +348,7 @@ async def test_adapter_no_subtotal_request_uses_flat_leaf_rows():
         aggregations=[],
         pagination={"pageIndex": 0, "pageSize": 1},
         totals=False,
-        include_subtotals=False,
+        **request_overrides,
     )
 
     response = await adapter.handle_virtual_scroll_request(
@@ -238,3 +431,33 @@ def test_no_subtotal_flag_participates_in_adapter_cache_fingerprint():
     )
 
     assert adapter._request_structure_fingerprint(base_request) != adapter._request_structure_fingerprint(no_subtotal_request)
+
+
+def test_layout_and_subtotal_footer_mode_participate_in_adapter_cache_fingerprint():
+    class DummyController:
+        pass
+
+    adapter = TanStackPivotAdapter(DummyController())
+
+    def request(layout_mode, show_subtotal_footers):
+        return TanStackRequest(
+            operation=TanStackOperation.GET_DATA,
+            table="sales",
+            columns=[{"id": "region"}, {"id": "country"}],
+            filters={},
+            sorting=[],
+            grouping=["region", "country"],
+            aggregations=[],
+            include_subtotals=True,
+            layout_mode=layout_mode,
+            show_subtotal_footers=show_subtotal_footers,
+        )
+
+    hierarchy = request("hierarchy", True)
+    outline = request("outline", True)
+    tabular = request("tabular", True)
+    tabular_without_subtotals = request("tabular", False)
+
+    assert adapter._request_structure_fingerprint(hierarchy) != adapter._request_structure_fingerprint(outline)
+    assert adapter._request_structure_fingerprint(outline) != adapter._request_structure_fingerprint(tabular)
+    assert adapter._request_structure_fingerprint(tabular) != adapter._request_structure_fingerprint(tabular_without_subtotals)

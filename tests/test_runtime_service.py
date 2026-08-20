@@ -42,6 +42,72 @@ def _make_duplicate_group_adapter():
     return adapter
 
 
+def test_expand_all_state_parser_preserves_explicit_collapsed_overrides():
+    assert PivotRuntimeService._parse_expanded_paths({
+        "__ALL__": True,
+        "North": False,
+        "South|||Brazil": False,
+    }) == [
+        ["__ALL__"],
+        ["__COLLAPSED__", "North"],
+        ["__COLLAPSED__", "South", "Brazil"],
+    ]
+
+
+def test_runtime_service_propagates_tabular_layout_and_subtotal_contract_to_adapter():
+    class CaptureAdapter:
+        def __init__(self):
+            self.request = None
+
+        async def handle_virtual_scroll_request(
+            self,
+            request,
+            start_row,
+            end_row,
+            expanded_paths,
+            **kwargs,
+        ):
+            self.request = request
+            return TanStackResponse(
+                data=[],
+                columns=[],
+                total_rows=0,
+                version=request.version,
+            )
+
+    adapter = CaptureAdapter()
+    service = PivotRuntimeService(
+        adapter_getter=lambda: adapter,
+        session_gate=SessionRequestGate(),
+    )
+
+    response = service.process(
+        PivotViewState(
+            row_fields=["region", "country", "instrument"],
+            val_configs=[{"field": "sales", "agg": "sum"}],
+            expanded={"__ALL__": True},
+            show_subtotals=True,
+            layout_mode="tabular",
+        ),
+        PivotRequestContext(
+            table="sales_data",
+            trigger_prop="pivot.viewport",
+            session_id="layout-session",
+            client_instance="layout-client",
+            state_epoch=2,
+            window_seq=3,
+            viewport_active=True,
+            start_row=0,
+            end_row=25,
+        ),
+    )
+
+    assert response.status == "data"
+    assert adapter.request.layout_mode == "tabular"
+    assert adapter.request.include_subtotals is True
+    assert adapter.request.show_subtotal_footers is True
+
+
 def _make_weighted_average_adapter():
     adapter = create_tanstack_adapter(backend_uri=":memory:")
     table = pa.Table.from_pydict(

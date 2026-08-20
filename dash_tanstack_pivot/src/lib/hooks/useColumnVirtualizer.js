@@ -10,17 +10,29 @@ import {
 const DEFAULT_VISIBLE_RANGE = { start: 0, end: 0 };
 const SERVER_SIDE_HORIZONTAL_METRICS_DEBOUNCE_MS = 96;
 
-// Stable-reference helper: returns the previous array when the ids haven't changed.
-const useStableColumnList = (columns) => {
+// Stable-reference helper: returns the previous runtime-column array while both
+// its physical layout and the source column definitions are unchanged.
+//
+// Outline and Tabular intentionally use the same column ids and widths, but
+// their accessor/cell closures have different display contracts. Comparing
+// only id:size therefore kept Outline column objects alive after switching to
+// Tabular, so the toolbar showed Tabular while ancestor cells still executed
+// Outline's depth-only renderer.
+const useStableColumnList = (columns, columnDefinitions) => {
     const prevRef = useRef(columns);
+    const prevDefinitionsRef = useRef(columnDefinitions);
     const prevSignatureRef = useRef('');
     const signature = columns.map((column) => {
         const columnId = column && column.id ? column.id : '';
         const size = column && typeof column.getSize === 'function' ? column.getSize() : '';
         return `${columnId}:${size}`;
     }).join(',');
-    if (signature !== prevSignatureRef.current) {
+    if (
+        signature !== prevSignatureRef.current
+        || columnDefinitions !== prevDefinitionsRef.current
+    ) {
         prevRef.current = columns;
+        prevDefinitionsRef.current = columnDefinitions;
         prevSignatureRef.current = signature;
     }
     return prevRef.current;
@@ -89,15 +101,18 @@ export const useColumnVirtualizer = ({
     /* eslint-disable react-hooks/exhaustive-deps */
     const leftCols = useStableColumnList(
         useMemo(() => table.getLeftLeafColumns().filter(c => c.getIsVisible()),
-            [table, columns, columnVisibility, columnPinning, columnOrder, columnSizing])
+            [table, columns, columnVisibility, columnPinning, columnOrder, columnSizing]),
+        columns
     );
     const rightCols = useStableColumnList(
         useMemo(() => table.getRightLeafColumns().filter(c => c.getIsVisible()),
-            [table, columns, columnVisibility, columnPinning, columnOrder, columnSizing])
+            [table, columns, columnVisibility, columnPinning, columnOrder, columnSizing]),
+        columns
     );
     const centerCols = useStableColumnList(
         useMemo(() => table.getCenterLeafColumns().filter(c => c.getIsVisible()),
-            [table, columns, columnVisibility, columnPinning, columnOrder, columnSizing])
+            [table, columns, columnVisibility, columnPinning, columnOrder, columnSizing]),
+        columns
     );
     /* eslint-enable react-hooks/exhaustive-deps */
 

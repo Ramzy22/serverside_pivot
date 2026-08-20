@@ -12,6 +12,7 @@ from contextlib import nullcontext
 import re
 import json
 import hashlib
+from functools import cmp_to_key
 import pyarrow as pa
 import asyncio
 import ibis
@@ -42,6 +43,7 @@ from pivot_engine.hierarchy_rows import (
     clone_hierarchy_rows,
     compute_hierarchy_color_scale_stats,
     find_hierarchy_grand_total_row,
+    hierarchy_lookup_key,
     is_hierarchy_grand_total,
     normalize_expanded_paths,
 )
@@ -583,6 +585,89 @@ class ScalablePivotController(PivotController):
             return str(values[0])
         return "|".join(str(value) for value in values)
 
+    @staticmethod
+    def _sort_sparse_materialized_rows(
+        rows: List[Dict[str, Any]],
+        sort_specs: Any,
+        fallback_fields: List[str],
+    ) -> List[Dict[str, Any]]:
+        """Sort reshaped pivot rows, including dynamic pivot-value columns.
+
+        SQL ordering runs before sparse columns such as ``Stress_pnl_sum`` exist,
+        so those sort expressions are necessarily ignored by the query builder.
+        Apply them after reshape and retain deterministic dimension tie-breakers.
+        """
+        normalized_sorts = [
+            item for item in (sort_specs if isinstance(sort_specs, list) else [sort_specs])
+            if isinstance(item, dict) and isinstance(item.get("field"), str)
+        ]
+        dynamic_sorts = [
+            item for item in normalized_sorts
+            if any(item.get("field") in row for row in rows)
+        ]
+        if not dynamic_sorts or not rows:
+            return rows
+
+        def is_missing(value: Any) -> bool:
+            if value is None:
+                return True
+            if isinstance(value, float):
+                return math.isnan(value)
+            if isinstance(value, decimal.Decimal):
+                return value.is_nan()
+            return False
+
+        def compare_values(left: Any, right: Any, spec: Dict[str, Any]) -> int:
+            left_missing = is_missing(left)
+            right_missing = is_missing(right)
+            if left_missing or right_missing:
+                if left_missing and right_missing:
+                    return 0
+                nulls_first = str(spec.get("nulls") or "").strip().lower() == "first"
+                return (-1 if left_missing else 1) if nulls_first else (1 if left_missing else -1)
+
+            sort_type = str(spec.get("sortType") or "").strip().lower()
+            absolute_sort = bool(spec.get("absoluteSort")) or sort_type in {
+                "absolute", "abs", "absolute_value", "absolute-value",
+            }
+            numeric_types = (int, float, decimal.Decimal)
+            numeric = (
+                not isinstance(left, bool)
+                and not isinstance(right, bool)
+                and isinstance(left, numeric_types)
+                and isinstance(right, numeric_types)
+                and (not isinstance(left, float) or math.isfinite(left))
+                and (not isinstance(right, float) or math.isfinite(right))
+                and (not isinstance(left, decimal.Decimal) or left.is_finite())
+                and (not isinstance(right, decimal.Decimal) or right.is_finite())
+            )
+
+            if numeric:
+                comparable_left = abs(left) if absolute_sort else left
+                comparable_right = abs(right) if absolute_sort else right
+                result = (comparable_left > comparable_right) - (comparable_left < comparable_right)
+                if result == 0 and absolute_sort:
+                    result = (left > right) - (left < right)
+            else:
+                left_text = str(left).casefold()
+                right_text = str(right).casefold()
+                result = (left_text > right_text) - (left_text < right_text)
+
+            return -result if str(spec.get("order") or "asc").lower() == "desc" else result
+
+        def compare_rows(left: Dict[str, Any], right: Dict[str, Any]) -> int:
+            for spec in dynamic_sorts:
+                result = compare_values(left.get(spec["field"]), right.get(spec["field"]), spec)
+                if result:
+                    return result
+            for field in fallback_fields:
+                result = compare_values(left.get(field), right.get(field), {"order": "asc"})
+                if result:
+                    return result
+            return 0
+
+        return sorted(rows, key=cmp_to_key(compare_rows))
+
     def _reshape_sparse_materialized_pivot(
         self,
         grouped_table: pa.Table,
@@ -623,7 +708,11 @@ class ScalablePivotController(PivotController):
         if not ordered_rows:
             return pa.table({})
 
-        ordered_row_list = list(ordered_rows.values())
+        ordered_row_list = self._sort_sparse_materialized_rows(
+            list(ordered_rows.values()),
+            spec.sort,
+            row_dims,
+        )
         output_columns = list(row_dims) + list(hidden_sort_keys)
         for column_value in (column_values or []):
             for measure in base_measures:
@@ -862,7 +951,7 @@ class ScalablePivotController(PivotController):
 
     @staticmethod
     def _path_key(parts: List[Any]) -> str:
-        return "|||".join("" if value is None else str(value) for value in (parts or []))
+        return hierarchy_lookup_key(parts)
 
     @staticmethod
     def _stable_json(value: Any) -> str:
@@ -956,7 +1045,7 @@ class ScalablePivotController(PivotController):
         if not requested_expanded_set or requested_expanded_set == {("__ALL__",)}:
             return None
         best_entry = None
-        best_size = -1
+        best_rank: Optional[tuple[int, int]] = None
         for cache_key, (payload, expires_at) in list(self._hierarchy_view_cache.items()):
             if time.time() > expires_at:
                 self._hierarchy_view_cache.pop(cache_key, None)
@@ -970,11 +1059,20 @@ class ScalablePivotController(PivotController):
             cached_expanded_set = set(payload.get("expanded_set") or set())
             if cached_expanded_set == {("__ALL__",)}:
                 continue
-            if not cached_expanded_set.issubset(requested_expanded_set):
+
+            # Expansion can reuse the largest cached subset and fetch only its
+            # missing paths. Collapse is even cheaper: a cached superset already
+            # contains every hierarchy branch required by the smaller expanded
+            # set, so it only needs to be flattened with the new visibility.
+            if requested_expanded_set.issubset(cached_expanded_set):
+                rank = (2, -len(cached_expanded_set))  # smallest complete superset
+            elif cached_expanded_set.issubset(requested_expanded_set):
+                rank = (1, len(cached_expanded_set))  # largest useful subset
+            else:
                 continue
-            if len(cached_expanded_set) > best_size:
+            if best_rank is None or rank > best_rank:
                 best_entry = self._hierarchy_view_cache_get(cache_key)
-                best_size = len(cached_expanded_set)
+                best_rank = rank
         return best_entry
 
     def _hierarchy_root_count_cache_get(self, cache_key: str) -> Optional[int]:
@@ -1340,7 +1438,7 @@ class ScalablePivotController(PivotController):
             root_table = await self.run_pivot_async(
                 root_spec,
                 return_format="arrow",
-                force_refresh=True,
+                force_refresh=False,
                 profile_sink=root_query_profile if profiling else None,
             )
             root_query_finished_at = time.perf_counter()
@@ -1363,7 +1461,7 @@ class ScalablePivotController(PivotController):
             root_table = await self.run_pivot_async(
                 root_spec,
                 return_format="arrow",
-                force_refresh=True,
+                force_refresh=False,
                 profile_sink=root_query_profile if profiling else None,
             )
             root_query_finished_at = time.perf_counter()
@@ -1621,11 +1719,7 @@ class ScalablePivotController(PivotController):
         """Build parent key 'd1|||d2' for dispatching children into hierarchy buckets."""
         if not parent_dims:
             return ""
-        parts = []
-        for dim in parent_dims:
-            val = row.get(dim)
-            parts.append("" if val is None else str(val))
-        return "|||".join(parts)
+        return hierarchy_lookup_key([row.get(dim) for dim in parent_dims])
 
     async def run_progressive_load(self, spec: PivotSpec, chunk_callback: Optional[Callable] = None):
         """Run progressive data loading for large datasets"""
@@ -1634,7 +1728,15 @@ class ScalablePivotController(PivotController):
         result = await self.progressive_loader.load_progressive_chunks(spec, chunk_callback)
         return result
 
-    async def run_hierarchical_pivot_batch_load(self, spec_dict: Dict[str, Any], target_paths: List[List[str]], max_levels: int = 3) -> Dict[str, Any]:
+    async def run_hierarchical_pivot_batch_load(
+        self,
+        spec_dict: Dict[str, Any],
+        target_paths: List[List[str]],
+        max_levels: int = 3,
+        *,
+        include_root: bool = True,
+        profile_sink: Optional[Dict[str, Any]] = None,
+    ) -> Dict[str, Any]:
         """
         Efficiently load only hierarchy levels that are actually needed.
         - Always fetch root level.
@@ -1648,43 +1750,70 @@ class ScalablePivotController(PivotController):
         Returns:
             Dictionary mapping parent_path_key -> list of node dicts
         """
+        batch_started_at = time.perf_counter()
         spec = PivotSpec.from_dict(spec_dict)
         results = {}
+        level_profiles: Dict[str, Any] = {}
+
+        def _finish_batch_profile() -> None:
+            if isinstance(profile_sink, dict):
+                profile_sink.clear()
+                profile_sink.update({
+                    "includeRoot": include_root,
+                    "levels": level_profiles,
+                    "totalMs": self._profile_ms(batch_started_at, time.perf_counter()),
+                })
+
         rows = spec.rows or []
         if not rows:
+            _finish_batch_profile()
             return results
 
         max_group_len = min(len(rows), max_levels + 1)
         expand_all = any(path == ['__ALL__'] for path in (target_paths or []))
         valid_node_keys_by_depth: Dict[int, set[str]] = {}
 
-        # 1) Root level is always fetched.
-        root_spec = spec.copy()
-        root_spec.rows = rows[:1]
-        self._mark_measure_axis_exact_layout(root_spec)
-        root_spec.limit = self.max_hierarchy_rows
         col_sort_opts = spec.column_sort_options
-        root_spec.sort = self._build_group_rows_sort(root_spec.rows, spec.sort, col_sort_opts)
-        root_spec.totals = bool(spec.totals)
+        # A delta expansion already owns cached root rows. Re-querying them made
+        # every first expansion pay for both the root aggregation and its child
+        # aggregation. Full loads still fetch the root as before.
+        if include_root:
+            root_spec = spec.copy()
+            root_spec.rows = rows[:1]
+            self._mark_measure_axis_exact_layout(root_spec)
+            root_spec.limit = self.max_hierarchy_rows
+            root_spec.sort = self._build_group_rows_sort(root_spec.rows, spec.sort, col_sort_opts)
+            root_spec.totals = bool(spec.totals)
 
-        try:
-            root_table = await self.run_pivot_async(root_spec, return_format="arrow")
-            if isinstance(root_table, pa.Table):
-                root_rows = root_table.to_pylist()
-                results[""] = root_rows
-                root_dim = rows[0]
-                valid_node_keys_by_depth[1] = {
-                    self._path_key([row.get(root_dim)])
-                    for row in root_rows
-                    if isinstance(row, dict) and row.get(root_dim) is not None
-                }
-        except Exception as e:
-            print(f"Error loading root level: {e}")
-            results[""] = []
-            valid_node_keys_by_depth[1] = set()
+            root_profile: Dict[str, Any] = {}
+            root_started_at = time.perf_counter()
+            try:
+                root_table = await self.run_pivot_async(
+                    root_spec,
+                    return_format="arrow",
+                    profile_sink=root_profile if profile_sink is not None else None,
+                )
+                if isinstance(root_table, pa.Table):
+                    root_rows = root_table.to_pylist()
+                    results[""] = root_rows
+                    root_dim = rows[0]
+                    valid_node_keys_by_depth[1] = {
+                        self._path_key([row.get(root_dim)])
+                        for row in root_rows
+                        if isinstance(row, dict) and row.get(root_dim) is not None
+                    }
+            except Exception as e:
+                print(f"Error loading root level: {e}")
+                results[""] = []
+                valid_node_keys_by_depth[1] = set()
+            level_profiles["root"] = {
+                "totalMs": self._profile_ms(root_started_at, time.perf_counter()),
+                **root_profile,
+            }
 
         # 2) Collapsed mode: no expanded paths, nothing deeper to load.
         if not expand_all and not target_paths:
+            _finish_batch_profile()
             return results
 
         # 3) Determine which deeper group levels to fetch.
@@ -1710,7 +1839,7 @@ class ScalablePivotController(PivotController):
             group_rows = rows[:group_len]
             parent_paths = levels_to_paths[group_len]
             valid_parent_keys = (
-                {"|||".join(str(v) for v in p) for p in (parent_paths or [])}
+                {self._path_key(p) for p in (parent_paths or [])}
                 if parent_paths
                 else None
             )
@@ -1736,11 +1865,22 @@ class ScalablePivotController(PivotController):
                     parent_dims, parent_paths
                 )
 
+            level_profile: Dict[str, Any] = {}
+            level_started_at = time.perf_counter()
             try:
-                level_table = await self.run_pivot_async(level_spec, return_format="arrow")
+                level_table = await self.run_pivot_async(
+                    level_spec,
+                    return_format="arrow",
+                    profile_sink=level_profile if profile_sink is not None else None,
+                )
             except Exception as e:
                 print(f"Error loading level group_len={group_len}: {e}")
                 continue
+
+            level_profiles[f"depth{group_len}"] = {
+                "totalMs": self._profile_ms(level_started_at, time.perf_counter()),
+                **level_profile,
+            }
 
             if not isinstance(level_table, pa.Table):
                 continue
@@ -1758,6 +1898,7 @@ class ScalablePivotController(PivotController):
             if current_level_keys:
                 valid_node_keys_by_depth[group_len] = current_level_keys
 
+        _finish_batch_profile()
         return results
 
     def _flatten_hierarchy_rows(self, spec: PivotSpec, hierarchy_result: Dict[str, List[Dict[str, Any]]], expanded_paths: List[List[str]]) -> List[Dict[str, Any]]:
@@ -1875,11 +2016,13 @@ class ScalablePivotController(PivotController):
             cached_visible_rows: Optional[List[Dict[str, Any]]] = None
             hierarchy_load_started_at = None
             hierarchy_load_finished_at = None
+            hierarchy_batch_profile: Dict[str, Any] = {}
             flatten_started_at = None
             flatten_finished_at = None
             window_slice_started_at = None
             window_slice_finished_at = None
             reused_cache = False
+            reuse_direction = None
             cache_hit = cached_view is not None
             cached_expanded_count = 0
             requested_expanded_set = set(normalized_expanded)
@@ -1895,20 +2038,33 @@ class ScalablePivotController(PivotController):
                     hierarchy_result = reusable_view["hierarchy_result"]
                     cached_expanded_set = set(reusable_view.get("expanded_set") or set())
                     cached_expanded_count = len(cached_expanded_set)
+                    if requested_expanded_set < cached_expanded_set:
+                        reuse_direction = "collapse"
+                    elif cached_expanded_set < requested_expanded_set:
+                        reuse_direction = "expand"
+                    else:
+                        reuse_direction = "equivalent"
                     missing_paths = [
                         list(path_tuple)
                         for path_tuple in sorted(requested_expanded_set - cached_expanded_set)
                     ]
                     if missing_paths:
                         delta_hierarchy = await self.run_hierarchical_pivot_batch_load(
-                            spec.to_dict(), missing_paths, max_levels=len(spec.rows)
+                            spec.to_dict(),
+                            missing_paths,
+                            max_levels=len(spec.rows),
+                            include_root=False,
+                            profile_sink=hierarchy_batch_profile if profiling else None,
                         )
                         for parent_key, rows in (delta_hierarchy or {}).items():
                             hierarchy_result[str(parent_key)] = self._clone_hierarchy_rows(rows)
                     hierarchy_load_finished_at = time.perf_counter()
                 else:
                     hierarchy_result = await self.run_hierarchical_pivot_batch_load(
-                        spec.to_dict(), target_paths, max_levels=len(spec.rows)
+                        spec.to_dict(),
+                        target_paths,
+                        max_levels=len(spec.rows),
+                        profile_sink=hierarchy_batch_profile if profiling else None,
                     )
                     hierarchy_load_finished_at = time.perf_counter()
 
@@ -1977,6 +2133,7 @@ class ScalablePivotController(PivotController):
                             "path": "materialized_hierarchy",
                             "cacheHit": cache_hit,
                             "reusedCache": reused_cache,
+                            "reuseDirection": reuse_direction,
                             "requestedExpandedCount": len(requested_expanded_set),
                             "cachedExpandedCount": cached_expanded_count,
                             "cacheLookupMs": self._profile_ms(cache_lookup_started_at, cache_lookup_finished_at),
@@ -1988,7 +2145,8 @@ class ScalablePivotController(PivotController):
                             "totalMs": self._profile_ms(view_started_at, time.perf_counter()),
                             "returnedRows": len(window_rows),
                             "totalRows": total_rows,
-                        }
+                        },
+                        "controllerHierarchyBatch": hierarchy_batch_profile,
                     }
                     if profiling
                     else None
