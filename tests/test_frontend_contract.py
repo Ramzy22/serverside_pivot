@@ -3898,14 +3898,14 @@ def test_measure_axis_contract_is_wired_through_frontend_and_runtime():
             "dash_callbacks.py",
         )
     ).read_text(encoding="utf-8")
-    service_source = Path(
+    request_factory_source = Path(
         os.path.join(
             os.getcwd(),
             "dash_tanstack_pivot",
             "pivot_engine",
             "pivot_engine",
             "runtime",
-            "service.py",
+            "request_factory.py",
         )
     ).read_text(encoding="utf-8")
     column_defs_source = Path(
@@ -3932,7 +3932,7 @@ def test_measure_axis_contract_is_wired_through_frontend_and_runtime():
     assert "Drag to Rows or Columns to show measure names" in sidebar_source
     assert 'State(pivot_id, "measureAxis")' in callbacks_source
     assert 'Input(pivot_id, "measureAxis")' not in callbacks_source
-    assert 'measure_axis=state.measure_axis or None' in service_source
+    assert "measure_axis=state.measure_axis or None" in request_factory_source
     assert "c.alias || c.id || getKey('', c.field, c.agg)" in column_defs_source
     assert "getMeasureAxisRowValueConfig" in column_defs_source
 
