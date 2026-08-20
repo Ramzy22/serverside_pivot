@@ -2,9 +2,8 @@
 tanstack_adapter.py - Direct TanStack Table/Query adapter for the scalable pivot engine
 This bypasses the REST API and provides direct integration with TanStack components
 """
+
 from typing import Dict, Any, List, Optional, Callable, Union, Set
-from dataclasses import dataclass, field
-from enum import Enum
 import asyncio
 import copy
 from functools import cmp_to_key
@@ -28,6 +27,9 @@ from .hierarchy_rows import (
     is_hierarchy_grand_total,
     normalize_expanded_paths,
 )
+from .transport.contracts import TanStackOperation, TanStackRequest, TanStackResponse
+from .transport.request_mapper import TanStackRequestMapper
+from .transport.response_mapper import TanStackResponseMapper
 
 _adapter_logger = logging.getLogger("pivot_engine.adapter")
 _FORMULA_IDENTIFIER_RE = re.compile(r"\b[A-Za-z_][A-Za-z0-9_]*\b")
@@ -45,7 +47,9 @@ def _positive_env_float(name: str, default: float) -> float:
 # These caches are generation-keyed and explicitly invalidated after data changes.
 # A 10-second TTL caused periodic full column-catalog and hierarchy recomputation
 # during ordinary scrolling, so keep hot viewport state for a realistic session.
-_LOCAL_CACHE_TTL_SECONDS = _positive_env_float("PIVOT_VIEWPORT_CACHE_TTL_SECONDS", 300.0)
+_LOCAL_CACHE_TTL_SECONDS = _positive_env_float(
+    "PIVOT_VIEWPORT_CACHE_TTL_SECONDS", 300.0
+)
 _PIVOT_CATALOG_CACHE_SIZE = 32
 _RESPONSE_WINDOW_CACHE_SIZE = 128
 _ROW_BLOCK_CACHE_SIZE = 1024
@@ -56,7 +60,10 @@ def _normalize_formula_reference_key(value: Any, fallback: Any = "formula") -> s
     base = str(value or "").strip().lower()
     base = re.sub(r"\s+", "", base)
     base = re.sub(r"[^a-z0-9_]", "", base)
-    fallback_base = re.sub(r"[^a-z0-9_]", "", str(fallback or "formula").strip().lower()) or "formula"
+    fallback_base = (
+        re.sub(r"[^a-z0-9_]", "", str(fallback or "formula").strip().lower())
+        or "formula"
+    )
     normalized = base or fallback_base
     return normalized if re.match(r"^[a-z_]", normalized) else f"f_{normalized}"
 
@@ -70,59 +77,9 @@ def _is_grand_total_row(row: Any) -> bool:
     return is_hierarchy_grand_total(row)
 
 
-class TanStackOperation(str, Enum):
-    """TanStack operation types"""
-    GET_DATA = "get_data"
-    GET_ROWS = "get_rows"
-    GET_COLUMNS = "get_columns"
-    GET_PAGE_COUNT = "get_page_count"
-    FILTER = "filter"
-    SORT = "sort"
-    GROUP = "group"
-    GET_UNIQUE_VALUES = "get_unique_values"
-
-
-@dataclass
-class TanStackRequest:
-    """TanStack request structure"""
-    operation: TanStackOperation
-    table: str
-    columns: List[Dict[str, Any]]
-    filters: Dict[str, Any]
-    sorting: List[Dict[str, Any]]
-    grouping: List[str]
-    aggregations: List[Dict[str, Any]]
-    pagination: Optional[Dict[str, Any]] = None
-    global_filter: Optional[str] = None
-    totals: Optional[bool] = True
-    row_totals: Optional[bool] = False
-    include_subtotals: Optional[bool] = True
-    version: Optional[int] = None
-    column_sort_options: Optional[Dict[str, Any]] = None
-    custom_dimensions: List[Dict[str, Any]] = field(default_factory=list)
-    measure_axis: Optional[Dict[str, Any]] = None
-    layout_mode: Optional[str] = None          # 'hierarchy' | 'outline' | 'tabular'
-    show_subtotal_footers: Optional[bool] = False
-
-
-@dataclass
-class TanStackResponse:
-    """TanStack response structure"""
-    data: List[Dict[str, Any]]
-    columns: List[Dict[str, Any]]
-    pagination: Optional[Dict[str, Any]] = None
-    total_rows: Optional[int] = None
-    grouping: Optional[List[Dict[str, Any]]] = None
-    version: Optional[int] = None
-    col_schema: Optional[Dict[str, Any]] = None
-    color_scale_stats: Optional[Dict[str, Any]] = None
-    profile: Optional[Dict[str, Any]] = None
-    formula_errors: Optional[Dict[str, str]] = None
-
-
 class TanStackPivotAdapter(FormulaEngineMixin):
     """Direct TanStack adapter that bypasses REST API and connects to controller"""
-    
+
     def __init__(self, controller: ScalablePivotController, debug: bool = False):
         self.controller = controller
         self.edit_domain = EditDomainService()
@@ -141,12 +98,16 @@ class TanStackPivotAdapter(FormulaEngineMixin):
         # Compatibility aliases for existing diagnostics/tests. All mutation
         # goes through AdapterViewportCache.
         self._center_col_ids_cache = self._viewport_cache.center_col_ids_cache
-        self._pivot_column_catalog_cache = self._viewport_cache.pivot_column_catalog_cache
+        self._pivot_column_catalog_cache = (
+            self._viewport_cache.pivot_column_catalog_cache
+        )
         self._response_window_cache = self._viewport_cache.response_window_cache
         self._row_block_cache = self._viewport_cache.row_block_cache
         self._grand_total_cache = self._viewport_cache.grand_total_cache
         self._prefetch_request_keys = self._viewport_cache.prefetch_request_keys
         self.viewport_prefetch_enabled: bool = False
+        self._request_mapper = TanStackRequestMapper()
+        self._response_mapper = TanStackResponseMapper()
 
     @property
     def _local_cache_generation(self) -> int:
@@ -158,7 +119,14 @@ class TanStackPivotAdapter(FormulaEngineMixin):
     def _locked_cache_lookup(self, cache: OrderedDict, key: str):
         return self._viewport_cache.lookup(cache, key)
 
-    def _locked_cache_store(self, cache: OrderedDict, key: str, value: Any, max_size: int, ttl_seconds: float):
+    def _locked_cache_store(
+        self,
+        cache: OrderedDict,
+        key: str,
+        value: Any,
+        max_size: int,
+        ttl_seconds: float,
+    ):
         self._viewport_cache.store(
             cache,
             key,
@@ -209,16 +177,28 @@ class TanStackPivotAdapter(FormulaEngineMixin):
                 "table": request.table,
                 "responseCacheKey": response_cache_key,
                 "cacheGeneration": self._cache_generation_value(),
-                "cacheNamespaces": self._viewport_cache.metrics_snapshot().get("namespaces", {}),
-                "rowWindow": [int(start_row or 0), int(end_row if end_row is not None else start_row or 0)],
-                "colWindow": [int(col_start or 0), None if col_end is None else int(col_end)],
+                "cacheNamespaces": self._viewport_cache.metrics_snapshot().get(
+                    "namespaces", {}
+                ),
+                "rowWindow": [
+                    int(start_row or 0),
+                    int(end_row if end_row is not None else start_row or 0),
+                ],
+                "colWindow": [
+                    int(col_start or 0),
+                    None if col_end is None else int(col_end),
+                ],
                 "needsColSchema": bool(needs_col_schema),
                 "includeGrandTotal": bool(include_grand_total),
                 "responseRows": len(response.data or []),
                 "responseColumns": len(response.columns or []),
                 "totalRows": response.total_rows,
                 "totalMs": self._profile_ms(started_at, time.perf_counter()),
-                **{key: value for key, value in (stages or {}).items() if value is not None},
+                **{
+                    key: value
+                    for key, value in (stages or {}).items()
+                    if value is not None
+                },
             }
         }
         if isinstance(extra, dict):
@@ -245,8 +225,12 @@ class TanStackPivotAdapter(FormulaEngineMixin):
             "totals": bool(request.totals),
             "row_totals": bool(request.row_totals),
             "include_subtotals": bool(request.include_subtotals),
-            "layout_mode": str(getattr(request, "layout_mode", None) or "").strip().lower(),
-            "show_subtotal_footers": bool(getattr(request, "show_subtotal_footers", False)),
+            "layout_mode": str(getattr(request, "layout_mode", None) or "")
+            .strip()
+            .lower(),
+            "show_subtotal_footers": bool(
+                getattr(request, "show_subtotal_footers", False)
+            ),
             "column_sort_options": request.column_sort_options or {},
         }
         return hashlib.sha256(self._stable_json(payload).encode()).hexdigest()[:24]
@@ -278,36 +262,57 @@ class TanStackPivotAdapter(FormulaEngineMixin):
             "pivot_columns": list(spec.columns or []),
             "filters": spec.filters or [],
             "custom_dimensions": spec.custom_dimensions or [],
-            "measure_axis": spec.measure_axis.to_dict() if getattr(spec, "measure_axis", None) else None,
+            "measure_axis": (
+                spec.measure_axis.to_dict()
+                if getattr(spec, "measure_axis", None)
+                else None
+            ),
             "column_sort_options": spec.column_sort_options or {},
             "order_measure": vars(order_measure) if order_measure is not None else None,
         }
         return hashlib.sha256(self._stable_json(payload).encode()).hexdigest()[:24]
 
     @staticmethod
-    def _normalize_expanded_paths(expanded_paths: Union[List[List[str]], bool, None]) -> tuple:
+    def _normalize_expanded_paths(
+        expanded_paths: Union[List[List[str]], bool, None],
+    ) -> tuple:
         return normalize_expanded_paths(expanded_paths)
 
     @staticmethod
-    def _clone_response(response: "TanStackResponse", include_profile: bool = False) -> "TanStackResponse":
+    def _clone_response(
+        response: "TanStackResponse", include_profile: bool = False
+    ) -> "TanStackResponse":
         if response is None:
             return response
         return TanStackResponse(
             data=[dict(row) for row in (response.data or [])],
             columns=[dict(column) for column in (response.columns or [])],
-            pagination=dict(response.pagination) if isinstance(response.pagination, dict) else response.pagination,
+            pagination=(
+                dict(response.pagination)
+                if isinstance(response.pagination, dict)
+                else response.pagination
+            ),
             total_rows=response.total_rows,
-            grouping=[
-                dict(item) if isinstance(item, dict) else item
-                for item in (response.grouping or [])
-            ] if response.grouping else response.grouping,
+            grouping=(
+                [
+                    dict(item) if isinstance(item, dict) else item
+                    for item in (response.grouping or [])
+                ]
+                if response.grouping
+                else response.grouping
+            ),
             version=response.version,
-            col_schema={
-                **response.col_schema,
-                "columns": [
-                    dict(column) for column in (response.col_schema.get("columns") or [])
-                ],
-            } if isinstance(response.col_schema, dict) else response.col_schema,
+            col_schema=(
+                {
+                    **response.col_schema,
+                    "columns": [
+                        dict(column)
+                        for column in (response.col_schema.get("columns") or [])
+                    ],
+                }
+                if isinstance(response.col_schema, dict)
+                else response.col_schema
+            ),
             color_scale_stats=(
                 json.loads(json.dumps(response.color_scale_stats, default=str))
                 if response.color_scale_stats is not None
@@ -325,7 +330,9 @@ class TanStackPivotAdapter(FormulaEngineMixin):
         return AdapterViewportCache.lookup_entry(cache, key)
 
     @staticmethod
-    def _cache_store(cache: OrderedDict, key: str, value: Any, max_size: int, ttl_seconds: float):
+    def _cache_store(
+        cache: OrderedDict, key: str, value: Any, max_size: int, ttl_seconds: float
+    ):
         AdapterViewportCache.store_entry(
             cache,
             key,
@@ -423,7 +430,9 @@ class TanStackPivotAdapter(FormulaEngineMixin):
         if grand_total_row is not None:
             self._locked_cache_store(
                 self._grand_total_cache,
-                self._grand_total_cache_key(request, expanded_paths, col_start, col_end, requested_center_ids),
+                self._grand_total_cache_key(
+                    request, expanded_paths, col_start, col_end, requested_center_ids
+                ),
                 grand_total_row,
                 max_size=_ROW_BLOCK_CACHE_SIZE,
                 ttl_seconds=_LOCAL_CACHE_TTL_SECONDS,
@@ -434,7 +443,9 @@ class TanStackPivotAdapter(FormulaEngineMixin):
 
         response_start = int(start_row or 0)
         response_end = response_start + len(regular_rows) - 1
-        total_rows = response.total_rows if response.total_rows is not None else response_end + 1
+        total_rows = (
+            response.total_rows if response.total_rows is not None else response_end + 1
+        )
         start_block = response_start // _ROW_BLOCK_SIZE
         end_block = response_end // _ROW_BLOCK_SIZE
 
@@ -447,21 +458,40 @@ class TanStackPivotAdapter(FormulaEngineMixin):
             rel_end = abs_end - response_start + 1
             block_rows = regular_rows[rel_start:rel_end]
             expected_rows = max(0, min(block_end + 1, int(total_rows)) - block_start)
-            is_complete = abs_start == block_start and len(block_rows) >= expected_rows and expected_rows > 0
+            is_complete = (
+                abs_start == block_start
+                and len(block_rows) >= expected_rows
+                and expected_rows > 0
+            )
             if not is_complete:
                 continue
             self._locked_cache_store(
                 self._row_block_cache,
-                self._row_block_cache_key(request, block_index, expanded_paths, col_start, col_end, requested_center_ids),
+                self._row_block_cache_key(
+                    request,
+                    block_index,
+                    expanded_paths,
+                    col_start,
+                    col_end,
+                    requested_center_ids,
+                ),
                 {
                     "rows": [dict(row) for row in block_rows[:expected_rows]],
                     "total_rows": response.total_rows,
                     "version": response.version,
-                    "pagination": dict(response.pagination) if isinstance(response.pagination, dict) else response.pagination,
-                    "grouping": [
-                        dict(item) if isinstance(item, dict) else item
-                        for item in (response.grouping or [])
-                    ] if response.grouping else response.grouping,
+                    "pagination": (
+                        dict(response.pagination)
+                        if isinstance(response.pagination, dict)
+                        else response.pagination
+                    ),
+                    "grouping": (
+                        [
+                            dict(item) if isinstance(item, dict) else item
+                            for item in (response.grouping or [])
+                        ]
+                        if response.grouping
+                        else response.grouping
+                    ),
                     "columns": [dict(column) for column in (response.columns or [])],
                 },
                 max_size=_ROW_BLOCK_CACHE_SIZE,
@@ -487,7 +517,14 @@ class TanStackPivotAdapter(FormulaEngineMixin):
         for block_index in range(start_block, end_block + 1):
             entry = self._locked_cache_lookup(
                 self._row_block_cache,
-                self._row_block_cache_key(request, block_index, expanded_paths, col_start, col_end, requested_center_ids),
+                self._row_block_cache_key(
+                    request,
+                    block_index,
+                    expanded_paths,
+                    col_start,
+                    col_end,
+                    requested_center_ids,
+                ),
             )
             if entry is None:
                 missing_blocks.append(block_index)
@@ -522,7 +559,9 @@ class TanStackPivotAdapter(FormulaEngineMixin):
         if include_grand_total:
             grand_total_row = self._locked_cache_lookup(
                 self._grand_total_cache,
-                self._grand_total_cache_key(request, expanded_paths, col_start, col_end, requested_center_ids),
+                self._grand_total_cache_key(
+                    request, expanded_paths, col_start, col_end, requested_center_ids
+                ),
             )
             if grand_total_row is None:
                 return None
@@ -540,9 +579,19 @@ class TanStackPivotAdapter(FormulaEngineMixin):
             merged_rows.extend(dict(row) for row in (entry.get("rows") or []))
 
         trim_from = max(int(start_row or 0) - start_block * _ROW_BLOCK_SIZE, 0)
-        trim_to = trim_from + max(int(end_row if end_row is not None else start_row or 0) - int(start_row or 0) + 1, 0)
+        trim_to = trim_from + max(
+            int(end_row if end_row is not None else start_row or 0)
+            - int(start_row or 0)
+            + 1,
+            0,
+        )
         window_rows = merged_rows[trim_from:trim_to]
-        expected_rows = max(int(end_row if end_row is not None else start_row or 0) - int(start_row or 0) + 1, 0)
+        expected_rows = max(
+            int(end_row if end_row is not None else start_row or 0)
+            - int(start_row or 0)
+            + 1,
+            0,
+        )
         if len(window_rows) < expected_rows:
             return None
 
@@ -553,19 +602,29 @@ class TanStackPivotAdapter(FormulaEngineMixin):
         return TanStackResponse(
             data=window_rows,
             columns=[dict(column) for column in (metadata_source.get("columns") or [])],
-            pagination=dict(metadata_source["pagination"]) if isinstance(metadata_source.get("pagination"), dict) else metadata_source.get("pagination"),
+            pagination=(
+                dict(metadata_source["pagination"])
+                if isinstance(metadata_source.get("pagination"), dict)
+                else metadata_source.get("pagination")
+            ),
             total_rows=metadata_source.get("total_rows"),
-            grouping=[
-                dict(item) if isinstance(item, dict) else item
-                for item in (metadata_source.get("grouping") or [])
-            ] if metadata_source.get("grouping") else metadata_source.get("grouping"),
+            grouping=(
+                [
+                    dict(item) if isinstance(item, dict) else item
+                    for item in (metadata_source.get("grouping") or [])
+                ]
+                if metadata_source.get("grouping")
+                else metadata_source.get("grouping")
+            ),
             version=metadata_source.get("version"),
             col_schema=None,
             color_scale_stats=None,
         )
 
     @staticmethod
-    def _trim_transport_columns(columns: Optional[List[Dict[str, Any]]]) -> List[Dict[str, Any]]:
+    def _trim_transport_columns(
+        columns: Optional[List[Dict[str, Any]]],
+    ) -> List[Dict[str, Any]]:
         trimmed_columns: List[Dict[str, Any]] = []
         for column in columns or []:
             if not isinstance(column, dict):
@@ -574,10 +633,12 @@ class TanStackPivotAdapter(FormulaEngineMixin):
             if not column_id:
                 continue
             if column_id == "__col_schema":
-                trimmed_columns.append({
-                    "id": "__col_schema",
-                    "col_schema": column.get("col_schema"),
-                })
+                trimmed_columns.append(
+                    {
+                        "id": "__col_schema",
+                        "col_schema": column.get("col_schema"),
+                    }
+                )
                 continue
             trimmed_column = {"id": column_id}
             for key in ("header", "headerVal", "accessorKey"):
@@ -586,18 +647,26 @@ class TanStackPivotAdapter(FormulaEngineMixin):
             trimmed_columns.append(trimmed_column)
         return trimmed_columns
 
-    def _finalize_windowed_response(self, response: "TanStackResponse") -> "TanStackResponse":
+    def _finalize_windowed_response(
+        self, response: "TanStackResponse"
+    ) -> "TanStackResponse":
         if response.columns:
             response.columns = self._trim_transport_columns(response.columns)
         return response
 
-    def _get_cached_window_response(self, cache_key: str) -> Optional["TanStackResponse"]:
-        cached_response = self._locked_cache_lookup(self._response_window_cache, cache_key)
+    def _get_cached_window_response(
+        self, cache_key: str
+    ) -> Optional["TanStackResponse"]:
+        cached_response = self._locked_cache_lookup(
+            self._response_window_cache, cache_key
+        )
         if cached_response is None:
             return None
         return self._clone_response(cached_response)
 
-    def _store_window_response(self, cache_key: str, response: "TanStackResponse") -> "TanStackResponse":
+    def _store_window_response(
+        self, cache_key: str, response: "TanStackResponse"
+    ) -> "TanStackResponse":
         finalized = self._finalize_windowed_response(response)
         self._locked_cache_store(
             self._response_window_cache,
@@ -634,18 +703,22 @@ class TanStackPivotAdapter(FormulaEngineMixin):
 
         row_window_size = max(int(end_row) - int(start_row or 0) + 1, 1)
         next_row_start = int(end_row) + 1
-        next_row_end = min(max(int(total_rows) - 1, 0), next_row_start + row_window_size - 1)
+        next_row_end = min(
+            max(int(total_rows) - 1, 0), next_row_start + row_window_size - 1
+        )
         prefetch_specs: List[Dict[str, Any]] = []
 
         if next_row_start <= next_row_end:
-            prefetch_specs.append({
-                "start_row": next_row_start,
-                "end_row": next_row_end,
-                "col_start": col_start,
-                "col_end": col_end,
-                "needs_col_schema": False,
-                "label": "rows",
-            })
+            prefetch_specs.append(
+                {
+                    "start_row": next_row_start,
+                    "end_row": next_row_end,
+                    "col_start": col_start,
+                    "col_end": col_end,
+                    "needs_col_schema": False,
+                    "label": "rows",
+                }
+            )
 
         if (
             total_center_cols is not None
@@ -655,16 +728,20 @@ class TanStackPivotAdapter(FormulaEngineMixin):
         ):
             col_window_size = max(int(col_end) - int(col_start) + 1, 1)
             next_col_start = int(col_end) + 1
-            next_col_end = min(int(total_center_cols) - 1, next_col_start + col_window_size - 1)
+            next_col_end = min(
+                int(total_center_cols) - 1, next_col_start + col_window_size - 1
+            )
             if next_col_start <= next_col_end:
-                prefetch_specs.append({
-                    "start_row": start_row,
-                    "end_row": end_row,
-                    "col_start": next_col_start,
-                    "col_end": next_col_end,
-                    "needs_col_schema": True,
-                    "label": "cols",
-                })
+                prefetch_specs.append(
+                    {
+                        "start_row": start_row,
+                        "end_row": end_row,
+                        "col_start": next_col_start,
+                        "col_end": next_col_end,
+                        "needs_col_schema": True,
+                        "label": "cols",
+                    }
+                )
 
         for prefetch_spec in prefetch_specs:
             cache_key = self._response_window_cache_key(
@@ -697,11 +774,16 @@ class TanStackPivotAdapter(FormulaEngineMixin):
                     )
                 except Exception as exc:
                     if self._debug:
-                        _adapter_logger.debug("Background prefetch %s failed: %s", spec["label"], exc)
+                        _adapter_logger.debug(
+                            "Background prefetch %s failed: %s", spec["label"], exc
+                        )
                 finally:
                     self._clear_prefetch_request_pending(prefetch_cache_key)
 
-            task_manager.create_task(_run_prefetch(), name=f"pivot_prefetch_{prefetch_spec['label']}_{cache_key[:8]}")
+            task_manager.create_task(
+                _run_prefetch(),
+                name=f"pivot_prefetch_{prefetch_spec['label']}_{cache_key[:8]}",
+            )
 
     def _complete_virtual_scroll_response(
         self,
@@ -745,22 +827,30 @@ class TanStackPivotAdapter(FormulaEngineMixin):
             )
         return stored_response
 
-    def _get_center_col_ids_from_rows(self, rows: list, row_meta_keys: set, pinned_ids: set) -> list:
+    def _get_center_col_ids_from_rows(
+        self, rows: list, row_meta_keys: set, pinned_ids: set
+    ) -> list:
         """Return an ordered list of center (non-pinned, non-meta) column IDs from result rows."""
         seen = []
         seen_set = set()
         for row in rows:
             for col_id in row:
-                if col_id not in seen_set and col_id not in row_meta_keys and col_id not in pinned_ids:
+                if (
+                    col_id not in seen_set
+                    and col_id not in row_meta_keys
+                    and col_id not in pinned_ids
+                ):
                     seen.append(col_id)
                     seen_set.add(col_id)
         return seen
 
-    def _get_center_col_ids_from_columns(self, columns: list, excluded_ids: set) -> list:
+    def _get_center_col_ids_from_columns(
+        self, columns: list, excluded_ids: set
+    ) -> list:
         """Return ordered center column IDs from response column metadata when available."""
         ordered = []
         seen = set()
-        for col in (columns or []):
+        for col in columns or []:
             if not isinstance(col, dict):
                 continue
             col_id = col.get("id")
@@ -772,9 +862,13 @@ class TanStackPivotAdapter(FormulaEngineMixin):
             seen.add(col_id)
         return ordered
 
-    def _measure_axis_placeholder_center_ids(self, request: "TanStackRequest") -> set[str]:
+    def _measure_axis_placeholder_center_ids(
+        self, request: "TanStackRequest"
+    ) -> set[str]:
         """Return request measure placeholders hidden by measure-axis rendering."""
-        measure_axis = MeasureAxisConfig.from_dict(getattr(request, "measure_axis", None))
+        measure_axis = MeasureAxisConfig.from_dict(
+            getattr(request, "measure_axis", None)
+        )
         if not measure_axis or measure_axis.placement not in {"rows", "columns"}:
             return set()
 
@@ -803,27 +897,19 @@ class TanStackPivotAdapter(FormulaEngineMixin):
 
     @staticmethod
     def _implicit_formula_ref_request_ids(request: "TanStackRequest") -> set[str]:
-        """Return aggregate request ids used only as hidden formula inputs."""
-        return {
-            str(col.get("id"))
-            for col in (request.columns or [])
-            if isinstance(col, dict) and col.get("_isImplicitFormulaRef") and col.get("id")
-        }
+        return TanStackResponseMapper._implicit_formula_ref_request_ids(request)
 
     @staticmethod
     def _matches_materialized_request_id(column_id: Any, request_id: Any) -> bool:
-        if not isinstance(column_id, str) or not isinstance(request_id, str) or not request_id:
-            return False
-        return (
-            column_id == request_id
-            or column_id.endswith(f"_{request_id}")
-            or column_id == f"__RowTotal__{request_id}"
+        return TanStackResponseMapper._matches_materialized_request_id(
+            column_id, request_id
         )
 
-    def _is_implicit_formula_ref_center_id(self, column_id: Any, request: "TanStackRequest") -> bool:
-        return any(
-            self._matches_materialized_request_id(column_id, request_id)
-            for request_id in self._implicit_formula_ref_request_ids(request)
+    def _is_implicit_formula_ref_center_id(
+        self, column_id: Any, request: "TanStackRequest"
+    ) -> bool:
+        return self._response_mapper._is_implicit_formula_ref_center_id(
+            column_id, request
         )
 
     def _filter_implicit_formula_ref_columns(
@@ -831,109 +917,18 @@ class TanStackPivotAdapter(FormulaEngineMixin):
         columns: Optional[List[Dict[str, Any]]],
         request: "TanStackRequest",
     ) -> List[Dict[str, Any]]:
-        if not columns:
-            return []
-        return [
-            col
-            for col in columns
-            if not (
-                isinstance(col, dict)
-                and (
-                    col.get("_isImplicitFormulaRef")
-                    or self._is_implicit_formula_ref_center_id(col.get("id"), request)
-                )
-            )
-        ]
+        return self._response_mapper._filter_implicit_formula_ref_columns(
+            columns, request
+        )
 
     def _reorder_materialized_dynamic_ids(
         self,
         observed_ids: list,
         request: "TanStackRequest",
     ) -> list[str]:
-        """Normalize materialized value/formula column order for flat and pivot payloads.
-
-        Planner output already determines the pivot-prefix sequence for regular
-        measures, but post-aggregation formulas are materialized later from row
-        dicts. Without a canonical reorder pass, those late formula keys drift to
-        the end of the schema in arbitrary set/dict insertion order, which breaks
-        the horizontal window contract expected by the client.
-        """
-        requested_dynamic_ids = self._dynamic_request_ids(request)
-        column_formula_ids = [
-            str(col.get("id"))
-            for col in (request.columns or [])
-            if self._is_column_formula_column(col) and col.get("id")
-        ]
-        if not requested_dynamic_ids:
-            observed_list = [
-                str(col_id)
-                for col_id in (observed_ids or [])
-                if isinstance(col_id, str)
-            ]
-            if not column_formula_ids:
-                return observed_list
-            observed_set = set(observed_list)
-            ordered: list[str] = []
-            seen: set[str] = set()
-            for formula_id in column_formula_ids:
-                if formula_id in observed_set and formula_id not in seen:
-                    ordered.append(formula_id)
-                    seen.add(formula_id)
-            for col_id in observed_list:
-                if col_id not in seen:
-                    ordered.append(col_id)
-                    seen.add(col_id)
-            return ordered
-
-        observed_list = [
-            str(col_id)
-            for col_id in (observed_ids or [])
-            if isinstance(col_id, str)
-        ]
-        observed_set = set(observed_list)
-        ordered: list[str] = []
-        seen: set[str] = set()
-
-        pivot_prefixes: list[str] = []
-        seen_prefixes: set[str] = set()
-        has_pivoted_dynamic = False
-
-        for col_id in observed_list:
-            for dynamic_id in requested_dynamic_ids:
-                suffix = f"_{dynamic_id}"
-                if not col_id.endswith(suffix):
-                    continue
-                has_pivoted_dynamic = True
-                prefix = col_id[: -len(suffix)]
-                if prefix and prefix not in seen_prefixes:
-                    pivot_prefixes.append(prefix)
-                    seen_prefixes.add(prefix)
-                break
-
-        if has_pivoted_dynamic:
-            for prefix in pivot_prefixes:
-                for dynamic_id in requested_dynamic_ids:
-                    candidate = f"{prefix}_{dynamic_id}"
-                    if candidate in observed_set and candidate not in seen:
-                        ordered.append(candidate)
-                        seen.add(candidate)
-        else:
-            for dynamic_id in requested_dynamic_ids:
-                if dynamic_id in observed_set and dynamic_id not in seen:
-                    ordered.append(dynamic_id)
-                    seen.add(dynamic_id)
-
-        for formula_id in column_formula_ids:
-            if formula_id in observed_set and formula_id not in seen:
-                ordered.append(formula_id)
-                seen.add(formula_id)
-
-        for col_id in observed_list:
-            if col_id not in seen:
-                ordered.append(col_id)
-                seen.add(col_id)
-
-        return ordered
+        return self._response_mapper._reorder_materialized_dynamic_ids(
+            observed_ids, request
+        )
 
     def _synthesize_response_column(
         self,
@@ -1010,7 +1005,9 @@ class TanStackPivotAdapter(FormulaEngineMixin):
             if col_id not in seen_center_ids:
                 center_col_ids.append(col_id)
                 seen_center_ids.add(col_id)
-        measure_axis_placeholder_ids = self._measure_axis_placeholder_center_ids(request)
+        measure_axis_placeholder_ids = self._measure_axis_placeholder_center_ids(
+            request
+        )
         if measure_axis_placeholder_ids:
             center_col_ids = [
                 col_id
@@ -1043,7 +1040,9 @@ class TanStackPivotAdapter(FormulaEngineMixin):
             col = (
                 current_lookup.get(col_id)
                 or request_lookup.get(col_id)
-                or self._synthesize_response_column(col_id, request_lookup, formula_labels)
+                or self._synthesize_response_column(
+                    col_id, request_lookup, formula_labels
+                )
             )
             if col_id not in seen_column_ids:
                 authoritative_columns.append(col)
@@ -1053,17 +1052,7 @@ class TanStackPivotAdapter(FormulaEngineMixin):
 
     @staticmethod
     def _dynamic_request_ids(request: "TanStackRequest") -> list[str]:
-        measure_axis = MeasureAxisConfig.from_dict(getattr(request, "measure_axis", None))
-        if measure_axis and measure_axis.placement in {"rows", "columns"}:
-            return [measure_axis.value_field or "__measure_value__"]
-        return [
-            str(col.get("id"))
-            for col in (request.columns or [])
-            if isinstance(col, dict)
-            and col.get("id")
-            and not col.get("_isImplicitFormulaRef")
-            and (col.get("aggregationFn") or FormulaEngineMixin._is_measure_formula_column(col))
-        ]
+        return TanStackResponseMapper._dynamic_request_ids(request)
 
     @staticmethod
     def _column_formula_request_ids(request: "TanStackRequest") -> list[str]:
@@ -1083,7 +1072,7 @@ class TanStackPivotAdapter(FormulaEngineMixin):
             return []
 
         ordered: list[str] = []
-        for raw_value in (discovered_values or []):
+        for raw_value in discovered_values or []:
             prefix = str(raw_value)
             for dynamic_id in dynamic_ids:
                 ordered.append(f"{prefix}_{dynamic_id}")
@@ -1111,7 +1100,8 @@ class TanStackPivotAdapter(FormulaEngineMixin):
 
         if requested_center_ids:
             requested_order = [
-                col_id for col_id in requested_center_ids
+                col_id
+                for col_id in requested_center_ids
                 if isinstance(col_id, str) and col_id in center_col_ids
             ]
             return requested_order or None
@@ -1119,11 +1109,14 @@ class TanStackPivotAdapter(FormulaEngineMixin):
         safe_start = max(0, min(int(col_start or 0), len(center_col_ids) - 1))
         if col_end is not None:
             safe_end = max(safe_start, min(int(col_end), len(center_col_ids) - 1))
-            return center_col_ids[safe_start:safe_end + 1]
+            return center_col_ids[safe_start : safe_end + 1]
 
         if needs_col_schema:
-            safe_end = min(len(center_col_ids) - 1, safe_start + _INITIAL_SCHEMA_WINDOW_CENTER_COLS - 1)
-            return center_col_ids[safe_start:safe_end + 1]
+            safe_end = min(
+                len(center_col_ids) - 1,
+                safe_start + _INITIAL_SCHEMA_WINDOW_CENTER_COLS - 1,
+            )
+            return center_col_ids[safe_start : safe_end + 1]
 
         return None
 
@@ -1145,18 +1138,18 @@ class TanStackPivotAdapter(FormulaEngineMixin):
 
         source_center_ids = list(window_center_ids)
         visible_center_ids = set(
-            col_id for col_id in window_center_ids
-            if isinstance(col_id, str)
+            col_id for col_id in window_center_ids if isinstance(col_id, str)
         )
         available_center_ids = set(
-            col_id for col_id in (all_center_ids or window_center_ids)
+            col_id
+            for col_id in (all_center_ids or window_center_ids)
             if isinstance(col_id, str)
         )
         # A row sort on a pivoted value remains a query dependency even after
         # horizontal scrolling moves that column off screen. Without it, each
         # column window can produce a different row order and cached rows appear
         # blank or attached to the wrong virtual index.
-        for sort_spec in (request.sorting or []):
+        for sort_spec in request.sorting or []:
             sort_id = sort_spec.get("id") if isinstance(sort_spec, dict) else None
             if (
                 isinstance(sort_id, str)
@@ -1165,7 +1158,7 @@ class TanStackPivotAdapter(FormulaEngineMixin):
             ):
                 source_center_ids.append(sort_id)
 
-        for col in (request.columns or []):
+        for col in request.columns or []:
             if not self._is_column_formula_column(col):
                 continue
             formula_id = str(col.get("id") or "")
@@ -1173,7 +1166,9 @@ class TanStackPivotAdapter(FormulaEngineMixin):
                 continue
             source_center_ids.extend(
                 reference
-                for reference in self._extract_column_formula_references(col.get("formulaExpr", ""))
+                for reference in self._extract_column_formula_references(
+                    col.get("formulaExpr", "")
+                )
                 if reference not in visible_center_ids
             )
 
@@ -1184,7 +1179,7 @@ class TanStackPivotAdapter(FormulaEngineMixin):
                 suffix = f"_{dynamic_id}"
                 if not col_id.endswith(suffix):
                     continue
-                raw_value = col_id[:-len(suffix)]
+                raw_value = col_id[: -len(suffix)]
                 if raw_value and raw_value not in seen_values:
                     ordered_values.append(raw_value)
                     seen_values.add(raw_value)
@@ -1197,8 +1192,12 @@ class TanStackPivotAdapter(FormulaEngineMixin):
             return []
 
         local_cache_key = self._pivot_column_catalog_cache_key(spec)
-        cached_catalog = self._locked_cache_lookup(self._pivot_column_catalog_cache, local_cache_key)
-        if isinstance(cached_catalog, dict) and isinstance(cached_catalog.get("values"), list):
+        cached_catalog = self._locked_cache_lookup(
+            self._pivot_column_catalog_cache, local_cache_key
+        )
+        if isinstance(cached_catalog, dict) and isinstance(
+            cached_catalog.get("values"), list
+        ):
             return list(cached_catalog["values"])
 
         order_measure = spec.measures[0] if spec.measures else None
@@ -1217,19 +1216,25 @@ class TanStackPivotAdapter(FormulaEngineMixin):
 
         col_cache_key = self.controller._cache_key_for_query(col_query, spec)
         cached_cols_table = self.controller.cache.get(col_cache_key)
-        if cached_cols_table is not None and "_col_key" in cached_cols_table.column_names:
+        if (
+            cached_cols_table is not None
+            and "_col_key" in cached_cols_table.column_names
+        ):
             return [
-                str(value)
-                for value in cached_cols_table.column("_col_key").to_pylist()
+                str(value) for value in cached_cols_table.column("_col_key").to_pylist()
             ]
 
-        col_results_table = await self.controller._execute_ibis_expr_async(col_query, spec.table)
+        col_results_table = await self.controller._execute_ibis_expr_async(
+            col_query, spec.table
+        )
         self.controller.cache.set(col_cache_key, col_results_table)
-        if col_results_table is None or "_col_key" not in col_results_table.column_names:
+        if (
+            col_results_table is None
+            or "_col_key" not in col_results_table.column_names
+        ):
             return []
         discovered_values = [
-            str(value)
-            for value in col_results_table.column("_col_key").to_pylist()
+            str(value) for value in col_results_table.column("_col_key").to_pylist()
         ]
         self._locked_cache_store(
             self._pivot_column_catalog_cache,
@@ -1240,24 +1245,43 @@ class TanStackPivotAdapter(FormulaEngineMixin):
         )
         return discovered_values
 
-    def _apply_col_windowing(self, tanstack_result: 'TanStackResponse', request: 'TanStackRequest',
-                              col_start: int, col_end: Optional[int], needs_col_schema: bool,
-                              requested_center_ids: Optional[List[str]] = None,
-                              discovered_center_ids: Optional[List[str]] = None) -> 'TanStackResponse':
+    def _apply_col_windowing(
+        self,
+        tanstack_result: "TanStackResponse",
+        request: "TanStackRequest",
+        col_start: int,
+        col_end: Optional[int],
+        needs_col_schema: bool,
+        requested_center_ids: Optional[List[str]] = None,
+        discovered_center_ids: Optional[List[str]] = None,
+    ) -> "TanStackResponse":
         """Apply column slicing and optionally build col_schema."""
         if not needs_col_schema and col_end is None and not requested_center_ids:
             return self._finalize_windowed_response(tanstack_result)
 
         row_meta_keys = {
-            '_id', '_path', '_isTotal', '_level', '_expanded', '_parentPath',
-            '_has_children', '_is_expanded', 'depth', '_depth', 'uuid', 'subRows',
-            '_pathFields'
+            "_id",
+            "_path",
+            "_isTotal",
+            "_level",
+            "_expanded",
+            "_parentPath",
+            "_has_children",
+            "_is_expanded",
+            "depth",
+            "_depth",
+            "uuid",
+            "subRows",
+            "_pathFields",
         }
         pinned_ids = set(request.grouping or [])
         request_dimension_ids = {
             col.get("id")
             for col in (request.columns or [])
-            if isinstance(col, dict) and not col.get("aggregationFn") and not col.get("isFormula") and col.get("id")
+            if isinstance(col, dict)
+            and not col.get("aggregationFn")
+            and not col.get("isFormula")
+            and col.get("id")
         }
         excluded_ids = set(row_meta_keys) | pinned_ids | request_dimension_ids
         cache_key = (
@@ -1286,8 +1310,10 @@ class TanStackPivotAdapter(FormulaEngineMixin):
         if discovered_center_ids is None and (
             needs_col_schema or cached_center_col_ids is None or requested_center_ids
         ):
-            center_col_ids, authoritative_columns = self._build_authoritative_response_columns(
-                tanstack_result, request, row_meta_keys, excluded_ids
+            center_col_ids, authoritative_columns = (
+                self._build_authoritative_response_columns(
+                    tanstack_result, request, row_meta_keys, excluded_ids
+                )
             )
             tanstack_result.columns = authoritative_columns
             self._center_col_ids_cache_set(cache_key, center_col_ids)
@@ -1305,7 +1331,9 @@ class TanStackPivotAdapter(FormulaEngineMixin):
                 authoritative_columns, excluded_ids
             )
             if fresh_center_col_ids and fresh_center_col_ids != center_col_ids:
-                center_col_ids = self._reorder_materialized_dynamic_ids(fresh_center_col_ids, request)
+                center_col_ids = self._reorder_materialized_dynamic_ids(
+                    fresh_center_col_ids, request
+                )
                 self._center_col_ids_cache_set(cache_key, center_col_ids)
 
         effective_window_ids = self._resolve_center_window_ids(
@@ -1319,9 +1347,9 @@ class TanStackPivotAdapter(FormulaEngineMixin):
 
         if needs_col_schema:
             column_lookup = {
-                col.get('id'): col
+                col.get("id"): col
                 for col in (tanstack_result.columns or [])
-                if isinstance(col, dict) and col.get('id')
+                if isinstance(col, dict) and col.get("id")
             }
             schema_center_ids = effective_window_ids or center_col_ids
             schema_start_index = 0
@@ -1332,31 +1360,36 @@ class TanStackPivotAdapter(FormulaEngineMixin):
                 except ValueError:
                     schema_start_index = 0
             tanstack_result.col_schema = {
-                'total_center_cols': len(center_col_ids),
-                'columns': [{
-                    'index': schema_start_index + i,
-                    'id': col_id,
-                    'size': 140,
-                    'header': (
-                        column_lookup.get(col_id, {}).get('header')
-                        or column_lookup.get(col_id, {}).get('accessorKey')
-                        or col_id
-                    ),
-                    'headerVal': (
-                        column_lookup.get(col_id, {}).get('headerVal')
-                        if column_lookup.get(col_id, {}).get('headerVal') is not None
-                        else (
-                            column_lookup.get(col_id, {}).get('header')
-                            or column_lookup.get(col_id, {}).get('accessorKey')
+                "total_center_cols": len(center_col_ids),
+                "columns": [
+                    {
+                        "index": schema_start_index + i,
+                        "id": col_id,
+                        "size": 140,
+                        "header": (
+                            column_lookup.get(col_id, {}).get("header")
+                            or column_lookup.get(col_id, {}).get("accessorKey")
                             or col_id
-                        )
-                    ),
-                } for i, col_id in enumerate(schema_center_ids)]
+                        ),
+                        "headerVal": (
+                            column_lookup.get(col_id, {}).get("headerVal")
+                            if column_lookup.get(col_id, {}).get("headerVal")
+                            is not None
+                            else (
+                                column_lookup.get(col_id, {}).get("header")
+                                or column_lookup.get(col_id, {}).get("accessorKey")
+                                or col_id
+                            )
+                        ),
+                    }
+                    for i, col_id in enumerate(schema_center_ids)
+                ],
             }
 
         if requested_center_ids:
             requested_order = [
-                col_id for col_id in requested_center_ids
+                col_id
+                for col_id in requested_center_ids
                 if isinstance(col_id, str) and col_id in center_col_ids
             ]
             requested_ids = set(requested_order)
@@ -1369,9 +1402,9 @@ class TanStackPivotAdapter(FormulaEngineMixin):
 
             if tanstack_result.columns:
                 column_lookup = {
-                    col.get('id'): col
+                    col.get("id"): col
                     for col in tanstack_result.columns
-                    if isinstance(col, dict) and col.get('id')
+                    if isinstance(col, dict) and col.get("id")
                 }
                 ordered_columns = []
                 seen = set()
@@ -1382,7 +1415,7 @@ class TanStackPivotAdapter(FormulaEngineMixin):
                 for col in tanstack_result.columns:
                     if not isinstance(col, dict):
                         continue
-                    col_id = col.get('id')
+                    col_id = col.get("id")
                     if not col_id or col_id in seen:
                         continue
                     if col_id in keep_ids:
@@ -1402,13 +1435,15 @@ class TanStackPivotAdapter(FormulaEngineMixin):
 
             if tanstack_result.columns:
                 column_lookup = {
-                    col.get('id'): col
+                    col.get("id"): col
                     for col in tanstack_result.columns
-                    if isinstance(col, dict) and col.get('id')
+                    if isinstance(col, dict) and col.get("id")
                 }
                 ordered_columns = []
                 seen = set()
-                for col_id in list(request.grouping or []) + [col_id for col_id in center_col_ids if col_id in keep_ids]:
+                for col_id in list(request.grouping or []) + [
+                    col_id for col_id in center_col_ids if col_id in keep_ids
+                ]:
                     if col_id in column_lookup and col_id not in seen:
                         ordered_columns.append(column_lookup[col_id])
                         seen.add(col_id)
@@ -1438,6 +1473,7 @@ class TanStackPivotAdapter(FormulaEngineMixin):
             If the data type is not supported.
         """
         from .data_input import normalize_data_input  # noqa: PLC0415  (lazy import)
+
         normalize_data_input(data, table_name, self.controller)
 
     def _log_request(self, method: str, request: "TanStackRequest", **extra):
@@ -1452,13 +1488,15 @@ class TanStackPivotAdapter(FormulaEngineMixin):
                 "totals": getattr(request, "totals", None),
                 "filters_keys": list((getattr(request, "filters", None) or {}).keys()),
                 **extra,
-            }
+            },
         )
 
     def _log_response(self, method: str, rows: list):
         if not self._debug:
             return
-        total_rows = [r for r in rows if r.get("_isTotal") or r.get("_path") == "__grand_total__"]
+        total_rows = [
+            r for r in rows if r.get("_isTotal") or r.get("_path") == "__grand_total__"
+        ]
         _adapter_logger.debug(
             "adapter_response",
             extra={
@@ -1466,8 +1504,9 @@ class TanStackPivotAdapter(FormulaEngineMixin):
                 "row_count": len(rows),
                 "total_row_count": len(total_rows),
                 "has_grand_total": any(r.get("_id") == "Grand Total" for r in rows),
-            }
+            },
         )
+
     # Formula engine and window function methods provided by FormulaEngineMixin
 
     @staticmethod
@@ -1476,732 +1515,97 @@ class TanStackPivotAdapter(FormulaEngineMixin):
         measures: List[Measure],
         request_columns: List[Dict[str, Any]],
     ) -> List[Dict[str, Any]]:
-        if not measure_axis or measure_axis.placement == "none":
-            return []
-
-        configured_members = [
-            dict(member)
-            for member in (measure_axis.members or [])
-            if isinstance(member, dict)
-        ]
-        if configured_members:
-            if not measures:
-                return configured_members
-            measures_by_alias = {
-                str(getattr(measure, "alias", "")): measure
-                for measure in (measures or [])
-                if getattr(measure, "alias", None)
-            }
-
-            def resolve_configured_member(member: Dict[str, Any]) -> Optional[Measure]:
-                candidates = [
-                    member.get("measureAlias"),
-                    member.get("measure_alias"),
-                    member.get("alias"),
-                    member.get("id"),
-                ]
-                for candidate in candidates:
-                    key = str(candidate or "").strip()
-                    if key and key in measures_by_alias:
-                        return measures_by_alias[key]
-
-                source_field = str(
-                    member.get("sourceField")
-                    or member.get("source_field")
-                    or member.get("field")
-                    or member.get("aggregationField")
-                    or member.get("aggregation_field")
-                    or ""
-                ).strip()
-                agg = str(member.get("agg") or member.get("aggregation") or "sum").strip().lower()
-                for measure in measures or []:
-                    measure_field = str(getattr(measure, "field", None) or "").strip()
-                    measure_agg = str(getattr(measure, "agg", None) or "sum").strip().lower()
-                    if source_field and measure_field == source_field and measure_agg == agg:
-                        return measure
-                for measure in measures or []:
-                    measure_field = str(getattr(measure, "field", None) or "").strip()
-                    if source_field and measure_field == source_field:
-                        return measure
-                return None
-
-            valid_configured_members: List[Dict[str, Any]] = []
-            seen_aliases: set = set()
-            for member in configured_members:
-                measure = resolve_configured_member(member)
-                if measure is None:
-                    continue
-                measure_alias = str(getattr(measure, "alias", "") or "").strip()
-                if not measure_alias or measure_alias in seen_aliases:
-                    continue
-                seen_aliases.add(measure_alias)
-                valid_configured_members.append({
-                    **member,
-                    "id": measure_alias,
-                    "sourceField": getattr(measure, "field", None),
-                    "measureAlias": measure_alias,
-                    "agg": getattr(measure, "agg", None) or member.get("agg") or "sum",
-                    "order": len(valid_configured_members),
-                })
-            return valid_configured_members
-
-        columns_by_id = {
-            str(column.get("id")): column
-            for column in (request_columns or [])
-            if isinstance(column, dict) and column.get("id") is not None
-        }
-        derived_members: List[Dict[str, Any]] = []
-        for index, measure in enumerate(measures or []):
-            column = columns_by_id.get(str(measure.alias), {})
-            label = (
-                column.get("header")
-                or column.get("label")
-                or column.get("aggregationLabel")
-                or getattr(measure, "field", None)
-                or getattr(measure, "alias", None)
-            )
-            derived_members.append({
-                "id": getattr(measure, "alias", None) or getattr(measure, "field", None) or f"measure_{index + 1}",
-                "sourceField": getattr(measure, "field", None),
-                "measureAlias": getattr(measure, "alias", None),
-                "agg": getattr(measure, "agg", None) or "sum",
-                "label": str(label or getattr(measure, "alias", None) or f"Measure {index + 1}"),
-                "order": index,
-                "format": column.get("format"),
-                "editable": bool(column.get("editable", False)),
-            })
-        return derived_members
+        return TanStackRequestMapper._derive_measure_axis_members(
+            measure_axis, measures, request_columns
+        )
 
     @staticmethod
-    def _formula_alias_lookup_from_request_columns(request_columns: List[Dict[str, Any]]) -> Dict[str, str]:
-        lookup: Dict[str, str] = {}
-
-        def add_alias(alias: Any, target: str) -> None:
-            key = str(alias or "").strip()
-            if not key:
-                return
-            lookup.setdefault(key, target)
-            lookup.setdefault(key.lower(), target)
-
-        for column in request_columns or []:
-            if not isinstance(column, dict) or not column.get("id"):
-                continue
-            column_id = str(column.get("id"))
-            add_alias(column_id, column_id)
-            if column.get("aggregationFn"):
-                add_alias(column.get("aggregationField"), column_id)
-                add_alias(column.get("header"), column_id)
-                add_alias(column.get("label"), column_id)
-                add_alias(column.get("aggregationLabel"), column_id)
-            elif column.get("isFormula"):
-                add_alias(column.get("formulaRef"), column_id)
-                add_alias(column.get("formulaLabel"), column_id)
-                add_alias(column.get("header"), column_id)
-        return lookup
+    def _formula_alias_lookup_from_request_columns(
+        request_columns: List[Dict[str, Any]],
+    ) -> Dict[str, str]:
+        return TanStackRequestMapper._formula_alias_lookup_from_request_columns(
+            request_columns
+        )
 
     @staticmethod
-    def _canonicalize_measure_formula_expression(expression: Any, alias_lookup: Dict[str, str]) -> str:
-        text = str(expression or "")
-        if not text:
-            return ""
+    def _canonicalize_measure_formula_expression(
+        expression: Any, alias_lookup: Dict[str, str]
+    ) -> str:
+        return TanStackRequestMapper._canonicalize_measure_formula_expression(
+            expression, alias_lookup
+        )
 
-        reserved = {
-            "True", "False", "None", "and", "or", "not", "if", "else", "in", "is",
-            "abs", "round", "ceil", "floor", "max", "min", "int", "float",
-        }
-
-        def resolve_alias(value: str) -> str:
-            return alias_lookup.get(value, alias_lookup.get(value.lower(), value))
-
-        def replace_bracket(match: re.Match) -> str:
-            resolved = resolve_alias(match.group(1))
-            return f"[{resolved}]" if not _FORMULA_IDENTIFIER_RE.fullmatch(resolved) else resolved
-
-        bracketed = re.sub(r"\[([^\]]+)\]", replace_bracket, text)
-
-        protected: Dict[str, str] = {}
-
-        def protect_bracket(match: re.Match) -> str:
-            token = f"__formula_bracket_{len(protected)}__"
-            protected[token] = match.group(0)
-            return token
-
-        protected_text = re.sub(r"\[[^\]]+\]", protect_bracket, bracketed)
-
-        def replace_identifier(match: re.Match) -> str:
-            token = match.group(0)
-            if token in protected or token in reserved:
-                return token
-            return resolve_alias(token)
-
-        normalized = _FORMULA_IDENTIFIER_RE.sub(replace_identifier, protected_text)
-        for token, value in protected.items():
-            normalized = normalized.replace(token, value)
-        return normalized
-
-    def convert_tanstack_request_to_pivot_spec(self, request: TanStackRequest) -> PivotSpec:
+    def convert_tanstack_request_to_pivot_spec(
+        self, request: TanStackRequest
+    ) -> PivotSpec:
         """Convert TanStack request to PivotSpec format"""
+        return self._request_mapper.convert_tanstack_request_to_pivot_spec(request)
+
         # Extract grouping columns as hierarchy
-        hierarchy_cols = request.grouping or []
-        
+
         # Extract measure columns
-        measures = []
-        value_cols = []
-        measure_axis = MeasureAxisConfig.from_dict(request.measure_axis)
-        measure_axis_active = bool(measure_axis and measure_axis.placement != "none")
-        measure_axis_member_aliases = {
-            str(
-                member.get("measureAlias")
-                or member.get("measure_alias")
-                or member.get("alias")
-                or member.get("id")
-                or ""
-            ).strip()
-            for member in ((measure_axis.members if measure_axis else []) or [])
-            if isinstance(member, dict)
-        }
-        measure_axis_member_aliases.discard("")
-        formula_alias_lookup = self._formula_alias_lookup_from_request_columns(request.columns or [])
-        
-        for col in request.columns:
-            if col.get('isFormula'):
-                if (
-                    measure_axis_active
-                    and not self._is_column_formula_column(col)
-                    and col.get("id")
-                    and (not measure_axis_member_aliases or str(col.get("id")) in measure_axis_member_aliases)
-                ):
-                    measures.append(Measure(
-                        field=None,
-                        agg="formula",
-                        alias=str(col.get("id")),
-                        expression=self._canonicalize_measure_formula_expression(
-                            col.get("formulaExpr", ""),
-                            formula_alias_lookup,
-                        ),
-                    ))
-                continue
-            if col.get('aggregationFn'):
-                # This is an aggregation column
-                window_fn = col.get('windowFn')
-                planner_window_fn = (
-                    None if self._normalize_window_fn(window_fn) is not None else window_fn
-                )
-                measures.append(Measure(
-                    field=col.get('aggregationField', col['id']),
-                    agg=col.get('aggregationFn', 'sum'),
-                    alias=col['id'],
-                    weighted_field=col.get('weightField'),
-                    window_func=planner_window_fn
-                ))
-            elif col['id'] not in hierarchy_cols and col['id'] not in ('_id', 'depth', 'hierarchy', 'subRows'):
-                # This is a value column
-                value_cols.append(col['id'])
 
-        if measure_axis and measure_axis.placement != "none":
-            measure_axis.members = self._derive_measure_axis_members(measure_axis, measures, request.columns or [])
-            label_field = measure_axis.label_field
-            if measure_axis.placement == "rows":
-                if label_field not in hierarchy_cols:
-                    hierarchy_cols = list(hierarchy_cols) + [label_field]
-                value_cols = [field for field in value_cols if field != label_field]
-            elif measure_axis.placement == "columns":
-                if label_field not in value_cols:
-                    value_cols = list(value_cols) + [label_field]
-                hierarchy_cols = [field for field in hierarchy_cols if field != label_field]
-
-            sort_key_field = f"__sortkey__{label_field}"
-            has_measure_axis_sort = any(
-                isinstance(item, dict)
-                and (
-                    item.get("field") == label_field
-                    or item.get("sortKeyField") == sort_key_field
-                )
-                for item in (request.sorting or [])
-            )
-        else:
-            has_measure_axis_sort = False
-
-        pivot_filters = []
-        if request.filters:
-            for field_name, filter_obj in request.filters.items():
-                if not field_name or field_name in ('__row_number__', 'hierarchy'):
-                    continue
-                if filter_obj is None:
-                    continue
-
-                # Global search: convert to OR-contains across all row dimension fields
-                if field_name == 'global':
-                    search_val = filter_obj if isinstance(filter_obj, str) else (
-                        filter_obj.get('value') if isinstance(filter_obj, dict) else None
-                    )
-                    if search_val and str(search_val).strip() and hierarchy_cols:
-                        pivot_filters.append({
-                            'op': 'OR',
-                            'conditions': [
-                                {'field': f, 'op': 'contains', 'value': str(search_val), 'caseSensitive': False}
-                                for f in hierarchy_cols
-                            ]
-                        })
-                    continue
-
-                if isinstance(filter_obj, dict):
-                    if 'conditions' in filter_obj and 'operator' in filter_obj:
-                        # This is a multi-condition filter block
-                        conditions = []
-                        for cond in filter_obj.get('conditions', []):
-                            conditions.append({
-                                'field': field_name,
-                                'op': self._map_tanstack_operator(cond.get('type', 'eq')),
-                                'value': cond.get('value'),
-                                'caseSensitive': cond.get('caseSensitive', False)
-                            })
-
-                        if conditions:
-                            pivot_filters.append({
-                                'op': filter_obj['operator'],
-                                'conditions': conditions
-                            })
-                    else:
-                        # This is a single-condition filter dict
-                        pivot_filters.append({
-                            'field': field_name,
-                            'op': self._map_tanstack_operator(filter_obj.get('type', 'eq')),
-                            'value': filter_obj.get('value'),
-                            'caseSensitive': filter_obj.get('caseSensitive', False)
-                        })
-                elif isinstance(filter_obj, list):
-                    # TanStack sometimes sends an array of condition objects directly
-                    conditions = [
-                        {
-                            'field': field_name,
-                            'op': self._map_tanstack_operator(item.get('type', 'eq')),
-                            'value': item.get('value'),
-                            'caseSensitive': item.get('caseSensitive', False)
-                        }
-                        for item in filter_obj
-                        if isinstance(item, dict) and item.get('value') not in (None, '')
-                    ]
-                    if len(conditions) == 1:
-                        pivot_filters.append(conditions[0])
-                    elif len(conditions) > 1:
-                        pivot_filters.append({'op': 'AND', 'conditions': conditions})
-                elif isinstance(filter_obj, str) and filter_obj.strip() != '':
-                    # Support simple string filters (e.g. from quick input)
-                    pivot_filters.append({
-                        'field': field_name,
-                        'op': 'contains',
-                        'value': filter_obj,
-                        'caseSensitive': False
-                    })
-
-        
         # Convert TanStack sorting to PivotSpec sorting.
         # The hierarchy column has id="hierarchy" in the frontend but the backend
         # needs the actual first row dimension field name.
-        pivot_sort = []
-        for sort_spec in request.sorting:
-            col_id = sort_spec['id']
-            if not col_id or col_id == '__row_number__':
-                continue
-            if col_id == 'hierarchy' and request.grouping:
-                col_id = request.grouping[0]
-
-            sort_type = str(sort_spec.get("sortType") or "").strip().lower()
-            sort_key_field = sort_spec.get("sortKeyField")
-            semantic_type = sort_spec.get("semanticType") or sort_spec.get("sortSemantic")
-            if not semantic_type and isinstance(col_id, str):
-                # Safe heuristic fallback so common tenor fields sort naturally without
-                # forcing every caller to send explicit semantic metadata.
-                lower_col = col_id.lower()
-                if any(token in lower_col for token in ("tenor", "maturity", "term")):
-                    semantic_type = "tenor"
-            if not semantic_type and sort_type == "curve_pillar_tenor":
-                # Fallback semantic hint when caller requested curve tenor semantics
-                # but did not provide an explicit semanticType.
-                semantic_type = "tenor"
-
-            sort_item = {
-                'field': col_id,
-                'order': 'desc' if sort_spec.get('desc') is True else 'asc'
-            }
-            if semantic_type:
-                sort_item["semanticType"] = semantic_type
-            if sort_type:
-                sort_item["sortType"] = sort_type
-            if sort_spec.get("absoluteSort") is True:
-                sort_item["absoluteSort"] = True
-                if not sort_item.get("sortType"):
-                    sort_item["sortType"] = "absolute"
-            if isinstance(sort_key_field, str) and sort_key_field:
-                sort_item["sortKeyField"] = sort_key_field
-            
-            # If no sortKeyField was provided but we have a tenor semantic,
-            # we check if a standard __sortkey__ field exists in the schema.
-            # (The planner will then ensure it's in the GROUP BY).
-            if semantic_type == "tenor" and not sort_item.get("sortKeyField"):
-                possible_key = f"__sortkey__{col_id}"
-                # We don't have the table here, so we'll let the planner/builder 
-                # handle the final resolution, but we can pass the hint.
-                sort_item["sortKeyField"] = possible_key
-
-            if sort_spec.get("nulls"):
-                sort_item["nulls"] = sort_spec.get("nulls")
-            pivot_sort.append(sort_item)
 
         # Inject default sort specs for custom dimensions with explicit order settings.
         # Only injected when: user hasn't already sorted by that field AND the
         # dimension is actually present in the current grouping (avoids carrying
         # unnecessary hidden sort-key columns through unrelated queries).
-        explicit_sort_fields = {s.get("field") for s in pivot_sort}
-        active_dims = set(request.grouping or [])
-        for dim in (request.custom_dimensions or []):
-            if not isinstance(dim, dict):
-                continue
-            dim_field = dim.get("field") or ""
-            if not dim_field or dim_field in explicit_sort_fields or dim_field not in active_dims:
-                continue
-            dim_order = str(dim.get("order") or "creation").strip().lower()
-            if dim_order == "alpha":
-                continue
-            sort_key_col = f"__sortkey__{dim_field}"
-            if dim_order == "alpha_desc":
-                pivot_sort.append({"field": dim_field, "order": "desc"})
-            elif dim_order in ("numeric", "creation"):
-                pivot_sort.append({"field": dim_field, "order": "asc", "sortKeyField": sort_key_col})
-            elif dim_order == "numeric_desc":
-                pivot_sort.append({"field": dim_field, "order": "desc", "sortKeyField": sort_key_col})
-
-        if measure_axis and measure_axis.placement != "none" and not has_measure_axis_sort:
-            label_field = measure_axis.label_field
-            if label_field in set(hierarchy_cols or []) or label_field in set(value_cols or []):
-                pivot_sort.append({
-                    "field": label_field,
-                    "order": "asc",
-                    "sortKeyField": f"__sortkey__{label_field}",
-                })
 
         # Handle pagination
-        offset = 0
-        limit = 1000  # Default
-        
-        if request.pagination:
-            page_size = request.pagination.get('pageSize', 100)
-            page = request.pagination.get('pageIndex', 0)
-            offset = page * page_size
-            limit = page_size
-            
+
         # Parse column_cursor from global_filter
-        column_cursor = None
-        if request.global_filter and request.global_filter.startswith("column_cursor:"):
-            column_cursor = request.global_filter.replace("column_cursor:", "", 1)
-            
-        from pivot_engine.types.pivot_spec import PivotConfig
-        
-        spec = PivotSpec(
-            table=request.table,
-            rows=hierarchy_cols,
-            columns=value_cols,  # Map non-grouped dimensions to column pivots
-            measures=measures,
-            filters=pivot_filters,
-            custom_dimensions=request.custom_dimensions or [],
-            measure_axis=measure_axis,
-            sort=pivot_sort,
-            limit=limit,
-            totals=request.totals if request.totals is not None else True,  # Enable totals computation
-            pivot_config=PivotConfig(
-                enabled=True,
-                column_cursor=column_cursor,
-                include_totals_column=request.row_totals if request.row_totals is not None else False
-            ),
-            column_sort_options=request.column_sort_options,
-        )
-        return spec
-    
+
     def _map_tanstack_operator(self, tanstack_op: str) -> str:
-        """Map TanStack filter operators to pivot engine operators"""
-        mapping = {
-            'eq': '=',
-            'ne': '!=',
-            'lt': '<',
-            'gt': '>',
-            'lte': '<=',
-            'gte': '>=',
-            'contains': 'contains',
-            'startsWith': 'starts_with',
-            'endsWith': 'ends_with',
-            'in': 'in',
-            'notIn': 'not in'
-        }
-        return mapping.get(tanstack_op, '=')
-    
-    def convert_pivot_result_to_tanstack_format(self, pivot_result: Any, 
-                                               tanstack_request: TanStackRequest,
-                                               version: Optional[int] = None) -> TanStackResponse:
+        return self._request_mapper._map_tanstack_operator(tanstack_op)
+
+    def convert_pivot_result_to_tanstack_format(
+        self,
+        pivot_result: Any,
+        tanstack_request: TanStackRequest,
+        version: Optional[int] = None,
+    ) -> TanStackResponse:
         """Convert pivot engine result to TanStack format"""
-        import pyarrow as pa
-        hidden_sort_prefix = "__sortkey__"
-        
+        return self._response_mapper.convert_pivot_result_to_tanstack_format(
+            pivot_result,
+            tanstack_request,
+            version,
+        )
+
         # Convert from pivot format to TanStack row format
-        rows = []
-        
-        if isinstance(pivot_result, pa.Table):
-            # Optimized vectorised conversion using PyArrow
-            rows = pivot_result.to_pylist()
-        elif isinstance(pivot_result, dict) and 'rows' in pivot_result and 'columns' in pivot_result:
-            # Dict format with columns and rows
-            pivot_columns = pivot_result['columns']
-            pivot_rows = pivot_result['rows']
-            
-            for pivot_row in pivot_rows:
-                tanstack_row = {}
-                # Check if pivot_row is a list/tuple or a dict
-                if isinstance(pivot_row, (list, tuple)):
-                    for i, col_name in enumerate(pivot_columns):
-                        tanstack_row[col_name] = pivot_row[i] if i < len(pivot_row) else None
-                elif isinstance(pivot_row, dict):
-                    # Already a dict, just use it
-                    tanstack_row = pivot_row
-                rows.append(tanstack_row)
-        elif isinstance(pivot_result, list):
-            # Already in row format
-            rows = pivot_result
 
         # Hidden sort-key fields are transport-only helpers.
         # Keep them available for backend ORDER BY, but never expose them to the frontend.
         # Also sanitize NaN floats → None so JSON serialization produces valid null.
-        import math as _math
-        if rows:
-            for row in rows:
-                if not isinstance(row, dict):
-                    continue
-                hidden_keys = [
-                    key for key in row.keys()
-                    if isinstance(key, str) and key.startswith(hidden_sort_prefix)
-                ]
-                for key in hidden_keys:
-                    row.pop(key, None)
-                for key, val in row.items():
-                    if isinstance(val, float) and _math.isnan(val):
-                        row[key] = None
-        
+
         # Enrich rows for TanStack Hierarchy display
-        hierarchy_cols = tanstack_request.grouping or []
-        if hierarchy_cols:
-            max_depth = max(len(hierarchy_cols) - 1, 0)
-            for row in rows:
-                # Normalize depth (support both depth and _depth).
-                # When depth is absent, infer it from how many consecutive
-                # grouping fields are non-null — this is the only reliable
-                # source when controllers return flat rows without depth metadata.
-                current_depth = row.get('depth')
-                if current_depth is None:
-                    current_depth = row.get('_depth')
-                if current_depth is None:
-                    inferred_parts = []
-                    for col in hierarchy_cols:
-                        if _is_missing_value(row.get(col)):
-                            break
-                        inferred_parts.append(str(row[col]))
-                    current_depth = min(max(len(inferred_parts) - 1, 0), max_depth)
-                row['depth'] = current_depth
-
-                # Populate _id if missing
-                if '_id' not in row:
-                    is_grand_total = False
-                    # Check for Grand Total (first grouping column missing/NaN)
-                    first_col = hierarchy_cols[0]
-                    if first_col in row and _is_missing_value(row[first_col]):
-                        row['_id'] = 'Grand Total'
-                        row['_isTotal'] = True
-                        is_grand_total = True
-
-                    if not is_grand_total:
-                        # Find the correct dimension for this depth
-                        if current_depth < len(hierarchy_cols):
-                            target_col = hierarchy_cols[current_depth]
-                            target_val = row.get(target_col)
-                            row['_id'] = "" if _is_missing_value(target_val) else target_val
-                        else:
-                            # Fallback: deepest non-None
-                            for col in reversed(hierarchy_cols):
-                                if col in row and not _is_missing_value(row[col]):
-                                    row['_id'] = row[col]
-                                    break
-
-                        if '_id' not in row:
-                            row['_id'] = ""
-
-                # Populate _path for row identification (critical for expansion).
-                # Build the full path from ALL non-null grouping fields up to the
-                # inferred depth so tabular layout mode can retrieve parent labels
-                # (e.g. "USA") for child rows (e.g. depth-1 city rows) even when
-                # the parent field value is absent from the row dict.
-                if '_path' not in row:
-                    if row.get('_isTotal'):
-                        row['_path'] = '__grand_total__'
-                    elif hierarchy_cols:
-                        path_parts = []
-                        for col in hierarchy_cols[:current_depth + 1]:
-                            val = row.get(col)
-                            if _is_missing_value(val):
-                                break
-                            path_parts.append(str(val))
-                        row['_path'] = "|||".join(path_parts) if path_parts else str(row.get('_id', ''))
-                    else:
-                        row['_path'] = str(id(row))
 
         # Apply pivot window functions (% row/% col/% grand total) after hierarchy
         # metadata is normalized, so grand-total detection is stable.
-        self._apply_pivot_window_functions(rows, tanstack_request)
 
         # Apply formula columns (post-aggregation calculated fields) after window functions.
-        measure_axis_for_response = MeasureAxisConfig.from_dict(getattr(tanstack_request, "measure_axis", None))
-        formulas_materialized_by_measure_axis = bool(
-            measure_axis_for_response
-            and measure_axis_for_response.placement in {"rows", "columns"}
-            and any(isinstance(column, dict) and column.get("isFormula") for column in (tanstack_request.columns or []))
-        )
-        _formula_errors_main = {}
-        if not formulas_materialized_by_measure_axis:
-            _formula_errors_main = self._apply_formula_columns(rows, tanstack_request)
-            rows = self._sort_rows_for_formula_sort(rows, tanstack_request)
 
         # Calculate pagination info if needed
-        pagination = None
-        if tanstack_request.pagination:
-            total_rows = len(rows)  # In real implementation, get actual total
-            pagination = {
-                'totalRows': total_rows,
-                'pageSize': tanstack_request.pagination.get('pageSize', 100),
-                'pageIndex': tanstack_request.pagination.get('pageIndex', 0),
-                'pageCount': (total_rows + tanstack_request.pagination.get('pageSize', 100) - 1) // tanstack_request.pagination.get('pageSize', 100) if total_rows else 0
-            }
-        
+
         # Dynamic Column Generation for Pivot
         # If we have pivot columns, we need to update the response columns
-        response_columns = list(tanstack_request.columns or [])
-        measure_ids = {c['id'] for c in tanstack_request.columns if c.get('aggregationFn')}
-        formula_ids = {c['id'] for c in tanstack_request.columns if c.get('isFormula')}
-        formula_labels = {
-            c['id']: self._formula_label(c)
-            for c in tanstack_request.columns
-            if c.get('isFormula') and c.get('id')
-        }
-        grouping_ids = set(tanstack_request.grouping or [])
-        has_column_dimensions = any(
-            c.get('id') not in grouping_ids and not c.get('aggregationFn') and not c.get('isFormula')
-            for c in tanstack_request.columns
-        )
 
         # In pivot mode (column dimensions present), base measure columns are placeholders.
         # Keep only expanded dynamic pivot columns to avoid showing extra plain measures.
-        if has_column_dimensions and (measure_ids or formula_ids):
-            placeholder_ids = measure_ids | formula_ids
-            response_columns = [c for c in response_columns if c.get('id') not in placeholder_ids]
 
         # Detect dynamic columns using backend schema order first so pivot column
         # sorting survives transport and horizontal windowing.
-        if rows:
-            ordered_result_keys = []
-            seen_result_keys = set()
-            if isinstance(pivot_result, pa.Table):
-                for key in (pivot_result.column_names or []):
-                    if key not in seen_result_keys:
-                        ordered_result_keys.append(key)
-                        seen_result_keys.add(key)
-            for row in rows:
-                if not isinstance(row, dict):
-                    continue
-                for key in row.keys():
-                    if key not in seen_result_keys:
-                        ordered_result_keys.append(key)
-                        seen_result_keys.add(key)
-
-            known_ids = {c['id'] for c in response_columns if isinstance(c, dict) and c.get('id')}
-            meta_keys = {
-                '_id', '_path', '_isTotal', 'depth', '_depth', 'hierarchy',
-                '_level', '_expanded', '_parentPath', '_has_children', '_is_expanded',
-                'subRows', 'uuid', '__virtualIndex'
-            }
-
-            materialized_ids = []
-            for key in ordered_result_keys:
-                if key in known_ids or key in meta_keys:
-                    continue
-                if isinstance(key, str) and key.startswith(hidden_sort_prefix):
-                    continue
-                if self._is_implicit_formula_ref_center_id(key, tanstack_request):
-                    continue
-                materialized_ids.append(key)
-
-            materialized_ids = self._reorder_materialized_dynamic_ids(
-                materialized_ids,
-                tanstack_request,
-            )
-
-            new_columns = []
-            for key in materialized_ids:
-                if key.startswith("__RowTotal__"):
-                    measure_key = key.replace("__RowTotal__", "")
-                    header = f"Total {measure_key.replace('_', ' ').title()}"
-                    new_columns.append({
-                        'id': key,
-                        'header': header,
-                        'accessorKey': key,
-                        'isRowTotal': True
-                    })
-                else:
-                    formula_label = None
-                    for formula_id, label in formula_labels.items():
-                        if self._matches_formula_column_id(key, formula_id):
-                            formula_label = label
-                            break
-
-                    new_column = {
-                        'id': key,
-                        'header': formula_label or key.replace('_', ' ').title(),
-                        'accessorKey': key,
-                    }
-                    if formula_label:
-                        new_column['formulaLabel'] = formula_label
-                    new_columns.append(new_column)
-
-            if new_columns:
-                existing_ids = {c.get('id') for c in response_columns if isinstance(c, dict)}
-                for col in new_columns:
-                    if col['id'] not in existing_ids:
-                        response_columns.append(col)
-
-        response_columns = [
-            col for col in response_columns
-            if not (
-                isinstance(col, dict)
-                and isinstance(col.get("id"), str)
-                and col.get("id").startswith(hidden_sort_prefix)
-            )
-        ]
-        response_columns = self._filter_implicit_formula_ref_columns(response_columns, tanstack_request)
 
         # Apply formula columns here so that all call paths (handle_request,
         # handle_hierarchical_request, handle_virtual_scroll_request) evaluate
         # formula columns. handle_request also calls _apply_formula_columns after
         # window functions, but that second pass is idempotent so it is safe.
-        _formula_errors = {}
-        if not formulas_materialized_by_measure_axis:
-            _formula_errors = self._apply_formula_columns(rows, tanstack_request)
-            rows = self._sort_rows_for_formula_sort(rows, tanstack_request)
 
-        return TanStackResponse(
-            data=rows,
-            columns=response_columns,
-            pagination=pagination,
-            total_rows=len(rows) if rows else 0,
-            version=version,
-            formula_errors=_formula_errors or None,
-        )
-    
-    async def handle_update(self, request: TanStackRequest, update_payload: Dict[str, Any]) -> bool:
+    async def handle_update(
+        self, request: TanStackRequest, update_payload: Dict[str, Any]
+    ) -> bool:
         """
         Handle a cell update request from the frontend.
         """
@@ -2251,40 +1655,56 @@ class TanStackPivotAdapter(FormulaEngineMixin):
                 continue
             request_column_id = str(col.get("id") or "").strip()
             accessor_key = str(col.get("accessorKey") or "").strip()
-            if request_column_id == normalized_column_id or accessor_key == normalized_column_id:
+            if (
+                request_column_id == normalized_column_id
+                or accessor_key == normalized_column_id
+            ):
                 matched_column = col
                 break
 
         if matched_column is None:
             lowered_column_id = normalized_column_id.lower()
             row_total_prefix = "__RowTotal__"
-            row_total_payload = normalized_column_id[len(row_total_prefix):] if normalized_column_id.startswith(row_total_prefix) else None
+            row_total_payload = (
+                normalized_column_id[len(row_total_prefix) :]
+                if normalized_column_id.startswith(row_total_prefix)
+                else None
+            )
             for col in request.columns or []:
                 if not isinstance(col, dict):
                     continue
                 request_column_id = str(col.get("id") or "").strip()
                 if not request_column_id:
                     continue
-                if row_total_payload and request_column_id.lower() == row_total_payload.lower():
+                if (
+                    row_total_payload
+                    and request_column_id.lower() == row_total_payload.lower()
+                ):
                     matched_column = col
                     break
                 if col.get("isFormula"):
-                    if self._matches_formula_column_id(normalized_column_id, request_column_id):
+                    if self._matches_formula_column_id(
+                        normalized_column_id, request_column_id
+                    ):
                         matched_column = col
                         suffix = f"_{request_column_id}"
-                        if lowered_column_id.endswith(suffix.lower()) and len(normalized_column_id) > len(suffix):
-                            matched_prefix = normalized_column_id[:-len(suffix)]
+                        if lowered_column_id.endswith(suffix.lower()) and len(
+                            normalized_column_id
+                        ) > len(suffix):
+                            matched_prefix = normalized_column_id[: -len(suffix)]
                         break
                     continue
                 aggregation_field = str(col.get("aggregationField") or "").strip()
-                aggregation_fn = self._normalize_aggregation_name(col.get("aggregationFn"))
+                aggregation_fn = self._normalize_aggregation_name(
+                    col.get("aggregationFn")
+                )
                 if not aggregation_field or not aggregation_fn:
                     continue
                 suffix = f"_{aggregation_field}_{aggregation_fn}"
                 if lowered_column_id.endswith(suffix.lower()):
                     matched_column = col
                     if len(normalized_column_id) > len(suffix):
-                        matched_prefix = normalized_column_id[:-len(suffix)]
+                        matched_prefix = normalized_column_id[: -len(suffix)]
                         if matched_prefix.endswith("_"):
                             matched_prefix = matched_prefix[:-1]
                     break
@@ -2304,12 +1724,20 @@ class TanStackPivotAdapter(FormulaEngineMixin):
         }
 
         if isinstance(matched_column, dict):
-            target_column = matched_column.get("aggregationField") or matched_column.get("accessorKey") or matched_column.get("id")
+            target_column = (
+                matched_column.get("aggregationField")
+                or matched_column.get("accessorKey")
+                or matched_column.get("id")
+            )
             spec.update(
                 {
-                    "targetColumn": str(target_column) if target_column else normalized_column_id,
+                    "targetColumn": (
+                        str(target_column) if target_column else normalized_column_id
+                    ),
                     "aggregationField": matched_column.get("aggregationField"),
-                    "aggregationFn": self._normalize_aggregation_name(matched_column.get("aggregationFn")),
+                    "aggregationFn": self._normalize_aggregation_name(
+                        matched_column.get("aggregationFn")
+                    ),
                     "windowFn": matched_column.get("windowFn"),
                     "weightField": matched_column.get("weightField"),
                     "isFormula": bool(matched_column.get("isFormula")),
@@ -2327,32 +1755,44 @@ class TanStackPivotAdapter(FormulaEngineMixin):
                 }
             else:
                 spec["editable"] = False
-                spec["reason"] = "Skipped aggregate edit because the pivot column path could not be resolved."
+                spec["reason"] = (
+                    "Skipped aggregate edit because the pivot column path could not be resolved."
+                )
 
         aggregation_fn = spec["aggregationFn"]
         if spec["isRowTotal"]:
             spec["editable"] = False
-            spec["reason"] = "Row total cells are derived from multiple pivot buckets and are not directly editable."
+            spec["reason"] = (
+                "Row total cells are derived from multiple pivot buckets and are not directly editable."
+            )
         elif spec["isFormula"]:
             spec["editable"] = False
             spec["reason"] = "Formula cells are derived and are not directly editable."
         elif spec["windowFn"]:
             spec["editable"] = False
-            spec["reason"] = "Window-function cells are derived and are not directly editable."
+            spec["reason"] = (
+                "Window-function cells are derived and are not directly editable."
+            )
         elif aggregation_fn in {"count", "count_distinct", "distinct_count"}:
             spec["editable"] = False
-            spec["reason"] = "Count-based aggregates cannot be edited because they do not map to one source value."
+            spec["reason"] = (
+                "Count-based aggregates cannot be edited because they do not map to one source value."
+            )
 
         return spec
 
-    def _resolve_request_target_column(self, request: TanStackRequest, column_id: Any) -> Optional[str]:
+    def _resolve_request_target_column(
+        self, request: TanStackRequest, column_id: Any
+    ) -> Optional[str]:
         column_spec = self._resolve_request_column_spec(request, column_id)
         if not isinstance(column_spec, dict):
             return None
         target_column = column_spec.get("targetColumn")
         return str(target_column).strip() if target_column else None
 
-    def _normalize_table_row_data(self, request: TanStackRequest, row_data: Dict[str, Any]) -> Dict[str, Any]:
+    def _normalize_table_row_data(
+        self, request: TanStackRequest, row_data: Dict[str, Any]
+    ) -> Dict[str, Any]:
         normalized: Dict[str, Any] = {}
         if not isinstance(row_data, dict):
             return normalized
@@ -2374,7 +1814,9 @@ class TanStackPivotAdapter(FormulaEngineMixin):
         return "smart"
 
     @staticmethod
-    def _normalize_visible_patch_row_paths(transaction_payload: Dict[str, Any]) -> List[str]:
+    def _normalize_visible_patch_row_paths(
+        transaction_payload: Dict[str, Any],
+    ) -> List[str]:
         raw_paths = (
             transaction_payload.get("visibleRowPaths")
             or transaction_payload.get("visible_row_paths")
@@ -2394,7 +1836,9 @@ class TanStackPivotAdapter(FormulaEngineMixin):
         return normalized
 
     @staticmethod
-    def _normalize_visible_patch_center_ids(transaction_payload: Dict[str, Any]) -> List[str]:
+    def _normalize_visible_patch_center_ids(
+        transaction_payload: Dict[str, Any],
+    ) -> List[str]:
         raw_ids = (
             transaction_payload.get("visibleCenterColumnIds")
             or transaction_payload.get("visible_center_column_ids")
@@ -2445,13 +1889,19 @@ class TanStackPivotAdapter(FormulaEngineMixin):
     ) -> List[str]:
         if not visible_row_paths:
             return []
-        visible_order = [str(path) for path in visible_row_paths if str(path or "").strip()]
-        normalized_visible = [path for path in visible_order if path != "__grand_total__"]
+        visible_order = [
+            str(path) for path in visible_row_paths if str(path or "").strip()
+        ]
+        normalized_visible = [
+            path for path in visible_order if path != "__grand_total__"
+        ]
         grouping_fields = list(request.grouping or [])
         if not grouping_fields:
             return visible_order
 
-        update_entries = self._extract_transaction_entries(transaction_payload, "update")
+        update_entries = self._extract_transaction_entries(
+            transaction_payload, "update"
+        )
         if not update_entries:
             return visible_order
 
@@ -2471,9 +1921,8 @@ class TanStackPivotAdapter(FormulaEngineMixin):
 
             is_group_path = len(path_parts) < len(grouping_fields)
             for visible_path in normalized_visible:
-                if (
-                    visible_path == entry_path
-                    or entry_path.startswith(f"{visible_path}|||")
+                if visible_path == entry_path or entry_path.startswith(
+                    f"{visible_path}|||"
                 ):
                     affected_paths.add(visible_path)
                     continue
@@ -2500,7 +1949,11 @@ class TanStackPivotAdapter(FormulaEngineMixin):
         if not grouping_fields:
             return False
         patch_path_set = set(str(path) for path in patch_row_paths)
-        normalized_visible = [str(path) for path in visible_row_paths if str(path or "").strip() and str(path) != "__grand_total__"]
+        normalized_visible = [
+            str(path)
+            for path in visible_row_paths
+            if str(path or "").strip() and str(path) != "__grand_total__"
+        ]
         for entry in self._extract_transaction_entries(transaction_payload, "update"):
             entry_path = self._extract_patch_entry_path(request, entry)
             if not entry_path or entry_path == "__grand_total__":
@@ -2509,7 +1962,10 @@ class TanStackPivotAdapter(FormulaEngineMixin):
             if len(path_parts) >= len(grouping_fields):
                 continue
             for visible_path in normalized_visible:
-                if visible_path.startswith(f"{entry_path}|||") and visible_path not in patch_path_set:
+                if (
+                    visible_path.startswith(f"{entry_path}|||")
+                    and visible_path not in patch_path_set
+                ):
                     return True
         return False
 
@@ -2527,7 +1983,9 @@ class TanStackPivotAdapter(FormulaEngineMixin):
         return True
 
     @staticmethod
-    def _build_path_filter_block(grouping_fields: List[str], requested_paths: List[List[str]]) -> Optional[Dict[str, Any]]:
+    def _build_path_filter_block(
+        grouping_fields: List[str], requested_paths: List[List[str]]
+    ) -> Optional[Dict[str, Any]]:
         if not grouping_fields or not requested_paths:
             return None
         if len(grouping_fields) == 1:
@@ -2563,7 +2021,9 @@ class TanStackPivotAdapter(FormulaEngineMixin):
         depth: int,
         requested_center_ids: Optional[List[str]],
     ) -> TanStackResponse:
-        pivot_result = await self.controller.run_pivot_async(spec, return_format="dict", force_refresh=True)
+        pivot_result = await self.controller.run_pivot_async(
+            spec, return_format="dict", force_refresh=True
+        )
         pivot_columns = list((pivot_result or {}).get("columns") or [])
         pivot_rows = []
         for raw_row in (pivot_result or {}).get("rows") or []:
@@ -2571,7 +2031,9 @@ class TanStackPivotAdapter(FormulaEngineMixin):
                 row_out = dict(raw_row)
             else:
                 row_out = {
-                    pivot_columns[index]: raw_row[index] if index < len(raw_row) else None
+                    pivot_columns[index]: (
+                        raw_row[index] if index < len(raw_row) else None
+                    )
                     for index in range(len(pivot_columns))
                 }
             row_out["depth"] = max(depth - 1, 0)
@@ -2606,7 +2068,9 @@ class TanStackPivotAdapter(FormulaEngineMixin):
         if not targeted_row_paths:
             return None
 
-        requested_center_ids = self._normalize_visible_patch_center_ids(transaction_payload)
+        requested_center_ids = self._normalize_visible_patch_center_ids(
+            transaction_payload
+        )
         base_spec = self.convert_tanstack_request_to_pivot_spec(request)
         base_spec.limit = None
         base_spec.sort = []
@@ -2615,7 +2079,9 @@ class TanStackPivotAdapter(FormulaEngineMixin):
         if base_spec.columns:
             if not requested_center_ids:
                 return None
-            materialized_values = self._materialized_pivot_values_for_window(requested_center_ids, request)
+            materialized_values = self._materialized_pivot_values_for_window(
+                requested_center_ids, request
+            )
             if not materialized_values:
                 return None
             base_spec = copy.deepcopy(base_spec)
@@ -2660,7 +2126,9 @@ class TanStackPivotAdapter(FormulaEngineMixin):
             group_spec = copy.deepcopy(base_spec)
             group_spec.rows = list(request.grouping[:depth])
             group_spec.filters = list(copy.deepcopy(base_spec.filters or []))
-            path_filter = self._build_path_filter_block(group_spec.rows, requested_paths)
+            path_filter = self._build_path_filter_block(
+                group_spec.rows, requested_paths
+            )
             if path_filter:
                 group_spec.filters.append(path_filter)
             group_response = await self._execute_patch_row_group_query(
@@ -2735,7 +2203,9 @@ class TanStackPivotAdapter(FormulaEngineMixin):
         return normalized_grouping
 
     @staticmethod
-    def _extract_transaction_entries(transaction_payload: Dict[str, Any], operation_kind: str) -> List[Dict[str, Any]]:
+    def _extract_transaction_entries(
+        transaction_payload: Dict[str, Any], operation_kind: str
+    ) -> List[Dict[str, Any]]:
         entries: List[Dict[str, Any]] = []
         direct = transaction_payload.get(operation_kind)
         if isinstance(direct, dict):
@@ -2758,13 +2228,17 @@ class TanStackPivotAdapter(FormulaEngineMixin):
         operations = transaction_payload.get("operations")
         if isinstance(operations, list):
             entries.extend(
-                entry for entry in operations
-                if isinstance(entry, dict) and str(entry.get("kind") or "").strip().lower() == operation_kind
+                entry
+                for entry in operations
+                if isinstance(entry, dict)
+                and str(entry.get("kind") or "").strip().lower() == operation_kind
             )
 
         return entries
 
-    def _extract_transaction_row_data(self, request: TanStackRequest, entry: Dict[str, Any]) -> Dict[str, Any]:
+    def _extract_transaction_row_data(
+        self, request: TanStackRequest, entry: Dict[str, Any]
+    ) -> Dict[str, Any]:
         if not isinstance(entry, dict):
             return {}
         row_source = entry.get("rowData")
@@ -2774,7 +2248,17 @@ class TanStackPivotAdapter(FormulaEngineMixin):
             row_source = {
                 key: value
                 for key, value in entry.items()
-                if key not in {"kind", "keys", "keyColumns", "key_columns", "values", "updates", "rowId", "row_id"}
+                if key
+                not in {
+                    "kind",
+                    "keys",
+                    "keyColumns",
+                    "key_columns",
+                    "values",
+                    "updates",
+                    "rowId",
+                    "row_id",
+                }
             }
         return self._normalize_table_row_data(request, row_source)
 
@@ -2796,7 +2280,11 @@ class TanStackPivotAdapter(FormulaEngineMixin):
             if exact_keys:
                 return normalized_keys
             if key_fields:
-                normalized_keys = {field: normalized_keys[field] for field in key_fields if field in normalized_keys}
+                normalized_keys = {
+                    field: normalized_keys[field]
+                    for field in key_fields
+                    if field in normalized_keys
+                }
             if not key_fields or len(normalized_keys) == len(key_fields):
                 return normalized_keys
             return {}
@@ -2809,7 +2297,9 @@ class TanStackPivotAdapter(FormulaEngineMixin):
             return {field: parts[index] for index, field in enumerate(key_fields)}
 
         if key_fields:
-            candidate = {field: row_data[field] for field in key_fields if field in row_data}
+            candidate = {
+                field: row_data[field] for field in key_fields if field in row_data
+            }
             if len(candidate) == len(key_fields):
                 return candidate
 
@@ -2841,7 +2331,11 @@ class TanStackPivotAdapter(FormulaEngineMixin):
         if not column_spec:
             return None
 
-        pivot_filters = column_spec.get("pivotFilters") if isinstance(column_spec.get("pivotFilters"), dict) else {}
+        pivot_filters = (
+            column_spec.get("pivotFilters")
+            if isinstance(column_spec.get("pivotFilters"), dict)
+            else {}
+        )
         if pivot_filters:
             key_columns.update(pivot_filters)
 
@@ -2858,7 +2352,9 @@ class TanStackPivotAdapter(FormulaEngineMixin):
             reason = column_spec.get("reason") or f"Column '{col_id}' is not editable."
             return {"warning": reason}
 
-        aggregation_fn = self._normalize_aggregation_name(column_spec.get("aggregationFn"))
+        aggregation_fn = self._normalize_aggregation_name(
+            column_spec.get("aggregationFn")
+        )
         if aggregation_fn:
             return {
                 "key_columns": key_columns,
@@ -2899,7 +2395,9 @@ class TanStackPivotAdapter(FormulaEngineMixin):
             "updates": {target_col: new_value},
         }
 
-    async def handle_transaction(self, request: TanStackRequest, transaction_payload: Dict[str, Any]) -> Dict[str, Any]:
+    async def handle_transaction(
+        self, request: TanStackRequest, transaction_payload: Dict[str, Any]
+    ) -> Dict[str, Any]:
         """Apply a richer-than-AG-Grid row transaction with smart refresh semantics."""
         payload = transaction_payload if isinstance(transaction_payload, dict) else {}
         key_fields = self._resolve_transaction_key_fields(request, payload)
@@ -2927,15 +2425,21 @@ class TanStackPivotAdapter(FormulaEngineMixin):
             if not row_data:
                 warnings.append("Skipped add entry without valid row data.")
                 continue
-            key_columns = self._extract_transaction_key_columns(request, entry, row_data, key_fields)
-            normalized_transaction["add"].append({
-                "row_data": row_data,
-                "key_columns": key_columns,
-            })
+            key_columns = self._extract_transaction_key_columns(
+                request, entry, row_data, key_fields
+            )
+            normalized_transaction["add"].append(
+                {
+                    "row_data": row_data,
+                    "key_columns": key_columns,
+                }
+            )
 
         for entry in self._extract_transaction_entries(payload, "remove"):
             row_data = self._extract_transaction_row_data(request, entry)
-            key_columns = self._extract_transaction_key_columns(request, entry, row_data, key_fields)
+            key_columns = self._extract_transaction_key_columns(
+                request, entry, row_data, key_fields
+            )
             if not key_columns:
                 warnings.append("Skipped remove entry without resolvable key columns.")
                 continue
@@ -2943,16 +2447,26 @@ class TanStackPivotAdapter(FormulaEngineMixin):
 
         update_entries = self._extract_transaction_entries(payload, "update")
         if not update_entries and isinstance(payload.get("updates"), list):
-            update_entries = [entry for entry in payload.get("updates") if isinstance(entry, dict)]
+            update_entries = [
+                entry for entry in payload.get("updates") if isinstance(entry, dict)
+            ]
         for entry in update_entries:
             operation = None
             if entry.get("rowId") is not None and entry.get("colId") is not None:
                 operation = self._normalize_update_operation(request, entry)
             else:
                 row_data = self._extract_transaction_row_data(request, entry)
-                key_columns = self._extract_transaction_key_columns(request, entry, row_data, key_fields)
-                values_source = entry.get("values") if isinstance(entry.get("values"), dict) else (
-                    entry.get("updates") if isinstance(entry.get("updates"), dict) else row_data
+                key_columns = self._extract_transaction_key_columns(
+                    request, entry, row_data, key_fields
+                )
+                values_source = (
+                    entry.get("values")
+                    if isinstance(entry.get("values"), dict)
+                    else (
+                        entry.get("updates")
+                        if isinstance(entry.get("updates"), dict)
+                        else row_data
+                    )
                 )
                 update_values = self._normalize_table_row_data(request, values_source)
                 for field in list(key_columns.keys()):
@@ -2966,7 +2480,9 @@ class TanStackPivotAdapter(FormulaEngineMixin):
                 warnings.append(str(operation.get("warning")))
                 continue
             if not operation:
-                warnings.append("Skipped update entry without resolvable keys or values.")
+                warnings.append(
+                    "Skipped update entry without resolvable keys or values."
+                )
                 continue
             normalized_transaction["update"].append(operation)
 
@@ -2986,14 +2502,20 @@ class TanStackPivotAdapter(FormulaEngineMixin):
                     }
                 else:
                     existing_operation["updates"].update(operation["updates"])
-            normalized_transaction["update"] = passthrough_updates + list(merged_updates.values())
+            normalized_transaction["update"] = passthrough_updates + list(
+                merged_updates.values()
+            )
 
         for entry in self._extract_transaction_entries(payload, "upsert"):
             row_data = self._extract_transaction_row_data(request, entry)
-            key_columns = self._extract_transaction_key_columns(request, entry, row_data, key_fields)
+            key_columns = self._extract_transaction_key_columns(
+                request, entry, row_data, key_fields
+            )
             merged_row = {**key_columns, **row_data}
             if not key_columns or not merged_row:
-                warnings.append("Skipped upsert entry without resolvable keys or row data.")
+                warnings.append(
+                    "Skipped upsert entry without resolvable keys or row data."
+                )
                 continue
             normalized_transaction["upsert"].append(
                 {
@@ -3002,10 +2524,14 @@ class TanStackPivotAdapter(FormulaEngineMixin):
                 }
             )
 
-        prepared_event_action = self.edit_domain.prepare_event_action(request, payload, normalized_transaction)
+        prepared_event_action = self.edit_domain.prepare_event_action(
+            request, payload, normalized_transaction
+        )
 
         if prepared_event_action is not None:
-            normalized_transaction = prepared_event_action.normalized_transaction or normalized_transaction
+            normalized_transaction = (
+                prepared_event_action.normalized_transaction or normalized_transaction
+            )
 
         requested_counts = {
             kind: len(normalized_transaction.get(kind) or [])
@@ -3014,11 +2540,19 @@ class TanStackPivotAdapter(FormulaEngineMixin):
         }
 
         if prepared_event_action is None:
-            validation = self.edit_domain.validate_transaction(request, payload, normalized_transaction)
+            validation = self.edit_domain.validate_transaction(
+                request, payload, normalized_transaction
+            )
         else:
-            validation = self.edit_domain.validate_prepared_event_action(request, payload, prepared_event_action)
-            if not any(requested_counts.values()) and not list(validation.get("warnings") or []):
-                warnings.append("Requested event action could not be prepared from the current edit session.")
+            validation = self.edit_domain.validate_prepared_event_action(
+                request, payload, prepared_event_action
+            )
+            if not any(requested_counts.values()) and not list(
+                validation.get("warnings") or []
+            ):
+                warnings.append(
+                    "Requested event action could not be prepared from the current edit session."
+                )
         warnings.extend(list(validation.get("warnings") or []))
         if validation.get("conflicts"):
             response = {
@@ -3079,11 +2613,20 @@ class TanStackPivotAdapter(FormulaEngineMixin):
                 prepared_event_action=prepared_event_action,
             )
 
-        apply_result = {"requested": {}, "applied": dict(zero_applied_counts), "warnings": [], "rowCountDelta": 0}
+        apply_result = {
+            "requested": {},
+            "applied": dict(zero_applied_counts),
+            "warnings": [],
+            "rowCountDelta": 0,
+        }
         if hasattr(self.controller, "apply_row_transaction"):
-            apply_result = await self.controller.apply_row_transaction(request.table, normalized_transaction)
+            apply_result = await self.controller.apply_row_transaction(
+                request.table, normalized_transaction
+            )
         elif normalized_transaction["update"]:
-            updated_count = await self.controller.update_records(request.table, normalized_transaction["update"])
+            updated_count = await self.controller.update_records(
+                request.table, normalized_transaction["update"]
+            )
             apply_result = {
                 "requested": {"update": len(normalized_transaction["update"])},
                 "applied": {"update": updated_count},
@@ -3091,12 +2634,20 @@ class TanStackPivotAdapter(FormulaEngineMixin):
                 "rowCountDelta": 0,
             }
 
-        raw_applied = apply_result.get("applied") if isinstance(apply_result.get("applied"), dict) else {}
+        raw_applied = (
+            apply_result.get("applied")
+            if isinstance(apply_result.get("applied"), dict)
+            else {}
+        )
         applied = {
             **zero_applied_counts,
             **raw_applied,
         }
-        requested = apply_result.get("requested") if isinstance(apply_result.get("requested"), dict) else {}
+        requested = (
+            apply_result.get("requested")
+            if isinstance(apply_result.get("requested"), dict)
+            else {}
+        )
         requires_structural_refresh = bool(
             (applied.get("add") or 0)
             or (applied.get("remove") or 0)
@@ -3105,9 +2656,13 @@ class TanStackPivotAdapter(FormulaEngineMixin):
         )
         resolved_refresh_mode = refresh_mode
         if refresh_mode == "smart":
-            resolved_refresh_mode = "structural" if requires_structural_refresh else "viewport"
+            resolved_refresh_mode = (
+                "structural" if requires_structural_refresh else "viewport"
+            )
         elif refresh_mode == "patch":
-            resolved_refresh_mode = "structural" if requires_structural_refresh else "patch"
+            resolved_refresh_mode = (
+                "structural" if requires_structural_refresh else "patch"
+            )
         elif refresh_mode == "full":
             resolved_refresh_mode = "structural"
 
@@ -3116,7 +2671,9 @@ class TanStackPivotAdapter(FormulaEngineMixin):
 
         patch_payload = None
         if resolved_refresh_mode == "patch" and any(applied.values()):
-            patch_payload = await self._build_transaction_patch_payload(request, payload)
+            patch_payload = await self._build_transaction_patch_payload(
+                request, payload
+            )
             if patch_payload is None:
                 resolved_refresh_mode = "viewport"
 
@@ -3131,10 +2688,16 @@ class TanStackPivotAdapter(FormulaEngineMixin):
             if not enriched:
                 return None
             enriched["keyFields"] = list(key_fields or [])
-            enriched["refreshMode"] = resolved_refresh_mode if resolved_refresh_mode != "none" else "smart"
+            enriched["refreshMode"] = (
+                resolved_refresh_mode if resolved_refresh_mode != "none" else "smart"
+            )
             return enriched
 
-        history_result = apply_result.get("history") if isinstance(apply_result.get("history"), dict) else {}
+        history_result = (
+            apply_result.get("history")
+            if isinstance(apply_result.get("history"), dict)
+            else {}
+        )
 
         response = {
             "kind": "transaction",
@@ -3149,21 +2712,33 @@ class TanStackPivotAdapter(FormulaEngineMixin):
             "propagation": list(apply_result.get("propagation") or []),
             "scopeValueChanges": list(apply_result.get("scopeValueChanges") or []),
             "patchPayload": patch_payload,
-            "deferredViewportRefresh": bool((patch_payload or {}).get("deferredViewportRefresh")),
-            "inverseTransaction": enrich_history_transaction(apply_result.get("inverseTransaction")),
-            "redoTransaction": enrich_history_transaction(apply_result.get("redoTransaction")),
+            "deferredViewportRefresh": bool(
+                (patch_payload or {}).get("deferredViewportRefresh")
+            ),
+            "inverseTransaction": enrich_history_transaction(
+                apply_result.get("inverseTransaction")
+            ),
+            "redoTransaction": enrich_history_transaction(
+                apply_result.get("redoTransaction")
+            ),
             "history": {
                 "captureable": bool(history_result.get("captureable")),
                 "warnings": list(history_result.get("warnings") or []),
             },
         }
-        if prepared_event_action is not None and prepared_event_action.action in {"undo", "redo", "revert"}:
+        if prepared_event_action is not None and prepared_event_action.action in {
+            "undo",
+            "redo",
+            "revert",
+        }:
             response["history"] = {
                 "captureable": False,
                 "warnings": list(history_result.get("warnings") or []),
             }
         if prepared_event_action is not None:
-            response = self.edit_domain.finalize_event_action(request, payload, prepared_event_action, response)
+            response = self.edit_domain.finalize_event_action(
+                request, payload, prepared_event_action, response
+            )
         return self.edit_domain.enrich_transaction_result(
             request,
             payload,
@@ -3172,7 +2747,9 @@ class TanStackPivotAdapter(FormulaEngineMixin):
             prepared_event_action=prepared_event_action,
         )
 
-    async def handle_updates(self, request: TanStackRequest, update_payloads: List[Dict[str, Any]]) -> Dict[str, Any]:
+    async def handle_updates(
+        self, request: TanStackRequest, update_payloads: List[Dict[str, Any]]
+    ) -> Dict[str, Any]:
         """Apply one or more cell updates and invalidate adapter caches."""
         transaction_result = await self.handle_transaction(
             request,
@@ -3182,7 +2759,9 @@ class TanStackPivotAdapter(FormulaEngineMixin):
                 "source": "cell_updates",
             },
         )
-        updated_count = int(((transaction_result.get("applied") or {}).get("update")) or 0)
+        updated_count = int(
+            ((transaction_result.get("applied") or {}).get("update")) or 0
+        )
         if updated_count <= 0:
             return {"updated": 0}
         return {
@@ -3190,17 +2769,21 @@ class TanStackPivotAdapter(FormulaEngineMixin):
             "transaction": transaction_result,
         }
 
-    async def handle_drill_through(self, request: TanStackRequest, drill_payload: Dict[str, Any]) -> Dict[str, Any]:
+    async def handle_drill_through(
+        self, request: TanStackRequest, drill_payload: Dict[str, Any]
+    ) -> Dict[str, Any]:
         """
         Handle a drill through request.
         """
         # 1. Convert request to spec to get base filters
         spec = self.convert_tanstack_request_to_pivot_spec(request)
-        
+
         # 2. Extract drill filters from payload
-        drill_filters_raw = drill_payload.get('filters', {})
-        row_path = drill_payload.get('row_path') or drill_payload.get('rowPath') or ""
-        row_fields = drill_payload.get('row_fields') or drill_payload.get('pathFields') or []
+        drill_filters_raw = drill_payload.get("filters", {})
+        row_path = drill_payload.get("row_path") or drill_payload.get("rowPath") or ""
+        row_fields = (
+            drill_payload.get("row_fields") or drill_payload.get("pathFields") or []
+        )
         if not isinstance(row_fields, list):
             row_fields = []
         path_parts = str(row_path).split("|||") if row_path else []
@@ -3214,34 +2797,46 @@ class TanStackPivotAdapter(FormulaEngineMixin):
                         "value": path_parts[index],
                     },
                 }
-        
+
         # Convert frontend filter format to pivot engine format
         # This mirrors logic in convert_tanstack_request_to_pivot_spec
         drill_filters = []
         for field_name, filter_obj in drill_filters_raw.items():
             if isinstance(filter_obj, dict):
-                if 'conditions' in filter_obj:
-                    for cond in filter_obj['conditions']:
-                        drill_filters.append({
-                            'field': field_name,
-                            'op': self._map_tanstack_operator(cond.get('type', 'eq')),
-                            'value': cond.get('value')
-                        })
+                if "conditions" in filter_obj:
+                    for cond in filter_obj["conditions"]:
+                        drill_filters.append(
+                            {
+                                "field": field_name,
+                                "op": self._map_tanstack_operator(
+                                    cond.get("type", "eq")
+                                ),
+                                "value": cond.get("value"),
+                            }
+                        )
                 else:
-                    drill_filters.append({
-                        'field': field_name,
-                        'op': self._map_tanstack_operator(filter_obj.get('type', 'eq')),
-                        'value': filter_obj.get('value')
-                    })
-        
-        page = max(int(drill_payload.get('page', 0) or 0), 0)
-        page_size_raw = drill_payload.get('page_size', drill_payload.get('pageSize', 100))
+                    drill_filters.append(
+                        {
+                            "field": field_name,
+                            "op": self._map_tanstack_operator(
+                                filter_obj.get("type", "eq")
+                            ),
+                            "value": filter_obj.get("value"),
+                        }
+                    )
+
+        page = max(int(drill_payload.get("page", 0) or 0), 0)
+        page_size_raw = drill_payload.get(
+            "page_size", drill_payload.get("pageSize", 100)
+        )
         page_size = min(max(int(page_size_raw or 100), 1), 500)
-        sort_col = drill_payload.get('sort_col') or drill_payload.get('sortCol')
-        sort_dir = str(drill_payload.get('sort_dir') or drill_payload.get('sortDir') or 'asc').lower()
-        text_filter = drill_payload.get('filter')
+        sort_col = drill_payload.get("sort_col") or drill_payload.get("sortCol")
+        sort_dir = str(
+            drill_payload.get("sort_dir") or drill_payload.get("sortDir") or "asc"
+        ).lower()
+        text_filter = drill_payload.get("filter")
         if text_filter is None:
-            text_filter = drill_payload.get('filterText', '')
+            text_filter = drill_payload.get("filterText", "")
 
         # 3. Call controller (returns dict with 'rows' and 'total_rows')
         result = await self.controller.get_drill_through_data(
@@ -3250,8 +2845,8 @@ class TanStackPivotAdapter(FormulaEngineMixin):
             limit=page_size,
             offset=page * page_size,
             sort_col=sort_col,
-            sort_dir='desc' if sort_dir == 'desc' else 'asc',
-            text_filter=str(text_filter or ''),
+            sort_dir="desc" if sort_dir == "desc" else "asc",
+            text_filter=str(text_filter or ""),
         )
         return {
             "rows": result.get("rows", []),
@@ -3259,18 +2854,24 @@ class TanStackPivotAdapter(FormulaEngineMixin):
             "page": page,
             "page_size": page_size,
             "sort_col": sort_col,
-            "sort_dir": 'desc' if sort_dir == 'desc' else 'asc',
-            "filter": str(text_filter or ''),
+            "sort_dir": "desc" if sort_dir == "desc" else "asc",
+            "filter": str(text_filter or ""),
             "row_path": row_path,
             "row_fields": row_fields,
         }
 
-    async def handle_request(self, request: TanStackRequest, user: Optional[User] = None) -> TanStackResponse:
+    async def handle_request(
+        self, request: TanStackRequest, user: Optional[User] = None
+    ) -> TanStackResponse:
         """Handle a TanStack request directly"""
         if request.operation == TanStackOperation.GET_UNIQUE_VALUES:
             # Logic for unique values (used by Excel-like filter)
-            column_id = request.global_filter # Overload global_filter to pass the column
-            pagination = request.pagination if isinstance(request.pagination, dict) else {}
+            column_id = (
+                request.global_filter
+            )  # Overload global_filter to pass the column
+            pagination = (
+                request.pagination if isinstance(request.pagination, dict) else {}
+            )
             page_size = pagination.get("pageSize", pagination.get("page_size", 250))
             page_index = pagination.get("pageIndex", pagination.get("page_index", 0))
             offset = pagination.get("offset")
@@ -3283,7 +2884,11 @@ class TanStackPivotAdapter(FormulaEngineMixin):
             except (TypeError, ValueError):
                 page_index = 0
             try:
-                offset = max(0, int(offset)) if offset is not None else page_index * page_size
+                offset = (
+                    max(0, int(offset))
+                    if offset is not None
+                    else page_index * page_size
+                )
             except (TypeError, ValueError):
                 offset = page_index * page_size
             search = str(pagination.get("search") or "").strip()
@@ -3313,22 +2918,29 @@ class TanStackPivotAdapter(FormulaEngineMixin):
 
         # Convert request to pivot spec
         pivot_spec = self.convert_tanstack_request_to_pivot_spec(request)
-        
+
         # Apply RLS if user is provided
         if user:
             pivot_spec = apply_rls_to_spec(pivot_spec, user)
-        
+
         # Execute pivot operation asynchronously
-        pivot_result = await self.controller.run_pivot_async(pivot_spec, return_format="dict")
-        
+        pivot_result = await self.controller.run_pivot_async(
+            pivot_spec, return_format="dict"
+        )
+
         # Convert result to TanStack format
-        tanstack_result = self.convert_pivot_result_to_tanstack_format(pivot_result, request)
-        
+        tanstack_result = self.convert_pivot_result_to_tanstack_format(
+            pivot_result, request
+        )
+
         return tanstack_result
-    
-    async def handle_hierarchical_request(self, request: TanStackRequest,
-                                        expanded_paths: Union[List[List[str]], bool],
-                                        user_preferences: Optional[Dict[str, Any]] = None) -> TanStackResponse:
+
+    async def handle_hierarchical_request(
+        self,
+        request: TanStackRequest,
+        expanded_paths: Union[List[List[str]], bool],
+        user_preferences: Optional[Dict[str, Any]] = None,
+    ) -> TanStackResponse:
         """Handle hierarchical TanStack request with expansion state"""
         self._log_request("handle_hierarchical_request", request)
         pivot_spec = self.convert_tanstack_request_to_pivot_spec(request)
@@ -3337,10 +2949,12 @@ class TanStackPivotAdapter(FormulaEngineMixin):
         target_paths = expanded_paths
         if expanded_paths is True:
             # Signal to load all levels/nodes
-            target_paths = [['__ALL__']]
+            target_paths = [["__ALL__"]]
 
-        if hasattr(self.controller, 'run_hierarchy_view'):
-            hierarchy_view = await self.controller.run_hierarchy_view(pivot_spec, target_paths)
+        if hasattr(self.controller, "run_hierarchy_view"):
+            hierarchy_view = await self.controller.run_hierarchy_view(
+                pivot_spec, target_paths
+            )
             tanstack_result = self.convert_pivot_result_to_tanstack_format(
                 hierarchy_view.get("rows", []), request
             )
@@ -3353,22 +2967,26 @@ class TanStackPivotAdapter(FormulaEngineMixin):
         # We use the batch loading method which is more efficient for multiple levels
         # and returns the {path_key: [nodes]} format expected by the traversal.
         try:
-            if hasattr(self.controller, 'run_hierarchical_pivot_batch_load'):
-                hierarchy_result = await self.controller.run_hierarchical_pivot_batch_load(
-                    pivot_spec.to_dict(), target_paths, max_levels=len(pivot_spec.rows)
+            if hasattr(self.controller, "run_hierarchical_pivot_batch_load"):
+                hierarchy_result = (
+                    await self.controller.run_hierarchical_pivot_batch_load(
+                        pivot_spec.to_dict(),
+                        target_paths,
+                        max_levels=len(pivot_spec.rows),
+                    )
                 )
             else:
                 # Fallback to direct query or other method
                 hierarchy_result = self.controller.run_progressive_hierarchical_load(
-                     pivot_spec, target_paths, user_preferences=user_preferences
+                    pivot_spec, target_paths, user_preferences=user_preferences
                 )
                 # If it's the levels/metadata format, we need to convert it
-                if isinstance(hierarchy_result, dict) and 'levels' in hierarchy_result:
+                if isinstance(hierarchy_result, dict) and "levels" in hierarchy_result:
                     new_result = {}
-                    for level_info in hierarchy_result['levels']:
-                        path_key = "|||".join(str(v) for v in level_info['path'])
-                        data = level_info['data']
-                        if hasattr(data, 'to_pylist'):
+                    for level_info in hierarchy_result["levels"]:
+                        path_key = "|||".join(str(v) for v in level_info["path"])
+                        data = level_info["data"]
+                        if hasattr(data, "to_pylist"):
                             new_result[path_key] = data.to_pylist()
                         else:
                             new_result[path_key] = data
@@ -3387,7 +3005,9 @@ class TanStackPivotAdapter(FormulaEngineMixin):
             tanstack_result.data = finalize_hierarchy_rows(tanstack_result.data)
             return tanstack_result
 
-        visible_rows = build_visible_hierarchy_rows(pivot_spec, hierarchy_result, target_paths)
+        visible_rows = build_visible_hierarchy_rows(
+            pivot_spec, hierarchy_result, target_paths
+        )
         tanstack_result = self.convert_pivot_result_to_tanstack_format(
             visible_rows, request
         )
@@ -3405,7 +3025,7 @@ class TanStackPivotAdapter(FormulaEngineMixin):
         rows = finalize_hierarchy_rows(response.data or [])
         safe_start = max(int(start_row or 0), 0)
         safe_end = max(int(end_row if end_row is not None else safe_start), safe_start)
-        response.data = rows[safe_start:safe_end + 1]
+        response.data = rows[safe_start : safe_end + 1]
         response.total_rows = len(rows)
         if isinstance(response.pagination, dict):
             response.pagination = {
@@ -3415,20 +3035,30 @@ class TanStackPivotAdapter(FormulaEngineMixin):
         return response
 
     @staticmethod
-    def _filter_refs_measure_alias_local(filter_spec: Any, measure_aliases: Set[str]) -> bool:
+    def _filter_refs_measure_alias_local(
+        filter_spec: Any, measure_aliases: Set[str]
+    ) -> bool:
         if not filter_spec or not measure_aliases:
             return False
         if isinstance(filter_spec, dict):
-            field = filter_spec.get("field") or filter_spec.get("id") or filter_spec.get("column")
+            field = (
+                filter_spec.get("field")
+                or filter_spec.get("id")
+                or filter_spec.get("column")
+            )
             if field in measure_aliases:
                 return True
             return any(
-                TanStackPivotAdapter._filter_refs_measure_alias_local(value, measure_aliases)
+                TanStackPivotAdapter._filter_refs_measure_alias_local(
+                    value, measure_aliases
+                )
                 for value in filter_spec.values()
             )
         if isinstance(filter_spec, list):
             return any(
-                TanStackPivotAdapter._filter_refs_measure_alias_local(item, measure_aliases)
+                TanStackPivotAdapter._filter_refs_measure_alias_local(
+                    item, measure_aliases
+                )
                 for item in filter_spec
             )
         return False
@@ -3471,7 +3101,9 @@ class TanStackPivotAdapter(FormulaEngineMixin):
             for measure in (spec.measures or [])
             if getattr(measure, "alias", None)
         }
-        controller_filter_checker = getattr(self.controller, "_filter_refs_measure_alias", None)
+        controller_filter_checker = getattr(
+            self.controller, "_filter_refs_measure_alias", None
+        )
         refs_measure_filter = any(
             (
                 controller_filter_checker(filter_spec, measure_aliases)
@@ -3506,11 +3138,15 @@ class TanStackPivotAdapter(FormulaEngineMixin):
             return int(await execute_scalar(count_expr, spec.table))
         except Exception as exc:
             if self._debug:
-                _adapter_logger.debug("Flat group row count fallback for %s: %s", spec.table, exc)
+                _adapter_logger.debug(
+                    "Flat group row count fallback for %s: %s", spec.table, exc
+                )
             return await self._count_flat_group_rows_by_materialization(spec)
 
     @staticmethod
-    def _annotate_flat_group_rows(rows: List[Dict[str, Any]], grouping: List[str]) -> None:
+    def _annotate_flat_group_rows(
+        rows: List[Dict[str, Any]], grouping: List[str]
+    ) -> None:
         if not grouping:
             return
         max_depth = max(len(grouping) - 1, 0)
@@ -3526,13 +3162,19 @@ class TanStackPivotAdapter(FormulaEngineMixin):
             depth = min(max(len(path_parts) - 1, 0), max_depth)
             row["depth"] = depth
             row["_depth"] = depth
-            row["_id"] = row.get(grouping[depth], "") if grouping else row.get("_id", "")
-            row["_path"] = "|||".join(path_parts) if path_parts else str(row.get("_id", ""))
+            row["_id"] = (
+                row.get(grouping[depth], "") if grouping else row.get("_id", "")
+            )
+            row["_path"] = (
+                "|||".join(path_parts) if path_parts else str(row.get("_id", ""))
+            )
             row["_pathFields"] = list(grouping[: len(path_parts)])
             row["_has_children"] = False
             row["_is_expanded"] = False
 
-    async def _fetch_flat_grand_total_row(self, pivot_spec: PivotSpec, request: TanStackRequest) -> Optional[Dict[str, Any]]:
+    async def _fetch_flat_grand_total_row(
+        self, pivot_spec: PivotSpec, request: TanStackRequest
+    ) -> Optional[Dict[str, Any]]:
         total_spec = pivot_spec.copy()
         total_spec.rows = []
         total_spec.limit = 1
@@ -3561,17 +3203,21 @@ class TanStackPivotAdapter(FormulaEngineMixin):
 
     # _apply_expansion_state removed as it is now handled by the controller/tree manager logic
 
-    async def handle_virtual_scroll_request(self, request: TanStackRequest,
-                                          start_row: int, end_row: int,
-                                          expanded_paths: Union[List[List[str]], bool] = None,
-                                          user: Optional[User] = None,
-                                          col_start: int = 0,
-                                          col_end: Optional[int] = None,
-                                          needs_col_schema: bool = False,
-                                          include_grand_total: bool = False,
-                                          requested_center_ids: Optional[List[str]] = None,
-                                          _allow_prefetch: bool = True,
-                                          profiling: bool = False) -> TanStackResponse:
+    async def handle_virtual_scroll_request(
+        self,
+        request: TanStackRequest,
+        start_row: int,
+        end_row: int,
+        expanded_paths: Union[List[List[str]], bool] = None,
+        user: Optional[User] = None,
+        col_start: int = 0,
+        col_end: Optional[int] = None,
+        needs_col_schema: bool = False,
+        include_grand_total: bool = False,
+        requested_center_ids: Optional[List[str]] = None,
+        _allow_prefetch: bool = True,
+        profiling: bool = False,
+    ) -> TanStackResponse:
         """Handle virtual scrolling request with start/end row indices"""
         request_started_at = time.perf_counter()
         cache_lookup_started_at = request_started_at
@@ -3592,19 +3238,38 @@ class TanStackPivotAdapter(FormulaEngineMixin):
             if _allow_prefetch:
                 total_center_cols = None
                 if isinstance(cached_response.col_schema, dict):
-                    total_center_cols = cached_response.col_schema.get("total_center_cols")
+                    total_center_cols = cached_response.col_schema.get(
+                        "total_center_cols"
+                    )
                 elif request.grouping:
                     row_meta_keys = {
-                        '_id', '_path', '_isTotal', '_level', '_expanded', '_parentPath',
-                        '_has_children', '_is_expanded', 'depth', '_depth', 'uuid', 'subRows',
-                        '_pathFields'
+                        "_id",
+                        "_path",
+                        "_isTotal",
+                        "_level",
+                        "_expanded",
+                        "_parentPath",
+                        "_has_children",
+                        "_is_expanded",
+                        "depth",
+                        "_depth",
+                        "uuid",
+                        "subRows",
+                        "_pathFields",
                     }
                     request_dimension_ids = {
                         col.get("id")
                         for col in (request.columns or [])
-                        if isinstance(col, dict) and not col.get("aggregationFn") and not col.get("isFormula") and col.get("id")
+                        if isinstance(col, dict)
+                        and not col.get("aggregationFn")
+                        and not col.get("isFormula")
+                        and col.get("id")
                     }
-                    excluded_ids = set(row_meta_keys) | set(request.grouping or []) | request_dimension_ids
+                    excluded_ids = (
+                        set(row_meta_keys)
+                        | set(request.grouping or [])
+                        | request_dimension_ids
+                    )
                     center_cache_key = (
                         self._cache_generation_value(),
                         request.table,
@@ -3612,7 +3277,10 @@ class TanStackPivotAdapter(FormulaEngineMixin):
                         tuple(sorted(str(column_id) for column_id in excluded_ids)),
                         self._center_column_catalog_cache_key(request),
                     )
-                    total_center_cols = len(self._center_col_ids_cache_get(center_cache_key) or []) or None
+                    total_center_cols = (
+                        len(self._center_col_ids_cache_get(center_cache_key) or [])
+                        or None
+                    )
                 self._schedule_viewport_prefetch(
                     request,
                     start_row,
@@ -3624,22 +3292,28 @@ class TanStackPivotAdapter(FormulaEngineMixin):
                     cached_response.total_rows,
                     total_center_cols,
                 )
-            return self._attach_virtual_scroll_profile(
-                cached_response,
-                started_at=request_started_at,
-                request=request,
-                start_row=start_row,
-                end_row=end_row,
-                col_start=col_start,
-                col_end=col_end,
-                needs_col_schema=needs_col_schema,
-                include_grand_total=include_grand_total,
-                response_cache_key=response_cache_key,
-                path="response_cache_hit",
-                stages={
-                    "cacheLookupMs": self._profile_ms(cache_lookup_started_at, cache_lookup_finished_at),
-                },
-            ) if profiling else cached_response
+            return (
+                self._attach_virtual_scroll_profile(
+                    cached_response,
+                    started_at=request_started_at,
+                    request=request,
+                    start_row=start_row,
+                    end_row=end_row,
+                    col_start=col_start,
+                    col_end=col_end,
+                    needs_col_schema=needs_col_schema,
+                    include_grand_total=include_grand_total,
+                    response_cache_key=response_cache_key,
+                    path="response_cache_hit",
+                    stages={
+                        "cacheLookupMs": self._profile_ms(
+                            cache_lookup_started_at, cache_lookup_finished_at
+                        ),
+                    },
+                )
+                if profiling
+                else cached_response
+            )
         if not needs_col_schema:
             row_block_lookup_started_at = time.perf_counter()
             cached_block_response = self._assemble_cached_row_block_window(
@@ -3667,23 +3341,32 @@ class TanStackPivotAdapter(FormulaEngineMixin):
                     _allow_prefetch,
                     requested_center_ids,
                 )
-                return self._attach_virtual_scroll_profile(
-                    completed_response,
-                    started_at=request_started_at,
-                    request=request,
-                    start_row=start_row,
-                    end_row=end_row,
-                    col_start=col_start,
-                    col_end=col_end,
-                    needs_col_schema=needs_col_schema,
-                    include_grand_total=include_grand_total,
-                    response_cache_key=response_cache_key,
-                    path="row_block_cache_hit",
-                    stages={
-                        "cacheLookupMs": self._profile_ms(cache_lookup_started_at, cache_lookup_finished_at),
-                        "rowBlockLookupMs": self._profile_ms(row_block_lookup_started_at, row_block_lookup_finished_at),
-                    },
-                ) if profiling else completed_response
+                return (
+                    self._attach_virtual_scroll_profile(
+                        completed_response,
+                        started_at=request_started_at,
+                        request=request,
+                        start_row=start_row,
+                        end_row=end_row,
+                        col_start=col_start,
+                        col_end=col_end,
+                        needs_col_schema=needs_col_schema,
+                        include_grand_total=include_grand_total,
+                        response_cache_key=response_cache_key,
+                        path="row_block_cache_hit",
+                        stages={
+                            "cacheLookupMs": self._profile_ms(
+                                cache_lookup_started_at, cache_lookup_finished_at
+                            ),
+                            "rowBlockLookupMs": self._profile_ms(
+                                row_block_lookup_started_at,
+                                row_block_lookup_finished_at,
+                            ),
+                        },
+                    )
+                    if profiling
+                    else completed_response
+                )
 
             missing_blocks_lookup_started_at = time.perf_counter()
             cached_blocks, missing_blocks = self._get_cached_row_block_entries(
@@ -3741,31 +3424,46 @@ class TanStackPivotAdapter(FormulaEngineMixin):
                         _allow_prefetch,
                         requested_center_ids,
                     )
-                    return self._attach_virtual_scroll_profile(
-                        completed_response,
-                        started_at=request_started_at,
-                        request=request,
-                        start_row=start_row,
-                        end_row=end_row,
-                        col_start=col_start,
-                        col_end=col_end,
-                        needs_col_schema=needs_col_schema,
-                        include_grand_total=include_grand_total,
-                        response_cache_key=response_cache_key,
-                        path="row_block_partial_reuse",
-                        stages={
-                            "cacheLookupMs": self._profile_ms(cache_lookup_started_at, cache_lookup_finished_at),
-                            "rowBlockLookupMs": self._profile_ms(missing_blocks_lookup_started_at, missing_blocks_lookup_finished_at),
-                            "missingBlocksFetchMs": self._profile_ms(missing_blocks_fetch_started_at, missing_blocks_fetch_finished_at),
-                            "rowBlockReassembleMs": self._profile_ms(row_block_reassemble_started_at, row_block_reassemble_finished_at),
-                        },
-                        extra={
-                            "rowBlockCache": {
-                                "cachedBlocks": len(cached_blocks),
-                                "missingBlocks": len(missing_blocks),
-                            }
-                        },
-                    ) if profiling else completed_response
+                    return (
+                        self._attach_virtual_scroll_profile(
+                            completed_response,
+                            started_at=request_started_at,
+                            request=request,
+                            start_row=start_row,
+                            end_row=end_row,
+                            col_start=col_start,
+                            col_end=col_end,
+                            needs_col_schema=needs_col_schema,
+                            include_grand_total=include_grand_total,
+                            response_cache_key=response_cache_key,
+                            path="row_block_partial_reuse",
+                            stages={
+                                "cacheLookupMs": self._profile_ms(
+                                    cache_lookup_started_at, cache_lookup_finished_at
+                                ),
+                                "rowBlockLookupMs": self._profile_ms(
+                                    missing_blocks_lookup_started_at,
+                                    missing_blocks_lookup_finished_at,
+                                ),
+                                "missingBlocksFetchMs": self._profile_ms(
+                                    missing_blocks_fetch_started_at,
+                                    missing_blocks_fetch_finished_at,
+                                ),
+                                "rowBlockReassembleMs": self._profile_ms(
+                                    row_block_reassemble_started_at,
+                                    row_block_reassemble_finished_at,
+                                ),
+                            },
+                            extra={
+                                "rowBlockCache": {
+                                    "cachedBlocks": len(cached_blocks),
+                                    "missingBlocks": len(missing_blocks),
+                                }
+                            },
+                        )
+                        if profiling
+                        else completed_response
+                    )
         if self._has_formula_sort(request):
             formula_path_started_at = time.perf_counter()
             target_paths = expanded_paths or []
@@ -3789,11 +3487,19 @@ class TanStackPivotAdapter(FormulaEngineMixin):
                     regular_rows.append(_fr)
 
             safe_start = max(int(start_row or 0), 0)
-            safe_end = max(int(end_row if end_row is not None else safe_start), safe_start)
-            window_rows = regular_rows[safe_start:safe_end + 1]
+            safe_end = max(
+                int(end_row if end_row is not None else safe_start), safe_start
+            )
+            window_rows = regular_rows[safe_start : safe_end + 1]
 
-            if include_grand_total and request.totals and isinstance(grand_total_row, dict):
-                window_rows = finalize_hierarchy_rows([*window_rows, grand_total_row], preserve_window_order=True)
+            if (
+                include_grand_total
+                and request.totals
+                and isinstance(grand_total_row, dict)
+            ):
+                window_rows = finalize_hierarchy_rows(
+                    [*window_rows, grand_total_row], preserve_window_order=True
+                )
 
             response = TanStackResponse(
                 data=window_rows,
@@ -3828,25 +3534,39 @@ class TanStackPivotAdapter(FormulaEngineMixin):
                 _allow_prefetch,
                 requested_center_ids,
             )
-            return self._attach_virtual_scroll_profile(
-                completed_response,
-                started_at=request_started_at,
-                request=request,
-                start_row=start_row,
-                end_row=end_row,
-                col_start=col_start,
-                col_end=col_end,
-                needs_col_schema=needs_col_schema,
-                include_grand_total=include_grand_total,
-                response_cache_key=response_cache_key,
-                path="formula_sort_window",
-                stages={
-                    "cacheLookupMs": self._profile_ms(cache_lookup_started_at, cache_lookup_finished_at),
-                    "formulaPathMs": self._profile_ms(formula_path_started_at, time.perf_counter()),
-                    "colWindowingMs": self._profile_ms(col_window_started_at, col_window_finished_at),
-                },
-                extra=(full_response.profile if isinstance(getattr(full_response, "profile", None), dict) else None),
-            ) if profiling else completed_response
+            return (
+                self._attach_virtual_scroll_profile(
+                    completed_response,
+                    started_at=request_started_at,
+                    request=request,
+                    start_row=start_row,
+                    end_row=end_row,
+                    col_start=col_start,
+                    col_end=col_end,
+                    needs_col_schema=needs_col_schema,
+                    include_grand_total=include_grand_total,
+                    response_cache_key=response_cache_key,
+                    path="formula_sort_window",
+                    stages={
+                        "cacheLookupMs": self._profile_ms(
+                            cache_lookup_started_at, cache_lookup_finished_at
+                        ),
+                        "formulaPathMs": self._profile_ms(
+                            formula_path_started_at, time.perf_counter()
+                        ),
+                        "colWindowingMs": self._profile_ms(
+                            col_window_started_at, col_window_finished_at
+                        ),
+                    },
+                    extra=(
+                        full_response.profile
+                        if isinstance(getattr(full_response, "profile", None), dict)
+                        else None
+                    ),
+                )
+                if profiling
+                else completed_response
+            )
 
         # Convert request to pivot spec
         pivot_spec_started_at = time.perf_counter()
@@ -3858,14 +3578,20 @@ class TanStackPivotAdapter(FormulaEngineMixin):
             pivot_spec = apply_rls_to_spec(pivot_spec, user)
 
         discovered_center_ids: Optional[List[str]] = None
-        if pivot_spec.columns and pivot_spec.pivot_config and pivot_spec.pivot_config.enabled:
+        if (
+            pivot_spec.columns
+            and pivot_spec.pivot_config
+            and pivot_spec.pivot_config.enabled
+        ):
             column_catalog_started_at = time.perf_counter()
             discovered_values = await self._discover_pivot_column_values(pivot_spec)
             column_catalog_finished_at = time.perf_counter()
             if discovered_values:
-                discovered_center_ids = self._build_center_col_ids_from_discovered_values(
-                    discovered_values,
-                    request,
+                discovered_center_ids = (
+                    self._build_center_col_ids_from_discovered_values(
+                        discovered_values,
+                        request,
+                    )
                 )
                 window_center_ids = self._resolve_center_window_ids(
                     discovered_center_ids,
@@ -3877,10 +3603,12 @@ class TanStackPivotAdapter(FormulaEngineMixin):
                 )
                 pivot_spec = pivot_spec.copy()
                 if pivot_spec.pivot_config:
-                    pivot_spec.pivot_config.materialized_column_values = self._materialized_pivot_values_for_window(
-                        window_center_ids,
-                        request,
-                        discovered_center_ids,
+                    pivot_spec.pivot_config.materialized_column_values = (
+                        self._materialized_pivot_values_for_window(
+                            window_center_ids,
+                            request,
+                            discovered_center_ids,
+                        )
                     )
         else:
             column_catalog_started_at = None
@@ -3889,25 +3617,29 @@ class TanStackPivotAdapter(FormulaEngineMixin):
         # Handle "Expand All" case
         target_paths = expanded_paths or []
         if expanded_paths is True:
-            target_paths = [['__ALL__']]
+            target_paths = [["__ALL__"]]
 
         # Flat path: tabular layout with subtotals OFF.  Layout-mode is the
         # primary signal; include_subtotals is kept as a backward-compat fallback
         # for callers that predate the layout_mode field.
         _raw_request_layout_mode = getattr(request, "layout_mode", None)
         _request_layout_mode = str(_raw_request_layout_mode or "").strip().lower()
-        if _raw_request_layout_mode and _request_layout_mode not in {"hierarchy", "outline", "tabular"}:
+        if _raw_request_layout_mode and _request_layout_mode not in {
+            "hierarchy",
+            "outline",
+            "tabular",
+        }:
             _request_layout_mode = "hierarchy"
         _show_subtotal_footers = bool(getattr(request, "show_subtotal_footers", False))
-        _use_flat_path = (
-            request.grouping and (
-                (_request_layout_mode == "tabular" and not _show_subtotal_footers)
-                or (not _request_layout_mode and request.include_subtotals is False)
-            )
+        _use_flat_path = request.grouping and (
+            (_request_layout_mode == "tabular" and not _show_subtotal_footers)
+            or (not _request_layout_mode and request.include_subtotals is False)
         )
         if _use_flat_path:
             safe_start = max(int(start_row or 0), 0)
-            safe_end = max(int(end_row if end_row is not None else safe_start), safe_start)
+            safe_end = max(
+                int(end_row if end_row is not None else safe_start), safe_start
+            )
             requested_count = (safe_end - safe_start) + 1
 
             flat_spec = pivot_spec.copy()
@@ -3957,16 +3689,22 @@ class TanStackPivotAdapter(FormulaEngineMixin):
                 and not include_grand_total
                 and safe_start <= flat_row_count <= safe_end
             )
-            if request.totals and (include_grand_total or natural_grand_total_in_window):
+            if request.totals and (
+                include_grand_total or natural_grand_total_in_window
+            ):
                 grand_total_started_at = time.perf_counter()
-                grand_total_row = await self._fetch_flat_grand_total_row(pivot_spec, request)
+                grand_total_row = await self._fetch_flat_grand_total_row(
+                    pivot_spec, request
+                )
                 grand_total_finished_at = time.perf_counter()
                 if isinstance(grand_total_row, dict):
                     existing_rows = tanstack_result.data or []
                     if not any(_is_grand_total_row(row) for row in existing_rows):
                         tanstack_result.data = [*existing_rows, grand_total_row]
 
-            tanstack_result.data = finalize_hierarchy_rows(tanstack_result.data, preserve_window_order=True)
+            tanstack_result.data = finalize_hierarchy_rows(
+                tanstack_result.data, preserve_window_order=True
+            )
             col_window_started_at = time.perf_counter()
             windowed_response = self._apply_col_windowing(
                 tanstack_result,
@@ -3991,33 +3729,57 @@ class TanStackPivotAdapter(FormulaEngineMixin):
                 _allow_prefetch,
                 requested_center_ids,
             )
-            return self._attach_virtual_scroll_profile(
-                completed_response,
-                started_at=request_started_at,
-                request=request,
-                start_row=start_row,
-                end_row=end_row,
-                col_start=col_start,
-                col_end=col_end,
-                needs_col_schema=needs_col_schema,
-                include_grand_total=include_grand_total,
-                response_cache_key=response_cache_key,
-                path="flat_no_subtotals",
-                stages={
-                    "cacheLookupMs": self._profile_ms(cache_lookup_started_at, cache_lookup_finished_at),
-                    "pivotSpecMs": self._profile_ms(pivot_spec_started_at, pivot_spec_finished_at),
-                    "columnCatalogMs": self._profile_ms(column_catalog_started_at, column_catalog_finished_at),
-                    "flatQueryMs": self._profile_ms(flat_query_started_at, flat_query_finished_at),
-                    "flatCountMs": self._profile_ms(count_started_at, count_finished_at),
-                    "grandTotalMs": self._profile_ms(grand_total_started_at, grand_total_finished_at),
-                    "convertMs": self._profile_ms(convert_started_at, convert_finished_at),
-                    "colWindowingMs": self._profile_ms(col_window_started_at, col_window_finished_at),
-                },
-                extra=flat_query_profile if profiling else None,
-            ) if profiling else completed_response
+            return (
+                self._attach_virtual_scroll_profile(
+                    completed_response,
+                    started_at=request_started_at,
+                    request=request,
+                    start_row=start_row,
+                    end_row=end_row,
+                    col_start=col_start,
+                    col_end=col_end,
+                    needs_col_schema=needs_col_schema,
+                    include_grand_total=include_grand_total,
+                    response_cache_key=response_cache_key,
+                    path="flat_no_subtotals",
+                    stages={
+                        "cacheLookupMs": self._profile_ms(
+                            cache_lookup_started_at, cache_lookup_finished_at
+                        ),
+                        "pivotSpecMs": self._profile_ms(
+                            pivot_spec_started_at, pivot_spec_finished_at
+                        ),
+                        "columnCatalogMs": self._profile_ms(
+                            column_catalog_started_at, column_catalog_finished_at
+                        ),
+                        "flatQueryMs": self._profile_ms(
+                            flat_query_started_at, flat_query_finished_at
+                        ),
+                        "flatCountMs": self._profile_ms(
+                            count_started_at, count_finished_at
+                        ),
+                        "grandTotalMs": self._profile_ms(
+                            grand_total_started_at, grand_total_finished_at
+                        ),
+                        "convertMs": self._profile_ms(
+                            convert_started_at, convert_finished_at
+                        ),
+                        "colWindowingMs": self._profile_ms(
+                            col_window_started_at, col_window_finished_at
+                        ),
+                    },
+                    extra=flat_query_profile if profiling else None,
+                )
+                if profiling
+                else completed_response
+            )
 
-        _hier_show_subtotal_footers = _show_subtotal_footers and _request_layout_mode != "tabular"
-        _hier_tabular_subtotals = _show_subtotal_footers and _request_layout_mode == "tabular"
+        _hier_show_subtotal_footers = (
+            _show_subtotal_footers and _request_layout_mode != "tabular"
+        )
+        _hier_tabular_subtotals = (
+            _show_subtotal_footers and _request_layout_mode == "tabular"
+        )
         if _hier_tabular_subtotals:
             # A tabular subtotal view is a flat post-order projection of the full
             # hierarchy. Expansion/collapse is a presentation concern for the
@@ -4025,7 +3787,7 @@ class TanStackPivotAdapter(FormulaEngineMixin):
             # when the incoming expansion map is empty or contains overrides.
             target_paths = [["__ALL__"]]
 
-        if hasattr(self.controller, 'run_hierarchy_view'):
+        if hasattr(self.controller, "run_hierarchy_view"):
             try:
                 hierarchy_view_started_at = time.perf_counter()
                 hierarchy_view = await self.controller.run_hierarchy_view(
@@ -4056,7 +3818,9 @@ class TanStackPivotAdapter(FormulaEngineMixin):
 
             if include_grand_total and request.totals:
                 grand_total_row = hierarchy_view.get("grand_total_row")
-                formula_source_rows = hierarchy_view.get("grand_total_formula_source_rows") or []
+                formula_source_rows = (
+                    hierarchy_view.get("grand_total_formula_source_rows") or []
+                )
                 if isinstance(grand_total_row, dict):
                     normalized_total = self.convert_pivot_result_to_tanstack_format(
                         [grand_total_row], request, version=request.version
@@ -4064,21 +3828,31 @@ class TanStackPivotAdapter(FormulaEngineMixin):
                     if normalized_total:
                         grand_total_row = normalized_total[0]
                 formula_ids = self._measure_formula_ids_from_request(request)
-                if isinstance(grand_total_row, dict) and formula_source_rows and formula_ids:
+                if (
+                    isinstance(grand_total_row, dict)
+                    and formula_source_rows
+                    and formula_ids
+                ):
                     source_rows = self.convert_pivot_result_to_tanstack_format(
                         formula_source_rows,
                         request,
                         version=request.version,
                     ).data
-                    grand_total_row.update(self._build_formula_rollup_values(source_rows, formula_ids))
+                    grand_total_row.update(
+                        self._build_formula_rollup_values(source_rows, formula_ids)
+                    )
                 if isinstance(grand_total_row, dict):
                     existing_rows = tanstack_result.data or []
                     if not any(_is_grand_total_row(row) for row in existing_rows):
                         tanstack_result.data = [*existing_rows, grand_total_row]
                     if not request.totals and tanstack_result.total_rows is not None:
-                        tanstack_result.total_rows = max(int(tanstack_result.total_rows) - 1, 0)
+                        tanstack_result.total_rows = max(
+                            int(tanstack_result.total_rows) - 1, 0
+                        )
 
-            tanstack_result.data = finalize_hierarchy_rows(tanstack_result.data, preserve_window_order=True)
+            tanstack_result.data = finalize_hierarchy_rows(
+                tanstack_result.data, preserve_window_order=True
+            )
             if hierarchy_view.get("color_scale_stats"):
                 tanstack_result.color_scale_stats = hierarchy_view["color_scale_stats"]
             col_window_started_at = time.perf_counter()
@@ -4105,31 +3879,51 @@ class TanStackPivotAdapter(FormulaEngineMixin):
                 _allow_prefetch,
                 requested_center_ids,
             )
-            return self._attach_virtual_scroll_profile(
-                completed_response,
-                started_at=request_started_at,
-                request=request,
-                start_row=start_row,
-                end_row=end_row,
-                col_start=col_start,
-                col_end=col_end,
-                needs_col_schema=needs_col_schema,
-                include_grand_total=include_grand_total,
-                response_cache_key=response_cache_key,
-                path="hierarchy_view",
-                stages={
-                    "cacheLookupMs": self._profile_ms(cache_lookup_started_at, cache_lookup_finished_at),
-                    "pivotSpecMs": self._profile_ms(pivot_spec_started_at, pivot_spec_finished_at),
-                    "columnCatalogMs": self._profile_ms(column_catalog_started_at, column_catalog_finished_at),
-                    "hierarchyViewMs": self._profile_ms(hierarchy_view_started_at, hierarchy_view_finished_at),
-                    "convertMs": self._profile_ms(convert_started_at, convert_finished_at),
-                    "colWindowingMs": self._profile_ms(col_window_started_at, col_window_finished_at),
-                },
-                extra=(hierarchy_view.get("profile") if isinstance(hierarchy_view.get("profile"), dict) else None),
-            ) if profiling else completed_response
+            return (
+                self._attach_virtual_scroll_profile(
+                    completed_response,
+                    started_at=request_started_at,
+                    request=request,
+                    start_row=start_row,
+                    end_row=end_row,
+                    col_start=col_start,
+                    col_end=col_end,
+                    needs_col_schema=needs_col_schema,
+                    include_grand_total=include_grand_total,
+                    response_cache_key=response_cache_key,
+                    path="hierarchy_view",
+                    stages={
+                        "cacheLookupMs": self._profile_ms(
+                            cache_lookup_started_at, cache_lookup_finished_at
+                        ),
+                        "pivotSpecMs": self._profile_ms(
+                            pivot_spec_started_at, pivot_spec_finished_at
+                        ),
+                        "columnCatalogMs": self._profile_ms(
+                            column_catalog_started_at, column_catalog_finished_at
+                        ),
+                        "hierarchyViewMs": self._profile_ms(
+                            hierarchy_view_started_at, hierarchy_view_finished_at
+                        ),
+                        "convertMs": self._profile_ms(
+                            convert_started_at, convert_finished_at
+                        ),
+                        "colWindowingMs": self._profile_ms(
+                            col_window_started_at, col_window_finished_at
+                        ),
+                    },
+                    extra=(
+                        hierarchy_view.get("profile")
+                        if isinstance(hierarchy_view.get("profile"), dict)
+                        else None
+                    ),
+                )
+                if profiling
+                else completed_response
+            )
 
         # Use the controller's virtual scrolling method
-        if hasattr(self.controller, 'run_virtual_scroll_hierarchical'):
+        if hasattr(self.controller, "run_virtual_scroll_hierarchical"):
             # For hierarchical virtual scrolling
             try:
                 virtual_result = self.controller.run_virtual_scroll_hierarchical(
@@ -4137,16 +3931,22 @@ class TanStackPivotAdapter(FormulaEngineMixin):
                 )
 
                 # Convert result to TanStack format (even if empty)
-                tanstack_result = self.convert_pivot_result_to_tanstack_format(virtual_result, request, version=request.version)
+                tanstack_result = self.convert_pivot_result_to_tanstack_format(
+                    virtual_result, request, version=request.version
+                )
 
                 # Override total_rows with the ACTUAL count of all visible (expanded) hierarchical rows
-                if hasattr(self.controller, 'virtual_scroll_manager'):
-                    total_visible = self.controller.virtual_scroll_manager.get_total_visible_row_count(pivot_spec, target_paths)
+                if hasattr(self.controller, "virtual_scroll_manager"):
+                    total_visible = self.controller.virtual_scroll_manager.get_total_visible_row_count(
+                        pivot_spec, target_paths
+                    )
                     if total_visible > 0:
                         tanstack_result.total_rows = total_visible
 
                 # The legacy manager already returns a viewport window; preserve that order.
-                tanstack_result.data = finalize_hierarchy_rows(tanstack_result.data, preserve_window_order=True)
+                tanstack_result.data = finalize_hierarchy_rows(
+                    tanstack_result.data, preserve_window_order=True
+                )
                 col_window_started_at = time.perf_counter()
                 windowed_response = self._apply_col_windowing(
                     tanstack_result,
@@ -4171,30 +3971,44 @@ class TanStackPivotAdapter(FormulaEngineMixin):
                     _allow_prefetch,
                     requested_center_ids,
                 )
-                return self._attach_virtual_scroll_profile(
-                    completed_response,
-                    started_at=request_started_at,
-                    request=request,
-                    start_row=start_row,
-                    end_row=end_row,
-                    col_start=col_start,
-                    col_end=col_end,
-                    needs_col_schema=needs_col_schema,
-                    include_grand_total=include_grand_total,
-                    response_cache_key=response_cache_key,
-                    path="legacy_virtual_scroll",
-                    stages={
-                        "cacheLookupMs": self._profile_ms(cache_lookup_started_at, cache_lookup_finished_at),
-                        "pivotSpecMs": self._profile_ms(pivot_spec_started_at, pivot_spec_finished_at),
-                        "columnCatalogMs": self._profile_ms(column_catalog_started_at, column_catalog_finished_at),
-                        "colWindowingMs": self._profile_ms(col_window_started_at, col_window_finished_at),
-                    },
-                ) if profiling else completed_response
+                return (
+                    self._attach_virtual_scroll_profile(
+                        completed_response,
+                        started_at=request_started_at,
+                        request=request,
+                        start_row=start_row,
+                        end_row=end_row,
+                        col_start=col_start,
+                        col_end=col_end,
+                        needs_col_schema=needs_col_schema,
+                        include_grand_total=include_grand_total,
+                        response_cache_key=response_cache_key,
+                        path="legacy_virtual_scroll",
+                        stages={
+                            "cacheLookupMs": self._profile_ms(
+                                cache_lookup_started_at, cache_lookup_finished_at
+                            ),
+                            "pivotSpecMs": self._profile_ms(
+                                pivot_spec_started_at, pivot_spec_finished_at
+                            ),
+                            "columnCatalogMs": self._profile_ms(
+                                column_catalog_started_at, column_catalog_finished_at
+                            ),
+                            "colWindowingMs": self._profile_ms(
+                                col_window_started_at, col_window_finished_at
+                            ),
+                        },
+                    )
+                    if profiling
+                    else completed_response
+                )
 
             except Exception as e:
                 print(f"Virtual scroll failed: {e}, falling back to hierarchical load")
                 # Fallback to direct hierarchical load which is un-materialized but accurate
-                fallback_result = await self.handle_hierarchical_request(request, expanded_paths)
+                fallback_result = await self.handle_hierarchical_request(
+                    request, expanded_paths
+                )
                 fallback_result = self._slice_full_hierarchy_response_to_viewport(
                     fallback_result,
                     start_row,
@@ -4224,28 +4038,42 @@ class TanStackPivotAdapter(FormulaEngineMixin):
                     _allow_prefetch,
                     requested_center_ids,
                 )
-                return self._attach_virtual_scroll_profile(
-                    completed_response,
-                    started_at=request_started_at,
-                    request=request,
-                    start_row=start_row,
-                    end_row=end_row,
-                    col_start=col_start,
-                    col_end=col_end,
-                    needs_col_schema=needs_col_schema,
-                    include_grand_total=include_grand_total,
-                    response_cache_key=response_cache_key,
-                    path="legacy_virtual_scroll_fallback",
-                    stages={
-                        "cacheLookupMs": self._profile_ms(cache_lookup_started_at, cache_lookup_finished_at),
-                        "pivotSpecMs": self._profile_ms(pivot_spec_started_at, pivot_spec_finished_at),
-                        "columnCatalogMs": self._profile_ms(column_catalog_started_at, column_catalog_finished_at),
-                        "colWindowingMs": self._profile_ms(col_window_started_at, col_window_finished_at),
-                    },
-                ) if profiling else completed_response
+                return (
+                    self._attach_virtual_scroll_profile(
+                        completed_response,
+                        started_at=request_started_at,
+                        request=request,
+                        start_row=start_row,
+                        end_row=end_row,
+                        col_start=col_start,
+                        col_end=col_end,
+                        needs_col_schema=needs_col_schema,
+                        include_grand_total=include_grand_total,
+                        response_cache_key=response_cache_key,
+                        path="legacy_virtual_scroll_fallback",
+                        stages={
+                            "cacheLookupMs": self._profile_ms(
+                                cache_lookup_started_at, cache_lookup_finished_at
+                            ),
+                            "pivotSpecMs": self._profile_ms(
+                                pivot_spec_started_at, pivot_spec_finished_at
+                            ),
+                            "columnCatalogMs": self._profile_ms(
+                                column_catalog_started_at, column_catalog_finished_at
+                            ),
+                            "colWindowingMs": self._profile_ms(
+                                col_window_started_at, col_window_finished_at
+                            ),
+                        },
+                    )
+                    if profiling
+                    else completed_response
+                )
         else:
             # Fallback: Use regular hierarchical method
-            fallback_result = await self.handle_hierarchical_request(request, expanded_paths)
+            fallback_result = await self.handle_hierarchical_request(
+                request, expanded_paths
+            )
             fallback_result = self._slice_full_hierarchy_response_to_viewport(
                 fallback_result,
                 start_row,
@@ -4275,48 +4103,64 @@ class TanStackPivotAdapter(FormulaEngineMixin):
                 _allow_prefetch,
                 requested_center_ids,
             )
-            return self._attach_virtual_scroll_profile(
-                completed_response,
-                started_at=request_started_at,
-                request=request,
-                start_row=start_row,
-                end_row=end_row,
-                col_start=col_start,
-                col_end=col_end,
-                needs_col_schema=needs_col_schema,
-                include_grand_total=include_grand_total,
-                response_cache_key=response_cache_key,
-                path="hierarchical_fallback",
-                stages={
-                    "cacheLookupMs": self._profile_ms(cache_lookup_started_at, cache_lookup_finished_at),
-                    "pivotSpecMs": self._profile_ms(pivot_spec_started_at, pivot_spec_finished_at),
-                    "columnCatalogMs": self._profile_ms(column_catalog_started_at, column_catalog_finished_at),
-                    "colWindowingMs": self._profile_ms(col_window_started_at, col_window_finished_at),
-                },
-            ) if profiling else completed_response
+            return (
+                self._attach_virtual_scroll_profile(
+                    completed_response,
+                    started_at=request_started_at,
+                    request=request,
+                    start_row=start_row,
+                    end_row=end_row,
+                    col_start=col_start,
+                    col_end=col_end,
+                    needs_col_schema=needs_col_schema,
+                    include_grand_total=include_grand_total,
+                    response_cache_key=response_cache_key,
+                    path="hierarchical_fallback",
+                    stages={
+                        "cacheLookupMs": self._profile_ms(
+                            cache_lookup_started_at, cache_lookup_finished_at
+                        ),
+                        "pivotSpecMs": self._profile_ms(
+                            pivot_spec_started_at, pivot_spec_finished_at
+                        ),
+                        "columnCatalogMs": self._profile_ms(
+                            column_catalog_started_at, column_catalog_finished_at
+                        ),
+                        "colWindowingMs": self._profile_ms(
+                            col_window_started_at, col_window_finished_at
+                        ),
+                    },
+                )
+                if profiling
+                else completed_response
+            )
 
     def get_schema_info(self, table_name: str) -> Dict[str, Any]:
         """Get schema information for TanStack column configuration"""
         # Try to use backend's schema discovery first
         try:
-            if hasattr(self.controller, 'backend') and hasattr(self.controller.backend, 'get_schema'):
+            if hasattr(self.controller, "backend") and hasattr(
+                self.controller.backend, "get_schema"
+            ):
                 schema = self.controller.backend.get_schema(table_name)
                 if schema:
                     columns_info = []
                     for col_name, col_type in schema.items():
-                        columns_info.append({
-                            'id': col_name,
-                            'header': col_name.replace('_', ' ').title(),
-                            'accessorKey': col_name,
-                            'type': col_type,
-                            'enableSorting': True,
-                            'enableFiltering': True
-                        })
-                    
+                        columns_info.append(
+                            {
+                                "id": col_name,
+                                "header": col_name.replace("_", " ").title(),
+                                "accessorKey": col_name,
+                                "type": col_type,
+                                "enableSorting": True,
+                                "enableFiltering": True,
+                            }
+                        )
+
                     return {
-                        'table': table_name,
-                        'columns': columns_info,
-                        'sample_data': [] # Fetching sample data could be separate if needed
+                        "table": table_name,
+                        "columns": columns_info,
+                        "sample_data": [],  # Fetching sample data could be separate if needed
                     }
         except Exception as e:
             print(f"Metadata schema retrieval failed: {e}")
@@ -4325,63 +4169,69 @@ class TanStackPivotAdapter(FormulaEngineMixin):
         try:
             # Run a simple query to get column info
             spec = PivotSpec(
-                table=table_name,
-                rows=[],  # No grouping
-                measures=[],
-                filters=[]
+                table=table_name, rows=[], measures=[], filters=[]  # No grouping
             )
             sample_result = self.controller.run_pivot(spec, return_format="dict")
-            
-            if sample_result and sample_result.get('columns'):
+
+            if sample_result and sample_result.get("columns"):
                 columns_info = []
-                for col_name in sample_result['columns']:
+                for col_name in sample_result["columns"]:
                     # Determine column type (simplified)
                     col_type = "string"  # Default
                     # In a real implementation, this would analyze the data
-                    columns_info.append({
-                        'id': col_name,
-                        'header': col_name.replace('_', ' ').title(),
-                        'accessorKey': col_name,
-                        'type': col_type,
-                        'enableSorting': True,
-                        'enableFiltering': True
-                    })
-                
+                    columns_info.append(
+                        {
+                            "id": col_name,
+                            "header": col_name.replace("_", " ").title(),
+                            "accessorKey": col_name,
+                            "type": col_type,
+                            "enableSorting": True,
+                            "enableFiltering": True,
+                        }
+                    )
+
                 return {
-                    'table': table_name,
-                    'columns': columns_info,
-                    'sample_data': sample_result.get('rows', [])[:5]  # First 5 rows as sample
+                    "table": table_name,
+                    "columns": columns_info,
+                    "sample_data": sample_result.get("rows", [])[
+                        :5
+                    ],  # First 5 rows as sample
                 }
         except:
             pass
-        
+
         # Return empty schema
-        return {
-            'table': table_name,
-            'columns': [],
-            'sample_data': []
-        }
-    
+        return {"table": table_name, "columns": [], "sample_data": []}
+
     async def get_grouped_data(self, request: TanStackRequest) -> TanStackResponse:
         """Handle grouped data request (for hierarchical tables)"""
         pivot_spec = self.convert_tanstack_request_to_pivot_spec(request)
-        
+
         # Use the controller to get grouped data
-        pivot_result = await self.controller.run_pivot_async(pivot_spec, return_format="dict")
-        
+        pivot_result = await self.controller.run_pivot_async(
+            pivot_spec, return_format="dict"
+        )
+
         # Format for TanStack grouping
-        tanstack_result = self.convert_pivot_result_to_tanstack_format(pivot_result, request)
-        
+        tanstack_result = self.convert_pivot_result_to_tanstack_format(
+            pivot_result, request
+        )
+
         # Add grouping information
         if request.grouping:
-            tanstack_result.grouping = [{
-                'id': group_col,
-                'value': None  # Will be populated with actual grouped data
-            } for group_col in request.grouping]
-        
+            tanstack_result.grouping = [
+                {
+                    "id": group_col,
+                    "value": None,  # Will be populated with actual grouped data
+                }
+                for group_col in request.grouping
+            ]
+
         return tanstack_result
 
-    def get_invalidation_events(self, table_name: str, change_type: str) -> List[Dict[str, Any]]:
+    def get_invalidation_events(
+        self, table_name: str, change_type: str
+    ) -> List[Dict[str, Any]]:
         # ... existing ...
         pass
 
@@ -4398,33 +4248,44 @@ class TanStackPivotAdapter(FormulaEngineMixin):
         offset: int = 0,
     ) -> tuple[List[Any], int]:
         # Skip virtual columns that don't exist in the underlying table
-        if not column_id or column_id in ('__row_number__', 'hierarchy'):
+        if not column_id or column_id in ("__row_number__", "hierarchy"):
             return [], 0
         """Get unique values for a column, potentially filtered"""
-        
+
         # Convert the filters from the request format to the spec format
         pivot_filters = []
         if filters:
             for field_name, filter_obj in filters.items():
-                if not isinstance(filter_obj, dict) or field_name == column_id: continue
+                if not isinstance(filter_obj, dict) or field_name == column_id:
+                    continue
 
-                if 'conditions' in filter_obj and 'operator' in filter_obj:
+                if "conditions" in filter_obj and "operator" in filter_obj:
                     conditions = []
-                    for cond in filter_obj['conditions']:
-                        conditions.append({
-                            'field': field_name,
-                            'op': self._map_tanstack_operator(cond.get('type', 'eq')),
-                            'value': cond.get('value')
-                        })
+                    for cond in filter_obj["conditions"]:
+                        conditions.append(
+                            {
+                                "field": field_name,
+                                "op": self._map_tanstack_operator(
+                                    cond.get("type", "eq")
+                                ),
+                                "value": cond.get("value"),
+                            }
+                        )
                     if conditions:
-                        pivot_filters.append({'op': filter_obj['operator'], 'conditions': conditions})
+                        pivot_filters.append(
+                            {"op": filter_obj["operator"], "conditions": conditions}
+                        )
                 else:
-                    pivot_filters.append({
-                        'field': field_name,
-                        'op': self._map_tanstack_operator(filter_obj.get('type', 'eq')),
-                        'value': filter_obj.get('value')
-                    })
-        
+                    pivot_filters.append(
+                        {
+                            "field": field_name,
+                            "op": self._map_tanstack_operator(
+                                filter_obj.get("type", "eq")
+                            ),
+                            "value": filter_obj.get("value"),
+                        }
+                    )
+
         try:
             limit = max(1, min(int(limit), 500))
         except (TypeError, ValueError):
@@ -4437,15 +4298,23 @@ class TanStackPivotAdapter(FormulaEngineMixin):
         axis_config = MeasureAxisConfig.from_dict(measure_axis)
         request_measures: List[Measure] = []
         for column in request_columns or []:
-            if not isinstance(column, dict) or not column.get("aggregationFn") or column.get("isFormula"):
+            if (
+                not isinstance(column, dict)
+                or not column.get("aggregationFn")
+                or column.get("isFormula")
+            ):
                 continue
-            request_measures.append(Measure(
-                field=column.get("aggregationField", column.get("id")),
-                agg=column.get("aggregationFn", "sum"),
-                alias=column.get("id"),
-            ))
+            request_measures.append(
+                Measure(
+                    field=column.get("aggregationField", column.get("id")),
+                    agg=column.get("aggregationFn", "sum"),
+                    alias=column.get("id"),
+                )
+            )
         if axis_config and axis_config.placement != "none":
-            axis_config.members = self._derive_measure_axis_members(axis_config, request_measures, request_columns or [])
+            axis_config.members = self._derive_measure_axis_members(
+                axis_config, request_measures, request_columns or []
+            )
 
         spec = PivotSpec(
             table=table_name,
@@ -4458,20 +4327,24 @@ class TanStackPivotAdapter(FormulaEngineMixin):
             limit=limit,
             offset=offset,
         )
-        
+
         # Use Ibis to get distinct values
         table = self.controller.planner._table_for_spec(
             self.controller.planner._prepare_measure_axis_spec(spec)
         )
         if column_id not in getattr(table, "columns", []):
             return [], 0
-        filter_expr = self.controller.planner.builder.build_filter_expression(table, spec.filters)
+        filter_expr = self.controller.planner.builder.build_filter_expression(
+            table, spec.filters
+        )
         if filter_expr is not None:
             table = table.filter(filter_expr)
 
         search_text = str(search or "").strip()
         if search_text:
-            table = table.filter(table[column_id].cast("string").lower().contains(search_text.lower()))
+            table = table.filter(
+                table[column_id].cast("string").lower().contains(search_text.lower())
+            )
 
         # Get distinct values in stable sorted order, with explicit paging so
         # large columns remain usable without shipping every option at once.
@@ -4487,14 +4360,16 @@ class TanStackPivotAdapter(FormulaEngineMixin):
 
 
 # Utility function for TanStack integration
-def create_tanstack_adapter(backend_uri: str = ":memory:", debug: bool = False) -> TanStackPivotAdapter:
+def create_tanstack_adapter(
+    backend_uri: str = ":memory:", debug: bool = False
+) -> TanStackPivotAdapter:
     """Create a TanStack adapter with a configured controller"""
     controller = ScalablePivotController(
         backend_uri=backend_uri,
         enable_streaming=True,
         enable_incremental_views=True,
         tile_size=100,
-        cache_ttl=300
+        cache_ttl=300,
     )
     return TanStackPivotAdapter(controller, debug=debug)
 
@@ -4503,7 +4378,7 @@ def create_tanstack_adapter(backend_uri: str = ":memory:", debug: bool = False) 
 async def example_usage():
     """Example of how to use the TanStack adapter"""
     adapter = create_tanstack_adapter()
-    
+
     # Example TanStack request
     request = TanStackRequest(
         operation=TanStackOperation.GET_DATA,
@@ -4511,18 +4386,23 @@ async def example_usage():
         columns=[
             {"id": "region", "header": "Region", "enableSorting": True},
             {"id": "product", "header": "Product", "enableSorting": True},
-            {"id": "total_sales", "header": "Total Sales", "aggregationFn": "sum", "aggregationField": "sales"}
+            {
+                "id": "total_sales",
+                "header": "Total Sales",
+                "aggregationFn": "sum",
+                "aggregationField": "sales",
+            },
         ],
         filters=[],
         sorting=[{"id": "total_sales", "desc": True}],
         grouping=["region", "product"],
         aggregations=[],
-        pagination={"pageIndex": 0, "pageSize": 100}
+        pagination={"pageIndex": 0, "pageSize": 100},
     )
-    
+
     result = await adapter.handle_request(request)
     print(f"Received {len(result.data)} rows from TanStack adapter")
-    
+
     return result
 
 

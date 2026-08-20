@@ -54,6 +54,7 @@ packages = [
     "pivot_engine.planner",
     "pivot_engine.runtime",
     "pivot_engine.streaming",
+    "pivot_engine.transport",
 ]
 
 [tool.setuptools.package-dir]
