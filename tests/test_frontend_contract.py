@@ -205,6 +205,31 @@ def test_server_side_single_collapse_preserves_expand_all_default_for_offscreen_
     assert "delete normalizedRawExpanded[toggledExpandedPath];" in component_source
 
 
+def test_expansion_shifted_cache_blocks_are_removed_before_repaint():
+    component_source = Path(
+        os.path.join(
+            os.getcwd(),
+            "dash_tanstack_pivot",
+            "src",
+            "lib",
+            "components",
+            "DashTanstackPivot.react.js",
+        )
+    ).read_text(encoding="utf-8")
+
+    deferred_invalidation = re.search(
+        r"// Deferred block invalidation after single-row expansion\.(.*?)// Debug effect removed",
+        component_source,
+        re.S,
+    )
+
+    assert deferred_invalidation is not None
+    effect_source = deferred_invalidation.group(1)
+    assert "invalidateFromBlock(0)" in effect_source
+    assert "invalidateFromBlock(firstStaleBlock)" in effect_source
+    assert "softInvalidateFromBlock" not in effect_source
+
+
 def test_dash_presentation_app_includes_single_pivot_sparkline_modes_demo():
     app_source = Path(
         os.path.join(os.getcwd(), "dash_presentation", "app.py")

@@ -9405,7 +9405,7 @@ export default function DashTanstackPivot(props) {
         };
     }, [serverSide]);
 
-    const { rowVirtualizer, getRow, renderedData, renderedOffset, clearCache, invalidateFromBlock, softInvalidateFromBlock, grandTotalRow, loadedRows, requestUrgentColumnViewport, requestVisibleViewportRefresh } = useServerSideRowModel({
+    const { rowVirtualizer, getRow, renderedData, renderedOffset, clearCache, invalidateFromBlock, grandTotalRow, loadedRows, requestUrgentColumnViewport, requestVisibleViewportRefresh } = useServerSideRowModel({
         parentRef,
         serverSide,
         rowCount: effectiveRowCount,
@@ -10525,18 +10525,17 @@ export default function DashTanstackPivot(props) {
         pendingExpansionRef.current = null;
         if (anchorBlock < 0) {
             // The expanded row was not in the viewport when the user toggled it.
-            // We can't know which anchor block shifted, but a hard clear causes
-            // a full skeleton flash.  Soft-invalidate all blocks from 0 instead
-            // so existing rows stay visible (stale-while-revalidate) until fresh
-            // data lands (finding #6).
-            if (softInvalidateFromBlock) softInvalidateFromBlock(0);
+            // We cannot know which cached index first shifted, so remove every
+            // cached block. Keeping those rows during revalidation paints values
+            // from the previous hierarchy at their now-invalid virtual indexes.
+            if (invalidateFromBlock) invalidateFromBlock(0);
         } else {
             // The expansion request was extended to cover through extendedToBlock
             // (anchorBlock + 1 when the anchor is known).  Those blocks were filled
-            // with fresh data by the data-sync effect, so we must NOT re-dirty them.
-            // Start soft-invalidating from the first block BEYOND the fresh coverage.
+            // with fresh data by the data-sync effect, so retain them and remove
+            // every later block whose virtual row indexes may have shifted.
             const firstStaleBlock = extendedToBlock >= 0 ? extendedToBlock + 1 : anchorBlock + 1;
-            if (softInvalidateFromBlock) softInvalidateFromBlock(firstStaleBlock);
+            if (invalidateFromBlock) invalidateFromBlock(firstStaleBlock);
         }
         // Clear the transition loader now that the expansion response has landed.
         setPendingRowTransitions(new Map());

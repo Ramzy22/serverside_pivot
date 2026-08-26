@@ -206,14 +206,12 @@ def iter_visible_hierarchy_rows(
                 else:
                     yield row
             else:
-                # Pre-order: group row first, then children, then optional footer.
+                # Hierarchy and outline are pre-order views. Their group row already
+                # carries the aggregate subtotal, so emitting a copied footer would
+                # duplicate the parent and collide with its expandable row identity.
                 yield row
                 if is_expanded:
                     yield from traverse(child_key, tuple(child_path_parts), next_active_keys)
-                    if show_subtotal_footers:
-                        footer_row = dict(row)
-                        footer_row["_isSubtotalFooter"] = True
-                        yield footer_row
 
     yield from traverse("")
 

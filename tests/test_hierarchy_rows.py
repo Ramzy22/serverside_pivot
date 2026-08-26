@@ -188,13 +188,13 @@ async def test_real_adapter_tabular_subtotals_force_loads_all_descendants_withou
 
 
 @pytest.mark.parametrize(
-    ("show_subtotal_footers", "expected"),
+    "show_subtotal_footers",
     [
-        (False, [("North", False), ("North|||USA", False), ("North|||Canada", False), ("South", False)]),
-        (True, [("North", False), ("North|||USA", False), ("North|||Canada", False), ("North", True), ("South", False)]),
+        False,
+        True,
     ],
 )
-def test_hierarchy_and_outline_row_contracts_insert_only_requested_subtotal_footers(show_subtotal_footers, expected):
+def test_hierarchy_and_outline_use_the_expandable_parent_as_the_subtotal_row(show_subtotal_footers):
     hierarchy_result = {
         "": [
             {"region": "North", "sales_sum": 100},
@@ -215,7 +215,12 @@ def test_hierarchy_and_outline_row_contracts_insert_only_requested_subtotal_foot
         show_subtotal_footers=show_subtotal_footers,
     )
 
-    assert [(row["_path"], bool(row.get("_isSubtotalFooter"))) for row in window["rows"]] == expected
+    assert [(row["_path"], bool(row.get("_isSubtotalFooter"))) for row in window["rows"]] == [
+        ("North", False),
+        ("North|||USA", False),
+        ("North|||Canada", False),
+        ("South", False),
+    ]
 
 
 @pytest.mark.parametrize("expanded_paths", [[[''], ['', 'Cash Equity']], [['__ALL__']]])
