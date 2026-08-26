@@ -195,22 +195,31 @@ class CompletePivotAPI:
 
         @self.app.post("/pivot/export")
         async def export_endpoint(request: ExportRequest, user: User = Depends(get_current_user)):
+            export_format = str(request.format or "").strip().lower()
+            if export_format not in {"csv", "parquet"}:
+                raise HTTPException(
+                    status_code=400,
+                    detail="Unsupported export format. Supported formats are: csv, parquet.",
+                )
             try:
                 spec_dict = request.spec.model_dump()
                 pivot_spec = PivotSpec.from_dict(spec_dict)
                 pivot_spec = apply_rls_to_spec(pivot_spec, user)
                 
-                # Get the stream from controller
-                stream = await self.controller.run_pivot_export(pivot_spec, format=request.format)
+                # Async generators are already valid StreamingResponse bodies and
+                # must not be awaited before Starlette iterates them.
+                stream = self.controller.run_pivot_export(pivot_spec, format=export_format)
                 
-                media_type = "text/csv" if request.format.lower() == "csv" else "application/octet-stream"
-                filename = f"export.{request.format.lower()}"
+                media_type = "text/csv" if export_format == "csv" else "application/vnd.apache.parquet"
+                filename = f"export.{export_format}"
                 
                 return StreamingResponse(
                     stream, 
                     media_type=media_type,
                     headers={"Content-Disposition": f"attachment; filename={filename}"}
                 )
+            except HTTPException:
+                raise
             except Exception as e:
                 raise HTTPException(status_code=500, detail=str(e))
 

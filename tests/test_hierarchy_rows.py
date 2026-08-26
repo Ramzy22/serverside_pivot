@@ -264,6 +264,63 @@ def test_blank_root_hierarchy_value_has_distinct_lookup_key_and_cannot_recurse(e
     ]
 
 
+def test_blank_root_expand_all_keeps_full_and_virtual_row_order_identical():
+    """A blank grouping value is a valid parent, not an absent row identity.
+
+    The complete hierarchy can be materialized during a structural update while
+    later viewports arrive as independently windowed responses.  Both paths
+    must use the exact same canonical preorder; otherwise the client cache can
+    assign the last expanded children to the wrong virtual indices.
+    """
+    class _Spec:
+        rows = ["option_right", "strategy", "instrument"]
+
+    blank_key = hierarchy_lookup_key([""])
+    blank_strategy_key = hierarchy_lookup_key(["", "AI Momentum"])
+    call_key = hierarchy_lookup_key(["C"])
+    call_strategy_key = hierarchy_lookup_key(["C", "Upside Calls"])
+    put_key = hierarchy_lookup_key(["P"])
+    put_strategy_key = hierarchy_lookup_key(["P", "Search Hedge"])
+    hierarchy_result = {
+        "": [
+            {"option_right": "", "amount_sum": 30},
+            {"option_right": "C", "amount_sum": 20},
+            {"option_right": "P", "amount_sum": 10},
+        ],
+        blank_key: [{"option_right": "", "strategy": "AI Momentum", "amount_sum": 30}],
+        blank_strategy_key: [{
+            "option_right": "", "strategy": "AI Momentum", "instrument": "AAPL US Equity", "amount_sum": 30,
+        }],
+        call_key: [{"option_right": "C", "strategy": "Upside Calls", "amount_sum": 20}],
+        call_strategy_key: [{
+            "option_right": "C", "strategy": "Upside Calls", "instrument": "AAPL 19JUN26 270C", "amount_sum": 20,
+        }],
+        put_key: [{"option_right": "P", "strategy": "Search Hedge", "amount_sum": 10}],
+        put_strategy_key: [{
+            "option_right": "P", "strategy": "Search Hedge", "instrument": "GOOGL 19JUN26 305P", "amount_sum": 10,
+        }],
+    }
+
+    materialized = build_hierarchy_row_window(
+        _Spec(), hierarchy_result, [["__ALL__"]], start_row=0, end_row=99,
+    )
+    first_window = build_hierarchy_row_window(
+        _Spec(), hierarchy_result, [["__ALL__"]], start_row=0, end_row=3,
+    )
+    final_window = build_hierarchy_row_window(
+        _Spec(), hierarchy_result, [["__ALL__"]], start_row=4, end_row=99,
+    )
+
+    full_paths = [row["_path"] for row in finalize_hierarchy_rows(materialized["rows"])]
+    virtual_paths = [
+        *(row["_path"] for row in first_window["rows"]),
+        *(row["_path"] for row in final_window["rows"]),
+    ]
+
+    assert full_paths == virtual_paths
+    assert virtual_paths[-1] == "P|||Search Hedge|||GOOGL 19JUN26 305P"
+
+
 @pytest.mark.asyncio
 async def test_adapter_legacy_hierarchy_fallback_slices_viewport_with_shared_policy():
     class BatchOnlyController:

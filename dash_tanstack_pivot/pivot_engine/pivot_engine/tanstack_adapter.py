@@ -103,6 +103,10 @@ class TanStackRequest:
     measure_axis: Optional[Dict[str, Any]] = None
     layout_mode: Optional[str] = None          # 'hierarchy' | 'outline' | 'tabular'
     show_subtotal_footers: Optional[bool] = False
+    # A full export must not reuse an interactive viewport query whose limit is
+    # smaller than the requested extract.  This is deliberately transport
+    # neutral; the adapter only uses it to bypass the controller result cache.
+    full_export: bool = False
 
 
 @dataclass
@@ -3921,6 +3925,7 @@ class TanStackPivotAdapter(FormulaEngineMixin):
             flat_table = await self.controller.run_pivot_async(
                 flat_spec,
                 return_format="arrow",
+                force_refresh=bool(getattr(request, "full_export", False)),
                 profile_sink=flat_query_profile if profiling else None,
             )
             flat_query_finished_at = time.perf_counter()

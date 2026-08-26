@@ -300,11 +300,26 @@ class PivotRuntimeService:
 
         if trigger_kind == "export":
             export_context = self._build_export_request_context(context, state.export_request)
+            export_all_rows = bool(
+                first_present(
+                    state.export_request if isinstance(state.export_request, dict) else {},
+                    "allRows",
+                    "all_rows",
+                    default=False,
+                )
+            )
             export_request = replace(
                 request,
                 pagination=self._build_export_pagination(state.export_request),
+                full_export=export_all_rows,
             )
-            export_expanded_paths = self._parse_expanded_paths(state.expanded)
+            # Export/copy is a full filtered pivot extract. Do not let the
+            # virtual viewport or currently collapsed branches truncate it.
+            export_expanded_paths = (
+                [["__ALL__"]]
+                if export_all_rows and state.row_fields
+                else self._parse_expanded_paths(state.expanded)
+            )
             execution_started_at = time.perf_counter()
             try:
                 response = await self._run_backend_operation(
@@ -834,6 +849,55 @@ class PivotRuntimeService:
         effective_needs_col_schema: bool,
         profiling_enabled: bool,
     ) -> TanStackResponse:
+        export_all_rows = bool(
+            first_present(
+                state.export_request if isinstance(state.export_request, dict) else {},
+                "allRows",
+                "all_rows",
+                default=False,
+            )
+        )
+        if trigger_kind == "export" and export_all_rows:
+            is_tabular_without_subtotals = (
+                str(getattr(request, "layout_mode", "") or "").strip().lower() == "tabular"
+                and not bool(getattr(request, "show_subtotal_footers", False))
+            )
+            if is_tabular_without_subtotals:
+                # Tabular-without-subtotals is intentionally a flat query path,
+                # not a hierarchy projection. First obtain its exact total, then
+                # fetch that bounded range. This avoids both the visible 100-row
+                # viewport and an unsafe artificial max-int virtual window.
+                preflight_context = replace(context, start_row=0, end_row=0)
+                preflight = await self._execute_tanstack_data_request(
+                    adapter,
+                    request,
+                    state,
+                    preflight_context,
+                    expanded_paths,
+                    trigger_kind="data",
+                    effective_needs_col_schema=effective_needs_col_schema,
+                    profiling_enabled=profiling_enabled,
+                )
+                full_row_count = max(int(preflight.total_rows or 0), 0)
+                if full_row_count <= 1:
+                    return preflight
+                full_context = replace(context, start_row=0, end_row=full_row_count - 1)
+                return await self._execute_tanstack_data_request(
+                    adapter,
+                    request,
+                    state,
+                    full_context,
+                    expanded_paths,
+                    trigger_kind="data",
+                    effective_needs_col_schema=effective_needs_col_schema,
+                    profiling_enabled=profiling_enabled,
+                )
+            # Full exports deliberately bypass virtual-window execution. The
+            # hierarchy path produces the complete filtered, expanded result
+            # in one pass without manufacturing a huge virtual range or cache.
+            if state.row_fields and hasattr(adapter, "handle_hierarchical_request"):
+                return await adapter.handle_hierarchical_request(request, expanded_paths)
+            return await adapter.handle_request(request)
         if state.view_mode == "tree" and trigger_kind != "chart":
             response_state = await self._tree_service.handle_data_request(
                 adapter,
@@ -1006,6 +1070,25 @@ class PivotRuntimeService:
         include_headers = bool(first_present(request_payload, "includeHeaders", "include_headers", default=True))
 
         rows = [row for row in (response.data or []) if isinstance(row, dict)]
+        is_tabular_without_subtotals = (
+            str(getattr(state, "layout_mode", "") or "").strip().lower() == "tabular"
+            and not bool(getattr(state, "show_subtotals", False))
+        )
+        if is_tabular_without_subtotals:
+            # The normal tabular query is flat and contains no subtotal rows.
+            # Retain this export-side guard for responses produced by custom
+            # adapters or stale hierarchy caches: the toggle must be honored
+            # at the final output boundary as well.
+            rows = [
+                row for row in rows
+                if not bool(row.get("_isTabularSubtotal") or row.get("_isSubtotalFooter"))
+            ]
+        # The hierarchy column is a presentation-only shorthand.  In tabular
+        # mode the grid instead renders one physical column per row field and
+        # repeats the ancestor labels on every leaf row.  Prepare the same row
+        # shape before resolving fields so CSV, HTML/copy, and XLSX all export
+        # what the user sees rather than a single indented hierarchy column.
+        rows = PivotRuntimeService._project_export_rows_for_layout(rows, state)
         field_order = PivotRuntimeService._resolve_export_field_order(
             rows,
             response.columns or [],
@@ -1021,11 +1104,16 @@ class PivotRuntimeService:
             else {}
         )
 
-        value_keys = {key for key in field_order if key != "_id"}
-
         def _cell(key: str, value: Any) -> Any:
-            if value is None or (isinstance(value, float) and math.isnan(value)):
-                return 0 if key in value_keys else ""
+            if value is None or (
+                isinstance(value, (float, Decimal))
+                and not math.isfinite(float(value))
+            ):
+                return ""
+            if isinstance(value, str) and value.startswith(("=", "+", "-", "@")):
+                # A leading apostrophe is Excel's established literal-text
+                # marker and prevents CSV values from executing as formulas.
+                return "'" + value
             return value
 
         fd, content_path = tempfile.mkstemp(prefix="pivot_export_", suffix=f".{ext}")
@@ -1054,9 +1142,15 @@ class PivotRuntimeService:
                             include_headers=include_headers,
                         )
                     else:
+                        # Excel uses the UTF-8 BOM to detect non-ASCII CSV/TSV
+                        # text reliably instead of falling back to a local code page.
+                        buf.write("\ufeff")
                         writer = csv.writer(buf, delimiter=delimiter)
                         if include_headers and field_order:
-                            writer.writerow([PivotRuntimeService._export_header_for_key(key, header_map, state, style_profile) for key in field_order])
+                            writer.writerow([
+                                _cell(key, PivotRuntimeService._export_header_for_key(key, header_map, state, style_profile))
+                                for key in field_order
+                            ])
                         for row in rows:
                             writer.writerow([_cell(key, row.get(key)) for key in field_order])
             content_length = os.path.getsize(content_path)
@@ -1074,7 +1168,11 @@ class PivotRuntimeService:
         return {
             "contentPath": content_path,
             "contentLength": content_length,
-            "contentType": f"{content_type};charset=utf-8",
+            "contentType": (
+                f"{content_type};charset=utf-8"
+                if export_fmt in {"csv", "tsv", "html"}
+                else content_type
+            ),
             "format": export_fmt,
             "filename": filename,
             "rows": len(rows),
@@ -1093,6 +1191,8 @@ class PivotRuntimeService:
         style_profile: Dict[str, Any],
         include_headers: bool,
     ) -> None:
+        spreadsheet_ns = "http://schemas.openxmlformats.org/spreadsheetml/2006/main"
+
         def _col_name(index: int) -> str:
             name = ""
             current = index + 1
@@ -1107,35 +1207,294 @@ class PivotRuntimeService:
         def _is_number(value: Any) -> bool:
             return isinstance(value, (int, float, Decimal)) and not isinstance(value, bool) and math.isfinite(float(value))
 
-        def _cell_xml(row_index: int, col_index: int, value: Any) -> str:
+        def _css_number(value: Any, default: float) -> float:
+            match = re.search(r"-?\d+(?:\.\d+)?", str(value or ""))
+            return float(match.group(0)) if match else default
+
+        def _argb(value: Any, default: str = "FF000000") -> str:
+            text = str(value or "").strip()
+            hex_match = re.fullmatch(r"#([0-9a-fA-F]{3}|[0-9a-fA-F]{6}|[0-9a-fA-F]{8})", text)
+            if hex_match:
+                digits = hex_match.group(1)
+                if len(digits) == 3:
+                    digits = "".join(char * 2 for char in digits)
+                if len(digits) == 6:
+                    digits = "FF" + digits
+                return digits.upper()
+            rgb_match = re.match(
+                r"rgba?\(\s*(\d+)\s*,\s*(\d+)\s*,\s*(\d+)(?:\s*,\s*([\d.]+))?\s*\)",
+                text,
+                re.IGNORECASE,
+            )
+            if rgb_match:
+                red, green, blue = (max(0, min(255, int(rgb_match.group(i)))) for i in range(1, 4))
+                alpha = 255
+                if rgb_match.group(4) is not None:
+                    alpha = max(0, min(255, round(float(rgb_match.group(4)) * 255)))
+                return f"{alpha:02X}{red:02X}{green:02X}{blue:02X}"
+            return default
+
+        fonts: List[str] = [
+            '<font><sz val="11"/><color theme="1"/><name val="Calibri"/><family val="2"/></font>'
+        ]
+        fills: List[str] = [
+            '<fill><patternFill patternType="none"/></fill>',
+            '<fill><patternFill patternType="gray125"/></fill>',
+        ]
+        borders: List[str] = [
+            '<border><left/><right/><top/><bottom/><diagonal/></border>'
+        ]
+        num_fmts: List[Tuple[int, str]] = []
+        cell_xfs: List[str] = [
+            '<xf numFmtId="0" fontId="0" fillId="0" borderId="0" xfId="0"/>'
+        ]
+        font_ids: Dict[Tuple[Any, ...], int] = {}
+        fill_ids: Dict[str, int] = {}
+        border_ids: Dict[Tuple[Any, ...], int] = {}
+        num_fmt_ids: Dict[str, int] = {}
+        xf_ids: Dict[Tuple[Any, ...], int] = {}
+
+        def _font_id(style: Dict[str, Any]) -> int:
+            family = str(style.get("fontFamily") or "Calibri").split(",", 1)[0].strip(" '\"") or "Calibri"
+            size = max(1.0, _css_number(style.get("fontSize"), 11.0) * 0.75)
+            weight = str(style.get("fontWeight") or "").lower()
+            bold = weight in {"bold", "bolder"} or (_css_number(weight, 0) >= 600)
+            italic = str(style.get("fontStyle") or "").lower() == "italic"
+            underline = "underline" in str(style.get("textDecoration") or "").lower()
+            color = _argb(style.get("color"), "FF000000")
+            key = (family, round(size, 2), bold, italic, underline, color)
+            if key in font_ids:
+                return font_ids[key]
+            xml = ["<font>"]
+            if bold:
+                xml.append("<b/>")
+            if italic:
+                xml.append("<i/>")
+            if underline:
+                xml.append("<u/>")
+            xml.extend(
+                [
+                    f'<sz val="{size:g}"/>',
+                    f'<color rgb="{color}"/>',
+                    f'<name val="{_xml_text(family)}"/>',
+                    '<family val="2"/>',
+                    "</font>",
+                ]
+            )
+            font_ids[key] = len(fonts)
+            fonts.append("".join(xml))
+            return font_ids[key]
+
+        def _fill_id(style: Dict[str, Any]) -> int:
+            color = _argb(style.get("background") or style.get("backgroundColor"), "FFFFFFFF")
+            if color in fill_ids:
+                return fill_ids[color]
+            fill_ids[color] = len(fills)
+            fills.append(
+                '<fill><patternFill patternType="solid">'
+                f'<fgColor rgb="{color}"/><bgColor indexed="64"/>'
+                '</patternFill></fill>'
+            )
+            return fill_ids[color]
+
+        def _border_id(style: Dict[str, Any]) -> int:
+            generic = style.get("border") or ""
+            sides = []
+            for side in ("left", "right", "top", "bottom"):
+                raw = style.get(f"border{side.title()}") or generic
+                text = str(raw or "")
+                width = max(0.0, _css_number(text, 0.0))
+                if "double" in text:
+                    line_style = "double"
+                elif "dotted" in text:
+                    line_style = "dotted"
+                elif "dashed" in text:
+                    line_style = "dashed"
+                elif width >= 3:
+                    line_style = "thick"
+                elif width >= 2:
+                    line_style = "medium"
+                elif width > 0 or text:
+                    line_style = "thin"
+                else:
+                    line_style = None
+                color_match = re.search(r"#[0-9a-fA-F]{3,8}|rgba?\([^)]*\)", text)
+                color = _argb(color_match.group(0) if color_match else style.get("borderColor"), "FFD1D5DB")
+                sides.append((line_style, color))
+            key = tuple(sides)
+            if key in border_ids:
+                return border_ids[key]
+            xml = ["<border>"]
+            for side, (line_style, color) in zip(("left", "right", "top", "bottom"), sides):
+                if line_style:
+                    xml.append(f'<{side} style="{line_style}"><color rgb="{color}"/></{side}>')
+                else:
+                    xml.append(f"<{side}/>")
+            xml.extend(["<diagonal/>", "</border>"])
+            border_ids[key] = len(borders)
+            borders.append("".join(xml))
+            return border_ids[key]
+
+        def _number_format_code(key: str) -> Optional[str]:
+            decimal_overrides = style_profile.get("columnDecimalOverrides") if isinstance(style_profile, dict) else None
+            format_overrides = style_profile.get("columnFormatOverrides") if isinstance(style_profile, dict) else None
+            decimal_places = style_profile.get("decimalPlaces") if isinstance(style_profile, dict) else None
+            value_format = style_profile.get("defaultValueFormat") if isinstance(style_profile, dict) else None
+            config = PivotRuntimeService._matching_value_config_for_export(key, state, style_profile)
+            for alias in PivotRuntimeService._export_key_aliases(key):
+                if isinstance(decimal_overrides, dict) and alias in decimal_overrides:
+                    decimal_places = decimal_overrides[alias]
+                if isinstance(format_overrides, dict) and alias in format_overrides:
+                    value_format = format_overrides[alias]
+            if not value_format and isinstance(config, dict):
+                value_format = config.get("format")
+            fmt_text = str(value_format or "").strip()
+            if decimal_places is None and not fmt_text:
+                return None
+            try:
+                decimals = max(0, int(decimal_places)) if decimal_places is not None else None
+            except (TypeError, ValueError):
+                decimals = None
+            if fmt_text.startswith("fixed:") and decimals is None:
+                try:
+                    decimals = max(0, int(fmt_text.split(":", 1)[1]))
+                except (IndexError, TypeError, ValueError):
+                    decimals = 2
+            if decimals is None:
+                decimals = 2 if fmt_text in {"currency", "accounting", "percent", "scientific"} or fmt_text.startswith(("currency:", "accounting:")) else 0
+            decimal_suffix = "." + ("0" * decimals) if decimals else ""
+            if fmt_text == "percent":
+                return f"0{decimal_suffix}%"
+            if fmt_text == "scientific":
+                return f"0{decimal_suffix}E+00"
+            if fmt_text == "currency" or fmt_text.startswith("currency:"):
+                symbol = fmt_text.split(":", 1)[1] if ":" in fmt_text else "$"
+                prefix = f'"{symbol.replace(chr(34), chr(34) * 2)}"'
+                return f"{prefix}#,##0{decimal_suffix};[Red]-{prefix}#,##0{decimal_suffix}"
+            if fmt_text == "accounting" or fmt_text.startswith("accounting:"):
+                symbol = fmt_text.split(":", 1)[1] if ":" in fmt_text else "$"
+                prefix = f'"{symbol.replace(chr(34), chr(34) * 2)}"'
+                return f"{prefix}#,##0{decimal_suffix};[Red]({prefix}#,##0{decimal_suffix})"
+            return f"#,##0{decimal_suffix}"
+
+        def _num_fmt_id(code: Optional[str]) -> int:
+            if not code:
+                return 0
+            if code in num_fmt_ids:
+                return num_fmt_ids[code]
+            fmt_id = 164 + len(num_fmts)
+            num_fmt_ids[code] = fmt_id
+            num_fmts.append((fmt_id, code))
+            return fmt_id
+
+        def _xf_id(style: Dict[str, Any], number_format: Optional[str] = None) -> int:
+            font_id = _font_id(style)
+            fill_id = _fill_id(style)
+            border_id = _border_id(style)
+            num_fmt_id = _num_fmt_id(number_format)
+            horizontal = str(style.get("textAlign") or "").lower()
+            if horizontal not in {"left", "center", "right", "fill", "justify"}:
+                horizontal = "general"
+            vertical = str(style.get("verticalAlign") or "").lower()
+            if vertical not in {"top", "center", "bottom", "justify"}:
+                vertical = "center"
+            wrap = str(style.get("whiteSpace") or "").lower() not in {"nowrap", "pre"}
+            key = (font_id, fill_id, border_id, num_fmt_id, horizontal, vertical, wrap)
+            if key in xf_ids:
+                return xf_ids[key]
+            alignment = (
+                f'<alignment horizontal="{horizontal}" vertical="{vertical}"'
+                + (' wrapText="1"' if wrap else "")
+                + "/>"
+            )
+            xml = (
+                f'<xf numFmtId="{num_fmt_id}" fontId="{font_id}" fillId="{fill_id}" borderId="{border_id}" xfId="0" '
+                'applyFont="1" applyFill="1" applyBorder="1" applyAlignment="1"'
+                + (' applyNumberFormat="1"' if num_fmt_id else "")
+                + f">{alignment}</xf>"
+            )
+            xf_ids[key] = len(cell_xfs)
+            cell_xfs.append(xml)
+            return xf_ids[key]
+
+        def _cell_xml(row_index: int, col_index: int, value: Any, style_id: int) -> str:
             ref = f"{_col_name(col_index)}{row_index}"
-            if value is None or (isinstance(value, float) and math.isnan(value)):
-                value = ""
+            style_attr = f' s="{style_id}"' if style_id else ""
+            if value is None or (
+                isinstance(value, (float, Decimal))
+                and not math.isfinite(float(value))
+            ):
+                return f'<c r="{ref}"{style_attr}/>'
             if _is_number(value):
-                return f'<c r="{ref}"><v>{html.escape(str(value), quote=True)}</v></c>'
-            return f'<c r="{ref}" t="inlineStr"><is><t>{_xml_text(value)}</t></is></c>'
+                return f'<c r="{ref}"{style_attr}><v>{html.escape(str(value), quote=True)}</v></c>'
+            if isinstance(value, bool):
+                return f'<c r="{ref}"{style_attr} t="b"><v>{1 if value else 0}</v></c>'
+            text_value = str(value)
+            if text_value.startswith(("=", "+", "-", "@")):
+                text_value = "'" + text_value
+            return f'<c r="{ref}"{style_attr} t="inlineStr"><is><t>{_xml_text(text_value)}</t></is></c>'
 
         sheet_rows: List[str] = []
         excel_row = 1
         if include_headers and field_order:
             headers = [PivotRuntimeService._export_header_for_key(key, header_map, state, style_profile) for key in field_order]
-            cells = "".join(_cell_xml(excel_row, col_index, header) for col_index, header in enumerate(headers))
-            sheet_rows.append(f'<row r="{excel_row}">{cells}</row>')
+            cells = "".join(
+                _cell_xml(
+                    excel_row,
+                    col_index,
+                    header,
+                    _xf_id(PivotRuntimeService._export_header_style(key, header, style_profile, state)),
+                )
+                for col_index, (key, header) in enumerate(zip(field_order, headers))
+            )
+            sheet_rows.append(f'<row r="{excel_row}" customHeight="1" ht="24">{cells}</row>')
             excel_row += 1
         for row in rows:
-            values = []
-            for key in field_order:
-                values.append(PivotRuntimeService._formatted_export_value(key, row.get(key), row, state, style_profile))
-            cells = "".join(_cell_xml(excel_row, col_index, value) for col_index, value in enumerate(values))
-            sheet_rows.append(f'<row r="{excel_row}">{cells}</row>')
+            cells = []
+            for col_index, key in enumerate(field_order):
+                raw_value = row.get(key)
+                header_label = PivotRuntimeService._export_header_for_key(key, header_map, state, style_profile)
+                style = PivotRuntimeService._export_cell_style(key, raw_value, row, header_label, style_profile)
+                number_format = _number_format_code(key) if _is_number(raw_value) else None
+                cells.append(_cell_xml(excel_row, col_index, raw_value, _xf_id(style, number_format)))
+            row_height = max(1.0, _css_number(style_profile.get("rowHeight"), 20.0) * 0.75)
+            sheet_rows.append(f'<row r="{excel_row}" customHeight="1" ht="{row_height:g}">{"".join(cells)}</row>')
             excel_row += 1
+
+        column_xml = []
+        for index, key in enumerate(field_order, start=1):
+            pixel_width = PivotRuntimeService._export_column_width(key, style_profile)
+            if pixel_width:
+                excel_width = max(1.0, min(255.0, (pixel_width - 5) / 7))
+                column_xml.append(f'<col min="{index}" max="{index}" width="{excel_width:.2f}" customWidth="1"/>')
 
         worksheet_xml = (
             '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>'
             '<worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" '
             'xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships">'
+            f'{"<cols>" + "".join(column_xml) + "</cols>" if column_xml else ""}'
             f'<sheetData>{"".join(sheet_rows)}</sheetData>'
             '</worksheet>'
+        )
+        num_fmts_xml = (
+            f'<numFmts count="{len(num_fmts)}">'
+            + "".join(f'<numFmt numFmtId="{fmt_id}" formatCode="{_xml_text(code)}"/>' for fmt_id, code in num_fmts)
+            + "</numFmts>"
+            if num_fmts
+            else ""
+        )
+        styles_xml = (
+            '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>'
+            f'<styleSheet xmlns="{spreadsheet_ns}">'
+            f'{num_fmts_xml}'
+            f'<fonts count="{len(fonts)}">{"".join(fonts)}</fonts>'
+            f'<fills count="{len(fills)}">{"".join(fills)}</fills>'
+            f'<borders count="{len(borders)}">{"".join(borders)}</borders>'
+            '<cellStyleXfs count="1"><xf numFmtId="0" fontId="0" fillId="0" borderId="0"/></cellStyleXfs>'
+            f'<cellXfs count="{len(cell_xfs)}">{"".join(cell_xfs)}</cellXfs>'
+            '<cellStyles count="1"><cellStyle name="Normal" xfId="0" builtinId="0"/></cellStyles>'
+            '<dxfs count="0"/>'
+            '</styleSheet>'
         )
         workbook_xml = (
             '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>'
@@ -1151,6 +1510,7 @@ class PivotRuntimeService:
             '<Default Extension="xml" ContentType="application/xml"/>'
             '<Override PartName="/xl/workbook.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet.main+xml"/>'
             '<Override PartName="/xl/worksheets/sheet1.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml"/>'
+            '<Override PartName="/xl/styles.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.styles+xml"/>'
             '</Types>'
         )
         root_rels_xml = (
@@ -1163,6 +1523,7 @@ class PivotRuntimeService:
             '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>'
             '<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">'
             '<Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet" Target="worksheets/sheet1.xml"/>'
+            '<Relationship Id="rId2" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/styles" Target="styles.xml"/>'
             '</Relationships>'
         )
 
@@ -1172,6 +1533,7 @@ class PivotRuntimeService:
             workbook.writestr("xl/workbook.xml", workbook_xml)
             workbook.writestr("xl/_rels/workbook.xml.rels", workbook_rels_xml)
             workbook.writestr("xl/worksheets/sheet1.xml", worksheet_xml)
+            workbook.writestr("xl/styles.xml", styles_xml)
 
     @staticmethod
     def _export_key_aliases(key: str) -> List[str]:
@@ -1403,12 +1765,15 @@ class PivotRuntimeService:
 
         separator_map = {
             "comma": ",",
-            "space": "\u00a0",
-            "thin_space": "\u202f",
+            # HTML/copy exports must not contain non-breaking or narrow
+            # non-breaking spaces: both are surprising when pasted into text
+            # tools and can break equality checks or numeric parsing.
+            "space": " ",
+            "thin_space": " ",
             "apostrophe": "'",
             "none": "",
         }
-        separator = separator_map.get(str(group_separator or "thin_space"), "\u202f")
+        separator = separator_map.get(str(group_separator or "thin_space"), " ")
 
         def grouped(number: float, places: int) -> str:
             formatted = f"{number:,.{max(0, places)}f}"
@@ -1733,11 +2098,26 @@ class PivotRuntimeService:
             text = str(column_id)
             return "_id" if text == "hierarchy" else text
 
+        is_tabular_layout = str(getattr(state, "layout_mode", "") or "").strip().lower() == "tabular"
+        tabular_row_fields = [
+            str(field)
+            for field in (getattr(state, "row_fields", None) or [])
+            if field is not None and str(field)
+        ] if is_tabular_layout and state is not None else []
+
         if isinstance(col_ids, list) and col_ids:
             ordered: List[str] = []
             seen = set()
             for column_id in col_ids:
                 field = _field_from_column_id(column_id)
+                # Older server-side clients can still send the hierarchy
+                # placeholder.  Expand it into tabular's real row columns.
+                if is_tabular_layout and field == "_id":
+                    for row_field in tabular_row_fields:
+                        if row_field not in seen:
+                            ordered.append(row_field)
+                            seen.add(row_field)
+                    continue
                 if field and field not in seen:
                     ordered.append(field)
                     seen.add(field)
@@ -1768,15 +2148,81 @@ class PivotRuntimeService:
             if field and field not in skip and not str(field).startswith("_") and field not in column_fields:
                 column_fields.append(field)
         if column_fields:
+            if is_tabular_layout:
+                return tabular_row_fields + [
+                    field for field in column_fields if field not in tabular_row_fields
+                ]
             return (["_id"] if any("_id" in row for row in rows) and "_id" not in column_fields else []) + column_fields
 
         if not rows:
             return []
         first = rows[0]
+        if is_tabular_layout:
+            return tabular_row_fields + [
+                key for key in first
+                if key not in skip and key != "_id" and not key.startswith("_") and key not in tabular_row_fields
+            ]
         return (
             [key for key in first if key == "_id"]
             + [key for key in first if key not in skip and key != "_id" and not key.startswith("_")]
         )
+
+    @staticmethod
+    def _project_export_rows_for_layout(
+        rows: List[Dict[str, Any]],
+        state: PivotViewState,
+    ) -> List[Dict[str, Any]]:
+        """Return export rows shaped like the active layout's visible grid."""
+        if str(getattr(state, "layout_mode", "") or "").strip().lower() != "tabular":
+            return rows
+
+        row_fields = [str(field) for field in (state.row_fields or []) if field is not None and str(field)]
+        if not row_fields:
+            return rows
+
+        def _is_blank(value: Any) -> bool:
+            return value is None or value == "" or (
+                isinstance(value, (float, Decimal)) and not math.isfinite(float(value))
+            )
+
+        projected_rows: List[Dict[str, Any]] = []
+        for source_row in rows:
+            row = dict(source_row)
+            is_total = bool(
+                row.get("_isTotal")
+                or row.get("__isGrandTotal__")
+                or row.get("_path") == "__grand_total__"
+                or row.get("_id") == "Grand Total"
+            )
+            if is_total:
+                # Tabular grid shows the grand-total label only in its first
+                # dimension column, with the remaining dimensions empty.
+                if _is_blank(row.get(row_fields[0])):
+                    row[row_fields[0]] = row.get("_id") or "Grand Total"
+                for field in row_fields[1:]:
+                    row[field] = None
+                projected_rows.append(row)
+                continue
+
+            path_parts = (
+                str(row.get("_path")).split("|||")
+                if isinstance(row.get("_path"), str) and row.get("_path")
+                else []
+            )
+            path_fields = row.get("_pathFields") if isinstance(row.get("_pathFields"), list) else []
+            for index, field in enumerate(row_fields):
+                if not _is_blank(row.get(field)):
+                    continue
+                path_index = path_fields.index(field) if field in path_fields else index
+                if 0 <= path_index < len(path_parts):
+                    row[field] = path_parts[path_index]
+                elif index == 0 and not _is_blank(row.get("_id")):
+                    # Some lightweight/custom adapters expose only the
+                    # hierarchy display value.  It is the first tabular
+                    # dimension when no full row path is available.
+                    row[field] = row.get("_id")
+            projected_rows.append(row)
+        return projected_rows
 
     @staticmethod
     def _build_export_header_map(

@@ -15,14 +15,19 @@ they run in milliseconds without the 2M-row simulation dataset.
 import sys
 import os
 
-sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..', 'pivot_engine')))
+sys.path.insert(
+    0,
+    os.path.abspath(
+        os.path.join(os.path.dirname(__file__), "..", "dash_tanstack_pivot", "pivot_engine")
+    ),
+)
 
 import asyncio
 import pytest
 import pyarrow as pa
 
-from pivot_engine.pivot_engine.scalable_pivot_controller import ScalablePivotController
-from pivot_engine.pivot_engine.types.pivot_spec import PivotSpec, Measure
+from pivot_engine.scalable_pivot_controller import ScalablePivotController
+from pivot_engine.types.pivot_spec import PivotSpec, Measure
 
 
 # ---------------------------------------------------------------------------

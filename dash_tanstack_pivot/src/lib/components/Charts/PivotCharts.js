@@ -961,24 +961,33 @@ const copySvgToClipboard = async (svgNode, presentation) => {
     } catch (_) { return false; }
 };
 
+const escapeSpreadsheetCsvValue = (value) => {
+    const text = String(value ?? '');
+    const safeText = typeof value === 'string' && /^[=+\-@]/.test(text)
+        ? `'${text}`
+        : text;
+    return safeText.includes(',') || safeText.includes('"') || safeText.includes('\n')
+        ? `"${safeText.replace(/"/g, '""')}"`
+        : safeText;
+};
+
 const exportChartCsv = (model, fileStem, rawPresentation) => {
     if (!model) return;
     const categories = Array.isArray(model.categories) ? model.categories : [];
     const series = Array.isArray(model.series) ? model.series : [];
     if (categories.length === 0 || series.length === 0) return;
-    const escape = (v) => { const s = String(v ?? ''); return s.includes(',') || s.includes('"') || s.includes('\n') ? `"${s.replace(/"/g, '""')}"` : s; };
-    const header = ['Category', ...series.map((s) => s.name)].map(escape).join(',');
-    const rows = categories.map((cat, i) => [cat, ...series.map((s) => s.values[i] ?? '')].map(escape).join(','));
+    const header = ['Category', ...series.map((s) => s.name)].map(escapeSpreadsheetCsvValue).join(',');
+    const rows = categories.map((cat, i) => [cat, ...series.map((s) => s.values[i] ?? '')].map(escapeSpreadsheetCsvValue).join(','));
     const presentation = normalizeChartPresentation(rawPresentation);
     const legendLabels = presentation.legendItems.length > 0
         ? presentation.legendItems.map(item => item.label)
         : series.map(item => item.name).filter(Boolean);
     const metadata = [];
-    if (presentation.title) metadata.push(['Title', presentation.title].map(escape).join(','));
-    if (legendLabels.length > 0) metadata.push(['Legend', ...legendLabels].map(escape).join(','));
+    if (presentation.title) metadata.push(['Title', presentation.title].map(escapeSpreadsheetCsvValue).join(','));
+    if (legendLabels.length > 0) metadata.push(['Legend', ...legendLabels].map(escapeSpreadsheetCsvValue).join(','));
     if (metadata.length > 0) metadata.push('');
     const csv = [...metadata, header, ...rows].join('\n');
-    downloadBlob(new Blob([csv], { type: 'text/csv;charset=utf-8' }), `${fileStem}.csv`);
+    downloadBlob(new Blob([`\ufeff${csv}`], { type: 'text/csv;charset=utf-8' }), `${fileStem}.csv`);
 };
 
 const ECHARTS_CHART_TYPES = new Set(['bar3d', 'line3d', 'scatter3d', 'range', 'boxplot', 'nightingale']);
