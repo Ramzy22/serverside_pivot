@@ -19,6 +19,7 @@ Full deterministic release gate (install + import + multi-instance regression):
 
 import pathlib
 import sys
+import json
 try:
     import tomllib
 except ImportError:
@@ -103,6 +104,32 @@ def test_pyproject_toml_redis_extra():
         "Consumers need 'pip install serverside-pivot[redis]' to be valid."
     )
     assert optional["redis"], "optional-dependencies.redis list is empty."
+
+
+def test_component_asset_metadata_uses_the_distribution_version():
+    """A release must not serve a previous version's cached Dash bundle.
+
+    Dash fingerprints component assets with ``dash_tanstack_pivot.__version__``.
+    That version comes from the installed package-info.json, rather than from
+    pyproject.toml.  Keep every version source aligned so a new Python wheel
+    cannot cause browsers to reuse an old JavaScript bundle.
+    """
+    pyproject_version = tomllib.loads(
+        (PKG_DIR / "pyproject.toml").read_text(encoding="utf-8")
+    )["project"]["version"]
+    metadata_files = [
+        PKG_DIR / "package.json",
+        PKG_DIR / "package-info.json",
+        INNER_PKG_DIR / "package.json",
+        INNER_PKG_DIR / "package-info.json",
+    ]
+
+    for metadata_file in metadata_files:
+        data = json.loads(metadata_file.read_text(encoding="utf-8"))
+        assert data["version"] == pyproject_version, (
+            f"{metadata_file.relative_to(REPO_ROOT)} declares {data['version']!r}, "
+            f"but the distribution declares {pyproject_version!r}."
+        )
 
 
 def test_package_json_no_broken_prepublish():

@@ -348,6 +348,63 @@ def test_runtime_service_all_rows_export_is_independent_of_viewport_and_collapse
             os.remove(content_path)
 
 
+def test_runtime_service_two_level_tabular_all_rows_export_is_not_limited_to_viewport():
+    """A two-field tabular export must not fall back to its loaded row block."""
+    adapter = create_tanstack_adapter(backend_uri=":memory:")
+    total_rows = 251
+    adapter.controller.load_data_from_arrow(
+        "two_level_full_export_data",
+        pa.Table.from_pydict(
+            {
+                "portfolio": [f"Portfolio {index % 5}" for index in range(total_rows)],
+                "instrument": [f"Instrument {index:03d}" for index in range(total_rows)],
+                "sales": [float(index) for index in range(total_rows)],
+            }
+        ),
+    )
+    service = PivotRuntimeService(adapter_getter=lambda: adapter, session_gate=SessionRequestGate())
+
+    response = service.process(
+        PivotViewState(
+            row_fields=["portfolio", "instrument"],
+            val_configs=[{"field": "sales", "agg": "sum"}],
+            expanded={},
+            layout_mode="tabular",
+            show_subtotals=False,
+            export_request={
+                "format": "csv",
+                "rowStart": 0,
+                # Mirrors the virtual block size that previously caused a
+                # two-level export to stop early.
+                "rowEnd": 123,
+                "allRows": True,
+            },
+        ),
+        PivotRequestContext(
+            table="two_level_full_export_data",
+            trigger_prop="pivot.runtimeRequest",
+            session_id="two-level-all-rows",
+            client_instance="two-level-client",
+            state_epoch=1,
+            window_seq=1,
+        ),
+    )
+
+    assert response.status == "export"
+    content_path = response.export_payload["contentPath"]
+    try:
+        with open(content_path, encoding="utf-8-sig", newline="") as export_file:
+            exported_rows = list(csv.reader(export_file))
+        assert exported_rows[0][:2] == ["Portfolio", "Instrument"]
+        # The backend may append its grand-total line; all 251 leaf records
+        # must still be present even though the requested window ends at 123.
+        assert sum(row[1].startswith("Instrument ") for row in exported_rows[1:]) == total_rows
+        assert any(row[:2] == ["Portfolio 0", "Instrument 250"] for row in exported_rows[1:])
+    finally:
+        if os.path.exists(content_path):
+            os.remove(content_path)
+
+
 def test_runtime_service_tabular_export_uses_repeated_dimension_columns():
     response = TanStackResponse(
         data=[
