@@ -841,16 +841,6 @@ def test_chart_panel_dimensions_use_shared_bounds_and_chrome():
             "DashTanstackPivot.react.js",
         )
     ).read_text(encoding="utf-8")
-    renderer_source = Path(
-        os.path.join(
-            os.getcwd(),
-            "dash_tanstack_pivot",
-            "src",
-            "lib",
-            "components",
-            "PivotChartRenderer.js",
-        )
-    ).read_text(encoding="utf-8")
     normalization_source = Path(
         os.path.join(
             os.getcwd(),
@@ -874,11 +864,16 @@ def test_chart_panel_dimensions_use_shared_bounds_and_chrome():
     assert "Math.min(\n                maxChartCanvasPaneWidth," in component_source
     assert "nextRect.height - CHART_PANEL_VERTICAL_CHROME_HEIGHT" in component_source
     assert "Math.floor((pane.chartHeight || DEFAULT_CHART_GRAPH_HEIGHT) + CHART_PANEL_VERTICAL_CHROME_HEIGHT)" in component_source
-    assert "Math.floor((pane.chartHeight || DEFAULT_CHART_GRAPH_HEIGHT) + CHART_PANEL_VERTICAL_CHROME_HEIGHT)" in renderer_source
     assert "Math.max(width || 430, 430)" not in chart_source
     assert "+ 188" not in component_source
     assert "- 188" not in component_source
-    assert "+ 188" not in renderer_source
+
+
+def test_frontend_has_no_unintegrated_refactor_scaffolding():
+    source_root = Path(os.getcwd()) / "dash_tanstack_pivot" / "src" / "lib"
+
+    assert not (source_root / "hooks" / "usePivotData.js").exists()
+    assert not (source_root / "components" / "PivotChartRenderer.js").exists()
 
 
 def test_resized_chart_panel_samples_dense_axis_labels():
