@@ -3170,7 +3170,10 @@ def test_cell_sparkline_source_supports_pivot_summary_and_ag_grid_style_series()
     assert "data-pivot-sparkline-detail-table=\"true\"" in component_source
     assert "normalizeSparklineValConfigsForView" in component_source
     assert "getFixedSparklineConfigMap" in component_source
-    assert "removesFixedSparkline" in component_source
+    assert "from '../utils/sparklines'" in component_source
+    assert "export const normalizeSparklineValConfigsForView" in sparkline_utils_source
+    assert "export const getFixedSparklineConfigMap" in sparkline_utils_source
+    assert "removesFixedSparkline" in sparkline_utils_source
     assert "fixedSparklineValueKeys" in component_source
     assert "setValConfigs(normalizeSparklineValConfigsForView(restored.valConfigs, normalizedInitialValConfigs))" in component_source
     assert "valConfigs: normalizeSparklineValConfigsForView(valConfigs, normalizedInitialValConfigs)" in component_source

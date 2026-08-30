@@ -381,3 +381,58 @@ export const buildSparklineHeader = (config, fallbackField) => {
     const label = config && config.label ? config.label : fallbackField;
     return `${formatDisplayLabel(label || 'Value')} Trend`;
 };
+
+export const getSparklineValueConfigIdentity = (config) => {
+    if (!config || typeof config !== 'object') return '';
+    const field = config.field === undefined || config.field === null ? '' : String(config.field);
+    const agg = config.agg === undefined || config.agg === null ? '' : String(config.agg);
+    return `${field}::${agg}`;
+};
+
+export const getFixedSparklineConfigMap = (fixedConfigs) => {
+    const fixedMap = new Map();
+    if (!Array.isArray(fixedConfigs)) return fixedMap;
+    fixedConfigs.forEach((config) => {
+        if (!config || typeof config !== 'object' || !config.sparkline || config.sparkline === false) return;
+        const identity = getSparklineValueConfigIdentity(config);
+        if (!identity) return;
+        const sparkline = config.sparkline === true
+            ? {}
+            : (typeof config.sparkline === 'object' ? config.sparkline : {});
+        fixedMap.set(identity, { ...sparkline, placement: 'before' });
+    });
+    return fixedMap;
+};
+
+export const normalizeSparklineValConfigsForView = (configs, fixedConfigs = []) => {
+    const fixedMap = getFixedSparklineConfigMap(fixedConfigs);
+    return Array.isArray(configs)
+        ? configs.map((config) => {
+            if (!config || typeof config !== 'object') return config;
+            const fixedSparkline = fixedMap.get(getSparklineValueConfigIdentity(config));
+            const removesFixedSparkline = Boolean(
+                fixedSparkline
+                && config.sparkline
+                && typeof config.sparkline === 'object'
+                && config.sparkline.enabled === false
+            );
+            const sourceSparkline = (
+                removesFixedSparkline
+                || config.sparkline === false
+                || config.sparkline === null
+                || config.sparkline === undefined
+            ) ? fixedSparkline : config.sparkline;
+            if (!sourceSparkline) return config;
+            const sparkline = sourceSparkline === true
+                ? {}
+                : (typeof sourceSparkline === 'object' ? sourceSparkline : {});
+            return {
+                ...config,
+                sparkline: {
+                    ...sparkline,
+                    placement: 'before',
+                },
+            };
+        })
+        : [];
+};

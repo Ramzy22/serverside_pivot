@@ -228,7 +228,12 @@ import { PivotThemeProvider } from '../contexts/PivotThemeContext';
 import { PivotConfigProvider } from '../contexts/PivotConfigContext';
 import { PivotValueDisplayProvider } from '../contexts/PivotValueDisplayContext';
 import { normalizeSortingState, updateSortingForColumn } from '../utils/sorting';
-import { buildSparklineGeometry } from '../utils/sparklines';
+import {
+    buildSparklineGeometry,
+    getFixedSparklineConfigMap,
+    getSparklineValueConfigIdentity,
+    normalizeSparklineValConfigsForView,
+} from '../utils/sparklines';
 
 const EDITING_TEMPORARILY_DISABLED = true;
 const LazyPivotChartModal = React.lazy(() => import('./Charts/PivotCharts').then(module => ({ default: module.PivotChartModal })));
@@ -272,61 +277,6 @@ const formatLocaleTextTemplate = (template, values = {}) => {
     return text.replace(/\{([A-Za-z0-9_]+)\}/g, (match, key) => (
         Object.prototype.hasOwnProperty.call(values, key) ? String(values[key]) : match
     ));
-};
-
-const getSparklineValueConfigIdentity = (config) => {
-    if (!config || typeof config !== 'object') return '';
-    const field = config.field === undefined || config.field === null ? '' : String(config.field);
-    const agg = config.agg === undefined || config.agg === null ? '' : String(config.agg);
-    return `${field}::${agg}`;
-};
-
-const getFixedSparklineConfigMap = (fixedConfigs) => {
-    const fixedMap = new Map();
-    if (!Array.isArray(fixedConfigs)) return fixedMap;
-    fixedConfigs.forEach((config) => {
-        if (!config || typeof config !== 'object' || !config.sparkline || config.sparkline === false) return;
-        const identity = getSparklineValueConfigIdentity(config);
-        if (!identity) return;
-        const sparkline = config.sparkline === true
-            ? {}
-            : (typeof config.sparkline === 'object' ? config.sparkline : {});
-        fixedMap.set(identity, { ...sparkline, placement: 'before' });
-    });
-    return fixedMap;
-};
-
-const normalizeSparklineValConfigsForView = (configs, fixedConfigs = []) => {
-    const fixedMap = getFixedSparklineConfigMap(fixedConfigs);
-    return Array.isArray(configs)
-        ? configs.map((config) => {
-            if (!config || typeof config !== 'object') return config;
-            const fixedSparkline = fixedMap.get(getSparklineValueConfigIdentity(config));
-            const removesFixedSparkline = Boolean(
-                fixedSparkline
-                && config.sparkline
-                && typeof config.sparkline === 'object'
-                && config.sparkline.enabled === false
-            );
-            const sourceSparkline = (
-                removesFixedSparkline
-                || config.sparkline === false
-                || config.sparkline === null
-                || config.sparkline === undefined
-            ) ? fixedSparkline : config.sparkline;
-            if (!sourceSparkline) return config;
-            const sparkline = sourceSparkline === true
-                ? {}
-                : (typeof sourceSparkline === 'object' ? sourceSparkline : {});
-            return {
-                ...config,
-                sparkline: {
-                    ...sparkline,
-                    placement: 'before',
-                },
-            };
-        })
-        : [];
 };
 
 const formatSparklineDetailValue = (value, maximumFractionDigits = 4) => {
