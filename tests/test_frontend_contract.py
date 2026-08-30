@@ -205,6 +205,31 @@ def test_server_side_single_collapse_preserves_expand_all_default_for_offscreen_
     assert "delete normalizedRawExpanded[toggledExpandedPath];" in component_source
 
 
+def test_expansion_shifted_cache_blocks_are_removed_before_repaint():
+    component_source = Path(
+        os.path.join(
+            os.getcwd(),
+            "dash_tanstack_pivot",
+            "src",
+            "lib",
+            "components",
+            "DashTanstackPivot.react.js",
+        )
+    ).read_text(encoding="utf-8")
+
+    deferred_invalidation = re.search(
+        r"// Deferred block invalidation after single-row expansion\.(.*?)// Debug effect removed",
+        component_source,
+        re.S,
+    )
+
+    assert deferred_invalidation is not None
+    effect_source = deferred_invalidation.group(1)
+    assert "invalidateFromBlock(0)" in effect_source
+    assert "invalidateFromBlock(firstStaleBlock)" in effect_source
+    assert "softInvalidateFromBlock" not in effect_source
+
+
 def test_dash_presentation_app_includes_single_pivot_sparkline_modes_demo():
     app_source = Path(
         os.path.join(os.getcwd(), "dash_presentation", "app.py")
@@ -268,6 +293,98 @@ def test_export_copy_uses_rich_html_clipboard_and_styled_xlsx_runtime_export():
     assert "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" in export_source
     assert "XLSX.write" in export_source
     assert "downloadHtmlTableAsExcel" in export_source
+
+
+def test_server_exports_forward_active_layout_and_use_plain_text_grouping():
+    component_source = Path(
+        os.path.join(
+            os.getcwd(),
+            "dash_tanstack_pivot",
+            "src",
+            "lib",
+            "components",
+            "DashTanstackPivot.react.js",
+        )
+    ).read_text(encoding="utf-8")
+    helpers_source = Path(
+        os.path.join(
+            os.getcwd(),
+            "dash_tanstack_pivot",
+            "src",
+            "lib",
+            "utils",
+            "helpers.js",
+        )
+    ).read_text(encoding="utf-8")
+
+    export_payload = re.search(
+        r"function buildServerExportPayload\(.*?\n    function dispatchServerExportRequest",
+        component_source,
+        re.S,
+    )
+    assert export_payload is not None
+    assert "layout_mode: layoutMode" in export_payload.group(0)
+    assert "allRows: Boolean(allRows)" in export_payload.group(0)
+    assert "function getExportGroupSeparator" in component_source
+    assert "getExportGroupSeparator(effectiveGroupSeparator)" in component_source
+    assert "plain_space: ' '" in helpers_source
+
+    server_export = re.search(
+        r"const exportPivot = \(\) => \{.*?\n    const dispatchExportPart",
+        component_source,
+        re.S,
+    )
+    assert server_export is not None
+    assert "allRows: true" in server_export.group(0)
+
+
+def test_export_ui_matches_xlsx_format_and_cancel_ignores_late_responses():
+    component_source = Path(
+        os.path.join(
+            os.getcwd(),
+            "dash_tanstack_pivot",
+            "src",
+            "lib",
+            "components",
+            "DashTanstackPivot.react.js",
+        )
+    ).read_text(encoding="utf-8")
+    app_bar_source = Path(
+        os.path.join(
+            os.getcwd(),
+            "dash_tanstack_pivot",
+            "src",
+            "lib",
+            "components",
+            "PivotAppBar.js",
+        )
+    ).read_text(encoding="utf-8")
+
+    assert "Export CSV" not in app_bar_source
+    assert app_bar_source.count("Export XLSX") >= 2
+    assert "const activeExportRequestIdRef = useRef(null);" in component_source
+    assert "const cancelledExportRequestIdsRef = useRef(new Set());" in component_source
+    assert "cancelledExportRequestIdsRef.current.has(responseRequestId)" in component_source
+    assert "cancelledExportRequestIdsRef.current.add(activeRequestId)" in component_source
+    assert "onClick={cancelActiveExportRequest}" in component_source
+
+
+def test_chart_csv_neutralizes_formula_text_and_emits_excel_utf8_bom():
+    chart_source = Path(
+        os.path.join(
+            os.getcwd(),
+            "dash_tanstack_pivot",
+            "src",
+            "lib",
+            "components",
+            "Charts",
+            "PivotCharts.js",
+        )
+    ).read_text(encoding="utf-8")
+
+    assert "const escapeSpreadsheetCsvValue" in chart_source
+    assert "/^[=+\\-@]/.test(text)" in chart_source
+    assert "new Blob([`\\ufeff${csv}`]" in chart_source
 
 
 def test_displayed_column_formula_scope_is_exposed_in_sidebar_and_component():

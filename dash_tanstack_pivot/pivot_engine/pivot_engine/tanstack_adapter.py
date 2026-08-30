@@ -2684,6 +2684,7 @@ class TanStackPivotAdapter(TransactionAdapterMixin, FormulaEngineMixin):
             flat_table = await self.controller.run_pivot_async(
                 flat_spec,
                 return_format="arrow",
+                force_refresh=bool(getattr(request, "full_export", False)),
                 profile_sink=flat_query_profile if profiling else None,
             )
             flat_query_finished_at = time.perf_counter()

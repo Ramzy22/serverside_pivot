@@ -1,7 +1,10 @@
 import asyncio
+import csv
+import io
 import os
 import zipfile
 import sys
+import xml.etree.ElementTree as ET
 
 import pyarrow as pa
 import pytest
@@ -215,6 +218,8 @@ def test_runtime_service_export_uses_runtime_viewport_execution_and_returns_file
             val_configs=[{"field": "sales", "agg": "sum"}],
             expanded=True,
             show_col_totals=True,
+            show_subtotals=True,
+            layout_mode="tabular",
             export_request={
                 "format": "csv",
                 "rowStart": 0,
@@ -240,6 +245,8 @@ def test_runtime_service_export_uses_runtime_viewport_execution_and_returns_file
     assert call["end"] == 1
     assert call["expanded"] == [["__ALL__"]]
     assert call["request"].grouping == ["region"]
+    assert call["request"].layout_mode == "tabular"
+    assert call["request"].show_subtotal_footers is True
     assert call["request"].pagination["pageSize"] == 2
     assert call["kwargs"]["needs_col_schema"] is True
     assert call["kwargs"]["requested_center_ids"] == ["hierarchy", "sales_sum"]
@@ -249,11 +256,259 @@ def test_runtime_service_export_uses_runtime_viewport_execution_and_returns_file
     content_path = response.export_payload["contentPath"]
     try:
         with open(content_path, "rb") as export_file:
-            assert export_file.read() == b"Region,Sales\r\nNorth,100\r\nSouth,80\r\n"
+            assert export_file.read() == b"\xef\xbb\xbfRegion,Sales\r\nNorth,100\r\nSouth,80\r\n"
         assert response.export_payload["contentLength"] == os.path.getsize(content_path)
     finally:
         if os.path.exists(content_path):
             os.remove(content_path)
+
+
+@pytest.mark.parametrize("layout_mode", ["hierarchy", "outline", "tabular"])
+def test_runtime_service_all_rows_export_is_independent_of_viewport_and_collapsed_state(layout_mode):
+    adapter = create_tanstack_adapter(backend_uri=":memory:")
+    total_rows = 251
+    adapter.controller.load_data_from_arrow(
+        "full_export_data",
+        pa.Table.from_pydict(
+            {
+                "instrument": [f"Instrument {index:03d}" for index in range(total_rows)],
+                "sales": [float(index) for index in range(total_rows)],
+            }
+        ),
+    )
+    service = PivotRuntimeService(adapter_getter=lambda: adapter, session_gate=SessionRequestGate())
+
+    # Warm the controller with the ordinary 100-row virtual window first.  The
+    # export must still fetch the entire result rather than reusing that window.
+    # This matches the browser sequence: users scroll/view a page and then
+    # export from the same pivot state.
+    if layout_mode == "tabular":
+        visible_response = service.process(
+            PivotViewState(
+                row_fields=["instrument"],
+                val_configs=[{"field": "sales", "agg": "sum"}],
+                expanded={},
+                layout_mode=layout_mode,
+                show_subtotals=False,
+            ),
+            PivotRequestContext(
+                table="full_export_data",
+                trigger_prop="pivot.runtimeRequest",
+                session_id=f"all-rows-{layout_mode}",
+                client_instance="all-rows-client",
+                state_epoch=1,
+                window_seq=1,
+                viewport_active=True,
+                start_row=0,
+                end_row=99,
+            ),
+        )
+        assert visible_response.status == "data"
+        assert len(visible_response.data) == 100
+
+    response = service.process(
+        PivotViewState(
+            row_fields=["instrument"],
+            val_configs=[{"field": "sales", "agg": "sum"}],
+            # No open nodes: a viewport export would only contain root rows.
+            expanded={},
+            layout_mode=layout_mode,
+            show_subtotals=False,
+            export_request={
+                "format": "csv",
+                "rowStart": 0,
+                # Deliberately smaller than the dataset, proving allRows does
+                # not inherit the 100-row virtual viewport.
+                "rowEnd": 100,
+                "allRows": True,
+            },
+        ),
+        PivotRequestContext(
+            table="full_export_data",
+            trigger_prop="pivot.runtimeRequest",
+            session_id=f"all-rows-{layout_mode}",
+            client_instance="all-rows-client",
+            state_epoch=1,
+            window_seq=1,
+        ),
+    )
+
+    assert response.status == "export"
+    # The hierarchy includes its grand-total row as well as all leaf records.
+    assert response.export_payload["rows"] > 100
+    content_path = response.export_payload["contentPath"]
+    try:
+        with open(content_path, encoding="utf-8-sig", newline="") as export_file:
+            exported_rows = list(csv.reader(export_file))
+        assert len(exported_rows) == response.export_payload["rows"] + 1
+        assert exported_rows[1][0] == "Instrument 000"
+        assert any(row[0] == "Instrument 250" for row in exported_rows[1:])
+    finally:
+        if os.path.exists(content_path):
+            os.remove(content_path)
+
+
+def test_runtime_service_two_level_tabular_all_rows_export_is_not_limited_to_viewport():
+    """A two-field tabular export must not fall back to its loaded row block."""
+    adapter = create_tanstack_adapter(backend_uri=":memory:")
+    total_rows = 251
+    adapter.controller.load_data_from_arrow(
+        "two_level_full_export_data",
+        pa.Table.from_pydict(
+            {
+                "portfolio": [f"Portfolio {index % 5}" for index in range(total_rows)],
+                "instrument": [f"Instrument {index:03d}" for index in range(total_rows)],
+                "sales": [float(index) for index in range(total_rows)],
+            }
+        ),
+    )
+    service = PivotRuntimeService(adapter_getter=lambda: adapter, session_gate=SessionRequestGate())
+
+    response = service.process(
+        PivotViewState(
+            row_fields=["portfolio", "instrument"],
+            val_configs=[{"field": "sales", "agg": "sum"}],
+            expanded={},
+            layout_mode="tabular",
+            show_subtotals=False,
+            export_request={
+                "format": "csv",
+                "rowStart": 0,
+                # Mirrors the virtual block size that previously caused a
+                # two-level export to stop early.
+                "rowEnd": 123,
+                "allRows": True,
+            },
+        ),
+        PivotRequestContext(
+            table="two_level_full_export_data",
+            trigger_prop="pivot.runtimeRequest",
+            session_id="two-level-all-rows",
+            client_instance="two-level-client",
+            state_epoch=1,
+            window_seq=1,
+        ),
+    )
+
+    assert response.status == "export"
+    content_path = response.export_payload["contentPath"]
+    try:
+        with open(content_path, encoding="utf-8-sig", newline="") as export_file:
+            exported_rows = list(csv.reader(export_file))
+        assert exported_rows[0][:2] == ["Portfolio", "Instrument"]
+        # The backend may append its grand-total line; all 251 leaf records
+        # must still be present even though the requested window ends at 123.
+        assert sum(row[1].startswith("Instrument ") for row in exported_rows[1:]) == total_rows
+        assert any(row[:2] == ["Portfolio 0", "Instrument 250"] for row in exported_rows[1:])
+    finally:
+        if os.path.exists(content_path):
+            os.remove(content_path)
+
+
+def test_runtime_service_tabular_export_uses_repeated_dimension_columns():
+    response = TanStackResponse(
+        data=[
+            {
+                "_id": "Paris",
+                "_path": "Europe|||France|||Paris",
+                "_pathFields": ["continent", "country", "city"],
+                "depth": 2,
+                "city": "Paris",
+                "sales_sum": 123.5,
+            },
+            {
+                "_id": "Lyon",
+                "_path": "Europe|||France|||Lyon",
+                "_pathFields": ["continent", "country", "city"],
+                "depth": 2,
+                "city": "Lyon",
+                "sales_sum": 80.0,
+            },
+            {
+                "_id": "France",
+                "_path": "Europe|||France",
+                "_pathFields": ["continent", "country"],
+                "depth": 1,
+                "country": "France",
+                "sales_sum": 203.5,
+                "_isTabularSubtotal": True,
+            },
+        ],
+        # A hierarchy placeholder is what older/partially initialized clients
+        # provide. It must expand into the three visible tabular dimensions.
+        columns=[
+            {"id": "hierarchy", "header": "Hierarchy"},
+            {"id": "sales_sum", "header": "Sales"},
+        ],
+        total_rows=2,
+    )
+    state = PivotViewState(
+        row_fields=["continent", "country", "city"],
+        val_configs=[{"field": "sales", "agg": "sum"}],
+        layout_mode="tabular",
+        show_subtotals=False,
+    )
+
+    payload = PivotRuntimeService._build_export_payload(
+        response,
+        state,
+        {"format": "csv", "colIds": ["hierarchy", "sales_sum"]},
+    )
+    try:
+        with open(payload["contentPath"], encoding="utf-8-sig", newline="") as export_file:
+            rows = list(csv.reader(export_file))
+        assert rows == [
+            ["Continent", "Country", "City", "Sales"],
+            ["Europe", "France", "Paris", "123.5"],
+            ["Europe", "France", "Lyon", "80.0"],
+        ]
+    finally:
+        if os.path.exists(payload["contentPath"]):
+            os.remove(payload["contentPath"])
+
+
+def test_runtime_service_csv_export_preserves_nulls_decimals_and_neutralizes_formulas():
+    response = TanStackResponse(
+        data=[
+            {"_id": "North", "country": "US", "amount_sum": 123.5, "count_sum": 2},
+            {"_id": "South", "country": "FR", "amount_sum": -42.25, "count_sum": 0},
+            {"_id": "West", "country": None, "amount_sum": None, "count_sum": None},
+            {"_id": "@cmd", "country": "=2+2", "amount_sum": "+SUM(A1:A2)", "count_sum": "-cmd"},
+        ],
+        columns=[
+            {"id": "hierarchy", "header": "Region"},
+            {"id": "country", "header": "Country"},
+            {"id": "amount_sum", "header": "Amount"},
+            {"id": "count_sum", "header": "Count"},
+        ],
+        total_rows=4,
+    )
+    state = PivotViewState(row_fields=["region"], val_configs=[])
+
+    payload = PivotRuntimeService._build_export_payload(
+        response,
+        state,
+        {
+            "format": "csv",
+            "colIds": ["hierarchy", "country", "amount_sum", "count_sum"],
+        },
+    )
+
+    try:
+        with open(payload["contentPath"], "rb") as export_file:
+            assert export_file.read(3) == b"\xef\xbb\xbf"
+        with open(payload["contentPath"], encoding="utf-8-sig", newline="") as export_file:
+            rows = list(csv.reader(export_file))
+        assert rows == [
+            ["Region", "Country", "Amount", "Count"],
+            ["North", "US", "123.5", "2"],
+            ["South", "FR", "-42.25", "0"],
+            ["West", "", "", ""],
+            ["'@cmd", "'=2+2", "'+SUM(A1:A2)", "'-cmd"],
+        ]
+    finally:
+        if os.path.exists(payload["contentPath"]):
+            os.remove(payload["contentPath"])
 
 
 def test_runtime_service_export_without_col_ids_materializes_full_virtual_columns():
@@ -320,7 +575,7 @@ def test_runtime_service_export_without_col_ids_materializes_full_virtual_column
     content_path = response.export_payload["contentPath"]
     try:
         with open(content_path, "rb") as export_file:
-            content = export_file.read().decode("utf-8")
+            content = export_file.read().decode("utf-8-sig")
         assert "Metric 29" in content
         assert content.splitlines()[0].startswith("Region,Metric 0")
         assert "North,0,1,2,3,4,5,6,7,8,9" in content
@@ -330,19 +585,34 @@ def test_runtime_service_export_without_col_ids_materializes_full_virtual_column
             os.remove(content_path)
 
 
-def test_runtime_service_export_xls_preserves_inline_table_styles():
+@pytest.mark.parametrize("group_separator", [None, "space", "thin_space"])
+def test_formatted_html_export_uses_plain_spaces_for_number_grouping(group_separator):
+    formatted = PivotRuntimeService._format_export_number(
+        1234567.5,
+        "fixed:2",
+        2,
+        group_separator,
+    )
+
+    assert formatted == "1 234 567.50"
+    assert "\u00a0" not in formatted
+    assert "\u202f" not in formatted
+
+
+def test_runtime_service_export_xlsx_preserves_values_types_and_table_styles():
     class ExportAdapter:
         async def handle_virtual_scroll_request(self, request, start_row, end_row, expanded_paths, **kwargs):
             return TanStackResponse(
                 data=[
-                    {"_id": "North", "sales_sum": 100, "depth": 0},
-                    {"_id": "South", "sales_sum": 80, "depth": 0},
+                    {"_id": "North", "sales_sum": 123.5, "depth": 0},
+                    {"_id": "South", "sales_sum": -42.25, "depth": 0},
+                    {"_id": "West", "sales_sum": None, "depth": 0},
                 ],
                 columns=[
                     {"id": "hierarchy", "header": "Region"},
                     {"id": "sales_sum", "header": "Sales"},
                 ],
-                total_rows=2,
+                total_rows=3,
             )
 
     service = PivotRuntimeService(adapter_getter=lambda: ExportAdapter(), session_gate=SessionRequestGate())
@@ -356,7 +626,7 @@ def test_runtime_service_export_xls_preserves_inline_table_styles():
                 "format": "xlsx",
                 "includeHeaders": True,
                 "rowStart": 0,
-                "rowEnd": 2,
+                "rowEnd": 3,
                 "colIds": ["hierarchy", "sales_sum"],
                 "style": {
                     "fontFamily": "Aptos, sans-serif",
@@ -407,10 +677,40 @@ def test_runtime_service_export_xls_preserves_inline_table_styles():
     content_path = response.export_payload["contentPath"]
     try:
         with zipfile.ZipFile(content_path) as workbook:
-            content = workbook.read("xl/worksheets/sheet1.xml").decode("utf-8")
-        assert "<worksheet" in content
-        assert "Styled Sales" in content
-        assert "$100.00" in content
+            names = set(workbook.namelist())
+            sheet = ET.fromstring(workbook.read("xl/worksheets/sheet1.xml"))
+            styles_content = workbook.read("xl/styles.xml")
+            styles = ET.fromstring(styles_content)
+        assert "xl/styles.xml" in names
+
+        ns = {"x": "http://schemas.openxmlformats.org/spreadsheetml/2006/main"}
+        cells = {cell.attrib["r"]: cell for cell in sheet.findall(".//x:c", ns)}
+        assert cells["B2"].get("t") is None
+        assert cells["B2"].findtext("x:v", namespaces=ns) == "123.5"
+        assert cells["B3"].get("t") is None
+        assert cells["B3"].findtext("x:v", namespaces=ns) == "-42.25"
+        assert cells["B4"].find("x:v", ns) is None
+        assert cells["B2"].get("s") is not None
+
+        assert len(styles.findall(".//x:fonts/x:font", ns)) > 1
+        assert len(styles.findall(".//x:fills/x:fill", ns)) > 2
+        assert len(styles.findall(".//x:borders/x:border", ns)) > 1
+        assert len(styles.findall(".//x:cellXfs/x:xf", ns)) > 1
+        assert styles.find(".//x:numFmts", ns) is not None
+        styles_text = styles_content.decode("utf-8")
+        assert "Aptos" in styles_text
+        assert "FF123456" in styles_text
+        assert "FF654321" in styles_text
+        assert "FFFFEECC" in styles_text
+        assert "FFDDEEFF" in styles_text
+        assert "FF123123" in styles_text
+        assert "FFCBD5E1" in styles_text
+        assert "applyAlignment=\"1\"" in styles_text
+        assert "formatCode=\"&quot;$&quot;#,##0.00;[Red]-&quot;$&quot;#,##0.00\"" in styles_text
+
+        columns = sheet.findall(".//x:cols/x:col", ns)
+        assert columns
+        assert any(float(column.attrib["width"]) > 10 for column in columns)
     finally:
         if os.path.exists(content_path):
             os.remove(content_path)

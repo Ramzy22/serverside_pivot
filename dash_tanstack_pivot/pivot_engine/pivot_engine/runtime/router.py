@@ -136,14 +136,29 @@ class RuntimeRequestRouter:
                 context,
                 state.export_request,
             )
+            export_all_rows = bool(
+                first_present(
+                    state.export_request
+                    if isinstance(state.export_request, dict)
+                    else {},
+                    "allRows",
+                    "all_rows",
+                    default=False,
+                )
+            )
             export_request = replace(
                 request,
                 pagination=RuntimeRequestFactory.build_export_pagination(
                     state.export_request
                 ),
+                full_export=export_all_rows,
             )
-            export_expanded_paths = RuntimeRequestFactory.parse_expanded_paths(
-                state.expanded
+            # A full export/copy must not be limited by the virtual viewport or
+            # the branches currently expanded in the interactive grid.
+            export_expanded_paths = (
+                [["__ALL__"]]
+                if export_all_rows and state.row_fields
+                else RuntimeRequestFactory.parse_expanded_paths(state.expanded)
             )
             execution_started_at = time.perf_counter()
             try:
@@ -761,6 +776,56 @@ class RuntimeRequestRouter:
         effective_needs_col_schema: bool,
         profiling_enabled: bool,
     ) -> TanStackResponse:
+        export_all_rows = bool(
+            first_present(
+                state.export_request if isinstance(state.export_request, dict) else {},
+                "allRows",
+                "all_rows",
+                default=False,
+            )
+        )
+        if trigger_kind == "export" and export_all_rows:
+            is_tabular_without_subtotals = (
+                str(getattr(request, "layout_mode", "") or "").strip().lower()
+                == "tabular"
+                and not bool(getattr(request, "show_subtotal_footers", False))
+            )
+            if is_tabular_without_subtotals:
+                # Query the exact size first, then request that bounded range.
+                # This keeps the tabular path flat and avoids an artificial
+                # max-int virtual window.
+                preflight_context = replace(context, start_row=0, end_row=0)
+                preflight = await self._execute_tanstack_data_request(
+                    adapter,
+                    request,
+                    state,
+                    preflight_context,
+                    expanded_paths,
+                    trigger_kind="data",
+                    effective_needs_col_schema=effective_needs_col_schema,
+                    profiling_enabled=profiling_enabled,
+                )
+                full_row_count = max(int(preflight.total_rows or 0), 0)
+                if full_row_count <= 1:
+                    return preflight
+                full_context = replace(
+                    context, start_row=0, end_row=full_row_count - 1
+                )
+                return await self._execute_tanstack_data_request(
+                    adapter,
+                    request,
+                    state,
+                    full_context,
+                    expanded_paths,
+                    trigger_kind="data",
+                    effective_needs_col_schema=effective_needs_col_schema,
+                    profiling_enabled=profiling_enabled,
+                )
+            # Hierarchical full exports deliberately bypass virtual-window
+            # execution so the complete filtered hierarchy is produced.
+            if state.row_fields and hasattr(adapter, "handle_hierarchical_request"):
+                return await adapter.handle_hierarchical_request(request, expanded_paths)
+            return await adapter.handle_request(request)
         if state.view_mode == "tree" and trigger_kind != "chart":
             response_state = await self.tree_service.handle_data_request(
                 adapter,

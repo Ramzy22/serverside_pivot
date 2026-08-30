@@ -2321,6 +2321,9 @@ export default function DashTanstackPivot(props) {
     const [isCopying, setIsCopying] = useState(false);
     const [exportProgress, setExportProgress] = useState(null); // null = indeterminate, 0-100 = known %
     const pendingCopyIntentRef = useRef(null);
+    const exportRequestSequenceRef = useRef(0);
+    const activeExportRequestIdRef = useRef(null);
+    const cancelledExportRequestIdsRef = useRef(new Set());
     const [partModal, setPartModal] = useState(null);
     const EXPORT_ROW_LIMIT = 100_000;
     const COPY_ROW_LIMIT = 10_000;
@@ -8074,6 +8077,15 @@ export default function DashTanstackPivot(props) {
         return '';
     }
 
+    function getExportGroupSeparator(groupSeparator) {
+        // The grid deliberately uses non-breaking spaces for readable number
+        // grouping. Exported text needs ordinary spaces so it can be pasted,
+        // searched, and parsed consistently by other applications.
+        return groupSeparator === 'thin_space' || groupSeparator === 'space'
+            ? 'plain_space'
+            : groupSeparator;
+    }
+
     function getExportCellDisplayValue(rowLike, column, rowIndex, overrideValue = undefined) {
         if (!column) return '';
         const rowData = getExportRowData(rowLike) || {};
@@ -8100,7 +8112,12 @@ export default function DashTanstackPivot(props) {
             const effectiveGroupSeparator = columnGroupSeparatorOverrides && columnGroupSeparatorOverrides[column.id] !== undefined
                 ? columnGroupSeparatorOverrides[column.id]
                 : numberGroupSeparator;
-            return formatValue(displayedValue, effectiveFormat, effectiveDecimalPlaces, effectiveGroupSeparator);
+            return formatValue(
+                displayedValue,
+                effectiveFormat,
+                effectiveDecimalPlaces,
+                getExportGroupSeparator(effectiveGroupSeparator),
+            );
         }
         return String(displayedValue);
     }
@@ -9405,7 +9422,7 @@ export default function DashTanstackPivot(props) {
         };
     }, [serverSide]);
 
-    const { rowVirtualizer, getRow, renderedData, renderedOffset, clearCache, invalidateFromBlock, softInvalidateFromBlock, grandTotalRow, loadedRows, requestUrgentColumnViewport, requestVisibleViewportRefresh } = useServerSideRowModel({
+    const { rowVirtualizer, getRow, renderedData, renderedOffset, clearCache, invalidateFromBlock, grandTotalRow, loadedRows, requestUrgentColumnViewport, requestVisibleViewportRefresh } = useServerSideRowModel({
         parentRef,
         serverSide,
         rowCount: effectiveRowCount,
@@ -10525,18 +10542,17 @@ export default function DashTanstackPivot(props) {
         pendingExpansionRef.current = null;
         if (anchorBlock < 0) {
             // The expanded row was not in the viewport when the user toggled it.
-            // We can't know which anchor block shifted, but a hard clear causes
-            // a full skeleton flash.  Soft-invalidate all blocks from 0 instead
-            // so existing rows stay visible (stale-while-revalidate) until fresh
-            // data lands (finding #6).
-            if (softInvalidateFromBlock) softInvalidateFromBlock(0);
+            // We cannot know which cached index first shifted, so remove every
+            // cached block. Keeping those rows during revalidation paints values
+            // from the previous hierarchy at their now-invalid virtual indexes.
+            if (invalidateFromBlock) invalidateFromBlock(0);
         } else {
             // The expansion request was extended to cover through extendedToBlock
             // (anchorBlock + 1 when the anchor is known).  Those blocks were filled
-            // with fresh data by the data-sync effect, so we must NOT re-dirty them.
-            // Start soft-invalidating from the first block BEYOND the fresh coverage.
+            // with fresh data by the data-sync effect, so retain them and remove
+            // every later block whose virtual row indexes may have shifted.
             const firstStaleBlock = extendedToBlock >= 0 ? extendedToBlock + 1 : anchorBlock + 1;
-            if (softInvalidateFromBlock) softInvalidateFromBlock(firstStaleBlock);
+            if (invalidateFromBlock) invalidateFromBlock(firstStaleBlock);
         }
         // Clear the transition loader now that the expansion response has landed.
         setPendingRowTransitions(new Map());
@@ -11637,6 +11653,24 @@ export default function DashTanstackPivot(props) {
         }
 
         if (runtimeResponse.kind === 'export') {
+            const responseRequestId = runtimeResponse.requestId ? String(runtimeResponse.requestId) : null;
+            if (responseRequestId && cancelledExportRequestIdsRef.current.has(responseRequestId)) {
+                cancelledExportRequestIdsRef.current.delete(responseRequestId);
+                if (activeExportRequestIdRef.current === responseRequestId) {
+                    activeExportRequestIdRef.current = null;
+                }
+                return;
+            }
+            if (
+                responseRequestId
+                && activeExportRequestIdRef.current
+                && activeExportRequestIdRef.current !== responseRequestId
+            ) {
+                return;
+            }
+            if (activeExportRequestIdRef.current === responseRequestId) {
+                activeExportRequestIdRef.current = null;
+            }
             const partId = payload.partId;
             const copyIntent = pendingCopyIntentRef.current;
             const payloadRef = payload.payloadRef && typeof payload.payloadRef === 'object'
@@ -12455,13 +12489,19 @@ export default function DashTanstackPivot(props) {
         partLabel,
         colStart = null,
         colEnd = null,
+        allRows = false,
     }) {
         const payload = {
             format,
             includeHeaders,
             table: tableName,
+            // The server cannot infer layout from the state override. Send it
+            // explicitly so hierarchy, outline, and tabular exports project
+            // the same rows as the active grid.
+            layout_mode: layoutMode,
             rowStart,
             rowEnd,
+            allRows: Boolean(allRows),
             style: buildExportStyleProfile(getServerExportStyleIds(columnTarget), styleOptions),
         };
         if (partId) payload.partId = partId;
@@ -12477,13 +12517,32 @@ export default function DashTanstackPivot(props) {
     }
 
     function dispatchServerExportRequest(payload, runtimeFields = {}) {
+        exportRequestSequenceRef.current += 1;
+        const requestId = `export:${clientInstanceRef.current}:${Date.now()}:${exportRequestSequenceRef.current}`;
+        activeExportRequestIdRef.current = requestId;
         dispatchServerSideRuntimeSetProps({
             runtimeRequest: {
                 kind: 'export',
+                requestId,
+                abort_generation: abortGenerationRef.current,
                 ...runtimeFields,
                 payload,
             }
         });
+        return requestId;
+    }
+
+    function cancelActiveExportRequest() {
+        const activeRequestId = activeExportRequestIdRef.current;
+        if (activeRequestId) {
+            cancelledExportRequestIdsRef.current.add(activeRequestId);
+            activeExportRequestIdRef.current = null;
+        }
+        pendingCopyIntentRef.current = null;
+        setIsExporting(false);
+        setIsCopying(false);
+        setExportProgress(null);
+        setPartModal(null);
     }
 
     function copyServerTableToClipboard(withHeaders = false, mergedHeaders = false) {
@@ -12513,6 +12572,7 @@ export default function DashTanstackPivot(props) {
             rowEnd: rowCount,
             columnTarget,
             styleOptions: { withHeaders, mergedHeaders },
+            allRows: true,
         }));
     }
 
@@ -12543,6 +12603,7 @@ export default function DashTanstackPivot(props) {
                 rowEnd: rowCount,
                 columnTarget,
                 styleOptions: { withHeaders: true, mergedHeaders: true },
+                allRows: true,
             }));
         } else {
             setIsExporting(true);
@@ -13973,7 +14034,7 @@ export default function DashTanstackPivot(props) {
                         <div style={{ background:theme.background, color:theme.text, borderRadius:'12px', padding:'24px', boxShadow:'0 8px 32px rgba(0,0,0,0.3)', width:'440px', maxWidth:'94vw', maxHeight:'85vh', display:'flex', flexDirection:'column', gap:'14px', fontFamily:"'Inter',ui-sans-serif,system-ui,sans-serif" }}>
                             <div style={{ display:'flex', alignItems:'center', justifyContent:'space-between' }}>
                                 <span style={{ fontWeight:700, fontSize:'15px' }}>{mode === 'copy' ? 'Copy Table — Large Dataset' : 'Export — Large Dataset'}</span>
-                                <button onClick={() => setPartModal(null)} style={{ background:'none', border:'none', cursor:'pointer', color:theme.textSec, fontSize:'20px', lineHeight:1, padding:'0 4px' }}>×</button>
+                                <button onClick={cancelActiveExportRequest} style={{ background:'none', border:'none', cursor:'pointer', color:theme.textSec, fontSize:'20px', lineHeight:1, padding:'0 4px' }}>×</button>
                             </div>
                             <div style={{ fontSize:'13px', color:theme.textSec || theme.text, opacity:.75 }}>
                                 {totalRows.toLocaleString()} rows × {totalCols} columns — limit is {limit.toLocaleString()} rows. Split into parts below.
@@ -14030,7 +14091,7 @@ export default function DashTanstackPivot(props) {
                 <div style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.45)', zIndex: 10001, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
                     <div style={{ position: 'relative', background: theme.background, color: theme.text, borderRadius: '14px', padding: '32px 40px 28px', boxShadow: '0 12px 40px rgba(0,0,0,0.35)', display: 'flex', flexDirection: 'column', alignItems: 'center', gap: '16px', minWidth: '280px', border: `1px solid ${theme.border}`, fontFamily: "'Inter',ui-sans-serif,system-ui,sans-serif" }}>
                         <button
-                            onClick={() => { setIsExporting(false); setIsCopying(false); setExportProgress(null); }}
+                            onClick={cancelActiveExportRequest}
                             style={{ position: 'absolute', top: '10px', right: '10px', width: '26px', height: '26px', borderRadius: '50%', background: '#dc2626', border: 'none', cursor: 'pointer', color: '#fff', fontSize: '13px', fontWeight: 700, lineHeight: 1, display: 'flex', alignItems: 'center', justifyContent: 'center', boxShadow: '0 1px 4px rgba(220,38,38,0.4)', transition: 'background 0.15s' }}
                             onMouseEnter={e => e.currentTarget.style.background = '#b91c1c'}
                             onMouseLeave={e => e.currentTarget.style.background = '#dc2626'}
@@ -14052,7 +14113,7 @@ export default function DashTanstackPivot(props) {
                             <span style={{ fontSize: '12px', color: theme.textSec || theme.text, opacity: 0.8, marginTop: '-8px' }}>{exportProgress}%</span>
                         )}
                         <button
-                            onClick={() => { setIsExporting(false); setIsCopying(false); setExportProgress(null); }}
+                            onClick={cancelActiveExportRequest}
                             style={{ marginTop: '4px', padding: '7px 28px', fontSize: '13px', fontWeight: 600, background: '#dc2626', border: 'none', borderRadius: '7px', color: '#fff', cursor: 'pointer', letterSpacing: '0.02em', boxShadow: '0 2px 8px rgba(220,38,38,0.35)', transition: 'background 0.15s' }}
                             onMouseEnter={e => e.currentTarget.style.background = '#b91c1c'}
                             onMouseLeave={e => e.currentTarget.style.background = '#dc2626'}

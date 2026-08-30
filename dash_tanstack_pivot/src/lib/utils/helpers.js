@@ -51,6 +51,9 @@ const NUMBER_GROUP_SEPARATOR_CHAR_MAP = Object.freeze({
     comma: ',',
     space: '\u00A0',
     thin_space: '\u202F',
+    // Export/copy-only internal value. Keep the user-facing "space" option
+    // non-breaking in the grid, but make exported text portable plain text.
+    plain_space: ' ',
     apostrophe: '\'',
     none: '',
 });

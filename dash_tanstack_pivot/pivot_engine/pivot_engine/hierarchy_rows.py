@@ -206,14 +206,12 @@ def iter_visible_hierarchy_rows(
                 else:
                     yield row
             else:
-                # Pre-order: group row first, then children, then optional footer.
+                # Hierarchy and outline are pre-order views. Their group row already
+                # carries the aggregate subtotal, so emitting a copied footer would
+                # duplicate the parent and collide with its expandable row identity.
                 yield row
                 if is_expanded:
                     yield from traverse(child_key, tuple(child_path_parts), next_active_keys)
-                    if show_subtotal_footers:
-                        footer_row = dict(row)
-                        footer_row["_isSubtotalFooter"] = True
-                        yield footer_row
 
     yield from traverse("")
 
@@ -245,7 +243,13 @@ def order_hierarchy_rows(rows: Any) -> List[Dict[str, Any]]:
 
     for index, row in enumerate(regular_rows):
         path = row.get("_path")
-        if not path:
+        # ``""`` is the display path for a real blank first-level grouping
+        # value.  It is the parent of paths such as ``|||Strategy`` and must
+        # participate in ordering; treating it as absent detaches that branch
+        # and puts its parent at the end of a full materialization.  Windowed
+        # hierarchy responses retain preorder, so that disagreement can shift
+        # the final expanded children to different virtual indices.
+        if path is None:
             continue
         path_to_row[str(path)] = row
         first_seen[str(path)] = index
@@ -260,7 +264,7 @@ def order_hierarchy_rows(rows: Any) -> List[Dict[str, Any]]:
     root_paths: List[str] = []
     for path in path_to_row:
         parent_path = path.rsplit("|||", 1)[0] if "|||" in path else None
-        if parent_path and parent_path in path_to_row:
+        if parent_path is not None and parent_path in path_to_row:
             children_by_parent.setdefault(parent_path, []).append(path)
         else:
             root_paths.append(path)
@@ -284,7 +288,7 @@ def order_hierarchy_rows(rows: Any) -> List[Dict[str, Any]]:
 
     for row in regular_rows:
         path = row.get("_path")
-        if not path or str(path) not in visited:
+        if path is None or str(path) not in visited:
             ordered_rows.append(row)
 
     if grand_total_row is not None:

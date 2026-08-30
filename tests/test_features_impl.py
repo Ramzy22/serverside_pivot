@@ -15,7 +15,7 @@ from pivot_engine.types.pivot_spec import PivotSpec
 def mock_controller():
     controller = MagicMock(spec=ScalablePivotController)
     controller.run_pivot_async = AsyncMock(return_value={"columns": [], "rows": []})
-    controller.run_pivot_export = AsyncMock()
+    controller.run_pivot_export = MagicMock()
     controller.setup_push_cdc = AsyncMock()
     controller.push_change_event = AsyncMock()
     return controller
@@ -42,10 +42,11 @@ def test_security_valid_key(api_client):
 
 def test_export_endpoint(api_client, mock_controller):
     """Test the data export endpoint"""
-    # Mock the export stream
-    import io
-    mock_stream = io.BytesIO(b"col1,col2\n1,2")
-    mock_controller.run_pivot_export.return_value = mock_stream
+    async def mock_stream():
+        yield b"col1,col2\n"
+        yield b"1,2"
+
+    mock_controller.run_pivot_export.return_value = mock_stream()
     
     payload = {
         "spec": {
@@ -65,6 +66,54 @@ def test_export_endpoint(api_client, mock_controller):
     assert response.content == b"col1,col2\n1,2"
     assert "text/csv" in response.headers["content-type"]
     mock_controller.run_pivot_export.assert_called_once()
+
+
+def test_export_endpoint_streams_parquet_with_binary_media_type(api_client, mock_controller):
+    async def mock_stream():
+        yield b"PAR1"
+
+    mock_controller.run_pivot_export.return_value = mock_stream()
+    payload = {
+        "spec": {
+            "table": "test_table",
+            "measures": [{"field": "amount", "agg": "sum", "alias": "total"}],
+        },
+        "format": "PARQUET",
+    }
+
+    response = api_client.post(
+        "/pivot/export",
+        json=payload,
+        headers={"X-API-Key": "test-secret-key"},
+    )
+
+    assert response.status_code == 200
+    assert response.content == b"PAR1"
+    assert response.headers["content-type"] == "application/vnd.apache.parquet"
+    assert response.headers["content-disposition"] == "attachment; filename=export.parquet"
+    mock_controller.run_pivot_export.assert_called_once()
+
+
+@pytest.mark.parametrize("export_format", ["xlsx", "html", "CSVV", ""])
+def test_export_endpoint_rejects_unsupported_formats(api_client, mock_controller, export_format):
+    payload = {
+        "spec": {
+            "table": "test_table",
+            "measures": [{"field": "amount", "agg": "sum", "alias": "total"}],
+        },
+        "format": export_format,
+    }
+
+    response = api_client.post(
+        "/pivot/export",
+        json=payload,
+        headers={"X-API-Key": "test-secret-key"},
+    )
+
+    assert response.status_code == 400
+    assert "csv" in response.json()["detail"]
+    assert "parquet" in response.json()["detail"]
+    mock_controller.run_pivot_export.assert_not_called()
 
 def test_push_cdc_setup(api_client, mock_controller):
     """Test setting up push CDC"""

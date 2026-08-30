@@ -42,6 +42,9 @@ class TanStackRequest:
     measure_axis: Optional[Dict[str, Any]] = None
     layout_mode: Optional[str] = None
     show_subtotal_footers: Optional[bool] = False
+    # Full exports must bypass the interactive viewport cache so their result
+    # cannot be truncated to a previously requested window.
+    full_export: bool = False
 
 
 @dataclass

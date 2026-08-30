@@ -1773,13 +1773,13 @@ export const PivotAppBar = React.memo(function PivotAppBar({
                     </button>
                     <div style={innerDividerStyle} />
                     <button style={btnPrimary} onClick={exportPivot} disabled={isExporting}>
-                        <Icons.Export/> {isExporting ? 'Exporting…' : (rowCount || 0) > 500000 ? 'Export CSV' : 'Export'}
+                        <Icons.Export/> {isExporting ? 'Exporting…' : 'Export XLSX'}
                     </button>
                 </> : <>
                     <div style={{marginLeft:'auto'}} />
                     <div style={innerDividerStyle} />
                     <button style={btnPrimary} onClick={exportPivot} disabled={isExporting}>
-                        <Icons.Export/> {isExporting ? 'Exporting…' : (rowCount || 0) > 500000 ? 'Export CSV' : 'Export'}
+                        <Icons.Export/> {isExporting ? 'Exporting…' : 'Export XLSX'}
                     </button>
                 </>}
             </div>
