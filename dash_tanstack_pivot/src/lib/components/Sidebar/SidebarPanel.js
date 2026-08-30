@@ -24,6 +24,7 @@ import {
     normalizeCustomDimensionsValue,
 } from '../../hooks/usePivotNormalization';
 import { normalizeSparklineConfig } from '../../utils/sparklines';
+import { normalizeMeasureAxisValue as normalizeMeasureAxisPanelValue } from '../../utils/measureAxis';
 import { usePivotRenderCounter } from '../../hooks/usePivotRenderCounter';
 import { ReportEditor } from './ReportEditor';
 
@@ -43,26 +44,6 @@ const DEFAULT_VALUE_SPARKLINE_CONFIG = {
     source: 'pivot',
     displayMode: 'trend',
 };
-const MEASURE_AXIS_PLACEMENTS = new Set(['none', 'rows', 'columns']);
-
-function normalizeMeasureAxisPanelValue(value) {
-    const source = value && typeof value === 'object' ? value : {};
-    const rawPlacement = source.placement || source.axis || source.measureAxis || source.measurePlacement || 'none';
-    const normalizedPlacement = String(rawPlacement || 'none').trim().toLowerCase();
-    const placement = MEASURE_AXIS_PLACEMENTS.has(normalizedPlacement)
-        ? normalizedPlacement
-        : ({ row: 'rows', column: 'columns', value: 'none', values: 'none', off: 'none' }[normalizedPlacement] || 'none');
-    return {
-        placement,
-        labelField: String(source.labelField || source.label_field || source.measureNameField || source.measureLabelField || 'Measure Name').trim() || 'Measure Name',
-        valueField: String(source.valueField || source.value_field || source.measureValueField || source.measureAmountField || 'Amount').trim() || 'Amount',
-        members: Array.isArray(source.members) ? source.members.filter((member) => member && typeof member === 'object').map((member) => ({ ...member })) : [],
-        suppressEmptyMembers: Boolean(source.suppressEmptyMembers || source.suppress_empty_members),
-        suppressZeroMembers: Boolean(source.suppressZeroMembers || source.suppress_zero_members),
-        totalsPolicy: String(source.totalsPolicy || source.totals_policy || 'per_member'),
-    };
-}
-
 function escapeRegExp(value) {
     return String(value || '').replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 }

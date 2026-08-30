@@ -4016,6 +4016,16 @@ def test_measure_axis_contract_is_wired_through_frontend_and_runtime():
             "SidebarPanel.js",
         )
     ).read_text(encoding="utf-8")
+    measure_axis_source = Path(
+        os.path.join(
+            os.getcwd(),
+            "dash_tanstack_pivot",
+            "src",
+            "lib",
+            "utils",
+            "measureAxis.js",
+        )
+    ).read_text(encoding="utf-8")
     callbacks_source = Path(
         os.path.join(
             os.getcwd(),
@@ -4049,6 +4059,10 @@ def test_measure_axis_contract_is_wired_through_frontend_and_runtime():
 
     assert "normalizeMeasureAxisValue" in component_source
     assert "buildMeasureAxisRuntimeConfig" in component_source
+    assert "from '../utils/measureAxis'" in component_source
+    assert "normalizeMeasureAxisValue as normalizeMeasureAxisPanelValue" in sidebar_source
+    assert "export const normalizeMeasureAxisValue" in measure_axis_source
+    assert "export const buildMeasureAxisRuntimeConfig" in measure_axis_source
     assert "measureAxis: runtimeMeasureAxis" in component_source
     assert "isValueMeasureDragToAxis" in component_source
     assert "placeMeasureAxisLabel" in component_source
