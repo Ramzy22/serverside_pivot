@@ -3695,10 +3695,25 @@ def test_runtime_data_drop_resolves_pending_viewport_request():
             "DashTanstackPivot.react.js",
         )
     ).read_text(encoding="utf-8")
+    runtime_data_commit_source = Path(
+        os.path.join(
+            os.getcwd(),
+            "dash_tanstack_pivot",
+            "src",
+            "lib",
+            "hooks",
+            "useRuntimeDataCommit.js",
+        )
+    ).read_text(encoding="utf-8")
 
+    assert "useRuntimeDataCommit({" in source
     assert "if (!runtimePayloadCommitIsCurrent(runtimeResponse, payload, resolvedPayload)) {" in source
     assert "resolvePendingRequest(runtimeResponse);" in source
     assert "if (!runtimePayloadCommitIsCurrent(runtimeResponse, payload, payload)) {" in source
+    assert "export function useRuntimeDataCommit" in runtime_data_commit_source
+    assert "const runtimePayloadCommitIsCurrent = useCallback" in runtime_data_commit_source
+    assert "const commitRuntimeDataPayload = useCallback" in runtime_data_commit_source
+    assert "normalizeRuntimeDataEnvelope" in runtime_data_commit_source
 
 
 def test_expansion_requests_preserve_latest_horizontal_window():
