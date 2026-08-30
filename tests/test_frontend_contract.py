@@ -2818,6 +2818,16 @@ def test_grid_polish_header_drag_order_pinning_and_menu_contract():
             "DashTanstackPivot.react.js",
         )
     ).read_text(encoding="utf-8")
+    column_order_source = Path(
+        os.path.join(
+            os.getcwd(),
+            "dash_tanstack_pivot",
+            "src",
+            "lib",
+            "utils",
+            "columnOrder.js",
+        )
+    ).read_text(encoding="utf-8")
     render_helpers_source = Path(
         os.path.join(
             os.getcwd(),
@@ -2842,8 +2852,14 @@ def test_grid_polish_header_drag_order_pinning_and_menu_contract():
 
     assert "columnOrder: externalColumnOrder = null" in component_source
     assert "localeText: externalLocaleText = null" in component_source
+    assert "from '../utils/columnOrder'" in component_source
     assert "normalizeColumnOrderValue" in component_source
     assert "mergeColumnOrderWithIds" in component_source
+    assert "export const normalizeColumnOrderValue" in column_order_source
+    assert "export const collectColumnDefLeafIds" in column_order_source
+    assert "export const mergeColumnOrderWithIds" in column_order_source
+    assert "export const moveColumnIdInOrder" in column_order_source
+    assert "export const moveColumnIdByDelta" in column_order_source
     assert "columnOrder: effectiveColumnOrder" in component_source
     assert "onColumnOrderChange" in component_source
     assert "setColumnOrderWithHistory" in component_source
