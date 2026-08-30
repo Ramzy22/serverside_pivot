@@ -4116,6 +4116,16 @@ def test_filter_open_requests_and_responses_are_idempotent():
             "DashTanstackPivot.react.js",
         )
     ).read_text(encoding="utf-8")
+    filter_options_source = Path(
+        os.path.join(
+            os.getcwd(),
+            "dash_tanstack_pivot",
+            "src",
+            "lib",
+            "utils",
+            "filterOptions.js",
+        )
+    ).read_text(encoding="utf-8")
     filter_popover_source = Path(
         os.path.join(
             os.getcwd(),
@@ -4205,7 +4215,10 @@ def test_filter_open_requests_and_responses_are_idempotent():
     assert "getBoundingClientRect: () => ({" in component_source
     assert "requestFilterOptions(colId);" in component_source
     assert "previousOptions.every((value, index) => value === mergedOptions[index])" in component_source
-    assert "const collectDataFieldIds = (rows) =>" in component_source
+    assert "from '../utils/filterOptions'" in component_source
+    assert "export const collectDataFieldIds = (rows) =>" in filter_options_source
+    assert "export const buildClientFilterOptionMap" in filter_options_source
+    assert "export const compareFilterOptionValues" in filter_options_source
     assert "return collectDataFieldIds(data);" in component_source
     assert "const clientFilterOptionMap = useMemo" in component_source
     assert "buildClientFilterOptionMap(customAwareData, availableFieldsWithCustomDimensions)" in component_source
