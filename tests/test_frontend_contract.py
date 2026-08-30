@@ -529,6 +529,16 @@ def test_report_mode_supports_formatting_validation_debug_and_collapsed_levels()
             "DashTanstackPivot.react.js",
         )
     ).read_text(encoding="utf-8")
+    report_selection_source = Path(
+        os.path.join(
+            os.getcwd(),
+            "dash_tanstack_pivot",
+            "src",
+            "lib",
+            "utils",
+            "reportEditorSelection.js",
+        )
+    ).read_text(encoding="utf-8")
 
     assert "DEFAULT_REPORT_FORMAT" in report_source
     assert "Manual Report Rows" not in report_source
@@ -563,7 +573,8 @@ def test_report_mode_supports_formatting_validation_debug_and_collapsed_levels()
     assert "reportFormat.rowColor" in render_source
     assert "reportFormat && reportFormat.bold" in render_source
     assert "delete normalized.manualRows" in normalization_source
-    assert "debug: rowData._reportDebug || null" in component_source
+    assert "from '../utils/reportEditorSelection'" in component_source
+    assert "debug: rowData._reportDebug || null" in report_selection_source
     assert "reportDef: Object.prototype.hasOwnProperty.call(snapshot, 'reportDef')" in component_source
     assert "showReportConfigColumn: showReportConfigColumn !== false && !immersiveMode" in component_source
     assert (
@@ -3350,12 +3361,27 @@ def test_frontend_editable_cells_flow_through_column_metadata_and_transaction_hi
     assert "const measuredFromCells = (col.id !== 'hierarchy' && col.id !== '__row_number__' && col.id !== '__report_config__')" in component_source
     assert "const reportDefRef = useRef(reportDef);" in component_source
     assert "reportDefRef.current = reportDef;" in component_source
+    assert "from '../utils/reportEditorSelection'" in component_source
     assert "buildReportEditorSelectionFromRow(reportDefRef.current, rowData)" in component_source
     assert "Math.min(Math.max(measuredWithCells, autoSizeBounds.minWidth), autoSizeBounds.maxWidth)" in component_source
     assert "Math.ceil(renderedHeaderWidth)" in component_source
     assert "contentWidth + horizontalChrome + autoSizeBounds.cellOverscan" in component_source
     assert "const measurementClone = headerContent.cloneNode(true);" in component_source
     assert "measurementClone.style.width = 'max-content';" in component_source
+
+    report_selection_source = Path(
+        os.path.join(
+            os.getcwd(),
+            "dash_tanstack_pivot",
+            "src",
+            "lib",
+            "utils",
+            "reportEditorSelection.js",
+        )
+    ).read_text(encoding="utf-8")
+    assert "export const buildReportEditorSelectionFromRow" in report_selection_source
+    assert "findReportEditorNodePathForRow" in report_selection_source
+    assert "findReportEditorNodePathByField" in report_selection_source
 
     app_bar_source = Path(
         os.path.join(
