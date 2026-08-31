@@ -7,7 +7,7 @@ import pytest
 import pyarrow as pa
 import pandas as pd
 
-from pivot_engine.pivot_engine.data_input import DataInputNormalizer, DataInputError, normalize_data_input
+from pivot_engine.data_input import DataInputNormalizer, DataInputError, normalize_data_input
 
 
 class MockController:

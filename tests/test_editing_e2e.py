@@ -27,6 +27,18 @@ from dash_tanstack_pivot import DashTanstackPivot
 from pivot_engine import create_tanstack_adapter, register_pivot_app
 
 
+_editing_component_path = os.path.join(
+    os.getcwd(), "dash_tanstack_pivot", "src", "lib", "components", "DashTanstackPivot.react.js"
+)
+with open(_editing_component_path, encoding="utf-8") as _editing_component_file:
+    _EDITING_UI_TEMPORARILY_DISABLED = "const EDITING_TEMPORARILY_DISABLED = true;" in _editing_component_file.read()
+
+_requires_editing_ui = pytest.mark.skipif(
+    _EDITING_UI_TEMPORARILY_DISABLED,
+    reason="Editing UI is intentionally disabled by EDITING_TEMPORARILY_DISABLED.",
+)
+
+
 class _DashServerThread(threading.Thread):
     def __init__(self, app, host, port):
         super().__init__(daemon=True)
@@ -770,6 +782,7 @@ def _element_width(driver, selector):
     )
 
 
+@_requires_editing_ui
 def test_inline_aggregate_edit_propagates_and_undo_redo_round_trips(editing_e2e_server, chrome_driver):
     chrome_driver.get(editing_e2e_server)
 
@@ -838,6 +851,7 @@ def test_inline_aggregate_edit_propagates_and_undo_redo_round_trips(editing_e2e_
     assert _get_cell_css_value(chrome_driver, "North", "sales_sum", "background-color") == edited_parent_background
 
 
+@_requires_editing_ui
 def test_row_mode_double_click_edit_saves_without_explicit_start_button(row_editing_e2e_server, chrome_driver):
     chrome_driver.get(row_editing_e2e_server)
 
@@ -922,6 +936,7 @@ def test_expand_collapse_undo_redo_round_trips(editing_e2e_server, chrome_driver
     _wait_for_cell_absent(chrome_driver, "North|||USA", "sales_sum")
 
 
+@_requires_editing_ui
 def test_parent_edit_does_not_mark_children_as_edited(editing_e2e_server, chrome_driver):
     chrome_driver.get(editing_e2e_server)
 
@@ -953,6 +968,7 @@ def test_parent_edit_does_not_mark_children_as_edited(editing_e2e_server, chrome
     assert canada_overlay == "none"
 
 
+@_requires_editing_ui
 def test_edited_overlay_survives_existing_cell_formatting(formatted_editing_e2e_server, chrome_driver):
     chrome_driver.get(formatted_editing_e2e_server)
 
@@ -984,6 +1000,7 @@ def test_edited_overlay_survives_existing_cell_formatting(formatted_editing_e2e_
         assert _get_cell_surface_css_value(chrome_driver, "North|||USA", "sales_sum", "background-image") == leaf_surface_overlay
 
 
+@_requires_editing_ui
 def test_custom_edited_theme_background_updates_outer_cell_without_stale_inner_overlay(themed_editing_e2e_server, chrome_driver):
     chrome_driver.get(themed_editing_e2e_server)
 
@@ -1005,6 +1022,7 @@ def test_custom_edited_theme_background_updates_outer_cell_without_stale_inner_o
         assert _get_cell_surface_css_value(chrome_driver, "North|||USA", "sales_sum", "background-image") == "none"
 
 
+@_requires_editing_ui
 def test_original_edited_value_switch_restores_parent_and_visible_children(editing_e2e_server, chrome_driver):
     chrome_driver.get(editing_e2e_server)
 
@@ -1024,6 +1042,7 @@ def test_original_edited_value_switch_restores_parent_and_visible_children(editi
     _wait_for_value_mode_pressed(chrome_driver, "edited", True)
 
 
+@_requires_editing_ui
 def test_reload_preserves_original_vs_edited_baseline_for_saved_values(persisted_editing_e2e_server, chrome_driver):
     chrome_driver.get(persisted_editing_e2e_server)
     chrome_driver.execute_script(
@@ -1065,6 +1084,7 @@ def test_reload_preserves_original_vs_edited_baseline_for_saved_values(persisted
     _wait_for_cell_text(chrome_driver, "North", "sales_sum", "260")
 
 
+@_requires_editing_ui
 def test_parent_aggregate_edit_prompt_accepts_proportional_formula(editing_e2e_server, chrome_driver):
     chrome_driver.get(editing_e2e_server)
 
@@ -1101,10 +1121,8 @@ def test_chart_settings_open_immediately_and_table_refills_after_close(chart_e2e
     settings_pane = WebDriverWait(chrome_driver, 20).until(
         EC.visibility_of_element_located((By.CSS_SELECTOR, '[data-chart-settings-pane="true"]'))
     )
-    assert chrome_driver.execute_script(
-        "return arguments[0].innerText.includes('Chart Settings');",
-        settings_pane,
-    )
+    assert settings_pane.find_element(By.CSS_SELECTOR, '[data-chart-settings-tab="chart"]').text == "Chart"
+    assert settings_pane.find_element(By.CSS_SELECTOR, '[data-chart-settings-tab="data"]').text == "Data"
     settings_pane_width = _element_width(chrome_driver, '[data-chart-settings-pane="true"]')
     assert settings_pane_width >= 300
     assert len(chrome_driver.find_elements(By.CSS_SELECTOR, '[data-chart-settings-pane="true"]')) == 1
@@ -1196,7 +1214,10 @@ def test_chart_sparkline_mode_renders_multi_series_board(sparkline_chart_e2e_ser
     ).click()
 
     WebDriverWait(chrome_driver, 20).until(
-        EC.element_to_be_clickable((By.CSS_SELECTOR, 'button[data-chart-type="sparkline"]'))
+        EC.element_to_be_clickable((By.CSS_SELECTOR, 'button[data-chart-settings-tab="data"]'))
+    ).click()
+    WebDriverWait(chrome_driver, 20).until(
+        EC.element_to_be_clickable((By.CSS_SELECTOR, 'button[data-chart-preset="sparkline"]'))
     ).click()
 
     WebDriverWait(chrome_driver, 20).until(

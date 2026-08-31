@@ -3540,6 +3540,7 @@ def test_frontend_chart_surface_includes_inline_settings_sparkline_and_resize_re
 
     assert "data-chart-settings-toggle=\"true\"" in chart_source
     assert "data-chart-settings-pane=\"true\"" in chart_source
+    assert "data-chart-settings-tab={tab.id}" in chart_source
     assert "data-chart-settings-scroll=\"true\"" in chart_source
     assert "data-chart-surface-scroll=\"true\"" in chart_source
     assert "data-chart-settings-resizer=\"true\"" in chart_source
@@ -3554,6 +3555,7 @@ def test_frontend_chart_surface_includes_inline_settings_sparkline_and_resize_re
     assert "const isSparklineChart = chartType === 'sparkline';" in chart_source
     assert "overscrollBehavior: 'contain'" in chart_source
     assert "applyChartPreset" in chart_source
+    assert "data-chart-preset={preset.key}" in chart_source
     assert "onChartTypeChange('sparkline')" in chart_source
     assert "chartType === 'sparkline'" in chart_source
     assert "showLegend={!isSparklineChart}" in chart_source

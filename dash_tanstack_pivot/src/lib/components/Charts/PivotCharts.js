@@ -4980,6 +4980,7 @@ const ChartSurface = ({
                         <button
                             key={tab.id}
                             type="button"
+                            data-chart-settings-tab={tab.id}
                             onClick={() => setSettingsTab(tab.id)}
                             style={{
                                 flex: 1,
@@ -5122,7 +5123,7 @@ const ChartSurface = ({
                             { key: 'flow', label: 'Flow' },
                             { key: 'sparkline', label: 'Sparkline' },
                         ].map((preset) => (
-                            <button key={preset.key} type="button" onClick={() => applyChartPreset(preset.key)} style={{ ...exportButtonStyle, textAlign: 'left' }}>
+                            <button key={preset.key} type="button" data-chart-preset={preset.key} onClick={() => applyChartPreset(preset.key)} style={{ ...exportButtonStyle, textAlign: 'left' }}>
                                 {preset.label}
                             </button>
                         ))}
