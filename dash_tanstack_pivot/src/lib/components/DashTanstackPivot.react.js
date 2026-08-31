@@ -204,6 +204,7 @@ import { SidebarPanel } from './Sidebar/SidebarPanel';
 import DetailSidePanel from './Table/DetailSidePanel';
 import EditSidePanel from './Table/EditSidePanel';
 import DetailDrawer from './Table/DetailDrawer';
+import { ChartWorkspace, groupChartWorkspacePanes } from './Charts/ChartWorkspace';
 import {
     buildPivotChartModel,
     buildComboPivotChartModel,
@@ -12175,52 +12176,15 @@ export default function DashTanstackPivot(props) {
         });
     }, [chartCanvasPanes]);
 
-    const dockedChartCanvasPanes = chartCanvasPanes.filter((pane) => !pane.floating && !pane.isPreview);
-    const floatingChartCanvasPanes = chartCanvasPanes.filter((pane) => pane.floating && !pane.isPreview);
-    const dockedChartCanvasPanesByPosition = useMemo(() => ({
-        left: dockedChartCanvasPanes.filter((pane) => normalizeChartDockPosition(pane.dockPosition, 'right') === 'left'),
-        right: dockedChartCanvasPanes.filter((pane) => normalizeChartDockPosition(pane.dockPosition, 'right') === 'right'),
-        top: dockedChartCanvasPanes.filter((pane) => normalizeChartDockPosition(pane.dockPosition, 'right') === 'top'),
-        bottom: dockedChartCanvasPanes.filter((pane) => normalizeChartDockPosition(pane.dockPosition, 'right') === 'bottom'),
-    }), [dockedChartCanvasPanes]);
+    const chartWorkspacePanes = useMemo(() => (
+        groupChartWorkspacePanes(chartCanvasPanes)
+    ), [chartCanvasPanes]);
+    const {
+        floating: floatingChartCanvasPanes,
+        dockedByPosition: dockedChartCanvasPanesByPosition,
+    } = chartWorkspacePanes;
 
-    const renderChartCanvasPane = (pane, dockPosition) => {
-        const normalizedDockPosition = normalizeChartDockPosition(dockPosition || pane.dockPosition, 'right');
-        const widthHint = Number.isFinite(Number(chartCanvasPaneWidthHints[pane.id]))
-            ? Math.max(MIN_CHART_CANVAS_PANE_WIDTH, Math.floor(Number(chartCanvasPaneWidthHints[pane.id])))
-            : null;
-        const isVerticalDock = normalizedDockPosition === 'top' || normalizedDockPosition === 'bottom';
-        const basePaneStyle = isVerticalDock
-            ? {
-                display: 'flex',
-                width: '100%',
-                height: `${Math.max(DEFAULT_DOCKED_CHART_PANE_HEIGHT, Math.floor((pane.chartHeight || DEFAULT_CHART_GRAPH_HEIGHT) + CHART_PANEL_VERTICAL_CHROME_HEIGHT))}px`,
-                minHeight: `${Math.max(280, Math.floor((pane.chartHeight || DEFAULT_CHART_GRAPH_HEIGHT) + 120))}px`,
-                minWidth: 0,
-                overflow: 'hidden',
-                borderTop: normalizedDockPosition === 'bottom' ? `1px solid ${theme.border}` : 'none',
-                borderBottom: normalizedDockPosition === 'top' ? `1px solid ${theme.border}` : 'none',
-                flexShrink: 0,
-            }
-            : {
-                display: 'flex',
-                flexGrow: widthHint === null ? pane.size : 0,
-                flexBasis: widthHint === null ? 0 : `${widthHint}px`,
-                width: widthHint === null ? undefined : `${widthHint}px`,
-                minWidth: widthHint === null ? `${MIN_CHART_CANVAS_PANE_WIDTH}px` : `${widthHint}px`,
-                minHeight: 0,
-                overflow: 'hidden',
-                borderLeft: normalizedDockPosition === 'right' ? `1px solid ${theme.border}` : 'none',
-                borderRight: normalizedDockPosition === 'left' ? `1px solid ${theme.border}` : 'none',
-            };
-
-        return (
-            <div
-                key={pane.id}
-                data-docked-chart-pane={pane.id}
-                data-docked-chart-pane-position={normalizedDockPosition}
-                style={basePaneStyle}
-            >
+    const renderChartCanvasPane = (pane, normalizedDockPosition) => (
                 <PivotChartPanel
                     open
                     onClose={() => handleRemoveChartCanvasPane(pane.id)}
@@ -12288,148 +12252,82 @@ export default function DashTanstackPivot(props) {
                             : null
                     )}
                 />
-            </div>
-        );
-    };
+    );
 
-    const renderHorizontalDockGroup = (panes, groupPosition) => {
-        if (!uiConfig.showCharts) return null;
-        if (!Array.isArray(panes) || panes.length === 0) return null;
-        const totalGroupSize = panes.reduce((sum, p) => sum + (Number(p.size) || 1), 0);
-        const paneWidthHints = panes.map((pane) => {
-            const numericHint = Number(chartCanvasPaneWidthHints[pane.id]);
-            return {
-                pane,
-                widthHint: Number.isFinite(numericHint)
-                    ? Math.max(MIN_CHART_CANVAS_PANE_WIDTH, Math.floor(numericHint))
-                    : null,
-            };
-        });
-        const hasPaneWidthHint = paneWidthHints.some(({ widthHint }) => widthHint !== null);
-        const hintedGroupWidth = hasPaneWidthHint
-            ? paneWidthHints.reduce((sum, { pane, widthHint }) => {
-                const fallbackWidth = Math.max(
-                    MIN_CHART_CANVAS_PANE_WIDTH,
-                    Math.floor(Number(pane.width) || MIN_CHART_CANVAS_PANE_WIDTH)
-                );
-                return sum + (widthHint === null ? fallbackWidth : widthHint);
-            }, panes.length * 8)
-            : null;
-        const groupStyle = hasPaneWidthHint
-            ? {
-                display: 'flex',
-                minWidth: `${hintedGroupWidth}px`,
-                width: `${hintedGroupWidth}px`,
-                minHeight: 0,
-                overflow: 'hidden',
-                flex: `0 0 ${hintedGroupWidth}px`,
-                flexShrink: 0,
-            }
-            : { display: 'flex', minWidth: 0, minHeight: 0, overflow: 'hidden', flexShrink: 0, flexGrow: totalGroupSize, flexBasis: 0 };
-        return (
-            <div
-                data-docked-chart-group={groupPosition}
-                style={groupStyle}
-            >
-                {panes.map((pane, index) => {
-                    const previousPane = index > 0 ? panes[index - 1] : null;
-                    const nextPane = index < panes.length - 1 ? panes[index + 1] : null;
-                    const resizeLeftKey = groupPosition === 'left'
-                        ? pane.id
-                        : (index === 0 ? 'table' : previousPane.id);
-                    const resizeRightKey = groupPosition === 'left'
-                        ? (nextPane ? nextPane.id : 'table')
-                        : pane.id;
-                    const shouldRenderBeforeHandle = groupPosition === 'right';
-                    const shouldRenderAfterHandle = groupPosition === 'left';
-                    const renderResizeHandle = (leftKey, rightKey) => (
-                        <div
-                            onMouseDown={(event) => {
-                                event.preventDefault();
-                                handleStartChartCanvasResize(leftKey, rightKey, event);
+    const renderChartWorkspaceModal = (position) => (
+        chartModal && chartModalPosition === position ? (
+            <PivotChartModal
+                chartState={chartModal}
+                onClose={() => setChartModal(null)}
+                theme={theme}
+                position={chartModalPosition}
+                onPositionChange={setChartModalPosition}
+            />
+        ) : null
+    );
+
+    const renderFloatingChartCanvasPane = (pane) => (
+                        <PivotChartPanel
+                            key={pane.id}
+                            open
+                            onClose={() => handleRemoveChartCanvasPane(pane.id)}
+                            source={pane.source}
+                            onSourceChange={(value) => updateChartCanvasPane(pane.id, { source: value })}
+                            chartType={pane.chartType}
+                            onChartTypeChange={(value) => updateChartCanvasPane(pane.id, { chartType: value })}
+                            chartLayers={pane.chartLayers}
+                            onChartLayersChange={(value) => updateChartCanvasPane(pane.id, { chartLayers: value })}
+                            availableColumns={resolveChartAvailableColumns(chartPaneDataById[pane.id], visibleLeafColumns)}
+                            barLayout={pane.barLayout}
+                            onBarLayoutChange={(value) => updateChartCanvasPane(pane.id, { barLayout: value })}
+                            axisMode={pane.axisMode}
+                            onAxisModeChange={(value) => updateChartCanvasPane(pane.id, { axisMode: value })}
+                            orientation={pane.orientation}
+                            onOrientationChange={(value) => updateChartCanvasPane(pane.id, { orientation: value })}
+                            hierarchyLevel={pane.hierarchyLevel}
+                            onHierarchyLevelChange={(value) => updateChartCanvasPane(pane.id, { hierarchyLevel: value })}
+                            chartTitle={pane.chartTitle || pane.name}
+                            onChartTitleChange={(value) => updateChartCanvasPane(pane.id, { chartTitle: value })}
+                            rowLimit={pane.rowLimit}
+                            onRowLimitChange={(value) => updateChartCanvasPane(pane.id, { rowLimit: value })}
+                            columnLimit={pane.columnLimit}
+                            onColumnLimitChange={(value) => updateChartCanvasPane(pane.id, { columnLimit: value })}
+                            chartHeight={pane.chartHeight || DEFAULT_CHART_GRAPH_HEIGHT}
+                            onChartHeightChange={(value) => {
+                                const nextHeight = Number(value);
+                                updateChartCanvasPane(pane.id, {
+                                    chartHeight: Number.isFinite(nextHeight) ? Math.max(180, Math.floor(nextHeight)) : DEFAULT_CHART_GRAPH_HEIGHT,
+                                });
                             }}
-                            style={{
-                                width: '8px',
-                                cursor: 'col-resize',
-                                background: 'transparent',
-                                position: 'relative',
-                                flexShrink: 0,
-                            }}
-                            title="Resize workspace panes"
-                        >
-                            <div style={{
-                                position: 'absolute',
-                                top: '50%',
-                                left: '50%',
-                                transform: 'translate(-50%, -50%)',
-                                width: '3px',
-                                height: '78px',
-                                borderRadius: '999px',
-                                background: theme.border,
-                                opacity: 0.92,
-                            }} />
-                        </div>
-                    );
+                            sortMode={pane.sortMode}
+                            onSortModeChange={(value) => updateChartCanvasPane(pane.id, { sortMode: value })}
+                            interactionMode={pane.interactionMode}
+                            onInteractionModeChange={(value) => updateChartCanvasPane(pane.id, { interactionMode: value })}
+                            serverScope={pane.serverScope}
+                            onServerScopeChange={(value) => updateChartCanvasPane(pane.id, { serverScope: value })}
+                            showServerScope={serverSide}
+                            model={chartCanvasPaneModels[pane.id] || null}
+                            theme={theme}
+                            onCategoryActivate={(target) => activateChartCategory(pane.source, pane.interactionMode, target)}
+                            floating
+                            onToggleFloating={() => handleToggleChartCanvasPaneFloating(pane.id)}
+                            floatingRect={pane.floatingRect}
+                            onFloatingDragStart={(event) => handleStartChartCanvasPaneFloatingDrag(pane.id, event)}
+                            onFloatingResizeStart={(direction, event) => handleStartChartCanvasPaneFloatingResize(pane.id, direction, event)}
+                            standalone
+                            showResizeHandle={false}
+                            title={pane.name}
+                            showDefinitionManager={false}
+                            locked={pane.locked}
+                            onToggleLock={() => handleToggleChartCanvasPaneLock(pane.id)}
+                            immersiveMode={Boolean(pane.immersiveMode)}
+                            onImmersiveModeChange={(value) => updateChartCanvasPane(pane.id, { immersiveMode: Boolean(value) })}
+                            initialSettings={pane.chartSettings || {}}
+                            onSettingsChange={(settings) => updateChartCanvasPane(pane.id, { chartSettings: settings })}
+                            settingsPanelWidth={pane.settingsPanelWidth || undefined}
+                        />
 
-                    return (
-                        <React.Fragment key={pane.id}>
-                            {shouldRenderBeforeHandle ? renderResizeHandle(resizeLeftKey, resizeRightKey) : null}
-                            {renderChartCanvasPane(pane, groupPosition)}
-                            {shouldRenderAfterHandle ? renderResizeHandle(resizeLeftKey, resizeRightKey) : null}
-                        </React.Fragment>
-                    );
-                })}
-            </div>
-        );
-    };
-
-    const renderVerticalDockGroup = (panes, groupPosition) => {
-        if (!uiConfig.showCharts) return null;
-        if (!Array.isArray(panes) || panes.length === 0) return null;
-        const renderVerticalResizeHandle = (paneId) => (
-            <div
-                onMouseDown={(event) => {
-                    event.preventDefault();
-                    handleStartChartCanvasVerticalResize(paneId, groupPosition, event);
-                }}
-                style={{
-                    height: '8px',
-                    cursor: 'row-resize',
-                    background: 'transparent',
-                    position: 'relative',
-                    flexShrink: 0,
-                    width: '100%',
-                }}
-                title="Resize chart pane"
-            >
-                <div style={{
-                    position: 'absolute',
-                    top: '50%',
-                    left: '50%',
-                    transform: 'translate(-50%, -50%)',
-                    height: '3px',
-                    width: '78px',
-                    borderRadius: '999px',
-                    background: theme.border,
-                    opacity: 0.92,
-                }} />
-            </div>
-        );
-        return (
-            <div
-                data-docked-chart-group={groupPosition}
-                style={{ display: 'flex', flexDirection: 'column', minWidth: 0, minHeight: 0, overflow: 'hidden', flexShrink: 0 }}
-            >
-                {panes.map((pane) => (
-                    <React.Fragment key={pane.id}>
-                        {groupPosition === 'bottom' ? renderVerticalResizeHandle(pane.id) : null}
-                        {renderChartCanvasPane(pane, groupPosition)}
-                        {groupPosition === 'top' ? renderVerticalResizeHandle(pane.id) : null}
-                    </React.Fragment>
-                ))}
-            </div>
-        );
-    };
+    );
 
     return (
         <div
@@ -12580,42 +12478,63 @@ export default function DashTanstackPivot(props) {
                         serverSide={serverSide}
                     />
                 )}
-                <div ref={chartCanvasLayoutRef} style={{ display:'flex', flexDirection:'column', flex:1, minWidth:0, minHeight:0, overflowX:'hidden', overflowY: (dockedChartCanvasPanesByPosition.top.length > 0 || dockedChartCanvasPanesByPosition.bottom.length > 0) ? 'auto' : 'hidden', position:'relative' }}>
-                    {uiConfig.showCharts && chartModal && chartModalPosition === 'top' ? (
-                        <PivotChartModal
-                            chartState={chartModal}
-                            onClose={() => setChartModal(null)}
-                            theme={theme}
-                            position={chartModalPosition}
-                            onPositionChange={setChartModalPosition}
-                        />
-                    ) : null}
-                    {renderVerticalDockGroup(dockedChartCanvasPanesByPosition.top, 'top')}
-                    <div style={{ display:'flex', flex:1, minWidth:0, minHeight:0, overflow:'hidden', position:'relative' }}>
-                        {uiConfig.showCharts && chartModal && chartModalPosition === 'left' ? (
-                            <PivotChartModal
-                                chartState={chartModal}
-                                onClose={() => setChartModal(null)}
+                <ChartWorkspace
+                    chartCanvasLayoutRef={chartCanvasLayoutRef}
+                    chartLayoutRef={chartLayoutRef}
+                    showCharts={uiConfig.showCharts}
+                    dockedPanesByPosition={dockedChartCanvasPanesByPosition}
+                    floatingPanes={floatingChartCanvasPanes}
+                    paneWidthHints={chartCanvasPaneWidthHints}
+                    tableCanvasSize={tableCanvasSize}
+                    minTablePanelWidth={MIN_TABLE_PANEL_WIDTH}
+                    minChartPaneWidth={MIN_CHART_CANVAS_PANE_WIDTH}
+                    defaultDockedPaneHeight={DEFAULT_DOCKED_CHART_PANE_HEIGHT}
+                    defaultChartGraphHeight={DEFAULT_CHART_GRAPH_HEIGHT}
+                    chartPanelVerticalChromeHeight={CHART_PANEL_VERTICAL_CHROME_HEIGHT}
+                    theme={theme}
+                    renderChartPane={renderChartCanvasPane}
+                    renderFloatingPane={renderFloatingChartCanvasPane}
+                    renderModal={renderChartWorkspaceModal}
+                    tableAdjacentContent={(
+                        <>
+
+                        {activeDetailDisplayMode === 'sidepanel' && detailSurface && (
+                            <DetailSidePanel
+                                detailState={detailSurface}
+                                onClose={() => setDetailSurface(null)}
+                                onPageChange={handleDetailPageChange}
+                                onSort={handleDetailSort}
+                                onFilter={handleDetailFilter}
                                 theme={theme}
-                                position={chartModalPosition}
-                                onPositionChange={setChartModalPosition}
+                                width={detailConfig.sidepanelWidth}
+                            />
+                        )}
+                        {editPanelEnabled && ((editPanelOpen && editPanelCells.length > 0) || pendingPropagationUpdates) ? (
+                            <EditSidePanel
+                                editedCells={editPanelCells}
+                                propagationLog={propagationLogRef.current}
+                                onReapplyPropagation={handleReapplyPropagation}
+                                onRevertCell={handleRevertCell}
+                                onRevertSelected={handleRevertSelected}
+                                onRevertAll={handleRevertAll}
+                                onToggleDisplayMode={() => setEditValueDisplayMode((p) => p === 'original' ? 'edited' : 'original')}
+                                displayMode={editValueDisplayMode}
+                                onClose={() => { setEditPanelOpen(false); handleCancelPropagation(); }}
+                                theme={theme}
+                                width={320}
+                                pendingPropagation={pendingPropagationUpdates}
+                                propagationMethod={propagationMethodUI}
+                                onPropagationMethodChange={handlePropagationMethodChange}
+                                onConfirmPropagation={handleConfirmPropagation}
+                                onCancelPropagation={handleCancelPropagation}
                             />
                         ) : null}
-                        {renderHorizontalDockGroup(dockedChartCanvasPanesByPosition.left, 'left')}
-                        <div
-                            data-docked-table-canvas
-                            ref={chartLayoutRef}
-                            style={{
-                                display:'flex',
-                                flexDirection:'column',
-                                flexGrow: tableCanvasSize,
-                                flexBasis: 0,
-                                minWidth: `${MIN_TABLE_PANEL_WIDTH}px`,
-                                minHeight: 0,
-                                overflow:'hidden',
-                                position:'relative',
-                            }}
-                        >
+                        </>
+                    )}
+                    onHorizontalResizeStart={handleStartChartCanvasResize}
+                    onVerticalResizeStart={handleStartChartCanvasVerticalResize}
+                >
+
                             <div style={{ display:'flex', flex:1, minWidth:0, minHeight:0, overflow:'hidden' }}>
                                 <PivotTableBody
                                     key={`pivot-body-${editValueDisplayMode}-${layoutMode}-${showSubtotals ? 'with-subtotals' : 'no-subtotals'}`}
@@ -12693,121 +12612,7 @@ export default function DashTanstackPivot(props) {
                                     />
                                 )}
                             </div>
-                        </div>
-                        {activeDetailDisplayMode === 'sidepanel' && detailSurface && (
-                            <DetailSidePanel
-                                detailState={detailSurface}
-                                onClose={() => setDetailSurface(null)}
-                                onPageChange={handleDetailPageChange}
-                                onSort={handleDetailSort}
-                                onFilter={handleDetailFilter}
-                                theme={theme}
-                                width={detailConfig.sidepanelWidth}
-                            />
-                        )}
-                        {editPanelEnabled && ((editPanelOpen && editPanelCells.length > 0) || pendingPropagationUpdates) ? (
-                            <EditSidePanel
-                                editedCells={editPanelCells}
-                                propagationLog={propagationLogRef.current}
-                                onReapplyPropagation={handleReapplyPropagation}
-                                onRevertCell={handleRevertCell}
-                                onRevertSelected={handleRevertSelected}
-                                onRevertAll={handleRevertAll}
-                                onToggleDisplayMode={() => setEditValueDisplayMode((p) => p === 'original' ? 'edited' : 'original')}
-                                displayMode={editValueDisplayMode}
-                                onClose={() => { setEditPanelOpen(false); handleCancelPropagation(); }}
-                                theme={theme}
-                                width={320}
-                                pendingPropagation={pendingPropagationUpdates}
-                                propagationMethod={propagationMethodUI}
-                                onPropagationMethodChange={handlePropagationMethodChange}
-                                onConfirmPropagation={handleConfirmPropagation}
-                                onCancelPropagation={handleCancelPropagation}
-                            />
-                        ) : null}
-                        {renderHorizontalDockGroup(dockedChartCanvasPanesByPosition.right, 'right')}
-                        {uiConfig.showCharts && chartModal && chartModalPosition === 'right' ? (
-                            <PivotChartModal
-                                chartState={chartModal}
-                                onClose={() => setChartModal(null)}
-                                theme={theme}
-                                position={chartModalPosition}
-                                onPositionChange={setChartModalPosition}
-                            />
-                        ) : null}
-                    </div>
-                    {renderVerticalDockGroup(dockedChartCanvasPanesByPosition.bottom, 'bottom')}
-                    {uiConfig.showCharts && chartModal && chartModalPosition === 'bottom' ? (
-                        <PivotChartModal
-                            chartState={chartModal}
-                            onClose={() => setChartModal(null)}
-                            theme={theme}
-                            position={chartModalPosition}
-                            onPositionChange={setChartModalPosition}
-                        />
-                    ) : null}
-                    {uiConfig.showCharts && floatingChartCanvasPanes.map((pane) => (
-                        <PivotChartPanel
-                            key={pane.id}
-                            open
-                            onClose={() => handleRemoveChartCanvasPane(pane.id)}
-                            source={pane.source}
-                            onSourceChange={(value) => updateChartCanvasPane(pane.id, { source: value })}
-                            chartType={pane.chartType}
-                            onChartTypeChange={(value) => updateChartCanvasPane(pane.id, { chartType: value })}
-                            chartLayers={pane.chartLayers}
-                            onChartLayersChange={(value) => updateChartCanvasPane(pane.id, { chartLayers: value })}
-                            availableColumns={resolveChartAvailableColumns(chartPaneDataById[pane.id], visibleLeafColumns)}
-                            barLayout={pane.barLayout}
-                            onBarLayoutChange={(value) => updateChartCanvasPane(pane.id, { barLayout: value })}
-                            axisMode={pane.axisMode}
-                            onAxisModeChange={(value) => updateChartCanvasPane(pane.id, { axisMode: value })}
-                            orientation={pane.orientation}
-                            onOrientationChange={(value) => updateChartCanvasPane(pane.id, { orientation: value })}
-                            hierarchyLevel={pane.hierarchyLevel}
-                            onHierarchyLevelChange={(value) => updateChartCanvasPane(pane.id, { hierarchyLevel: value })}
-                            chartTitle={pane.chartTitle || pane.name}
-                            onChartTitleChange={(value) => updateChartCanvasPane(pane.id, { chartTitle: value })}
-                            rowLimit={pane.rowLimit}
-                            onRowLimitChange={(value) => updateChartCanvasPane(pane.id, { rowLimit: value })}
-                            columnLimit={pane.columnLimit}
-                            onColumnLimitChange={(value) => updateChartCanvasPane(pane.id, { columnLimit: value })}
-                            chartHeight={pane.chartHeight || DEFAULT_CHART_GRAPH_HEIGHT}
-                            onChartHeightChange={(value) => {
-                                const nextHeight = Number(value);
-                                updateChartCanvasPane(pane.id, {
-                                    chartHeight: Number.isFinite(nextHeight) ? Math.max(180, Math.floor(nextHeight)) : DEFAULT_CHART_GRAPH_HEIGHT,
-                                });
-                            }}
-                            sortMode={pane.sortMode}
-                            onSortModeChange={(value) => updateChartCanvasPane(pane.id, { sortMode: value })}
-                            interactionMode={pane.interactionMode}
-                            onInteractionModeChange={(value) => updateChartCanvasPane(pane.id, { interactionMode: value })}
-                            serverScope={pane.serverScope}
-                            onServerScopeChange={(value) => updateChartCanvasPane(pane.id, { serverScope: value })}
-                            showServerScope={serverSide}
-                            model={chartCanvasPaneModels[pane.id] || null}
-                            theme={theme}
-                            onCategoryActivate={(target) => activateChartCategory(pane.source, pane.interactionMode, target)}
-                            floating
-                            onToggleFloating={() => handleToggleChartCanvasPaneFloating(pane.id)}
-                            floatingRect={pane.floatingRect}
-                            onFloatingDragStart={(event) => handleStartChartCanvasPaneFloatingDrag(pane.id, event)}
-                            onFloatingResizeStart={(direction, event) => handleStartChartCanvasPaneFloatingResize(pane.id, direction, event)}
-                            standalone
-                            showResizeHandle={false}
-                            title={pane.name}
-                            showDefinitionManager={false}
-                            locked={pane.locked}
-                            onToggleLock={() => handleToggleChartCanvasPaneLock(pane.id)}
-                            immersiveMode={Boolean(pane.immersiveMode)}
-                            onImmersiveModeChange={(value) => updateChartCanvasPane(pane.id, { immersiveMode: Boolean(value) })}
-                            initialSettings={pane.chartSettings || {}}
-                            onSettingsChange={(settings) => updateChartCanvasPane(pane.id, { chartSettings: settings })}
-                            settingsPanelWidth={pane.settingsPanelWidth || undefined}
-                        />
-                    ))}
-                </div>
+                </ChartWorkspace>
             </div>
             {contextMenu && <ContextMenu {...contextMenu} theme={theme} onClose={() => setContextMenu(null)} />}
             {notification && <Notification message={notification.message} type={notification.type} onClose={() => setNotification(null)} />}

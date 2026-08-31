@@ -684,6 +684,17 @@ def test_chart_panel_source_grows_for_settings_instead_of_splitting_canvas():
             "DashTanstackPivot.react.js",
         )
     ).read_text(encoding="utf-8")
+    workspace_source = Path(
+        os.path.join(
+            os.getcwd(),
+            "dash_tanstack_pivot",
+            "src",
+            "lib",
+            "components",
+            "Charts",
+            "ChartWorkspace.js",
+        )
+    ).read_text(encoding="utf-8")
     normalization_source = Path(
         os.path.join(
             os.getcwd(),
@@ -706,19 +717,22 @@ def test_chart_panel_source_grows_for_settings_instead_of_splitting_canvas():
     assert "Dock chart pane to the bottom" in chart_source
     assert "data-chart-modal-position={position}" in chart_source
     assert "const [chartCanvasPaneWidthHints, setChartCanvasPaneWidthHints] = useState({});" in component_source
-    assert "const paneWidthHints = panes.map((pane) => {" in component_source
-    assert "const hintedGroupWidth = hasPaneWidthHint" in component_source
-    assert "flex: `0 0 ${hintedGroupWidth}px`" in component_source
-    assert "width: widthHint === null ? undefined : `${widthHint}px`" in component_source
-    assert "width: widthHint === null ? undefined : '100%'" not in component_source
+    assert "ChartWorkspace" in component_source
+    assert "groupChartWorkspacePanes" in component_source
+    assert "const paneHints = panes.map((pane) => ({" in workspace_source
+    assert "const hintedGroupWidth = hasPaneWidthHint" in workspace_source
+    assert "flex: `0 0 ${hintedGroupWidth}px`" in workspace_source
+    assert "width: widthHint === null ? undefined : `${widthHint}px`" in workspace_source
+    assert "width: widthHint === null ? undefined : '100%'" not in workspace_source
     assert "VALID_CHART_DOCK_POSITIONS = new Set(['left', 'right', 'top', 'bottom'])" in normalization_source
     assert "normalizeChartDockPosition" in component_source
     assert "dockPosition: normalizeChartDockPosition(source.dockPosition || source.dock_position, 'right')" in normalization_source
-    assert "data-docked-chart-pane-position={normalizedDockPosition}" in component_source
-    assert "renderHorizontalDockGroup(dockedChartCanvasPanesByPosition.left, 'left')" in component_source
-    assert "renderVerticalDockGroup(dockedChartCanvasPanesByPosition.top, 'top')" in component_source
-    assert "chartModal && chartModalPosition === 'top'" in component_source
-    assert "chartModal && chartModalPosition === 'bottom'" in component_source
+    assert "data-docked-chart-pane-position={normalizedDockPosition}" in workspace_source
+    assert "renderHorizontalDockGroup(leftPanes, 'left')" in workspace_source
+    assert "renderVerticalDockGroup(topPanes, 'top')" in workspace_source
+    assert "const renderChartWorkspaceModal = (position)" in component_source
+    assert "data-docked-table-canvas" in workspace_source
+    assert "{children}" in workspace_source
     assert "handleChartCanvasPaneWidthHintChange" in component_source
     assert "normalizedDockPosition === 'left' || normalizedDockPosition === 'right'" in component_source
 
@@ -852,6 +866,17 @@ def test_chart_panel_dimensions_use_shared_bounds_and_chrome():
             "DashTanstackPivot.react.js",
         )
     ).read_text(encoding="utf-8")
+    workspace_source = Path(
+        os.path.join(
+            os.getcwd(),
+            "dash_tanstack_pivot",
+            "src",
+            "lib",
+            "components",
+            "Charts",
+            "ChartWorkspace.js",
+        )
+    ).read_text(encoding="utf-8")
     normalization_source = Path(
         os.path.join(
             os.getcwd(),
@@ -874,7 +899,7 @@ def test_chart_panel_dimensions_use_shared_bounds_and_chrome():
     assert "chartCanvasLayoutRef.current.getBoundingClientRect().width" in component_source
     assert "Math.min(\n                maxChartCanvasPaneWidth," in component_source
     assert "nextRect.height - CHART_PANEL_VERTICAL_CHROME_HEIGHT" in component_source
-    assert "Math.floor((pane.chartHeight || DEFAULT_CHART_GRAPH_HEIGHT) + CHART_PANEL_VERTICAL_CHROME_HEIGHT)" in component_source
+    assert "Math.floor(chartHeight + chartPanelVerticalChromeHeight)" in workspace_source
     assert "Math.max(width || 430, 430)" not in chart_source
     assert "+ 188" not in component_source
     assert "- 188" not in component_source
