@@ -903,6 +903,16 @@ def test_frontend_edit_contract_uses_event_actions_and_removes_none_option():
             "DashTanstackPivot.react.js",
         )
     ).read_text(encoding="utf-8")
+    transaction_source = Path(
+        os.path.join(
+            os.getcwd(),
+            "dash_tanstack_pivot",
+            "src",
+            "lib",
+            "hooks",
+            "usePivotTransactions.js",
+        )
+    ).read_text(encoding="utf-8")
     side_panel_source = Path(
         os.path.join(
             os.getcwd(),
@@ -915,8 +925,9 @@ def test_frontend_edit_contract_uses_event_actions_and_removes_none_option():
         )
     ).read_text(encoding="utf-8")
 
-    assert "eventAction: 'undo'" in component_source
-    assert "eventAction: 'redo'" in component_source
+    assert "usePivotTransactions" in component_source
+    assert "eventAction: 'undo'" in transaction_source
+    assert "eventAction: 'redo'" in transaction_source
     assert "eventAction: 'revert'" in component_source
     assert "eventAction: 'replace'" in component_source
     assert "directEventIds" in component_source

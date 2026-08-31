@@ -3019,16 +3019,22 @@ def test_frontend_batch_edit_source_uses_runtime_transaction_requests():
             "DashTanstackPivot.react.js",
         )
     ).read_text(encoding="utf-8")
+    transaction_source = Path(
+        os.path.join(
+            os.getcwd(),
+            "dash_tanstack_pivot",
+            "src",
+            "lib",
+            "hooks",
+            "usePivotTransactions.js",
+        )
+    ).read_text(encoding="utf-8")
 
+    assert "usePivotTransactions" in component_source
     assert "const dispatchBatchUpdateRequest = useCallback" in component_source
-    assert "emitRuntimeRequest('transaction'" in component_source
     assert "supportsPatchTransactionRefresh" in component_source
     assert "refreshMode: supportsPatchTransactionRefresh ? 'patch' : 'smart'" in component_source
-    assert "visibleRowPaths: visiblePatchRowPathsRef.current" in component_source
-    assert "visibleCenterColumnIds: visiblePatchCenterIdsRef.current" in component_source
     assert "applyRuntimePatchEnvelope" in component_source
-    assert "silent: !showGlobalLoading" in component_source
-    assert "shouldShowTransactionLoading" in component_source
     assert "dispatchBatchUpdateRequest(updates, 'paste')" in component_source
     assert "dispatchBatchUpdateRequest(updates, 'fill')" in component_source
     assert "dispatchBatchUpdateRequest([update], 'inline-edit')" in component_source
@@ -3036,11 +3042,10 @@ def test_frontend_batch_edit_source_uses_runtime_transaction_requests():
     assert "pendingPropagationUpdatesRef" in component_source
     assert "handleConfirmPropagation" in component_source
     assert "handleCancelPropagation" in component_source
-    assert "inverseTransaction" in component_source
-    assert "redoTransaction" in component_source
     assert "describeTransactionPropagation" in component_source
-    assert "transactionUndoStackRef" in component_source
-    assert "transactionRedoStackRef" in component_source
+    assert "transactionUndoStackRef" not in component_source
+    assert "transactionRedoStackRef" not in component_source
+    assert "pendingTransactionHistoryRef" not in component_source
     assert "handleGlobalEditShortcut" in component_source
     assert "onUndoTransaction={handleUndo}" in component_source
     assert "onRedoTransaction={handleRedo}" in component_source
@@ -3053,6 +3058,16 @@ def test_frontend_batch_edit_source_uses_runtime_transaction_requests():
     assert "setValConfigsWithHistory" in component_source
     assert "setColumnPinningWithHistory" in component_source
     assert "setRowFields={setRowFieldsWithHistory}" in component_source
+
+    assert "emitRuntimeRequest('transaction'" in transaction_source
+    assert "visiblePatchRowPathsRef" in transaction_source
+    assert "visibleCenterColumnIds" in transaction_source
+    assert "silent: !showGlobalLoading" in transaction_source
+    assert "shouldShowTransactionLoading" in transaction_source
+    assert "inverseTransaction" in transaction_source
+    assert "redoTransaction" in transaction_source
+    assert "queueTransactionHistoryRequest" in transaction_source
+    assert "finalizeTransactionHistoryResponse" in transaction_source
     assert "setColFields={setColFieldsWithHistory}" in component_source
     assert "setValConfigs={setValConfigsWithHistory}" in component_source
 

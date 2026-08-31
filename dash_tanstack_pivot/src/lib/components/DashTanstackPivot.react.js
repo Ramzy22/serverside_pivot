@@ -225,6 +225,7 @@ import { useSidebarUI } from '../hooks/useSidebarUI';
 import { useReportMode } from '../hooks/useReportMode';
 import { useDetailDrillThrough } from '../hooks/useDetailDrillThrough';
 import { useRuntimeDataCommit } from '../hooks/useRuntimeDataCommit';
+import { usePivotTransactions } from '../hooks/usePivotTransactions';
 import { PivotThemeProvider } from '../contexts/PivotThemeContext';
 import { PivotConfigProvider } from '../contexts/PivotConfigContext';
 import { PivotValueDisplayProvider } from '../contexts/PivotValueDisplayContext';
@@ -1777,16 +1778,31 @@ export default function DashTanstackPivot(props) {
     const EXPORT_ROW_LIMIT = 100_000;
     const COPY_ROW_LIMIT = 10_000;
 
-    const transactionUndoExecutorRef = useRef(() => {});
-    const transactionRedoExecutorRef = useRef(() => {});
+    const transactionControls = usePivotTransactions();
+    const {
+        configure: configureTransactions,
+        transactionHistoryState,
+        syncTransactionHistoryState,
+        findTransactionHistoryEntryByEventId,
+        sortEventIdsByActiveHistory,
+        pruneTransactionHistoryEntries,
+        pushUnifiedHistoryEntry,
+        queueTransactionHistoryRequest,
+        clearTransactionHistory,
+        dispatchTransactionRequest,
+        finalizeTransactionHistoryResponse,
+        clearPendingTransactionHistoryRequest,
+        executeUndoTransaction,
+        executeRedoTransaction,
+    } = transactionControls;
 
     const handleUndo = useCallback(() => {
-        transactionUndoExecutorRef.current();
-    }, []);
+        executeUndoTransaction();
+    }, [executeUndoTransaction]);
 
     const handleRedo = useCallback(() => {
-        transactionRedoExecutorRef.current();
-    }, []);
+        executeRedoTransaction();
+    }, [executeRedoTransaction]);
 
     const handleRefresh = () => {
         if (setProps) setProps({ refresh: Date.now() });
@@ -3370,16 +3386,6 @@ export default function DashTanstackPivot(props) {
     const profilingEnabledRef = useRef(isPivotProfilingEnabled());
     const pendingDataProfilerCommitRef = useRef(null);
     const activeRuntimePayloadFetchRef = useRef(null);
-    const transactionUndoStackRef = useRef([]);
-    const transactionRedoStackRef = useRef([]);
-    const pendingTransactionHistoryRef = useRef(new Map());
-    const transactionHistoryPendingRequestRef = useRef(null);
-    const editSessionStateRef = useRef({
-        sessionId: sessionIdRef.current,
-        clientInstance: clientInstanceRef.current,
-        sessionKey: null,
-        sessionVersion: 0,
-    });
     const optimisticCellValuesRef = useRef(new Map());
     const optimisticCellRequestsRef = useRef(new Map());
     const visiblePatchRowPathsRef = useRef([]);
@@ -3411,11 +3417,6 @@ export default function DashTanstackPivot(props) {
     const [pendingPropagationUpdates, setPendingPropagationUpdates] = useState(null);
     const [editPanelOpen, setEditPanelOpen] = useState(false);
     const [propagationMethodUI, setPropagationMethodUI] = useState('equal');
-    const [transactionHistoryState, setTransactionHistoryState] = useState({
-        undoCount: 0,
-        redoCount: 0,
-        pending: false,
-    });
     const [comparisonValueState, setComparisonValueState] = useState({
         activeCount: 0,
     });
@@ -3611,14 +3612,6 @@ export default function DashTanstackPivot(props) {
             return nextSnapshot;
         });
         return nextSnapshot;
-    }, []);
-
-    const syncTransactionHistoryState = useCallback(() => {
-        setTransactionHistoryState({
-            undoCount: transactionUndoStackRef.current.length,
-            redoCount: transactionRedoStackRef.current.length,
-            pending: Boolean(transactionHistoryPendingRequestRef.current),
-        });
     }, []);
 
     const syncComparisonValueState = useCallback(() => {
@@ -3971,44 +3964,6 @@ export default function DashTanstackPivot(props) {
             reason: null,
         };
     }, [resolveTrackedCellEventIds]);
-
-    const findTransactionHistoryEntryByEventId = useCallback((eventId) => {
-        const normalizedEventId = String(eventId || '').trim();
-        if (!normalizedEventId) return null;
-        const findInEntries = (entries) => (
-            Array.isArray(entries)
-                ? entries.find((entry) => entry && entry.kind === 'transaction' && entry.eventId === normalizedEventId) || null
-                : null
-        );
-        return findInEntries(transactionUndoStackRef.current) || findInEntries(transactionRedoStackRef.current);
-    }, []);
-
-    const sortEventIdsByActiveHistory = useCallback((eventIds) => {
-        const normalizedEventIds = normalizeTrackedEventIds(eventIds);
-        if (normalizedEventIds.length <= 1) return normalizedEventIds;
-        const orderMap = new Map();
-        transactionUndoStackRef.current.forEach((entry, index) => {
-            if (!entry || entry.kind !== 'transaction' || !entry.eventId) return;
-            orderMap.set(entry.eventId, index);
-        });
-        return normalizedEventIds.sort((left, right) => {
-            const leftIndex = orderMap.has(left) ? orderMap.get(left) : -1;
-            const rightIndex = orderMap.has(right) ? orderMap.get(right) : -1;
-            return rightIndex - leftIndex;
-        });
-    }, [normalizeTrackedEventIds]);
-
-    const pruneTransactionHistoryEntries = useCallback((eventIds) => {
-        const normalizedEventIds = new Set(normalizeTrackedEventIds(eventIds));
-        if (normalizedEventIds.size === 0) return;
-        transactionUndoStackRef.current = transactionUndoStackRef.current.filter((entry) => (
-            !entry || entry.kind !== 'transaction' || !normalizedEventIds.has(entry.eventId)
-        ));
-        transactionRedoStackRef.current = transactionRedoStackRef.current.filter((entry) => (
-            !entry || entry.kind !== 'transaction' || !normalizedEventIds.has(entry.eventId)
-        ));
-        syncTransactionHistoryState();
-    }, [normalizeTrackedEventIds, syncTransactionHistoryState]);
 
     const hydrateVisibleEditOverlay = useCallback((editOverlay) => {
         const overlayCells = Array.isArray(editOverlay && editOverlay.cells) ? editOverlay.cells : [];
@@ -4822,17 +4777,6 @@ export default function DashTanstackPivot(props) {
         if (didDelete) bumpOptimisticCellEpoch();
     }, [bumpOptimisticCellEpoch]);
 
-    const pushUnifiedHistoryEntry = useCallback((entry) => {
-        if (!entry || typeof entry !== 'object') return;
-        const nextUndoStack = [...transactionUndoStackRef.current, entry];
-        if (nextUndoStack.length > MAX_TRANSACTION_HISTORY_ENTRIES) {
-            nextUndoStack.splice(0, nextUndoStack.length - MAX_TRANSACTION_HISTORY_ENTRIES);
-        }
-        transactionUndoStackRef.current = nextUndoStack;
-        transactionRedoStackRef.current = [];
-        syncTransactionHistoryState();
-    }, [syncTransactionHistoryState]);
-
     const clearPendingLayoutHistoryCapture = useCallback((token = null) => {
         const pendingCapture = pendingLayoutHistoryCaptureRef.current;
         if (!pendingCapture) return;
@@ -4968,24 +4912,6 @@ export default function DashTanstackPivot(props) {
                 : false
         );
     }, [normalizedInitialValConfigs]);
-
-    const clearTransactionHistory = useCallback(() => {
-        transactionUndoStackRef.current = [];
-        transactionRedoStackRef.current = [];
-        pendingTransactionHistoryRef.current.clear();
-        transactionHistoryPendingRequestRef.current = null;
-        editSessionStateRef.current = {
-            sessionId: sessionIdRef.current,
-            clientInstance: clientInstanceRef.current,
-            sessionKey: null,
-            sessionVersion: 0,
-        };
-        clearAllOptimisticCellValues();
-        clearAllEditedCellMarkers();
-        clearAllComparisonValueState();
-        clearPendingLayoutHistoryCapture();
-        syncTransactionHistoryState();
-    }, [clearAllComparisonValueState, clearAllEditedCellMarkers, clearAllOptimisticCellValues, clearPendingLayoutHistoryCapture, syncTransactionHistoryState]);
 
     const didMountClearTransactionRef = useRef(false);
     const prevServerSideRef = useRef(serverSide);
@@ -5344,428 +5270,64 @@ export default function DashTanstackPivot(props) {
         }));
     }, [detailMode, rowFields, serverSide, valConfigs, viewMode]);
 
-    const dispatchTransactionRequest = useCallback((transactionPayload, source = 'transaction') => {
-        let normalizedTransaction = normalizeTransactionHistoryPayload(transactionPayload, { source });
-        if (!normalizedTransaction || !setPropsRef.current || !serverSide) return null;
-        if (transactionHistoryPendingRequestRef.current) {
-            showNotification('Wait for the current edit-history action to finish before applying another edit.', 'warning');
-            return null;
-        }
-        const requestedRefreshMode = normalizeTransactionRefreshModeValue(normalizedTransaction.refreshMode, 'smart');
-        const canUsePatchRefresh = (
-            requestedRefreshMode === 'patch'
-            && visiblePatchRowPathsRef.current.length > 0
-            && (!colFields.length || visiblePatchCenterIdsRef.current.length > 0)
-        );
-        if (requestedRefreshMode === 'patch' && !canUsePatchRefresh) {
-            normalizedTransaction = {
-                ...normalizedTransaction,
-                refreshMode: 'viewport',
-            };
-        }
-        const showGlobalLoading = shouldShowTransactionLoading(normalizedTransaction);
-
-        const viewportSnapshot = latestRequestedViewportRef.current || latestViewportRef.current || { start: 0, end: DEFAULT_SERVER_SIDE_BLOCK_SIZE - 1, count: DEFAULT_SERVER_SIDE_BLOCK_SIZE };
-        const nextStart = Math.max(0, Number.isFinite(Number(viewportSnapshot.start)) ? Number(viewportSnapshot.start) : 0);
-        const nextEndCandidate = Number.isFinite(Number(viewportSnapshot.end))
-            ? Number(viewportSnapshot.end)
-            : (nextStart + Math.max(1, Number(viewportSnapshot.count) || DEFAULT_SERVER_SIDE_BLOCK_SIZE) - 1);
-        const nextEnd = Math.max(nextStart, nextEndCandidate);
-        const nextCount = Math.max(1, nextEnd - nextStart + 1);
-        const updateColumnWindow = resolveStableRequestedColumnWindow();
-        const tx = beginExpansionRequest();
-        const requestId = `${source}:${tx.version}`;
-        markRequestPending({
-            version: tx.version,
-            reqStart: nextStart,
-            reqEnd: nextEnd,
-            colStart: updateColumnWindow.start,
-            colEnd: updateColumnWindow.end,
-            silent: !showGlobalLoading,
-        });
-        emitRuntimeRequest('transaction', {
-            table: tableName || undefined,
-            start: nextStart,
-            end: nextEnd,
-            count: nextCount,
-            window_seq: tx.version,
-            version: tx.version,
-            requestId,
-            state_epoch: tx.stateEpoch,
-            session_id: sessionIdRef.current,
-            client_instance: clientInstanceRef.current,
-            abort_generation: tx.abortGeneration,
-            intent: 'viewport',
-            col_start: updateColumnWindow.start !== null ? updateColumnWindow.start : undefined,
-            col_end: updateColumnWindow.end !== null ? updateColumnWindow.end : undefined,
-            include_grand_total: serverSidePinsGrandTotal || undefined,
-            immersive_mode: immersiveMode || undefined,
-            ...normalizedTransaction,
-            ...(normalizedTransaction.refreshMode === 'patch' ? {
-                visibleRowPaths: visiblePatchRowPathsRef.current,
-                visibleCenterColumnIds: visiblePatchCenterIdsRef.current,
-            } : {}),
-        });
-        return { requestId };
-    }, [beginExpansionRequest, immersiveMode, colFields.length, emitRuntimeRequest, markRequestPending, resolveStableRequestedColumnWindow, serverSide, serverSidePinsGrandTotal, showNotification, tableName]);
-
-    const finalizeTransactionHistoryResponse = useCallback((response, payload) => {
-        if (!response || typeof response !== 'object') return;
-        const requestId = response.requestId || null;
-        if (!requestId) return;
-        const pendingEntry = pendingTransactionHistoryRef.current.get(requestId);
-        if (!pendingEntry) return;
-        pendingTransactionHistoryRef.current.delete(requestId);
-
-        const transactionResult = payload && typeof payload === 'object' && payload.transaction && typeof payload.transaction === 'object'
-            ? payload.transaction
-            : {};
-        const didApplyWork = hasAppliedTransactionWork(transactionResult);
-        const transactionWarnings = Array.isArray(transactionResult.warnings) ? transactionResult.warnings : [];
-        const propagationEntries = Array.isArray(transactionResult.propagation) ? transactionResult.propagation : [];
-        const responseAffectedCells = transactionResult.affectedCells && typeof transactionResult.affectedCells === 'object'
-            ? transactionResult.affectedCells
-            : null;
-        const responseEditSession = transactionResult.editSession && typeof transactionResult.editSession === 'object'
-            ? transactionResult.editSession
-            : null;
-        if (responseEditSession) {
-            editSessionStateRef.current = {
-                sessionId: responseEditSession.sessionId || sessionIdRef.current,
-                clientInstance: responseEditSession.clientInstance || clientInstanceRef.current,
-                sessionKey: responseEditSession.sessionKey || null,
-                sessionVersion: Number(responseEditSession.sessionVersion) || 0,
-            };
-        }
-
-        const resolveTargetHistoryEntries = () => {
-            const explicitEntries = Array.isArray(pendingEntry.historyEntries)
-                ? pendingEntry.historyEntries.filter(Boolean)
-                : [];
-            if (explicitEntries.length > 0) return explicitEntries;
-            const targetEventIds = Array.isArray(pendingEntry.targetEventIds) ? pendingEntry.targetEventIds : [];
-            return targetEventIds
-                .map((eventId) => findTransactionHistoryEntryByEventId(eventId))
-                .filter(Boolean);
-        };
-
-        const rollbackHistoryEntries = (historyEntries) => {
-            (Array.isArray(historyEntries) ? historyEntries : []).forEach((entry) => {
-                if (!entry || typeof entry !== 'object') return;
-                if (entry.editedMarkerPlan) {
-                    applyEditedCellMarkerPlan(entry.editedMarkerPlan, 'backward');
-                }
-                if (entry.comparisonPlan) {
-                    applyComparisonValuePlan(entry.comparisonPlan, 'backward');
-                }
-                if (entry.eventId) {
-                    detachTrackedEventOwnership([entry.eventId]);
-                }
-            });
-        };
-
-        const pushCapturedHistoryEntry = (entry) => {
-            if (!entry) return;
-            pushUnifiedHistoryEntry(entry);
-            if (entry.eventId && entry.affectedCells) {
-                appendTrackedEventOwnership(entry.eventId, entry.affectedCells);
-            }
-        };
-
-        if (pendingEntry.action === 'apply') {
-            const captureable = Boolean(transactionResult.history && transactionResult.history.captureable);
-            const undoTransaction = normalizeTransactionHistoryPayload(transactionResult.inverseTransaction);
-            const redoTransaction = normalizeTransactionHistoryPayload(transactionResult.redoTransaction);
-            if (response.status === 'data') releaseOptimisticCellRequest(requestId);
-            if (!didApplyWork && pendingEntry.editedMarkerPlan) {
-                applyEditedCellMarkerPlan(pendingEntry.editedMarkerPlan, 'backward');
-            }
-            if (!didApplyWork && pendingEntry.comparisonPlan) {
-                applyComparisonValuePlan(pendingEntry.comparisonPlan, 'backward');
-            }
-            if (didApplyWork && captureable && undoTransaction && redoTransaction) {
-                pushCapturedHistoryEntry({
-                    kind: 'transaction',
-                    undoTransaction,
-                    redoTransaction,
-                    editedMarkerPlan: pendingEntry.editedMarkerPlan || null,
-                    comparisonPlan: pendingEntry.comparisonPlan || null,
-                    source: pendingEntry.source || transactionResult.source || 'transaction',
-                    createdAt: Date.now(),
-                    eventId: transactionResult.eventId || null,
-                    sessionVersion: Number(transactionResult.sessionVersion) || 0,
-                    affectedCells: responseAffectedCells,
-                    impactedScopeIds: Array.isArray(transactionResult.impactedScopeIds) ? transactionResult.impactedScopeIds : [],
-                });
-            } else if (didApplyWork && transactionResult.history && Array.isArray(transactionResult.history.warnings) && transactionResult.history.warnings[0]) {
-                showNotification(transactionResult.history.warnings[0], 'warning');
-            } else if (!didApplyWork && transactionWarnings[0]) {
-                showNotification(transactionWarnings[0], 'warning');
-            }
-            if (didApplyWork && propagationEntries.length > 0) {
-                propagationEntries.forEach((entry) => {
-                    if (!entry || typeof entry !== 'object') return;
-                    propagationLogRef.current = [
-                        ...propagationLogRef.current.slice(-49),
-                        { ...entry, timestamp: Date.now() },
-                    ];
-                });
-                setPropagationLogEpoch((prev) => prev + 1);
-                setEditPanelOpen(true);
-            }
-            if (pendingEntry.rowEditRowId) {
-                if (didApplyWork) {
-                    closeRowEditSession(pendingEntry.rowEditRowId);
-                    emitEditLifecycleEvent({
-                        kind: 'row_edit_commit_success',
-                        rowId: pendingEntry.rowEditRowId,
-                        dirtyColumns: pendingEntry.dirtyColumns || [],
-                    });
-                } else {
-                    updateRowEditSessions((previousSessions) => {
-                        const previousSession = previousSessions[pendingEntry.rowEditRowId];
-                        if (!previousSession) return previousSessions;
-                        return {
-                            ...previousSessions,
-                            [pendingEntry.rowEditRowId]: {
-                                ...previousSession,
-                                status: 'editing',
-                            },
-                        };
-                    });
-                    emitEditLifecycleEvent({
-                        kind: 'row_edit_commit_error',
-                        rowId: pendingEntry.rowEditRowId,
-                        message: transactionWarnings[0] || 'The row edit did not apply.',
-                    });
-                }
-            }
-            return;
-        }
-
-        if (pendingEntry.action === 'undo') {
-            if (response.status === 'data') releaseOptimisticCellRequest(requestId);
-            if (didApplyWork && pendingEntry.entry && pendingEntry.entry.editedMarkerPlan) {
-                applyEditedCellMarkerPlan(pendingEntry.entry.editedMarkerPlan, 'backward');
-            }
-            if (didApplyWork && pendingEntry.entry && pendingEntry.entry.comparisonPlan) {
-                applyComparisonValuePlan(pendingEntry.entry.comparisonPlan, 'backward');
-            }
-            if (didApplyWork && pendingEntry.entry && pendingEntry.entry.eventId) {
-                detachTrackedEventOwnership([pendingEntry.entry.eventId]);
-            }
-            if (didApplyWork) {
-                transactionUndoStackRef.current = transactionUndoStackRef.current.slice(0, -1);
-                transactionRedoStackRef.current = [...transactionRedoStackRef.current, pendingEntry.entry];
-            }
-            transactionHistoryPendingRequestRef.current = null;
-            syncTransactionHistoryState();
-            if (didApplyWork) {
-                showNotification('Undid the last transaction.', 'success');
-            } else if (transactionWarnings[0]) {
-                showNotification(transactionWarnings[0], 'warning');
-            }
-            return;
-        }
-
-        if (pendingEntry.action === 'redo') {
-            if (response.status === 'data') releaseOptimisticCellRequest(requestId);
-            if (!didApplyWork && pendingEntry.entry && pendingEntry.entry.comparisonPlan) {
-                applyComparisonValuePlan(pendingEntry.entry.comparisonPlan, 'backward');
-            }
-            if (didApplyWork && pendingEntry.entry && pendingEntry.entry.editedMarkerPlan) {
-                applyEditedCellMarkerPlan(pendingEntry.entry.editedMarkerPlan, 'forward');
-            }
-            if (didApplyWork && pendingEntry.entry && pendingEntry.entry.eventId && pendingEntry.entry.affectedCells) {
-                appendTrackedEventOwnership(pendingEntry.entry.eventId, pendingEntry.entry.affectedCells);
-            }
-            if (didApplyWork) {
-                transactionRedoStackRef.current = transactionRedoStackRef.current.slice(0, -1);
-                transactionUndoStackRef.current = [...transactionUndoStackRef.current, pendingEntry.entry];
-            }
-            transactionHistoryPendingRequestRef.current = null;
-            syncTransactionHistoryState();
-            if (didApplyWork) {
-                showNotification('Reapplied the last transaction.', 'success');
-            } else if (transactionWarnings[0]) {
-                showNotification(transactionWarnings[0], 'warning');
-            }
-            return;
-        }
-
-        if (pendingEntry.action === 'revert') {
-            if (response.status === 'data') releaseOptimisticCellRequest(requestId);
-            if (didApplyWork) {
-                const targetEntries = resolveTargetHistoryEntries();
-                if (targetEntries.length > 0) {
-                    rollbackHistoryEntries(targetEntries);
-                } else if (Array.isArray(pendingEntry.targetEventIds) && pendingEntry.targetEventIds.length > 0) {
-                    detachTrackedEventOwnership(pendingEntry.targetEventIds, { adjustCounts: true });
-                }
-                if (Array.isArray(pendingEntry.targetEventIds) && pendingEntry.targetEventIds.length > 0) {
-                    pruneTransactionHistoryEntries(pendingEntry.targetEventIds);
-                }
-                if (pendingEntry.clearAllOnSuccess) {
-                    clearAllOptimisticCellValues();
-                    clearAllEditedCellMarkers();
-                    clearAllComparisonValueState();
-                    propagationLogRef.current = [];
-                    setPropagationLogEpoch((previousEpoch) => previousEpoch + 1);
-                }
-                showNotification(pendingEntry.successMessage || 'Reverted the selected edits.', 'success');
-            } else if (transactionWarnings[0]) {
-                showNotification(transactionWarnings[0], 'warning');
-            }
-            transactionHistoryPendingRequestRef.current = null;
-            syncTransactionHistoryState();
-            return;
-        }
-
-        if (pendingEntry.action === 'replace') {
-            if (response.status === 'data') releaseOptimisticCellRequest(requestId);
-            if (didApplyWork) {
-                const targetEntries = resolveTargetHistoryEntries();
-                if (targetEntries.length > 0) {
-                    rollbackHistoryEntries(targetEntries);
-                } else if (Array.isArray(pendingEntry.targetEventIds) && pendingEntry.targetEventIds.length > 0) {
-                    detachTrackedEventOwnership(pendingEntry.targetEventIds, { adjustCounts: true });
-                }
-                if (Array.isArray(pendingEntry.targetEventIds) && pendingEntry.targetEventIds.length > 0) {
-                    pruneTransactionHistoryEntries(pendingEntry.targetEventIds);
-                }
-                if (pendingEntry.comparisonPlan) {
-                    applyComparisonValuePlan(pendingEntry.comparisonPlan, 'forward');
-                }
-                if (pendingEntry.editedMarkerPlan) {
-                    applyEditedCellMarkerPlan(pendingEntry.editedMarkerPlan, 'forward');
-                }
-                const captureable = Boolean(transactionResult.history && transactionResult.history.captureable);
-                const undoTransaction = normalizeTransactionHistoryPayload(transactionResult.inverseTransaction);
-                const redoTransaction = normalizeTransactionHistoryPayload(transactionResult.redoTransaction);
-                if (captureable && undoTransaction && redoTransaction) {
-                    pushCapturedHistoryEntry({
-                        kind: 'transaction',
-                        undoTransaction,
-                        redoTransaction,
-                        editedMarkerPlan: pendingEntry.editedMarkerPlan || null,
-                        comparisonPlan: pendingEntry.comparisonPlan || null,
-                        source: pendingEntry.source || transactionResult.source || 'replace',
-                        createdAt: Date.now(),
-                        eventId: transactionResult.eventId || null,
-                        sessionVersion: Number(transactionResult.sessionVersion) || 0,
-                        affectedCells: responseAffectedCells,
-                        impactedScopeIds: Array.isArray(transactionResult.impactedScopeIds) ? transactionResult.impactedScopeIds : [],
-                    });
-                }
-                if (pendingEntry.rowEditRowId) {
-                    closeRowEditSession(pendingEntry.rowEditRowId);
-                    emitEditLifecycleEvent({
-                        kind: 'row_edit_commit_success',
-                        rowId: pendingEntry.rowEditRowId,
-                        dirtyColumns: pendingEntry.dirtyColumns || [],
-                    });
-                }
-                showNotification(pendingEntry.successMessage || 'Updated the selected edit.', 'success');
-            } else if (transactionWarnings[0]) {
-                if (pendingEntry.rowEditRowId) {
-                    updateRowEditSessions((previousSessions) => {
-                        const previousSession = previousSessions[pendingEntry.rowEditRowId];
-                        if (!previousSession) return previousSessions;
-                        return {
-                            ...previousSessions,
-                            [pendingEntry.rowEditRowId]: {
-                                ...previousSession,
-                                status: 'editing',
-                            },
-                        };
-                    });
-                    emitEditLifecycleEvent({
-                        kind: 'row_edit_commit_error',
-                        rowId: pendingEntry.rowEditRowId,
-                        message: transactionWarnings[0] || 'The row edit did not apply.',
-                    });
-                }
-                showNotification(transactionWarnings[0], 'warning');
-            } else if (pendingEntry.rowEditRowId) {
-                updateRowEditSessions((previousSessions) => {
-                    const previousSession = previousSessions[pendingEntry.rowEditRowId];
-                    if (!previousSession) return previousSessions;
-                    return {
-                        ...previousSessions,
-                        [pendingEntry.rowEditRowId]: {
-                            ...previousSession,
-                            status: 'editing',
-                        },
-                    };
-                });
-                emitEditLifecycleEvent({
-                    kind: 'row_edit_commit_error',
-                    rowId: pendingEntry.rowEditRowId,
-                    message: 'The row edit did not apply.',
-                });
-            }
-            transactionHistoryPendingRequestRef.current = null;
-            syncTransactionHistoryState();
-        }
-    }, [
+    configureTransactions({
+        maxHistoryEntries: MAX_TRANSACTION_HISTORY_ENTRIES,
+        normalizeTrackedEventIds,
+        normalizeTransactionHistoryPayload,
+        normalizeTransactionRefreshModeValue,
+        shouldShowTransactionLoading,
+        hasAppliedTransactionWork,
+        setPropsRef,
+        serverSide,
+        showNotification,
+        visiblePatchRowPathsRef,
+        visiblePatchCenterIdsRef,
+        colFields,
+        latestRequestedViewportRef,
+        latestViewportRef,
+        defaultServerSideBlockSize: DEFAULT_SERVER_SIDE_BLOCK_SIZE,
+        resolveStableRequestedColumnWindow,
+        beginExpansionRequest,
+        markRequestPending,
+        emitRuntimeRequest,
+        tableName,
+        sessionIdRef,
+        clientInstanceRef,
+        serverSidePinsGrandTotal,
+        immersiveMode,
         appendTrackedEventOwnership,
         applyComparisonValuePlan,
         applyEditedCellMarkerPlan,
         clearAllComparisonValueState,
         clearAllEditedCellMarkers,
         clearAllOptimisticCellValues,
+        clearOptimisticCellValuesForRequest,
         closeRowEditSession,
         detachTrackedEventOwnership,
         emitEditLifecycleEvent,
-        findTransactionHistoryEntryByEventId,
-        pruneTransactionHistoryEntries,
-        pushUnifiedHistoryEntry,
         releaseOptimisticCellRequest,
-        showNotification,
-        syncTransactionHistoryState,
         updateRowEditSessions,
-    ]);
-
-    const clearPendingTransactionHistoryRequest = useCallback((response, notifyOnError = false) => {
-        if (!response || typeof response !== 'object') return;
-        const requestId = response.requestId || null;
-        if (!requestId) return;
-        const pendingEntry = pendingTransactionHistoryRef.current.get(requestId);
-        if (!pendingEntry) return;
-        pendingTransactionHistoryRef.current.delete(requestId);
-        clearOptimisticCellValuesForRequest(requestId);
-        if (pendingEntry.action === 'apply' && pendingEntry.editedMarkerPlan) {
-            applyEditedCellMarkerPlan(pendingEntry.editedMarkerPlan, 'backward');
-        }
-        if ((pendingEntry.action === 'apply' || pendingEntry.action === 'redo') && pendingEntry.comparisonPlan) {
-            applyComparisonValuePlan(pendingEntry.comparisonPlan, 'backward');
-        }
-        if ((pendingEntry.action === 'apply' || pendingEntry.action === 'replace') && pendingEntry.rowEditRowId) {
-            updateRowEditSessions((previousSessions) => {
-                const previousSession = previousSessions[pendingEntry.rowEditRowId];
-                if (!previousSession) return previousSessions;
-                return {
-                    ...previousSessions,
-                    [pendingEntry.rowEditRowId]: {
-                        ...previousSession,
-                        status: 'editing',
-                    },
-                };
+        clearPendingLayoutHistoryCapture,
+        applyLayoutHistorySnapshot,
+        supportsPatchTransactionRefresh,
+        setEditValueDisplayMode,
+        comparisonValueState,
+        recordPropagationEntries: (entries) => {
+            entries.forEach((entry) => {
+                if (!entry || typeof entry !== 'object') return;
+                propagationLogRef.current = [
+                    ...propagationLogRef.current.slice(-49),
+                    { ...entry, timestamp: Date.now() },
+                ];
             });
-            emitEditLifecycleEvent({
-                kind: 'row_edit_commit_error',
-                rowId: pendingEntry.rowEditRowId,
-                message: response.message || 'Unable to commit the row edit.',
-            });
-        }
-        if (pendingEntry.action === 'undo' || pendingEntry.action === 'redo' || pendingEntry.action === 'revert' || pendingEntry.action === 'replace') {
-            transactionHistoryPendingRequestRef.current = null;
-            syncTransactionHistoryState();
-            if (notifyOnError && response.status === 'error') {
-                showNotification(`Unable to ${pendingEntry.action} the transaction.`, 'error');
-            }
-        }
-    }, [applyComparisonValuePlan, applyEditedCellMarkerPlan, clearOptimisticCellValuesForRequest, emitEditLifecycleEvent, showNotification, syncTransactionHistoryState, updateRowEditSessions]);
+            setPropagationLogEpoch((previousEpoch) => previousEpoch + 1);
+            setEditPanelOpen(true);
+        },
+        clearPropagationLog: () => {
+            propagationLogRef.current = [];
+            setPropagationLogEpoch((previousEpoch) => previousEpoch + 1);
+        },
+    });
 
     const resolvePropagationFormulaUpdates = useCallback((updates, source, meta) => {
         const normalizedUpdates = Array.isArray(updates) ? updates : [];
@@ -5854,7 +5416,7 @@ export default function DashTanstackPivot(props) {
             if (editedMarkerPlan) {
                 applyEditedCellMarkerPlan(editedMarkerPlan, 'forward');
             }
-            pendingTransactionHistoryRef.current.set(dispatched.requestId, {
+            queueTransactionHistoryRequest(dispatched.requestId, {
                 action: 'apply',
                 source,
                 editedMarkerPlan,
@@ -5864,7 +5426,7 @@ export default function DashTanstackPivot(props) {
             });
             return dispatched;
         }
-        pendingTransactionHistoryRef.current.set(dispatched.requestId, {
+        queueTransactionHistoryRequest(dispatched.requestId, {
             action: 'replace',
             source,
             targetEventIds: ownershipState.targetEventIds,
@@ -5873,9 +5435,7 @@ export default function DashTanstackPivot(props) {
             editedMarkerPlan,
             rowEditRowId: meta && meta.rowEditRowId ? String(meta.rowEditRowId) : null,
             dirtyColumns: meta && Array.isArray(meta.dirtyColumns) ? meta.dirtyColumns : [],
-        });
-        transactionHistoryPendingRequestRef.current = dispatched.requestId;
-        syncTransactionHistoryState();
+        }, { blocksHistory: true });
         return dispatched;
     }, [
         analyzeServerEditOwnership,
@@ -5889,7 +5449,7 @@ export default function DashTanstackPivot(props) {
         getOptimisticCellKey,
         showNotification,
         supportsPatchTransactionRefresh,
-        syncTransactionHistoryState,
+        queueTransactionHistoryRequest,
     ]);
 
     const dispatchBatchUpdateRequest = useCallback((updates, source = 'batch', meta = null) => {
@@ -6147,92 +5707,6 @@ export default function DashTanstackPivot(props) {
             </span>
         );
     }, [cancelRowEditSession, getRowEditMeta, normalizedEditingConfig.mode, normalizedEditingConfig.rowActions, saveRowEditSession, theme.border, theme.headerSubtleBg, theme.primary, theme.surfaceBg, theme.textSec]);
-
-    const executeUndoTransaction = useCallback(() => {
-        if (transactionHistoryPendingRequestRef.current) return;
-        const entry = transactionUndoStackRef.current[transactionUndoStackRef.current.length - 1];
-        if (!entry || typeof entry !== 'object') return;
-        if (entry.kind === 'layout') {
-            transactionUndoStackRef.current = transactionUndoStackRef.current.slice(0, -1);
-            transactionRedoStackRef.current = [...transactionRedoStackRef.current, entry];
-            clearPendingLayoutHistoryCapture();
-            applyLayoutHistorySnapshot(entry.before);
-            syncTransactionHistoryState();
-            showNotification('Undid the last layout change.', 'success');
-            return;
-        }
-        if (!serverSide) return;
-        const undoPayload = entry.eventId
-            ? {
-                eventAction: 'undo',
-                eventId: entry.eventId,
-                refreshMode: supportsPatchTransactionRefresh ? 'patch' : 'smart',
-            }
-            : entry.undoTransaction;
-        if (!undoPayload) return;
-        const dispatched = dispatchTransactionRequest(undoPayload, 'undo');
-        if (!dispatched || !dispatched.requestId) return;
-        pendingTransactionHistoryRef.current.set(dispatched.requestId, {
-            action: 'undo',
-            entry,
-            targetEventIds: entry.eventId ? [entry.eventId] : [],
-        });
-        transactionHistoryPendingRequestRef.current = dispatched.requestId;
-        syncTransactionHistoryState();
-    }, [applyLayoutHistorySnapshot, clearPendingLayoutHistoryCapture, dispatchTransactionRequest, serverSide, showNotification, supportsPatchTransactionRefresh, syncTransactionHistoryState]);
-
-    const executeRedoTransaction = useCallback(() => {
-        if (transactionHistoryPendingRequestRef.current) return;
-        const entry = transactionRedoStackRef.current[transactionRedoStackRef.current.length - 1];
-        if (!entry || typeof entry !== 'object') return;
-        if (entry.kind === 'layout') {
-            transactionRedoStackRef.current = transactionRedoStackRef.current.slice(0, -1);
-            transactionUndoStackRef.current = [...transactionUndoStackRef.current, entry];
-            clearPendingLayoutHistoryCapture();
-            applyLayoutHistorySnapshot(entry.after);
-            syncTransactionHistoryState();
-            showNotification('Reapplied the last layout change.', 'success');
-            return;
-        }
-        if (!serverSide) return;
-        if (entry.comparisonPlan) {
-            applyComparisonValuePlan(entry.comparisonPlan, 'forward');
-        }
-        setEditValueDisplayMode('edited');
-        const redoPayload = entry.eventId
-            ? {
-                eventAction: 'redo',
-                eventId: entry.eventId,
-                refreshMode: supportsPatchTransactionRefresh ? 'patch' : 'smart',
-            }
-            : entry.redoTransaction;
-        if (!redoPayload) {
-            if (entry.comparisonPlan) applyComparisonValuePlan(entry.comparisonPlan, 'backward');
-            if (comparisonValueState.activeCount === 0) {
-                setEditValueDisplayMode('original');
-            }
-            return;
-        }
-        const dispatched = dispatchTransactionRequest(redoPayload, 'redo');
-        if (!dispatched || !dispatched.requestId) {
-            if (entry.comparisonPlan) applyComparisonValuePlan(entry.comparisonPlan, 'backward');
-            if (comparisonValueState.activeCount === 0) {
-                setEditValueDisplayMode('original');
-            }
-            return;
-        }
-        pendingTransactionHistoryRef.current.set(dispatched.requestId, {
-            action: 'redo',
-            entry,
-            comparisonPlan: entry.comparisonPlan || null,
-            targetEventIds: entry.eventId ? [entry.eventId] : [],
-        });
-        transactionHistoryPendingRequestRef.current = dispatched.requestId;
-        syncTransactionHistoryState();
-    }, [applyComparisonValuePlan, applyLayoutHistorySnapshot, clearPendingLayoutHistoryCapture, comparisonValueState.activeCount, dispatchTransactionRequest, serverSide, setEditValueDisplayMode, showNotification, supportsPatchTransactionRefresh, syncTransactionHistoryState]);
-
-    transactionUndoExecutorRef.current = executeUndoTransaction;
-    transactionRedoExecutorRef.current = executeRedoTransaction;
 
     useEffect(() => {
         const handleGlobalEditShortcut = (event) => {
@@ -12274,15 +11748,13 @@ export default function DashTanstackPivot(props) {
                 refreshMode: supportsPatchTransactionRefresh ? 'patch' : 'smart',
             }, 'revert');
             if (!dispatched || !dispatched.requestId) return;
-            pendingTransactionHistoryRef.current.set(dispatched.requestId, {
+            queueTransactionHistoryRequest(dispatched.requestId, {
                 action: 'revert',
                 source: 'revert',
                 targetEventIds,
                 historyEntries: targetEventIds.map((eventId) => findTransactionHistoryEntryByEventId(eventId)).filter(Boolean),
                 successMessage: 'Reverted the selected cell.',
-            });
-            transactionHistoryPendingRequestRef.current = dispatched.requestId;
-            syncTransactionHistoryState();
+            }, { blocksHistory: true });
             return;
         }
 
@@ -12309,7 +11781,7 @@ export default function DashTanstackPivot(props) {
         serverSide,
         supportsPatchTransactionRefresh,
         syncComparisonValueState,
-        syncTransactionHistoryState,
+        queueTransactionHistoryRequest,
     ]);
 
     const handleConfirmPropagation = useCallback(() => {
@@ -12390,7 +11862,7 @@ export default function DashTanstackPivot(props) {
             refreshMode: supportsPatchTransactionRefresh ? 'patch' : 'smart',
         }, 'reapply-propagation');
         if (!dispatched || !dispatched.requestId) return;
-        pendingTransactionHistoryRef.current.set(dispatched.requestId, {
+        queueTransactionHistoryRequest(dispatched.requestId, {
             action: 'replace',
             source: 'reapply-propagation',
             targetEventIds,
@@ -12398,9 +11870,7 @@ export default function DashTanstackPivot(props) {
             comparisonPlan,
             editedMarkerPlan,
             successMessage: 'Updated propagation for the selected edit scope.',
-        });
-        transactionHistoryPendingRequestRef.current = dispatched.requestId;
-        syncTransactionHistoryState();
+        }, { blocksHistory: true });
     }, [
         buildComparisonValuePlan,
         buildEditedCellMarkerPlan,
@@ -12412,7 +11882,7 @@ export default function DashTanstackPivot(props) {
         showNotification,
         sortEventIdsByActiveHistory,
         supportsPatchTransactionRefresh,
-        syncTransactionHistoryState,
+        queueTransactionHistoryRequest,
     ]);
 
     const handleRevertSelected = useCallback((cells) => {
@@ -12429,15 +11899,13 @@ export default function DashTanstackPivot(props) {
                     refreshMode: supportsPatchTransactionRefresh ? 'patch' : 'smart',
                 }, 'revert-selected');
                 if (!dispatched || !dispatched.requestId) return;
-                pendingTransactionHistoryRef.current.set(dispatched.requestId, {
+                queueTransactionHistoryRequest(dispatched.requestId, {
                     action: 'revert',
                     source: 'revert-selected',
                     targetEventIds,
                     historyEntries: targetEventIds.map((eventId) => findTransactionHistoryEntryByEventId(eventId)).filter(Boolean),
                     successMessage: `Reverted ${cells.length} selected edit${cells.length === 1 ? '' : 's'}.`,
-                });
-                transactionHistoryPendingRequestRef.current = dispatched.requestId;
-                syncTransactionHistoryState();
+                }, { blocksHistory: true });
                 return;
             }
         }
@@ -12477,7 +11945,7 @@ export default function DashTanstackPivot(props) {
         serverSide,
         supportsPatchTransactionRefresh,
         syncComparisonValueState,
-        syncTransactionHistoryState,
+        queueTransactionHistoryRequest,
     ]);
 
     const handleRevertAll = useCallback(() => {
@@ -12489,16 +11957,14 @@ export default function DashTanstackPivot(props) {
                 refreshMode: supportsPatchTransactionRefresh ? 'patch' : 'smart',
             }, 'revert-all');
             if (!dispatched || !dispatched.requestId) return;
-            pendingTransactionHistoryRef.current.set(dispatched.requestId, {
+            queueTransactionHistoryRequest(dispatched.requestId, {
                 action: 'revert',
                 source: 'revert-all',
                 targetEventIds,
                 historyEntries: targetEventIds.map((eventId) => findTransactionHistoryEntryByEventId(eventId)).filter(Boolean),
                 clearAllOnSuccess: true,
                 successMessage: 'Reverted all active edits.',
-            });
-            transactionHistoryPendingRequestRef.current = dispatched.requestId;
-            syncTransactionHistoryState();
+            }, { blocksHistory: true });
             return;
         }
         const revertUpdates = [];
@@ -12531,7 +11997,7 @@ export default function DashTanstackPivot(props) {
         findTransactionHistoryEntryByEventId,
         serverSide,
         supportsPatchTransactionRefresh,
-        syncTransactionHistoryState,
+        queueTransactionHistoryRequest,
     ]);
 
     const statusAccessoryModel = useMemo(() => ({
