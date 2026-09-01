@@ -2885,6 +2885,16 @@ def test_grid_polish_header_drag_order_pinning_and_menu_contract():
             "ContextMenu.js",
         )
     ).read_text(encoding="utf-8")
+    field_interactions_source = Path(
+        os.path.join(
+            os.getcwd(),
+            "dash_tanstack_pivot",
+            "src",
+            "lib",
+            "hooks",
+            "usePivotFieldInteractions.js",
+        )
+    ).read_text(encoding="utf-8")
 
     assert "columnOrder: externalColumnOrder = null" in component_source
     assert "localeText: externalLocaleText = null" in component_source
@@ -2900,9 +2910,12 @@ def test_grid_polish_header_drag_order_pinning_and_menu_contract():
     assert "onColumnOrderChange" in component_source
     assert "setColumnOrderWithHistory" in component_source
     assert "savePersistedState('columnOrder', columnOrder)" in component_source
+    assert "usePivotFieldInteractions" in component_source
     assert "onHeaderDrop" in component_source
-    assert "resolveHeaderDropPinSide" in component_source
-    assert "application/x-pivot-column" in component_source
+    assert "resolveHeaderDropPinSide" in field_interactions_source
+    assert "application/x-pivot-column" in field_interactions_source
+    assert "handlePinColumn" in field_interactions_source
+    assert "onHeaderKeyboardMove" in field_interactions_source
     assert "menuMoveColumnLeft" in component_source
     assert "menuResetColumnOrder" in component_source
     assert "menuAutoSizeAllVisibleColumns" in component_source
@@ -3951,6 +3964,17 @@ def test_client_side_custom_categories_materialize_before_filtering():
         )
     ).read_text(encoding="utf-8")
 
+    field_interactions_source = Path(
+        os.path.join(
+            os.getcwd(),
+            "dash_tanstack_pivot",
+            "src",
+            "lib",
+            "hooks",
+            "usePivotFieldInteractions.js",
+        )
+    ).read_text(encoding="utf-8")
+
     assert "export const evaluateCustomCategoryDimension" in normalization_source
     assert "export const evaluateCustomCategoryCondition" in normalization_source
     assert "export const applyCustomDimensionsToRows" in normalization_source
@@ -3962,7 +3986,7 @@ def test_client_side_custom_categories_materialize_before_filtering():
     assert "data={customAwareData}" in component_source
     assert "const filteredData = useFilteredData(customAwareData, filters, serverSide);" in component_source
     assert component_source.index("const filteredData = useFilteredData") < component_source.index("} = useServerSideViewportController({")
-    assert "targetZone === 'vals' && isCustomCategoryField(fieldName)" in component_source
+    assert "targetZone === 'vals' && typeof isCustomCategoryField === 'function' && isCustomCategoryField(fieldName)" in field_interactions_source
 
 
 def test_custom_categories_are_selectable_report_dimensions():
@@ -4143,6 +4167,17 @@ def test_measure_axis_contract_is_wired_through_frontend_and_runtime():
         )
     ).read_text(encoding="utf-8")
 
+    field_interactions_source = Path(
+        os.path.join(
+            os.getcwd(),
+            "dash_tanstack_pivot",
+            "src",
+            "lib",
+            "hooks",
+            "usePivotFieldInteractions.js",
+        )
+    ).read_text(encoding="utf-8")
+
     assert "normalizeMeasureAxisValue" in component_source
     assert "buildMeasureAxisRuntimeConfig" in component_source
     assert "from '../utils/measureAxis'" in component_source
@@ -4150,9 +4185,9 @@ def test_measure_axis_contract_is_wired_through_frontend_and_runtime():
     assert "export const normalizeMeasureAxisValue" in measure_axis_source
     assert "export const buildMeasureAxisRuntimeConfig" in measure_axis_source
     assert "measureAxis: runtimeMeasureAxis" in component_source
-    assert "isValueMeasureDragToAxis" in component_source
-    assert "placeMeasureAxisLabel" in component_source
-    assert "valueConfig.alias || valueConfig.id" in component_source
+    assert "isValueMeasureDragToAxis" in field_interactions_source
+    assert "placeMeasureAxisLabel" in field_interactions_source
+    assert "valueConfig.alias || valueConfig.id" in field_interactions_source
     assert "MeasureAxisControls" in sidebar_source
     assert "Values as" in sidebar_source
     assert "showMeasureAxisAvailableField" in sidebar_source
@@ -4402,6 +4437,17 @@ def test_frontend_resilience_source_handles_reset_jank_cell_errors_and_keyboard_
         )
     ).read_text(encoding="utf-8")
 
+    field_interactions_source = Path(
+        os.path.join(
+            os.getcwd(),
+            "dash_tanstack_pivot",
+            "src",
+            "lib",
+            "hooks",
+            "usePivotFieldInteractions.js",
+        )
+    ).read_text(encoding="utf-8")
+
     assert "lifecycleResetRef" in row_model_source
     assert "resetViewportRequestState" in row_model_source
     assert "resolveRetentionBufferBlocks" in row_model_source
@@ -4434,15 +4480,17 @@ def test_frontend_resilience_source_handles_reset_jank_cell_errors_and_keyboard_
     assert "aria-grabbed=" in sidebar_source
     assert "handleDraggableKeyDown" in sidebar_source
     assert "handleDropZoneKeyDown" in sidebar_source
-    assert "dragItemRef.current = nextDragItem" in component_source
-    assert "resolveSidebarDropItem" in component_source
-    assert "event.dataTransfer.getData('application/x-pivot-column')" in component_source
-    assert "dropLine && dropLine.zone === targetZone ? dropLine.idx : 0" in component_source
+    assert "usePivotFieldInteractions" in component_source
+    assert "const [dragItem, setDragItem]" not in component_source
+    assert "dragItemRef.current = nextDragItem" in field_interactions_source
+    assert "resolveSidebarDropItem" in field_interactions_source
+    assert "event.dataTransfer.getData('application/x-pivot-column')" in field_interactions_source
+    assert "dropLine && dropLine.zone === targetZone ? dropLine.idx : 0" in field_interactions_source
     assert "onDragStart={onDragStart} onDragOver={onDragOver} onDrop={onDrop} onDragEnd={onHeaderDragEnd}" in component_source
     assert "onDragEnd={onDragEnd}" in sidebar_source
     assert "if (e.target === e.currentTarget) onDragOver(e, zone.id, zoneItems.length);" in sidebar_source
 
-    assert "const applyFieldZoneMove = useCallback" in component_source
+    assert "const applyFieldZoneMove = useCallback" in field_interactions_source
     assert "source: 'layout:keyboard-drop'" in sidebar_source
     assert "onKeyboardFieldDrop={applyFieldZoneMove}" in component_source
 

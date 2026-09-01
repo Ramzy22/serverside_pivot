@@ -227,6 +227,7 @@ import { useReportMode } from '../hooks/useReportMode';
 import { useDetailDrillThrough } from '../hooks/useDetailDrillThrough';
 import { useRuntimeDataCommit } from '../hooks/useRuntimeDataCommit';
 import { usePivotTransactions } from '../hooks/usePivotTransactions';
+import { usePivotFieldInteractions } from '../hooks/usePivotFieldInteractions';
 import { PivotThemeProvider } from '../contexts/PivotThemeContext';
 import { PivotConfigProvider } from '../contexts/PivotConfigContext';
 import { PivotValueDisplayProvider } from '../contexts/PivotValueDisplayContext';
@@ -3362,11 +3363,24 @@ export default function DashTanstackPivot(props) {
 
     const isColExpanded = (key) => colExpanded[key] !== false;
 
-    const [dragItem, setDragItem] = useState(null);
-    const dragItemRef = useRef(null);
-    const [dropLine, setDropLine] = useState(null);
-    const [dragOverHeaderId, setDragOverHeaderId] = useState(null);
-    const [dragOverSide, setDragOverSide] = useState(null);
+    const fieldInteractionControls = usePivotFieldInteractions();
+    const {
+        configure: configureFieldInteractions,
+        dropLine,
+        dragOverHeaderId,
+        dragOverSide,
+        handlePinColumn,
+        toggleAllColumnsPinned,
+        applyFieldZoneMove,
+        onDragStart,
+        onDragOver,
+        onDrop,
+        onHeaderDrop,
+        onHeaderDragOver,
+        onHeaderDragEnd,
+        onHeaderKeyboardMove,
+        onHeaderKeyboardPin,
+    } = fieldInteractionControls;
     const sessionIdRef = useRef(getOrCreateSessionId(id || 'pivot-grid'));
     const clientInstanceRef = useRef(createClientInstanceId(id || 'pivot-grid'));
     const requestVersionRef = useRef(Number(dataVersion) || 0);
@@ -7495,45 +7509,6 @@ export default function DashTanstackPivot(props) {
         }
     }, [parentRef, showNotification]);
 
-    const handlePinColumn = useCallback((columnId, side) => {
-        const table = tableRef.current;
-        if (!table) return;
-        
-        const col = table.getColumn(columnId);
-        if (!col) return;
-
-        // Get all IDs to pin/unpin (leaves + potential collapsed placeholder)
-        const idsToUpdate = new Set();
-        
-        // 1. Add leaf IDs
-        const isGroup = col.columns && col.columns.length > 0;
-        const leafIds = isGroup ? getAllLeafIdsFromColumn(col) : [columnId];
-        leafIds.forEach(id => idsToUpdate.add(id));
-
-        // 2. Add collapsed placeholder ID if it's a pivot group
-        if (columnId.startsWith('group_')) {
-            const rawPathKey = columnId.replace('group_', '');
-            idsToUpdate.add(`${rawPathKey}_collapsed`);
-        }
-
-        const idsArray = Array.from(idsToUpdate);
-
-        setColumnPinningWithHistory(prev => {
-            const next = { left: [...(prev.left || [])], right: [...(prev.right || [])] };
-
-            // Remove all relevant IDs from both sides first
-            next.left = next.left.filter(id => !idsToUpdate.has(id));
-            next.right = next.right.filter(id => !idsToUpdate.has(id));
-
-            // Add to new side
-            if (side === 'left') next.left.push(...idsArray);
-            if (side === 'right') next.right.push(...idsArray);
-
-            return next;
-        }, 'layout:column-pinning');
-    }, [setColumnPinningWithHistory]);
-
-
     const handlePinRow = (rowId, pinState) => {
         requestLayoutHistoryCapture('layout:row-pinning');
         if (rowId === GRAND_TOTAL_ROW_ID) {
@@ -9203,23 +9178,6 @@ export default function DashTanstackPivot(props) {
             });
         }
     }, [sorting]); // Removed table and setProps from dependencies
-
-    const toggleAllColumnsPinned = (pinState) => {
-        const leafColumns = table.getAllLeafColumns();
-        const newPinning = { left: [], right: [] };
-        
-        if (pinState === 'left') {
-            newPinning.left = leafColumns.map(c => c.id).filter(id => id !== 'no_data');
-        } else if (pinState === 'right') {
-            newPinning.right = leafColumns.map(c => c.id).filter(id => id !== 'no_data');
-        } else {
-            if (layoutMode === 'hierarchy') {
-                newPinning.left = ['hierarchy'];
-            }
-        }
-        
-        setColumnPinningWithHistory(newPinning, 'layout:toggle-all-columns-pinned');
-    };
 
     const activeFilterOptions = useMemo(() => {
         if (!activeFilterCol) return [];
@@ -10919,427 +10877,40 @@ export default function DashTanstackPivot(props) {
     );
 
 
-    const matchesValueConfigId = (columnId, valueConfig) => {
-        if (!columnId || !valueConfig || !valueConfig.field) return false;
-        if (valueConfig.agg === 'formula') {
-            return columnId === valueConfig.field || columnId.endsWith(`_${valueConfig.field}`);
-        }
-        const flatMeasureId = valueConfig.alias || valueConfig.id || `${valueConfig.field}_${valueConfig.agg}`;
-        return columnId === flatMeasureId
-            || columnId.endsWith(`_${flatMeasureId}`)
-            || columnId.endsWith(`_${valueConfig.field}_${valueConfig.agg}`);
-    };
-
-    const getFieldZone = (id) => {
-        if (id === 'hierarchy') return 'rows';
-        if (rowFields.includes(id)) return 'rows';
-        if (colFields.includes(id)) return 'cols';
-        if (valConfigs.find(v => matchesValueConfigId(id, v))) return 'vals';
-        return null;
-    };
-
-    const getFieldIndex = (id, zone) => {
-        if (zone === 'rows') return rowFields.indexOf(id);
-        if (zone === 'cols') return colFields.indexOf(id);
-        if (zone === 'vals') return valConfigs.findIndex(v => matchesValueConfigId(id, v));
-        return -1;
-    };
-
-    const resolveDraggedHeaderItem = (event) => {
-        if (dragItem) return dragItem;
-        if (!event || !event.dataTransfer) return null;
-        try {
-            const raw = event.dataTransfer.getData('application/x-pivot-column');
-            if (!raw) return null;
-            const parsed = JSON.parse(raw);
-            if (!parsed || typeof parsed !== 'object' || !parsed.field) return null;
-            return parsed;
-        } catch (error) {
-            return null;
-        }
-    };
-
-    const resolveHeaderDropPinSide = (event) => {
-        const container = parentRef.current;
-        if (!container || !event || !Number.isFinite(Number(event.clientX))) return null;
-        const rect = container.getBoundingClientRect();
-        if (!rect || !Number.isFinite(rect.left) || !Number.isFinite(rect.right)) return null;
-        const edgeWidth = Math.min(112, Math.max(44, rect.width * 0.1));
-        if (event.clientX <= rect.left + edgeWidth) return 'left';
-        if (event.clientX >= rect.right - edgeWidth) return 'right';
-        return null;
-    };
-
-    const resolveHeaderDropPosition = (event) => {
-        const target = event && event.currentTarget;
-        const rect = target && typeof target.getBoundingClientRect === 'function'
-            ? target.getBoundingClientRect()
-            : null;
-        if (!rect || !Number.isFinite(Number(event.clientX))) return 'before';
-        return event.clientX > rect.left + (rect.width / 2) ? 'after' : 'before';
-    };
-
-    const onHeaderDrop = (e, targetColId) => {
-        e.preventDefault();
-        e.stopPropagation();
-        const draggedItem = resolveDraggedHeaderItem(e);
-        if (!draggedItem) return;
-        const { field } = draggedItem;
-        const draggedValueConfig = typeof field === 'object' && field ? field : null;
-        const isFormulaValue = Boolean(draggedValueConfig && draggedValueConfig.agg === 'formula');
-        const fieldName = typeof field === 'string' ? field : field.field;
-        const sourceColumn = tableRef.current && fieldName ? tableRef.current.getColumn(fieldName) : null;
-        const dropPinSide = resolveHeaderDropPinSide(e);
-        const dropPosition = resolveHeaderDropPosition(e);
-        const targetZone = getFieldZone(targetColId);
-
-        if (!fieldName || !targetColId) {
-            setDragItem(null);
-            return;
-        }
-
-        if (isFormulaValue) {
-            showNotification('Formula columns can be reordered inside Values only.', 'warning');
-            setDragItem(null);
-            return;
-        }
-        if (targetZone === 'vals' && isCustomCategoryField(fieldName)) {
-            showNotification('Custom categories are dimensions. Use them in Rows, Columns, or Filters.', 'warning');
-            setDragItem(null);
-            return;
-        }
-
-        const canPinDraggedColumn = sourceColumn && fieldName !== '__row_number__' && fieldName !== '__report_config__';
-        if (dropPinSide && canPinDraggedColumn) {
-            handlePinColumn(fieldName, dropPinSide);
-            setAnnouncement(getLocaleText('columnPinnedAnnouncement', '{label} pinned {side}.', {
-                label: formatDisplayLabel(fieldName),
-                side: dropPinSide,
-            }));
-        } else if (canPinDraggedColumn) {
-            const targetIsPinned = getPinningState(targetColId);
-            const sourceIsPinned = getPinningState(fieldName);
-            if (targetIsPinned && targetIsPinned !== sourceIsPinned) {
-                 handlePinColumn(fieldName, targetIsPinned);
-            } else if (!targetIsPinned && sourceIsPinned) {
-                 handlePinColumn(fieldName, false);
-            }
-        }
-
-        // Header drag has two jobs: semantic zone moves when the ids are field-zone
-        // backed, and visual column order moves for normal rendered columns.
-        const srcZone = draggedItem.zone || getFieldZone(fieldName);
-        const srcIdx = srcZone ? getFieldIndex(fieldName, srcZone) : -1;
-        const targetIdx = targetZone ? getFieldIndex(targetColId, targetZone) : -1;
-        const canApplySemanticMove = Boolean(srcZone && targetZone && srcIdx >= 0 && targetIdx >= 0);
-        let targetInsertIdx = dropPosition === 'after' ? targetIdx + 1 : targetIdx;
-        if (srcZone === targetZone && srcIdx >= 0 && srcIdx < targetInsertIdx) {
-            targetInsertIdx -= 1;
-        }
-        const didApplySemanticMove = canApplySemanticMove
-            ? applyFieldZoneMove({
-                field,
-                srcZone,
-                srcIdx,
-                targetZone,
-                targetIdx: targetInsertIdx,
-                source: 'layout:header-drop',
-            })
-            : false;
-
-        if (!didApplySemanticMove && fieldName !== targetColId) {
-            setColumnOrderWithHistory((previousOrder) => {
-                const baseOrder = mergeColumnOrderWithIds(previousOrder, availableColumnOrderIds);
-                return moveColumnIdInOrder(baseOrder, fieldName, targetColId, dropPosition);
-            }, 'layout:header-reorder');
-            setAnnouncement(getLocaleText('columnMovedAnnouncement', '{label} moved {position} {target}.', {
-                label: formatDisplayLabel(fieldName),
-                position: dropPosition,
-                target: formatDisplayLabel(targetColId),
-            }));
-        }
-        setDragItem(null);
-    };
-
-    const onDragStart = (e, field, zone, idx) => {
-        const fieldName = typeof field === 'string' ? field : field && field.field;
-        const resolvedZone = getFieldZone(fieldName) || zone;
-        const resolvedIdx = Number.isInteger(idx) && idx >= 0
-            ? idx
-            : getFieldIndex(fieldName, resolvedZone);
-        const nextDragItem = { field, zone: resolvedZone, idx: resolvedIdx };
-        dragItemRef.current = nextDragItem;
-        setDragItem(nextDragItem);
-        e.dataTransfer.effectAllowed = 'move';
-        try {
-            e.dataTransfer.setData('application/x-pivot-column', JSON.stringify({
-                field: fieldName,
-                zone: resolvedZone,
-                idx: resolvedIdx,
-            }));
-            e.dataTransfer.setData('text/plain', fieldName || '');
-        } catch (error) {
-            // Some browsers restrict custom drag payloads; local React state still carries the drag.
-        }
-    };
-    const onDragOver = (e, zone, idx) => {
-        e.preventDefault();
-        if (e.dataTransfer) e.dataTransfer.dropEffect = 'move';
-        // If hovering over a header, zone might be 'cols' or 'rows' derived from ID
-        // For sidebar, we use dropLine logic
-        if (['rows', 'cols', 'vals', 'filter'].includes(zone)) {
-            const rect = e.currentTarget.getBoundingClientRect();
-            const mid = rect.top + rect.height / 2;
-            setDropLine({ zone, idx: e.clientY > mid ? idx + 1 : idx });
-        }
-    };
-
-    const onHeaderDragOver = (e, columnId) => {
-        const hasHeaderDragPayload = Boolean(
-            dragItem
-            || (
-                e.dataTransfer
-                && e.dataTransfer.types
-                && Array.from(e.dataTransfer.types).includes('application/x-pivot-column')
-            )
-        );
-        if (!hasHeaderDragPayload) return;
-        e.preventDefault();
-        e.stopPropagation();
-        if (e.dataTransfer) e.dataTransfer.dropEffect = 'move';
-        if (columnId && e.currentTarget) {
-            const rect = e.currentTarget.getBoundingClientRect();
-            const side = e.clientX < rect.left + rect.width / 2 ? 'before' : 'after';
-            setDragOverHeaderId(columnId);
-            setDragOverSide(side);
-        }
-    };
-
-    const onHeaderDragEnd = () => {
-        dragItemRef.current = null;
-        setDragItem(null);
-        setDropLine(null);
-        setDragOverHeaderId(null);
-        setDragOverSide(null);
-    };
-
-    const resolveSidebarDropItem = (event) => {
-        if (dragItemRef.current) return dragItemRef.current;
-        if (dragItem) return dragItem;
-        if (!event || !event.dataTransfer) return null;
-        try {
-            const rawPayload = event.dataTransfer.getData('application/x-pivot-column');
-            if (rawPayload) {
-                const parsed = JSON.parse(rawPayload);
-                if (parsed && typeof parsed.field === 'string' && parsed.field) {
-                    return {
-                        field: parsed.field,
-                        zone: parsed.zone || getFieldZone(parsed.field) || 'pool',
-                        idx: Number.isInteger(parsed.idx) ? parsed.idx : getFieldIndex(parsed.field, parsed.zone || getFieldZone(parsed.field)),
-                    };
-                }
-            }
-        } catch (error) {
-            // Fall back to text/plain below.
-        }
-        try {
-            const fieldName = event.dataTransfer.getData('text/plain');
-            if (fieldName) {
-                const zone = getFieldZone(fieldName) || 'pool';
-                return { field: fieldName, zone, idx: getFieldIndex(fieldName, zone) };
-            }
-        } catch (error) {
-            return null;
-        }
-        return null;
-    };
-
-    const onHeaderKeyboardMove = (columnId, delta) => {
-        if (!columnId || !availableColumnOrderIds.includes(columnId)) return false;
-        const direction = delta < 0 ? -1 : 1;
-        const baseOrder = mergeColumnOrderWithIds(columnOrder, availableColumnOrderIds);
-        const nextOrder = moveColumnIdByDelta(baseOrder, columnId, direction);
-        const moved = !areStringArraysEqual(baseOrder, nextOrder);
-        if (moved) {
-            setColumnOrderWithHistory(nextOrder, 'layout:header-keyboard-reorder');
-        }
-        if (moved) {
-            setAnnouncement(getLocaleText('columnMovedByKeyboardAnnouncement', '{label} moved {direction}.', {
-                label: formatDisplayLabel(columnId),
-                direction: direction < 0 ? 'left' : 'right',
-            }));
-        }
-        return moved;
-    };
-
-    const onHeaderKeyboardPin = (columnId, side) => {
-        if (!columnId || columnId === '__row_number__' || columnId === '__report_config__') return false;
-        handlePinColumn(columnId, side);
-        setAnnouncement(getLocaleText('columnPinnedAnnouncement', '{label} pinned {side}.', {
-            label: formatDisplayLabel(columnId),
-            side: side || 'center',
-        }));
-        return true;
-    };
-
-    const applyFieldZoneMove = useCallback(({
-        field,
-        srcZone,
-        srcIdx = -1,
-        targetZone,
-        targetIdx = 0,
-        source = 'layout:zone-drop',
-    } = {}) => {
-        const draggedValueConfig = typeof field === 'object' && field ? field : null;
-        const isFormulaValue = Boolean(draggedValueConfig && draggedValueConfig.agg === 'formula');
-        const fieldName = typeof field === 'string' ? field : field.field;
-        if (!fieldName || typeof fieldName !== 'string') return false;
-        if (!['rows', 'cols', 'vals', 'filter'].includes(targetZone)) return false;
-        if (targetZone === 'vals' && isCustomCategoryField(fieldName)) {
-            showNotification('Custom categories are dimensions. Use them in Rows, Columns, or Filters.', 'warning');
-            return false;
-        }
-        const numericTargetIdx = Number(targetIdx);
-        const safeTargetIdx = Number.isFinite(numericTargetIdx)
-            ? Math.max(0, Math.floor(numericTargetIdx))
-            : 0;
-        const insertItem = (list, idx, item) => {
-            const next = [...list];
-            next.splice(Math.min(Math.max(idx, 0), next.length), 0, item);
-            return next;
-        };
-        const moveItem = (list, idx, target, setList) => {
-            if (!Number.isInteger(idx) || idx < 0 || idx >= list.length) return false;
-            const next = [...list];
-            const [moved] = next.splice(idx, 1);
-            let insertAt = Math.min(Math.max(target, 0), next.length);
-            if (idx < target) insertAt = Math.max(0, insertAt - 1);
-            next.splice(insertAt, 0, moved);
-            setList(next);
-            return true;
-        };
-        const defaultValueConfig = () => {
-            const autoSparklineCfg = sparklineFields && sparklineFields[fieldName];
-            return autoSparklineCfg
-                ? { field: fieldName, agg: 'array_agg', sparkline: { ...autoSparklineCfg } }
-                : { field: fieldName, agg: 'sum' };
-        };
-        const normalizedAxis = normalizeMeasureAxisValue(measureAxis);
-        const measureAxisLabelField = normalizedAxis.labelField || 'Measure Name';
-        const draggedValueIndex = Number.isInteger(srcIdx) && srcIdx >= 0
-            ? srcIdx
-            : valConfigs.findIndex((config) => matchesValueConfigId(fieldName, config));
-        const sourceValueConfig = draggedValueConfig || (draggedValueIndex >= 0 ? valConfigs[draggedValueIndex] : null);
-        const isMeasureAxisLabelField = (
-            fieldName === measureAxisLabelField
-            && (srcZone === 'measureAxis' || normalizedAxis.placement !== 'none')
-        );
-        const isValueMeasureDragToAxis = Boolean(
-            sourceValueConfig
-            && (srcZone === 'vals' || draggedValueConfig)
-            && (targetZone === 'rows' || targetZone === 'cols')
-        );
-        const placeMeasureAxisLabel = (placement) => {
-            const insertLabel = (list, idx) => insertItem((list || []).filter((item) => item !== measureAxisLabelField), idx, measureAxisLabelField);
-            requestLayoutHistoryCapture(source);
-            setMeasureAxis((previous) => ({
-                ...normalizeMeasureAxisValue(previous),
-                placement,
-                labelField: measureAxisLabelField,
-            }));
-            if (placement === 'rows') {
-                setRowFieldsWithHistory((previous) => insertLabel(previous, safeTargetIdx), source);
-                setColFieldsWithHistory((previous) => (previous || []).filter((item) => item !== measureAxisLabelField), source);
-            } else if (placement === 'columns') {
-                setColFieldsWithHistory((previous) => insertLabel(previous, safeTargetIdx), source);
-                setRowFieldsWithHistory((previous) => (previous || []).filter((item) => item !== measureAxisLabelField), source);
-            }
-            if (showNotification) {
-                showNotification(`Showing measure names in ${placement === 'rows' ? 'Rows' : 'Columns'}.`, 'success');
-            }
-        };
-
-        if (isMeasureAxisLabelField) {
-            if (targetZone === 'rows' || targetZone === 'cols') {
-                placeMeasureAxisLabel(targetZone === 'rows' ? 'rows' : 'columns');
-                return true;
-            }
-            showNotification('Measure names can be placed in Rows or Columns.', 'warning');
-            return false;
-        }
-
-        if (isValueMeasureDragToAxis) {
-            placeMeasureAxisLabel(targetZone === 'rows' ? 'rows' : 'columns');
-            return true;
-        }
-
-        if (isFormulaValue && targetZone !== 'vals') {
-            showNotification('Formula columns can only stay in Values.', 'warning');
-            return false;
-        }
-
-        if (srcZone !== targetZone) {
-            if (srcZone==='rows') setRowFieldsWithHistory((p) => p.filter(f => f !== fieldName), source);
-            if (srcZone==='cols') setColFieldsWithHistory((p) => p.filter(f => f !== fieldName), source);
-            if (srcZone==='vals') {
-                setValConfigsWithHistory((p) => (
-                    Number.isInteger(srcIdx) && srcIdx >= 0
-                        ? p.filter((_, i) => i !== srcIdx)
-                        : p.filter(f => f.field !== fieldName)
-                ), source);
-            }
-            if (targetZone==='rows') setRowFieldsWithHistory((p) => (p.includes(fieldName) ? p : insertItem(p, safeTargetIdx, fieldName)), source);
-            if (targetZone==='cols') setColFieldsWithHistory((p) => (p.includes(fieldName) ? p : insertItem(p, safeTargetIdx, fieldName)), source);
-            if (targetZone==='vals') {
-                setValConfigsWithHistory((p) => insertItem(p, safeTargetIdx, draggedValueConfig ? { ...draggedValueConfig } : defaultValueConfig()), source);
-            }
-            if (targetZone==='filter' && !Object.prototype.hasOwnProperty.call(filters || {}, fieldName)) {
-                requestLayoutHistoryCapture(source);
-                setFilters(p => ({ ...(p || {}), [fieldName]: '' }));
-            }
-            return true;
-        } else {
-            if (targetZone==='rows') return moveItem(rowFields, srcIdx, safeTargetIdx, (next) => setRowFieldsWithHistory(next, source));
-            if (targetZone==='cols') return moveItem(colFields, srcIdx, safeTargetIdx, (next) => setColFieldsWithHistory(next, source));
-            if (targetZone==='vals') return moveItem(valConfigs, srcIdx, safeTargetIdx, (next) => setValConfigsWithHistory(next, source));
-        }
-        return false;
-    }, [
-        colFields,
-        filters,
-        matchesValueConfigId,
-        measureAxis,
-        requestLayoutHistoryCapture,
+    configureFieldInteractions({
+        tableRef,
+        table,
+        getAllLeafIdsFromColumn,
+        setColumnPinningWithHistory,
+        layoutMode,
         rowFields,
-        setColFieldsWithHistory,
-        setFilters,
+        colFields,
+        valConfigs,
+        filters,
+        measureAxis,
+        sparklineFields,
+        isCustomCategoryField,
+        normalizeMeasureAxisValue,
+        requestLayoutHistoryCapture,
         setMeasureAxis,
         setRowFieldsWithHistory,
+        setColFieldsWithHistory,
         setValConfigsWithHistory,
+        setFilters,
         showNotification,
-        sparklineFields,
-        valConfigs,
-    ]);
-    const onDrop = (e, targetZone) => {
-        e.preventDefault();
-        e.stopPropagation();
-        const resolvedDragItem = resolveSidebarDropItem(e);
-        if (!resolvedDragItem) {
-            dragItemRef.current = null;
-            setDragItem(null);
-            setDropLine(null);
-            return;
-        }
-        const { field, zone: srcZone, idx: srcIdx } = resolvedDragItem;
-        const targetIdx = dropLine && dropLine.zone === targetZone ? dropLine.idx : 0;
-        applyFieldZoneMove({ field, srcZone, srcIdx, targetZone, targetIdx, source: 'layout:zone-drop' });
-        dragItemRef.current = null;
-        setDragItem(null); setDropLine(null);
-    };
-
-
-
-
+        parentRef,
+        getPinningState,
+        availableColumnOrderIds,
+        columnOrder,
+        mergeColumnOrderWithIds,
+        moveColumnIdInOrder,
+        moveColumnIdByDelta,
+        areStringArraysEqual,
+        setColumnOrderWithHistory,
+        formatDisplayLabel,
+        getLocaleText,
+        setAnnouncement,
+    });
 
     // buildExportAoa and exportPivot extracted to ../utils/exportUtils.js
     function getServerExportStyleIds(columnTarget) {
