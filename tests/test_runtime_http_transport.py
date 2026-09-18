@@ -1,6 +1,7 @@
 """Contract tests for the host-neutral HTTP Pivot Runtime Protocol V1."""
 
 from dataclasses import dataclass, field
+import logging
 
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
@@ -157,6 +158,29 @@ def test_http_transport_rejects_noncanonical_envelopes():
     assert response.json()["schemaVersion"] == 1
     assert response.json()["status"] == "error"
     assert "legacyOnly" in response.json()["message"]
+
+
+def test_http_transport_dataset_denial_emits_safe_security_event(caplog):
+    async def current_user():
+        return _User("viewer-42", {"tenant": "A", "secret": "must-not-log"})
+
+    app = FastAPI()
+    register_runtime_http_transport(
+        app,
+        lambda: _Service(),
+        current_user_dependency=current_user,
+        dataset_authorizer=RuntimeDatasetAuthorizer(),
+    )
+
+    with caplog.at_level(logging.WARNING, logger="pivot_engine.security_events"):
+        response = TestClient(app).post("/v1/runtime", json=_runtime_request())
+
+    assert response.status_code == 403
+    assert "event=authorization_denied" in caplog.text
+    assert "subject=viewer-42" in caplog.text
+    assert "table=sales" in caplog.text
+    assert "operation=read" in caplog.text
+    assert "must-not-log" not in caplog.text
 
 
 def test_http_transport_externalizes_export_files_as_authorized_downloads(tmp_path):

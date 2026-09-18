@@ -92,6 +92,24 @@ def test_authenticated_websocket_can_subscribe_only_after_handshake_auth(monkeyp
         }
 
 
+def test_client_connection_path_cannot_replace_an_active_socket(monkeypatch):
+    """The URL segment is a correlation value, never the registry key."""
+    monkeypatch.setenv("PIVOT_API_KEY", "realtime-test-key")
+    api = _api()
+    client = TestClient(api.get_app())
+
+    with client.websocket_connect(
+        "/ws/pivot/reused-client-id",
+        headers={"X-API-Key": "realtime-test-key"},
+    ):
+        with client.websocket_connect(
+            "/ws/pivot/reused-client-id",
+            headers={"X-API-Key": "realtime-test-key"},
+        ):
+            assert len(api.active_connections) == 2
+            assert len(set(api.active_connections)) == 2
+
+
 def test_subscription_requires_explicit_dataset_subscribe_permission():
     api = RealTimePivotAPI(
         MagicMock(),

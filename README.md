@@ -145,8 +145,10 @@ The release-assurance baseline is [OWASP ASVS v5.0.0 Level 2](security/certifica
 Repository tests verify only the controls marked `verified_locally`; current
 TLS/network, IdP, penetration-test, backup, incident, and sign-off evidence
 must be supplied by the deployment operator and checked with
-`scripts/verify_security_release_evidence.py`. The included evidence JSON is
-deliberately a non-success template, not a certification claim.
+`scripts/verify_security_release_evidence.py` against the exact release tag,
+commit, protected environment, public HTTPS origin, matrix digest, and complete
+control scope. The included evidence JSON is deliberately a non-success
+template, not a certification claim.
 
 ## Why Use It
 

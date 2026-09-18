@@ -92,6 +92,13 @@ jobs:
       - name: Generate CycloneDX SBOM
         run: cyclonedx-py environment --output-file security/reports/sbom.cdx.json --output-format JSON
 
+      - name: Verify protected production deployment edge
+        env:
+          PIVOT_RELEASE_DEPLOYMENT_ORIGIN: ${{ vars.PIVOT_RELEASE_DEPLOYMENT_ORIGIN }}
+        run: |
+          test -n "$PIVOT_RELEASE_DEPLOYMENT_ORIGIN"
+          python scripts/verify_production_deployment.py --base-url "$PIVOT_RELEASE_DEPLOYMENT_ORIGIN" --output security/reports/deployment-security.json
+
       - name: Upload release security evidence
         if: always()
         uses: actions/upload-artifact@65462800fd760344b1a7b4382951275a0abb4808 # v4.3.3
@@ -112,11 +119,15 @@ jobs:
       - name: Require protected operator evidence
         env:
           PIVOT_RELEASE_EVIDENCE_PATH: ${{ vars.PIVOT_RELEASE_EVIDENCE_PATH }}
+          PIVOT_RELEASE_ENVIRONMENT: ${{ vars.PIVOT_RELEASE_ENVIRONMENT }}
+          PIVOT_RELEASE_DEPLOYMENT_ORIGIN: ${{ vars.PIVOT_RELEASE_DEPLOYMENT_ORIGIN }}
         run: |
           test -n "$PIVOT_RELEASE_EVIDENCE_PATH"
+          test -n "$PIVOT_RELEASE_ENVIRONMENT"
+          test -n "$PIVOT_RELEASE_DEPLOYMENT_ORIGIN"
           test "$PIVOT_RELEASE_EVIDENCE_PATH" != "security/release-evidence.example.json"
           test -f "$PIVOT_RELEASE_EVIDENCE_PATH"
-          python scripts/verify_security_release_evidence.py --matrix security/certification-matrix.json --evidence "$PIVOT_RELEASE_EVIDENCE_PATH" --repository-root .
+          python scripts/verify_security_release_evidence.py --matrix security/certification-matrix.json --evidence "$PIVOT_RELEASE_EVIDENCE_PATH" --repository-root . --expected-tag "${GITHUB_REF_NAME}" --expected-commit "${GITHUB_SHA}" --expected-environment "$PIVOT_RELEASE_ENVIRONMENT" --expected-deployment-origin "$PIVOT_RELEASE_DEPLOYMENT_ORIGIN"
 
       - name: Build distribution
         run: python -m build dash_tanstack_pivot/

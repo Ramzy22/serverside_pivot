@@ -29,6 +29,7 @@ from .dataset_authorization import (
 from .payload_store import RuntimePayloadStore
 from .service import PivotRuntimeService
 from ..production_security import resolve_runtime_environment
+from ..security_events import log_authorization_denied
 
 
 _PAYLOAD_SESSION_SUBJECT_KEY = "_dash_tanstack_pivot_payload_subject"
@@ -196,10 +197,22 @@ async def _resolve_dash_principal(
     if dataset_authorizer is None and principal_getter is None:
         if not require_authorization:
             return _DashRuntimeAuthorization(principal=None, row_scope=None)
+        log_authorization_denied(
+            principal=None,
+            table=table,
+            operation=operation,
+            reason="dash_authorization_not_configured",
+        )
         raise RuntimeDatasetAuthorizationError(
             "Dash runtime access requires a dataset policy and principal resolver."
         )
     if dataset_authorizer is None or principal_getter is None:
+        log_authorization_denied(
+            principal=None,
+            table=table,
+            operation=operation,
+            reason="dash_authorization_incomplete",
+        )
         raise RuntimeDatasetAuthorizationError(
             "Dash runtime dataset authorization is incompletely configured."
         )
@@ -208,8 +221,20 @@ async def _resolve_dash_principal(
     try:
         principal = await _await_if_needed(principal_getter(flask_request))
     except RuntimeDatasetAuthorizationError:
+        log_authorization_denied(
+            principal=None,
+            table=table,
+            operation=operation,
+            reason="dash_authentication_denied",
+        )
         raise
     except Exception as exc:
+        log_authorization_denied(
+            principal=None,
+            table=table,
+            operation=operation,
+            reason="dash_authentication_failed",
+        )
         raise RuntimeDatasetAuthorizationError("Dash runtime authentication failed.") from exc
     row_scope = dataset_authorizer.authorize(
         principal=principal,

@@ -2,13 +2,15 @@
 
 import asyncio
 import hashlib
+import importlib.util
 import json
+import logging
 from pathlib import Path
 import subprocess
 import sys
 
 import pytest
-from fastapi import FastAPI
+from fastapi import FastAPI, HTTPException
 from fastapi.testclient import TestClient
 from flask import Flask
 
@@ -291,6 +293,32 @@ def test_complete_api_hides_unexpected_backend_error_details():
     assert "secret" not in response.text
 
 
+def test_dataset_authorization_denial_emits_safe_security_event(caplog):
+    controller = ScalablePivotController(backend_uri=":memory:")
+    api = CompletePivotAPI(
+        controller,
+        dataset_authorizer=RuntimeDatasetAuthorizer(
+            {"sales": {"roles": {"admin"}, "rowSecurity": {"mode": "global"}}}
+        ),
+    )
+    viewer = User(
+        id="viewer-42",
+        username="viewer",
+        role="viewer",
+        attributes={"tenant": "A", "secret": "must-not-log"},
+    )
+
+    with caplog.at_level(logging.WARNING, logger="pivot_engine.security_events"):
+        with pytest.raises(HTTPException, match="Dataset access is not authorized"):
+            api._authorize_dataset(viewer, "sales", "read")
+
+    assert "event=authorization_denied" in caplog.text
+    assert "subject=viewer-42" in caplog.text
+    assert "table=sales" in caplog.text
+    assert "operation=read" in caplog.text
+    assert "must-not-log" not in caplog.text
+
+
 def test_flask_security_is_idempotent_and_protects_unsafe_requests(monkeypatch):
     _production_env(monkeypatch)
     settings = ProductionSecuritySettings.from_env()
@@ -476,14 +504,22 @@ def test_release_workflow_gates_publish_on_security_scanners():
     assert "bandit" in release
     assert "cyclonedx" in release.lower()
     assert "PIVOT_RELEASE_EVIDENCE_PATH" in release
+    assert "PIVOT_RELEASE_ENVIRONMENT" in release
+    assert "PIVOT_RELEASE_DEPLOYMENT_ORIGIN" in release
     assert "verify_security_release_evidence.py" in release
+    assert "verify_production_deployment.py" in release
     assert release.index("verify_dependency_audit.py") < release.rindex("Publish to PyPI")
     assert release.index("verify_npm_audit.py") < release.rindex("Publish to PyPI")
     assert release.index("verify_security_release_evidence.py") < release.rindex("Publish to PyPI")
+    assert release.index("verify_production_deployment.py") < release.rindex("Publish to PyPI")
+    assert '--expected-tag "${GITHUB_REF_NAME}"' in release
+    assert '--expected-commit "${GITHUB_SHA}"' in release
+    assert '--expected-environment "$PIVOT_RELEASE_ENVIRONMENT"' in release
+    assert '--expected-deployment-origin "$PIVOT_RELEASE_DEPLOYMENT_ORIGIN"' in release
     assert "continue-on-error" not in release
 
 
-def test_release_evidence_validator_requires_current_complete_operator_evidence(tmp_path):
+def test_release_evidence_validator_binds_release_and_complete_control_scope(tmp_path):
     root = Path(__file__).resolve().parents[1]
     script = root / "scripts" / "verify_security_release_evidence.py"
     assert script.is_file()
@@ -523,25 +559,34 @@ def test_release_evidence_validator_requires_current_complete_operator_evidence(
         "operatorEvidence": ["tls-scan"],
     }
 
-    def check(controls, attachments):
-        matrix_path.write_text(
-            json.dumps(
-                {
-                    "standard": {
-                        "name": "OWASP ASVS",
-                        "version": "5.0.0",
-                        "catalog": "security/asvs-5.0.0-catalog.json",
-                    },
-                    "controls": controls,
-                    "operationalControls": [],
-                }
-            ),
-            encoding="utf-8",
-        )
+    expected_release = {
+        "tag": "v0.0.0-test",
+        "commit": "a" * 40,
+        "environment": "production",
+        "deploymentOrigin": "https://pivot.example.test",
+    }
+
+    def check(controls, attachments, *, release=None, scope=None):
+        matrix_payload = {
+            "standard": {
+                "name": "OWASP ASVS",
+                "version": "5.0.0",
+                "catalog": "security/asvs-5.0.0-catalog.json",
+            },
+            "controls": controls,
+            "operationalControls": [],
+        }
+        matrix_json = json.dumps(matrix_payload, sort_keys=True)
+        matrix_path.write_text(matrix_json, encoding="utf-8")
+        expected_scope = {
+            "matrixSha256": hashlib.sha256(matrix_json.encode("utf-8")).hexdigest(),
+            "controlIds": [control["id"] for control in controls],
+        }
         evidence_path.write_text(
             json.dumps(
                 {
-                    "release": "v0.0.0-test",
+                    "release": release or expected_release,
+                    "scope": scope or expected_scope,
                     "generatedAt": "2026-09-17T12:00:00Z",
                     "attachments": attachments,
                 }
@@ -558,6 +603,14 @@ def test_release_evidence_validator_requires_current_complete_operator_evidence(
                 str(evidence_path),
                 "--repository-root",
                 str(root),
+                "--expected-tag",
+                expected_release["tag"],
+                "--expected-commit",
+                expected_release["commit"],
+                "--expected-environment",
+                expected_release["environment"],
+                "--expected-deployment-origin",
+                expected_release["deploymentOrigin"],
                 "--as-of",
                 "2026-09-17",
             ],
@@ -590,6 +643,16 @@ def test_release_evidence_validator_requires_current_complete_operator_evidence(
     assert check(
         [dict(local_control, asvs=[dict(local_control["asvs"][0], title="Wrong title")])],
         [],
+    ).returncode != 0
+    assert check(
+        [local_control],
+        [],
+        release=dict(expected_release, tag="v9.9.9-unrelated"),
+    ).returncode != 0
+    assert check(
+        [local_control],
+        [],
+        scope={"matrixSha256": "0" * 64, "controlIds": []},
     ).returncode != 0
 
 
@@ -656,3 +719,64 @@ def test_production_security_evidence_artifacts_cover_the_deployment_boundary():
     assert "backup restore" in runbook.read_text(encoding="utf-8").lower()
     assert "penetration test" in runbook.read_text(encoding="utf-8").lower()
     assert "pip-audit" in workflow.read_text(encoding="utf-8")
+
+
+def test_deployment_verifier_rejects_ineffective_security_header_values(monkeypatch):
+    root = Path(__file__).resolve().parents[1]
+    verifier_path = root / "scripts" / "verify_production_deployment.py"
+    module_spec = importlib.util.spec_from_file_location("deployment_verifier_test", verifier_path)
+    assert module_spec and module_spec.loader
+    verifier = importlib.util.module_from_spec(module_spec)
+    module_spec.loader.exec_module(verifier)
+
+    def unsafe_response(url, *, follow_redirects):
+        if url.startswith("https://"):
+            return 200, {
+                "Strict-Transport-Security": "max-age=0",
+                "Content-Security-Policy": "default-src *; frame-ancestors *",
+                "X-Content-Type-Options": "nosniff",
+                "X-Frame-Options": "SAMEORIGIN",
+                "Referrer-Policy": "unsafe-url",
+                "Permissions-Policy": "geolocation=*",
+            }, url
+        return 308, {"Location": "https://other.example.test/health"}, url
+
+    monkeypatch.setattr(verifier, "_response_for", unsafe_response)
+    result = verifier.verify("https://pivot.example.test", "/health")
+
+    assert result["ok"] is False
+    assert any("HSTS" in error for error in result["errors"])
+    assert any("frame-ancestors" in error for error in result["errors"])
+    assert any("X-Frame-Options" in error for error in result["errors"])
+    assert any("Referrer-Policy" in error for error in result["errors"])
+    assert any("Permissions-Policy" in error for error in result["errors"])
+    assert any("configured HTTPS origin" in error for error in result["errors"])
+
+
+def test_deployment_verifier_accepts_effective_security_header_values(monkeypatch):
+    root = Path(__file__).resolve().parents[1]
+    verifier_path = root / "scripts" / "verify_production_deployment.py"
+    module_spec = importlib.util.spec_from_file_location("deployment_verifier_positive_test", verifier_path)
+    assert module_spec and module_spec.loader
+    verifier = importlib.util.module_from_spec(module_spec)
+    module_spec.loader.exec_module(verifier)
+
+    def secure_response(url, *, follow_redirects):
+        if url.startswith("https://"):
+            return 200, {
+                "Strict-Transport-Security": "max-age=63072000; includeSubDomains; preload",
+                "Content-Security-Policy": "default-src 'self'; base-uri 'self'; frame-ancestors 'none'; object-src 'none'",
+                "X-Content-Type-Options": "nosniff",
+                "X-Frame-Options": "DENY",
+                "Referrer-Policy": "strict-origin-when-cross-origin",
+                "Permissions-Policy": "geolocation=(), microphone=(), camera=()",
+            }, url
+        return 308, {"Location": "https://pivot.example.test/health"}, url
+
+    monkeypatch.setattr(verifier, "_response_for", secure_response)
+    result = verifier.verify("https://pivot.example.test", "/health")
+
+    assert result["ok"] is True
+    assert result["errors"] == []
+    with pytest.raises(ValueError, match="origin without a path"):
+        verifier.verify("https://pivot.example.test/untrusted-path", "/health")

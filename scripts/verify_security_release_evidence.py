@@ -10,6 +10,7 @@ from pathlib import Path
 import re
 import sys
 from typing import Any
+from urllib.parse import urlparse, urlunparse
 
 
 _MATRIX_FIELDS = frozenset({"standard", "controls", "operationalControls"})
@@ -23,9 +24,12 @@ _CATALOG_FIELDS = frozenset({"standard", "requirements"})
 _CATALOG_STANDARD_FIELDS = frozenset({"name", "version", "source", "sourceSha256"})
 _CATALOG_REQUIREMENT_FIELDS = frozenset({"id", "level", "title"})
 _ATTACHMENT_FIELDS = frozenset({"id", "path", "owner", "expiresAt", "sha256"})
-_EVIDENCE_FIELDS = frozenset({"release", "generatedAt", "attachments"})
+_RELEASE_FIELDS = frozenset({"tag", "commit", "environment", "deploymentOrigin"})
+_SCOPE_FIELDS = frozenset({"matrixSha256", "controlIds"})
+_EVIDENCE_FIELDS = frozenset({"release", "scope", "generatedAt", "attachments"})
 _STATES = frozenset({"verified_locally", "operator_evidence_required", "not_applicable"})
 _SHA256 = re.compile(r"^[0-9a-fA-F]{64}$")
+_COMMIT_SHA = re.compile(r"^[0-9a-fA-F]{40,64}$")
 
 
 def _load_json(path: Path, label: str) -> Any:
@@ -156,14 +160,80 @@ def _matrix_controls(payload: Any, repository_root: Path) -> list[dict[str, Any]
     return resolved
 
 
-def _attachments_from_evidence(payload: Any, evidence_directory: Path, as_of: date) -> dict[str, dict[str, Any]]:
+def _deployment_origin(value: str, label: str) -> str:
+    parsed = urlparse(value)
+    if (
+        parsed.scheme != "https"
+        or not parsed.netloc
+        or parsed.username
+        or parsed.password
+        or parsed.path not in {"", "/"}
+        or parsed.query
+        or parsed.fragment
+    ):
+        raise ValueError(f"{label} must be a credential-free https origin.")
+    return urlunparse(("https", parsed.netloc.lower(), "", "", "", ""))
+
+
+def _validate_release_binding(release: Any, expected_release: dict[str, str]) -> None:
+    if not isinstance(release, dict) or set(release) != _RELEASE_FIELDS:
+        raise ValueError("Release evidence release binding has invalid fields.")
+    _require_strings(
+        release,
+        ("tag", "commit", "environment", "deploymentOrigin"),
+        "Release evidence release binding",
+    )
+    if not _COMMIT_SHA.fullmatch(release["commit"]):
+        raise ValueError("Release evidence commit must be an immutable Git SHA.")
+    supplied_origin = _deployment_origin(release["deploymentOrigin"], "Release evidence deploymentOrigin")
+    expected_origin = _deployment_origin(expected_release["deploymentOrigin"], "Expected deployment origin")
+    if supplied_origin != expected_origin:
+        raise ValueError("Release evidence deployment origin does not match the protected release target.")
+    for key in ("tag", "commit", "environment"):
+        if release[key] != expected_release[key]:
+            raise ValueError(f"Release evidence {key} does not match the protected release target.")
+
+
+def _validate_scope(scope: Any, *, matrix_sha256: str, control_ids: set[str]) -> None:
+    if not isinstance(scope, dict) or set(scope) != _SCOPE_FIELDS:
+        raise ValueError("Release evidence scope has invalid fields.")
+    matrix_digest = scope.get("matrixSha256")
+    if not isinstance(matrix_digest, str) or not _SHA256.fullmatch(matrix_digest):
+        raise ValueError("Release evidence scope matrixSha256 is invalid.")
+    if matrix_digest.lower() != matrix_sha256.lower():
+        raise ValueError("Release evidence scope does not match the current control matrix.")
+    scoped_controls = scope.get("controlIds")
+    if (
+        not isinstance(scoped_controls, list)
+        or any(not isinstance(control_id, str) or not control_id.strip() for control_id in scoped_controls)
+        or len(set(scoped_controls)) != len(scoped_controls)
+        or set(scoped_controls) != control_ids
+    ):
+        raise ValueError("Release evidence scope must list every and only current matrix control id.")
+
+
+def _attachments_from_evidence(
+    payload: Any,
+    evidence_directory: Path,
+    as_of: date,
+    *,
+    expected_release: dict[str, str],
+    matrix_sha256: str,
+    control_ids: set[str],
+) -> dict[str, dict[str, Any]]:
     if not isinstance(payload, dict) or set(payload) != _EVIDENCE_FIELDS:
-        raise ValueError("Release evidence must contain release, generatedAt, and attachments only.")
-    _require_strings(payload, ("release", "generatedAt"), "Release evidence")
+        raise ValueError("Release evidence must contain release, scope, generatedAt, and attachments only.")
+    _require_strings(payload, ("generatedAt",), "Release evidence")
     try:
         datetime.fromisoformat(payload["generatedAt"].replace("Z", "+00:00"))
     except ValueError as exc:
         raise ValueError("Release evidence generatedAt must be ISO-8601.") from exc
+    _validate_release_binding(payload["release"], expected_release)
+    _validate_scope(
+        payload["scope"],
+        matrix_sha256=matrix_sha256,
+        control_ids=control_ids,
+    )
     if not isinstance(payload["attachments"], list):
         raise ValueError("Release evidence attachments must be an array.")
     attachments: dict[str, dict[str, Any]] = {}
@@ -191,9 +261,27 @@ def _attachments_from_evidence(payload: Any, evidence_directory: Path, as_of: da
     return attachments
 
 
-def verify(*, matrix_path: Path, evidence_path: Path, repository_root: Path, as_of: date) -> None:
+def verify(
+    *,
+    matrix_path: Path,
+    evidence_path: Path,
+    repository_root: Path,
+    as_of: date,
+    expected_release: dict[str, str],
+) -> None:
+    try:
+        matrix_bytes = matrix_path.read_bytes()
+    except OSError as exc:
+        raise ValueError(f"Cannot read certification matrix: {matrix_path}") from exc
     controls = _matrix_controls(_load_json(matrix_path, "certification matrix"), repository_root)
-    attachments = _attachments_from_evidence(_load_json(evidence_path, "release evidence"), evidence_path.parent, as_of)
+    attachments = _attachments_from_evidence(
+        _load_json(evidence_path, "release evidence"),
+        evidence_path.parent,
+        as_of,
+        expected_release=expected_release,
+        matrix_sha256=hashlib.sha256(matrix_bytes).hexdigest(),
+        control_ids={str(control["id"]) for control in controls},
+    )
     required_ids = {
         attachment_id
         for control in controls
@@ -213,10 +301,25 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--matrix", type=Path, required=True, help="OWASP ASVS matrix JSON")
     parser.add_argument("--evidence", type=Path, required=True, help="release evidence manifest JSON")
     parser.add_argument("--repository-root", type=Path, default=Path.cwd(), help="repository root for local evidence paths")
+    parser.add_argument("--expected-tag", required=True, help="immutable release tag expected by the protected job")
+    parser.add_argument("--expected-commit", required=True, help="immutable source commit expected by the protected job")
+    parser.add_argument("--expected-environment", required=True, help="protected deployment environment")
+    parser.add_argument("--expected-deployment-origin", required=True, help="protected HTTPS deployment origin")
     parser.add_argument("--as-of", type=date.fromisoformat, default=date.today(), help="ISO date used for evidence freshness")
     args = parser.parse_args(argv)
     try:
-        verify(matrix_path=args.matrix, evidence_path=args.evidence, repository_root=args.repository_root, as_of=args.as_of)
+        verify(
+            matrix_path=args.matrix,
+            evidence_path=args.evidence,
+            repository_root=args.repository_root,
+            as_of=args.as_of,
+            expected_release={
+                "tag": args.expected_tag,
+                "commit": args.expected_commit,
+                "environment": args.expected_environment,
+                "deploymentOrigin": args.expected_deployment_origin,
+            },
+        )
     except ValueError as exc:
         print(f"security-release-evidence: {exc}", file=sys.stderr)
         return 2

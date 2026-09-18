@@ -1,5 +1,26 @@
 {
-  "release": "vX.Y.Z",
-  "generatedAt": "2026-09-17T00:00:00Z",
+  "release": {
+    "tag": "vX.Y.Z",
+    "commit": "0000000000000000000000000000000000000000",
+    "environment": "production",
+    "deploymentOrigin": "https://pivot.example.com"
+  },
+  "scope": {
+    "matrixSha256": "c74e2ab0d679298c6359e3e1931fea4d3046d8c5f393933c0a8fbda410d15e30",
+    "controlIds": [
+      "AUTHORIZATION_TENANT_ISOLATION",
+      "JWT_AND_FLIGHT_AUTHENTICATION",
+      "SAFE_CACHE_CODECS",
+      "REQUEST_BOUNDARIES_AND_ERRORS",
+      "DEPENDENCY_SCANNING_AND_SBOM",
+      "SECURITY_EVENT_AND_ERROR_LOGGING",
+      "TLS_AND_NETWORK_EDGE",
+      "IDENTITY_PROVIDER_CONFIGURATION",
+      "INDEPENDENT_PENETRATION_TEST",
+      "BACKUP_RESTORE",
+      "INCIDENT_RESPONSE_AND_SIGNOFF"
+    ]
+  },
+  "generatedAt": "2026-09-18T00:00:00Z",
   "attachments": []
 }

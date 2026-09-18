@@ -6,8 +6,9 @@ import hashlib
 import json
 from dataclasses import dataclass
 from types import MappingProxyType
-from typing import Any, FrozenSet, Mapping, Optional
+from typing import Any, FrozenSet, Mapping, NoReturn, Optional
 
+from ..security_events import log_authorization_denied
 from .contracts import RuntimeContractError
 
 
@@ -222,23 +223,69 @@ class RuntimeDatasetAuthorizer:
     def _role(principal: Any) -> str:
         return str(getattr(principal, "role", "") or "").strip().lower()
 
+    @staticmethod
+    def _deny(
+        *,
+        principal: Any,
+        table: str,
+        operation: str,
+        reason: str,
+        message: str | None = None,
+    ) -> NoReturn:
+        """Log a generic denial at the common server-owned policy boundary."""
+        log_authorization_denied(
+            principal=principal,
+            table=table,
+            operation=operation,
+            reason=reason,
+        )
+        raise RuntimeDatasetAuthorizationError(message or "Dataset access is not authorized.")
+
     def authorize(
         self, *, principal: Any, table: str, operation: str = "read"
     ) -> RowScopeGrant:
         normalized_table = str(table or "").strip()
         normalized_operation = str(operation or "read").strip().lower()
         if normalized_operation not in _ALL_DATASET_OPERATIONS:
-            raise RuntimeDatasetAuthorizationError()
+            self._deny(
+                principal=principal,
+                table=normalized_table,
+                operation=normalized_operation,
+                reason="unsupported_operation",
+            )
         access = self._table_permissions.get(normalized_table) or self._table_permissions.get("*")
         if access is None:
-            raise RuntimeDatasetAuthorizationError(
-                "This dataset is not authorized for the current principal."
+            self._deny(
+                principal=principal,
+                table=normalized_table,
+                operation=normalized_operation,
+                reason="dataset_not_configured",
+                message="This dataset is not authorized for the current principal.",
             )
         if self._role(principal) not in access.roles:
-            raise RuntimeDatasetAuthorizationError()
+            self._deny(
+                principal=principal,
+                table=normalized_table,
+                operation=normalized_operation,
+                reason="role_not_permitted",
+            )
         if normalized_operation not in access.operations:
-            raise RuntimeDatasetAuthorizationError()
-        return access.row_security.grant(table=normalized_table, principal=principal)
+            self._deny(
+                principal=principal,
+                table=normalized_table,
+                operation=normalized_operation,
+                reason="operation_not_permitted",
+            )
+        try:
+            return access.row_security.grant(table=normalized_table, principal=principal)
+        except RuntimeDatasetAuthorizationError:
+            log_authorization_denied(
+                principal=principal,
+                table=normalized_table,
+                operation=normalized_operation,
+                reason="row_scope_denied",
+            )
+            raise
 
 
 __all__ = [

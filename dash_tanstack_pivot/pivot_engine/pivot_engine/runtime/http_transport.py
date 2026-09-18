@@ -15,6 +15,7 @@ from typing import Any, Callable, Dict, Optional
 
 from ..tanstack_adapter import TanStackOperation, TanStackRequest
 from ..security import MutationAuthorizationError
+from ..security_events import log_authorization_denied
 from .contracts import (
     RUNTIME_SCHEMA_VERSION,
     RuntimeContractError,
@@ -509,6 +510,18 @@ def register_runtime_http_transport(
             kind = str(candidate.get("kind") or "data")
             if kind not in _COMMAND_TRIGGER_PROPS:
                 kind = "data"
+            operation = (
+                "mutate"
+                if kind in {"transaction", "update"}
+                else ("export" if kind == "export" else "read")
+            )
+            if isinstance(exc, MutationAuthorizationError):
+                log_authorization_denied(
+                    principal=user,
+                    table=candidate.get("table"),
+                    operation=operation,
+                    reason="mutation_policy",
+                )
             request_id = candidate.get("requestId")
             request_id = str(request_id) if request_id is not None else None
             error_response = build_runtime_response(

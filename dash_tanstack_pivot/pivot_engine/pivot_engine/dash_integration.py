@@ -20,6 +20,7 @@ from .production_security import (
     install_flask_security,
     resolve_runtime_environment,
 )
+from .security_events import log_authorization_denied
 from .runtime import (
     PivotRuntimeService,
     RuntimeDatasetAuthorizer,
@@ -209,6 +210,12 @@ def register_pivot_app(
                 # Avoid revealing whether an unapproved table exists.
                 return jsonify({"error": "Not found"}), 404
             if production and drill_authorizer is None:
+                log_authorization_denied(
+                    principal=None,
+                    table=table,
+                    operation="drill",
+                    reason="drill_authorizer_not_configured",
+                )
                 return jsonify({"error": "Drill-through is not configured"}), 403
             if drill_authorizer is not None:
                 try:
@@ -218,6 +225,12 @@ def register_pivot_app(
                     # an implementation detail to the browser.
                     allowed = False
                 if not allowed:
+                    log_authorization_denied(
+                        principal=None,
+                        table=table,
+                        operation="drill",
+                        reason="drill_authorizer_denied",
+                    )
                     return jsonify({"error": "Forbidden"}), 403
 
             import re as _re

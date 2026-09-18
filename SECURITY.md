@@ -37,6 +37,6 @@ The assurance baseline is OWASP ASVS v5.0.0 Level 2. The
 [certification matrix](security/certification-matrix.json) identifies which
 controls have repository-local evidence and which require fresh operator
 attachments. Validate a release manifest with
-`python scripts/verify_security_release_evidence.py --matrix security/certification-matrix.json --evidence <protected-manifest>`;
-the tool checks completeness and freshness without claiming that external
-deployment work occurred.
+`python scripts/verify_security_release_evidence.py --matrix security/certification-matrix.json --evidence <protected-manifest> --expected-tag <tag> --expected-commit <sha> --expected-environment <protected-environment> --expected-deployment-origin <https-origin>`;
+the tool binds completeness and freshness to that immutable release without
+claiming that external deployment work occurred.

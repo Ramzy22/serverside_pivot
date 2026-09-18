@@ -8374,7 +8374,7 @@ const wx = wt.memo(function({
   ] });
 }), Rx = wt.lazy(() => import(
   /* webpackChunkName: "pivot-sidebar" */
-  "./SidebarPanel-CPfbykM8.js"
+  "./SidebarPanel-DSl61iQW.js"
 ).then((n) => ({ default: n.SidebarPanel })));
 function Mx({ toolbar: n }) {
   const {
@@ -10098,7 +10098,7 @@ const jc = ({ style: n, rowHeight: e }) => /* @__PURE__ */ m.jsx("div", { style:
   }), t;
 }, eC = wt.lazy(() => import(
   /* webpackChunkName: "pivot-detail-inline" */
-  "./InlineDetailPanel-BKfMAx93.js"
+  "./InlineDetailPanel-CoQHPBV_.js"
 )), tC = (n) => n.totalBg || n.select || n.background, nC = (n, e) => {
   if (!n) return [];
   const t = n.id || n;
@@ -10872,13 +10872,13 @@ const jc = ({ style: n, rowHeight: e }) => /* @__PURE__ */ m.jsx("div", { style:
   ] });
 }), iC = wt.lazy(() => import(
   /* webpackChunkName: "pivot-detail-drawer" */
-  "./DetailDrawer-CK2iUSiM.js"
+  "./DetailDrawer-DaPB2hlJ.js"
 )), lC = wt.lazy(() => import(
   /* webpackChunkName: "pivot-detail-sidepanel" */
-  "./DetailSidePanel-CklnVHAR.js"
+  "./DetailSidePanel-DLvkgyu_.js"
 )), sC = wt.lazy(() => import(
   /* webpackChunkName: "pivot-edit-panel" */
-  "./EditSidePanel-B4Zg9ogz.js"
+  "./EditSidePanel-DxfikV9y.js"
 ));
 function aC({ canvas: n }) {
   const {
@@ -11197,17 +11197,17 @@ const fd = (n, e = 4) => {
 };
 wt.lazy(() => import(
   /* webpackChunkName: "pivot-charts" */
-  "./PivotCharts-C0zeBme4.js"
+  "./PivotCharts-C88Bn4Ez.js"
 ).then((n) => ({ default: n.PivotChartModal })));
 const pC = wt.lazy(() => import(
   /* webpackChunkName: "pivot-charts" */
-  "./PivotCharts-C0zeBme4.js"
+  "./PivotCharts-C88Bn4Ez.js"
 ).then((n) => ({ default: n.PivotChartPanel }))), hC = wt.lazy(() => import(
   /* webpackChunkName: "pivot-context-menu" */
-  "./ContextMenu-BCwffKuN.js"
+  "./ContextMenu-5_4WtAJV.js"
 )), gC = wt.lazy(() => import(
   /* webpackChunkName: "pivot-sparkline-detail" */
-  "./SparklineDetailGraph-DuZhDI0q.js"
+  "./SparklineDetailGraph-keHEfMAP.js"
 ).then((n) => ({ default: n.SparklineDetailGraph }))), mC = () => null, yC = (n) => /* @__PURE__ */ m.jsx(wt.Suspense, { fallback: /* @__PURE__ */ m.jsx(mC, {}), children: /* @__PURE__ */ m.jsx(pC, { ...n }) }), xC = `
 @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@300;500&family=Plus+Jakarta+Sans:wght@300;500;800&display=swap');
 @keyframes pivot-row-loader-enter {
@@ -13186,13 +13186,13 @@ function JC({
 const QC = 48;
 wt.lazy(() => import(
   /* webpackChunkName: "pivot-charts" */
-  "./PivotCharts-C0zeBme4.js"
+  "./PivotCharts-C88Bn4Ez.js"
 ).then((n) => ({
   default: n.PivotChartModal
 })));
 wt.lazy(() => import(
   /* webpackChunkName: "pivot-charts" */
-  "./PivotCharts-C0zeBme4.js"
+  "./PivotCharts-C88Bn4Ez.js"
 ).then((n) => ({
   default: n.PivotChartPanel
 })));
@@ -16007,13 +16007,13 @@ const $b = (n, e, t) => n * e + (t ? e : 0), Wb = (n, e = {}) => {
 }, zc = !1;
 wt.lazy(() => import(
   /* webpackChunkName: "pivot-charts" */
-  "./PivotCharts-C0zeBme4.js"
+  "./PivotCharts-C88Bn4Ez.js"
 ).then((n) => ({
   default: n.PivotChartModal
 })));
 wt.lazy(() => import(
   /* webpackChunkName: "pivot-charts" */
-  "./PivotCharts-C0zeBme4.js"
+  "./PivotCharts-C88Bn4Ez.js"
 ).then((n) => ({
   default: n.PivotChartPanel
 })));
@@ -17453,7 +17453,7 @@ let Nc = null;
 function oS() {
   return Nc || (Nc = import(
     /* webpackChunkName: "pivot-xlsx" */
-    "./xlsx.mini.min-B7xenUIP.js"
+    "./xlsx.mini.min-DPiuAy3A.js"
   ).then((n) => n.x)), Nc.then((n) => n.default || n);
 }
 const Fm = /* @__PURE__ */ new Set(["__row_number__"]), iS = /* @__PURE__ */ new Set([
@@ -26228,13 +26228,13 @@ const Tl = "__ALL__", Yo = (...n) => {
 };
 wt.lazy(() => import(
   /* webpackChunkName: "pivot-charts" */
-  "./PivotCharts-C0zeBme4.js"
+  "./PivotCharts-C88Bn4Ez.js"
 ).then((n) => ({
   default: n.PivotChartModal
 })));
 wt.lazy(() => import(
   /* webpackChunkName: "pivot-charts" */
-  "./PivotCharts-C0zeBme4.js"
+  "./PivotCharts-C88Bn4Ez.js"
 ).then((n) => ({
   default: n.PivotChartPanel
 })));
@@ -29255,12 +29255,12 @@ function Q1({
 }
 const Z1 = wt.lazy(() => import(
   /* webpackChunkName: "pivot-charts" */
-  "./PivotCharts-C0zeBme4.js"
+  "./PivotCharts-C88Bn4Ez.js"
 ).then((n) => ({
   default: n.PivotChartModal
 }))), eR = wt.lazy(() => import(
   /* webpackChunkName: "pivot-charts" */
-  "./PivotCharts-C0zeBme4.js"
+  "./PivotCharts-C88Bn4Ez.js"
 ).then((n) => ({
   default: n.PivotChartPanel
 }))), ay = () => null, tR = (n) => /* @__PURE__ */ m.jsx(wt.Suspense, { fallback: /* @__PURE__ */ m.jsx(ay, {}), children: /* @__PURE__ */ m.jsx(Z1, { ...n }) }), Lg = (n) => /* @__PURE__ */ m.jsx(wt.Suspense, { fallback: /* @__PURE__ */ m.jsx(ay, {}), children: /* @__PURE__ */ m.jsx(eR, { ...n }) });

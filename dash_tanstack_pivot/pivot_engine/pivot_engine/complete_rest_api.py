@@ -794,6 +794,14 @@ class RealTimePivotAPI(CompletePivotAPI):
         self.active_connections: Dict[str, _RealtimeConnection] = {}
         self._setup_websocket_routes()
 
+    def _register_connection(self, connection: _RealtimeConnection) -> str:
+        """Allocate the registry key on the server, not from a client URL."""
+        connection_id = uuid.uuid4().hex
+        while connection_id in self.active_connections:  # pragma: no cover - UUID collision guard
+            connection_id = uuid.uuid4().hex
+        self.active_connections[connection_id] = connection
+        return connection_id
+
     @staticmethod
     def _bearer_token(websocket: WebSocket) -> Optional[str]:
         authorization = str(websocket.headers.get("authorization") or "").strip()
@@ -859,7 +867,10 @@ class RealTimePivotAPI(CompletePivotAPI):
 
             await websocket.accept()
             connection = _RealtimeConnection(websocket=websocket, principal=principal)
-            self.active_connections[connection_id] = connection
+            # ``connection_id`` is only a backwards-compatible client-side
+            # correlation segment. It must never control server registry
+            # ownership, otherwise a second client can replace an active one.
+            registry_id = self._register_connection(connection)
             try:
                 while True:
                     raw_message = await websocket.receive_text()
@@ -879,8 +890,8 @@ class RealTimePivotAPI(CompletePivotAPI):
             except WebSocketDisconnect:
                 pass
             finally:
-                if self.active_connections.get(connection_id) is connection:
-                    del self.active_connections[connection_id]
+                if self.active_connections.get(registry_id) is connection:
+                    del self.active_connections[registry_id]
 
     async def _handle_subscription(
         self,

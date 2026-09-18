@@ -2,6 +2,7 @@ import asyncio
 import gzip
 import inspect
 import json
+import logging
 import threading
 from pathlib import Path
 
@@ -373,6 +374,24 @@ def test_dash_runtime_principal_is_server_resolved_and_dataset_scoped():
                 require_authorization=True,
             )
         )
+
+
+def test_dash_runtime_denial_emits_safe_security_event(caplog):
+    with caplog.at_level(logging.WARNING, logger="pivot_engine.security_events"):
+        with pytest.raises(RuntimeDatasetAuthorizationError):
+            asyncio.run(
+                _resolve_dash_principal(
+                    dataset_authorizer=None,
+                    principal_getter=None,
+                    table="sales",
+                    operation="read",
+                    require_authorization=True,
+                )
+            )
+
+    assert "event=authorization_denied" in caplog.text
+    assert "table=sales" in caplog.text
+    assert "operation=read" in caplog.text
 
 
 def test_runtime_payload_ref_keeps_small_nested_windows_inline(monkeypatch):
