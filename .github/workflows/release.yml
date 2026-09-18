@@ -8,22 +8,29 @@ on:
 jobs:
   validate-and-publish:
     name: Validate and Publish to PyPI
-    runs-on: ubuntu-latest
+    runs-on: [self-hosted, pivot-release]
+    environment: pypi-release
     permissions:
       id-token: write
       contents: read
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
 
       - name: Set up Python
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5.6.0
         with:
           python-version: "3.11"
 
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
       - name: Install dependencies
         run: |
-          python -m pip install --upgrade pip "setuptools<71" duckdb pyarrow "ibis-framework[duckdb]" pandas dash pytest tomli redis "python-jose[cryptography]" build twine
+          python -m pip install --upgrade pip "setuptools<71" duckdb pyarrow "ibis-framework[duckdb]" pandas dash pytest tomli redis jsonschema "python-jose[cryptography]" build twine
+          python -m pip install -r security/requirements-security.txt
 
       - name: Add pivot-engine to PYTHONPATH
         run: echo "PYTHONPATH=$PYTHONPATH:${{ github.workspace }}/dash_tanstack_pivot/pivot_engine" >> $GITHUB_ENV
@@ -31,20 +38,94 @@ jobs:
       - name: Install serverside-pivot (editable)
         run: pip install -e dash_tanstack_pivot/
 
+      - name: Install frontend dependencies
+        run: npm ci
+        working-directory: dash_tanstack_pivot
+
+      - name: Build and validate frontend package
+        run: |
+          npm run typecheck
+          npm run build:js
+          npm run build:py
+        working-directory: dash_tanstack_pivot
+
+      - name: Verify bundle contract and budgets
+        run: python scripts/ci/verify_bundle_contract.py
+
       - name: Validate tag/version parity
         run: python scripts/ci/check_tag_version.py
 
-      - name: Run multi-instance isolation gate
-        run: python -m pytest tests/test_multi_instance_isolation.py tests/test_dash_runtime_callbacks.py tests/test_session_request_gate.py tests/test_runtime_service.py -v
+      - name: Run complete Python and browser-capability suite
+        run: python -m pytest -q
 
-      - name: Run packaging smoke tests
-        run: python -m pytest tests/test_packaging_smoke.py tests/test_docs_examples_contract.py -v
+      - name: Create security reports directory
+        run: mkdir -p security/reports
+
+      - name: Create dependency audit report
+        run: |
+          set +e
+          pip-audit --format json --output security/reports/pip-audit.json
+          status=$?
+          set -e
+          test -s security/reports/pip-audit.json
+          test "$status" -eq 0 -o "$status" -eq 1
+
+      - name: Create JavaScript dependency audit report
+        working-directory: dash_tanstack_pivot
+        run: |
+          set +e
+          npm audit --omit=dev --json > ../security/reports/npm-audit.json
+          status=$?
+          set -e
+          test -s ../security/reports/npm-audit.json
+          test "$status" -eq 0 -o "$status" -eq 1
+
+      - name: Create static security analysis report
+        run: |
+          set +e
+          bandit -r dash_tanstack_pivot/pivot_engine/pivot_engine -f json -o security/reports/bandit.json
+          status=$?
+          set -e
+          test -s security/reports/bandit.json
+          test "$status" -eq 0 -o "$status" -eq 1
+
+      - name: Generate CycloneDX SBOM
+        run: cyclonedx-py environment --output-file security/reports/sbom.cdx.json --output-format JSON
+
+      - name: Upload release security evidence
+        if: always()
+        uses: actions/upload-artifact@65462800fd760344b1a7b4382951275a0abb4808 # v4.3.3
+        with:
+          name: release-security-evidence
+          path: security/reports/
+          if-no-files-found: error
+
+      - name: Gate release on dependency findings
+        run: python scripts/ci/verify_dependency_audit.py --audit security/reports/pip-audit.json --exceptions security/dependency-exceptions.json
+
+      - name: Gate release on JavaScript dependency findings
+        run: python scripts/ci/verify_npm_audit.py --audit security/reports/npm-audit.json
+
+      - name: Gate release on static security findings
+        run: bandit -r dash_tanstack_pivot/pivot_engine/pivot_engine
+
+      - name: Require protected operator evidence
+        env:
+          PIVOT_RELEASE_EVIDENCE_PATH: ${{ vars.PIVOT_RELEASE_EVIDENCE_PATH }}
+        run: |
+          test -n "$PIVOT_RELEASE_EVIDENCE_PATH"
+          test "$PIVOT_RELEASE_EVIDENCE_PATH" != "security/release-evidence.example.json"
+          test -f "$PIVOT_RELEASE_EVIDENCE_PATH"
+          python scripts/verify_security_release_evidence.py --matrix security/certification-matrix.json --evidence "$PIVOT_RELEASE_EVIDENCE_PATH" --repository-root .
 
       - name: Build distribution
         run: python -m build dash_tanstack_pivot/
 
       - name: Validate artifacts with twine check
         run: twine check dash_tanstack_pivot/dist/*
+
+      - name: Verify wheel package contract
+        run: python scripts/ci/verify_wheel_contract.py dash_tanstack_pivot/dist/*.whl
 
       - name: Publish to PyPI
         uses: pypa/gh-action-pypi-publish@release/v1

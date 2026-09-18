@@ -12,10 +12,20 @@ from __future__ import annotations
 
 import os
 from dataclasses import dataclass
-from typing import Any, Callable, Optional
+from typing import Any, Callable, Iterable, Optional
 
 from .runtime.async_bridge import run_awaitable_in_worker_thread
-from .runtime import PivotRuntimeService, SessionRequestGate, register_dash_pivot_transport_callback
+from .production_security import (
+    ProductionSecuritySettings,
+    install_flask_security,
+    resolve_runtime_environment,
+)
+from .runtime import (
+    PivotRuntimeService,
+    RuntimeDatasetAuthorizer,
+    SessionRequestGate,
+    register_dash_pivot_transport_callback,
+)
 
 
 def _component_props(component: Any) -> dict:
@@ -34,7 +44,7 @@ def _component_props(component: Any) -> dict:
     for name in getattr(component, "_prop_names", []) or []:
         try:
             props[name] = getattr(component, name)
-        except Exception:
+        except Exception:  # nosec B112
             continue
     return props
 
@@ -86,6 +96,11 @@ class _RuntimeServiceHolder:
     service: Optional[PivotRuntimeService] = None
 
 
+def _is_production_environment() -> bool:
+    """Use the one environment decision shared by all public transports."""
+    return resolve_runtime_environment() == "production"
+
+
 def register_pivot_app(
     app: Any,
     adapter_getter: Callable[[], Any],
@@ -93,6 +108,10 @@ def register_pivot_app(
     *,
     debug: Optional[bool] = None,
     drill_store_id: Optional[Any] = None,
+    allowed_drill_tables: Optional[Iterable[str]] = None,
+    drill_authorizer: Optional[Callable[[Any, str], bool]] = None,
+    runtime_dataset_authorizer: Optional[RuntimeDatasetAuthorizer] = None,
+    runtime_principal_getter: Optional[Callable[[Any], Any]] = None,
 ) -> None:
     """
     Wire a pivot component into a Dash app with minimal boilerplate.
@@ -115,9 +134,39 @@ def register_pivot_app(
     drill_store_id:
         Optional ``dcc.Store`` id for drill-through data (only needed when
         you also call ``register_dash_drill_modal_callback`` separately).
+    allowed_drill_tables:
+        Optional allowlist for the ``/api/drill-through`` table parameter.
+        Provide this for every production application so the endpoint cannot
+        be used to discover unrelated tables on the shared connection.
+    drill_authorizer:
+        A synchronous ``(flask_request, table_name) -> bool`` authorization
+        callback for drill-through. It is required in a production environment
+        (``ENV``/``APP_ENV``/``FLASK_ENV``/``DASH_ENV`` set to ``production``
+        or ``prod``). Dash runtime callbacks should still be protected by the
+        host application's normal authentication middleware.
+    runtime_dataset_authorizer:
+        Server-owned per-table policy for Dash runtime data, exports, and
+        filter values. In production it must be paired with
+        ``runtime_principal_getter``; otherwise the callback fails closed.
+    runtime_principal_getter:
+        ``(flask_request) -> principal`` resolver used for every Dash runtime
+        request. The principal is passed to the runtime, so row-level filters
+        apply to data and filter-option queries as well as table permissions.
     """
+    security_settings = ProductionSecuritySettings.from_env()
+    production = security_settings.is_production
+    if production:
+        # Install before drill and Dash callback routes become public. The
+        # installer is idempotent, so multiple pivot instances share one host
+        # boundary rather than accumulating duplicate Flask hooks.
+        install_flask_security(app.server, security_settings)
     if debug is None:
         debug = os.environ.get("PIVOT_DEBUG_OUTPUT", "0").lower() in {"1", "true", "yes"}
+    allowed_table_names = frozenset(
+        str(table).strip()
+        for table in (allowed_drill_tables or ())
+        if str(table).strip()
+    )
 
     # --- per-registration runtime state ---
     _session_gate = SessionRequestGate()
@@ -147,8 +196,6 @@ def register_pivot_app(
             table = flask_request.args.get("table", "")
             row_path = flask_request.args.get("row_path", "")
             row_fields_raw = flask_request.args.get("row_fields", "")
-            page = int(flask_request.args.get("page", 0))
-            page_size = min(int(flask_request.args.get("page_size", 500)), 500)
             sort_col = flask_request.args.get("sort_col") or None
             sort_dir = flask_request.args.get("sort_dir", "asc")
             text_filter = flask_request.args.get("filter", "")
@@ -158,10 +205,31 @@ def register_pivot_app(
                 error_msg = "Missing required parameter" if not debug else "table param required"
                 return jsonify({"error": error_msg}), 400
 
+            if allowed_table_names and table not in allowed_table_names:
+                # Avoid revealing whether an unapproved table exists.
+                return jsonify({"error": "Not found"}), 404
+            if production and drill_authorizer is None:
+                return jsonify({"error": "Drill-through is not configured"}), 403
+            if drill_authorizer is not None:
+                try:
+                    allowed = bool(drill_authorizer(flask_request, table))
+                except Exception:
+                    # Authorization errors must fail closed and must not leak
+                    # an implementation detail to the browser.
+                    allowed = False
+                if not allowed:
+                    return jsonify({"error": "Forbidden"}), 403
+
             import re as _re
             _SAFE_FIELD_RE = _re.compile(r'^[A-Za-z_][A-Za-z0-9_]*$')
             row_fields = [f for f in row_fields_raw.split(",") if f and _SAFE_FIELD_RE.match(f)]
             path_parts = row_path.split("|||") if row_path else []
+
+            try:
+                page = max(0, int(flask_request.args.get("page", 0)))
+                page_size = min(max(1, int(flask_request.args.get("page_size", 500))), 500)
+            except (TypeError, ValueError):
+                return jsonify({"error": "Invalid pagination"}), 400
 
             drill_filters = []
             for i, field in enumerate(row_fields):
@@ -198,7 +266,7 @@ def register_pivot_app(
     try:
         if hasattr(app, "layout") and app.layout is not None:
             _layout_sort_options = _find_sort_options_in_layout(app.layout, pivot_id)
-    except Exception:
+    except Exception:  # nosec B110
         pass
 
     # --- Dash transport callback ---
@@ -209,4 +277,7 @@ def register_pivot_app(
         drill_store_id=drill_store_id,
         debug=debug,
         sort_options_default=_layout_sort_options,
+        dataset_authorizer=runtime_dataset_authorizer,
+        principal_getter=runtime_principal_getter,
+        require_dataset_authorization=production,
     )

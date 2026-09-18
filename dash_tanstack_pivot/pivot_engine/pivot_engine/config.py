@@ -70,14 +70,25 @@ class ScalablePivotConfig:
         
         # Redis settings if enabled
         if self.cache_type == 'redis':
-            self.redis_config = {
-                'host': os.getenv('REDIS_HOST', 'localhost'),
-                'port': int(os.getenv('REDIS_PORT', '6379')),
-                'db': int(os.getenv('REDIS_DB', '0')),
-            }
-            redis_password = os.getenv('REDIS_PASSWORD')
-            if redis_password:
-                self.redis_config['password'] = redis_password
+            redis_url = str(os.getenv('REDIS_URL') or '').strip()
+            if redis_url:
+                self.redis_config = {
+                    'url': redis_url,
+                    'ssl_cert_reqs': os.getenv('REDIS_SSL_CERT_REQS', 'required'),
+                }
+            else:
+                self.redis_config = {
+                    'host': os.getenv('REDIS_HOST', 'localhost'),
+                    'port': int(os.getenv('REDIS_PORT', '6379')),
+                    'db': int(os.getenv('REDIS_DB', '0')),
+                    'ssl_cert_reqs': os.getenv('REDIS_SSL_CERT_REQS', 'required'),
+                }
+                redis_username = os.getenv('REDIS_USERNAME')
+                redis_password = os.getenv('REDIS_PASSWORD')
+                if redis_username:
+                    self.redis_config['username'] = redis_username
+                if redis_password:
+                    self.redis_config['password'] = redis_password
         
         # Performance settings
         self.tile_size = int(os.getenv('TILE_SIZE', str(self.tile_size)))
@@ -113,6 +124,28 @@ class ScalablePivotConfig:
         
         if self.max_concurrent_queries <= 0:
             errors.append("max_concurrent_queries must be positive")
+
+        if self.cache_type == "redis":
+            try:
+                from .production_security import ProductionSecuritySettings
+                settings = ProductionSecuritySettings.from_env()
+                settings.validate()
+                if settings.is_production:
+                    from urllib.parse import urlparse
+                    redis_url = str(self.redis_config.get("url") or "")
+                    parsed_url = urlparse(redis_url)
+                    if (
+                        parsed_url.scheme != "rediss"
+                        or not parsed_url.username
+                        or not parsed_url.password
+                        or str(self.redis_config.get("ssl_cert_reqs") or "").lower()
+                        not in {"required", "cert_required"}
+                    ):
+                        errors.append(
+                            "Production Redis cache requires an authenticated rediss:// URL with certificate verification."
+                        )
+            except RuntimeError as exc:
+                errors.append(str(exc))
         
         if errors:
             raise ValueError(f"Configuration validation errors: {'; '.join(errors)}")

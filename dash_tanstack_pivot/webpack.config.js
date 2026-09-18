@@ -10,8 +10,15 @@ module.exports = {
     output: {
         path: path.resolve(__dirname, dashLibraryName),
         filename: `${dashLibraryName}.min.js`,
+        // Meaningful async names make the Dash assets diagnosable and allow CI
+        // to hold ordinary feature chunks to a different budget than the
+        // explicitly optional XLSX and WebGL renderers.
+        chunkFilename: '[name].dash_tanstack_pivot.min.js',
         library: dashLibraryName,
         libraryTarget: 'window',
+    },
+    resolve: {
+        extensions: ['.js', '.jsx', '.ts', '.tsx', '.json'],
     },
     externals: {
         react: 'React',
@@ -22,14 +29,15 @@ module.exports = {
     module: {
         rules: [
             {
-                test: /\.js$/,
+                test: /\.[jt]sx?$/,
                 exclude: /node_modules\/(?!@tanstack)/,
                 use: {
                     loader: 'babel-loader',
                     options: {
                         presets: [
                             '@babel/preset-env',
-                            '@babel/preset-react'
+                            '@babel/preset-react',
+                            '@babel/preset-typescript'
                         ],
                         plugins: [
                             '@babel/plugin-proposal-nullish-coalescing-operator',

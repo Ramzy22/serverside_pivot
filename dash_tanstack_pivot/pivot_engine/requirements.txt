@@ -10,6 +10,7 @@ fastapi>=0.100.0; extra != "no-api"
 uvicorn[standard]>=0.20.0; extra != "no-api"
 python-dotenv>=1.0.0
 python-multipart>=0.0.6
+jsonschema>=4.0.0
 
 # Security & Auth
 python-jose[cryptography]>=3.3.0

@@ -20,6 +20,12 @@ For Redis-backed caching:
 pip install "serverside-pivot[redis]"
 ```
 
+For the optional FastAPI service and its authentication dependencies:
+
+```bash
+pip install "serverside-pivot[api]"
+```
+
 ## Quick Start
 
 Run the included example directly:
@@ -78,6 +84,70 @@ The same `adapter.load_data(...)` call also accepts `polars`, `pyarrow`, and dat
 
 `register_pivot_app(...)` wires the transport callback, drill-through endpoint, and sort options in one call.
 
+### Supported scope
+
+Cell editing and edit transactions are not a supported public capability in
+this release. The legacy edit-related Dash inputs are accepted as no-ops only,
+so existing layouts can upgrade without a prop-validation failure.
+
+### Production security
+
+Protect Dash itself with your application's normal authentication middleware.
+Dash runtime data, filter values, and exports must also be bound to the host's
+authenticated principal and a server-owned table policy. In a production
+environment, omitting either hook makes the runtime callback fail closed. For
+the drill-through route, use both an explicit table allowlist and an
+authorization callback:
+
+```python
+from pivot_engine.runtime import RuntimeDatasetAuthorizer
+
+dataset_policy = RuntimeDatasetAuthorizer({
+    "sales": {"roles": {"viewer", "editor", "admin"}, "operations": {"read", "export"}},
+})
+
+register_pivot_app(
+    app,
+    adapter_getter=lambda: adapter,
+    pivot_id="pivot",
+    runtime_dataset_authorizer=dataset_policy,
+    runtime_principal_getter=lambda request: current_authenticated_principal(request),
+    allowed_drill_tables={"sales"},
+    drill_authorizer=lambda request, table: current_user_can_read(request, table),
+)
+```
+
+The REST API additionally enforces configured API-key/JWT authentication,
+dataset permissions, and row-level filters. Its runtime endpoint is
+default-deny until a dataset policy is installed. Dash payload download URLs
+are short-lived and bound to the issuing browser's signed Flask session; a
+token alone is not sufficient to download data.
+
+When JWT authentication is enabled, configure both values and issue tokens
+with the matching `iss` claim; `exp` and `iss` are required:
+
+```env
+JWT_SECRET_KEY=replace-with-a-long-random-secret
+JWT_ISSUER=https://identity.example.com/
+```
+
+For an internet-facing production service, use the rotating-key and host
+security contract instead of the local single-secret example above. The
+application will fail startup with `ENV=production` unless HTTPS origin/host
+settings, trusted proxy CIDRs, CSP, rate-limit Redis, secure Redis, and a JWT
+key ring are configured. See the [production security runbook](docs/operations/production-security-runbook.md)
+for the required environment variables, edge configuration, evidence command,
+and operational gates. This repository validates the software contract; TLS
+issuance, backup restoration, and independent penetration testing are
+operator-owned release requirements.
+
+The release-assurance baseline is [OWASP ASVS v5.0.0 Level 2](security/certification-matrix.json).
+Repository tests verify only the controls marked `verified_locally`; current
+TLS/network, IdP, penetration-test, backup, incident, and sign-off evidence
+must be supplied by the deployment operator and checked with
+`scripts/verify_security_release_evidence.py`. The included evidence JSON is
+deliberately a non-success template, not a certification claim.
+
 ## Why Use It
 
 - Built for Dash, so it fits naturally into a Python application.
@@ -87,6 +157,8 @@ The same `adapter.load_data(...)` call also accepts `polars`, `pyarrow`, and dat
 - Lets you stay in Python instead of splitting the project across Python and React.
 
 ## Examples
+
+- **Flagship host showcases:** [Dash, React, and Streamlit](examples/FLAGSHIP_DEMOS.md) share one interactive Revenue Operations workspace. Run `powershell -File examples/launch_flagship_demos.ps1` to launch all three locally.
 
 - **Quick start (root):** [example_app.py](example_app.py) — 10,000 rows, sparkline, infinite scroll, flash theme. Run with `python example_app.py`.
 - Basic example: [examples/example_dash_basic.py](examples/example_dash_basic.py)

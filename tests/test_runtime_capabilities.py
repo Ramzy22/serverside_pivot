@@ -6,6 +6,7 @@ from pivot_engine.runtime.lifecycle import RuntimeRequestLifecycle
 from pivot_engine.runtime.models import PivotRequestContext, PivotViewState
 from pivot_engine.runtime.request_factory import RuntimeRequestFactory
 from pivot_engine.runtime.resilience import CircuitBreaker, PivotRequestTimeout
+from pivot_engine.export_limits import ExportLimitError
 
 
 def _context(**overrides):
@@ -98,6 +99,20 @@ async def test_lifecycle_times_out_and_records_backend_failure():
         await lifecycle.run_backend_operation(_context(), "data", slow_operation)
 
     assert breaker.snapshot(("sales", "data"))["open"] is True
+
+
+@pytest.mark.asyncio
+async def test_lifecycle_does_not_trip_circuit_for_export_limit_rejection():
+    breaker = CircuitBreaker(failure_threshold=1, cooldown_seconds=30)
+    lifecycle = RuntimeRequestLifecycle(circuit_breaker=breaker)
+
+    async def rejected_export():
+        raise ExportLimitError("row budget exceeded")
+
+    with pytest.raises(ExportLimitError):
+        await lifecycle.run_backend_operation(_context(intent="export"), "export", rejected_export)
+
+    assert breaker.snapshot(("sales", "export"))["open"] is False
 
 
 @pytest.mark.asyncio

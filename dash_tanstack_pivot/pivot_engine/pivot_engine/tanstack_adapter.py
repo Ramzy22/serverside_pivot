@@ -13,9 +13,9 @@ import os
 import re
 import time
 import json
-import hashlib
 from collections import OrderedDict
-from .adapter_viewport_cache import AdapterViewportCache
+from dataclasses import replace
+from .adapter_viewport_cache import AdapterViewportCache, AdapterViewportKeyBuilder
 from .scalable_pivot_controller import ScalablePivotController
 from .editing import EditDomainService, TransactionAdapterMixin
 from .types.pivot_spec import PivotSpec, Measure, MeasureAxisConfig
@@ -93,6 +93,7 @@ class TanStackPivotAdapter(TransactionAdapterMixin, FormulaEngineMixin):
             row_block_cache_size=_ROW_BLOCK_CACHE_SIZE,
             cache_coordinator=self.cache_coordinator,
         )
+        self._viewport_keys = AdapterViewportKeyBuilder(self._cache_generation_value)
         self.cache_coordinator = self._viewport_cache.cache_coordinator
         self._local_cache_lock = self._viewport_cache.lock
         # Compatibility aliases for existing diagnostics/tests. All mutation
@@ -212,40 +213,31 @@ class TanStackPivotAdapter(TransactionAdapterMixin, FormulaEngineMixin):
         return json.dumps(value, sort_keys=True, default=str, separators=(",", ":"))
 
     def _request_structure_fingerprint(self, request: "TanStackRequest") -> str:
-        payload = {
-            "cache_generation": self._cache_generation_value(),
-            "table": request.table,
-            "columns": request.columns or [],
-            "filters": request.filters or {},
-            "sorting": request.sorting or [],
-            "grouping": request.grouping or [],
-            "aggregations": request.aggregations or [],
-            "custom_dimensions": request.custom_dimensions or [],
-            "measure_axis": request.measure_axis or None,
-            "totals": bool(request.totals),
-            "row_totals": bool(request.row_totals),
-            "include_subtotals": bool(request.include_subtotals),
-            "layout_mode": str(getattr(request, "layout_mode", None) or "")
-            .strip()
-            .lower(),
-            "show_subtotal_footers": bool(
-                getattr(request, "show_subtotal_footers", False)
-            ),
-            "column_sort_options": request.column_sort_options or {},
-        }
-        return hashlib.sha256(self._stable_json(payload).encode()).hexdigest()[:24]
+        return self._viewport_keys.request_structure_fingerprint(request)
+
+    @staticmethod
+    def _request_with_row_scope(
+        request: "TanStackRequest", row_scope: Any
+    ) -> "TanStackRequest":
+        """Bind a server-issued row grant into request identity before caching.
+
+        The adapter owns several viewport caches.  A row grant has to be part
+        of the immutable request consumed by every one of those caches; adding
+        it only to the SQL spec after a cache lookup would allow a response
+        built for one tenant to satisfy another tenant's request.
+        """
+        if row_scope is None:
+            return request
+        apply_filters = getattr(row_scope, "apply_to_filters", None)
+        if not callable(apply_filters):
+            raise ValueError("A row-scoped request requires an immutable row grant.")
+        scoped_filters = apply_filters(dict(request.filters or {}))
+        if not isinstance(scoped_filters, dict):
+            raise ValueError("Row grant produced invalid request filters.")
+        return replace(request, filters=scoped_filters)
 
     def _center_column_catalog_cache_key(self, request: "TanStackRequest") -> str:
-        payload = {
-            "cache_generation": self._cache_generation_value(),
-            "table": request.table,
-            "columns": request.columns or [],
-            "filters": request.filters or {},
-            "custom_dimensions": request.custom_dimensions or [],
-            "measure_axis": request.measure_axis or None,
-            "column_sort_options": request.column_sort_options or {},
-        }
-        return hashlib.sha256(self._stable_json(payload).encode()).hexdigest()[:24]
+        return self._viewport_keys.center_column_catalog_key(request)
 
     def _pivot_column_catalog_cache_key(self, spec: PivotSpec) -> str:
         """Key column discovery by inputs that can change column membership/order.
@@ -255,22 +247,7 @@ class TanStackPivotAdapter(TransactionAdapterMixin, FormulaEngineMixin):
         every deeper row-field change, while omitting ``spec.columns`` could
         incorrectly reuse a catalog for a different pivot dimension.
         """
-        order_measure = spec.measures[0] if spec.measures else None
-        payload = {
-            "cache_generation": self._cache_generation_value(),
-            "table": spec.table,
-            "pivot_columns": list(spec.columns or []),
-            "filters": spec.filters or [],
-            "custom_dimensions": spec.custom_dimensions or [],
-            "measure_axis": (
-                spec.measure_axis.to_dict()
-                if getattr(spec, "measure_axis", None)
-                else None
-            ),
-            "column_sort_options": spec.column_sort_options or {},
-            "order_measure": vars(order_measure) if order_measure is not None else None,
-        }
-        return hashlib.sha256(self._stable_json(payload).encode()).hexdigest()[:24]
+        return self._viewport_keys.pivot_column_catalog_key(spec)
 
     @staticmethod
     def _normalize_expanded_paths(
@@ -353,18 +330,17 @@ class TanStackPivotAdapter(TransactionAdapterMixin, FormulaEngineMixin):
         include_grand_total: bool,
         requested_center_ids: Optional[List[str]],
     ) -> str:
-        payload = {
-            "request": self._request_structure_fingerprint(request),
-            "expanded": self._normalize_expanded_paths(expanded_paths),
-            "start_row": int(start_row or 0),
-            "end_row": int(end_row if end_row is not None else start_row or 0),
-            "col_start": int(col_start or 0),
-            "col_end": None if col_end is None else int(col_end),
-            "needs_col_schema": bool(needs_col_schema),
-            "include_grand_total": bool(include_grand_total),
-            "requested_center_ids": list(requested_center_ids or []),
-        }
-        return hashlib.sha256(self._stable_json(payload).encode()).hexdigest()[:32]
+        return self._viewport_keys.response_window_key(
+            request,
+            start_row,
+            end_row,
+            expanded_paths,
+            col_start,
+            col_end,
+            needs_col_schema,
+            include_grand_total,
+            requested_center_ids,
+        )
 
     def _row_block_cache_key(
         self,
@@ -375,15 +351,14 @@ class TanStackPivotAdapter(TransactionAdapterMixin, FormulaEngineMixin):
         col_end: Optional[int],
         requested_center_ids: Optional[List[str]],
     ) -> str:
-        payload = {
-            "request": self._request_structure_fingerprint(request),
-            "expanded": self._normalize_expanded_paths(expanded_paths),
-            "block_index": int(block_index),
-            "col_start": int(col_start or 0),
-            "col_end": None if col_end is None else int(col_end),
-            "requested_center_ids": list(requested_center_ids or []),
-        }
-        return hashlib.sha256(self._stable_json(payload).encode()).hexdigest()[:32]
+        return self._viewport_keys.row_block_key(
+            request,
+            block_index,
+            expanded_paths,
+            col_start,
+            col_end,
+            requested_center_ids,
+        )
 
     def _grand_total_cache_key(
         self,
@@ -393,14 +368,13 @@ class TanStackPivotAdapter(TransactionAdapterMixin, FormulaEngineMixin):
         col_end: Optional[int],
         requested_center_ids: Optional[List[str]],
     ) -> str:
-        payload = {
-            "request": self._request_structure_fingerprint(request),
-            "expanded": self._normalize_expanded_paths(expanded_paths),
-            "col_start": int(col_start or 0),
-            "col_end": None if col_end is None else int(col_end),
-            "requested_center_ids": list(requested_center_ids or []),
-        }
-        return hashlib.sha256(self._stable_json(payload).encode()).hexdigest()[:32]
+        return self._viewport_keys.grand_total_key(
+            request,
+            expanded_paths,
+            col_start,
+            col_end,
+            requested_center_ids,
+        )
 
     def _store_row_block_window(
         self,
@@ -1604,12 +1578,22 @@ class TanStackPivotAdapter(TransactionAdapterMixin, FormulaEngineMixin):
         # window functions, but that second pass is idempotent so it is safe.
 
     async def handle_update(
-        self, request: TanStackRequest, update_payload: Dict[str, Any]
+        self,
+        request: TanStackRequest,
+        update_payload: Dict[str, Any],
+        *,
+        user: Optional[User] = None,
+        mutation_grant: Any = None,
     ) -> bool:
         """
         Handle a cell update request from the frontend.
         """
-        result = await self.handle_updates(request, [update_payload])
+        result = await self.handle_updates(
+            request,
+            [update_payload],
+            user=user,
+            mutation_grant=mutation_grant,
+        )
         return bool(result.get("updated", 0))
 
     def _invalidate_local_caches(self) -> None:
@@ -1892,9 +1876,14 @@ class TanStackPivotAdapter(TransactionAdapterMixin, FormulaEngineMixin):
         }
 
     async def handle_request(
-        self, request: TanStackRequest, user: Optional[User] = None
+        self,
+        request: TanStackRequest,
+        user: Optional[User] = None,
+        *,
+        row_scope: Any = None,
     ) -> TanStackResponse:
         """Handle a TanStack request directly"""
+        request = self._request_with_row_scope(request, row_scope)
         if request.operation == TanStackOperation.GET_UNIQUE_VALUES:
             # Logic for unique values (used by Excel-like filter)
             column_id = (
@@ -1933,6 +1922,8 @@ class TanStackPivotAdapter(TransactionAdapterMixin, FormulaEngineMixin):
                 search=search,
                 limit=page_size,
                 offset=offset,
+                user=user,
+                row_scope=row_scope,
             )
             return TanStackResponse(
                 data=[{"value": v} for v in unique_values],
@@ -1951,8 +1942,10 @@ class TanStackPivotAdapter(TransactionAdapterMixin, FormulaEngineMixin):
         pivot_spec = self.convert_tanstack_request_to_pivot_spec(request)
 
         # Apply RLS if user is provided
-        if user:
-            pivot_spec = apply_rls_to_spec(pivot_spec, user)
+        if user or row_scope is not None:
+            pivot_spec = apply_rls_to_spec(
+                pivot_spec, user, row_scope=row_scope
+            )
 
         # Execute pivot operation asynchronously
         pivot_result = await self.controller.run_pivot_async(
@@ -1971,10 +1964,18 @@ class TanStackPivotAdapter(TransactionAdapterMixin, FormulaEngineMixin):
         request: TanStackRequest,
         expanded_paths: Union[List[List[str]], bool],
         user_preferences: Optional[Dict[str, Any]] = None,
+        *,
+        user: Optional[User] = None,
+        row_scope: Any = None,
     ) -> TanStackResponse:
         """Handle hierarchical TanStack request with expansion state"""
+        request = self._request_with_row_scope(request, row_scope)
         self._log_request("handle_hierarchical_request", request)
         pivot_spec = self.convert_tanstack_request_to_pivot_spec(request)
+        if user or row_scope is not None:
+            pivot_spec = apply_rls_to_spec(
+                pivot_spec, user, row_scope=row_scope
+            )
 
         # Handle "Expand All" case
         target_paths = expanded_paths
@@ -2241,6 +2242,7 @@ class TanStackPivotAdapter(TransactionAdapterMixin, FormulaEngineMixin):
         end_row: int,
         expanded_paths: Union[List[List[str]], bool] = None,
         user: Optional[User] = None,
+        row_scope: Any = None,
         col_start: int = 0,
         col_end: Optional[int] = None,
         needs_col_schema: bool = False,
@@ -2250,6 +2252,7 @@ class TanStackPivotAdapter(TransactionAdapterMixin, FormulaEngineMixin):
         profiling: bool = False,
     ) -> TanStackResponse:
         """Handle virtual scrolling request with start/end row indices"""
+        request = self._request_with_row_scope(request, row_scope)
         request_started_at = time.perf_counter()
         cache_lookup_started_at = request_started_at
         response_cache_key = self._response_window_cache_key(
@@ -2503,9 +2506,16 @@ class TanStackPivotAdapter(TransactionAdapterMixin, FormulaEngineMixin):
                 or any(isinstance(path, list) and path for path in target_paths)
             )
             full_response = (
-                await self.handle_hierarchical_request(request, expanded_paths or [])
+                await self.handle_hierarchical_request(
+                    request,
+                    expanded_paths or [],
+                    user=user,
+                    row_scope=row_scope,
+                )
                 if requires_hierarchy_materialization
-                else await self.handle_request(request, user=user)
+                else await self.handle_request(
+                    request, user=user, row_scope=row_scope
+                )
             )
             full_rows = list(full_response.data or [])
             grand_total_row = None
@@ -2606,7 +2616,9 @@ class TanStackPivotAdapter(TransactionAdapterMixin, FormulaEngineMixin):
 
         # Apply RLS if user is provided
         if user:
-            pivot_spec = apply_rls_to_spec(pivot_spec, user)
+            pivot_spec = apply_rls_to_spec(
+                pivot_spec, user, row_scope=row_scope
+            )
 
         discovered_center_ids: Optional[List[str]] = None
         if (
@@ -3039,7 +3051,10 @@ class TanStackPivotAdapter(TransactionAdapterMixin, FormulaEngineMixin):
                 print(f"Virtual scroll failed: {e}, falling back to hierarchical load")
                 # Fallback to direct hierarchical load which is un-materialized but accurate
                 fallback_result = await self.handle_hierarchical_request(
-                    request, expanded_paths
+                    request,
+                    expanded_paths,
+                    user=user,
+                    row_scope=row_scope,
                 )
                 fallback_result = self._slice_full_hierarchy_response_to_viewport(
                     fallback_result,
@@ -3104,7 +3119,10 @@ class TanStackPivotAdapter(TransactionAdapterMixin, FormulaEngineMixin):
         else:
             # Fallback: Use regular hierarchical method
             fallback_result = await self.handle_hierarchical_request(
-                request, expanded_paths
+                request,
+                expanded_paths,
+                user=user,
+                row_scope=row_scope,
             )
             fallback_result = self._slice_full_hierarchy_response_to_viewport(
                 fallback_result,
@@ -3229,7 +3247,7 @@ class TanStackPivotAdapter(TransactionAdapterMixin, FormulaEngineMixin):
                         :5
                     ],  # First 5 rows as sample
                 }
-        except:
+        except:  # nosec B110
             pass
 
         # Return empty schema
@@ -3278,6 +3296,8 @@ class TanStackPivotAdapter(TransactionAdapterMixin, FormulaEngineMixin):
         search: str = "",
         limit: int = 250,
         offset: int = 0,
+        user: Optional[User] = None,
+        row_scope: Any = None,
     ) -> tuple[List[Any], int]:
         # Skip virtual columns that don't exist in the underlying table
         if not column_id or column_id in ("__row_number__", "hierarchy"):
@@ -3359,6 +3379,13 @@ class TanStackPivotAdapter(TransactionAdapterMixin, FormulaEngineMixin):
             limit=limit,
             offset=offset,
         )
+
+        # Filter-option queries are data reads too.  Apply the exact same
+        # server-owned RLS transform used by normal TanStack requests *after*
+        # client filters are normalized, so a client cannot replace a
+        # protected predicate with its own tenant value.
+        if user or row_scope is not None:
+            spec = apply_rls_to_spec(spec, user, row_scope=row_scope)
 
         # Use Ibis to get distinct values
         table = self.controller.planner._table_for_spec(

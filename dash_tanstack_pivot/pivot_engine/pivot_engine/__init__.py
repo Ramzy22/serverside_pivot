@@ -15,10 +15,15 @@ from .runtime import (
     PivotRuntimeService,
     PivotServiceResponse,
     PivotViewState,
+    RuntimeDatasetAuthorizer,
+    RuntimeDatasetAuthorizationError,
+    RuntimeMutationAuthorizer,
+    RuntimeHttpGateway,
     SessionRequestGate,
     register_dash_callbacks_for_instances,
     register_dash_drill_modal_callback,
     register_dash_pivot_transport_callback,
+    register_runtime_http_transport,
 )
 
 __all__ = [
@@ -33,9 +38,14 @@ __all__ = [
     "PivotRuntimeService",
     "PivotServiceResponse",
     "PivotViewState",
+    "RuntimeDatasetAuthorizer",
+    "RuntimeDatasetAuthorizationError",
+    "RuntimeMutationAuthorizer",
+    "RuntimeHttpGateway",
     "SessionRequestGate",
     "DashPivotInstanceConfig",
     "register_dash_pivot_transport_callback",
     "register_dash_drill_modal_callback",
     "register_dash_callbacks_for_instances",
+    "register_runtime_http_transport",
 ]

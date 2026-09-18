@@ -174,7 +174,8 @@ export function ChartWorkspace({
                 width: `${hintedGroupWidth}px`,
                 minHeight: 0,
                 overflow: 'hidden',
-                flex: `0 0 ${hintedGroupWidth}px`,
+                flexGrow: 0,
+                flexBasis: `${hintedGroupWidth}px`,
                 flexShrink: 0,
             }
             : {

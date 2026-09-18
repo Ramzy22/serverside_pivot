@@ -8,9 +8,10 @@ import time
 from typing import Any, Callable, Dict, List, Optional
 
 from ..tanstack_adapter import TanStackRequest, TanStackResponse
+from ..security import MutationAuthorizationError
 from .detail_service import DetailRuntimeService
 from .drill_service import RuntimeDrillService
-from .export_service import RuntimeExportService
+from .export_service import ExportLimitError, RuntimeExportService
 from .lifecycle import RuntimeRequestLifecycle
 from .models import (
     PivotRequestContext,
@@ -132,6 +133,18 @@ class RuntimeRequestRouter:
             )
 
         if trigger_kind == "export":
+            try:
+                export_pagination = RuntimeRequestFactory.build_export_pagination(
+                    state.export_request,
+                    max_rows=self.export_service.max_rows,
+                )
+            except ValueError as exc:
+                return PivotServiceResponse(
+                    status="error",
+                    message=str(exc),
+                    export_payload={},
+                    profile=build_profile(),
+                )
             export_context = RuntimeRequestFactory.build_export_context(
                 context,
                 state.export_request,
@@ -148,9 +161,7 @@ class RuntimeRequestRouter:
             )
             export_request = replace(
                 request,
-                pagination=RuntimeRequestFactory.build_export_pagination(
-                    state.export_request
-                ),
+                pagination=export_pagination,
                 full_export=export_all_rows,
             )
             # A full export/copy must not be limited by the virtual viewport or
@@ -174,6 +185,7 @@ class RuntimeRequestRouter:
                         trigger_kind=trigger_kind,
                         effective_needs_col_schema=True,
                         profiling_enabled=profiling_enabled,
+                        max_export_rows=self.export_service.max_rows,
                     ),
                 )
             except CircuitBreakerOpen as exc:
@@ -213,11 +225,23 @@ class RuntimeRequestRouter:
                 )
             execution_finished_at = time.perf_counter()
             postprocess_started_at = time.perf_counter()
-            export_payload = self.export_service._build_export_payload(
-                response,
-                state,
-                state.export_request,
-            )
+            try:
+                export_payload = self.export_service.build_export_payload(
+                    response,
+                    state,
+                    state.export_request,
+                )
+            except ExportLimitError as exc:
+                return PivotServiceResponse(
+                    status="error",
+                    message=str(exc),
+                    export_payload={},
+                    profile=build_profile(
+                        execution_started_at=execution_started_at,
+                        execution_finished_at=execution_finished_at,
+                        postprocess_started_at=postprocess_started_at,
+                    ),
+                )
             return PivotServiceResponse(
                 status="export",
                 export_payload=export_payload,
@@ -396,20 +420,11 @@ class RuntimeRequestRouter:
             transaction_request_payload = (
                 {
                     **(state.transaction_request or {}),
-                    "session_id": first_present(
-                        state.transaction_request,
-                        "session_id",
-                        "sessionId",
-                        default=context.session_id,
-                    )
-                    or context.session_id,
-                    "client_instance": first_present(
-                        state.transaction_request,
-                        "client_instance",
-                        "clientInstance",
-                        default=context.client_instance,
-                    )
-                    or context.client_instance,
+                    # Session identity is a server-owned request-context
+                    # boundary.  Transaction payload values are browser
+                    # input and must never select another user's edit history.
+                    "session_id": context.session_id,
+                    "client_instance": context.client_instance,
                 }
                 if isinstance(state.transaction_request, dict)
                 else {}
@@ -421,7 +436,10 @@ class RuntimeRequestRouter:
                         context,
                         trigger_kind,
                         lambda: adapter.handle_transaction(
-                            request, transaction_request_payload
+                            request,
+                            transaction_request_payload,
+                            user=context.principal,
+                            mutation_grant=context.mutation_grant,
                         ),
                     )
                 else:
@@ -453,6 +471,10 @@ class RuntimeRequestRouter:
                         execution_finished_at=execution_finished_at,
                     ),
                 )
+            except MutationAuthorizationError:
+                # The HTTP gateway turns this into a 403. Do not convert it to
+                # an apparently successful runtime envelope here.
+                raise
             except Exception as exc:  # pragma: no cover - defensive
                 execution_finished_at = time.perf_counter()
                 if self.debug:
@@ -531,10 +553,20 @@ class RuntimeRequestRouter:
 
                 async def _apply_updates():
                     if hasattr(adapter, "handle_updates"):
-                        await adapter.handle_updates(request, update_payloads)
+                        await adapter.handle_updates(
+                            request,
+                            update_payloads,
+                            user=context.principal,
+                            mutation_grant=context.mutation_grant,
+                        )
                     else:
                         for update_payload in update_payloads:
-                            await adapter.handle_update(request, update_payload)
+                            await adapter.handle_update(
+                                request,
+                                update_payload,
+                                user=context.principal,
+                                mutation_grant=context.mutation_grant,
+                            )
 
                 await self.lifecycle.run_backend_operation(
                     context, trigger_kind, _apply_updates
@@ -542,6 +574,8 @@ class RuntimeRequestRouter:
             except (CircuitBreakerOpen, PivotRequestTimeout) as exc:
                 if self.debug:
                     print(f"Cell update skipped: {exc}")
+            except MutationAuthorizationError:
+                raise
             except Exception as exc:  # pragma: no cover - defensive
                 if self.debug:
                     print(f"Cell update failed: {exc}")
@@ -775,6 +809,7 @@ class RuntimeRequestRouter:
         trigger_kind: str,
         effective_needs_col_schema: bool,
         profiling_enabled: bool,
+        max_export_rows: Optional[int] = None,
     ) -> TanStackResponse:
         export_all_rows = bool(
             first_present(
@@ -806,6 +841,11 @@ class RuntimeRequestRouter:
                     profiling_enabled=profiling_enabled,
                 )
                 full_row_count = max(int(preflight.total_rows or 0), 0)
+                if max_export_rows is not None and full_row_count > max_export_rows:
+                    raise ExportLimitError(
+                        f"Export contains {full_row_count:,} rows; the server limit is {max_export_rows:,}. "
+                        "Narrow the selected range or raise PIVOT_EXPORT_MAX_ROWS."
+                    )
                 if full_row_count <= 1:
                     return preflight
                 full_context = replace(
@@ -820,12 +860,22 @@ class RuntimeRequestRouter:
                     trigger_kind="data",
                     effective_needs_col_schema=effective_needs_col_schema,
                     profiling_enabled=profiling_enabled,
+                    max_export_rows=max_export_rows,
                 )
             # Hierarchical full exports deliberately bypass virtual-window
             # execution so the complete filtered hierarchy is produced.
             if state.row_fields and hasattr(adapter, "handle_hierarchical_request"):
-                return await adapter.handle_hierarchical_request(request, expanded_paths)
-            return await adapter.handle_request(request)
+                return await adapter.handle_hierarchical_request(
+                    request,
+                    expanded_paths,
+                    user=context.principal,
+                    row_scope=context.row_scope,
+                )
+            return await adapter.handle_request(
+                request,
+                user=context.principal,
+                row_scope=context.row_scope,
+            )
         if state.view_mode == "tree" and trigger_kind != "chart":
             response_state = await self.tree_service.handle_data_request(
                 adapter,
@@ -871,6 +921,8 @@ class RuntimeRequestRouter:
                 context.start_row,
                 context.end_row if context.end_row is not None else context.start_row,
                 expanded_paths,
+                user=context.principal,
+                row_scope=context.row_scope,
                 col_start=context.col_start,
                 col_end=context.col_end,
                 needs_col_schema=bool(
@@ -923,6 +975,8 @@ class RuntimeRequestRouter:
                 context.start_row,
                 context.end_row,
                 expanded_paths,
+                user=context.principal,
+                row_scope=context.row_scope,
                 col_start=payload_col_start,
                 col_end=payload_col_end,
                 needs_col_schema=export_needs_col_schema,
@@ -936,6 +990,8 @@ class RuntimeRequestRouter:
                 context.start_row,
                 context.end_row,
                 expanded_paths,
+                user=context.principal,
+                row_scope=context.row_scope,
                 col_start=context.col_start,
                 col_end=context.col_end,
                 needs_col_schema=effective_needs_col_schema,
@@ -949,7 +1005,13 @@ class RuntimeRequestRouter:
                 0,
                 initial_end_row,
                 expanded_paths,
+                user=context.principal,
+                row_scope=context.row_scope,
                 needs_col_schema=True,
                 profiling=profiling_enabled,
             )
-        return await adapter.handle_request(request)
+        return await adapter.handle_request(
+            request,
+            user=context.principal,
+            row_scope=context.row_scope,
+        )

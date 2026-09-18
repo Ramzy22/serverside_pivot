@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { estimateUrgentHorizontalColumnRange } from '../utils/horizontalViewport';
 
 const DEFAULT_VISIBLE_RANGE = { start: 0, end: 0 };
 
@@ -475,43 +476,16 @@ export const useServerSideViewportController = ({
         const resolvedCenterCount = Number.isFinite(Number(totalCenterCols))
             ? Math.max(0, Math.floor(Number(totalCenterCols)))
             : fallbackCenterCount;
-        if (resolvedCenterCount <= 0) return;
-        const largeColumnMode = resolvedCenterCount >= 5000;
-        const extremeColumnMode = resolvedCenterCount >= 20000;
-
+        const estimatedRange = estimateUrgentHorizontalColumnRange({
+            scrollLeft,
+            clientWidth,
+            scrollWidth,
+            averageColumnWidth,
+            centerColumnCount: resolvedCenterCount,
+        });
+        if (!estimatedRange) return;
+        const { start: estimatedStart, end: estimatedEnd, atRightEdge } = estimatedRange;
         const maxIndex = Math.max(resolvedCenterCount - 1, 0);
-        const leftPinnedWidth = Number.isFinite(Number(metrics && metrics.leftPinnedWidth))
-            ? Math.max(0, Number(metrics.leftPinnedWidth))
-            : 0;
-        const atRightEdge = (scrollLeft + clientWidth) >= (scrollWidth - 1);
-        const estimatedCenterOffset = Math.max(0, scrollLeft - leftPinnedWidth);
-        let estimatedStart = Math.max(
-            0,
-            Math.min(maxIndex, Math.floor(estimatedCenterOffset / Math.max(averageColumnWidth, 1)))
-        );
-        const estimatedVisibleCount = Math.max(
-            1,
-            Math.ceil(clientWidth / Math.max(averageColumnWidth, 1))
-        );
-        const bufferCount = extremeColumnMode
-            ? 1
-            : (largeColumnMode
-                ? Math.max(1, Math.min(3, Math.ceil(estimatedVisibleCount / 5)))
-                : Math.max(2, Math.min(8, Math.ceil(estimatedVisibleCount / 3))));
-        const edgeSafetyCount = atRightEdge
-            ? (extremeColumnMode
-                ? Math.max(bufferCount, Math.min(8, estimatedVisibleCount))
-                : (largeColumnMode
-                    ? Math.max(bufferCount, Math.min(12, Math.ceil(estimatedVisibleCount * 1.5)))
-                    : Math.max(bufferCount, Math.min(24, estimatedVisibleCount * 2))))
-            : bufferCount;
-        let estimatedEnd = Math.min(maxIndex, estimatedStart + estimatedVisibleCount + bufferCount);
-        estimatedStart = Math.max(0, estimatedStart - bufferCount);
-
-        if (atRightEdge) {
-            estimatedEnd = maxIndex;
-            estimatedStart = Math.max(0, estimatedEnd - estimatedVisibleCount - edgeSafetyCount);
-        }
 
         const previousFastRange = lastFastHorizontalRangeRef.current;
         const now = Date.now();

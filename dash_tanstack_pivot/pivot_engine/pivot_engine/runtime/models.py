@@ -59,7 +59,11 @@ class PivotViewState:
 
 @dataclass
 class PivotRequestContext:
-    """Execution context used for request ordering and multi-instance isolation."""
+    """Execution context used for ordering, isolation, and server identity.
+
+    ``principal`` is injected by a host transport after authentication.  It is
+    intentionally never populated from a browser protocol envelope.
+    """
 
     table: str
     trigger_prop: Optional[str] = None
@@ -80,6 +84,14 @@ class PivotRequestContext:
     request_id: Optional[str] = None
     cache_key: Optional[str] = None
     profiling: bool = False
+    principal: Optional[Any] = field(default=None, repr=False, compare=False)
+    # Immutable row constraints derived from a server-owned dataset policy.
+    # Browser envelopes must never create or modify this capability.
+    row_scope: Optional[Any] = field(default=None, repr=False, compare=False)
+    # A host transport creates this immutable capability only after it has
+    # authenticated and authorized a mutation request.  It is deliberately
+    # absent from frontend-derived state and never serialized back to clients.
+    mutation_grant: Optional[Any] = field(default=None, repr=False, compare=False)
 
     @classmethod
     def from_frontend(

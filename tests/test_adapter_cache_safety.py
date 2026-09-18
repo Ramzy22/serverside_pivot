@@ -2,6 +2,7 @@ from types import SimpleNamespace
 
 from pivot_engine.adapter_viewport_cache import AdapterViewportCache
 from pivot_engine.cache_coordinator import CacheNamespaces
+from pivot_engine.runtime import RuntimeDatasetAuthorizer
 from pivot_engine.tanstack_adapter import TanStackOperation, TanStackPivotAdapter, TanStackRequest
 
 
@@ -120,6 +121,46 @@ def test_adapter_viewport_cache_key_separates_sort_filter_expand_value_and_custo
     )
 
     assert len({base, sorted_key, filtered_key, expanded_key, value_config_key, custom_dimension_key}) == 6
+
+
+def test_viewport_cache_keys_include_the_server_owned_row_scope():
+    """A cached window from tenant A must never be reusable by tenant B."""
+    adapter = TanStackPivotAdapter(SimpleNamespace())
+    authorizer = RuntimeDatasetAuthorizer(
+        {
+            "sales_data": {
+                "roles": {"viewer"},
+                "operations": {"read"},
+                "rowSecurity": {
+                    "mode": "claims",
+                    "claims": {"tenant": "tenant"},
+                },
+            }
+        }
+    )
+    scope_a = authorizer.authorize(
+        principal=SimpleNamespace(id="a", role="viewer", attributes={"tenant": "A"}),
+        table="sales_data",
+        operation="read",
+    )
+    scope_b = authorizer.authorize(
+        principal=SimpleNamespace(id="b", role="viewer", attributes={"tenant": "B"}),
+        table="sales_data",
+        operation="read",
+    )
+
+    secured_a = adapter._request_with_row_scope(_request(), scope_a)
+    secured_b = adapter._request_with_row_scope(_request(), scope_b)
+    key_a = adapter._response_window_cache_key(
+        secured_a, 0, 50, [], 0, None, True, True, None
+    )
+    key_b = adapter._response_window_cache_key(
+        secured_b, 0, 50, [], 0, None, True, True, None
+    )
+
+    assert secured_a.filters["tenant"] == {"type": "eq", "value": "A"}
+    assert secured_b.filters["tenant"] == {"type": "eq", "value": "B"}
+    assert key_a != key_b
 
 
 def test_adapter_edit_invalidation_clears_window_blocks_and_bumps_generation():

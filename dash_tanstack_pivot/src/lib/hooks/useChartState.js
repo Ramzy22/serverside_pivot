@@ -1,4 +1,4 @@
-import { useState, useRef } from 'react';
+import { useState } from 'react';
 
 /**
  * useChartState — extracts all chart-related state from DashTanstackPivot.
@@ -61,23 +61,6 @@ export function useChartState({
     });
     const [chartPaneDataById, setChartPaneDataById] = useState({});
 
-    // Refs
-    const chartPanelOrientationAutoRef = useRef(true);
-    const chartLayoutRef = useRef(null);
-    const chartCanvasLayoutRef = useRef(null);
-    const chartCanvasResizeRef = useRef(null);
-    const chartCanvasVerticalResizeRef = useRef(null);
-    const chartPanelFloatingDragRef = useRef(null);
-    const chartPanelFloatingResizeRef = useRef(null);
-    const chartCanvasFloatingDragRef = useRef(null);
-    const chartCanvasFloatingResizeRef = useRef(null);
-    const chartRequestSeqRef = useRef(0);
-    const activeChartRequestRef = useRef(null);
-    const completedChartRequestSignaturesRef = useRef({});
-    const applyingChartDefinitionRef = useRef(false);
-    const lastChartDefinitionsPropRef = useRef(null);
-    const lastChartCanvasPanesPropRef = useRef(null);
-
     return {
         chartPanelOpen, setChartPanelOpen,
         chartPanelSource, setChartPanelSource,
@@ -108,21 +91,5 @@ export function useChartState({
         chartCanvasPanes, setChartCanvasPanes,
         tableCanvasSize, setTableCanvasSize,
         chartPaneDataById, setChartPaneDataById,
-        // Refs
-        chartPanelOrientationAutoRef,
-        chartLayoutRef,
-        chartCanvasLayoutRef,
-        chartCanvasResizeRef,
-        chartCanvasVerticalResizeRef,
-        chartPanelFloatingDragRef,
-        chartPanelFloatingResizeRef,
-        chartCanvasFloatingDragRef,
-        chartCanvasFloatingResizeRef,
-        chartRequestSeqRef,
-        activeChartRequestRef,
-        completedChartRequestSignaturesRef,
-        applyingChartDefinitionRef,
-        lastChartDefinitionsPropRef,
-        lastChartCanvasPanesPropRef,
     };
 }

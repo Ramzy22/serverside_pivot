@@ -27,7 +27,13 @@ const MenuItems = ({ actions, theme, onClose, itemRefs, onItemMouseEnter, onKeyD
                     aria-disabled={disabled || undefined}
                     tabIndex={disabled ? -1 : 0}
                     title={action.title || (typeof action.label === 'string' ? action.label : undefined)}
-                    onMouseEnter={() => onItemMouseEnter && onItemMouseEnter(i, hasChildren, disabled)}
+                    onMouseEnter={(event) => {
+                        event.currentTarget.style.backgroundColor = disabled ? '' : (theme?.hover || '#f5f5f5');
+                        if (onItemMouseEnter) onItemMouseEnter(i, hasChildren, disabled);
+                    }}
+                    onMouseLeave={(event) => {
+                        event.currentTarget.style.backgroundColor = '';
+                    }}
                     onClick={(e) => {
                         if (disabled || hasChildren) { e.stopPropagation(); return; }
                         if (typeof action.onClick === 'function') action.onClick();
@@ -54,12 +60,6 @@ const MenuItems = ({ actions, theme, onClose, itemRefs, onItemMouseEnter, onKeyD
                         color: disabled ? (theme?.textSec || '#757575') : (theme?.text || '#111'),
                         opacity: disabled ? 0.48 : 1,
                         userSelect: 'none',
-                    }}
-                    onMouseEnterCapture={(e) => {
-                        e.currentTarget.style.backgroundColor = disabled ? '' : (theme?.hover || '#f5f5f5');
-                    }}
-                    onMouseLeaveCapture={(e) => {
-                        e.currentTarget.style.backgroundColor = '';
                     }}
                 >
                     {action.icon && (

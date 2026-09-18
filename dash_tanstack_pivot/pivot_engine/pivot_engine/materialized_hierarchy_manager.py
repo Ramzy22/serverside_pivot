@@ -40,14 +40,24 @@ class MaterializedHierarchyManager:
         except Exception as e:
             print(f"Failed to save materialized registry: {e}")
 
-    async def create_materialized_hierarchy_async(self, spec: PivotSpec) -> str:
+    async def create_materialized_hierarchy_async(
+        self,
+        spec: PivotSpec,
+        *,
+        owner: Optional[str] = None,
+    ) -> str:
         """
         Start an asynchronous job to create materialized hierarchy.
         Returns a job_id.
         """
         import uuid
         job_id = str(uuid.uuid4())
-        self.jobs[job_id] = {"status": "pending", "progress": 0, "table": spec.table}
+        self.jobs[job_id] = {
+            "status": "pending",
+            "progress": 0,
+            "table": spec.table,
+            "owner": str(owner) if owner else None,
+        }
 
         # DuckDB connections are not safe for this background-thread pattern:
         # the next query can observe a closed pending result on the shared
@@ -91,7 +101,7 @@ class MaterializedHierarchyManager:
             'measures': measures_list,
             'filters': str(sorted(spec.filters, key=lambda x: str(x))) if spec.filters else []
         }
-        return hashlib.md5(json.dumps(key, sort_keys=True, default=str).encode()).hexdigest()
+        return hashlib.sha256(json.dumps(key, sort_keys=True, default=str).encode()).hexdigest()
 
     def _create_materialized_hierarchy_sync(self, spec: PivotSpec, job_id: Optional[str] = None):
         """Internal synchronous worker to create materialized hierarchy."""
@@ -165,7 +175,7 @@ class MaterializedHierarchyManager:
         try:
             import hashlib
             cols_str = "_".join(columns)
-            hash_suffix = hashlib.md5(cols_str.encode()).hexdigest()[:8]
+            hash_suffix = hashlib.sha256(cols_str.encode()).hexdigest()[:8]
             index_name = f"idx_{table_name}_{hash_suffix}"[:63]
             
             safe_table = quote_ident(table_name)
@@ -178,7 +188,7 @@ class MaterializedHierarchyManager:
                  if res and hasattr(res, 'fetchall'):
                      try:
                         res.fetchall()
-                     except:
+                     except:  # nosec B110
                         pass
             elif hasattr(self.backend, 'execute'):
                  self.backend.execute(sql)

@@ -250,6 +250,8 @@ class RuntimeRequestFactory:
     @staticmethod
     def build_export_pagination(
         export_request: Optional[Dict[str, Any]],
+        *,
+        max_rows: Optional[int] = None,
     ) -> Dict[str, Any]:
         payload = export_request if isinstance(export_request, dict) else {}
         row_start = safe_int(first_present(payload, "rowStart", "row_start"), 0)
@@ -258,11 +260,19 @@ class RuntimeRequestFactory:
             row_end = max(row_start + 1, safe_int(row_end_raw, row_start + 1))
             page_size = max(1, row_end - row_start)
         else:
+            requested_page_size = first_present(payload, "pageSize", "page_size")
             page_size = max(
                 1,
-                safe_int(first_present(payload, "pageSize", "page_size"), 10_000_000),
+                safe_int(requested_page_size, max_rows or 10_000_000),
             )
             row_end = row_start + page_size
+        if max_rows is not None:
+            safe_max_rows = max(1, int(max_rows))
+            if page_size > safe_max_rows:
+                raise ValueError(
+                    f"Export requests are limited to {safe_max_rows:,} rows. "
+                    "Narrow the selected range or raise PIVOT_EXPORT_MAX_ROWS."
+                )
         return {
             "pageIndex": row_start // page_size if page_size else 0,
             "pageSize": page_size,

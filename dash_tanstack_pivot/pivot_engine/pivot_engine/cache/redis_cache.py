@@ -11,8 +11,22 @@ except ImportError:
 import pyarrow as pa
 import pyarrow.ipc as ipc
 import json
-import pickle
 from typing import Optional, Any, Dict
+
+
+_ARROW_PREFIX = b"pivot:arrow-ipc:v1\x00"
+_JSON_PREFIX = b"pivot:json:v1\x00"
+
+
+def _is_json_value(value: Any) -> bool:
+    """Accept the JSON data model, not Python's broader pickle model."""
+    if value is None or isinstance(value, (str, int, float, bool)):
+        return True
+    if isinstance(value, list):
+        return all(_is_json_value(item) for item in value)
+    if isinstance(value, dict):
+        return all(isinstance(key, str) and _is_json_value(item) for key, item in value.items())
+    return False
 
 class RedisCache:
     """
@@ -20,7 +34,18 @@ class RedisCache:
     It stores various data types with automatic serialization.
     """
 
-    def __init__(self, host: str = 'localhost', port: int = 6379, db: int = 0, ttl: int = 300):
+    def __init__(
+        self,
+        host: str = 'localhost',
+        port: int = 6379,
+        db: int = 0,
+        ttl: int = 300,
+        *,
+        url: Optional[str] = None,
+        username: Optional[str] = None,
+        password: Optional[str] = None,
+        ssl_cert_reqs: str = "required",
+    ):
         """
         Initialize the Redis cache.
 
@@ -32,7 +57,22 @@ class RedisCache:
         """
         try:
             # Note: decode_responses=False is important as we are storing binary data
-            self.client = redis.StrictRedis(host=host, port=port, db=db, decode_responses=False)
+            if url:
+                self.client = redis.Redis.from_url(
+                    url,
+                    decode_responses=False,
+                    ssl_cert_reqs=ssl_cert_reqs,
+                )
+            else:
+                self.client = redis.StrictRedis(
+                    host=host,
+                    port=port,
+                    db=db,
+                    username=username,
+                    password=password,
+                    decode_responses=False,
+                    ssl_cert_reqs=ssl_cert_reqs,
+                )
             self.client.ping()
         except redis.exceptions.ConnectionError as e:
             raise ConnectionError(f"Could not connect to Redis at {host}:{port}. Please ensure Redis is running.") from e
@@ -50,22 +90,24 @@ class RedisCache:
             The cached item, or None if the item is not found.
         """
         cached_value = self.client.get(key)
-        if cached_value:
-            try:
-                # Arrow values are written as an IPC stream in set().
-                buffer = pa.py_buffer(cached_value)
-                return ipc.open_stream(buffer).read_all()
-            except (pa.ArrowInvalid, OSError):
-                # Try to deserialize as JSON
+        if isinstance(cached_value, str):
+            cached_value = cached_value.encode("utf-8")
+        if isinstance(cached_value, bytes):
+            if cached_value.startswith(_ARROW_PREFIX):
                 try:
-                    return json.loads(cached_value.decode('utf-8'))
+                    buffer = pa.py_buffer(cached_value[len(_ARROW_PREFIX):])
+                    return ipc.open_stream(buffer).read_all()
+                except (pa.ArrowInvalid, OSError, ValueError):
+                    return None
+            if cached_value.startswith(_JSON_PREFIX):
+                try:
+                    return json.loads(cached_value[len(_JSON_PREFIX):].decode("utf-8"))
                 except (json.JSONDecodeError, UnicodeDecodeError):
-                    # Try to deserialize as pickle
-                    try:
-                        return pickle.loads(cached_value)
-                    except (pickle.PickleError, EOFError):
-                        # If all attempts fail, return None
-                        return None
+                    return None
+            # Never attempt to deserialize legacy/unmarked bytes. In
+            # particular, a Redis writer must not be able to trigger pickle
+            # execution in the application process.
+            return None
         return None
 
     def set(self, key: str, value: Any, ttl: Optional[int] = None):
@@ -85,13 +127,21 @@ class RedisCache:
             sink = pa.BufferOutputStream()
             with ipc.new_stream(sink, value.schema) as writer:
                 writer.write_table(value)
-            buffer = sink.getvalue().to_pybytes()
-        elif isinstance(value, (dict, list, str, int, float, bool, type(None))):
-            # For JSON-serializable types, use JSON
-            buffer = json.dumps(value).encode('utf-8')
+            buffer = _ARROW_PREFIX + sink.getvalue().to_pybytes()
+        elif _is_json_value(value):
+            # Persist only an explicit, versioned JSON representation. This
+            # format is data-only and does not execute code when read.
+            try:
+                buffer = _JSON_PREFIX + json.dumps(
+                    value,
+                    ensure_ascii=False,
+                    allow_nan=False,
+                    separators=(",", ":"),
+                ).encode("utf-8")
+            except (TypeError, ValueError) as exc:
+                raise TypeError("RedisCache values must be JSON-compatible or pyarrow.Table.") from exc
         else:
-            # For other types, use pickle
-            buffer = pickle.dumps(value)
+            raise TypeError("RedisCache values must be JSON-compatible or pyarrow.Table.")
 
         self.client.set(key, buffer, ex=ttl_to_use)
 

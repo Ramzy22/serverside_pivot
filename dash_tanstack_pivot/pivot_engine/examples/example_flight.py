@@ -40,13 +40,16 @@ def run_client(location: str, spec: dict):
         # that can be used to retrieve the data stream.
         # In our simple implementation, the result stream is empty, but we could
         # pass back metadata like the schema in a real app.
-        for result in client.do_action(action):
-             print(f"Client: Received result from action: {result.body.to_pybytes()}")
+        results = list(client.do_action(action))
+        payload = json.loads(results[0].body.to_pybytes())
+        print(f"Client: Received result metadata: {json.dumps(payload)}")
 
 
         # Now, create a ticket to get the actual data
-        # The ticket is just the spec itself, serialized
-        ticket = fl.Ticket(json.dumps(spec).encode('utf-8'))
+        # Flight returns an opaque, short-lived ticket. Do not build tickets
+        # from client-side query data; authenticated servers bind them to the
+        # server-resolved principal and row scope.
+        ticket = fl.Ticket(json.dumps({"ticket": payload["ticket"]}).encode("utf-8"))
 
         # Use do_get with the ticket to get the data stream
         reader = client.do_get(ticket)
@@ -70,7 +73,11 @@ def main():
     host = "localhost"
     port = 8080
     location = f"grpc://{host}:{port}"
-    server = PivotFlightServer(controller, location=location)
+    # This is deliberately a loopback-only local demo. A deployment must pass
+    # a per-principal resolver and RuntimeDatasetAuthorizer instead; shared
+    # bearer tokens are rejected and unauthenticated Flight is not a public
+    # service mode.
+    server = PivotFlightServer(controller, location=location, require_auth=False)
     
     # Run the server in a background thread
     server_thread = threading.Thread(target=server.serve)

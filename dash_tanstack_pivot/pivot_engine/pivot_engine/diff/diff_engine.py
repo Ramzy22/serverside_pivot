@@ -372,7 +372,15 @@ class QueryDiffEngine:
         if results:
             return results[0] if len(results) == 1 else pa.concat_tables(results)
         
-        if change_type == SpecChangeType.IDENTICAL and not results:
+        # A structural transition can still resolve every planned query from
+        # cache (for example, hierarchy loading alternates root and child
+        # specifications).  ``plan`` records those hits and returns no work;
+        # finalize must materialize the same cached Arrow tables rather than
+        # returning an empty placeholder just because the prior spec differed.
+        if not results and (
+            change_type == SpecChangeType.IDENTICAL
+            or execution_strategy.get("cache_hits", 0) > 0
+        ):
              cached_tables = []
              for q_expr in queries:
                  key = self._cache_key_for_query(q_expr, spec_dict)

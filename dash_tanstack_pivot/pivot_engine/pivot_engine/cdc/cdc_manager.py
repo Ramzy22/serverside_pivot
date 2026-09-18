@@ -56,7 +56,7 @@ class PivotCDCManager:
         try:
             if changes_table_name not in self.database.list_tables():
                 self.database.create_table(changes_table_name, schema)
-        except Exception as e:
+        except Exception as e:  # nosec B110
             # Some backends might raise if table exists or permission issues
             pass
 

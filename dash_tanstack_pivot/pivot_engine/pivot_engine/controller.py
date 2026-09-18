@@ -147,10 +147,19 @@ class PivotController:
         self._cache_misses += len(queries_to_run)
 
         results = []
+        cache_spec = self.diff_engine._normalize_spec_for_hash(spec)
         for query_expr in queries_to_run:
             if hasattr(query_expr, 'to_pyarrow'):
                 try:
-                    results.append(query_expr.to_pyarrow())
+                    result = query_expr.to_pyarrow()
+                    # Diff planning checks this exact key on repeated requests.
+                    # Store every successfully executed standard query so the
+                    # identical-spec path can return Arrow data from cache.
+                    self.cache.set(
+                        self.diff_engine._cache_key_for_query(query_expr, cache_spec),
+                        result,
+                    )
+                    results.append(result)
                 except Exception as e:
                     print(f"Error executing Ibis expression: {e}")
                     results.append(pa.table({}))
@@ -163,7 +172,12 @@ class PivotController:
         if metadata.get("needs_totals", False) and main_result is not None and main_result.num_rows > 0:
             main_result = self._append_totals_row(main_result, spec, metadata)
 
-        final_table = self.diff_engine.merge_and_finalize([main_result] if main_result is not None else [], plan_result, spec, strategy)
+        final_table = self.diff_engine.merge_and_finalize(
+            [main_result] if results and main_result is not None else [],
+            plan_result,
+            spec,
+            strategy,
+        )
 
         return final_table if final_table is not None else pa.table({}) if pa is not None else None
 
@@ -234,11 +248,16 @@ class PivotController:
         
         loop = asyncio.get_running_loop()
         results = []
+        cache_spec = self.diff_engine._normalize_spec_for_hash(spec)
         
         for query_ibis_expr in queries_to_run:
             # Offload Ibis execution to thread pool to avoid blocking the event loop
             if hasattr(query_ibis_expr, 'to_pyarrow'):
                 result = await loop.run_in_executor(None, query_ibis_expr.to_pyarrow)
+                self.cache.set(
+                    self.diff_engine._cache_key_for_query(query_ibis_expr, cache_spec),
+                    result,
+                )
                 results.append(result)
             else:
                  # Fallback if somehow not an ibis expr
@@ -250,7 +269,12 @@ class PivotController:
             if metadata.get("needs_totals", False) and main_result is not None and main_result.num_rows > 0:
                 main_result = self._append_totals_row(main_result, spec, metadata)
 
-        final_table = self.diff_engine.merge_and_finalize([main_result] if main_result is not None else [], plan_result, spec, strategy)
+        final_table = self.diff_engine.merge_and_finalize(
+            [main_result] if results and main_result is not None else [],
+            plan_result,
+            spec,
+            strategy,
+        )
 
         return final_table if final_table is not None else pa.table({}) if pa is not None else None
 
@@ -664,7 +688,7 @@ class PivotController:
                 quoted_table_name = quote_ident(table_name)
                 self.backend.con.execute(f"DROP TABLE IF EXISTS {quoted_table_name}")
                 self.backend.con.execute(
-                    f"CREATE TABLE {quoted_table_name} AS SELECT * FROM arrow_table"
+                    f"CREATE TABLE {quoted_table_name} AS SELECT * FROM arrow_table"  # nosec B608
                 )
 
         if register_checkpoint:

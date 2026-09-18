@@ -156,13 +156,13 @@ class HierarchicalVirtualScrollManager:
         # Exclude pagination/cursor from hash as it doesn't change the data structure
         key_parts = {k: v for k, v in spec_dict.items() if k not in ('limit', 'offset', 'cursor')}
         spec_str = json.dumps(key_parts, sort_keys=True, default=str)
-        return hashlib.md5(spec_str.encode()).hexdigest()
+        return hashlib.sha256(spec_str.encode()).hexdigest()
 
     def _get_cache_key(self, spec: PivotSpec, offset: int, limit: int, expanded_paths: List[List[str]]):
         """Generate cache key for a hierarchical query."""
         spec_hash = self._get_spec_hash(spec)
         paths_str = str(sorted(map(str, expanded_paths))) if expanded_paths else ""
-        paths_hash = hashlib.md5(paths_str.encode()).hexdigest()
+        paths_hash = hashlib.sha256(paths_str.encode()).hexdigest()
         # Combine the four uniquely-identifying fields directly — no outer hash needed
         # since spec_hash and paths_hash are already fixed-length hex digests.
         return f"hier_scroll_v3:{spec_hash}:{paths_hash}:{offset}:{limit}"
@@ -237,7 +237,7 @@ class HierarchicalVirtualScrollManager:
             if includes_grand_total:
                 try:
                     grand_total_table = self._fetch_grand_total_pyarrow(spec, pivot_col_values)
-                except Exception as e:
+                except Exception as e:  # nosec B110
                     print(f"[WARN] Failed to fetch Grand Total {self._debug_context(spec, offset=offset, limit=limit, includes_grand_total=includes_grand_total)}: {e}")
 
             # Only reduce the data window if the grand total was successfully fetched.
@@ -534,7 +534,7 @@ class HierarchicalVirtualScrollManager:
         """Calculate total number of visible rows for the scrollbar."""
         spec_hash = self._get_spec_hash(spec)
         paths_str = str(sorted(map(str, expanded_paths))) if expanded_paths else ""
-        cache_key = f"hier_count:{spec_hash}:{hashlib.md5(paths_str.encode()).hexdigest()}"
+        cache_key = f"hier_count:{spec_hash}:{hashlib.sha256(paths_str.encode()).hexdigest()}"
         
         cached_count = self.cache.get(cache_key)
         if cached_count is not None:
@@ -563,8 +563,8 @@ class HierarchicalVirtualScrollManager:
                      total_count += self._execute_scalar(level_1_table.count())
                      level_1_success = True
                 except Exception as e:
-                    # print(f"[WARN] Error counting rollup: {e}")
-                    pass
+                    # Rollup count is an optional optimization; use the fallback path.
+                    pass  # nosec B110
 
             if not level_1_success:
                  try:
@@ -642,7 +642,7 @@ class HierarchicalVirtualScrollManager:
                              if or_expr is not None:
                                  total_count += self._execute_scalar(table_to_query.filter(or_expr).count())
                                  rollup_success = True
-                         except Exception as e:
+                         except Exception as e:  # nosec B110
                              # print(f"[WARN] Rollup batch count error: {e}")
                              pass
 

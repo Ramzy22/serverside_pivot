@@ -4,11 +4,17 @@ Supports API Key (Service-to-Service) and OAuth2/JWT (User-to-Service).
 """
 import os
 import logging
-from typing import Optional, List, Dict, Any, Set
+import json
+from dataclasses import dataclass
+from types import MappingProxyType
+from typing import Optional, List, Dict, Any, Mapping, Set
+
+from .production_security import resolve_runtime_environment
 
 try:
     from fastapi import HTTPException, Security, status, Depends
     from fastapi.security import APIKeyHeader, OAuth2PasswordBearer
+    from starlette.requests import HTTPConnection
     _fastapi_available = True
     api_key_header = APIKeyHeader(name="X-API-Key", auto_error=False)
     oauth2_scheme = OAuth2PasswordBearer(tokenUrl="token", auto_error=False)
@@ -16,6 +22,7 @@ except ImportError:
     _fastapi_available = False
     HTTPException = Security = status = Depends = None
     api_key_header = oauth2_scheme = None
+    HTTPConnection = Any
 
 try:
     from pydantic import BaseModel
@@ -32,28 +39,113 @@ except ImportError:
     _jose_available = False
     jwt = JWTError = None
 
-DEFAULT_JWT_SECRET_KEY = "dev-jwt-secret"
-_PRODUCTION_ENV_VALUES = {"production", "prod"}
-_DEVELOPMENT_AUTH_ENV_VALUES = {"development", "local"}
-_ENVIRONMENT_VARIABLES = ("ENV", "APP_ENV", "FLASK_ENV", "DASH_ENV")
+# Local-development fallback only; production rejects it in JwtKeyRing.from_env.
+DEFAULT_JWT_SECRET_KEY = "dev-jwt-secret"  # nosec B105
 _LOGGER = logging.getLogger(__name__)
 
 
+class MutationAuthorizationError(PermissionError):
+    """A mutation escaped neither its server policy nor its row scope."""
+
+
+@dataclass(frozen=True)
+class JwtKeyRing:
+    """Immutable signing-key selection for active and rotating JWT keys."""
+
+    active_kid: str
+    verification_keys: Mapping[str, str]
+    issuer: str
+    audience: Optional[str]
+    algorithm: str
+    require_kid: bool
+
+    @classmethod
+    def from_env(cls) -> Optional["JwtKeyRing"]:
+        raw_keys = str(os.getenv("PIVOT_JWT_KEYS_JSON") or "").strip()
+        production = _is_production_environment()
+        if raw_keys:
+            try:
+                parsed = json.loads(raw_keys)
+            except json.JSONDecodeError as exc:
+                raise RuntimeError("PIVOT_JWT_KEYS_JSON must be a JSON object.") from exc
+            if not isinstance(parsed, dict) or not parsed:
+                raise RuntimeError("PIVOT_JWT_KEYS_JSON must contain verification keys.")
+            keys = {
+                str(kid).strip(): str(key)
+                for kid, key in parsed.items()
+                if str(kid).strip() and isinstance(key, str) and key
+            }
+            active_kid = str(os.getenv("PIVOT_JWT_ACTIVE_KID") or "").strip()
+            if not active_kid or active_kid not in keys:
+                raise RuntimeError("PIVOT_JWT_ACTIVE_KID must name a configured verification key.")
+        elif JWT_SECRET_KEY:
+            if production:
+                raise RuntimeError(
+                    "PIVOT_JWT_KEYS_JSON and PIVOT_JWT_ACTIVE_KID are required for JWT authentication in production."
+                )
+            active_kid = "local"
+            keys = {active_kid: JWT_SECRET_KEY}
+        else:
+            return None
+
+        issuer = str(os.getenv("JWT_ISSUER") or "").strip()
+        audience = str(os.getenv("JWT_AUDIENCE") or "").strip() or None
+        if not issuer:
+            raise RuntimeError("JWT_ISSUER must be set whenever JWT authentication is configured.")
+        if production and not audience:
+            raise RuntimeError("JWT_AUDIENCE must be set for JWT authentication in production.")
+        algorithm = str(os.getenv("JWT_ALGORITHM", "HS256") or "").strip()
+        if algorithm not in {"HS256", "HS384", "HS512", "RS256", "RS384", "RS512", "ES256", "ES384", "ES512"}:
+            raise RuntimeError("JWT_ALGORITHM is not an allowed signing algorithm.")
+        if production and algorithm.startswith("HS"):
+            weak_kids = sorted(
+                kid for kid, key in keys.items() if len(key.encode("utf-8")) < 32
+            )
+            if weak_kids:
+                raise RuntimeError(
+                    "Production HMAC JWT verification keys must be at least 32 UTF-8 bytes "
+                    f"(weak key ids: {', '.join(weak_kids)})."
+                )
+        if production and algorithm.startswith(("RS", "ES")):
+            invalid_kids = sorted(
+                kid
+                for kid, key in keys.items()
+                if "-----BEGIN PUBLIC KEY-----" not in key
+                and "-----BEGIN CERTIFICATE-----" not in key
+            )
+            if invalid_kids:
+                raise RuntimeError(
+                    "Production asymmetric JWT public verification keys must be PEM encoded "
+                    f"(invalid key ids: {', '.join(invalid_kids)})."
+                )
+        return cls(
+            active_kid=active_kid,
+            verification_keys=MappingProxyType(keys),
+            issuer=issuer,
+            audience=audience,
+            algorithm=algorithm,
+            require_kid=production,
+        )
+
+    def key_for_token(self, token: str) -> str:
+        try:
+            header = jwt.get_unverified_header(token)
+        except Exception as exc:
+            raise JWTError("Invalid JWT header.") from exc
+        kid = str((header or {}).get("kid") or "").strip()
+        if not kid and not self.require_kid:
+            kid = self.active_kid
+        if not kid or kid not in self.verification_keys:
+            raise JWTError("Unknown JWT signing key.")
+        return self.verification_keys[kid]
+
+
 def _is_production_environment() -> bool:
-    for variable_name in _ENVIRONMENT_VARIABLES:
-        value = str(os.getenv(variable_name) or "").strip().lower()
-        if value in _PRODUCTION_ENV_VALUES:
-            return True
-    return False
+    return resolve_runtime_environment() == "production"
 
 
 def _is_development_auth_environment() -> bool:
-    if _is_production_environment():
-        return False
-    return any(
-        str(os.getenv(variable_name) or "").strip().lower() in _DEVELOPMENT_AUTH_ENV_VALUES
-        for variable_name in _ENVIRONMENT_VARIABLES
-    )
+    return resolve_runtime_environment() == "development"
 
 
 def _allow_development_auth_fallbacks() -> bool:
@@ -70,7 +162,14 @@ def _get_development_auth_fallback_user() -> "User":
 def _load_jwt_secret_key() -> Optional[str]:
     configured_secret = os.getenv("JWT_SECRET_KEY")
     if configured_secret and configured_secret != DEFAULT_JWT_SECRET_KEY:
+        if _is_production_environment() and len(configured_secret.encode("utf-8")) < 32:
+            raise RuntimeError("Production JWT_SECRET_KEY must be at least 32 UTF-8 bytes.")
         return configured_secret
+    # Production JWT verification is normally supplied by a rotating key ring.
+    # Do not require an unused compatibility secret when the ring is configured;
+    # ``JwtKeyRing.from_env`` remains the authoritative validator and decoder.
+    if str(os.getenv("PIVOT_JWT_KEYS_JSON") or "").strip():
+        return None
     if _is_production_environment():
         raise RuntimeError(
             "JWT_SECRET_KEY must be set to a non-default value in production."
@@ -87,9 +186,20 @@ def _load_jwt_secret_key() -> Optional[str]:
     return None
 
 
+def _load_jwt_issuer(secret_key: Optional[str]) -> Optional[str]:
+    """Require an issuer whenever signed JWT authentication is enabled."""
+    configured_issuer = str(os.getenv("JWT_ISSUER") or "").strip()
+    if secret_key and not configured_issuer:
+        raise RuntimeError(
+            "JWT_ISSUER must be set whenever JWT authentication is configured."
+        )
+    return configured_issuer or None
+
+
 # Configuration
 JWT_SECRET_KEY = _load_jwt_secret_key()
 JWT_ALGORITHM = os.getenv("JWT_ALGORITHM", "HS256")
+JWT_ISSUER = _load_jwt_issuer(JWT_SECRET_KEY)
 PIVOT_API_KEY = os.getenv("PIVOT_API_KEY")
 
 
@@ -120,14 +230,12 @@ else:
         scopes: List[str] = _field(default_factory=list)
         attributes: Dict[str, Any] = _field(default_factory=dict)
 
-async def get_current_user(
-    api_key: str = (Security(api_key_header) if _fastapi_available else None),
-    token: str = (Security(oauth2_scheme) if _fastapi_available else None)
+async def authenticate_user_credentials(
+    *,
+    api_key: Optional[str] = None,
+    token: Optional[str] = None,
 ) -> User:
-    """
-    Authenticate user via API Key or JWT Token.
-    API Key takes precedence.
-    """
+    """Authenticate API-key or bearer credentials at an HTTP or WebSocket boundary."""
     configured_api_key = _load_pivot_api_key()
     
     # 1. API Key Authentication (Service Account)
@@ -154,14 +262,40 @@ async def get_current_user(
                 status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
                 detail="JWT authentication support is unavailable",
             )
-        if not JWT_SECRET_KEY:
+        try:
+            key_ring = JwtKeyRing.from_env()
+        except RuntimeError as exc:
+            raise HTTPException(
+                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                detail="JWT authentication is not configured",
+            ) from exc
+        if key_ring is None:
             raise HTTPException(
                 status_code=status.HTTP_401_UNAUTHORIZED,
                 detail="JWT authentication is not configured",
                 headers={"WWW-Authenticate": "Bearer"},
             )
+        if not key_ring.issuer:
+            raise HTTPException(
+                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                detail="JWT issuer validation is not configured",
+            )
         try:
-            payload = jwt.decode(token, JWT_SECRET_KEY, algorithms=[JWT_ALGORITHM])
+            # ``verify_exp`` only checks an expiration claim when it exists.
+            # Require the claim as well, otherwise a correctly signed bearer
+            # token can remain valid forever.
+            payload = jwt.decode(
+                token,
+                key_ring.key_for_token(token),
+                algorithms=[key_ring.algorithm],
+                issuer=key_ring.issuer,
+                audience=key_ring.audience,
+                options={
+                    "require_exp": True,
+                    "require_iss": True,
+                    "require_aud": bool(key_ring.audience),
+                },
+            )
             username: str = payload.get("sub")
             if username is None:
                 raise HTTPException(status_code=401, detail="Invalid token payload")
@@ -193,6 +327,26 @@ async def get_current_user(
         status_code=status.HTTP_401_UNAUTHORIZED,
         detail="Missing or invalid authentication credentials"
     )
+
+
+async def get_current_user(
+    connection: HTTPConnection = None,
+    api_key: Optional[str] = None,
+    token: Optional[str] = None,
+) -> User:
+    """Authenticate HTTP and WebSocket connections through the same policy.
+
+    ``APIKeyHeader`` and ``OAuth2PasswordBearer`` are HTTP ``Request``-only in
+    current FastAPI versions, so using them in the application-wide dependency
+    prevents a WebSocket endpoint from ever reaching its own authentication
+    boundary. ``HTTPConnection`` covers both protocols while preserving the
+    direct ``api_key``/``token`` parameters used by embedded callers and tests.
+    """
+    if connection is not None:
+        api_key = connection.headers.get("X-API-Key")
+        authorization = str(connection.headers.get("Authorization") or "").strip()
+        token = authorization[7:].strip() if authorization.lower().startswith("bearer ") else None
+    return await authenticate_user_credentials(api_key=api_key, token=token)
 
 def _get_dev_user():
     return User(
@@ -226,11 +380,39 @@ def get_user_with_rls(user: User = (Depends(get_current_user) if _fastapi_availa
     """
     return user
 
-def apply_rls_to_spec(spec: PivotSpec, user: User) -> PivotSpec:
+def apply_rls_to_spec(
+    spec: PivotSpec,
+    user: User,
+    *,
+    row_scope: Any = None,
+) -> PivotSpec:
     """
     Apply Row-Level Security filters from User attributes to a PivotSpec.
     Modifies the spec in-place and returns it.
     """
+    scope_values = getattr(row_scope, "field_values", None)
+    if isinstance(scope_values, dict) or hasattr(scope_values, "items"):
+        protected_fields = {str(field) for field in scope_values.keys()}
+        spec.filters = [
+            filter_spec
+            for filter_spec in list(spec.filters or [])
+            if not _filter_references_fields(filter_spec, protected_fields)
+        ]
+        for field, values in scope_values.items():
+            values = list(values)
+            if len(values) > 1:
+                spec.filters.append({
+                    "field": field,
+                    "op": "in",
+                    "value": values,
+                })
+                continue
+            spec.filters.append({
+                "field": field,
+                "op": "=",
+                "value": values[0] if values else None,
+            })
+        return spec
     if user.attributes:
         protected_fields = {str(field) for field in user.attributes.keys()}
         spec.filters = [
@@ -239,6 +421,16 @@ def apply_rls_to_spec(spec: PivotSpec, user: User) -> PivotSpec:
             if not _filter_references_fields(filter_spec, protected_fields)
         ]
         for field, value in user.attributes.items():
+            if isinstance(value, (list, tuple, set, frozenset)):
+                values = list(value)
+                if isinstance(value, (set, frozenset)):
+                    values = sorted(values, key=lambda item: str(item))
+                spec.filters.append({
+                    "field": field,
+                    "op": "in",
+                    "value": values,
+                })
+                continue
             spec.filters.append({
                 "field": field,
                 "op": "=",

@@ -1,12 +1,13 @@
 import React from 'react';
 import SkeletonRow from '../SkeletonRow';
 import StatusBar from './StatusBar';
-import InlineDetailPanel from './InlineDetailPanel';
 import { usePivotTheme } from '../../contexts/PivotThemeContext';
 import { usePivotConfig } from '../../contexts/PivotConfigContext';
 import { buildRowSpanPlan, collectRowSpanColumns } from '../../utils/rowSpanning';
 import { getPivotPerformanceNow, recordPivotMeasure } from '../../utils/pivotProfiler';
 import { usePivotRenderCounter } from '../../hooks/usePivotRenderCounter';
+
+const LazyInlineDetailPanel = React.lazy(() => import(/* webpackChunkName: "pivot-detail-inline" */ './InlineDetailPanel'));
 
 const getTotalRowBackground = (theme) =>
     theme.totalBg || theme.select || theme.background;
@@ -612,6 +613,7 @@ export const PivotTableBody = React.memo(function PivotTableBody({
             )}
             <div
                 ref={parentRef}
+                data-pivot-scroll-container="true"
                 style={{...styles.scrollContainer, overflow: 'auto'}}
                 onKeyDown={handleKeyDown}
                 tabIndex={0}
@@ -960,7 +962,8 @@ export const PivotTableBody = React.memo(function PivotTableBody({
                                       })}
                                   </div>
                                   {detailMode === 'inline' && detailState && detailState.anchorRowId === row.id && (
-                                      <InlineDetailPanel
+                                      <React.Suspense fallback={null}>
+                                      <LazyInlineDetailPanel
                                           detailState={detailState}
                                           onClose={onDetailClose}
                                           onPageChange={onDetailPageChange}
@@ -971,6 +974,7 @@ export const PivotTableBody = React.memo(function PivotTableBody({
                                           top={adjustedTop + virtualRow.size + 4}
                                           height={detailInlineHeight}
                                       />
+                                      </React.Suspense>
                                   )}
                                   {showRowTransitionLoader && (
                                       <div

@@ -26,7 +26,7 @@ def _json_default(value: Any) -> Any:
     if callable(item):
         try:
             return item()
-        except Exception:
+        except Exception:  # nosec B110
             pass
     return str(value)
 
@@ -79,6 +79,7 @@ class RuntimePayloadStore:
         ttl_seconds: Optional[int] = None,
         serialized_body: Optional[bytes] = None,
         compress: bool = False,
+        url_prefix: str = "/_dash_tanstack_pivot/payload",
     ) -> Dict[str, Any]:
         raw_body = (
             bytes(serialized_body)
@@ -113,7 +114,7 @@ class RuntimePayloadStore:
         return {
             "id": token,
             "format": "json",
-            "url": f"/_dash_tanstack_pivot/payload/{token}",
+            "url": f"{url_prefix.rstrip('/')}/{token}",
             "bytes": len(body),
             "expiresAt": int(item.expires_at * 1000),
             **item.metadata,
@@ -131,6 +132,7 @@ class RuntimePayloadStore:
         content_type: str = "application/octet-stream",
         metadata: Optional[Dict[str, Any]] = None,
         ttl_seconds: Optional[int] = None,
+        url_prefix: str = "/_dash_tanstack_pivot/payload",
     ) -> Dict[str, Any]:
         if isinstance(body, str):
             body = body.encode("utf-8")
@@ -160,7 +162,7 @@ class RuntimePayloadStore:
         return {
             "id": token,
             "format": "bytes",
-            "url": f"/_dash_tanstack_pivot/payload/{token}",
+            "url": f"{url_prefix.rstrip('/')}/{token}",
             "bytes": len(body_bytes),
             "contentType": item.content_type,
             "expiresAt": int(item.expires_at * 1000),
@@ -174,6 +176,7 @@ class RuntimePayloadStore:
         content_type: str = "application/octet-stream",
         metadata: Optional[Dict[str, Any]] = None,
         ttl_seconds: Optional[int] = None,
+        url_prefix: str = "/_dash_tanstack_pivot/payload",
     ) -> Dict[str, Any]:
         file_path = os.path.abspath(path)
         size = os.path.getsize(file_path)
@@ -201,7 +204,7 @@ class RuntimePayloadStore:
         return {
             "id": token,
             "format": "file",
-            "url": f"/_dash_tanstack_pivot/payload/{token}",
+            "url": f"{url_prefix.rstrip('/')}/{token}",
             "bytes": size,
             "contentType": item.content_type,
             "expiresAt": int(item.expires_at * 1000),

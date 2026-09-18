@@ -9,8 +9,19 @@ __pycache__/
 # Distribution / packaging
 .Python
 build/
+# The Streamlit V2 component is distributed with its compiled, hashed assets.
+!dash_tanstack_pivot/streamlit_pivot/
+!dash_tanstack_pivot/streamlit_pivot/frontend/
+!dash_tanstack_pivot/streamlit_pivot/frontend/build
+!dash_tanstack_pivot/streamlit_pivot/frontend/build/
+!dash_tanstack_pivot/streamlit_pivot/frontend/build/**
+dash_tanstack_pivot/streamlit_pivot/frontend/node_modules/
+.setuptools-build/
 develop-eggs/
 dist/
+!dash_tanstack_pivot/dist/
+!dash_tanstack_pivot/dist/react/
+!dash_tanstack_pivot/dist/react/**
 downloads/
 eggs/
 .eggs/
@@ -135,9 +146,12 @@ dmypy.json
 # OS generated files
 .DS_Store
 .DS_Store?
+/.runlogs/
+/examples/flagship_react/dist/
 ._*
 .Spotlight-V100
 .Trashes
 ehthumbs.db
 Thumbs.db
 desktop.ini
+security/release-evidence.json

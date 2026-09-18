@@ -1,5 +1,29 @@
 import { saveAs } from 'file-saver';
-import * as XLSX from 'xlsx';
+
+// XLSX is only needed after a user starts a client-side workbook export. Keep
+// it out of the interactive grid bundle: SheetJS is by far the largest export
+// dependency and a static import makes every pivot viewer pay that cost.
+//
+// Normal pivot exports create workbooks from arrays and only need SheetJS's
+// writer APIs. Its mini build supplies exactly those APIs. HTML-table import
+// remains available through the full build, but pays for the parser only when
+// that legacy compatibility path is explicitly called.
+let xlsxWriterModulePromise = null;
+let xlsxHtmlModulePromise = null;
+
+function loadXlsxWriter() {
+    if (!xlsxWriterModulePromise) {
+        xlsxWriterModulePromise = import(/* webpackChunkName: "pivot-xlsx" */ 'xlsx/dist/xlsx.mini.min.js');
+    }
+    return xlsxWriterModulePromise.then((module) => module.default || module);
+}
+
+function loadXlsxHtmlParser() {
+    if (!xlsxHtmlModulePromise) {
+        xlsxHtmlModulePromise = import(/* webpackChunkName: "pivot-xlsx-html" */ 'xlsx');
+    }
+    return xlsxHtmlModulePromise.then((module) => module.default || module);
+}
 
 const SKIP_COL_IDS = new Set(['__row_number__']);
 
@@ -77,6 +101,60 @@ function defaultHeaderLabel(column) {
     if (typeof columnDef.header === 'string' && columnDef.header.trim()) return columnDef.header;
     if (columnDef.headerVal !== undefined && columnDef.headerVal !== null) return String(columnDef.headerVal);
     return column.id !== undefined && column.id !== null ? String(column.id) : '';
+}
+
+/**
+ * Convert the visible leaf columns' header ancestry into a compact grid that
+ * spreadsheet writers can turn into merged cells. Keeping this derived from
+ * the leaf order means it works with virtual columns as well as ordinary
+ * TanStack header groups.
+ */
+export function buildMergedHeaderRows(columns = [], { getHeaderStack = null, getHeaderLabel = null } = {}) {
+    const leaves = (Array.isArray(columns) ? columns : []).filter(Boolean);
+    if (leaves.length === 0) return { rows: [], depth: 0 };
+    const labelFor = typeof getHeaderLabel === 'function' ? getHeaderLabel : defaultHeaderLabel;
+    const stacks = leaves.map((column) => {
+        const rawStack = typeof getHeaderStack === 'function' ? getHeaderStack(column) : null;
+        const stack = (Array.isArray(rawStack) ? rawStack : [])
+            .map(value => String(value === undefined || value === null ? '' : value).trim())
+            .filter(Boolean);
+        return stack.length > 0 ? stack : [String(labelFor(column) || column.id || '')];
+    });
+    const depth = Math.max(...stacks.map(stack => stack.length), 1);
+    const rows = Array.from({ length: depth }, () => ({ cells: [] }));
+
+    for (let level = 0; level < depth; level += 1) {
+        let start = 0;
+        while (start < leaves.length) {
+            const stack = stacks[start];
+            if (level >= stack.length) {
+                start += 1;
+                continue;
+            }
+            const prefix = stack.slice(0, level + 1).join('\u0000');
+            let end = start + 1;
+            while (end < leaves.length) {
+                const candidate = stacks[end];
+                if (level >= candidate.length || candidate.slice(0, level + 1).join('\u0000') !== prefix) break;
+                end += 1;
+            }
+            const columnIds = leaves.slice(start, end).map((column, index) => (
+                column && column.id !== undefined && column.id !== null ? String(column.id) : String(start + index)
+            ));
+            const rowSpan = level === stack.length - 1 ? depth - level : 1;
+            rows[level].cells.push({
+                label: stack[level],
+                columnIds,
+                colSpan: end - start,
+                rowSpan,
+                startIndex: start,
+                endIndex: end - 1,
+                styleColumnId: columnIds[0],
+            });
+            start = end;
+        }
+    }
+    return { rows, depth };
 }
 
 function defaultCellValue(rowLike, column, rowIndex) {
@@ -295,16 +373,18 @@ export function buildSpreadsheetMlExport({
 /**
  * Export the pivot table as a real Office Open XML workbook (.xlsx).
  */
-export function buildXlsxExport({
+export async function buildXlsxExport({
     table = null,
     rows = null,
     columns = null,
     getHeaderLabel = null,
+    getHeaderStack = null,
     getCellValue = null,
     getCellRawValue = null,
     filename = 'pivot.xlsx',
     sheetName = 'Pivot',
 } = {}) {
+    const XLSX = await loadXlsxWriter();
     const exportCols = resolveColumns(table, { columns: Array.isArray(columns) ? columns : undefined });
     const exportRows = Array.isArray(rows) ? rows : resolveRows(table, null);
     const colWidths = exportCols.map((column, columnIndex) => {
@@ -318,6 +398,14 @@ export function buildXlsxExport({
             ? getHeaderLabel(column, columnIndex)
             : defaultHeaderLabel(column)
     ));
+    const mergedHeaders = buildMergedHeaderRows(exportCols, { getHeaderStack, getHeaderLabel });
+    const headerRows = mergedHeaders.rows.length > 0
+        ? mergedHeaders.rows.map(({ cells }) => {
+            const row = Array(exportCols.length).fill('');
+            cells.forEach(cell => { row[cell.startIndex] = cell.label; });
+            return row;
+        })
+        : [headerRow];
     const dataRows = exportRows.map((rowLike, rowIndex) => (
         exportCols.map((column, columnIndex) => {
             const rawValue = typeof getCellRawValue === 'function'
@@ -333,7 +421,19 @@ export function buildXlsxExport({
             return value === undefined || value === null ? '' : value;
         })
     ));
-    const worksheet = XLSX.utils.aoa_to_sheet([headerRow, ...dataRows]);
+    const worksheet = XLSX.utils.aoa_to_sheet([...headerRows, ...dataRows]);
+    const merges = [];
+    mergedHeaders.rows.forEach(({ cells }, rowIndex) => {
+        cells.forEach((cell) => {
+            if (cell.colSpan > 1 || cell.rowSpan > 1) {
+                merges.push({
+                    s: { r: rowIndex, c: cell.startIndex },
+                    e: { r: rowIndex + cell.rowSpan - 1, c: cell.endIndex },
+                });
+            }
+        });
+    });
+    if (merges.length > 0) worksheet['!merges'] = merges;
     worksheet['!cols'] = colWidths.map(width => ({ wch: Math.min(Math.max(width + 2, 8), 60) }));
     const workbook = XLSX.utils.book_new();
     XLSX.utils.book_append_sheet(workbook, worksheet, sheetName);
@@ -581,7 +681,8 @@ export function writeClipboardPayload(payload) {
     return Promise.reject(new Error('Clipboard API is unavailable.'));
 }
 
-export function downloadHtmlTableAsExcel(payload, filename = 'pivot.xlsx') {
+export async function downloadHtmlTableAsExcel(payload, filename = 'pivot.xlsx') {
+    const XLSX = await loadXlsxHtmlParser();
     const html = payload && payload.html ? payload.html : '';
     const workbook = XLSX.read(html || '<table></table>', { type: 'string' });
     const bytes = XLSX.write(workbook, { bookType: 'xlsx', type: 'array' });
@@ -593,14 +694,15 @@ export function downloadHtmlTableAsExcel(payload, filename = 'pivot.xlsx') {
 /**
  * Export the pivot table as a real .xlsx file.
  */
-export function exportPivotTable(table, rowCount, rawRowsOverride = null, options = {}) {
+export async function exportPivotTable(table, rowCount, rawRowsOverride = null, options = {}) {
     const allRows = resolveRows(table, rawRowsOverride);
     const exportCols = resolveColumns(table, options);
-    buildXlsxExport({
+    await buildXlsxExport({
         table,
         rows: allRows,
         columns: exportCols,
         getHeaderLabel: options.getHeaderLabel,
+        getHeaderStack: options.getHeaderStack,
         getCellValue: options.getCellValue,
         getCellRawValue: options.getCellRawValue,
         filename: options.filename || 'pivot.xlsx',

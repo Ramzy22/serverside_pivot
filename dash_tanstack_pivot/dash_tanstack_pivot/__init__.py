@@ -71,6 +71,11 @@ _js_dist = [
         'namespace': package_name,
         'dynamic': True
     },
+    {
+        'dev_package_path': 'proptypes.js',
+        'dev_only': True,
+        'namespace': package_name,
+    },
     *_discover_async_js_dist(),
 ]
 

@@ -8,9 +8,9 @@ inside dash_tanstack_pivot/.
 The contract: after a successful build, these files must be present:
   dash_tanstack_pivot/dash_tanstack_pivot/dash_tanstack_pivot.min.js
 
-Optional but checked if previously present:
-  dash_tanstack_pivot/dash_tanstack_pivot/package-info.json
-  dash_tanstack_pivot/dash_tanstack_pivot/metadata.json
+The contract establishes separate budgets for the initial bundle, normal lazy
+features, and the two intentionally heavy opt-in dependencies. Keeping them
+here makes regressions visible in CI before a release reaches Dash users.
 
 Exits 0 on success, 1 on any missing required artifact.
 
@@ -27,13 +27,28 @@ from pathlib import Path
 # Required artifacts — build is considered broken if any of these are missing.
 REQUIRED_ARTIFACTS = [
     "dash_tanstack_pivot.min.js",
+    "metadata.json",
+    "package-info.json",
 ]
 
-# Optional artifacts — logged as warnings but do not fail the check.
-OPTIONAL_ARTIFACTS = [
-    "package-info.json",
-    "metadata.json",
-]
+# The initial viewer, normal charts, and report builder should stay lean. XLSX
+# and ECharts/WebGL are deliberately lazy because they are only needed after a
+# user starts an export or selects a specialised chart type.
+DEFAULT_MAX_MAIN_BYTES = 1_100_000
+DEFAULT_MAX_STANDARD_ASYNC_BYTES = 300_000
+DEFAULT_MAX_ASYNC_BYTES = 1_750_000
+OPTIONAL_ASYNC_BUDGETS = {
+    # ECharts shares its rendering core between 2D and WebGL feature chunks.
+    # The shared chunk is still marked `dynamic` in the Dash package metadata,
+    # so it is fetched only after a chart feature is selected.
+    "dash_tanstack_pivot_shared.dash_tanstack_pivot.min.js": 550_000,
+    "dash_tanstack_pivot_async_pivot-echarts-2d.dash_tanstack_pivot.min.js": 100_000,
+    "dash_tanstack_pivot_async_pivot-echarts-3d.dash_tanstack_pivot.min.js": 500_000,
+    # Standard workbook export is writer-only; the legacy HTML-table parser
+    # is emitted as a second, explicitly requested compatibility chunk.
+    "dash_tanstack_pivot_async_pivot-xlsx.dash_tanstack_pivot.min.js": 250_000,
+    "dash_tanstack_pivot_async_pivot-xlsx-html.dash_tanstack_pivot.min.js": 450_000,
+}
 
 
 def main() -> None:
@@ -45,6 +60,24 @@ def main() -> None:
             "Path to the directory containing built artifacts. "
             "Default: dash_tanstack_pivot/dash_tanstack_pivot/ relative to repo root."
         ),
+    )
+    parser.add_argument(
+        "--max-main-bytes",
+        type=int,
+        default=DEFAULT_MAX_MAIN_BYTES,
+        help="Maximum allowed size of the initial minified bundle.",
+    )
+    parser.add_argument(
+        "--max-async-bytes",
+        type=int,
+        default=DEFAULT_MAX_ASYNC_BYTES,
+        help="Absolute maximum allowed size of any asynchronous minified bundle.",
+    )
+    parser.add_argument(
+        "--max-standard-async-bytes",
+        type=int,
+        default=DEFAULT_MAX_STANDARD_ASYNC_BYTES,
+        help="Maximum allowed size for a normal (non opt-in dependency) async bundle.",
     )
     args = parser.parse_args()
 
@@ -63,8 +96,6 @@ def main() -> None:
         sys.exit(1)
 
     errors: list[str] = []
-    warnings: list[str] = []
-
     for artifact in REQUIRED_ARTIFACTS:
         path = bundle_dir / artifact
         if path.exists():
@@ -74,13 +105,36 @@ def main() -> None:
             errors.append(f"MISSING (required): {artifact}")
             print(f"  MISSING (required): {artifact}", file=sys.stderr)
 
-    for artifact in OPTIONAL_ARTIFACTS:
-        path = bundle_dir / artifact
-        if path.exists():
-            print(f"  FOUND (optional): {artifact}")
-        else:
-            warnings.append(f"MISSING (optional): {artifact}")
-            print(f"  WARNING (optional not found): {artifact}")
+    main_bundle = bundle_dir / "dash_tanstack_pivot.min.js"
+    if main_bundle.exists():
+        main_size = main_bundle.stat().st_size
+        print(f"  SIZE (main): {main_size / 1024 / 1024:.2f} MiB")
+        if main_size > args.max_main_bytes:
+            errors.append(
+                f"Initial bundle is {main_size} bytes; budget is {args.max_main_bytes}."
+            )
+
+    async_bundles = sorted(
+        path
+        for path in bundle_dir.glob("*.dash_tanstack_pivot.min.js")
+        if path.name != main_bundle.name
+    )
+    if not async_bundles:
+        errors.append("No asynchronous bundle was emitted; chart code must remain lazy-loaded.")
+    for bundle in async_bundles:
+        size = bundle.stat().st_size
+        print(f"  SIZE (async): {bundle.name} ({size / 1024 / 1024:.2f} MiB)")
+        if size > args.max_async_bytes:
+            errors.append(
+                f"Async bundle {bundle.name} is {size} bytes; absolute budget is {args.max_async_bytes}."
+            )
+        feature_budget = OPTIONAL_ASYNC_BUDGETS.get(
+            bundle.name, args.max_standard_async_bytes
+        )
+        if size > feature_budget:
+            errors.append(
+                f"Async bundle {bundle.name} is {size} bytes; feature budget is {feature_budget}."
+            )
 
     if errors:
         print(
@@ -89,10 +143,7 @@ def main() -> None:
         )
         sys.exit(1)
 
-    if warnings:
-        print(f"\nverify_bundle_contract: OK (with {len(warnings)} optional warning(s))")
-    else:
-        print("\nverify_bundle_contract: OK — all required artifacts present.")
+    print("\nverify_bundle_contract: OK — artifacts and bundle budgets are valid.")
 
     sys.exit(0)
 

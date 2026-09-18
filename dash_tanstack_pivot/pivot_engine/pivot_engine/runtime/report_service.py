@@ -436,7 +436,8 @@ class RuntimeReportService:
         source_count: int,
     ) -> Dict[str, Any]:
         row_out = dict(base_row or {})
-        other_token = "__other__"
+        # Internal hierarchy sentinel, not a credential.
+        other_token = "__other__"  # nosec B105
         row_path_values = list(path_values or []) + [other_token]
         row_path = "|||".join(row_path_values)
         row_path_fields = list(path_fields or []) + ([node_field] if node_field else [])

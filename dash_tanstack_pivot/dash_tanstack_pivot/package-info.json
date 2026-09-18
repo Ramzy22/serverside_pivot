@@ -2,12 +2,37 @@
   "name": "dash_tanstack_pivot",
   "version": "0.0.88",
   "description": "A Dash component built with TanStack Table v8",
-  "main": "build/index.js",
+  "main": "./dist/react/index.mjs",
+  "types": "./dist/react/react.d.ts",
+  "files": [
+    "dist/react",
+    "README.md"
+  ],
+  "exports": {
+    ".": {
+      "types": "./dist/react/react.d.ts",
+      "import": "./dist/react/index.mjs",
+      "default": "./dist/react/index.mjs"
+    },
+    "./react": {
+      "types": "./dist/react/react.d.ts",
+      "import": "./dist/react/index.mjs",
+      "default": "./dist/react/index.mjs"
+    }
+  },
   "scripts": {
     "start": "webpack-dev-server --config ./webpack.serve.config.js --open",
     "build:js": "webpack --mode production",
+    "build:react": "vite build --config vite.react.config.mjs && tsc --project tsconfig.react.build.json",
+    "build:streamlit": "npm --prefix streamlit_pivot/frontend run build",
     "build:py": "python scripts/build_py_strict.py",
-    "build": "npm run build:js && npm run build:py"
+    "build": "npm run typecheck && npm run build:js && npm run build:react && npm run build:streamlit && npm run build:py",
+    "benchmark:runtime": "python ../scripts/benchmark_pivot_runtime.py",
+    "benchmark:browser": "python ../scripts/benchmark_browser_runtime.py",
+    "benchmark:flagship-transport": "python ../scripts/benchmark_flagship_transport.py",
+    "certify:flagship": "python ../scripts/certify_flagship.py",
+    "typecheck": "tsc --noEmit",
+    "generate:runtime-contract-types": "json2ts -i pivot_engine/pivot_engine/runtime/runtime-contract.schema.json -o src/lib/runtime/runtime-contract.generated.ts && json2ts -i pivot_engine/pivot_engine/runtime/runtime-response.schema.json -o src/lib/runtime/runtime-response-contract.generated.ts"
   },
   "author": "Gemini",
   "license": "MIT",
@@ -19,6 +44,7 @@
     "echarts-gl": "^2.0.9",
     "file-saver": "^2.0.5",
     "ramda": "^0.26.1",
+    "styled-components": "^5.3.11",
     "xlsx": "^0.18.5"
   },
   "devDependencies": {
@@ -28,23 +54,28 @@
     "@babel/plugin-proposal-optional-chaining": "^7.21.0",
     "@babel/preset-env": "^7.5.4",
     "@babel/preset-react": "^7.0.0",
+    "@babel/preset-typescript": "^7.27.1",
     "@plotly/webpack-dash-dynamic-import": "^1.2.0",
+    "@vitejs/plugin-react": "^4.4.1",
     "babel-loader": "^8.0.6",
     "css-loader": "^7.1.2",
+    "json-schema-to-typescript": "^15.0.4",
     "npm": "^11.7.0",
     "prop-types": "^15.7.2",
     "react": "^16.8.6",
-    "react-docgen": "^4.1.1",
+    "react-docgen": "^8.0.3",
     "react-dom": "^16.8.6",
     "style-loader": "^0.23.1",
-    "styled-components": "^5.3.11",
+    "typescript": "^5.8.3",
+    "vite": "^6.2.2",
     "webpack": "^5.104.1",
     "webpack-cli": "^6.0.1",
     "webpack-dev-server": "^5.0.0"
   },
   "peerDependencies": {
     "react": ">=16.8.6",
-    "react-dom": ">=16.8.6"
+    "react-dom": ">=16.8.6",
+    "styled-components": ">=5.3.0"
   },
   "engines": {
     "node": ">=8.11.0",

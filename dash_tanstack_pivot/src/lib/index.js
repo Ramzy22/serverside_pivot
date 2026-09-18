@@ -1,4 +1,6 @@
-import DashTanstackPivot from './components/DashTanstackPivot.react';
+import DashTanstackPivot from './components/DashTanstackPivot.react.tsx';
+export { PivotWorkspace } from './components/PivotWorkspace';
+export { HttpPivotTransport, LatestViewportScheduler } from './runtime/httpTransport';
 
 export {
     DashTanstackPivot

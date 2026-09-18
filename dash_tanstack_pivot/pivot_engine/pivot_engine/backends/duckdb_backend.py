@@ -108,7 +108,7 @@ class ConnectionPool:
         if callable(close):
             try:
                 close()
-            except Exception:
+            except Exception:  # nosec B110
                 pass
         with self.lock:
             if self.created_count > 0:
@@ -229,7 +229,7 @@ class DuckDBBackend:
         try:
             # Use connection from pool for concurrency
             with self.pool.get_connection() as con:
-                result = con.execute(sql, params).fetch_arrow_table()
+                result = con.execute(sql, params).to_arrow_table()
             
             # Performance tracking
             self._query_count += 1

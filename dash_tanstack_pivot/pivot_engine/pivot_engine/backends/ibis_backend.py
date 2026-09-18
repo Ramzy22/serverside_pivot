@@ -165,7 +165,7 @@ class IbisBackend:
                         try:
                             df = pd.DataFrame(result)
                             result = pa.Table.from_pandas(df)
-                        except Exception:
+                        except Exception:  # nosec B110
                             pass
             elif not return_arrow and isinstance(result, pa.Table):
                  result = result.to_pylist()
@@ -307,7 +307,7 @@ class IbisBackend:
             # Generate a safe index name
             import hashlib
             cols_str = "_".join(columns)
-            hash_suffix = hashlib.md5(cols_str.encode()).hexdigest()[:8]
+            hash_suffix = hashlib.sha256(cols_str.encode()).hexdigest()[:8]
             index_name = f"idx_{table_name}_{hash_suffix}"[:63]
 
         try:

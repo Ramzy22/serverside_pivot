@@ -9,6 +9,7 @@ import pandas as pd
 import pytest
 from dash import Dash, dcc, html, dash_table
 import pivot_engine as pivot_engine_module
+import pivot_engine.dash_integration as dash_integration_module
 import pivot_engine.runtime as runtime_module
 from pivot_engine import register_pivot_app
 from pivot_engine.grid_hierarchy import build_org_hierarchy_paths
@@ -27,13 +28,16 @@ from pivot_engine.runtime.dash_callbacks import (
     _externalize_data_payload_if_needed,
     _externalize_export_payload,
     _format_transport_callback_output,
+    _get_runtime_payload_store,
     _is_bootstrap_without_viewport,
     _is_request_scoped_trigger,
     _normalize_transport_request,
     _register_runtime_payload_endpoint,
+    _resolve_dash_principal,
     _state_override_value,
 )
 from pivot_engine.runtime.models import PivotRequestContext
+from pivot_engine.runtime import RuntimeDatasetAuthorizationError, RuntimeDatasetAuthorizer
 from pivot_engine.runtime.async_bridge import run_awaitable_in_worker_thread, run_awaitable_sync
 
 
@@ -43,6 +47,23 @@ class _StubRuntimeService:
 
     def process(self, *args, **kwargs):  # pragma: no cover - callback execution is not in scope here
         raise RuntimeError("not used in registration-only tests")
+
+
+def _install_dash_security_with_test_limiter(monkeypatch):
+    """Keep production-Dash wiring tests independent of an external Redis."""
+    def install_with_test_limiter(server, settings):
+        from pivot_engine.production_security import (
+            InMemoryFixedWindowRateLimiter,
+            install_flask_security,
+        )
+
+        return install_flask_security(
+            server,
+            settings,
+            rate_limiter=InMemoryFixedWindowRateLimiter(limit=20, window_seconds=60),
+        )
+
+    monkeypatch.setattr(dash_integration_module, "install_flask_security", install_with_test_limiter)
 
 
 def _make_app():
@@ -62,6 +83,13 @@ def _make_app():
         ]
     )
     return app
+
+
+def _payload_owner_client(app, subject: str):
+    client = app.server.test_client()
+    with client.session_transaction() as session:
+        session["_dash_tanstack_pivot_payload_subject"] = subject
+    return client
 
 
 def test_register_dash_pivot_transport_callback_is_idempotent():
@@ -89,6 +117,112 @@ def test_register_dash_pivot_transport_callback_without_drill_store():
         app, getter, pivot_id="pivot-only", debug=False
     )
     assert len(app.callback_map) == 1
+
+
+def test_register_pivot_app_installs_production_flask_security_once(monkeypatch):
+    monkeypatch.setenv("ENV", "production")
+    monkeypatch.setenv("PIVOT_PUBLIC_ORIGIN", "https://pivot.example.test")
+    monkeypatch.setenv("PIVOT_TRUSTED_HOSTS", "pivot.example.test")
+    monkeypatch.setenv("PIVOT_TRUSTED_PROXY_NETWORKS", "127.0.0.0/8")
+    monkeypatch.setenv(
+        "PIVOT_CSP",
+        "default-src 'self'; frame-ancestors 'none'; base-uri 'self'",
+    )
+    monkeypatch.setenv(
+        "PIVOT_RATE_LIMIT_REDIS_URL",
+        "rediss://rate-user:rate-password@redis.example.test:6380/0",
+    )
+    monkeypatch.setenv("PIVOT_JWT_ACTIVE_KID", "current")
+    monkeypatch.setenv(
+        "PIVOT_JWT_KEYS_JSON",
+        '{"current":"current-secret-with-at-least-thirty-two-bytes"}',
+    )
+    monkeypatch.setenv("JWT_ISSUER", "https://issuer.example.test")
+    monkeypatch.setenv("JWT_AUDIENCE", "pivot-api")
+    _install_dash_security_with_test_limiter(monkeypatch)
+
+    app = Dash(__name__)
+    app.layout = html.Div([DashTanstackPivot(id="pivot-production", table="sales")])
+    register_pivot_app(
+        app,
+        adapter_getter=lambda: _StubRuntimeService(),
+        pivot_id="pivot-production",
+        debug=False,
+    )
+    before_request_count = len(app.server.before_request_funcs.get(None, ()))
+    register_pivot_app(
+        app,
+        adapter_getter=lambda: _StubRuntimeService(),
+        pivot_id="pivot-production",
+        debug=False,
+    )
+
+    response = app.server.test_client().get(
+        "/",
+        base_url="https://pivot.example.test",
+    )
+
+    assert getattr(app.server, "_pivot_production_security_installed") is True
+    assert len(app.server.before_request_funcs.get(None, ())) == before_request_count
+    assert app.server.config["SESSION_COOKIE_SECURE"] is True
+    assert response.status_code == 200
+    assert response.headers["strict-transport-security"]
+    assert "frame-ancestors 'none'" in response.headers["content-security-policy"]
+
+
+def test_production_dash_security_uses_dash_renderer_csrf_cookie_and_header(monkeypatch):
+    """Dash Renderer posts ``X-CSRFToken`` from its ``_csrf_token`` cookie."""
+    monkeypatch.setenv("ENV", "production")
+    monkeypatch.setenv("PIVOT_PUBLIC_ORIGIN", "https://pivot.example.test")
+    monkeypatch.setenv("PIVOT_TRUSTED_HOSTS", "pivot.example.test")
+    monkeypatch.setenv("PIVOT_TRUSTED_PROXY_NETWORKS", "127.0.0.0/8")
+    monkeypatch.setenv(
+        "PIVOT_CSP",
+        "default-src 'self'; frame-ancestors 'none'; base-uri 'self'",
+    )
+    monkeypatch.setenv(
+        "PIVOT_RATE_LIMIT_REDIS_URL",
+        "rediss://rate-user:rate-password@redis.example.test:6380/0",
+    )
+    monkeypatch.setenv("PIVOT_JWT_ACTIVE_KID", "current")
+    monkeypatch.setenv(
+        "PIVOT_JWT_KEYS_JSON",
+        '{"current":"current-secret-with-at-least-thirty-two-bytes"}',
+    )
+    monkeypatch.setenv("JWT_ISSUER", "https://issuer.example.test")
+    monkeypatch.setenv("JWT_AUDIENCE", "pivot-api")
+
+    _install_dash_security_with_test_limiter(monkeypatch)
+
+    app = Dash(__name__)
+    app.layout = html.Div([DashTanstackPivot(id="pivot-csrf", table="sales")])
+
+    @app.server.post("/csrf-protected-callback")
+    def csrf_protected_callback():
+        return {"ok": True}
+
+    register_pivot_app(
+        app,
+        adapter_getter=lambda: _StubRuntimeService(),
+        pivot_id="pivot-csrf",
+        debug=False,
+    )
+
+    client = app.server.test_client()
+    landing = client.get("/", base_url="https://pivot.example.test")
+    token = client.get_cookie("_csrf_token", domain="pivot.example.test")
+    accepted = client.post(
+        "/csrf-protected-callback",
+        base_url="https://pivot.example.test",
+        headers={
+            "Origin": "https://pivot.example.test",
+            "X-CSRFToken": token.value if token else "",
+        },
+    )
+
+    assert landing.status_code == 200
+    assert token is not None
+    assert accepted.status_code == 200
 
 
 def test_transport_callback_uses_runtime_request_as_primary_trigger():
@@ -148,6 +282,7 @@ def test_runtime_payload_ref_externalizes_nested_rows_and_serves_json(monkeypatc
         payload,
         request_id="req-1",
         context=context,
+        payload_subject="nested-owner",
     )
 
     assert externalized["data"] == []
@@ -159,10 +294,85 @@ def test_runtime_payload_ref_externalizes_nested_rows_and_serves_json(monkeypatc
     assert payload_ref["windowSeq"] == 5
     assert payload_ref["dataVersion"] == 7
 
-    response = app.server.test_client().get(payload_ref["url"])
+    response = _payload_owner_client(app, "nested-owner").get(payload_ref["url"])
     assert response.status_code == 200
     assert response.headers["Content-Encoding"] == "gzip"
     assert json.loads(gzip.decompress(response.data).decode("utf-8")) == {"data": payload["data"]}
+
+
+def test_dash_payload_download_requires_the_issuing_browser_session():
+    app = Dash(__name__)
+    app.server.secret_key = "test-dash-payload-session-secret"
+    app.layout = html.Div()
+    _register_runtime_payload_endpoint(app)
+    payload_ref = _get_runtime_payload_store(app).put_bytes(
+        b"private-export",
+        metadata={"subject": "owner-session"},
+    )
+
+    owner = app.server.test_client()
+    with owner.session_transaction() as session:
+        session["_dash_tanstack_pivot_payload_subject"] = "owner-session"
+    stranger = app.server.test_client()
+
+    assert owner.get(payload_ref["url"]).status_code == 200
+    assert stranger.get(payload_ref["url"]).status_code == 404
+
+
+def test_dash_runtime_principal_is_server_resolved_and_dataset_scoped():
+    class Principal:
+        id = "tenant-a"
+        role = "viewer"
+        attributes = {"tenant": "A"}
+
+    app = Dash(__name__)
+    app.layout = html.Div()
+    authorizer = RuntimeDatasetAuthorizer(
+        {
+            "sales": {
+                "roles": {"viewer"},
+                "operations": {"read"},
+                "rowSecurity": {
+                    "mode": "claims",
+                    "claims": {"tenant": "tenant"},
+                },
+            }
+        }
+    )
+
+    with app.server.test_request_context("/_dash-update-component"):
+        authorization = asyncio.run(
+            _resolve_dash_principal(
+                dataset_authorizer=authorizer,
+                principal_getter=lambda _request: Principal(),
+                table="sales",
+                operation="read",
+                require_authorization=True,
+            )
+        )
+        assert authorization.principal.id == "tenant-a"
+        assert authorization.row_scope.field_values == {"tenant": ("A",)}
+        with pytest.raises(RuntimeDatasetAuthorizationError):
+            asyncio.run(
+                _resolve_dash_principal(
+                    dataset_authorizer=authorizer,
+                    principal_getter=lambda _request: Principal(),
+                    table="other_tenant_sales",
+                    operation="read",
+                    require_authorization=True,
+                )
+            )
+
+    with pytest.raises(RuntimeDatasetAuthorizationError):
+        asyncio.run(
+            _resolve_dash_principal(
+                dataset_authorizer=None,
+                principal_getter=None,
+                table="sales",
+                operation="read",
+                require_authorization=True,
+            )
+        )
 
 
 def test_runtime_payload_ref_keeps_small_nested_windows_inline(monkeypatch):
@@ -178,7 +388,13 @@ def test_runtime_payload_ref_keeps_small_nested_windows_inline(monkeypatch):
         "dataOffset": 0,
     }
 
-    result = _externalize_data_payload_if_needed(app, payload, request_id="req-inline", context=context)
+    result = _externalize_data_payload_if_needed(
+        app,
+        payload,
+        request_id="req-inline",
+        context=context,
+        payload_subject="inline-owner",
+    )
 
     assert result is payload
     assert "payloadRef" not in result
@@ -206,12 +422,18 @@ def test_runtime_payload_ref_externalizes_wide_flat_rows_and_schema(monkeypatch)
         "dataOffset": 0,
     }
 
-    result = _externalize_data_payload_if_needed(app, payload, request_id="req-wide", context=context)
+    result = _externalize_data_payload_if_needed(
+        app,
+        payload,
+        request_id="req-wide",
+        context=context,
+        payload_subject="wide-owner",
+    )
 
     assert result["data"] == []
     assert result["columns"] is None
     assert result["colSchema"] is None
-    response = app.server.test_client().get(result["payloadRef"]["url"])
+    response = _payload_owner_client(app, "wide-owner").get(result["payloadRef"]["url"])
     remote_payload = json.loads(gzip.decompress(response.data).decode("utf-8"))
     assert remote_payload["data"] == payload["data"]
     assert remote_payload["columns"] == center_columns
@@ -241,6 +463,7 @@ def test_runtime_payload_ref_uses_encoded_size_without_shape_heuristics(monkeypa
         payload,
         request_id="req-bytes",
         context=context,
+        payload_subject="bytes-owner",
         profile_sink=profile,
     )
 
@@ -274,6 +497,7 @@ def test_export_payload_is_served_as_bytes_without_base64():
         },
         request_id="req-export",
         context=context,
+        payload_subject="export-owner",
     )
 
     assert "data" not in externalized
@@ -284,7 +508,7 @@ def test_export_payload_is_served_as_bytes_without_base64():
     assert payload_ref["filename"] == "pivot_export.csv"
     assert payload_ref["exportFormat"] == "csv"
 
-    response = app.server.test_client().get(payload_ref["url"])
+    response = _payload_owner_client(app, "export-owner").get(payload_ref["url"])
     assert response.status_code == 200
     assert response.data == b"Region,Sales\r\nNorth,100\r\n"
     assert response.headers["Content-Type"].startswith("text/csv")
@@ -317,6 +541,7 @@ def test_export_payload_file_is_streamed_without_inline_bytes(tmp_path):
         },
         request_id="req-export",
         context=context,
+        payload_subject="file-owner",
     )
 
     assert "content" not in externalized
@@ -324,7 +549,7 @@ def test_export_payload_file_is_streamed_without_inline_bytes(tmp_path):
     payload_ref = externalized["payloadRef"]
     assert payload_ref["format"] == "file"
 
-    response = app.server.test_client().get(payload_ref["url"])
+    response = _payload_owner_client(app, "file-owner").get(payload_ref["url"])
     assert response.status_code == 200
     assert response.data == b"Region,Sales\r\nNorth,100\r\n"
     assert response.headers["Content-Length"] == str(content_path.stat().st_size)
@@ -446,6 +671,32 @@ def test_drill_through_rest_route_runs_controller_on_worker_thread():
     assert payload["rows"][0]["offset"] == 25
     assert payload["total_rows"] == 1
     assert controller_thread_ids and controller_thread_ids[0] != request_thread_id
+
+
+def test_drill_through_route_enforces_its_table_allowlist_and_authorizer():
+    class _Controller:
+        async def get_drill_through_data(self, *_args, **_kwargs):
+            raise AssertionError("unauthorized drill-through must not reach the controller")
+
+    class _Adapter:
+        controller = _Controller()
+
+    app = Dash(__name__)
+    app.layout = html.Div([DashTanstackPivot(id="pivot-guard", table="sales")])
+    register_pivot_app(
+        app,
+        adapter_getter=lambda: _Adapter(),
+        pivot_id="pivot-guard",
+        allowed_drill_tables={"sales"},
+        drill_authorizer=lambda _request, _table: False,
+    )
+
+    with app.server.test_client() as client:
+        unknown_table = client.get("/api/drill-through?table=other")
+        denied = client.get("/api/drill-through?table=sales")
+
+    assert unknown_table.status_code == 404
+    assert denied.status_code == 403
 
 
 def test_register_dash_drill_modal_callback_is_idempotent():

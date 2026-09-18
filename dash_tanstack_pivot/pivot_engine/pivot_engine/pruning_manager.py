@@ -50,7 +50,7 @@ class HierarchyPruningManager:
                     sorted_table = hierarchy_data.sort_by([(hierarchy_data.schema.field(col_idx).name, 'descending')])
                     # Take top N
                     return sorted_table.slice(0, top_n)
-            except:
+            except:  # nosec B110
                 # If sorting fails, return original data
                 pass
 
@@ -108,7 +108,7 @@ class HierarchyPruningManager:
                         mask = [abs(v - mean_val) / mean_val > threshold if v and mean_val else False for v in values]
                         # This is a simplified approach - would need more sophisticated filtering
                         return hierarchy_data.slice(0, min(len(values), 50))  # Placeholder
-            except:
+            except:  # nosec B110
                 pass
 
         elif isinstance(hierarchy_data, dict):

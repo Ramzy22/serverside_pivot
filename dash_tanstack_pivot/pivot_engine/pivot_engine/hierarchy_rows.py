@@ -9,8 +9,9 @@ from typing import Any, Dict, List, Optional, Tuple
 
 GRAND_TOTAL_ID = "Grand Total"
 GRAND_TOTAL_PATH = "__grand_total__"
-EXPAND_ALL_TOKEN = "__ALL__"
-COLLAPSED_PATH_TOKEN = "__COLLAPSED__"
+# Internal hierarchy sentinels, not credentials.
+EXPAND_ALL_TOKEN = "__ALL__"  # nosec B105
+COLLAPSED_PATH_TOKEN = "__COLLAPSED__"  # nosec B105
 HIERARCHY_PATH_SEPARATOR = "|||"
 _NULL_LOOKUP_SEGMENT = "\x00N"
 _EMPTY_LOOKUP_SEGMENT = "\x00E"

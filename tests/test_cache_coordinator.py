@@ -86,12 +86,16 @@ def test_controller_mutation_invalidation_uses_cache_coordinator_namespaces():
     controller._hierarchy_grand_total_cache_set("total", {"_id": "Grand Total"})
     controller._hierarchy_root_count_cache_set("count", 4)
     controller._hierarchy_root_page_cache_set("page", ["North", "South"])
+    controller._hierarchy_root_result_cache_set(
+        "result", pa.table({"region": ["North", "South"]})
+    )
 
     controller._clear_mutation_caches(table_name, structural=False)
 
     assert controller.cache.get(f"pivot_ibis:query:{table_key}:abc") is None
     assert controller._hierarchy_view_cache_get("view") is None
     assert controller._hierarchy_grand_total_cache_get("total") is None
+    assert controller._hierarchy_root_result_cache_get("result") is None
     assert controller._hierarchy_root_count_cache_get("count") == 4
     assert controller._hierarchy_root_page_cache_get("page") == ["North", "South"]
 

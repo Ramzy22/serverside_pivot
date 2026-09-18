@@ -353,7 +353,7 @@ class IbisExpressionBuilder:
                      # If it's a python date/datetime object, it's fine.
                      pass
 
-            except Exception:
+            except Exception:  # nosec B110
                 # If casting fails, return original value and let backend complain or handle it
                 pass
             return v
@@ -364,7 +364,7 @@ class IbisExpressionBuilder:
                 try:
                     if col.type().is_string():
                         return col.lower() == str(val).lower()
-                except: pass
+                except: pass  # nosec B110
             return col == val
 
         if op in ["!=", "ne"]:
@@ -373,7 +373,7 @@ class IbisExpressionBuilder:
                 try:
                     if col.type().is_string():
                         return col.lower() != str(val).lower()
-                except: pass
+                except: pass  # nosec B110
             return col != val
 
         if op in ["<", "lt"]:
@@ -394,7 +394,7 @@ class IbisExpressionBuilder:
                         if col.type().is_string():
                             # For case-insensitive IN, we can use lower() on col and values
                             return col.lower().isin([str(v).lower() for v in vals])
-                    except: pass
+                    except: pass  # nosec B110
                 return col.isin(vals)
             return col == cast_val(value, col) # Fallback for single value
 
@@ -405,7 +405,7 @@ class IbisExpressionBuilder:
                     try:
                         if col.type().is_string():
                             return ~col.lower().isin([str(v).lower() for v in vals])
-                    except: pass
+                    except: pass  # nosec B110
                 return ~col.isin(vals)
             return col != cast_val(value, col)
 
@@ -438,14 +438,14 @@ class IbisExpressionBuilder:
             try:
                 if col.type().is_string():
                     return col.isnull() | (col.cast("string").strip() == "")
-            except Exception:
+            except Exception:  # nosec B110
                 pass
             return col.isnull()
         if op == "is not null":
             try:
                 if col.type().is_string():
                     return col.notnull() & (col.cast("string").strip() != "")
-            except Exception:
+            except Exception:  # nosec B110
                 pass
             return col.notnull()
         

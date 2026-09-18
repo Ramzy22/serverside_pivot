@@ -1,0 +1,7 @@
+[project]
+name = "serverside-pivot"
+version = "0.0.88"
+
+[[tool.streamlit.component.components]]
+name = "pivot_workspace"
+asset_dir = "frontend/build"

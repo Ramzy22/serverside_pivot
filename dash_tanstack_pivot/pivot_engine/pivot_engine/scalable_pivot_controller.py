@@ -37,6 +37,9 @@ from pivot_engine.hierarchy_query_service import (
     HierarchyQueryService,
     LegacyHierarchyAdapter,
 )
+from pivot_engine.export_executor import PivotExportExecutor
+from pivot_engine.execution_locks import TableExecutionLockRegistry
+from pivot_engine.query_execution_service import PivotQueryExecutor
 from pivot_engine.hierarchy_rows import (
     build_hierarchy_row_window,
     build_visible_hierarchy_rows,
@@ -47,6 +50,7 @@ from pivot_engine.hierarchy_rows import (
     is_hierarchy_grand_total,
     normalize_expanded_paths,
 )
+from pivot_engine.hierarchy_cache_registry import HierarchyCacheRegistry
 from pivot_engine.progressive_loader import ProgressiveDataLoader
 from pivot_engine.cdc.cdc_manager import PivotCDCManager
 from pivot_engine.materialized_hierarchy_manager import MaterializedHierarchyManager
@@ -60,6 +64,15 @@ def _positive_env_float(name: str, default: float) -> float:
     except (TypeError, ValueError):
         return default
     return value if value > 0 else default
+
+
+def _non_negative_env_int(name: str, default: int) -> int:
+    """Read an opt-out-friendly bounded-cache setting from the environment."""
+    try:
+        value = int(os.environ.get(name, default))
+    except (TypeError, ValueError):
+        return default
+    return value if value >= 0 else default
 
 
 class QueryStatsTracker:
@@ -86,7 +99,7 @@ class QueryStatsTracker:
             'rows': spec_dict.get('rows'),
             'filters': str(sorted(spec_dict.get('filters', []), key=lambda x: str(x)))
         }
-        spec_hash = hashlib.md5(json.dumps(key_parts, sort_keys=True).encode()).hexdigest()
+        spec_hash = hashlib.sha256(json.dumps(key_parts, sort_keys=True).encode()).hexdigest()
 
         if spec_hash in self.materialized_specs:
             return False
@@ -157,9 +170,11 @@ class ScalablePivotController(PivotController):
         self.enable_incremental_views = enable_incremental_views
         self.task_manager = get_task_manager()
         self.planning_lock = threading.Lock() # Lock for planner (Ibis/DuckDB metadata access is not thread-safe)
-        self.execution_lock = threading.RLock()
-        self._execution_locks: Dict[str, threading.RLock] = {}
-        self._execution_locks_guard = threading.Lock()
+        self.execution_locks = TableExecutionLockRegistry()
+        # Retain the historical default lock attribute for integrations that
+        # accessed it directly; all controller-owned execution now uses the
+        # registry so contention can be observed per table.
+        self.execution_lock = self.execution_locks.lock_for(None)
         self.hierarchy_request_lock = threading.RLock()
         
         # Helper to get connection safely
@@ -214,19 +229,36 @@ class ScalablePivotController(PivotController):
         
         self.stats_tracker = QueryStatsTracker()
         hierarchy_cache_ttl = _positive_env_float("PIVOT_HIERARCHY_CACHE_TTL_SECONDS", 300.0)
-        self._hierarchy_view_cache: OrderedDict[str, tuple[Dict[str, Any], float]] = OrderedDict()
-        self._hierarchy_view_cache_ttl = hierarchy_cache_ttl
-        self._hierarchy_view_cache_size = 32
-        self._hierarchy_root_count_cache: OrderedDict[str, tuple[int, float]] = OrderedDict()
-        self._hierarchy_root_count_cache_ttl = hierarchy_cache_ttl
-        self._hierarchy_root_count_cache_size = 64
-        self._hierarchy_root_page_cache: OrderedDict[str, tuple[List[Any], float]] = OrderedDict()
-        self._hierarchy_root_page_cache_ttl = hierarchy_cache_ttl
-        self._hierarchy_root_page_cache_size = 128
-        self._hierarchy_grand_total_cache: OrderedDict[str, tuple[Dict[str, Any], float]] = OrderedDict()
-        self._hierarchy_grand_total_cache_ttl = hierarchy_cache_ttl
-        self._hierarchy_grand_total_cache_size = 64
-        self._register_hierarchy_cache_namespaces()
+        self.hierarchy_cache_registry = HierarchyCacheRegistry(
+            self.cache_coordinator,
+            ttl_seconds=hierarchy_cache_ttl,
+        )
+        # Compatibility aliases retain the established controller internals
+        # while the registry owns creation and coordinator invalidation.
+        self._hierarchy_view_cache = self.hierarchy_cache_registry.view
+        self._hierarchy_view_cache_ttl = self.hierarchy_cache_registry.view_ttl
+        self._hierarchy_view_cache_size = self.hierarchy_cache_registry.view_size
+        self._hierarchy_root_count_cache = self.hierarchy_cache_registry.root_count
+        self._hierarchy_root_count_cache_ttl = self.hierarchy_cache_registry.root_count_ttl
+        self._hierarchy_root_count_cache_size = self.hierarchy_cache_registry.root_count_size
+        self._hierarchy_root_page_cache = self.hierarchy_cache_registry.root_page
+        self._hierarchy_root_page_cache_ttl = self.hierarchy_cache_registry.root_page_ttl
+        self._hierarchy_root_page_cache_size = self.hierarchy_cache_registry.root_page_size
+        self._hierarchy_root_result_cache = self.hierarchy_cache_registry.root_result
+        self._hierarchy_root_result_cache_ttl = self.hierarchy_cache_registry.root_result_ttl
+        self._hierarchy_root_result_cache_size = self.hierarchy_cache_registry.root_result_size
+        # Materialising a modest collapsed root level avoids an expensive
+        # ``IN (...)`` aggregate for every scroll. Both limits are hard safety
+        # bounds; set either to 0 to retain page-at-a-time execution only.
+        self._collapsed_root_materialization_max_rows = _non_negative_env_int(
+            "PIVOT_COLLAPSED_ROOT_MATERIALIZATION_MAX_ROWS", 10_000
+        )
+        self._collapsed_root_materialization_max_bytes = _non_negative_env_int(
+            "PIVOT_COLLAPSED_ROOT_MATERIALIZATION_MAX_BYTES", 32 * 1024 * 1024
+        )
+        self._hierarchy_grand_total_cache = self.hierarchy_cache_registry.grand_total
+        self._hierarchy_grand_total_cache_ttl = self.hierarchy_cache_registry.grand_total_ttl
+        self._hierarchy_grand_total_cache_size = self.hierarchy_cache_registry.grand_total_size
         self._sparse_materialized_pivot_threshold = 8
         try:
             configured_hierarchy_cap = int(max_hierarchy_rows) if max_hierarchy_rows is not None else 0
@@ -234,6 +266,10 @@ class ScalablePivotController(PivotController):
             configured_hierarchy_cap = 0
         self.max_hierarchy_rows = configured_hierarchy_cap if configured_hierarchy_cap > 0 else None
         self.hierarchy_query_service = HierarchyQueryService(LegacyHierarchyAdapter(self))
+        # Public controller methods remain stable façades while streaming export
+        # execution is owned by a focused collaborator.
+        self.export_executor = PivotExportExecutor(self)
+        self.query_executor = PivotQueryExecutor(self)
 
     @staticmethod
     def _profile_ms(start: Optional[float], end: Optional[float]) -> Optional[float]:
@@ -254,44 +290,6 @@ class ScalablePivotController(PivotController):
             ):
                 count += 1
         return {"entries": count}
-
-    def _register_hierarchy_cache_namespaces(self) -> None:
-        self.cache_coordinator.register_namespace(
-            CacheNamespaces.CONTROLLER_HIERARCHY_VIEW,
-            owner="controller.hierarchy",
-            key_dimensions=("table", "spec_fingerprint", "expanded_paths", "row_window"),
-            max_entries=self._hierarchy_view_cache_size,
-            ttl_seconds=self._hierarchy_view_cache_ttl,
-            size_getter=lambda: {"entries": len(self._hierarchy_view_cache)},
-            invalidator=self._invalidate_hierarchy_view_cache,
-        )
-        self.cache_coordinator.register_namespace(
-            CacheNamespaces.CONTROLLER_HIERARCHY_ROOT_COUNT,
-            owner="controller.hierarchy",
-            key_dimensions=("table", "rows", "filters"),
-            max_entries=self._hierarchy_root_count_cache_size,
-            ttl_seconds=self._hierarchy_root_count_cache_ttl,
-            size_getter=lambda: {"entries": len(self._hierarchy_root_count_cache)},
-            invalidator=self._invalidate_hierarchy_root_count_cache,
-        )
-        self.cache_coordinator.register_namespace(
-            CacheNamespaces.CONTROLLER_HIERARCHY_ROOT_PAGE,
-            owner="controller.hierarchy",
-            key_dimensions=("table", "root_count_key", "sort", "row_window"),
-            max_entries=self._hierarchy_root_page_cache_size,
-            ttl_seconds=self._hierarchy_root_page_cache_ttl,
-            size_getter=lambda: {"entries": len(self._hierarchy_root_page_cache)},
-            invalidator=self._invalidate_hierarchy_root_page_cache,
-        )
-        self.cache_coordinator.register_namespace(
-            CacheNamespaces.CONTROLLER_HIERARCHY_GRAND_TOTAL,
-            owner="controller.hierarchy",
-            key_dimensions=("table", "spec_fingerprint", "filters", "measures", "custom_dimensions"),
-            max_entries=self._hierarchy_grand_total_cache_size,
-            ttl_seconds=self._hierarchy_grand_total_cache_ttl,
-            size_getter=lambda: {"entries": len(self._hierarchy_grand_total_cache)},
-            invalidator=self._invalidate_hierarchy_grand_total_cache,
-        )
 
     def _invalidate_controller_query_cache(self, event: CacheInvalidationEvent) -> None:
         table_key = self._cache_table_key(event.table)
@@ -317,18 +315,6 @@ class ScalablePivotController(PivotController):
         if not self._delete_cache_keys(should_delete_query_cache) and hasattr(self.cache, "clear"):
             self.cache.clear()
 
-    def _invalidate_hierarchy_view_cache(self, _event: CacheInvalidationEvent) -> None:
-        self._hierarchy_view_cache.clear()
-
-    def _invalidate_hierarchy_root_count_cache(self, _event: CacheInvalidationEvent) -> None:
-        self._hierarchy_root_count_cache.clear()
-
-    def _invalidate_hierarchy_root_page_cache(self, _event: CacheInvalidationEvent) -> None:
-        self._hierarchy_root_page_cache.clear()
-
-    def _invalidate_hierarchy_grand_total_cache(self, _event: CacheInvalidationEvent) -> None:
-        self._hierarchy_grand_total_cache.clear()
-
     def load_data_from_arrow(
         self,
         table_name: str,
@@ -348,13 +334,14 @@ class ScalablePivotController(PivotController):
         return backend_name == "duckdb"
 
     def _execution_lock_for_table(self, table_name: Optional[str]) -> threading.RLock:
-        key = str(table_name or "__default__")
-        with self._execution_locks_guard:
-            lock = self._execution_locks.get(key)
-            if lock is None:
-                lock = threading.RLock()
-                self._execution_locks[key] = lock
-            return lock
+        return self.execution_locks.lock_for(table_name)
+
+    def execution_lock_metrics_snapshot(
+        self,
+        table_name: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        """Expose per-table queue contention to runtime profiling consumers."""
+        return self.execution_locks.snapshot(table_name)
 
     @staticmethod
     def _split_pivot_filters(spec: PivotSpec) -> tuple[List[Dict[str, Any]], List[Dict[str, Any]]]:
@@ -732,8 +719,7 @@ class ScalablePivotController(PivotController):
             return await loop.run_in_executor(None, expr.to_pyarrow)
 
         def execute_with_lock():
-            with self._execution_lock_for_table(table_name):
-                return expr.to_pyarrow()
+            return self.execution_locks.run(table_name, expr.to_pyarrow)
 
         return await loop.run_in_executor(None, execute_with_lock)
 
@@ -745,8 +731,7 @@ class ScalablePivotController(PivotController):
             return await loop.run_in_executor(None, expr.execute)
 
         def execute_with_lock():
-            with self._execution_lock_for_table(table_name):
-                return expr.execute()
+            return self.execution_locks.run(table_name, expr.execute)
 
         return await loop.run_in_executor(None, execute_with_lock)
 
@@ -1056,6 +1041,13 @@ class ScalablePivotController(PivotController):
                 continue
             if payload.get("spec_fingerprint") != spec_fingerprint:
                 continue
+            # A collapsed virtual-scroll response only materializes the root
+            # rows in its requested window.  It is useful for an identical
+            # collapsed request, but it cannot be used as the base tree for an
+            # expansion: doing so makes the flattened row indexes relative to
+            # that one page and can omit children for parents near its end.
+            if payload.get("is_complete_hierarchy_result") is False:
+                continue
             cached_expanded_set = set(payload.get("expanded_set") or set())
             if cached_expanded_set == {("__ALL__",)}:
                 continue
@@ -1172,6 +1164,71 @@ class ScalablePivotController(PivotController):
             "page_size": int(page_size or 0),
         }
         return hashlib.sha256(self._stable_json(payload).encode()).hexdigest()[:24]
+
+    def _collapsed_root_result_cache_key(self, root_spec: PivotSpec) -> str:
+        """Key a complete, collapsed root aggregate independently of a window."""
+        return self._hierarchy_spec_fingerprint(root_spec)
+
+    def _hierarchy_root_result_cache_get(self, cache_key: str) -> Optional[pa.Table]:
+        cached_entry = self._hierarchy_root_result_cache.get(cache_key)
+        if not cached_entry:
+            self.cache_coordinator.record_lookup(
+                CacheNamespaces.CONTROLLER_HIERARCHY_ROOT_RESULT, hit=False
+            )
+            return None
+        result, expires_at = cached_entry
+        if expires_at < time.time() or not isinstance(result, pa.Table):
+            self._hierarchy_root_result_cache.pop(cache_key, None)
+            self.cache_coordinator.record_lookup(
+                CacheNamespaces.CONTROLLER_HIERARCHY_ROOT_RESULT,
+                hit=False,
+                expired=True,
+            )
+            return None
+        self._hierarchy_root_result_cache.move_to_end(cache_key)
+        self.cache_coordinator.record_lookup(
+            CacheNamespaces.CONTROLLER_HIERARCHY_ROOT_RESULT, hit=True
+        )
+        return result
+
+    def _hierarchy_root_result_cache_set(self, cache_key: str, result: pa.Table) -> bool:
+        if not isinstance(result, pa.Table):
+            return False
+        byte_count = max(int(getattr(result, "nbytes", 0) or 0), 0)
+        if (
+            self._collapsed_root_materialization_max_bytes <= 0
+            or byte_count > self._collapsed_root_materialization_max_bytes
+        ):
+            return False
+        self._hierarchy_root_result_cache[cache_key] = (
+            result,
+            time.time() + self._hierarchy_root_result_cache_ttl,
+        )
+        self._hierarchy_root_result_cache.move_to_end(cache_key)
+        evicted = 0
+        evicted_bytes = 0
+        while len(self._hierarchy_root_result_cache) > self._hierarchy_root_result_cache_size:
+            evicted_result, _expires_at = self._hierarchy_root_result_cache.popitem(last=False)[1]
+            evicted += 1
+            evicted_bytes += max(int(getattr(evicted_result, "nbytes", 0) or 0), 0)
+        total_bytes = sum(
+            max(int(getattr(cached_result, "nbytes", 0) or 0), 0)
+            for cached_result, _expires_at in self._hierarchy_root_result_cache.values()
+        )
+        self.cache_coordinator.record_store(
+            CacheNamespaces.CONTROLLER_HIERARCHY_ROOT_RESULT,
+            entries=len(self._hierarchy_root_result_cache),
+            bytes_used=total_bytes,
+        )
+        if evicted:
+            self.cache_coordinator.record_eviction(
+                CacheNamespaces.CONTROLLER_HIERARCHY_ROOT_RESULT,
+                count=evicted,
+                bytes_removed=evicted_bytes,
+                entries=len(self._hierarchy_root_result_cache),
+                bytes_used=total_bytes,
+            )
+        return True
 
     def _hierarchy_grand_total_cache_get(self, cache_key: str) -> Optional[Dict[str, Any]]:
         cached_entry = self._hierarchy_grand_total_cache.get(cache_key)
@@ -1422,61 +1479,98 @@ class ScalablePivotController(PivotController):
         root_spec.totals = False
         root_spec.sort = self._build_group_rows_sort(root_spec.rows, spec.sort, spec.column_sort_options)
 
-        page_key_fetch_started_at = time.perf_counter()
-        paged_root_values = await self._fetch_paged_collapsed_root_values(
-            spec,
-            root_spec.sort,
-            safe_start,
-            page_size,
-        )
-        page_key_fetch_finished_at = time.perf_counter()
-        if paged_root_values is None:
-            root_spec.limit = page_size
-            root_spec.offset = safe_start
-            root_query_profile: Dict[str, Any] = {}
-            root_query_started_at = time.perf_counter()
-            root_table = await self.run_pivot_async(
-                root_spec,
-                return_format="arrow",
-                force_refresh=False,
-                profile_sink=root_query_profile if profiling else None,
-            )
-            root_query_finished_at = time.perf_counter()
-            root_rows = root_table.to_pylist() if isinstance(root_table, pa.Table) else []
-        elif not paged_root_values:
-            root_query_profile = {}
-            root_query_started_at = None
-            root_query_finished_at = None
-            root_rows = []
-        else:
-            root_spec.limit = None
-            root_spec.offset = 0
-            root_spec.filters = self._build_collapsed_root_page_filters(
-                root_spec.filters,
-                root_spec.rows[0],
-                paged_root_values,
-            )
-            root_query_profile = {}
-            root_query_started_at = time.perf_counter()
-            root_table = await self.run_pivot_async(
-                root_spec,
-                return_format="arrow",
-                force_refresh=False,
-                profile_sink=root_query_profile if profiling else None,
-            )
-            root_query_finished_at = time.perf_counter()
-            root_rows = root_table.to_pylist() if isinstance(root_table, pa.Table) else []
         total_count_started_at = time.perf_counter()
-        can_infer_total_from_short_first_page = (
-            safe_start == 0
-            and paged_root_values is not None
-            and len(paged_root_values) < page_size
-        )
-        if can_infer_total_from_short_first_page:
-            root_total_rows = len(paged_root_values)
-        else:
-            root_total_rows = await self._count_collapsed_root_rows(spec)
+        root_total_rows = await self._count_collapsed_root_rows(spec)
         total_count_finished_at = time.perf_counter()
+        materialized_root_table: Optional[pa.Table] = None
+        materialized_root_cache_state = "bypassed"
+        can_materialize_root_result = (
+            self._collapsed_root_materialization_max_rows > 0
+            and self._collapsed_root_materialization_max_bytes > 0
+            and 0 < root_total_rows <= self._collapsed_root_materialization_max_rows
+        )
+
+        if can_materialize_root_result:
+            page_key_fetch_started_at = None
+            page_key_fetch_finished_at = None
+            root_cache_key = self._collapsed_root_result_cache_key(root_spec)
+            materialized_root_table = self._hierarchy_root_result_cache_get(root_cache_key)
+            root_query_profile: Dict[str, Any] = {}
+            if materialized_root_table is None:
+                materialized_root_spec = root_spec.copy()
+                materialized_root_spec.limit = 0
+                materialized_root_spec.offset = 0
+                root_query_started_at = time.perf_counter()
+                root_table = await self.run_pivot_async(
+                    materialized_root_spec,
+                    return_format="arrow",
+                    force_refresh=False,
+                    profile_sink=root_query_profile if profiling else None,
+                )
+                root_query_finished_at = time.perf_counter()
+                if isinstance(root_table, pa.Table):
+                    materialized_root_table = root_table
+                    materialized_root_cache_state = (
+                        "stored"
+                        if self._hierarchy_root_result_cache_set(root_cache_key, root_table)
+                        else "not_stored"
+                    )
+            else:
+                root_query_profile = {"cached": True}
+                root_query_started_at = None
+                root_query_finished_at = None
+                materialized_root_cache_state = "hit"
+
+            root_rows = (
+                materialized_root_table.slice(safe_start, page_size).to_pylist()
+                if isinstance(materialized_root_table, pa.Table)
+                else []
+            )
+        else:
+            page_key_fetch_started_at = time.perf_counter()
+            paged_root_values = await self._fetch_paged_collapsed_root_values(
+                spec,
+                root_spec.sort,
+                safe_start,
+                page_size,
+            )
+            page_key_fetch_finished_at = time.perf_counter()
+            if paged_root_values is None:
+                root_spec.limit = page_size
+                root_spec.offset = safe_start
+                root_query_profile = {}
+                root_query_started_at = time.perf_counter()
+                root_table = await self.run_pivot_async(
+                    root_spec,
+                    return_format="arrow",
+                    force_refresh=False,
+                    profile_sink=root_query_profile if profiling else None,
+                )
+                root_query_finished_at = time.perf_counter()
+                root_rows = root_table.to_pylist() if isinstance(root_table, pa.Table) else []
+            elif not paged_root_values:
+                root_query_profile = {}
+                root_query_started_at = None
+                root_query_finished_at = None
+                root_rows = []
+            else:
+                root_spec.limit = None
+                root_spec.offset = 0
+                root_spec.filters = self._build_collapsed_root_page_filters(
+                    root_spec.filters,
+                    root_spec.rows[0],
+                    paged_root_values,
+                )
+                root_query_profile = {}
+                root_query_started_at = time.perf_counter()
+                root_table = await self.run_pivot_async(
+                    root_spec,
+                    return_format="arrow",
+                    force_refresh=False,
+                    profile_sink=root_query_profile if profiling else None,
+                )
+                root_query_finished_at = time.perf_counter()
+                root_rows = root_table.to_pylist() if isinstance(root_table, pa.Table) else []
         grand_total_row = None
         grand_total_formula_source_rows = []
         grand_total_index = root_total_rows if spec.totals else None
@@ -1528,19 +1622,22 @@ class ScalablePivotController(PivotController):
                 grand_total_row["_depth"] = 0
                 formula_source_root_rows = root_rows
                 if len(root_rows) < max(root_total_rows, 0):
-                    formula_source_spec = spec.copy()
-                    formula_source_spec.rows = list(spec.rows[:1])
-                    self._mark_measure_axis_exact_layout(formula_source_spec)
-                    formula_source_spec.limit = 0
-                    formula_source_spec.offset = 0
-                    formula_source_spec.totals = False
-                    formula_source_table = await self.run_pivot_async(
-                        formula_source_spec,
-                        return_format="arrow",
-                        force_refresh=True,
-                    )
-                    if isinstance(formula_source_table, pa.Table):
-                        formula_source_root_rows = formula_source_table.to_pylist()
+                    if isinstance(materialized_root_table, pa.Table):
+                        formula_source_root_rows = materialized_root_table.to_pylist()
+                    else:
+                        formula_source_spec = spec.copy()
+                        formula_source_spec.rows = list(spec.rows[:1])
+                        self._mark_measure_axis_exact_layout(formula_source_spec)
+                        formula_source_spec.limit = 0
+                        formula_source_spec.offset = 0
+                        formula_source_spec.totals = False
+                        formula_source_table = await self.run_pivot_async(
+                            formula_source_spec,
+                            return_format="arrow",
+                            force_refresh=True,
+                        )
+                        if isinstance(formula_source_table, pa.Table):
+                            formula_source_root_rows = formula_source_table.to_pylist()
                 grand_total_formula_source_rows = [
                     dict(row)
                     for row in formula_source_root_rows
@@ -1568,6 +1665,7 @@ class ScalablePivotController(PivotController):
             {
                 "spec_fingerprint": spec_fingerprint,
                 "expanded_set": set(),
+                "is_complete_hierarchy_result": False,
                 "hierarchy_result": {"": self._clone_hierarchy_rows(root_rows)},
                 "visible_rows": self._clone_hierarchy_rows(root_rows),
                 "grand_total_row": dict(grand_total_row) if isinstance(grand_total_row, dict) else grand_total_row,
@@ -1588,6 +1686,7 @@ class ScalablePivotController(PivotController):
                         "pageKeyFetchMs": self._profile_ms(page_key_fetch_started_at, page_key_fetch_finished_at),
                         "rootQueryMs": self._profile_ms(root_query_started_at, root_query_finished_at),
                         "rootCountMs": self._profile_ms(total_count_started_at, total_count_finished_at),
+                        "rootMaterialization": materialized_root_cache_state,
                         "grandTotalMs": self._profile_ms(grand_total_started_at, grand_total_finished_at),
                         "colorScaleMs": self._profile_ms(color_scale_started_at, color_scale_finished_at),
                         "totalMs": self._profile_ms(view_started_at, time.perf_counter()),
@@ -2113,6 +2212,7 @@ class ScalablePivotController(PivotController):
             self._hierarchy_view_cache_set(cache_key, {
                 "spec_fingerprint": spec_fingerprint,
                 "expanded_set": set(normalized_expanded),
+                "is_complete_hierarchy_result": True,
                 "hierarchy_result": hierarchy_result,
                 "visible_rows": visible_rows_to_cache,
                 "grand_total_row": grand_total_row,
@@ -2167,141 +2267,13 @@ class ScalablePivotController(PivotController):
         force_refresh: bool = False,
         profile_sink: Optional[Dict[str, Any]] = None,
     ) -> Union[Dict[str, Any], pa.Table]:
-        """Execute a pivot query asynchronously with all scalability features"""
-        start_time = time.time()
-        started_at = time.perf_counter()
-        
-        self._request_count += 1
-        spec = self._normalize_spec(spec)
-        
-        # Define the work as a coroutine
-        async def _do_work():
-            if self._can_use_sparse_materialized_pivot(spec):
-                sparse_execution_profile: Dict[str, Any] = {}
-                execute_started_at = time.perf_counter()
-                result_table = await self._execute_sparse_materialized_pivot_async(
-                    spec,
-                    force_refresh,
-                    profile_sink=sparse_execution_profile,
-                )
-                execute_finished_at = time.perf_counter()
-
-                duration = time.time() - start_time
-                if self.stats_tracker.record_query(spec, duration):
-                    if not self._uses_duckdb_ibis():
-                        self.task_manager.create_task(
-                            self._trigger_materialization(spec),
-                            name=f"smart_materialization_{spec.table}"
-                        )
-
-                if return_format == "dict":
-                    conversion_started_at = time.perf_counter()
-                    converted = self._convert_table_to_dict(result_table, spec)
-                    conversion_finished_at = time.perf_counter()
-                    if isinstance(profile_sink, dict):
-                        profile_sink.clear()
-                        profile_sink.update({
-                            "planner": {
-                                "planningMs": 0.0,
-                                "executeMs": self._profile_ms(execute_started_at, execute_finished_at),
-                                "convertMs": self._profile_ms(conversion_started_at, conversion_finished_at),
-                                "totalMs": self._profile_ms(started_at, time.perf_counter()),
-                                "needsColumnDiscovery": False,
-                                "queryCount": 1,
-                                "path": "sparse_materialized",
-                            },
-                            "plannerExecution": sparse_execution_profile,
-                        })
-                    return converted
-
-                if isinstance(profile_sink, dict):
-                    profile_sink.clear()
-                    profile_sink.update({
-                        "planner": {
-                            "planningMs": 0.0,
-                            "executeMs": self._profile_ms(execute_started_at, execute_finished_at),
-                            "convertMs": 0.0,
-                            "totalMs": self._profile_ms(started_at, time.perf_counter()),
-                            "needsColumnDiscovery": False,
-                            "queryCount": 1,
-                            "path": "sparse_materialized",
-                        },
-                        "plannerExecution": sparse_execution_profile,
-                    })
-                return result_table
-
-            # Planning can be CPU-bound for complex queries, so we offload it
-            loop = asyncio.get_running_loop()
-            
-            # Removed lock wrapper
-            def plan_with_lock():
-                with self.planning_lock:
-                    return self.planner.plan(spec)
-
-            planning_started_at = time.perf_counter()
-            plan_result = await loop.run_in_executor(None, plan_with_lock)
-            planning_finished_at = time.perf_counter()
-            
-            metadata = plan_result.get("metadata", {})
-            
-            execute_started_at = time.perf_counter()
-            if metadata.get("needs_column_discovery"):
-                plan_execution_profile: Dict[str, Any] = {}
-                result_table = await self._execute_topn_pivot_async(spec, plan_result, force_refresh, profile_sink=plan_execution_profile)
-            else:
-                plan_execution_profile = {}
-                result_table = await self._execute_standard_pivot_async(spec, plan_result, force_refresh, profile_sink=plan_execution_profile)
-            execute_finished_at = time.perf_counter()
-
-            # Smart Materialization Check
-            duration = time.time() - start_time
-            if self.stats_tracker.record_query(spec, duration):
-                # DuckDB/Ibis on a shared connection is sensitive to concurrent background
-                # materialization and can surface "closed pending query result" errors.
-                # Keep smart materialization async only for backends that safely support it.
-                if not self._uses_duckdb_ibis():
-                    self.task_manager.create_task(
-                        self._trigger_materialization(spec),
-                        name=f"smart_materialization_{spec.table}"
-                    )
-
-            # Final conversion
-            if return_format == "dict":
-                # cpu bound conversion
-                conversion_started_at = time.perf_counter()
-                converted = self._convert_table_to_dict(result_table, spec)
-                conversion_finished_at = time.perf_counter()
-                if isinstance(profile_sink, dict):
-                    profile_sink.clear()
-                    profile_sink.update({
-                        "planner": {
-                            "planningMs": self._profile_ms(planning_started_at, planning_finished_at),
-                            "executeMs": self._profile_ms(execute_started_at, execute_finished_at),
-                            "convertMs": self._profile_ms(conversion_started_at, conversion_finished_at),
-                            "totalMs": self._profile_ms(started_at, time.perf_counter()),
-                            "needsColumnDiscovery": bool(metadata.get("needs_column_discovery")),
-                            "queryCount": len(plan_result.get("queries", []) or []),
-                        },
-                        "plannerExecution": plan_execution_profile,
-                    })
-                return converted
-
-            if isinstance(profile_sink, dict):
-                profile_sink.clear()
-                profile_sink.update({
-                    "planner": {
-                        "planningMs": self._profile_ms(planning_started_at, planning_finished_at),
-                        "executeMs": self._profile_ms(execute_started_at, execute_finished_at),
-                        "convertMs": 0.0,
-                        "totalMs": self._profile_ms(started_at, time.perf_counter()),
-                        "needsColumnDiscovery": bool(metadata.get("needs_column_discovery")),
-                        "queryCount": len(plan_result.get("queries", []) or []),
-                    },
-                    "plannerExecution": plan_execution_profile,
-                })
-            return result_table
-
-        return await _do_work()
+        """Delegate pivot execution to the dedicated query-execution service."""
+        return await self.query_executor.execute(
+            spec,
+            return_format=return_format,
+            force_refresh=force_refresh,
+            profile_sink=profile_sink,
+        )
 
     async def _trigger_materialization(self, spec: PivotSpec):
         """Helper to run materialization in background"""
@@ -2341,6 +2313,7 @@ class ScalablePivotController(PivotController):
 
         loop = asyncio.get_running_loop()
         tasks = []
+        cache_spec = self.diff_engine._normalize_spec_for_hash(spec)
 
         # Lock wrapper removed
 
@@ -2368,6 +2341,14 @@ class ScalablePivotController(PivotController):
                     print(f"Query execution error [{idx}] {debug_context}: {r}")
                     valid_results.append(pa.table({}))
                 else:
+                    query_expr = queries_to_run[idx]
+                    # Keep standard async execution on the same cache contract
+                    # as diff planning. A later identical request can then
+                    # resolve its Arrow result without another Ibis execution.
+                    self.cache.set(
+                        self.diff_engine._cache_key_for_query(query_expr, cache_spec),
+                        r,
+                    )
                     valid_results.append(r)
             results = valid_results
         else:
@@ -2385,7 +2366,12 @@ class ScalablePivotController(PivotController):
             totals_finished_at = time.perf_counter()
 
         finalize_started_at = time.perf_counter()
-        final_table = self.diff_engine.merge_and_finalize([main_result] if main_result is not None else [], plan_result, spec, strategy)
+        final_table = self.diff_engine.merge_and_finalize(
+            [main_result] if results and main_result is not None else [],
+            plan_result,
+            spec,
+            strategy,
+        )
         finalize_finished_at = time.perf_counter()
         if isinstance(profile_sink, dict):
             profile_sink.clear()
@@ -2548,9 +2534,17 @@ class ScalablePivotController(PivotController):
 
         return result_table
 
-    async def run_materialized_hierarchy(self, spec: PivotSpec):
+    async def run_materialized_hierarchy(
+        self,
+        spec: PivotSpec,
+        *,
+        job_owner: Optional[str] = None,
+    ):
         """Run hierarchical pivot using materialized rollups (Async Job)"""
-        job_id = await self.materialized_hierarchy_manager.create_materialized_hierarchy_async(spec)
+        job_id = await self.materialized_hierarchy_manager.create_materialized_hierarchy_async(
+            spec,
+            owner=job_owner,
+        )
         return {"status": "pending", "job_id": job_id, "message": "Materialization job started"}
 
     def get_materialization_status(self, job_id: str) -> Dict[str, Any]:
@@ -2611,107 +2605,9 @@ class ScalablePivotController(PivotController):
         return val
 
     async def run_pivot_export(self, spec: Any, format: str = "csv") -> Generator[bytes, None, None]:
-        """
-        Execute a pivot query and yield result in chunks (CSV or Parquet) for memory efficiency.
-        """
-        spec = self._normalize_spec(spec)
-        plan_result = await asyncio.get_running_loop().run_in_executor(None, self.planner.plan, spec)
-        
-        queries = plan_result.get("queries", [])
-        if not queries:
-            yield b""
-            return
-
-        main_query = queries[-1] # Main aggregation
-        
-        # Check if backend supports streaming
-        if hasattr(self.backend, 'execute_streaming'):
-            iterator = self.backend.execute_streaming(main_query, batch_size=5000)
-            
-            if format.lower() == "csv":
-                import pyarrow.csv as csv
-                import io
-                
-                header_written = False
-                
-                for batch_rows in iterator:
-                    if not batch_rows:
-                         continue
-                         
-                    batch_table = pa.Table.from_pylist(batch_rows)
-                    sink = io.BytesIO()
-                    
-                    write_options = csv.WriteOptions(include_header=not header_written)
-                    csv.write_csv(batch_table, sink, write_options=write_options)
-                    header_written = True
-                    
-                    yield sink.getvalue()
-                    await asyncio.sleep(0)
-                    
-            elif format.lower() == "parquet":
-                import pyarrow.parquet as pq
-                import tempfile
-                import os
-                
-                # Use a temporary file for scalable Parquet writing
-                # Parquet requires random access to write the footer, so streaming to stdout is hard.
-                # We write to a temp file, then stream the file content.
-                
-                with tempfile.NamedTemporaryFile(delete=False, suffix=".parquet") as tmp_file:
-                    tmp_path = tmp_file.name
-                
-                writer = None
-                try:
-                    for batch_rows in iterator:
-                        if not batch_rows: continue
-                        
-                        batch_table = pa.Table.from_pylist(batch_rows)
-                        
-                        if writer is None:
-                            writer = pq.ParquetWriter(tmp_path, batch_table.schema)
-                        
-                        writer.write_table(batch_table)
-                        # Yield nothing while writing, or yield empty bytes to keep connection alive?
-                        # Yielding empty bytes might be confusing if client expects data.
-                        # We just await sleep to be nice.
-                        await asyncio.sleep(0)
-                    
-                    if writer:
-                        writer.close()
-                    
-                    # Stream the file back
-                    with open(tmp_path, "rb") as f:
-                        while chunk := f.read(64 * 1024): # 64KB chunks
-                            yield chunk
-                            await asyncio.sleep(0)
-                            
-                except Exception as e:
-                    print(f"Error exporting parquet: {e}")
-                    raise e
-                finally:
-                    if writer:
-                        writer.close() # Ensure closed
-                    if os.path.exists(tmp_path):
-                        try:
-                            os.unlink(tmp_path)
-                        except:
-                            pass
-                    
-        else:
-            # Fallback to full load
-            table = await self.run_pivot_async(spec, return_format="arrow")
-            if format.lower() == "csv":
-                import pyarrow.csv as csv
-                import io
-                sink = io.BytesIO()
-                csv.write_csv(table, sink)
-                yield sink.getvalue()
-            else:
-                 import pyarrow.parquet as pq
-                 import io
-                 sink = io.BytesIO()
-                 pq.write_table(table, sink)
-                 yield sink.getvalue()
+        """Stream a pivot export through the dedicated export executor."""
+        async for chunk in self.export_executor.stream(spec, export_format=format):
+            yield chunk
 
     async def get_drill_through_data(
         self,
@@ -2758,7 +2654,7 @@ class ScalablePivotController(PivotController):
                 col = table_expr[col_name]
                 try:
                     conditions.append(col.cast('string').lower().contains(text_lower))
-                except Exception:
+                except Exception:  # nosec B110
                     pass  # skip columns that cannot be cast to string
             if conditions:
                 combined = conditions[0]
@@ -2818,6 +2714,18 @@ class ScalablePivotController(PivotController):
         for col, val in key_columns.items():
             if val is None:
                 where_parts.append(f"{col} IS NULL")
+            elif isinstance(val, (list, tuple, set, frozenset)):
+                values = list(val)
+                if not values:
+                    where_parts.append("1 = 0")
+                elif len(values) == 1:
+                    where_parts.append(f"{col} = ?")
+                    params.append(values[0])
+                else:
+                    where_parts.append(
+                        f"{col} IN ({', '.join(['?'] * len(values))})"
+                    )
+                    params.extend(values)
             else:
                 where_parts.append(f"{col} = ?")
                 params.append(val)
@@ -2829,6 +2737,8 @@ class ScalablePivotController(PivotController):
         for column, value in key_columns.items():
             if value is None:
                 filtered = filtered.filter(filtered[column].isnull())
+            elif isinstance(value, (list, tuple, set, frozenset)):
+                filtered = filtered.filter(filtered[column].isin(list(value)))
             else:
                 filtered = filtered.filter(filtered[column] == value)
         return int(filtered.count().execute())
@@ -2844,6 +2754,8 @@ class ScalablePivotController(PivotController):
         for column, value in key_columns.items():
             if value is None:
                 filtered = filtered.filter(filtered[column].isnull())
+            elif isinstance(value, (list, tuple, set, frozenset)):
+                filtered = filtered.filter(filtered[column].isin(list(value)))
             else:
                 filtered = filtered.filter(filtered[column] == value)
         result = filtered.execute()
@@ -2875,7 +2787,7 @@ class ScalablePivotController(PivotController):
         select_list = ", ".join(["rowid AS __rowid__", *selected_columns]) if selected_columns else "rowid AS __rowid__"
         where_sql, where_params = self._build_where_clause(key_columns)
         rows = self._execute_parameterized_fetchall(
-            f"SELECT {select_list} FROM {table_name} WHERE {where_sql}",
+            f"SELECT {select_list} FROM {table_name} WHERE {where_sql}",  # nosec B608
             where_params,
         )
         records: List[Dict[str, Any]] = []
@@ -3245,7 +3157,7 @@ class ScalablePivotController(PivotController):
 
         row = self._execute_parameterized_fetchone(
             (
-                f"SELECT COUNT({target_column}) AS matched_row_count, "
+                f"SELECT COUNT({target_column}) AS matched_row_count, "  # nosec B608
                 f"{current_value_sql} AS current_value "
                 f"FROM {table_name} "
                 f"WHERE {predicate_sql}"
@@ -3309,14 +3221,14 @@ class ScalablePivotController(PivotController):
 
         if remainder_count == 0:
             self._execute_parameterized_mutation(
-                f"UPDATE {table_name} SET {target_column} = {target_column} + ? WHERE {numeric_where}",
+                f"UPDATE {table_name} SET {target_column} = {target_column} + ? WHERE {numeric_where}",  # nosec B608
                 [base_delta, *where_params],
             )
             return matched_row_count if base_delta != 0 else 0
 
         self._execute_parameterized_mutation(
             (
-                f"WITH target AS ("
+                f"WITH target AS ("  # nosec B608
                 f"SELECT rowid, row_number() OVER (ORDER BY rowid) AS rn "
                 f"FROM {table_name} "
                 f"WHERE {numeric_where}"
@@ -3347,7 +3259,7 @@ class ScalablePivotController(PivotController):
             predicate for predicate in [where_sql, f"{target_column} IS NOT NULL"] if predicate
         ) or f"{target_column} IS NOT NULL"
         rows = self._execute_parameterized_fetchall(
-            f"SELECT rowid, {target_column} AS val FROM {table_name} WHERE {numeric_where}",
+            f"SELECT rowid, {target_column} AS val FROM {table_name} WHERE {numeric_where}",  # nosec B608
             where_params,
         )
         if not rows:
@@ -3377,7 +3289,7 @@ class ScalablePivotController(PivotController):
 
         self._execute_parameterized_mutation(
             (
-                f"WITH scaled(target_rowid, new_value) AS (VALUES {value_rows_sql}) "
+                f"WITH scaled(target_rowid, new_value) AS (VALUES {value_rows_sql}) "  # nosec B608
                 f"UPDATE {table_name} "
                 f"SET {target_column} = scaled.new_value "
                 f"FROM scaled "
@@ -3474,7 +3386,7 @@ class ScalablePivotController(PivotController):
                     )
                 else:
                     self._execute_parameterized_mutation(
-                        f"UPDATE {table_name} SET {target_column} = {target_column} * ? WHERE {numeric_where}",
+                        f"UPDATE {table_name} SET {target_column} = {target_column} * ? WHERE {numeric_where}",  # nosec B608
                         [scale_factor, *where_params],
                     )
                     updated_row_count = matched_row_count
@@ -3502,7 +3414,7 @@ class ScalablePivotController(PivotController):
                 else:
                     delta_per_row = total_delta / matched_row_count
                     self._execute_parameterized_mutation(
-                        f"UPDATE {table_name} SET {target_column} = {target_column} + ? WHERE {numeric_where}",
+                        f"UPDATE {table_name} SET {target_column} = {target_column} + ? WHERE {numeric_where}",  # nosec B608
                         [delta_per_row, *where_params],
                     )
                     updated_row_count = matched_row_count
@@ -3524,7 +3436,7 @@ class ScalablePivotController(PivotController):
                     )
                 else:
                     self._execute_parameterized_mutation(
-                        f"UPDATE {table_name} SET {target_column} = {target_column} * ? WHERE {numeric_where}",
+                        f"UPDATE {table_name} SET {target_column} = {target_column} * ? WHERE {numeric_where}",  # nosec B608
                         [scale_factor, *where_params],
                     )
                     updated_row_count = matched_row_count
@@ -3552,7 +3464,7 @@ class ScalablePivotController(PivotController):
                 else:
                     delta_per_row = next_value - current_value
                     self._execute_parameterized_mutation(
-                        f"UPDATE {table_name} SET {target_column} = {target_column} + ? WHERE {numeric_where}",
+                        f"UPDATE {table_name} SET {target_column} = {target_column} + ? WHERE {numeric_where}",  # nosec B608
                         [delta_per_row, *where_params],
                     )
                     updated_row_count = matched_row_count
@@ -3573,7 +3485,7 @@ class ScalablePivotController(PivotController):
                     )
                 else:
                     self._execute_parameterized_mutation(
-                        f"UPDATE {table_name} SET {target_column} = {target_column} * ? WHERE {numeric_where}",
+                        f"UPDATE {table_name} SET {target_column} = {target_column} * ? WHERE {numeric_where}",  # nosec B608
                         [scale_factor, *where_params],
                     )
                     updated_row_count = matched_row_count
@@ -3591,7 +3503,7 @@ class ScalablePivotController(PivotController):
                         }
                     delta_per_row = int(rounded_delta)
                 self._execute_parameterized_mutation(
-                    f"UPDATE {table_name} SET {target_column} = {target_column} + ? WHERE {numeric_where}",
+                    f"UPDATE {table_name} SET {target_column} = {target_column} + ? WHERE {numeric_where}",  # nosec B608
                     [delta_per_row, *where_params],
                 )
                 updated_row_count = matched_row_count
@@ -3796,7 +3708,7 @@ class ScalablePivotController(PivotController):
         if not insert_columns:
             return None
         placeholders = ", ".join(["?"] * len(insert_columns))
-        sql = f"INSERT INTO {table_name} ({', '.join(insert_columns)}) VALUES ({placeholders})"
+        sql = f"INSERT INTO {table_name} ({', '.join(insert_columns)}) VALUES ({placeholders})"  # nosec B608
         return sql, [sanitized_row[column] for column in insert_columns]
 
     async def apply_row_transaction(self, table_name: str, transaction: Dict[str, Any]) -> Dict[str, Any]:
@@ -3862,7 +3774,7 @@ class ScalablePivotController(PivotController):
                         continue
                     where_sql, where_params = self._build_where_clause(key_columns)
                     self._execute_parameterized_mutation(
-                        f"DELETE FROM {table_name} WHERE {where_sql}",
+                        f"DELETE FROM {table_name} WHERE {where_sql}",  # nosec B608
                         where_params,
                     )
                     applied["remove"] += len(matched_rows)
@@ -4022,7 +3934,7 @@ class ScalablePivotController(PivotController):
                             if matched_count <= 0:
                                 continue
                             self._execute_parameterized_mutation(
-                                f"UPDATE {table_name} SET {', '.join(set_parts)} WHERE {where_sql}",
+                                f"UPDATE {table_name} SET {', '.join(set_parts)} WHERE {where_sql}",  # nosec B608
                                 [*updates.values(), *where_params],
                             )
 
@@ -4073,7 +3985,7 @@ class ScalablePivotController(PivotController):
                     set_parts = [f"{column} = ?" for column in updates.keys()]
                     where_sql, where_params = self._build_where_clause(key_columns)
                     self._execute_parameterized_mutation(
-                        f"UPDATE {table_name} SET {', '.join(set_parts)} WHERE {where_sql}",
+                        f"UPDATE {table_name} SET {', '.join(set_parts)} WHERE {where_sql}",  # nosec B608
                         [*updates.values(), *where_params],
                     )
                     applied["update"] += len(before_rows)
@@ -4112,7 +4024,7 @@ class ScalablePivotController(PivotController):
                             set_parts = [f"{column} = ?" for column in updates.keys()]
                             where_sql, where_params = self._build_where_clause(key_columns)
                             self._execute_parameterized_mutation(
-                                f"UPDATE {table_name} SET {', '.join(set_parts)} WHERE {where_sql}",
+                                f"UPDATE {table_name} SET {', '.join(set_parts)} WHERE {where_sql}",  # nosec B608
                                 [*updates.values(), *where_params],
                             )
                             applied["upsertUpdated"] += len(before_rows)
@@ -4234,6 +4146,7 @@ class ScalablePivotController(PivotController):
         namespaces = [
             CacheNamespaces.CONTROLLER_QUERY,
             CacheNamespaces.CONTROLLER_HIERARCHY_VIEW,
+            CacheNamespaces.CONTROLLER_HIERARCHY_ROOT_RESULT,
             CacheNamespaces.CONTROLLER_HIERARCHY_GRAND_TOTAL,
         ]
         if structural:
@@ -4255,6 +4168,9 @@ class ScalablePivotController(PivotController):
             )
             self._invalidate_controller_query_cache(event)
             self._hierarchy_view_cache.clear()
+            root_result_cache = getattr(self, "_hierarchy_root_result_cache", None)
+            if root_result_cache is not None and hasattr(root_result_cache, "clear"):
+                root_result_cache.clear()
             self._hierarchy_grand_total_cache.clear()
             if structural:
                 self._hierarchy_root_count_cache.clear()
@@ -4312,7 +4228,7 @@ class ScalablePivotController(PivotController):
             raise ValueError("Invalid identifier in update request")
 
         # Value params — use ? binding (NOT string interpolation)
-        sql = f"UPDATE {table_name} SET {column} = ? WHERE {id_column} = ?"
+        sql = f"UPDATE {table_name} SET {column} = ? WHERE {id_column} = ?"  # nosec B608
 
         loop = asyncio.get_running_loop()
 

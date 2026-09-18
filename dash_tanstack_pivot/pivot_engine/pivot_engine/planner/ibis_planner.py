@@ -420,7 +420,7 @@ class IbisPlanner:
                 try:
                     if method():
                         return True
-                except Exception:
+                except Exception:  # nosec B112
                     continue
         return False
 

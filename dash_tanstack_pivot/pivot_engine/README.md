@@ -34,6 +34,8 @@ BACKEND_TYPE=duckdb
 
 # Security
 PIVOT_API_KEY=your-secret-key-here
+JWT_SECRET_KEY=your-jwt-signing-secret
+JWT_ISSUER=https://identity.example.com/
 
 # Cache
 CACHE_TYPE=memory  # or redis
@@ -91,6 +93,65 @@ RLS is enforced automatically based on the user's attributes. When using the API
 
 **Example Logic:**
 If a user is assigned `{"region": "North"}`, the engine automatically appends `WHERE region = 'North'` to **all** queries, including exports and drill-downs.
+
+---
+
+## Dataset authorization
+
+The table name in a browser request is not authority to read a dataset. The
+HTTP runtime and table-addressing REST routes are default-deny until the host
+installs a `RuntimeDatasetAuthorizer`; the policy is evaluated with the
+server-authenticated principal before the controller is called.
+
+```python
+from pivot_engine.complete_rest_api import CompletePivotAPI
+from pivot_engine.runtime import RuntimeDatasetAuthorizer
+
+api = CompletePivotAPI(
+    controller,
+    dataset_authorizer=RuntimeDatasetAuthorizer({
+        "sales": {
+            "roles": {"viewer", "editor", "admin"},
+            "operations": {"read", "export", "schema", "subscribe"},
+            "rowSecurity": {"mode": "global"},
+        },
+    }),
+)
+```
+
+Configure `"*"` only when every authenticated role is deliberately allowed
+to reach every dataset. CDC setup and push require both an explicit `"cdc"`
+dataset operation and an admin principal. WebSocket connections authenticate
+before the handshake, subscriptions require `"subscribe"`, and update notices
+are tenant-scoped invalidations rather than raw CDC rows.
+
+Materialization job IDs are also principal-bound. The creating principal is
+stored with the job, and `GET /pivot/jobs/{job_id}` returns `404` unless the
+caller owns the job (or is an authorized admin) and still has read access to
+the job's dataset. This intentionally hides whether a foreign job ID exists.
+
+## Production security contract
+
+Set `ENV=production` only after configuring the following server-owned
+controls: HTTPS public origin, trusted hosts and proxy CIDRs, a CSP containing
+`frame-ancestors`, an authenticated `rediss://` rate-limit/cache service,
+positive request limits, and a rotating JWT key ring. Production JWTs require
+an allowed `kid`, `exp`, `iss`, and `aud`; use `PIVOT_JWT_KEYS_JSON` and
+`PIVOT_JWT_ACTIVE_KID`, not a shared Flight token. Arrow Flight must receive a
+per-principal resolver plus the same `RuntimeDatasetAuthorizer` used by HTTP.
+
+Use [the production runbook](../../docs/operations/production-security-runbook.md)
+and [reference Nginx configuration](../../deploy/nginx/serverside-pivot.conf)
+as the release checklist. The verifier records edge headers and HTTPS redirect
+behaviour:
+
+```bash
+python scripts/verify_production_deployment.py --base-url https://pivot.example.com
+```
+
+The verifier is intentionally not evidence of certificate issuance, a
+penetration test, backup recovery, or incident response; attach those
+operator-run records before release.
 
 ---
 

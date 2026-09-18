@@ -14,10 +14,8 @@ import {
     sanitizeFieldPanelSizeEntry,
 } from '../../utils/fieldPanelLayout';
 import {
-    applyCustomDimensionsToRows,
     buildCustomCategoryFieldId,
     DATE_GROUP_GRANULARITIES,
-    evaluateCustomCategoryCondition,
     formatCustomAwareFieldLabel,
     isCustomCategoryField,
     normalizeCustomCategoryId,
@@ -26,243 +24,50 @@ import {
 import { normalizeSparklineConfig } from '../../utils/sparklines';
 import { normalizeMeasureAxisValue as normalizeMeasureAxisPanelValue } from '../../utils/measureAxis';
 import { usePivotRenderCounter } from '../../hooks/usePivotRenderCounter';
-import { ReportEditor } from './ReportEditor';
+import {
+    COLUMN_FORMULA_REFERENCE_RE,
+    DEFAULT_VALUE_SPARKLINE_CONFIG,
+    escapeRegExp,
+    FORMULA_FUNCTION_NAMES,
+    FORMULA_REFERENCE_RE,
+    FORMULA_RESERVED_REFERENCES,
+    getFormulaReferenceKey,
+    isColumnFormulaScope,
+    normalizeFormulaReferenceKey,
+    normalizeFormulaScope,
+    SIMPLE_FORMULA_REFERENCE_RE,
+} from './formulaUtils';
+import {
+    canValidateCustomCategoryRows,
+    collectCustomCategoryClauseFields,
+    createCustomCategoryClause,
+    createCustomCategoryDraft,
+    createCustomCategoryRule,
+    createDateGroupDraft,
+    createNumberGroupDraft,
+    CUSTOM_CATEGORY_LIST_OPERATORS,
+    CUSTOM_CATEGORY_OPERATORS,
+    CUSTOM_CATEGORY_VALUELESS_OPERATORS,
+    getAllowedCustomCategoryDependencies,
+    getCustomCategoryDraftField,
+    getCustomCategoryRuleMatchSummary,
+    getCustomCategoryValidationRows,
+    getTypedFields,
+    normalizeCustomCategoryNameKey,
+    splitListInput,
+} from './customCategoryUtils';
 
-const FORMULA_REFERENCE_RE = /\b[A-Za-z_][A-Za-z0-9_]*\b/g;
-const SIMPLE_FORMULA_REFERENCE_RE = /^[A-Za-z_][A-Za-z0-9_]*$/;
-const COLUMN_FORMULA_REFERENCE_RE = /\[([^\]]+)\]/g;
-const FORMULA_FUNCTION_NAMES = new Set(['abs', 'round', 'ceil', 'floor', 'max', 'min', 'int', 'float']);
-const FORMULA_RESERVED_REFERENCES = new Set(['True', 'False', 'None', 'and', 'or', 'not', 'if', 'else', 'in', 'is']);
-const DEFAULT_VALUE_SPARKLINE_CONFIG = {
-    type: 'line',
-    metric: 'last',
-    showCurrentValue: true,
-    showDelta: true,
-    compact: false,
-    hideColumns: false,
-    placement: 'before',
-    source: 'pivot',
-    displayMode: 'trend',
-};
-function escapeRegExp(value) {
-    return String(value || '').replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-}
+// The report builder is only shown in report mode.  Deferring its specialised
+// editor keeps normal pivot sessions from parsing its sizeable form logic.
+const LazyReportEditor = React.lazy(() => import(/* webpackChunkName: "pivot-report-editor" */ './ReportEditor').then(module => ({
+    default: module.ReportEditor,
+})));
 
-function normalizeFormulaReferenceKey(value, fallback = 'formula') {
-    const normalized = String(value || '')
-        .trim()
-        .toLowerCase()
-        .replace(/\s+/g, '')
-        .replace(/[^a-z0-9_]/g, '');
-    const base = normalized || String(fallback || 'formula').toLowerCase().replace(/[^a-z0-9_]/g, '') || 'formula';
-    return /^[a-z_]/.test(base) ? base : `f_${base}`;
-}
-
-function getFormulaReferenceKey(config) {
-    if (!config || typeof config !== 'object') return '';
-    return String(
-        config.formulaRef
-        || normalizeFormulaReferenceKey(config.label || '', config.field || 'formula')
-        || config.field
-        || ''
-    ).trim();
-}
-
-function normalizeFormulaScope(value) {
-    const scope = String(value || '').trim().toLowerCase();
-    return ['columns', 'display', 'displayed', 'displayed_columns', 'rendered', 'rendered_columns'].includes(scope)
-        ? 'columns'
-        : 'measures';
-}
-
-function isColumnFormulaScope(value) {
-    return normalizeFormulaScope(value) === 'columns';
-}
-
-const CUSTOM_CATEGORY_OPERATORS = [
-    { value: 'eq', label: 'Equals' },
-    { value: 'ne', label: 'Does not equal' },
-    { value: 'contains', label: 'Contains' },
-    { value: 'starts_with', label: 'Starts with' },
-    { value: 'ends_with', label: 'Ends with' },
-    { value: 'gt', label: '>' },
-    { value: 'gte', label: '>=' },
-    { value: 'lt', label: '<' },
-    { value: 'lte', label: '<=' },
-    { value: 'in', label: 'In list' },
-    { value: 'not_in', label: 'Not in list' },
-    { value: 'is_null', label: 'Is empty' },
-    { value: 'is_not_null', label: 'Is not empty' },
-];
-
-const CUSTOM_CATEGORY_LIST_OPERATORS = new Set(['in', 'not_in']);
-const CUSTOM_CATEGORY_VALUELESS_OPERATORS = new Set(['is_null', 'is_not_null']);
-
-function createCustomCategoryClause(availableFields) {
-    return {
-        field: (availableFields && availableFields[0]) || '',
-        operator: 'eq',
-        value: '',
-        values: [],
-        caseSensitive: false,
-    };
-}
-
-function createCustomCategoryRule(availableFields, index = 0) {
-    return {
-        id: `rule-${Date.now().toString(36)}-${index}`,
-        label: index === 0 ? 'Group A' : `Group ${index + 1}`,
-        condition: {
-            op: 'AND',
-            clauses: [createCustomCategoryClause(availableFields)],
-        },
-    };
-}
-
-function createCustomCategoryDraft(availableFields, existing = null) {
-    if (existing) {
-        const normalized = normalizeCustomDimensionsValue([existing])[0] || existing;
-        return {
-            ...JSON.parse(JSON.stringify(normalized)),
-            __editingField: normalized.field,
-            __editingId: normalized.id,
-        };
-    }
-    const id = normalizeCustomCategoryId(`category_${Date.now().toString(36)}`);
-    return {
-        id,
-        field: buildCustomCategoryFieldId(id),
-        name: 'New Category',
-        fallbackLabel: 'Other',
-        order: 'creation',
-        rules: [createCustomCategoryRule(availableFields, 0)],
-        __isNew: true,
-    };
-}
-
-function inferFieldTypeFromRows(rows, field) {
-    if (!field) return 'string';
-    const sampleRows = Array.isArray(rows) ? rows.slice(0, 250) : [];
-    for (let index = 0; index < sampleRows.length; index += 1) {
-        const row = sampleRows[index];
-        if (!row || typeof row !== 'object') continue;
-        const value = row[field];
-        if (value === null || value === undefined || value === '') continue;
-        if (typeof value === 'number' && Number.isFinite(value)) return 'number';
-        if (value instanceof Date && !Number.isNaN(value.getTime())) return 'date';
-        if (typeof value === 'string') {
-            const trimmed = value.trim();
-            if (!trimmed) continue;
-            if (Number.isFinite(Number(trimmed))) return 'number';
-            const parsedDate = Date.parse(trimmed);
-            if (!Number.isNaN(parsedDate) && /[-/T:]/.test(trimmed)) return 'date';
-            return 'string';
-        }
-    }
-    return 'string';
-}
-
-function getTypedFields(rows, fields, targetType) {
-    const sourceFields = Array.isArray(fields) ? fields : [];
-    return sourceFields.filter((field) => inferFieldTypeFromRows(rows, field) === targetType);
-}
-
-function createDateGroupDraft(availableFields, data) {
-    const dateFields = getTypedFields(data, availableFields, 'date');
-    const sourceField = dateFields[0] || availableFields[0] || '';
-    const id = normalizeCustomCategoryId(`${sourceField || 'date'}_month`);
-    return {
-        id,
-        field: buildCustomCategoryFieldId(id),
-        kind: 'date_group',
-        name: sourceField ? `${formatDisplayLabel(sourceField)} Month` : 'Date Month',
-        sourceField,
-        granularity: 'month',
-        fiscalYearStartMonth: 1,
-        fallbackLabel: 'No date',
-        __isNew: true,
-    };
-}
-
-function createNumberGroupDraft(availableFields, data) {
-    const numberFields = getTypedFields(data, availableFields, 'number');
-    const sourceField = numberFields[0] || availableFields[0] || '';
-    const id = normalizeCustomCategoryId(`${sourceField || 'number'}_bins`);
-    return {
-        id,
-        field: buildCustomCategoryFieldId(id),
-        kind: 'number_group',
-        name: sourceField ? `${formatDisplayLabel(sourceField)} Bins` : 'Number Bins',
-        sourceField,
-        binSize: 10,
-        minValue: '',
-        maxValue: '',
-        precision: 0,
-        fallbackLabel: 'No value',
-        __isNew: true,
-    };
-}
-
-function splitListInput(value) {
-    return String(value || '')
-        .split(',')
-        .map((item) => item.trim())
-        .filter(Boolean);
-}
-
-function normalizeCustomCategoryNameKey(value) {
-    return String(value || '').trim().replace(/\s+/g, ' ').toLowerCase();
-}
-
-function getCustomCategoryDraftField(draft) {
-    return draft && (draft.__editingField || draft.field) ? (draft.__editingField || draft.field) : '';
-}
-
-function getAllowedCustomCategoryDependencies(normalizedDimensions, draft) {
-    const dimensions = Array.isArray(normalizedDimensions) ? normalizedDimensions : [];
-    const editingField = getCustomCategoryDraftField(draft);
-    if (!editingField) return dimensions;
-    const editingIndex = dimensions.findIndex((dimension) => dimension && dimension.field === editingField);
-    return editingIndex >= 0 ? dimensions.slice(0, editingIndex) : dimensions;
-}
-
-function collectCustomCategoryClauseFields(dimension) {
-    const fields = [];
-    (dimension && Array.isArray(dimension.rules) ? dimension.rules : []).forEach((rule) => {
-        const clauses = rule && rule.condition && Array.isArray(rule.condition.clauses)
-            ? rule.condition.clauses
-            : [];
-        clauses.forEach((clause) => {
-            if (clause && clause.field) fields.push(clause.field);
-        });
-    });
-    return Array.from(new Set(fields));
-}
-
-function getCustomCategoryValidationRows(data, dependencyDimensions) {
-    const rows = (Array.isArray(data) ? data : [])
-        .filter((row) => row && typeof row === 'object')
-        .filter((row) => !row._isTotal && row._path !== '__grand_total__' && row._path !== '__color_scale_stats__');
-    return applyCustomDimensionsToRows(rows, dependencyDimensions || []);
-}
-
-function canValidateCustomCategoryRows(rows, clauseFields) {
-    if (!Array.isArray(rows) || rows.length === 0 || !Array.isArray(clauseFields) || clauseFields.length === 0) {
-        return false;
-    }
-    return clauseFields.every((field) => rows.some((row) => (
-        row && Object.prototype.hasOwnProperty.call(row, field)
-    )));
-}
-
-function getCustomCategoryRuleMatchSummary(rows, dimension) {
-    return (dimension && Array.isArray(dimension.rules) ? dimension.rules : []).map((rule) => ({
-        label: rule && rule.label ? rule.label : 'Rule',
-        count: rows.reduce((matches, row) => (
-            evaluateCustomCategoryCondition(row, rule.condition) ? matches + 1 : matches
-        ), 0),
-    }));
-}
+const ReportEditor = (props) => (
+    <React.Suspense fallback={<div role="status" style={{ padding: '16px' }}>Loading report builder…</div>}>
+        <LazyReportEditor {...props} />
+    </React.Suspense>
+);
 
 function CustomCategoriesEditor({
     availableFields,
@@ -2146,7 +1951,7 @@ function FormulaListItem({ item, idx, selected, onSelect, onRemove, setValConfig
     );
 }
 
-function FormulaEditor({ item, idx, valConfigs, setValConfigs, theme, onRemove }) {
+function FormulaEditor({ item, idx, valConfigs, setValConfigs, theme, onRemove, serverError = null }) {
     const containerRef = React.useRef(null);
     const inputRef = React.useRef(null);
     const draftRef = React.useRef({ label: item.label || '', formula: item.formula || '' });

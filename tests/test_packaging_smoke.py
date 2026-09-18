@@ -106,6 +106,39 @@ def test_pyproject_toml_redis_extra():
     assert optional["redis"], "optional-dependencies.redis list is empty."
 
 
+def test_pyproject_declares_the_documented_pivot_engine_dependencies():
+    """A clean install must be able to run the README quick start."""
+    data = tomllib.loads((PKG_DIR / "pyproject.toml").read_text(encoding="utf-8"))
+    requirements = "\n".join(data["project"].get("dependencies", []))
+
+    for dependency in ("duckdb", "pyarrow", "ibis-framework", "pandas"):
+        assert dependency in requirements, (
+            f"{dependency} is required by pivot_engine but is missing from pyproject dependencies."
+        )
+
+
+def test_package_metadata_has_a_readme_and_external_build_staging():
+    """Repeated local builds must not fold stale staging output into the wheel."""
+    data = tomllib.loads((PKG_DIR / "pyproject.toml").read_text(encoding="utf-8"))
+    readme = data["project"].get("readme")
+
+    assert readme == "README.md"
+    assert (PKG_DIR / readme).is_file()
+
+    setup_cfg = (PKG_DIR / "setup.cfg").read_text(encoding="utf-8")
+    assert "build_base = ../.setuptools-build" in setup_cfg
+
+
+def test_package_lock_matches_package_json_dev_dependencies():
+    """CI uses npm ci, so the lockfile must be the declared build graph."""
+    package_json = json.loads((PKG_DIR / "package.json").read_text(encoding="utf-8"))
+    package_lock = json.loads((PKG_DIR / "package-lock.json").read_text(encoding="utf-8"))
+    declared = package_json["devDependencies"]
+    locked = package_lock["packages"][""]["devDependencies"]
+
+    assert locked["react-docgen"] == declared["react-docgen"]
+
+
 def test_component_asset_metadata_uses_the_distribution_version():
     """A release must not serve a previous version's cached Dash bundle.
 

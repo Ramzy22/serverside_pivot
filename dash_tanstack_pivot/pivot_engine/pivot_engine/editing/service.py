@@ -11,6 +11,7 @@ from .patch_planner import summarize_patch_scope_ids
 from .propagation_planner import validate_real_propagation_policy
 from .session_manager import EditSessionManager
 from .target_resolver import build_affected_cells_payload, build_impacted_scopes_payload, resolve_scope_targets
+from ..security import MutationAuthorizationError
 
 OVERLAP_BLOCK_WARNING = "Blocked edit because the target scope overlaps an active edit in this session."
 
@@ -292,10 +293,20 @@ class EditDomainService:
 
     def get_or_create_session(self, request: Any, transaction_payload: Dict[str, Any]):
         table, session_id, client_instance = self._payload_session_parts(request, transaction_payload)
-        return self.sessions.get_or_create_session(table=table, session_id=session_id, client_instance=client_instance)
+        return self.sessions.get_or_create_session(
+            table=table,
+            session_id=session_id,
+            client_instance=client_instance,
+            owner_subject=self.sessions.owner_subject_from_session_id(session_id),
+        )
 
     def get_or_create_session_from_parts(self, *, table: str, session_id: str, client_instance: str):
-        return self.sessions.get_or_create_session(table=table, session_id=session_id, client_instance=client_instance)
+        return self.sessions.get_or_create_session(
+            table=table,
+            session_id=session_id,
+            client_instance=client_instance,
+            owner_subject=self.sessions.owner_subject_from_session_id(session_id),
+        )
 
     def has_visible_edit_overlay(self, request: Any, *, session_id: str, client_instance: str) -> bool:
         table = str(getattr(request, "table", "") or "")
@@ -337,8 +348,12 @@ class EditDomainService:
     ) -> List[SessionEventRecord]:
         resolved_events: List[SessionEventRecord] = []
         for event_id in self._normalize_event_ids(event_ids):
-            event = self.sessions.get_event(event_id)
-            if event is None or event.session_key != session.session_key:
+            event = self.sessions.get_event_for_session(
+                session,
+                event_id,
+                owner_subject=session.owner_subject,
+            )
+            if event is None:
                 continue
             if require_active is not None and bool(event.active) != require_active:
                 continue
@@ -355,6 +370,23 @@ class EditDomainService:
             return None
         active_events = self._resolve_session_events(session, [latest_event_id], require_active=True)
         return active_events[0] if active_events else None
+
+    def _reject_foreign_history_event_ids(
+        self, session: Any, event_ids: Optional[Iterable[Any]]
+    ) -> None:
+        """Fail closed when an explicit history ID belongs to another session.
+
+        The transport binds a history request to the authenticated principal's
+        session.  This additional check makes the edit domain safe for every
+        caller, including future transports which might accidentally pass a
+        browser-controlled session key.
+        """
+        for event_id in self._normalize_event_ids(event_ids):
+            event = self.sessions.get_event(event_id)
+            if event is not None and event.session_key != session.session_key:
+                raise MutationAuthorizationError(
+                    "Edit history is not authorized for this session."
+                )
 
     def _validate_scope_targets(
         self,
@@ -515,6 +547,7 @@ class EditDomainService:
         refresh_mode = str(transaction_payload.get("refreshMode") or transaction_payload.get("refresh_mode") or "smart")
         if action in {"undo", "redo"}:
             event_id = str(transaction_payload.get("eventId") or transaction_payload.get("event_id") or "").strip()
+            self._reject_foreign_history_event_ids(session, [event_id])
             if action == "undo":
                 target_event = self._resolve_undo_target_event(session, event_id)
                 if not target_event:
@@ -548,6 +581,7 @@ class EditDomainService:
             )
         if action == "revert":
             event_ids = _collect_requested_event_ids(transaction_payload)
+            self._reject_foreign_history_event_ids(session, event_ids)
             events = self._resolve_session_events(session, event_ids, require_active=True)
             events = list(reversed(events))
             return PreparedEventAction(
@@ -570,6 +604,7 @@ class EditDomainService:
             )
         if action == "replace":
             event_ids = _collect_requested_event_ids(transaction_payload)
+            self._reject_foreign_history_event_ids(session, event_ids)
             target_events = [
                 event
                 for event in self._resolve_session_events(session, event_ids, require_active=True)
@@ -734,6 +769,7 @@ class EditDomainService:
             source=source,
             created_at=time.time(),
             normalized_transaction=record_normalized_transaction,
+            owner_subject=session.owner_subject,
             inverse_transaction=_clone_transaction(response.get("inverseTransaction")),
             redo_transaction=_clone_transaction(response.get("redoTransaction")),
             original_updates=record_original_updates,

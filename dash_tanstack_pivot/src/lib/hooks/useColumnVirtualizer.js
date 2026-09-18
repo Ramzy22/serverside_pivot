@@ -173,10 +173,6 @@ export const useColumnVirtualizer = ({
         };
     }, [virtualCenterCols]);
 
-    const leftPinnedWidth = useMemo(
-        () => leftCols.reduce((sum, column) => sum + column.getSize(), 0),
-        [leftCols]
-    );
     const averageCenterColumnWidth = useMemo(() => {
         if (centerCols.length <= 0) return estimateColumnWidth || 140;
         const totalWidth = Number(centerTotalWidth);
@@ -185,10 +181,6 @@ export const useColumnVirtualizer = ({
         }
         return Math.max(48, totalWidth / centerCols.length);
     }, [centerCols.length, centerTotalWidth, estimateColumnWidth]);
-
-    const lastVirtualCenterIndex = virtualCenterCols.length > 0
-        ? virtualCenterCols[virtualCenterCols.length - 1].index
-        : -1;
 
     useLayoutEffect(() => {
         if (!parentRef.current || !columnVirtualizer) return;
@@ -202,18 +194,6 @@ export const useColumnVirtualizer = ({
         // jank badly. Re-measure only when the column structure/layout changes.
         columnVirtualizer.measure();
 
-        const lastCenterIndex = Math.max(centerCols.length - 1, 0);
-        const atRightEdge = maxScrollLeft > 0
-            && (scrollEl.scrollLeft + scrollEl.clientWidth) >= (scrollEl.scrollWidth - 1);
-
-        if (
-            atRightEdge
-            && centerCols.length > 0
-            && lastVirtualCenterIndex < lastCenterIndex
-            && typeof columnVirtualizer.scrollToIndex === 'function'
-        ) {
-            columnVirtualizer.scrollToIndex(lastCenterIndex, { align: 'end' });
-        }
     }, [centerCols.length, columnVirtualizer, parentRef, totalLayoutWidth]);
 
     useLayoutEffect(() => {
@@ -227,7 +207,6 @@ export const useColumnVirtualizer = ({
                     scrollLeft: scrollEl.scrollLeft,
                     clientWidth: scrollEl.clientWidth,
                     scrollWidth: scrollEl.scrollWidth,
-                    leftPinnedWidth,
                     averageCenterColumnWidth,
                     centerColumnCount: centerCols.length,
                 }, { immediate: true });
@@ -254,7 +233,6 @@ export const useColumnVirtualizer = ({
         averageCenterColumnWidth,
         centerCols.length,
         columnVirtualizer,
-        leftPinnedWidth,
         parentRef,
         scheduleHorizontalMetrics,
         serverSide,
@@ -271,7 +249,6 @@ export const useColumnVirtualizer = ({
                 scrollLeft: scrollEl.scrollLeft,
                 clientWidth: scrollEl.clientWidth,
                 scrollWidth: scrollEl.scrollWidth,
-                leftPinnedWidth,
                 averageCenterColumnWidth,
                 centerColumnCount: centerCols.length,
             }, { debounceMs: SERVER_SIDE_HORIZONTAL_METRICS_DEBOUNCE_MS });
@@ -284,7 +261,6 @@ export const useColumnVirtualizer = ({
     }, [
         averageCenterColumnWidth,
         centerCols.length,
-        leftPinnedWidth,
         onHorizontalScrollMetrics,
         parentRef,
         scheduleHorizontalMetrics,

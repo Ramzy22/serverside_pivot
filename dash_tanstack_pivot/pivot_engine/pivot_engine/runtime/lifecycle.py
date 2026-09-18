@@ -7,6 +7,7 @@ import inspect
 import os
 from typing import Any, Awaitable, Callable, Optional, Tuple
 
+from ..export_limits import ExportLimitError
 from .models import PivotRequestContext
 from .request_coordinator import RuntimeRequestCoordinator
 from .resilience import CircuitBreaker, PivotRequestTimeout
@@ -117,6 +118,11 @@ class RuntimeRequestLifecycle:
                 f"{self.request_timeout_seconds:g}s timeout."
             ) from exc
         except asyncio.CancelledError:
+            raise
+        except ExportLimitError:
+            # A caller requested an export outside the configured resource
+            # budget.  That is a deterministic validation result, not a
+            # backend outage, so it must never trip the shared circuit.
             raise
         except Exception:
             self.circuit_breaker.record_failure(circuit_key)

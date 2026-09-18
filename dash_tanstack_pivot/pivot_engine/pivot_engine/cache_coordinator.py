@@ -17,6 +17,7 @@ class CacheNamespaces:
     CONTROLLER_HIERARCHY_VIEW = "controller.hierarchy_view"
     CONTROLLER_HIERARCHY_ROOT_COUNT = "controller.hierarchy_root_count"
     CONTROLLER_HIERARCHY_ROOT_PAGE = "controller.hierarchy_root_page"
+    CONTROLLER_HIERARCHY_ROOT_RESULT = "controller.hierarchy_root_result"
     CONTROLLER_HIERARCHY_GRAND_TOTAL = "controller.hierarchy_grand_total"
     ADAPTER_CENTER_COLUMNS = "adapter.center_columns"
     ADAPTER_PIVOT_CATALOG = "adapter.pivot_catalog"
@@ -273,7 +274,7 @@ class CacheCoordinator:
         for namespace, getter in getters.items():
             try:
                 size = getter() or {}
-            except Exception:
+            except Exception:  # nosec B112
                 continue
             with self._lock:
                 metrics = self._metrics.setdefault(namespace, CacheNamespaceMetrics())

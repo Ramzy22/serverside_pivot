@@ -1595,6 +1595,7 @@ export const PivotAppBar = React.memo(function PivotAppBar({
         }}>
             <div style={firstLineStyle}>
                 {uiConfig.showSidebar !== false && <button
+                    data-testid="pivot-toggle-sidebar"
                     onClick={() => setSidebarOpen(!sidebarOpen)}
                     style={{...btnGhost, padding:'6px 10px', color: theme.text, display: 'flex', alignItems: 'center', gap: '8px'}}
                 >
@@ -1623,6 +1624,7 @@ export const PivotAppBar = React.memo(function PivotAppBar({
                         gap: '2px',
                     }}>
                         <button
+                            data-testid="pivot-mode-pivot"
                             style={{
                                 ...btnBase,
                                 padding: '5px 12px',
@@ -1639,6 +1641,7 @@ export const PivotAppBar = React.memo(function PivotAppBar({
                             <Icons.Columns /> Pivot
                         </button>
                         <button
+                            data-testid="pivot-mode-report"
                             style={{
                                 ...btnBase,
                                 padding: '5px 12px',
@@ -1702,6 +1705,7 @@ export const PivotAppBar = React.memo(function PivotAppBar({
                     }}>
                         <Icons.Search />
                         <input
+                            data-testid="pivot-global-search"
                             style={{border:'none',background:'transparent',marginLeft:'8px',outline:'none',width:'100%', color: theme.text, fontSize:'13px'}}
                             placeholder="Search records..."
                             value={(filters && filters.global) || ''}
@@ -1741,10 +1745,10 @@ export const PivotAppBar = React.memo(function PivotAppBar({
                 </div>
                 </>}
                 <div style={innerDividerStyle} />
-                <button data-toolbar-section-toggle="view" style={sectionToggleButtonStyle(openToolbarSections.view)} onClick={() => toggleToolbarSection('view')}>View</button>
-                <button data-toolbar-section-toggle="format" style={sectionToggleButtonStyle(openToolbarSections.format)} onClick={() => toggleToolbarSection('format')}>Format</button>
-                {uiConfig.showCharts !== false && <button data-toolbar-section-toggle="charts" style={sectionToggleButtonStyle(openToolbarSections.charts)} onClick={() => toggleToolbarSection('charts')}>Charts</button>}
-                <button data-toolbar-section-toggle="theme" style={sectionToggleButtonStyle(openToolbarSections.theme)} onClick={() => toggleToolbarSection('theme')}>Theme</button>
+                <button data-testid="pivot-toolbar-view" data-toolbar-section-toggle="view" style={sectionToggleButtonStyle(openToolbarSections.view)} onClick={() => toggleToolbarSection('view')}>View</button>
+                <button data-testid="pivot-toolbar-format" data-toolbar-section-toggle="format" style={sectionToggleButtonStyle(openToolbarSections.format)} onClick={() => toggleToolbarSection('format')}>Format</button>
+                {uiConfig.showCharts !== false && <button data-testid="pivot-toolbar-charts" data-toolbar-section-toggle="charts" style={sectionToggleButtonStyle(openToolbarSections.charts)} onClick={() => toggleToolbarSection('charts')}>Charts</button>}
+                <button data-testid="pivot-toolbar-theme" data-toolbar-section-toggle="theme" style={sectionToggleButtonStyle(openToolbarSections.theme)} onClick={() => toggleToolbarSection('theme')}>Theme</button>
                 <div style={innerDividerStyle} />
                 <div style={{display:'flex', alignItems:'center', gap:'2px', background: theme.hover, border:`1px solid ${theme.border}`, borderRadius:'6px', padding:'2px 4px'}}>
                     <button
@@ -1772,13 +1776,13 @@ export const PivotAppBar = React.memo(function PivotAppBar({
                         {immersiveMode ? <Icons.FullscreenExit /> : <Icons.Fullscreen />} Immersive
                     </button>
                     <div style={innerDividerStyle} />
-                    <button style={btnPrimary} onClick={exportPivot} disabled={isExporting}>
+                    <button data-testid="pivot-export-xlsx" style={btnPrimary} onClick={exportPivot} disabled={isExporting}>
                         <Icons.Export/> {isExporting ? 'Exporting…' : 'Export XLSX'}
                     </button>
                 </> : <>
                     <div style={{marginLeft:'auto'}} />
                     <div style={innerDividerStyle} />
-                    <button style={btnPrimary} onClick={exportPivot} disabled={isExporting}>
+                    <button data-testid="pivot-export-xlsx" style={btnPrimary} onClick={exportPivot} disabled={isExporting}>
                         <Icons.Export/> {isExporting ? 'Exporting…' : 'Export XLSX'}
                     </button>
                 </>}

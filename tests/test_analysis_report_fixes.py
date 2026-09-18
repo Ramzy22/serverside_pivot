@@ -148,8 +148,8 @@ class _CountingController:
         return pa.table({"value": [spec["value"]]})
 
 
-def test_flight_server_requires_auth_token_by_default():
-    with pytest.raises(RuntimeError, match="PIVOT_FLIGHT_AUTH_TOKEN"):
+def test_flight_server_requires_principal_and_dataset_authorization_by_default():
+    with pytest.raises(RuntimeError, match="principal_resolver and dataset_authorizer"):
         PivotFlightServer(_CountingController(), location=None)
 
 
@@ -166,6 +166,71 @@ def test_flight_pivot_action_returns_ticket_and_do_get_reuses_cached_table():
         assert stream is not None
         assert server._load_result(payload["ticket"]).to_pylist() == [{"value": 7}]
         assert controller.calls == 1
+    finally:
+        server.shutdown()
+
+
+def test_flight_ticket_and_query_are_bound_to_the_authenticated_row_scope():
+    class Principal:
+        def __init__(self, user_id, tenant):
+            self.id = user_id
+            self.role = "viewer"
+            self.attributes = {"tenant": tenant}
+
+    class Context:
+        def __init__(self, principal):
+            self._middleware = type("Middleware", (), {"principal": principal})()
+
+        def get_middleware(self, key):
+            assert key == "pivot_auth"
+            return self._middleware
+
+    class ScopedController:
+        def run_pivot_arrow(self, spec):
+            filters = {entry["field"]: entry["value"] for entry in spec["filters"]}
+            return pa.table({"tenant": [filters["tenant"]]})
+
+    from pivot_engine.runtime import RuntimeDatasetAuthorizer
+
+    authorizer = RuntimeDatasetAuthorizer(
+        {
+            "sales": {
+                "roles": {"viewer"},
+                "operations": {"read"},
+                "rowSecurity": {
+                    "mode": "claims",
+                    "claims": {"tenant": "tenant"},
+                },
+            }
+        }
+    )
+    server = PivotFlightServer(
+        ScopedController(),
+        location=None,
+        require_auth=True,
+        principal_resolver=lambda token: Principal("resolved", token),
+        dataset_authorizer=authorizer,
+    )
+    try:
+        a_context = Context(Principal("tenant-a", "A"))
+        b_context = Context(Principal("tenant-b", "B"))
+        [result] = list(
+            server.do_action(
+                a_context,
+                fl.Action("pivot", json.dumps({"table": "sales", "filters": []}).encode("utf-8")),
+            )
+        )
+        ticket = json.loads(result.body.to_pybytes())["ticket"]
+
+        assert server.do_get(
+            a_context,
+            fl.Ticket(json.dumps({"ticket": ticket}).encode("utf-8")),
+        ) is not None
+        with pytest.raises(fl.FlightUnauthorizedError):
+            server.do_get(
+                b_context,
+                fl.Ticket(json.dumps({"ticket": ticket}).encode("utf-8")),
+            )
     finally:
         server.shutdown()
 

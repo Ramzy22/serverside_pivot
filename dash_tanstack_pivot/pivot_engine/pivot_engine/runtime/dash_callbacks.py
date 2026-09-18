@@ -6,6 +6,7 @@ import asyncio
 import inspect
 import json
 import os
+import secrets
 import traceback
 import time
 from dataclasses import dataclass
@@ -20,8 +21,17 @@ except ImportError:
 
 from .models import PivotRequestContext, PivotViewState
 from .async_bridge import run_awaitable_sync
+from .contracts import build_runtime_response, normalize_runtime_request
+from .dataset_authorization import (
+    RuntimeDatasetAuthorizationError,
+    RuntimeDatasetAuthorizer,
+)
 from .payload_store import RuntimePayloadStore
 from .service import PivotRuntimeService
+from ..production_security import resolve_runtime_environment
+
+
+_PAYLOAD_SESSION_SUBJECT_KEY = "_dash_tanstack_pivot_payload_subject"
 
 
 def _normalize_id(value: Any) -> str:
@@ -158,6 +168,70 @@ def _state_override_value(
     if expected_type is not None and not isinstance(value, expected_type):
         return fallback
     return value
+
+
+@dataclass(frozen=True)
+class _DashRuntimeAuthorization:
+    """Host principal together with its server-issued immutable row scope."""
+
+    principal: Any
+    row_scope: Any
+
+
+async def _resolve_dash_principal(
+    *,
+    dataset_authorizer: Optional[RuntimeDatasetAuthorizer],
+    principal_getter: Optional[Callable[[Any], Any]],
+    table: str,
+    operation: str,
+    require_authorization: bool,
+) -> _DashRuntimeAuthorization:
+    """Resolve the host principal and enforce a server-owned Dash dataset policy.
+
+    Dash callback values are browser-controlled, so neither a component table
+    prop nor an anonymous Flask request can grant access. Development apps may
+    deliberately omit both hooks for backwards compatibility; production
+    registration sets ``require_authorization`` and therefore fails closed.
+    """
+    if dataset_authorizer is None and principal_getter is None:
+        if not require_authorization:
+            return _DashRuntimeAuthorization(principal=None, row_scope=None)
+        raise RuntimeDatasetAuthorizationError(
+            "Dash runtime access requires a dataset policy and principal resolver."
+        )
+    if dataset_authorizer is None or principal_getter is None:
+        raise RuntimeDatasetAuthorizationError(
+            "Dash runtime dataset authorization is incompletely configured."
+        )
+    from flask import request as flask_request
+
+    try:
+        principal = await _await_if_needed(principal_getter(flask_request))
+    except RuntimeDatasetAuthorizationError:
+        raise
+    except Exception as exc:
+        raise RuntimeDatasetAuthorizationError("Dash runtime authentication failed.") from exc
+    row_scope = dataset_authorizer.authorize(
+        principal=principal,
+        table=table,
+        operation=operation,
+    )
+    return _DashRuntimeAuthorization(principal=principal, row_scope=row_scope)
+
+
+def _runtime_dataset_operation(kind: str) -> str:
+    if kind == "export":
+        return "export"
+    if kind in {"update", "transaction"}:
+        return "mutate"
+    return "read"
+
+
+def _principal_session_id(principal: Any) -> Optional[str]:
+    if principal is None:
+        return None
+    identifier = str(getattr(principal, "id", "") or "").strip()
+    return f"principal:{identifier or 'authenticated'}"
 
 
 def _normalize_request_layout_mode(value: Any) -> str:
@@ -298,34 +372,11 @@ def _normalize_transport_request(
     pivot_id: Any,
     runtime_request: Any,
 ) -> Dict[str, Any]:
-    if isinstance(runtime_request, dict):
-        kind = str(runtime_request.get("kind") or "data").strip().lower() or "data"
-        kind = {
-            "batch_update": "update",
-            "cell_updates": "update",
-        }.get(kind, kind)
-        payload = _coerce_runtime_request_payload(runtime_request)
-        request_id = _extract_request_id(runtime_request) or _extract_request_id(payload)
-        return {
-            "kind": kind,
-            "request_id": request_id,
-            "payload": payload,
-            "trigger_prop": {
-                "filter_options": f"{_normalize_id(pivot_id)}.filterRequest",
-                "chart": f"{_normalize_id(pivot_id)}.chartRequest",
-                "drill": f"{_normalize_id(pivot_id)}.drillThrough",
-                "detail": f"{_normalize_id(pivot_id)}.detailRequest",
-                "update": f"{_normalize_id(pivot_id)}.cellUpdates",
-                "export": f"{_normalize_id(pivot_id)}.runtimeRequest",
-                "transaction": f"{_normalize_id(pivot_id)}.runtimeRequest",
-            }.get(kind, f"{_normalize_id(pivot_id)}.viewport"),
-        }
-    return {
-        "kind": "data",
-        "request_id": None,
-        "payload": {},
-        "trigger_prop": f"{_normalize_id(pivot_id)}.viewport",
-    }
+    """Compatibility import point for existing extensions and tests."""
+    return normalize_runtime_request(
+        pivot_id=pivot_id,
+        runtime_request=runtime_request,
+    )
 
 
 def _build_runtime_response(
@@ -342,27 +393,37 @@ def _build_runtime_response(
     message: Optional[str] = None,
     profile: Optional[Dict[str, Any]] = None,
 ) -> Dict[str, Any]:
-    response: Dict[str, Any] = {
-        "kind": kind,
-        "status": status,
-        "payload": payload,
-    }
-    if request_id is not None:
-        response["requestId"] = request_id
-    if table is not None:
-        response["table"] = table
-    if session_id is not None:
-        response["session_id"] = session_id
-    if client_instance is not None:
-        response["client_instance"] = client_instance
-    if state_epoch is not None:
-        response["state_epoch"] = state_epoch
-    if window_seq is not None:
-        response["window_seq"] = window_seq
-    if message:
-        response["message"] = message
-    if isinstance(profile, dict) and profile:
-        response["profile"] = profile
+    """Adapt the canonical protocol response for older Dash component builds.
+
+    The canonical V1 protocol is camel-case only.  Existing Dash bundles read
+    a few snake-case response members, so aliases are added at this outermost
+    Dash-only boundary rather than leaking into HTTP or React transports.
+    """
+    response = build_runtime_response(
+        kind=kind,
+        request_id=request_id,
+        status=status,
+        payload=payload,
+        table=table,
+        session_id=session_id,
+        client_instance=client_instance,
+        state_epoch=state_epoch,
+        window_seq=window_seq,
+        message=message,
+        profile=profile,
+    )
+    response.update(
+        {
+            key: value
+            for key, value in {
+                "session_id": session_id,
+                "client_instance": client_instance,
+                "state_epoch": state_epoch,
+                "window_seq": window_seq,
+            }.items()
+            if value is not None
+        }
+    )
     return response
 
 
@@ -392,6 +453,10 @@ def _env_flag(name: str, default: bool = False) -> bool:
     return os.environ.get(name, fallback).strip().lower() not in {"0", "false", "no", "off"}
 
 
+def _is_production_environment() -> bool:
+    return resolve_runtime_environment() == "production"
+
+
 def _get_runtime_payload_store(app: Any) -> RuntimePayloadStore:
     store = getattr(app, "_pivot_runtime_payload_store", None)
     if store is None:
@@ -404,17 +469,54 @@ def _get_runtime_payload_store(app: Any) -> RuntimePayloadStore:
     return store
 
 
+def _ensure_dash_payload_session_support(app: Any) -> None:
+    """Ensure the Flask session can bind one-time payload references to a browser."""
+    if app.server.secret_key:
+        return
+    # Dash applications frequently do not configure Flask sessions because the
+    # component itself is stateless. Payload references are different: their
+    # bearer token must not be enough to retrieve data. A process-local random
+    # key makes the session signed without leaking data across browsers.
+    app.server.secret_key = secrets.token_urlsafe(32)
+
+
+def _dash_payload_subject() -> str:
+    """Return the opaque, signed-session subject for the current Dash browser."""
+    from flask import session
+
+    subject = session.get(_PAYLOAD_SESSION_SUBJECT_KEY)
+    if isinstance(subject, str) and subject:
+        return subject
+    subject = secrets.token_urlsafe(32)
+    session[_PAYLOAD_SESSION_SUBJECT_KEY] = subject
+    return subject
+
+
 def _register_runtime_payload_endpoint(app: Any) -> None:
+    _ensure_dash_payload_session_support(app)
     if "_dash_tanstack_pivot_runtime_payload" in getattr(app.server, "view_functions", {}):
         return
 
     @app.server.route("/_dash_tanstack_pivot/payload/<token>", methods=["GET"], endpoint="_dash_tanstack_pivot_runtime_payload")
     def _dash_tanstack_pivot_runtime_payload(token: str):
-        from flask import Response
+        from flask import Response, session
 
         store = _get_runtime_payload_store(app)
         item = store.get(token)
         if item is None:
+            return Response("payload expired or not found", status=404, content_type="text/plain")
+        metadata = item.metadata if isinstance(item.metadata, dict) else {}
+        expected_subject = metadata.get("subject")
+        if (
+            not isinstance(expected_subject, str)
+            or not expected_subject
+            or not secrets.compare_digest(
+                expected_subject,
+                str(session.get(_PAYLOAD_SESSION_SUBJECT_KEY) or ""),
+            )
+        ):
+            # Deliberately use the same response as a missing token. This
+            # prevents a payload reference from becoming an oracle.
             return Response("payload expired or not found", status=404, content_type="text/plain")
 
         if item.file_path:
@@ -454,6 +556,7 @@ def _externalize_data_payload_if_needed(
     *,
     request_id: Optional[str],
     context: PivotRequestContext,
+    payload_subject: str,
     profile_sink: Optional[Dict[str, Any]] = None,
 ) -> Dict[str, Any]:
     if not _runtime_payload_refs_enabled() or not isinstance(payload, dict):
@@ -499,6 +602,7 @@ def _externalize_data_payload_if_needed(
         serialized_body=encoded_payload,
         compress=_env_flag("PIVOT_RUNTIME_PAYLOAD_REF_GZIP", True),
         metadata={
+            "subject": payload_subject,
             "requestId": request_id,
             "stateEpoch": context.state_epoch,
             "windowSeq": context.window_seq,
@@ -534,6 +638,7 @@ def _externalize_export_payload(
     *,
     request_id: Optional[str],
     context: PivotRequestContext,
+    payload_subject: str,
 ) -> Dict[str, Any]:
     if not isinstance(payload, dict):
         return {}
@@ -544,6 +649,7 @@ def _externalize_export_payload(
             content_path,
             content_type=str(payload.get("contentType") or "application/octet-stream"),
             metadata={
+                "subject": payload_subject,
                 "requestId": request_id,
                 "stateEpoch": context.state_epoch,
                 "windowSeq": context.window_seq,
@@ -575,6 +681,7 @@ def _externalize_export_payload(
         bytes(content),
         content_type=str(payload.get("contentType") or "application/octet-stream"),
         metadata={
+            "subject": payload_subject,
             "requestId": request_id,
             "stateEpoch": context.state_epoch,
             "windowSeq": context.window_seq,
@@ -615,6 +722,9 @@ def register_dash_pivot_transport_callback(
     drill_store_id: Optional[Any] = None,
     debug: bool = False,
     sort_options_default: Optional[Dict] = None,
+    dataset_authorizer: Optional[RuntimeDatasetAuthorizer] = None,
+    principal_getter: Optional[Callable[[Any], Any]] = None,
+    require_dataset_authorization: Optional[bool] = None,
 ) -> bool:
     """
     Register the main Dash -> runtime transport callback for one pivot component.
@@ -625,6 +735,9 @@ def register_dash_pivot_transport_callback(
     callback_key = f"pivot::{_normalize_id(pivot_id)}::{_normalize_id(drill_store_id)}"
     if callback_key in registry:
         return False
+
+    if require_dataset_authorization is None:
+        require_dataset_authorization = _is_production_environment()
 
     include_drill_store = drill_store_id is not None
     _register_runtime_payload_endpoint(app)
@@ -693,6 +806,7 @@ def register_dash_pivot_transport_callback(
     ):
         """Main transport adapter callback for one pivot instance."""
         callback_started_at = time.perf_counter()
+        payload_subject = _dash_payload_subject()
         ctx = dash.callback_context
         triggered_props = _get_triggered_props(ctx)
         triggered_prop = triggered_props[0] if triggered_props else None
@@ -700,6 +814,19 @@ def register_dash_pivot_transport_callback(
             pivot_id=pivot_id,
             runtime_request=runtime_request,
         )
+        if transport_request.get("error"):
+            return _response_tuple(
+                _build_runtime_response(
+                    kind=transport_request.get("kind") or "data",
+                    request_id=transport_request.get("request_id"),
+                    status="error",
+                    payload={
+                        "errorCode": transport_request.get("error_code")
+                        or "invalid_runtime_request",
+                    },
+                    message=str(transport_request.get("error")),
+                )
+            )
         request_kind = transport_request["kind"]
         request_id = transport_request.get("request_id")
         request_payload = transport_request.get("payload") if isinstance(transport_request.get("payload"), dict) else {}
@@ -792,6 +919,33 @@ def register_dash_pivot_transport_callback(
 
             _debug_print(debug, "[filter-request]", {"columnId": column_id, "table": resolved_table, "search": search, "offset": offset, "limit": limit})
 
+            try:
+                authorization = await _resolve_dash_principal(
+                    dataset_authorizer=dataset_authorizer,
+                    principal_getter=principal_getter,
+                    table=resolved_table,
+                    operation="read",
+                    require_authorization=require_dataset_authorization,
+                )
+            except RuntimeDatasetAuthorizationError:
+                callback_finished_at = time.perf_counter()
+                return _response_tuple(
+                    _build_runtime_response(
+                        kind="filter_options",
+                        request_id=request_id,
+                        status="error",
+                        payload={"columnId": column_id, "options": []},
+                        table=resolved_table,
+                        message="Dataset access is not authorized.",
+                        profile={
+                            "callback": {
+                                "totalMs": round((callback_finished_at - callback_started_at) * 1000, 3),
+                                "executeMs": round((callback_finished_at - filter_started_at) * 1000, 3),
+                            }
+                        } if profiling_enabled else None,
+                    )
+                )
+
             from ..tanstack_adapter import TanStackOperation, TanStackRequest
 
             service = runtime_service_getter()
@@ -826,7 +980,13 @@ def register_dash_pivot_transport_callback(
                 pagination={"pageIndex": offset // limit if limit else 0, "pageSize": limit, "offset": offset, "search": search},
                 global_filter=column_id,
             )
-            response = await _await_if_needed(adapter.handle_request(request))
+            response = await _await_if_needed(
+                adapter.handle_request(
+                    request,
+                    user=authorization.principal,
+                    row_scope=authorization.row_scope,
+                )
+            )
             next_filter_options = [d.get("value") for d in (response.data or [])]
             pagination = response.pagination if isinstance(response.pagination, dict) else {}
             total_options = pagination.get("totalRows", len(next_filter_options))
@@ -895,11 +1055,36 @@ def register_dash_pivot_transport_callback(
                 ),
             )
 
+        try:
+            authorization = await _resolve_dash_principal(
+                dataset_authorizer=dataset_authorizer,
+                principal_getter=principal_getter,
+                table=resolved_table,
+                operation=_runtime_dataset_operation(request_kind),
+                require_authorization=require_dataset_authorization,
+            )
+        except RuntimeDatasetAuthorizationError:
+            return _response_tuple(
+                _build_runtime_response(
+                    kind=request_kind,
+                    request_id=request_id,
+                    status="error",
+                    payload={},
+                    table=resolved_table,
+                    message="Dataset access is not authorized.",
+                )
+            )
+
         context = PivotRequestContext.from_frontend(
             table=resolved_table,
             trigger_prop=effective_trigger_prop,
             viewport=active_request_meta,
         )
+        context.principal = authorization.principal
+        context.row_scope = authorization.row_scope
+        principal_session_id = _principal_session_id(authorization.principal)
+        if principal_session_id:
+            context.session_id = principal_session_id
         # Runtime state_override is a snapshot attached to a specific runtimeRequest.
         # When a normal Dash prop (viewMode, reportDef, rowFields, etc.) triggers this
         # callback, reusing the previous runtimeRequest override can force the backend
@@ -1243,6 +1428,7 @@ def register_dash_pivot_transport_callback(
                 result.export_payload or {},
                 request_id=request_id,
                 context=context,
+                payload_subject=payload_subject,
             )
             return _response_tuple(
                 _build_runtime_response(
@@ -1283,6 +1469,7 @@ def register_dash_pivot_transport_callback(
                 data_payload,
                 request_id=request_id,
                 context=context,
+                payload_subject=payload_subject,
                 profile_sink=payload_profile,
             )
             if profiling_enabled:

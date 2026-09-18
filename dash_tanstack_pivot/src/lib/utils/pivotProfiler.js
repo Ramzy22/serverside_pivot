@@ -80,6 +80,16 @@ const roundMs = (value) => (
     Number.isFinite(Number(value)) ? Math.round(Number(value) * 1000) / 1000 : null
 );
 
+const percentile = (values, percentileValue) => {
+    const valid = values
+        .map(Number)
+        .filter(Number.isFinite)
+        .sort((left, right) => left - right);
+    if (valid.length === 0) return null;
+    const rank = Math.max(0, Math.min(valid.length - 1, Math.ceil(valid.length * percentileValue) - 1));
+    return roundMs(valid[rank]);
+};
+
 const logSummary = (entry) => {
     if (!isPivotProfilerConsoleEnabled() || !entry) return;
     const derived = entry.derived || {};
@@ -331,6 +341,12 @@ const createPivotProfiler = () => {
                 avgQueueMs: roundMs(totals.queueMs / totals.count),
                 avgResponseMs: roundMs(totals.responseMs / totals.count),
                 avgRenderMs: roundMs(totals.renderMs / totals.count),
+                p50TotalMs: percentile(items.map((entry) => entry.derived?.totalMs), 0.5),
+                p95TotalMs: percentile(items.map((entry) => entry.derived?.totalMs), 0.95),
+                p50ResponseMs: percentile(items.map((entry) => entry.derived?.responseMs), 0.5),
+                p95ResponseMs: percentile(items.map((entry) => entry.derived?.responseMs), 0.95),
+                p50RenderMs: percentile(items.map((entry) => entry.derived?.renderMs), 0.5),
+                p95RenderMs: percentile(items.map((entry) => entry.derived?.renderMs), 0.95),
             };
         },
     };

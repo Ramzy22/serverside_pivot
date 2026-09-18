@@ -1,4 +1,3 @@
-
 import pytest
 import asyncio
 import pyarrow as pa
@@ -20,6 +19,94 @@ from pivot_engine.tanstack_adapter import create_tanstack_adapter, TanStackReque
 from pivot_engine.types.pivot_spec import PivotSpec, Measure, PivotConfig
 
 
+def with_pivot_workspace_shell(component_source):
+    component_root = Path(
+        os.path.join(
+            os.getcwd(),
+            "dash_tanstack_pivot",
+            "src",
+            "lib",
+            "components",
+        )
+    )
+    shell_source = (component_root / "PivotWorkspaceShell.js").read_text(encoding="utf-8")
+    sparkline_source = (component_root / "Table" / "SparklineDetailGraph.js").read_text(encoding="utf-8")
+    runtime_source = "\n".join(
+        (component_root.parent / "runtime" / filename).read_text(encoding="utf-8")
+        for filename in (
+            "useCoreRuntimeStage.tsx",
+            "useCommandRuntimeStage.tsx",
+            "useViewportRuntimeStage.tsx",
+            "useWorkspaceRuntimeStage.tsx",
+        )
+    )
+    runtime_source += "\n" + "\n".join(
+        (component_root.parent / "runtime" / filename).read_text(encoding="utf-8")
+        for filename in (
+            "useRuntimeChartModels.js",
+            "useChartWorkspacePresentation.js",
+            "useWorkspaceStatusPresentation.js",
+            "runtimeResponseDedup.js",
+            "useRuntimeResponseLifecycle.js",
+            "useRuntimeChartRequestDispatch.js",
+            "useRuntimeResponsePostCommit.js",
+            "useRuntimeClipboardExportPresentation.js",
+            "useRuntimeChartCanvasCommands.js",
+            "useRuntimeChartCanvasResize.js",
+            "useRuntimeChartCanvasVerticalResize.js",
+            "useRuntimeChartDefinitionCommands.js",
+            "useRuntimeChartFloatingInteractions.js",
+            "useRuntimeChartPanelSizing.js",
+            "useRuntimeClipboardPaste.js",
+            "useRuntimeCellSelection.js",
+            "useRuntimeColumnAutoSizing.js",
+            "useRuntimeFilterPopover.js",
+            "useRuntimeColorScalePresentation.js",
+            "useRuntimeViewportTableData.js",
+            "createRuntimeCellPresentation.js",
+            "useRuntimeEditChangeTracking.js",
+            "useRuntimeEditCellIdentity.js",
+            "useRuntimeEditComparisonState.js",
+            "useRuntimeEditDispatch.js",
+            "useRuntimeEditOwnership.js",
+            "useRuntimeEditPresentation.js",
+            "useRuntimeOptimisticCellState.js",
+            "useRuntimeRowEditSessions.js",
+            "useRuntimeEditStatePersistence.js",
+            "useRuntimeRowEditing.js",
+            "useRuntimeRequestSession.js",
+            "useRuntimeRowSelection.js",
+            "createRuntimeExportCommands.js",
+            "useRuntimeSelectionFormatting.js",
+            "useRuntimeColumnMeasurement.js",
+            "useRuntimeColumnCommands.js",
+            "useRuntimeDisplayNavigation.js",
+            "useRuntimeViewSnapshot.js",
+            "useRuntimeViewRestoreScroll.js",
+            "useRuntimeExportState.js",
+            "useRuntimeLayoutHistory.js",
+            "createRuntimeRowPinCommand.js",
+            "useRuntimeStructuralSync.js",
+        )
+    )
+    runtime_source += "\n" + "\n".join(
+        (component_root / filename).read_text(encoding="utf-8")
+        for filename in (
+            "PivotWorkspaceCanvas.js",
+            "PivotWorkspaceControls.js",
+        )
+    )
+    # Source-contract assertions describe the composed pivot runtime, not a
+    # specific implementation file. Project its shared runtime bindings back to
+    # the familiar local-symbol spelling used by the legacy assertions.
+    runtime_source = re.sub(r"runtime\.([A-Za-z_]\w*) = function \1", r"function \1", runtime_source)
+    runtime_source = re.sub(r"runtime\.([A-Za-z_]\w*) = ", r"const \1 = ", runtime_source)
+    runtime_source = runtime_source.replace("runtime.", "")
+    runtime_source = re.sub(r"(\[[A-Za-z_][\w\s,]*\]) = (use(?:State|Ref)\()", r"const \1 = \2", runtime_source)
+    runtime_source = re.sub(r": const ([A-Za-z_]\w*)", r": \1", runtime_source)
+    return component_source + "\n" + runtime_source + "\n" + shell_source + "\n" + sparkline_source
+
+
 def test_tabular_value_resolution_executes_source_against_runtime_hierarchy_rows():
     node = shutil.which("node")
     if not node:
@@ -37,6 +124,101 @@ def test_tabular_value_resolution_executes_source_against_runtime_hierarchy_rows
 
     assert result.returncode == 0, result.stderr or result.stdout
     assert "tabular hierarchy value resolution passed" in result.stdout
+
+
+def test_chart_math_is_a_standalone_frontend_module():
+    node = shutil.which("node")
+    if not node:
+        pytest.skip("Node.js is required for the frontend source regression")
+
+    script = Path(__file__).with_name("frontend_chart_math.cjs")
+    result = subprocess.run(
+        [node, str(script)],
+        cwd=Path(__file__).resolve().parents[1],
+        capture_output=True,
+        text=True,
+        timeout=30,
+        check=False,
+    )
+
+    assert result.returncode == 0, result.stderr or result.stdout
+    assert "chart math modularization passed" in result.stdout
+
+
+def test_horizontal_viewport_calculations_are_standalone_and_pinned_safe():
+    node = shutil.which("node")
+    if not node:
+        pytest.skip("Node.js is required for the frontend source regression")
+
+    script = Path(__file__).with_name("frontend_horizontal_viewport.cjs")
+    result = subprocess.run(
+        [node, str(script)],
+        cwd=Path(__file__).resolve().parents[1],
+        capture_output=True,
+        text=True,
+        timeout=30,
+        check=False,
+    )
+
+    assert result.returncode == 0, result.stderr or result.stdout
+    assert "horizontal viewport range calculations passed" in result.stdout
+
+
+def test_sparkline_detail_calculations_are_standalone():
+    node = shutil.which("node")
+    if not node:
+        pytest.skip("Node.js is required for the frontend source regression")
+
+    script = Path(__file__).with_name("frontend_sparkline_detail.cjs")
+    result = subprocess.run(
+        [node, str(script)],
+        cwd=Path(__file__).resolve().parents[1],
+        capture_output=True,
+        text=True,
+        timeout=30,
+        check=False,
+    )
+
+    assert result.returncode == 0, result.stderr or result.stdout
+    assert "sparkline detail modularization passed" in result.stdout
+
+
+def test_pivot_layout_utilities_are_standalone():
+    node = shutil.which("node")
+    if not node:
+        pytest.skip("Node.js is required for the frontend source regression")
+
+    script = Path(__file__).with_name("frontend_pivot_layout_utils.cjs")
+    result = subprocess.run(
+        [node, str(script)],
+        cwd=Path(__file__).resolve().parents[1],
+        capture_output=True,
+        text=True,
+        timeout=30,
+        check=False,
+    )
+
+    assert result.returncode == 0, result.stderr or result.stdout
+    assert "pivot layout utility modularization passed" in result.stdout
+
+
+def test_raw_table_tsv_is_a_standalone_frontend_module():
+    node = shutil.which("node")
+    if not node:
+        pytest.skip("Node.js is required for the frontend source regression")
+
+    script = Path(__file__).with_name("frontend_raw_table_tsv.cjs")
+    result = subprocess.run(
+        [node, str(script)],
+        cwd=Path(__file__).resolve().parents[1],
+        capture_output=True,
+        text=True,
+        timeout=30,
+        check=False,
+    )
+
+    assert result.returncode == 0, result.stderr or result.stdout
+    assert "raw table TSV modularization passed" in result.stdout
 
 
 def test_column_virtualizer_refreshes_same_shape_columns_on_layout_transition():
@@ -101,8 +283,32 @@ def test_dash_app_registers_local_component_bundle():
         if "dash_tanstack_pivot" in resource and resource.endswith(".min.js")
     ]
 
-    bundle_rel_path = "dash_tanstack_pivot/dash_tanstack_pivot.min.js"
-    bundle_path = Path(component_pkg.__file__).resolve().parent / bundle_rel_path
+    bundle_rel_path = next(
+        entry["relative_package_path"]
+        for entry in component_pkg.DashTanstackPivot._js_dist
+        if entry.get("relative_package_path", "").endswith(
+            "dash_tanstack_pivot.min.js"
+        )
+        and not entry.get("dynamic")
+    )
+    package_dir = Path(component_pkg.__file__).resolve().parent
+    # Packaging smoke tests can import the inner distribution package while
+    # the presentation app imports its repository-level wrapper. Both declare
+    # the same bundle, with only the resource prefix differing; resolve the
+    # declared resource from either package root rather than assuming import
+    # order for the whole suite.
+    bundle_path = next(
+        (
+            candidate
+            for candidate in (
+                package_dir / bundle_rel_path,
+                package_dir.parent / bundle_rel_path,
+            )
+            if candidate.is_file()
+        ),
+        None,
+    )
+    assert bundle_path is not None, "Generated Dash component bundle is missing"
     expected = (
         f"{app.config.requests_pathname_prefix}"
         f"_dash-component-suites/dash_tanstack_pivot/"
@@ -123,26 +329,15 @@ def test_server_side_sorting_is_emitted_with_runtime_request_only():
             "src",
             "lib",
             "components",
-            "DashTanstackPivot.react.js",
+            "DashTanstackPivot.react.tsx",
         )
     ).read_text(encoding="utf-8")
+    component_source = with_pivot_workspace_shell(component_source)
 
-    apply_header_sort = re.search(
-        r"const applyHeaderSort = .*?\n    // 4\. FIXED:",
-        component_source,
-        re.S,
-    )
-    handle_sorting_change = re.search(
-        r"const handleSortingChange = .*?\n\n    const table = useReactTable",
-        component_source,
-        re.S,
-    )
-
-    assert apply_header_sort is not None
-    assert handle_sorting_change is not None
-    assert "if (!serverSide && setPropsRef.current)" in apply_header_sort.group(0)
-    assert "if (!serverSide && setPropsRef.current)" in handle_sorting_change.group(0)
-    assert "will send sorting and the runtimeRequest in one update" in handle_sorting_change.group(0)
+    assert "stage.applyHeaderSort =" in component_source
+    assert "stage.handleSortingChange =" in component_source
+    assert component_source.count("if (!stage.serverSide && stage.setPropsRef.current)") >= 2
+    assert "will send sorting and the runtimeRequest in one update" in component_source
 
 
 def test_server_side_sorting_starts_a_new_structural_cache_epoch():
@@ -153,9 +348,10 @@ def test_server_side_sorting_starts_a_new_structural_cache_epoch():
             "src",
             "lib",
             "components",
-            "DashTanstackPivot.react.js",
+            "DashTanstackPivot.react.tsx",
         )
     ).read_text(encoding="utf-8")
+    component_source = with_pivot_workspace_shell(component_source)
 
     sorting_only_branch = re.search(
         r"if \(isSortingOnly\) \{.*?\n\s*return;\n\s*\}",
@@ -176,11 +372,12 @@ def test_expansion_anchor_uses_configured_server_side_block_size():
             "src",
             "lib",
             "components",
-            "DashTanstackPivot.react.js",
+            "DashTanstackPivot.react.tsx",
         )
     ).read_text(encoding="utf-8")
+    component_source = with_pivot_workspace_shell(component_source)
 
-    assert "Math.floor(toggledRow.__virtualIndex / serverSideBlockSize)" in component_source
+    assert "Math.floor(toggledRow.__virtualIndex / stage.serverSideBlockSize)" in component_source
     assert "Math.floor(toggledRow.__virtualIndex / 100)" not in component_source
 
 
@@ -192,14 +389,15 @@ def test_server_side_single_collapse_preserves_expand_all_default_for_offscreen_
             "src",
             "lib",
             "components",
-            "DashTanstackPivot.react.js",
+            "DashTanstackPivot.react.tsx",
         )
     ).read_text(encoding="utf-8")
+    component_source = with_pivot_workspace_shell(component_source)
 
     assert "const EXPAND_ALL_STATE_KEY = '__ALL__';" in component_source
     assert "expanded[EXPAND_ALL_STATE_KEY] === true" in component_source
     assert "if (nextExpanded[EXPAND_ALL_STATE_KEY] === true) return nextExpanded;" in component_source
-    assert "Object.keys(table.getRowModel().rowsById).forEach((rowId)" in component_source
+    assert "Object.keys(stage.table.getRowModel().rowsById).forEach(rowId =>" in component_source
     assert "[EXPAND_ALL_STATE_KEY]: true" in component_source
     assert "normalizedRawExpanded[toggledExpandedPath] = false;" in component_source
     assert "delete normalizedRawExpanded[toggledExpandedPath];" in component_source
@@ -213,9 +411,10 @@ def test_expansion_shifted_cache_blocks_are_removed_before_repaint():
             "src",
             "lib",
             "components",
-            "DashTanstackPivot.react.js",
+            "DashTanstackPivot.react.tsx",
         )
     ).read_text(encoding="utf-8")
+    component_source = with_pivot_workspace_shell(component_source)
 
     deferred_invalidation = re.search(
         r"// Deferred block invalidation after single-row expansion\.(.*?)// Debug effect removed",
@@ -268,9 +467,10 @@ def test_export_copy_uses_rich_html_clipboard_and_styled_xlsx_runtime_export():
             "src",
             "lib",
             "components",
-            "DashTanstackPivot.react.js",
+            "DashTanstackPivot.react.tsx",
         )
     ).read_text(encoding="utf-8")
+    component_source = with_pivot_workspace_shell(component_source)
     export_source = Path(
         os.path.join(
             os.getcwd(),
@@ -295,6 +495,61 @@ def test_export_copy_uses_rich_html_clipboard_and_styled_xlsx_runtime_export():
     assert "downloadHtmlTableAsExcel" in export_source
 
 
+def test_heavy_client_dependencies_are_loaded_only_by_the_features_that_need_them():
+    root = Path(os.getcwd()) / "dash_tanstack_pivot"
+    export_source = (root / "src" / "lib" / "utils" / "exportUtils.js").read_text(encoding="utf-8")
+    export_command_source = (root / "src" / "lib" / "runtime" / "createRuntimeExportCommands.js").read_text(encoding="utf-8")
+    chart_renderer_source = (root / "src" / "lib" / "components" / "Charts" / "ChartRenderers.js").read_text(encoding="utf-8")
+    echarts_2d_source = (root / "src" / "lib" / "components" / "Charts" / "ECharts2dRenderer.js").read_text(encoding="utf-8")
+    echarts_3d_source = (root / "src" / "lib" / "components" / "Charts" / "ECharts3dRenderer.js").read_text(encoding="utf-8")
+    sidebar_source = (root / "src" / "lib" / "components" / "Sidebar" / "SidebarPanel.js").read_text(encoding="utf-8")
+    workspace_controls_source = (root / "src" / "lib" / "components" / "PivotWorkspaceControls.js").read_text(encoding="utf-8")
+    workspace_shell_source = (root / "src" / "lib" / "components" / "PivotWorkspaceShell.js").read_text(encoding="utf-8")
+    workspace_canvas_source = (root / "src" / "lib" / "components" / "PivotWorkspaceCanvas.js").read_text(encoding="utf-8")
+    webpack_source = (root / "webpack.config.js").read_text(encoding="utf-8")
+    bundle_contract_source = (root.parent / "scripts" / "ci" / "verify_bundle_contract.py").read_text(encoding="utf-8")
+
+    assert "import * as XLSX from 'xlsx';" not in export_source
+    assert 'webpackChunkName: "pivot-xlsx"' in export_source
+    assert 'xlsx/dist/xlsx.mini.min.js' in export_source
+    assert 'webpackChunkName: "pivot-xlsx-html"' in export_source
+    assert "await loadXlsxWriter()" in export_source
+    assert "await loadXlsxHtmlParser()" in export_source
+    assert "await exportPivotTable(" in export_command_source
+
+    assert "from 'echarts-for-react'" not in chart_renderer_source
+    assert "import 'echarts-gl';" not in chart_renderer_source
+    assert 'webpackChunkName: "pivot-echarts-2d"' in chart_renderer_source
+    assert 'webpackChunkName: "pivot-echarts-3d"' in chart_renderer_source
+    assert "from 'echarts-for-react/lib/core'" in echarts_2d_source
+    assert "from 'echarts/core'" in echarts_2d_source
+    assert "import 'echarts-gl';" not in echarts_2d_source
+    assert "from 'echarts-for-react'" not in echarts_3d_source
+    assert "from 'echarts-for-react/lib/core'" in echarts_3d_source
+    assert "from 'echarts-gl/lib/export/charts'" in echarts_3d_source
+    assert "from 'echarts-gl/lib/export/components'" in echarts_3d_source
+    assert "Grid3DComponent" in echarts_3d_source
+
+    assert "import { ReportEditor } from './ReportEditor';" not in sidebar_source
+    assert 'webpackChunkName: "pivot-report-editor"' in sidebar_source
+    assert "import { SidebarPanel }" not in workspace_controls_source
+    assert 'webpackChunkName: "pivot-sidebar"' in workspace_controls_source
+    assert "LazySidebarPanel" in workspace_controls_source
+    assert 'webpackChunkName: "pivot-context-menu"' in workspace_shell_source
+    assert 'webpackChunkName: "pivot-sparkline-detail"' in workspace_shell_source
+    assert 'webpackChunkName: "pivot-detail-drawer"' in workspace_canvas_source
+    assert 'webpackChunkName: "pivot-detail-sidepanel"' in workspace_canvas_source
+    assert 'webpackChunkName: "pivot-edit-panel"' in workspace_canvas_source
+    assert "chunkFilename: '[name].dash_tanstack_pivot.min.js'" in webpack_source
+    assert "DEFAULT_MAX_MAIN_BYTES = 1_100_000" in bundle_contract_source
+    assert "DEFAULT_MAX_STANDARD_ASYNC_BYTES = 300_000" in bundle_contract_source
+    assert "OPTIONAL_ASYNC_BUDGETS" in bundle_contract_source
+    assert "dash_tanstack_pivot_shared" in bundle_contract_source
+    assert "pivot-xlsx-html" in bundle_contract_source
+    assert "pivot-echarts-2d" in bundle_contract_source
+    assert "pivot-echarts-3d" in bundle_contract_source
+
+
 def test_server_exports_forward_active_layout_and_use_plain_text_grouping():
     component_source = Path(
         os.path.join(
@@ -303,9 +558,10 @@ def test_server_exports_forward_active_layout_and_use_plain_text_grouping():
             "src",
             "lib",
             "components",
-            "DashTanstackPivot.react.js",
+            "DashTanstackPivot.react.tsx",
         )
     ).read_text(encoding="utf-8")
+    component_source = with_pivot_workspace_shell(component_source)
     helpers_source = Path(
         os.path.join(
             os.getcwd(),
@@ -316,22 +572,42 @@ def test_server_exports_forward_active_layout_and_use_plain_text_grouping():
             "helpers.js",
         )
     ).read_text(encoding="utf-8")
+    export_commands_source = Path(
+        os.path.join(
+            os.getcwd(),
+            "dash_tanstack_pivot",
+            "src",
+            "lib",
+            "runtime",
+            "createRuntimeExportCommands.js",
+        )
+    ).read_text(encoding="utf-8")
+    export_presentation_source = Path(
+        os.path.join(
+            os.getcwd(),
+            "dash_tanstack_pivot",
+            "src",
+            "lib",
+            "runtime",
+            "useRuntimeClipboardExportPresentation.js",
+        )
+    ).read_text(encoding="utf-8")
 
     export_payload = re.search(
-        r"function buildServerExportPayload\(.*?\n    function dispatchServerExportRequest",
-        component_source,
+        r"const buildServerExportPayload =.*?\n\s*const dispatchServerExportRequest",
+        export_commands_source,
         re.S,
     )
     assert export_payload is not None
     assert "layout_mode: layoutMode" in export_payload.group(0)
     assert "allRows: Boolean(allRows)" in export_payload.group(0)
-    assert "function getExportGroupSeparator" in component_source
-    assert "getExportGroupSeparator(effectiveGroupSeparator)" in component_source
+    assert "const getExportGroupSeparator" in export_presentation_source
+    assert "getExportGroupSeparator(effectiveGroupSeparator)" in export_presentation_source
     assert "plain_space: ' '" in helpers_source
 
     server_export = re.search(
-        r"const exportPivot = \(\) => \{.*?\n    const dispatchExportPart",
-        component_source,
+        r"const exportPivot = \(\) => \{.*?\n\s*const dispatchExportPart",
+        export_commands_source,
         re.S,
     )
     assert server_export is not None
@@ -346,9 +622,10 @@ def test_export_ui_matches_xlsx_format_and_cancel_ignores_late_responses():
             "src",
             "lib",
             "components",
-            "DashTanstackPivot.react.js",
+            "DashTanstackPivot.react.tsx",
         )
     ).read_text(encoding="utf-8")
+    component_source = with_pivot_workspace_shell(component_source)
     app_bar_source = Path(
         os.path.join(
             os.getcwd(),
@@ -381,10 +658,41 @@ def test_chart_csv_neutralizes_formula_text_and_emits_excel_utf8_bom():
             "PivotCharts.js",
         )
     ).read_text(encoding="utf-8")
+    chart_export_source = Path(
+        os.path.join(
+            os.getcwd(),
+            "dash_tanstack_pivot",
+            "src",
+            "lib",
+            "components",
+            "Charts",
+            "chartExportPresentation.js",
+        )
+    ).read_text(encoding="utf-8")
 
-    assert "const escapeSpreadsheetCsvValue" in chart_source
-    assert "/^[=+\\-@]/.test(text)" in chart_source
-    assert "new Blob([`\\ufeff${csv}`]" in chart_source
+    assert "from './chartExportPresentation'" in chart_source
+    assert "const escapeSpreadsheetCsvValue" in chart_export_source
+    assert "/^[=+\\-@]/.test(text)" in chart_export_source
+    assert "new Blob([`\\ufeff${[...metadata, header, ...rows].join('\\n')}`]" in chart_export_source
+
+
+def test_chart_export_presentation_is_a_standalone_module():
+    node = shutil.which("node")
+    if not node:
+        pytest.skip("Node.js is required for the frontend source regression")
+
+    script = Path(__file__).with_name("frontend_chart_export_presentation.cjs")
+    result = subprocess.run(
+        [node, str(script)],
+        cwd=Path(__file__).resolve().parents[1],
+        capture_output=True,
+        text=True,
+        timeout=30,
+        check=False,
+    )
+
+    assert result.returncode == 0, result.stderr or result.stdout
+    assert "chart export presentation modularization passed" in result.stdout
 
 
 def test_displayed_column_formula_scope_is_exposed_in_sidebar_and_component():
@@ -406,16 +714,36 @@ def test_displayed_column_formula_scope_is_exposed_in_sidebar_and_component():
             "src",
             "lib",
             "components",
-            "DashTanstackPivot.react.js",
+            "DashTanstackPivot.react.tsx",
         )
     ).read_text(encoding="utf-8")
+    component_source = with_pivot_workspace_shell(component_source)
 
-    assert "const COLUMN_FORMULA_REFERENCE_RE" in sidebar_source
+    assert "from './formulaUtils'" in sidebar_source
     assert "formulaScope: normalizeFormulaScope(item.formulaScope)" in sidebar_source
     assert '<option value="columns">Displayed columns</option>' in sidebar_source
     assert "formatColumnFormulaReference(column.id)" in sidebar_source
     assert "displayedColumnOptions={displayedFormulaColumnOptions}" in component_source
     assert "formulaScope: PropTypes.oneOf(['measures', 'columns'])" in component_source
+
+
+def test_sidebar_formula_utilities_are_standalone_and_preserve_scope_normalization():
+    node = shutil.which("node")
+    if not node:
+        pytest.skip("Node.js is required for the frontend source regression")
+
+    script = Path(__file__).with_name("frontend_formula_utils.cjs")
+    result = subprocess.run(
+        [node, str(script)],
+        cwd=Path(__file__).resolve().parents[1],
+        capture_output=True,
+        text=True,
+        timeout=30,
+        check=False,
+    )
+
+    assert result.returncode == 0, result.stderr or result.stdout
+    assert "sidebar formula utils modularization passed" in result.stdout
 
 
 def test_value_formula_editor_brackets_field_names_that_are_not_identifiers():
@@ -526,9 +854,10 @@ def test_report_mode_supports_formatting_validation_debug_and_collapsed_levels()
             "src",
             "lib",
             "components",
-            "DashTanstackPivot.react.js",
+            "DashTanstackPivot.react.tsx",
         )
     ).read_text(encoding="utf-8")
+    component_source = with_pivot_workspace_shell(component_source)
     report_selection_source = Path(
         os.path.join(
             os.getcwd(),
@@ -576,10 +905,10 @@ def test_report_mode_supports_formatting_validation_debug_and_collapsed_levels()
     assert "from '../utils/reportEditorSelection'" in component_source
     assert "debug: rowData._reportDebug || null" in report_selection_source
     assert "reportDef: Object.prototype.hasOwnProperty.call(snapshot, 'reportDef')" in component_source
-    assert "showReportConfigColumn: showReportConfigColumn !== false && !immersiveMode" in component_source
+    assert "showReportConfigColumn: stage.showReportConfigColumn !== false && !stage.immersiveMode" in component_source
     assert (
-        "const shouldShowReportConfigGutter = pivotMode === 'report' && "
-        "showReportConfigColumn !== false && !immersiveMode"
+            "const shouldShowReportConfigGutter = stage.pivotMode === 'report' && "
+            "stage.showReportConfigColumn !== false && !stage.immersiveMode"
     ) in component_source
 
 
@@ -591,9 +920,10 @@ def test_cell_formatting_persists_colors_borders_and_alignment():
             "src",
             "lib",
             "components",
-            "DashTanstackPivot.react.js",
+            "DashTanstackPivot.react.tsx",
         )
     ).read_text(encoding="utf-8")
+    component_source = with_pivot_workspace_shell(component_source)
     app_bar_source = Path(
         os.path.join(
             os.getcwd(),
@@ -615,7 +945,7 @@ def test_cell_formatting_persists_colors_borders_and_alignment():
         )
     ).read_text(encoding="utf-8")
 
-    assert "if (restored.cellFormatRules && typeof restored.cellFormatRules === 'object') setCellFormatRules(restored.cellFormatRules);" in component_source
+    assert "if (restored.cellFormatRules && typeof restored.cellFormatRules === 'object') stage.setCellFormatRules(restored.cellFormatRules);" in component_source
     assert "cellFormatRules," in component_source
     assert "borderStyle," in app_bar_source
     assert "borderColor," in app_bar_source
@@ -681,9 +1011,10 @@ def test_chart_panel_source_grows_for_settings_instead_of_splitting_canvas():
             "src",
             "lib",
             "components",
-            "DashTanstackPivot.react.js",
+            "DashTanstackPivot.react.tsx",
         )
     ).read_text(encoding="utf-8")
+    component_source = with_pivot_workspace_shell(component_source)
     workspace_source = Path(
         os.path.join(
             os.getcwd(),
@@ -716,12 +1047,12 @@ def test_chart_panel_source_grows_for_settings_instead_of_splitting_canvas():
     assert "Dock chart pane to the top" in chart_source
     assert "Dock chart pane to the bottom" in chart_source
     assert "data-chart-modal-position={position}" in chart_source
-    assert "const [chartCanvasPaneWidthHints, setChartCanvasPaneWidthHints] = useState({});" in component_source
+    assert "[stage.chartCanvasPaneWidthHints, stage.setChartCanvasPaneWidthHints] = useState({});" in component_source
     assert "ChartWorkspace" in component_source
     assert "groupChartWorkspacePanes" in component_source
     assert "const paneHints = panes.map((pane) => ({" in workspace_source
     assert "const hintedGroupWidth = hasPaneWidthHint" in workspace_source
-    assert "flex: `0 0 ${hintedGroupWidth}px`" in workspace_source
+    assert "flexBasis: `${hintedGroupWidth}px`" in workspace_source
     assert "width: widthHint === null ? undefined : `${widthHint}px`" in workspace_source
     assert "width: widthHint === null ? undefined : '100%'" not in workspace_source
     assert "VALID_CHART_DOCK_POSITIONS = new Set(['left', 'right', 'top', 'bottom'])" in normalization_source
@@ -730,7 +1061,7 @@ def test_chart_panel_source_grows_for_settings_instead_of_splitting_canvas():
     assert "data-docked-chart-pane-position={normalizedDockPosition}" in workspace_source
     assert "renderHorizontalDockGroup(leftPanes, 'left')" in workspace_source
     assert "renderVerticalDockGroup(topPanes, 'top')" in workspace_source
-    assert "const renderChartWorkspaceModal = (position)" in component_source
+    assert "const renderChartWorkspaceModal = position =>" in component_source
     assert "data-docked-table-canvas" in workspace_source
     assert "{children}" in workspace_source
     assert "handleChartCanvasPaneWidthHintChange" in component_source
@@ -756,9 +1087,10 @@ def test_chart_canvas_pane_full_settings_settable_from_props():
             "src",
             "lib",
             "components",
-            "DashTanstackPivot.react.js",
+            "DashTanstackPivot.react.tsx",
         )
     ).read_text(encoding="utf-8")
+    component_source = with_pivot_workspace_shell(component_source)
     python_source = Path(
         os.path.join(
             os.getcwd(),
@@ -800,26 +1132,26 @@ def test_chart_canvas_pane_full_settings_settable_from_props():
     # settingsPanelWidth is normalized in chartCanvasPane
     assert "settingsPanelWidth" in normalization_source
 
-    # All three PivotChartPanel render sites pass settingsPanelWidth
+    # The shared chart-pane presentation factory forwards settingsPanelWidth to
+    # both docked and floating render paths.
     assert normalization_source.count("settingsPanelWidth") >= 2  # normalization declares it at least twice
-    assert component_source.count("settingsPanelWidth={pane.settingsPanelWidth") >= 2  # docked + floating
+    assert "settingsPanelWidth: pane.settingsPanelWidth || undefined" in component_source
 
-    # Floating pane render site now passes initialSettings and onSettingsChange
-    # (was missing before this fix)
-    floating_block_start = component_source.find("floating\n")
-    assert "initialSettings={pane.chartSettings" in component_source
+    # The shared pane-props factory supplies settings to both docked and
+    # floating render paths (which used to duplicate this JSX).
+    assert "initialSettings: pane.chartSettings || {}" in component_source
+    assert "onSettingsChange: settings => updateChartCanvasPane(pane.id, { chartSettings: settings })" in component_source
 
-    # onSettingsChange is wired for all pane render sites
-    assert component_source.count("onSettingsChange={(settings) => updateChartCanvasPane(pane.id, { chartSettings: settings })}") >= 2
-
-    # Python docstring documents chartSettings and its sub-fields
-    assert "chartSettings (dict; optional)" in python_source
-    assert "settingsPanelWidth (number; optional)" in python_source
-    assert "yAxisTitle" in python_source
-    assert "referenceLines" in python_source
-    assert "trendlineMode" in python_source
-    assert "legendPosition" in python_source
-    assert "seriesSort" in python_source
+    # TypeScript is the Dash metadata source; the local public interfaces keep
+    # chart-pane settings discoverable without relying on docgen's legacy
+    # Python-docstring formatter for nested TypeScript arrays.
+    assert "chartSettings?: DashChartSettings;" in component_source
+    assert "settingsPanelWidth?: number;" in component_source
+    assert "yAxisTitle?: string;" in component_source
+    assert "referenceLines?: Array<object>;" in component_source
+    assert "trendlineMode?: string;" in component_source
+    assert "legendPosition?: string;" in component_source
+    assert "seriesSort?: string;" in component_source
 
 
 def test_chart_panel_settings_budget_survives_parent_rerenders():
@@ -863,9 +1195,10 @@ def test_chart_panel_dimensions_use_shared_bounds_and_chrome():
             "src",
             "lib",
             "components",
-            "DashTanstackPivot.react.js",
+            "DashTanstackPivot.react.tsx",
         )
     ).read_text(encoding="utf-8")
+    component_source = with_pivot_workspace_shell(component_source)
     workspace_source = Path(
         os.path.join(
             os.getcwd(),
@@ -887,17 +1220,29 @@ def test_chart_panel_dimensions_use_shared_bounds_and_chrome():
             "usePivotNormalization.js",
         )
     ).read_text(encoding="utf-8")
+    chart_math_source = Path(
+        os.path.join(
+            os.getcwd(),
+            "dash_tanstack_pivot",
+            "src",
+            "lib",
+            "components",
+            "Charts",
+            "chartMath.js",
+        )
+    ).read_text(encoding="utf-8")
 
     assert "export const CHART_PANEL_VERTICAL_CHROME_HEIGHT = 220;" in normalization_source
-    assert "const clampChartPanelBaseWidth = (value, fallback = 430) => {" in chart_source
-    assert "Math.max(MIN_CHART_PANEL_WIDTH, Math.min(MAX_CHART_PANEL_WIDTH" in chart_source
+    assert "from './chartMath'" in chart_source
+    assert "export const clampChartPanelBaseWidth = (value, fallback = 430, minWidth, maxWidth) => {" in chart_math_source
+    assert "return Math.max(minWidth, Math.min(maxWidth, Math.floor(candidate)));" in chart_math_source
     assert "Math.max(MIN_FLOATING_CHART_PANEL_HEIGHT, Math.floor(Number(floatingRect.height)))" in chart_source
     assert "height: `${floatingPanelHeight}px`" in chart_source
     assert "Math.max(DEFAULT_FLOATING_CHART_PANEL_HEIGHT, (Number(chartHeight) || CHART_HEIGHT) + CHART_PANEL_VERTICAL_CHROME_HEIGHT)" in chart_source
     assert "Number(chartState.chartHeight || CHART_HEIGHT) + CHART_PANEL_VERTICAL_CHROME_HEIGHT" in chart_source
     assert "const maxChartCanvasPaneWidth" in component_source
     assert "chartCanvasLayoutRef.current.getBoundingClientRect().width" in component_source
-    assert "Math.min(\n                maxChartCanvasPaneWidth," in component_source
+    assert "Math.min(maxChartCanvasPaneWidth," in component_source
     assert "nextRect.height - CHART_PANEL_VERTICAL_CHROME_HEIGHT" in component_source
     assert "Math.floor(chartHeight + chartPanelVerticalChromeHeight)" in workspace_source
     assert "Math.max(width || 430, 430)" not in chart_source
@@ -924,13 +1269,25 @@ def test_resized_chart_panel_samples_dense_axis_labels():
             "PivotCharts.js",
         )
     ).read_text(encoding="utf-8")
+    renderer_source = Path(
+        os.path.join(
+            os.getcwd(),
+            "dash_tanstack_pivot",
+            "src",
+            "lib",
+            "components",
+            "Charts",
+            "ChartRenderers.js",
+        )
+    ).read_text(encoding="utf-8")
 
-    assert "const categoryAxisLabelPlan = useMemo(() => {" in chart_source
-    assert "Math.ceil((projectedWidth + 12) / Math.max(geometry.step, 1))" in chart_source
-    assert "categoryAxisLabelPlan.visibleIndexes.has(categoryIndex)" in chart_source
-    assert "<title>{String(category)}</title>" in chart_source
-    assert "const observer = new ResizeObserver(updateWidth);" in chart_source
-    assert "observer.observe(element);" in chart_source
+    assert "from './ChartRenderers'" in chart_source
+    assert "const categoryAxisLabelPlan = useMemo(() => {" in renderer_source
+    assert "Math.ceil((projectedWidth + 12) / Math.max(geometry.step, 1))" in renderer_source
+    assert "categoryAxisLabelPlan.visibleIndexes.has(categoryIndex)" in renderer_source
+    assert "<title>{String(category)}</title>" in renderer_source
+    assert "const observer = new ResizeObserver(updateWidth);" in renderer_source
+    assert "observer.observe(element);" in renderer_source
 
 
 def test_chart_panel_immersive_chrome_lock_and_export_menu_are_explicit():
@@ -970,8 +1327,20 @@ def test_chart_copy_and_exports_compose_visible_title_and_legend():
             "PivotCharts.js",
         )
     ).read_text(encoding="utf-8")
+    renderer_source = Path(
+        os.path.join(
+            os.getcwd(),
+            "dash_tanstack_pivot",
+            "src",
+            "lib",
+            "components",
+            "Charts",
+            "ChartRenderers.js",
+        )
+    ).read_text(encoding="utf-8")
 
-    assert "data-chart-export-legend-item=\"true\"" in chart_source
+    assert "from './ChartRenderers'" in chart_source
+    assert "data-chart-export-legend-item=\"true\"" in renderer_source
     assert "const createPresentedSvgNode" in chart_source
     assert "const echartsToPresentedCanvas" in chart_source
     assert "const presentation = getChartPresentation();" in chart_source
@@ -1087,7 +1456,7 @@ async def test_expansion_logic(adapter):
 
 
 @pytest.mark.asyncio
-async def test_first_expansion_reuses_collapsed_root_cache(adapter):
+async def test_first_expansion_does_not_reuse_paged_collapsed_root_cache(adapter):
     spec = PivotSpec(
         table="sales_data",
         rows=["region", "country"],
@@ -1116,8 +1485,82 @@ async def test_first_expansion_reuses_collapsed_root_cache(adapter):
 
     assert collapsed["profile"]["controller"]["path"] == "paged_collapsed_root"
     assert expanded["profile"]["controller"]["path"] == "materialized_hierarchy"
-    assert expanded["profile"]["controller"]["reusedCache"] is True
+    assert expanded["profile"]["controller"]["reusedCache"] is False
     assert any(isinstance(row, dict) and row.get("country") is not None for row in expanded["rows"])
+
+
+@pytest.mark.asyncio
+async def test_virtual_scroll_last_parent_keeps_children_after_reexpand(adapter):
+    """A collapsed page is not a complete tree for a later expansion.
+
+    This models scrolling to a deep virtual window, expanding a parent in it,
+    window, collapsing it, and expanding it again.  The children must be
+    returned at their absolute virtual-row positions on each expansion.
+    """
+    parent_count = 160
+    parent_values = [f"Parent {parent:03d}" for parent in range(parent_count) for _ in range(2)]
+    child_values = [
+        f"Child {parent:03d}-{child}"
+        for parent in range(parent_count)
+        for child in range(2)
+    ]
+    adapter.controller.load_data_from_arrow(
+        "virtual_scroll_reexpand",
+        pa.Table.from_pydict(
+            {
+                "parent": parent_values,
+                "child": child_values,
+                "value": [float(index) for index in range(len(parent_values))],
+            }
+        ),
+    )
+    request = TanStackRequest(
+        operation=TanStackOperation.GET_DATA,
+        table="virtual_scroll_reexpand",
+        columns=[
+            {"id": "parent"},
+            {"id": "child"},
+            {"id": "value_sum", "aggregationField": "value", "aggregationFn": "sum"},
+        ],
+        filters={},
+        sorting=[],
+        grouping=["parent", "child"],
+        aggregations=[],
+        totals=True,
+    )
+    window_start, window_end = 100, 159
+    # This is the last parent whose two children still fit in the requested
+    # window after expansion (absolute rows 158 and 159).
+    expanded_parent = ["Parent 157"]
+    expected_children = {
+        "Parent 157|||Child 157-0",
+        "Parent 157|||Child 157-1",
+    }
+
+    collapsed = await adapter.handle_virtual_scroll_request(
+        request, window_start, window_end, [], _allow_prefetch=False
+    )
+    expanded = await adapter.handle_virtual_scroll_request(
+        request, window_start, window_end, [expanded_parent], _allow_prefetch=False
+    )
+
+    # Clear only adapter response entries so the collapse/re-expand leg asks
+    # the controller again while retaining its hierarchy-view cache.
+    adapter._response_window_cache.clear()
+    collapsed_again = await adapter.handle_virtual_scroll_request(
+        request, window_start, window_end, [], _allow_prefetch=False
+    )
+    adapter._response_window_cache.clear()
+    reexpanded = await adapter.handle_virtual_scroll_request(
+        request, window_start, window_end, [expanded_parent], _allow_prefetch=False
+    )
+
+    assert collapsed.total_rows == parent_count + 1
+    assert collapsed_again.total_rows == collapsed.total_rows
+    for response in (expanded, reexpanded):
+        assert response.total_rows == parent_count + len(expected_children) + 1
+        returned_paths = {row.get("_path") for row in response.data}
+        assert expected_children <= returned_paths
 
 
 @pytest.mark.asyncio
@@ -2399,6 +2842,42 @@ async def test_collapsed_root_virtual_scroll_uses_paged_root_query(adapter, monk
 
 
 @pytest.mark.asyncio
+async def test_small_collapsed_root_view_materializes_once_and_slices_cached_results(adapter):
+    """Small root levels avoid repeating an IN-filtered pivot for every scroll."""
+    root_count = 80
+    adapter.controller.load_data_from_arrow(
+        "materialized_collapsed_root",
+        pa.Table.from_pydict(
+            {
+                "region": [f"Region {index:03d}" for index in range(root_count) for _ in range(2)],
+                "desk": [f"Desk {copy}" for _index in range(root_count) for copy in range(2)],
+                "sales": [index for index in range(root_count) for _ in range(2)],
+            }
+        ),
+    )
+    spec = PivotSpec(
+        table="materialized_collapsed_root",
+        rows=["region", "desk"],
+        measures=[Measure(field="sales", agg="sum", alias="sales_sum")],
+    )
+
+    first = await adapter.controller.run_hierarchy_view(
+        spec, [], start_row=0, end_row=9, profiling=True
+    )
+    second = await adapter.controller.run_hierarchy_view(
+        spec, [], start_row=40, end_row=49, profiling=True
+    )
+
+    assert first["total_rows"] == root_count
+    assert first["profile"]["controller"]["rootMaterialization"] == "stored"
+    assert second["profile"]["controller"]["rootMaterialization"] == "hit"
+    assert second["profile"]["controller"]["pageKeyFetchMs"] is None
+    assert [row["region"] for row in second["rows"]] == [
+        f"Region {index:03d}" for index in range(40, 50)
+    ]
+
+
+@pytest.mark.asyncio
 async def test_collapsed_root_virtual_scroll_with_grand_total_uses_paged_root_query(adapter, monkeypatch):
     rows = 100_000
     table = pa.Table.from_pydict(
@@ -2657,9 +3136,10 @@ def test_server_side_component_source_has_fast_horizontal_dispatch_and_trimmed_r
             "src",
             "lib",
             "components",
-            "DashTanstackPivot.react.js",
+            "DashTanstackPivot.react.tsx",
         )
     ).read_text(encoding="utf-8")
+    source = with_pivot_workspace_shell(source)
     hook_source = Path(
         os.path.join(
             os.getcwd(),
@@ -2680,6 +3160,16 @@ def test_server_side_component_source_has_fast_horizontal_dispatch_and_trimmed_r
             "useServerSideViewportController.js",
         )
     ).read_text(encoding="utf-8")
+    horizontal_viewport_source = Path(
+        os.path.join(
+            os.getcwd(),
+            "dash_tanstack_pivot",
+            "src",
+            "lib",
+            "utils",
+            "horizontalViewport.js",
+        )
+    ).read_text(encoding="utf-8")
     body_source = Path(
         os.path.join(
             os.getcwd(),
@@ -2694,12 +3184,12 @@ def test_server_side_component_source_has_fast_horizontal_dispatch_and_trimmed_r
 
     assert "chartModelingActive" in source
     assert "useServerSideViewportController" in source
-    assert "getExpandedRowModel: serverSide ? undefined : getExpandedRowModel()" in source
-    assert "getGroupedRowModel: serverSide ? undefined : getGroupedRowModel()" in source
+    assert "getExpandedRowModel: stage.serverSide ? undefined : getExpandedRowModel()" in source
+    assert "getGroupedRowModel: stage.serverSide ? undefined : getGroupedRowModel()" in source
     assert "const serverSideBlockSize = useMemo" in viewport_hook_source
     assert "if (!serverSide) return 48" in viewport_hook_source
     assert "return 48" in viewport_hook_source
-    assert "blockSize: serverSideBlockSize" in source
+    assert "blockSize: stage.serverSideBlockSize" in source
     assert "lastObservedHorizontalScrollLeftRef" in viewport_hook_source
     assert "lastFastHorizontalRangeRef" in viewport_hook_source
     assert "columnRangeUrgencyToken" in viewport_hook_source
@@ -2714,12 +3204,15 @@ def test_server_side_component_source_has_fast_horizontal_dispatch_and_trimmed_r
     assert "totalCenterCols" in hook_source
     assert "columnSizing," in hook_source
     assert "bigJumpThreshold" in viewport_hook_source
+    assert "estimateUrgentHorizontalColumnRange" in viewport_hook_source
     assert "handleHorizontalScrollMetrics" in viewport_hook_source
     assert "resetVisibleColRange" in viewport_hook_source
     assert "preserveRecentUrgentRange" in viewport_hook_source
-    assert "edgeSafetyCount" in viewport_hook_source
-    assert "largeColumnMode" in viewport_hook_source
-    assert "extremeColumnMode" in viewport_hook_source
+    assert "edgeSafetyCount" in horizontal_viewport_source
+    assert "largeColumnMode" in horizontal_viewport_source
+    assert "extremeColumnMode" in horizontal_viewport_source
+    assert "scrollLeft - leftPinnedWidth" not in viewport_hook_source
+    assert "scrollToIndex(lastCenterIndex" not in hook_source
     assert "deferredHorizontalMetricsRef" in viewport_hook_source
     assert "isRequestPending || isHorizontalColumnRequestPending" in viewport_hook_source
     assert "preserveRecentRightEdgeUrgentRange" in viewport_hook_source
@@ -2745,9 +3238,10 @@ def test_large_column_guardrail_source_warns_without_disabling_features():
             "src",
             "lib",
             "components",
-            "DashTanstackPivot.react.js",
+            "DashTanstackPivot.react.tsx",
         )
     ).read_text(encoding="utf-8")
+    component_source = with_pivot_workspace_shell(component_source)
     status_source = Path(
         os.path.join(
             os.getcwd(),
@@ -2770,8 +3264,8 @@ def test_large_column_guardrail_source_warns_without_disabling_features():
         )
     ).read_text(encoding="utf-8")
 
-    assert "SOFT_CENTER_COLUMN_WARNING_THRESHOLD" in component_source
-    assert "HARD_CENTER_COLUMN_WARNING_THRESHOLD" in component_source
+    assert "SOFT_CENTER_COLUMN_WARNING_THRESHOLD" in normalization_source
+    assert "HARD_CENTER_COLUMN_WARNING_THRESHOLD" in normalization_source
     assert "buildLargeColumnAdvisory" in component_source
     assert "bucket numeric fields, roll up dates, or move one field to Rows or Filters" in normalization_source
     assert "columnAdvisory" in status_source
@@ -2786,9 +3280,10 @@ def test_server_side_performance_config_source_exposes_ssrm_style_tuning():
             "src",
             "lib",
             "components",
-            "DashTanstackPivot.react.js",
+            "DashTanstackPivot.react.tsx",
         )
     ).read_text(encoding="utf-8")
+    component_source = with_pivot_workspace_shell(component_source)
     row_model_source = Path(
         os.path.join(
             os.getcwd(),
@@ -2851,9 +3346,10 @@ def test_grid_polish_header_drag_order_pinning_and_menu_contract():
             "src",
             "lib",
             "components",
-            "DashTanstackPivot.react.js",
+            "DashTanstackPivot.react.tsx",
         )
     ).read_text(encoding="utf-8")
+    component_source = with_pivot_workspace_shell(component_source)
     column_order_source = Path(
         os.path.join(
             os.getcwd(),
@@ -2896,8 +3392,8 @@ def test_grid_polish_header_drag_order_pinning_and_menu_contract():
         )
     ).read_text(encoding="utf-8")
 
-    assert "columnOrder: externalColumnOrder = null" in component_source
-    assert "localeText: externalLocaleText = null" in component_source
+    assert "columnOrder: stage.externalColumnOrder = null" in component_source
+    assert "localeText: stage.externalLocaleText = null" in component_source
     assert "from '../utils/columnOrder'" in component_source
     assert "normalizeColumnOrderValue" in component_source
     assert "mergeColumnOrderWithIds" in component_source
@@ -2906,10 +3402,10 @@ def test_grid_polish_header_drag_order_pinning_and_menu_contract():
     assert "export const mergeColumnOrderWithIds" in column_order_source
     assert "export const moveColumnIdInOrder" in column_order_source
     assert "export const moveColumnIdByDelta" in column_order_source
-    assert "columnOrder: effectiveColumnOrder" in component_source
+    assert "columnOrder: stage.effectiveColumnOrder" in component_source
     assert "onColumnOrderChange" in component_source
     assert "setColumnOrderWithHistory" in component_source
-    assert "savePersistedState('columnOrder', columnOrder)" in component_source
+    assert "stage.savePersistedState('columnOrder', stage.columnOrder)" in component_source
     assert "usePivotFieldInteractions" in component_source
     assert "onHeaderDrop" in component_source
     assert "resolveHeaderDropPinSide" in field_interactions_source
@@ -2938,9 +3434,10 @@ def test_header_coloring_contract_exposes_prop_and_render_path():
             "src",
             "lib",
             "components",
-            "DashTanstackPivot.react.js",
+            "DashTanstackPivot.react.tsx",
         )
     ).read_text(encoding="utf-8")
+    component_source = with_pivot_workspace_shell(component_source)
     render_helpers_source = Path(
         os.path.join(
             os.getcwd(),
@@ -2981,9 +3478,10 @@ def test_frontend_profiler_source_tracks_request_ids_and_global_history():
             "src",
             "lib",
             "components",
-            "DashTanstackPivot.react.js",
+            "DashTanstackPivot.react.tsx",
         )
     ).read_text(encoding="utf-8")
+    component_source = with_pivot_workspace_shell(component_source)
     row_model_source = Path(
         os.path.join(
             os.getcwd(),
@@ -3027,9 +3525,10 @@ def test_grid_clipboard_shortcuts_preserve_native_editable_input_behavior():
             "src",
             "lib",
             "components",
-            "DashTanstackPivot.react.js",
+            "DashTanstackPivot.react.tsx",
         )
     ).read_text(encoding="utf-8")
+    component_source = with_pivot_workspace_shell(component_source)
     normalization_source = Path(
         os.path.join(
             os.getcwd(),
@@ -3054,9 +3553,10 @@ def test_frontend_batch_edit_source_uses_runtime_transaction_requests():
             "src",
             "lib",
             "components",
-            "DashTanstackPivot.react.js",
+            "DashTanstackPivot.react.tsx",
         )
     ).read_text(encoding="utf-8")
+    component_source = with_pivot_workspace_shell(component_source)
     transaction_source = Path(
         os.path.join(
             os.getcwd(),
@@ -3080,7 +3580,9 @@ def test_frontend_batch_edit_source_uses_runtime_transaction_requests():
     assert "pendingPropagationUpdatesRef" in component_source
     assert "handleConfirmPropagation" in component_source
     assert "handleCancelPropagation" in component_source
-    assert "describeTransactionPropagation" in component_source
+    assert "describeTransactionPropagation" in Path(
+        os.path.join(os.getcwd(), "dash_tanstack_pivot", "src", "lib", "hooks", "usePivotNormalization.js")
+    ).read_text(encoding="utf-8")
     assert "transactionUndoStackRef" not in component_source
     assert "transactionRedoStackRef" not in component_source
     assert "pendingTransactionHistoryRef" not in component_source
@@ -3170,9 +3672,10 @@ def test_cell_sparkline_source_supports_pivot_summary_and_ag_grid_style_series()
             "src",
             "lib",
             "components",
-            "DashTanstackPivot.react.js",
+            "DashTanstackPivot.react.tsx",
         )
     ).read_text(encoding="utf-8")
+    component_source = with_pivot_workspace_shell(component_source)
     normalization_source = Path(
         os.path.join(
             os.getcwd(),
@@ -3222,19 +3725,19 @@ def test_cell_sparkline_source_supports_pivot_summary_and_ag_grid_style_series()
     assert "data-pivot-sparkline-zoom-reset=\"true\"" in component_source
     assert "data-pivot-sparkline-detail-table=\"true\"" in component_source
     assert "normalizeSparklineValConfigsForView" in component_source
-    assert "getFixedSparklineConfigMap" in component_source
+    assert "getFixedSparklineConfigMap" in sparkline_utils_source
     assert "from '../utils/sparklines'" in component_source
     assert "export const normalizeSparklineValConfigsForView" in sparkline_utils_source
     assert "export const getFixedSparklineConfigMap" in sparkline_utils_source
     assert "removesFixedSparkline" in sparkline_utils_source
     assert "fixedSparklineValueKeys" in component_source
-    assert "setValConfigs(normalizeSparklineValConfigsForView(restored.valConfigs, normalizedInitialValConfigs))" in component_source
+    assert "stage.setValConfigs(normalizeSparklineValConfigsForView(restored.valConfigs, stage.normalizedInitialValConfigs))" in component_source
     assert "valConfigs: normalizeSparklineValConfigsForView(valConfigs, normalizedInitialValConfigs)" in component_source
     assert "sparkline: PropTypes.oneOfType([PropTypes.bool, PropTypes.object])" in component_source
     assert "'array_agg'" in component_source
-    assert "\"sparkline\": NotRequired[typing.Union[bool, dict]]" in python_source
-    assert "- sparkline (boolean | dict; optional)" in python_source
-    assert '"array_agg"' in python_source
+    assert "sparkline?: boolean | object;" in component_source
+    assert "sparkline?: boolean | object;" in component_source
+    assert "agg?: string;" in component_source
     assert "if (columnMeta && columnMeta.isSparklineSummary) return null;" in normalization_source
     assert "const placement = sparklineConfig.placement || 'before';" in column_source
     assert "placement: 'before'" in sparkline_utils_source
@@ -3283,9 +3786,10 @@ def test_frontend_sorting_source_preserves_multisort_priority_and_metadata():
             "src",
             "lib",
             "components",
-            "DashTanstackPivot.react.js",
+            "DashTanstackPivot.react.tsx",
         )
     ).read_text(encoding="utf-8")
+    component_source = with_pivot_workspace_shell(component_source)
     sorting_source = Path(
         os.path.join(
             os.getcwd(),
@@ -3298,7 +3802,7 @@ def test_frontend_sorting_source_preserves_multisort_priority_and_metadata():
     ).read_text(encoding="utf-8")
 
     assert "updateSortingForColumn({" in component_source
-    assert "normalizeSortingState(rawNextSorting, sorting)" in component_source
+    assert "normalizeSortingState(rawNextSorting, stage.sorting)" in component_source
     assert "Update Priority" in component_source
     assert "mergeSortSpecifierMetadata" in sorting_source
     assert "updatedExisting = true" in sorting_source
@@ -3343,9 +3847,10 @@ def test_frontend_editable_cells_flow_through_column_metadata_and_transaction_hi
             "src",
             "lib",
             "components",
-            "DashTanstackPivot.react.js",
+            "DashTanstackPivot.react.tsx",
         )
     ).read_text(encoding="utf-8")
+    component_source = with_pivot_workspace_shell(component_source)
     assert "dispatchBatchUpdateRequest([update], 'inline-edit')" in component_source
     assert "optimisticCellValuesRef" in component_source
     assert "captureOptimisticCellValues(effectiveUpdates, dispatched.requestId);" in component_source
@@ -3353,7 +3858,7 @@ def test_frontend_editable_cells_flow_through_column_metadata_and_transaction_hi
     assert "const setColExpandedWithHistory = useCallback" in component_source
     assert "setExpandedWithHistory(newExpanded, 'layout:expanded');" in component_source
     assert "setExpandedWithHistory(shouldExpand ? true : {}, 'layout:expand-all');" in component_source
-    assert "setExpandedWithHistory((prev) => {" in component_source
+    assert "setExpandedWithHistory(prev => {" in component_source
     assert "'layout:expand-subtree'" in component_source
     assert "const resolveCurrentCellValue = useCallback" in component_source
     assert "const resolveDisplayedCellValue = useCallback" in component_source
@@ -3370,7 +3875,7 @@ def test_frontend_editable_cells_flow_through_column_metadata_and_transaction_hi
     assert "editComparisonState: serializedEditComparisonState" in component_source
     assert "resolveEditedCellMarker" in component_source
     assert "editValueDisplayMode" in component_source
-    assert "resolveCellDisplayValue: resolveDisplayedCellValue" in component_source
+    assert "resolveCellDisplayValue: stage.resolveDisplayedCellValue" in component_source
     assert "resolveCurrentCellValue={resolveCurrentCellValue}" in component_source
     assert "setEditValueDisplayMode={setEditValueDisplayMode}" in component_source
     assert "normalizedEditingConfig" in component_source
@@ -3383,7 +3888,7 @@ def test_frontend_editable_cells_flow_through_column_metadata_and_transaction_hi
     assert "editLifecycleEvent" in component_source
     assert "emitEditLifecycleEvent({" in component_source
     assert "editorOptionsLoadingState" in component_source
-    assert "const requestEditorOptions = useCallback" in component_source
+    assert "stage.requestEditorOptions = useCallback" in component_source
     assert "aggregation =" in editable_cell_source
     assert "source: 'inline-edit'" in editable_cell_source
     assert "rowPath: rowPath || null" in editable_cell_source
@@ -3407,19 +3912,19 @@ def test_frontend_editable_cells_flow_through_column_metadata_and_transaction_hi
     assert "onDoubleClick={(e) => {" in editable_cell_source
     assert "onMouseDown={(e) => {" not in editable_cell_source
     assert "onClick={(e) => {" not in editable_cell_source
-    assert "const EDITING_TEMPORARILY_DISABLED = true;" in component_source
-    assert "showEditing: !EDITING_TEMPORARILY_DISABLED && src.showEditing !== false" in component_source
-    assert "showEditPanel: !EDITING_TEMPORARILY_DISABLED && src.showEditPanel !== false" in component_source
+    assert "const EDITING_PUBLIC_FEATURE_SUPPORTED = false;" in component_source
+    assert "showEditing: EDITING_PUBLIC_FEATURE_SUPPORTED" in component_source
+    assert "showEditPanel: EDITING_PUBLIC_FEATURE_SUPPORTED" in component_source
     assert "if (!editingEnabled) return null;" in component_source
-    assert "const getRenderedCellWidthForColumn = useCallback((columnId) => {" in component_source
-    assert "const getAutoSizeSampleRows = useCallback((rows) => {" in component_source
-    assert "const renderedCellWidth = (columnId !== 'hierarchy' && columnId !== '__row_number__' && columnId !== '__report_config__')" in component_source
-    assert "const measuredFromCells = (col.id !== 'hierarchy' && col.id !== '__row_number__' && col.id !== '__report_config__')" in component_source
-    assert "const reportDefRef = useRef(reportDef);" in component_source
-    assert "reportDefRef.current = reportDef;" in component_source
+    assert "const getRenderedCellWidthForColumn = useCallback(columnId => {" in component_source
+    assert "const getAutoSizeSampleRows = useCallback(rows => {" in component_source
+    assert "const renderedCellWidth = columnId !== 'hierarchy' && columnId !== '__row_number__' && columnId !== '__report_config__'" in component_source
+    assert "const measuredFromCells = col.id !== 'hierarchy' && col.id !== '__row_number__' && col.id !== '__report_config__'" in component_source
+    assert "stage.reportDefRef = useRef(stage.reportDef);" in component_source
+    assert "stage.reportDefRef.current = stage.reportDef;" in component_source
     assert "from '../utils/reportEditorSelection'" in component_source
-    assert "buildReportEditorSelectionFromRow(reportDefRef.current, rowData)" in component_source
-    assert "Math.min(Math.max(measuredWithCells, autoSizeBounds.minWidth), autoSizeBounds.maxWidth)" in component_source
+    assert "buildReportEditorSelectionFromRow(stage.reportDefRef.current, rowData)" in component_source
+    assert "Math.min(Math.max(measuredWithCells, stage.autoSizeBounds.minWidth), stage.autoSizeBounds.maxWidth)" in component_source
     assert "Math.ceil(renderedHeaderWidth)" in component_source
     assert "contentWidth + horizontalChrome + autoSizeBounds.cellOverscan" in component_source
     assert "const measurementClone = headerContent.cloneNode(true);" in component_source
@@ -3567,9 +4072,10 @@ def test_frontend_chart_surface_includes_inline_settings_sparkline_and_resize_re
             "src",
             "lib",
             "components",
-            "DashTanstackPivot.react.js",
+            "DashTanstackPivot.react.tsx",
         )
     ).read_text(encoding="utf-8")
+    component_source = with_pivot_workspace_shell(component_source)
     normalization_source = Path(
         os.path.join(
             os.getcwd(),
@@ -3590,6 +4096,17 @@ def test_frontend_chart_surface_includes_inline_settings_sparkline_and_resize_re
             "useColumnVirtualizer.js",
         )
     ).read_text(encoding="utf-8")
+    renderer_source = Path(
+        os.path.join(
+            os.getcwd(),
+            "dash_tanstack_pivot",
+            "src",
+            "lib",
+            "components",
+            "Charts",
+            "ChartRenderers.js",
+        )
+    ).read_text(encoding="utf-8")
 
     assert "data-chart-settings-toggle=\"true\"" in chart_source
     assert "data-chart-settings-pane=\"true\"" in chart_source
@@ -3597,8 +4114,9 @@ def test_frontend_chart_surface_includes_inline_settings_sparkline_and_resize_re
     assert "data-chart-settings-scroll=\"true\"" in chart_source
     assert "data-chart-surface-scroll=\"true\"" in chart_source
     assert "data-chart-settings-resizer=\"true\"" in chart_source
-    assert "data-chart-sparkline-board=\"true\"" in chart_source
-    assert "data-chart-sparkline-card=" in chart_source
+    assert "from './ChartRenderers'" in chart_source
+    assert "data-chart-sparkline-board=\"true\"" in renderer_source
+    assert "data-chart-sparkline-card=" in renderer_source
     assert "const PivotChartPanelContent = ({" in chart_source
     assert "export const PivotChartPanel = (props) => {" in chart_source
     assert "if (!props.open) return null;" in chart_source
@@ -3615,7 +4133,7 @@ def test_frontend_chart_surface_includes_inline_settings_sparkline_and_resize_re
     assert "VALID_CHART_TYPES = new Set([" in normalization_source
     assert "'bar3d'" in normalization_source
     assert "'sparkline'" in normalization_source
-    assert "setTableCanvasSize((previousSize) => Math.max(DEFAULT_TABLE_CANVAS_SIZE" in component_source
+    assert "setTableCanvasSize(previousSize => Math.max(DEFAULT_TABLE_CANVAS_SIZE" in component_source
     assert "const remeasure = () => {" in column_virtualizer_source
     assert "observer.observe(scrollEl);" in column_virtualizer_source
     assert "columnVirtualizer.measure();" in column_virtualizer_source
@@ -3731,23 +4249,34 @@ def test_expansion_request_includes_anchor_block_from_overscan_boundary():
             "src",
             "lib",
             "components",
-            "DashTanstackPivot.react.js",
+            "DashTanstackPivot.react.tsx",
         )
     ).read_text(encoding="utf-8")
+    source = with_pivot_workspace_shell(source)
 
     assert "viewportAlignedStart" in source
     assert "Math.min(viewportAlignedStart, anchorBlockHint * expansionBlockSize)" in source
 
 
 def test_runtime_data_drop_resolves_pending_viewport_request():
-    source = Path(
+    transport_source = Path(
         os.path.join(
             os.getcwd(),
             "dash_tanstack_pivot",
             "src",
             "lib",
-            "components",
-            "DashTanstackPivot.react.js",
+            "runtime",
+            "useTransportRuntime.ts",
+        )
+    ).read_text(encoding="utf-8")
+    response_lifecycle_source = Path(
+        os.path.join(
+            os.getcwd(),
+            "dash_tanstack_pivot",
+            "src",
+            "lib",
+            "runtime",
+            "useRuntimeResponseLifecycle.js",
         )
     ).read_text(encoding="utf-8")
     runtime_data_commit_source = Path(
@@ -3761,10 +4290,11 @@ def test_runtime_data_drop_resolves_pending_viewport_request():
         )
     ).read_text(encoding="utf-8")
 
-    assert "useRuntimeDataCommit({" in source
-    assert "if (!runtimePayloadCommitIsCurrent(runtimeResponse, payload, resolvedPayload)) {" in source
-    assert "resolvePendingRequest(runtimeResponse);" in source
-    assert "if (!runtimePayloadCommitIsCurrent(runtimeResponse, payload, payload)) {" in source
+    assert "useRuntimeDataCommit({" in transport_source
+    assert "useRuntimeResponseLifecycle({" in transport_source
+    assert "if (!runtimePayloadCommitIsCurrent(runtimeResponse, payload, resolvedPayload)) {" in response_lifecycle_source
+    assert "resolvePendingRequest(runtimeResponse);" in response_lifecycle_source
+    assert "if (!runtimePayloadCommitIsCurrent(runtimeResponse, payload, payload)) {" in response_lifecycle_source
     assert "export function useRuntimeDataCommit" in runtime_data_commit_source
     assert "const runtimePayloadCommitIsCurrent = useCallback" in runtime_data_commit_source
     assert "const commitRuntimeDataPayload = useCallback" in runtime_data_commit_source
@@ -3779,9 +4309,10 @@ def test_expansion_requests_preserve_latest_horizontal_window():
             "src",
             "lib",
             "components",
-            "DashTanstackPivot.react.js",
+            "DashTanstackPivot.react.tsx",
         )
     ).read_text(encoding="utf-8")
+    source = with_pivot_workspace_shell(source)
     viewport_hook_source = Path(
         os.path.join(
             os.getcwd(),
@@ -3807,9 +4338,10 @@ def test_structural_requests_restart_from_top_window_after_field_changes():
             "src",
             "lib",
             "components",
-            "DashTanstackPivot.react.js",
+            "DashTanstackPivot.react.tsx",
         )
     ).read_text(encoding="utf-8")
+    source = with_pivot_workspace_shell(source)
 
     assert "const structuralWindowSize = Math.max(" in source
     assert "const structuralStart = 0;" in source
@@ -3824,9 +4356,10 @@ def test_view_state_restore_rehydrates_server_side_runtime_requests():
             "src",
             "lib",
             "components",
-            "DashTanstackPivot.react.js",
+            "DashTanstackPivot.react.tsx",
         )
     ).read_text(encoding="utf-8")
+    component_source = with_pivot_workspace_shell(component_source)
     callback_source = Path(
         os.path.join(
             os.getcwd(),
@@ -3840,11 +4373,11 @@ def test_view_state_restore_rehydrates_server_side_runtime_requests():
 
     assert "restored.expanded === true" in component_source
     assert "restored.expanded === false" in component_source
-    assert "const buildRuntimeRequestStateOverride = useCallback" in component_source
+    assert "stage.buildRuntimeRequestStateOverride = useCallback" in component_source
     assert "state_override: requestStateOverride || undefined" in component_source
-    assert "const dispatchServerSideRuntimeSetProps = useCallback" in component_source
-    assert "setProps: dispatchServerSideRuntimeSetProps" in component_source
-    assert "state_override: buildRuntimeRequestStateOverride() || undefined" in component_source
+    assert "stage.dispatchServerSideRuntimeSetProps = useCallback" in component_source
+    assert "setProps: stage.dispatchServerSideRuntimeSetProps" in component_source
+    assert "state_override: stage.buildRuntimeRequestStateOverride() || undefined" in component_source
     assert "showSubtotals" in component_source
     assert "reportDef," in component_source
     assert "customDimensions" in component_source
@@ -3890,9 +4423,10 @@ def test_layout_modes_and_subtotal_toggle_have_deterministic_runtime_contracts()
             "src",
             "lib",
             "components",
-            "DashTanstackPivot.react.js",
+            "DashTanstackPivot.react.tsx",
         )
     ).read_text(encoding="utf-8")
+    component_source = with_pivot_workspace_shell(component_source)
     render_helpers_source = Path(
         os.path.join(
             os.getcwd(),
@@ -3927,12 +4461,12 @@ def test_layout_modes_and_subtotal_toggle_have_deterministic_runtime_contracts()
     assert "Subtotals" in appbar_source
     assert "setShowSubtotals(prev => !prev)" in appbar_source
     assert "const normalizeLayoutModeValue" in component_source
-    assert "normalizeLayoutModeValue(loadPersistedState('layoutMode', 'hierarchy'))" in component_source
+    assert "normalizeLayoutModeValue(stage.loadPersistedState('layoutMode', 'hierarchy'))" in component_source
     assert "loadPersistedState('showSubtotals'" in component_source
-    assert "savePersistedState('layoutMode', layoutMode)" in component_source
-    assert "savePersistedState('showSubtotals', showSubtotals)" in component_source
+    assert "stage.savePersistedState('layoutMode', stage.layoutMode)" in component_source
+    assert "stage.savePersistedState('showSubtotals', stage.showSubtotals)" in component_source
     assert "layoutMode: 'hierarchy'" in component_source
-    assert "layoutMode,\n            grandTotalPinOverride," in component_source
+    assert "grandTotalPinOverride," in component_source
     assert "'layoutMode'," in component_source
     assert "show_subtotal_footers: showSubtotals," in component_source
     assert "show_subtotal_footers: showSubtotals || undefined" not in component_source
@@ -3950,9 +4484,10 @@ def test_client_side_custom_categories_materialize_before_filtering():
             "src",
             "lib",
             "components",
-            "DashTanstackPivot.react.js",
+            "DashTanstackPivot.react.tsx",
         )
     ).read_text(encoding="utf-8")
+    component_source = with_pivot_workspace_shell(component_source)
     normalization_source = Path(
         os.path.join(
             os.getcwd(),
@@ -3982,10 +4517,10 @@ def test_client_side_custom_categories_materialize_before_filtering():
     assert "if (normalized === 'isnull') return 'is_null';" in normalization_source
     assert "clause.value.split(',')" in normalization_source
     assert "evaluateCustomCategoryDimension(nextRow, dimension)" in normalization_source
-    assert "serverSide ? cleanData : applyCustomDimensionsToRows(cleanData, customDimensions)" in component_source
+    assert "stage.serverSide ? stage.cleanData : applyCustomDimensionsToRows(stage.cleanData, stage.customDimensions)" in component_source
     assert "data={customAwareData}" in component_source
-    assert "const filteredData = useFilteredData(customAwareData, filters, serverSide);" in component_source
-    assert component_source.index("const filteredData = useFilteredData") < component_source.index("} = useServerSideViewportController({")
+    assert "stage.filteredData = useFilteredData(stage.customAwareData, stage.filters, stage.serverSide);" in component_source
+    assert component_source.index("stage.filteredData = useFilteredData") < component_source.index("} = useServerSideViewportController({")
     assert "targetZone === 'vals' && typeof isCustomCategoryField === 'function' && isCustomCategoryField(fieldName)" in field_interactions_source
 
 
@@ -4042,6 +4577,25 @@ def test_custom_category_editor_uses_modal_and_validates_rules():
     assert 'A category named "${normalized.name}" already exists.' in sidebar_source
     assert "does not match any current row" in sidebar_source
     assert "createCustomCategoryRule(conditionFieldOptions" in sidebar_source
+
+
+def test_custom_category_utilities_are_standalone():
+    node = shutil.which("node")
+    if not node:
+        pytest.skip("Node.js is required for the frontend source regression")
+
+    script = Path(__file__).with_name("frontend_custom_category_utils.cjs")
+    result = subprocess.run(
+        [node, str(script)],
+        cwd=Path(__file__).resolve().parents[1],
+        capture_output=True,
+        text=True,
+        timeout=30,
+        check=False,
+    )
+
+    assert result.returncode == 0, result.stderr or result.stdout
+    assert "custom category utility modularization passed" in result.stdout
 
 
 def test_available_fields_search_only_appears_for_larger_field_lists():
@@ -4112,9 +4666,10 @@ def test_measure_axis_contract_is_wired_through_frontend_and_runtime():
             "src",
             "lib",
             "components",
-            "DashTanstackPivot.react.js",
+            "DashTanstackPivot.react.tsx",
         )
     ).read_text(encoding="utf-8")
+    component_source = with_pivot_workspace_shell(component_source)
     sidebar_source = Path(
         os.path.join(
             os.getcwd(),
@@ -4208,9 +4763,10 @@ def test_filter_open_requests_and_responses_are_idempotent():
             "src",
             "lib",
             "components",
-            "DashTanstackPivot.react.js",
+            "DashTanstackPivot.react.tsx",
         )
     ).read_text(encoding="utf-8")
+    component_source = with_pivot_workspace_shell(component_source)
     filter_options_source = Path(
         os.path.join(
             os.getcwd(),
@@ -4299,10 +4855,10 @@ def test_filter_open_requests_and_responses_are_idempotent():
         )
     ).read_text(encoding="utf-8")
 
-    assert "const handledRuntimeResponseKeysRef = useRef(new Set());" in component_source
-    assert "const buildRuntimeResponseProcessingKey = useCallback" in component_source
-    assert "const markRuntimeResponseHandled = useCallback" in component_source
-    assert "if (responseProcessingKey && !markRuntimeResponseHandled(responseProcessingKey)) return;" in component_source
+    assert "stage.handledRuntimeResponseKeysRef = useRef(new Set());" in component_source
+    assert "export function buildRuntimeResponseProcessingKey" in component_source
+    assert "export function markRuntimeResponseHandled" in component_source
+    assert "if (responseProcessingKey && !markRuntimeResponseHandled(handledRuntimeResponseKeysRef, responseProcessingKey)) return;" in component_source
     assert "Object.prototype.hasOwnProperty.call(filterOptions || {}, columnId)" in component_source
     assert "pendingServerFilterOptionsRef.current = requestKey;" in component_source
     assert "const handleFilterClick = useCallback" in component_source
@@ -4314,14 +4870,14 @@ def test_filter_open_requests_and_responses_are_idempotent():
     assert "export const collectDataFieldIds = (rows) =>" in filter_options_source
     assert "export const buildClientFilterOptionMap" in filter_options_source
     assert "export const compareFilterOptionValues" in filter_options_source
-    assert "return collectDataFieldIds(data);" in component_source
-    assert "const clientFilterOptionMap = useMemo" in component_source
-    assert "buildClientFilterOptionMap(customAwareData, availableFieldsWithCustomDimensions)" in component_source
-    assert "if (!serverSide && clientFilterOptionMap[activeFilterCol])" in component_source
+    assert "return collectDataFieldIds(stage.data);" in component_source
+    assert "stage.clientFilterOptionMap = useMemo" in component_source
+    assert "buildClientFilterOptionMap(stage.customAwareData, stage.availableFieldsWithCustomDimensions)" in component_source
+    assert "if (!stage.serverSide && stage.clientFilterOptionMap[stage.activeFilterCol])" in component_source
     assert "const FILTER_OPTION_PAGE_SIZE = 250;" in component_source
     assert "setTransportFilterOptionMetaState" in component_source
     assert "payload: {" in component_source and "search," in component_source and "offset," in component_source
-    assert "state_override: buildRuntimeRequestStateOverride() || undefined" in component_source
+    assert "state_override: stage.buildRuntimeRequestStateOverride() || undefined" in component_source
 
     assert "const columnPositionKey =" in filter_popover_source
     assert "[anchorEl, columnAnchorTarget, columnPositionKey]" in filter_popover_source
@@ -4415,6 +4971,16 @@ def test_frontend_resilience_source_handles_reset_jank_cell_errors_and_keyboard_
             "useRenderHelpers.js",
         )
     ).read_text(encoding="utf-8")
+    safe_cell_content_source = Path(
+        os.path.join(
+            os.getcwd(),
+            "dash_tanstack_pivot",
+            "src",
+            "lib",
+            "presentation",
+            "safeCellContent.js",
+        )
+    ).read_text(encoding="utf-8")
     sidebar_source = Path(
         os.path.join(
             os.getcwd(),
@@ -4433,9 +4999,10 @@ def test_frontend_resilience_source_handles_reset_jank_cell_errors_and_keyboard_
             "src",
             "lib",
             "components",
-            "DashTanstackPivot.react.js",
+            "DashTanstackPivot.react.tsx",
         )
     ).read_text(encoding="utf-8")
+    component_source = with_pivot_workspace_shell(component_source)
 
     field_interactions_source = Path(
         os.path.join(
@@ -4459,9 +5026,10 @@ def test_frontend_resilience_source_handles_reset_jank_cell_errors_and_keyboard_
     assert "debugLog('skip-obsolete-viewport'" in row_model_source
     assert "blocksNeeded: dispatchBlocksNeeded" in row_model_source
 
-    assert "class CellErrorBoundary extends React.Component" in render_helpers_source
-    assert "data-pivot-cell-error=\"true\"" in render_helpers_source
-    assert "function SafeCellContent({ render })" in render_helpers_source
+    assert "from '../presentation/safeCellContent'" in render_helpers_source
+    assert "class CellErrorBoundary extends React.Component" in safe_cell_content_source
+    assert "data-pivot-cell-error=\"true\"" in safe_cell_content_source
+    assert "function SafeCellContent({ render })" in safe_cell_content_source
     assert "render={() => flexRender(col.columnDef.cell, displayCellLike.getContext())}" in render_helpers_source
     assert "import { useCallback, useEffect, useMemo, useRef } from 'react';" in render_helpers_source
     assert "useEffect(() => { leafColumnsCacheRef.current = new Map(); }" in render_helpers_source

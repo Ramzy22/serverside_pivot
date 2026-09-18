@@ -172,7 +172,7 @@ class ProgressiveDataLoader:
                 
                 # For now, stick to count() but acknowledge it's usually fast without filters
                 pass
-            except:
+            except:  # nosec B110
                 pass
 
         # Apply filters

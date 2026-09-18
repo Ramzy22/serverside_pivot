@@ -13,11 +13,58 @@ import zipfile
 from typing import Any, Dict, List, Optional, Tuple
 
 from ..tanstack_adapter import TanStackResponse
+from ..export_limits import (
+    DEFAULT_EXPORT_MAX_BYTES,
+    DEFAULT_EXPORT_MAX_ROWS,
+    ExportLimitError,
+    ExportLimits,
+)
 from .models import PivotViewState, first_present
 
 
 class RuntimeExportService:
     """Build and write table export payloads without routing requests."""
+
+    def __init__(
+        self,
+        *,
+        max_rows: Optional[int] = None,
+        max_bytes: Optional[int] = None,
+    ) -> None:
+        self.limits = ExportLimits.from_environment(
+            max_rows=max_rows,
+            max_bytes=max_bytes,
+        )
+        self.max_rows = self.limits.max_rows
+        self.max_bytes = self.limits.max_bytes
+
+    def build_export_payload(
+        self,
+        response: TanStackResponse,
+        state: PivotViewState,
+        export_request: Optional[Dict[str, Any]],
+    ) -> Dict[str, Any]:
+        """Write an export and enforce the configured row and byte budgets."""
+        response_rows = getattr(response, "data", None)
+        if isinstance(response_rows, list):
+            # Reject a materialized allRows/hierarchy response before a derived
+            # list or temporary document is allocated.
+            self.limits.ensure_rows(len(response_rows))
+        payload = self._build_export_payload(response, state, export_request)
+        rows = int(payload.get("rows") or 0)
+        content_length = int(payload.get("contentLength") or 0)
+        if rows <= self.max_rows and content_length <= self.max_bytes:
+            return payload
+
+        content_path = payload.get("contentPath")
+        if isinstance(content_path, str):
+            try:
+                os.remove(content_path)
+            except OSError:
+                pass
+        if rows > self.max_rows:
+            self.limits.ensure_rows(rows)
+        self.limits.ensure_bytes(content_length)
 
     @staticmethod
     def _build_export_payload(
@@ -46,7 +93,17 @@ class RuntimeExportService:
             filename = f"pivot_export_{part_label}.{ext}" if part_label else f"pivot_export.{ext}"
         include_headers = bool(first_present(request_payload, "includeHeaders", "include_headers", default=True))
 
-        rows = [row for row in (response.data or []) if isinstance(row, dict)]
+        # The TanStack response already owns an in-memory row window.  Reuse
+        # that list for the common hierarchy/outline export path rather than
+        # allocating a second full list before writing the file. Tabular
+        # projection and subtotal filtering intentionally create derived rows
+        # only when their presentation contract requires it.
+        response_rows = response.data if isinstance(response.data, list) else []
+        rows = (
+            response_rows
+            if all(isinstance(row, dict) for row in response_rows)
+            else [row for row in response_rows if isinstance(row, dict)]
+        )
         is_tabular_without_subtotals = (
             str(getattr(state, "layout_mode", "") or "").strip().lower() == "tabular"
             and not bool(getattr(state, "show_subtotals", False))
@@ -411,21 +468,100 @@ class RuntimeExportService:
                 text_value = "'" + text_value
             return f'<c r="{ref}"{style_attr} t="inlineStr"><is><t>{_xml_text(text_value)}</t></is></c>'
 
+        def _export_field_from_column_id(column_id: Any) -> str:
+            return "_id" if str(column_id) == "hierarchy" else str(column_id)
+
+        def _merged_header_rows() -> List[List[Dict[str, Any]]]:
+            """Normalize client header ancestry into safe worksheet merge cells."""
+            raw_rows = style_profile.get("mergedHeaderRows") if isinstance(style_profile, dict) else None
+            if not isinstance(raw_rows, list) or not raw_rows:
+                return []
+            field_indexes = {field: index for index, field in enumerate(field_order)}
+            normalized: List[List[Dict[str, Any]]] = []
+            total_rows = len(raw_rows)
+            for row_index, raw_row in enumerate(raw_rows):
+                if not isinstance(raw_row, list):
+                    return []
+                cells: List[Dict[str, Any]] = []
+                for raw_cell in raw_row:
+                    if not isinstance(raw_cell, dict):
+                        continue
+                    raw_column_ids = raw_cell.get("columnIds")
+                    if not isinstance(raw_column_ids, list):
+                        raw_column_ids = [raw_cell.get("styleColumnId")]
+                    indexes = sorted({
+                        field_indexes[field]
+                        for column_id in raw_column_ids
+                        for field in [_export_field_from_column_id(column_id)]
+                        if field in field_indexes
+                    })
+                    if not indexes:
+                        continue
+                    start, end = indexes[0], indexes[-1]
+                    # A merge cannot skip a field that was selected for this
+                    # export part. Falling back to a flat header is safer than
+                    # emitting a misleading, non-contiguous group.
+                    if indexes != list(range(start, end + 1)):
+                        return []
+                    try:
+                        row_span = int(raw_cell.get("rowSpan") or 1)
+                    except (TypeError, ValueError):
+                        row_span = 1
+                    row_span = max(1, min(row_span, total_rows - row_index))
+                    style_key = _export_field_from_column_id(raw_cell.get("styleColumnId") or raw_column_ids[0])
+                    label = raw_cell.get("label")
+                    cells.append({
+                        "label": str(label) if label not in (None, "") else RuntimeExportService._export_header_for_key(
+                            field_order[start], header_map, state, style_profile
+                        ),
+                        "start": start,
+                        "end": end,
+                        "rowSpan": row_span,
+                        "styleKey": style_key if style_key in field_indexes else field_order[start],
+                    })
+                if not cells:
+                    return []
+                normalized.append(sorted(cells, key=lambda cell: cell["start"]))
+            return normalized
+
         sheet_rows: List[str] = []
+        merge_ranges: List[str] = []
         excel_row = 1
         if include_headers and field_order:
-            headers = [RuntimeExportService._export_header_for_key(key, header_map, state, style_profile) for key in field_order]
-            cells = "".join(
-                _cell_xml(
-                    excel_row,
-                    col_index,
-                    header,
-                    _xf_id(RuntimeExportService._export_header_style(key, header, style_profile, state)),
+            merged_header_rows = _merged_header_rows()
+            if merged_header_rows:
+                for header_row_index, header_row in enumerate(merged_header_rows):
+                    cells = "".join(
+                        _cell_xml(
+                            excel_row,
+                            cell["start"],
+                            cell["label"],
+                            _xf_id(RuntimeExportService._export_header_style(
+                                cell["styleKey"], cell["label"], style_profile, state
+                            )),
+                        )
+                        for cell in header_row
+                    )
+                    sheet_rows.append(f'<row r="{excel_row}" customHeight="1" ht="24">{cells}</row>')
+                    for cell in header_row:
+                        if cell["end"] > cell["start"] or cell["rowSpan"] > 1:
+                            merge_ranges.append(
+                                f'{_col_name(cell["start"])}{excel_row}:{_col_name(cell["end"])}{excel_row + cell["rowSpan"] - 1}'
+                            )
+                    excel_row += 1
+            else:
+                headers = [RuntimeExportService._export_header_for_key(key, header_map, state, style_profile) for key in field_order]
+                cells = "".join(
+                    _cell_xml(
+                        excel_row,
+                        col_index,
+                        header,
+                        _xf_id(RuntimeExportService._export_header_style(key, header, style_profile, state)),
+                    )
+                    for col_index, (key, header) in enumerate(zip(field_order, headers))
                 )
-                for col_index, (key, header) in enumerate(zip(field_order, headers))
-            )
-            sheet_rows.append(f'<row r="{excel_row}" customHeight="1" ht="24">{cells}</row>')
-            excel_row += 1
+                sheet_rows.append(f'<row r="{excel_row}" customHeight="1" ht="24">{cells}</row>')
+                excel_row += 1
         for row in rows:
             cells = []
             for col_index, key in enumerate(field_order):
@@ -451,7 +587,10 @@ class RuntimeExportService:
             'xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships">'
             f'{"<cols>" + "".join(column_xml) + "</cols>" if column_xml else ""}'
             f'<sheetData>{"".join(sheet_rows)}</sheetData>'
-            '</worksheet>'
+            + (f'<mergeCells count="{len(merge_ranges)}">' + "".join(
+                f'<mergeCell ref="{merge_range}"/>' for merge_range in merge_ranges
+            ) + '</mergeCells>' if merge_ranges else '')
+            + '</worksheet>'
         )
         num_fmts_xml = (
             f'<numFmts count="{len(num_fmts)}">'
@@ -1042,13 +1181,18 @@ class RuntimeExportService:
         buf.write("</head><body>")
         buf.write(f"<table class=\"pivot-export-table\" style=\"{html.escape(table_style, quote=True)}\">")
         if include_headers and field_order:
-            buf.write("<tr>")
+            # Clipboard consumers do not all infer a header row from bare
+            # ``<th>`` cells in the first table row.  Keep the header in an
+            # explicit table head so rich pastes and the text/plain fallback
+            # agree on the first, labelled row.
+            buf.write("<thead><tr>")
             for key in field_order:
                 header_label = RuntimeExportService._export_header_for_key(key, header_map, state, style_profile)
                 css = RuntimeExportService._style_to_css(RuntimeExportService._export_header_style(key, header_label, style_profile, state))
                 buf.write(f"<th style=\"{html.escape(css, quote=True)}\">{html.escape(header_label)}</th>")
-            buf.write("</tr>")
+            buf.write("</tr></thead>")
 
+        buf.write("<tbody>")
         for row in rows:
             buf.write("<tr>")
             for key in field_order:
@@ -1060,7 +1204,7 @@ class RuntimeExportService:
                 css = RuntimeExportService._style_to_css(RuntimeExportService._export_cell_style(key, raw_value, row, header_label, style_profile))
                 buf.write(f"<td style=\"{html.escape(css, quote=True)}\">{html.escape(display_value)}</td>")
             buf.write("</tr>")
-        buf.write("</table></body></html>")
+        buf.write("</tbody></table></body></html>")
 
     @staticmethod
     def _resolve_export_field_order(

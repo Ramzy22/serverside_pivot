@@ -9,8 +9,9 @@ from __future__ import annotations
 
 import copy
 from collections import OrderedDict
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Mapping, Optional
 
+from ..security import MutationAuthorizationError
 from ..transport.contracts import TanStackRequest, TanStackResponse
 from ..types.pivot_spec import PivotSpec
 
@@ -42,6 +43,161 @@ class TransactionAdapterMixin:
                 continue
             normalized[target_column] = value
         return normalized
+
+    @staticmethod
+    def _scope_value_is_allowed(value: Any, allowed_values: tuple[Any, ...]) -> bool:
+        """Compare a client value to server-derived row-security values."""
+        if isinstance(value, (list, tuple, set, frozenset, dict)):
+            return False
+        return any(value == allowed for allowed in allowed_values)
+
+    @staticmethod
+    def _mutation_scope_values(mutation_grant: Any) -> Dict[str, tuple[Any, ...]]:
+        raw_constraints = getattr(mutation_grant, "row_constraints", None)
+        if not isinstance(raw_constraints, Mapping):
+            return {}
+        normalized: Dict[str, tuple[Any, ...]] = {}
+        for field, values in raw_constraints.items():
+            field_name = str(field or "").strip()
+            if not field_name:
+                continue
+            if not isinstance(values, tuple) or not values:
+                raise MutationAuthorizationError()
+            normalized[field_name] = values
+        return normalized
+
+    @staticmethod
+    def _mutation_scope_allows_operation(mutation_grant: Any, operation: str) -> bool:
+        allowed = getattr(mutation_grant, "allowed_operations", None)
+        return isinstance(allowed, (set, frozenset)) and operation in allowed
+
+    @staticmethod
+    def _mutation_scope_allows_column(mutation_grant: Any, column: str) -> bool:
+        allowed = getattr(mutation_grant, "allowed_columns", None)
+        return allowed is None or column in allowed
+
+    def _authorize_and_scope_normalized_transaction(
+        self,
+        normalized_transaction: Dict[str, Any],
+        mutation_grant: Any,
+        user: Any = None,
+    ) -> None:
+        """Enforce an immutable server grant before controller SQL is built.
+
+        Controller mutation code only receives the rewritten key dictionaries,
+        so every UPDATE/DELETE/UPSERT/aggregate predicate necessarily contains
+        the authenticated principal's RLS constraints.  Insert-like operations
+        are rejected unless their tenant/scope values are explicitly present
+        and match; silently filling them in can conceal a client-side mistake.
+        """
+        if mutation_grant is None:
+            # Direct adapter/controller use is an in-process trusted API. A
+            # host that did authenticate a principal must also provide a
+            # server-owned grant; otherwise it is a misconfigured read-only
+            # deployment and must fail closed.
+            if user is not None:
+                raise MutationAuthorizationError(
+                    "Authenticated mutations require a server authorization policy."
+                )
+            return
+
+        constraints = self._mutation_scope_values(mutation_grant)
+
+        def require_operation(operation: str) -> None:
+            if not self._mutation_scope_allows_operation(mutation_grant, operation):
+                raise MutationAuthorizationError()
+
+        def require_writable_columns(values: Any) -> None:
+            if not isinstance(values, dict):
+                return
+            forbidden = sorted(
+                str(column)
+                for column in values
+                if not self._mutation_scope_allows_column(
+                    mutation_grant, str(column)
+                )
+            )
+            if forbidden:
+                raise MutationAuthorizationError(
+                    "Mutation is not authorized for one or more columns."
+                )
+
+        def scope_predicate(key_columns: Any) -> None:
+            if not isinstance(key_columns, dict):
+                raise MutationAuthorizationError()
+            for field, allowed_values in constraints.items():
+                submitted = key_columns.get(field)
+                if field in key_columns:
+                    if not self._scope_value_is_allowed(submitted, allowed_values):
+                        raise MutationAuthorizationError(
+                            "Mutation row-security scope does not match the target."
+                        )
+                    # A permitted explicit key is narrower than the caller's
+                    # full RLS grant. Preserve it rather than widening the
+                    # predicate to every permitted tenant.
+                    continue
+                # Only an omitted security field receives the complete
+                # permitted set, represented as an IN predicate downstream.
+                key_columns[field] = (
+                    allowed_values[0]
+                    if len(allowed_values) == 1
+                    else list(allowed_values)
+                )
+
+        def validate_insert_scope(row_data: Any) -> None:
+            if not isinstance(row_data, dict):
+                raise MutationAuthorizationError()
+            for field, allowed_values in constraints.items():
+                if field not in row_data or not self._scope_value_is_allowed(
+                    row_data[field], allowed_values
+                ):
+                    raise MutationAuthorizationError(
+                        "Inserted rows must include matching row-security values."
+                    )
+
+        for operation in list(normalized_transaction.get("remove") or []):
+            require_operation("remove")
+            scope_predicate(operation.get("key_columns"))
+
+        for operation in list(normalized_transaction.get("update") or []):
+            aggregate_edit = (
+                operation.get("aggregate_edit")
+                if isinstance(operation.get("aggregate_edit"), dict)
+                else None
+            )
+            require_operation("aggregate" if aggregate_edit else "update")
+            scope_predicate(operation.get("key_columns"))
+            if aggregate_edit:
+                target_column = str(aggregate_edit.get("column") or "").strip()
+                if (
+                    not target_column
+                    or not self._mutation_scope_allows_column(
+                        mutation_grant, target_column
+                    )
+                ):
+                    raise MutationAuthorizationError(
+                        "Mutation is not authorized for this aggregate column."
+                    )
+            else:
+                require_writable_columns(operation.get("updates"))
+
+        for operation in list(normalized_transaction.get("upsert") or []):
+            require_operation("upsert")
+            scope_predicate(operation.get("key_columns"))
+            row_data = operation.get("row_data")
+            require_writable_columns(row_data)
+            validate_insert_scope(row_data)
+
+        for operation in list(normalized_transaction.get("add") or []):
+            require_operation("add")
+            row_data = operation.get("row_data")
+            require_writable_columns(row_data)
+            validate_insert_scope(row_data)
+            # Key fields are also scoped so generated undo-delete predicates
+            # cannot escape the tenant when history is replayed.
+            key_columns = operation.get("key_columns")
+            if isinstance(key_columns, dict) and key_columns:
+                scope_predicate(key_columns)
 
     @staticmethod
     def _normalize_transaction_refresh_mode(value: Any) -> str:
@@ -633,7 +789,12 @@ class TransactionAdapterMixin:
         }
 
     async def handle_transaction(
-        self, request: TanStackRequest, transaction_payload: Dict[str, Any]
+        self,
+        request: TanStackRequest,
+        transaction_payload: Dict[str, Any],
+        *,
+        user: Any = None,
+        mutation_grant: Any = None,
     ) -> Dict[str, Any]:
         """Apply a richer-than-AG-Grid row transaction with smart refresh semantics."""
         payload = transaction_payload if isinstance(transaction_payload, dict) else {}
@@ -769,6 +930,13 @@ class TransactionAdapterMixin:
             normalized_transaction = (
                 prepared_event_action.normalized_transaction or normalized_transaction
             )
+
+        # This runs after history actions have been materialized, so undo,
+        # redo, revert, and replacement transactions are re-authorized against
+        # the current principal rather than trusting saved inverse payloads.
+        self._authorize_and_scope_normalized_transaction(
+            normalized_transaction, mutation_grant, user=user
+        )
 
         requested_counts = {
             kind: len(normalized_transaction.get(kind) or [])
@@ -985,7 +1153,12 @@ class TransactionAdapterMixin:
         )
 
     async def handle_updates(
-        self, request: TanStackRequest, update_payloads: List[Dict[str, Any]]
+        self,
+        request: TanStackRequest,
+        update_payloads: List[Dict[str, Any]],
+        *,
+        user: Any = None,
+        mutation_grant: Any = None,
     ) -> Dict[str, Any]:
         """Apply one or more cell updates and invalidate adapter caches."""
         transaction_result = await self.handle_transaction(
@@ -995,6 +1168,8 @@ class TransactionAdapterMixin:
                 "refreshMode": "viewport",
                 "source": "cell_updates",
             },
+            user=user,
+            mutation_grant=mutation_grant,
         )
         updated_count = int(
             ((transaction_result.get("applied") or {}).get("update")) or 0

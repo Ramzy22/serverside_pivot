@@ -30,7 +30,7 @@ def ensure_arrow_table(data: Any) -> "pa.Table":
         # Likely pandas DataFrame
         try:
             return pa.Table.from_pandas(data)
-        except Exception:
+        except Exception:  # nosec B110
             pass
             
     if isinstance(data, list):

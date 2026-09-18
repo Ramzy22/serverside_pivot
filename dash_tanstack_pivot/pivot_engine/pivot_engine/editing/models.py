@@ -38,6 +38,7 @@ class SessionEventRecord:
     source: str
     created_at: float
     normalized_transaction: Dict[str, Any]
+    owner_subject: str = ""
     inverse_transaction: Optional[Dict[str, Any]] = None
     redo_transaction: Optional[Dict[str, Any]] = None
     original_updates: List[Dict[str, Any]] = field(default_factory=list)
@@ -55,6 +56,7 @@ class EditSessionState:
     table: str
     session_id: str
     client_instance: str
+    owner_subject: str = ""
     base_snapshot_version: int = 0
     session_version: int = 0
     status: str = "active"

@@ -3,11 +3,135 @@
 from __future__ import annotations
 
 from collections import OrderedDict
+import hashlib
+import json
 import threading
 import time
-from typing import Any, Optional
+from typing import Any, Callable, Optional
 
 from .cache_coordinator import CacheCoordinator, CacheInvalidationEvent, CacheNamespaces
+from .hierarchy_rows import normalize_expanded_paths
+
+
+class AdapterViewportKeyBuilder:
+    """Build cache keys from immutable request/spec state.
+
+    Keeping this deterministic logic outside the transport adapter makes cache
+    identity independently testable and prevents query execution from owning a
+    second, subtly different cache-key policy.
+    """
+
+    def __init__(self, cache_generation_getter: Callable[[], int]) -> None:
+        self._cache_generation_getter = cache_generation_getter
+
+    @staticmethod
+    def _stable_json(value: Any) -> str:
+        return json.dumps(value, sort_keys=True, default=str, separators=(",", ":"))
+
+    @classmethod
+    def _hash(cls, payload: Any, length: int) -> str:
+        return hashlib.sha256(cls._stable_json(payload).encode()).hexdigest()[:length]
+
+    def request_structure_fingerprint(self, request: Any) -> str:
+        return self._hash({
+            "cache_generation": self._cache_generation_getter(),
+            "table": request.table,
+            "columns": request.columns or [],
+            "filters": request.filters or {},
+            "sorting": request.sorting or [],
+            "grouping": request.grouping or [],
+            "aggregations": request.aggregations or [],
+            "custom_dimensions": request.custom_dimensions or [],
+            "measure_axis": request.measure_axis or None,
+            "totals": bool(request.totals),
+            "row_totals": bool(request.row_totals),
+            "include_subtotals": bool(request.include_subtotals),
+            "layout_mode": str(getattr(request, "layout_mode", None) or "").strip().lower(),
+            "show_subtotal_footers": bool(getattr(request, "show_subtotal_footers", False)),
+            "column_sort_options": request.column_sort_options or {},
+        }, 24)
+
+    def center_column_catalog_key(self, request: Any) -> str:
+        return self._hash({
+            "cache_generation": self._cache_generation_getter(),
+            "table": request.table,
+            "columns": request.columns or [],
+            "filters": request.filters or {},
+            "custom_dimensions": request.custom_dimensions or [],
+            "measure_axis": request.measure_axis or None,
+            "column_sort_options": request.column_sort_options or {},
+        }, 24)
+
+    def pivot_column_catalog_key(self, spec: Any) -> str:
+        order_measure = spec.measures[0] if spec.measures else None
+        return self._hash({
+            "cache_generation": self._cache_generation_getter(),
+            "table": spec.table,
+            "pivot_columns": list(spec.columns or []),
+            "filters": spec.filters or [],
+            "custom_dimensions": spec.custom_dimensions or [],
+            "measure_axis": spec.measure_axis.to_dict() if getattr(spec, "measure_axis", None) else None,
+            "column_sort_options": spec.column_sort_options or {},
+            "order_measure": vars(order_measure) if order_measure is not None else None,
+        }, 24)
+
+    def response_window_key(
+        self,
+        request: Any,
+        start_row: int,
+        end_row: int,
+        expanded_paths: Any,
+        col_start: int,
+        col_end: Optional[int],
+        needs_col_schema: bool,
+        include_grand_total: bool,
+        requested_center_ids: Optional[list[str]],
+    ) -> str:
+        return self._hash({
+            "request": self.request_structure_fingerprint(request),
+            "expanded": normalize_expanded_paths(expanded_paths),
+            "start_row": int(start_row or 0),
+            "end_row": int(end_row if end_row is not None else start_row or 0),
+            "col_start": int(col_start or 0),
+            "col_end": None if col_end is None else int(col_end),
+            "needs_col_schema": bool(needs_col_schema),
+            "include_grand_total": bool(include_grand_total),
+            "requested_center_ids": list(requested_center_ids or []),
+        }, 32)
+
+    def row_block_key(
+        self,
+        request: Any,
+        block_index: int,
+        expanded_paths: Any,
+        col_start: int,
+        col_end: Optional[int],
+        requested_center_ids: Optional[list[str]],
+    ) -> str:
+        return self._hash({
+            "request": self.request_structure_fingerprint(request),
+            "expanded": normalize_expanded_paths(expanded_paths),
+            "block_index": int(block_index),
+            "col_start": int(col_start or 0),
+            "col_end": None if col_end is None else int(col_end),
+            "requested_center_ids": list(requested_center_ids or []),
+        }, 32)
+
+    def grand_total_key(
+        self,
+        request: Any,
+        expanded_paths: Any,
+        col_start: int,
+        col_end: Optional[int],
+        requested_center_ids: Optional[list[str]],
+    ) -> str:
+        return self._hash({
+            "request": self.request_structure_fingerprint(request),
+            "expanded": normalize_expanded_paths(expanded_paths),
+            "col_start": int(col_start or 0),
+            "col_end": None if col_end is None else int(col_end),
+            "requested_center_ids": list(requested_center_ids or []),
+        }, 32)
 
 
 class AdapterViewportCache:

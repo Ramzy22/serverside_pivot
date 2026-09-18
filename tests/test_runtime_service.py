@@ -348,6 +348,92 @@ def test_runtime_service_all_rows_export_is_independent_of_viewport_and_collapse
             os.remove(content_path)
 
 
+def test_runtime_service_current_table_export_preserves_collapsed_hierarchy_state():
+    """Current-table copy must not silently expand records hidden in the grid."""
+    adapter = _make_adapter()
+    service = PivotRuntimeService(adapter_getter=lambda: adapter, session_gate=SessionRequestGate())
+
+    response = service.process(
+        PivotViewState(
+            row_fields=["region", "country"],
+            val_configs=[{"field": "sales", "agg": "sum"}],
+            expanded={},
+            layout_mode="hierarchy",
+            show_subtotals=False,
+            export_request={
+                "format": "csv",
+                "includeHeaders": True,
+                "rowStart": 0,
+                "rowEnd": 10,
+                "allRows": False,
+            },
+        ),
+        PivotRequestContext(
+            table="sales_data",
+            trigger_prop="pivot.runtimeRequest",
+            session_id="current-table-copy",
+            client_instance="current-table-client",
+        ),
+    )
+
+    assert response.status == "export"
+    content_path = response.export_payload["contentPath"]
+    try:
+        with open(content_path, encoding="utf-8-sig", newline="") as export_file:
+            exported_rows = list(csv.reader(export_file))
+        assert exported_rows == [
+            ["Region/Country", "sales"],
+            ["North", "180"],
+            ["South", "190"],
+            ["Grand Total", "370"],
+        ]
+    finally:
+        if os.path.exists(content_path):
+            os.remove(content_path)
+
+
+def test_runtime_service_html_copy_uses_semantic_header_section():
+    """Rich clipboard copies expose their labels to every paste target."""
+    adapter = _make_adapter()
+    service = PivotRuntimeService(adapter_getter=lambda: adapter, session_gate=SessionRequestGate())
+
+    response = service.process(
+        PivotViewState(
+            row_fields=["region", "country"],
+            val_configs=[{"field": "sales", "agg": "sum"}],
+            expanded={},
+            layout_mode="hierarchy",
+            show_subtotals=False,
+            export_request={
+                "format": "html",
+                "includeHeaders": True,
+                "rowStart": 0,
+                "rowEnd": 10,
+                "allRows": False,
+            },
+        ),
+        PivotRequestContext(
+            table="sales_data",
+            trigger_prop="pivot.runtimeRequest",
+            session_id="current-table-html-copy",
+            client_instance="current-table-html-client",
+        ),
+    )
+
+    assert response.status == "export"
+    content_path = response.export_payload["contentPath"]
+    try:
+        with open(content_path, encoding="utf-8") as export_file:
+            exported_html = export_file.read()
+        assert "<thead><tr>" in exported_html
+        assert "<th " in exported_html
+        assert "Region/Country" in exported_html
+        assert "</thead><tbody>" in exported_html
+    finally:
+        if os.path.exists(content_path):
+            os.remove(content_path)
+
+
 def test_runtime_service_two_level_tabular_all_rows_export_is_not_limited_to_viewport():
     """A two-field tabular export must not fall back to its loaded row block."""
     adapter = create_tanstack_adapter(backend_uri=":memory:")
@@ -711,6 +797,89 @@ def test_runtime_service_export_xlsx_preserves_values_types_and_table_styles():
         columns = sheet.findall(".//x:cols/x:col", ns)
         assert columns
         assert any(float(column.attrib["width"]) > 10 for column in columns)
+    finally:
+        if os.path.exists(content_path):
+            os.remove(content_path)
+
+
+def test_runtime_service_export_xlsx_preserves_merged_pivot_header_hierarchy():
+    class ExportAdapter:
+        async def handle_virtual_scroll_request(self, request, start_row, end_row, expanded_paths, **kwargs):
+            return TanStackResponse(
+                data=[
+                    {
+                        "_id": "North",
+                        "fy24_q1_sales_sum": 10,
+                        "fy24_q2_sales_sum": 20,
+                        "fy25_q1_sales_sum": 30,
+                    }
+                ],
+                columns=[
+                    {"id": "hierarchy", "header": "Region"},
+                    {"id": "fy24_q1_sales_sum", "header": "Revenue (Sum)"},
+                    {"id": "fy24_q2_sales_sum", "header": "Revenue (Sum)"},
+                    {"id": "fy25_q1_sales_sum", "header": "Revenue (Sum)"},
+                ],
+                total_rows=1,
+            )
+
+    service = PivotRuntimeService(adapter_getter=lambda: ExportAdapter(), session_gate=SessionRequestGate())
+    response = service.process(
+        PivotViewState(
+            row_fields=["region"],
+            col_fields=["quarter"],
+            val_configs=[{"field": "sales", "agg": "sum", "label": "Revenue"}],
+            expanded=True,
+            export_request={
+                "format": "xlsx",
+                "includeHeaders": True,
+                "rowStart": 0,
+                "rowEnd": 1,
+                "colIds": ["hierarchy", "fy24_q1_sales_sum", "fy24_q2_sales_sum", "fy25_q1_sales_sum"],
+                "style": {
+                    "mergedHeaders": True,
+                    "mergedHeaderRows": [
+                        [
+                            {"label": "Region", "columnIds": ["hierarchy"], "rowSpan": 3},
+                            {"label": "FY 2024", "columnIds": ["fy24_q1_sales_sum", "fy24_q2_sales_sum"]},
+                            {"label": "FY 2025", "columnIds": ["fy25_q1_sales_sum"]},
+                        ],
+                        [
+                            {"label": "Q1", "columnIds": ["fy24_q1_sales_sum"]},
+                            {"label": "Q2", "columnIds": ["fy24_q2_sales_sum"]},
+                            {"label": "Q1", "columnIds": ["fy25_q1_sales_sum"]},
+                        ],
+                        [
+                            {"label": "Revenue (Sum)", "columnIds": ["fy24_q1_sales_sum"]},
+                            {"label": "Revenue (Sum)", "columnIds": ["fy24_q2_sales_sum"]},
+                            {"label": "Revenue (Sum)", "columnIds": ["fy25_q1_sales_sum"]},
+                        ],
+                    ],
+                },
+            },
+        ),
+        PivotRequestContext(
+            table="sales_data",
+            trigger_prop="pivot.runtimeRequest",
+            session_id="sess-export-merged-headers",
+            client_instance="client-export-merged-headers",
+        ),
+    )
+
+    assert response.status == "export"
+    content_path = response.export_payload["contentPath"]
+    try:
+        with zipfile.ZipFile(content_path) as workbook:
+            sheet = ET.fromstring(workbook.read("xl/worksheets/sheet1.xml"))
+        ns = {"x": "http://schemas.openxmlformats.org/spreadsheetml/2006/main"}
+        merge_refs = {merge.attrib["ref"] for merge in sheet.findall(".//x:mergeCells/x:mergeCell", ns)}
+        cells = {cell.attrib["r"]: cell for cell in sheet.findall(".//x:c", ns)}
+        assert {"A1:A3", "B1:C1"}.issubset(merge_refs)
+        assert cells["A1"].findtext("x:is/x:t", namespaces=ns) == "Region"
+        assert cells["B1"].findtext("x:is/x:t", namespaces=ns) == "FY 2024"
+        assert cells["B2"].findtext("x:is/x:t", namespaces=ns) == "Q1"
+        assert cells["B3"].findtext("x:is/x:t", namespaces=ns) == "Revenue (Sum)"
+        assert cells["B4"].findtext("x:v", namespaces=ns) == "10"
     finally:
         if os.path.exists(content_path):
             os.remove(content_path)

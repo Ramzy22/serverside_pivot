@@ -6,6 +6,9 @@ build-backend = "setuptools.build_meta"
 name = "serverside-pivot"
 version = "0.0.88"
 description = "A Dash component library for enterprise-grade pivot tables built with TanStack Table v8"
+readme = "README.md"
+# Keep the table form until the minimum supported setuptools can parse the
+# SPDX-string form consistently.  The isolated release build upgrades it.
 license = {text = "MIT"}
 authors = [
     {name = "Ramzy"}
@@ -14,18 +17,24 @@ classifiers = [
     "Framework :: Dash",
     "Development Status :: 3 - Alpha",
     "Intended Audience :: Developers",
-    "License :: OSI Approved :: MIT License",
     "Programming Language :: Python :: 3",
-    "Programming Language :: Python :: 3.8",
-    "Programming Language :: Python :: 3.9",
     "Programming Language :: Python :: 3.10",
     "Programming Language :: Python :: 3.11",
     "Topic :: Software Development :: User Interfaces",
 ]
 keywords = ["dash", "pivot", "tanstack", "table", "analytics"]
-requires-python = ">=3.8"
+requires-python = ">=3.10"
 dependencies = [
     "dash>=2.0.0",
+    "jsonschema>=4.0.0",
+    # pivot_engine is included in this distribution and imported by the
+    # documented quick start, so its execution dependencies must travel with
+    # the wheel rather than live only in pivot_engine/requirements.txt.
+    "duckdb>=0.8.0",
+    "pyarrow>=10.0.0",
+    "pyarrow_hotfix>=0.4",
+    "ibis-framework[duckdb]>=4.0.0",
+    "pandas>=1.5.0",
 ]
 
 [project.urls]
@@ -37,15 +46,38 @@ Issues = "https://github.com/Ramzy22/serverside_pivot/issues"
 redis = [
     "redis>=4.0.0",
 ]
+streamlit = [
+    "streamlit>=1.51.0",
+]
+api = [
+    "fastapi>=0.100.0",
+    "uvicorn[standard]>=0.20.0",
+    "python-dotenv>=1.0.0",
+    "python-multipart>=0.0.6",
+    "python-jose[cryptography]>=3.3.0",
+    "passlib[bcrypt]>=1.7.4",
+    "prometheus-fastapi-instrumentator>=6.0.0",
+    "structlog>=23.1.0",
+]
 dev = [
     "pytest>=7.0.0",
+    "pytest-asyncio>=0.20.0",
+    "httpx>=0.24.0",
+    "selenium>=4.0.0",
     "build>=0.10.0",
+]
+security = [
+    "bandit[toml]==1.7.9",
+    "cyclonedx-bom==4.5.0",
+    "pip-audit==2.8.0",
 ]
 
 [tool.setuptools]
+include-package-data = false
 packages = [
     "dash_tanstack_pivot",
     "dash_tanstack_pivot.dash_tanstack_pivot",
+    "streamlit_pivot",
     "pivot_engine",
     "pivot_engine.cache",
     "pivot_engine.cdc",
@@ -67,4 +99,17 @@ dash_tanstack_pivot = [
     "*.js.map",
     "*.json",
 ]
+streamlit_pivot = ["pyproject.toml", "frontend/build/**/*"]
 pivot_engine = ["**/*.py", "**/*.json", "**/*.html"]
+
+# Streamlit V2 discovers file-backed component assets from the installed
+# distribution manifest.  The component key is built as
+# ``<project-name>.<component-name>``, so this registers
+# ``serverside-pivot.pivot_workspace`` while keeping the public component
+# name short and stable.
+[[tool.streamlit.component.components]]
+name = "pivot_workspace"
+asset_dir = "streamlit_pivot/frontend/build"
+
+[tool.setuptools.exclude-package-data]
+"*" = ["build/**", "**/node_modules/**", "**/__pycache__/**"]

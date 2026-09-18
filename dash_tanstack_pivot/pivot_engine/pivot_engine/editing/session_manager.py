@@ -18,8 +18,23 @@ class EditSessionManager:
     def build_session_key(table: str, session_id: str, client_instance: str) -> str:
         return f"{table}::{session_id}::{client_instance}"
 
-    def get_or_create_session(self, *, table: str, session_id: str, client_instance: str) -> EditSessionState:
+    @staticmethod
+    def owner_subject_from_session_id(session_id: str) -> str:
+        normalized = str(session_id or "").strip()
+        if normalized.startswith("principal:"):
+            normalized = normalized.split(":", 1)[1]
+        return normalized or "anonymous"
+
+    def get_or_create_session(
+        self,
+        *,
+        table: str,
+        session_id: str,
+        client_instance: str,
+        owner_subject: Optional[str] = None,
+    ) -> EditSessionState:
         session_key = self.build_session_key(table, session_id, client_instance)
+        normalized_owner = str(owner_subject or self.owner_subject_from_session_id(session_id)).strip() or "anonymous"
         with self._lock:
             session = self._sessions.get(session_key)
             if session is None:
@@ -28,8 +43,11 @@ class EditSessionManager:
                     table=table,
                     session_id=session_id,
                     client_instance=client_instance,
+                    owner_subject=normalized_owner,
                 )
                 self._sessions[session_key] = session
+            elif session.owner_subject != normalized_owner:
+                raise PermissionError("Edit session ownership does not match.")
             return session
 
     @staticmethod
@@ -45,7 +63,11 @@ class EditSessionManager:
         events: List[SessionEventRecord] = []
         for event_id in list(session.active_event_ids):
             event = self.event_store.get(event_id)
-            if event is None or not event.active:
+            if (
+                event is None
+                or event.owner_subject != session.owner_subject
+                or not event.active
+            ):
                 continue
             events.append(event)
         events.sort(key=lambda event: int(event.session_version or 0))
@@ -220,6 +242,10 @@ class EditSessionManager:
 
     def register_event(self, session: EditSessionState, event: SessionEventRecord) -> EditSessionState:
         with self._lock:
+            if not event.owner_subject:
+                event.owner_subject = session.owner_subject
+            elif event.owner_subject != session.owner_subject:
+                raise PermissionError("Edit event ownership does not match its session.")
             session.session_version = max(session.session_version, int(event.session_version or 0))
             session._active_event_ids = (*session.active_event_ids, event.event_id)
             session._undone_event_ids = ()
@@ -250,7 +276,7 @@ class EditSessionManager:
             candidate_id = event_id or (session.undone_event_ids[-1] if session.undone_event_ids else None)
             if not candidate_id or candidate_id not in session.undone_event_ids:
                 return None
-            return self.event_store.get(candidate_id)
+            return self.get_event_for_session(session, candidate_id)
 
     def activate_redo_events(self, session: EditSessionState, event_ids: List[str]) -> None:
         with self._lock:
@@ -265,6 +291,22 @@ class EditSessionManager:
 
     def get_event(self, event_id: str) -> Optional[SessionEventRecord]:
         return self.event_store.get(event_id)
+
+    def get_event_for_session(
+        self,
+        session: EditSessionState,
+        event_id: str,
+        owner_subject: Optional[str] = None,
+    ) -> Optional[SessionEventRecord]:
+        event = self.event_store.get(event_id)
+        expected_owner = str(owner_subject or session.owner_subject or "").strip()
+        if (
+            event is None
+            or event.session_key != session.session_key
+            or event.owner_subject != expected_owner
+        ):
+            return None
+        return event
 
     def has_overlay_index(self, *, table: str, session_id: str, client_instance: str, grouping_fields: List[str]) -> bool:
         session_key = self.build_session_key(table, session_id, client_instance)

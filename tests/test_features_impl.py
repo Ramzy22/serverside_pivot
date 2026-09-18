@@ -8,6 +8,7 @@ import os
 os.environ["PIVOT_API_KEY"] = "test-secret-key"
 
 from pivot_engine.complete_rest_api import create_complete_api, CompletePivotAPI
+from pivot_engine.runtime import RuntimeDatasetAuthorizer
 from pivot_engine.scalable_pivot_controller import ScalablePivotController
 from pivot_engine.types.pivot_spec import PivotSpec
 
@@ -22,7 +23,18 @@ def mock_controller():
 
 @pytest.fixture
 def api_client(mock_controller):
-    api = CompletePivotAPI(mock_controller)
+    api = CompletePivotAPI(
+        mock_controller,
+        dataset_authorizer=RuntimeDatasetAuthorizer(
+            {
+                "*": {
+                    "roles": {"admin"},
+                    "operations": {"read", "export", "mutate", "cdc", "schema", "subscribe"},
+                    "rowSecurity": {"mode": "global"},
+                }
+            }
+        ),
+    )
     return TestClient(api.get_app())
 
 def test_security_missing_key(api_client):

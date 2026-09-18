@@ -28,14 +28,14 @@ from pivot_engine import create_tanstack_adapter, register_pivot_app
 
 
 _editing_component_path = os.path.join(
-    os.getcwd(), "dash_tanstack_pivot", "src", "lib", "components", "DashTanstackPivot.react.js"
+    os.getcwd(), "dash_tanstack_pivot", "src", "lib", "components", "DashTanstackPivot.react.tsx"
 )
 with open(_editing_component_path, encoding="utf-8") as _editing_component_file:
-    _EDITING_UI_TEMPORARILY_DISABLED = "const EDITING_TEMPORARILY_DISABLED = true;" in _editing_component_file.read()
+    _EDITING_PUBLIC_FEATURE_UNSUPPORTED = "const EDITING_PUBLIC_FEATURE_SUPPORTED = false;" in _editing_component_file.read()
 
 _requires_editing_ui = pytest.mark.skipif(
-    _EDITING_UI_TEMPORARILY_DISABLED,
-    reason="Editing UI is intentionally disabled by EDITING_TEMPORARILY_DISABLED.",
+    _EDITING_PUBLIC_FEATURE_UNSUPPORTED,
+    reason="Editing is not a supported public feature.",
 )
 
 

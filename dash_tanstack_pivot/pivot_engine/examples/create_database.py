@@ -34,7 +34,7 @@ def create_sales_database():
     
     # Verify content
     print("\nContent of the 'sales' table:")
-    print(con.execute("SELECT * FROM sales LIMIT 5").fetch_arrow_table())
+    print(con.execute("SELECT * FROM sales LIMIT 5").to_arrow_table())
 
     con.close()
 

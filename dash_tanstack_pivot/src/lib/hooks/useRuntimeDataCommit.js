@@ -27,7 +27,7 @@ export function useRuntimeDataCommit({
             return false;
         }
 
-        const responseClient = response && (response.client_instance || response.clientInstance);
+        const responseClient = response && (response.clientInstance || response.client_instance);
         const refClient = payloadRef.clientInstance || payloadRef.client_instance;
         const expectedClient = responseClient || refClient;
         if (expectedClient && String(expectedClient) !== String(clientInstanceRef.current)) {
@@ -35,7 +35,9 @@ export function useRuntimeDataCommit({
         }
 
         const stateEpochValue = coerceTransportNumber(
-            response && response.state_epoch !== undefined ? response.state_epoch : payloadRef.stateEpoch,
+            response && response.stateEpoch !== undefined
+                ? response.stateEpoch
+                : (response && response.state_epoch !== undefined ? response.state_epoch : payloadRef.stateEpoch),
             null
         );
         if (Number.isFinite(stateEpochValue) && stateEpochValue !== stateEpochRef.current) {
@@ -74,8 +76,12 @@ export function useRuntimeDataCommit({
         }
         setTransportDataState((previousState) => normalizeRuntimeDataEnvelope({
             ...payload,
-            stateEpoch: response && response.state_epoch !== undefined ? response.state_epoch : payload.stateEpoch,
-            windowSeq: response && response.window_seq !== undefined ? response.window_seq : payload.windowSeq,
+            stateEpoch: response && response.stateEpoch !== undefined
+                ? response.stateEpoch
+                : (response && response.state_epoch !== undefined ? response.state_epoch : payload.stateEpoch),
+            windowSeq: response && response.windowSeq !== undefined
+                ? response.windowSeq
+                : (response && response.window_seq !== undefined ? response.window_seq : payload.windowSeq),
         }, previousState));
     }, [
         finalizeTransactionHistoryResponse,

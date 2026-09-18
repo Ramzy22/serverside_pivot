@@ -3,6 +3,7 @@ Tests for cache implementations.
 """
 import pytest
 import time
+import pickle
 import pyarrow as pa
 from pivot_engine.cache.memory_cache import MemoryCache
 from pivot_engine.cache.redis_cache import RedisCache
@@ -111,8 +112,10 @@ def test_redis_cache_arrow_ipc_round_trip_without_redis_server():
 
     cache_instance.set("arrow", expected)
     cache_instance.set("json", {"enabled": True, "count": 2})
-    cache_instance.set("pickle", ("tuple", 3))
+    with pytest.raises(TypeError, match="JSON-compatible"):
+        cache_instance.set("unsupported", ("tuple", 3))
+    cache_instance.client.set("legacy-pickle", pickle.dumps({"unsafe": True}))
 
     assert cache_instance.get("arrow").equals(expected)
     assert cache_instance.get("json") == {"enabled": True, "count": 2}
-    assert cache_instance.get("pickle") == ("tuple", 3)
+    assert cache_instance.get("legacy-pickle") is None

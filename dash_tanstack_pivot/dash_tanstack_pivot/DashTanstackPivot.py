@@ -20,268 +20,452 @@ NumberType = typing.Union[
 
 class DashTanstackPivot(Component):
     """A DashTanstackPivot component.
-
+Dash public component and typed runtime composition root.
 
 Keyword arguments:
 
-- id (string; optional)
+- id (string; default PropTypes.string)
 
-- activeReportId (string; optional)
+- activeReportId (string; default PropTypes.string)
 
-- availableFieldList (list of strings; optional)
+- availableFieldList (list of strings; default PropTypes.arrayOf(PropTypes.string))
 
-- sparklineFields (dict; optional): Maps field names to sparkline config objects. When a field in this map is added to the Values zone via the sidebar, it automatically uses array_agg aggregation and the provided sparkline config. The add/remove trend toggle is also hidden for these fields.
+- cellUpdate (dict; default PropTypes.object):
+    Deprecated compatibility input. Editing is unsupported and this
+    value is ignored.
 
-- cellUpdate (dict; optional)
+- cellUpdates (list of dicts; default PropTypes.arrayOf(PropTypes.object)):
+    Deprecated compatibility input. Editing is unsupported and this
+    value is ignored.
 
-- cellUpdates (list of dicts; optional)
+- chartCanvasPanes (list of dicts; default PropTypes.arrayOf(PropTypes.shape({    id: PropTypes.string,    name: PropTypes.string,    chartTitle: PropTypes.string,    source: PropTypes.oneOf(['pivot', 'selection']),    chartType: PropTypes.string,    barLayout: PropTypes.oneOf(['grouped', 'stacked']),    axisMode: PropTypes.oneOf(['vertical', 'horizontal']),    orientation: PropTypes.oneOf(['rows', 'columns']),    hierarchyLevel: PropTypes.oneOfType([PropTypes.number, PropTypes.oneOf(['all'])]),    rowLimit: PropTypes.number,    columnLimit: PropTypes.number,    width: PropTypes.number,    chartHeight: PropTypes.number,    sortMode: PropTypes.string,    interactionMode: PropTypes.string,    serverScope: PropTypes.oneOf(['viewport', 'root']),    size: PropTypes.number,    floating: PropTypes.bool,    settingsPanelWidth: PropTypes.number,    chartSettings: PropTypes.shape({      chartSubtitle: PropTypes.string,      yAxisTitle: PropTypes.string,      yAxisMin: PropTypes.number,      yAxisMax: PropTypes.number,      yAxisMinRight: PropTypes.number,      yAxisMaxRight: PropTypes.number,      tickCount: PropTypes.number,      labelAngle: PropTypes.number,      colorPalette: PropTypes.string,      valueFormat: PropTypes.string,      showDataLabels: PropTypes.bool,      decimalPlaces: PropTypes.number,      labelPosition: PropTypes.string,      legendPosition: PropTypes.string,      markerShape: PropTypes.string,      markerSize: PropTypes.number,      showGradient: PropTypes.bool,      gradientDirection: PropTypes.string,      gradientOpacity: PropTypes.number,      showAnimations: PropTypes.bool,      showCalloutLabels: PropTypes.bool,      showTrendline: PropTypes.bool,      trendlineMode: PropTypes.string,      trendlinePeriod: PropTypes.number,      trendlineColor: PropTypes.string,      trendlineWidth: PropTypes.number,      seriesSort: PropTypes.string,      seriesColors: PropTypes.object,      customPaletteColors: PropTypes.arrayOf(PropTypes.string),      lineDashStyles: PropTypes.object,      referenceLines: PropTypes.arrayOf(PropTypes.object)    })  })))
 
-- chartCanvasPanes (list of dicts; optional)
+    `chartCanvasPanes` is a list of dicts with keys:
 
-    Each dict in `chartCanvasPanes` controls one visible chart pane and accepts all
-    keys from `chartDefinitions` (id, name, chartType, chartTitle, barLayout, axisMode,
-    orientation, source, hierarchyLevel, rowLimit, columnLimit, width, chartHeight,
-    sortMode, interactionMode, serverScope, chartLayers) plus:
-
-    - dockPosition (a value equal to: 'left', 'right', 'top', 'bottom'; default 'right')
-    - floating (boolean; default False) -- True renders as a floating overlay
-    - floatingRect (dict with keys left, top, width, height; optional) -- initial position/size when floating
-    - locked (boolean; default False) -- freeze the chart data
-    - immersiveMode (boolean; default False) -- open in fullscreen mode
-    - size (number; default 1) -- relative flex size when docked alongside other panes
-    - settingsPanelWidth (number; optional) -- initial settings panel width in px (300–680)
-    - chartSettings (dict; optional) -- visual/axis settings for this pane:
-
-        - chartSubtitle (string; default '')
-        - yAxisTitle (string; default '')
-        - yAxisMin (string or number; default '') -- leave empty for auto
-        - yAxisMax (string or number; default '') -- leave empty for auto
-        - yAxisMinRight (string or number; default '') -- right-axis min for combo charts
-        - yAxisMaxRight (string or number; default '') -- right-axis max for combo charts
-        - tickCount (number 2–20; default 5)
-        - labelAngle (number 0–90; default 0) -- X-axis label rotation degrees
-        - colorPalette (string; default 'default') -- named palette or 'custom'
-        - customPaletteColors (list of color strings; default []) -- colors when colorPalette='custom'
-        - seriesColors (dict {seriesName: colorString}; default {}) -- per-series color overrides
-        - valueFormat (a value equal to: 'auto', 'number', 'compact', 'percent', 'currency'; default 'auto')
-        - decimalPlaces (number; default -1 for auto)
-        - showDataLabels (boolean; default False)
-        - labelPosition (a value equal to: 'outside', 'inside', 'center'; default 'outside')
-        - legendPosition (a value equal to: 'bottom', 'top', 'none'; default 'bottom')
-        - showCalloutLabels (boolean; default False) -- pie/donut callout labels
-        - markerShape (a value equal to: 'none', 'circle', 'square', 'diamond', 'triangle', 'cross'; default 'circle')
-        - markerSize (number; default 4)
-        - showGradient (boolean; default False)
-        - gradientDirection (a value equal to: 'vertical', 'horizontal'; default 'vertical')
-        - gradientOpacity (number 0–100; default 70)
-        - showAnimations (boolean; default True)
-        - showTrendline (boolean; default False)
-        - trendlineMode (a value equal to: 'linear', 'moving_avg', 'exponential'; default 'linear')
-        - trendlinePeriod (number; default 3) -- window size for moving average
-        - trendlineColor (string; default '' for auto)
-        - trendlineWidth (number 1–8; default 2)
-        - lineDashStyles (dict {seriesName: dashStyle}; default {})
-        - referenceLines (list of dicts; default []) -- each dict: value, label, orient ('h'|'v'), color, dash
-        - seriesSort (a value equal to: 'none', 'value_desc', 'value_asc', 'alpha_asc', 'alpha_desc'; default 'none')
-
-- chartDefaults (dict; optional)
-
-- chartDefinitions (list of dicts; optional)
-
-- chartEvent (dict; optional)
-
-- chartServerWindow (dict; optional)
-
-    `chartServerWindow` is a dict with keys:
-
-    - enabled (boolean; optional)
-
-    - rows (number; optional)
-
-    - columns (number; optional)
-
-    - scope (a value equal to: 'viewport', 'root'; optional)
-
-- immersiveMode (boolean; optional)
-
-- colFields (list; optional)
-
-- columnPinned (dict; optional)
-
-- columnPinning (dict; optional)
-
-    `columnPinning` is a dict with keys:
-
-    - left (list of strings; optional)
-
-    - right (list of strings; optional)
-
-- columnOrder (list of strings; optional)
-
-- columnSizing (dict; optional)
-
-- columnVisibility (dict; optional)
-
-- conditionalFormatting (list of dicts; optional)
-
-- headerFormatting (dict | list of dicts; optional): Per-header color/style overrides. Accepts a mapping such as `{"sales_sum": {"background": "#123456", "color": "#fff"}}` or rule objects.
-
-- customDimensions (list of dicts; optional)
-
-- data (list of dicts; optional)
-
-- decimalPlaces (number; optional)
-
-- defaultTheme (string; optional)
-
-- defaultValueFormat (string; optional)
-
-- detailConfig (dict; optional)
-
-- detailMode (a value equal to: 'none', 'inline', 'sidepanel', 'drawer'; optional)
-
-- drillEndpoint (string; optional)
-
-- editLifecycleEvent (dict; optional)
-
-- editState (dict; optional):
-    Persisted edit state: edited cell markers, comparison original
-    values, display mode,  and propagation event log. Round-tripped
-    via setProps so the Dash backend can  save/restore/modify it.
-
-- editingConfig (dict; optional)
-
-- expanded (dict | boolean; optional)
-
-- fieldPanelSizes (dict; optional)
-
-- filters (dict; optional)
-
-- grandTotalPosition (a value equal to: 'top', 'bottom'; optional)
-
-- localeText (dict; optional)
-
-- measureAxis (dict; optional): Controls whether selected measures are rendered as virtual row or column dimension members. Keys include `placement`, `labelField`, `valueField`, `members`, `suppressEmptyMembers`, `suppressZeroMembers`, and `totalsPolicy`.
-
-- numberGroupSeparator (a value equal to: 'comma', 'space', 'thin_space', 'apostrophe', 'none'; optional)
-
-- performanceConfig (dict; optional)
-
-    `performanceConfig` is a dict with keys:
-
-    - cacheBlockSize (number; optional)
-
-    - maxBlocksInCache (number; optional)
-
-    - blockLoadDebounceMs (number; optional)
-
-    - rowOverscan (number; optional)
-
-    - columnOverscan (number; optional)
-
-    - prefetchColumns (number; optional)
-
-- persistence (boolean | string | number; optional)
-
-- persistence_type (a value equal to: 'local', 'session', 'memory'; optional)
-
-- pinningOptions (dict; optional)
-
-    `pinningOptions` is a dict with keys:
-
-    - maxPinnedLeft (number; optional)
-
-    - maxPinnedRight (number; optional)
-
-    - suppressMovable (boolean; optional)
-
-    - lockPinned (boolean; optional)
-
-- pinningPresets (list of dicts; optional)
-
-    `pinningPresets` is a list of dicts with keys:
+    - id (string; optional)
 
     - name (string; optional)
 
-    - config (dict; optional)
+    - chartTitle (string; optional)
 
-- pivotTitle (string; optional)
+    - source (string; optional)
 
-- reportDef (dict; optional)
+    - chartType (string; optional)
 
-- reset (boolean | number | string | dict | list; optional)
+    - barLayout (string; optional)
 
-- rowFields (list; optional)
+    - axisMode (string; optional)
 
-- rowMove (dict; optional)
+    - orientation (string; optional)
 
-- rowPinned (dict; optional)
+    - hierarchyLevel (string | number; optional)
 
-- rowPinning (dict; optional)
+    - rowLimit (number; optional)
 
-    `rowPinning` is a dict with keys:
+    - columnLimit (number; optional)
 
-    - top (list of strings; optional)
+    - width (number; optional)
 
-    - bottom (list of strings; optional)
+    - chartHeight (number; optional)
 
-- runtimeRequest (dict; optional)
+    - sortMode (string; optional)
 
-- runtimeResponse (dict; optional)
+    - interactionMode (string; optional)
 
-- saveViewTrigger (boolean | number | string | dict | list; optional)
+    - serverScope (string; optional)
 
-- savedReports (list of dicts; optional)
+    - size (number; optional)
 
-- savedView (dict; optional)
+    - floating (dict; optional)
 
-- serverSide (boolean; optional)
+        `floating` is a dict with keys:
 
-- showColTotals (boolean; optional)
+        - valueOf (optional):
 
-- showRowTotals (boolean; optional)
+            Returns the primitive value of the specified object.
 
-- showSubtotals (boolean; optional)
+              Or dict with keys:
 
-- sortEvent (dict; optional)
+        - valueOf (optional):
 
-- sortLock (boolean; optional)
+            Returns the primitive value of the specified object.
 
-- sortOptions (dict; optional)
+    - settingsPanelWidth (number; optional)
 
-    `sortOptions` is a dict with keys:
+    - chartSettings (dict; optional)
 
-    - naturalSort (boolean; optional)
+        `chartSettings` is a dict with keys:
 
-    - caseSensitive (boolean; optional)
+        - chartSubtitle (string; optional)
 
-    - columnOptions (dict; optional)
+        - yAxisTitle (string; optional)
 
-- sorting (list; optional)
+        - yAxisMin (number; optional)
 
-- table (string; optional)
+        - yAxisMax (number; optional)
 
-- tableCanvasSize (number; optional)
+        - yAxisMinRight (number; optional)
 
-- treeConfig (dict; optional)
+        - yAxisMaxRight (number; optional)
 
-- uiConfig (dict; optional)
+        - tickCount (number; optional)
 
-- paginationConfig (dict; optional):
-    Client-side pagination configuration: { enabled: true, pageSize: 50 }.
-    Only applies when serverSide is false.
+        - labelAngle (number; optional)
 
-- valConfigs (list of dicts; optional)
+        - colorPalette (string; optional)
+
+        - valueFormat (string; optional)
+
+        - showDataLabels (dict; optional)
+
+            `showDataLabels` is a dict with keys:
+
+            - valueOf (optional):
+
+                Returns the primitive value of the specified object.
+
+                  Or dict with keys:
+
+            - valueOf (optional):
+
+                Returns the primitive value of the specified object.
+
+        - decimalPlaces (number; optional)
+
+        - labelPosition (string; optional)
+
+        - legendPosition (string; optional)
+
+        - markerShape (string; optional)
+
+        - markerSize (number; optional)
+
+        - showGradient (dict; optional)
+
+            `showGradient` is a dict with keys:
+
+            - valueOf (optional):
+
+                Returns the primitive value of the specified object.
+
+                  Or dict with keys:
+
+            - valueOf (optional):
+
+                Returns the primitive value of the specified object.
+
+        - gradientDirection (string; optional)
+
+        - gradientOpacity (number; optional)
+
+        - showAnimations (dict; optional)
+
+            `showAnimations` is a dict with keys:
+
+            - valueOf (optional):
+
+                Returns the primitive value of the specified object.
+
+                  Or dict with keys:
+
+            - valueOf (optional):
+
+                Returns the primitive value of the specified object.
+
+        - showCalloutLabels (dict; optional)
+
+            `showCalloutLabels` is a dict with keys:
+
+            - valueOf (optional):
+
+                Returns the primitive value of the specified object.
+
+                  Or dict with keys:
+
+            - valueOf (optional):
+
+                Returns the primitive value of the specified object.
+
+        - showTrendline (dict; optional)
+
+            `showTrendline` is a dict with keys:
+
+            - valueOf (optional):
+
+                Returns the primitive value of the specified object.
+
+                  Or dict with keys:
+
+            - valueOf (optional):
+
+                Returns the primitive value of the specified object.
+
+        - trendlineMode (string; optional)
+
+        - trendlinePeriod (number; optional)
+
+        - trendlineColor (string; optional)
+
+        - trendlineWidth (number; optional)
+
+        - seriesSort (string; optional)
+
+        - seriesColors (dict; optional)
+
+        - customPaletteColors (list of strings; optional)
+
+        - lineDashStyles (dict; optional)
+
+        - referenceLines (list of dicts; optional)
+
+- chartDefaults (dict; default PropTypes.object)
+
+- chartDefinitions (list of dicts; default PropTypes.arrayOf(PropTypes.object))
+
+- chartEvent (dict; default PropTypes.object)
+
+- chartServerWindow (dict; default PropTypes.shape({    enabled: PropTypes.bool,    rows: PropTypes.number,    columns: PropTypes.number,    scope: PropTypes.oneOf(['viewport', 'root'])  }))
+
+- colFields (list of dicts; default PropTypes.array)
+
+    `colFields` is a list of dicts with keys:
+
+
+- columnOrder (list of strings; default PropTypes.arrayOf(PropTypes.string))
+
+- columnPinned (dict; default PropTypes.object)
+
+- columnPinning (dict; default PropTypes.shape({    left: PropTypes.arrayOf(PropTypes.string),    right: PropTypes.arrayOf(PropTypes.string)  }))
+
+- columnSizing (dict; default PropTypes.object)
+
+- columnVisibility (dict; default PropTypes.object)
+
+- conditionalFormatting (list of dicts; default PropTypes.arrayOf(PropTypes.object))
+
+- customDimensions (list of dicts; default PropTypes.arrayOf(PropTypes.object))
+
+- data (list of dicts; default PropTypes.arrayOf(PropTypes.object))
+
+- decimalPlaces (number; default PropTypes.number)
+
+- defaultTheme (string; default PropTypes.string)
+
+- defaultValueFormat (string; default PropTypes.string)
+
+- detailConfig (dict; default PropTypes.object)
+
+- detailMode (string; default PropTypes.oneOf(['none', 'inline', 'sidepanel', 'drawer']))
+
+- drillEndpoint (string; default PropTypes.string)
+
+- editLifecycleEvent (dict; default PropTypes.object):
+    Deprecated compatibility input. Editing is unsupported and this
+    value is ignored.
+
+- editState (dict; default PropTypes.object):
+    Deprecated compatibility input. Editing is unsupported and this
+    value is ignored.
+
+- editingConfig (dict; default PropTypes.object):
+    Deprecated compatibility input. Editing is unsupported and this
+    value is ignored.
+
+- expanded (dict; default PropTypes.oneOfType([PropTypes.object, PropTypes.bool]))
+
+    `expanded` is a dict with keys:
+
+    - valueOf (optional):
+        Returns the primitive value of the specified object.
+
+      Or dict with keys:
+
+    - valueOf (optional):
+        Returns the primitive value of the specified object. | dict
+
+- fieldPanelSizes (dict; default PropTypes.object)
+
+- filters (dict; default PropTypes.object)
+
+- grandTotalPosition (string; default PropTypes.oneOf(['top', 'bottom']))
+
+- headerFormatting (dict | list of dicts; default PropTypes.oneOfType([PropTypes.object, PropTypes.arrayOf(PropTypes.object)]))
+
+- immersiveMode (dict; default PropTypes.bool)
+
+    `immersiveMode` is a dict with keys:
+
+    - valueOf (optional):
+        Returns the primitive value of the specified object.
+
+      Or dict with keys:
+
+    - valueOf (optional):
+        Returns the primitive value of the specified object.
+
+- localeText (dict; default PropTypes.object)
+
+- measureAxis (dict; default PropTypes.shape({    placement: PropTypes.oneOf(['none', 'rows', 'columns']),    labelField: PropTypes.string,    valueField: PropTypes.string,    members: PropTypes.arrayOf(PropTypes.object),    suppressEmptyMembers: PropTypes.bool,    suppressZeroMembers: PropTypes.bool,    totalsPolicy: PropTypes.string  }))
+
+- mergedHeaderSeparator (string; default PropTypes.string)
+
+- numberGroupSeparator (string; default PropTypes.oneOf(['comma', 'space', 'thin_space', 'apostrophe', 'none']))
+
+- paginationConfig (dict; default PropTypes.object)
+
+- performanceConfig (dict; default PropTypes.shape({    cacheBlockSize: PropTypes.number,    maxBlocksInCache: PropTypes.number,    blockLoadDebounceMs: PropTypes.number,    rowOverscan: PropTypes.number,    columnOverscan: PropTypes.number,    prefetchColumns: PropTypes.number  }))
+
+- persistence (dict; default PropTypes.oneOfType([PropTypes.bool, PropTypes.string, PropTypes.number]))
+
+    `persistence` is a string | number | dict with keys:
+
+    - valueOf (optional):
+        Returns the primitive value of the specified object.
+
+      Or dict with keys:
+
+    - valueOf (optional):
+        Returns the primitive value of the specified object.
+
+- persistence_type (string; default PropTypes.oneOf(['local', 'session', 'memory']))
+
+- pinningOptions (dict; default PropTypes.shape({    maxPinnedLeft: PropTypes.number,    maxPinnedRight: PropTypes.number,    suppressMovable: PropTypes.bool,    lockPinned: PropTypes.bool  }))
+
+- pinningPresets (list of dicts; default PropTypes.arrayOf(PropTypes.shape({    name: PropTypes.string,    config: PropTypes.object  })))
+
+- pivotTitle (string; default PropTypes.string)
+
+- reportDef (dict; default PropTypes.object)
+
+- reset (boolean | number | string | dict | list; default PropTypes.any)
+
+- rowFields (list of dicts; default PropTypes.array)
+
+    `rowFields` is a list of dicts with keys:
+
+
+- rowMove (dict; default PropTypes.object)
+
+- rowPinned (dict; default PropTypes.object)
+
+- rowPinning (dict; default PropTypes.shape({    top: PropTypes.arrayOf(PropTypes.string),    bottom: PropTypes.arrayOf(PropTypes.string)  }))
+
+- rowSelection (dict; default PropTypes.oneOfType([PropTypes.oneOf(['single', 'multiple']), PropTypes.bool]))
+
+    `rowSelection` is a string | dict with keys:
+
+    - valueOf (optional):
+        Returns the primitive value of the specified object.
+
+      Or dict with keys:
+
+    - valueOf (optional):
+        Returns the primitive value of the specified object.
+
+- runtimeRequest (dict; default PropTypes.object)
+
+- runtimeResponse (dict; default PropTypes.object)
+
+- saveViewTrigger (boolean | number | string | dict | list; default PropTypes.any)
+
+- savedReports (list of dicts; default PropTypes.arrayOf(PropTypes.object))
+
+- savedView (dict; default PropTypes.object)
+
+- selectedRows (list of strings; default PropTypes.arrayOf(PropTypes.string))
+
+- serverSide (dict; default PropTypes.bool)
+
+    `serverSide` is a dict with keys:
+
+    - valueOf (optional):
+        Returns the primitive value of the specified object.
+
+      Or dict with keys:
+
+    - valueOf (optional):
+        Returns the primitive value of the specified object.
+
+- setProps (default PropTypes.func)
+
+- showColTotals (dict; default PropTypes.bool)
+
+    `showColTotals` is a dict with keys:
+
+    - valueOf (optional):
+        Returns the primitive value of the specified object.
+
+      Or dict with keys:
+
+    - valueOf (optional):
+        Returns the primitive value of the specified object.
+
+- showRowTotals (dict; default PropTypes.bool)
+
+    `showRowTotals` is a dict with keys:
+
+    - valueOf (optional):
+        Returns the primitive value of the specified object.
+
+      Or dict with keys:
+
+    - valueOf (optional):
+        Returns the primitive value of the specified object.
+
+- showSubtotals (dict; default PropTypes.bool)
+
+    `showSubtotals` is a dict with keys:
+
+    - valueOf (optional):
+        Returns the primitive value of the specified object.
+
+      Or dict with keys:
+
+    - valueOf (optional):
+        Returns the primitive value of the specified object.
+
+- sortEvent (dict; default PropTypes.object)
+
+- sortLock (dict; default PropTypes.bool)
+
+    `sortLock` is a dict with keys:
+
+    - valueOf (optional):
+        Returns the primitive value of the specified object.
+
+      Or dict with keys:
+
+    - valueOf (optional):
+        Returns the primitive value of the specified object.
+
+- sortOptions (dict; default PropTypes.shape({    naturalSort: PropTypes.bool,    caseSensitive: PropTypes.bool,    columnOptions: PropTypes.object  }))
+
+- sorting (list of dicts; default PropTypes.array)
+
+    `sorting` is a list of dicts with keys:
+
+
+- sparklineFields (dict; default PropTypes.object)
+
+- table (string; default PropTypes.string)
+
+- tableCanvasSize (number; default PropTypes.number)
+
+- treeConfig (dict; default PropTypes.object)
+
+- uiConfig (dict; default PropTypes.object)
+
+- valConfigs (list of dicts; default PropTypes.arrayOf(PropTypes.shape({    field: PropTypes.string,    agg: PropTypes.oneOf(['sum', 'avg', 'count', 'min', 'max', 'weighted_avg', 'wavg', 'weighted_mean', 'array_agg', 'formula']),    weightField: PropTypes.string,    windowFn: PropTypes.oneOf(['percent_of_row', 'percent_of_col', 'percent_of_grand_total']),    format: PropTypes.string,    percentile: PropTypes.number,    separator: PropTypes.string,    formula: PropTypes.string,    label: PropTypes.string,    formulaRef: PropTypes.string,    formulaScope: PropTypes.oneOf(['measures', 'columns']),    headerStyle: PropTypes.object,    headerBg: PropTypes.string,    headerColor: PropTypes.string,    headerTextColor: PropTypes.string,    sparkline: PropTypes.oneOfType([PropTypes.bool, PropTypes.object])  })))
 
     `valConfigs` is a list of dicts with keys:
 
     - field (string; optional)
 
-    - agg (a value equal to: 'sum', 'avg', 'count', 'min', 'max', 'weighted_avg', 'wavg', 'weighted_mean', 'array_agg', 'formula'; optional)
+    - agg (string; optional)
 
     - weightField (string; optional)
 
-    - windowFn (a value equal to: 'percent_of_row', 'percent_of_col', 'percent_of_grand_total'; optional)
+    - windowFn (string; optional)
 
     - format (string; optional)
 
@@ -295,6 +479,8 @@ Keyword arguments:
 
     - formulaRef (string; optional)
 
+    - formulaScope (string; optional)
+
     - headerStyle (dict; optional)
 
     - headerBg (string; optional)
@@ -303,100 +489,244 @@ Keyword arguments:
 
     - headerTextColor (string; optional)
 
-    - sparkline (boolean | dict; optional)
+    - sparkline (dict; optional)
 
-- validationRules (dict; optional)
+        `sparkline` is a dict with keys:
 
-- viewMode (a value equal to: 'pivot', 'report', 'tree', 'table'; optional)
+        - valueOf (optional):
 
-- viewState (dict; optional)"""
+            Returns the primitive value of the specified object.
+
+              Or dict with keys:
+
+        - valueOf (optional):
+
+            Returns the primitive value of the specified object. | dict
+
+- validationRules (dict; default PropTypes.object)
+
+- viewMode (string; default PropTypes.oneOf(['pivot', 'report', 'tree', 'table']))
+
+- viewState (dict; default PropTypes.object)"""
     _children_props = []
     _base_nodes = ['children']
     _namespace = 'dash_tanstack_pivot'
     _type = 'DashTanstackPivot'
+    ServerSide = TypedDict(
+        "ServerSide",
+            {
+            "valueOf": NotRequired[typing.Any]
+        }
+    )
+
+    RowFields = TypedDict(
+        "RowFields",
+            {
+
+        }
+    )
+
+    ColFields = TypedDict(
+        "ColFields",
+            {
+
+        }
+    )
+
+    ValConfigsSparkline = TypedDict(
+        "ValConfigsSparkline",
+            {
+            "valueOf": NotRequired[typing.Any]
+        }
+    )
+
     ValConfigs = TypedDict(
         "ValConfigs",
             {
-            "field": NotRequired[str],
-            "agg": NotRequired[Literal["sum", "avg", "count", "min", "max", "weighted_avg", "wavg", "weighted_mean", "array_agg", "formula"]],
-            "weightField": NotRequired[str],
-            "windowFn": NotRequired[Literal["percent_of_row", "percent_of_col", "percent_of_grand_total"]],
-            "format": NotRequired[str],
-            "percentile": NotRequired[NumberType],
-            "separator": NotRequired[str],
-            "formula": NotRequired[str],
-            "label": NotRequired[str],
-            "formulaRef": NotRequired[str],
-            "headerStyle": NotRequired[dict],
-            "headerBg": NotRequired[str],
-            "headerColor": NotRequired[str],
-            "headerTextColor": NotRequired[str],
-            "sparkline": NotRequired[typing.Union[bool, dict]]
+            "field": NotRequired[typing.Union[str]],
+            "agg": NotRequired[typing.Union[str]],
+            "weightField": NotRequired[typing.Union[str]],
+            "windowFn": NotRequired[typing.Union[str]],
+            "format": NotRequired[typing.Union[str]],
+            "percentile": NotRequired[typing.Union[NumberType]],
+            "separator": NotRequired[typing.Union[str]],
+            "formula": NotRequired[typing.Union[str]],
+            "label": NotRequired[typing.Union[str]],
+            "formulaRef": NotRequired[typing.Union[str]],
+            "formulaScope": NotRequired[typing.Union[str]],
+            "headerStyle": NotRequired[typing.Union[dict]],
+            "headerBg": NotRequired[typing.Union[str]],
+            "headerColor": NotRequired[typing.Union[str]],
+            "headerTextColor": NotRequired[typing.Union[str]],
+            "sparkline": NotRequired[typing.Union["ValConfigsSparkline", dict]]
         }
     )
 
-    PerformanceConfig = TypedDict(
-        "PerformanceConfig",
+    Sorting = TypedDict(
+        "Sorting",
             {
-            "cacheBlockSize": NotRequired[NumberType],
-            "maxBlocksInCache": NotRequired[NumberType],
-            "blockLoadDebounceMs": NotRequired[NumberType],
-            "rowOverscan": NotRequired[NumberType],
-            "columnOverscan": NotRequired[NumberType],
-            "prefetchColumns": NotRequired[NumberType]
+
         }
     )
 
-    ChartServerWindow = TypedDict(
-        "ChartServerWindow",
+    Expanded = TypedDict(
+        "Expanded",
             {
-            "enabled": NotRequired[bool],
-            "rows": NotRequired[NumberType],
-            "columns": NotRequired[NumberType],
-            "scope": NotRequired[Literal["viewport", "root"]]
+            "valueOf": NotRequired[typing.Any]
         }
     )
 
-    ColumnPinning = TypedDict(
-        "ColumnPinning",
+    ImmersiveMode = TypedDict(
+        "ImmersiveMode",
             {
-            "left": NotRequired[typing.Sequence[str]],
-            "right": NotRequired[typing.Sequence[str]]
+            "valueOf": NotRequired[typing.Any]
         }
     )
 
-    RowPinning = TypedDict(
-        "RowPinning",
+    ShowRowTotals = TypedDict(
+        "ShowRowTotals",
             {
-            "top": NotRequired[typing.Sequence[str]],
-            "bottom": NotRequired[typing.Sequence[str]]
+            "valueOf": NotRequired[typing.Any]
         }
     )
 
-    PinningOptions = TypedDict(
-        "PinningOptions",
+    ShowColTotals = TypedDict(
+        "ShowColTotals",
             {
-            "maxPinnedLeft": NotRequired[NumberType],
-            "maxPinnedRight": NotRequired[NumberType],
-            "suppressMovable": NotRequired[bool],
-            "lockPinned": NotRequired[bool]
+            "valueOf": NotRequired[typing.Any]
         }
     )
 
-    PinningPresets = TypedDict(
-        "PinningPresets",
+    ShowSubtotals = TypedDict(
+        "ShowSubtotals",
             {
-            "name": NotRequired[str],
-            "config": NotRequired[dict]
+            "valueOf": NotRequired[typing.Any]
         }
     )
 
-    SortOptions = TypedDict(
-        "SortOptions",
+    ChartCanvasPanesFloating = TypedDict(
+        "ChartCanvasPanesFloating",
             {
-            "naturalSort": NotRequired[bool],
-            "caseSensitive": NotRequired[bool],
-            "columnOptions": NotRequired[dict]
+            "valueOf": NotRequired[typing.Any]
+        }
+    )
+
+    ChartCanvasPanesChartSettingsShowDataLabels = TypedDict(
+        "ChartCanvasPanesChartSettingsShowDataLabels",
+            {
+            "valueOf": NotRequired[typing.Any]
+        }
+    )
+
+    ChartCanvasPanesChartSettingsShowGradient = TypedDict(
+        "ChartCanvasPanesChartSettingsShowGradient",
+            {
+            "valueOf": NotRequired[typing.Any]
+        }
+    )
+
+    ChartCanvasPanesChartSettingsShowAnimations = TypedDict(
+        "ChartCanvasPanesChartSettingsShowAnimations",
+            {
+            "valueOf": NotRequired[typing.Any]
+        }
+    )
+
+    ChartCanvasPanesChartSettingsShowCalloutLabels = TypedDict(
+        "ChartCanvasPanesChartSettingsShowCalloutLabels",
+            {
+            "valueOf": NotRequired[typing.Any]
+        }
+    )
+
+    ChartCanvasPanesChartSettingsShowTrendline = TypedDict(
+        "ChartCanvasPanesChartSettingsShowTrendline",
+            {
+            "valueOf": NotRequired[typing.Any]
+        }
+    )
+
+    ChartCanvasPanesChartSettings = TypedDict(
+        "ChartCanvasPanesChartSettings",
+            {
+            "chartSubtitle": NotRequired[typing.Union[str]],
+            "yAxisTitle": NotRequired[typing.Union[str]],
+            "yAxisMin": NotRequired[typing.Union[NumberType]],
+            "yAxisMax": NotRequired[typing.Union[NumberType]],
+            "yAxisMinRight": NotRequired[typing.Union[NumberType]],
+            "yAxisMaxRight": NotRequired[typing.Union[NumberType]],
+            "tickCount": NotRequired[typing.Union[NumberType]],
+            "labelAngle": NotRequired[typing.Union[NumberType]],
+            "colorPalette": NotRequired[typing.Union[str]],
+            "valueFormat": NotRequired[typing.Union[str]],
+            "showDataLabels": NotRequired[typing.Union["ChartCanvasPanesChartSettingsShowDataLabels"]],
+            "decimalPlaces": NotRequired[typing.Union[NumberType]],
+            "labelPosition": NotRequired[typing.Union[str]],
+            "legendPosition": NotRequired[typing.Union[str]],
+            "markerShape": NotRequired[typing.Union[str]],
+            "markerSize": NotRequired[typing.Union[NumberType]],
+            "showGradient": NotRequired[typing.Union["ChartCanvasPanesChartSettingsShowGradient"]],
+            "gradientDirection": NotRequired[typing.Union[str]],
+            "gradientOpacity": NotRequired[typing.Union[NumberType]],
+            "showAnimations": NotRequired[typing.Union["ChartCanvasPanesChartSettingsShowAnimations"]],
+            "showCalloutLabels": NotRequired[typing.Union["ChartCanvasPanesChartSettingsShowCalloutLabels"]],
+            "showTrendline": NotRequired[typing.Union["ChartCanvasPanesChartSettingsShowTrendline"]],
+            "trendlineMode": NotRequired[typing.Union[str]],
+            "trendlinePeriod": NotRequired[typing.Union[NumberType]],
+            "trendlineColor": NotRequired[typing.Union[str]],
+            "trendlineWidth": NotRequired[typing.Union[NumberType]],
+            "seriesSort": NotRequired[typing.Union[str]],
+            "seriesColors": NotRequired[typing.Union[dict]],
+            "customPaletteColors": NotRequired[typing.Union[typing.Sequence[str]]],
+            "lineDashStyles": NotRequired[typing.Union[dict]],
+            "referenceLines": NotRequired[typing.Union[typing.Sequence[dict]]]
+        }
+    )
+
+    ChartCanvasPanes = TypedDict(
+        "ChartCanvasPanes",
+            {
+            "id": NotRequired[typing.Union[str]],
+            "name": NotRequired[typing.Union[str]],
+            "chartTitle": NotRequired[typing.Union[str]],
+            "source": NotRequired[typing.Union[str]],
+            "chartType": NotRequired[typing.Union[str]],
+            "barLayout": NotRequired[typing.Union[str]],
+            "axisMode": NotRequired[typing.Union[str]],
+            "orientation": NotRequired[typing.Union[str]],
+            "hierarchyLevel": NotRequired[typing.Union[str, NumberType]],
+            "rowLimit": NotRequired[typing.Union[NumberType]],
+            "columnLimit": NotRequired[typing.Union[NumberType]],
+            "width": NotRequired[typing.Union[NumberType]],
+            "chartHeight": NotRequired[typing.Union[NumberType]],
+            "sortMode": NotRequired[typing.Union[str]],
+            "interactionMode": NotRequired[typing.Union[str]],
+            "serverScope": NotRequired[typing.Union[str]],
+            "size": NotRequired[typing.Union[NumberType]],
+            "floating": NotRequired[typing.Union["ChartCanvasPanesFloating"]],
+            "settingsPanelWidth": NotRequired[typing.Union[NumberType]],
+            "chartSettings": NotRequired[typing.Union["ChartCanvasPanesChartSettings"]]
+        }
+    )
+
+    Persistence = TypedDict(
+        "Persistence",
+            {
+            "valueOf": NotRequired[typing.Any]
+        }
+    )
+
+    SortLock = TypedDict(
+        "SortLock",
+            {
+            "valueOf": NotRequired[typing.Any]
+        }
+    )
+
+    RowSelection = TypedDict(
+        "RowSelection",
+            {
+            "valueOf": NotRequired[typing.Any]
         }
     )
 
@@ -404,83 +734,86 @@ Keyword arguments:
     def __init__(
         self,
         id: typing.Optional[typing.Union[str, dict]] = None,
-        table: typing.Optional[str] = None,
-        pivotTitle: typing.Optional[str] = None,
-        data: typing.Optional[typing.Sequence[dict]] = None,
+        table: typing.Optional[typing.Union[str]] = None,
+        pivotTitle: typing.Optional[typing.Union[str]] = None,
+        data: typing.Optional[typing.Union[typing.Sequence[dict]]] = None,
         style: typing.Optional[typing.Any] = None,
-        serverSide: typing.Optional[bool] = None,
-        rowFields: typing.Optional[typing.Sequence] = None,
-        colFields: typing.Optional[typing.Sequence] = None,
-        valConfigs: typing.Optional[typing.Sequence["ValConfigs"]] = None,
-        filters: typing.Optional[dict] = None,
-        sorting: typing.Optional[typing.Sequence] = None,
-        expanded: typing.Optional[typing.Union[dict, bool]] = None,
-        immersiveMode: typing.Optional[bool] = None,
-        showRowTotals: typing.Optional[bool] = None,
-        showColTotals: typing.Optional[bool] = None,
-        showSubtotals: typing.Optional[bool] = None,
-        grandTotalPosition: typing.Optional[Literal["top", "bottom"]] = None,
-        runtimeRequest: typing.Optional[dict] = None,
-        runtimeResponse: typing.Optional[dict] = None,
-        viewMode: typing.Optional[Literal["pivot", "report", "tree", "table"]] = None,
-        detailMode: typing.Optional[Literal["none", "inline", "sidepanel", "drawer"]] = None,
-        measureAxis: typing.Optional[dict] = None,
-        treeConfig: typing.Optional[dict] = None,
-        detailConfig: typing.Optional[dict] = None,
-        chartEvent: typing.Optional[dict] = None,
-        chartDefinitions: typing.Optional[typing.Sequence[dict]] = None,
-        chartDefaults: typing.Optional[dict] = None,
-        chartCanvasPanes: typing.Optional[typing.Sequence[dict]] = None,
-        tableCanvasSize: typing.Optional[NumberType] = None,
-        performanceConfig: typing.Optional["PerformanceConfig"] = None,
-        chartServerWindow: typing.Optional["ChartServerWindow"] = None,
-        cellUpdate: typing.Optional[dict] = None,
-        cellUpdates: typing.Optional[typing.Sequence[dict]] = None,
-        rowMove: typing.Optional[dict] = None,
-        drillEndpoint: typing.Optional[str] = None,
-        viewState: typing.Optional[dict] = None,
+        serverSide: typing.Optional[typing.Union["ServerSide"]] = None,
+        rowFields: typing.Optional[typing.Union[typing.Sequence["RowFields"]]] = None,
+        colFields: typing.Optional[typing.Union[typing.Sequence["ColFields"]]] = None,
+        valConfigs: typing.Optional[typing.Union[typing.Sequence["ValConfigs"]]] = None,
+        measureAxis: typing.Optional[typing.Union[dict]] = None,
+        filters: typing.Optional[typing.Union[dict]] = None,
+        sorting: typing.Optional[typing.Union[typing.Sequence["Sorting"]]] = None,
+        expanded: typing.Optional[typing.Union["Expanded", dict]] = None,
+        immersiveMode: typing.Optional[typing.Union["ImmersiveMode"]] = None,
+        showRowTotals: typing.Optional[typing.Union["ShowRowTotals"]] = None,
+        showColTotals: typing.Optional[typing.Union["ShowColTotals"]] = None,
+        showSubtotals: typing.Optional[typing.Union["ShowSubtotals"]] = None,
+        grandTotalPosition: typing.Optional[typing.Union[str]] = None,
+        runtimeRequest: typing.Optional[typing.Union[dict]] = None,
+        runtimeResponse: typing.Optional[typing.Union[dict]] = None,
+        viewMode: typing.Optional[typing.Union[str]] = None,
+        detailMode: typing.Optional[typing.Union[str]] = None,
+        treeConfig: typing.Optional[typing.Union[dict]] = None,
+        detailConfig: typing.Optional[typing.Union[dict]] = None,
+        chartEvent: typing.Optional[typing.Union[dict]] = None,
+        chartDefinitions: typing.Optional[typing.Union[typing.Sequence[dict]]] = None,
+        chartDefaults: typing.Optional[typing.Union[dict]] = None,
+        chartCanvasPanes: typing.Optional[typing.Union[typing.Sequence["ChartCanvasPanes"]]] = None,
+        tableCanvasSize: typing.Optional[typing.Union[NumberType]] = None,
+        performanceConfig: typing.Optional[typing.Union[dict]] = None,
+        chartServerWindow: typing.Optional[typing.Union[dict]] = None,
+        cellUpdate: typing.Optional[typing.Union[dict]] = None,
+        cellUpdates: typing.Optional[typing.Union[typing.Sequence[dict]]] = None,
+        rowMove: typing.Optional[typing.Union[dict]] = None,
+        drillEndpoint: typing.Optional[typing.Union[str]] = None,
+        viewState: typing.Optional[typing.Union[dict]] = None,
         saveViewTrigger: typing.Optional[typing.Any] = None,
-        savedView: typing.Optional[dict] = None,
-        conditionalFormatting: typing.Optional[typing.Sequence[dict]] = None,
+        savedView: typing.Optional[typing.Union[dict]] = None,
+        conditionalFormatting: typing.Optional[typing.Union[typing.Sequence[dict]]] = None,
         headerFormatting: typing.Optional[typing.Union[dict, typing.Sequence[dict]]] = None,
-        validationRules: typing.Optional[dict] = None,
-        editingConfig: typing.Optional[dict] = None,
-        editLifecycleEvent: typing.Optional[dict] = None,
-        editState: typing.Optional[dict] = None,
-        uiConfig: typing.Optional[dict] = None,
-        paginationConfig: typing.Optional[dict] = None,
-        columnPinning: typing.Optional["ColumnPinning"] = None,
-        rowPinning: typing.Optional["RowPinning"] = None,
-        columnPinned: typing.Optional[dict] = None,
-        rowPinned: typing.Optional[dict] = None,
-        columnVisibility: typing.Optional[dict] = None,
-        columnOrder: typing.Optional[typing.Sequence[str]] = None,
-        columnSizing: typing.Optional[dict] = None,
-        localeText: typing.Optional[dict] = None,
-        decimalPlaces: typing.Optional[NumberType] = None,
-        defaultValueFormat: typing.Optional[str] = None,
-        fieldPanelSizes: typing.Optional[dict] = None,
-        numberGroupSeparator: typing.Optional[Literal["comma", "space", "thin_space", "apostrophe", "none"]] = None,
+        validationRules: typing.Optional[typing.Union[dict]] = None,
+        editingConfig: typing.Optional[typing.Union[dict]] = None,
+        editLifecycleEvent: typing.Optional[typing.Union[dict]] = None,
+        editState: typing.Optional[typing.Union[dict]] = None,
+        uiConfig: typing.Optional[typing.Union[dict]] = None,
+        paginationConfig: typing.Optional[typing.Union[dict]] = None,
+        mergedHeaderSeparator: typing.Optional[typing.Union[str]] = None,
+        columnPinning: typing.Optional[typing.Union[dict]] = None,
+        rowPinning: typing.Optional[typing.Union[dict]] = None,
+        columnPinned: typing.Optional[typing.Union[dict]] = None,
+        rowPinned: typing.Optional[typing.Union[dict]] = None,
+        columnVisibility: typing.Optional[typing.Union[dict]] = None,
+        columnOrder: typing.Optional[typing.Union[typing.Sequence[str]]] = None,
+        columnSizing: typing.Optional[typing.Union[dict]] = None,
+        localeText: typing.Optional[typing.Union[dict]] = None,
+        decimalPlaces: typing.Optional[typing.Union[NumberType]] = None,
+        defaultValueFormat: typing.Optional[typing.Union[str]] = None,
+        fieldPanelSizes: typing.Optional[typing.Union[dict]] = None,
+        numberGroupSeparator: typing.Optional[typing.Union[str]] = None,
         reset: typing.Optional[typing.Any] = None,
-        persistence: typing.Optional[typing.Union[bool, str, NumberType]] = None,
-        persistence_type: typing.Optional[Literal["local", "session", "memory"]] = None,
-        pinningOptions: typing.Optional["PinningOptions"] = None,
-        pinningPresets: typing.Optional[typing.Sequence["PinningPresets"]] = None,
-        sortOptions: typing.Optional["SortOptions"] = None,
-        sortLock: typing.Optional[bool] = None,
-        defaultTheme: typing.Optional[str] = None,
-        sortEvent: typing.Optional[dict] = None,
-        availableFieldList: typing.Optional[typing.Sequence[str]] = None,
-        sparklineFields: typing.Optional[dict] = None,
-        reportDef: typing.Optional[dict] = None,
-        savedReports: typing.Optional[typing.Sequence[dict]] = None,
-        activeReportId: typing.Optional[str] = None,
-        customDimensions: typing.Optional[typing.Sequence[dict]] = None,
+        persistence: typing.Optional[typing.Union[str, NumberType, "Persistence"]] = None,
+        persistence_type: typing.Optional[typing.Union[str]] = None,
+        pinningOptions: typing.Optional[typing.Union[dict]] = None,
+        pinningPresets: typing.Optional[typing.Union[typing.Sequence[dict]]] = None,
+        sortOptions: typing.Optional[typing.Union[dict]] = None,
+        sortLock: typing.Optional[typing.Union["SortLock"]] = None,
+        defaultTheme: typing.Optional[typing.Union[str]] = None,
+        sortEvent: typing.Optional[typing.Union[dict]] = None,
+        availableFieldList: typing.Optional[typing.Union[typing.Sequence[str]]] = None,
+        sparklineFields: typing.Optional[typing.Union[dict]] = None,
+        customDimensions: typing.Optional[typing.Union[typing.Sequence[dict]]] = None,
+        reportDef: typing.Optional[typing.Union[dict]] = None,
+        savedReports: typing.Optional[typing.Union[typing.Sequence[dict]]] = None,
+        activeReportId: typing.Optional[typing.Union[str]] = None,
+        rowSelection: typing.Optional[typing.Union[str, "RowSelection"]] = None,
+        selectedRows: typing.Optional[typing.Union[typing.Sequence[str]]] = None,
         **kwargs
     ):
-        self._prop_names = ['id', 'activeReportId', 'availableFieldList', 'sparklineFields', 'cellUpdate', 'cellUpdates', 'chartCanvasPanes', 'chartDefaults', 'chartDefinitions', 'chartEvent', 'chartServerWindow', 'immersiveMode', 'colFields', 'columnOrder', 'columnPinned', 'columnPinning', 'columnSizing', 'columnVisibility', 'conditionalFormatting', 'headerFormatting', 'customDimensions', 'data', 'decimalPlaces', 'defaultTheme', 'defaultValueFormat', 'detailConfig', 'detailMode', 'drillEndpoint', 'editLifecycleEvent', 'editState', 'editingConfig', 'expanded', 'fieldPanelSizes', 'filters', 'grandTotalPosition', 'localeText', 'measureAxis', 'numberGroupSeparator', 'performanceConfig', 'persistence', 'persistence_type', 'pinningOptions', 'pinningPresets', 'pivotTitle', 'reportDef', 'reset', 'rowFields', 'rowMove', 'rowPinned', 'rowPinning', 'runtimeRequest', 'runtimeResponse', 'saveViewTrigger', 'savedReports', 'savedView', 'serverSide', 'showColTotals', 'showRowTotals', 'showSubtotals', 'sortEvent', 'sortLock', 'sortOptions', 'sorting', 'style', 'table', 'tableCanvasSize', 'treeConfig', 'paginationConfig', 'uiConfig', 'valConfigs', 'validationRules', 'viewMode', 'viewState']
+        self._prop_names = ['id', 'activeReportId', 'availableFieldList', 'cellUpdate', 'cellUpdates', 'chartCanvasPanes', 'chartDefaults', 'chartDefinitions', 'chartEvent', 'chartServerWindow', 'colFields', 'columnOrder', 'columnPinned', 'columnPinning', 'columnSizing', 'columnVisibility', 'conditionalFormatting', 'customDimensions', 'data', 'decimalPlaces', 'defaultTheme', 'defaultValueFormat', 'detailConfig', 'detailMode', 'drillEndpoint', 'editLifecycleEvent', 'editState', 'editingConfig', 'expanded', 'fieldPanelSizes', 'filters', 'grandTotalPosition', 'headerFormatting', 'immersiveMode', 'localeText', 'measureAxis', 'mergedHeaderSeparator', 'numberGroupSeparator', 'paginationConfig', 'performanceConfig', 'persistence', 'persistence_type', 'pinningOptions', 'pinningPresets', 'pivotTitle', 'reportDef', 'reset', 'rowFields', 'rowMove', 'rowPinned', 'rowPinning', 'rowSelection', 'runtimeRequest', 'runtimeResponse', 'saveViewTrigger', 'savedReports', 'savedView', 'selectedRows', 'serverSide', 'setProps', 'showColTotals', 'showRowTotals', 'showSubtotals', 'sortEvent', 'sortLock', 'sortOptions', 'sorting', 'sparklineFields', 'style', 'table', 'tableCanvasSize', 'treeConfig', 'uiConfig', 'valConfigs', 'validationRules', 'viewMode', 'viewState']
         self._valid_wildcard_attributes =            []
-        self.available_properties = ['id', 'activeReportId', 'availableFieldList', 'sparklineFields', 'cellUpdate', 'cellUpdates', 'chartCanvasPanes', 'chartDefaults', 'chartDefinitions', 'chartEvent', 'chartServerWindow', 'immersiveMode', 'colFields', 'columnOrder', 'columnPinned', 'columnPinning', 'columnSizing', 'columnVisibility', 'conditionalFormatting', 'headerFormatting', 'customDimensions', 'data', 'decimalPlaces', 'defaultTheme', 'defaultValueFormat', 'detailConfig', 'detailMode', 'drillEndpoint', 'editLifecycleEvent', 'editState', 'editingConfig', 'expanded', 'fieldPanelSizes', 'filters', 'grandTotalPosition', 'localeText', 'measureAxis', 'numberGroupSeparator', 'performanceConfig', 'persistence', 'persistence_type', 'pinningOptions', 'pinningPresets', 'pivotTitle', 'reportDef', 'reset', 'rowFields', 'rowMove', 'rowPinned', 'rowPinning', 'runtimeRequest', 'runtimeResponse', 'saveViewTrigger', 'savedReports', 'savedView', 'serverSide', 'showColTotals', 'showRowTotals', 'showSubtotals', 'sortEvent', 'sortLock', 'sortOptions', 'sorting', 'style', 'table', 'tableCanvasSize', 'treeConfig', 'paginationConfig', 'uiConfig', 'valConfigs', 'validationRules', 'viewMode', 'viewState']
+        self.available_properties = ['id', 'activeReportId', 'availableFieldList', 'cellUpdate', 'cellUpdates', 'chartCanvasPanes', 'chartDefaults', 'chartDefinitions', 'chartEvent', 'chartServerWindow', 'colFields', 'columnOrder', 'columnPinned', 'columnPinning', 'columnSizing', 'columnVisibility', 'conditionalFormatting', 'customDimensions', 'data', 'decimalPlaces', 'defaultTheme', 'defaultValueFormat', 'detailConfig', 'detailMode', 'drillEndpoint', 'editLifecycleEvent', 'editState', 'editingConfig', 'expanded', 'fieldPanelSizes', 'filters', 'grandTotalPosition', 'headerFormatting', 'immersiveMode', 'localeText', 'measureAxis', 'mergedHeaderSeparator', 'numberGroupSeparator', 'paginationConfig', 'performanceConfig', 'persistence', 'persistence_type', 'pinningOptions', 'pinningPresets', 'pivotTitle', 'reportDef', 'reset', 'rowFields', 'rowMove', 'rowPinned', 'rowPinning', 'rowSelection', 'runtimeRequest', 'runtimeResponse', 'saveViewTrigger', 'savedReports', 'savedView', 'selectedRows', 'serverSide', 'setProps', 'showColTotals', 'showRowTotals', 'showSubtotals', 'sortEvent', 'sortLock', 'sortOptions', 'sorting', 'sparklineFields', 'style', 'table', 'tableCanvasSize', 'treeConfig', 'uiConfig', 'valConfigs', 'validationRules', 'viewMode', 'viewState']
         self.available_wildcard_properties =            []
         _explicit_args = kwargs.pop('_explicit_args')
         _locals = locals()

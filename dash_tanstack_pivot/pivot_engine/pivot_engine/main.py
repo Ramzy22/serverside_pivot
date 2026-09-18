@@ -20,7 +20,7 @@ def main():
     print(f"Backend: {config.backend_type} ({config.backend_uri})")
     print(f"Features: Streaming={config.enable_streaming}, CDC={config.enable_cdc}")
     
-    uvicorn.run(app, host="0.0.0.0", port=8000)
+    uvicorn.run(app, host=os.getenv("PIVOT_BIND_HOST", "127.0.0.1"), port=8000)
 
 if __name__ == "__main__":
     main()

@@ -893,16 +893,18 @@ def test_runtime_service_clears_overlay_after_parent_edit_is_undone():
 
 
 def test_frontend_edit_contract_uses_event_actions_and_removes_none_option():
-    component_source = Path(
-        os.path.join(
-            os.getcwd(),
-            "dash_tanstack_pivot",
-            "src",
-            "lib",
-            "components",
-            "DashTanstackPivot.react.js",
+    frontend_root = Path(os.getcwd()) / "dash_tanstack_pivot" / "src" / "lib"
+    component_source = "\n".join(
+        (frontend_root / relative_path).read_text(encoding="utf-8")
+        for relative_path in (
+            "components/DashTanstackPivot.react.tsx",
+            "components/PivotWorkspaceShell.js",
+            "runtime/useCoreRuntimeStage.tsx",
+            "runtime/useCommandRuntimeStage.tsx",
+            "runtime/useViewportRuntimeStage.tsx",
+            "runtime/useWorkspaceRuntimeStage.tsx",
         )
-    ).read_text(encoding="utf-8")
+    )
     transaction_source = Path(
         os.path.join(
             os.getcwd(),
