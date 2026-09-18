@@ -1,0 +1,40 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://serverside-pivot.dev/schema/pivot-runtime-response-v1.json",
+  "title": "Pivot Runtime Protocol Response V1",
+  "type": "object",
+  "required": ["schemaVersion", "kind", "status", "payload"],
+  "properties": {
+    "schemaVersion": { "const": 1 },
+    "kind": {
+      "enum": ["data", "filter_options", "chart", "detail", "drill", "update", "transaction", "export"]
+    },
+    "status": { "type": "string", "minLength": 1 },
+    "requestId": { "type": "string", "minLength": 1 },
+    "table": { "type": "string", "minLength": 1 },
+    "sessionId": { "type": "string", "minLength": 1 },
+    "clientInstance": { "type": "string", "minLength": 1 },
+    "stateEpoch": { "type": "integer", "minimum": 0 },
+    "windowSeq": { "type": "integer", "minimum": 0 },
+    "message": { "type": "string" },
+    "payload": { "$ref": "#/$defs/jsonObject" },
+    "profile": { "$ref": "#/$defs/jsonObject" }
+  },
+  "additionalProperties": false,
+  "$defs": {
+    "jsonValue": {
+      "anyOf": [
+        { "type": "null" },
+        { "type": "boolean" },
+        { "type": "number" },
+        { "type": "string" },
+        { "type": "array", "items": { "$ref": "#/$defs/jsonValue" } },
+        { "$ref": "#/$defs/jsonObject" }
+      ]
+    },
+    "jsonObject": {
+      "type": "object",
+      "additionalProperties": { "$ref": "#/$defs/jsonValue" }
+    }
+  }
+}

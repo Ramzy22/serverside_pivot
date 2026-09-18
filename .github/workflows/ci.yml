@@ -63,18 +63,22 @@ jobs:
       - name: Install setuptools for build:py
         run: pip install "setuptools<71" dash
 
-      - name: Build JS bundle
-        run: npm run build:js
-
-      - name: Type-check TypeScript runtime contracts
-        run: npm run typecheck
-
-      - name: Regenerate and validate Python component metadata
-        run: npm run build:py
+      - name: Build Dash, React, and Streamlit hosts
+        run: npm run build
 
       - name: Verify bundle contract
         working-directory: ${{ github.workspace }}
         run: python scripts/ci/verify_bundle_contract.py
+
+      - name: Verify React and Streamlit build contract
+        working-directory: ${{ github.workspace }}
+        run: python scripts/ci/verify_host_build_contract.py --package-dir dash_tanstack_pivot
+
+      - name: Pack and verify standalone React package
+        run: |
+          mkdir -p "$RUNNER_TEMP/serverside-pivot-npm"
+          npm pack --json --pack-destination "$RUNNER_TEMP/serverside-pivot-npm"
+          python ../scripts/ci/verify_npm_package_contract.py "$RUNNER_TEMP/serverside-pivot-npm"/*.tgz
 
   package-smoke:
     name: Package Build and Import Smoke
@@ -89,8 +93,34 @@ jobs:
         with:
           python-version: "3.11"
 
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
       - name: Install build tools
-        run: python -m pip install --upgrade pip "setuptools<71" build twine
+        run: python -m pip install --upgrade pip "setuptools<71" build twine dash
+
+      - name: Install frontend dependencies from clean checkout
+        run: npm ci
+        working-directory: dash_tanstack_pivot
+
+      - name: Build every advertised host from clean checkout
+        run: npm run build
+        working-directory: dash_tanstack_pivot
+
+      - name: Verify all host build outputs
+        run: |
+          python scripts/ci/verify_bundle_contract.py
+          python scripts/ci/verify_host_build_contract.py --package-dir dash_tanstack_pivot
+
+      - name: Pack and verify standalone React package
+        run: |
+          mkdir -p "$RUNNER_TEMP/serverside-pivot-npm"
+          cd dash_tanstack_pivot
+          npm pack --json --pack-destination "$RUNNER_TEMP/serverside-pivot-npm"
+          cd ..
+          python scripts/ci/verify_npm_package_contract.py "$RUNNER_TEMP/serverside-pivot-npm"/*.tgz
 
       - name: Build distribution
         run: python -m build dash_tanstack_pivot/
@@ -101,7 +131,22 @@ jobs:
       - name: Verify wheel package contract
         run: python scripts/ci/verify_wheel_contract.py dash_tanstack_pivot/dist/*.whl
 
-      - name: Install from wheel and run import smoke
+      - name: Install wheel in an isolated environment and execute runtime smoke
         run: |
-          pip install dash_tanstack_pivot/dist/*.whl
-          python -c "import dash_tanstack_pivot; print('Import smoke: OK')"
+          python -m venv "$RUNNER_TEMP/serverside-pivot-wheel-smoke"
+          "$RUNNER_TEMP/serverside-pivot-wheel-smoke/bin/python" -m pip install --upgrade pip
+          WHEEL="$(find "$GITHUB_WORKSPACE/dash_tanstack_pivot/dist" -maxdepth 1 -name '*.whl' -print -quit)"
+          test -n "$WHEEL"
+          "$RUNNER_TEMP/serverside-pivot-wheel-smoke/bin/python" -m pip install "${WHEEL}[api]" httpx
+          cd "$RUNNER_TEMP/serverside-pivot-wheel-smoke"
+          "$RUNNER_TEMP/serverside-pivot-wheel-smoke/bin/python" "$GITHUB_WORKSPACE/scripts/ci/smoke_installed_python_runtime.py"
+
+      - name: Install packed React package and execute runtime transport
+        run: |
+          SMOKE_DIR="$RUNNER_TEMP/serverside-pivot-react-smoke"
+          mkdir -p "$SMOKE_DIR"
+          cp scripts/ci/smoke_installed_react_runtime.mjs "$SMOKE_DIR/"
+          cd "$SMOKE_DIR"
+          npm init --yes
+          npm install --ignore-scripts "$RUNNER_TEMP/serverside-pivot-npm"/*.tgz
+          node smoke_installed_react_runtime.mjs

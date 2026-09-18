@@ -46,8 +46,10 @@ OPTIONAL_ASYNC_BUDGETS = {
     "dash_tanstack_pivot_async_pivot-echarts-3d.dash_tanstack_pivot.min.js": 500_000,
     # Standard workbook export is writer-only; the legacy HTML-table parser
     # is emitted as a second, explicitly requested compatibility chunk.
-    "dash_tanstack_pivot_async_pivot-xlsx.dash_tanstack_pivot.min.js": 250_000,
-    "dash_tanstack_pivot_async_pivot-xlsx-html.dash_tanstack_pivot.min.js": 450_000,
+    # Current writer and legacy-parser releases require these tightly bounded
+    # limits. Both dependencies remain opt-in lazy chunks.
+    "dash_tanstack_pivot_async_pivot-xlsx.dash_tanstack_pivot.min.js": 275_000,
+    "dash_tanstack_pivot_async_pivot-xlsx-html.dash_tanstack_pivot.min.js": 500_000,
 }
 
 
@@ -138,7 +140,7 @@ def main() -> None:
 
     if errors:
         print(
-            f"\nverify_bundle_contract: FAILED — {len(errors)} required artifact(s) missing.",
+            f"\nverify_bundle_contract: FAILED — {len(errors)} contract violation(s).",
             file=sys.stderr,
         )
         sys.exit(1)

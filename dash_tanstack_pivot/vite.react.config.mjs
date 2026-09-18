@@ -11,12 +11,21 @@ const sharedJsx = {
     enforce: 'pre',
     async transform(code, id) {
         if (!id.replace(/\\/g, '/').startsWith(sharedSource) || !id.endsWith('.js')) return null;
-        return transformWithEsbuild(code, id, { loader: 'jsx', jsx: 'automatic' });
+        return transformWithEsbuild(code, id, { loader: 'jsx', jsx: 'transform' });
     },
 };
 
 export default defineConfig({
-    plugins: [sharedJsx, react({ include: [/src\/lib\/.*\.js$/, /\.[jt]sx?$/] })],
+    plugins: [
+        sharedJsx,
+        react({
+            include: [/src\/lib\/.*\.js$/, /\.[jt]sx?$/],
+            // A classic transform uses the consumer's external React object.
+            // It avoids coupling a bundled automatic JSX runtime to the React
+            // version that happened to be installed during publication.
+            jsxRuntime: 'classic',
+        }),
+    ],
     define: { 'process.env.NODE_ENV': JSON.stringify('production') },
     build: {
         outDir: 'dist/react',
@@ -28,7 +37,12 @@ export default defineConfig({
             fileName: 'index.mjs',
         },
         rollupOptions: {
-            external: ['react', 'react-dom', 'react-dom/client', 'styled-components'],
+            external: [
+                'react',
+                'react-dom',
+                'react-dom/client',
+                'styled-components',
+            ],
             output: {
                 entryFileNames: 'index.mjs',
                 chunkFileNames: 'chunks/[name]-[hash].mjs',

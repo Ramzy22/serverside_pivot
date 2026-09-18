@@ -4,6 +4,8 @@ include dash_tanstack_pivot/package-info.json
 include package.json
 include streamlit_pivot/pyproject.toml
 recursive-include streamlit_pivot/frontend/build *
+include pivot_engine/pivot_engine/runtime/runtime-contract.schema.json
+include pivot_engine/pivot_engine/runtime/runtime-response.schema.json
 
 # Never let locally generated build output or npm's dependency tree enter an
 # sdist.  Besides keeping distributions small, this forces every wheel to use

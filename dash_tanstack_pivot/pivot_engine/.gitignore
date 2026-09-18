@@ -162,6 +162,8 @@ secrets.json
 *.parquet
 *.csv
 *.json
+!pivot_engine/runtime/runtime-contract.schema.json
+!pivot_engine/runtime/runtime-response.schema.json
 *.xlsx
 
 # DuckDB files
