@@ -638,10 +638,10 @@ class CompletePivotAPI:
                 raise HTTPException(status_code=403, detail="Dataset access is not authorized.")
             try:
                 # Expects dict with type, new_row, old_row
-                await self.controller.push_change_event(table_name, change)
+                mode = await self.controller.push_change_event(table_name, change)
                 return APIResponse(
                     status="success",
-                    data={"message": "Change accepted"}
+                    data={"message": "Change accepted", "mode": mode}
                 )
             except Exception as e:
                 raise HTTPException(status_code=500, detail="Internal server error.") from e

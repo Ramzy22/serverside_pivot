@@ -784,6 +784,8 @@ class ScalablePivotController(PivotController):
         # Register materialized view manager to receive change notifications
         if self.incremental_view_manager is not None:
             self.cdc_manager.register_materialized_view_manager(table_name, self.incremental_view_manager)
+        if getattr(self, 'streaming_processor', None) is not None:
+            self.cdc_manager.register_change_consumer(table_name, self.streaming_processor)
 
         # Start tracking changes in the background using TaskManager
         self.task_manager.create_task(
@@ -801,7 +803,10 @@ class ScalablePivotController(PivotController):
         
         await self.cdc_manager.setup_cdc(table_name)
         
-        self.cdc_manager.register_materialized_view_manager(table_name, self.incremental_view_manager)
+        if self.incremental_view_manager is not None:
+            self.cdc_manager.register_materialized_view_manager(table_name, self.incremental_view_manager)
+        if getattr(self, 'streaming_processor', None) is not None:
+            self.cdc_manager.register_change_consumer(table_name, self.streaming_processor)
         
         # Start processing changes (consuming the queue)
         self.task_manager.create_task(
@@ -823,10 +828,23 @@ class ScalablePivotController(PivotController):
             table=table_name,
             type=change_dict.get('type', 'INSERT'),
             new_row=change_dict.get('new_row'),
-            old_row=change_dict.get('old_row')
+            old_row=change_dict.get('old_row'),
+            source=str(change_dict.get('source') or 'push'),
+            event_id=change_dict.get('event_id'),
+            partition=str(change_dict.get('partition') or '0'),
+            sequence=change_dict.get('sequence'),
+            row_identity=(
+                str(change_dict['row_identity'])
+                if change_dict.get('row_identity') is not None
+                else str((change_dict.get('new_row') or change_dict.get('old_row') or {}).get('id'))
+                if (change_dict.get('new_row') or change_dict.get('old_row') or {}).get('id') is not None
+                else None
+            ),
+            row_images_complete=change_dict.get('row_images_complete'),
         )
         
         await self.cdc_manager.push_change(table_name, change)
+        return 'accepted_exact' if change.is_exact() else 'accepted_invalidating'
 
     async def run_streaming_aggregation(self, spec: PivotSpec):
         """Run streaming aggregation for real-time results"""
