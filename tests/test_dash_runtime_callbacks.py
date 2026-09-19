@@ -6,12 +6,14 @@ import logging
 import threading
 from pathlib import Path
 
+import fakeredis
 import pandas as pd
 import pytest
 from dash import Dash, dcc, html, dash_table
 import pivot_engine as pivot_engine_module
 import pivot_engine.dash_integration as dash_integration_module
 import pivot_engine.runtime as runtime_module
+import pivot_engine.runtime.dash_callbacks as dash_callbacks_module
 from pivot_engine import register_pivot_app
 from pivot_engine.grid_hierarchy import build_org_hierarchy_paths
 
@@ -40,6 +42,8 @@ from pivot_engine.runtime.dash_callbacks import (
 from pivot_engine.runtime.models import PivotRequestContext
 from pivot_engine.runtime import RuntimeDatasetAuthorizationError, RuntimeDatasetAuthorizer
 from pivot_engine.runtime.async_bridge import run_awaitable_in_worker_thread, run_awaitable_sync
+from pivot_engine.runtime.distributed import DistributedRuntimeSettings, RedisRuntimeState
+from pivot_engine.runtime.payload_store import RedisPayloadBackend, RuntimePayloadStore
 
 
 class _StubRuntimeService:
@@ -318,6 +322,69 @@ def test_dash_payload_download_requires_the_issuing_browser_session():
 
     assert owner.get(payload_ref["url"]).status_code == 200
     assert stranger.get(payload_ref["url"]).status_code == 404
+
+
+def test_single_worker_dash_payload_store_keeps_configured_limits(monkeypatch):
+    monkeypatch.setenv("PIVOT_DISTRIBUTED_RUNTIME", "0")
+    monkeypatch.setenv("PIVOT_RUNTIME_PAYLOAD_TTL_SECONDS", "11")
+    monkeypatch.setenv("PIVOT_RUNTIME_PAYLOAD_MAX_ENTRIES", "13")
+    monkeypatch.setenv("PIVOT_RUNTIME_PAYLOAD_MAX_BYTES", "2048")
+    app = Dash(__name__)
+    app.layout = html.Div()
+
+    store = _get_runtime_payload_store(app)
+
+    assert store.default_ttl_seconds == 11
+    assert store.max_entries == 13
+    assert store.max_bytes == 2048
+
+
+def test_distributed_dash_payloads_require_shared_session_secret_and_cross_worker_store(
+    monkeypatch,
+):
+    monkeypatch.setenv("PIVOT_DISTRIBUTED_RUNTIME", "1")
+    monkeypatch.setenv("PIVOT_RUNTIME_REDIS_URL", "rediss://user:pass@example/0")
+    monkeypatch.setenv("PIVOT_RUNTIME_REDIS_PREFIX", "dash-payload-test")
+    monkeypatch.setenv("PIVOT_DASH_SESSION_SECRET", "s" * 32)
+    server = fakeredis.FakeServer()
+    settings = DistributedRuntimeSettings.from_env()
+    stores = [
+        RuntimePayloadStore(
+            backend=RedisPayloadBackend(
+                RedisRuntimeState(
+                    settings,
+                    client=fakeredis.FakeRedis(server=server, decode_responses=False),
+                )
+            )
+        ),
+        RuntimePayloadStore(
+            backend=RedisPayloadBackend(
+                RedisRuntimeState(
+                    settings,
+                    client=fakeredis.FakeRedis(server=server, decode_responses=False),
+                )
+            )
+        ),
+    ]
+    monkeypatch.setattr(
+        dash_callbacks_module,
+        "runtime_payload_store_from_env",
+        lambda **_kwargs: stores.pop(0),
+    )
+
+    producer = Dash(__name__)
+    consumer = Dash(__name__)
+    producer.layout = consumer.layout = html.Div()
+    _register_runtime_payload_endpoint(producer)
+    _register_runtime_payload_endpoint(consumer)
+
+    reference = _get_runtime_payload_store(producer).put_bytes(
+        b"distributed-dash-payload", metadata={"subject": "shared-browser"}
+    )
+    owner = _payload_owner_client(consumer, "shared-browser")
+
+    assert producer.server.secret_key == consumer.server.secret_key == "s" * 32
+    assert owner.get(reference["url"]).data == b"distributed-dash-payload"
 
 
 def test_dash_runtime_principal_is_server_resolved_and_dataset_scoped():

@@ -34,7 +34,7 @@ from .dataset_authorization import (
     RuntimeDatasetAuthorizationError,
     RuntimeDatasetAuthorizer,
 )
-from .payload_store import RuntimePayloadStore
+from .payload_store import RuntimePayloadStore, runtime_payload_store_from_env
 from .request_factory import RuntimeRequestFactory
 
 
@@ -89,7 +89,7 @@ class RuntimeHttpGateway:
         dataset_authorizer: Optional[RuntimeDatasetAuthorizer] = None,
     ) -> None:
         self._runtime_service_getter = runtime_service_getter
-        self.payload_store = payload_store or RuntimePayloadStore()
+        self.payload_store = payload_store or runtime_payload_store_from_env()
         self.payload_url_prefix = payload_url_prefix.rstrip("/")
         self.inline_payload_bytes = (
             _inline_limit_bytes()

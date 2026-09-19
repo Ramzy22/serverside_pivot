@@ -26,7 +26,11 @@ from .dataset_authorization import (
     RuntimeDatasetAuthorizationError,
     RuntimeDatasetAuthorizer,
 )
-from .payload_store import RuntimePayloadStore
+from .distributed import (
+    DistributedRuntimeConfigurationError,
+    DistributedRuntimeSettings,
+)
+from .payload_store import RuntimePayloadStore, runtime_payload_store_from_env
 from .service import PivotRuntimeService
 from ..production_security import resolve_runtime_environment
 from ..security_events import log_authorization_denied
@@ -485,7 +489,7 @@ def _is_production_environment() -> bool:
 def _get_runtime_payload_store(app: Any) -> RuntimePayloadStore:
     store = getattr(app, "_pivot_runtime_payload_store", None)
     if store is None:
-        store = RuntimePayloadStore(
+        store = runtime_payload_store_from_env(
             default_ttl_seconds=_env_int("PIVOT_RUNTIME_PAYLOAD_TTL_SECONDS", 120),
             max_entries=_env_int("PIVOT_RUNTIME_PAYLOAD_MAX_ENTRIES", 256),
             max_bytes=_env_int("PIVOT_RUNTIME_PAYLOAD_MAX_BYTES", 128 * 1024 * 1024),
@@ -496,6 +500,15 @@ def _get_runtime_payload_store(app: Any) -> RuntimePayloadStore:
 
 def _ensure_dash_payload_session_support(app: Any) -> None:
     """Ensure the Flask session can bind one-time payload references to a browser."""
+    settings = DistributedRuntimeSettings.from_env()
+    if settings.enabled:
+        secret = str(os.environ.get("PIVOT_DASH_SESSION_SECRET") or "")
+        if len(secret.encode("utf-8")) < 32:
+            raise DistributedRuntimeConfigurationError(
+                "Distributed Dash runtime requires PIVOT_DASH_SESSION_SECRET with at least 32 bytes."
+            )
+        app.server.secret_key = secret
+        return
     if app.server.secret_key:
         return
     # Dash applications frequently do not configure Flask sessions because the

@@ -13,6 +13,7 @@ from pivot_engine.runtime.distributed import (
     DistributedRuntimeSettings,
     RedisRuntimeState,
 )
+from pivot_engine.runtime.payload_store import RedisPayloadBackend, RuntimePayloadStore
 
 
 class _RedisGenerationStub:
@@ -36,6 +37,19 @@ class _RedisGenerationStub:
     def publish(self, channel: str, message: bytes) -> int:
         self.published.append((channel, message))
         return 0
+
+
+def _payload_runtime_state(client):
+    return RedisRuntimeState(
+        DistributedRuntimeSettings(
+            enabled=True,
+            redis_url="rediss://user:pass@example/0",
+            key_prefix="payload-test",
+            payload_ttl_seconds=30,
+            payload_max_bytes=1024 * 1024,
+        ),
+        client=client,
+    )
 
 
 def test_runtime_exports_distributed_configuration_contract():
@@ -106,6 +120,66 @@ def test_independent_redis_runtime_states_share_generation_with_fakeredis():
         CacheInvalidationEvent(1, "mutation", ("controller.query",), table="sales")
     ) == 1
     assert second.generation() == 1
+
+
+def test_redis_payload_store_survives_producer_worker_loss():
+    server = fakeredis.FakeServer()
+    producer = RuntimePayloadStore(
+        backend=RedisPayloadBackend(
+            _payload_runtime_state(
+                fakeredis.FakeRedis(server=server, decode_responses=False)
+            )
+        ),
+        default_ttl_seconds=30,
+    )
+    consumer = RuntimePayloadStore(
+        backend=RedisPayloadBackend(
+            _payload_runtime_state(
+                fakeredis.FakeRedis(server=server, decode_responses=False)
+            )
+        ),
+        default_ttl_seconds=30,
+    )
+
+    reference = producer.put_bytes(
+        b"shared export",
+        metadata={"subject": "alice", "filename": "x.csv"},
+    )
+    del producer
+
+    item = consumer.get(reference["id"])
+    assert item is not None
+    assert item.body == b"shared export"
+    assert item.file_path is None
+    assert item.metadata["subject"] == "alice"
+
+
+def test_redis_payload_store_copies_export_file_before_worker_path_disappears(tmp_path):
+    server = fakeredis.FakeServer()
+    export = tmp_path / "export.xlsx"
+    export.write_bytes(b"workbook")
+    producer = RuntimePayloadStore(
+        backend=RedisPayloadBackend(
+            _payload_runtime_state(
+                fakeredis.FakeRedis(server=server, decode_responses=False)
+            )
+        )
+    )
+    consumer = RuntimePayloadStore(
+        backend=RedisPayloadBackend(
+            _payload_runtime_state(
+                fakeredis.FakeRedis(server=server, decode_responses=False)
+            )
+        )
+    )
+
+    reference = producer.put_file(str(export), metadata={"subject": "alice"})
+    assert not export.exists()
+
+    item = consumer.get(reference["id"])
+    assert item is not None
+    assert item.body == b"workbook"
+    assert item.file_path is None
 
 
 @pytest.mark.skipif(

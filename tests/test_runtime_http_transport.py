@@ -3,14 +3,19 @@
 from dataclasses import dataclass, field
 import logging
 
+import fakeredis
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
 from pivot_engine.runtime import (
     PivotServiceResponse,
+    RuntimeHttpGateway,
     RuntimeDatasetAuthorizer,
     register_runtime_http_transport,
 )
+import pivot_engine.runtime.payload_store as payload_store_module
+from pivot_engine.runtime.distributed import DistributedRuntimeSettings, RedisRuntimeState
+from pivot_engine.runtime.payload_store import RedisPayloadBackend, RuntimePayloadStore
 
 
 @dataclass
@@ -66,6 +71,77 @@ def _dataset_policy(
     if operations:
         permission["operations"] = set(operations)
     return RuntimeDatasetAuthorizer({"sales": permission})
+
+
+def _distributed_payload_state(client):
+    return RedisRuntimeState(
+        DistributedRuntimeSettings(
+            enabled=True,
+            redis_url="rediss://user:pass@example/0",
+            key_prefix="http-payload-test",
+        ),
+        client=client,
+    )
+
+
+def test_http_gateway_uses_configured_distributed_payload_store(monkeypatch):
+    state = _distributed_payload_state(fakeredis.FakeRedis(decode_responses=False))
+    monkeypatch.setattr(
+        payload_store_module,
+        "distributed_runtime_from_env",
+        lambda **_kwargs: state,
+    )
+
+    gateway = RuntimeHttpGateway(lambda: _Service())
+
+    assert isinstance(gateway.payload_store._backend, RedisPayloadBackend)
+
+
+def test_http_transport_downloads_shared_payload_from_another_worker():
+    server = fakeredis.FakeServer()
+    producer_store = RuntimePayloadStore(
+        backend=RedisPayloadBackend(
+            _distributed_payload_state(
+                fakeredis.FakeRedis(server=server, decode_responses=False)
+            )
+        )
+    )
+    consumer_store = RuntimePayloadStore(
+        backend=RedisPayloadBackend(
+            _distributed_payload_state(
+                fakeredis.FakeRedis(server=server, decode_responses=False)
+            )
+        )
+    )
+    active_user = {"value": _User("alice")}
+
+    async def current_user():
+        return active_user["value"]
+
+    producer_app = FastAPI()
+    register_runtime_http_transport(
+        producer_app,
+        lambda: _Service(),
+        current_user_dependency=current_user,
+        dataset_authorizer=_dataset_policy("read"),
+        payload_store=producer_store,
+        inline_payload_bytes=1,
+    )
+    consumer_app = FastAPI()
+    register_runtime_http_transport(
+        consumer_app,
+        lambda: _Service(),
+        current_user_dependency=current_user,
+        dataset_authorizer=_dataset_policy("read"),
+        payload_store=consumer_store,
+        inline_payload_bytes=1,
+    )
+
+    reference = TestClient(producer_app).post("/v1/runtime", json=_runtime_request()).json()["payload"]["payloadRef"]
+    assert TestClient(consumer_app).get(reference["url"]).status_code == 200
+
+    active_user["value"] = _User("mallory")
+    assert TestClient(consumer_app).get(reference["url"]).status_code == 404
 
 
 def test_http_transport_uses_canonical_v1_and_server_bound_identity():
