@@ -37,6 +37,7 @@ from .dataset_authorization import (
 from .payload_store import RuntimePayloadStore, runtime_payload_store_from_env
 from .distributed import RedisRuntimeState, distributed_runtime_from_env
 from .request_factory import RuntimeRequestFactory
+from .router import DistributedEditingUnavailable
 
 
 _COMMAND_TRIGGER_PROPS = {
@@ -428,6 +429,24 @@ class RuntimeHttpGateway:
             operation=dataset_operation,
         )
         context = replace(context, row_scope=row_scope)
+        if self.distributed_runtime is not None and kind in {"transaction", "update"}:
+            result = PivotServiceResponse(
+                status="error",
+                message=DistributedEditingUnavailable.code,
+            )
+            response = self._response_from_service(
+                result,
+                request=request,
+                context=context,
+            )
+            profile = _object(response.get("profile"))
+            profile["transport"] = {
+                "protocol": "v1",
+                "gatewayMs": round((time.perf_counter() - started_at) * 1000, 3),
+                "payloadExternalized": False,
+            }
+            response["profile"] = profile
+            return validate_runtime_response_v1(response)
         if kind in {"transaction", "update"}:
             grant = self.mutation_authorizer.authorize(
                 principal=principal,

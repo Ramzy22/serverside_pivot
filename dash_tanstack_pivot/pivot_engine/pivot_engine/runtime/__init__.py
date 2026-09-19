@@ -19,6 +19,7 @@ from .request_coordinator import RuntimeRequestCoordinator
 from .lifecycle import RuntimeRequestLifecycle
 from .service import PivotRuntimeService
 from .session_gate import SessionRequestGate
+from .router import DistributedEditingUnavailable
 from .distributed import (
     DistributedRuntimeConfigurationError,
     DistributedRuntimeSettings,
@@ -61,6 +62,7 @@ __all__ = [
     "CircuitBreakerOpen",
     "PivotRequestTimeout",
     "SessionRequestGate",
+    "DistributedEditingUnavailable",
     "DistributedRuntimeConfigurationError",
     "DistributedRuntimeSettings",
     "DistributedRuntimeUnavailable",

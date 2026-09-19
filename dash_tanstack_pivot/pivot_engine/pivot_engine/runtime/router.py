@@ -27,6 +27,15 @@ from .resilience import CircuitBreakerOpen, PivotRequestTimeout
 from .tree_service import TreeRuntimeService
 
 
+class DistributedEditingUnavailable(RuntimeError):
+    """Stable capability error for the Redis-backed distributed release."""
+
+    code = "editing_not_available_in_distributed_mode"
+
+    def __init__(self) -> None:
+        super().__init__(self.code)
+
+
 class RuntimeRequestRouter:
     """Route a normalized runtime command to its capability handler."""
 
@@ -40,6 +49,7 @@ class RuntimeRequestRouter:
         report_service: RuntimeReportService,
         export_service: RuntimeExportService,
         drill_service: RuntimeDrillService,
+        distributed_runtime: Optional[Any] = None,
         debug: bool = False,
     ) -> None:
         self._adapter_getter = adapter_getter
@@ -49,7 +59,31 @@ class RuntimeRequestRouter:
         self.report_service = report_service
         self.export_service = export_service
         self.drill_service = drill_service
+        self.distributed_runtime = distributed_runtime
         self.debug = debug
+
+    @staticmethod
+    def _is_distributed_editing_command(
+        state: PivotViewState,
+        context: PivotRequestContext,
+        trigger_kind: str,
+    ) -> bool:
+        if trigger_kind in {"update", "transaction", "undo", "redo", "history"}:
+            return True
+        payload = state.transaction_request
+        if not isinstance(payload, dict):
+            return False
+        actions = (
+            payload.get("action"),
+            payload.get("eventAction"),
+            payload.get("event_action"),
+            payload.get("historyAction"),
+            payload.get("history_action"),
+        )
+        return any(
+            str(action or "").strip().lower() in {"undo", "redo", "history"}
+            for action in actions
+        )
 
     async def process_async(
         self,
@@ -76,6 +110,15 @@ class RuntimeRequestRouter:
             trigger_kind=trigger_kind,
             started_at=service_started_at,
         )
+        if (
+            self.distributed_runtime is not None
+            and self._is_distributed_editing_command(state, context, trigger_kind)
+        ):
+            return PivotServiceResponse(
+                status="error",
+                message=DistributedEditingUnavailable.code,
+                profile=profile_builder.build(),
+            )
         adapter = self._adapter_getter()
         adapter_lookup_finished_at = time.perf_counter()
         profile_builder.mark_adapter_lookup_finished(adapter_lookup_finished_at)

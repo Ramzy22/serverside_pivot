@@ -97,6 +97,51 @@ def test_http_gateway_uses_configured_distributed_payload_store(monkeypatch):
     assert isinstance(gateway.payload_store._backend, RedisPayloadBackend)
 
 
+def test_distributed_http_transport_rejects_all_edit_commands_before_policy_or_service():
+    class _MutationAuthorizer:
+        def authorize(self, **_kwargs):
+            raise AssertionError("distributed edit denial must precede mutation authorization")
+
+    service = _Service()
+
+    async def current_user():
+        return _User("alice", {"tenant": "A"}, "editor")
+
+    app = FastAPI()
+    register_runtime_http_transport(
+        app,
+        lambda: service,
+        current_user_dependency=current_user,
+        dataset_authorizer=_dataset_policy("mutate"),
+        mutation_authorizer=_MutationAuthorizer(),
+        distributed_runtime=_distributed_payload_state(
+            fakeredis.FakeRedis(decode_responses=False)
+        ),
+    )
+    client = TestClient(app)
+
+    for kind, payload in (
+        ("update", {"updates": [{"rowId": "North", "value": 1}]}),
+        ("transaction", {"action": "undo"}),
+        ("transaction", {"action": "redo"}),
+        ("transaction", {"action": "history"}),
+    ):
+        response = client.post(
+            "/v1/runtime",
+            json={
+                **_runtime_request(request_id=f"distributed-{kind}-{payload.get('action', 'update')}"),
+                "kind": kind,
+                "payload": payload,
+            },
+        )
+
+        assert response.status_code == 200
+        assert response.json()["status"] == "error"
+        assert response.json()["message"] == "editing_not_available_in_distributed_mode"
+
+    assert service.calls == []
+
+
 def test_http_transport_downloads_shared_payload_from_another_worker():
     server = fakeredis.FakeServer()
     producer_store = RuntimePayloadStore(

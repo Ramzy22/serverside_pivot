@@ -26,6 +26,7 @@ from pivot_engine.runtime.payload_store import RedisPayloadBackend, RuntimePaylo
 from pivot_engine.runtime.request_coordinator import RuntimeRequestCoordinator
 from pivot_engine.runtime.service import PivotRuntimeService
 from pivot_engine.runtime.session_gate import SessionRequestGate
+from pivot_engine.runtime.models import PivotRequestContext, PivotViewState
 from pivot_engine.scalable_pivot_controller import ScalablePivotController
 from pivot_engine.tanstack_adapter import create_tanstack_adapter
 
@@ -440,6 +441,46 @@ def test_worker_b_controller_query_l1_syncs_after_a_missed_notification():
     finally:
         controller_a.cache_coordinator.close()
         controller_b.cache_coordinator.close()
+
+
+@pytest.mark.parametrize(
+    ("state", "trigger_prop"),
+    [
+        (PivotViewState(transaction_request={"action": "undo"}), None),
+        (PivotViewState(transaction_request={"action": "redo"}), None),
+        (PivotViewState(transaction_request={"action": "history"}), None),
+        (PivotViewState(cell_update={"rowId": "North", "colId": "sales"}), "grid.cellUpdate"),
+    ],
+)
+def test_distributed_editing_is_rejected_before_adapter_state_is_accessed(
+    state,
+    trigger_prop,
+):
+    accessed = False
+
+    def adapter_getter():
+        nonlocal accessed
+        accessed = True
+        raise AssertionError("editing must be rejected before adapter lookup")
+
+    service = PivotRuntimeService(
+        adapter_getter=adapter_getter,
+        distributed_runtime=_payload_runtime_state(_RedisGenerationStub()),
+    )
+
+    response = service.process(
+        state,
+        PivotRequestContext(
+            table="sales",
+            trigger_prop=trigger_prop,
+            session_id="alice",
+            client_instance="grid",
+        ),
+    )
+
+    assert response.status == "error"
+    assert response.message == "editing_not_available_in_distributed_mode"
+    assert not accessed
 
 
 @pytest.mark.skipif(

@@ -82,6 +82,7 @@ class PivotRuntimeService(RuntimeCompatibilityMixin):
             report_service=self._report_service,
             export_service=self._export_service,
             drill_service=self._drill_service,
+            distributed_runtime=self.distributed_runtime,
             debug=debug,
         )
 
