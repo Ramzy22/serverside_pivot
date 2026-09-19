@@ -6,6 +6,8 @@ import asyncio
 from unittest.mock import Mock, MagicMock
 import pyarrow as pa
 from pivot_engine.streaming.streaming_processor import StreamAggregationProcessor, IncrementalMaterializedViewManager
+from pivot_engine.streaming.exact_state import MemoryCDCStateStore
+from pivot_engine.cdc.models import Change
 from pivot_engine.types.pivot_spec import PivotSpec, Measure
 
 
@@ -249,6 +251,77 @@ async def test_stream_processor_process_various_operations(stream_processor):
              await stream_processor.process_stream_update("test_table", record, op)
         else:
              await stream_processor.process_stream_update("test_table", record, op)
+
+
+def _exact_change(change_type, event_id, sequence, old_row=None, new_row=None):
+    row = new_row if new_row is not None else old_row
+    return Change(
+        table="sales",
+        type=change_type,
+        old_row=old_row,
+        new_row=new_row,
+        source="postgres",
+        event_id=event_id,
+        partition="0",
+        sequence=sequence,
+        row_identity=str(row["id"]),
+        row_images_complete=True,
+    )
+
+
+@pytest.mark.asyncio
+async def test_stream_job_removes_old_group_and_adds_new_group_for_exact_update():
+    processor = StreamAggregationProcessor(state_store=MemoryCDCStateStore())
+    spec = PivotSpec(
+        table="sales",
+        rows=["region"],
+        measures=[Measure(field="sales", agg="sum", alias="total_sales")],
+        filters=[{"field": "active", "op": "=", "value": True}],
+    )
+    job_id = await processor.create_real_time_aggregation_job(spec)
+    await processor.process_change(
+        _exact_change(
+            "INSERT",
+            "evt-1",
+            1,
+            new_row={"id": 1, "region": "North", "active": True, "sales": 10},
+        )
+    )
+    await processor.process_change(
+        _exact_change(
+            "UPDATE",
+            "evt-2",
+            2,
+            old_row={"id": 1, "region": "North", "active": True, "sales": 10},
+            new_row={"id": 1, "region": "South", "active": True, "sales": 25},
+        )
+    )
+
+    result = await processor.get_job_result(job_id)
+
+    assert result.status == "fresh"
+    assert result.values["groups"] == {"South": {"total_sales": 25}}
+
+
+@pytest.mark.asyncio
+async def test_incomplete_change_invalidates_job_and_never_returns_previous_extremum():
+    processor = StreamAggregationProcessor(state_store=MemoryCDCStateStore())
+    spec = PivotSpec(
+        table="sales",
+        rows=[],
+        measures=[Measure(field="sales", agg="min", alias="minimum")],
+        filters=[],
+    )
+    job_id = await processor.create_real_time_aggregation_job(spec)
+    await processor.process_change(
+        _exact_change("INSERT", "evt-1", 1, new_row={"id": 1, "sales": 10})
+    )
+    await processor.process_change(Change(table="sales", type="DELETE", old_row={"id": 1}))
+
+    result = await processor.get_job_result(job_id)
+
+    assert result.status == "invalidated"
+    assert result.values == {}
 
 
 if __name__ == "__main__":

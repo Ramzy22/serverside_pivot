@@ -2,13 +2,41 @@
 StreamAggregationProcessor - Real-time stream processing for pivot aggregations
 """
 import asyncio
+from dataclasses import dataclass
+import hashlib
+import json
 import threading
 import time
-from typing import Dict, Any, Optional, Callable, List
+from typing import Dict, Any, Optional, Callable, List, Mapping
 import pyarrow as pa
 import ibis
 from pivot_engine.types.pivot_spec import PivotSpec
+from pivot_engine.cdc.models import Change
+from pivot_engine.streaming.exact_state import (
+    CDCJobSnapshot,
+    CDCStateStore,
+    CanonicalScalarCodec,
+    ExactCDCStateError,
+    ExactGroupState,
+    MemoryCDCStateStore,
+    StateVersionConflict,
+)
 from ibis.expr.api import Table as IbisTable
+
+
+@dataclass(frozen=True)
+class StreamingJobResult:
+    """A freshness-bearing streaming result that remains mapping-friendly."""
+
+    status: str
+    values: Dict[str, Any]
+    reason: Optional[str] = None
+
+    def __getitem__(self, key: str) -> Any:
+        return self.values[key]
+
+    def get(self, key: str, default: Any = None) -> Any:
+        return self.values.get(key, default)
 
 
 class StreamAggregationProcessor:
@@ -20,9 +48,19 @@ class StreamAggregationProcessor:
         self.job_results = {}
         self.job_callbacks = {}
         
-        # Initialize State Store
-        if state_store:
+        self.cdc_state_store: CDCStateStore
+        if isinstance(state_store, CDCStateStore):
+            # Exact state is a separate, narrow persistence domain.  Retain an
+            # in-memory legacy store only for compatibility callbacks that have
+            # not moved to process_change yet.
+            from pivot_engine.streaming.state_store import MemoryStateStore
+
+            self.state_store = MemoryStateStore()
+            self.cdc_state_store = state_store
+        # Initialize legacy State Store
+        elif state_store:
             self.state_store = state_store
+            self.cdc_state_store = MemoryCDCStateStore()
         else:
             # Check if we can use Redis from config
             if self.kafka_config.get('redis_host'):
@@ -40,10 +78,18 @@ class StreamAggregationProcessor:
             else:
                 from pivot_engine.streaming.state_store import MemoryStateStore
                 self.state_store = MemoryStateStore()
+            self.cdc_state_store = MemoryCDCStateStore()
 
     async def create_real_time_aggregation_job(self, pivot_spec: PivotSpec):
         """Create a stream processing job for real-time aggregations"""
-        job_id = f"agg_job_{pivot_spec.table}_{abs(hash(str(pivot_spec.to_dict())))}"
+        stable_spec = json.dumps(
+            pivot_spec.to_dict(),
+            ensure_ascii=False,
+            sort_keys=True,
+            default=str,
+            separators=(",", ":"),
+        )
+        job_id = f"agg_job_{pivot_spec.table}_{hashlib.sha256(stable_spec.encode('utf-8')).hexdigest()[:16]}"
 
         # Create the streaming job configuration
         job_config = {
@@ -84,7 +130,7 @@ class StreamAggregationProcessor:
     def _init_current_state(self, job_config: Dict[str, Any], measures):
         # This was modifying job_config['current_state'] directly. 
         # Since we removed it, this is no-op or we create a temp dict
-        pass
+        return None
 
     async def _process_job_stream(self, job_id: str):
         """Background task to process stream updates"""
@@ -100,18 +146,16 @@ class StreamAggregationProcessor:
         return job_ids
 
     async def process_stream_update(self, table_name: str, record: Dict[str, Any], operation: str = 'INSERT'):
-        """Process a single record update from the stream"""
-        # Find affected jobs
-        affected_jobs = []
-        for job_id, job in self.aggregation_jobs.items():
-            if job.get('table') == table_name:
-                # Check if the record matches the job's filters
-                if self._matches_filters(record, job.get('filters', [])):
-                    affected_jobs.append((job_id, job))
-
-        # Update all affected jobs
-        for job_id, job in affected_jobs:
-            await self._update_job_state(job_id, job, record, operation)
+        """Compatibility entry point that never fabricates an exact event."""
+        normalized_operation = str(operation or "INSERT").upper()
+        change = Change(
+            table=table_name,
+            type=normalized_operation,
+            new_row=record if normalized_operation in {"INSERT", "UPDATE"} else None,
+            old_row=record if normalized_operation == "DELETE" else None,
+            invalidation_reason="legacy_stream_record_without_cdc_metadata",
+        )
+        return await self.process_change(change)
 
     def _matches_filters(self, record: Dict[str, Any], filters: list) -> bool:
         """Check if a record matches the specified filters"""
@@ -124,7 +168,7 @@ class StreamAggregationProcessor:
             value = f.get('value')
 
             if field not in record:
-                continue
+                return False
 
             record_value = record[field]
 
@@ -149,111 +193,180 @@ class StreamAggregationProcessor:
 
         return True
 
-    async def _update_job_state(self, job_id: str, job: Dict[str, Any], record: Dict[str, Any], operation: str):
-        """Update job state based on the record and operation"""
-        measures = job['measures']
-        
-        # Fetch current state from store
-        current_state = await self.state_store.get_state(job_id)
+    def _jobs_for_table(self, table_name: str) -> List[Dict[str, Any]]:
+        return [
+            job for job in self.aggregation_jobs.values()
+            if job.get("table") == table_name
+        ]
 
-        for measure in measures:
-            field = measure['field']
-            agg_type = measure['agg']
-            alias = measure['alias']
+    @staticmethod
+    def _group_key(job: Mapping[str, Any], row: Mapping[str, Any]) -> str:
+        values = [
+            CanonicalScalarCodec.encode(row.get(str(field)))
+            for field in list(job.get("rows") or [])
+        ]
+        return json.dumps(values, ensure_ascii=False, separators=(",", ":"))
 
-            if field in record:
-                field_value = record[field]
+    @staticmethod
+    def _group_label(group_key: str) -> Any:
+        values = [CanonicalScalarCodec.decode(value) for value in json.loads(group_key)]
+        if len(values) == 1:
+            return str(values[0])
+        return tuple(values)
 
-                if operation == 'INSERT':
-                    self._apply_aggregation(current_state, alias, field_value, agg_type)
-                elif operation == 'DELETE':
-                    self._apply_aggregation_reverse(current_state, alias, field_value, agg_type)
-                elif operation == 'UPDATE':
-                    # For updates, we need old and new values
-                    self._apply_aggregation_reverse(current_state, alias, record.get(f'old_{field}', field_value), agg_type)
-                    self._apply_aggregation(current_state, alias, field_value, agg_type)
+    def _apply_row(
+        self,
+        snapshot: CDCJobSnapshot,
+        job: Mapping[str, Any],
+        row: Mapping[str, Any],
+        sign: int,
+    ) -> None:
+        if not self._matches_filters(dict(row), list(job.get("filters") or [])):
+            return
+        group_key = self._group_key(job, row)
+        group = snapshot.groups.get(group_key)
+        if group is None:
+            if sign < 0:
+                raise ExactCDCStateError("CDC group removal has no matching state.")
+            group = ExactGroupState()
+            snapshot.groups[group_key] = group
+        group.apply(row, sign, list(job.get("measures") or []))
+        if group.row_count == 0:
+            snapshot.groups.pop(group_key, None)
 
-        # Save updated state back to store
-        await self.state_store.save_state(job_id, current_state)
-        
-        # Update timestamp in memory
-        job['last_update'] = time.time()
-        
-        # Trigger callbacks
-        if job_id in self.job_callbacks:
-             try:
-                 # Call callback (potentially async handling needed?)
-                 # For now assuming sync callback or fire-and-forget
-                 self.job_callbacks[job_id](current_state)
-             except Exception as e:
-                 print(f"Error in streaming callback: {e}")
+    def _apply_exact_transition(
+        self,
+        snapshot: CDCJobSnapshot,
+        job: Mapping[str, Any],
+        change: Change,
+    ) -> CDCJobSnapshot:
+        next_snapshot = snapshot.clone()
+        next_snapshot.status = "fresh"
+        next_snapshot.invalidation_reason = None
+        operation = str(change.type or "").upper()
+        if operation == "INSERT":
+            self._apply_row(next_snapshot, job, change.new_row or {}, 1)
+        elif operation == "DELETE":
+            self._apply_row(next_snapshot, job, change.old_row or {}, -1)
+        elif operation == "UPDATE":
+            self._apply_row(next_snapshot, job, change.old_row or {}, -1)
+            self._apply_row(next_snapshot, job, change.new_row or {}, 1)
+        else:
+            raise ExactCDCStateError("CDC operation is not supported for exact state.")
+        return next_snapshot.advance(change)
 
-    def _apply_aggregation(self, current_state: Dict, alias: str, value: Any, agg_type: str):
-        """Apply aggregation operation to update the current state"""
-        # Ensure key exists
-        if alias not in current_state:
-            current_state[alias] = 0 if agg_type in ['sum', 'count', 'avg'] else None
+    async def _invalidate_job(self, job_id: str, reason: str) -> None:
+        for _ in range(2):
+            snapshot = await self.cdc_state_store.load(job_id)
+            invalidated = snapshot.clone()
+            invalidated.status = "invalidated"
+            invalidated.invalidation_reason = reason
+            try:
+                await self.cdc_state_store.compare_and_swap(
+                    job_id, snapshot.version, invalidated
+                )
+                return
+            except StateVersionConflict:
+                continue
+        raise ExactCDCStateError("CDC state could not be invalidated safely.")
 
-        if agg_type == 'sum':
-            current_state[alias] += value if isinstance(value, (int, float)) else 0
-        elif agg_type == 'count':
-            current_state[alias] += 1
-        elif agg_type == 'min':
-            if current_state[alias] is None:
-                current_state[alias] = value
+    async def invalidate_table(self, table_name: str, reason: str) -> int:
+        jobs = self._jobs_for_table(table_name)
+        for job in jobs:
+            await self._invalidate_job(str(job["job_id"]), reason)
+        return len(jobs)
+
+    async def _notify_callback(self, job_id: str) -> None:
+        callback = self.job_callbacks.get(job_id)
+        if callback is None:
+            return
+        try:
+            result = await self.get_job_result(job_id)
+            outcome = callback(result)
+            if asyncio.iscoroutine(outcome):
+                await outcome
+        except Exception:
+            # Callbacks are notifications only; state has already been
+            # persisted and a callback cannot make it stale.
+            return
+
+    async def process_change(self, change: Change) -> Dict[str, int]:
+        """Apply one trusted event or invalidate jobs that cannot be updated."""
+        if change.is_invalidating():
+            return {
+                "exact": 0,
+                "invalidated": await self.invalidate_table(
+                    change.table,
+                    change.invalidation_reason or "incomplete_change",
+                ),
+                "ignored": 0,
+            }
+
+        exact = invalidated = ignored = 0
+        for job in self._jobs_for_table(change.table):
+            job_id = str(job["job_id"])
+            for _ in range(2):
+                snapshot = await self.cdc_state_store.load(job_id)
+                decision = snapshot.accept(
+                    change.partition, int(change.sequence), str(change.event_id)
+                )
+                if decision == "replay":
+                    ignored += 1
+                    break
+                if decision == "out_of_order":
+                    await self._invalidate_job(job_id, "out_of_order_source_event")
+                    invalidated += 1
+                    break
+                if snapshot.status != "fresh":
+                    # A prior incomplete event invalidated this job.  We must
+                    # not resume from an unknown baseline using later deltas.
+                    invalidated += 1
+                    break
+                try:
+                    next_snapshot = self._apply_exact_transition(snapshot, job, change)
+                    await self.cdc_state_store.compare_and_swap(
+                        job_id, snapshot.version, next_snapshot
+                )
+                except StateVersionConflict:
+                    continue
+                except ExactCDCStateError:
+                    await self._invalidate_job(job_id, "invalid_exact_transition")
+                    invalidated += 1
+                    break
+                else:
+                    job["last_update"] = time.time()
+                    exact += 1
+                    await self._notify_callback(job_id)
+                    break
             else:
-                current_state[alias] = min(current_state[alias], value)
-        elif agg_type == 'max':
-            if current_state[alias] is None:
-                current_state[alias] = value
-            else:
-                current_state[alias] = max(current_state[alias], value)
-        elif agg_type == 'avg':
-            # For streaming average, we keep sum and count separately
-            current_state[f'{alias}_sum'] = current_state.get(f'{alias}_sum', 0) + value
-            current_state[f'{alias}_count'] = current_state.get(f'{alias}_count', 0) + 1
-            current_state[alias] = current_state[f'{alias}_sum'] / current_state[f'{alias}_count']
+                await self._invalidate_job(job_id, "state_conflict")
+                invalidated += 1
+        return {"exact": exact, "invalidated": invalidated, "ignored": ignored}
 
-    def _apply_aggregation_reverse(self, current_state: Dict, alias: str, value: Any, agg_type: str):
-        """Reverse aggregation operation (for deletes)"""
-        if alias not in current_state:
-             return
-
-        if agg_type == 'sum':
-            current_state[alias] -= value if isinstance(value, (int, float)) else 0
-        elif agg_type == 'count':
-            current_state[alias] -= 1
-        elif agg_type == 'min' or agg_type == 'max':
-            # For min/max, we can't simply reverse - in a real system we'd need to maintain more state
-            pass
-        elif agg_type == 'avg':
-            current_state[f'{alias}_sum'] = current_state.get(f'{alias}_sum', 0) - value
-            current_state[f'{alias}_count'] = max(0, current_state.get(f'{alias}_count', 1) - 1)
-            if current_state[f'{alias}_count'] > 0:
-                current_state[alias] = current_state[f'{alias}_sum'] / current_state[f'{alias}_count']
-            else:
-                current_state[alias] = 0
-
-    async def get_job_result(self, job_id: str) -> Optional[Dict[str, Any]]:
-        """Get the current result for a streaming job"""
-        if job_id in self.aggregation_jobs:
-            job = self.aggregation_jobs[job_id]
-            # Fetch state from store
-            current_state = await self.state_store.get_state(job_id)
-            result = current_state.copy()
-
-            # Compute averages based on sum/count
-            for k, v in list(result.items()):
-                if k.endswith('_sum') and f'{k[:-4]}_count' in result:
-                    count_key = f'{k[:-4]}_count'
-                    avg_key = k[:-4]  # Remove '_sum'
-                    if result[count_key] > 0:
-                        result[avg_key] = result[k] / result[count_key]
-                    else:
-                        result[avg_key] = 0
-
-            return result
-        return None
+    async def get_job_result(self, job_id: str) -> Optional[StreamingJobResult]:
+        """Return a fresh exact result or an explicit invalidated status."""
+        job = self.aggregation_jobs.get(job_id)
+        if job is None:
+            return None
+        snapshot = await self.cdc_state_store.load(job_id)
+        if snapshot.status != "fresh":
+            return StreamingJobResult(
+                status="invalidated",
+                values={},
+                reason=snapshot.invalidation_reason,
+            )
+        row_fields = list(job.get("rows") or [])
+        if not row_fields:
+            group = snapshot.groups.get("[]")
+            return StreamingJobResult(
+                status="fresh",
+                values=group.result() if group is not None else {},
+            )
+        grouped_values = {
+            self._group_label(group_key): group.result()
+            for group_key, group in snapshot.groups.items()
+        }
+        return StreamingJobResult(status="fresh", values={"groups": grouped_values})
 
     def register_callback(self, job_id: str, callback: Callable):
         """Register a callback to be called when job results update"""
