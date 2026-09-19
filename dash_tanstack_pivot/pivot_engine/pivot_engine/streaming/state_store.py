@@ -4,6 +4,33 @@ import json
 import asyncio
 from pivot_engine.cache.redis_cache import RedisCache
 
+from .exact_state import (
+    CDCJobSnapshot,
+    CDCStateStore,
+    CanonicalScalarCodec,
+    ExactCDCStateError,
+    ExactGroupState,
+    ExactMeasureAccumulator,
+    MemoryCDCStateStore,
+    RedisCDCStateStore,
+    StateVersionConflict,
+)
+
+__all__ = [
+    "CDCJobSnapshot",
+    "CDCStateStore",
+    "CanonicalScalarCodec",
+    "ExactCDCStateError",
+    "ExactGroupState",
+    "ExactMeasureAccumulator",
+    "MemoryCDCStateStore",
+    "MemoryStateStore",
+    "RedisCDCStateStore",
+    "RedisStateStore",
+    "StateStore",
+    "StateVersionConflict",
+]
+
 class StateStore(ABC):
     @abstractmethod
     async def get_state(self, job_id: str) -> Dict[str, Any]:
