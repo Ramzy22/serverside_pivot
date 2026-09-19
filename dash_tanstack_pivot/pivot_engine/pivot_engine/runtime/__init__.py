@@ -19,6 +19,13 @@ from .request_coordinator import RuntimeRequestCoordinator
 from .lifecycle import RuntimeRequestLifecycle
 from .service import PivotRuntimeService
 from .session_gate import SessionRequestGate
+from .distributed import (
+    DistributedRuntimeConfigurationError,
+    DistributedRuntimeSettings,
+    DistributedRuntimeUnavailable,
+    RedisRuntimeState,
+    distributed_runtime_from_env,
+)
 from .http_transport import RuntimeHttpGateway, register_runtime_http_transport
 from .mutation_authorization import (
     MutationGrant,
@@ -54,6 +61,11 @@ __all__ = [
     "CircuitBreakerOpen",
     "PivotRequestTimeout",
     "SessionRequestGate",
+    "DistributedRuntimeConfigurationError",
+    "DistributedRuntimeSettings",
+    "DistributedRuntimeUnavailable",
+    "RedisRuntimeState",
+    "distributed_runtime_from_env",
     "register_dash_callbacks_for_instances",
     "register_dash_drill_modal_callback",
     "register_dash_pivot_transport_callback",
