@@ -4,6 +4,7 @@ Test suite for streaming and incremental views
 import pytest
 import asyncio
 from unittest.mock import Mock, MagicMock
+import ibis
 import pyarrow as pa
 from pivot_engine.streaming.streaming_processor import StreamAggregationProcessor, IncrementalMaterializedViewManager
 from pivot_engine.streaming.exact_state import MemoryCDCStateStore
@@ -161,6 +162,42 @@ async def test_update_view_incrementally(incremental_view_manager, mock_backend)
     await incremental_view_manager.update_view_incrementally("test_table", changes)
     
     assert True
+
+
+@pytest.mark.asyncio
+async def test_legacy_view_update_refreshes_deleted_minimum_from_authoritative_source():
+    """A direct legacy update must not retain a deleted group minimum in its cache."""
+    backend = ibis.duckdb.connect()
+    backend.create_table(
+        "sales",
+        pa.table(
+            {
+                "region": ["North", "North", "North"],
+                "sales": [10, 20, 30],
+            }
+        ),
+        overwrite=True,
+    )
+    manager = IncrementalMaterializedViewManager(backend)
+    view_name = await manager.create_incremental_view(
+        PivotSpec(
+            table="sales",
+            rows=["region"],
+            measures=[Measure(field="sales", agg="min", alias="minimum")],
+            filters=[],
+        )
+    )
+    manager.view_data[view_name] = backend.table(view_name).to_pyarrow().to_pylist()
+
+    backend.raw_sql("DELETE FROM sales WHERE region = 'North' AND sales = 10")
+    await manager.update_view_incrementally(
+        view_name,
+        [{"type": "DELETE", "old_row": {"region": "North", "sales": 10}}],
+    )
+
+    assert await manager.get_view_data(view_name) == [
+        {"region": "North", "minimum": 20}
+    ]
 
 
 @pytest.mark.asyncio

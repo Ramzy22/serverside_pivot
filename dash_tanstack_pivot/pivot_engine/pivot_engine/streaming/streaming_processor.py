@@ -516,170 +516,31 @@ class IncrementalMaterializedViewManager:
         return combined_filter
 
     async def update_view_incrementally(self, view_name: str, changes: list):
-        """Update materialized view with incremental changes based on table changes"""
+        """Refresh a legacy materialized-view batch from its authoritative source.
+
+        This compatibility entry point accepts unversioned dictionaries and does
+        not have the durable group state required to reverse min/max (or an
+        average after a delete) exactly.  Applying the old row-by-row cache
+        arithmetic could therefore publish stale aggregate values.  Rebuild the
+        physical view once for the entire batch instead.
+        """
         if view_name not in self.views:
+            return
+        if not changes:
             return
 
         view_info = self.views[view_name]
-        source_table = view_info['source_table']
-        grouping_cols = view_info['grouping_cols']
-        measures = view_info['measures']
-
-        # For each change in the list, update the materialized view
-        for change in changes:
-            change_type = change.get('type', 'INSERT').upper()
-            row_data = change.get('new_row', {}) if change_type in ['INSERT', 'UPDATE'] else change.get('old_row', {})
-
-            if change_type == 'INSERT':
-                await self._handle_insert_incremental(view_name, view_info, row_data)
-            elif change_type == 'UPDATE':
-                old_row = change.get('old_row', {})
-                new_row = change.get('new_row', {})
-                await self._handle_update_incremental(view_name, view_info, old_row, new_row)
-            elif change_type == 'DELETE':
-                old_row = change.get('old_row', {})
-                await self._handle_delete_incremental(view_name, view_info, old_row)
-
-        # Update the last updated timestamp
-        view_info['last_updated'] = time.time()
-
-    async def _handle_insert_incremental(self, view_name: str, view_info: Dict[str, Any], new_row: Dict[str, Any]):
-        """Handle incremental insert to materialized view by updating aggregations"""
-        # Get current view data
-        current_data = self.view_data.get(view_name, [])
-
-        # Extract grouping values from the new row
-        grouping_values = tuple(new_row.get(col) for col in view_info['grouping_cols'])
-
-        # Find if this grouping combination already exists
-        existing_row = None
-        existing_idx = -1
-        for i, row in enumerate(current_data):
-            row_grouping = tuple(row.get(col) for col in view_info['grouping_cols'])
-            if row_grouping == grouping_values:
-                existing_row = row
-                existing_idx = i
-                break
-
-        if existing_row:
-            # Update existing aggregation values
-            for measure in view_info['measures']:
-                field = measure.field
-                agg_type = measure.agg
-                alias = measure.alias
-
-                new_value = new_row.get(field, 0)
-
-                if agg_type == 'sum':
-                    current_data[existing_idx][alias] += new_value
-                elif agg_type == 'count':
-                    current_data[existing_idx][alias] += 1
-                elif agg_type == 'min':
-                    current_data[existing_idx][alias] = min(current_data[existing_idx][alias], new_value)
-                elif agg_type == 'max':
-                    current_data[existing_idx][alias] = max(current_data[existing_idx][alias], new_value)
-                elif agg_type == 'avg':
-                    # Update sum and count for average
-                    sum_key = f"{alias}_sum"
-                    count_key = f"{alias}_count"
-                    current_data[existing_idx][sum_key] = current_data[existing_idx].get(sum_key, 0) + new_value
-                    current_data[existing_idx][count_key] = current_data[existing_idx].get(count_key, 0) + 1
-                    current_data[existing_idx][alias] = current_data[existing_idx][sum_key] / current_data[existing_idx][count_key]
-        else:
-            # Create a new aggregation row
-            new_agg_row = {}
-            # Set grouping columns
-            for col in view_info['grouping_cols']:
-                new_agg_row[col] = new_row.get(col)
-
-            # Set initial aggregation values
-            for measure in view_info['measures']:
-                field = measure.field
-                agg_type = measure.agg
-                alias = measure.alias
-                new_value = new_row.get(field, 0)
-
-                if agg_type == 'sum':
-                    new_agg_row[alias] = new_value
-                elif agg_type == 'count':
-                    new_agg_row[alias] = 1
-                elif agg_type == 'min' or agg_type == 'max':
-                    new_agg_row[alias] = new_value
-                elif agg_type == 'avg':
-                    new_agg_row[alias] = new_value  # Initially just the new value
-                    new_agg_row[f"{alias}_sum"] = new_value
-                    new_agg_row[f"{alias}_count"] = 1
-
-            current_data.append(new_agg_row)
-
-        # Update the cached data
-        self.view_data[view_name] = current_data
-
-    async def _handle_update_incremental(self, view_name: str, view_info: Dict[str, Any], old_row: Dict[str, Any], new_row: Dict[str, Any]):
-        """Handle incremental update to materialized view"""
-        # For an update, we effectively delete the old values and add the new values
-        await self._handle_delete_incremental(view_name, view_info, old_row)
-        await self._handle_insert_incremental(view_name, view_info, new_row)
-
-    async def _handle_delete_incremental(self, view_name: str, view_info: Dict[str, Any], old_row: Dict[str, Any]):
-        """Handle incremental delete from materialized view"""
-        current_data = self.view_data.get(view_name, [])
-
-        # Extract grouping values from the new row
-        grouping_values = tuple(old_row.get(col) for col in view_info['grouping_cols'])
-
-        # Find the matching row in current data
-        existing_row = None
-        existing_idx = -1
-        for i, row in enumerate(current_data):
-            row_grouping = tuple(row.get(col) for col in view_info['grouping_cols'])
-            if row_grouping == grouping_values:
-                existing_row = row
-                existing_idx = i
-                break
-
-        if existing_row:
-            # Update aggregation values by subtracting the old values
-            for measure in view_info['measures']:
-                field = measure.field
-                agg_type = measure.agg
-                alias = measure.alias
-
-                old_value = old_row.get(field, 0)
-
-                if agg_type == 'sum':
-                    current_data[existing_idx][alias] -= old_value
-                elif agg_type == 'count':
-                    current_data[existing_idx][alias] -= 1
-                    # If count goes to 0, remove the row
-                    if current_data[existing_idx][alias] <= 0:
-                        current_data.pop(existing_idx)
-                        break
-                elif agg_type == 'min' or agg_type == 'max':
-                    # For min/max, we need to recalculate if the deleted value was the min/max
-                    # This is complex in incremental updates - in a real system we'd maintain more state
-                    # For now, this is a simplified handling
-                    pass
-                elif agg_type == 'avg':
-                    sum_key = f"{alias}_sum"
-                    count_key = f"{alias}_count"
-                    current_data[existing_idx][sum_key] = current_data[existing_idx].get(sum_key, 0) - old_value
-                    current_data[existing_idx][count_key] = max(0, current_data[existing_idx].get(count_key, 1) - 1)
-                    if current_data[existing_idx][count_key] > 0:
-                        current_data[existing_idx][alias] = current_data[existing_idx][sum_key] / current_data[existing_idx][count_key]
-                    else:
-                        current_data[existing_idx][alias] = 0
-                        # Remove the row if no more items in this group
-                        if current_data[existing_idx][alias] == 0 and current_data[existing_idx].get(count_key, 0) <= 0:
-                            current_data.pop(existing_idx)
-
-        # Update the cached data
-        self.view_data[view_name] = current_data
+        view_info['freshness'] = 'invalidated'
+        view_info['invalidation_reason'] = 'legacy_batch_refresh'
+        self.view_data.pop(view_name, None)
+        await self._refresh_view(view_name)
 
     async def get_view_data(self, view_name: str) -> Optional[list]:
         """Get the current data from a materialized view"""
         if view_name in self.view_data:
             return self.view_data[view_name]
+        if self.views.get(view_name, {}).get('freshness') == 'invalidated':
+            return None
         # If not in cache, try to load from database
         if view_name in self.views:
             try:

@@ -289,3 +289,42 @@ async def test_cdc_manager_records_and_raises_consumer_failure(cdc_manager):
         await cdc_manager._process_change(change)
 
     assert cdc_manager.checkpoints["sales"]["last_error"] == "cdc_consumer_failed"
+
+
+@pytest.mark.asyncio
+async def test_typed_materialized_view_is_not_sent_through_legacy_update_twice(cdc_manager):
+    """The router is the sole update path for a manager with exact CDC methods."""
+
+    class TypedViewManager:
+        def __init__(self):
+            self.views = {"sales_rollup": {"source_table": "sales"}}
+            self.processed = []
+            self.legacy_batches = []
+
+        async def process_change(self, change):
+            self.processed.append(change.event_id)
+
+        async def invalidate_table(self, table_name, reason):
+            raise AssertionError("an exact event must not invalidate this view")
+
+        async def update_view_incrementally(self, view_name, changes):
+            self.legacy_batches.append((view_name, changes))
+
+    view_manager = TypedViewManager()
+    cdc_manager.register_materialized_view_manager("sales", view_manager)
+    change = Change(
+        table="sales",
+        type="INSERT",
+        new_row={"id": 1, "sales": 10},
+        source="postgres",
+        event_id="evt-1",
+        partition="0",
+        sequence=1,
+        row_identity="1",
+    )
+
+    await cdc_manager._process_change(change)
+    await cdc_manager._update_materialized_views(change)
+
+    assert view_manager.processed == ["evt-1"]
+    assert view_manager.legacy_batches == []

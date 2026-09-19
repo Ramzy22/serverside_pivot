@@ -213,15 +213,31 @@ class PivotCDCManager:
                         cache.clear_table_cache(change.table)
 
     async def _update_materialized_views(self, change: Change):
-        """Update materialized views based on changes"""
+        """Deliver only compatibility updates not handled by typed CDC routing."""
         table_name = change.table
-        if table_name in self.materialized_view_managers:
-            changes_list = [change]  # List of changes to process
-            for manager in self.materialized_view_managers[table_name]:
-                try:
-                    await manager.update_view_incrementally(f"mv_{table_name}", changes_list)
-                except Exception as e:
-                    print(f"Error updating materialized view for {table_name}: {e}")
+        routed_manager_ids = {
+            id(consumer) for consumer in self.change_consumers.get(table_name, ())
+        }
+        for manager in self.materialized_view_managers.get(table_name, ()):
+            if id(manager) in routed_manager_ids:
+                continue
+            update_view = getattr(manager, "update_view_incrementally", None)
+            if not callable(update_view):
+                continue
+            try:
+                views = getattr(manager, "views", None)
+                view_names = (
+                    [
+                        name for name, info in views.items()
+                        if info.get("source_table") == table_name
+                    ]
+                    if isinstance(views, dict)
+                    else [f"mv_{table_name}"]
+                )
+                for view_name in view_names:
+                    await update_view(view_name, [change])
+            except Exception as e:
+                print(f"Error updating materialized view for {table_name}: {e}")
 
     def stop_tracking(self):
         """Stop the CDC tracking"""
