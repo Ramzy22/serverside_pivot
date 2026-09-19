@@ -116,6 +116,18 @@ jobs:
     name: Package Build and Import Smoke
     runs-on: ubuntu-latest
     needs: [python-tests, js-build, duckdb-compatibility]
+    env:
+      PIVOT_TEST_REDIS_URL: redis://localhost:6379/15
+    services:
+      redis:
+        image: redis:7-alpine
+        ports:
+          - 6379:6379
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
 
     steps:
       - uses: actions/checkout@v4
@@ -169,7 +181,7 @@ jobs:
           "$RUNNER_TEMP/serverside-pivot-wheel-smoke/bin/python" -m pip install --upgrade pip
           WHEEL="$(find "$GITHUB_WORKSPACE/dash_tanstack_pivot/dist" -maxdepth 1 -name '*.whl' -print -quit)"
           test -n "$WHEEL"
-          "$RUNNER_TEMP/serverside-pivot-wheel-smoke/bin/python" -m pip install "${WHEEL}[api]" httpx
+          "$RUNNER_TEMP/serverside-pivot-wheel-smoke/bin/python" -m pip install "${WHEEL}[api,redis]" httpx
           cd "$RUNNER_TEMP/serverside-pivot-wheel-smoke"
           "$RUNNER_TEMP/serverside-pivot-wheel-smoke/bin/python" "$GITHUB_WORKSPACE/scripts/ci/smoke_installed_python_runtime.py"
 

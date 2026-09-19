@@ -201,3 +201,17 @@ def test_two_instance_example_contains_isolation_wiring():
     assert not missing, (
         f"Multi-instance example is missing required isolation wiring: {missing}"
     )
+
+
+def test_distributed_runtime_operations_documentation_declares_required_controls():
+    path = REPO_ROOT / "docs" / "operations" / "distributed-runtime.md"
+    assert path.exists(), "distributed runtime operations documentation is missing"
+    text = path.read_text(encoding="utf-8")
+    for required in (
+        "PIVOT_DISTRIBUTED_RUNTIME",
+        "PIVOT_RUNTIME_REDIS_URL",
+        "PIVOT_RUNTIME_REDIS_PREFIX",
+        "PIVOT_DASH_SESSION_SECRET",
+        "editing_not_available_in_distributed_mode",
+    ):
+        assert required in text

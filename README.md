@@ -26,6 +26,11 @@ For the optional FastAPI service and its authentication dependencies:
 pip install "serverside-pivot[api]"
 ```
 
+For multi-worker deployment, follow the
+[distributed runtime operations guide](docs/operations/distributed-runtime.md).
+It requires authenticated TLS Redis and deliberately disables editing until
+durable distributed edit sessions are available.
+
 ## Quick Start
 
 Run the included example directly:
