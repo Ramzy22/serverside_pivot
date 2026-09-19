@@ -8,6 +8,10 @@ import time
 from typing import Any, Dict, Optional
 
 from .models import safe_int
+from .distributed import (
+    RedisRuntimeState,
+    distributed_runtime_from_env,
+)
 
 try:
     import redis as _redis  # Optional: cross-worker state storage
@@ -87,24 +91,35 @@ redis.call('EXPIRE', key, ttl_seconds)
 return 1
 """
 
-    def __init__(self):
+    def __init__(self, runtime_state: Optional[RedisRuntimeState] = None):
         self._lock = threading.Lock()
         self._sessions: Dict[str, Dict[str, Any]] = {}
         self._ttl_seconds = safe_int(os.environ.get("PIVOT_SESSION_STATE_TTL_SECONDS"), 900)
+        self._runtime_state = runtime_state or distributed_runtime_from_env()
         self._redis = None
-        redis_url = os.environ.get("PIVOT_SESSION_REDIS_URL")
-        if redis_url and _redis is not None:
-            try:
-                self._redis = _redis.from_url(redis_url, decode_responses=True)
-                self._redis.ping()
-            except Exception:
-                self._redis = None
+        if self._runtime_state is not None:
+            self._redis = self._runtime_state.client
+        else:
+            redis_url = os.environ.get("PIVOT_SESSION_REDIS_URL")
+            if redis_url and _redis is not None:
+                try:
+                    self._redis = _redis.from_url(redis_url, decode_responses=True)
+                    self._redis.ping()
+                except Exception:
+                    self._redis = None
+
+    def _redis_call(self, operation):
+        if self._runtime_state is not None:
+            return self._runtime_state._call(operation)
+        return operation()
+
+    def _session_key(self, session_id: str, client_instance: str = "default") -> str:
+        if self._runtime_state is not None:
+            return self._runtime_state.key("session", session_id, client_instance)
+        return f"pivot:session:{session_id}:{client_instance}"
 
     def _now(self) -> int:
         return int(time.time())
-
-    def _session_key(self, session_id: str, client_instance: str = "default") -> str:
-        return f"pivot:session:{session_id}:{client_instance}"
 
     def _cleanup_local(self, now_ts: int):
         stale_ids = [
@@ -118,7 +133,7 @@ return 1
     def _read_state(self, session_id: str, client_instance: str = "default") -> Dict[str, Any]:
         if self._redis is not None:
             key = self._session_key(session_id, client_instance)
-            raw = self._redis.hgetall(key) or {}
+            raw = self._redis_call(lambda: self._redis.hgetall(key)) or {}
             return {
                 "state_epoch": safe_int(raw.get("state_epoch"), 0),
                 "window_seq": safe_int(raw.get("window_seq"), 0),
@@ -194,16 +209,18 @@ return 1
         client_instance: str = "default",
     ) -> bool:
         if self._redis is not None:
-            result = self._redis.eval(
-                self._REGISTER_LUA_SCRIPT,
-                1,
-                self._session_key(session_id, client_instance),
-                int(state_epoch),
-                int(window_seq),
-                int(abort_generation),
-                str(intent),
-                str(self._now()),
-                str(self._ttl_seconds),
+            result = self._redis_call(
+                lambda: self._redis.eval(
+                    self._REGISTER_LUA_SCRIPT,
+                    1,
+                    self._session_key(session_id, client_instance),
+                    int(state_epoch),
+                    int(window_seq),
+                    int(abort_generation),
+                    str(intent),
+                    str(self._now()),
+                    str(self._ttl_seconds),
+                )
             )
             return bool(int(result))
 

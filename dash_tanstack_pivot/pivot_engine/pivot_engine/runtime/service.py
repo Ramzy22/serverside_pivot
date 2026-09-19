@@ -10,6 +10,7 @@ from .models import PivotRequestContext, PivotServiceResponse, PivotViewState
 from .resilience import CircuitBreaker
 from .request_coordinator import RuntimeRequestCoordinator
 from .session_gate import SessionRequestGate
+from .distributed import RedisRuntimeState, distributed_runtime_from_env
 from .detail_service import DetailRuntimeService
 from .drill_service import RuntimeDrillService
 from .export_service import RuntimeExportService
@@ -32,10 +33,30 @@ class PivotRuntimeService(RuntimeCompatibilityMixin):
         circuit_breaker_failures: int = 5,
         circuit_breaker_cooldown_seconds: float = 30.0,
         request_coordinator: Optional[RuntimeRequestCoordinator] = None,
+        distributed_runtime: Optional[RedisRuntimeState] = None,
     ):
+        self.distributed_runtime = distributed_runtime or distributed_runtime_from_env()
+        if request_coordinator is not None and session_gate is not None:
+            if request_coordinator.session_gate is not session_gate:
+                raise ValueError(
+                    "request_coordinator and session_gate must use the same gate."
+                )
+        if request_coordinator is not None and session_gate is None:
+            resolved_session_gate = request_coordinator.session_gate
+        else:
+            resolved_session_gate = session_gate or SessionRequestGate(
+                runtime_state=self.distributed_runtime
+            )
+        if self.distributed_runtime is not None:
+            gate_state = getattr(resolved_session_gate, "_runtime_state", None)
+            if gate_state is not self.distributed_runtime:
+                raise ValueError(
+                    "Distributed runtime services require the coordinator to use "
+                    "their shared Redis runtime state."
+                )
         self._adapter_getter = adapter_getter
         self._lifecycle = RuntimeRequestLifecycle(
-            session_gate=session_gate,
+            session_gate=resolved_session_gate,
             request_coordinator=request_coordinator,
             request_timeout_seconds=request_timeout_seconds,
             circuit_breaker=circuit_breaker,

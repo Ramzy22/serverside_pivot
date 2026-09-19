@@ -10,10 +10,14 @@ from pivot_engine.cache_coordinator import CacheInvalidationEvent
 from pivot_engine.runtime import DistributedRuntimeSettings as PublicSettings
 from pivot_engine.runtime.distributed import (
     DistributedRuntimeConfigurationError,
+    DistributedRuntimeUnavailable,
     DistributedRuntimeSettings,
     RedisRuntimeState,
 )
 from pivot_engine.runtime.payload_store import RedisPayloadBackend, RuntimePayloadStore
+from pivot_engine.runtime.request_coordinator import RuntimeRequestCoordinator
+from pivot_engine.runtime.service import PivotRuntimeService
+from pivot_engine.runtime.session_gate import SessionRequestGate
 
 
 class _RedisGenerationStub:
@@ -37,6 +41,66 @@ class _RedisGenerationStub:
     def publish(self, channel: str, message: bytes) -> int:
         self.published.append((channel, message))
         return 0
+
+
+class _RedisGateStub(_RedisGenerationStub):
+    """Minimal shared implementation of the session-gate Lua transition."""
+
+    def __init__(self, shared: dict[str, dict[str, str]]) -> None:
+        super().__init__()
+        self.shared = shared
+
+    def hgetall(self, key: str) -> dict[str, str]:
+        return dict(self.shared.get(key, {}))
+
+    def eval(self, _script, _key_count, key, state_epoch, window_seq, abort_generation, intent, now_ts, _ttl):
+        current = self.shared.get(key, {})
+        current_epoch = int(current.get("state_epoch", 0))
+        current_window = int(current.get("window_seq", 0))
+        current_structural = int(current.get("structural_seq", 0))
+        current_chart = int(current.get("chart_seq", 0))
+        current_abort = int(current.get("abort_generation", 0))
+        state_epoch, window_seq, abort_generation = map(
+            int, (state_epoch, window_seq, abort_generation)
+        )
+        if abort_generation < current_abort or state_epoch < current_epoch:
+            return 0
+        if state_epoch > current_epoch:
+            next_state = {
+                "state_epoch": str(state_epoch),
+                "window_seq": str(window_seq),
+                "structural_seq": "0",
+                "chart_seq": str(window_seq if intent == "chart" else 0),
+            }
+        elif intent == "viewport":
+            if window_seq <= current_window or window_seq <= current_structural:
+                return 0
+            next_state = {
+                "state_epoch": str(current_epoch),
+                "window_seq": str(window_seq),
+                "structural_seq": str(current_structural),
+                "chart_seq": str(current_chart),
+            }
+        elif intent == "chart":
+            if window_seq <= current_chart:
+                return 0
+            next_state = {
+                "state_epoch": str(current_epoch),
+                "window_seq": str(current_window),
+                "structural_seq": str(current_structural),
+                "chart_seq": str(window_seq),
+            }
+        else:
+            next_state = {
+                "state_epoch": str(current_epoch),
+                "window_seq": str(max(current_window, window_seq)),
+                "structural_seq": str(max(current_structural, window_seq)),
+                "chart_seq": str(current_chart),
+            }
+        next_state["abort_generation"] = str(max(current_abort, abort_generation))
+        next_state["updated_at"] = str(now_ts)
+        self.shared[key] = next_state
+        return 1
 
 
 def _payload_runtime_state(client):
@@ -180,6 +244,54 @@ def test_redis_payload_store_copies_export_file_before_worker_path_disappears(tm
     assert item is not None
     assert item.body == b"workbook"
     assert item.file_path is None
+
+
+def test_two_workers_share_causal_request_ordering():
+    shared = {}
+    first = SessionRequestGate(
+        runtime_state=_payload_runtime_state(_RedisGateStub(shared))
+    )
+    second = SessionRequestGate(
+        runtime_state=_payload_runtime_state(_RedisGateStub(shared))
+    )
+
+    assert first.register_request("alice", 4, 10, 1, "viewport", "mount")
+    assert not second.register_request("alice", 4, 9, 1, "viewport", "mount")
+    assert second.response_is_current("alice", 4, 10, 1, "viewport", "mount")
+
+
+def test_distributed_request_gate_does_not_fall_back_to_process_memory():
+    class _UnavailableRedis(_RedisGenerationStub):
+        def eval(self, *_args):
+            raise OSError("connection lost")
+
+    gate = SessionRequestGate(runtime_state=_payload_runtime_state(_UnavailableRedis()))
+
+    with pytest.raises(
+        DistributedRuntimeUnavailable,
+        match="Distributed runtime Redis is unavailable",
+    ):
+        gate.register_request("alice", 1, 1, 0, "viewport")
+
+
+def test_runtime_service_threads_one_distributed_state_to_its_request_gate():
+    state = _payload_runtime_state(_RedisGenerationStub())
+
+    service = PivotRuntimeService(adapter_getter=lambda: object(), distributed_runtime=state)
+
+    assert service._request_coordinator.session_gate._runtime_state is state
+
+
+def test_runtime_service_rejects_a_distributed_coordinator_with_another_gate():
+    state = _payload_runtime_state(_RedisGenerationStub())
+    coordinator = RuntimeRequestCoordinator(SessionRequestGate())
+
+    with pytest.raises(ValueError, match="shared Redis runtime state"):
+        PivotRuntimeService(
+            adapter_getter=lambda: object(),
+            request_coordinator=coordinator,
+            distributed_runtime=state,
+        )
 
 
 @pytest.mark.skipif(

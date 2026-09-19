@@ -35,6 +35,7 @@ from .dataset_authorization import (
     RuntimeDatasetAuthorizer,
 )
 from .payload_store import RuntimePayloadStore, runtime_payload_store_from_env
+from .distributed import RedisRuntimeState, distributed_runtime_from_env
 from .request_factory import RuntimeRequestFactory
 
 
@@ -87,9 +88,13 @@ class RuntimeHttpGateway:
         inline_payload_bytes: Optional[int] = None,
         mutation_authorizer: Optional[RuntimeMutationAuthorizer] = None,
         dataset_authorizer: Optional[RuntimeDatasetAuthorizer] = None,
+        distributed_runtime: Optional[RedisRuntimeState] = None,
     ) -> None:
         self._runtime_service_getter = runtime_service_getter
-        self.payload_store = payload_store or runtime_payload_store_from_env()
+        self.distributed_runtime = distributed_runtime or distributed_runtime_from_env()
+        self.payload_store = payload_store or runtime_payload_store_from_env(
+            runtime_state=self.distributed_runtime
+        )
         self.payload_url_prefix = payload_url_prefix.rstrip("/")
         self.inline_payload_bytes = (
             _inline_limit_bytes()
@@ -473,6 +478,7 @@ def register_runtime_http_transport(
     inline_payload_bytes: Optional[int] = None,
     mutation_authorizer: Optional[RuntimeMutationAuthorizer] = None,
     dataset_authorizer: Optional[RuntimeDatasetAuthorizer] = None,
+    distributed_runtime: Optional[RedisRuntimeState] = None,
 ) -> RuntimeHttpGateway:
     """Register the canonical V1 HTTP API on a FastAPI application.
 
@@ -498,6 +504,7 @@ def register_runtime_http_transport(
         inline_payload_bytes=inline_payload_bytes,
         mutation_authorizer=mutation_authorizer,
         dataset_authorizer=dataset_authorizer,
+        distributed_runtime=distributed_runtime,
     )
     router = APIRouter(prefix=normalized_prefix, tags=["pivot-runtime"])
 
