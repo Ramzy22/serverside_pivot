@@ -367,14 +367,17 @@ def test_controller_with_redis_cache(sample_data: pa.Table):
     """
     Test that the PivotController works correctly with the RedisCache.
     """
-    import redis
-    fake_redis_server = fakeredis.FakeServer()
-    fake_client = redis.StrictRedis(server=fake_redis_server, decode_responses=False)
+    from pivot_engine.cache.redis_cache import RedisCache
+
+    fake_client = fakeredis.FakeRedis(decode_responses=False)
+    cache = RedisCache.__new__(RedisCache)
+    cache.client = fake_client
+    cache.default_ttl = 300
 
     controller = PivotController(
         planner_name="ibis",
         backend_uri=":memory:",
-        cache=fake_client
+        cache=cache,
     )
 
     controller.load_data_from_arrow("sales", sample_data)
@@ -399,7 +402,7 @@ def test_controller_with_redis_cache(sample_data: pa.Table):
     assert sorted_rows[0] == ["East", 300]
     assert sorted_rows[1] == ["West", 750]
 
-    assert len(fake_redis_server.keys()) > 0
+    assert fake_client.keys()
 
 
 def test_cursor_pagination(controller: PivotController):

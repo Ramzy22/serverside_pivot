@@ -29,6 +29,7 @@ from .backends.ibis_backend import IbisBackend
 from .backends.duckdb_backend import DuckDBBackend
 from .cache.memory_cache import MemoryCache
 from .cache.redis_cache import RedisCache
+from .cache.generation_guard import GenerationGuard, GenerationGuardedCache
 from .types.pivot_spec import PivotSpec
 from pivot_engine.streaming.streaming_processor import StreamAggregationProcessor, IncrementalMaterializedViewManager
 from pivot_engine.hierarchical_scroll_manager import HierarchicalVirtualScrollManager
@@ -140,8 +141,23 @@ class ScalablePivotController(PivotController):
         tile_size: int = 100,
         cache_ttl: int = 300,
         max_hierarchy_rows: Optional[int] = None,
+        distributed_runtime: Optional[Any] = None,
         **cache_options: Any
     ):
+        if distributed_runtime is None:
+            # Import lazily: runtime's public package also imports the adapter,
+            # while this module is being imported by that adapter.
+            from .runtime.distributed import distributed_runtime_from_env
+
+            distributed_runtime = distributed_runtime_from_env()
+        self.distributed_runtime = distributed_runtime
+        if self.distributed_runtime is not None and (
+            cache == "redis" or isinstance(cache, RedisCache)
+        ):
+            raise ValueError(
+                "Distributed runtime requires a worker-local memory cache; "
+                "Redis runtime state is not a general query-cache backend."
+            )
         # Initialize base PivotController
         super().__init__(
             backend_uri=backend_uri,
@@ -155,7 +171,18 @@ class ScalablePivotController(PivotController):
             **cache_options
         )
 
-        self.cache_coordinator = CacheCoordinator()
+        generation_guard = (
+            GenerationGuard(self.distributed_runtime, lambda: None)
+            if self.distributed_runtime is not None
+            else None
+        )
+        self.cache_coordinator = CacheCoordinator(generation_guard=generation_guard)
+        if generation_guard is not None:
+            self.cache = GenerationGuardedCache(self.cache, generation_guard)
+            # PivotController constructs the diff engine before the guarded
+            # L1 proxy exists, so make every controller query path observe the
+            # same shared generation.
+            self.diff_engine.cache = self.cache
         self.cache_coordinator.register_namespace(
             CacheNamespaces.CONTROLLER_QUERY,
             owner="controller",
@@ -277,6 +304,9 @@ class ScalablePivotController(PivotController):
             return None
         return round((end - start) * 1000, 3)
 
+    def _sync_controller_cache_generation(self) -> int:
+        return self.cache_coordinator.sync_generation()
+
     def _query_cache_size_snapshot(self) -> Dict[str, int]:
         if not hasattr(self.cache, "get_all_keys"):
             return {"entries": 0}
@@ -292,6 +322,14 @@ class ScalablePivotController(PivotController):
         return {"entries": count}
 
     def _invalidate_controller_query_cache(self, event: CacheInvalidationEvent) -> None:
+        # A generation-only synchronization intentionally has no source table:
+        # the worker missed the detailed Pub/Sub event, so preserving any query
+        # entry would risk returning stale data.  Clear only this controller's
+        # L1 query cache, never a shared Redis database.
+        if event.table is None:
+            if hasattr(self.cache, "clear"):
+                self.cache.clear()
+            return
         table_key = self._cache_table_key(event.table)
         table_scoped_prefixes = (
             f"pivot_ibis:query:{table_key}:",
@@ -976,6 +1014,7 @@ class ScalablePivotController(PivotController):
         return spec
 
     def _hierarchy_view_cache_get(self, cache_key: str) -> Optional[Dict[str, Any]]:
+        self._sync_controller_cache_generation()
         cached_entry = self._hierarchy_view_cache.get(cache_key)
         if not cached_entry:
             self.cache_coordinator.record_lookup(CacheNamespaces.CONTROLLER_HIERARCHY_VIEW, hit=False)
@@ -1001,6 +1040,7 @@ class ScalablePivotController(PivotController):
         }
 
     def _hierarchy_view_cache_set(self, cache_key: str, payload: Dict[str, Any]) -> None:
+        self._sync_controller_cache_generation()
         stored_payload = {
             **payload,
             "expanded_set": set(payload.get("expanded_set") or set()),
@@ -1027,6 +1067,7 @@ class ScalablePivotController(PivotController):
             )
 
     def _find_reusable_hierarchy_cache_entry(self, spec_fingerprint: str, requested_expanded_set: set[tuple]) -> Optional[Dict[str, Any]]:
+        self._sync_controller_cache_generation()
         if not requested_expanded_set or requested_expanded_set == {("__ALL__",)}:
             return None
         best_entry = None
@@ -1068,6 +1109,7 @@ class ScalablePivotController(PivotController):
         return best_entry
 
     def _hierarchy_root_count_cache_get(self, cache_key: str) -> Optional[int]:
+        self._sync_controller_cache_generation()
         cached_entry = self._hierarchy_root_count_cache.get(cache_key)
         if not cached_entry:
             self.cache_coordinator.record_lookup(CacheNamespaces.CONTROLLER_HIERARCHY_ROOT_COUNT, hit=False)
@@ -1086,6 +1128,7 @@ class ScalablePivotController(PivotController):
         return int(count)
 
     def _hierarchy_root_count_cache_set(self, cache_key: str, count: int) -> None:
+        self._sync_controller_cache_generation()
         self._hierarchy_root_count_cache[cache_key] = (int(count), time.time() + self._hierarchy_root_count_cache_ttl)
         self._hierarchy_root_count_cache.move_to_end(cache_key)
         evicted = 0
@@ -1104,6 +1147,7 @@ class ScalablePivotController(PivotController):
             )
 
     def _hierarchy_root_page_cache_get(self, cache_key: str) -> Optional[List[Any]]:
+        self._sync_controller_cache_generation()
         cached_entry = self._hierarchy_root_page_cache.get(cache_key)
         if not cached_entry:
             self.cache_coordinator.record_lookup(CacheNamespaces.CONTROLLER_HIERARCHY_ROOT_PAGE, hit=False)
@@ -1122,6 +1166,7 @@ class ScalablePivotController(PivotController):
         return list(values or [])
 
     def _hierarchy_root_page_cache_set(self, cache_key: str, values: List[Any]) -> None:
+        self._sync_controller_cache_generation()
         self._hierarchy_root_page_cache[cache_key] = (
             list(values or []),
             time.time() + self._hierarchy_root_page_cache_ttl,
@@ -1170,6 +1215,7 @@ class ScalablePivotController(PivotController):
         return self._hierarchy_spec_fingerprint(root_spec)
 
     def _hierarchy_root_result_cache_get(self, cache_key: str) -> Optional[pa.Table]:
+        self._sync_controller_cache_generation()
         cached_entry = self._hierarchy_root_result_cache.get(cache_key)
         if not cached_entry:
             self.cache_coordinator.record_lookup(
@@ -1192,6 +1238,7 @@ class ScalablePivotController(PivotController):
         return result
 
     def _hierarchy_root_result_cache_set(self, cache_key: str, result: pa.Table) -> bool:
+        self._sync_controller_cache_generation()
         if not isinstance(result, pa.Table):
             return False
         byte_count = max(int(getattr(result, "nbytes", 0) or 0), 0)
@@ -1231,6 +1278,7 @@ class ScalablePivotController(PivotController):
         return True
 
     def _hierarchy_grand_total_cache_get(self, cache_key: str) -> Optional[Dict[str, Any]]:
+        self._sync_controller_cache_generation()
         cached_entry = self._hierarchy_grand_total_cache.get(cache_key)
         if not cached_entry:
             self.cache_coordinator.record_lookup(CacheNamespaces.CONTROLLER_HIERARCHY_GRAND_TOTAL, hit=False)
@@ -1249,6 +1297,7 @@ class ScalablePivotController(PivotController):
         return dict(row) if isinstance(row, dict) else None
 
     def _hierarchy_grand_total_cache_set(self, cache_key: str, row: Dict[str, Any]) -> None:
+        self._sync_controller_cache_generation()
         if not isinstance(row, dict):
             return
         self._hierarchy_grand_total_cache[cache_key] = (

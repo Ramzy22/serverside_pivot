@@ -9,6 +9,7 @@ import threading
 import time
 from typing import Any, Callable, Optional
 
+from .cache.generation_guard import GenerationGuard
 from .cache_coordinator import CacheCoordinator, CacheInvalidationEvent, CacheNamespaces
 from .hierarchy_rows import normalize_expanded_paths
 
@@ -152,6 +153,7 @@ class AdapterViewportCache:
         response_window_size: int,
         row_block_cache_size: int,
         cache_coordinator: Optional[CacheCoordinator] = None,
+        generation_guard: Optional[GenerationGuard] = None,
     ) -> None:
         self.lock = threading.RLock()
         self.ttl_seconds = ttl_seconds
@@ -159,6 +161,7 @@ class AdapterViewportCache:
         self.response_window_size = response_window_size
         self.row_block_cache_size = row_block_cache_size
         self.cache_coordinator = cache_coordinator or CacheCoordinator()
+        self.generation_guard = generation_guard or self.cache_coordinator.generation_guard
         self.center_col_ids_cache: dict[Any, list[str]] = {}
         self.pivot_column_catalog_cache: OrderedDict[str, tuple[Any, float]] = OrderedDict()
         self.response_window_cache: OrderedDict[str, tuple[Any, float]] = OrderedDict()
@@ -182,6 +185,11 @@ class AdapterViewportCache:
             CacheNamespaces.ADAPTER_PREFETCH_PENDING,
         )
         self._register_cache_namespaces()
+
+    def _sync_generation(self) -> Optional[int]:
+        if self.generation_guard is None:
+            return None
+        return self.generation_guard.sync()
 
     def _register_cache_namespaces(self) -> None:
         self.cache_coordinator.register_namespace(
@@ -243,6 +251,9 @@ class AdapterViewportCache:
             return {"entries": len(cache)}
 
     def generation_value(self) -> int:
+        shared_generation = self._sync_generation()
+        if shared_generation is not None:
+            return shared_generation
         with self.lock:
             return self._generation
 
@@ -279,6 +290,7 @@ class AdapterViewportCache:
         return evicted
 
     def lookup(self, cache: OrderedDict, key: str) -> Optional[Any]:
+        self._sync_generation()
         with self.lock:
             namespace = self._cache_namespace_by_id.get(id(cache))
             had_entry = key in cache
@@ -300,6 +312,7 @@ class AdapterViewportCache:
         max_size: int,
         ttl_seconds: float,
     ) -> None:
+        self._sync_generation()
         with self.lock:
             namespace = self._cache_namespace_by_id.get(id(cache))
             evicted = self.store_entry(
@@ -315,6 +328,7 @@ class AdapterViewportCache:
                     self.cache_coordinator.record_eviction(namespace, count=evicted, entries=len(cache))
 
     def center_col_ids_get(self, key: Any) -> Optional[list[str]]:
+        self._sync_generation()
         with self.lock:
             if key not in self.center_col_ids_cache:
                 self.cache_coordinator.record_lookup(CacheNamespaces.ADAPTER_CENTER_COLUMNS, hit=False)
@@ -323,6 +337,7 @@ class AdapterViewportCache:
             return list(self.center_col_ids_cache.get(key) or [])
 
     def center_col_ids_set(self, key: Any, value: list[str]) -> None:
+        self._sync_generation()
         with self.lock:
             self.center_col_ids_cache[key] = list(value or [])
             self.cache_coordinator.record_store(
@@ -331,6 +346,7 @@ class AdapterViewportCache:
             )
 
     def mark_prefetch_request_pending(self, cache_key: str) -> bool:
+        self._sync_generation()
         with self.lock:
             if cache_key in self.prefetch_request_keys:
                 self.cache_coordinator.record_lookup(CacheNamespaces.ADAPTER_PREFETCH_PENDING, hit=True)
@@ -354,6 +370,7 @@ class AdapterViewportCache:
             return True
 
     def clear_prefetch_request_pending(self, cache_key: str) -> None:
+        self._sync_generation()
         with self.lock:
             if cache_key in self.prefetch_request_keys:
                 self.prefetch_request_keys.discard(cache_key)

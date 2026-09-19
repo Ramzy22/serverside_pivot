@@ -92,6 +92,7 @@ class TanStackPivotAdapter(TransactionAdapterMixin, FormulaEngineMixin):
             response_window_size=_RESPONSE_WINDOW_CACHE_SIZE,
             row_block_cache_size=_ROW_BLOCK_CACHE_SIZE,
             cache_coordinator=self.cache_coordinator,
+            generation_guard=getattr(self.cache_coordinator, "generation_guard", None),
         )
         self._viewport_keys = AdapterViewportKeyBuilder(self._cache_generation_value)
         self.cache_coordinator = self._viewport_cache.cache_coordinator
@@ -3420,7 +3421,10 @@ class TanStackPivotAdapter(TransactionAdapterMixin, FormulaEngineMixin):
 
 # Utility function for TanStack integration
 def create_tanstack_adapter(
-    backend_uri: str = ":memory:", debug: bool = False
+    backend_uri: str = ":memory:",
+    debug: bool = False,
+    *,
+    distributed_runtime: Optional[Any] = None,
 ) -> TanStackPivotAdapter:
     """Create a TanStack adapter with a configured controller"""
     controller = ScalablePivotController(
@@ -3429,6 +3433,7 @@ def create_tanstack_adapter(
         enable_incremental_views=True,
         tile_size=100,
         cache_ttl=300,
+        distributed_runtime=distributed_runtime,
     )
     return TanStackPivotAdapter(controller, debug=debug)
 

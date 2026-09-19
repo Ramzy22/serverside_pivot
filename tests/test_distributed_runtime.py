@@ -1,12 +1,20 @@
 from __future__ import annotations
 
 import os
+import time
 
 import fakeredis
 import pytest
 import redis
 
-from pivot_engine.cache_coordinator import CacheInvalidationEvent
+from pivot_engine.adapter_viewport_cache import AdapterViewportCache
+from pivot_engine.cache.generation_guard import GenerationGuard, GenerationGuardedCache
+from pivot_engine.cache.memory_cache import MemoryCache
+from pivot_engine.cache_coordinator import (
+    CacheCoordinator,
+    CacheInvalidationEvent,
+    CacheNamespaces,
+)
 from pivot_engine.runtime import DistributedRuntimeSettings as PublicSettings
 from pivot_engine.runtime.distributed import (
     DistributedRuntimeConfigurationError,
@@ -18,6 +26,8 @@ from pivot_engine.runtime.payload_store import RedisPayloadBackend, RuntimePaylo
 from pivot_engine.runtime.request_coordinator import RuntimeRequestCoordinator
 from pivot_engine.runtime.service import PivotRuntimeService
 from pivot_engine.runtime.session_gate import SessionRequestGate
+from pivot_engine.scalable_pivot_controller import ScalablePivotController
+from pivot_engine.tanstack_adapter import create_tanstack_adapter
 
 
 class _RedisGenerationStub:
@@ -114,6 +124,15 @@ def _payload_runtime_state(client):
         ),
         client=client,
     )
+
+
+def _wait_until(predicate, *, timeout_seconds: float = 2.0) -> bool:
+    deadline = time.monotonic() + timeout_seconds
+    while time.monotonic() < deadline:
+        if predicate():
+            return True
+        time.sleep(0.01)
+    return predicate()
 
 
 def test_runtime_exports_distributed_configuration_contract():
@@ -292,6 +311,135 @@ def test_runtime_service_rejects_a_distributed_coordinator_with_another_gate():
             request_coordinator=coordinator,
             distributed_runtime=state,
         )
+
+
+def test_worker_b_discards_l1_cache_after_worker_a_invalidation_without_pubsub():
+    server = fakeredis.FakeServer()
+    state_a = _payload_runtime_state(
+        fakeredis.FakeRedis(server=server, decode_responses=False)
+    )
+    state_b = _payload_runtime_state(
+        fakeredis.FakeRedis(server=server, decode_responses=False)
+    )
+    cache_b_backing = MemoryCache()
+    cache_b = GenerationGuardedCache(
+        cache_b_backing, GenerationGuard(state_b, cache_b_backing.clear)
+    )
+    cache_b.set("query", {"sales": 100})
+
+    CacheCoordinator(
+        generation_guard=GenerationGuard(state_a, lambda: None)
+    ).invalidate(event="mutation", reason="test", table="sales")
+
+    assert cache_b.get("query") is None
+
+
+def test_remote_invalidation_pubsub_clears_viewport_cache_before_next_lookup():
+    server = fakeredis.FakeServer()
+    state_a = _payload_runtime_state(
+        fakeredis.FakeRedis(server=server, decode_responses=False)
+    )
+    state_b = _payload_runtime_state(
+        fakeredis.FakeRedis(server=server, decode_responses=False)
+    )
+    coordinator_a = CacheCoordinator(
+        generation_guard=GenerationGuard(state_a, lambda: None)
+    )
+    coordinator_a.register_namespace(
+        CacheNamespaces.ADAPTER_RESPONSE_WINDOW,
+        owner="adapter",
+    )
+    coordinator_b = CacheCoordinator(
+        generation_guard=GenerationGuard(state_b, lambda: None)
+    )
+    cache_b = AdapterViewportCache(
+        ttl_seconds=60,
+        pivot_catalog_size=8,
+        response_window_size=8,
+        row_block_cache_size=8,
+        cache_coordinator=coordinator_b,
+        generation_guard=coordinator_b.generation_guard,
+    )
+    cache_b.store(
+        cache_b.response_window_cache,
+        "window",
+        {"rows": []},
+        max_size=8,
+        ttl_seconds=60,
+    )
+
+    coordinator_a.invalidate(
+        [CacheNamespaces.ADAPTER_RESPONSE_WINDOW],
+        event="mutation",
+        reason="test",
+        table="sales",
+    )
+
+    # Inspect the backing L1 collection directly: a guarded ``lookup`` would
+    # also poll Redis and could mask a broken Pub/Sub delivery path.
+    assert _wait_until(lambda: not cache_b.response_window_cache)
+    coordinator_a.close()
+    coordinator_b.close()
+
+
+def test_worker_b_adapter_cache_syncs_after_its_pubsub_subscription_is_closed():
+    server = fakeredis.FakeServer()
+    adapter_a = create_tanstack_adapter(
+        distributed_runtime=_payload_runtime_state(
+            fakeredis.FakeRedis(server=server, decode_responses=False)
+        )
+    )
+    adapter_b = create_tanstack_adapter(
+        distributed_runtime=_payload_runtime_state(
+            fakeredis.FakeRedis(server=server, decode_responses=False)
+        )
+    )
+    try:
+        adapter_b._locked_cache_store(
+            adapter_b._response_window_cache,
+            "window",
+            {"rows": []},
+            max_size=8,
+            ttl_seconds=60,
+        )
+        adapter_b.controller.cache_coordinator.close()
+
+        adapter_a.controller._clear_mutation_caches("sales")
+
+        assert (
+            adapter_b._locked_cache_lookup(
+                adapter_b._response_window_cache,
+                "window",
+            )
+            is None
+        )
+    finally:
+        adapter_a.controller.cache_coordinator.close()
+        adapter_b.controller.cache_coordinator.close()
+
+
+def test_worker_b_controller_query_l1_syncs_after_a_missed_notification():
+    server = fakeredis.FakeServer()
+    controller_a = ScalablePivotController(
+        distributed_runtime=_payload_runtime_state(
+            fakeredis.FakeRedis(server=server, decode_responses=False)
+        )
+    )
+    controller_b = ScalablePivotController(
+        distributed_runtime=_payload_runtime_state(
+            fakeredis.FakeRedis(server=server, decode_responses=False)
+        )
+    )
+    try:
+        controller_b.cache.set("pivot_ibis:query:sales:cached", {"sales": 100})
+        controller_b.cache_coordinator.close()
+
+        controller_a._clear_mutation_caches("sales")
+
+        assert controller_b.cache.get("pivot_ibis:query:sales:cached") is None
+    finally:
+        controller_a.cache_coordinator.close()
+        controller_b.cache_coordinator.close()
 
 
 @pytest.mark.skipif(

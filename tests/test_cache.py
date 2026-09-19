@@ -25,7 +25,9 @@ def cache(request):
             pytest.skip("fakeredis is not installed, skipping Redis cache tests.")
         
         # Use fakeredis for testing
-        fake_redis_client = fakeredis.FakeStrictRedis(decode_responses=True)
+        # RedisCache persists Arrow IPC bytes, so the fake must mirror the
+        # production client's binary response mode.
+        fake_redis_client = fakeredis.FakeStrictRedis(decode_responses=False)
         
         # Monkeypatch the redis.StrictRedis client in the RedisCache
         class MockRedisCache(RedisCache):

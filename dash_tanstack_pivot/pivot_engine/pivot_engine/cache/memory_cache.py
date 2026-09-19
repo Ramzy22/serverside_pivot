@@ -4,9 +4,23 @@ Simple in-memory cache with TTL support for various data types including PyArrow
 """
 import time
 import threading
-from typing import Optional, Any, Dict, Union
+from typing import Optional, Any, Dict, Union, Protocol
 from collections import OrderedDict
 import pyarrow as pa
+
+
+class CacheProtocol(Protocol):
+    """Minimal cache protocol shared by local and guarded cache callers."""
+
+    def get(self, key: str) -> Optional[Any]: ...
+
+    def set(self, key: str, value: Any, ttl: Optional[int] = None): ...
+
+    def clear(self): ...
+
+    def delete(self, key: str): ...
+
+    def get_all_keys(self): ...
 
 class MemoryCache:
     """

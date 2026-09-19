@@ -5,8 +5,10 @@ from __future__ import annotations
 import threading
 import time
 from collections import deque
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from typing import Any, Callable, Deque, Dict, Iterable, Mapping, Optional, Sequence
+
+from .cache.generation_guard import GenerationGuard
 
 
 class CacheNamespaces:
@@ -78,7 +80,12 @@ class CacheCoordinator:
     event bus so correctness-sensitive clears are observable and testable.
     """
 
-    def __init__(self, *, max_events: int = 100) -> None:
+    def __init__(
+        self,
+        *,
+        max_events: int = 100,
+        generation_guard: Optional[GenerationGuard] = None,
+    ) -> None:
         self._lock = threading.RLock()
         self._namespaces: Dict[str, CacheNamespaceSpec] = {}
         self._metrics: Dict[str, CacheNamespaceMetrics] = {}
@@ -86,6 +93,63 @@ class CacheCoordinator:
         self._invalidators: Dict[str, Invalidator] = {}
         self._events: Deque[CacheInvalidationEvent] = deque(maxlen=max(1, int(max_events)))
         self._sequence = 0
+        self._generation_guard = generation_guard
+        self._unsubscribe_generation: Optional[Callable[[], None]] = None
+        if generation_guard is not None:
+            generation_guard.set_clear(self._clear_registered_l1_caches)
+            state = generation_guard.state
+            if state is not None:
+                self._unsubscribe_generation = state.subscribe(
+                    self._receive_distributed_invalidation
+                )
+
+    @property
+    def generation_guard(self) -> Optional[GenerationGuard]:
+        return self._generation_guard
+
+    def sync_generation(self) -> int:
+        """Synchronize worker-local caches before serving an L1 lookup."""
+        if self._generation_guard is None:
+            return 0
+        return self._generation_guard.sync()
+
+    def close(self) -> None:
+        """Release the optional Redis Pub/Sub subscription for this worker."""
+        unsubscribe = self._unsubscribe_generation
+        self._unsubscribe_generation = None
+        if unsubscribe is not None:
+            unsubscribe()
+
+    def _registered_namespaces(self) -> tuple[str, ...]:
+        with self._lock:
+            return tuple(self._namespaces)
+
+    def _clear_registered_l1_caches(self) -> None:
+        """Clear every local namespace after a shared generation transition.
+
+        A global generation deliberately favors correctness over retaining a
+        potentially stale, table-specific cache entry.  Metrics are recorded
+        using the source event separately by ``invalidate`` or the Pub/Sub
+        callback; this synthetic event exists only to drive local clear hooks.
+        """
+        guard = self._generation_guard
+        generation = guard.sync() if guard is not None else 0
+        event = CacheInvalidationEvent(
+            sequence=generation,
+            event="cache_generation_sync",
+            namespaces=self._registered_namespaces(),
+            reason="shared_generation_advanced",
+        )
+        self._notify_invalidators(event)
+
+    def _receive_distributed_invalidation(
+        self,
+        event: CacheInvalidationEvent,
+    ) -> None:
+        guard = self._generation_guard
+        if guard is None or not guard.receive(event):
+            return
+        self._record_invalidation(event, notify=False)
 
     def register_namespace(
         self,
@@ -246,21 +310,51 @@ class CacheCoordinator:
                 structural=bool(structural),
                 metadata=dict(metadata or {}),
             )
-            self._events.append(invalidation)
-            invalidators = [self._invalidators[name] for name in resolved if name in self._invalidators]
-            now = time.time()
-            for namespace in resolved:
-                metrics = self._metrics.setdefault(namespace, CacheNamespaceMetrics())
-                metrics.invalidations += 1
-                metrics.generation += 1
-                metrics.last_event = str(event)
-                metrics.last_reason = str(reason or "")
-                metrics.last_updated_at = now
+        guard = self._generation_guard
+        if guard is not None:
+            generation = guard.invalidate(invalidation)
+            invalidation = replace(invalidation, sequence=generation)
+            with self._lock:
+                self._sequence = max(self._sequence, generation)
+            self._record_invalidation(invalidation, notify=False)
+            return invalidation
+
+        self._record_invalidation(invalidation, notify=True)
+        return invalidation
+
+    def _notify_invalidators(self, invalidation: CacheInvalidationEvent) -> None:
+        with self._lock:
+            invalidators = [
+                self._invalidators[name]
+                for name in invalidation.namespaces
+                if name in self._invalidators
+            ]
 
         for invalidator in invalidators:
             invalidator(invalidation)
-        self.refresh_sizes(resolved)
-        return invalidation
+        self.refresh_sizes(invalidation.namespaces)
+
+    def _record_invalidation(
+        self,
+        invalidation: CacheInvalidationEvent,
+        *,
+        notify: bool,
+    ) -> None:
+        with self._lock:
+            self._events.append(invalidation)
+            now = time.time()
+            for namespace in invalidation.namespaces:
+                metrics = self._metrics.setdefault(namespace, CacheNamespaceMetrics())
+                metrics.invalidations += 1
+                metrics.generation += 1
+                metrics.last_event = invalidation.event
+                metrics.last_reason = invalidation.reason
+                metrics.last_updated_at = now
+
+        if notify:
+            self._notify_invalidators(invalidation)
+        else:
+            self.refresh_sizes(invalidation.namespaces)
 
     def refresh_sizes(self, namespaces: Optional[Iterable[str]] = None) -> None:
         with self._lock:
