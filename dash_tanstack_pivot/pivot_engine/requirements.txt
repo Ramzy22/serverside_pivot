@@ -1,5 +1,5 @@
 # Core Dependencies
-duckdb>=0.8.0
+duckdb>=0.8.0,<2.0
 pyarrow>=10.0.0
 pyarrow_hotfix>=0.4
 ibis-framework>=4.0.0; extra != "no-ibis"

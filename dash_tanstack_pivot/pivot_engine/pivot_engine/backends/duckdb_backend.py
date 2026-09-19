@@ -45,6 +45,23 @@ _DUCKDB_MEMORY_UNIT_CANONICAL = {
 }
 
 
+def _fetch_arrow_table(result: Any) -> "pa.Table":
+    """Return an Arrow table across supported DuckDB connection APIs.
+
+    DuckDB 0.x connections expose ``fetch_arrow_table`` after ``execute``;
+    newer releases also expose ``to_arrow_table``. Prefer the newer spelling
+    while retaining the documented legacy fetch API throughout our supported
+    DuckDB 0.8--1.x range.
+    """
+    to_arrow_table = getattr(result, "to_arrow_table", None)
+    if callable(to_arrow_table):
+        return to_arrow_table()
+    fetch_arrow_table = getattr(result, "fetch_arrow_table", None)
+    if callable(fetch_arrow_table):
+        return fetch_arrow_table()
+    raise TypeError("DuckDB query result does not expose an Arrow table conversion API.")
+
+
 def _validate_duckdb_threads(threads: Any) -> int:
     if isinstance(threads, bool):
         raise ValueError("DuckDB threads must be a positive integer.")
@@ -229,7 +246,7 @@ class DuckDBBackend:
         try:
             # Use connection from pool for concurrency
             with self.pool.get_connection() as con:
-                result = con.execute(sql, params).to_arrow_table()
+                result = _fetch_arrow_table(con.execute(sql, params))
             
             # Performance tracking
             self._query_count += 1

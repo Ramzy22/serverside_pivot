@@ -30,7 +30,9 @@ dependencies = [
     # pivot_engine is included in this distribution and imported by the
     # documented quick start, so its execution dependencies must travel with
     # the wheel rather than live only in pivot_engine/requirements.txt.
-    "duckdb>=0.8.0",
+    # The direct backend supports DuckDB's 0.8 legacy fetch API through the
+    # current 1.x conversion API; 2.x needs an explicit compatibility review.
+    "duckdb>=0.8.0,<2.0",
     "pyarrow>=10.0.0",
     "pyarrow_hotfix>=0.4",
     "ibis-framework[duckdb]>=4.0.0",
