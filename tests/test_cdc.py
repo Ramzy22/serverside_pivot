@@ -175,7 +175,7 @@ async def test_update_affected_cache_keys(cdc_manager):
 
 
 @pytest.mark.asyncio
-async def test_polling_cdc_detects_update_outside_previous_five_row_sample():
+async def test_polling_cdc_invalidates_update_outside_previous_five_row_sample():
     rows = [{"id": index, "value": f"value-{index}"} for index in range(1, 7)]
 
     class MutableTable:
@@ -199,7 +199,8 @@ async def test_polling_cdc_detects_update_outside_previous_five_row_sample():
 
     changes = await provider.detect_changes("sales")
 
-    assert [change.type for change in changes] == ["UPDATE"]
+    assert [change.type for change in changes] == ["INVALIDATE"]
+    assert changes[0].invalidation_reason == "polling_snapshot_changed"
 
 
 def test_polling_cdc_checksum_is_independent_of_backend_row_order():
@@ -207,3 +208,52 @@ def test_polling_cdc_checksum_is_independent_of_backend_row_order():
     reversed_rows = pa.Table.from_pylist([{"id": 2, "value": "b"}, {"id": 1, "value": "a"}])
 
     assert PollingCDCProvider._table_checksum(first) == PollingCDCProvider._table_checksum(reversed_rows)
+
+
+def test_change_requires_images_identity_and_order_for_exact_processing():
+    exact = Change(
+        table="sales",
+        type="UPDATE",
+        old_row={"id": 1, "amount": 10},
+        new_row={"id": 1, "amount": 25},
+        source="postgres",
+        event_id="wal-101",
+        partition="0",
+        sequence=101,
+        row_identity="1",
+    )
+    incomplete = Change(table="sales", type="DELETE", old_row={"id": 1})
+
+    assert exact.is_exact() is True
+    assert incomplete.is_exact() is False
+    assert incomplete.is_invalidating() is True
+
+
+@pytest.mark.asyncio
+async def test_polling_change_is_one_invalidating_event_not_placeholder_rows():
+    rows = [
+        {"id": 1, "value": "first"},
+        {"id": 2, "value": "second"},
+    ]
+
+    class MutableTable:
+        columns = ["id", "value"]
+
+        def to_pyarrow(self):
+            return pa.Table.from_pylist(rows)
+
+    class MutableBackend:
+        def table(self, _table_name):
+            return MutableTable()
+
+    provider = PollingCDCProvider(MutableBackend())
+    await provider.start_tracking_table("sales")
+    rows.pop()
+
+    changes = await provider.detect_changes("sales")
+
+    assert len(changes) == 1
+    assert changes[0].is_invalidating()
+    assert changes[0].invalidation_reason == "polling_snapshot_changed"
+    assert changes[0].old_row is None
+    assert changes[0].new_row is None

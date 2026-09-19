@@ -229,21 +229,17 @@ class PollingCDCProvider(CDCProvider):
         
         # Compare snapshots to detect changes
         if current_snapshot.checksum != previous_snapshot.checksum:
-            # Data has changed - determine what changed
-            if current_snapshot.row_count > previous_snapshot.row_count:
-                # Likely INSERT operations
-                changes.extend(await self._detect_inserts(table_name, previous_snapshot, current_snapshot))
-            elif current_snapshot.row_count < previous_snapshot.row_count:
-                # Likely DELETE operations
-                changes.extend(await self._detect_deletions(table_name, previous_snapshot, current_snapshot))
-            else:
-                # Row count is same but data changed - likely UPDATE operations
-                changes.append(Change(
-                    table=table_name,
-                    type='UPDATE',
-                    old_row={"_change_type": "detected_update", "_timestamp": time.time()},
-                    new_row={"_change_type": "detected_update", "_timestamp": time.time()}
-                ))
+            # Snapshot polling establishes that content changed, not which row
+            # changed.  It cannot provide the old/new images required for an
+            # exact reversible aggregate, so consumers must refresh instead of
+            # applying a fabricated INSERT/UPDATE/DELETE record.
+            changes.append(
+                Change.invalidation(
+                    table_name,
+                    "polling_snapshot_changed",
+                    source="polling",
+                )
+            )
         
         # Update the stored snapshot
         self.table_snapshots[table_name] = current_snapshot
