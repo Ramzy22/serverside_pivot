@@ -4,6 +4,7 @@ from unittest.mock import MagicMock, AsyncMock, patch
 from pivot_engine.cdc.cdc_manager import PivotCDCManager
 from pivot_engine.cdc.database_change_detector import PollingCDCProvider
 from pivot_engine.cdc.models import Change
+from pivot_engine.cdc.cdc_manager import CDCProcessingError
 from pivot_engine.scalable_pivot_controller import ScalablePivotController
 import pyarrow as pa
 import time
@@ -66,7 +67,10 @@ async def test_setup_cdc(cdc_manager):
 @pytest.mark.asyncio
 async def test_process_change_insert(cdc_manager):
     """Test processing an INSERT change"""
-    change = Change(table="test_table", type="INSERT", new_row={"id": 1, "val": "new"})
+    change = Change(
+        table="test_table", type="INSERT", new_row={"id": 1, "val": "new"},
+        source="test", event_id="insert-1", partition="0", sequence=1, row_identity="1",
+    )
     
     # Mock materialized view manager
     mock_mv_manager = AsyncMock()
@@ -89,7 +93,8 @@ async def test_process_change_update(cdc_manager):
         table="test_table", 
         type="UPDATE", 
         old_row={"id": 1, "val": "old"}, 
-        new_row={"id": 1, "val": "new"}
+        new_row={"id": 1, "val": "new"},
+        source="test", event_id="update-1", partition="0", sequence=1, row_identity="1",
     )
     
     # Mock materialized view manager
@@ -257,3 +262,30 @@ async def test_polling_change_is_one_invalidating_event_not_placeholder_rows():
     assert changes[0].invalidation_reason == "polling_snapshot_changed"
     assert changes[0].old_row is None
     assert changes[0].new_row is None
+
+
+@pytest.mark.asyncio
+async def test_cdc_manager_records_and_raises_consumer_failure(cdc_manager):
+    class BrokenConsumer:
+        async def process_change(self, change):
+            raise RuntimeError("backend secret")
+
+        async def invalidate_table(self, table_name, reason):
+            raise AssertionError("exact event must use process_change")
+
+    cdc_manager.register_change_consumer("sales", BrokenConsumer())
+    change = Change(
+        table="sales",
+        type="INSERT",
+        new_row={"id": 1, "sales": 1},
+        source="postgres",
+        event_id="evt-1",
+        partition="0",
+        sequence=1,
+        row_identity="1",
+    )
+
+    with pytest.raises(CDCProcessingError):
+        await cdc_manager._process_change(change)
+
+    assert cdc_manager.checkpoints["sales"]["last_error"] == "cdc_consumer_failed"

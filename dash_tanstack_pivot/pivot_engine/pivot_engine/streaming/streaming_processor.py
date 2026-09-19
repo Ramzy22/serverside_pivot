@@ -382,6 +382,47 @@ class IncrementalMaterializedViewManager:
         self.dependencies = {}  # Store table dependencies
         self.view_data = {}  # Cache for view data
 
+    def _view_expression(self, view_info: Dict[str, Any]):
+        base_table = self.database.table(view_info['source_table'])
+        filtered_table = base_table
+        filters = view_info.get('filters') or []
+        if filters:
+            filter_expr = self._build_ibis_filter_expression(base_table, filters)
+            if filter_expr is not None:
+                filtered_table = filtered_table.filter(filter_expr)
+        aggregations = [
+            getattr(filtered_table[measure.field], measure.agg)().name(measure.alias)
+            for measure in view_info['measures']
+        ]
+        if view_info['grouping_cols']:
+            return filtered_table.group_by(view_info['grouping_cols']).aggregate(aggregations)
+        return filtered_table.aggregate(aggregations)
+
+    async def _refresh_view(self, view_name: str) -> None:
+        view_info = self.views[view_name]
+        expression = self._view_expression(view_info)
+        self.database.create_table(view_name, expression, overwrite=True)
+        table = expression.to_pyarrow()
+        self.view_data[view_name] = table.to_pylist()
+        view_info['freshness'] = 'fresh'
+        view_info['last_updated'] = time.time()
+
+    async def invalidate_table(self, table_name: str, reason: str) -> int:
+        names = [
+            name for name, info in self.views.items()
+            if info.get('source_table') == table_name
+        ]
+        for view_name in names:
+            self.views[view_name]['freshness'] = 'invalidated'
+            self.views[view_name]['invalidation_reason'] = reason
+            self.view_data.pop(view_name, None)
+            await self._refresh_view(view_name)
+        return len(names)
+
+    async def process_change(self, change: Change) -> None:
+        """Refresh the portable physical-view path from authoritative Ibis data."""
+        await self.invalidate_table(change.table, 'exact_event_refresh')
+
     async def create_incremental_view(self, pivot_spec: PivotSpec):
         """Create an incremental materialized view in the database using Ibis."""
         view_name = f"mv_{pivot_spec.table}_{abs(hash(str(pivot_spec.to_dict()))):x}"
@@ -422,7 +463,8 @@ class IncrementalMaterializedViewManager:
             'filters': pivot_spec.filters,
             'last_updated': time.time(),
             'dependencies': [pivot_spec.table],
-            'refresh_interval': 300  # 5 minutes default
+            'refresh_interval': 300,  # 5 minutes default
+            'freshness': 'fresh',
         }
 
         # Initialize view data cache (can be loaded from DB if needed)

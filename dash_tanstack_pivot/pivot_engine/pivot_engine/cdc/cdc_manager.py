@@ -1,10 +1,15 @@
 import asyncio
+import logging
 import time
 from typing import AsyncGenerator, Any, Dict, List, Optional, Union
 import ibis
 from pivot_engine.streaming.streaming_processor import IncrementalMaterializedViewManager
 from pivot_engine.cdc.database_change_detector import TableSnapshot, PollingCDCProvider, PushCDCProvider, CDCProvider
 from pivot_engine.cdc.models import Change
+
+
+class CDCProcessingError(RuntimeError):
+    """A registered CDC consumer failed after the event reached routing."""
 
 
 class PivotCDCManager:
@@ -22,6 +27,7 @@ class PivotCDCManager:
         self.running = False
         self.change_processors = []
         self.materialized_view_managers = {}
+        self.change_consumers = {}
         
         # Default to polling provider
         self.provider: CDCProvider = PollingCDCProvider(database)
@@ -80,6 +86,38 @@ class PivotCDCManager:
         if table_name not in self.materialized_view_managers:
             self.materialized_view_managers[table_name] = []
         self.materialized_view_managers[table_name].append(manager)
+        if (
+            callable(getattr(type(manager), "process_change", None))
+            and callable(getattr(type(manager), "invalidate_table", None))
+        ):
+            self.register_change_consumer(table_name, manager)
+
+    def register_change_consumer(self, table_name: str, consumer) -> None:
+        """Register a consumer with explicit exact/invalidation operations."""
+        self.change_consumers.setdefault(table_name, []).append(consumer)
+
+    def _record_consumer_failure(self, table_name: str, exc: Exception) -> None:
+        checkpoint = self.checkpoints.setdefault(table_name, {})
+        checkpoint["last_error"] = "cdc_consumer_failed"
+        logging.getLogger(__name__).error(
+            "CDC consumer failed table=%s code=cdc_consumer_failed type=%s",
+            table_name,
+            type(exc).__name__,
+        )
+
+    async def _route_change(self, change: Change) -> None:
+        for consumer in tuple(self.change_consumers.get(change.table, ())):
+            try:
+                if change.is_invalidating():
+                    await consumer.invalidate_table(
+                        change.table,
+                        change.invalidation_reason or "incomplete_change",
+                    )
+                else:
+                    await consumer.process_change(change)
+            except Exception as exc:
+                self._record_consumer_failure(change.table, exc)
+                raise CDCProcessingError("cdc_consumer_failed") from exc
 
     def register_change_processor(self, processor_func):
         """Register a function to process changes"""
@@ -108,6 +146,11 @@ class PivotCDCManager:
 
     async def _process_change(self, change: Change):
         """Process individual changes and update pivot structures"""
+        if self.change_consumers.get(change.table):
+            await self._route_change(change)
+            return
+        if change.is_invalidating():
+            return
         if change.type == 'INSERT':
             await self._incremental_insert(change.table, change.new_row)
         elif change.type == 'UPDATE':
