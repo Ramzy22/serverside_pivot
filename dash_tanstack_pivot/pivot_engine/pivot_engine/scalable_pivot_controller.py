@@ -1,7 +1,7 @@
 """
 ScalablePivotController - Main controller for high-scale pivot operations
 """
-from typing import Optional, Any, Dict, List, Union, Callable, Generator
+from typing import Optional, Any, Dict, List, Mapping, Union, Callable, Generator
 import threading
 import time
 import decimal
@@ -142,6 +142,7 @@ class ScalablePivotController(PivotController):
         cache_ttl: int = 300,
         max_hierarchy_rows: Optional[int] = None,
         distributed_runtime: Optional[Any] = None,
+        cdc_exact_state_store: str = "memory",
         **cache_options: Any
     ):
         if distributed_runtime is None:
@@ -212,8 +213,21 @@ class ScalablePivotController(PivotController):
         # for totals, hierarchy counts, and virtual-scroll helper queries that still
         # execute through Ibis expressions on the shared connection.
 
+        if cdc_exact_state_store not in {"memory", "redis"}:
+            raise ValueError("cdc_exact_state_store must be 'memory' or 'redis'.")
         if enable_streaming:
-            self.streaming_processor = StreamAggregationProcessor()
+            if cdc_exact_state_store == "redis":
+                if self.distributed_runtime is None:
+                    raise ValueError(
+                        "Redis CDC state requires a validated distributed Redis runtime."
+                    )
+                from pivot_engine.streaming.exact_state import RedisCDCStateStore
+
+                self.streaming_processor = StreamAggregationProcessor(
+                    state_store=RedisCDCStateStore(self.distributed_runtime)
+                )
+            else:
+                self.streaming_processor = StreamAggregationProcessor()
 
         if enable_incremental_views and con is not None:
             self.incremental_view_manager = IncrementalMaterializedViewManager(con)
@@ -846,13 +860,43 @@ class ScalablePivotController(PivotController):
         await self.cdc_manager.push_change(table_name, change)
         return 'accepted_exact' if change.is_exact() else 'accepted_invalidating'
 
-    async def run_streaming_aggregation(self, spec: PivotSpec):
-        """Run streaming aggregation for real-time results"""
+    async def run_streaming_aggregation(
+        self,
+        spec: PivotSpec,
+        *,
+        source_checkpoints: Optional[Mapping[str, tuple[int, str]]] = None,
+    ):
+        """Create a streaming job and optionally install an exact source snapshot.
+
+        ``source_checkpoints`` must be a watermark obtained atomically with the
+        source scan. Without it the job remains unavailable rather than
+        claiming an empty aggregate is current.
+        """
         if not self.enable_streaming:
             raise ValueError("Streaming aggregation is not enabled")
         
         job_id = await self.streaming_processor.create_real_time_aggregation_job(spec)
-        return {"job_id": job_id, "status": "created"}
+        if source_checkpoints is not None:
+            con = (
+                self.backend.con if isinstance(self.backend, IbisBackend)
+                else getattr(self.planner, 'con', None)
+            )
+            if con is None:
+                raise ValueError("Streaming aggregation requires an authoritative Ibis source.")
+            source_rows = await self._execute_ibis_expr_async(
+                con.table(spec.table), spec.table
+            )
+            await self.streaming_processor.bootstrap_job(
+                job_id,
+                source_rows.to_pylist(),
+                checkpoints=source_checkpoints,
+            )
+        result = await self.streaming_processor.get_job_result(job_id)
+        return {
+            "job_id": job_id,
+            "status": result.status if result is not None else "unavailable",
+            "reason": result.reason if result is not None else "streaming_job_unavailable",
+        }
 
     async def create_incremental_view(self, spec: PivotSpec):
         """Create incremental materialized view"""

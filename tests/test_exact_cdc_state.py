@@ -140,3 +140,4 @@ def test_checkpoint_distinguishes_replay_from_out_of_order_source_events():
     assert snapshot.accept("0", 4, "evt-4") == "replay"
     assert snapshot.accept("0", 3, "evt-3") == "out_of_order"
     assert snapshot.accept("0", 5, "evt-5") == "accept"
+    assert snapshot.accept("0", 6, "evt-6") == "gap"

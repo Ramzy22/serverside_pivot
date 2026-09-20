@@ -155,3 +155,16 @@ def test_push_cdc_event(api_client, mock_controller):
     assert response.status_code == 200
     mock_controller.push_change_event.assert_called_once()
 
+
+def test_incomplete_push_is_not_advertised_as_exact_cdc(api_client, mock_controller):
+    mock_controller.push_change_event.return_value = "accepted_invalidating"
+
+    response = api_client.post(
+        "/pivot/cdc/push/test_table",
+        json={"type": "DELETE", "old_row": {"id": 1}},
+        headers={"X-API-Key": "test-secret-key"},
+    )
+
+    assert response.status_code == 200
+    assert response.json()["data"]["mode"] == "accepted_invalidating"
+

@@ -1,3 +1,5 @@
+import pytest
+
 from pivot_engine.config import ScalablePivotConfig
 
 
@@ -24,3 +26,15 @@ def test_config_from_env_populates_existing_redis_config(monkeypatch):
     assert config.cache_type == "redis"
     assert config.redis_config["host"] == "redis.local"
     assert config.redis_config["port"] == 6380
+
+
+def test_config_rejects_redis_cdc_state_without_validated_distributed_runtime(monkeypatch):
+    monkeypatch.delenv("PIVOT_DISTRIBUTED_RUNTIME", raising=False)
+    monkeypatch.delenv("PIVOT_RUNTIME_REDIS_URL", raising=False)
+    monkeypatch.delenv("PIVOT_RUNTIME_REDIS_PREFIX", raising=False)
+
+    config = ScalablePivotConfig()
+    config.cdc_exact_state_store = "redis"
+
+    with pytest.raises(ValueError, match="Redis CDC state requires"):
+        config.validate()

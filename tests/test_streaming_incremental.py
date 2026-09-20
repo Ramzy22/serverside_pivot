@@ -316,6 +316,9 @@ async def test_stream_job_removes_old_group_and_adds_new_group_for_exact_update(
         filters=[{"field": "active", "op": "=", "value": True}],
     )
     job_id = await processor.create_real_time_aggregation_job(spec)
+    await processor.bootstrap_job(
+        job_id, [], checkpoints={"0": (0, "snapshot-0")}
+    )
     await processor.process_change(
         _exact_change(
             "INSERT",
@@ -350,6 +353,9 @@ async def test_incomplete_change_invalidates_job_and_never_returns_previous_extr
         filters=[],
     )
     job_id = await processor.create_real_time_aggregation_job(spec)
+    await processor.bootstrap_job(
+        job_id, [], checkpoints={"0": (0, "snapshot-0")}
+    )
     await processor.process_change(
         _exact_change("INSERT", "evt-1", 1, new_row={"id": 1, "sales": 10})
     )
@@ -359,6 +365,195 @@ async def test_incomplete_change_invalidates_job_and_never_returns_previous_extr
 
     assert result.status == "invalidated"
     assert result.values == {}
+
+
+@pytest.mark.asyncio
+async def test_streaming_job_is_unavailable_until_an_authoritative_snapshot_is_bootstrapped():
+    processor = StreamAggregationProcessor(state_store=MemoryCDCStateStore())
+    job_id = await processor.create_real_time_aggregation_job(
+        PivotSpec(
+            table="sales",
+            rows=[],
+            measures=[Measure(field="sales", agg="min", alias="minimum")],
+            filters=[],
+        )
+    )
+
+    result = await processor.get_job_result(job_id)
+    outcome = await processor.process_change(
+        _exact_change("INSERT", "evt-1", 1, new_row={"id": 1, "sales": 10})
+    )
+
+    assert result.status == "unavailable"
+    assert result.values == {}
+    assert result.reason == "authoritative_snapshot_required"
+    assert outcome == {"exact": 0, "invalidated": 1, "ignored": 0}
+
+
+@pytest.mark.asyncio
+async def test_fresh_state_without_a_source_checkpoint_is_still_unavailable():
+    state_store = MemoryCDCStateStore()
+    processor = StreamAggregationProcessor(state_store=state_store)
+    job_id = await processor.create_real_time_aggregation_job(
+        PivotSpec(
+            table="sales",
+            rows=[],
+            measures=[Measure(field="sales", agg="sum", alias="total_sales")],
+            filters=[],
+        )
+    )
+    unwatermarked = await state_store.load(job_id)
+    unwatermarked.status = "fresh"
+    await state_store.compare_and_swap(job_id, unwatermarked.version, unwatermarked)
+
+    result = await processor.get_job_result(job_id)
+    outcome = await processor.process_change(
+        _exact_change("INSERT", "evt-1", 1, new_row={"id": 1, "sales": 10})
+    )
+
+    assert result.status == "unavailable"
+    assert result.reason == "authoritative_snapshot_required"
+    assert outcome == {"exact": 0, "invalidated": 1, "ignored": 0}
+
+
+@pytest.mark.asyncio
+async def test_bootstrapped_source_minimum_is_exact_after_a_delete():
+    processor = StreamAggregationProcessor(state_store=MemoryCDCStateStore())
+    job_id = await processor.create_real_time_aggregation_job(
+        PivotSpec(
+            table="sales",
+            rows=[],
+            measures=[Measure(field="sales", agg="min", alias="minimum")],
+            filters=[],
+        )
+    )
+    await processor.bootstrap_job(
+        job_id,
+        [{"id": 1, "sales": 10}, {"id": 2, "sales": 20}],
+        checkpoints={"0": (0, "snapshot-0")},
+    )
+
+    before = await processor.get_job_result(job_id)
+    outcome = await processor.process_change(
+        _exact_change("DELETE", "evt-1", 1, old_row={"id": 1, "sales": 10})
+    )
+    after = await processor.get_job_result(job_id)
+
+    assert before.status == "fresh"
+    assert before.values == {"minimum": 10}
+    assert outcome == {"exact": 1, "invalidated": 0, "ignored": 0}
+    assert after.values == {"minimum": 20}
+
+
+@pytest.mark.asyncio
+async def test_bootstrap_uses_the_saved_in_and_between_filters():
+    processor = StreamAggregationProcessor(state_store=MemoryCDCStateStore())
+    job_id = await processor.create_real_time_aggregation_job(
+        PivotSpec(
+            table="sales",
+            rows=[],
+            measures=[Measure(field="sales", agg="sum", alias="total_sales")],
+            filters=[
+                {"field": "region", "op": "in", "value": ["North"]},
+                {"field": "sales", "op": "between", "value": [0, 15]},
+            ],
+        )
+    )
+
+    await processor.bootstrap_job(
+        job_id,
+        [
+            {"id": 1, "region": "North", "sales": 10},
+            {"id": 2, "region": "South", "sales": 5},
+            {"id": 3, "region": "North", "sales": 20},
+        ],
+        checkpoints={"0": (0, "snapshot-0")},
+    )
+
+    result = await processor.get_job_result(job_id)
+
+    assert result.values == {"total_sales": 10}
+
+
+@pytest.mark.asyncio
+async def test_missed_source_sequence_invalidates_a_bootstrapped_job():
+    processor = StreamAggregationProcessor(state_store=MemoryCDCStateStore())
+    job_id = await processor.create_real_time_aggregation_job(
+        PivotSpec(
+            table="sales",
+            rows=[],
+            measures=[Measure(field="sales", agg="sum", alias="total_sales")],
+            filters=[],
+        )
+    )
+    await processor.bootstrap_job(
+        job_id,
+        [{"id": 1, "sales": 10}],
+        checkpoints={"0": (0, "snapshot-0")},
+    )
+
+    outcome = await processor.process_change(
+        _exact_change("INSERT", "evt-2", 2, new_row={"id": 2, "sales": 20})
+    )
+    result = await processor.get_job_result(job_id)
+
+    assert outcome == {"exact": 0, "invalidated": 1, "ignored": 0}
+    assert result.status == "invalidated"
+    assert result.reason == "missed_source_event"
+    assert result.values == {}
+
+
+@pytest.mark.asyncio
+async def test_recreated_processor_ignores_a_replayed_event_after_bootstrap():
+    state_store = MemoryCDCStateStore()
+    first = StreamAggregationProcessor(state_store=state_store)
+    spec = PivotSpec(
+        table="sales",
+        rows=[],
+        measures=[Measure(field="sales", agg="sum", alias="total_sales")],
+        filters=[],
+    )
+    job_id = await first.create_real_time_aggregation_job(spec)
+    await first.bootstrap_job(
+        job_id,
+        [{"id": 1, "sales": 10}, {"id": 2, "sales": 20}],
+        checkpoints={"0": (0, "snapshot-0")},
+    )
+    inserted = _exact_change("INSERT", "evt-1", 1, new_row={"id": 3, "sales": 30})
+    await first.process_change(inserted)
+
+    restarted = StreamAggregationProcessor(state_store=state_store)
+    restarted_job_id = await restarted.create_real_time_aggregation_job(spec)
+    outcome = await restarted.process_change(inserted)
+    result = await restarted.get_job_result(restarted_job_id)
+
+    assert restarted_job_id == job_id
+    assert outcome == {"exact": 0, "invalidated": 0, "ignored": 1}
+    assert result.status == "fresh"
+    assert result.values == {"total_sales": 60}
+
+
+@pytest.mark.asyncio
+async def test_materialized_view_cache_starts_with_the_authoritative_source_aggregate():
+    backend = ibis.duckdb.connect()
+    backend.create_table(
+        "sales",
+        pa.table({"region": ["North", "North"], "sales": [10, 20]}),
+        overwrite=True,
+    )
+    manager = IncrementalMaterializedViewManager(backend)
+    view_name = await manager.create_incremental_view(
+        PivotSpec(
+            table="sales",
+            rows=["region"],
+            measures=[Measure(field="sales", agg="min", alias="minimum")],
+            filters=[],
+        )
+    )
+
+    assert await manager.get_view_data(view_name) == [
+        {"region": "North", "minimum": 10}
+    ]
 
 
 if __name__ == "__main__":

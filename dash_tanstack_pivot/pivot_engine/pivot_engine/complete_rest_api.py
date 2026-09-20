@@ -757,7 +757,8 @@ def create_complete_api(backend_uri: Optional[str] = None):
         enable_streaming=config.enable_streaming,
         enable_incremental_views=config.enable_incremental_views,
         tile_size=config.tile_size,
-        cache_ttl=config.default_cache_ttl
+        cache_ttl=config.default_cache_ttl,
+        cdc_exact_state_store=config.cdc_exact_state_store,
     )
     
     return CompletePivotAPI(controller)
@@ -963,7 +964,8 @@ def create_realtime_api(backend_uri: Optional[str] = None):
         enable_streaming=config.enable_streaming,
         enable_incremental_views=config.enable_incremental_views,
         tile_size=config.tile_size,
-        cache_ttl=config.default_cache_ttl
+        cache_ttl=config.default_cache_ttl,
+        cdc_exact_state_store=config.cdc_exact_state_store,
     )
     
     return RealTimePivotAPI(controller)

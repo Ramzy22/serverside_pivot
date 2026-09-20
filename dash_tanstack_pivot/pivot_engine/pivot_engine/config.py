@@ -2,7 +2,7 @@
 config.py - Configuration for the scalable pivot engine
 """
 import os
-from typing import Dict, Any, Optional
+from typing import Dict, Any, Literal, Optional
 from dataclasses import dataclass, field
 from dotenv import load_dotenv
 
@@ -38,6 +38,7 @@ class ScalablePivotConfig:
     enable_cdc: bool = True
     cdc_batch_size: int = 100
     streaming_timeout: int = 30
+    cdc_exact_state_store: Literal["memory", "redis"] = "memory"
     
     # Microservices configuration
     enable_microservices: bool = True
@@ -93,6 +94,9 @@ class ScalablePivotConfig:
         # Performance settings
         self.tile_size = int(os.getenv('TILE_SIZE', str(self.tile_size)))
         self.chunk_size = int(os.getenv('CHUNK_SIZE', str(self.chunk_size)))
+        self.cdc_exact_state_store = str(
+            os.getenv('CDC_EXACT_STATE_STORE', self.cdc_exact_state_store)
+        ).strip().lower()
         
         # Hierarchical settings
         self.max_hierarchy_depth = int(os.getenv('MAX_HIERARCHY_DEPTH', str(self.max_hierarchy_depth)))
@@ -124,6 +128,24 @@ class ScalablePivotConfig:
         
         if self.max_concurrent_queries <= 0:
             errors.append("max_concurrent_queries must be positive")
+
+        if self.cdc_exact_state_store not in {"memory", "redis"}:
+            errors.append("cdc_exact_state_store must be 'memory' or 'redis'")
+        elif self.cdc_exact_state_store == "redis":
+            try:
+                from .runtime.distributed import distributed_runtime_from_env
+
+                runtime_state = distributed_runtime_from_env()
+                if runtime_state is None:
+                    errors.append(
+                        "Redis CDC state requires a validated distributed Redis runtime."
+                    )
+                else:
+                    runtime_state.close()
+            except Exception:
+                errors.append(
+                    "Redis CDC state requires a validated distributed Redis runtime."
+                )
 
         if self.cache_type == "redis":
             try:

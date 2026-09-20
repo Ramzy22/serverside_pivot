@@ -342,7 +342,7 @@ class CDCJobSnapshot:
     version: int = 0
     groups: Dict[str, ExactGroupState] = field(default_factory=dict)
     checkpoints: Dict[str, tuple[int, str]] = field(default_factory=dict)
-    status: str = "fresh"
+    status: str = "uninitialized"
     invalidation_reason: Optional[str] = None
 
     @classmethod
@@ -360,8 +360,10 @@ class CDCJobSnapshot:
         if existing is None:
             return "accept"
         previous_sequence, previous_event_id = existing
-        if sequence > previous_sequence:
+        if sequence == previous_sequence + 1:
             return "accept"
+        if sequence > previous_sequence + 1:
+            return "gap"
         if sequence == previous_sequence and event_id == previous_event_id:
             return "replay"
         return "out_of_order"
@@ -413,7 +415,7 @@ class CDCJobSnapshot:
             version=int(payload.get("version") or 0),
             groups=groups,
             checkpoints=checkpoints,
-            status=str(payload.get("status") or "fresh"),
+            status=str(payload.get("status") or "uninitialized"),
             invalidation_reason=(
                 str(payload["invalidation_reason"])
                 if payload.get("invalidation_reason") is not None

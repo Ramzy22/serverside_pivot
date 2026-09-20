@@ -172,24 +172,39 @@ class StreamAggregationProcessor:
 
             record_value = record[field]
 
-            if op == '=' or op == '==':
-                if record_value != value:
+            try:
+                if op == '=' or op == '==':
+                    if record_value != value:
+                        return False
+                elif op == '!=':
+                    if record_value == value:
+                        return False
+                elif op == '>':
+                    if record_value <= value:
+                        return False
+                elif op == '>=':
+                    if record_value < value:
+                        return False
+                elif op == '<':
+                    if record_value >= value:
+                        return False
+                elif op == '<=':
+                    if record_value > value:
+                        return False
+                elif op == 'in':
+                    if not isinstance(value, (list, tuple, set)) or record_value not in value:
+                        return False
+                elif op == 'between':
+                    if (
+                        not isinstance(value, (list, tuple))
+                        or len(value) != 2
+                        or not value[0] <= record_value <= value[1]
+                    ):
+                        return False
+                else:
                     return False
-            elif op == '!=':
-                if record_value == value:
-                    return False
-            elif op == '>':
-                if record_value <= value:
-                    return False
-            elif op == '>=':
-                if record_value < value:
-                    return False
-            elif op == '<':
-                if record_value >= value:
-                    return False
-            elif op == '<=':
-                if record_value > value:
-                    return False
+            except TypeError:
+                return False
 
         return True
 
@@ -255,6 +270,71 @@ class StreamAggregationProcessor:
             raise ExactCDCStateError("CDC operation is not supported for exact state.")
         return next_snapshot.advance(change)
 
+    @staticmethod
+    def _normalized_checkpoints(
+        checkpoints: Mapping[str, tuple[int, str]],
+    ) -> Dict[str, tuple[int, str]]:
+        normalized: Dict[str, tuple[int, str]] = {}
+        for partition, checkpoint in checkpoints.items():
+            if not isinstance(checkpoint, tuple) or len(checkpoint) != 2:
+                raise ExactCDCStateError(
+                    "CDC snapshot checkpoints must be (sequence, event_id) pairs."
+                )
+            sequence, event_id = checkpoint
+            if (
+                not isinstance(sequence, int)
+                or isinstance(sequence, bool)
+                or not str(event_id or "").strip()
+            ):
+                raise ExactCDCStateError("CDC snapshot checkpoint is invalid.")
+            normalized[str(partition or "0")] = (int(sequence), str(event_id))
+        if not normalized:
+            raise ExactCDCStateError(
+                "CDC bootstrap requires an authoritative source checkpoint."
+            )
+        return normalized
+
+    async def bootstrap_job(
+        self,
+        job_id: str,
+        rows: List[Mapping[str, Any]],
+        *,
+        checkpoints: Mapping[str, tuple[int, str]],
+    ) -> None:
+        """Build exact state from one source-consistent snapshot and watermark.
+
+        A producer must obtain the rows and checkpoints atomically from its
+        source.  Without that watermark, later events cannot prove that none
+        were missed between the scan and subscription.
+        """
+        job = self.aggregation_jobs.get(str(job_id))
+        if job is None:
+            raise KeyError(f"Unknown streaming job: {job_id}")
+        normalized_checkpoints = self._normalized_checkpoints(checkpoints)
+        for _ in range(2):
+            current = await self.cdc_state_store.load(str(job_id))
+            if current.status == "fresh" and current.checkpoints:
+                # A recreated worker recovered durable exact state.  Never
+                # rescan and overwrite it with a later, uncoordinated source
+                # read.
+                return
+            bootstrapped = CDCJobSnapshot.empty(str(job_id))
+            bootstrapped.status = "fresh"
+            bootstrapped.invalidation_reason = None
+            bootstrapped.checkpoints = dict(normalized_checkpoints)
+            for row in rows:
+                if not isinstance(row, Mapping):
+                    raise ExactCDCStateError("CDC bootstrap rows must be mappings.")
+                self._apply_row(bootstrapped, job, row, 1)
+            try:
+                await self.cdc_state_store.compare_and_swap(
+                    str(job_id), current.version, bootstrapped
+                )
+                return
+            except StateVersionConflict:
+                continue
+        raise ExactCDCStateError("CDC source snapshot could not be installed safely.")
+
     async def _invalidate_job(self, job_id: str, reason: str) -> None:
         for _ in range(2):
             snapshot = await self.cdc_state_store.load(job_id)
@@ -317,7 +397,11 @@ class StreamAggregationProcessor:
                     await self._invalidate_job(job_id, "out_of_order_source_event")
                     invalidated += 1
                     break
-                if snapshot.status != "fresh":
+                if decision == "gap":
+                    await self._invalidate_job(job_id, "missed_source_event")
+                    invalidated += 1
+                    break
+                if snapshot.status != "fresh" or not snapshot.checkpoints:
                     # A prior incomplete event invalidated this job.  We must
                     # not resume from an unknown baseline using later deltas.
                     invalidated += 1
@@ -349,6 +433,14 @@ class StreamAggregationProcessor:
         if job is None:
             return None
         snapshot = await self.cdc_state_store.load(job_id)
+        if snapshot.status == "uninitialized" or (
+            snapshot.status == "fresh" and not snapshot.checkpoints
+        ):
+            return StreamingJobResult(
+                status="unavailable",
+                values={},
+                reason="authoritative_snapshot_required",
+            )
         if snapshot.status != "fresh":
             return StreamingJobResult(
                 status="invalidated",
@@ -427,32 +519,6 @@ class IncrementalMaterializedViewManager:
         """Create an incremental materialized view in the database using Ibis."""
         view_name = f"mv_{pivot_spec.table}_{abs(hash(str(pivot_spec.to_dict()))):x}"
 
-        # Build the Ibis expression for the materialized view
-        base_table = self.database.table(pivot_spec.table)
-
-        # Apply filters
-        filtered_table = base_table
-        if pivot_spec.filters:
-            filter_expr = self._build_ibis_filter_expression(base_table, pivot_spec.filters)
-            if filter_expr is not None:
-                filtered_table = filtered_table.filter(filter_expr)
-
-        # Define aggregations in Ibis
-        aggregations = []
-        for m in pivot_spec.measures:
-            agg_func = getattr(filtered_table[m.field], m.agg)
-            aggregations.append(agg_func().name(m.alias))
-
-        # Build the grouped and aggregated expression
-        if pivot_spec.rows:
-            agg_expr = filtered_table.group_by(pivot_spec.rows).aggregate(aggregations)
-        else:
-            # If no grouping columns, just aggregate the whole table
-            agg_expr = filtered_table.aggregate(aggregations)
-
-        # Create the table in the database
-        self.database.create_table(view_name, agg_expr, overwrite=True)
-
         # Store view metadata
         self.views[view_name] = {
             'name': view_name,
@@ -461,14 +527,13 @@ class IncrementalMaterializedViewManager:
             'grouping_cols': pivot_spec.rows,
             'measures': pivot_spec.measures,
             'filters': pivot_spec.filters,
-            'last_updated': time.time(),
+            'last_updated': 0.0,
             'dependencies': [pivot_spec.table],
             'refresh_interval': 300,  # 5 minutes default
-            'freshness': 'fresh',
+            'freshness': 'initializing',
         }
 
-        # Initialize view data cache (can be loaded from DB if needed)
-        self.view_data[view_name] = []
+        await self._refresh_view(view_name)
 
         return view_name
 

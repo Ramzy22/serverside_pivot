@@ -6,6 +6,7 @@ from pivot_engine.cdc.database_change_detector import PollingCDCProvider
 from pivot_engine.cdc.models import Change
 from pivot_engine.cdc.cdc_manager import CDCProcessingError
 from pivot_engine.scalable_pivot_controller import ScalablePivotController
+from pivot_engine.types.pivot_spec import Measure, PivotSpec
 import pyarrow as pa
 import time
 
@@ -72,18 +73,23 @@ async def test_process_change_insert(cdc_manager):
         source="test", event_id="insert-1", partition="0", sequence=1, row_identity="1",
     )
     
-    # Mock materialized view manager
-    mock_mv_manager = AsyncMock()
-    cdc_manager.register_materialized_view_manager("test_table", mock_mv_manager)
+    class RecordingView:
+        def __init__(self):
+            self.changes = []
+
+        async def process_change(self, received):
+            self.changes.append(received)
+
+        async def invalidate_table(self, table_name, reason):
+            raise AssertionError("exact insert must not invalidate")
+
+    view_manager = RecordingView()
+    cdc_manager.register_materialized_view_manager("test_table", view_manager)
     
     # Process change
     await cdc_manager._process_change(change)
     
-    # Verify manager was notified
-    assert mock_mv_manager.process_incremental_change.called
-    call_args = mock_mv_manager.process_incremental_change.call_args[0][0]
-    assert call_args['operation'] == 'INSERT'
-    assert call_args['new_row'] == {"id": 1, "val": "new"}
+    assert view_manager.changes == [change]
 
 
 @pytest.mark.asyncio
@@ -97,19 +103,23 @@ async def test_process_change_update(cdc_manager):
         source="test", event_id="update-1", partition="0", sequence=1, row_identity="1",
     )
     
-    # Mock materialized view manager
-    mock_mv_manager = AsyncMock()
-    cdc_manager.register_materialized_view_manager("test_table", mock_mv_manager)
+    class RecordingView:
+        def __init__(self):
+            self.changes = []
+
+        async def process_change(self, received):
+            self.changes.append(received)
+
+        async def invalidate_table(self, table_name, reason):
+            raise AssertionError("exact update must not invalidate")
+
+    view_manager = RecordingView()
+    cdc_manager.register_materialized_view_manager("test_table", view_manager)
     
     # Process change
     await cdc_manager._process_change(change)
     
-    # Verify manager was notified
-    assert mock_mv_manager.process_incremental_change.called
-    call_args = mock_mv_manager.process_incremental_change.call_args[0][0]
-    assert call_args['operation'] == 'UPDATE'
-    assert call_args['old_row'] == {"id": 1, "val": "old"}
-    assert call_args['new_row'] == {"id": 1, "val": "new"}
+    assert view_manager.changes == [change]
 
 
 @pytest.mark.asyncio
@@ -324,7 +334,44 @@ async def test_typed_materialized_view_is_not_sent_through_legacy_update_twice(c
     )
 
     await cdc_manager._process_change(change)
-    await cdc_manager._update_materialized_views(change)
 
     assert view_manager.processed == ["evt-1"]
     assert view_manager.legacy_batches == []
+
+
+def test_cdc_manager_rejects_an_untyped_legacy_materialized_view(cdc_manager):
+    class UntypedMaterializedView:
+        pass
+
+    with pytest.raises(TypeError, match="process_change and invalidate_table"):
+        cdc_manager.register_materialized_view_manager(
+            "sales", UntypedMaterializedView()
+        )
+
+
+@pytest.mark.asyncio
+async def test_controller_bootstraps_streaming_aggregate_from_existing_source_rows():
+    controller = ScalablePivotController(
+        backend_uri=":memory:", enable_incremental_views=False
+    )
+    controller.load_data_from_arrow(
+        "sales",
+        pa.table({"id": [1, 2], "sales": [10, 20]}),
+    )
+    try:
+        job = await controller.run_streaming_aggregation(
+            PivotSpec(
+                table="sales",
+                rows=[],
+                measures=[Measure(field="sales", agg="min", alias="minimum")],
+                filters=[],
+            ),
+            source_checkpoints={"0": (0, "snapshot-0")},
+        )
+        result = await controller.streaming_processor.get_job_result(job["job_id"])
+    finally:
+        controller.close()
+
+    assert job["status"] == "fresh"
+    assert result.status == "fresh"
+    assert result.values == {"minimum": 10}
