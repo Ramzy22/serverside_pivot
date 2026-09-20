@@ -350,6 +350,31 @@ def test_cdc_manager_rejects_an_untyped_legacy_materialized_view(cdc_manager):
 
 
 @pytest.mark.asyncio
+async def test_controller_rejects_a_checkpoint_without_its_atomic_source_snapshot():
+    """A later controller scan cannot be paired safely with an earlier watermark."""
+    controller = ScalablePivotController(
+        backend_uri=":memory:", enable_incremental_views=False
+    )
+    controller.load_data_from_arrow(
+        "sales",
+        pa.table({"id": [1, 2], "sales": [10, 20]}),
+    )
+    try:
+        with pytest.raises(ValueError, match="source snapshot rows"):
+            await controller.run_streaming_aggregation(
+                PivotSpec(
+                    table="sales",
+                    rows=[],
+                    measures=[Measure(field="sales", agg="min", alias="minimum")],
+                    filters=[],
+                ),
+                source_checkpoints={"0": (0, "snapshot-0")},
+            )
+    finally:
+        controller.close()
+
+
+@pytest.mark.asyncio
 async def test_controller_bootstraps_streaming_aggregate_from_existing_source_rows():
     controller = ScalablePivotController(
         backend_uri=":memory:", enable_incremental_views=False
@@ -359,6 +384,7 @@ async def test_controller_bootstraps_streaming_aggregate_from_existing_source_ro
         pa.table({"id": [1, 2], "sales": [10, 20]}),
     )
     try:
+        source_rows = controller.backend.con.table("sales").to_pyarrow().to_pylist()
         job = await controller.run_streaming_aggregation(
             PivotSpec(
                 table="sales",
@@ -366,6 +392,7 @@ async def test_controller_bootstraps_streaming_aggregate_from_existing_source_ro
                 measures=[Measure(field="sales", agg="min", alias="minimum")],
                 filters=[],
             ),
+            source_rows=source_rows,
             source_checkpoints={"0": (0, "snapshot-0")},
         )
         result = await controller.streaming_processor.get_job_result(job["job_id"])

@@ -3,12 +3,15 @@ Test suite for streaming and incremental views
 """
 import pytest
 import asyncio
+import os
+import uuid
 from unittest.mock import Mock, MagicMock
 import ibis
 import pyarrow as pa
 from pivot_engine.streaming.streaming_processor import StreamAggregationProcessor, IncrementalMaterializedViewManager
-from pivot_engine.streaming.exact_state import MemoryCDCStateStore
+from pivot_engine.streaming.exact_state import MemoryCDCStateStore, RedisCDCStateStore
 from pivot_engine.cdc.models import Change
+from pivot_engine.runtime.distributed import DistributedRuntimeSettings, RedisRuntimeState
 from pivot_engine.types.pivot_spec import PivotSpec, Measure
 
 
@@ -531,6 +534,84 @@ async def test_recreated_processor_ignores_a_replayed_event_after_bootstrap():
     assert outcome == {"exact": 0, "invalidated": 0, "ignored": 1}
     assert result.status == "fresh"
     assert result.values == {"total_sales": 60}
+
+
+@pytest.mark.skipif(
+    not os.environ.get("PIVOT_TEST_REDIS_URL"),
+    reason="PIVOT_TEST_REDIS_URL is configured by Redis integration CI only.",
+)
+@pytest.mark.asyncio
+async def test_redis_restart_replay_preserves_baseline_and_ignores_duplicate_event():
+    """A new worker must recover a Redis baseline instead of replaying it."""
+    import redis
+
+    prefix = f"test-cdc-restart-{uuid.uuid4().hex}"
+    settings = DistributedRuntimeSettings(
+        enabled=True,
+        redis_url=os.environ["PIVOT_TEST_REDIS_URL"],
+        key_prefix=prefix,
+    )
+    first_state = RedisRuntimeState(
+        settings,
+        client=redis.Redis.from_url(
+            os.environ["PIVOT_TEST_REDIS_URL"], decode_responses=False
+        ),
+    )
+    second_state = None
+    try:
+        spec = PivotSpec(
+            table="sales",
+            rows=[],
+            measures=[Measure(field="sales", agg="sum", alias="total_sales")],
+            filters=[],
+        )
+        first = StreamAggregationProcessor(
+            state_store=RedisCDCStateStore(first_state)
+        )
+        job_id = await first.create_real_time_aggregation_job(spec)
+        await first.bootstrap_job(
+            job_id,
+            [{"id": 1, "sales": 10}, {"id": 2, "sales": 20}],
+            checkpoints={"0": (0, "snapshot-0")},
+        )
+        inserted = _exact_change(
+            "INSERT", "evt-1", 1, new_row={"id": 3, "sales": 30}
+        )
+        assert await first.process_change(inserted) == {
+            "exact": 1,
+            "invalidated": 0,
+            "ignored": 0,
+        }
+
+        second_state = RedisRuntimeState(
+            settings,
+            client=redis.Redis.from_url(
+                os.environ["PIVOT_TEST_REDIS_URL"], decode_responses=False
+            ),
+        )
+        restarted = StreamAggregationProcessor(
+            state_store=RedisCDCStateStore(second_state)
+        )
+        restarted_job_id = await restarted.create_real_time_aggregation_job(spec)
+
+        assert restarted_job_id == job_id
+        assert await restarted.process_change(inserted) == {
+            "exact": 0,
+            "invalidated": 0,
+            "ignored": 1,
+        }
+        result = await restarted.get_job_result(job_id)
+        assert result.status == "fresh"
+        assert result.values == {"total_sales": 60}
+    finally:
+        keys = list(first_state.client.scan_iter(f"{prefix}:*"))
+        if keys:
+            first_state.client.delete(*keys)
+        if second_state is not None:
+            second_state.close()
+            second_state.client.close()
+        first_state.close()
+        first_state.client.close()
 
 
 @pytest.mark.asyncio

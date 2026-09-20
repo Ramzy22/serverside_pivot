@@ -215,3 +215,23 @@ def test_distributed_runtime_operations_documentation_declares_required_controls
         "editing_not_available_in_distributed_mode",
     ):
         assert required in text
+
+
+def test_exact_cdc_operations_documentation_declares_safety_and_performance_contract():
+    path = REPO_ROOT / "docs" / "operations" / "exact-cdc.md"
+    text = path.read_text(encoding="utf-8")
+    for required in (
+        "event_id",
+        "sequence",
+        "row_identity",
+        "old_row",
+        "new_row",
+        "PollingCDCProvider",
+        "invalidated",
+        "PIVOT_RUNTIME_REDIS_URL",
+        "source_checkpoints",
+        "source_rows",
+        "authoritative snapshot",
+        "CDC_EXACT_STATE_STORE",
+    ):
+        assert required in text

@@ -864,31 +864,31 @@ class ScalablePivotController(PivotController):
         self,
         spec: PivotSpec,
         *,
+        source_rows: Optional[List[Mapping[str, Any]]] = None,
         source_checkpoints: Optional[Mapping[str, tuple[int, str]]] = None,
     ):
         """Create a streaming job and optionally install an exact source snapshot.
 
-        ``source_checkpoints`` must be a watermark obtained atomically with the
-        source scan. Without it the job remains unavailable rather than
+        ``source_rows`` and ``source_checkpoints`` must be captured atomically
+        by the CDC source. The controller deliberately never scans the table
+        after accepting a checkpoint: that later scan could silently omit an
+        event between source watermark capture and query execution. Without
+        the complete snapshot pair, the job remains unavailable rather than
         claiming an empty aggregate is current.
         """
         if not self.enable_streaming:
             raise ValueError("Streaming aggregation is not enabled")
+        if (source_rows is None) != (source_checkpoints is None):
+            raise ValueError(
+                "Exact CDC requires source snapshot rows and source checkpoints "
+                "captured atomically."
+            )
         
         job_id = await self.streaming_processor.create_real_time_aggregation_job(spec)
-        if source_checkpoints is not None:
-            con = (
-                self.backend.con if isinstance(self.backend, IbisBackend)
-                else getattr(self.planner, 'con', None)
-            )
-            if con is None:
-                raise ValueError("Streaming aggregation requires an authoritative Ibis source.")
-            source_rows = await self._execute_ibis_expr_async(
-                con.table(spec.table), spec.table
-            )
+        if source_rows is not None and source_checkpoints is not None:
             await self.streaming_processor.bootstrap_job(
                 job_id,
-                source_rows.to_pylist(),
+                source_rows,
                 checkpoints=source_checkpoints,
             )
         result = await self.streaming_processor.get_job_result(job_id)

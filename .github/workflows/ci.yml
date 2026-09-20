@@ -48,6 +48,10 @@ jobs:
         run: |
           python -m pytest -q
 
+      - name: Verify Redis CDC restart and replay recovery
+        run: |
+          python -m pytest -q tests/test_streaming_incremental.py -k redis_restart_replay
+
   js-build:
     name: JS Build and Bundle Contract
     runs-on: ubuntu-latest

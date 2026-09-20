@@ -44,6 +44,9 @@ CACHE_TTL=300
 # Performance
 TILE_SIZE=100
 MAX_HIERARCHY_DEPTH=10
+
+# Exact CDC (requires the distributed Redis controls in docs/operations/exact-cdc.md)
+CDC_EXACT_STATE_STORE=memory  # use redis only with validated distributed runtime state
 ```
 
 ---
@@ -84,6 +87,17 @@ curl -X POST http://localhost:8000/pivot \
 | `/pivot/cdc/push-setup`| `POST` | Initialize push-mode CDC for a table. |
 | `/pivot/cdc/push/{table}`| `POST` | Ingest external change events. |
 | `/ws/pivot/{id}` | `WS` | WebSocket for real-time updates. |
+
+### Exact CDC contract
+
+Polling CDC safely invalidates results but does not provide event-speed
+aggregation. For exact inserts, updates, deletes, duplicate extrema, replay,
+and restart recovery, use a native/push source that supplies complete row
+images plus `source_rows` captured with an atomic source snapshot and
+contiguous event watermark. See
+[`../../docs/operations/exact-cdc.md`](../../docs/operations/exact-cdc.md) for the
+required event envelope, `source_checkpoints`, freshness states, and Redis
+deployment controls.
 
 ---
 

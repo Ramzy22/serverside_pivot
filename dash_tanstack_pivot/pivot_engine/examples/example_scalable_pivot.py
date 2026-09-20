@@ -91,32 +91,48 @@ async def example_scalable_features():
     # 6. Streaming aggregation (if enabled)
     if controller.enable_streaming:
         print("\n6. Setting up streaming aggregation...")
-        streaming_result = await controller.run_streaming_aggregation(spec)
-        print(f"SUCCESS: Streaming job created: {streaming_result}")
+        # A real source must capture this watermark atomically with the source
+        # rows. The demo stream below starts at sequence 1 after checkpoint 0.
+        streaming_result = await controller.run_streaming_aggregation(
+            spec,
+            source_rows=sample_data.to_pylist(),
+            source_checkpoints={"0": (0, "demo-snapshot-0")},
+        )
+        print(f"SUCCESS: Streaming job state: {streaming_result}")
 
     # 7. CDC setup for real-time updates
     print("\n7. Setting up CDC for real-time updates...")
-    from pivot_engine.cdc.database_change_detector import DatabaseChangeProducer
-
-    # Create a real change stream producer
-    change_producer = DatabaseChangeProducer(controller.backend)
-
-    # Register the table for CDC tracking (this creates a background task)
-    tracker_task = await change_producer.register_table_for_cdc("sales")
-
-    # For demo purposes, we'll create a limited change stream
+    # For demo purposes, create a limited exact change stream. Production
+    # sources must provide these fields from their native CDC/log position.
     async def demo_change_stream():
-        from pivot_engine.cdc.cdc_manager import Change
+        from pivot_engine.cdc.models import Change
         for i in range(3):
             yield Change(
                 table="sales",
                 type="INSERT",
-                new_row={"region": "North", "product": f"Product_{i}", "sales": 100 + i*50}
+                new_row={
+                    "id": 10_000 + i,
+                    "region": "North",
+                    "product": f"Product_{i}",
+                    "sales": 100 + i * 50,
+                    "quarter": "Q1",
+                },
+                source="demo",
+                event_id=f"demo-{i + 1}",
+                partition="0",
+                sequence=i + 1,
+                row_identity=str(10_000 + i),
+                row_images_complete=True,
             )
             await asyncio.sleep(0.1)
 
     cdc_manager = await controller.setup_cdc("sales", demo_change_stream())
     print("SUCCESS: CDC manager setup complete")
+    if controller.enable_streaming:
+        result = await controller.streaming_processor.get_job_result(
+            streaming_result["job_id"]
+        )
+        print(f"SUCCESS: CDC freshness is {result.status}")
 
     # 8. Batch loading for multiple levels
     print("\n8. Running batch load for multiple levels...")
