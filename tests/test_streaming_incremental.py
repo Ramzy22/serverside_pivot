@@ -536,6 +536,34 @@ async def test_recreated_processor_ignores_a_replayed_event_after_bootstrap():
     assert result.values == {"total_sales": 60}
 
 
+@pytest.mark.asyncio
+async def test_reconnect_replay_of_older_events_is_ignored_after_checkpoint():
+    processor = StreamAggregationProcessor(state_store=MemoryCDCStateStore())
+    spec = PivotSpec(
+        table="sales",
+        rows=[],
+        measures=[Measure(field="sales", agg="sum", alias="total_sales")],
+        filters=[],
+    )
+    job_id = await processor.create_real_time_aggregation_job(spec)
+    await processor.bootstrap_job(
+        job_id,
+        [{"id": 1, "sales": 10}],
+        checkpoints={"0": (0, "snapshot-0")},
+    )
+    first = _exact_change("INSERT", "evt-1", 1, new_row={"id": 2, "sales": 20})
+    second = _exact_change("INSERT", "evt-2", 2, new_row={"id": 3, "sales": 30})
+    await processor.process_change(first)
+    await processor.process_change(second)
+
+    outcome = await processor.process_change(first)
+    result = await processor.get_job_result(job_id)
+
+    assert outcome == {"exact": 0, "invalidated": 0, "ignored": 1}
+    assert result.status == "fresh"
+    assert result.values == {"total_sales": 60}
+
+
 @pytest.mark.skipif(
     not os.environ.get("PIVOT_TEST_REDIS_URL"),
     reason="PIVOT_TEST_REDIS_URL is configured by Redis integration CI only.",
@@ -562,7 +590,10 @@ async def test_redis_restart_replay_preserves_baseline_and_ignores_duplicate_eve
         spec = PivotSpec(
             table="sales",
             rows=[],
-            measures=[Measure(field="sales", agg="sum", alias="total_sales")],
+            measures=[
+                Measure(field="sales", agg="sum", alias="total_sales"),
+                Measure(field="sales", agg="min", alias="minimum_sales"),
+            ],
             filters=[],
         )
         first = StreamAggregationProcessor(
@@ -571,13 +602,27 @@ async def test_redis_restart_replay_preserves_baseline_and_ignores_duplicate_eve
         job_id = await first.create_real_time_aggregation_job(spec)
         await first.bootstrap_job(
             job_id,
-            [{"id": 1, "sales": 10}, {"id": 2, "sales": 20}],
+            # Two equal minima prove that deleting one extremum does not
+            # invalidate the remaining duplicate value.
+            [{"id": 1, "sales": 10}, {"id": 2, "sales": 10}],
             checkpoints={"0": (0, "snapshot-0")},
         )
-        inserted = _exact_change(
-            "INSERT", "evt-1", 1, new_row={"id": 3, "sales": 30}
+        updated = _exact_change(
+            "UPDATE",
+            "evt-1",
+            1,
+            old_row={"id": 1, "sales": 10},
+            new_row={"id": 1, "sales": 20},
         )
-        assert await first.process_change(inserted) == {
+        assert await first.process_change(updated) == {
+            "exact": 1,
+            "invalidated": 0,
+            "ignored": 0,
+        }
+        deleted = _exact_change(
+            "DELETE", "evt-2", 2, old_row={"id": 2, "sales": 10}
+        )
+        assert await first.process_change(deleted) == {
             "exact": 1,
             "invalidated": 0,
             "ignored": 0,
@@ -595,14 +640,14 @@ async def test_redis_restart_replay_preserves_baseline_and_ignores_duplicate_eve
         restarted_job_id = await restarted.create_real_time_aggregation_job(spec)
 
         assert restarted_job_id == job_id
-        assert await restarted.process_change(inserted) == {
+        assert await restarted.process_change(updated) == {
             "exact": 0,
             "invalidated": 0,
             "ignored": 1,
         }
         result = await restarted.get_job_result(job_id)
         assert result.status == "fresh"
-        assert result.values == {"total_sales": 60}
+        assert result.values == {"total_sales": 20, "minimum_sales": 20}
     finally:
         keys = list(first_state.client.scan_iter(f"{prefix}:*"))
         if keys:

@@ -360,6 +360,12 @@ class CDCJobSnapshot:
         if existing is None:
             return "accept"
         previous_sequence, previous_event_id = existing
+        # Once a position has been accepted, every lower position was already
+        # applied: strict contiguous processing rejects gaps before they can
+        # advance the checkpoint. Reconnects commonly replay a whole tail, so
+        # those older positions must be idempotent rather than invalidating.
+        if sequence < previous_sequence:
+            return "replay"
         if sequence == previous_sequence + 1:
             return "accept"
         if sequence > previous_sequence + 1:
