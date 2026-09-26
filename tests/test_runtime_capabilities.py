@@ -1,4 +1,5 @@
 import asyncio
+import time
 
 import pytest
 
@@ -7,7 +8,11 @@ from pivot_engine.runtime.models import PivotRequestContext, PivotViewState
 from pivot_engine.runtime.request_factory import RuntimeRequestFactory
 from pivot_engine.runtime.resilience import CircuitBreaker, PivotRequestTimeout
 from pivot_engine.export_limits import ExportLimitError
-from pivot_engine.backends.execution import QueryTimeoutError
+from pivot_engine.backends.execution import (
+    CancellationUnavailableError,
+    QueryTimeoutError,
+)
+from pivot_engine.backends.ibis_backend import IbisBackend
 
 
 def _context(**overrides):
@@ -112,6 +117,24 @@ async def test_lifecycle_translates_native_database_timeout_to_stable_request_ti
 
     with pytest.raises(PivotRequestTimeout, match="^query_timeout$"):
         await lifecycle.run_backend_operation(_context(), "data", database_operation)
+
+
+@pytest.mark.asyncio
+async def test_lifecycle_rejects_unsupported_ibis_cancellation_instead_of_faking_timeout():
+    """Mapping a thread-only Ibis timeout to query_timeout would overclaim cancellation."""
+    class UnsupportedConnection:
+        name = "unsupported"
+
+    backend = IbisBackend(connection=UnsupportedConnection())
+    backend.execute = lambda *_args, **_kwargs: time.sleep(0.05)
+    lifecycle = RuntimeRequestLifecycle(request_timeout_seconds=0.01)
+
+    with pytest.raises(CancellationUnavailableError, match="cancellation_unavailable"):
+        await lifecycle.run_backend_operation(
+            _context(),
+            "data",
+            lambda: backend.execute_async("SELECT slow"),
+        )
 
 
 @pytest.mark.asyncio

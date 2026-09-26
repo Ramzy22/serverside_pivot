@@ -39,6 +39,9 @@ from pivot_engine.backends.execution import (
 )
 
 
+_CANCELLATION_CLEANUP_TIMEOUT_SECONDS = 5.0
+
+
 class IbisBackend:
     """
     Database-agnostic backend that works with any Ibis-supported database.
@@ -329,7 +332,12 @@ class IbisBackend:
 
     async def _await_execution_cleanup(self, worker: Any) -> None:
         try:
-            await asyncio.shield(worker)
+            await asyncio.wait_for(
+                asyncio.shield(worker),
+                timeout=_CANCELLATION_CLEANUP_TIMEOUT_SECONDS,
+            )
+        except asyncio.TimeoutError as exc:
+            raise DatabaseExecutionError("database cleanup acknowledgement timed out") from exc
         except DatabaseExecutionError:
             pass
 
@@ -346,7 +354,11 @@ class IbisBackend:
         with self._running_queries_lock:
             self._running_queries[query_id] = task
         try:
-            return await task
+            return await asyncio.shield(task)
+        except asyncio.CancelledError as exc:
+            # The underlying executor future cannot stop the physical query.
+            # Do not let an outer asyncio timeout claim database cancellation.
+            raise CancellationUnavailableError() from exc
         finally:
             with self._running_queries_lock:
                 self._running_queries.pop(query_id, None)
@@ -385,6 +397,9 @@ class IbisBackend:
             return_arrow,
             execution,
         )
+        worker.add_done_callback(
+            lambda _worker: self._remove_execution(execution.query_id)
+        )
         try:
             if requested_timeout is None:
                 return await asyncio.shield(worker)
@@ -419,10 +434,19 @@ class IbisBackend:
         if requested:
             with self._running_queries_lock:
                 self._execution_metrics["cancellation_attempts"] += 1
-            await asyncio.to_thread(item.wait_for_completion)
+            completed = await asyncio.to_thread(
+                item.wait_for_completion,
+                _CANCELLATION_CLEANUP_TIMEOUT_SECONDS,
+            )
+            if not completed:
+                raise DatabaseExecutionError("database cleanup acknowledgement timed out")
             with self._running_queries_lock:
                 self._running_queries.pop(normalized_query_id, None)
         return requested
+
+    def _remove_execution(self, query_id: str) -> None:
+        with self._running_queries_lock:
+            self._running_queries.pop(query_id, None)
 
     def execute_arrow(
         self,

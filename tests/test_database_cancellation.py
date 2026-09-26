@@ -7,6 +7,8 @@ from types import SimpleNamespace
 
 import pytest
 
+import pivot_engine.backends.duckdb_backend as duckdb_backend_module
+from pivot_engine.backends.execution import DatabaseExecutionError
 from pivot_engine.backends.execution import QueryCancelledError, QueryTimeoutError
 from pivot_engine.backends.duckdb_backend import ConnectionPool
 from pivot_engine.backends.duckdb_backend import DuckDBBackend
@@ -168,6 +170,25 @@ async def test_duckdb_repeated_cancel_requests_interrupt_one_statement_once():
             task.cancel()
             with pytest.raises(asyncio.CancelledError):
                 await task
+        backend.close()
+
+
+@pytest.mark.asyncio
+async def test_duckdb_cleanup_acknowledgement_has_a_bounded_failure_path(monkeypatch):
+    """An unbounded cleanup wait would make a request deadline hang forever."""
+    backend = DuckDBBackend(":memory:")
+    worker = asyncio.get_running_loop().create_future()
+    monkeypatch.setattr(
+        duckdb_backend_module,
+        "_CANCELLATION_CLEANUP_TIMEOUT_SECONDS",
+        0.01,
+        raising=False,
+    )
+    try:
+        with pytest.raises(DatabaseExecutionError, match="database_execution_failed"):
+            await asyncio.wait_for(backend._await_execution_cleanup(worker), timeout=0.05)
+    finally:
+        worker.cancel()
         backend.close()
 
 

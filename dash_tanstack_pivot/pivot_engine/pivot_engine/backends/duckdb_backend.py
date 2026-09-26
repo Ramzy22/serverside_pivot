@@ -38,6 +38,7 @@ from pivot_engine.backends.execution import (
 
 
 _MAX_DUCKDB_THREADS = 1024
+_CANCELLATION_CLEANUP_TIMEOUT_SECONDS = 5.0
 _DUCKDB_MEMORY_LIMIT_RE = re.compile(
     r"^(?P<value>(?:0|[1-9][0-9]*)(?:\.[0-9]+)?)\s*(?P<unit>B|KB|MB|GB|TB|KIB|MIB|GIB|TIB)$",
     re.IGNORECASE,
@@ -368,7 +369,12 @@ class DuckDBBackend:
     async def _await_execution_cleanup(self, worker: Any) -> None:
         """Wait for the worker that owns the leased cursor to finish cleanup."""
         try:
-            await asyncio.shield(worker)
+            await asyncio.wait_for(
+                asyncio.shield(worker),
+                timeout=_CANCELLATION_CLEANUP_TIMEOUT_SECONDS,
+            )
+        except asyncio.TimeoutError as exc:
+            raise DatabaseExecutionError("database cleanup acknowledgement timed out") from exc
         except DatabaseExecutionError:
             pass
 
@@ -388,6 +394,7 @@ class DuckDBBackend:
         execution = DatabaseExecution(f"duckdb-query-{next(self._query_id_counter)}")
         self._register_execution(execution)
         worker = loop.run_in_executor(None, self._execute_with_lease, query, execution)
+        worker.add_done_callback(lambda _worker: self._unregister_execution(execution))
 
         try:
             if requested_timeout is None:
@@ -419,7 +426,12 @@ class DuckDBBackend:
             return False
         requested = self._record_cancellation_request(execution)
         if requested:
-            await asyncio.to_thread(execution.wait_for_completion)
+            completed = await asyncio.to_thread(
+                execution.wait_for_completion,
+                _CANCELLATION_CLEANUP_TIMEOUT_SECONDS,
+            )
+            if not completed:
+                raise DatabaseExecutionError("database cleanup acknowledgement timed out")
             self._unregister_execution(execution)
         return requested
 
