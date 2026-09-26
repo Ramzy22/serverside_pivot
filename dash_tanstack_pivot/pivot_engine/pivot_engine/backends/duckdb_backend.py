@@ -9,10 +9,12 @@ Features:
 - Performance metrics
 """
 
+import asyncio
 import time
 import queue
 import re
 import threading
+import itertools
 from contextlib import contextmanager
 from typing import Any, List, Dict, Optional, Union
 
@@ -25,6 +27,13 @@ try:
     import pyarrow as pa
 except ImportError:
     pa = None
+
+from pivot_engine.backends.execution import (
+    DatabaseExecution,
+    DatabaseExecutionError,
+    QueryCancelledError,
+    QueryTimeoutError,
+)
 
 
 _MAX_DUCKDB_THREADS = 1024
@@ -168,12 +177,13 @@ class ConnectionPool:
         """Close a lease that a statement owner cannot prove safe to reuse."""
         self._discard_connection(con)
 
-    def checkin(self, con: Any, *, discard: bool = False) -> None:
+    def checkin(self, con: Any, *, discard: bool = False) -> bool:
         """Return a healthy lease or retire it before another statement can use it."""
         if discard or not self._is_healthy(con):
             self._discard_connection(con)
-            return
+            return False
         self.pool.put(con)
+        return True
 
     @contextmanager
     def get_connection(self):
@@ -238,6 +248,17 @@ class DuckDBBackend:
         # Track query stats
         self._query_count = 0
         self._total_time = 0.0
+        self._query_id_counter = itertools.count(1)
+        self._running_queries_lock = threading.RLock()
+        self._running_queries: Dict[str, DatabaseExecution] = {}
+        self._execution_metrics = {
+            "cancellation_attempts": 0,
+            "cancellation_successes": 0,
+            "cancellation_failures": 0,
+            "timeouts": 0,
+            "healthy_checkins": 0,
+            "discarded_leases": 0,
+        }
     
     def execute(self, query: Dict[str, Any]) -> pa.Table:
         """
@@ -269,11 +290,138 @@ class DuckDBBackend:
             print(f"Error executing query:\nSQL: {sql}\nParams: {params}\nError: {e}")
             raise
 
-    async def execute_async(self, query: Dict[str, Any]) -> pa.Table:
-        """Execute query asynchronously"""
-        import asyncio
+    def _register_execution(self, execution: DatabaseExecution) -> None:
+        with self._running_queries_lock:
+            self._running_queries[execution.query_id] = execution
+
+    def _unregister_execution(self, execution: DatabaseExecution) -> None:
+        with self._running_queries_lock:
+            self._running_queries.pop(execution.query_id, None)
+
+    def _record_cancellation_request(self, execution: DatabaseExecution) -> bool:
+        requested = execution.request_cancel("client_cancelled")
+        if requested:
+            with self._running_queries_lock:
+                self._execution_metrics["cancellation_attempts"] += 1
+        return requested
+
+    def _record_lease_disposition(
+        self,
+        execution: DatabaseExecution,
+        retained: bool,
+    ) -> None:
+        with self._running_queries_lock:
+            if retained:
+                self._execution_metrics["healthy_checkins"] += 1
+            else:
+                self._execution_metrics["discarded_leases"] += 1
+            if execution.cancellation_requested:
+                key = (
+                    "cancellation_successes"
+                    if execution.cancellation_succeeded
+                    else "cancellation_failures"
+                )
+                self._execution_metrics[key] += 1
+
+    def _execute_with_lease(
+        self,
+        query: Dict[str, Any],
+        execution: DatabaseExecution,
+    ) -> pa.Table:
+        """Run one query on an owned cursor and retire the lease before return."""
+        lease = None
+        discard = False
+        try:
+            lease = self.pool.checkout()
+            execution.attach_lease(lease)
+            if execution.cancellation_requested:
+                raise QueryCancelledError()
+
+            sql = query.get("sql")
+            params = query.get("params", [])
+            result = _fetch_arrow_table(lease.execute(sql, params))
+            if execution.cancellation_requested:
+                raise QueryCancelledError()
+            return result
+        except BaseException as exc:
+            if execution.cancellation_requested:
+                discard = execution.cancel_error is not None
+                if execution.reason == "query_timeout":
+                    raise QueryTimeoutError() from exc
+                raise QueryCancelledError() from exc
+            if isinstance(exc, DatabaseExecutionError):
+                raise
+            raise DatabaseExecutionError(str(exc)) from exc
+        finally:
+            try:
+                if lease is not None:
+                    retained = self.pool.checkin(lease, discard=discard)
+                    self._record_lease_disposition(execution, retained)
+            finally:
+                execution.finish()
+
+    async def _await_execution_cleanup(self, worker: Any) -> None:
+        """Wait for the worker that owns the leased cursor to finish cleanup."""
+        try:
+            await asyncio.shield(worker)
+        except DatabaseExecutionError:
+            pass
+
+    async def execute_async(
+        self,
+        query: Dict[str, Any],
+        *,
+        timeout_seconds: Optional[float] = None,
+    ) -> pa.Table:
+        """Execute one statement asynchronously with native cursor interruption."""
+        if timeout_seconds is not None and timeout_seconds <= 0:
+            raise ValueError("timeout_seconds must be positive when provided.")
         loop = asyncio.get_running_loop()
-        return await loop.run_in_executor(None, self.execute, query)
+        execution = DatabaseExecution(f"duckdb-query-{next(self._query_id_counter)}")
+        self._register_execution(execution)
+        worker = loop.run_in_executor(None, self._execute_with_lease, query, execution)
+
+        try:
+            if timeout_seconds is None:
+                return await asyncio.shield(worker)
+
+            done, _pending = await asyncio.wait({worker}, timeout=timeout_seconds)
+            if done:
+                return worker.result()
+
+            if execution.request_cancel("query_timeout"):
+                with self._running_queries_lock:
+                    self._execution_metrics["cancellation_attempts"] += 1
+                    self._execution_metrics["timeouts"] += 1
+            await self._await_execution_cleanup(worker)
+            raise QueryTimeoutError()
+        except asyncio.CancelledError:
+            self._record_cancellation_request(execution)
+            await self._await_execution_cleanup(worker)
+            raise
+        finally:
+            if worker.done():
+                self._unregister_execution(execution)
+
+    async def cancel_query(self, query_id: Union[int, str]) -> bool:
+        """Cancel a registered statement and wait for its lease cleanup."""
+        with self._running_queries_lock:
+            execution = self._running_queries.get(str(query_id))
+        if execution is None:
+            return False
+        requested = self._record_cancellation_request(execution)
+        if requested:
+            await asyncio.to_thread(execution.wait_for_completion)
+            self._unregister_execution(execution)
+        return requested
+
+    def execution_metrics(self) -> Dict[str, int]:
+        """Return statement-cancellation counters without driver internals."""
+        with self._running_queries_lock:
+            return {
+                "running": len(self._running_queries),
+                **self._execution_metrics,
+            }
     
     def execute_arrow(
         self,
@@ -422,12 +570,11 @@ class DuckDBBackend:
         self._total_time = 0.0
     
     def interrupt(self):
-        """Interrupt currently running queries"""
-        if self.con:
-            try:
-                self.con.interrupt()
-            except Exception as e:
-                print(f"Failed to interrupt DuckDB execution: {e}")
+        """Request cancellation of active owned statements without a global interrupt."""
+        with self._running_queries_lock:
+            executions = list(self._running_queries.values())
+        for execution in executions:
+            self._record_cancellation_request(execution)
 
     @contextmanager
     def transaction(self):
