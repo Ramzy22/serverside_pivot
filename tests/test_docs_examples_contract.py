@@ -233,5 +233,6 @@ def test_exact_cdc_operations_documentation_declares_safety_and_performance_cont
         "source_rows",
         "authoritative snapshot",
         "CDC_EXACT_STATE_STORE",
+        "at or below the saved position",
     ):
         assert required in text

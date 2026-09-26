@@ -18,10 +18,10 @@ Each exact event must contain all of the following:
 
 `sequence` is a contiguous event counter within each partition. The next event
 after a snapshot checkpoint must have `sequence == checkpoint + 1`. A duplicate
-at the saved position is ignored; an older/conflicting event or a sequence gap
-is never applied and invalidates the result. Sources with sparse log positions
-must expose a contiguous per-partition event counter alongside their native
-offset.
+at or below the saved position is ignored; a conflicting event at the saved
+position or a sequence gap is never applied and invalidates the result.
+Sources with sparse log positions must expose a contiguous per-partition event
+counter alongside their native offset.
 
 ## Starting an exact job
 
