@@ -239,21 +239,26 @@ class PivotController:
             
         return result_table
 
-    async def _execute_standard_pivot_async(self, spec: Any, plan_result: Dict[str, Any], force_refresh: bool) -> pa.Table:
+    async def _execute_ibis_expr_async(self, expr: Any) -> pa.Table:
+        """Route Ibis request expressions through the backend cancellation facade."""
+        if isinstance(self.backend, IbisBackend):
+            return await self.backend.execute_async({"ibis_expr": expr})
         import asyncio
+        return await asyncio.get_running_loop().run_in_executor(None, expr.to_pyarrow)
+
+    async def _execute_standard_pivot_async(self, spec: Any, plan_result: Dict[str, Any], force_refresh: bool) -> pa.Table:
         queries_to_run, strategy = self.diff_engine.plan(plan_result, spec, force_refresh=force_refresh)
 
         self._cache_hits += strategy.get("cache_hits", 0)
         self._cache_misses += len(queries_to_run)
         
-        loop = asyncio.get_running_loop()
         results = []
         cache_spec = self.diff_engine._normalize_spec_for_hash(spec)
         
         for query_ibis_expr in queries_to_run:
             # Offload Ibis execution to thread pool to avoid blocking the event loop
             if hasattr(query_ibis_expr, 'to_pyarrow'):
-                result = await loop.run_in_executor(None, query_ibis_expr.to_pyarrow)
+                result = await self._execute_ibis_expr_async(query_ibis_expr)
                 self.cache.set(
                     self.diff_engine._cache_key_for_query(query_ibis_expr, cache_spec),
                     result,
@@ -279,9 +284,6 @@ class PivotController:
         return final_table if final_table is not None else pa.table({}) if pa is not None else None
 
     async def _execute_topn_pivot_async(self, spec: Any, plan_result: Dict[str, Any], force_refresh: bool) -> pa.Table:
-        import asyncio
-        loop = asyncio.get_running_loop()
-        
         queries = plan_result.get("queries", [])
         col_ibis_expr = queries[0]
         
@@ -292,7 +294,7 @@ class PivotController:
             column_values = cached_cols_table.column("_col_key").to_pylist()
             self._cache_hits += 1
         else:
-            col_results_table = await loop.run_in_executor(None, col_ibis_expr.to_pyarrow)
+            col_results_table = await self._execute_ibis_expr_async(col_ibis_expr)
             column_values = col_results_table.column("_col_key").to_pylist()
             self.cache.set(col_cache_key, col_results_table)
             self._cache_misses += 1
@@ -305,7 +307,7 @@ class PivotController:
         if cached_pivot_table:
             result_table = cached_pivot_table
         else:
-            pivot_results_table = await loop.run_in_executor(None, pivot_ibis_expr.to_pyarrow)
+            pivot_results_table = await self._execute_ibis_expr_async(pivot_ibis_expr)
             self.cache.set(pivot_cache_key, pivot_results_table)
             result_table = pivot_results_table
 

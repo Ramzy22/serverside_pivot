@@ -11,6 +11,7 @@ Features:
 """
 
 from typing import Any, List, Dict, Optional, Union
+import asyncio
 import itertools
 import threading
 import time
@@ -27,6 +28,14 @@ except ImportError:
     pa = None
 
 from pivot_engine.util.sql_builder import quote_ident
+from pivot_engine.backends.duckdb_backend import ConnectionPool, _fetch_arrow_table
+from pivot_engine.backends.execution import (
+    CancellationUnavailableError,
+    DatabaseExecution,
+    DatabaseExecutionError,
+    QueryCancelledError,
+    QueryTimeoutError,
+)
 
 
 class IbisBackend:
@@ -38,6 +47,7 @@ class IbisBackend:
         self,
         connection: Optional[Any] = None,
         connection_uri: Optional[str] = None,
+        query_timeout_seconds: Optional[float] = None,
         **connection_kwargs
     ):
         """
@@ -111,8 +121,57 @@ class IbisBackend:
         self._total_time = 0.0
         self._stats_lock = threading.Lock()
         self._query_id_counter = itertools.count(1)
-        self._running_queries_lock = threading.Lock()
-        self._running_queries: Dict[str, Any] = {}  # Map stable query_id -> asyncio Future.
+        self._running_queries_lock = threading.RLock()
+        self._running_queries: Dict[str, Any] = {}
+        self._query_timeout_seconds = query_timeout_seconds
+        self._duckdb_pool: Optional[ConnectionPool] = None
+        self._execution_metrics = {
+            "cancellation_attempts": 0,
+            "cancellation_successes": 0,
+            "cancellation_failures": 0,
+            "timeouts": 0,
+            "healthy_checkins": 0,
+            "discarded_leases": 0,
+        }
+        if self._uses_duckdb_cursor_leases():
+            self._duckdb_pool = ConnectionPool(
+                lambda: self.con.con.cursor(),
+                max_size=10,
+            )
+        if query_timeout_seconds is not None:
+            if query_timeout_seconds <= 0:
+                raise ValueError("query_timeout_seconds must be positive when provided.")
+            if self._duckdb_pool is None:
+                raise CancellationUnavailableError()
+
+    def _backend_name(self) -> str:
+        return str(getattr(self.con, "name", "unknown") or "unknown").lower()
+
+    def _uses_duckdb_cursor_leases(self) -> bool:
+        raw_connection = getattr(self.con, "con", None)
+        return self._backend_name() == "duckdb" and callable(
+            getattr(raw_connection, "cursor", None)
+        )
+
+    def cancellation_status(self) -> Dict[str, Any]:
+        """Describe whether this backend can stop an exact active statement."""
+        available = self._duckdb_pool is not None
+        return {
+            "available": available,
+            "backend": self._backend_name(),
+            "code": None if available else "cancellation_unavailable",
+        }
+
+    def execution_metrics(self) -> Dict[str, int]:
+        """Return statement execution counters without exposing driver errors."""
+        with self._running_queries_lock:
+            return {
+                "running": sum(
+                    isinstance(item, DatabaseExecution)
+                    for item in self._running_queries.values()
+                ),
+                **self._execution_metrics,
+            }
 
     def execute(self, query: Union[Dict[str, Any], str], params: Optional[List[Any]] = None, return_arrow: bool = True) -> Union[pa.Table, List[Dict[str, Any]]]:
         """
@@ -183,42 +242,188 @@ class IbisBackend:
             print(f"Error executing query:\nQuery: {query}\nError: {e}")
             raise
 
-    async def execute_async(self, query: Union[Dict[str, Any], str], params: Optional[List[Any]] = None, return_arrow: bool = True) -> Any:
-        """
-        Execute query asynchronously in a thread pool.
-        """
-        import asyncio
+    def _record_lease_disposition(
+        self,
+        execution: DatabaseExecution,
+        retained: bool,
+    ) -> None:
+        with self._running_queries_lock:
+            key = "healthy_checkins" if retained else "discarded_leases"
+            self._execution_metrics[key] += 1
+            if execution.cancellation_requested:
+                outcome_key = (
+                    "cancellation_successes"
+                    if execution.cancellation_succeeded
+                    else "cancellation_failures"
+                )
+                self._execution_metrics[outcome_key] += 1
+
+    def _execute_duckdb_ibis_with_lease(
+        self,
+        query: Union[Dict[str, Any], str],
+        params: Optional[List[Any]],
+        return_arrow: bool,
+        execution: DatabaseExecution,
+    ) -> Any:
+        """Compile and execute Ibis DuckDB work on one cancellable cursor."""
+        assert self._duckdb_pool is not None
+        lease = None
+        discard = False
+        started_at = time.time()
+        try:
+            ibis_expr = query.get("ibis_expr") if isinstance(query, dict) else None
+            if ibis_expr is not None:
+                self.con._run_pre_execute_hooks(ibis_expr)
+                expression = ibis_expr.as_table()
+                sql = self.con.compile(expression)
+            elif isinstance(query, dict) and "sql" in query:
+                sql = query["sql"]
+            elif isinstance(query, str):
+                sql = query
+            else:
+                raise ValueError("Query must contain an ibis_expr or SQL string.")
+
+            lease = self._duckdb_pool.checkout()
+            execution.attach_lease(lease)
+            if execution.cancellation_requested:
+                raise QueryCancelledError()
+            if params:
+                raw_table = _fetch_arrow_table(lease.execute(sql, params))
+            else:
+                raw_table = _fetch_arrow_table(lease.execute(sql))
+            if execution.cancellation_requested:
+                raise QueryCancelledError()
+
+            if ibis_expr is not None:
+                from ibis.backends.duckdb.converter import DuckDBPyArrowData
+
+                result = ibis_expr.__pyarrow_result__(
+                    raw_table,
+                    data_mapper=DuckDBPyArrowData,
+                )
+            else:
+                result = raw_table
+            if not return_arrow and isinstance(result, pa.Table):
+                result = result.to_pylist()
+            with self._stats_lock:
+                self._query_count += 1
+                self._total_time += time.time() - started_at
+            return result
+        except BaseException as exc:
+            if execution.cancellation_requested:
+                discard = execution.cancel_error is not None
+                if execution.reason == "query_timeout":
+                    raise QueryTimeoutError() from exc
+                raise QueryCancelledError() from exc
+            if isinstance(exc, DatabaseExecutionError):
+                raise
+            raise DatabaseExecutionError(str(exc)) from exc
+        finally:
+            try:
+                if lease is not None:
+                    retained = self._duckdb_pool.checkin(lease, discard=discard)
+                    self._record_lease_disposition(execution, retained)
+            finally:
+                execution.finish()
+
+    async def _await_execution_cleanup(self, worker: Any) -> None:
+        try:
+            await asyncio.shield(worker)
+        except DatabaseExecutionError:
+            pass
+
+    async def _execute_async_without_cancellation(
+        self,
+        query: Union[Dict[str, Any], str],
+        params: Optional[List[Any]],
+        return_arrow: bool,
+    ) -> Any:
+        """Preserve normal async Ibis execution when no hard deadline is requested."""
         loop = asyncio.get_running_loop()
-        
         task = loop.run_in_executor(None, self.execute, query, params, return_arrow)
         query_id = f"ibis-query-{next(self._query_id_counter)}"
         with self._running_queries_lock:
             self._running_queries[query_id] = task
-        
         try:
             return await task
-        except asyncio.CancelledError:
-            print(f"Query task {query_id} cancelled")
-            # We can't easily kill the thread, but we stop waiting for it
-            raise
         finally:
             with self._running_queries_lock:
                 self._running_queries.pop(query_id, None)
 
-    async def cancel_query(self, query_id: Union[int, str]):
-        """
-        Attempt to cancel a running query.
-        For thread-based execution, this just cancels the asyncio waiter.
-        True database-level cancellation depends on backend capabilities.
-        """
+    async def execute_async(
+        self,
+        query: Union[Dict[str, Any], str],
+        params: Optional[List[Any]] = None,
+        return_arrow: bool = True,
+        *,
+        timeout_seconds: Optional[float] = None,
+    ) -> Any:
+        """Execute with native DuckDB cancellation when an exact lease is available."""
+        requested_timeout = (
+            timeout_seconds
+            if timeout_seconds is not None
+            else getattr(self, "_query_timeout_seconds", None)
+        )
+        if requested_timeout is not None and requested_timeout <= 0:
+            raise ValueError("timeout_seconds must be positive when provided.")
+        if getattr(self, "_duckdb_pool", None) is None:
+            if requested_timeout is not None:
+                raise CancellationUnavailableError()
+            return await self._execute_async_without_cancellation(
+                query,
+                params,
+                return_arrow,
+            )
+
+        execution = DatabaseExecution(f"ibis-query-{next(self._query_id_counter)}")
+        with self._running_queries_lock:
+            self._running_queries[execution.query_id] = execution
+        worker = asyncio.get_running_loop().run_in_executor(
+            None,
+            self._execute_duckdb_ibis_with_lease,
+            query,
+            params,
+            return_arrow,
+            execution,
+        )
+        try:
+            if requested_timeout is None:
+                return await asyncio.shield(worker)
+            done, _pending = await asyncio.wait({worker}, timeout=requested_timeout)
+            if done:
+                return worker.result()
+            if execution.request_cancel("query_timeout"):
+                with self._running_queries_lock:
+                    self._execution_metrics["cancellation_attempts"] += 1
+                    self._execution_metrics["timeouts"] += 1
+            await self._await_execution_cleanup(worker)
+            raise QueryTimeoutError()
+        except asyncio.CancelledError:
+            if execution.request_cancel("client_cancelled"):
+                with self._running_queries_lock:
+                    self._execution_metrics["cancellation_attempts"] += 1
+            await self._await_execution_cleanup(worker)
+            raise
+        finally:
+            if worker.done():
+                with self._running_queries_lock:
+                    self._running_queries.pop(execution.query_id, None)
+
+    async def cancel_query(self, query_id: Union[int, str]) -> bool:
+        """Cancel an owned DuckDB statement and wait for its cleanup acknowledgement."""
         normalized_query_id = str(query_id)
         with self._running_queries_lock:
-            task = self._running_queries.get(normalized_query_id)
-        if task is None:
+            item = self._running_queries.get(normalized_query_id)
+        if not isinstance(item, DatabaseExecution):
             return False
-        task.cancel()
-        print(f"Cancelled query task {normalized_query_id}")
-        return True
+        requested = item.request_cancel("client_cancelled")
+        if requested:
+            with self._running_queries_lock:
+                self._execution_metrics["cancellation_attempts"] += 1
+            await asyncio.to_thread(item.wait_for_completion)
+            with self._running_queries_lock:
+                self._running_queries.pop(normalized_query_id, None)
+        return requested
 
     def execute_arrow(
         self,

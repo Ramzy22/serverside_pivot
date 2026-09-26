@@ -9,12 +9,15 @@ import pytest
 from pivot_engine.backends.execution import QueryCancelledError, QueryTimeoutError
 from pivot_engine.backends.duckdb_backend import ConnectionPool
 from pivot_engine.backends.duckdb_backend import DuckDBBackend
+from pivot_engine.backends.ibis_backend import IbisBackend
+from pivot_engine.scalable_pivot_controller import ScalablePivotController
 
 
 LONG_DUCKDB_QUERY = {
     "sql": "SELECT sum(i) FROM range(10000000000) AS t(i)",
     "params": [],
 }
+LONG_IBIS_DUCKDB_SQL = "SELECT sum(i) AS total FROM range(1000000000) AS t(i)"
 
 
 class _InterruptingCursor:
@@ -150,3 +153,78 @@ async def test_duckdb_repeated_cancel_requests_interrupt_one_statement_once():
             with pytest.raises(asyncio.CancelledError):
                 await task
         backend.close()
+
+
+@pytest.mark.asyncio
+async def test_ibis_duckdb_cancel_stops_compiled_expression_and_preserves_arrow_types():
+    """Replacing the facade with direct Ibis execution would leave the statement alive."""
+    pa = pytest.importorskip("pyarrow")
+    backend = IbisBackend(connection_uri=":memory:")
+    expression = backend.con.sql(LONG_IBIS_DUCKDB_SQL)
+    task = asyncio.create_task(backend.execute_async({"ibis_expr": expression}))
+    try:
+        query_id = await _wait_for_running_query(backend)
+
+        assert await backend.cancel_query(query_id) is True
+        with pytest.raises(QueryCancelledError, match="query_cancelled"):
+            await task
+
+        typed_expression = backend.con.sql("SELECT CAST(1 AS BIGINT) AS value")
+        expected_type = typed_expression.to_pyarrow().schema.field("value").type
+        result = await backend.execute_async({"ibis_expr": typed_expression})
+        assert result.schema.field("value").type == expected_type == pa.int64()
+    finally:
+        if not task.done():
+            task.cancel()
+            with pytest.raises(asyncio.CancelledError):
+                await task
+        backend.close()
+
+
+@pytest.mark.asyncio
+async def test_scalable_controller_routes_ibis_expressions_through_backend_facade(monkeypatch):
+    """Calling expression.to_pyarrow in the controller would bypass cancellation."""
+    pa = pytest.importorskip("pyarrow")
+    backend = IbisBackend(connection_uri=":memory:")
+    controller = ScalablePivotController.__new__(ScalablePivotController)
+    controller.backend = backend
+    expression = backend.con.sql("SELECT 1 AS value")
+    calls = []
+
+    async def execute_async(query):
+        calls.append(query)
+        return pa.table({"value": [1]})
+
+    monkeypatch.setattr(backend, "execute_async", execute_async)
+    try:
+        result = await controller._execute_ibis_expr_async(expression, "sales")
+    finally:
+        backend.close()
+
+    assert result.to_pylist() == [{"value": 1}]
+    assert calls == [{"ibis_expr": expression}]
+
+
+def test_ibis_backend_rejects_hard_deadline_without_a_documented_capability():
+    """Treating an unknown Ibis driver as cancellable would fake a hard deadline."""
+    class UnsupportedConnection:
+        name = "unsupported"
+
+    from pivot_engine.backends.execution import CancellationUnavailableError
+
+    with pytest.raises(CancellationUnavailableError, match="cancellation_unavailable"):
+        IbisBackend(connection=UnsupportedConnection(), query_timeout_seconds=1)
+
+
+def test_ibis_backend_reports_unavailable_cancellation_without_hard_deadline():
+    """A backend without cancellation must advertise that fact instead of overclaiming."""
+    class UnsupportedConnection:
+        name = "unsupported"
+
+    backend = IbisBackend(connection=UnsupportedConnection())
+
+    assert backend.cancellation_status() == {
+        "available": False,
+        "backend": "unsupported",
+        "code": "cancellation_unavailable",
+    }

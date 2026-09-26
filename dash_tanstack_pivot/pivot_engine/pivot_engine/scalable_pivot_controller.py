@@ -765,6 +765,8 @@ class ScalablePivotController(PivotController):
 
     async def _execute_ibis_expr_async(self, expr, table_name: Optional[str] = None) -> pa.Table:
         """Execute an Ibis expression safely for the current backend."""
+        if isinstance(self.backend, IbisBackend):
+            return await self.backend.execute_async({"ibis_expr": expr})
         loop = asyncio.get_running_loop()
 
         if not self._uses_duckdb_ibis():
