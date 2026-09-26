@@ -15,6 +15,12 @@ class CircuitBreakerOpen(RuntimeError):
 class PivotRequestTimeout(TimeoutError):
     """Raised when a backend request exceeds its configured timeout."""
 
+    code = "query_timeout"
+
+    def __init__(self, detail: Optional[str] = None) -> None:
+        super().__init__(self.code)
+        self.detail = detail
+
 
 @dataclass
 class _CircuitState:

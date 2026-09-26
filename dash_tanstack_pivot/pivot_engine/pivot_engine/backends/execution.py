@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import threading
+import os
 from typing import Any, Literal, Optional
 
 
@@ -35,6 +36,22 @@ class CancellationUnavailableError(DatabaseExecutionError):
 
 
 CancellationReason = Literal["client_cancelled", "query_timeout"]
+
+
+def resolve_query_timeout_seconds(explicit: Optional[float] = None) -> Optional[float]:
+    """Resolve an explicit or ``QUERY_TIMEOUT`` database deadline safely."""
+    candidate: Any = explicit
+    if candidate is None:
+        candidate = os.environ.get("QUERY_TIMEOUT")
+    if candidate is None or candidate == "":
+        return None
+    try:
+        timeout_seconds = float(candidate)
+    except (TypeError, ValueError) as exc:
+        raise ValueError("QUERY_TIMEOUT must be a positive number of seconds.") from exc
+    if timeout_seconds <= 0:
+        raise ValueError("QUERY_TIMEOUT must be a positive number of seconds.")
+    return timeout_seconds
 
 
 class DatabaseExecution:

@@ -33,6 +33,7 @@ from pivot_engine.backends.execution import (
     DatabaseExecutionError,
     QueryCancelledError,
     QueryTimeoutError,
+    resolve_query_timeout_seconds,
 )
 
 
@@ -209,7 +210,8 @@ class DuckDBBackend:
         threads: Optional[int] = None,
         memory_limit: Optional[str] = None,
         connection: Optional["duckdb.DuckDBPyConnection"] = None,
-        max_connections: int = 10
+        max_connections: int = 10,
+        query_timeout_seconds: Optional[float] = None,
     ):
         """
         Initialize DuckDB backend.
@@ -226,6 +228,9 @@ class DuckDBBackend:
             raise ImportError("duckdb package required. Install: pip install duckdb")
 
         self.uri = uri
+        self._query_timeout_seconds = resolve_query_timeout_seconds(
+            query_timeout_seconds
+        )
         if connection:
             self.con = connection
         else:
@@ -374,18 +379,21 @@ class DuckDBBackend:
         timeout_seconds: Optional[float] = None,
     ) -> pa.Table:
         """Execute one statement asynchronously with native cursor interruption."""
-        if timeout_seconds is not None and timeout_seconds <= 0:
-            raise ValueError("timeout_seconds must be positive when provided.")
+        requested_timeout = (
+            resolve_query_timeout_seconds(timeout_seconds)
+            if timeout_seconds is not None
+            else self._query_timeout_seconds
+        )
         loop = asyncio.get_running_loop()
         execution = DatabaseExecution(f"duckdb-query-{next(self._query_id_counter)}")
         self._register_execution(execution)
         worker = loop.run_in_executor(None, self._execute_with_lease, query, execution)
 
         try:
-            if timeout_seconds is None:
+            if requested_timeout is None:
                 return await asyncio.shield(worker)
 
-            done, _pending = await asyncio.wait({worker}, timeout=timeout_seconds)
+            done, _pending = await asyncio.wait({worker}, timeout=requested_timeout)
             if done:
                 return worker.result()
 

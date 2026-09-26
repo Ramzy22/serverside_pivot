@@ -8,6 +8,11 @@ import os
 from typing import Any, Awaitable, Callable, Optional, Tuple
 
 from ..export_limits import ExportLimitError
+from ..backends.execution import (
+    CancellationUnavailableError,
+    DatabaseExecutionError,
+    QueryTimeoutError,
+)
 from .models import PivotRequestContext
 from .request_coordinator import RuntimeRequestCoordinator
 from .resilience import CircuitBreaker, PivotRequestTimeout
@@ -111,13 +116,17 @@ class RuntimeRequestLifecycle:
                 )
             else:
                 result = await awaitable
-        except asyncio.TimeoutError as exc:
+        except (asyncio.TimeoutError, QueryTimeoutError) as exc:
             self.circuit_breaker.record_failure(circuit_key)
-            raise PivotRequestTimeout(
-                "Pivot backend request exceeded "
-                f"{self.request_timeout_seconds:g}s timeout."
-            ) from exc
+            raise PivotRequestTimeout() from exc
         except asyncio.CancelledError:
+            raise
+        except CancellationUnavailableError:
+            # A hard deadline was rejected before execution; this is a stable
+            # capability outcome, not evidence that the database is unhealthy.
+            raise
+        except DatabaseExecutionError:
+            self.circuit_breaker.record_failure(circuit_key)
             raise
         except ExportLimitError:
             # A caller requested an export outside the configured resource

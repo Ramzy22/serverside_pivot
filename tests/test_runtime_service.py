@@ -14,6 +14,7 @@ sys.path.append(os.path.join(os.getcwd(), "pivot_engine"))
 
 from pivot_engine import create_tanstack_adapter
 from pivot_engine.runtime import PivotRequestContext, PivotRuntimeService, PivotViewState, SessionRequestGate
+from pivot_engine.backends.execution import QueryTimeoutError
 from pivot_engine.tanstack_adapter import TanStackResponse
 
 
@@ -1345,6 +1346,45 @@ def test_runtime_service_times_out_slow_backend_request():
     asyncio.run(_run())
 
 
+def test_runtime_service_returns_only_the_stable_native_timeout_code():
+    class TimeoutAdapter:
+        async def handle_virtual_scroll_request(self, *args, **kwargs):
+            raise QueryTimeoutError("database server detail")
+
+    async def _run():
+        service = PivotRuntimeService(
+            adapter_getter=TimeoutAdapter,
+            session_gate=SessionRequestGate(),
+            request_timeout_seconds=1,
+            circuit_breaker_failures=10,
+        )
+        state = PivotViewState(
+            row_fields=["region"],
+            val_configs=[{"field": "sales", "agg": "sum"}],
+        )
+        context = PivotRequestContext.from_frontend(
+            table="sales_data",
+            trigger_prop="custom.viewport",
+            viewport={
+                "start": 0,
+                "end": 20,
+                "session_id": "timeout-code",
+                "client_instance": "timeout-grid",
+                "state_epoch": 1,
+                "window_seq": 1,
+                "abort_generation": 1,
+            },
+        )
+
+        response = await service.process_async(state, context)
+
+        assert response.status == "timeout"
+        assert response.message == "query_timeout"
+        assert "database server detail" not in response.message
+
+    asyncio.run(_run())
+
+
 def test_runtime_service_opens_circuit_after_backend_failures():
     class FailingAdapter:
         def __init__(self):
@@ -1391,7 +1431,8 @@ def test_runtime_service_opens_circuit_after_backend_failures():
         second_response = await service.process_async(state, second_context)
 
         assert first_response.status == "error"
-        assert "backend boom" in first_response.message
+        assert first_response.message == "database_execution_failed"
+        assert "backend boom" not in first_response.message
         assert second_response.status == "error"
         assert "circuit" in second_response.message.lower()
         assert adapter.calls == 1

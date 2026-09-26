@@ -35,6 +35,7 @@ from pivot_engine.backends.execution import (
     DatabaseExecutionError,
     QueryCancelledError,
     QueryTimeoutError,
+    resolve_query_timeout_seconds,
 )
 
 
@@ -123,7 +124,9 @@ class IbisBackend:
         self._query_id_counter = itertools.count(1)
         self._running_queries_lock = threading.RLock()
         self._running_queries: Dict[str, Any] = {}
-        self._query_timeout_seconds = query_timeout_seconds
+        self._query_timeout_seconds = resolve_query_timeout_seconds(
+            query_timeout_seconds
+        )
         self._duckdb_pool: Optional[ConnectionPool] = None
         self._execution_metrics = {
             "cancellation_attempts": 0,
@@ -138,9 +141,7 @@ class IbisBackend:
                 lambda: self.con.con.cursor(),
                 max_size=10,
             )
-        if query_timeout_seconds is not None:
-            if query_timeout_seconds <= 0:
-                raise ValueError("query_timeout_seconds must be positive when provided.")
+        if self._query_timeout_seconds is not None:
             if self._duckdb_pool is None:
                 raise CancellationUnavailableError()
 
@@ -360,12 +361,10 @@ class IbisBackend:
     ) -> Any:
         """Execute with native DuckDB cancellation when an exact lease is available."""
         requested_timeout = (
-            timeout_seconds
+            resolve_query_timeout_seconds(timeout_seconds)
             if timeout_seconds is not None
             else getattr(self, "_query_timeout_seconds", None)
         )
-        if requested_timeout is not None and requested_timeout <= 0:
-            raise ValueError("timeout_seconds must be positive when provided.")
         if getattr(self, "_duckdb_pool", None) is None:
             if requested_timeout is not None:
                 raise CancellationUnavailableError()

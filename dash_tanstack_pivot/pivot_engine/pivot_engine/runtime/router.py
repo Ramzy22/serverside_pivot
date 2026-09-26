@@ -7,6 +7,7 @@ from dataclasses import replace
 import time
 from typing import Any, Callable, Dict, List, Optional
 
+from ..backends.execution import DatabaseExecutionError
 from ..tanstack_adapter import TanStackRequest, TanStackResponse
 from ..security import MutationAuthorizationError
 from .detail_service import DetailRuntimeService
@@ -61,6 +62,13 @@ class RuntimeRequestRouter:
         self.drill_service = drill_service
         self.distributed_runtime = distributed_runtime
         self.debug = debug
+
+    @staticmethod
+    def _safe_backend_error_code(exc: BaseException) -> str:
+        """Return a stable client error without serializing backend exception text."""
+        if isinstance(exc, DatabaseExecutionError):
+            return exc.code
+        return "database_execution_failed"
 
     @staticmethod
     def _is_distributed_editing_command(
@@ -259,7 +267,7 @@ class RuntimeRequestRouter:
                     print(f"Export request failed: {exc}")
                 return PivotServiceResponse(
                     status="error",
-                    message=str(exc),
+                    message=self._safe_backend_error_code(exc),
                     export_payload={},
                     profile=build_profile(
                         execution_started_at=execution_started_at,
@@ -353,7 +361,7 @@ class RuntimeRequestRouter:
                     print(f"Detail request failed: {exc}")
                 return PivotServiceResponse(
                     status="error",
-                    message=str(exc),
+                    message=self._safe_backend_error_code(exc),
                     data=[],
                     total_rows=0,
                     profile=build_profile(
@@ -524,7 +532,7 @@ class RuntimeRequestRouter:
                     print(f"Transaction request failed: {exc}")
                 return PivotServiceResponse(
                     status="error",
-                    message=str(exc),
+                    message=self._safe_backend_error_code(exc),
                     data=[],
                     total_rows=0,
                     profile=build_profile(
@@ -691,7 +699,7 @@ class RuntimeRequestRouter:
                 print(f"Pivot execution failed: {exc}")
             return PivotServiceResponse(
                 status="error",
-                message=str(exc),
+                message=self._safe_backend_error_code(exc),
                 data=[],
                 total_rows=0,
                 profile=build_profile(

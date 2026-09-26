@@ -7,6 +7,7 @@ from pivot_engine.runtime.models import PivotRequestContext, PivotViewState
 from pivot_engine.runtime.request_factory import RuntimeRequestFactory
 from pivot_engine.runtime.resilience import CircuitBreaker, PivotRequestTimeout
 from pivot_engine.export_limits import ExportLimitError
+from pivot_engine.backends.execution import QueryTimeoutError
 
 
 def _context(**overrides):
@@ -99,6 +100,18 @@ async def test_lifecycle_times_out_and_records_backend_failure():
         await lifecycle.run_backend_operation(_context(), "data", slow_operation)
 
     assert breaker.snapshot(("sales", "data"))["open"] is True
+
+
+@pytest.mark.asyncio
+async def test_lifecycle_translates_native_database_timeout_to_stable_request_timeout():
+    """Returning a native timeout directly would leak the backend boundary upward."""
+    lifecycle = RuntimeRequestLifecycle(request_timeout_seconds=1)
+
+    async def database_operation():
+        raise QueryTimeoutError("driver detail must not cross the runtime boundary")
+
+    with pytest.raises(PivotRequestTimeout, match="^query_timeout$"):
+        await lifecycle.run_backend_operation(_context(), "data", database_operation)
 
 
 @pytest.mark.asyncio

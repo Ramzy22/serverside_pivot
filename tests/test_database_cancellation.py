@@ -133,6 +133,20 @@ async def test_duckdb_async_timeout_interrupts_database_without_leaking_capacity
 
 
 @pytest.mark.asyncio
+async def test_direct_duckdb_query_timeout_environment_interrupts_the_statement(monkeypatch):
+    """Ignoring QUERY_TIMEOUT would make the direct backend's deadline advisory."""
+    monkeypatch.setenv("QUERY_TIMEOUT", "0.01")
+    backend = DuckDBBackend(":memory:", max_connections=1)
+    try:
+        with pytest.raises(QueryTimeoutError, match="query_timeout"):
+            await backend.execute_async(LONG_DUCKDB_QUERY)
+
+        assert backend.execution_metrics()["running"] == 0
+    finally:
+        backend.close()
+
+
+@pytest.mark.asyncio
 async def test_duckdb_repeated_cancel_requests_interrupt_one_statement_once():
     """Removing idempotency could interrupt a later statement on a reused cursor."""
     backend = DuckDBBackend(":memory:", max_connections=1)
@@ -180,6 +194,21 @@ async def test_ibis_duckdb_cancel_stops_compiled_expression_and_preserves_arrow_
             task.cancel()
             with pytest.raises(asyncio.CancelledError):
                 await task
+        backend.close()
+
+
+@pytest.mark.asyncio
+async def test_ibis_duckdb_query_timeout_environment_interrupts_the_statement(monkeypatch):
+    """Ignoring QUERY_TIMEOUT would leave the default Ibis database query running."""
+    monkeypatch.setenv("QUERY_TIMEOUT", "0.01")
+    backend = IbisBackend(connection_uri=":memory:")
+    try:
+        with pytest.raises(QueryTimeoutError, match="query_timeout"):
+            await backend.execute_async({"ibis_expr": backend.con.sql(LONG_IBIS_DUCKDB_SQL)})
+
+        assert backend.execution_metrics()["running"] == 0
+        assert backend.execute({"ibis_expr": backend.con.sql("SELECT 1 AS value")}).num_rows == 1
+    finally:
         backend.close()
 
 
