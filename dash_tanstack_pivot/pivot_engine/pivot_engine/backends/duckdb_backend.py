@@ -160,21 +160,32 @@ class ConnectionPool:
             self._discard_connection(con)
             con = None
 
+    def checkout(self) -> Any:
+        """Lease one cursor to a statement owner until it explicitly checks in."""
+        return self._borrow_connection()
+
+    def discard(self, con: Any) -> None:
+        """Close a lease that a statement owner cannot prove safe to reuse."""
+        self._discard_connection(con)
+
+    def checkin(self, con: Any, *, discard: bool = False) -> None:
+        """Return a healthy lease or retire it before another statement can use it."""
+        if discard or not self._is_healthy(con):
+            self._discard_connection(con)
+            return
+        self.pool.put(con)
+
     @contextmanager
     def get_connection(self):
-        con = self._borrow_connection()
-        should_return = True
+        con = self.checkout()
+        discard = False
         try:
             yield con
         except Exception:
-            should_return = False
-            self._discard_connection(con)
+            discard = True
             raise
         finally:
-            if should_return and self._is_healthy(con):
-                self.pool.put(con)
-            elif should_return:
-                self._discard_connection(con)
+            self.checkin(con, discard=discard)
 
 class DuckDBBackend:
     """
