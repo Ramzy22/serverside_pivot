@@ -13,6 +13,7 @@ from .planner.ibis_planner import IbisPlanner
 from .diff.diff_engine import QueryDiffEngine
 from .backends.duckdb_backend import DuckDBBackend
 from .backends.ibis_backend import IbisBackend
+from .backends.execution import CancellationUnavailableError
 from .cache.memory_cache import MemoryCache
 from .cache.redis_cache import RedisCache
 from .types.pivot_spec import PivotSpec
@@ -239,12 +240,23 @@ class PivotController:
             
         return result_table
 
-    async def _execute_ibis_expr_async(self, expr: Any) -> pa.Table:
-        """Route Ibis request expressions through the backend cancellation facade."""
+    def _ibis_execution_backend(self) -> IbisBackend:
+        """Return the cancellable facade for this controller's Ibis connection."""
         if isinstance(self.backend, IbisBackend):
-            return await self.backend.execute_async({"ibis_expr": expr})
-        import asyncio
-        return await asyncio.get_running_loop().run_in_executor(None, expr.to_pyarrow)
+            return self.backend
+        facade = getattr(self, "_ibis_execution_facade", None)
+        if isinstance(facade, IbisBackend):
+            return facade
+        connection = getattr(getattr(self, "planner", None), "con", None)
+        if connection is None:
+            raise CancellationUnavailableError()
+        facade = IbisBackend(connection=connection)
+        self._ibis_execution_facade = facade
+        return facade
+
+    async def _execute_ibis_expr_async(self, expr: Any) -> pa.Table:
+        """Route every Ibis request expression through a cancellation facade."""
+        return await self._ibis_execution_backend().execute_async({"ibis_expr": expr})
 
     async def _execute_standard_pivot_async(self, spec: Any, plan_result: Dict[str, Any], force_refresh: bool) -> pa.Table:
         queries_to_run, strategy = self.diff_engine.plan(plan_result, spec, force_refresh=force_refresh)

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+from types import SimpleNamespace
 
 import pytest
 
@@ -10,6 +11,7 @@ from pivot_engine.backends.execution import QueryCancelledError, QueryTimeoutErr
 from pivot_engine.backends.duckdb_backend import ConnectionPool
 from pivot_engine.backends.duckdb_backend import DuckDBBackend
 from pivot_engine.backends.ibis_backend import IbisBackend
+from pivot_engine.controller import PivotController
 from pivot_engine.scalable_pivot_controller import ScalablePivotController
 
 
@@ -200,6 +202,31 @@ async def test_scalable_controller_routes_ibis_expressions_through_backend_facad
         result = await controller._execute_ibis_expr_async(expression, "sales")
     finally:
         backend.close()
+
+    assert result.to_pylist() == [{"value": 1}]
+    assert calls == [{"ibis_expr": expression}]
+
+
+@pytest.mark.asyncio
+async def test_base_controller_creates_an_ibis_facade_for_a_custom_planner(monkeypatch):
+    """Direct executor fallback would bypass cancellation with a custom planner."""
+    pa = pytest.importorskip("pyarrow")
+    source_backend = IbisBackend(connection_uri=":memory:")
+    controller = PivotController.__new__(PivotController)
+    controller.backend = object()
+    controller.planner = SimpleNamespace(con=source_backend.con)
+    expression = source_backend.con.sql("SELECT 1 AS value")
+    calls = []
+
+    async def execute_async(_self, query):
+        calls.append(query)
+        return pa.table({"value": [1]})
+
+    monkeypatch.setattr(IbisBackend, "execute_async", execute_async)
+    try:
+        result = await controller._execute_ibis_expr_async(expression)
+    finally:
+        source_backend.close()
 
     assert result.to_pylist() == [{"value": 1}]
     assert calls == [{"ibis_expr": expression}]
