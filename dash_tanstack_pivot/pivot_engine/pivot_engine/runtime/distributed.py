@@ -53,6 +53,7 @@ class DistributedRuntimeSettings:
     tls_verify: str = "required"
     payload_ttl_seconds: int = 120
     payload_max_bytes: int = 128 * 1024 * 1024
+    payload_total_max_bytes: int = 128 * 1024 * 1024
 
     @classmethod
     def from_env(
@@ -97,6 +98,9 @@ class DistributedRuntimeSettings:
             ),
             payload_max_bytes=_positive_int(
                 source, "PIVOT_RUNTIME_PAYLOAD_MAX_BYTES", 128 * 1024 * 1024
+            ),
+            payload_total_max_bytes=_positive_int(
+                source, "PIVOT_RUNTIME_PAYLOAD_TOTAL_MAX_BYTES", 128 * 1024 * 1024
             ),
         )
 

@@ -1,117 +1,105 @@
+"""Byte-bounded, process-local LRU cache with TTL and optional admission leases."""
 
-"""
-Simple in-memory cache with TTL support for various data types including PyArrow Tables.
-"""
-import time
 import threading
-from typing import Optional, Any, Dict, Union, Protocol
+import time
 from collections import OrderedDict
-import pyarrow as pa
+from typing import Any, Optional, Protocol
+
+from ..resource_governor import (
+    ResourceExhaustedError, ResourceGovernor, ResourceKind, ResourceLease,
+    ResourceLimits, estimate_value_bytes,
+)
 
 
 class CacheProtocol(Protocol):
     """Minimal cache protocol shared by local and guarded cache callers."""
 
     def get(self, key: str) -> Optional[Any]: ...
-
     def set(self, key: str, value: Any, ttl: Optional[int] = None): ...
-
     def clear(self): ...
-
     def delete(self, key: str): ...
-
     def get_all_keys(self): ...
 
-class MemoryCache:
-    """
-    An in-memory cache for various data types including PyArrow Tables with a time-to-live (TTL) and LRU eviction.
-    """
-    def __init__(self, ttl: int = 300, max_size: int = 1000):
-        """
-        Initialize the cache.
 
-        Args:
-            ttl: Default time-to-live for cache entries in seconds.
-            max_size: Maximum number of items to hold in cache (LRU eviction).
-        """
-        # OrderedDict for LRU: 
-        # Popitem(last=False) removes from beginning (Least Recently Used)
-        # Move to end on access (Most Recently Used)
+class MemoryCache:
+    """Bound known value bytes; this is not a measure of native allocations."""
+
+    def __init__(self, ttl: int = 300, max_size: int = 1000, *,
+                 max_bytes: int = ResourceLimits().cache_bytes,
+                 governor: Optional[ResourceGovernor] = None):
         self._cache: OrderedDict[str, tuple[Any, float]] = OrderedDict()
+        self._charges: dict[str, tuple[int, Optional[ResourceLease]]] = {}
         self.default_ttl = ttl
-        self.max_size = max_size
+        self.max_size = max(0, int(max_size))
+        self.max_bytes = max(0, int(max_bytes))
+        self.governor = governor
+        self._bytes = 0
         self._lock = threading.RLock()
 
-    def get(self, key: str) -> Optional[Any]:
-        """
-        Retrieve an item from the cache.
-
-        Args:
-            key: The key of the item to retrieve.
-
-        Returns:
-            The cached item, or None if the item is not found or expired.
-        """
+    @property
+    def bytes_used(self) -> int:
         with self._lock:
-            if key not in self._cache:
+            return self._bytes
+
+    def get(self, key: str) -> Optional[Any]:
+        with self._lock:
+            entry = self._cache.get(key)
+            if entry is None:
                 return None
-
-            value, expiry = self._cache[key]
-
-            if time.time() > expiry:
-                # Entry has expired
-                del self._cache[key]
+            value, expiry = entry
+            if time.time() >= expiry:
+                self._remove(key)
                 return None
-
-            # LRU: Move to end (mark as recently used)
             self._cache.move_to_end(key)
             return value
 
-    def set(self, key: str, value: Any, ttl: Optional[int] = None):
-        """
-        Add an item to the cache.
-
-        Args:
-            key: The key of the item to add.
-            value: The item to add to the cache (any type).
-            ttl: Time-to-live for this specific entry. If None, use default.
-        """
-        ttl_to_use = ttl if ttl is not None else self.default_ttl
-        expiry = time.time() + ttl_to_use
-        
+    def set(self, key: str, value: Any, ttl: Optional[int] = None) -> bool:
+        charge = estimate_value_bytes(value)
+        # Reject before touching the existing LRU, including replacements.
+        if charge is None or charge > self.max_bytes or self.max_size == 0:
+            return False
+        expiry = time.time() + (self.default_ttl if ttl is None else ttl)
         with self._lock:
-            if key in self._cache:
-                # Update existing
-                self._cache.move_to_end(key)
+            self.get_all_keys()
+            self._remove(key)
+            while self._cache and (
+                len(self._cache) >= self.max_size or self._bytes + charge > self.max_bytes
+            ):
+                self._remove(next(iter(self._cache)))
+            lease = None
+            if self.governor is not None and charge:
+                try:
+                    lease = self.governor.reserve(ResourceKind.CACHE, charge)
+                except ResourceExhaustedError:
+                    return False
             self._cache[key] = (value, expiry)
+            self._charges[key] = (charge, lease)
+            self._bytes += charge
+            return True
 
-            # Evict if over size
-            while len(self._cache) > self.max_size:
-                self._cache.popitem(last=False)
+    def _remove(self, key: str) -> None:
+        if key not in self._cache:
+            return
+        del self._cache[key]
+        charge, lease = self._charges.pop(key)
+        self._bytes -= charge
+        if lease is not None:
+            lease.release()
 
     def clear(self):
-        """Clear all items from the cache."""
         with self._lock:
-            self._cache.clear()
+            for key in list(self._cache):
+                self._remove(key)
 
     def delete(self, key: str):
-        """Delete a specific key from the cache."""
         with self._lock:
-            if key in self._cache:
-                del self._cache[key]
+            self._remove(key)
 
     def get_all_keys(self):
-        """Get all keys in the cache (for cache invalidation purposes)."""
-        # Remove expired entries first and return valid keys
         with self._lock:
-            current_time = time.time()
-            valid_keys = []
-            # Create a copy of items to iterate safely while deleting
-            for key, (value, expiry) in list(self._cache.items()):
-                if current_time <= expiry:
-                    valid_keys.append(key)
-                else:
-                    # Remove expired entries
-                    del self._cache[key]
-            return valid_keys
+            now = time.time()
+            for key, (_, expiry) in list(self._cache.items()):
+                if now >= expiry:
+                    self._remove(key)
+            return list(self._cache)
 

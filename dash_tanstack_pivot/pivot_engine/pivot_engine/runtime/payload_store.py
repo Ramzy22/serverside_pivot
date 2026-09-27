@@ -16,6 +16,8 @@ from decimal import Decimal
 from typing import Any, Dict, Optional, Protocol
 
 from ..cache_coordinator import CacheCoordinator, CacheNamespaces
+from ..hierarchy_cache_registry import estimate_container_bytes
+from ..resource_governor import ResourceExhaustedError, ResourceGovernor, ResourceKind
 from .distributed import RedisRuntimeState, distributed_runtime_from_env
 
 
@@ -44,8 +46,11 @@ class RuntimePayload:
     size: int = 0
 
 
-class RuntimePayloadTooLarge(ValueError):
+class RuntimePayloadTooLarge(ResourceExhaustedError, ValueError):
     """Raised before a distributed payload exceeds its configured byte bound."""
+
+    def __init__(self, message: str = "payload_max_bytes") -> None:
+        super().__init__(ResourceKind.PAYLOAD, reason=message)
 
 
 class PayloadStoreBackend(Protocol):
@@ -71,6 +76,64 @@ class RedisPayloadBackend:
     def _key(self, token: str) -> str:
         return self.state.key("payload", str(token))
 
+    def _mutate(self, *, item: Optional[RuntimePayload] = None,
+                envelope: Optional[bytes] = None, token: Optional[str] = None,
+                clear: bool = False) -> None:
+        """Atomically reconcile expiry, admit bytes, and mutate shared storage.
+
+        WATCH/MULTI provides one namespace-wide reservation across workers.
+        The ledger charges serialized envelopes (not Redis allocator overhead).
+        Its non-expiring records allow cleanup after payload keys expire.
+        """
+        from redis.exceptions import WatchError
+
+        ledger_key = self.state.key("payload-budget", "entries")
+        counter_key = self.state.key("payload-budget", "bytes")
+
+        def transaction():
+            for _attempt in range(32):
+                with self.state.client.pipeline() as pipe:
+                    try:
+                        pipe.watch(ledger_key, counter_key)
+                        records = pipe.hgetall(ledger_key)
+                        live = {}
+                        removed = []
+                        now = time.time()
+                        for raw_key, raw_record in records.items():
+                            key = raw_key.decode("utf-8") if isinstance(raw_key, bytes) else raw_key
+                            size, expires_at = json.loads(raw_record)
+                            if clear or expires_at <= now or not pipe.exists(key):
+                                removed.append(key)
+                            else:
+                                live[key] = int(size)
+                        target = self._key(item.token if item is not None else token) if item is not None or token is not None else None
+                        total = sum(live.values())
+                        previous = live.get(target, 0)
+                        charge = len(envelope) if envelope is not None else 0
+                        accepted = item is None or total - previous + charge <= self.state.settings.payload_total_max_bytes
+                        if accepted and target is not None:
+                            total -= previous
+                            removed.append(target)
+                        pipe.multi()
+                        for key in removed:
+                            pipe.delete(key)
+                            pipe.hdel(ledger_key, key)
+                        if accepted and item is not None:
+                            ttl = max(1, math.ceil(float(item.expires_at) - now))
+                            pipe.set(target, envelope, ex=ttl)
+                            pipe.hset(ledger_key, target, json.dumps([charge, item.expires_at]))
+                            total += charge
+                        pipe.set(counter_key, max(0, total))
+                        pipe.execute()
+                        return accepted
+                    except WatchError:
+                        continue
+            return False
+
+        accepted = self.state._call(transaction)
+        if not accepted:
+            raise ResourceExhaustedError(ResourceKind.PAYLOAD, reason="payload_total_bytes")
+
     def put(self, item: RuntimePayload) -> None:
         body = bytes(item.body or b"")
         if len(body) > self.state.settings.payload_max_bytes:
@@ -88,12 +151,12 @@ class RedisPayloadBackend:
             separators=(",", ":"),
         ).encode("utf-8")
         envelope = self._FORMAT + len(header).to_bytes(4, "big") + header + body
-        ttl = max(1, math.ceil(float(item.expires_at) - time.time()))
-        self.state._call(lambda: self.state.client.set(self._key(item.token), envelope, ex=ttl))
+        self._mutate(item=item, envelope=envelope)
 
     def get(self, token: str) -> Optional[RuntimePayload]:
         raw = self.state._call(lambda: self.state.client.get(self._key(token)))
         if not isinstance(raw, bytes) or not raw.startswith(self._FORMAT):
+            self._mutate()
             return None
         header_size_offset = len(self._FORMAT)
         header_start = header_size_offset + 4
@@ -118,6 +181,7 @@ class RedisPayloadBackend:
             or not isinstance(content_type, str)
             or size != len(body)
         ):
+            self._mutate()
             return None
         return RuntimePayload(
             token=str(token),
@@ -130,12 +194,10 @@ class RedisPayloadBackend:
         )
 
     def delete(self, token: str) -> None:
-        self.state._call(lambda: self.state.client.delete(self._key(token)))
+        self._mutate(token=str(token))
 
     def clear(self) -> None:
-        pattern = self.state.key("payload", "*")
-        for key in self.state._call(lambda: list(self.state.client.scan_iter(match=pattern))):
-            self.state._call(lambda key=key: self.state.client.delete(key))
+        self._mutate(clear=True)
 
 
 class RuntimePayloadStore:
@@ -149,13 +211,16 @@ class RuntimePayloadStore:
         max_bytes: int = 128 * 1024 * 1024,
         cache_coordinator: Optional[CacheCoordinator] = None,
         backend: Optional[PayloadStoreBackend] = None,
+        governor: Optional[ResourceGovernor] = None,
     ) -> None:
         self.default_ttl_seconds = max(1, int(default_ttl_seconds))
         self.max_entries = max(1, int(max_entries))
-        self.max_bytes = max(1024, int(max_bytes))
+        self.max_bytes = max(1, int(max_bytes))
+        self.governor = governor
         self.cache_coordinator = cache_coordinator or CacheCoordinator()
         self._backend = backend
         self._items: OrderedDict[str, RuntimePayload] = OrderedDict()
+        self._charges = {}
         self._bytes = 0
         self._lock = threading.Lock()
         self.cache_coordinator.register_namespace(
@@ -266,8 +331,16 @@ class RuntimePayloadStore:
         now = time.time()
         ttl = max(1, int(ttl_seconds or self.default_ttl_seconds))
         if self._backend is not None:
+            limit = self.max_bytes
+            if isinstance(self._backend, RedisPayloadBackend):
+                limit = min(self._backend.state.settings.payload_max_bytes,
+                            self._backend.state.settings.payload_total_max_bytes)
+            if size > limit:
+                raise ResourceExhaustedError(ResourceKind.PAYLOAD, reason="payload_bytes")
             with open(file_path, "rb") as source:
-                body = source.read()
+                body = source.read(limit + 1)
+            if len(body) > limit:
+                raise ResourceExhaustedError(ResourceKind.PAYLOAD, reason="payload_bytes")
             item = RuntimePayload(
                 token=token,
                 body=body,
@@ -359,6 +432,19 @@ class RuntimePayloadStore:
                     reason="clear",
                 )
 
+    def delete(self, token: str) -> None:
+        if self._backend is not None:
+            self._backend.delete(str(token))
+            return
+        with self._lock:
+            existed = str(token) in self._items
+            removed = self._remove_locked(str(token))
+            if existed:
+                self.cache_coordinator.record_delete(
+                    CacheNamespaces.RUNTIME_PAYLOAD, count=1, bytes_removed=removed,
+                    entries=len(self._items), bytes_used=self._bytes,
+                )
+
     def metrics_snapshot(self) -> Dict[str, Any]:
         return self.cache_coordinator.snapshot((CacheNamespaces.RUNTIME_PAYLOAD,))
 
@@ -373,12 +459,22 @@ class RuntimePayloadStore:
             self._backend.put(item)
             self.cache_coordinator.record_store(CacheNamespaces.RUNTIME_PAYLOAD)
             return
+        charge = estimate_container_bytes((item.body, item.token, item.content_type,
+                                           item.metadata, item.file_path))
+        if charge is None or charge > self.max_bytes:
+            raise ResourceExhaustedError(ResourceKind.PAYLOAD, reason="payload_bytes")
         with self._lock:
             expired_count, expired_bytes = self._cleanup_expired_locked(now)
+            self._remove_locked(item.token, delete_file=False)
+            evicted_count = evicted_bytes = 0
+            while self._items and (len(self._items) >= self.max_entries or self._bytes + charge > self.max_bytes):
+                evicted_bytes += self._remove_locked(next(iter(self._items)))
+                evicted_count += 1
+            lease = self.governor.reserve(ResourceKind.PAYLOAD, charge) if self.governor and charge else None
             self._items[item.token] = item
             self._items.move_to_end(item.token)
-            self._bytes += int(item.size or len(item.body or b""))
-            evicted_count, evicted_bytes = self._evict_locked()
+            self._charges[item.token] = (charge, lease)
+            self._bytes += charge
             self._record_expirations(expired_count, expired_bytes)
             self._record_store()
             self._record_evictions(evicted_count, evicted_bytes)
@@ -390,21 +486,14 @@ class RuntimePayloadStore:
             removed_bytes += self._remove_locked(token)
         return len(expired), removed_bytes
 
-    def _evict_locked(self) -> tuple[int, int]:
-        evicted = 0
-        removed_bytes = 0
-        while len(self._items) > self.max_entries or (self._bytes > self.max_bytes and len(self._items) > 1):
-            token, _item = next(iter(self._items.items()))
-            removed_bytes += self._remove_locked(token)
-            evicted += 1
-        return evicted, removed_bytes
-
-    def _remove_locked(self, token: str) -> int:
+    def _remove_locked(self, token: str, *, delete_file: bool = True) -> int:
         item = self._items.pop(token, None)
         if item is not None:
-            removed_size = int(item.size or len(item.body or b""))
-            self._bytes = max(0, self._bytes - removed_size)
-            if item.file_path:
+            removed_size, lease = self._charges.pop(token)
+            self._bytes -= removed_size
+            if lease is not None:
+                lease.release()
+            if item.file_path and delete_file:
                 try:
                     os.remove(item.file_path)
                 except OSError:

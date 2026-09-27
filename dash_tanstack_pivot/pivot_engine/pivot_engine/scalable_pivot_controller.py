@@ -1103,22 +1103,11 @@ class ScalablePivotController(PivotController):
             "grand_total_row": dict(payload["grand_total_row"]) if isinstance(payload.get("grand_total_row"), dict) else payload.get("grand_total_row"),
             "grand_total_formula_source_rows": self._clone_hierarchy_rows(payload.get("grand_total_formula_source_rows") or []),
         }
-        self._hierarchy_view_cache[cache_key] = (stored_payload, time.time() + self._hierarchy_view_cache_ttl)
-        self._hierarchy_view_cache.move_to_end(cache_key)
-        evicted = 0
-        while len(self._hierarchy_view_cache) > self._hierarchy_view_cache_size:
-            self._hierarchy_view_cache.popitem(last=False)
-            evicted += 1
-        self.cache_coordinator.record_store(
-            CacheNamespaces.CONTROLLER_HIERARCHY_VIEW,
-            entries=len(self._hierarchy_view_cache),
+        self.hierarchy_cache_registry.store(
+            "view", cache_key, stored_payload,
+            ttl=self._hierarchy_view_cache_ttl,
+            max_size=self._hierarchy_view_cache_size,
         )
-        if evicted:
-            self.cache_coordinator.record_eviction(
-                CacheNamespaces.CONTROLLER_HIERARCHY_VIEW,
-                count=evicted,
-                entries=len(self._hierarchy_view_cache),
-            )
 
     def _find_reusable_hierarchy_cache_entry(self, spec_fingerprint: str, requested_expanded_set: set[tuple]) -> Optional[Dict[str, Any]]:
         self._sync_controller_cache_generation()
@@ -1183,22 +1172,11 @@ class ScalablePivotController(PivotController):
 
     def _hierarchy_root_count_cache_set(self, cache_key: str, count: int) -> None:
         self._sync_controller_cache_generation()
-        self._hierarchy_root_count_cache[cache_key] = (int(count), time.time() + self._hierarchy_root_count_cache_ttl)
-        self._hierarchy_root_count_cache.move_to_end(cache_key)
-        evicted = 0
-        while len(self._hierarchy_root_count_cache) > self._hierarchy_root_count_cache_size:
-            self._hierarchy_root_count_cache.popitem(last=False)
-            evicted += 1
-        self.cache_coordinator.record_store(
-            CacheNamespaces.CONTROLLER_HIERARCHY_ROOT_COUNT,
-            entries=len(self._hierarchy_root_count_cache),
+        self.hierarchy_cache_registry.store(
+            "root_count", cache_key, int(count),
+            ttl=self._hierarchy_root_count_cache_ttl,
+            max_size=self._hierarchy_root_count_cache_size,
         )
-        if evicted:
-            self.cache_coordinator.record_eviction(
-                CacheNamespaces.CONTROLLER_HIERARCHY_ROOT_COUNT,
-                count=evicted,
-                entries=len(self._hierarchy_root_count_cache),
-            )
 
     def _hierarchy_root_page_cache_get(self, cache_key: str) -> Optional[List[Any]]:
         self._sync_controller_cache_generation()
@@ -1221,25 +1199,11 @@ class ScalablePivotController(PivotController):
 
     def _hierarchy_root_page_cache_set(self, cache_key: str, values: List[Any]) -> None:
         self._sync_controller_cache_generation()
-        self._hierarchy_root_page_cache[cache_key] = (
-            list(values or []),
-            time.time() + self._hierarchy_root_page_cache_ttl,
+        self.hierarchy_cache_registry.store(
+            "root_page", cache_key, list(values or []),
+            ttl=self._hierarchy_root_page_cache_ttl,
+            max_size=self._hierarchy_root_page_cache_size,
         )
-        self._hierarchy_root_page_cache.move_to_end(cache_key)
-        evicted = 0
-        while len(self._hierarchy_root_page_cache) > self._hierarchy_root_page_cache_size:
-            self._hierarchy_root_page_cache.popitem(last=False)
-            evicted += 1
-        self.cache_coordinator.record_store(
-            CacheNamespaces.CONTROLLER_HIERARCHY_ROOT_PAGE,
-            entries=len(self._hierarchy_root_page_cache),
-        )
-        if evicted:
-            self.cache_coordinator.record_eviction(
-                CacheNamespaces.CONTROLLER_HIERARCHY_ROOT_PAGE,
-                count=evicted,
-                entries=len(self._hierarchy_root_page_cache),
-            )
 
     def _collapsed_root_count_cache_key(self, spec: PivotSpec) -> str:
         payload = {
@@ -1301,35 +1265,11 @@ class ScalablePivotController(PivotController):
             or byte_count > self._collapsed_root_materialization_max_bytes
         ):
             return False
-        self._hierarchy_root_result_cache[cache_key] = (
-            result,
-            time.time() + self._hierarchy_root_result_cache_ttl,
+        return self.hierarchy_cache_registry.store(
+            "root_result", cache_key, result,
+            ttl=self._hierarchy_root_result_cache_ttl,
+            max_size=self._hierarchy_root_result_cache_size,
         )
-        self._hierarchy_root_result_cache.move_to_end(cache_key)
-        evicted = 0
-        evicted_bytes = 0
-        while len(self._hierarchy_root_result_cache) > self._hierarchy_root_result_cache_size:
-            evicted_result, _expires_at = self._hierarchy_root_result_cache.popitem(last=False)[1]
-            evicted += 1
-            evicted_bytes += max(int(getattr(evicted_result, "nbytes", 0) or 0), 0)
-        total_bytes = sum(
-            max(int(getattr(cached_result, "nbytes", 0) or 0), 0)
-            for cached_result, _expires_at in self._hierarchy_root_result_cache.values()
-        )
-        self.cache_coordinator.record_store(
-            CacheNamespaces.CONTROLLER_HIERARCHY_ROOT_RESULT,
-            entries=len(self._hierarchy_root_result_cache),
-            bytes_used=total_bytes,
-        )
-        if evicted:
-            self.cache_coordinator.record_eviction(
-                CacheNamespaces.CONTROLLER_HIERARCHY_ROOT_RESULT,
-                count=evicted,
-                bytes_removed=evicted_bytes,
-                entries=len(self._hierarchy_root_result_cache),
-                bytes_used=total_bytes,
-            )
-        return True
 
     def _hierarchy_grand_total_cache_get(self, cache_key: str) -> Optional[Dict[str, Any]]:
         self._sync_controller_cache_generation()
@@ -1354,25 +1294,11 @@ class ScalablePivotController(PivotController):
         self._sync_controller_cache_generation()
         if not isinstance(row, dict):
             return
-        self._hierarchy_grand_total_cache[cache_key] = (
-            dict(row),
-            time.time() + self._hierarchy_grand_total_cache_ttl,
+        self.hierarchy_cache_registry.store(
+            "grand_total", cache_key, dict(row),
+            ttl=self._hierarchy_grand_total_cache_ttl,
+            max_size=self._hierarchy_grand_total_cache_size,
         )
-        self._hierarchy_grand_total_cache.move_to_end(cache_key)
-        evicted = 0
-        while len(self._hierarchy_grand_total_cache) > self._hierarchy_grand_total_cache_size:
-            self._hierarchy_grand_total_cache.popitem(last=False)
-            evicted += 1
-        self.cache_coordinator.record_store(
-            CacheNamespaces.CONTROLLER_HIERARCHY_GRAND_TOTAL,
-            entries=len(self._hierarchy_grand_total_cache),
-        )
-        if evicted:
-            self.cache_coordinator.record_eviction(
-                CacheNamespaces.CONTROLLER_HIERARCHY_GRAND_TOTAL,
-                count=evicted,
-                entries=len(self._hierarchy_grand_total_cache),
-            )
 
     @staticmethod
     def _filter_refs_measure_alias(filter_spec: Dict[str, Any], measure_aliases: set[str]) -> bool:
