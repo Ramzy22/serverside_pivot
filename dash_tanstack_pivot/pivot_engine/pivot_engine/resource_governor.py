@@ -10,6 +10,7 @@ from __future__ import annotations
 from collections import Counter
 from dataclasses import dataclass, fields
 from enum import StrEnum
+from numbers import Real
 import os
 from threading import RLock
 from typing import Any, Callable, Mapping
@@ -228,8 +229,6 @@ def estimate_value_bytes(value: Any) -> int | None:
             else:
                 total += 4
         return total
-    if isinstance(value, memoryview):
-        return value.nbytes
     if isinstance(value, (bytes, bytearray)):
         return len(value)
     try:
@@ -357,14 +356,17 @@ class ResourceGovernor:
             self._reject(kind, "total_bytes")
 
     def _sample_rss(self) -> int | None:
+        """Accept only non-negative, integral-valued real numeric readings."""
         try:
             reported = self._rss_bytes_getter()
-            if isinstance(reported, bool):
+            if isinstance(reported, bool) or not isinstance(reported, Real):
+                return None
+            # Check before conversion: int() truncates fractional byte counts.
+            # Non-finite remainders also fail this exact-integrality check.
+            if reported < 0 or reported % 1 != 0:
                 return None
             current = int(reported)
         except Exception:
-            return None
-        if current < 0:
             return None
         self._high_water_rss_bytes = max(self._high_water_rss_bytes, current)
         return current

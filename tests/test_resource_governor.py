@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import array
+from fractions import Fraction
 
 import pytest
 
@@ -124,6 +125,63 @@ def test_estimate_value_bytes_uses_memoryview_byte_length_not_element_count():
     values = array.array("I", [1, 2, 3])
 
     assert estimate_value_bytes(memoryview(values)) == 12
+
+
+def test_estimate_value_bytes_returns_none_for_released_memoryview():
+    view = memoryview(b"abc")
+    view.release()
+
+    assert estimate_value_bytes(view) is None
+
+
+@pytest.mark.parametrize(
+    "reported",
+    [-0.5, 0.5, -1, Fraction(-1, 2), Fraction(1, 2), True, False,
+     float("nan"), float("inf"), float("-inf"), "0", None, 1 + 0j],
+)
+@pytest.mark.parametrize("operation", ["reserve", "grow"])
+def test_invalid_rss_readings_reject_without_leaking_capacity(reported, operation):
+    reading = 17
+    governor = ResourceGovernor(
+        ResourceLimits.for_testing(), rss_bytes_getter=lambda: reading
+    )
+    lease = governor.reserve(ResourceKind.QUERY, 20)
+    reading = reported
+
+    with pytest.raises(ResourceExhaustedError) as raised:
+        if operation == "reserve":
+            governor.reserve(ResourceKind.QUERY, 1)
+        else:
+            lease.grow(1)
+
+    assert raised.value.reason == "rss_unavailable"
+    snapshot = governor.snapshot()
+    assert snapshot["rss_bytes"] is None
+    assert snapshot["high_water_rss_bytes"] == 17
+    assert snapshot["rejected"]["query"]["rss_unavailable"] == 1
+    assert snapshot["admitted"]["query"] == 1
+    assert snapshot["reserved_bytes"] == 20
+    assert snapshot["reserved_bytes_by_kind"]["query"] == 20
+    assert snapshot["active_slots"]["query"] == 1
+    assert lease.reserved_bytes == 20
+    lease.release()
+    snapshot = governor.snapshot()
+    assert snapshot["reserved_bytes"] == 0
+    assert snapshot["active_slots"]["query"] == 0
+
+
+@pytest.mark.parametrize("reported", [0, 17, 17.0, Fraction(17, 1)])
+def test_integral_real_rss_readings_allow_reservation_and_growth(reported):
+    governor = ResourceGovernor(
+        ResourceLimits.for_testing(), rss_bytes_getter=lambda: reported
+    )
+
+    with governor.reserve(ResourceKind.QUERY, 20) as lease:
+        lease.grow(1)
+        snapshot = governor.snapshot()
+        assert snapshot["rss_bytes"] == reported
+        assert type(snapshot["rss_bytes"]) is int
+        assert snapshot["reserved_bytes"] == 21
 
 
 def test_snapshot_retains_rejection_kind_and_reason():
