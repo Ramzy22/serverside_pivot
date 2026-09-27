@@ -44,6 +44,34 @@ def test_runtime_benchmark_emits_latency_throughput_and_cache_metrics():
     assert report["cache"]["hits"] > 0
 
 
+def test_memory_workload_cli_emits_rss_and_admission_metrics_without_large_fixture():
+    result = subprocess.run(
+        [
+            sys.executable,
+            str(BENCHMARK),
+            "--memory-workload",
+            "--rows",
+            "2000",
+            "--concurrent-requests",
+            "4",
+            "--json",
+        ],
+        cwd=REPOSITORY_ROOT,
+        capture_output=True,
+        text=True,
+        timeout=60,
+        check=False,
+    )
+
+    assert result.returncode == 0, result.stderr or result.stdout
+    report = json.loads(result.stdout)
+    assert report["inputRows"] == 2000
+    assert report["memory"]["peakRssBytes"] > 0
+    assert report["resourceGovernor"]["rejections"] > 0
+    assert report["resourceGovernor"]["admitted"] > 0
+    assert report["throughput"]["requestsPerSecond"] > 0
+
+
 @pytest.mark.asyncio
 async def test_async_standard_pivot_populates_the_diff_engine_cache():
     controller = ScalablePivotController(

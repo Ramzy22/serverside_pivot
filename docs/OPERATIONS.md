@@ -48,3 +48,72 @@ test. That adapter must target the exact driver connection, issue native
 transaction, and prove the connection is usable or discarded after timeout.
 Do not enable PostgreSQL hard deadlines based only on an application-level
 `asyncio.wait_for` wrapper.
+
+## Worker memory envelope
+
+The worker owns one declared memory envelope. `PIVOT_WORKER_MEMORY_HARD_LIMIT_BYTES`
+is the container/process hard ceiling; `PIVOT_RESOURCE_MAX_BYTES` is the
+application-accounted budget; `PIVOT_NATIVE_HEADROOM_BYTES` reserves space for
+Arrow, DuckDB, Python, and extension allocations; and
+`PIVOT_DUCKDB_MEMORY_LIMIT` configures DuckDB's native allocator. Startup
+fails closed unless:
+
+```text
+DuckDB limit + application budget + native headroom <= worker hard limit
+```
+
+The direct and Ibis-backed DuckDB constructors apply the reconciled setting.
+Memory errors remain behind the existing stable backend error boundary. The
+admin health endpoint is authenticated and reports only aggregate current RSS,
+RSS high-water, reservations, admissions, and rejection counts. Accounted
+bytes are an admission-control estimate; they are not the process's native
+total memory and must not be treated as one.
+
+Recommended baseline environment:
+
+```env
+PIVOT_WORKER_MEMORY_HARD_LIMIT_BYTES=2147483648
+PIVOT_RESOURCE_MAX_BYTES=1073741824
+PIVOT_NATIVE_HEADROOM_BYTES=268435456
+PIVOT_DUCKDB_MEMORY_LIMIT=512MB
+PIVOT_WORKER_RSS_SOFT_LIMIT_BYTES=1811939328
+```
+
+Container and service limits must agree with the application envelope. For
+Docker, set a hard limit and pass the same values to the process:
+
+```bash
+docker run --memory=2g --env-file=.env your-image
+```
+
+For Kubernetes, set both requests and limits on every worker pod and keep the
+DuckDB limit below the pod limit after application budget and native headroom:
+
+```yaml
+resources:
+  requests: {memory: 2Gi}
+  limits: {memory: 2Gi}
+```
+
+For systemd, use `MemoryMax=2G` in the service unit and the equivalent
+`PIVOT_WORKER_MEMORY_HARD_LIMIT_BYTES` value in its environment file. Do not
+use an unlimited DuckDB setting to bypass the worker envelope.
+
+## Release evidence
+
+The ordinary benchmark remains small. Run the opt-in deterministic pressure
+workload in the target worker/container profile and retain its JSON output:
+
+```bash
+python scripts/benchmark_pivot_runtime.py --memory-workload \
+  --rows 500000 --concurrent-requests 4 --json > memory-500k.json
+python scripts/benchmark_pivot_runtime.py --memory-workload \
+  --rows 1000000 --concurrent-requests 4 --max-rss-bytes 2147483648 --json > memory-1m.json
+```
+
+The report includes latency, admitted/rejected work, throughput, current RSS,
+and peak RSS. A non-zero exit means the requested RSS ceiling was exceeded or
+the workload failed to demonstrate an admission rejection; it does not claim
+that application-accounted bytes equal total native process memory. Keep the
+JSON alongside the exact image/tag, deployment limits, and admin health
+snapshot for release review.

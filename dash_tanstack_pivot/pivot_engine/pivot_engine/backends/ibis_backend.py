@@ -28,7 +28,13 @@ except ImportError:
     pa = None
 
 from pivot_engine.util.sql_builder import quote_ident
-from pivot_engine.backends.duckdb_backend import ConnectionPool, _fetch_arrow_table
+from pivot_engine.backends.duckdb_backend import (
+    ConnectionPool,
+    _fetch_arrow_table,
+    _resolve_duckdb_memory_limit,
+    _validate_duckdb_memory_envelope,
+)
+from pivot_engine.resource_governor import ResourceLimits
 from pivot_engine.backends.execution import (
     CancellationUnavailableError,
     DatabaseExecution,
@@ -52,6 +58,8 @@ class IbisBackend:
         connection: Optional[Any] = None,
         connection_uri: Optional[str] = None,
         query_timeout_seconds: Optional[float] = None,
+        memory_limit: Optional[str] = None,
+        resource_limits: Optional[ResourceLimits] = None,
         **connection_kwargs
     ):
         """
@@ -66,6 +74,8 @@ class IbisBackend:
             raise ImportError("ibis package required. Install: pip install ibis-framework")
         
         self.con = connection
+        self.resource_limits = resource_limits or ResourceLimits.from_environment()
+        resolved_memory_limit = _resolve_duckdb_memory_limit(memory_limit, self.resource_limits)
         
         # Support for different database backends based on URI
         if connection_uri:
@@ -119,6 +129,19 @@ class IbisBackend:
             else:
                 # Default to DuckDB
                 self.con = ibis.duckdb.connect(connection_uri)
+
+        # Reconcile and apply the policy only for DuckDB. Other Ibis dialects
+        # must not receive a DuckDB-specific SET statement, but callers still
+        # get deterministic validation when they explicitly provide limits.
+        raw_connection = getattr(self.con, "con", None)
+        backend_name = str(getattr(self.con, "name", "") or "").lower()
+        is_duckdb = backend_name == "duckdb" and raw_connection is not None
+        if is_duckdb:
+            _validate_duckdb_memory_envelope(resolved_memory_limit, self.resource_limits)
+            configure = getattr(raw_connection, "execute", None)
+            if callable(configure):
+                configure(f"SET memory_limit='{resolved_memory_limit}'")
+        self.memory_limit = resolved_memory_limit
 
         # Track query stats — lock guards counters updated from executor threads.
         self._query_count = 0

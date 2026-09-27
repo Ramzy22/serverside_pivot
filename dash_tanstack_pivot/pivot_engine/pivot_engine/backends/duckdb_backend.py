@@ -10,11 +10,13 @@ Features:
 """
 
 import asyncio
+import os
 import time
 import queue
 import re
 import threading
 import itertools
+from decimal import Decimal, InvalidOperation
 from contextlib import contextmanager
 from typing import Any, List, Dict, Optional, Union
 
@@ -35,6 +37,7 @@ from pivot_engine.backends.execution import (
     QueryTimeoutError,
     resolve_query_timeout_seconds,
 )
+from pivot_engine.resource_governor import ResourceLimits
 
 
 _MAX_DUCKDB_THREADS = 1024
@@ -53,6 +56,17 @@ _DUCKDB_MEMORY_UNIT_CANONICAL = {
     "MIB": "MiB",
     "GIB": "GiB",
     "TIB": "TiB",
+}
+_DUCKDB_MEMORY_UNIT_BYTES = {
+    "B": 1,
+    "KB": 1000,
+    "MB": 1000**2,
+    "GB": 1000**3,
+    "TB": 1000**4,
+    "KIB": 1024,
+    "MIB": 1024**2,
+    "GIB": 1024**3,
+    "TIB": 1024**4,
 }
 
 
@@ -101,6 +115,76 @@ def _validate_duckdb_memory_limit(memory_limit: Any) -> str:
         raise ValueError("DuckDB memory_limit must be greater than zero.") from None
     unit = _DUCKDB_MEMORY_UNIT_CANONICAL[match.group("unit").upper()]
     return f"{value}{unit}"
+
+
+def _duckdb_memory_limit_bytes(memory_limit: str) -> int:
+    """Convert an already validated DuckDB size literal to bytes."""
+    normalized = _validate_duckdb_memory_limit(memory_limit)
+    match = _DUCKDB_MEMORY_LIMIT_RE.fullmatch(normalized)
+    assert match is not None  # validation above guarantees a match
+    try:
+        result = Decimal(match.group("value")) * _DUCKDB_MEMORY_UNIT_BYTES[match.group("unit").upper()]
+        as_int = int(result)
+    except (InvalidOperation, OverflowError, ValueError):
+        raise ValueError("DuckDB memory_limit must be a finite size literal.") from None
+    if Decimal(as_int) != result or as_int <= 0:
+        raise ValueError("DuckDB memory_limit must resolve to a positive whole byte count.")
+    return as_int
+
+
+def _memory_limit_literal_from_bytes(value: int) -> str:
+    """Format the policy's byte limit as a safe DuckDB literal."""
+    if not isinstance(value, int) or isinstance(value, bool) or value <= 0:
+        raise ValueError("DuckDB memory limit must be a positive integer number of bytes.")
+    return f"{value}B"
+
+
+def _resolve_duckdb_memory_limit(
+    memory_limit: Optional[str], resource_limits: ResourceLimits
+) -> str:
+    """Resolve an explicit limit or the documented environment setting.
+
+    ``ResourceLimits`` stores bytes for arithmetic, while operators commonly
+    use DuckDB literals such as ``512MB`` in environment files. Accept both
+    forms and reject a non-empty malformed setting instead of silently
+    widening the native allocation.
+    """
+    if memory_limit is not None:
+        return _validate_duckdb_memory_limit(memory_limit)
+    configured = os.environ.get("PIVOT_DUCKDB_MEMORY_LIMIT")
+    if configured is not None and str(configured).strip():
+        text = str(configured).strip()
+        if _DUCKDB_MEMORY_LIMIT_RE.fullmatch(text):
+            return _validate_duckdb_memory_limit(text)
+        try:
+            return _memory_limit_literal_from_bytes(int(text))
+        except (TypeError, ValueError):
+            raise ValueError(
+                "PIVOT_DUCKDB_MEMORY_LIMIT must be a DuckDB size literal or positive byte count."
+            ) from None
+    return _memory_limit_literal_from_bytes(resource_limits.duckdb_memory_limit_bytes)
+
+
+def _validate_duckdb_memory_envelope(memory_limit: str, resource_limits: ResourceLimits) -> int:
+    """Ensure native DuckDB allocation fits the worker's declared envelope."""
+    allocated_bytes = _duckdb_memory_limit_bytes(memory_limit)
+    if (
+        allocated_bytes
+        + resource_limits.total_bytes
+        + resource_limits.native_headroom_bytes
+        > resource_limits.worker_hard_limit_bytes
+    ):
+        raise ValueError(
+            "DuckDB memory limit plus resource budget and native headroom "
+            "must fit within the worker memory hard limit"
+        )
+    return allocated_bytes
+
+
+def _is_duckdb_memory_failure(exc: BaseException) -> bool:
+    """Classify native allocation failures without exposing driver text."""
+    message = str(exc).lower()
+    return any(token in message for token in ("out of memory", "memory limit", "oom"))
 
 
 class ConnectionPool:
@@ -213,6 +297,7 @@ class DuckDBBackend:
         connection: Optional["duckdb.DuckDBPyConnection"] = None,
         max_connections: int = 10,
         query_timeout_seconds: Optional[float] = None,
+        resource_limits: Optional[ResourceLimits] = None,
     ):
         """
         Initialize DuckDB backend.
@@ -229,6 +314,10 @@ class DuckDBBackend:
             raise ImportError("duckdb package required. Install: pip install duckdb")
 
         self.uri = uri
+        self.resource_limits = resource_limits or ResourceLimits.from_environment()
+        resolved_memory_limit = _resolve_duckdb_memory_limit(memory_limit, self.resource_limits)
+        _validate_duckdb_memory_envelope(resolved_memory_limit, self.resource_limits)
+        self.memory_limit = resolved_memory_limit
         self._query_timeout_seconds = resolve_query_timeout_seconds(
             query_timeout_seconds
         )
@@ -242,9 +331,12 @@ class DuckDBBackend:
             safe_threads = _validate_duckdb_threads(threads)
             self.con.execute(f"SET threads={safe_threads}")
 
-        if memory_limit is not None:
-            safe_memory_limit = _validate_duckdb_memory_limit(memory_limit)
-            self.con.execute(f"SET memory_limit='{safe_memory_limit}'")
+        # Existing/injected test doubles and non-DuckDB wrappers may not expose
+        # a settings API. Native DuckDB connections always do, and receive the
+        # reconciled limit before pooled cursors are created.
+        configure = getattr(self.con, "execute", None)
+        if callable(configure):
+            configure(f"SET memory_limit='{resolved_memory_limit}'")
             
         # Initialize connection pool
         # For DuckDB, we use cursors from the main connection as 'connections' in the pool
@@ -292,8 +384,11 @@ class DuckDBBackend:
             
             return result
         except Exception as e:
-            # Log error and re-raise
+            # Keep native allocation details server-side and use the same safe
+            # boundary as cancellable execution for memory failures.
             print(f"Error executing query:\nSQL: {sql}\nParams: {params}\nError: {e}")
+            if _is_duckdb_memory_failure(e):
+                raise DatabaseExecutionError() from e
             raise
 
     def _register_execution(self, execution: DatabaseExecution) -> None:

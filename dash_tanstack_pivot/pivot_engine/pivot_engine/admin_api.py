@@ -11,8 +11,47 @@ from datetime import datetime
 from pivot_engine.security import get_current_user, User, UserRole
 from pivot_engine.lifecycle import get_task_manager
 from pivot_engine.config import get_config
+from pivot_engine.resource_governor import ResourceGovernor, ResourceLimits
 
 admin_router = APIRouter(prefix="/admin", tags=["admin"])
+
+# Hosts that construct a runtime service can register its worker-local
+# governor here. The fallback is intentionally process-local and aggregate;
+# health never exposes query text, payloads, cache keys, or driver errors.
+_resource_governor: ResourceGovernor | None = None
+
+
+def register_resource_governor(governor: ResourceGovernor) -> None:
+    """Publish the worker governor used by authenticated admin diagnostics."""
+    if not isinstance(governor, ResourceGovernor):
+        raise TypeError("governor must be a ResourceGovernor")
+    global _resource_governor
+    _resource_governor = governor
+
+
+def get_resource_governor() -> ResourceGovernor:
+    """Return the registered worker governor or a safe process-local fallback."""
+    global _resource_governor
+    if _resource_governor is None:
+        _resource_governor = ResourceGovernor(ResourceLimits.from_environment())
+    return _resource_governor
+
+
+def _governor_health_snapshot() -> Dict[str, Any]:
+    snapshot = get_resource_governor().snapshot()
+    rejected_by_kind = {
+        kind: sum(reasons.values())
+        for kind, reasons in snapshot.get("rejected", {}).items()
+        if reasons
+    }
+    return {
+        "current_rss_bytes": snapshot.get("rss_bytes"),
+        "high_water_rss_bytes": snapshot.get("high_water_rss_bytes", 0),
+        "reserved_bytes": snapshot.get("reserved_bytes", 0),
+        "admitted": sum(snapshot.get("admitted", {}).values()),
+        "rejections": sum(rejected_by_kind.values()),
+        "rejections_by_kind": rejected_by_kind,
+    }
 
 def require_admin(user: User = Depends(get_current_user)):
     """Dependency to ensure the user is an admin"""
@@ -28,6 +67,7 @@ async def get_system_health():
     """Get system resource usage and health status"""
     process = psutil.Process(os.getpid())
     config = get_config()
+    governor = _governor_health_snapshot()
     
     return {
         "status": "healthy",
@@ -36,12 +76,15 @@ async def get_system_health():
         "resources": {
             "cpu_percent": process.cpu_percent(),
             "memory_usage_mb": process.memory_info().rss / 1024 / 1024,
+            "rss_bytes": governor["current_rss_bytes"],
+            "high_water_rss_bytes": governor["high_water_rss_bytes"],
             "system_cpu": psutil.cpu_percent(),
             "system_memory": psutil.virtual_memory().percent
         },
+        "resourceGovernor": governor,
         "configuration": {
             "backend": config.backend_type,
-            "cache": "redis" if config.redis_host else "memory",
+            "cache": "redis" if config.redis_config else "memory",
             "features": {
                 "streaming": config.enable_streaming,
                 "cdc": config.enable_cdc,
@@ -73,11 +116,19 @@ async def get_cache_stats():
     config = get_config()
     stats = {"type": "memory", "keys": 0, "hit_rate": 0}
     
-    if config.redis_host:
+    if config.redis_config:
         stats["type"] = "redis"
         try:
             import redis
-            r = redis.StrictRedis(host=config.redis_host, port=config.redis_port, db=0)
+            redis_url = config.redis_config.get("url")
+            if redis_url:
+                r = redis.from_url(redis_url)
+            else:
+                r = redis.StrictRedis(
+                    host=config.redis_config.get("host", "localhost"),
+                    port=config.redis_config.get("port", 6379),
+                    db=config.redis_config.get("db", 0),
+                )
             info = r.info()
             stats["keys"] = r.dbsize()
             stats["used_memory_human"] = info.get("used_memory_human")

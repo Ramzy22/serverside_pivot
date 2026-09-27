@@ -31,6 +31,9 @@ For multi-worker deployment, follow the
 It requires authenticated TLS Redis and deliberately disables editing until
 durable distributed edit sessions are available.
 
+For worker memory limits, native DuckDB settings, authenticated aggregate
+health metrics, and release evidence commands, see the [operations guide](docs/OPERATIONS.md).
+
 ## Quick Start
 
 Run the included example directly:
