@@ -1,11 +1,11 @@
-import { exportPivotTable } from '../utils/exportUtils';
+import { exportPivotTable, exportPivotTableCsv } from '../utils/exportUtils';
 
 /**
  * Creates the export request and download commands for the workspace.
  *
  * Payload construction lives in useRuntimeClipboardExportPresentation. This
  * module owns only command flow: request IDs, cancellation, part scheduling,
- * and the client-side XLSX fallback.
+ * and the client-side XLSX/CSV fallback.
  */
 export function createRuntimeExportCommands({
   abortGenerationRef,
@@ -132,20 +132,24 @@ export function createRuntimeExportCommands({
     copyServerTableToClipboard({ allRows: true, withHeaders, mergedHeaders });
   };
 
-  const exportPivot = () => {
+  const exportPivot = (format = 'xlsx') => {
+    if (format !== 'xlsx' && format !== 'csv') {
+      throw new TypeError('Export format must be either xlsx or csv.');
+    }
     if (serverSide) {
       const columnTarget = getServerExportColumnTarget();
       if (rowCount > EXPORT_ROW_LIMIT) {
         setPartModal({
           mode: 'export', copyIntent: null, rowsPerPart: EXPORT_ROW_LIMIT, colsPerPart: columnTarget.totalCols,
           totalRows: rowCount, totalCols: columnTarget.totalCols, visibleColIds: columnTarget.colIds,
-          knownColIds: columnTarget.knownColIds, columnMode: columnTarget.mode, processingPartId: null, completedParts: new Set(),
+          knownColIds: columnTarget.knownColIds, columnMode: columnTarget.mode, exportFormat: format,
+          processingPartId: null, completedParts: new Set(),
         });
         return;
       }
       setIsExporting(true);
       dispatchServerExportRequest(buildServerExportPayload({
-        format: 'xlsx', includeHeaders: true, rowStart: 0, rowEnd: rowCount, columnTarget,
+        format, includeHeaders: true, rowStart: 0, rowEnd: rowCount, columnTarget,
         styleOptions: { withHeaders: true, mergedHeaders: true }, allRows: true,
       }));
       return;
@@ -153,12 +157,13 @@ export function createRuntimeExportCommands({
 
     setIsExporting(true); setExportProgress(null);
     // Defer export one tick so the overlay renders before loading and building
-    // the on-demand XLSX writer.
+    // the on-demand writer.
     setTimeout(async () => {
       try {
         const displayRows = getDisplayRows();
-        await exportPivotTable(table, rowCount, displayRows.length > 0 ? displayRows : null, {
-          filename: 'pivot.xlsx', columns: getExportColumns(),
+        const exportWriter = format === 'csv' ? exportPivotTableCsv : exportPivotTable;
+        await exportWriter(table, rowCount, displayRows.length > 0 ? displayRows : null, {
+          filename: format === 'csv' ? 'pivot.csv' : 'pivot.xlsx', columns: getExportColumns(),
           getHeaderLabel: column => getExportHeaderLabel(column, true, mergedHeaderSeparator),
           getHeaderStack: column => getDisplayHeaderTextStackForColumn(column),
           getCellValue: getExportCellDisplayValue, getCellRawValue: getExportRawCellValue,
@@ -185,7 +190,7 @@ export function createRuntimeExportCommands({
 
   const dispatchExportPart = (rowBatch, colBatch) => {
     if (!partModal) return;
-    const { mode, copyIntent, rowsPerPart, colsPerPart, totalRows, totalCols, visibleColIds, knownColIds, columnMode } = partModal;
+    const { mode, copyIntent, rowsPerPart, colsPerPart, totalRows, totalCols, visibleColIds, knownColIds, columnMode, exportFormat = 'xlsx' } = partModal;
     const rowStart = rowBatch * rowsPerPart;
     const rowEnd = Math.min(rowStart + rowsPerPart, totalRows);
     const colStart = colBatch * colsPerPart;
@@ -202,7 +207,7 @@ export function createRuntimeExportCommands({
     const partColumnTarget = { mode: useIdColumns ? 'ids' : 'window', colIds, knownColIds: Array.isArray(knownColIds) ? knownColIds : [] };
     const runtimeFields = useColumnWindow ? { col_start: colStart, col_end: colEnd - 1 } : {};
     dispatchServerExportRequest(buildServerExportPayload({
-      format: isCopyMode ? 'html' : 'xlsx', includeHeaders: isCopyMode ? !!(copyIntent && copyIntent.withHeaders) : true,
+      format: isCopyMode ? 'html' : exportFormat, includeHeaders: isCopyMode ? !!(copyIntent && copyIntent.withHeaders) : true,
       rowStart, rowEnd, columnTarget: partColumnTarget, partId, partLabel,
       colStart: useColumnWindow ? colStart : null, colEnd: useColumnWindow ? colEnd - 1 : null,
       styleOptions: { withHeaders: isCopyMode ? !!(copyIntent && copyIntent.withHeaders) : true, mergedHeaders: isCopyMode ? !!(copyIntent && copyIntent.mergedHeaders) : true },

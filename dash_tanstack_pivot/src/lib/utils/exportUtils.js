@@ -66,6 +66,11 @@ export function escapeTsv(value) {
         .replace(/\t/g, ' ');
 }
 
+export function escapeCsv(value) {
+    const text = String(value === undefined || value === null ? '' : value);
+    return /[",\r\n]/.test(text) ? `"${text.replace(/"/g, '""')}"` : text;
+}
+
 function cssValue(prop, value) {
     if (value === undefined || value === null || value === false || value === '') return null;
     if (typeof value === 'number' && Number.isFinite(value) && !UNITLESS_CSS_PROPS.has(prop)) {
@@ -448,6 +453,44 @@ export async function buildXlsxExport({
     return { rows: exportRows.length, columns: exportCols.length };
 }
 
+/**
+ * Export the pivot table as UTF-8 CSV without loading the XLSX dependency.
+ */
+export function buildCsvExport({
+    table = null,
+    rows = null,
+    columns = null,
+    getHeaderLabel = null,
+    getCellValue = null,
+    getCellRawValue = null,
+    filename = 'pivot.csv',
+} = {}) {
+    const exportCols = resolveColumns(table, { columns: Array.isArray(columns) ? columns : undefined });
+    const exportRows = Array.isArray(rows) ? rows : resolveRows(table, null);
+    const headerRow = exportCols.map((column, columnIndex) => escapeCsv(
+        typeof getHeaderLabel === 'function'
+            ? getHeaderLabel(column, columnIndex)
+            : defaultHeaderLabel(column)
+    ));
+    const dataRows = exportRows.map((rowLike, rowIndex) => exportCols.map((column, columnIndex) => {
+        const rawValue = typeof getCellRawValue === 'function'
+            ? getCellRawValue(rowLike, column, rowIndex)
+            : undefined;
+        const value = rawValue !== undefined
+            ? rawValue
+            : (typeof getCellValue === 'function'
+                ? getCellValue(rowLike, column, rowIndex)
+                : defaultCellValue(rowLike, column, rowIndex));
+        return escapeCsv(value);
+    }));
+    const csv = [headerRow, ...dataRows].map(row => row.join(',')).join('\r\n');
+    const blob = new Blob([`\ufeff${csv}`], { type: 'text/csv;charset=utf-8' });
+    const safeName = String(filename || 'pivot.csv');
+    saveAs(blob, /\.csv$/i.test(safeName) ? safeName : `${safeName}.csv`);
+
+    return { rows: exportRows.length, columns: exportCols.length };
+}
+
 // ── AOA helper (used by legacy paths) ───────────────────────────────────────
 
 /**
@@ -706,6 +749,24 @@ export async function exportPivotTable(table, rowCount, rawRowsOverride = null, 
         getCellValue: options.getCellValue,
         getCellRawValue: options.getCellRawValue,
         filename: options.filename || 'pivot.xlsx',
+    });
+    return { rows: allRows.length, columns: exportCols.length, requestedRows: rowCount || allRows.length };
+}
+
+/**
+ * Export the pivot table as a .csv file.
+ */
+export async function exportPivotTableCsv(table, rowCount, rawRowsOverride = null, options = {}) {
+    const allRows = resolveRows(table, rawRowsOverride);
+    const exportCols = resolveColumns(table, options);
+    buildCsvExport({
+        table,
+        rows: allRows,
+        columns: exportCols,
+        getHeaderLabel: options.getHeaderLabel,
+        getCellValue: options.getCellValue,
+        getCellRawValue: options.getCellRawValue,
+        filename: options.filename || 'pivot.csv',
     });
     return { rows: allRows.length, columns: exportCols.length, requestedRows: rowCount || allRows.length };
 }

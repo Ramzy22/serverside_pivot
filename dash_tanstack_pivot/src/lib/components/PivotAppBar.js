@@ -968,6 +968,93 @@ function ThemeEditorPopover({ theme, themeName, themeOverrides, setThemeOverride
     );
 }
 
+function PivotExportControl({ exportPivot, isExporting, buttonStyle, theme }) {
+    const menuRef = useRef(null);
+    const runExport = (format) => {
+        if (format === 'csv') exportPivot('csv');
+        else exportPivot();
+        if (menuRef.current) menuRef.current.removeAttribute('open');
+    };
+    const menuButtonStyle = {
+        width: '100%',
+        border: 'none',
+        background: 'transparent',
+        color: theme.text,
+        cursor: isExporting ? 'not-allowed' : 'pointer',
+        padding: '8px 12px',
+        textAlign: 'left',
+        whiteSpace: 'nowrap',
+        opacity: isExporting ? 0.55 : 1,
+    };
+
+    return (
+        <div role="group" aria-label="Export table" style={{ display: 'inline-flex', alignItems: 'stretch' }}>
+            <button
+                type="button"
+                data-testid="pivot-export-xlsx"
+                aria-label="Export XLSX"
+                style={{ ...buttonStyle, borderTopRightRadius: 0, borderBottomRightRadius: 0 }}
+                onClick={() => exportPivot()}
+                disabled={isExporting}
+            >
+                <Icons.Export/> {isExporting ? 'Exporting...' : 'Export XLSX'}
+            </button>
+            <details ref={menuRef} style={{ position: 'relative' }}>
+                <summary
+                    aria-label="Choose export format"
+                    aria-disabled={isExporting}
+                    onClick={event => { if (isExporting) event.preventDefault(); }}
+                    style={{
+                        ...buttonStyle,
+                        alignItems: 'center',
+                        borderTopLeftRadius: 0,
+                        borderBottomLeftRadius: 0,
+                        borderLeft: `1px solid ${theme.border}`,
+                        cursor: isExporting ? 'not-allowed' : 'pointer',
+                        display: 'inline-flex',
+                        height: '100%',
+                        listStyle: 'none',
+                        opacity: isExporting ? 0.55 : 1,
+                        paddingLeft: '8px',
+                        paddingRight: '8px',
+                    }}
+                >
+                    <span aria-hidden="true">{'\u25BE'}</span>
+                </summary>
+                <ul
+                    role="list"
+                    aria-label="Export formats"
+                    style={{
+                        position: 'absolute',
+                        right: 0,
+                        top: 'calc(100% + 4px)',
+                        zIndex: 50,
+                        minWidth: '150px',
+                        margin: 0,
+                        padding: '4px',
+                        listStyle: 'none',
+                        border: `1px solid ${theme.border}`,
+                        borderRadius: theme.radiusSm || '8px',
+                        background: theme.surfaceBg || theme.headerBg,
+                        boxShadow: theme.shadowMd || theme.shadow,
+                    }}
+                >
+                    <li>
+                        <button type="button" aria-label="Export XLSX" style={menuButtonStyle} onClick={() => runExport('xlsx')} disabled={isExporting}>
+                            Export XLSX
+                        </button>
+                    </li>
+                    <li>
+                        <button type="button" data-testid="pivot-export-csv" aria-label="Export CSV" style={menuButtonStyle} onClick={() => runExport('csv')} disabled={isExporting}>
+                            Export CSV
+                        </button>
+                    </li>
+                </ul>
+            </details>
+        </div>
+    );
+}
+
 export const PivotAppBar = React.memo(function PivotAppBar({
     immersiveMode, setImmersiveMode,
     sidebarOpen, setSidebarOpen,
@@ -1776,16 +1863,11 @@ export const PivotAppBar = React.memo(function PivotAppBar({
                         {immersiveMode ? <Icons.FullscreenExit /> : <Icons.Fullscreen />} Immersive
                     </button>
                     <div style={innerDividerStyle} />
-                    <button data-testid="pivot-export-xlsx" style={btnPrimary} onClick={exportPivot} disabled={isExporting}>
-                        <Icons.Export/> {isExporting ? 'Exporting…' : 'Export XLSX'}
-                    </button>
                 </> : <>
                     <div style={{marginLeft:'auto'}} />
                     <div style={innerDividerStyle} />
-                    <button data-testid="pivot-export-xlsx" style={btnPrimary} onClick={exportPivot} disabled={isExporting}>
-                        <Icons.Export/> {isExporting ? 'Exporting…' : 'Export XLSX'}
-                    </button>
                 </>}
+                <PivotExportControl exportPivot={exportPivot} isExporting={isExporting} buttonStyle={btnPrimary} theme={theme} />
             </div>
 
             {activeSections.length > 0 ? (

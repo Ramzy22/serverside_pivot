@@ -471,7 +471,7 @@ export function useViewportRuntimeStage(input, transport) {
     actions.push({
       label: stage.getLocaleText('menuExportToExcel', 'Export to Excel'),
       icon: <Icons.Export />,
-      onClick: stage.exportPivot
+      onClick: () => stage.exportPivot()
     });
     stage.setContextMenu({
       x: menuX,

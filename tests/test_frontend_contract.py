@@ -486,7 +486,6 @@ def test_export_copy_uses_rich_html_clipboard_and_styled_xlsx_runtime_export():
     assert "writeClipboardPayload" in component_source
     assert "htmlTableToTsv" in component_source
     assert "format: 'html'" in component_source
-    assert "format: 'xlsx'" in component_source
     assert "style: buildExportStyleProfile" in component_source
     assert "ClipboardItem" in export_source
     assert "'text/html'" in export_source
@@ -515,7 +514,7 @@ def test_heavy_client_dependencies_are_loaded_only_by_the_features_that_need_the
     assert 'webpackChunkName: "pivot-xlsx-html"' in export_source
     assert "await loadXlsxWriter()" in export_source
     assert "await loadXlsxHtmlParser()" in export_source
-    assert "await exportPivotTable(" in export_command_source
+    assert "format === 'csv' ? exportPivotTableCsv : exportPivotTable" in export_command_source
 
     assert "from 'echarts-for-react'" not in chart_renderer_source
     assert "import 'echarts-gl';" not in chart_renderer_source
@@ -606,7 +605,7 @@ def test_server_exports_forward_active_layout_and_use_plain_text_grouping():
     assert "plain_space: ' '" in helpers_source
 
     server_export = re.search(
-        r"const exportPivot = \(\) => \{.*?\n\s*const dispatchExportPart",
+        r"const exportPivot = \(format = 'xlsx'\) => \{.*?\n\s*const dispatchExportPart",
         export_commands_source,
         re.S,
     )
@@ -614,7 +613,7 @@ def test_server_exports_forward_active_layout_and_use_plain_text_grouping():
     assert "allRows: true" in server_export.group(0)
 
 
-def test_export_ui_matches_xlsx_format_and_cancel_ignores_late_responses():
+def test_export_ui_exposes_xlsx_and_csv_and_cancel_ignores_late_responses():
     component_source = Path(
         os.path.join(
             os.getcwd(),
@@ -637,13 +636,34 @@ def test_export_ui_matches_xlsx_format_and_cancel_ignores_late_responses():
         )
     ).read_text(encoding="utf-8")
 
-    assert "Export CSV" not in app_bar_source
-    assert app_bar_source.count("Export XLSX") >= 2
+    assert app_bar_source.count('data-testid="pivot-export-xlsx"') == 1
+    assert app_bar_source.count('data-testid="pivot-export-csv"') == 1
+    assert "onClick={() => exportPivot()}" in app_bar_source
+    assert "if (format === 'csv') exportPivot('csv')" in app_bar_source
+    assert "onClick={() => runExport('csv')}" in app_bar_source
+    assert 'role="list"' in app_bar_source
+    assert 'aria-label="Export table"' in app_bar_source
+    assert "disabled={isExporting}" in app_bar_source
     assert "const activeExportRequestIdRef = useRef(null);" in component_source
     assert "const cancelledExportRequestIdsRef = useRef(new Set());" in component_source
     assert "cancelledExportRequestIdsRef.current.has(responseRequestId)" in component_source
     assert "cancelledExportRequestIdsRef.current.add(activeRequestId)" in component_source
     assert "onClick={cancelActiveExportRequest}" in component_source
+
+
+def test_context_menu_retains_zero_argument_xlsx_export():
+    viewport_source = Path(
+        os.path.join(
+            os.getcwd(),
+            "dash_tanstack_pivot",
+            "src",
+            "lib",
+            "runtime",
+            "useViewportRuntimeStage.tsx",
+        )
+    ).read_text(encoding="utf-8")
+
+    assert "onClick: () => stage.exportPivot()" in viewport_source
 
 
 def test_chart_csv_neutralizes_formula_text_and_emits_excel_utf8_bom():
