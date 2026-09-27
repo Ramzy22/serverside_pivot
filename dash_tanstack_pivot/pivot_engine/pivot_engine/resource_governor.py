@@ -22,6 +22,7 @@ from .export_limits import positive_env_int
 _MIB = 1024 * 1024
 _GIB = 1024 * _MIB
 _RETRY_AFTER_MS = 1_000
+_MAX_RETRY_AFTER_MS = 60_000
 
 
 class ResourceKind(StrEnum):
@@ -47,7 +48,10 @@ class ResourceExhaustedError(RuntimeError):
     ) -> None:
         self.resource_kind = resource_kind
         self.reason = reason
-        self.retry_after_ms = max(1, int(retry_after_ms))
+        self.retry_after_ms = min(
+            _MAX_RETRY_AFTER_MS,
+            max(1, int(retry_after_ms)),
+        )
         super().__init__(
             f"{self.code}: {resource_kind.value} capacity is unavailable ({reason})"
         )
@@ -210,7 +214,9 @@ def estimate_value_bytes(value: Any) -> int | None:
 
     if isinstance(value, str):
         return len(value.encode("utf-8"))
-    if isinstance(value, (bytes, bytearray, memoryview)):
+    if isinstance(value, memoryview):
+        return value.nbytes
+    if isinstance(value, (bytes, bytearray)):
         return len(value)
     try:
         size = getattr(value, "nbytes")
@@ -268,7 +274,7 @@ class ResourceGovernor:
         self._reserved_by_kind: Counter[ResourceKind] = Counter()
         self._active_slots: Counter[ResourceKind] = Counter()
         self._admitted: Counter[ResourceKind] = Counter()
-        self._rejected: Counter[str] = Counter()
+        self._rejected: Counter[tuple[ResourceKind, str]] = Counter()
         self._high_water_rss_bytes = 0
 
     def reserve(self, kind: ResourceKind, estimated_bytes: int) -> ResourceLease:
@@ -332,7 +338,7 @@ class ResourceGovernor:
         return current
 
     def _reject(self, kind: ResourceKind, reason: str) -> None:
-        self._rejected[reason] += 1
+        self._rejected[(kind, reason)] += 1
         raise ResourceExhaustedError(kind, reason=reason)
 
     @staticmethod
@@ -350,6 +356,9 @@ class ResourceGovernor:
         with self._lock:
             current_rss = self._sample_rss()
             kinds = tuple(ResourceKind)
+            rejected = {kind.value: {} for kind in kinds}
+            for (kind, reason), count in self._rejected.items():
+                rejected[kind.value][reason] = count
             return {
                 "reserved_bytes": sum(self._reserved_by_kind.values()),
                 "reserved_bytes_by_kind": {
@@ -359,7 +368,7 @@ class ResourceGovernor:
                     kind.value: self._active_slots[kind] for kind in kinds
                 },
                 "admitted": {kind.value: self._admitted[kind] for kind in kinds},
-                "rejected": dict(self._rejected),
+                "rejected": rejected,
                 "rss_bytes": current_rss,
                 "high_water_rss_bytes": self._high_water_rss_bytes,
             }

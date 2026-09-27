@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import array
+
 import pytest
 
 from pivot_engine.resource_governor import (
@@ -63,7 +65,7 @@ def test_resource_governor_rejects_new_work_above_rss_soft_limit():
         governor.reserve(ResourceKind.QUERY, 1)
 
     assert raised.value.resource_kind is ResourceKind.QUERY
-    assert governor.snapshot()["rejected"]["rss_soft_limit"] == 1
+    assert governor.snapshot()["rejected"]["query"]["rss_soft_limit"] == 1
 
 
 def test_lease_growth_is_atomic_and_release_is_idempotent():
@@ -110,6 +112,39 @@ def test_estimate_value_bytes_handles_arrow_bytes_and_text():
     assert estimate_value_bytes("abc") == len("abc".encode("utf-8"))
     assert estimate_value_bytes(pyarrow.array(["ab", "c"])) > 0
     assert estimate_value_bytes(object()) is None
+
+
+def test_estimate_value_bytes_uses_memoryview_byte_length_not_element_count():
+    values = array.array("I", [1, 2, 3])
+
+    assert estimate_value_bytes(memoryview(values)) == 12
+
+
+def test_snapshot_retains_rejection_kind_and_reason():
+    limits = ResourceLimits.for_testing(
+        rss_soft_limit_bytes=1,
+        total_bytes=100,
+        headroom_bytes=10,
+    )
+    governor = ResourceGovernor(limits, rss_bytes_getter=lambda: 1)
+
+    for kind in (ResourceKind.QUERY, ResourceKind.EXPORT):
+        with pytest.raises(ResourceExhaustedError):
+            governor.reserve(kind, 1)
+
+    rejected = governor.snapshot()["rejected"]
+    assert rejected["query"]["rss_soft_limit"] == 1
+    assert rejected["export"]["rss_soft_limit"] == 1
+
+
+def test_resource_exhausted_error_caps_huge_retry_metadata():
+    error = ResourceExhaustedError(
+        ResourceKind.QUERY,
+        reason="slot",
+        retry_after_ms=10**100,
+    )
+
+    assert 1 <= error.retry_after_ms <= 60_000
 
 
 def test_limits_reject_inconsistent_duckdb_worker_envelope():
