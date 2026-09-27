@@ -121,7 +121,8 @@ def _duckdb_memory_limit_bytes(memory_limit: str) -> int:
     """Convert an already validated DuckDB size literal to bytes."""
     normalized = _validate_duckdb_memory_limit(memory_limit)
     match = _DUCKDB_MEMORY_LIMIT_RE.fullmatch(normalized)
-    assert match is not None  # validation above guarantees a match
+    if match is None:  # pragma: no cover - defensive guard after validation
+        raise ValueError("DuckDB memory_limit must be a valid size literal.")
     try:
         result = Decimal(match.group("value")) * _DUCKDB_MEMORY_UNIT_BYTES[match.group("unit").upper()]
         as_int = int(result)

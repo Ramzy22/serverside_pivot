@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 import os
 import time
 
@@ -112,6 +113,40 @@ class _RedisGateStub(_RedisGenerationStub):
         next_state["updated_at"] = str(now_ts)
         self.shared[key] = next_state
         return 1
+
+
+class _FailingCleanupPubSub:
+    """Pub/Sub double that proves shutdown cleans up each resource independently."""
+
+    def __init__(self) -> None:
+        self.subscribed: list[str] = []
+        self.unsubscribe_calls = 0
+        self.close_calls = 0
+
+    def subscribe(self, channel: str) -> None:
+        self.subscribed.append(channel)
+
+    def get_message(self, timeout: float):
+        time.sleep(min(timeout, 0.001))
+        return None
+
+    def unsubscribe(self, _channel: str) -> None:
+        self.unsubscribe_calls += 1
+        raise RuntimeError("simulated unsubscribe failure")
+
+    def close(self) -> None:
+        self.close_calls += 1
+        raise RuntimeError("simulated close failure")
+
+
+class _FailingCleanupRedis(_RedisGenerationStub):
+    def __init__(self) -> None:
+        super().__init__()
+        self.pubsub_instance = _FailingCleanupPubSub()
+
+    def pubsub(self, *, ignore_subscribe_messages: bool):
+        assert ignore_subscribe_messages is True
+        return self.pubsub_instance
 
 
 def _payload_runtime_state(client):
@@ -381,6 +416,67 @@ def test_remote_invalidation_pubsub_clears_viewport_cache_before_next_lookup():
     assert _wait_until(lambda: not cache_b.response_window_cache)
     coordinator_a.close()
     coordinator_b.close()
+
+
+def test_pubsub_callback_failure_is_audited_and_does_not_stop_later_invalidations(caplog):
+    """A bad optional callback must not hide failures or stop the subscriber."""
+
+    server = fakeredis.FakeServer()
+    publisher = _payload_runtime_state(
+        fakeredis.FakeRedis(server=server, decode_responses=False)
+    )
+    subscriber = _payload_runtime_state(
+        fakeredis.FakeRedis(server=server, decode_responses=False)
+    )
+    attempts: list[int] = []
+    delivered: list[int] = []
+
+    def callback(event: CacheInvalidationEvent) -> None:
+        attempts.append(event.sequence)
+        if len(attempts) == 1:
+            raise RuntimeError("callback-secret-must-not-be-logged")
+        delivered.append(event.sequence)
+
+    with caplog.at_level(logging.WARNING, logger="pivot_engine.runtime.distributed"):
+        subscriber.subscribe(callback)
+        try:
+            publisher.invalidate(
+                CacheInvalidationEvent(1, "mutation", ("controller.query",))
+            )
+            assert _wait_until(lambda: attempts == [1])
+            publisher.invalidate(
+                CacheInvalidationEvent(2, "mutation", ("controller.query",))
+            )
+            assert _wait_until(lambda: delivered == [2])
+        finally:
+            publisher.close()
+            subscriber.close()
+
+    assert "event=distributed_invalidation_callback_failed" in caplog.text
+    assert "callback-secret-must-not-be-logged" not in caplog.text
+
+
+def test_pubsub_shutdown_audits_failures_and_attempts_every_cleanup_step(caplog):
+    """An unsubscribe failure must not prevent pubsub.close during shutdown."""
+
+    client = _FailingCleanupRedis()
+    state = RedisRuntimeState(
+        DistributedRuntimeSettings(
+            enabled=True,
+            redis_url="rediss://user:pass@example/0",
+            key_prefix="shutdown-test",
+        ),
+        client=client,
+    )
+
+    with caplog.at_level(logging.WARNING, logger="pivot_engine.runtime.distributed"):
+        state.subscribe(lambda _event: None)
+        state.close()
+
+    assert client.pubsub_instance.unsubscribe_calls == 1
+    assert client.pubsub_instance.close_calls == 1
+    assert "event=distributed_invalidation_unsubscribe_failed" in caplog.text
+    assert "event=distributed_invalidation_close_failed" in caplog.text
 
 
 def test_worker_b_adapter_cache_syncs_after_its_pubsub_subscription_is_closed():

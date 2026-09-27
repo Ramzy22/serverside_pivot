@@ -293,7 +293,8 @@ class IbisBackend:
         execution: DatabaseExecution,
     ) -> Any:
         """Compile and execute Ibis DuckDB work on one cancellable cursor."""
-        assert self._duckdb_pool is not None
+        if self._duckdb_pool is None:
+            raise RuntimeError("Ibis DuckDB execution requires an initialized connection pool.")
         lease = None
         discard = False
         started_at = time.time()

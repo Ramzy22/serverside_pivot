@@ -8,6 +8,7 @@ explicit JSON or bytes managed by the consuming runtime domain.
 from __future__ import annotations
 
 import json
+import logging
 import os
 import re
 import threading
@@ -18,6 +19,7 @@ from urllib.parse import urlparse
 from ..cache_coordinator import CacheInvalidationEvent
 
 
+_LOGGER = logging.getLogger(__name__)
 _ENABLED_VALUES = frozenset({"1", "true", "yes", "on"})
 _TLS_VERIFICATION_VALUES = frozenset({"required", "cert_required"})
 _KEY_PREFIX_RE = re.compile(r"[A-Za-z0-9][A-Za-z0-9:_-]{0,127}\Z")
@@ -263,6 +265,9 @@ class RedisRuntimeState:
                 try:
                     message = pubsub.get_message(timeout=0.2)
                 except Exception:
+                    _LOGGER.warning(
+                        "event=distributed_invalidation_receive_failed action=stop"
+                    )
                     return
                 if not isinstance(message, dict) or message.get("type") != "message":
                     continue
@@ -271,9 +276,12 @@ class RedisRuntimeState:
                     try:
                         callback(event)
                     except Exception:
-                        # The poll-based generation guard still maintains
-                        # correctness if a local optional callback fails.
-                        continue
+                        # Callback exceptions are local observer failures. The
+                        # generation guard remains authoritative, so report
+                        # the failure and accept later invalidations.
+                        _LOGGER.warning(
+                            "event=distributed_invalidation_callback_failed action=continue"
+                        )
 
         worker = threading.Thread(target=run, name="pivot-runtime-redis", daemon=True)
         worker.start()
@@ -284,9 +292,16 @@ class RedisRuntimeState:
             stop.set()
             try:
                 pubsub.unsubscribe(self.key(*self._INVALIDATION_CHANNEL))
+            except Exception:
+                _LOGGER.warning(
+                    "event=distributed_invalidation_unsubscribe_failed action=continue"
+                )
+            try:
                 pubsub.close()
             except Exception:
-                pass
+                _LOGGER.warning(
+                    "event=distributed_invalidation_close_failed action=continue"
+                )
             worker.join(timeout=1.0)
 
         self._subscriptions.append(close)
