@@ -90,6 +90,10 @@ export function useRuntimeClipboardExportPresentation({
         seen.add(columnId);
       };
       knownIds.filter(columnId => !seenCenterIds.has(columnId) && !String(columnId).startsWith('__RowTotal__')).forEach(pushId);
+      // TanStack's visible leaf list carries the user's live column order.
+      // Preserve that order for instantiated center columns, then fill any
+      // virtual/off-screen gaps from the complete cached schema.
+      knownIds.filter(columnId => seenCenterIds.has(columnId)).forEach(pushId);
       centerIds.forEach(pushId);
       knownIds.filter(columnId => String(columnId).startsWith('__RowTotal__')).forEach(pushId);
       return orderedIds.length > 0 ? orderedIds : null;

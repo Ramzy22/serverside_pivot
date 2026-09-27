@@ -93,6 +93,57 @@ function makeCommandOptions(overrides = {}) {
     assert.equal(dispatchedPayloads.at(-1).format, 'csv');
     assert.throws(() => commands.exportPivot('tsv'), /xlsx.*csv|csv.*xlsx/i);
 
+    const liveColumnOrder = [
+        'hierarchy',
+        'Q1_unités_sum',
+        'Q1_ventes_sum',
+        '__RowTotal__sum',
+    ];
+    const {useRuntimeClipboardExportPresentation} = loadFrontendModule(
+        'src/lib/runtime/useRuntimeClipboardExportPresentation.js',
+        {
+            react: {useCallback: callback => callback},
+            '../utils/exportUtils': {
+                buildMergedHeaderRows: () => ({rows: []}),
+                buildStyledHtmlTableExport: () => ({}),
+                writeClipboardPayload: () => Promise.resolve(),
+            },
+            '../utils/helpers': {
+                formatDisplayLabel: value => String(value),
+                formatValue: value => String(value),
+            },
+        },
+    );
+    const exportPresentation = useRuntimeClipboardExportPresentation({
+        cachedColSchema: {
+            total_center_cols: 2,
+            columns: [{id: 'Q1_ventes_sum'}, {id: 'Q1_unités_sum'}],
+        },
+        serverSide: true,
+        table: {
+            getVisibleLeafColumns: () => liveColumnOrder.map(id => ({id})),
+        },
+        theme: {},
+        totalCenterCols: 2,
+    });
+    assert.deepStrictEqual(
+        exportPresentation.getCompleteServerExportColIds(),
+        liveColumnOrder,
+    );
+    const orderedTarget = exportPresentation.getServerExportColumnTarget();
+    assert.deepStrictEqual(orderedTarget.colIds, liveColumnOrder);
+
+    const orderedCsvPayloads = [];
+    const orderedCsvCommands = createRuntimeExportCommands(makeCommandOptions({
+        getServerExportColumnTarget: exportPresentation.getServerExportColumnTarget,
+        dispatchServerSideRuntimeSetProps: update => {
+            orderedCsvPayloads.push(update.runtimeRequest.payload);
+        },
+    }));
+    orderedCsvCommands.exportPivot('csv');
+    assert.equal(orderedCsvPayloads.at(-1).format, 'csv');
+    assert.deepStrictEqual(orderedCsvPayloads.at(-1).colIds, liveColumnOrder);
+
     let openedPartModal = null;
     const partitionedCommands = createRuntimeExportCommands(makeCommandOptions({
         rowCount: 101,
