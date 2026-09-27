@@ -9,7 +9,11 @@ from unittest.mock import Mock, MagicMock
 import ibis
 import pyarrow as pa
 from pivot_engine.streaming.streaming_processor import StreamAggregationProcessor, IncrementalMaterializedViewManager
-from pivot_engine.streaming.exact_state import MemoryCDCStateStore, RedisCDCStateStore
+from pivot_engine.streaming.exact_state import (
+    CDCStateLimits,
+    MemoryCDCStateStore,
+    RedisCDCStateStore,
+)
 from pivot_engine.cdc.models import Change
 from pivot_engine.runtime.distributed import DistributedRuntimeSettings, RedisRuntimeState
 from pivot_engine.types.pivot_spec import PivotSpec, Measure
@@ -344,6 +348,172 @@ async def test_stream_job_removes_old_group_and_adds_new_group_for_exact_update(
 
     assert result.status == "fresh"
     assert result.values["groups"] == {"South": {"total_sales": 25}}
+
+
+@pytest.mark.asyncio
+async def test_cdc_group_budget_invalidates_without_persisting_a_partial_transition():
+    processor = StreamAggregationProcessor(
+        state_store=MemoryCDCStateStore(),
+        cdc_state_limits=CDCStateLimits(
+            max_groups=1, max_bytes=4096, max_extrema_values=10
+        ),
+    )
+    job_id = await processor.create_real_time_aggregation_job(
+        PivotSpec(
+            table="sales",
+            rows=["region"],
+            measures=[Measure(field="sales", agg="sum", alias="total_sales")],
+            filters=[],
+        )
+    )
+    await processor.bootstrap_job(
+        job_id,
+        [{"id": 1, "region": "A", "sales": 1}],
+        checkpoints={"0": (0, "bootstrap")},
+    )
+
+    outcome = await processor.process_change(
+        _exact_change(
+            "INSERT", "evt-1", 1, new_row={"id": 2, "region": "B", "sales": 2}
+        )
+    )
+    result = await processor.get_job_result(job_id)
+    snapshot = await processor.cdc_state_store.load(job_id)
+
+    assert outcome == {"exact": 0, "invalidated": 1, "ignored": 0}
+    assert result.reason == "cdc_state_budget_exceeded"
+    assert snapshot.groups == {}
+    assert snapshot.checkpoints == {}
+
+
+@pytest.mark.asyncio
+async def test_cdc_group_budget_invalidates_an_oversized_authoritative_bootstrap():
+    processor = StreamAggregationProcessor(
+        state_store=MemoryCDCStateStore(),
+        cdc_state_limits=CDCStateLimits(
+            max_groups=1, max_bytes=4096, max_extrema_values=10
+        ),
+    )
+    job_id = await processor.create_real_time_aggregation_job(
+        PivotSpec(
+            table="sales",
+            rows=["region"],
+            measures=[Measure(field="sales", agg="sum", alias="total_sales")],
+            filters=[],
+        )
+    )
+
+    await processor.bootstrap_job(
+        job_id,
+        [
+            {"id": 1, "region": "A", "sales": 1},
+            {"id": 2, "region": "B", "sales": 2},
+        ],
+        checkpoints={"0": (0, "bootstrap")},
+    )
+
+    result = await processor.get_job_result(job_id)
+    snapshot = await processor.cdc_state_store.load(job_id)
+    assert result.reason == "cdc_state_budget_exceeded"
+    assert snapshot.groups == {}
+    assert snapshot.checkpoints == {}
+
+
+@pytest.mark.asyncio
+async def test_cdc_extrema_budget_keeps_duplicates_and_allows_an_update_to_replace_value():
+    processor = StreamAggregationProcessor(
+        state_store=MemoryCDCStateStore(),
+        cdc_state_limits=CDCStateLimits(
+            max_groups=1, max_bytes=4096, max_extrema_values=1
+        ),
+    )
+    job_id = await processor.create_real_time_aggregation_job(
+        PivotSpec(
+            table="sales",
+            rows=[],
+            measures=[Measure(field="sales", agg="min", alias="minimum")],
+            filters=[],
+        )
+    )
+    await processor.bootstrap_job(
+        job_id,
+        [{"id": 1, "sales": 10}],
+        checkpoints={"0": (0, "bootstrap")},
+    )
+
+    outcome = await processor.process_change(
+        _exact_change(
+            "UPDATE",
+            "evt-1",
+            1,
+            old_row={"id": 1, "sales": 10},
+            new_row={"id": 1, "sales": 20},
+        )
+    )
+
+    result = await processor.get_job_result(job_id)
+    assert outcome == {"exact": 1, "invalidated": 0, "ignored": 0}
+    assert result.values == {"minimum": 20}
+
+
+@pytest.mark.asyncio
+async def test_cdc_extrema_budget_accepts_a_duplicate_encoded_value():
+    processor = StreamAggregationProcessor(
+        state_store=MemoryCDCStateStore(),
+        cdc_state_limits=CDCStateLimits(
+            max_groups=1, max_bytes=4096, max_extrema_values=1
+        ),
+    )
+    job_id = await processor.create_real_time_aggregation_job(
+        PivotSpec(
+            table="sales",
+            rows=[],
+            measures=[Measure(field="sales", agg="min", alias="minimum")],
+            filters=[],
+        )
+    )
+    await processor.bootstrap_job(
+        job_id,
+        [{"id": 1, "sales": 10}],
+        checkpoints={"0": (0, "bootstrap")},
+    )
+
+    outcome = await processor.process_change(
+        _exact_change("INSERT", "evt-1", 1, new_row={"id": 2, "sales": 10})
+    )
+
+    assert outcome == {"exact": 1, "invalidated": 0, "ignored": 0}
+    assert (await processor.get_job_result(job_id)).values == {"minimum": 10}
+
+
+@pytest.mark.asyncio
+async def test_cdc_extrema_budget_invalidates_when_a_new_distinct_value_would_grow_state():
+    processor = StreamAggregationProcessor(
+        state_store=MemoryCDCStateStore(),
+        cdc_state_limits=CDCStateLimits(
+            max_groups=1, max_bytes=4096, max_extrema_values=1
+        ),
+    )
+    job_id = await processor.create_real_time_aggregation_job(
+        PivotSpec(
+            table="sales",
+            rows=[],
+            measures=[Measure(field="sales", agg="max", alias="maximum")],
+            filters=[],
+        )
+    )
+    await processor.bootstrap_job(
+        job_id,
+        [{"id": 1, "sales": 10}],
+        checkpoints={"0": (0, "bootstrap")},
+    )
+
+    outcome = await processor.process_change(
+        _exact_change("INSERT", "evt-1", 1, new_row={"id": 2, "sales": 20})
+    )
+
+    assert outcome == {"exact": 0, "invalidated": 1, "ignored": 0}
+    assert (await processor.get_job_result(job_id)).reason == "cdc_state_budget_exceeded"
 
 
 @pytest.mark.asyncio

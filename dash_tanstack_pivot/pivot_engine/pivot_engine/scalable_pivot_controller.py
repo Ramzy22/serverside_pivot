@@ -30,6 +30,7 @@ from .backends.duckdb_backend import DuckDBBackend
 from .cache.memory_cache import MemoryCache
 from .cache.redis_cache import RedisCache
 from .cache.generation_guard import GenerationGuard, GenerationGuardedCache
+from .resource_governor import ResourceLimits
 from .types.pivot_spec import PivotSpec
 from pivot_engine.streaming.streaming_processor import StreamAggregationProcessor, IncrementalMaterializedViewManager
 from pivot_engine.hierarchical_scroll_manager import HierarchicalVirtualScrollManager
@@ -143,6 +144,7 @@ class ScalablePivotController(PivotController):
         max_hierarchy_rows: Optional[int] = None,
         distributed_runtime: Optional[Any] = None,
         cdc_exact_state_store: str = "memory",
+        resource_limits: Optional[ResourceLimits] = None,
         **cache_options: Any
     ):
         if distributed_runtime is None:
@@ -152,6 +154,7 @@ class ScalablePivotController(PivotController):
 
             distributed_runtime = distributed_runtime_from_env()
         self.distributed_runtime = distributed_runtime
+        self.resource_limits = resource_limits or ResourceLimits.from_environment()
         if self.distributed_runtime is not None and (
             cache == "redis" or isinstance(cache, RedisCache)
         ):
@@ -216,6 +219,13 @@ class ScalablePivotController(PivotController):
         if cdc_exact_state_store not in {"memory", "redis"}:
             raise ValueError("cdc_exact_state_store must be 'memory' or 'redis'.")
         if enable_streaming:
+            from pivot_engine.streaming.exact_state import CDCStateLimits
+
+            cdc_state_limits = CDCStateLimits(
+                max_groups=CDCStateLimits().max_groups,
+                max_bytes=self.resource_limits.cdc_bytes,
+                max_extrema_values=CDCStateLimits().max_extrema_values,
+            )
             if cdc_exact_state_store == "redis":
                 if self.distributed_runtime is None:
                     raise ValueError(
@@ -224,10 +234,15 @@ class ScalablePivotController(PivotController):
                 from pivot_engine.streaming.exact_state import RedisCDCStateStore
 
                 self.streaming_processor = StreamAggregationProcessor(
-                    state_store=RedisCDCStateStore(self.distributed_runtime)
+                    state_store=RedisCDCStateStore(
+                        self.distributed_runtime, limits=cdc_state_limits
+                    ),
+                    cdc_state_limits=cdc_state_limits,
                 )
             else:
-                self.streaming_processor = StreamAggregationProcessor()
+                self.streaming_processor = StreamAggregationProcessor(
+                    cdc_state_limits=cdc_state_limits
+                )
 
         if enable_incremental_views and con is not None:
             self.incremental_view_manager = IncrementalMaterializedViewManager(con)

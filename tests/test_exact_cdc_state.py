@@ -10,6 +10,8 @@ from pivot_engine.runtime.distributed import (
 )
 from pivot_engine.streaming.exact_state import (
     CDCJobSnapshot,
+    CDCStateBudgetExceeded,
+    CDCStateLimits,
     CanonicalScalarCodec,
     ExactCDCStateError,
     ExactMeasureAccumulator,
@@ -119,6 +121,24 @@ async def test_memory_store_rejects_stale_compare_and_swap():
 
 
 @pytest.mark.asyncio
+async def test_memory_store_rejects_an_oversized_snapshot_without_persisting_it():
+    """A store CAS must be a final guard even when callers bypass a processor."""
+    store = MemoryCDCStateStore(
+        limits=CDCStateLimits(max_groups=10, max_bytes=1, max_extrema_values=10)
+    )
+    snapshot = await store.load("job-sales")
+
+    with pytest.raises(CDCStateBudgetExceeded):
+        await store.compare_and_swap(
+            "job-sales", snapshot.version, snapshot.with_checkpoint("0", 1, "evt-1")
+        )
+
+    persisted = await store.load("job-sales")
+    assert persisted.version == 0
+    assert persisted.checkpoints == {}
+
+
+@pytest.mark.asyncio
 async def test_redis_snapshot_persists_checkpoint_across_store_recreation(fake_runtime_state):
     first = RedisCDCStateStore(fake_runtime_state)
     snapshot = await first.load("job-sales")
@@ -132,6 +152,26 @@ async def test_redis_snapshot_persists_checkpoint_across_store_recreation(fake_r
 
     assert (await second.load("job-sales")).checkpoint("0") == (4, "evt-4")
     assert persisted.version == 1
+
+
+@pytest.mark.asyncio
+async def test_redis_store_rejects_an_oversized_snapshot_before_its_cas_write(
+    fake_runtime_state,
+):
+    store = RedisCDCStateStore(
+        fake_runtime_state,
+        limits=CDCStateLimits(max_groups=10, max_bytes=1, max_extrema_values=10),
+    )
+    snapshot = await store.load("job-sales")
+
+    with pytest.raises(CDCStateBudgetExceeded):
+        await store.compare_and_swap(
+            "job-sales", snapshot.version, snapshot.with_checkpoint("0", 1, "evt-1")
+        )
+
+    persisted = await store.load("job-sales")
+    assert persisted.version == 0
+    assert persisted.checkpoints == {}
 
 
 def test_checkpoint_distinguishes_replay_from_out_of_order_source_events():

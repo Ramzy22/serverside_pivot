@@ -14,12 +14,15 @@ from pivot_engine.types.pivot_spec import PivotSpec
 from pivot_engine.cdc.models import Change
 from pivot_engine.streaming.exact_state import (
     CDCJobSnapshot,
+    CDCStateBudgetExceeded,
+    CDCStateLimits,
     CDCStateStore,
     CanonicalScalarCodec,
     ExactCDCStateError,
     ExactGroupState,
     MemoryCDCStateStore,
     StateVersionConflict,
+    validate_cdc_snapshot_limits,
 )
 from ibis.expr.api import Table as IbisTable
 
@@ -40,8 +43,14 @@ class StreamingJobResult:
 
 
 class StreamAggregationProcessor:
-    def __init__(self, kafka_config: Optional[Dict[str, Any]] = None, state_store: Optional[Any] = None):
+    def __init__(
+        self,
+        kafka_config: Optional[Dict[str, Any]] = None,
+        state_store: Optional[Any] = None,
+        cdc_state_limits: Optional[CDCStateLimits] = None,
+    ):
         self.kafka_config = kafka_config or {}
+        self.cdc_state_limits = cdc_state_limits or CDCStateLimits()
         self.aggregation_jobs = {}
         self.stream_clients = {}
         self.job_tasks = {}
@@ -60,7 +69,7 @@ class StreamAggregationProcessor:
         # Initialize legacy State Store
         elif state_store:
             self.state_store = state_store
-            self.cdc_state_store = MemoryCDCStateStore()
+            self.cdc_state_store = MemoryCDCStateStore(self.cdc_state_limits)
         else:
             # Check if we can use Redis from config
             if self.kafka_config.get('redis_host'):
@@ -78,7 +87,7 @@ class StreamAggregationProcessor:
             else:
                 from pivot_engine.streaming.state_store import MemoryStateStore
                 self.state_store = MemoryStateStore()
-            self.cdc_state_store = MemoryCDCStateStore()
+            self.cdc_state_store = MemoryCDCStateStore(self.cdc_state_limits)
 
     async def create_real_time_aggregation_job(self, pivot_spec: PivotSpec):
         """Create a stream processing job for real-time aggregations"""
@@ -240,14 +249,65 @@ class StreamAggregationProcessor:
             return
         group_key = self._group_key(job, row)
         group = snapshot.groups.get(group_key)
+        new_group = group is None
         if group is None:
             if sign < 0:
                 raise ExactCDCStateError("CDC group removal has no matching state.")
+            if len(snapshot.groups) >= self.cdc_state_limits.max_groups:
+                raise CDCStateBudgetExceeded(
+                    "CDC group state exceeds its configured budget."
+                )
             group = ExactGroupState()
+        self._ensure_extrema_capacity(snapshot, group, job, row, sign)
+        if new_group:
             snapshot.groups[group_key] = group
         group.apply(row, sign, list(job.get("measures") or []))
         if group.row_count == 0:
             snapshot.groups.pop(group_key, None)
+        validate_cdc_snapshot_limits(snapshot, self.cdc_state_limits)
+
+    def _ensure_extrema_capacity(
+        self,
+        snapshot: CDCJobSnapshot,
+        group: ExactGroupState,
+        job: Mapping[str, Any],
+        row: Mapping[str, Any],
+        sign: int,
+    ) -> None:
+        """Reject a distinct min/max value before mutating cloned state."""
+
+        if sign < 0:
+            return
+        existing_values = sum(
+            len(accumulator.value_counts)
+            for current_group in snapshot.groups.values()
+            for accumulator in current_group.measures.values()
+            if accumulator.aggregation in {"min", "max"}
+        )
+        additions: set[tuple[str, str]] = set()
+        for measure in list(job.get("measures") or []):
+            field_name = ExactGroupState._measure_value(measure, "field")
+            aggregation = str(
+                ExactGroupState._measure_value(measure, "agg") or ""
+            ).lower()
+            if (
+                aggregation not in {"min", "max"}
+                or not field_name
+                or field_name not in row
+                or row[field_name] is None
+            ):
+                continue
+            alias = str(
+                ExactGroupState._measure_value(measure, "alias") or field_name
+            )
+            accumulator = group.measures.get(alias)
+            encoded = CanonicalScalarCodec.encode(row[field_name])
+            if accumulator is None or encoded not in accumulator.value_counts:
+                additions.add((alias, encoded))
+        if existing_values + len(additions) > self.cdc_state_limits.max_extrema_values:
+            raise CDCStateBudgetExceeded(
+                "CDC extrema state exceeds its configured budget."
+            )
 
     def _apply_exact_transition(
         self,
@@ -268,7 +328,9 @@ class StreamAggregationProcessor:
             self._apply_row(next_snapshot, job, change.new_row or {}, 1)
         else:
             raise ExactCDCStateError("CDC operation is not supported for exact state.")
-        return next_snapshot.advance(change)
+        advanced = next_snapshot.advance(change)
+        validate_cdc_snapshot_limits(advanced, self.cdc_state_limits)
+        return advanced
 
     @staticmethod
     def _normalized_checkpoints(
@@ -322,23 +384,32 @@ class StreamAggregationProcessor:
             bootstrapped.status = "fresh"
             bootstrapped.invalidation_reason = None
             bootstrapped.checkpoints = dict(normalized_checkpoints)
-            for row in rows:
-                if not isinstance(row, Mapping):
-                    raise ExactCDCStateError("CDC bootstrap rows must be mappings.")
-                self._apply_row(bootstrapped, job, row, 1)
             try:
+                for row in rows:
+                    if not isinstance(row, Mapping):
+                        raise ExactCDCStateError("CDC bootstrap rows must be mappings.")
+                    self._apply_row(bootstrapped, job, row, 1)
                 await self.cdc_state_store.compare_and_swap(
                     str(job_id), current.version, bootstrapped
+                )
+                return
+            except CDCStateBudgetExceeded:
+                await self._invalidate_job(
+                    str(job_id), CDCStateBudgetExceeded.code, discard_state=True
                 )
                 return
             except StateVersionConflict:
                 continue
         raise ExactCDCStateError("CDC source snapshot could not be installed safely.")
 
-    async def _invalidate_job(self, job_id: str, reason: str) -> None:
+    async def _invalidate_job(
+        self, job_id: str, reason: str, *, discard_state: bool = False
+    ) -> None:
         for _ in range(2):
             snapshot = await self.cdc_state_store.load(job_id)
-            invalidated = snapshot.clone()
+            invalidated = (
+                CDCJobSnapshot.empty(job_id) if discard_state else snapshot.clone()
+            )
             invalidated.status = "invalidated"
             invalidated.invalidation_reason = reason
             try:
@@ -413,6 +484,14 @@ class StreamAggregationProcessor:
                 )
                 except StateVersionConflict:
                     continue
+                except CDCStateBudgetExceeded:
+                    await self._invalidate_job(
+                        job_id,
+                        CDCStateBudgetExceeded.code,
+                        discard_state=True,
+                    )
+                    invalidated += 1
+                    break
                 except ExactCDCStateError:
                     await self._invalidate_job(job_id, "invalid_exact_transition")
                     invalidated += 1

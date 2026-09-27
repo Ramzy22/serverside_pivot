@@ -21,10 +21,39 @@ from typing import Any, Dict, Iterable, Mapping, Optional, Sequence
 
 _STATE_FORMAT = b"pivot:cdc-exact-state:v1\x00"
 _SUPPORTED_AGGREGATIONS = frozenset({"sum", "count", "avg", "min", "max"})
+_DEFAULT_CDC_MAX_GROUPS = 100_000
+_DEFAULT_CDC_MAX_BYTES = 128 * 1024 * 1024
+_DEFAULT_CDC_MAX_EXTREMA_VALUES = 1_000_000
 
 
 class ExactCDCStateError(ValueError):
     """Raised when an event cannot be represented in exact aggregate state."""
+
+
+@dataclass(frozen=True)
+class CDCStateLimits:
+    """Hard caps for one exact CDC snapshot.
+
+    Extrema state tracks each distinct, canonically encoded value.  Counting
+    those entries (rather than rows) preserves exact duplicate handling while
+    bounding the part of CDC state that can otherwise grow indefinitely.
+    """
+
+    max_groups: int = _DEFAULT_CDC_MAX_GROUPS
+    max_bytes: int = _DEFAULT_CDC_MAX_BYTES
+    max_extrema_values: int = _DEFAULT_CDC_MAX_EXTREMA_VALUES
+
+    def __post_init__(self) -> None:
+        for name in ("max_groups", "max_bytes", "max_extrema_values"):
+            value = getattr(self, name)
+            if not isinstance(value, int) or isinstance(value, bool) or value <= 0:
+                raise ValueError(f"{name} must be a positive integer")
+
+
+class CDCStateBudgetExceeded(ExactCDCStateError):
+    """Raised before exact CDC state exceeds a configured hard limit."""
+
+    code = "cdc_state_budget_exceeded"
 
 
 class StateVersionConflict(ExactCDCStateError):
@@ -213,7 +242,12 @@ class ExactMeasureAccumulator:
         remaining = self.value_counts.get(encoded, 0) - 1
         if remaining < 0:
             raise ExactCDCStateError("CDC removal has no matching contribution.")
-        self.value_counts[encoded] = remaining
+        if remaining:
+            self.value_counts[encoded] = remaining
+        else:
+            # Heaps retain a stale entry until their next lookup, but retaining
+            # a zero-count key would make historical extrema unbounded.
+            self.value_counts.pop(encoded, None)
 
     def _extremum(self, heap: list[Any]) -> Any:
         while heap:
@@ -430,6 +464,40 @@ class CDCJobSnapshot:
         )
 
 
+def _encoded_snapshot_size(snapshot: CDCJobSnapshot) -> int:
+    """Return the durable Redis envelope size used by every state backend."""
+
+    body = json.dumps(
+        {"version": 1, "snapshot": snapshot.to_payload()},
+        ensure_ascii=False,
+        allow_nan=False,
+        separators=(",", ":"),
+    ).encode("utf-8")
+    return len(_STATE_FORMAT) + len(body)
+
+
+def _extrema_value_count(snapshot: CDCJobSnapshot) -> int:
+    return sum(
+        len(accumulator.value_counts)
+        for group in snapshot.groups.values()
+        for accumulator in group.measures.values()
+        if accumulator.aggregation in {"min", "max"}
+    )
+
+
+def validate_cdc_snapshot_limits(
+    snapshot: CDCJobSnapshot, limits: CDCStateLimits
+) -> None:
+    """Reject an unpersisted snapshot that would exceed any exact-state cap."""
+
+    if len(snapshot.groups) > limits.max_groups:
+        raise CDCStateBudgetExceeded("CDC group state exceeds its configured budget.")
+    if _extrema_value_count(snapshot) > limits.max_extrema_values:
+        raise CDCStateBudgetExceeded("CDC extrema state exceeds its configured budget.")
+    if _encoded_snapshot_size(snapshot) > limits.max_bytes:
+        raise CDCStateBudgetExceeded("CDC encoded state exceeds its configured budget.")
+
+
 class CDCStateStore:
     """Narrow asynchronous persistence interface for exact CDC job state."""
 
@@ -448,9 +516,10 @@ class CDCStateStore:
 class MemoryCDCStateStore(CDCStateStore):
     """Process-local store for tests and explicit development-only use."""
 
-    def __init__(self) -> None:
+    def __init__(self, limits: Optional[CDCStateLimits] = None) -> None:
         self._snapshots: Dict[str, CDCJobSnapshot] = {}
         self._lock = asyncio.Lock()
+        self.limits = limits or CDCStateLimits()
 
     async def load(self, job_id: str) -> CDCJobSnapshot:
         async with self._lock:
@@ -471,6 +540,7 @@ class MemoryCDCStateStore(CDCStateStore):
             persisted = snapshot.clone()
             persisted.job_id = key
             persisted.version = current.version + 1
+            validate_cdc_snapshot_limits(persisted, self.limits)
             self._snapshots[key] = persisted
             return persisted.clone()
 
@@ -478,8 +548,11 @@ class MemoryCDCStateStore(CDCStateStore):
 class RedisCDCStateStore(CDCStateStore):
     """Redis-backed state using one explicit versioned JSON envelope per job."""
 
-    def __init__(self, runtime_state: Any) -> None:
+    def __init__(
+        self, runtime_state: Any, limits: Optional[CDCStateLimits] = None
+    ) -> None:
         self.runtime_state = runtime_state
+        self.limits = limits or CDCStateLimits()
 
     def _key(self, job_id: str) -> str:
         return self.runtime_state.key("cdc", "job", str(job_id))
@@ -539,11 +612,12 @@ class RedisCDCStateStore(CDCStateStore):
                 persisted = snapshot.clone()
                 persisted.job_id = str(job_id)
                 persisted.version = current.version + 1
+                validate_cdc_snapshot_limits(persisted, self.limits)
                 pipe.multi()
                 pipe.set(key, self._encode(persisted))
                 pipe.execute()
                 return persisted
-        except StateVersionConflict:
+        except (StateVersionConflict, CDCStateBudgetExceeded):
             raise
         except Exception as exc:
             if exc.__class__.__name__ == "WatchError":
@@ -553,6 +627,8 @@ class RedisCDCStateStore(CDCStateStore):
 
 __all__ = [
     "CDCJobSnapshot",
+    "CDCStateBudgetExceeded",
+    "CDCStateLimits",
     "CDCStateStore",
     "CanonicalScalarCodec",
     "ExactCDCStateError",
@@ -561,4 +637,5 @@ __all__ = [
     "MemoryCDCStateStore",
     "RedisCDCStateStore",
     "StateVersionConflict",
+    "validate_cdc_snapshot_limits",
 ]

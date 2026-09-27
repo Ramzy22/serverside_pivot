@@ -7,6 +7,7 @@ from pivot_engine.cdc.models import Change
 from pivot_engine.cdc.cdc_manager import CDCProcessingError
 from pivot_engine.scalable_pivot_controller import ScalablePivotController
 from pivot_engine.types.pivot_spec import Measure, PivotSpec
+from pivot_engine.resource_governor import ResourceLimits
 import pyarrow as pa
 import time
 
@@ -402,3 +403,15 @@ async def test_controller_bootstraps_streaming_aggregate_from_existing_source_ro
     assert job["status"] == "fresh"
     assert result.status == "fresh"
     assert result.values == {"minimum": 10}
+
+
+def test_controller_uses_worker_cdc_byte_policy_for_exact_state_limits():
+    controller = ScalablePivotController(
+        backend_uri=":memory:",
+        enable_incremental_views=False,
+        resource_limits=ResourceLimits.for_testing(cdc_bytes=2048),
+    )
+    try:
+        assert controller.streaming_processor.cdc_state_limits.max_bytes == 2048
+    finally:
+        controller.close()
