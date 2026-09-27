@@ -10,6 +10,7 @@ from pivot_engine.resource_governor import (
     ResourceExhaustedError,
     ResourceGovernor,
     ResourceKind,
+    ResourceLease,
     ResourceLimits,
     estimate_value_bytes,
 )
@@ -145,6 +146,50 @@ def test_resource_exhausted_error_caps_huge_retry_metadata():
     )
 
     assert 1 <= error.retry_after_ms <= 60_000
+
+
+def test_forged_lease_release_cannot_free_an_admitted_reservation():
+    governor = ResourceGovernor(
+        ResourceLimits.for_testing(
+            total_bytes=100,
+            headroom_bytes=10,
+            query_bytes=80,
+            max_queries=1,
+        ),
+        rss_bytes_getter=lambda: 0,
+    )
+    live_lease = governor.reserve(ResourceKind.QUERY, 80)
+
+    ResourceLease(governor, ResourceKind.QUERY, 80).release()
+
+    snapshot = governor.snapshot()
+    assert snapshot["reserved_bytes_by_kind"]["query"] == 80
+    assert snapshot["active_slots"]["query"] == 1
+    with pytest.raises(ResourceExhaustedError):
+        governor.reserve(ResourceKind.QUERY, 1)
+    live_lease.release()
+
+
+def test_mutating_public_lease_charge_cannot_corrupt_release_accounting():
+    governor = ResourceGovernor(
+        ResourceLimits.for_testing(
+            total_bytes=100,
+            headroom_bytes=10,
+            query_bytes=80,
+            max_queries=1,
+        ),
+        rss_bytes_getter=lambda: 0,
+    )
+    lease = governor.reserve(ResourceKind.QUERY, 80)
+
+    lease.reserved_bytes = 1
+    assert governor.snapshot()["reserved_bytes_by_kind"]["query"] == 80
+    lease.release()
+
+    snapshot = governor.snapshot()
+    assert snapshot["reserved_bytes_by_kind"]["query"] == 0
+    assert snapshot["active_slots"]["query"] == 0
+    governor.reserve(ResourceKind.QUERY, 80)
 
 
 def test_limits_reject_inconsistent_duckdb_worker_envelope():

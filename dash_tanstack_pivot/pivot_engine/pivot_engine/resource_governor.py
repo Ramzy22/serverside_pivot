@@ -275,6 +275,7 @@ class ResourceGovernor:
         self._active_slots: Counter[ResourceKind] = Counter()
         self._admitted: Counter[ResourceKind] = Counter()
         self._rejected: Counter[tuple[ResourceKind, str]] = Counter()
+        self._lease_records: dict[int, tuple[ResourceLease, ResourceKind, int]] = {}
         self._high_water_rss_bytes = 0
 
     def reserve(self, kind: ResourceKind, estimated_bytes: int) -> ResourceLease:
@@ -287,27 +288,37 @@ class ResourceGovernor:
             if self.limits.slots_for(kind) is not None:
                 self._active_slots[kind] += 1
             self._admitted[kind] += 1
-            return ResourceLease(self, kind, estimated_bytes)
+            lease = ResourceLease(self, kind, estimated_bytes)
+            self._lease_records[id(lease)] = (lease, kind, estimated_bytes)
+            return lease
 
     def _grow(self, lease: ResourceLease, additional_bytes: int) -> None:
         with self._lock:
-            if lease._released:
-                raise RuntimeError("Cannot grow a released resource lease")
-            self._ensure_capacity(lease.kind, additional_bytes, include_slot=False)
-            self._reserved_by_kind[lease.kind] += additional_bytes
-            lease.reserved_bytes += additional_bytes
+            record = self._lease_records.get(id(lease))
+            if record is None or record[0] is not lease:
+                raise RuntimeError("Cannot grow an inactive resource lease")
+            _, kind, recorded_bytes = record
+            self._ensure_capacity(kind, additional_bytes, include_slot=False)
+            self._reserved_by_kind[kind] += additional_bytes
+            updated_bytes = recorded_bytes + additional_bytes
+            self._lease_records[id(lease)] = (lease, kind, updated_bytes)
+            lease.reserved_bytes = updated_bytes
 
     def _release(self, lease: ResourceLease) -> None:
         with self._lock:
-            if lease._released:
+            record = self._lease_records.pop(id(lease), None)
+            if record is None or record[0] is not lease:
+                lease._released = True
                 return
-            self._reserved_by_kind[lease.kind] -= lease.reserved_bytes
-            if self._reserved_by_kind[lease.kind] <= 0:
-                self._reserved_by_kind.pop(lease.kind, None)
-            if self.limits.slots_for(lease.kind) is not None:
-                self._active_slots[lease.kind] -= 1
-                if self._active_slots[lease.kind] <= 0:
-                    self._active_slots.pop(lease.kind, None)
+            _, kind, recorded_bytes = record
+            self._reserved_by_kind[kind] -= recorded_bytes
+            if self._reserved_by_kind[kind] <= 0:
+                self._reserved_by_kind.pop(kind, None)
+            if self.limits.slots_for(kind) is not None:
+                self._active_slots[kind] -= 1
+                if self._active_slots[kind] <= 0:
+                    self._active_slots.pop(kind, None)
+            lease.reserved_bytes = recorded_bytes
             lease._released = True
 
     def _ensure_capacity(
