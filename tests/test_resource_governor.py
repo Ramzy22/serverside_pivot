@@ -115,6 +115,11 @@ def test_estimate_value_bytes_handles_arrow_bytes_and_text():
     assert estimate_value_bytes(object()) is None
 
 
+def test_estimate_value_bytes_counts_unicode_without_encoding_or_surrogate_errors():
+    assert estimate_value_bytes("Aé€𐍈") == 10
+    assert estimate_value_bytes("\ud800") is None
+
+
 def test_estimate_value_bytes_uses_memoryview_byte_length_not_element_count():
     values = array.array("I", [1, 2, 3])
 
@@ -146,6 +151,52 @@ def test_resource_exhausted_error_caps_huge_retry_metadata():
     )
 
     assert 1 <= error.retry_after_ms <= 60_000
+
+
+def test_rss_probe_failure_rejects_admission_without_reserving_capacity():
+    def unavailable_rss() -> int:
+        raise RuntimeError("process unavailable")
+
+    governor = ResourceGovernor(
+        ResourceLimits.for_testing(total_bytes=100, headroom_bytes=10, query_bytes=80),
+        rss_bytes_getter=unavailable_rss,
+    )
+
+    with pytest.raises(ResourceExhaustedError) as raised:
+        governor.reserve(ResourceKind.QUERY, 20)
+
+    assert raised.value.reason == "rss_unavailable"
+    snapshot = governor.snapshot()
+    assert snapshot["rejected"]["query"]["rss_unavailable"] == 1
+    assert snapshot["rss_bytes"] is None
+    assert snapshot["reserved_bytes_by_kind"]["query"] == 0
+    assert snapshot["active_slots"]["query"] == 0
+
+
+def test_rss_probe_failure_rejects_growth_without_changing_live_charge():
+    available = True
+
+    def rss_reading() -> int:
+        if not available:
+            raise RuntimeError("process unavailable")
+        return 0
+
+    governor = ResourceGovernor(
+        ResourceLimits.for_testing(total_bytes=100, headroom_bytes=10, query_bytes=80),
+        rss_bytes_getter=rss_reading,
+    )
+    lease = governor.reserve(ResourceKind.QUERY, 20)
+    available = False
+
+    with pytest.raises(ResourceExhaustedError, match="resource_exhausted") as raised:
+        lease.grow(1)
+
+    assert raised.value.reason == "rss_unavailable"
+    snapshot = governor.snapshot()
+    assert snapshot["rejected"]["query"]["rss_unavailable"] == 1
+    assert snapshot["reserved_bytes_by_kind"]["query"] == 20
+    assert snapshot["active_slots"]["query"] == 1
+    lease.release()
 
 
 def test_forged_lease_release_cannot_free_an_admitted_reservation():

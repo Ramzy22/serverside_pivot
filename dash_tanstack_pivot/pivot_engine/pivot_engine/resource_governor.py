@@ -213,7 +213,21 @@ def estimate_value_bytes(value: Any) -> int | None:
     """Safely estimate values that can be retained without serializing them."""
 
     if isinstance(value, str):
-        return len(value.encode("utf-8"))
+        total = 0
+        for character in value:
+            code_point = ord(character)
+            if code_point <= 0x7F:
+                total += 1
+            elif code_point <= 0x7FF:
+                total += 2
+            elif 0xD800 <= code_point <= 0xDFFF:
+                # A surrogate has no standalone UTF-8 representation.
+                return None
+            elif code_point <= 0xFFFF:
+                total += 3
+            else:
+                total += 4
+        return total
     if isinstance(value, memoryview):
         return value.nbytes
     if isinstance(value, (bytes, bytearray)):
@@ -325,6 +339,8 @@ class ResourceGovernor:
         self, kind: ResourceKind, requested_bytes: int, *, include_slot: bool
     ) -> None:
         rss = self._sample_rss()
+        if rss is None:
+            self._reject(kind, "rss_unavailable")
         if rss >= self.limits.rss_soft_limit_bytes:
             self._reject(kind, "rss_soft_limit")
 
@@ -340,11 +356,16 @@ class ResourceGovernor:
         if total_reserved + requested_bytes > self.limits.total_bytes - self.limits.headroom_bytes:
             self._reject(kind, "total_bytes")
 
-    def _sample_rss(self) -> int:
+    def _sample_rss(self) -> int | None:
         try:
-            current = max(0, int(self._rss_bytes_getter()))
+            reported = self._rss_bytes_getter()
+            if isinstance(reported, bool):
+                return None
+            current = int(reported)
         except Exception:
-            current = 0
+            return None
+        if current < 0:
+            return None
         self._high_water_rss_bytes = max(self._high_water_rss_bytes, current)
         return current
 
