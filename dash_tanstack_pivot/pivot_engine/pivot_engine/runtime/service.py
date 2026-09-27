@@ -40,6 +40,14 @@ class PivotRuntimeService(RuntimeCompatibilityMixin):
         # One service-scoped owner is shared by all sessions and transports in
         # this worker. Hosts may inject their worker governor explicitly.
         self.resource_governor = resource_governor or ResourceGovernor(ResourceLimits.from_environment())
+        try:
+            from ..admin_api import register_resource_governor
+
+            register_resource_governor(self.resource_governor)
+        except (ImportError, AttributeError):
+            # The core runtime remains usable in hosts that do not mount the
+            # optional admin router.
+            pass
         self.distributed_runtime = distributed_runtime or distributed_runtime_from_env()
         if request_coordinator is not None and session_gate is not None:
             if request_coordinator.session_gate is not session_gate:
