@@ -1,8 +1,10 @@
 from collections import OrderedDict
 import time
 
+import pytest
+
 from pivot_engine.cache_coordinator import CacheCoordinator, CacheNamespaces
-from pivot_engine.hierarchy_cache_registry import HierarchyCacheRegistry
+from pivot_engine.hierarchy_cache_registry import BoundedHierarchyCache, HierarchyCacheRegistry
 from pivot_engine.resource_governor import ResourceGovernor, ResourceLimits
 
 
@@ -33,4 +35,84 @@ def test_hierarchy_alias_mutations_do_not_bypass_charges():
     del registry.root_page["a"]
     assert governor.snapshot()["reserved_bytes"] == 2
     registry.root_page.popitem()
+    assert governor.snapshot()["reserved_bytes"] == 0
+
+
+def test_hierarchy_copy_is_an_ordered_detached_snapshot():
+    governor = ResourceGovernor(ResourceLimits.for_testing(), rss_bytes_getter=lambda: 0)
+    registry = HierarchyCacheRegistry(CacheCoordinator(), ttl_seconds=60, max_bytes=5, governor=governor)
+    expiry = time.time() + 60
+    registry.view.update({"a": (b"abc", expiry), "b": (b"de", expiry)})
+    before = list(registry.view.items())
+
+    copied = registry.view.copy()
+
+    assert type(copied) is OrderedDict
+    assert list(copied.items()) == before
+    assert list(registry.view.items()) == before
+    assert governor.snapshot()["reserved_bytes"] == 5
+    copied["a"] = (b"too large", expiry)
+    copied.pop("b")
+    copied["c"] = (b"z", expiry)
+    assert list(registry.view.items()) == before
+    registry.view.update(copied)
+    assert list(registry.view) == ["b", "c"]
+    assert registry.view.size_snapshot() == {"entries": 2, "bytes": 3}
+    assert governor.snapshot()["reserved_bytes"] == 3
+    registry.view.clear()
+    assert list(copied) == ["a", "c"]
+    assert governor.snapshot()["reserved_bytes"] == 0
+
+
+def test_hierarchy_fromkeys_preserves_ordered_dict_factory_semantics():
+    governor = ResourceGovernor(ResourceLimits.for_testing(), rss_bytes_getter=lambda: 0)
+    registry = HierarchyCacheRegistry(CacheCoordinator(), ttl_seconds=60, max_bytes=5, governor=governor)
+    empty_values = BoundedHierarchyCache.fromkeys(["b", "a", "b"])
+    assert type(empty_values) is OrderedDict
+    assert list(empty_values.items()) == [("b", None), ("a", None)]
+
+    entry = (b"abc", time.time() + 60)
+    generated = registry.view.fromkeys(iter(["b", "a", "b"]), entry)
+    assert type(generated) is OrderedDict
+    assert list(generated.items()) == [("b", entry), ("a", entry)]
+    assert generated["a"] is generated["b"]
+    assert registry.view.size_snapshot() == {"entries": 0, "bytes": 0}
+    assert governor.snapshot()["reserved_bytes"] == 0
+    registry.view |= generated
+    assert list(registry.view) == ["a"]
+    assert governor.snapshot()["reserved_bytes"] == 3
+    generated.clear()
+    assert list(registry.view) == ["a"]
+    registry.view.clear()
+    assert governor.snapshot()["reserved_bytes"] == 0
+
+
+@pytest.mark.parametrize("reverse", [False, True])
+def test_hierarchy_union_is_detached_and_readmission_is_bounded(reverse):
+    governor = ResourceGovernor(ResourceLimits.for_testing(), rss_bytes_getter=lambda: 0)
+    registry = HierarchyCacheRegistry(CacheCoordinator(), ttl_seconds=60, max_bytes=5, governor=governor)
+    expiry = time.time() + 60
+    registry.view.update({"a": (b"abc", expiry), "b": (b"de", expiry)})
+    before = list(registry.view.items())
+    other = {"b": (b"z", expiry), "huge": (b"oversized", expiry)}
+
+    merged = other | registry.view if reverse else registry.view | other
+
+    assert type(merged) is OrderedDict
+    expected = [("b", (b"de", expiry)), ("huge", (b"oversized", expiry)), ("a", (b"abc", expiry))] if reverse else [
+        ("a", (b"abc", expiry)), ("b", (b"z", expiry)), ("huge", (b"oversized", expiry))
+    ]
+    assert list(merged.items()) == expected
+    assert list(registry.view.items()) == before
+    assert governor.snapshot()["reserved_bytes"] == 5
+    merged["a"] = (b"oversized", expiry)
+    alias = registry.view
+    registry.view |= merged
+    assert registry.view is alias
+    assert "huge" not in alias
+    assert alias["a"][0] == b"abc"
+    assert alias.size_snapshot() == {"entries": 2, "bytes": 5 if reverse else 4}
+    assert governor.snapshot()["reserved_bytes"] == (5 if reverse else 4)
+    alias.clear()
+    assert len(merged) == 3
     assert governor.snapshot()["reserved_bytes"] == 0

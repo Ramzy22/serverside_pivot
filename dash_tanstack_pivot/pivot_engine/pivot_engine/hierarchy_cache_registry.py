@@ -54,7 +54,12 @@ class _SizedValue:
 
 
 class BoundedHierarchyCache(OrderedDict):
-    """OrderedDict compatibility view whose mutations all enter MemoryCache."""
+    """OrderedDict compatibility view whose mutations all enter MemoryCache.
+
+    Mapping factories return detached, shallow OrderedDicts, as the original
+    registry aliases did. These are caller-owned snapshots, not cache storage;
+    writing them back through the view still requires bounded admission.
+    """
 
     def __init__(self, *, ttl, max_size, max_bytes, governor):
         super().__init__()
@@ -134,6 +139,29 @@ class BoundedHierarchyCache(OrderedDict):
         if key not in self:
             self[key] = default
         return self.get(key)
+
+    def copy(self):
+        with self.storage._lock:
+            # Construct from items so reads do not change this cache's LRU order.
+            return OrderedDict(self.items())
+
+    @classmethod
+    def fromkeys(cls, iterable, value=None):
+        return OrderedDict.fromkeys(iterable, value)
+
+    def __or__(self, other):
+        if not isinstance(other, dict):
+            return NotImplemented
+        result = self.copy()
+        result.update(other.copy() if isinstance(other, BoundedHierarchyCache) else other)
+        return result
+
+    def __ror__(self, other):
+        if not isinstance(other, dict):
+            return NotImplemented
+        result = OrderedDict(other.items())
+        result.update(self.copy())
+        return result
 
     def __ior__(self, other):
         self.update(other)
