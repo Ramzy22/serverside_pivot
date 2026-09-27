@@ -6,6 +6,8 @@ from typing import Dict, Any, Literal, Optional
 from dataclasses import dataclass, field
 from dotenv import load_dotenv
 
+from .resource_governor import ResourceLimits
+
 
 @dataclass
 class ScalablePivotConfig:
@@ -56,6 +58,10 @@ class ScalablePivotConfig:
     progressive_load_chunk_size: int = 100
     throttle_time: float = 0.1  # 100ms between UI updates
 
+    # One immutable worker-wide policy; parsing remains centralized in
+    # ResourceLimits rather than duplicating policy environment handling here.
+    resource_limits: ResourceLimits = field(default_factory=ResourceLimits.from_environment)
+
     def from_env(self) -> 'ScalablePivotConfig':
         """Load configuration from environment variables into this instance."""
         # Fix L7: load .env lazily instead of at module import time
@@ -104,6 +110,7 @@ class ScalablePivotConfig:
         # Performance limits
         self.query_timeout = int(os.getenv('QUERY_TIMEOUT', str(self.query_timeout)))
         self.max_concurrent_queries = int(os.getenv('MAX_CONCURRENT_QUERIES', str(self.max_concurrent_queries)))
+        self.resource_limits = ResourceLimits.from_environment()
         
         # UI settings
         self.virtual_scroll_threshold = int(os.getenv('VIRTUAL_SCROLL_THRESHOLD', str(self.virtual_scroll_threshold)))
