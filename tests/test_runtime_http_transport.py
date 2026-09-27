@@ -2,8 +2,10 @@
 
 from dataclasses import dataclass, field
 import logging
+import asyncio
 
 import fakeredis
+import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
@@ -16,6 +18,8 @@ from pivot_engine.runtime import (
 import pivot_engine.runtime.payload_store as payload_store_module
 from pivot_engine.runtime.distributed import DistributedRuntimeSettings, RedisRuntimeState
 from pivot_engine.runtime.payload_store import RedisPayloadBackend, RuntimePayloadStore
+from pivot_engine.resource_governor import ResourceExhaustedError, ResourceGovernor, ResourceKind, ResourceLimits
+from pivot_engine.runtime import PivotRuntimeService
 
 
 @dataclass
@@ -58,6 +62,111 @@ def _runtime_request(*, request_id="window-1"):
         },
         "payload": {"intent": "viewport", "start": 0, "end": 49},
     }
+
+
+def test_http_overload_is_safe_retryable_v1_error():
+    class ExhaustedService(_Service):
+        async def process_async(self, state, context):
+            raise ResourceExhaustedError(ResourceKind.QUERY, reason="SECRET backend memory/path", retry_after_ms=1501)
+
+    app = FastAPI()
+    register_runtime_http_transport(
+        app, lambda: ExhaustedService(), current_user_dependency=lambda: _User("alice"),
+        dataset_authorizer=_dataset_policy("read"),
+    )
+    response = TestClient(app).post("/v1/runtime", json=_runtime_request())
+    assert response.status_code == 503
+    assert response.headers["Retry-After"] == "2"
+    assert response.json()["status"] == "error"
+    assert response.json()["requestId"] == "window-1"
+    assert response.json()["payload"] == {
+        "code": "resource_exhausted", "resourceKind": "query", "retryAfterMs": 1501,
+    }
+    assert "SECRET" not in response.text
+
+
+def test_http_filter_options_uses_service_query_governor():
+    governor = ResourceGovernor(ResourceLimits.for_testing(max_queries=1), rss_bytes_getter=lambda: 0)
+
+    class Adapter:
+        async def handle_request(self, *_args, **_kwargs):
+            pytest.fail("filter request must be rejected before reaching backend")
+
+    service = PivotRuntimeService(lambda: Adapter(), resource_governor=governor)
+    app = FastAPI()
+    register_runtime_http_transport(
+        app, lambda: service, current_user_dependency=lambda: _User("alice"),
+        dataset_authorizer=_dataset_policy("read"),
+    )
+    envelope = {**_runtime_request(), "kind": "filter_options", "payload": {"columnId": "region"}}
+    with governor.reserve(ResourceKind.QUERY, 1):
+        response = TestClient(app).post("/v1/runtime", json=envelope)
+    assert response.status_code == 503
+    assert response.json()["payload"]["resourceKind"] == "query"
+
+
+def test_gateway_payload_retention_shares_service_resource_budget():
+    governor = ResourceGovernor(ResourceLimits.for_testing(payload_bytes=128), rss_bytes_getter=lambda: 0)
+    service = PivotRuntimeService(lambda: None, resource_governor=governor)
+    gateway = RuntimeHttpGateway(lambda: service)
+    with pytest.raises(ResourceExhaustedError):
+        gateway.payload_store.put_bytes(b"x" * 129)
+    gateway.payload_store.put_bytes(b"1234")
+    assert 4 <= governor.snapshot()["reserved_bytes_by_kind"]["payload"] <= 128
+    gateway.payload_store.clear()
+    assert governor.snapshot()["reserved_bytes"] == 0
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("file_payload", [False, True])
+async def test_download_slot_covers_sending_and_releases_on_disconnect(tmp_path, file_payload):
+    governor = ResourceGovernor(ResourceLimits.for_testing(max_downloads=1, download_bytes=64), rss_bytes_getter=lambda: 0)
+    service = PivotRuntimeService(lambda: None, resource_governor=governor)
+    app = FastAPI()
+    gateway = register_runtime_http_transport(
+        app, lambda: service, current_user_dependency=lambda: _User("alice"),
+    )
+    if file_payload:
+        payload_path = tmp_path / "export.csv"
+        payload_path.write_bytes(b"hello")
+        reference = gateway.payload_store.put_file(str(payload_path), metadata={"subject": "alice"})
+    else:
+        reference = gateway.payload_store.put_bytes(b"hello", metadata={"subject": "alice"})
+    token = reference["id"]
+    sending, release = asyncio.Event(), asyncio.Event()
+    scope = {
+        "type": "http", "asgi": {"version": "3.0"}, "http_version": "1.1", "method": "GET",
+        "scheme": "http", "path": f"/v1/runtime/payload/{token}", "raw_path": b"/",
+        "query_string": b"", "headers": [], "client": ("127.0.0.1", 1), "server": ("test", 80),
+    }
+
+    async def receive():
+        await asyncio.Event().wait()
+
+    async def send(message):
+        if message["type"] == "http.response.body":
+            sending.set()
+            await release.wait()
+            raise ConnectionError("client disconnected")
+
+    task = asyncio.create_task(app(scope, receive, send))
+    try:
+        await asyncio.wait_for(sending.wait(), 2)
+        assert governor.snapshot()["active_slots"]["download"] == 1
+        with pytest.raises(ResourceExhaustedError):
+            governor.reserve(ResourceKind.DOWNLOAD, 1)
+        response = TestClient(app).get(f"/v1/runtime/payload/{token}")
+        assert response.status_code == 503
+        assert response.headers["Retry-After"] == "1"
+        assert response.json()["payload"] == {
+            "code": "resource_exhausted", "resourceKind": "download", "retryAfterMs": 1000,
+        }
+    finally:
+        release.set()
+        with pytest.raises(ConnectionError):
+            await task
+        gateway.payload_store.clear()
+    assert governor.snapshot()["reserved_bytes"] == 0
 
 
 def _dataset_policy(

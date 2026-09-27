@@ -8,6 +8,7 @@ import os
 from typing import Any, Awaitable, Callable, Optional, Tuple
 
 from ..export_limits import ExportLimitError
+from ..resource_governor import ResourceExhaustedError, ResourceGovernor, ResourceKind, ResourceLimits
 from ..backends.execution import (
     CancellationUnavailableError,
     DatabaseExecutionError,
@@ -46,7 +47,9 @@ class RuntimeRequestLifecycle:
         circuit_breaker: Optional[CircuitBreaker] = None,
         circuit_breaker_failures: int = 5,
         circuit_breaker_cooldown_seconds: float = 30.0,
+        resource_governor: Optional[ResourceGovernor] = None,
     ) -> None:
+        self.resource_governor = resource_governor or ResourceGovernor(ResourceLimits.from_environment())
         self.coordinator = request_coordinator or RuntimeRequestCoordinator(
             session_gate or SessionRequestGate()
         )
@@ -101,6 +104,55 @@ class RuntimeRequestLifecycle:
         context: PivotRequestContext,
         trigger_kind: Optional[str],
         operation: Callable[[], Awaitable[Any]],
+        *,
+        resource_kind: Optional[ResourceKind] = None,
+        reservation_bytes: Optional[int] = None,
+    ) -> Any:
+        # Legacy callers still participate in admission. Export uses its own
+        # class; every other backend operation defaults to the query class.
+        kind = ResourceKind(resource_kind) if resource_kind is not None else (
+            ResourceKind.EXPORT if trigger_kind == "export" else ResourceKind.QUERY
+        )
+        amount = self.reservation_bytes(kind) if reservation_bytes is None else reservation_bytes
+        lease = self.resource_governor.reserve(kind, amount)
+        try:
+            return await self._run_admitted_operation(context, trigger_kind, operation)
+        finally:
+            # The awaited operation includes native cancellation acknowledgement.
+            lease.release()
+
+    def reservation_bytes(self, kind: ResourceKind) -> int:
+        """Reserve a positive share of the configured class budget per slot."""
+        limits = self.resource_governor.limits
+        return max(1, limits.limit_for(kind) // (limits.slots_for(kind) or 1))
+
+    async def _await_backend(self, awaitable: Awaitable[Any]) -> Any:
+        task = asyncio.ensure_future(awaitable)
+        try:
+            return await asyncio.wait_for(asyncio.shield(task), timeout=self.request_timeout_seconds)
+        except (asyncio.CancelledError, asyncio.TimeoutError):
+            if not task.done():
+                task.cancel()
+            # Repeated client cancellation must not interrupt native cleanup or
+            # release the resource lease while its worker still owns a cursor.
+            while not task.done():
+                try:
+                    await asyncio.shield(task)
+                except asyncio.CancelledError:
+                    continue
+                except Exception:
+                    break
+            if not task.cancelled():
+                cleanup_error = task.exception()
+                if cleanup_error is not None:
+                    raise cleanup_error
+            raise
+
+    async def _run_admitted_operation(
+        self,
+        context: PivotRequestContext,
+        trigger_kind: Optional[str],
+        operation: Callable[[], Awaitable[Any]],
     ) -> Any:
         circuit_key = self.circuit_key(context, trigger_kind)
         self.circuit_breaker.before_request(circuit_key)
@@ -109,13 +161,7 @@ class RuntimeRequestLifecycle:
             if not inspect.isawaitable(awaitable):
                 self.circuit_breaker.record_success(circuit_key)
                 return awaitable
-            if self.request_timeout_seconds:
-                result = await asyncio.wait_for(
-                    awaitable,
-                    timeout=self.request_timeout_seconds,
-                )
-            else:
-                result = await awaitable
+            result = await self._await_backend(awaitable)
         except (asyncio.TimeoutError, QueryTimeoutError) as exc:
             self.circuit_breaker.record_failure(circuit_key)
             raise PivotRequestTimeout() from exc
@@ -128,7 +174,7 @@ class RuntimeRequestLifecycle:
         except DatabaseExecutionError:
             self.circuit_breaker.record_failure(circuit_key)
             raise
-        except ExportLimitError:
+        except (ExportLimitError, ResourceExhaustedError):
             # A caller requested an export outside the configured resource
             # budget.  That is a deterministic validation result, not a
             # backend outage, so it must never trip the shared circuit.

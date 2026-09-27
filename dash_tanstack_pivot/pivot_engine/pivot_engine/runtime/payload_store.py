@@ -552,18 +552,21 @@ def runtime_payload_store_from_env(
     default_ttl_seconds: int = 120,
     max_entries: int = 256,
     max_bytes: int = 128 * 1024 * 1024,
+    governor: Optional[ResourceGovernor] = None,
 ) -> RuntimePayloadStore:
     """Build the configured payload store without silent distributed fallback."""
 
     state = runtime_state or distributed_runtime_from_env(client=redis_client)
     if state is None:
         return RuntimePayloadStore(
+            governor=governor,
             default_ttl_seconds=default_ttl_seconds,
             max_entries=max_entries,
             max_bytes=max_bytes,
             cache_coordinator=cache_coordinator,
         )
     return RuntimePayloadStore(
+        governor=governor,
         default_ttl_seconds=state.settings.payload_ttl_seconds,
         max_bytes=state.settings.payload_max_bytes,
         cache_coordinator=cache_coordinator,

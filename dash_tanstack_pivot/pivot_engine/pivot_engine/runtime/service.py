@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 from typing import Any, Callable, Optional
+from ..resource_governor import ResourceGovernor, ResourceLimits
 
 from .compatibility import RuntimeCompatibilityMixin
 from .models import PivotRequestContext, PivotServiceResponse, PivotViewState
@@ -34,7 +35,11 @@ class PivotRuntimeService(RuntimeCompatibilityMixin):
         circuit_breaker_cooldown_seconds: float = 30.0,
         request_coordinator: Optional[RuntimeRequestCoordinator] = None,
         distributed_runtime: Optional[RedisRuntimeState] = None,
+        resource_governor: Optional[ResourceGovernor] = None,
     ):
+        # One service-scoped owner is shared by all sessions and transports in
+        # this worker. Hosts may inject their worker governor explicitly.
+        self.resource_governor = resource_governor or ResourceGovernor(ResourceLimits.from_environment())
         self.distributed_runtime = distributed_runtime or distributed_runtime_from_env()
         if request_coordinator is not None and session_gate is not None:
             if request_coordinator.session_gate is not session_gate:
@@ -56,6 +61,7 @@ class PivotRuntimeService(RuntimeCompatibilityMixin):
                 )
         self._adapter_getter = adapter_getter
         self._lifecycle = RuntimeRequestLifecycle(
+            resource_governor=self.resource_governor,
             session_gate=resolved_session_gate,
             request_coordinator=request_coordinator,
             request_timeout_seconds=request_timeout_seconds,

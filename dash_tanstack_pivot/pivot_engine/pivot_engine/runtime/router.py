@@ -8,6 +8,7 @@ import time
 from typing import Any, Callable, Dict, List, Optional
 
 from ..backends.execution import DatabaseExecutionError
+from ..resource_governor import ResourceExhaustedError, ResourceKind
 from ..tanstack_adapter import TanStackRequest, TanStackResponse
 from ..security import MutationAuthorizationError
 from .detail_service import DetailRuntimeService
@@ -223,20 +224,43 @@ class RuntimeRequestRouter:
                 else RuntimeRequestFactory.parse_expanded_paths(state.expanded)
             )
             execution_started_at = time.perf_counter()
+
+            async def execute_export():
+                response = await self._execute_tanstack_data_request(
+                    adapter,
+                    export_request,
+                    state,
+                    export_context,
+                    export_expanded_paths,
+                    trigger_kind=trigger_kind,
+                    effective_needs_col_schema=True,
+                    profiling_enabled=profiling_enabled,
+                    max_export_rows=self.export_service.max_rows,
+                )
+                execution_finished = time.perf_counter()
+                payload = self.export_service.build_export_payload(
+                    response, state, state.export_request,
+                )
+                return response, payload, execution_finished
+
             try:
-                response = await self.lifecycle.run_backend_operation(
+                response, export_payload, execution_finished_at = await self.lifecycle.run_backend_operation(
                     export_context,
                     trigger_kind,
-                    lambda: self._execute_tanstack_data_request(
-                        adapter,
-                        export_request,
-                        state,
-                        export_context,
-                        export_expanded_paths,
-                        trigger_kind=trigger_kind,
-                        effective_needs_col_schema=True,
-                        profiling_enabled=profiling_enabled,
-                        max_export_rows=self.export_service.max_rows,
+                    execute_export,
+                    resource_kind=ResourceKind.EXPORT,
+                    reservation_bytes=self.lifecycle.reservation_bytes(ResourceKind.EXPORT),
+                )
+            except ResourceExhaustedError:
+                raise
+            except ExportLimitError as exc:
+                return PivotServiceResponse(
+                    status="error",
+                    message=str(exc),
+                    export_payload={},
+                    profile=build_profile(
+                        execution_started_at=execution_started_at,
+                        execution_finished_at=time.perf_counter(),
                     ),
                 )
             except CircuitBreakerOpen as exc:
@@ -274,25 +298,7 @@ class RuntimeRequestRouter:
                         execution_finished_at=execution_finished_at,
                     ),
                 )
-            execution_finished_at = time.perf_counter()
-            postprocess_started_at = time.perf_counter()
-            try:
-                export_payload = self.export_service.build_export_payload(
-                    response,
-                    state,
-                    state.export_request,
-                )
-            except ExportLimitError as exc:
-                return PivotServiceResponse(
-                    status="error",
-                    message=str(exc),
-                    export_payload={},
-                    profile=build_profile(
-                        execution_started_at=execution_started_at,
-                        execution_finished_at=execution_finished_at,
-                        postprocess_started_at=postprocess_started_at,
-                    ),
-                )
+            postprocess_started_at = execution_finished_at
             return PivotServiceResponse(
                 status="export",
                 export_payload=export_payload,
@@ -330,7 +336,11 @@ class RuntimeRequestRouter:
                     lambda: self.detail_service.handle_request(
                         adapter, request, state, context
                     ),
+                    resource_kind=ResourceKind.QUERY,
+                    reservation_bytes=self.lifecycle.reservation_bytes(ResourceKind.QUERY),
                 )
+            except ResourceExhaustedError:
+                raise
             except CircuitBreakerOpen as exc:
                 execution_finished_at = time.perf_counter()
                 return PivotServiceResponse(
@@ -405,7 +415,11 @@ class RuntimeRequestRouter:
                     context,
                     trigger_kind,
                     lambda: adapter.handle_drill_through(request, state.drill_through),
+                    resource_kind=ResourceKind.QUERY,
+                    reservation_bytes=self.lifecycle.reservation_bytes(ResourceKind.QUERY),
                 )
+            except ResourceExhaustedError:
+                raise
             except CircuitBreakerOpen as exc:
                 execution_finished_at = time.perf_counter()
                 return PivotServiceResponse(
@@ -522,7 +536,7 @@ class RuntimeRequestRouter:
                         execution_finished_at=execution_finished_at,
                     ),
                 )
-            except MutationAuthorizationError:
+            except (MutationAuthorizationError, ResourceExhaustedError):
                 # The HTTP gateway turns this into a 403. Do not convert it to
                 # an apparently successful runtime envelope here.
                 raise
@@ -625,7 +639,7 @@ class RuntimeRequestRouter:
             except (CircuitBreakerOpen, PivotRequestTimeout) as exc:
                 if self.debug:
                     print(f"Cell update skipped: {exc}")
-            except MutationAuthorizationError:
+            except (MutationAuthorizationError, ResourceExhaustedError):
                 raise
             except Exception as exc:  # pragma: no cover - defensive
                 if self.debug:
@@ -655,8 +669,12 @@ class RuntimeRequestRouter:
                 )
 
             response = await self.lifecycle.run_backend_operation(
-                context, trigger_kind, _execute_data_request
+                context, trigger_kind, _execute_data_request,
+                resource_kind=ResourceKind.QUERY,
+                reservation_bytes=self.lifecycle.reservation_bytes(ResourceKind.QUERY),
             )
+        except ResourceExhaustedError:
+            raise
         except asyncio.CancelledError:
             execution_finished_at = time.perf_counter()
             if self.lifecycle.consume_superseded_cancel():

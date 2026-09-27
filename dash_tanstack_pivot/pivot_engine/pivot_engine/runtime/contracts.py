@@ -13,6 +13,7 @@ from dataclasses import dataclass
 import json
 from pathlib import Path
 from typing import Any, Dict, Optional
+from ..resource_governor import ResourceExhaustedError
 
 try:  # Keep import errors actionable for library consumers.
     from jsonschema import Draft202012Validator
@@ -297,3 +298,22 @@ def build_runtime_response(
     if isinstance(profile, dict) and profile:
         response["profile"] = profile
     return response
+
+
+def build_resource_exhausted_response(
+    error: ResourceExhaustedError,
+    *,
+    kind: str,
+    request_id: Optional[str] = None,
+) -> Dict[str, Any]:
+    """Expose only stable, retryable admission metadata, never internal reasons."""
+    return build_runtime_response(
+        kind=kind,
+        request_id=request_id,
+        status="error",
+        payload={
+            "code": error.code,
+            "resourceKind": error.resource_kind.value,
+            "retryAfterMs": min(60_000, max(1, int(error.retry_after_ms))),
+        },
+    )

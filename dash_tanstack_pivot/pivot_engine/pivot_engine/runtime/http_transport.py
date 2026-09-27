@@ -16,10 +16,13 @@ from typing import Any, Callable, Dict, Optional
 from ..tanstack_adapter import TanStackOperation, TanStackRequest
 from ..security import MutationAuthorizationError
 from ..security_events import log_authorization_denied
+from ..resource_governor import ResourceExhaustedError, ResourceGovernor, ResourceKind
+from .lifecycle import RuntimeRequestLifecycle
 from .contracts import (
     RUNTIME_SCHEMA_VERSION,
     RuntimeContractError,
     build_runtime_response,
+    build_resource_exhausted_response,
     validate_runtime_request_v1,
     validate_runtime_response_v1,
 )
@@ -93,9 +96,8 @@ class RuntimeHttpGateway:
     ) -> None:
         self._runtime_service_getter = runtime_service_getter
         self.distributed_runtime = distributed_runtime or distributed_runtime_from_env()
-        self.payload_store = payload_store or runtime_payload_store_from_env(
-            runtime_state=self.distributed_runtime
-        )
+        self._payload_store = payload_store
+        self._fallback_lifecycle: Optional[RuntimeRequestLifecycle] = None
         self.payload_url_prefix = payload_url_prefix.rstrip("/")
         self.inline_payload_bytes = (
             _inline_limit_bytes()
@@ -108,6 +110,31 @@ class RuntimeHttpGateway:
         # Table access is independent of row predicates and mutation grants.
         # An omitted dataset policy is intentionally deny-by-default.
         self.dataset_authorizer = dataset_authorizer or RuntimeDatasetAuthorizer()
+
+    def _lifecycle(self) -> RuntimeRequestLifecycle:
+        service = self._runtime_service_getter()
+        lifecycle = getattr(service, "_lifecycle", None)
+        if lifecycle is not None:
+            return lifecycle
+        # Compatibility with hosts providing their own service implementation:
+        # retain one gateway lifecycle, never create a per-request governor.
+        if self._fallback_lifecycle is None:
+            governor = getattr(service, "resource_governor", None)
+            self._fallback_lifecycle = RuntimeRequestLifecycle(resource_governor=governor)
+        return self._fallback_lifecycle
+
+    @property
+    def resource_governor(self) -> ResourceGovernor:
+        return self._lifecycle().resource_governor
+
+    @property
+    def payload_store(self) -> RuntimePayloadStore:
+        if self._payload_store is None:
+            self._payload_store = runtime_payload_store_from_env(
+                runtime_state=self.distributed_runtime,
+                governor=self.resource_governor,
+            )
+        return self._payload_store
 
     @staticmethod
     def _principal_id(principal: Any) -> str:
@@ -234,10 +261,14 @@ class RuntimeHttpGateway:
             global_filter=str(column_id),
         )
         adapter = service._adapter_getter()
-        response = await adapter.handle_request(
-            request,
-            user=context.principal,
-            row_scope=context.row_scope,
+        lifecycle = self._lifecycle()
+        response = await lifecycle.run_backend_operation(
+            context, "filter_options",
+            lambda: adapter.handle_request(
+                request, user=context.principal, row_scope=context.row_scope,
+            ),
+            resource_kind=ResourceKind.QUERY,
+            reservation_bytes=lifecycle.reservation_bytes(ResourceKind.QUERY),
         )
         pagination = _object(getattr(response, "pagination", None))
         values = [row.get("value") for row in (getattr(response, "data", None) or []) if isinstance(row, dict)]
@@ -413,6 +444,16 @@ class RuntimeHttpGateway:
         return validate_runtime_response_v1(response)
 
     async def process(self, envelope: Any, *, principal: Any) -> Dict[str, Any]:
+        try:
+            return await self._process(envelope, principal=principal)
+        except ResourceExhaustedError as exc:
+            # Validation and authorization have already completed before any
+            # admitted backend operation or payload retention is attempted.
+            return validate_runtime_response_v1(build_resource_exhausted_response(
+                exc, kind=envelope["kind"], request_id=envelope["requestId"],
+            ))
+
+    async def _process(self, envelope: Any, *, principal: Any) -> Dict[str, Any]:
         """Validate, authorize, execute, and encode exactly one V1 request."""
         started_at = time.perf_counter()
         request = validate_runtime_request_v1(envelope)
@@ -530,7 +571,13 @@ def register_runtime_http_transport(
     @router.post("")
     async def runtime_request(envelope: Any = Body(...), user: Any = Depends(current_user_dependency)):
         try:
-            return await gateway.process(envelope, principal=user)
+            response = await gateway.process(envelope, principal=user)
+            if _object(response.get("payload")).get("code") == ResourceExhaustedError.code:
+                return JSONResponse(
+                    status_code=503, content=response,
+                    headers={"Retry-After": str((response["payload"]["retryAfterMs"] + 999) // 1000)},
+                )
+            return response
         except (MutationAuthorizationError, RuntimeDatasetAuthorizationError) as exc:
             candidate = envelope if isinstance(envelope, dict) else {}
             kind = str(candidate.get("kind") or "data")
@@ -580,14 +627,52 @@ def register_runtime_http_transport(
                 content=validate_runtime_response_v1(error_response),
             )
 
+    class AdmittedPayloadResponse(Response):
+        """Keep the lease through file/body send and release on disconnect too."""
+
+        def __init__(self, response, lease):
+            super().__init__(status_code=response.status_code, headers=dict(response.headers))
+            self.response = response
+            self.lease = lease
+
+        async def __call__(self, scope, receive, send):
+            try:
+                await self.response(scope, receive, send)
+            finally:
+                self.lease.release()
+
     @router.get("/payload/{token}")
     async def runtime_payload(token: str, request: Request, user: Any = Depends(current_user_dependency)):
+        lease = None
+        try:
+            lifecycle = gateway._lifecycle()
+            lease = lifecycle.resource_governor.reserve(
+                ResourceKind.DOWNLOAD, lifecycle.reservation_bytes(ResourceKind.DOWNLOAD),
+            )
+            response = await payload_response(token, request, user, lease)
+            return AdmittedPayloadResponse(response, lease)
+        except ResourceExhaustedError as exc:
+            if lease is not None:
+                lease.release()
+            response = build_resource_exhausted_response(exc, kind="data")
+            return JSONResponse(
+                status_code=503, content=response,
+                headers={"Retry-After": str((response["payload"]["retryAfterMs"] + 999) // 1000)},
+            )
+        except BaseException:
+            if lease is not None:
+                lease.release()
+            raise
+
+    async def payload_response(token, request, user, lease):
         item = gateway.payload_store.get(token)
         if item is None or item.metadata.get("subject") != gateway._principal_id(user):
             raise HTTPException(status_code=404, detail="Runtime payload was not found.")
         etag = f'W/"{item.token}-{item.size}"'
         if request.headers.get("if-none-match") == etag:
             return Response(status_code=304, headers={"ETag": etag})
+        if not item.file_path and item.size > lease.reserved_bytes:
+            lease.grow(item.size - lease.reserved_bytes)
         filename = item.metadata.get("filename") if isinstance(item.metadata, dict) else None
         headers = {
             "Cache-Control": "no-store" if filename else "private, max-age=120",
