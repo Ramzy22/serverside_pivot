@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import csv
+import asyncio
 from decimal import Decimal
 import html
 import math
@@ -10,9 +11,10 @@ import os
 import re
 import tempfile
 import zipfile
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, AsyncIterable, Dict, Iterable, List, Optional, Tuple
 
 from ..tanstack_adapter import TanStackResponse
+from ..resource_governor import ResourceExhaustedError, ResourceKind, ResourceLease
 from ..export_limits import (
     DEFAULT_EXPORT_MAX_BYTES,
     DEFAULT_EXPORT_MAX_ROWS,
@@ -65,6 +67,115 @@ class RuntimeExportService:
         if rows > self.max_rows:
             self.limits.ensure_rows(rows)
         self.limits.ensure_bytes(content_length)
+
+    async def build_streamed_export(
+        self,
+        batches: Iterable[Any] | AsyncIterable[Any],
+        state: PivotViewState,
+        export_request: Optional[Dict[str, Any]],
+        *,
+        columns: Optional[List[Dict[str, Any]]] = None,
+        export_lease: Optional[ResourceLease] = None,
+    ) -> Dict[str, Any]:
+        """Write native record batches without retaining the full result."""
+        request_payload = export_request if isinstance(export_request, dict) else {}
+        export_fmt = str(request_payload.get("format") or "csv").strip().lower()
+        if export_fmt == "xls":
+            export_fmt = "xlsx"
+        if export_fmt not in {"csv", "tsv", "html"}:
+            raise ResourceExhaustedError(
+                ResourceKind.EXPORT,
+                reason="bounded_format_unavailable",
+            )
+        delimiter = "\t" if export_fmt == "tsv" else ","
+        ext = "tsv" if export_fmt == "tsv" else export_fmt
+        content_type = {
+            "tsv": "text/tab-separated-values;charset=utf-8",
+            "html": "text/html;charset=utf-8",
+        }.get(export_fmt, "text/csv;charset=utf-8")
+        filename = str(request_payload.get("filename") or f"pivot_export.{ext}")
+        include_headers = bool(first_present(request_payload, "includeHeaders", "include_headers", default=True))
+        field_order: Optional[List[str]] = None
+        header_map = self._build_export_header_map(columns or [], state)
+        emitted_rows = 0
+        fd, content_path = tempfile.mkstemp(prefix="pivot_stream_", suffix=f".{ext}")
+
+        async def _items():
+            if hasattr(batches, "__aiter__"):
+                async for value in batches:  # type: ignore[union-attr]
+                    yield value
+            else:
+                for value in batches:  # type: ignore[union-attr]
+                    yield value
+                    await asyncio.sleep(0)
+        def _rows_from_batch(batch: Any) -> List[Dict[str, Any]]:
+            if hasattr(batch, "to_pylist"):
+                batch = batch.to_pylist()
+            if not isinstance(batch, list):
+                batch = list(batch)
+            rows = [row for row in batch if isinstance(row, dict)]
+            return self._project_export_rows_for_layout(rows, state)
+
+        try:
+            with os.fdopen(fd, "w", encoding="utf-8", newline="") as output:
+                writer = csv.writer(output, delimiter=delimiter) if export_fmt != "html" else None
+                if export_fmt == "html":
+                    output.write("<table><thead><tr>")
+                async for raw_batch in _items():
+                    rows = _rows_from_batch(raw_batch)
+                    if not rows:
+                        continue
+                    if field_order is None:
+                        field_order = self._resolve_export_field_order(
+                            rows, columns or [], request_payload.get("colIds"), state,
+                        )
+                        if include_headers:
+                            labels = [self._export_header_for_key(key, header_map, state, {}) for key in field_order]
+                            if export_fmt == "html":
+                                output.write("".join(f"<th>{html.escape(str(label))}</th>" for label in labels))
+                                output.write("</tr></thead><tbody>")
+                            else:
+                                writer.writerow(labels)
+                        elif export_fmt == "html":
+                            output.write("</tr></thead><tbody>")
+                    self.limits.ensure_rows(emitted_rows + len(rows))
+                    for row in rows:
+                        values = ["" if row.get(key) is None else row.get(key) for key in (field_order or [])]
+                        if export_fmt == "html":
+                            output.write("<tr>" + "".join(f"<td>{html.escape(str(value))}</td>" for value in values) + "</tr>")
+                        else:
+                            writer.writerow(values)
+                    emitted_rows += len(rows)
+                    output.flush()
+                    current_bytes = os.path.getsize(content_path)
+                    self.limits.ensure_bytes(current_bytes)
+                    if export_lease is not None and current_bytes > export_lease.reserved_bytes:
+                        export_lease.grow(current_bytes - export_lease.reserved_bytes)
+                if export_fmt == "html":
+                    output.write("</tbody></table>")
+                    output.flush()
+            content_length = os.path.getsize(content_path)
+            self.limits.ensure_bytes(content_length)
+        except Exception:
+            try:
+                os.close(fd)
+            except OSError:
+                pass
+            try:
+                os.remove(content_path)
+            except OSError:
+                pass
+            raise
+        return {
+            "contentPath": content_path,
+            "contentLength": content_length,
+            "contentType": content_type,
+            "format": export_fmt,
+            "filename": filename,
+            "rows": emitted_rows,
+            "columns": len(field_order or []),
+            "partId": request_payload.get("partId"),
+        }
 
     @staticmethod
     def _build_export_payload(

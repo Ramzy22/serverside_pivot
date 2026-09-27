@@ -484,24 +484,84 @@ class IbisBackend:
         Yields:
             Batches of rows as list of dicts (or Arrow RecordBatches if we enhanced the signature)
         """
-        if isinstance(query, dict) and 'ibis_expr' in query:
-             ibis_expr = query['ibis_expr']
-             # Use Ibis's native batch streaming if available (Ibis 6+)
-             if hasattr(ibis_expr, 'to_pyarrow_batches'):
-                 # to_pyarrow_batches returns an iterator of RecordBatches
-                 for batch in ibis_expr.to_pyarrow_batches(limit=None, chunk_size=batch_size):
-                     yield batch.to_pylist()
-                 return
-
-        # Fallback to executing full query and slicing (old behavior, but safe)
-        # Or better: if it's Ibis, we could try to reimplement chunking manually
-        # But for now, let's keep the fallback for non-Ibis-batch-supported cases.
-        result = self.execute(query, params, return_arrow=True)
-        
-        num_rows = result.num_rows
-        for i in range(0, num_rows, batch_size):
-            batch = result.slice(i, min(batch_size, num_rows - i))
+        for batch in self.execute_record_batches(
+            query,
+            params=params,
+            max_batch_bytes=32 * 1024 * 1024,
+            max_batch_rows=batch_size,
+        ):
             yield batch.to_pylist()
+
+    def execute_record_batches(
+        self,
+        query: Union[str, Dict[str, Any]],
+        params: Optional[List[Any]] = None,
+        *,
+        max_batch_bytes: int = 32 * 1024 * 1024,
+        max_batch_rows: int = 10_000,
+    ):
+        """Yield native Arrow batches without a full-table execute fallback."""
+        if pa is None:
+            raise ImportError("pyarrow is required for bounded export batches")
+        if max_batch_bytes <= 0 or max_batch_rows <= 0:
+            raise ValueError("record-batch limits must be positive")
+        from pivot_engine.export_executor import iter_bounded_record_batches
+
+        if isinstance(query, dict) and "ibis_expr" in query:
+            expression = query["ibis_expr"]
+            to_batches = getattr(expression, "to_pyarrow_batches", None)
+            if callable(to_batches):
+                for raw_batch in to_batches(limit=None, chunk_size=int(max_batch_rows)):
+                    yield from iter_bounded_record_batches(
+                        raw_batch,
+                        max_batch_bytes=max_batch_bytes,
+                        max_batch_rows=max_batch_rows,
+                    )
+                return
+
+        # A DuckDB Ibis connection can expose the same cursor-level reader for
+        # raw SQL. Other Ibis backends must provide their own native batch API;
+        # execute()->Table is deliberately not used here.
+        if self._duckdb_pool is None:
+            from pivot_engine.resource_governor import ResourceExhaustedError, ResourceKind
+
+            raise ResourceExhaustedError(
+                ResourceKind.EXPORT,
+                reason="bounded_streaming_unavailable",
+            )
+        if isinstance(query, dict):
+            sql = query.get("sql")
+            params = query.get("params", [])
+        else:
+            sql = query
+            params = params or []
+        if not sql:
+            raise ValueError("A SQL query is required for bounded record batches")
+
+        with self._duckdb_pool.get_connection() as lease:
+            result = lease.execute(sql, params) if params else lease.execute(sql)
+            reader_factory = getattr(result, "fetch_record_batch", None)
+            if callable(reader_factory):
+                reader = reader_factory(int(max_batch_rows))
+                for raw_batch in reader:
+                    yield from iter_bounded_record_batches(
+                        raw_batch,
+                        max_batch_bytes=max_batch_bytes,
+                        max_batch_rows=max_batch_rows,
+                    )
+                return
+            description = getattr(result, "description", None) or []
+            columns = [item[0] for item in description]
+            while True:
+                rows = result.fetchmany(int(max_batch_rows))
+                if not rows:
+                    return
+                batch = pa.RecordBatch.from_pylist([dict(zip(columns, row)) for row in rows])
+                yield from iter_bounded_record_batches(
+                    batch,
+                    max_batch_bytes=max_batch_bytes,
+                    max_batch_rows=max_batch_rows,
+                )
 
     def register_arrow_dataset(
         self,

@@ -487,6 +487,29 @@ class DuckDBBackend:
         Yields:
             Batches of rows as list of dicts
         """
+        for batch in self.execute_record_batches(
+            query,
+            params=params,
+            max_batch_bytes=32 * 1024 * 1024,
+            max_batch_rows=batch_size,
+        ):
+            yield batch.to_pylist()
+
+    def execute_record_batches(
+        self,
+        query: Union[str, Dict[str, Any]],
+        params: Optional[List[Any]] = None,
+        *,
+        max_batch_bytes: int = 32 * 1024 * 1024,
+        max_batch_rows: int = 10_000,
+    ):
+        """Yield bounded Arrow record batches without materializing the table."""
+        if pa is None:
+            raise ImportError("pyarrow is required for bounded export batches")
+        if max_batch_bytes <= 0 or max_batch_rows <= 0:
+            raise ValueError("record-batch limits must be positive")
+        from pivot_engine.export_executor import iter_bounded_record_batches
+
         if isinstance(query, dict):
             sql = query.get("sql", "")
             params = query.get("params", [])
@@ -495,19 +518,35 @@ class DuckDBBackend:
             params = params or []
 
         with self.pool.get_connection() as con:
-            if params:
-                result = con.execute(sql, params)
-            else:
-                result = con.execute(sql)
+            result = con.execute(sql, params) if params else con.execute(sql)
+            fetch_record_batch = getattr(result, "fetch_record_batch", None)
+            if callable(fetch_record_batch):
+                reader = fetch_record_batch(int(max_batch_rows))
+                for raw_batch in reader:
+                    yield from iter_bounded_record_batches(
+                        raw_batch,
+                        max_batch_bytes=max_batch_bytes,
+                        max_batch_rows=max_batch_rows,
+                    )
+                return
 
-            cols = [desc[0] for desc in result.description]
-
+            # Older DuckDB releases expose fetchmany but not Arrow readers.
+            # fetchmany is still bounded by rows; convert only that batch and
+            # enforce the byte ceiling before it reaches the writer.
+            description = getattr(result, "description", None) or []
+            columns = [item[0] for item in description]
             while True:
-                rows = result.fetchmany(batch_size)
+                rows = result.fetchmany(int(max_batch_rows))
                 if not rows:
-                    break
-                batch = [dict(zip(cols, row)) for row in rows]
-                yield batch
+                    return
+                batch = pa.RecordBatch.from_pylist(
+                    [dict(zip(columns, row)) for row in rows]
+                )
+                yield from iter_bounded_record_batches(
+                    batch,
+                    max_batch_bytes=max_batch_bytes,
+                    max_batch_rows=max_batch_rows,
+                )
     
     def explain(
         self,
