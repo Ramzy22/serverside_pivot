@@ -19,6 +19,12 @@ def test_runtime_export_normalizes_supported_format(requested, expected):
     assert RuntimeExportService.normalize_export_format(requested) == expected
 
 
+@pytest.mark.parametrize("requested", ["", 0, False, [], {}])
+def test_runtime_export_rejects_supplied_falsy_non_formats(requested):
+    with pytest.raises(ValueError, match="Unsupported export format"):
+        RuntimeExportService.normalize_export_format(requested)
+
+
 def test_runtime_export_rejects_unknown_format_without_creating_a_file():
     with pytest.raises(ValueError, match="Unsupported export format"):
         RuntimeExportService().build_export_payload(

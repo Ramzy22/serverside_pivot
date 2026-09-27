@@ -41,11 +41,11 @@ class RuntimeExportService:
         self.max_bytes = self.limits.max_bytes
     @staticmethod
     def normalize_export_format(value: object) -> str:
-        export_fmt = str(value or "csv").strip().lower()
+        if not isinstance(value, (str, type(None))): raise ValueError(f"Unsupported export format: {value}")
+        export_fmt = "csv" if value is None else value.strip().lower()
         export_fmt = "xlsx" if export_fmt == "xls" else export_fmt
         if export_fmt not in {"csv", "tsv", "html", "xlsx"}: raise ValueError(f"Unsupported export format: {value}")
         return export_fmt
-
     def build_export_payload(
         self,
         response: TanStackResponse,
