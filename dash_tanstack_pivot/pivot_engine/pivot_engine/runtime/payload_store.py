@@ -134,22 +134,36 @@ class RedisPayloadBackend:
         if not accepted:
             raise ResourceExhaustedError(ResourceKind.PAYLOAD, reason="payload_total_bytes")
 
+    @staticmethod
+    def _serialize_header(item: RuntimePayload, body_size: int) -> bytes:
+        return json.dumps(
+            {
+                "content_type": str(item.content_type),
+                "expires_at": float(item.expires_at),
+                "metadata": dict(item.metadata or {}),
+                "size": body_size,
+            },
+            default=_json_default,
+            separators=(",", ":"),
+        ).encode("utf-8")
+
+    def file_body_limit(self, item: RuntimePayload) -> int:
+        """Bound a file read by the body capacity of an empty namespace."""
+        settings = self.state.settings
+        limit = min(settings.payload_max_bytes, settings.payload_total_max_bytes)
+        # The largest possible body's size field reserves enough decimal digits
+        # even if the file grows after stat. Use the actual header fields so JSON
+        # escaping and variable metadata/content types are included in the bound.
+        overhead = len(self._FORMAT) + 4 + len(self._serialize_header(item, limit))
+        return min(limit, settings.payload_total_max_bytes - overhead)
+
     def put(self, item: RuntimePayload) -> None:
         body = bytes(item.body or b"")
         if len(body) > self.state.settings.payload_max_bytes:
             raise RuntimePayloadTooLarge(
                 "Runtime payload exceeds PIVOT_RUNTIME_PAYLOAD_MAX_BYTES."
             )
-        header = json.dumps(
-            {
-                "content_type": str(item.content_type),
-                "expires_at": float(item.expires_at),
-                "metadata": dict(item.metadata or {}),
-                "size": len(body),
-            },
-            default=_json_default,
-            separators=(",", ":"),
-        ).encode("utf-8")
+        header = self._serialize_header(item, len(body))
         envelope = self._FORMAT + len(header).to_bytes(4, "big") + header + body
         self._mutate(item=item, envelope=envelope)
 
@@ -331,25 +345,26 @@ class RuntimePayloadStore:
         now = time.time()
         ttl = max(1, int(ttl_seconds or self.default_ttl_seconds))
         if self._backend is not None:
+            item = RuntimePayload(
+                token=token,
+                body=b"",
+                content_type=str(content_type or "application/octet-stream"),
+                expires_at=now + ttl,
+                metadata=dict(metadata or {}),
+                file_path=None,
+                size=size,
+            )
             limit = self.max_bytes
             if isinstance(self._backend, RedisPayloadBackend):
-                limit = min(self._backend.state.settings.payload_max_bytes,
-                            self._backend.state.settings.payload_total_max_bytes)
+                limit = self._backend.file_body_limit(item)
             if size > limit:
                 raise ResourceExhaustedError(ResourceKind.PAYLOAD, reason="payload_bytes")
             with open(file_path, "rb") as source:
                 body = source.read(limit + 1)
             if len(body) > limit:
                 raise ResourceExhaustedError(ResourceKind.PAYLOAD, reason="payload_bytes")
-            item = RuntimePayload(
-                token=token,
-                body=body,
-                content_type=str(content_type or "application/octet-stream"),
-                expires_at=now + ttl,
-                metadata=dict(metadata or {}),
-                file_path=None,
-                size=len(body),
-            )
+            item.body = body
+            item.size = len(body)
             self._store_item(item, now)
             try:
                 os.remove(file_path)

@@ -137,6 +137,48 @@ def test_distributed_file_rejects_oversize_before_reading_and_preserves_source(t
     assert path.exists()
 
 
+@pytest.mark.parametrize(
+    "body_size,content_type,metadata",
+    [
+        (400, "application/octet-stream", {}),
+        (200, "application/" + "x" * 200, {}),
+        (200, "application/octet-stream", {"label": "\u00e9" * 40}),
+        (0, "application/octet-stream", {"label": "x" * 400}),
+    ],
+)
+def test_distributed_file_accounts_for_envelope_before_opening(
+    tmp_path, monkeypatch, body_size, content_type, metadata
+):
+    path = tmp_path / "payload.bin"
+    path.write_bytes(b"x" * body_size)
+    backend, _ = redis_backends(total=400)
+    store = RuntimePayloadStore(backend=backend)
+
+    def unexpected_open(*args, **kwargs):
+        raise AssertionError("Files whose envelope cannot fit must not be opened")
+
+    monkeypatch.setattr("builtins.open", unexpected_open)
+    with pytest.raises(ResourceExhaustedError):
+        store.put_file(str(path), content_type=content_type, metadata=metadata)
+    assert path.exists()
+    assert backend.state.client.dbsize() == 0
+
+
+def test_distributed_file_that_fits_preserves_payload_and_removes_source(tmp_path):
+    path = tmp_path / "payload.bin"
+    path.write_bytes(b"x" * 200)
+    backend, _ = redis_backends(total=400)
+    store = RuntimePayloadStore(backend=backend)
+    ref = store.put_file(str(path), content_type="application/custom", metadata={"label": "small"})
+    stored = store.get(ref["id"])
+    assert stored.body == b"x" * 200
+    assert stored.content_type == "application/custom"
+    assert stored.metadata == {"label": "small"}
+    assert ref["bytes"] == 200
+    assert ref["format"] == "file"
+    assert not path.exists()
+
+
 def test_redis_native_expiry_and_clear_leave_exact_nonnegative_aggregate_counter():
     first, second = redis_backends()
     first.put(payload("one"))
