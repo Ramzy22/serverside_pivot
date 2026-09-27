@@ -39,6 +39,12 @@ class RuntimeExportService:
         )
         self.max_rows = self.limits.max_rows
         self.max_bytes = self.limits.max_bytes
+    @staticmethod
+    def normalize_export_format(value: object) -> str:
+        export_fmt = str(value or "csv").strip().lower()
+        export_fmt = "xlsx" if export_fmt == "xls" else export_fmt
+        if export_fmt not in {"csv", "tsv", "html", "xlsx"}: raise ValueError(f"Unsupported export format: {value}")
+        return export_fmt
 
     def build_export_payload(
         self,
@@ -79,9 +85,7 @@ class RuntimeExportService:
     ) -> Dict[str, Any]:
         """Write native record batches without retaining the full result."""
         request_payload = export_request if isinstance(export_request, dict) else {}
-        export_fmt = str(request_payload.get("format") or "csv").strip().lower()
-        if export_fmt == "xls":
-            export_fmt = "xlsx"
+        export_fmt = self.normalize_export_format(request_payload.get("format"))
         if export_fmt not in {"csv", "tsv", "html"}:
             raise ResourceExhaustedError(
                 ResourceKind.EXPORT,
@@ -184,11 +188,7 @@ class RuntimeExportService:
         export_request: Optional[Dict[str, Any]],
     ) -> Dict[str, Any]:
         request_payload = export_request if isinstance(export_request, dict) else {}
-        export_fmt = str(request_payload.get("format") or "csv").strip().lower()
-        if export_fmt == "xls":
-            export_fmt = "xlsx"
-        if export_fmt not in {"csv", "tsv", "html", "xlsx"}:
-            export_fmt = "csv"
+        export_fmt = RuntimeExportService.normalize_export_format(request_payload.get("format"))
         delimiter = "\t" if export_fmt == "tsv" else ","
         ext = {"tsv": "tsv", "html": "html", "xlsx": "xlsx"}.get(export_fmt, "csv")
         content_type = {
