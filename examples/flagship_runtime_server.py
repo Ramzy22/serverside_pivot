@@ -12,9 +12,18 @@ from typing import Any
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
-from pivot_engine import PivotRuntimeService, register_runtime_http_transport
+from pivot_engine import (
+    PivotRuntimeService,
+    RuntimeDatasetAuthorizer,
+    register_runtime_http_transport,
+)
 
-from examples.flagship_demo_data import DEMO_ROW_COUNT, TABLE_NAME, get_demo_adapter
+from examples.flagship_demo_data import (
+    DEMO_ROW_COUNT,
+    TABLE_NAME,
+    get_demo_adapter,
+    workspace_config,
+)
 
 
 @dataclass(frozen=True)
@@ -22,6 +31,7 @@ class DemoPrincipal:
     """Explicit local-only identity used by this unauthenticated sample."""
 
     id: str = "flagship-demo"
+    role: str = "viewer"
     attributes: dict[str, Any] = field(default_factory=dict)
 
 
@@ -50,8 +60,23 @@ register_runtime_http_transport(
     app,
     lambda: runtime_service,
     current_user_dependency=demo_principal,
+    dataset_authorizer=RuntimeDatasetAuthorizer(
+        {
+            TABLE_NAME: {
+                "roles": {"viewer"},
+                "operations": {"read", "export"},
+                "rowSecurity": {"mode": "global"},
+            }
+        }
+    ),
     inline_payload_bytes=5_000_000,
 )
+
+
+@app.get("/v1/workspace-config")
+async def react_workspace_config() -> dict[str, Any]:
+    """Deliver the same public workspace contract used by the other demos."""
+    return workspace_config("react")
 
 
 @app.get("/health")

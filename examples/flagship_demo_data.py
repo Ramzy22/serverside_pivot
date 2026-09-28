@@ -8,6 +8,7 @@ published example to a database, credentials, or a generated data file.
 from __future__ import annotations
 
 from functools import lru_cache
+import os
 from random import Random
 from typing import Any
 
@@ -35,9 +36,24 @@ AVAILABLE_FIELDS = [
     "variance",
 ]
 
+QUALIFICATION_SOURCE_ROWS = [
+    {"region": "Éclair", "account": "東京", "scope": "Included", "period": "Q1", "ventes_€": 100.25, "unités": 2, "écart": -12.5},
+    {"region": "Éclair", "account": "東京", "scope": "Included", "period": "Q2", "ventes_€": 20.0, "unités": 1, "écart": 2.5},
+    {"region": "München", "account": "القاهرة", "scope": "Included", "period": "Q1", "ventes_€": 49.75, "unités": 3, "écart": 4.25},
+    {"region": "München", "account": "القاهرة", "scope": "Included", "period": "Q2", "ventes_€": 30.0, "unités": 4, "écart": -1.0},
+    {"region": "São Paulo", "account": "北京", "scope": "Excluded", "period": "Q1", "ventes_€": 999999.5, "unités": 11, "écart": 99.0},
+]
+
+
+def _qualification_data_enabled() -> bool:
+    return os.environ.get("PIVOT_FLAGSHIP_EXPORT_QUALIFICATION_DATA") == "1"
+
 
 def build_demo_table(row_count: int = DEMO_ROW_COUNT) -> pa.Table:
     """Build a stable analytics dataset with useful categorical cardinality."""
+    if _qualification_data_enabled():
+        return pa.Table.from_pylist(QUALIFICATION_SOURCE_ROWS)
+
     random = Random(20260912)
     regions = ("North America", "EMEA", "APAC", "Latin America")
     segments = ("Enterprise", "Mid-market", "Commercial")
@@ -95,6 +111,52 @@ def get_demo_adapter():
 
 def workspace_config(host: str) -> dict[str, Any]:
     """Return public workspace props shared by all three flagship hosts."""
+    if _qualification_data_enabled():
+        return {
+            "id": f"flagship-{host}-pivot",
+            "table": TABLE_NAME,
+            "pivotTitle": "Export Qualification / تصدير",
+            "serverSide": True,
+            "rowFields": ["region", "account"],
+            "colFields": ["period"],
+            "valConfigs": [
+                {"field": "ventes_€", "agg": "sum", "label": "Ventes (€)"},
+                {"field": "unités", "agg": "sum", "label": "Unités"},
+                {"field": "écart", "agg": "sum", "label": "Écart"},
+            ],
+            "availableFieldList": ["region", "account", "scope", "period", "ventes_€", "unités", "écart"],
+            "filters": {
+                "scope": {
+                    "operator": "AND",
+                    "conditions": [{"type": "eq", "value": "Included", "caseSensitive": False}],
+                }
+            },
+            "sorting": [],
+            "expanded": {},
+            "columnOrder": [
+                "hierarchy",
+                "Q1_unités_sum", "Q1_ventes_€_sum", "Q1_écart_sum",
+                "Q2_unités_sum", "Q2_ventes_€_sum", "Q2_écart_sum",
+                "__RowTotal__unités_sum", "__RowTotal__ventes_€_sum", "__RowTotal__écart_sum",
+            ],
+            "showRowTotals": True,
+            "showColTotals": True,
+            "showSubtotals": True,
+            "grandTotalPosition": "bottom",
+            "defaultTheme": "dark",
+            "persistence": False,
+            "performanceConfig": {
+                "serverSideBlockSize": 50,
+                "rowOverscan": 4,
+                "columnOverscan": 4,
+            },
+            "uiConfig": {
+                "showToolbar": True,
+                "showSidebar": True,
+                "showCharts": True,
+            },
+            "style": {"height": "760px", "width": "100%"},
+        }
     return {
         "id": f"flagship-{host}-pivot",
         "table": TABLE_NAME,

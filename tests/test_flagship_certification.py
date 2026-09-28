@@ -11,17 +11,25 @@ from __future__ import annotations
 import json
 import os
 import time
-import xml.etree.ElementTree as ET
-import zipfile
 from pathlib import Path
 
 import pytest
 
 from tests.flagship_capabilities import CAPABILITIES, HOSTS, capability_ids, markdown_matrix
+from tests.export_qualification_fixture import (
+    FLAGSHIP_COL_FIELDS,
+    FLAGSHIP_FILTER,
+    FLAGSHIP_QUALIFICATION_SOURCE_ROWS,
+    FLAGSHIP_ROW_FIELDS,
+    FLAGSHIP_VALUE_CONFIGS,
+    assert_flagship_clipboard,
+    assert_flagship_download,
+)
 
 
 ROOT = Path(__file__).resolve().parents[1]
 RUN_BROWSER_CERTIFICATION = os.environ.get("PIVOT_RUN_FLAGSHIP_BROWSER_TESTS") == "1"
+RUN_EXPORT_QUALIFICATION = os.environ.get("PIVOT_FLAGSHIP_EXPORT_QUALIFICATION_DATA") == "1"
 ARTIFACT_ROOT = Path(os.environ.get("PIVOT_FLAGSHIP_ARTIFACT_DIR", ROOT / "artifacts" / "flagship-certification"))
 
 
@@ -46,6 +54,40 @@ def test_flagship_certification_document_is_generated_from_the_matrix_contract()
     assert "python scripts/certify_flagship.py" in document
     matrix = markdown_matrix()
     assert matrix.count("| required | required | required |") == len([item for item in CAPABILITIES if item.supported])
+
+
+def test_flagship_qualification_data_is_environment_gated(monkeypatch):
+    from examples import flagship_demo_data
+
+    monkeypatch.delenv("PIVOT_FLAGSHIP_EXPORT_QUALIFICATION_DATA", raising=False)
+    default_table = flagship_demo_data.build_demo_table(3)
+    default_config = flagship_demo_data.workspace_config("dash")
+    assert default_table.num_rows == 3
+    assert default_config["rowFields"] == ["region", "segment", "product"]
+
+    monkeypatch.setenv("PIVOT_FLAGSHIP_EXPORT_QUALIFICATION_DATA", "1")
+    qualification_table = flagship_demo_data.build_demo_table(3)
+    qualification_config = flagship_demo_data.workspace_config("dash")
+    assert qualification_table.to_pylist() == FLAGSHIP_QUALIFICATION_SOURCE_ROWS
+    assert qualification_config["rowFields"] == FLAGSHIP_ROW_FIELDS
+    assert qualification_config["colFields"] == FLAGSHIP_COL_FIELDS
+    assert qualification_config["valConfigs"] == FLAGSHIP_VALUE_CONFIGS
+    assert qualification_config["filters"] == FLAGSHIP_FILTER
+    assert qualification_config["columnOrder"] != []
+
+
+def test_flagship_react_host_authorizes_and_receives_shared_workspace_config():
+    """The HTTP-only hosts use the same explicit demo contract as Dash."""
+    runtime_server = (ROOT / "examples" / "flagship_runtime_server.py").read_text(encoding="utf-8")
+    react_source = (ROOT / "examples" / "flagship_react" / "src" / "main.tsx").read_text(encoding="utf-8")
+
+    assert "RuntimeDatasetAuthorizer" in runtime_server
+    assert '"read", "export"' in runtime_server
+    assert 'role: str = "viewer"' in runtime_server
+    assert 'workspace_config("react")' in runtime_server
+    assert '"/v1/workspace-config"' in runtime_server
+    assert "fetch('/v1/workspace-config')" in react_source
+    assert "<PivotWorkspace {...workspaceConfig} transport={transport} />" in react_source
 
 
 pytestmark = pytest.mark.flagship
@@ -185,6 +227,14 @@ def _wait_for_workspace_element(driver, selector: str, timeout: int = 15):
     return WebDriverWait(driver, timeout).until(lambda current: _workspace_element(current, selector, required=False))
 
 
+def _wait_for_visible_workspace_element(driver, selector: str, timeout: int = 15):
+    _, _, _, _, _, _, _, WebDriverWait = _selenium()
+    return WebDriverWait(driver, timeout).until(lambda current: next((
+        element for element in _workspace_elements(current, selector)
+        if element.is_displayed() and element.is_enabled()
+    ), False))
+
+
 def _save_evidence(driver, directory: Path, test_name: str):
     browser_logs = driver.get_log("browser")
     performance_logs = driver.get_log("performance")
@@ -223,18 +273,18 @@ def _clipboard_html(driver):
     )
 
 
-def _wait_for_download(directory: Path, timeout: int = 20, started_at: float | None = None) -> Path:
+def _wait_for_download(directory: Path, export_format: str = "xlsx", timeout: int = 20, started_at: float | None = None) -> Path:
     deadline = time.monotonic() + timeout
     while time.monotonic() < deadline:
         completed = [
-            path for path in directory.glob("*.xlsx")
+            path for path in directory.glob(f"*.{export_format}")
             if not path.with_suffix(path.suffix + ".crdownload").exists()
             and (started_at is None or path.stat().st_mtime >= started_at)
         ]
         if completed:
             return max(completed, key=lambda path: path.stat().st_mtime)
         time.sleep(0.2)
-    raise AssertionError(f"No completed XLSX download in {directory}")
+    raise AssertionError(f"No completed {export_format.upper()} download in {directory}")
 
 
 def _click_menu_item(driver, cell, label: str):
@@ -254,8 +304,43 @@ def _assert_workspace_controls(driver):
         "[data-testid='pivot-toolbar-charts']",
         "[data-testid='pivot-toolbar-theme']",
         "[data-testid='pivot-export-xlsx']",
+        "[data-testid='pivot-export-csv']",
     ):
         _wait_for_workspace_element(driver, selector)
+
+
+def _click_export(driver, export_format: str):
+    if export_format == "csv":
+        _wait_for_visible_workspace_element(driver, "[aria-label='Choose export format']").click()
+    _wait_for_visible_workspace_element(driver, f"[data-testid='pivot-export-{export_format}']").click()
+
+
+def _qualification_leaf_order(driver) -> list[str]:
+    return [
+        element.get_attribute("data-header-column-id")
+        for element in _workspace_elements(driver, "[role='columnheader'][data-header-column-id]")
+        if element.get_attribute("data-header-column-id")
+    ]
+
+
+def _apply_qualification_column_order(driver):
+    _, _, _, _, ActionChains, _, _, WebDriverWait = _selenium()
+    from selenium.webdriver.common.keys import Keys
+
+    units_id = "Q1_unités_sum"
+    sales_id = "Q1_ventes_€_sum"
+    order = _qualification_leaf_order(driver)
+    if order.index(units_id) > order.index(sales_id):
+        units_header = _wait_for_visible_workspace_element(
+            driver, f"[role='columnheader'][data-header-column-id='{units_id}']"
+        )
+        ActionChains(driver).click(units_header).key_down(Keys.CONTROL).send_keys(
+            Keys.ARROW_LEFT
+        ).key_up(Keys.CONTROL).perform()
+    WebDriverWait(driver, 15).until(
+        lambda current: _qualification_leaf_order(current).index(units_id)
+        < _qualification_leaf_order(current).index(sales_id)
+    )
 
 
 def test_flagship_startup_navigation_and_controls(flagship_host, flagship_driver, flagship_artifacts):
@@ -278,6 +363,7 @@ def test_flagship_startup_navigation_and_controls(flagship_host, flagship_driver
     assert not _relevant_browser_errors(logs)
 
 
+@pytest.mark.skipif(RUN_EXPORT_QUALIFICATION, reason="ordinary showcase-data certification")
 def test_flagship_copy_current_table_all_records_and_export_xlsx(flagship_host, flagship_driver, flagship_artifacts):
     _, _, _, _, ActionChains, _, _, WebDriverWait = _selenium()
     from selenium.webdriver.common.keys import Keys
@@ -331,6 +417,60 @@ def test_flagship_copy_current_table_all_records_and_export_xlsx(flagship_host, 
     namespace = {"x": "http://schemas.openxmlformats.org/spreadsheetml/2006/main"}
     assert sheet.findall(".//x:mergeCells/x:mergeCell", namespace)
     logs = _save_evidence(flagship_driver, flagship_artifacts, "copy-current-all-and-export")
+    assert not _relevant_browser_errors(logs)
+
+
+@pytest.mark.skipif(not RUN_EXPORT_QUALIFICATION, reason="set PIVOT_FLAGSHIP_EXPORT_QUALIFICATION_DATA=1")
+@pytest.mark.parametrize("export_format", ["csv", "xlsx"])
+def test_flagship_qualified_download(flagship_host, flagship_driver, flagship_artifacts, export_format):
+    _switch_to_workspace(flagship_driver, flagship_host)
+    _assert_workspace_controls(flagship_driver)
+    _apply_qualification_column_order(flagship_driver)
+
+    download_started_at = time.time()
+    _click_export(flagship_driver, export_format)
+    export = _wait_for_download(
+        flagship_artifacts / "downloads",
+        export_format,
+        started_at=download_started_at,
+    )
+    summary = assert_flagship_download(export, export_format)
+    (flagship_artifacts / f"qualified-{export_format}.parsed.json").write_text(
+        json.dumps(summary, indent=2) + "\n", encoding="utf-8"
+    )
+    logs = _save_evidence(flagship_driver, flagship_artifacts, f"qualified-{export_format}")
+    assert not _relevant_browser_errors(logs)
+
+
+@pytest.mark.skipif(not RUN_EXPORT_QUALIFICATION, reason="set PIVOT_FLAGSHIP_EXPORT_QUALIFICATION_DATA=1")
+@pytest.mark.parametrize("representation", ["tsv", "html"])
+def test_flagship_qualified_clipboard(flagship_host, flagship_driver, flagship_artifacts, representation):
+    _, _, _, _, _, _, _, WebDriverWait = _selenium()
+    _switch_to_workspace(flagship_driver, flagship_host)
+    _apply_qualification_column_order(flagship_driver)
+    first_cell = _workspace_element(flagship_driver, '[role="gridcell"]')
+
+    current_action = _click_menu_item(flagship_driver, first_cell, "Copy Current Table")
+    current_action.click()
+    WebDriverWait(flagship_driver, 20).until(lambda driver: "\t" in str(_clipboard_text(driver)))
+    current_document = _clipboard_text(flagship_driver) if representation == "tsv" else _clipboard_html(flagship_driver)
+    current_summary = assert_flagship_clipboard(current_document, representation, all_records=False)
+
+    first_cell = _workspace_element(flagship_driver, '[role="gridcell"]')
+    all_action = _click_menu_item(flagship_driver, first_cell, "Copy All Records")
+    all_action.click()
+    WebDriverWait(flagship_driver, 20).until(
+        lambda driver: len(str(_clipboard_text(driver)).splitlines()) > current_summary["rows"]
+    )
+    all_document = _clipboard_text(flagship_driver) if representation == "tsv" else _clipboard_html(flagship_driver)
+    all_summary = assert_flagship_clipboard(all_document, representation, all_records=True)
+    assert all_summary["rows"] > current_summary["rows"]
+
+    summary = {"currentTable": current_summary, "allRecords": all_summary}
+    (flagship_artifacts / f"qualified-clipboard-{representation}.parsed.json").write_text(
+        json.dumps(summary, indent=2) + "\n", encoding="utf-8"
+    )
+    logs = _save_evidence(flagship_driver, flagship_artifacts, f"qualified-clipboard-{representation}")
     assert not _relevant_browser_errors(logs)
 
 

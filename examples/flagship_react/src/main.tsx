@@ -1,4 +1,4 @@
-import React from 'react';
+import React, { useEffect, useState } from 'react';
 import { createRoot } from 'react-dom/client';
 
 import {
@@ -8,6 +8,8 @@ import {
 } from 'dash_tanstack_pivot/react';
 
 import './styles.css';
+
+type WorkspaceConfig = Omit<React.ComponentProps<typeof PivotWorkspace>, 'transport'>;
 
 // Flagship examples deliberately surface transport diagnostics in DevTools.
 // Applications opt in with the same flag when investigating a host integration.
@@ -49,6 +51,25 @@ function CapabilityCard({ number, title, copy }: (typeof capabilities)[number]) 
 }
 
 function App() {
+    const [workspaceConfig, setWorkspaceConfig] = useState<WorkspaceConfig | null>(null);
+    const [workspaceConfigError, setWorkspaceConfigError] = useState<string | null>(null);
+
+    useEffect(() => {
+        let active = true;
+        fetch('/v1/workspace-config')
+            .then(response => {
+                if (!response.ok) throw new Error(`workspace configuration request failed (${response.status})`);
+                return response.json() as Promise<WorkspaceConfig>;
+            })
+            .then(config => {
+                if (active) setWorkspaceConfig(config);
+            })
+            .catch(error => {
+                if (active) setWorkspaceConfigError(error instanceof Error ? error.message : 'workspace configuration request failed');
+            });
+        return () => { active = false; };
+    }, []);
+
     return <main className="page-shell">
         <header className="hero">
             <div className="hero-copy">
@@ -80,31 +101,9 @@ function App() {
                 </div>
                 <code>POST /v1/runtime</code>
             </div>
-            <PivotWorkspace
-                id="flagship-react-pivot"
-                table="revenue_operations"
-                pivotTitle="Revenue Operations Explorer"
-                serverSide
-                rowFields={['region', 'segment', 'product']}
-                colFields={['quarter']}
-                valConfigs={[
-                    { field: 'revenue', agg: 'sum', label: 'Revenue', format: 'currency' },
-                    { field: 'gross_margin', agg: 'sum', label: 'Gross Margin', format: 'currency' },
-                    { field: 'units', agg: 'sum', label: 'Units', format: 'fixed:0' },
-                    { field: 'margin_pct', agg: 'weighted_avg', weightField: 'revenue', label: 'Margin %', format: 'percent' },
-                ]}
-                availableFieldList={['region', 'segment', 'team', 'product', 'channel', 'quarter', 'owner', 'revenue', 'gross_margin', 'budget', 'units', 'margin_pct', 'variance']}
-                showRowTotals
-                showColTotals
-                showSubtotals
-                defaultTheme="dark"
-                persistence
-                persistence_type="local"
-                performanceConfig={{ serverSideBlockSize: 200, rowOverscan: 16, columnOverscan: 6 }}
-                uiConfig={{ showToolbar: true, showSidebar: true, showCharts: true }}
-                style={{ height: '760px', width: '100%' }}
-                transport={transport}
-            />
+            {workspaceConfig ? <PivotWorkspace {...workspaceConfig} transport={transport} /> : (
+                <p role="status">{workspaceConfigError || 'Loading workspace configuration…'}</p>
+            )}
         </section>
 
         <section className="integration-grid">

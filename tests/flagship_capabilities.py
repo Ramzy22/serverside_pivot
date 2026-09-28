@@ -49,6 +49,7 @@ CAPABILITIES = (
     FlagshipCapability("copy-current-table", "Selection", "Copy Current Table preserves the active expansion, sorting, filters, layout, and visible table shape.", "browser"),
     FlagshipCapability("copy-all-records", "Selection", "Copy All Records includes matching rows that are currently collapsed in the table.", "browser"),
     FlagshipCapability("keyboard-copy", "Selection", "Ctrl/Cmd+C copies the active selection without stealing editable input shortcuts.", "browser"),
+    FlagshipCapability("export-csv", "Delivery", "Export CSV downloads the filtered pivot with its visible column order, Unicode text, and totals.", "browser"),
     FlagshipCapability("export-xlsx", "Delivery", "Export XLSX downloads a non-empty, valid workbook containing the rendered pivot.", "browser"),
     FlagshipCapability("large-delivery", "Delivery", "Large copy/export presents progress, supports cancel, and delivers a selected part.", "browser"),
     FlagshipCapability("number-format", "Presentation", "Number-format and decimal controls update selected or default values.", "browser"),
