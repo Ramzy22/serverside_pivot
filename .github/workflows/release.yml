@@ -29,7 +29,7 @@ jobs:
 
       - name: Install dependencies
         run: |
-          python -m pip install --upgrade pip "setuptools<71" duckdb pyarrow "ibis-framework[duckdb]" pandas dash pytest tomli redis jsonschema "python-jose[cryptography]" build twine
+          python -m pip install --upgrade pip "setuptools<71" duckdb pyarrow "ibis-framework[duckdb]" pandas dash pytest selenium tomli redis jsonschema "python-jose[cryptography]" build twine
           python -m pip install -r security/requirements-security.txt
 
       - name: Add pivot-engine to PYTHONPATH
@@ -51,6 +51,17 @@ jobs:
         run: |
           python scripts/ci/verify_bundle_contract.py
           python scripts/ci/verify_host_build_contract.py --package-dir dash_tanstack_pivot
+
+      - name: Gate release on flagship export qualification
+        run: python scripts/certify_flagship.py --export-qualification --skip-build
+
+      - name: Upload flagship export qualification evidence
+        if: always()
+        uses: actions/upload-artifact@65462800fd760344b1a7b4382951275a0abb4808 # v4.3.3
+        with:
+          name: release-export-qualification-evidence
+          path: artifacts/export-qualification/
+          if-no-files-found: error
 
       - name: Pack and verify standalone React package
         run: |

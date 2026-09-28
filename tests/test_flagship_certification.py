@@ -8,9 +8,11 @@ verify what a user can actually copy, download, scroll, and control.
 
 from __future__ import annotations
 
+import importlib.util
 import json
 import os
 import time
+import xml.etree.ElementTree as ET
 from pathlib import Path
 
 import pytest
@@ -30,7 +32,171 @@ from tests.export_qualification_fixture import (
 ROOT = Path(__file__).resolve().parents[1]
 RUN_BROWSER_CERTIFICATION = os.environ.get("PIVOT_RUN_FLAGSHIP_BROWSER_TESTS") == "1"
 RUN_EXPORT_QUALIFICATION = os.environ.get("PIVOT_FLAGSHIP_EXPORT_QUALIFICATION_DATA") == "1"
+EXPORT_QUALIFICATION_PHASE = os.environ.get("PIVOT_EXPORT_QUALIFICATION_PHASE", "")
+REQUIRE_BROWSER_EVIDENCE = os.environ.get("PIVOT_REQUIRE_BROWSER_EVIDENCE") == "1"
 ARTIFACT_ROOT = Path(os.environ.get("PIVOT_FLAGSHIP_ARTIFACT_DIR", ROOT / "artifacts" / "flagship-certification"))
+
+
+def _load_certification_runner():
+    path = ROOT / "scripts" / "certify_flagship.py"
+    spec = importlib.util.spec_from_file_location("certify_flagship_for_test", path)
+    assert spec and spec.loader
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+def _write_junit_report(
+    path: Path,
+    *,
+    tests: int,
+    skipped: int = 0,
+    failures: int = 0,
+    errors: int = 0,
+) -> None:
+    suite = ET.Element(
+        "testsuite",
+        tests=str(tests),
+        skipped=str(skipped),
+        failures=str(failures),
+        errors=str(errors),
+    )
+    for index in range(tests):
+        case = ET.SubElement(
+            suite,
+            "testcase",
+            classname="qualification",
+            name=f"browser evidence {index}",
+        )
+        if index == 0 and skipped:
+            ET.SubElement(case, "skipped", message="SECRET backend exception: raw-cell-value")
+        if index == 0 and failures:
+            ET.SubElement(case, "failure", message="SECRET backend exception: raw-cell-value")
+        if index == 0 and errors:
+            ET.SubElement(case, "error", message="SECRET backend exception: raw-cell-value")
+    path.parent.mkdir(parents=True, exist_ok=True)
+    ET.ElementTree(suite).write(path, encoding="utf-8", xml_declaration=True)
+
+
+def _write_phase_evidence(phase_dir: Path, phase: str, *, missing: tuple[str, str] | None = None) -> None:
+    for host in HOSTS:
+        host_dir = phase_dir / host
+        downloads = host_dir / "downloads"
+        downloads.mkdir(parents=True, exist_ok=True)
+        if phase == "normal":
+            for export_format in ("csv", "xlsx"):
+                (downloads / f"pivot_export.{export_format}").write_bytes(b"qualified")
+                for suffix in ("parsed.json", "png", "browser.json", "network.json"):
+                    path = host_dir / f"qualified-{export_format}.{suffix}"
+                    if missing != (host, path.name):
+                        path.write_text("{}", encoding="utf-8")
+            for representation in ("tsv", "html"):
+                for suffix in ("parsed.json", "png", "browser.json", "network.json"):
+                    (host_dir / f"qualified-clipboard-{representation}.{suffix}").write_text(
+                        "{}", encoding="utf-8"
+                    )
+        else:
+            for export_format in ("csv", "xlsx"):
+                for suffix in ("parsed.json", "png", "browser.json", "network.json"):
+                    (host_dir / f"qualified-limit-{export_format}.{suffix}").write_text(
+                        "{}", encoding="utf-8"
+                    )
+
+
+@pytest.mark.parametrize(
+    ("scenario", "normal_code", "normal_skips", "normal_tests", "missing"),
+    [
+        pytest.param("skipped-case", 0, 1, 12, None, id="skipped-junit-case"),
+        pytest.param(
+            "missing-artifact",
+            0,
+            0,
+            12,
+            ("react", "qualified-xlsx.parsed.json"),
+            id="missing-required-host-artifact",
+        ),
+        pytest.param("browser-failure", 7, 0, 12, None, id="nonzero-browser-result"),
+        pytest.param("missing-cases", 0, 0, 1, None, id="incomplete-junit-case-count"),
+    ],
+)
+def test_export_qualification_runner_fails_closed_and_writes_sanitized_manifest(
+    tmp_path, monkeypatch, scenario, normal_code, normal_skips, normal_tests, missing
+):
+    """A release cannot qualify from a green-looking but incomplete browser run."""
+    runner = _load_certification_runner()
+
+    def fake_phase(phase, artifact_dir, environment, reuse_running):
+        assert environment["PIVOT_RUN_EXPORT_QUALIFICATION"] == "1"
+        assert environment["PIVOT_REQUIRE_BROWSER_EVIDENCE"] == "1"
+        assert environment["PIVOT_EXPORT_QUALIFICATION_PHASE"] == phase
+        if phase == "constrained":
+            assert environment["PIVOT_EXPORT_MAX_ROWS"] == "1"
+            assert int(environment["PIVOT_EXPORT_MAX_BYTES"]) < 389
+        else:
+            assert "PIVOT_EXPORT_MAX_ROWS" not in environment
+            assert "PIVOT_EXPORT_MAX_BYTES" not in environment
+        assert reuse_running is True
+        phase_dir = artifact_dir / phase
+        _write_phase_evidence(phase_dir, phase, missing=missing if phase == "normal" else None)
+        _write_junit_report(
+            phase_dir / "junit.xml",
+            tests=normal_tests if phase == "normal" else 6,
+            skipped=normal_skips if phase == "normal" else 0,
+        )
+        return normal_code if phase == "normal" else 0
+
+    monkeypatch.setattr(runner, "_run_qualification_phase", fake_phase, raising=False)
+    monkeypatch.setattr(runner, "_install_package", lambda: None)
+    artifact_dir = tmp_path / scenario
+    code = runner.main([
+        "--export-qualification",
+        "--skip-build",
+        "--reuse-running",
+        "--artifact-dir",
+        str(artifact_dir),
+    ])
+
+    assert code != 0
+    manifest = json.loads((artifact_dir / "export-qualification.json").read_text(encoding="utf-8"))
+    assert manifest["result"] == "failed"
+    assert set(manifest["phases"]) == {"normal", "constrained"}
+    serialized = json.dumps(manifest)
+    assert "raw-cell-value" not in serialized
+    assert "backend exception" not in serialized
+    assert "SECRET" not in serialized
+
+
+def test_export_qualification_skip_build_reinstalls_the_existing_streamlit_bundle(
+    tmp_path, monkeypatch
+):
+    runner = _load_certification_runner()
+    install_calls = []
+
+    def fake_install_package():
+        install_calls.append(True)
+
+    def fake_phase(phase, artifact_dir, environment, reuse_running):
+        phase_dir = artifact_dir / phase
+        _write_phase_evidence(phase_dir, phase)
+        _write_junit_report(phase_dir / "junit.xml", tests=12 if phase == "normal" else 6)
+        return 0
+
+    monkeypatch.setattr(runner, "_install_package", fake_install_package, raising=False)
+    monkeypatch.setattr(runner, "_run_qualification_phase", fake_phase)
+    artifact_dir = tmp_path / "qualification"
+    code = runner.main([
+        "--export-qualification",
+        "--skip-build",
+        "--reuse-running",
+        "--artifact-dir",
+        str(artifact_dir),
+    ])
+
+    assert code == 0
+    assert install_calls == [True]
+    manifest = json.loads((artifact_dir / "export-qualification.json").read_text(encoding="utf-8"))
+    assert manifest["result"] == "passed"
+    assert manifest["build"] == "skipped"
 
 
 def test_flagship_capability_matrix_covers_every_published_workflow():
@@ -94,7 +260,12 @@ pytestmark = pytest.mark.flagship
 
 
 def _selenium():
-    selenium = pytest.importorskip("selenium")
+    try:
+        import selenium
+    except ImportError:
+        if REQUIRE_BROWSER_EVIDENCE:
+            pytest.fail("Selenium is required for browser evidence")
+        pytest.skip("Selenium is not installed")
     from selenium import webdriver
     from selenium.common.exceptions import WebDriverException
     from selenium.webdriver.chrome.options import Options as ChromeOptions
@@ -158,6 +329,8 @@ def flagship_driver(flagship_host, flagship_artifacts):
     try:
         driver = webdriver.Chrome(options=options)
     except WebDriverException as exc:
+        if REQUIRE_BROWSER_EVIDENCE:
+            pytest.fail("Chrome WebDriver is required for browser evidence")
         pytest.skip(f"Chrome WebDriver is not available: {exc}")
     driver.set_page_load_timeout(30)
     driver.execute_cdp_cmd("Browser.setDownloadBehavior", {
@@ -233,6 +406,26 @@ def _wait_for_visible_workspace_element(driver, selector: str, timeout: int = 15
         element for element in _workspace_elements(current, selector)
         if element.is_displayed() and element.is_enabled()
     ), False))
+
+
+def _workspace_has_exact_text(driver, selector: str, text: str) -> bool:
+    return bool(driver.execute_script(
+        """
+        const [selector, expected] = arguments;
+        const visit = root => {
+            for (const element of root.querySelectorAll(selector)) {
+                if ((element.textContent || '').trim() === expected) return true;
+            }
+            for (const element of root.querySelectorAll('*')) {
+                if (element.shadowRoot && visit(element.shadowRoot)) return true;
+            }
+            return false;
+        };
+        return visit(document);
+        """,
+        selector,
+        text,
+    ))
 
 
 def _save_evidence(driver, directory: Path, test_name: str):
@@ -420,7 +613,10 @@ def test_flagship_copy_current_table_all_records_and_export_xlsx(flagship_host, 
     assert not _relevant_browser_errors(logs)
 
 
-@pytest.mark.skipif(not RUN_EXPORT_QUALIFICATION, reason="set PIVOT_FLAGSHIP_EXPORT_QUALIFICATION_DATA=1")
+@pytest.mark.skipif(
+    not RUN_EXPORT_QUALIFICATION or EXPORT_QUALIFICATION_PHASE == "constrained",
+    reason="normal export qualification phase",
+)
 @pytest.mark.parametrize("export_format", ["csv", "xlsx"])
 def test_flagship_qualified_download(flagship_host, flagship_driver, flagship_artifacts, export_format):
     _switch_to_workspace(flagship_driver, flagship_host)
@@ -442,7 +638,10 @@ def test_flagship_qualified_download(flagship_host, flagship_driver, flagship_ar
     assert not _relevant_browser_errors(logs)
 
 
-@pytest.mark.skipif(not RUN_EXPORT_QUALIFICATION, reason="set PIVOT_FLAGSHIP_EXPORT_QUALIFICATION_DATA=1")
+@pytest.mark.skipif(
+    not RUN_EXPORT_QUALIFICATION or EXPORT_QUALIFICATION_PHASE == "constrained",
+    reason="normal export qualification phase",
+)
 @pytest.mark.parametrize("representation", ["tsv", "html"])
 def test_flagship_qualified_clipboard(flagship_host, flagship_driver, flagship_artifacts, representation):
     _, _, _, _, _, _, _, WebDriverWait = _selenium()
@@ -472,6 +671,61 @@ def test_flagship_qualified_clipboard(flagship_host, flagship_driver, flagship_a
     )
     logs = _save_evidence(flagship_driver, flagship_artifacts, f"qualified-clipboard-{representation}")
     assert not _relevant_browser_errors(logs)
+
+
+@pytest.mark.skipif(
+    not RUN_EXPORT_QUALIFICATION or EXPORT_QUALIFICATION_PHASE != "constrained",
+    reason="constrained export qualification phase",
+)
+@pytest.mark.parametrize("export_format", ["csv", "xlsx"])
+def test_flagship_export_limit_rejection_creates_no_file(
+    flagship_host, flagship_driver, flagship_artifacts, export_format
+):
+    _, _, _, _, _, _, _, WebDriverWait = _selenium()
+    _switch_to_workspace(flagship_driver, flagship_host)
+    _assert_workspace_controls(flagship_driver)
+    downloads = flagship_artifacts / "downloads"
+    before = {
+        path.name: (path.stat().st_size, path.stat().st_mtime_ns)
+        for path in downloads.iterdir()
+        if path.is_file()
+    }
+
+    _click_export(flagship_driver, export_format)
+    WebDriverWait(flagship_driver, 20).until(
+        lambda current: _workspace_has_exact_text(current, "span", "Export failed")
+    )
+    WebDriverWait(flagship_driver, 20).until(
+        lambda current: _workspace_element(
+            current,
+            f"[data-testid='pivot-export-{export_format}']",
+            required=False,
+        ).is_enabled()
+    )
+
+    deadline = time.monotonic() + 2
+    after = before
+    while time.monotonic() < deadline:
+        after = {
+            path.name: (path.stat().st_size, path.stat().st_mtime_ns)
+            for path in downloads.iterdir()
+            if path.is_file()
+        }
+        assert after == before
+        time.sleep(0.1)
+
+    summary = {
+        "format": export_format,
+        "limitRejected": True,
+        "stableError": "Export failed",
+        "newCompletedFiles": 0,
+        "newPartialFiles": 0,
+    }
+    (flagship_artifacts / f"qualified-limit-{export_format}.parsed.json").write_text(
+        json.dumps(summary, indent=2) + "\n", encoding="utf-8"
+    )
+    _save_evidence(flagship_driver, flagship_artifacts, f"qualified-limit-{export_format}")
+    assert after == before
 
 
 def test_flagship_sidebar_filter_report_and_chart_entrypoints(flagship_host, flagship_driver, flagship_artifacts):

@@ -236,3 +236,15 @@ def test_exact_cdc_operations_documentation_declares_safety_and_performance_cont
         "at or below the saved position",
     ):
         assert required in text
+
+
+def test_release_gates_publish_on_export_qualification_and_always_uploads_evidence():
+    workflow = (REPO_ROOT / ".github" / "workflows" / "release.yml").read_text(encoding="utf-8")
+    qualification = workflow.index("python scripts/certify_flagship.py --export-qualification")
+    publish = workflow.index("- name: Publish to PyPI")
+    assert qualification < publish
+    assert "selenium" in workflow[:qualification]
+    upload = workflow.index("name: release-export-qualification-evidence")
+    upload_block = workflow[upload:publish]
+    assert "if: always()" in upload_block
+    assert "path: artifacts/export-qualification/" in upload_block
