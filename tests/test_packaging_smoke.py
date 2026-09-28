@@ -22,6 +22,7 @@ import sys
 import json
 import io
 import importlib.util
+import re
 import shutil
 import subprocess
 import tarfile
@@ -80,6 +81,88 @@ def _write_minimal_wheel(path, members):
         archive.writestr("serverside_pivot-0.0.88.dist-info/METADATA", metadata)
         for member, contents in members.items():
             archive.writestr(member, contents)
+
+
+def _extract_server_export_order_callback(javascript):
+    """Extract the emitted callback that combines live and schema column IDs."""
+    callback_start_pattern = re.compile(r"[A-Za-z_$][\w$]*\.useCallback\(\(\) => \{")
+    for marker in re.finditer(r"\.total_center_cols\b", javascript):
+        prefix_start = max(0, marker.start() - 2_000)
+        starts = list(callback_start_pattern.finditer(javascript, prefix_start, marker.start()))
+        if not starts:
+            continue
+        hook_start = starts[-1].start()
+        arrow_start = javascript.index("() =>", hook_start, marker.start())
+        brace_start = javascript.index("{", arrow_start, marker.start())
+        depth = 0
+        quote = None
+        escaped = False
+        for index in range(brace_start, len(javascript)):
+            character = javascript[index]
+            if quote is not None:
+                if escaped:
+                    escaped = False
+                elif character == "\\":
+                    escaped = True
+                elif character == quote:
+                    quote = None
+                continue
+            if character in "'\"`":
+                quote = character
+            elif character == "{":
+                depth += 1
+            elif character == "}":
+                depth -= 1
+                if depth == 0:
+                    callback = javascript[arrow_start : index + 1]
+                    if "total_center_cols" in callback and "__RowTotal__" in callback:
+                        return callback
+                    break
+    raise AssertionError("server export column-order callback missing from wheel JavaScript")
+
+
+def _run_bundled_server_export_order(javascript):
+    """Execute the emitted order callback against a hand-derived reorder fixture."""
+    callback = _extract_server_export_order_callback(javascript)
+    known_match = re.search(
+        r"const\s+([A-Za-z_$][\w$]*)\s*=\s*([A-Za-z_$][\w$]*)\(\);"
+        r"\s*if\s*\(!([A-Za-z_$][\w$]*)\)\s*return\s+\1;",
+        callback,
+    )
+    schema_match = re.search(
+        r"([A-Za-z_$][\w$]*)\s*&&\s*Number\.isFinite\(Number\(\1\.total_center_cols\)\)",
+        callback,
+    )
+    exportable_match = re.search(
+        r"if\s*\(!([A-Za-z_$][\w$]*)\([A-Za-z_$][\w$]*\)\)\s*return\s+null;",
+        callback,
+    )
+    assert known_match and schema_match and exportable_match
+    _, known_ids_getter, server_side = known_match.groups()
+    schema = schema_match.group(1)
+    is_exportable = exportable_match.group(1)
+    bindings = {
+        known_ids_getter: "() => ['hierarchy', 'center-b', 'center-a', '__RowTotal__sum']",
+        server_side: "true",
+        schema: (
+            "{total_center_cols: 3, columns: "
+            "[{id: 'center-a'}, {id: 'center-b'}, {id: 'center-c'}]}"
+        ),
+        is_exportable: "(columnId) => Boolean(columnId)",
+    }
+    script = "\n".join(
+        [*(f"const {name} = {value};" for name, value in bindings.items()),
+         f"const callback = {callback};",
+         "process.stdout.write(JSON.stringify(callback()));"]
+    )
+    result = subprocess.run(
+        ["node", "-e", script],
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+    assert result.returncode == 0, result.stdout + result.stderr
+    return json.loads(result.stdout)
 
 
 # ---------------------------------------------------------------------------
@@ -256,13 +339,21 @@ def test_clean_wheel_installs_complete_streamlit_component_build(tmp_path):
         assert not any("/node_modules/" in f"/{name}" for name in names)
         assert not any("/.setuptools-build/" in f"/{name}" for name in names)
 
-        installed_javascript = "\n".join(
+        wheel_javascript = "\n".join(
             archive.read(name).decode("utf-8")
             for name in sorted(names)
             if name.startswith(build_prefix) and name.endswith(".js")
         )
-        assert "pivot-export-csv" in installed_javascript
-        assert "Export format must be either xlsx or csv." in installed_javascript
+        assert "pivot-export-csv" in wheel_javascript
+        assert "Export format must be either xlsx or csv." in wheel_javascript
+        expected_export_order = [
+            "hierarchy",
+            "center-b",
+            "center-a",
+            "center-c",
+            "__RowTotal__sum",
+        ]
+        assert _run_bundled_server_export_order(wheel_javascript) == expected_export_order
 
     install_dir = tmp_path / "installed"
     install_result = subprocess.run(
@@ -307,6 +398,12 @@ def test_clean_wheel_installs_complete_streamlit_component_build(tmp_path):
     )
     assert component_result.returncode == 0, component_result.stdout + component_result.stderr
     assert component_result.stdout.strip() == entry_file
+    installed_build_dir = install_dir / "streamlit_pivot" / "frontend" / "build"
+    installed_javascript = "\n".join(
+        path.read_text(encoding="utf-8")
+        for path in sorted(installed_build_dir.rglob("*.js"))
+    )
+    assert _run_bundled_server_export_order(installed_javascript) == expected_export_order
 
 
 def test_host_build_contract_rejects_missing_react_and_streamlit_assets(tmp_path):
