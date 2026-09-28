@@ -115,4 +115,7 @@ name = "pivot_workspace"
 asset_dir = "streamlit_pivot/frontend/build"
 
 [tool.setuptools.exclude-package-data]
-"*" = ["build/**", "**/node_modules/**", "**/__pycache__/**"]
+# ``include-package-data = false`` already excludes undeclared build trees.
+# Do not blanket-exclude nested ``build`` directories: Streamlit's explicitly
+# declared component assets live under ``frontend/build`` and must ship.
+"*" = ["**/node_modules/**", "**/__pycache__/**"]

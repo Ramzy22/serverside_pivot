@@ -22,6 +22,7 @@ import sys
 import json
 import io
 import importlib.util
+import shutil
 import subprocess
 import tarfile
 import zipfile
@@ -183,6 +184,129 @@ def test_wheel_contract_rejects_missing_streamlit_manifest_entry(tmp_path):
     violations = _wheel_verifier_module().verify_wheel(wheel_path)
 
     assert "Streamlit manifest entry is missing from wheel: streamlit_pivot/frontend/build/pivot-workspace-missing.js" in violations
+
+
+def test_clean_wheel_installs_complete_streamlit_component_build(tmp_path):
+    """A clean wheel must run Streamlit exclusively from installed assets."""
+    source_copy = tmp_path / "package-source"
+    shutil.copytree(
+        PKG_DIR,
+        source_copy,
+        ignore=shutil.ignore_patterns(
+            ".pytest_cache",
+            "node_modules",
+            "dist",
+            "*.egg-info",
+            "__pycache__",
+            "pytest-cache-files-*",
+        ),
+    )
+    wheelhouse = tmp_path / "wheelhouse"
+    build_result = subprocess.run(
+        [
+            sys.executable,
+            "-m",
+            "build",
+            "--wheel",
+            "--no-isolation",
+            "--outdir",
+            str(wheelhouse),
+            str(source_copy),
+        ],
+        cwd=tmp_path,
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+    assert build_result.returncode == 0, build_result.stdout + build_result.stderr
+    wheels = list(wheelhouse.glob("*.whl"))
+    assert len(wheels) == 1
+    wheel_path = wheels[0]
+
+    assert _wheel_verifier_module().verify_wheel(wheel_path) == []
+    build_prefix = "streamlit_pivot/frontend/build/"
+    manifest_name = f"{build_prefix}pivot-workspace-manifest.json"
+    with zipfile.ZipFile(wheel_path) as archive:
+        names = set(archive.namelist())
+        manifest = json.loads(archive.read(manifest_name).decode("utf-8"))
+        entry_file = manifest["src/index.tsx"]["file"]
+        assert entry_file.startswith("pivot-workspace-") and entry_file.endswith(".js")
+
+        referenced_files = set()
+        for record in manifest.values():
+            if not isinstance(record, dict):
+                continue
+            if isinstance(record.get("file"), str):
+                referenced_files.add(record["file"])
+            for field in ("css", "assets"):
+                referenced_files.update(
+                    value for value in record.get(field, []) if isinstance(value, str)
+                )
+            for dependency_key in record.get("imports", []):
+                assert dependency_key in manifest
+            for dependency_key in record.get("dynamicImports", []):
+                assert dependency_key in manifest
+
+        missing_references = sorted(
+            relative_path
+            for relative_path in referenced_files
+            if f"{build_prefix}{relative_path}" not in names
+        )
+        assert missing_references == []
+        assert not any("/node_modules/" in f"/{name}" for name in names)
+        assert not any("/.setuptools-build/" in f"/{name}" for name in names)
+
+        installed_javascript = "\n".join(
+            archive.read(name).decode("utf-8")
+            for name in sorted(names)
+            if name.startswith(build_prefix) and name.endswith(".js")
+        )
+        assert "pivot-export-csv" in installed_javascript
+        assert "Export format must be either xlsx or csv." in installed_javascript
+
+    install_dir = tmp_path / "installed"
+    install_result = subprocess.run(
+        [
+            sys.executable,
+            "-m",
+            "pip",
+            "--disable-pip-version-check",
+            "install",
+            "--no-deps",
+            "--target",
+            str(install_dir),
+            str(wheel_path),
+        ],
+        cwd=tmp_path,
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+    assert install_result.returncode == 0, install_result.stdout + install_result.stderr
+
+    component_result = subprocess.run(
+        [
+            sys.executable,
+            "-I",
+            "-c",
+            (
+                "import pathlib, sys; "
+                f"sys.path.insert(0, {str(install_dir)!r}); "
+                "import streamlit_pivot; "
+                "package_dir = pathlib.Path(streamlit_pivot.__file__).resolve().parent; "
+                "build_dir = package_dir / 'frontend' / 'build'; "
+                "entry = streamlit_pivot._component_script(); "
+                "assert (build_dir / entry).is_file(); "
+                "print(entry)"
+            ),
+        ],
+        cwd=tmp_path,
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+    assert component_result.returncode == 0, component_result.stdout + component_result.stderr
+    assert component_result.stdout.strip() == entry_file
 
 
 def test_host_build_contract_rejects_missing_react_and_streamlit_assets(tmp_path):
