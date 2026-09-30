@@ -244,6 +244,10 @@ def test_release_gates_publish_on_export_qualification_and_always_uploads_eviden
     publish = workflow.index("- name: Publish to PyPI")
     assert qualification < publish
     assert "selenium" in workflow[:qualification]
+    assert "python -m build --wheel" in workflow[:qualification]
+    qualification_command = workflow[qualification:workflow.index("\n", qualification)]
+    assert "--skip-build" in qualification_command
+    assert "--wheel" in qualification_command
     upload = workflow.index("name: release-export-qualification-evidence")
     upload_block = workflow[upload:publish]
     assert "if: always()" in upload_block

@@ -52,8 +52,14 @@ jobs:
           python scripts/ci/verify_bundle_contract.py
           python scripts/ci/verify_host_build_contract.py --package-dir dash_tanstack_pivot
 
+      - name: Build export qualification wheel
+        run: python -m build --wheel --outdir "$RUNNER_TEMP/export-qualification-wheel" dash_tanstack_pivot/
+
       - name: Gate release on flagship export qualification
-        run: python scripts/certify_flagship.py --export-qualification --skip-build
+        run: |
+          WHEEL="$(find "$RUNNER_TEMP/export-qualification-wheel" -maxdepth 1 -name '*.whl' -print -quit)"
+          test -n "$WHEEL"
+          python scripts/certify_flagship.py --export-qualification --skip-build --wheel "$WHEEL"
 
       - name: Upload flagship export qualification evidence
         if: always()
