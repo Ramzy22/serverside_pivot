@@ -158,6 +158,28 @@ commit, protected environment, public HTTPS origin, matrix digest, and complete
 control scope. The included evidence JSON is deliberately a non-success
 template, not a certification claim.
 
+### Export contract
+
+Dash, React, and Streamlit host downloads are **CSV and XLSX** (XLSX remains
+the default). Copy actions provide **TSV and HTML** representations: copy
+current table preserves the active table state, while copy all records includes
+the complete matching hierarchy; both include headers. The runtime/API also
+supports CSV, TSV, HTML, and XLSX, with legacy `xls` requests normalized to
+XLSX. Host menus do not present TSV or HTML as file downloads.
+
+Release qualification runs both ordinary and limit-rejection browser phases:
+
+```bash
+python scripts/certify_flagship.py --export-qualification
+```
+
+The command is fail-closed and publishes a sanitized `export-qualification.json`
+manifest only when every host has complete evidence and rejected exports leave
+no file behind. See [the operations export contract](docs/OPERATIONS.md) for
+`PIVOT_EXPORT_MAX_ROWS`, `PIVOT_EXPORT_MAX_BYTES`, artifact requirements, and
+the boundary between browser qualification and deployment-owned security
+evidence.
+
 ## Why Use It
 
 - Built for Dash, so it fits naturally into a Python application.

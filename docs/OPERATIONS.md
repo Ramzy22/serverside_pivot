@@ -117,3 +117,39 @@ the workload failed to demonstrate an admission rejection; it does not claim
 that application-accounted bytes equal total native process memory. Keep the
 JSON alongside the exact image/tag, deployment limits, and admin health
 snapshot for release review.
+
+## Export contract and release qualification
+
+The public host contract is deliberately narrower than the runtime protocol:
+
+- Dash, React, and Streamlit host downloads are **CSV and XLSX**. XLSX is the
+  default when an existing export command omits a format.
+- Clipboard delivery is **TSV and HTML**. Copy-current-table preserves the
+  active filter, sorting, expansion, layout, and visible column order; copy-all
+  records includes the complete matching hierarchy. Both include headers.
+- The runtime/API export service supports CSV, TSV, HTML, and XLSX (with the
+  legacy `xls` request treated as XLSX). The host menu does not advertise TSV
+  or HTML as file downloads.
+
+Every host uses the server-owned row and byte limits. `PIVOT_EXPORT_MAX_ROWS`
+rejects a request before materialization when its row count is too large, and
+`PIVOT_EXPORT_MAX_BYTES` rejects an encoded document that exceeds the byte
+budget. A rejected export returns the stable `Export limit exceeded` error and
+must leave no completed or partial download behind.
+
+Run the release-equivalent browser qualification from a clean build with:
+
+```bash
+python scripts/certify_flagship.py --export-qualification
+```
+
+The command runs isolated `normal` and `constrained` phases for Dash, React,
+and Streamlit. It fails closed on unavailable browser tooling, skipped or
+failed cases, missing host evidence, a limit bypass, or any completed/partial
+file after rejection. The publication directory contains the sanitized
+`export-qualification.json` manifest, phase JUnit summaries, host screenshots,
+browser/network evidence, parsed document summaries, and downloads. Evidence
+contains no cell values, credentials, tokens, or backend exception text. Keep
+the manifest with the exact wheel, frontend build, image/tag, and deployment
+record used for the release; this browser qualification does not replace
+operator-owned TLS, identity, recovery, or penetration-test evidence.

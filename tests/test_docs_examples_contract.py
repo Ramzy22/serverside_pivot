@@ -248,7 +248,30 @@ def test_release_gates_publish_on_export_qualification_and_always_uploads_eviden
     qualification_command = workflow[qualification:workflow.index("\n", qualification)]
     assert "--skip-build" in qualification_command
     assert "--wheel" in qualification_command
+    assert "--artifact-dir \"$PIVOT_EXPORT_PUBLICATION_DIR\"" in qualification_command
+    assert "PIVOT_EXPORT_PUBLICATION_DIR=\"$RUNNER_TEMP/export-qualification-publication-" in workflow[:qualification]
+    assert ">> \"$GITHUB_ENV\"" in workflow[:qualification]
     upload = workflow.index("name: release-export-qualification-evidence")
     upload_block = workflow[upload:publish]
     assert "if: always()" in upload_block
-    assert "path: artifacts/export-qualification/" in upload_block
+    assert "path: ${{ env.PIVOT_EXPORT_PUBLICATION_DIR }}/" in upload_block
+    assert "artifacts/export-qualification" not in upload_block
+
+
+def test_export_operations_documentation_names_formats_limits_and_release_command():
+    """The public docs must state the host/API format boundary and gate command."""
+    operations = (REPO_ROOT / "docs" / "OPERATIONS.md").read_text(encoding="utf-8")
+    certification = (
+        REPO_ROOT / "docs" / "flagship-functionality-certification.md"
+    ).read_text(encoding="utf-8")
+    readme = (REPO_ROOT / "README.md").read_text(encoding="utf-8")
+
+    for text in (operations, certification, readme):
+        assert "CSV and XLSX" in text
+        assert "TSV and HTML" in text
+
+    assert "PIVOT_EXPORT_MAX_ROWS" in operations
+    assert "PIVOT_EXPORT_MAX_BYTES" in operations
+    assert "scripts/certify_flagship.py --export-qualification" in operations
+    assert "normal" in operations and "constrained" in operations
+    assert "export-qualification.json" in operations
