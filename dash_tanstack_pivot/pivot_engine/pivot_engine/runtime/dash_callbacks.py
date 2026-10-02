@@ -1589,7 +1589,11 @@ def register_dash_pivot_transport_callback(
                 kind=request_kind,
                 request_id=request_id,
                 status="error",
-                payload={},
+                payload=(
+                    result.export_payload or {}
+                    if request_kind == "export"
+                    else {}
+                ),
                 table=resolved_table,
                 session_id=context.session_id,
                 client_instance=context.client_instance,

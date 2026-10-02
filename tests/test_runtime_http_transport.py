@@ -468,6 +468,41 @@ def test_http_transport_externalizes_export_files_as_authorized_downloads(tmp_pa
     assert client.get(payload_ref["url"]).status_code == 404
 
 
+def test_http_export_limit_error_preserves_exact_v1_code_and_request_id():
+    class LimitedExportService:
+        async def process_async(self, _state, _context):
+            return PivotServiceResponse(
+                status="error",
+                message="Export limit exceeded",
+                export_payload={"limitCode": "PIVOT_EXPORT_MAX_ROWS"},
+            )
+
+    app = FastAPI()
+    register_runtime_http_transport(
+        app,
+        lambda: LimitedExportService(),
+        current_user_dependency=lambda: _User("alice"),
+        dataset_authorizer=_dataset_policy("export"),
+    )
+    response = TestClient(app).post(
+        "/v1/runtime",
+        json={
+            **_runtime_request(request_id="export-limit-1"),
+            "kind": "export",
+            "payload": {"format": "csv"},
+        },
+    )
+
+    assert response.status_code == 200
+    envelope = response.json()
+    assert envelope["schemaVersion"] == 1
+    assert envelope["kind"] == "export"
+    assert envelope["status"] == "error"
+    assert envelope["payload"] == {"limitCode": "PIVOT_EXPORT_MAX_ROWS"}
+    assert envelope["requestId"] == "export-limit-1"
+    assert envelope["message"] == "Export limit exceeded"
+
+
 def test_http_transport_mutations_are_default_deny_and_tenant_scoped_including_history():
     """A browser may name another tenant's group, but cannot mutate it."""
     import pyarrow as pa

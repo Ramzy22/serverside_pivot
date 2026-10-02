@@ -190,6 +190,13 @@ class RuntimeRequestRouter:
                     state.export_request,
                     max_rows=self.export_service.max_rows,
                 )
+            except ExportLimitError as exc:
+                return PivotServiceResponse(
+                    status="error",
+                    message=str(exc),
+                    export_payload={"limitCode": exc.limit_code} if exc.limit_code else {},
+                    profile=build_profile(),
+                )
             except ValueError as exc:
                 return PivotServiceResponse(
                     status="error",
@@ -257,7 +264,7 @@ class RuntimeRequestRouter:
                 return PivotServiceResponse(
                     status="error",
                     message=str(exc),
-                    export_payload={},
+                    export_payload={"limitCode": exc.limit_code} if exc.limit_code else {},
                     profile=build_profile(
                         execution_started_at=execution_started_at,
                         execution_finished_at=time.perf_counter(),
@@ -913,7 +920,8 @@ class RuntimeRequestRouter:
                 if max_export_rows is not None and full_row_count > max_export_rows:
                     raise ExportLimitError(
                         f"Export contains {full_row_count:,} rows; the server limit is {max_export_rows:,}. "
-                        "Narrow the selected range or raise PIVOT_EXPORT_MAX_ROWS."
+                        "Narrow the selected range or raise PIVOT_EXPORT_MAX_ROWS.",
+                        limit_code="PIVOT_EXPORT_MAX_ROWS",
                     )
                 if full_row_count <= 1:
                     return preflight

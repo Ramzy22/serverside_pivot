@@ -17,11 +17,12 @@ def test_export_pagination_uses_configured_limit_when_no_page_size_is_supplied()
 
 
 def test_export_pagination_rejects_explicit_oversized_ranges():
-    with pytest.raises(ValueError, match="limited to 25 rows"):
+    with pytest.raises(ExportLimitError, match="limited to 25 rows") as caught:
         RuntimeRequestFactory.build_export_pagination(
             {"pageSize": 26},
             max_rows=25,
         )
+    assert caught.value.limit_code == "PIVOT_EXPORT_MAX_ROWS"
 
 
 def test_export_service_deletes_an_oversized_generated_file(tmp_path):
@@ -34,9 +35,10 @@ def test_export_service_deletes_an_oversized_generated_file(tmp_path):
         "rows": 1,
     }
 
-    with pytest.raises(ExportLimitError, match="server limit is 16"):
+    with pytest.raises(ExportLimitError, match="server limit is 16") as caught:
         service.build_export_payload(None, None, None)
 
+    assert caught.value.limit_code == "PIVOT_EXPORT_MAX_BYTES"
     assert not content_path.exists()
 
 
@@ -46,8 +48,9 @@ def test_export_service_rejects_materialized_rows_before_creating_a_document():
     class Response:
         data = [{"region": "North"}, {"region": "South"}]
 
-    with pytest.raises(ExportLimitError, match="Export contains 2 rows"):
+    with pytest.raises(ExportLimitError, match="Export contains 2 rows") as caught:
         service.build_export_payload(Response(), None, None)
+    assert caught.value.limit_code == "PIVOT_EXPORT_MAX_ROWS"
 
 
 @pytest.mark.parametrize("export_format", ["csv", "tsv", "html", "xlsx"])
@@ -109,3 +112,12 @@ def test_runtime_router_rejects_oversized_export_before_adapter_execution(monkey
 
     assert response.status == "error"
     assert "limited to 2 rows" in response.message
+    assert response.export_payload == {"limitCode": "PIVOT_EXPORT_MAX_ROWS"}
+
+
+def test_unclassified_export_error_cannot_impersonate_a_limit():
+    error = ExportLimitError(
+        "synthetic error mentions PIVOT_EXPORT_MAX_ROWS but is not a configured limit"
+    )
+
+    assert error.limit_code is None

@@ -9,10 +9,16 @@ from typing import Optional
 
 DEFAULT_EXPORT_MAX_ROWS = 1_000_000
 DEFAULT_EXPORT_MAX_BYTES = 512 * 1024 * 1024
+EXPORT_ROW_LIMIT_CODE = "PIVOT_EXPORT_MAX_ROWS"
+EXPORT_BYTE_LIMIT_CODE = "PIVOT_EXPORT_MAX_BYTES"
 
 
 class ExportLimitError(ValueError):
     """Raised when an export would exceed its configured resource budget."""
+
+    def __init__(self, message: str, *, limit_code: Optional[str] = None) -> None:
+        super().__init__(message)
+        self.limit_code = limit_code
 
 
 def positive_env_int(name: str, default: int) -> int:
@@ -61,12 +67,14 @@ class ExportLimits:
         if int(rows) > self.max_rows:
             raise ExportLimitError(
                 f"Export contains {int(rows):,} rows; the server limit is {self.max_rows:,}. "
-                "Narrow the selected range or raise PIVOT_EXPORT_MAX_ROWS."
+                "Narrow the selected range or raise PIVOT_EXPORT_MAX_ROWS.",
+                limit_code=EXPORT_ROW_LIMIT_CODE,
             )
 
     def ensure_bytes(self, content_length: int) -> None:
         if int(content_length) > self.max_bytes:
             raise ExportLimitError(
                 f"Export is {int(content_length):,} bytes; the server limit is {self.max_bytes:,}. "
-                "Narrow the selected range or raise PIVOT_EXPORT_MAX_BYTES."
+                "Narrow the selected range or raise PIVOT_EXPORT_MAX_BYTES.",
+                limit_code=EXPORT_BYTE_LIMIT_CODE,
             )

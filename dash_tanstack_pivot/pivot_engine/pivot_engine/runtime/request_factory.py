@@ -6,6 +6,7 @@ from dataclasses import replace
 import re
 from typing import Any, Dict, List, Optional, Tuple
 
+from ..export_limits import EXPORT_ROW_LIMIT_CODE, ExportLimitError
 from ..tanstack_adapter import TanStackOperation, TanStackRequest
 from .models import PivotRequestContext, PivotViewState, first_present, safe_int
 
@@ -269,9 +270,10 @@ class RuntimeRequestFactory:
         if max_rows is not None:
             safe_max_rows = max(1, int(max_rows))
             if page_size > safe_max_rows:
-                raise ValueError(
+                raise ExportLimitError(
                     f"Export requests are limited to {safe_max_rows:,} rows. "
-                    "Narrow the selected range or raise PIVOT_EXPORT_MAX_ROWS."
+                    "Narrow the selected range or raise PIVOT_EXPORT_MAX_ROWS.",
+                    limit_code=EXPORT_ROW_LIMIT_CODE,
                 )
         return {
             "pageIndex": row_start // page_size if page_size else 0,

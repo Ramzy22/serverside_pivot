@@ -11,6 +11,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -29,18 +30,11 @@ ROOT = Path(__file__).resolve().parents[1]
 PACKAGE = ROOT / "dash_tanstack_pivot"
 DEFAULT_ARTIFACT_DIR = ROOT / "artifacts" / "flagship-certification"
 EXPORT_QUALIFICATION_ARTIFACT_DIR = ROOT / "artifacts" / "export-qualification"
+EXPORT_PUBLICATION_MARKER = ".pivot-export-qualification-publication-v1"
 QUALIFICATION_HOSTS = ("dash", "react", "streamlit")
 QUALIFICATION_PHASES = ("normal", "constrained")
 QUALIFICATION_TEST_COUNTS = {"normal": 12, "constrained": 6}
 SAFE_LIMIT_CODES = {"PIVOT_EXPORT_MAX_ROWS", "PIVOT_EXPORT_MAX_BYTES"}
-PROHIBITED_ARTIFACT_SUFFIXES = {".log", ".csv", ".xlsx", ".crdownload", ".part", ".tmp", ".har"}
-PROHIBITED_ARTIFACT_KEYS = {
-    "postdata", "headers", "requestheaders", "responseheaders", "cookie",
-    "cookies", "authorization", "set-cookie",
-}
-SENSITIVE_PROBES = (
-    "raw-cell-value", "SECRET backend exception", "Bearer test-token", "session-cookie-value",
-)
 
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
@@ -364,10 +358,21 @@ def _valid_limit_proof(path: Path, export_format: str) -> bool:
         proof = json.loads(path.read_text(encoding="utf-8"))
     except (json.JSONDecodeError, OSError):
         return False
+    return _valid_limit_proof_value(proof, export_format)
+
+
+def _valid_limit_proof_value(proof: object, export_format: object) -> bool:
     return (
-        proof.get("format") == export_format
+        isinstance(proof, dict)
+        and export_format in {"csv", "xlsx"}
+        and proof.get("format") == export_format
         and proof.get("limitRejected") is True
+        and proof.get("schemaVersion") == 1
+        and proof.get("kind") == "export"
         and proof.get("runtimeStatus") == "error"
+        and isinstance(proof.get("requestId"), str)
+        and bool(proof.get("requestId"))
+        and proof.get("requestId") == proof.get("clickedRequestId")
         and proof.get("limitCode") in SAFE_LIMIT_CODES
         and proof.get("stableError") == "Export limit exceeded"
         and proof.get("newCompletedFiles") == 0
@@ -426,84 +431,252 @@ def _qualification_environment(environment: dict[str, str], phase: str) -> dict[
     return phase_environment
 
 
-def _prepare_export_artifact_dir(artifact_dir: Path) -> None:
-    resolved = artifact_dir.resolve()
-    forbidden = {ROOT.resolve(), PACKAGE.resolve(), Path.home().resolve(), Path(resolved.anchor).resolve()}
-    if resolved in forbidden:
-        raise ValueError(f"Unsafe export qualification artifact directory: {resolved}")
-    if resolved.exists():
-        for child in resolved.iterdir():
-            if child.is_dir() and not child.is_symlink():
-                shutil.rmtree(child)
+def _validate_publication_target(artifact_dir: Path) -> Path:
+    """Accept only a new directory whose ancestors are real directories."""
+    target = artifact_dir.absolute()
+    if target.exists() or target.is_symlink():
+        raise ValueError(f"Publication target must not already exist: {target}")
+    if not target.parent.is_dir():
+        raise ValueError(f"Publication target parent must already exist: {target.parent}")
+    for parent in target.parents:
+        if parent.is_symlink():
+            raise ValueError(f"Publication target cannot traverse a symlink: {parent}")
+    resolved_parent = target.parent.resolve(strict=True)
+    resolved = resolved_parent / target.name
+    package = PACKAGE.resolve()
+    git_dir = (ROOT / ".git").resolve()
+    if resolved.is_relative_to(package) or resolved.is_relative_to(git_dir):
+        raise ValueError(f"Unsafe export qualification publication target: {resolved}")
+    return resolved
+
+
+def _prepare_export_artifact_dir(artifact_dir: Path) -> Path:
+    resolved = _validate_publication_target(artifact_dir)
+    resolved.mkdir()
+    (resolved / EXPORT_PUBLICATION_MARKER).write_text(
+        "owned export qualification publication directory\n", encoding="utf-8"
+    )
+    return resolved
+
+
+def _non_negative_int(value: object) -> bool:
+    return isinstance(value, int) and not isinstance(value, bool) and value >= 0
+
+
+def _safe_count_map(value: object) -> bool:
+    return (
+        isinstance(value, dict)
+        and all(
+            isinstance(key, str)
+            and re.fullmatch(r"[A-Za-z0-9_.:/ -]{1,80}", key) is not None
+            and _non_negative_int(count)
+            for key, count in value.items()
+        )
+    )
+
+
+def _load_safe_summary(path: Path) -> dict[str, object] | None:
+    """Reconstruct a publication summary from one explicitly known raw schema."""
+    try:
+        value = json.loads(path.read_text(encoding="utf-8"))
+    except (json.JSONDecodeError, OSError, UnicodeDecodeError):
+        return None
+    if not isinstance(value, dict):
+        return None
+
+    name = path.name
+    if name.endswith(".browser.json"):
+        expected = {"entryCount", "levelCounts", "sourceCounts", "relevantErrorCount"}
+        if (
+            set(value) != expected
+            or not _non_negative_int(value["entryCount"])
+            or not _non_negative_int(value["relevantErrorCount"])
+            or not _safe_count_map(value["levelCounts"])
+            or not _safe_count_map(value["sourceCounts"])
+        ):
+            return None
+        return {
+            "entryCount": value["entryCount"],
+            "relevantErrorCount": value["relevantErrorCount"],
+        }
+
+    if name.endswith(".network.json"):
+        expected = {"entryCount", "methodCounts", "statusCounts", "resourceTypeCounts"}
+        if (
+            set(value) != expected
+            or not _non_negative_int(value["entryCount"])
+            or not all(
+                _safe_count_map(value[field])
+                for field in ("methodCounts", "statusCounts", "resourceTypeCounts")
+            )
+        ):
+            return None
+        return {"entryCount": value["entryCount"]}
+
+    if name.endswith(".download.json"):
+        expected = {"format", "byteLength", "documentValidated"}
+        if (
+            set(value) != expected
+            or value["format"] not in {"csv", "xlsx"}
+            or not _non_negative_int(value["byteLength"])
+            or value["documentValidated"] is not True
+        ):
+            return None
+        return {key: value[key] for key in ("format", "byteLength", "documentValidated")}
+
+    if name.startswith("qualified-clipboard-") and name.endswith(".parsed.json"):
+        if set(value) != {"currentTable", "allRecords"}:
+            return None
+        safe: dict[str, object] = {}
+        for key, scope in (("currentTable", "current-table"), ("allRecords", "all-records")):
+            item = value[key]
+            expected = {
+                "representation", "scope", "rows", "columns", "unicodeVerified",
+                "filterVerified", "columnOrderVerified",
+            }
+            if (
+                not isinstance(item, dict)
+                or set(item) != expected
+                or item["representation"] not in {"tsv", "html"}
+                or item["scope"] != scope
+                or not _non_negative_int(item["rows"])
+                or not _non_negative_int(item["columns"])
+                or any(item[field] is not True for field in (
+                    "unicodeVerified", "filterVerified", "columnOrderVerified",
+                ))
+            ):
+                return None
+            safe[key] = {field: item[field] for field in sorted(expected)}
+        return safe
+
+    if name.startswith("qualified-limit-") and name.endswith(".parsed.json"):
+        if not _valid_limit_proof_value(value, value.get("format")):
+            return None
+        keys = (
+            "format", "limitRejected", "schemaVersion", "kind", "runtimeStatus",
+            "requestId", "clickedRequestId", "limitCode", "stableError",
+            "newCompletedFiles", "newPartialFiles",
+        )
+        if set(value) != set(keys):
+            return None
+        return {key: value[key] for key in keys}
+
+    if name.startswith("qualified-") and name.endswith(".parsed.json"):
+        expected = {
+            "format", "rows", "columns", "numericCellCount", "mergedHeaderCount",
+            "unicodeVerified", "filterVerified", "columnOrderVerified", "totalsVerified",
+        }
+        if (
+            set(value) != expected
+            or value["format"] not in {"csv", "xlsx"}
+            or any(not _non_negative_int(value[field]) for field in (
+                "rows", "columns", "numericCellCount", "mergedHeaderCount",
+            ))
+            or any(value[field] is not True for field in (
+                "unicodeVerified", "filterVerified", "columnOrderVerified", "totalsVerified",
+            ))
+        ):
+            return None
+        return {field: value[field] for field in sorted(expected)}
+    return None
+
+
+def _raw_expected_files() -> tuple[set[str], set[str]]:
+    expected: set[str] = set()
+    summaries: set[str] = set()
+    for phase in QUALIFICATION_PHASES:
+        expected.add(f"{phase}/junit.xml")
+        for process in ("runtime", "dash", "react", "streamlit"):
+            expected.add(f"{phase}/{process}.process.json")
+        for host in QUALIFICATION_HOSTS:
+            prefix = f"{phase}/{host}"
+            if phase == "normal":
+                for export_format in ("csv", "xlsx"):
+                    for suffix in ("download.json", "parsed.json", "png", "browser.json", "network.json"):
+                        relative = f"{prefix}/qualified-{export_format}.{suffix}"
+                        expected.add(relative)
+                        if suffix != "png":
+                            summaries.add(relative)
+                for representation in ("tsv", "html"):
+                    for suffix in ("parsed.json", "png", "browser.json", "network.json"):
+                        relative = f"{prefix}/qualified-clipboard-{representation}.{suffix}"
+                        expected.add(relative)
+                        if suffix != "png":
+                            summaries.add(relative)
             else:
-                child.unlink()
-    resolved.mkdir(parents=True, exist_ok=True)
+                for export_format in ("csv", "xlsx"):
+                    for suffix in ("parsed.json", "png", "browser.json", "network.json"):
+                        relative = f"{prefix}/qualified-limit-{export_format}.{suffix}"
+                        expected.add(relative)
+                        if suffix != "png":
+                            summaries.add(relative)
+    return expected, summaries
 
 
-def _sanitize_json_value(value: object) -> tuple[object, bool]:
-    if isinstance(value, dict):
-        sanitized: dict[str, object] = {}
-        changed = False
-        for key, child in value.items():
-            if str(key).lower() in PROHIBITED_ARTIFACT_KEYS:
-                changed = True
-                continue
-            safe_child, child_changed = _sanitize_json_value(child)
-            sanitized[str(key)] = safe_child
-            changed = changed or child_changed
-        return sanitized, changed
-    if isinstance(value, list):
-        sanitized_items = []
-        changed = False
-        for child in value:
-            safe_child, child_changed = _sanitize_json_value(child)
-            sanitized_items.append(safe_child)
-            changed = changed or child_changed
-        return sanitized_items, changed
-    if isinstance(value, str) and any(probe in value for probe in SENSITIVE_PROBES):
-        return "[redacted]", True
-    return value, False
+def _write_public_junit(destination: Path, tests: dict[str, int]) -> None:
+    suite = ET.Element("testsuite")
+    outcomes = (
+        ["failure"] * tests["failures"]
+        + ["error"] * tests["errors"]
+        + ["skipped"] * tests["skipped"]
+    )
+    for index in range(tests["tests"]):
+        case = ET.SubElement(
+            suite, "testcase", classname="export-qualification", name=f"case-{index + 1}"
+        )
+        if index < len(outcomes):
+            ET.SubElement(case, outcomes[index])
+    for key in ("tests", "skipped", "failures", "errors"):
+        suite.set(key, str(tests[key]))
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    ET.ElementTree(suite).write(destination, encoding="utf-8", xml_declaration=True)
 
 
-def _sanitize_published_artifact_tree(artifact_dir: Path) -> list[str]:
-    """Remove raw artifacts and redact unexpected structured fields before upload."""
-    issues: list[str] = []
-    for path in sorted(artifact_dir.rglob("*")):
+def _publish_safe_evidence(
+    raw_dir: Path,
+    publication_dir: Path,
+    phases: dict[str, object],
+) -> tuple[set[str], dict[str, set[str]]]:
+    """Build a new publication from an explicit summary-only allowlist."""
+    expected, summary_paths = _raw_expected_files()
+    issues = {phase: set() for phase in QUALIFICATION_PHASES}
+    for path in raw_dir.rglob("*"):
         if not path.is_file():
             continue
-        if path.suffix.lower() in PROHIBITED_ARTIFACT_SUFFIXES:
-            path.unlink()
-            issues.append("prohibited_artifact_removed")
+        relative = path.relative_to(raw_dir).as_posix()
+        if relative not in expected:
+            phase = relative.split("/", 1)[0]
+            issues[phase if phase in issues else "normal"].add("unexpected_raw_artifact")
+
+    published: set[str] = set()
+    for relative in sorted(summary_paths):
+        source = raw_dir / relative
+        if not source.is_file():
             continue
-        if path.suffix.lower() == ".png":
+        safe = _load_safe_summary(source)
+        phase = relative.split("/", 1)[0]
+        if safe is None:
+            issues[phase].add("invalid_safe_summary")
             continue
-        try:
-            text = path.read_text(encoding="utf-8")
-        except (OSError, UnicodeDecodeError):
-            path.unlink(missing_ok=True)
-            issues.append("unknown_binary_artifact_removed")
+        destination = publication_dir / relative
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        destination.write_text(json.dumps(safe, indent=2) + "\n", encoding="utf-8")
+        published.add(relative)
+
+    for phase in QUALIFICATION_PHASES:
+        report = phases.get(phase)
+        if not isinstance(report, dict):
             continue
-        changed = False
-        if path.suffix.lower() == ".json":
-            try:
-                value = json.loads(text)
-            except json.JSONDecodeError:
-                path.unlink()
-                issues.append("invalid_json_artifact_removed")
-                continue
-            value, changed = _sanitize_json_value(value)
-            if changed:
-                path.write_text(json.dumps(value, indent=2) + "\n", encoding="utf-8")
-        else:
-            safe_text = text
-            for probe in SENSITIVE_PROBES:
-                safe_text = safe_text.replace(probe, "[redacted]")
-            changed = safe_text != text
-            if changed:
-                path.write_text(safe_text, encoding="utf-8")
-        if changed:
-            issues.append("sensitive_artifact_redacted")
-    return sorted(set(issues))
+        junit = report.get("tests")
+        if (
+            isinstance(junit, dict)
+            and set(junit) == {"tests", "skipped", "failures", "errors"}
+            and all(_non_negative_int(junit[key]) for key in junit)
+        ):
+            relative = f"{phase}/junit.xml"
+            _write_public_junit(publication_dir / relative, junit)
+            published.add(relative)
+    return published, issues
 
 
 def _failed_qualification_phases(issue: str) -> dict[str, object]:
@@ -518,6 +691,66 @@ def _failed_qualification_phases(issue: str) -> dict[str, object]:
         }
         for phase in QUALIFICATION_PHASES
     }
+
+
+def _safe_issue_code(issue: object) -> str:
+    exact = {
+        "browser_exit_nonzero", "junit_missing", "junit_case_count", "junit_skipped",
+        "junit_failures", "junit_errors", "raw_download_present", "limit_created_download",
+        "missing_download_directory", "build_failed", "reuse_running_not_supported",
+        "qualification_interrupted", "unexpected_raw_artifact", "invalid_safe_summary",
+    }
+    if isinstance(issue, str) and issue in exact:
+        return issue
+    if isinstance(issue, str) and re.fullmatch(
+        r"host_(dash|react|streamlit)_evidence|invalid_limit_proof_(csv|xlsx)", issue
+    ):
+        return issue
+    expected, _ = _raw_expected_files()
+    allowed_names = {Path(relative).name for relative in expected}
+    if isinstance(issue, str) and issue.startswith("missing_") and issue[8:] in allowed_names:
+        return issue
+    return "qualification_issue"
+
+
+def _publication_phase_reports(
+    phases: dict[str, object], published: set[str]
+) -> dict[str, object]:
+    safe_phases: dict[str, object] = {}
+    for phase in QUALIFICATION_PHASES:
+        source = phases.get(phase, {})
+        if not isinstance(source, dict):
+            source = {}
+        raw_tests = source.get("tests", {})
+        tests = {
+            key: raw_tests.get(key, 0) if isinstance(raw_tests, dict) and _non_negative_int(raw_tests.get(key, 0)) else 0
+            for key in ("tests", "skipped", "failures", "errors")
+        }
+        hosts: dict[str, object] = {}
+        raw_hosts = source.get("hosts", {})
+        for host in QUALIFICATION_HOSTS:
+            raw_host = raw_hosts.get(host, {}) if isinstance(raw_hosts, dict) else {}
+            evidence = raw_host.get("evidence", []) if isinstance(raw_host, dict) else []
+            host_issues = raw_host.get("issues", []) if isinstance(raw_host, dict) else []
+            hosts[host] = {
+                "result": "passed" if isinstance(raw_host, dict) and raw_host.get("result") == "passed" else "failed",
+                "evidence": [
+                    item for item in evidence
+                    if isinstance(item, str) and item in published
+                ],
+                "issues": sorted({_safe_issue_code(item) for item in host_issues}),
+            }
+        issues = source.get("issues", [])
+        safe_phases[phase] = {
+            "result": "passed" if source.get("result") == "passed" else "failed",
+            "browserExitCode": source.get("browserExitCode")
+            if isinstance(source.get("browserExitCode"), int) else None,
+            "junit": f"{phase}/junit.xml" if f"{phase}/junit.xml" in published else None,
+            "tests": tests,
+            "hosts": hosts,
+            "issues": sorted({_safe_issue_code(item) for item in issues}),
+        }
+    return safe_phases
 
 
 def _write_export_qualification_manifest(
@@ -552,70 +785,78 @@ def _certify_export_qualification(
 ) -> int:
     phases: dict[str, object] = {}
     build_failed = False
-    if reuse_running:
-        phases = _failed_qualification_phases("reuse_running_not_supported")
-        build_failed = True
-    else:
+    interrupted = False
+    with tempfile.TemporaryDirectory(
+        prefix="pivot-export-qualification-raw-", ignore_cleanup_errors=True
+    ) as raw_name:
+        raw_dir = Path(raw_name)
         try:
-            if not skip_build:
-                _build()
-            elif wheel is None:
-                raise FileNotFoundError("--skip-build requires --wheel")
+            if reuse_running:
+                phases = _failed_qualification_phases("reuse_running_not_supported")
+                build_failed = True
             else:
-                _install_package(wheel)
-        except Exception:
-            build_failed = True
+                try:
+                    if not skip_build:
+                        _build()
+                    elif wheel is None:
+                        raise FileNotFoundError("--skip-build requires --wheel")
+                    else:
+                        _install_package(wheel)
+                except Exception:
+                    build_failed = True
 
-    if not build_failed:
-        for phase in QUALIFICATION_PHASES:
-            phase_environment = _qualification_environment(environment, phase)
-            try:
-                code = _run_qualification_phase(
-                    phase,
-                    artifact_dir,
-                    phase_environment,
+            if not build_failed:
+                for phase in QUALIFICATION_PHASES:
+                    phase_environment = _qualification_environment(environment, phase)
+                    try:
+                        code = _run_qualification_phase(
+                            phase,
+                            raw_dir,
+                            phase_environment,
+                        )
+                    except Exception:
+                        code = 1
+                    phases[phase] = _validate_qualification_phase(phase, raw_dir, code)
+            elif not phases:
+                phases = _failed_qualification_phases("build_failed")
+        except KeyboardInterrupt:
+            interrupted = True
+            phases = _failed_qualification_phases("qualification_interrupted")
+        finally:
+            published, publication_issues = _publish_safe_evidence(
+                raw_dir, artifact_dir, phases
+            )
+            for phase, issue_codes in publication_issues.items():
+                if not issue_codes:
+                    continue
+                report = phases.setdefault(
+                    phase, _failed_qualification_phases("qualification_issue")[phase]
                 )
-            except Exception:
-                code = 1
-            phases[phase] = _validate_qualification_phase(phase, artifact_dir, code)
-    elif not phases:
-        phases = _failed_qualification_phases("build_failed")
+                report["issues"].extend(sorted(issue_codes))
+                report["issues"] = sorted(set(report["issues"]))
+                report["result"] = "failed"
 
-    artifact_issues = _sanitize_published_artifact_tree(artifact_dir)
-    if artifact_issues:
-        phases["normal"]["issues"].extend(artifact_issues)
-        phases["normal"]["result"] = "failed"
-
-    passed = not build_failed and all(
-        phase_report.get("result") == "passed" for phase_report in phases.values()
-    )
-    result = "passed" if passed else "failed"
-    _write_export_qualification_manifest(
-        artifact_dir,
-        result=result,
-        started_at=started_at,
-        phases=phases,
-        build_status="failed" if build_failed else "skipped" if skip_build else "passed",
-    )
-    _write_matrix(
-        artifact_dir,
-        result=result,
-        started_at=started_at,
-        completed_at=datetime.now(UTC),
-    )
-    final_artifact_issues = _sanitize_published_artifact_tree(artifact_dir)
-    if final_artifact_issues:
-        phases["normal"]["issues"].extend(final_artifact_issues)
-        phases["normal"]["issues"] = sorted(set(phases["normal"]["issues"]))
-        phases["normal"]["result"] = "failed"
-        _write_export_qualification_manifest(
-            artifact_dir,
-            result="failed",
-            started_at=started_at,
-            phases=phases,
-            build_status="failed" if build_failed else "skipped" if skip_build else "passed",
-        )
-        return 1
+            passed = not build_failed and not interrupted and all(
+                isinstance(phase_report, dict) and phase_report.get("result") == "passed"
+                for phase_report in phases.values()
+            )
+            result = "passed" if passed else "failed"
+            public_phases = _publication_phase_reports(phases, published)
+            _write_export_qualification_manifest(
+                artifact_dir,
+                result=result,
+                started_at=started_at,
+                phases=public_phases,
+                build_status="failed" if build_failed else "skipped" if skip_build else "passed",
+            )
+            _write_matrix(
+                artifact_dir,
+                result=result,
+                started_at=started_at,
+                completed_at=datetime.now(UTC),
+            )
+    if interrupted:
+        raise KeyboardInterrupt
     return 0 if passed else 1
 
 
@@ -637,9 +878,24 @@ def main(argv: list[str] | None = None) -> int:
         if args.export_qualification
         else DEFAULT_ARTIFACT_DIR
     )
-    artifact_dir = (args.artifact_dir or default_artifact_dir).resolve()
+    artifact_dir = (args.artifact_dir or default_artifact_dir).absolute()
     if args.export_qualification:
-        _prepare_export_artifact_dir(artifact_dir)
+        if args.reuse_running:
+            print("Export qualification does not support --reuse-running", file=sys.stderr)
+            return 1
+        if args.skip_build:
+            if args.wheel is None:
+                print("Export qualification --skip-build requires --wheel", file=sys.stderr)
+                return 1
+            wheel = args.wheel.resolve()
+            if not wheel.is_file() or wheel.suffix.lower() != ".whl":
+                print(f"Prebuilt wheel is required: {wheel}", file=sys.stderr)
+                return 1
+        try:
+            artifact_dir = _prepare_export_artifact_dir(artifact_dir)
+        except ValueError as error:
+            print(str(error), file=sys.stderr)
+            return 1
     else:
         artifact_dir.mkdir(parents=True, exist_ok=True)
     started_at = datetime.now(UTC)

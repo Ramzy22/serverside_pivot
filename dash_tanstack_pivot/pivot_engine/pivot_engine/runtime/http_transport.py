@@ -426,7 +426,11 @@ class RuntimeHttpGateway:
                 "editOverlay": result.edit_overlay,
             }
         else:
-            payload = {}
+            payload = (
+                result.export_payload or {}
+                if kind == "export" and status == "error"
+                else {}
+            )
 
         response = build_runtime_response(
             kind=kind,

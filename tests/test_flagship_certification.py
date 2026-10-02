@@ -39,31 +39,79 @@ _EXPORT_RESPONSE_PROBE_SCRIPT = """
 if (!window.__PIVOT_EXPORT_PROBE_INSTALLED__) {
     window.__PIVOT_EXPORT_PROBE_INSTALLED__ = true;
     window.__PIVOT_EXPORT_PROOFS__ = [];
-    const visit = value => {
+    const requestIds = new Set();
+    window.__PIVOT_EXPORT_REQUEST_IDS__ = requestIds;
+    const parsed = value => {
+        if (typeof value !== 'string') return value;
+        try { return JSON.parse(value); } catch (_) { return null; }
+    };
+    const visitRequest = rawValue => {
+        const value = parsed(rawValue);
         if (!value || typeof value !== 'object') return;
-        if (Array.isArray(value)) { value.forEach(visit); return; }
-        if (value.kind === 'export' && value.status === 'error') {
-            const detail = String(value.message || '');
-            const code = detail.includes('PIVOT_EXPORT_MAX_ROWS')
-                ? 'PIVOT_EXPORT_MAX_ROWS'
-                : detail.includes('PIVOT_EXPORT_MAX_BYTES')
-                    ? 'PIVOT_EXPORT_MAX_BYTES'
-                    : null;
-            if (code) window.__PIVOT_EXPORT_PROOFS__.push({kind: 'export', status: 'error', code});
+        if (Array.isArray(value)) { value.forEach(visitRequest); return; }
+        if (
+            value.kind === 'export'
+            && typeof value.requestId === 'string'
+            && value.requestId.length > 0
+            && value.payload
+            && typeof value.payload === 'object'
+            && !Array.isArray(value.payload)
+        ) {
+            requestIds.add(value.requestId);
         }
-        Object.values(value).forEach(visit);
+        Object.values(value).forEach(visitRequest);
+    };
+    const visitResponse = rawValue => {
+        const value = parsed(rawValue);
+        if (!value || typeof value !== 'object') return;
+        if (Array.isArray(value)) { value.forEach(visitResponse); return; }
+        if (
+            value.schemaVersion === 1
+            && value.kind === 'export'
+            && value.status === 'error'
+            && typeof value.requestId === 'string'
+            && requestIds.has(value.requestId)
+            && value.payload
+            && typeof value.payload === 'object'
+            && !Array.isArray(value.payload)
+            && ['PIVOT_EXPORT_MAX_ROWS', 'PIVOT_EXPORT_MAX_BYTES'].includes(value.payload.limitCode)
+        ) {
+            window.__PIVOT_EXPORT_PROOFS__.push({
+                schemaVersion: 1,
+                kind: 'export',
+                status: 'error',
+                requestId: value.requestId,
+                limitCode: value.payload.limitCode,
+            });
+        }
+        Object.values(value).forEach(visitResponse);
     };
     const originalFetch = window.fetch.bind(window);
-    window.fetch = (...args) => originalFetch(...args).then(response => {
-        response.clone().json().then(visit).catch(() => {});
+    window.fetch = (...args) => {
+        if (args[1] && args[1].body) visitRequest(args[1].body);
+        if (args[0] instanceof Request) {
+            args[0].clone().text().then(visitRequest).catch(() => {});
+        }
+        return originalFetch(...args).then(response => {
+        response.clone().text().then(visitResponse).catch(() => {});
         return response;
-    });
+        });
+    };
     const originalOpen = XMLHttpRequest.prototype.open;
     XMLHttpRequest.prototype.open = function(...args) {
         this.addEventListener('load', () => {
-            try { visit(JSON.parse(this.responseText)); } catch (_) {}
+            visitResponse(this.responseText);
         });
         return originalOpen.apply(this, args);
+    };
+    const originalSend = XMLHttpRequest.prototype.send;
+    XMLHttpRequest.prototype.send = function(body) {
+        visitRequest(body);
+        return originalSend.call(this, body);
+    };
+    window.__PIVOT_RESET_EXPORT_PROBE__ = () => {
+        requestIds.clear();
+        window.__PIVOT_EXPORT_PROOFS__ = [];
     };
 }
 """
@@ -120,12 +168,74 @@ def _write_phase_evidence(phase_dir: Path, phase: str, *, missing: tuple[str, st
                 for suffix in ("download.json", "parsed.json", "png", "browser.json", "network.json"):
                     path = host_dir / f"qualified-{export_format}.{suffix}"
                     if missing != (host, path.name):
-                        path.write_bytes(b"png" if suffix == "png" else b"{}")
+                        if suffix == "png":
+                            path.write_bytes(b"png")
+                        elif suffix == "download.json":
+                            path.write_text(json.dumps({
+                                "format": export_format,
+                                "byteLength": 389,
+                                "documentValidated": True,
+                            }), encoding="utf-8")
+                        elif suffix == "parsed.json":
+                            path.write_text(json.dumps({
+                                "format": export_format,
+                                "rows": 5,
+                                "columns": 7,
+                                "numericCellCount": 10 if export_format == "xlsx" else 0,
+                                "mergedHeaderCount": 2 if export_format == "xlsx" else 0,
+                                "unicodeVerified": True,
+                                "filterVerified": True,
+                                "columnOrderVerified": True,
+                                "totalsVerified": True,
+                            }), encoding="utf-8")
+                        elif suffix == "browser.json":
+                            path.write_text(json.dumps({
+                                "entryCount": 1,
+                                "levelCounts": {"INFO": 1},
+                                "sourceCounts": {"console-api": 1},
+                                "relevantErrorCount": 0,
+                            }), encoding="utf-8")
+                        else:
+                            path.write_text(json.dumps({
+                                "entryCount": 1,
+                                "methodCounts": {"Network.responseReceived": 1},
+                                "statusCounts": {"200": 1},
+                                "resourceTypeCounts": {"Fetch": 1},
+                            }), encoding="utf-8")
             for representation in ("tsv", "html"):
                 for suffix in ("parsed.json", "png", "browser.json", "network.json"):
-                    (host_dir / f"qualified-clipboard-{representation}.{suffix}").write_text(
-                        "{}", encoding="utf-8"
-                    )
+                    path = host_dir / f"qualified-clipboard-{representation}.{suffix}"
+                    if suffix == "png":
+                        path.write_bytes(b"png")
+                    elif suffix == "parsed.json":
+                        def clipboard_summary(scope, rows):
+                            return {
+                                "representation": representation,
+                                "scope": scope,
+                                "rows": rows,
+                                "columns": 7,
+                                "unicodeVerified": True,
+                                "filterVerified": True,
+                                "columnOrderVerified": True,
+                            }
+                        path.write_text(json.dumps({
+                            "currentTable": clipboard_summary("current-table", 3),
+                            "allRecords": clipboard_summary("all-records", 5),
+                        }), encoding="utf-8")
+                    elif suffix == "browser.json":
+                        path.write_text(json.dumps({
+                            "entryCount": 1,
+                            "levelCounts": {"INFO": 1},
+                            "sourceCounts": {"console-api": 1},
+                            "relevantErrorCount": 0,
+                        }), encoding="utf-8")
+                    else:
+                        path.write_text(json.dumps({
+                            "entryCount": 1,
+                            "methodCounts": {"Network.responseReceived": 1},
+                            "statusCounts": {"200": 1},
+                            "resourceTypeCounts": {"Fetch": 1},
+                        }), encoding="utf-8")
         else:
             for export_format in ("csv", "xlsx"):
                 for suffix in ("parsed.json", "png", "browser.json", "network.json"):
@@ -134,14 +244,32 @@ def _write_phase_evidence(phase_dir: Path, phase: str, *, missing: tuple[str, st
                         path.write_text(json.dumps({
                             "format": export_format,
                             "limitRejected": True,
+                            "schemaVersion": 1,
+                            "kind": "export",
                             "runtimeStatus": "error",
+                            "requestId": f"export:test:{host}:{export_format}",
+                            "clickedRequestId": f"export:test:{host}:{export_format}",
                             "limitCode": "PIVOT_EXPORT_MAX_ROWS",
                             "stableError": "Export limit exceeded",
                             "newCompletedFiles": 0,
                             "newPartialFiles": 0,
                         }), encoding="utf-8")
+                    elif suffix == "png":
+                        path.write_bytes(b"png")
+                    elif suffix == "browser.json":
+                        path.write_text(json.dumps({
+                            "entryCount": 1,
+                            "levelCounts": {"INFO": 1},
+                            "sourceCounts": {"console-api": 1},
+                            "relevantErrorCount": 0,
+                        }), encoding="utf-8")
                     else:
-                        path.write_bytes(b"png" if suffix == "png" else b"{}")
+                        path.write_text(json.dumps({
+                            "entryCount": 1,
+                            "methodCounts": {"Network.responseReceived": 1},
+                            "statusCounts": {"429": 1},
+                            "resourceTypeCounts": {"Fetch": 1},
+                        }), encoding="utf-8")
 
 
 def _assert_published_tree_is_sanitized(root: Path) -> None:
@@ -150,10 +278,17 @@ def _assert_published_tree_is_sanitized(root: Path) -> None:
         "SECRET backend exception",
         "Bearer test-token",
         "session-cookie-value",
+        "token-value-123",
+        "access-token-value-456",
+        "password-value-789",
+        "credential-value-abc",
+        "secret-value-def",
+        "arbitrary backend/raw string",
     )
     prohibited_keys = {
         "postdata", "headers", "requestheaders", "responseheaders",
         "cookie", "cookies", "authorization", "set-cookie",
+        "token", "accesstoken", "password", "credential", "secret",
     }
     prohibited_suffixes = {".log", ".csv", ".xlsx", ".crdownload", ".part", ".tmp", ".har"}
 
@@ -170,8 +305,6 @@ def _assert_published_tree_is_sanitized(root: Path) -> None:
         if not path.is_file():
             continue
         assert path.suffix.lower() not in prohibited_suffixes, path
-        if path.suffix.lower() == ".png":
-            continue
         text = path.read_text(encoding="utf-8")
         assert not any(probe in text for probe in probes), path
         if path.suffix.lower() == ".json":
@@ -302,6 +435,9 @@ def test_export_qualification_rejects_reuse_running_before_any_phase(tmp_path, m
     called = []
     monkeypatch.setattr(runner, "_run_qualification_phase", lambda *args: called.append(args))
     artifact_dir = tmp_path / "qualification"
+    artifact_dir.mkdir()
+    sentinel = artifact_dir / "caller-owned.txt"
+    sentinel.write_text("preserve", encoding="utf-8")
 
     code = runner.main([
         "--export-qualification",
@@ -313,9 +449,69 @@ def test_export_qualification_rejects_reuse_running_before_any_phase(tmp_path, m
 
     assert code != 0
     assert called == []
-    manifest = json.loads((artifact_dir / "export-qualification.json").read_text(encoding="utf-8"))
-    assert manifest["result"] == "failed"
-    assert all("reuse_running_not_supported" in phase["issues"] for phase in manifest["phases"].values())
+    assert sentinel.read_text(encoding="utf-8") == "preserve"
+
+
+def test_export_qualification_missing_wheel_does_not_mutate_destination(tmp_path, monkeypatch):
+    runner = _load_certification_runner()
+    artifact_dir = tmp_path / "qualification"
+    artifact_dir.mkdir()
+    sentinel = artifact_dir / "caller-owned.txt"
+    sentinel.write_text("preserve", encoding="utf-8")
+    called = []
+    monkeypatch.setattr(runner, "_run_qualification_phase", lambda *args: called.append(args))
+
+    code = runner.main([
+        "--export-qualification",
+        "--skip-build",
+        "--artifact-dir",
+        str(artifact_dir),
+    ])
+
+    assert code != 0
+    assert called == []
+    assert sentinel.read_text(encoding="utf-8") == "preserve"
+
+
+@pytest.mark.parametrize("target_name", ["root", "package", "git", "external"])
+def test_export_publication_target_rejects_existing_caller_owned_paths(
+    tmp_path, target_name
+):
+    runner = _load_certification_runner()
+    targets = {
+        "root": runner.ROOT,
+        "package": runner.PACKAGE,
+        "git": runner.ROOT / ".git",
+        "external": tmp_path / "caller-owned",
+    }
+    target = targets[target_name]
+    if target_name == "external":
+        target.mkdir()
+        (target / "sentinel.txt").write_text("preserve", encoding="utf-8")
+
+    with pytest.raises(ValueError, match="must not already exist"):
+        runner._validate_publication_target(target)
+
+    if target_name == "external":
+        assert (target / "sentinel.txt").read_text(encoding="utf-8") == "preserve"
+
+
+def test_export_publication_target_rejects_symlink_without_touching_target(tmp_path):
+    runner = _load_certification_runner()
+    target = tmp_path / "target"
+    target.mkdir()
+    sentinel = target / "sentinel.txt"
+    sentinel.write_text("preserve", encoding="utf-8")
+    link = tmp_path / "publication-link"
+    try:
+        link.symlink_to(target, target_is_directory=True)
+    except OSError:
+        pytest.skip("directory symlinks are unavailable")
+
+    with pytest.raises(ValueError, match="must not already exist"):
+        runner._validate_publication_target(link)
+
+    assert sentinel.read_text(encoding="utf-8") == "preserve"
 
 
 def test_constrained_evidence_rejects_arbitrary_export_failure(tmp_path):
@@ -339,6 +535,51 @@ def test_constrained_evidence_rejects_arbitrary_export_failure(tmp_path):
     assert report["result"] == "failed"
     assert "host_react_evidence" in report["issues"]
     assert "invalid_limit_proof_csv" in report["hosts"]["react"]["issues"]
+
+
+@pytest.mark.parametrize(
+    "mutation",
+    [
+        {"schemaVersion": 2},
+        {"kind": "data"},
+        {"runtimeStatus": "timeout"},
+        {"requestId": "export:other-request"},
+        {"clickedRequestId": "export:other-request"},
+        {"limitCode": "PIVOT_EXPORT_MAX_ROWS_FAKE"},
+        {"limitCode": None, "stableError": "PIVOT_EXPORT_MAX_ROWS Export failed"},
+        {"stableError": "Export failed"},
+    ],
+)
+def test_constrained_limit_proof_requires_exact_correlated_v1_envelope(
+    tmp_path, mutation
+):
+    runner = _load_certification_runner()
+    proof = {
+        "format": "csv",
+        "limitRejected": True,
+        "schemaVersion": 1,
+        "kind": "export",
+        "runtimeStatus": "error",
+        "requestId": "export:clicked-request",
+        "clickedRequestId": "export:clicked-request",
+        "limitCode": "PIVOT_EXPORT_MAX_ROWS",
+        "stableError": "Export limit exceeded",
+        "newCompletedFiles": 0,
+        "newPartialFiles": 0,
+    }
+    proof.update(mutation)
+    path = tmp_path / "proof.json"
+    path.write_text(json.dumps(proof), encoding="utf-8")
+
+    assert not runner._valid_limit_proof(path, "csv")
+
+
+def test_browser_export_probe_correlates_outbound_request_to_exact_v1_response():
+    assert "XMLHttpRequest.prototype.send" in _EXPORT_RESPONSE_PROBE_SCRIPT
+    assert "schemaVersion === 1" in _EXPORT_RESPONSE_PROBE_SCRIPT
+    assert "value.payload.limitCode" in _EXPORT_RESPONSE_PROBE_SCRIPT
+    assert "requestIds.has(value.requestId)" in _EXPORT_RESPONSE_PROBE_SCRIPT
+    assert "detail.includes" not in _EXPORT_RESPONSE_PROBE_SCRIPT
 
 
 def test_qualification_chrome_options_disable_background_component_downloads(tmp_path, monkeypatch):
@@ -400,17 +641,19 @@ def test_validated_download_removal_retries_a_transient_browser_file_lock(
     assert unrelated.read_text(encoding="utf-8") == "preserve"
 
 
-def test_export_artifact_tree_is_recursively_sanitized_and_stale_evidence_is_cleared(
+def test_export_publication_is_new_allowlisted_tree_separate_from_raw_evidence(
     tmp_path, monkeypatch
 ):
     runner = _load_certification_runner()
     wheel = tmp_path / "serverside_pivot-0.0.88-py3-none-any.whl"
     wheel.write_bytes(b"wheel")
     artifact_dir = tmp_path / "qualification"
-    artifact_dir.mkdir()
-    (artifact_dir / "stale-secret.log").write_text("Bearer test-token", encoding="utf-8")
+    raw_roots = []
 
     def fake_phase(phase, output_dir, environment):
+        assert output_dir != artifact_dir
+        assert not output_dir.is_relative_to(artifact_dir)
+        raw_roots.append(output_dir)
         phase_dir = output_dir / phase
         _write_phase_evidence(phase_dir, phase)
         _write_junit_report(phase_dir / "junit.xml", tests=12 if phase == "normal" else 6)
@@ -418,10 +661,27 @@ def test_export_artifact_tree_is_recursively_sanitized_and_stale_evidence_is_cle
             (phase_dir / "runtime.stdout.log").write_text(
                 "SECRET backend exception: raw-cell-value", encoding="utf-8"
             )
+            (phase_dir / "dash" / "downloads" / "unrelated.txt").write_text(
+                "token=token-value-123; arbitrary backend/raw string", encoding="utf-8"
+            )
             (phase_dir / "dash" / "leak.network.json").write_text(json.dumps({
-                "postData": "raw-cell-value",
-                "headers": {"Authorization": "Bearer test-token", "Cookie": "session-cookie-value"},
+                "accessToken": "access-token-value-456",
+                "nested": {
+                    "password": "password-value-789",
+                    "credential": "credential-value-abc",
+                    "secret": "secret-value-def",
+                },
             }), encoding="utf-8")
+            (phase_dir / "dash" / "unknown.bin").write_bytes(
+                b"credential-value-abc\x00secret-value-def"
+            )
+            network_summary = phase_dir / "dash" / "qualified-xlsx.network.json"
+            value = json.loads(network_summary.read_text(encoding="utf-8"))
+            value["token"] = "token-value-123"
+            network_summary.write_text(json.dumps(value), encoding="utf-8")
+            (phase_dir / "react" / "qualified-csv.browser.json").write_text(
+                "{invalid json", encoding="utf-8"
+            )
         return 0
 
     monkeypatch.setattr(runner, "_install_package", lambda wheel_path: None)
@@ -436,8 +696,54 @@ def test_export_artifact_tree_is_recursively_sanitized_and_stale_evidence_is_cle
     ])
 
     assert code != 0
-    assert not (artifact_dir / "stale-secret.log").exists()
+    assert raw_roots
+    assert all(not raw_root.exists() for raw_root in raw_roots)
     _assert_published_tree_is_sanitized(artifact_dir)
+    assert not list(artifact_dir.rglob("*.png"))
+    assert not list(artifact_dir.rglob("*.process.json"))
+    assert not (artifact_dir / "normal" / "dash" / "downloads" / "unrelated.txt").exists()
+    manifest = json.loads((artifact_dir / "export-qualification.json").read_text(encoding="utf-8"))
+    assert manifest["result"] == "failed"
+    assert "unexpected_raw_artifact" in manifest["phases"]["normal"]["issues"]
+    assert "invalid_safe_summary" in manifest["phases"]["normal"]["issues"]
+
+
+def test_export_publication_remains_safe_when_qualification_is_interrupted(tmp_path, monkeypatch):
+    runner = _load_certification_runner()
+    wheel = tmp_path / "serverside_pivot-0.0.88-py3-none-any.whl"
+    wheel.write_bytes(b"wheel")
+    artifact_dir = tmp_path / "qualification"
+    raw_roots = []
+
+    def interrupting_phase(phase, output_dir, environment):
+        raw_roots.append(output_dir)
+        output_dir.mkdir(parents=True, exist_ok=True)
+        (output_dir / "secret.log").write_text(
+            "password=password-value-789", encoding="utf-8"
+        )
+        raise KeyboardInterrupt
+
+    monkeypatch.setattr(runner, "_install_package", lambda wheel_path: None)
+    monkeypatch.setattr(runner, "_run_qualification_phase", interrupting_phase)
+
+    with pytest.raises(KeyboardInterrupt):
+        runner.main([
+            "--export-qualification",
+            "--skip-build",
+            "--wheel",
+            str(wheel),
+            "--artifact-dir",
+            str(artifact_dir),
+        ])
+
+    assert all(not raw_root.exists() for raw_root in raw_roots)
+    _assert_published_tree_is_sanitized(artifact_dir)
+    manifest = json.loads((artifact_dir / "export-qualification.json").read_text(encoding="utf-8"))
+    assert manifest["result"] == "failed"
+    assert all(
+        "qualification_interrupted" in report["issues"]
+        for report in manifest["phases"].values()
+    )
 
 
 def test_flagship_capability_matrix_covers_every_published_workflow():
@@ -751,11 +1057,12 @@ def _save_evidence(driver, directory: Path, test_name: str):
 
 def _install_export_response_probe(driver) -> None:
     driver.execute_script(_EXPORT_RESPONSE_PROBE_SCRIPT)
+    driver.execute_script("window.__PIVOT_RESET_EXPORT_PROBE__();")
 
 
 def _export_limit_proof(driver):
     return driver.execute_script(
-        "return (window.__PIVOT_EXPORT_PROOFS__ || []).find(item => item && item.status === 'error' && item.code) || null;"
+        "return (window.__PIVOT_EXPORT_PROOFS__ || []).find(item => item && item.status === 'error' && item.limitCode) || null;"
     )
 
 
@@ -1039,8 +1346,11 @@ def test_flagship_export_limit_rejection_creates_no_file(
 
     _click_export(flagship_driver, export_format)
     proof = WebDriverWait(flagship_driver, 20).until(_export_limit_proof)
+    assert proof["schemaVersion"] == 1
+    assert proof["kind"] == "export"
     assert proof["status"] == "error"
-    assert proof["code"] in {"PIVOT_EXPORT_MAX_ROWS", "PIVOT_EXPORT_MAX_BYTES"}
+    assert proof["limitCode"] in {"PIVOT_EXPORT_MAX_ROWS", "PIVOT_EXPORT_MAX_BYTES"}
+    assert proof["requestId"]
     WebDriverWait(flagship_driver, 20).until(
         lambda current: _workspace_element(
             current,
@@ -1063,8 +1373,12 @@ def test_flagship_export_limit_rejection_creates_no_file(
     summary = {
         "format": export_format,
         "limitRejected": True,
+        "schemaVersion": proof["schemaVersion"],
+        "kind": proof["kind"],
         "runtimeStatus": proof["status"],
-        "limitCode": proof["code"],
+        "requestId": proof["requestId"],
+        "clickedRequestId": proof["requestId"],
+        "limitCode": proof["limitCode"],
         "stableError": "Export limit exceeded",
         "newCompletedFiles": 0,
         "newPartialFiles": 0,

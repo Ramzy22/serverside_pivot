@@ -59,14 +59,16 @@ jobs:
         run: |
           WHEEL="$(find "$RUNNER_TEMP/export-qualification-wheel" -maxdepth 1 -name '*.whl' -print -quit)"
           test -n "$WHEEL"
-          python scripts/certify_flagship.py --export-qualification --skip-build --wheel "$WHEEL"
+          PIVOT_EXPORT_PUBLICATION_DIR="$RUNNER_TEMP/export-qualification-publication-$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT-$GITHUB_JOB"
+          echo "PIVOT_EXPORT_PUBLICATION_DIR=$PIVOT_EXPORT_PUBLICATION_DIR" >> "$GITHUB_ENV"
+          python scripts/certify_flagship.py --export-qualification --skip-build --wheel "$WHEEL" --artifact-dir "$PIVOT_EXPORT_PUBLICATION_DIR"
 
       - name: Upload flagship export qualification evidence
         if: always()
         uses: actions/upload-artifact@65462800fd760344b1a7b4382951275a0abb4808 # v4.3.3
         with:
           name: release-export-qualification-evidence
-          path: artifacts/export-qualification/
+          path: ${{ env.PIVOT_EXPORT_PUBLICATION_DIR }}/
           if-no-files-found: error
 
       - name: Pack and verify standalone React package
