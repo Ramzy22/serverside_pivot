@@ -1169,6 +1169,14 @@ def test_measure_axis_rows_browser_renders_aggregate_first_pivot(measure_axis_br
     assert severe_logs == []
 
 
+def test_virtual_grid_rows_have_one_based_aria_indices(measure_axis_browser_server, chrome_driver):
+    chrome_driver.get(measure_axis_browser_server)
+    first_row = WebDriverWait(chrome_driver, 30).until(
+        EC.presence_of_element_located((By.CSS_SELECTOR, '[role="grid"] [role="row"][aria-rowindex]'))
+    )
+    assert first_row.get_attribute("aria-rowindex") == "1"
+
+
 def test_measure_axis_rows_browser_renders_hierarchy_levels(measure_axis_hierarchy_browser_server, chrome_driver):
     chrome_driver.get(measure_axis_hierarchy_browser_server)
 

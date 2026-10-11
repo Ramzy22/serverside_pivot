@@ -948,7 +948,7 @@ export const PivotTableBody = React.memo(function PivotTableBody({
                               <React.Fragment key={stableRowKey}>
                                   <div
                                      role="row"
-                                     aria-rowindex={virtualRow.index}
+                                     aria-rowindex={virtualRow.index + 1}
                                      style={{
                                       ...baseRowStyle,
                                       height: virtualRow.size,

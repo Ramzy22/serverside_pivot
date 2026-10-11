@@ -86,7 +86,8 @@ def _connection_dict_to_arrow(data: dict) -> pa.Table:
             f"Missing database driver for connection scheme '{scheme}': {exc}.\n"
             f"Install the required ibis backend: pip install ibis-framework[{scheme}]"
         ) from exc
-    return backend.con.table(table_name).to_pyarrow()
+    with backend:
+        return backend.con.table(table_name).to_pyarrow()
 
 
 def _unsupported_type_error(data) -> DataInputError:

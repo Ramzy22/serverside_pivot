@@ -719,9 +719,19 @@ class IbisBackend:
         """Close database connection"""
         if not hasattr(self, "con"):
             return
-        if hasattr(self.con, 'close'):
-            self.con.close()
-        self.con = None
+        pool = getattr(self, "_duckdb_pool", None)
+        if pool is not None:
+            pool.close()
+            self._duckdb_pool = None
+        if self.con is not None:
+            try:
+                close = getattr(self.con, "close", None)
+                if not callable(close):
+                    close = getattr(getattr(self.con, "con", None), "close", None)
+                if callable(close):
+                    close()
+            finally:
+                self.con = None
 
     def __enter__(self):
         return self

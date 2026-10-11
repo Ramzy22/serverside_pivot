@@ -90,6 +90,37 @@ def test_connection_string():
         os.unlink(db_path)
 
 
+def test_connection_string_releases_duckdb_file_before_return(tmp_path):
+    """One-shot loading must release its writer before another connection opens read-only."""
+    import gc
+    import duckdb
+
+    db_path = tmp_path / "source.duckdb"
+    writer = duckdb.connect(str(db_path))
+    writer.execute("CREATE TABLE sales_data AS SELECT 100 AS sales")
+    writer.close()
+
+    was_enabled = gc.isenabled()
+    gc.disable()
+    try:
+        controller = MockController()
+        normalize_data_input(
+            {"connection_string": f"duckdb://{db_path}", "table": "sales_data"},
+            "loaded_sales",
+            controller,
+        )
+        assert controller.loaded["loaded_sales"].column("sales").to_pylist() == [100]
+        reader = duckdb.connect(str(db_path), read_only=True)
+        try:
+            assert reader.execute("SELECT sales FROM sales_data").fetchone() == (100,)
+        finally:
+            reader.close()
+    finally:
+        if was_enabled:
+            gc.enable()
+        gc.collect()
+
+
 # --- API-05: auto-detection via single function signature ---
 
 def test_auto_detection():

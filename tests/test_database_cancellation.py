@@ -80,6 +80,23 @@ def test_connection_pool_checkin_discards_a_lease_the_execution_rejected():
     assert len(created) == 2
 
 
+def test_connection_pool_close_releases_idle_cursors_and_rejects_new_leases():
+    created: list[_HealthyCursor] = []
+
+    def factory() -> _HealthyCursor:
+        cursor = _HealthyCursor()
+        created.append(cursor)
+        return cursor
+
+    pool = ConnectionPool(factory, max_size=2)
+    pool.close()
+
+    assert len(created) == 2
+    assert all(cursor.closed for cursor in created)
+    with pytest.raises(RuntimeError, match="closed"):
+        pool.checkout()
+
+
 async def _wait_for_running_query(backend: DuckDBBackend) -> str:
     for _ in range(200):
         query_ids = tuple(backend._running_queries)

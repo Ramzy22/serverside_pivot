@@ -196,6 +196,7 @@ class ConnectionPool:
         self.max_size = max_size
         self.created_count = 0
         self.lock = threading.Lock()
+        self._closed = False
         
         # Pre-fill a few
         initial_fill = min(2, max_size)
@@ -231,6 +232,8 @@ class ConnectionPool:
         con = None
         while True:
             with self.lock:
+                if self._closed:
+                    raise RuntimeError("Connection pool is closed")
                 try:
                     con = self.pool.get(block=False)
                 except queue.Empty:
@@ -249,6 +252,12 @@ class ConnectionPool:
                 except queue.Empty:
                     con = None
                     continue  # Re-check created_count under the lock
+
+            with self.lock:
+                closed = self._closed
+            if closed:
+                self._discard_connection(con)
+                raise RuntimeError("Connection pool is closed")
 
             if self._is_healthy(con):
                 return con
@@ -269,8 +278,27 @@ class ConnectionPool:
         if discard or not self._is_healthy(con):
             self._discard_connection(con)
             return False
-        self.pool.put(con)
-        return True
+        with self.lock:
+            if not self._closed:
+                self.pool.put_nowait(con)
+                return True
+        self._discard_connection(con)
+        return False
+
+    def close(self) -> None:
+        """Release idle cursors now; checked-out cursors retire on check-in."""
+        with self.lock:
+            if self._closed:
+                return
+            self._closed = True
+            idle = []
+            while True:
+                try:
+                    idle.append(self.pool.get_nowait())
+                except queue.Empty:
+                    break
+        for con in idle:
+            self._discard_connection(con)
 
     @contextmanager
     def get_connection(self):
