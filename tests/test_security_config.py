@@ -443,3 +443,16 @@ def test_apply_rls_to_spec_is_idempotent_for_rls_fields():
     security.apply_rls_to_spec(spec, user)
 
     assert spec.filters == [{"field": "region", "op": "=", "value": "North"}]
+
+
+def test_accounting_tenant_is_not_treated_as_a_dataset_filter():
+    security = _reload_security()
+    spec = security.PivotSpec(table="sales", filters=[])
+    user = security.User(
+        id="user-1", username="analyst", role=security.UserRole.VIEWER,
+        attributes={"tenant": "data-a", "accounting_tenant": "payer-a"},
+    )
+
+    security.apply_rls_to_spec(spec, user)
+
+    assert spec.filters == [{"field": "tenant", "op": "=", "value": "data-a"}]

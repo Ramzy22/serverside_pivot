@@ -7,7 +7,6 @@ object deserializer.
 
 from __future__ import annotations
 
-import asyncio
 import base64
 import copy
 from dataclasses import dataclass, field, replace
@@ -16,7 +15,17 @@ from decimal import Decimal, InvalidOperation
 import heapq
 import json
 import math
-from typing import Any, Dict, Iterable, Mapping, Optional, Sequence
+import os
+from threading import RLock
+import time
+import weakref
+from typing import Any, Callable, Dict, Iterable, Mapping, Optional, Sequence
+
+from ..resource_governor import (
+    ResourceExhaustedError, ResourceGovernor, ResourceKind, ResourceLease,
+    SYSTEM_ACCOUNT, WorkloadAccount,
+    current_workload_account, get_worker_resource_governor,
+)
 
 
 _STATE_FORMAT = b"pivot:cdc-exact-state:v1\x00"
@@ -24,6 +33,20 @@ _SUPPORTED_AGGREGATIONS = frozenset({"sum", "count", "avg", "min", "max"})
 _DEFAULT_CDC_MAX_GROUPS = 100_000
 _DEFAULT_CDC_MAX_BYTES = 128 * 1024 * 1024
 _DEFAULT_CDC_MAX_EXTREMA_VALUES = 1_000_000
+
+
+def _configured_job_ttl(value: Optional[float]) -> Optional[float]:
+    if value is None:
+        raw = os.getenv("PIVOT_CDC_JOB_TTL_SECONDS")
+        if raw is None:
+            return None
+        try:
+            value = float(raw)
+        except ValueError as exc:
+            raise ValueError("PIVOT_CDC_JOB_TTL_SECONDS must be positive") from exc
+    if not isinstance(value, (int, float)) or not math.isfinite(value) or value <= 0:
+        raise ValueError("CDC job TTL must be positive")
+    return float(value)
 
 
 class ExactCDCStateError(ValueError):
@@ -516,15 +539,42 @@ class CDCStateStore:
 class MemoryCDCStateStore(CDCStateStore):
     """Process-local store for tests and explicit development-only use."""
 
-    def __init__(self, limits: Optional[CDCStateLimits] = None) -> None:
+    def __init__(self, limits: Optional[CDCStateLimits] = None, *,
+                 governor: Optional[ResourceGovernor] = None,
+                 job_ttl_seconds: Optional[float] = None,
+                 clock: Callable[[], float] = time.time) -> None:
         self._snapshots: Dict[str, CDCJobSnapshot] = {}
-        self._lock = asyncio.Lock()
+        self._leases: Dict[str, ResourceLease] = {}
+        self._expires_at: Dict[str, float] = {}
+        self._expiry_heap: list[tuple[float, str]] = []
+        self._finalizer = weakref.finalize(self, self._release_leases, self._leases)
+        self._lock = RLock()
         self.limits = limits or CDCStateLimits()
+        self.governor = governor or get_worker_resource_governor()
+        self.job_ttl_seconds = _configured_job_ttl(job_ttl_seconds)
+        self._clock = clock
+
+    @staticmethod
+    def _release_leases(leases: Dict[str, ResourceLease]) -> None:
+        for lease in leases.values():
+            lease.release()
 
     async def load(self, job_id: str) -> CDCJobSnapshot:
-        async with self._lock:
+        with self._lock:
+            self._expire_locked()
             snapshot = self._snapshots.get(str(job_id))
-            return snapshot.clone() if snapshot is not None else CDCJobSnapshot.empty(str(job_id))
+            if snapshot is None:
+                return CDCJobSnapshot.empty(str(job_id))
+            if self._leases[str(job_id)].account != current_workload_account.get():
+                raise ExactCDCStateError("CDC job accounting owner cannot change.")
+            try:
+                with self.governor.reserve(
+                    ResourceKind.CDC, _encoded_snapshot_size(snapshot),
+                    account=self._leases[str(job_id)].account,
+                ):
+                    return snapshot.clone()
+            except ResourceExhaustedError as exc:
+                raise CDCStateBudgetExceeded("CDC transient state budget exceeded.") from exc
 
     async def compare_and_swap(
         self,
@@ -533,26 +583,217 @@ class MemoryCDCStateStore(CDCStateStore):
         snapshot: CDCJobSnapshot,
     ) -> CDCJobSnapshot:
         key = str(job_id)
-        async with self._lock:
+        with self._lock:
+            self._expire_locked()
             current = self._snapshots.get(key, CDCJobSnapshot.empty(key))
             if current.version != int(expected_version):
                 raise StateVersionConflict("CDC state version was superseded.")
-            persisted = snapshot.clone()
-            persisted.job_id = key
-            persisted.version = current.version + 1
-            validate_cdc_snapshot_limits(persisted, self.limits)
-            self._snapshots[key] = persisted
-            return persisted.clone()
+            account = self._leases[key].account if key in self._leases else current_workload_account.get()
+            if key in self._leases and account != current_workload_account.get():
+                raise ExactCDCStateError("CDC job accounting owner cannot change.")
+            try:
+                with self.governor.reserve(
+                    ResourceKind.CDC, _encoded_snapshot_size(snapshot), account=account,
+                ):
+                    persisted = snapshot.clone()
+                    persisted.job_id = key
+                    persisted.version = current.version + 1
+                    validate_cdc_snapshot_limits(persisted, self.limits)
+                    size = _encoded_snapshot_size(persisted)
+                    lease = self._leases.get(key)
+                    if lease is None:
+                        lease = self.governor.reserve(ResourceKind.CDC, size, account=account)
+                    else:
+                        lease.resize(size)
+                    self._snapshots[key] = persisted
+                    self._leases[key] = lease
+                    if self.job_ttl_seconds is not None:
+                        deadline = self._clock() + self.job_ttl_seconds
+                        self._expires_at[key] = deadline
+                        heapq.heappush(self._expiry_heap, (deadline, key))
+                        if len(self._expiry_heap) > max(1024, 4 * len(self._expires_at)):
+                            self._expiry_heap = [
+                                (expiry, job) for job, expiry in self._expires_at.items()
+                            ]
+                            heapq.heapify(self._expiry_heap)
+                    return persisted.clone()
+            except ResourceExhaustedError as exc:
+                raise CDCStateBudgetExceeded("CDC aggregate state budget exceeded.") from exc
+
+    async def delete(self, job_id: str) -> None:
+        with self._lock:
+            key = str(job_id)
+            self._snapshots.pop(key, None)
+            self._expires_at.pop(key, None)
+            lease = self._leases.pop(key, None)
+            if lease is not None:
+                lease.release()
+
+    async def expire_jobs(self) -> int:
+        with self._lock:
+            return self._expire_locked()
+
+    def _expire_locked(self) -> int:
+        count = 0
+        now = self._clock()
+        while self._expiry_heap and self._expiry_heap[0][0] <= now:
+            deadline, key = heapq.heappop(self._expiry_heap)
+            if self._expires_at.get(key) != deadline:
+                continue
+            self._expires_at.pop(key, None)
+            self._snapshots.pop(key, None)
+            lease = self._leases.pop(key, None)
+            if lease is not None:
+                lease.release()
+            count += 1
+        return count
 
 
 class RedisCDCStateStore(CDCStateStore):
     """Redis-backed state using one explicit versioned JSON envelope per job."""
 
     def __init__(
-        self, runtime_state: Any, limits: Optional[CDCStateLimits] = None
+        self, runtime_state: Any, limits: Optional[CDCStateLimits] = None, *,
+        governor: Optional[ResourceGovernor] = None,
+        tenant_max_bytes: Optional[int] = None,
+        namespace_max_bytes: Optional[int] = None,
+        job_ttl_seconds: Optional[float] = None,
+        clock: Callable[[], float] = time.time,
     ) -> None:
         self.runtime_state = runtime_state
         self.limits = limits or CDCStateLimits()
+        self.governor = governor or get_worker_resource_governor()
+        self.namespace_max_bytes = (
+            namespace_max_bytes if namespace_max_bytes is not None else self.limits.max_bytes
+        )
+        self.tenant_max_bytes = (
+            tenant_max_bytes if tenant_max_bytes is not None else int(os.getenv(
+                "PIVOT_CDC_TENANT_MAX_BYTES", str(64 * 1024 * 1024)
+            ))
+        )
+        if (not isinstance(self.namespace_max_bytes, int) or not isinstance(self.tenant_max_bytes, int)
+                or self.namespace_max_bytes <= 0 or self.tenant_max_bytes <= 0):
+            raise ValueError("CDC aggregate byte budgets must be positive")
+        self.job_ttl_seconds = _configured_job_ttl(job_ttl_seconds)
+        self._clock = clock
+        self._verified = False
+
+    def _ensure_recovered(self) -> None:
+        """Reconcile durable counters once after a worker starts.
+
+        Indexed state is authoritative. An unindexed state has no trustworthy
+        owner, so it cannot be imported into a tenant budget automatically.
+        """
+        if self._verified:
+            return
+        client = self.runtime_state.client
+        ledger, total_key, tenants_key = self._ledger_keys()
+        prefix = self.runtime_state.key("cdc", "job") + ":"
+        for _attempt in range(32):
+            try:
+                with client.pipeline() as pipe:
+                    pipe.watch(ledger, total_key, tenants_key)
+                    records = pipe.hgetall(ledger)
+                    indexed = {}
+                    totals: dict[str, int] = {}
+                    total = 0
+                    expired = []
+                    for raw_job, raw_meta in records.items():
+                        job = raw_job.decode("utf-8") if isinstance(raw_job, bytes) else str(raw_job)
+                        owner, size, expires_at = self._metadata(raw_meta)
+                        key = self._key(job)
+                        pipe.watch(key)
+                        account = (
+                            SYSTEM_ACCOUNT if owner == "s:"
+                            else WorkloadAccount.tenant(owner[2:])
+                        )
+                        with self.governor.reserve(ResourceKind.CDC, size, account=account):
+                            raw_state = pipe.get(key)
+                            if raw_state is None or len(raw_state) != size:
+                                raise ExactCDCStateError("CDC indexed state is missing or inconsistent.")
+                        indexed[key] = size
+                        if expires_at is not None and expires_at <= self._clock():
+                            expired.append((job, key))
+                            continue
+                        total += size
+                        totals[owner] = totals.get(owner, 0) + size
+                    for raw_key in client.scan_iter(match=prefix + "*"):
+                        state_key = raw_key.decode("utf-8") if isinstance(raw_key, bytes) else str(raw_key)
+                        if state_key not in indexed:
+                            raise ExactCDCStateError("CDC unindexed state has no accounting owner.")
+                    existing_total = pipe.get(total_key)
+                    existing_tenants = pipe.hgetall(tenants_key)
+                    actual_tenants = {
+                        k.decode("utf-8") if isinstance(k, bytes) else str(k): self._counter(v)
+                        for k, v in existing_tenants.items()
+                    }
+                    if total > self.namespace_max_bytes or any(
+                        size > self.tenant_max_bytes for size in totals.values()
+                    ):
+                        raise CDCStateBudgetExceeded("Recovered CDC state exceeds the configured budget.")
+                    pipe.multi()
+                    if existing_total is None or self._counter(existing_total) != total or actual_tenants != totals:
+                        pipe.set(total_key, total)
+                        pipe.delete(tenants_key)
+                        if totals:
+                            pipe.hset(tenants_key, mapping=totals)
+                    else:
+                        pipe.ping()
+                    for job, key in expired:
+                        pipe.delete(key)
+                        pipe.hdel(ledger, job)
+                    pipe.execute()
+                    self._verified = True
+                    return
+            except Exception as exc:
+                if exc.__class__.__name__ == "WatchError":
+                    continue
+                raise
+        raise StateVersionConflict("CDC budget recovery was superseded.")
+
+    def _ledger_keys(self) -> tuple[str, str, str]:
+        return (
+            self.runtime_state.key("cdc", "budget", "jobs"),
+            self.runtime_state.key("cdc", "budget", "total"),
+            self.runtime_state.key("cdc", "budget", "tenants"),
+        )
+
+    @staticmethod
+    def _account_key(account: Any) -> str:
+        return "s:" if account.tenant_id is None else "t:" + account.tenant_id
+
+    @staticmethod
+    def _metadata(raw: Any) -> tuple[str, int, float | None] | None:
+        if raw is None:
+            return None
+        try:
+            payload = json.loads(raw)
+            owner, size = payload["owner"], payload["size"]
+            expires_at = payload.get("expiresAt")
+            if not isinstance(owner, str) or not isinstance(size, int) or size <= 0:
+                raise ValueError
+            if owner != "s:" and (not owner.startswith("t:") or not owner[2:]):
+                raise ValueError
+            if expires_at is not None and (
+                not isinstance(expires_at, (int, float))
+                or not math.isfinite(expires_at) or expires_at <= 0
+            ):
+                raise ValueError
+            return owner, size, expires_at
+        except (ValueError, TypeError, KeyError) as exc:
+            raise ExactCDCStateError("CDC budget metadata is invalid.") from exc
+
+    @staticmethod
+    def _counter(raw: Any) -> int:
+        if raw is None:
+            return 0
+        try:
+            value = int(raw)
+        except (TypeError, ValueError) as exc:
+            raise ExactCDCStateError("CDC budget counter is invalid.") from exc
+        if value < 0:
+            raise ExactCDCStateError("CDC budget counter is invalid.")
+        return value
 
     def _key(self, job_id: str) -> str:
         return self.runtime_state.key("cdc", "job", str(job_id))
@@ -589,10 +830,34 @@ class RedisCDCStateStore(CDCStateStore):
     async def load(self, job_id: str) -> CDCJobSnapshot:
         key = self._key(job_id)
         try:
-            raw = self.runtime_state.client.get(key)
+            self._ensure_recovered()
+            ledger, _, _ = self._ledger_keys()
+            with self.runtime_state.client.pipeline() as pipe:
+                pipe.multi()
+                pipe.get(key)
+                pipe.hget(ledger, str(job_id))
+                raw, metadata_raw = pipe.execute()
+            metadata = self._metadata(metadata_raw)
+            if (raw is None) != (metadata is None):
+                raise ExactCDCStateError("CDC state and budget metadata disagree.")
+            if raw is not None:
+                if metadata[2] is not None and metadata[2] <= self._clock():
+                    if await self.delete(job_id, expired_only=True):
+                        return CDCJobSnapshot.empty(str(job_id))
+                    return await self.load(job_id)
+                if len(raw) != metadata[1]:
+                    raise ExactCDCStateError("CDC state and budget size disagree.")
+                owner = metadata[0]
+                account = current_workload_account.get()
+                if owner != self._account_key(account):
+                    raise ExactCDCStateError("CDC job accounting owner cannot change.")
+                with self.governor.reserve(ResourceKind.CDC, len(raw), account=account):
+                    return self._decode(str(job_id), raw)
         except Exception as exc:
+            if isinstance(exc, (ExactCDCStateError, ResourceExhaustedError)):
+                raise
             raise ExactCDCStateError("CDC durable state is unavailable.") from exc
-        return self._decode(str(job_id), raw)
+        return CDCJobSnapshot.empty(str(job_id))
 
     async def compare_and_swap(
         self,
@@ -601,28 +866,120 @@ class RedisCDCStateStore(CDCStateStore):
         snapshot: CDCJobSnapshot,
     ) -> CDCJobSnapshot:
         key = self._key(job_id)
+        ledger, total_key, tenants_key = self._ledger_keys()
         client = self.runtime_state.client
+        account = current_workload_account.get()
+        owner = self._account_key(account)
         try:
-            with client.pipeline() as pipe:
-                pipe.watch(key)
-                current = self._decode(str(job_id), pipe.get(key))
-                if current.version != int(expected_version):
-                    pipe.unwatch()
-                    raise StateVersionConflict("CDC state version was superseded.")
-                persisted = snapshot.clone()
-                persisted.job_id = str(job_id)
-                persisted.version = current.version + 1
-                validate_cdc_snapshot_limits(persisted, self.limits)
-                pipe.multi()
-                pipe.set(key, self._encode(persisted))
-                pipe.execute()
-                return persisted
+            self._ensure_recovered()
+            if self.job_ttl_seconds is not None:
+                await self.delete(job_id, expired_only=True)
+            with self.governor.reserve(
+                ResourceKind.CDC, _encoded_snapshot_size(snapshot), account=account,
+            ):
+                with client.pipeline() as pipe:
+                    pipe.watch(key, ledger, total_key, tenants_key)
+                    old_raw = pipe.get(key)
+                    metadata = self._metadata(pipe.hget(ledger, str(job_id)))
+                    if (old_raw is None) != (metadata is None):
+                        raise ExactCDCStateError("CDC state and budget metadata disagree.")
+                    if metadata is not None and (metadata[0] != owner or len(old_raw) != metadata[1]):
+                        raise ExactCDCStateError("CDC job accounting owner or size disagrees.")
+                    current = self._decode(str(job_id), old_raw)
+                    if current.version != int(expected_version):
+                        raise StateVersionConflict("CDC state version was superseded.")
+                    persisted = snapshot.clone()
+                    persisted.job_id = str(job_id)
+                    persisted.version = current.version + 1
+                    validate_cdc_snapshot_limits(persisted, self.limits)
+                    encoded = self._encode(persisted)
+                    old_size = metadata[1] if metadata else 0
+                    total_raw = pipe.get(total_key)
+                    if total_raw is None and pipe.hlen(ledger):
+                        raise ExactCDCStateError("CDC budget totals require recovery.")
+                    total = self._counter(total_raw)
+                    tenant_raw = pipe.hget(tenants_key, owner)
+                    if metadata is not None and tenant_raw is None:
+                        raise ExactCDCStateError("CDC tenant budget total is missing.")
+                    tenant_total = self._counter(tenant_raw)
+                    next_total = total - old_size + len(encoded)
+                    next_tenant = tenant_total - old_size + len(encoded)
+                    if next_total < 0 or next_tenant < 0:
+                        raise ExactCDCStateError("CDC budget totals are inconsistent.")
+                    if next_total > self.namespace_max_bytes or next_tenant > self.tenant_max_bytes:
+                        raise CDCStateBudgetExceeded("CDC aggregate state budget exceeded.")
+                    pipe.multi()
+                    pipe.set(key, encoded)
+                    pipe.hset(ledger, str(job_id), json.dumps({
+                        "owner": owner, "size": len(encoded),
+                        "expiresAt": self._clock() + self.job_ttl_seconds
+                        if self.job_ttl_seconds is not None else None,
+                    }))
+                    pipe.set(total_key, next_total)
+                    pipe.hset(tenants_key, owner, next_tenant)
+                    pipe.execute()
+                    return persisted
         except (StateVersionConflict, CDCStateBudgetExceeded):
+            raise
+        except ResourceExhaustedError as exc:
+            raise CDCStateBudgetExceeded("CDC transient state budget exceeded.") from exc
+        except ExactCDCStateError:
             raise
         except Exception as exc:
             if exc.__class__.__name__ == "WatchError":
                 raise StateVersionConflict("CDC state version was superseded.") from exc
             raise ExactCDCStateError("CDC durable state is unavailable.") from exc
+
+    async def delete(self, job_id: str, *, expired_only: bool = False) -> bool:
+        key = self._key(job_id)
+        ledger, total_key, tenants_key = self._ledger_keys()
+        try:
+            self._ensure_recovered()
+            with self.runtime_state.client.pipeline() as pipe:
+                pipe.watch(key, ledger, total_key, tenants_key)
+                raw = pipe.get(key)
+                metadata = self._metadata(pipe.hget(ledger, str(job_id)))
+                if raw is None and metadata is None:
+                    return False
+                if raw is None or metadata is None or len(raw) != metadata[1]:
+                    raise ExactCDCStateError("CDC state and budget metadata disagree.")
+                if expired_only and (metadata[2] is None or metadata[2] > self._clock()):
+                    return False
+                if not expired_only and metadata[0] != self._account_key(current_workload_account.get()):
+                    raise ExactCDCStateError("CDC job accounting owner cannot change.")
+                total = self._counter(pipe.get(total_key))
+                tenant_total = self._counter(pipe.hget(tenants_key, metadata[0]))
+                if total < metadata[1] or tenant_total < metadata[1]:
+                    raise ExactCDCStateError("CDC budget totals are inconsistent.")
+                pipe.multi()
+                pipe.delete(key)
+                pipe.hdel(ledger, str(job_id))
+                pipe.set(total_key, total - metadata[1])
+                pipe.hset(tenants_key, metadata[0], tenant_total - metadata[1])
+                pipe.execute()
+                return True
+        except ExactCDCStateError:
+            raise
+        except Exception as exc:
+            if exc.__class__.__name__ == "WatchError":
+                raise StateVersionConflict("CDC state version was superseded.") from exc
+            raise ExactCDCStateError("CDC durable state is unavailable.") from exc
+
+    async def expire_jobs(self) -> int:
+        """Remove expired indexed jobs through the same atomic accounting path."""
+        self._ensure_recovered()
+        ledger, _, _ = self._ledger_keys()
+        records = self.runtime_state.client.hgetall(ledger)
+        expired = [
+            job.decode("utf-8") if isinstance(job, bytes) else str(job)
+            for job, raw in records.items()
+            if (metadata := self._metadata(raw))[2] is not None
+            and metadata[2] <= self._clock()
+        ]
+        removed = 0
+        for job in expired:
+            removed += int(await self.delete(job, expired_only=True))
+        return removed
 
 
 __all__ = [

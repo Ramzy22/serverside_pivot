@@ -8,7 +8,10 @@ import os
 from typing import Any, Awaitable, Callable, Optional, Tuple
 
 from ..export_limits import ExportLimitError
-from ..resource_governor import ResourceExhaustedError, ResourceGovernor, ResourceKind, ResourceLimits
+from ..resource_governor import (
+    ResourceExhaustedError, ResourceGovernor, ResourceKind,
+    current_workload_account, get_worker_resource_governor,
+)
 from ..backends.execution import (
     CancellationUnavailableError,
     DatabaseExecutionError,
@@ -49,7 +52,7 @@ class RuntimeRequestLifecycle:
         circuit_breaker_cooldown_seconds: float = 30.0,
         resource_governor: Optional[ResourceGovernor] = None,
     ) -> None:
-        self.resource_governor = resource_governor or ResourceGovernor(ResourceLimits.from_environment())
+        self.resource_governor = resource_governor or get_worker_resource_governor()
         self.coordinator = request_coordinator or RuntimeRequestCoordinator(
             session_gate or SessionRequestGate()
         )
@@ -114,11 +117,13 @@ class RuntimeRequestLifecycle:
             ResourceKind.EXPORT if trigger_kind == "export" else ResourceKind.QUERY
         )
         amount = self.reservation_bytes(kind) if reservation_bytes is None else reservation_bytes
-        lease = self.resource_governor.reserve(kind, amount)
+        lease = self.resource_governor.reserve(kind, amount, account=context.accounting_account)
+        account_token = current_workload_account.set(context.accounting_account)
         try:
             return await self._run_admitted_operation(context, trigger_kind, operation)
         finally:
             # The awaited operation includes native cancellation acknowledgement.
+            current_workload_account.reset(account_token)
             lease.release()
 
     def reservation_bytes(self, kind: ResourceKind) -> int:

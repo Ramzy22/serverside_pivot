@@ -9,6 +9,7 @@ import os
 import secrets
 import traceback
 import time
+import weakref
 from dataclasses import dataclass
 from typing import Any, Callable, Dict, Optional, Set
 
@@ -32,6 +33,10 @@ from .distributed import (
 )
 from .payload_store import RuntimePayloadStore, runtime_payload_store_from_env
 from .service import PivotRuntimeService
+from ..resource_governor import (
+    ResourceExhaustedError, ResourceKind, SYSTEM_ACCOUNT, WorkloadAccount,
+    account_for_principal, current_workload_account, get_worker_resource_governor,
+)
 from ..production_security import resolve_runtime_environment
 from ..security_events import log_authorization_denied
 
@@ -487,14 +492,20 @@ def _is_production_environment() -> bool:
 
 
 def _get_runtime_payload_store(app: Any) -> RuntimePayloadStore:
+    governor = getattr(app, "_pivot_runtime_resource_governor", None)
+    if governor is None:
+        governor = get_worker_resource_governor()
     store = getattr(app, "_pivot_runtime_payload_store", None)
     if store is None:
         store = runtime_payload_store_from_env(
             default_ttl_seconds=_env_int("PIVOT_RUNTIME_PAYLOAD_TTL_SECONDS", 120),
             max_entries=_env_int("PIVOT_RUNTIME_PAYLOAD_MAX_ENTRIES", 256),
             max_bytes=_env_int("PIVOT_RUNTIME_PAYLOAD_MAX_BYTES", 128 * 1024 * 1024),
+            governor=governor,
         )
         setattr(app, "_pivot_runtime_payload_store", store)
+    elif store.governor is not governor:
+        raise ValueError("Dash payload store must use its runtime worker governor")
     return store
 
 
@@ -557,10 +568,28 @@ def _register_runtime_payload_endpoint(app: Any) -> None:
             # prevents a payload reference from becoming an oracle.
             return Response("payload expired or not found", status=404, content_type="text/plain")
 
+        owner = metadata.get("_accountingTenant")
+        try:
+            account = WorkloadAccount.tenant(owner) if isinstance(owner, str) else SYSTEM_ACCOUNT
+        except ValueError:
+            return Response("payload expired or not found", status=404, content_type="text/plain")
+        limits = store.governor.limits
+        initial_bytes = max(1, limits.download_bytes // limits.max_downloads)
+        lease = None
+        try:
+            lease = store.governor.reserve(ResourceKind.DOWNLOAD, initial_bytes, account=account)
+            if not item.file_path and item.size > initial_bytes:
+                lease.grow(item.size - initial_bytes)
+        except ResourceExhaustedError:
+            if lease is not None:
+                lease.release()
+            return Response("download capacity unavailable", status=503, content_type="text/plain")
+
         if item.file_path:
             try:
                 file_handle = open(item.file_path, "rb")
             except OSError:
+                lease.release()
                 return Response("payload expired or not found", status=404, content_type="text/plain")
 
             def _stream_file():
@@ -576,6 +605,15 @@ def _register_runtime_payload_endpoint(app: Any) -> None:
             response = Response(_stream_file(), status=200, content_type=item.content_type)
         else:
             response = Response(item.body, status=200, content_type=item.content_type)
+        body_iterator = response.response
+        def _admitted_body():
+            try:
+                yield from body_iterator
+            finally:
+                lease.release()
+        response.response = _admitted_body()
+        response.call_on_close(lease.release)
+        weakref.finalize(response, lease.release)
         response.headers["Cache-Control"] = "no-store"
         content_encoding = item.metadata.get("contentEncoding") if isinstance(item.metadata, dict) else None
         if content_encoding:
@@ -1119,6 +1157,7 @@ def register_dash_pivot_transport_callback(
             viewport=active_request_meta,
         )
         context.principal = authorization.principal
+        context.accounting_account = account_for_principal(authorization.principal)
         context.row_scope = authorization.row_scope
         principal_session_id = _principal_session_id(authorization.principal)
         if principal_session_id:
@@ -1298,12 +1337,19 @@ def register_dash_pivot_transport_callback(
         )
 
         try:
-            service = runtime_service_getter()
-            process_async = getattr(service, "process_async", None)
-            if callable(process_async):
-                result = await _await_if_needed(process_async(state, context))
-            else:
-                result = await asyncio.to_thread(service.process, state, context)
+            account_token = current_workload_account.set(context.accounting_account)
+            try:
+                service = runtime_service_getter()
+                service_governor = getattr(service, "resource_governor", None)
+                if service_governor is not None:
+                    setattr(app, "_pivot_runtime_resource_governor", service_governor)
+                process_async = getattr(service, "process_async", None)
+                if callable(process_async):
+                    result = await _await_if_needed(process_async(state, context))
+                else:
+                    result = await asyncio.to_thread(service.process, state, context)
+            finally:
+                current_workload_account.reset(account_token)
             service_finished_at = time.perf_counter()
         except Exception as exc:  # pragma: no cover - defensive
             service_finished_at = time.perf_counter()
@@ -1461,13 +1507,17 @@ def register_dash_pivot_transport_callback(
             )
 
         if result.status == "export":
-            export_payload = _externalize_export_payload(
-                app,
-                result.export_payload or {},
-                request_id=request_id,
-                context=context,
-                payload_subject=payload_subject,
-            )
+            account_token = current_workload_account.set(context.accounting_account)
+            try:
+                export_payload = _externalize_export_payload(
+                    app,
+                    result.export_payload or {},
+                    request_id=request_id,
+                    context=context,
+                    payload_subject=payload_subject,
+                )
+            finally:
+                current_workload_account.reset(account_token)
             return _response_tuple(
                 _build_runtime_response(
                     kind="export",
@@ -1502,14 +1552,18 @@ def register_dash_pivot_transport_callback(
                 "formulaErrors": result.formula_errors or None,
             }
             payload_profile: Optional[Dict[str, Any]] = {} if profiling_enabled else None
-            data_payload = _externalize_data_payload_if_needed(
-                app,
-                data_payload,
-                request_id=request_id,
-                context=context,
-                payload_subject=payload_subject,
-                profile_sink=payload_profile,
-            )
+            account_token = current_workload_account.set(context.accounting_account)
+            try:
+                data_payload = _externalize_data_payload_if_needed(
+                    app,
+                    data_payload,
+                    request_id=request_id,
+                    context=context,
+                    payload_subject=payload_subject,
+                    profile_sink=payload_profile,
+                )
+            finally:
+                current_workload_account.reset(account_token)
             if profiling_enabled:
                 payload_build_finished_at = time.perf_counter()
                 if payload_profile:

@@ -45,6 +45,8 @@ from pivot_engine.resource_governor import (
     ResourceGovernor,
     ResourceKind,
     ResourceLimits,
+    WorkloadAccount,
+    current_workload_account,
 )
 from pivot_engine.types.pivot_spec import Measure, PivotSpec
 
@@ -212,6 +214,7 @@ def run_memory_benchmark(
         limits = replace(
             configured_limits,
             max_queries=max(1, min(configured_limits.max_queries, concurrent_requests - 1 or 1)),
+            tenant_max_queries=1,
         )
         governor = ResourceGovernor(limits)
         controller = ScalablePivotController(
@@ -221,6 +224,7 @@ def run_memory_benchmark(
             tile_size=200,
             cache_ttl=600,
             resource_limits=limits,
+            resource_governor=governor,
         )
         controller.load_data_from_arrow("benchmark_sales", data)
         spec = build_pivot_spec()
@@ -232,10 +236,16 @@ def run_memory_benchmark(
         def run_one(index: int) -> tuple[float, bool]:
             operation = index % 5
             started = time.perf_counter()
+            account = WorkloadAccount.tenant("benchmark-a" if index % 2 else "benchmark-b")
+            account_token = current_workload_account.set(account)
             try:
                 # All pressure lanes consume a query slot for this evidence
                 # run. The short hold creates a real concurrent admission race.
-                with governor.reserve(ResourceKind.QUERY, governor.limits.query_bytes // max(1, governor.limits.max_queries)):
+                with governor.reserve(
+                    ResourceKind.QUERY,
+                    governor.limits.query_bytes // max(1, governor.limits.max_queries),
+                    account=account,
+                ):
                     time.sleep(0.005)
                     if operation == 0:  # viewport
                         controller.run_pivot(viewport_spec, return_format="dict")
@@ -254,6 +264,8 @@ def run_memory_benchmark(
                 return (time.perf_counter() - started) * 1000, True
             except ResourceExhaustedError:
                 return (time.perf_counter() - started) * 1000, False
+            finally:
+                current_workload_account.reset(account_token)
 
         total_requests = max(concurrent_requests * 2, 8)
         with ThreadPoolExecutor(max_workers=concurrent_requests) as executor:
@@ -305,6 +317,11 @@ def run_memory_benchmark(
         "resourceGovernor": {
             "admitted": admitted_total,
             "rejections": rejected_total,
+            "tenantRejections": sum(
+                count for reasons in snapshot.get("rejected", {}).values()
+                for reason, count in reasons.items() if reason.startswith("tenant_")
+            ),
+            "maxTenantReservedBytes": snapshot.get("high_water_tenant_reserved_bytes", 0),
             "rejectedByKind": {
                 kind: sum(reasons.values())
                 for kind, reasons in snapshot.get("rejected", {}).items()

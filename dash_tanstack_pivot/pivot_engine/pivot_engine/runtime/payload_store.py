@@ -9,6 +9,7 @@ import os
 import secrets
 import threading
 import time
+import weakref
 from collections import OrderedDict
 from dataclasses import dataclass
 from datetime import date, datetime
@@ -17,7 +18,7 @@ from typing import Any, Dict, Optional, Protocol
 
 from ..cache_coordinator import CacheCoordinator, CacheNamespaces
 from ..hierarchy_cache_registry import estimate_container_bytes
-from ..resource_governor import ResourceExhaustedError, ResourceGovernor, ResourceKind
+from ..resource_governor import ResourceExhaustedError, ResourceGovernor, ResourceKind, current_workload_account, get_worker_resource_governor
 from .distributed import RedisRuntimeState, distributed_runtime_from_env
 
 
@@ -217,6 +218,11 @@ class RedisPayloadBackend:
 class RuntimePayloadStore:
     """Payload store with an in-process default and injectable shared backend."""
 
+    @staticmethod
+    def _public_metadata(item: RuntimePayload) -> Dict[str, Any]:
+        return {key: value for key, value in item.metadata.items()
+                if key != "_accountingTenant"}
+
     def __init__(
         self,
         *,
@@ -230,13 +236,15 @@ class RuntimePayloadStore:
         self.default_ttl_seconds = max(1, int(default_ttl_seconds))
         self.max_entries = max(1, int(max_entries))
         self.max_bytes = max(1, int(max_bytes))
-        self.governor = governor
+        self.governor = governor or get_worker_resource_governor()
         self.cache_coordinator = cache_coordinator or CacheCoordinator()
         self._backend = backend
         self._items: OrderedDict[str, RuntimePayload] = OrderedDict()
         self._charges = {}
+        self._finalizer = weakref.finalize(self, self._release_charges, self._charges)
         self._bytes = 0
         self._lock = threading.Lock()
+        owner_ref = weakref.ref(self)
         self.cache_coordinator.register_namespace(
             CacheNamespaces.RUNTIME_PAYLOAD,
             owner="runtime",
@@ -244,9 +252,15 @@ class RuntimePayloadStore:
             max_entries=self.max_entries,
             max_bytes=self.max_bytes,
             ttl_seconds=self.default_ttl_seconds,
-            size_getter=self._size_snapshot,
-            invalidator=lambda _event: self.clear(),
+            size_getter=lambda: owner_ref()._size_snapshot() if owner_ref() is not None else {},
+            invalidator=lambda _event: owner_ref().clear() if owner_ref() is not None else None,
         )
+
+    @staticmethod
+    def _release_charges(charges: Dict[str, tuple[int, Any]]) -> None:
+        for _, lease in charges.values():
+            if lease is not None:
+                lease.release()
 
     def put_json(
         self,
@@ -286,7 +300,7 @@ class RuntimePayloadStore:
             "url": f"{url_prefix.rstrip('/')}/{token}",
             "bytes": len(body),
             "expiresAt": int(item.expires_at * 1000),
-            **item.metadata,
+            **self._public_metadata(item),
         }
 
     @staticmethod
@@ -327,7 +341,7 @@ class RuntimePayloadStore:
             "bytes": len(body_bytes),
             "contentType": item.content_type,
             "expiresAt": int(item.expires_at * 1000),
-            **item.metadata,
+            **self._public_metadata(item),
         }
 
     def put_file(
@@ -377,7 +391,7 @@ class RuntimePayloadStore:
                 "bytes": len(body),
                 "contentType": item.content_type,
                 "expiresAt": int(item.expires_at * 1000),
-                **item.metadata,
+                **self._public_metadata(item),
             }
         item = RuntimePayload(
             token=token,
@@ -396,7 +410,7 @@ class RuntimePayloadStore:
             "bytes": size,
             "contentType": item.content_type,
             "expiresAt": int(item.expires_at * 1000),
-            **item.metadata,
+            **self._public_metadata(item),
         }
 
     def get(self, token: str) -> Optional[RuntimePayload]:
@@ -470,6 +484,11 @@ class RuntimePayloadStore:
             return {"entries": len(self._items), "bytes": self._bytes}
 
     def _store_item(self, item: RuntimePayload, now: float) -> None:
+        accounting_tenant = current_workload_account.get().tenant_id
+        if accounting_tenant is not None:
+            item.metadata["_accountingTenant"] = accounting_tenant
+        else:
+            item.metadata.pop("_accountingTenant", None)
         if self._backend is not None:
             self._backend.put(item)
             self.cache_coordinator.record_store(CacheNamespaces.RUNTIME_PAYLOAD)
@@ -485,7 +504,9 @@ class RuntimePayloadStore:
             while self._items and (len(self._items) >= self.max_entries or self._bytes + charge > self.max_bytes):
                 evicted_bytes += self._remove_locked(next(iter(self._items)))
                 evicted_count += 1
-            lease = self.governor.reserve(ResourceKind.PAYLOAD, charge) if self.governor and charge else None
+            lease = self.governor.reserve(
+                ResourceKind.PAYLOAD, charge, account=current_workload_account.get()
+            ) if charge else None
             self._items[item.token] = item
             self._items.move_to_end(item.token)
             self._charges[item.token] = (charge, lease)

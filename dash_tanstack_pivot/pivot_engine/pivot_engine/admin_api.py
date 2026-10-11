@@ -11,7 +11,7 @@ from datetime import datetime
 from pivot_engine.security import get_current_user, User, UserRole
 from pivot_engine.lifecycle import get_task_manager
 from pivot_engine.config import get_config
-from pivot_engine.resource_governor import ResourceGovernor, ResourceLimits
+from pivot_engine.resource_governor import ResourceGovernor, get_worker_resource_governor
 
 admin_router = APIRouter(prefix="/admin", tags=["admin"])
 
@@ -33,7 +33,7 @@ def get_resource_governor() -> ResourceGovernor:
     """Return the registered worker governor or a safe process-local fallback."""
     global _resource_governor
     if _resource_governor is None:
-        _resource_governor = ResourceGovernor(ResourceLimits.from_environment())
+        _resource_governor = get_worker_resource_governor()
     return _resource_governor
 
 

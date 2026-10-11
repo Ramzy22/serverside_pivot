@@ -14,7 +14,157 @@ from pivot_engine.resource_governor import (
     ResourceLease,
     ResourceLimits,
     estimate_value_bytes,
+    WorkloadAccount,
+    get_worker_resource_governor,
+    account_for_principal,
 )
+
+
+def test_default_worker_governor_is_shared_within_a_process():
+    assert get_worker_resource_governor() is get_worker_resource_governor()
+
+
+def test_admin_health_uses_the_default_worker_governor(monkeypatch):
+    from pivot_engine import admin_api
+
+    monkeypatch.setattr(admin_api, "_resource_governor", None)
+    assert admin_api.get_resource_governor() is get_worker_resource_governor()
+
+
+def test_default_runtime_services_share_one_worker_governor():
+    from pivot_engine.runtime.service import PivotRuntimeService
+
+    first = PivotRuntimeService(lambda: None)
+    second = PivotRuntimeService(lambda: None)
+    assert first.resource_governor is second.resource_governor
+    assert first._lifecycle.resource_governor is get_worker_resource_governor()
+
+
+def test_runtime_rejects_controller_bound_to_another_governor():
+    from types import SimpleNamespace
+    from pivot_engine.runtime.service import PivotRuntimeService
+
+    first = ResourceGovernor(ResourceLimits.for_testing(), rss_bytes_getter=lambda: 0)
+    second = ResourceGovernor(ResourceLimits.for_testing(), rss_bytes_getter=lambda: 0)
+    adapter = SimpleNamespace(controller=SimpleNamespace(resource_governor=second))
+    service = PivotRuntimeService(lambda: adapter, resource_governor=first)
+    with pytest.raises(ValueError, match="worker governor"):
+        service._adapter_getter()
+
+
+def test_tenant_byte_and_slot_caps_compose_with_worker_limits():
+    governor = ResourceGovernor(
+        ResourceLimits.for_testing(
+            total_bytes=100, headroom_bytes=10, query_bytes=90,
+            tenant_bytes=40, system_bytes=20, tenant_max_queries=1,
+        ), rss_bytes_getter=lambda: 0,
+    )
+    alice = WorkloadAccount.tenant("alice")
+    bob = WorkloadAccount.tenant("bob")
+    with governor.reserve(ResourceKind.QUERY, 40, account=alice):
+        with pytest.raises(ResourceExhaustedError) as rejected:
+            governor.reserve(ResourceKind.QUERY, 1, account=alice)
+        assert rejected.value.reason == "tenant_slot"
+        with governor.reserve(ResourceKind.QUERY, 40, account=bob):
+            with pytest.raises(ResourceExhaustedError) as rejected:
+                governor.reserve(ResourceKind.CACHE, 1, account=bob)
+            assert rejected.value.reason == "tenant_bytes"
+            assert governor.snapshot()["reserved_bytes"] == 80
+    assert governor.snapshot()["reserved_bytes"] == 0
+
+
+def test_resize_releases_tenant_and_worker_bytes_and_hides_tenant_names():
+    governor = ResourceGovernor(
+        ResourceLimits.for_testing(total_bytes=100, headroom_bytes=10,
+                                   cache_bytes=90, tenant_bytes=40),
+        rss_bytes_getter=lambda: 0,
+    )
+    account = WorkloadAccount.tenant("sensitive-customer")
+    lease = governor.reserve(ResourceKind.CACHE, 40, account=account)
+    with pytest.raises(ResourceExhaustedError):
+        lease.grow(1)
+    lease.resize(15)
+    with governor.reserve(ResourceKind.CACHE, 25, account=account):
+        snapshot = governor.snapshot()
+        assert snapshot["reserved_bytes"] == 40
+        assert snapshot["max_tenant_reserved_bytes"] == 40
+        assert "sensitive-customer" not in str(snapshot)
+    lease.release()
+    lease.release()
+    assert governor.snapshot()["reserved_bytes"] == 0
+
+
+def test_cache_failed_replacement_preserves_old_entry_and_owner():
+    from pivot_engine.cache.memory_cache import MemoryCache
+    from pivot_engine.resource_governor import current_workload_account
+
+    governor = ResourceGovernor(
+        ResourceLimits.for_testing(tenant_bytes=4, cache_bytes=100),
+        rss_bytes_getter=lambda: 0,
+    )
+    cache = MemoryCache(max_bytes=100, governor=governor)
+    token = current_workload_account.set(WorkloadAccount.tenant("payer"))
+    try:
+        assert cache.set("key", b"abc")
+        assert not cache.set("key", b"abcde")
+        assert cache.get("key") == b"abc"
+        assert governor.snapshot()["reserved_bytes"] == 3
+    finally:
+        current_workload_account.reset(token)
+        cache.clear()
+
+
+def test_two_cache_instances_share_worker_and_tenant_budget():
+    from pivot_engine.cache.memory_cache import MemoryCache
+    from pivot_engine.resource_governor import current_workload_account
+
+    governor = ResourceGovernor(
+        ResourceLimits.for_testing(cache_bytes=100, tenant_bytes=4),
+        rss_bytes_getter=lambda: 0,
+    )
+    first = MemoryCache(max_bytes=100, governor=governor)
+    second = MemoryCache(max_bytes=100, governor=governor)
+    token = current_workload_account.set(WorkloadAccount.tenant("payer-a"))
+    try:
+        assert first.set("one", b"abc")
+        assert not second.set("two", b"de")
+        assert first.get("one") == b"abc"
+    finally:
+        current_workload_account.reset(token)
+        first.clear()
+        second.clear()
+
+
+def test_malformed_tenant_budget_fails_configuration():
+    with pytest.raises(ValueError, match="PIVOT_TENANT_MAX_BYTES"):
+        ResourceLimits.from_environment({"PIVOT_TENANT_MAX_BYTES": "unlimited"})
+    with pytest.raises(ValueError, match="account byte budgets"):
+        ResourceLimits.from_environment({"PIVOT_TENANT_MAX_BYTES": str(1024**3)})
+
+
+def test_accounting_identity_comes_from_trusted_principal_not_data_tenant_scope():
+    from types import SimpleNamespace
+
+    principal = SimpleNamespace(attributes={
+        "tenant": ["data-a", "data-b"], "accounting_tenant": "payer-a",
+    })
+    assert account_for_principal(principal) == WorkloadAccount.tenant("payer-a")
+    assert account_for_principal(SimpleNamespace(attributes={"tenant": "data-a"})) == WorkloadAccount()
+    with pytest.raises(ValueError):
+        account_for_principal(SimpleNamespace(attributes={"accounting_tenant": ["a", "b"]}))
+    with pytest.raises(ValueError):
+        WorkloadAccount("")
+    with pytest.raises(ValueError):
+        WorkloadAccount("system")
+
+    from pivot_engine.runtime.http_transport import RuntimeHttpGateway
+    gateway = RuntimeHttpGateway(lambda: None)
+    context = gateway._context_from_request(
+        {"table": "sales", "kind": "data", "payload": {
+            "accountingTenant": "attacker", "tenant": "data-b",
+        }}, principal=principal,
+    )
+    assert context.accounting_account == WorkloadAccount.tenant("payer-a")
 
 
 def test_resource_governor_rejects_exhausted_bytes_or_slots():

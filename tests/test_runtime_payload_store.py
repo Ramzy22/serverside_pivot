@@ -10,6 +10,16 @@ from pivot_engine.runtime.distributed import DistributedRuntimeSettings, RedisRu
 from pivot_engine.runtime.payload_store import RedisPayloadBackend, RuntimePayload, RuntimePayloadStore
 
 
+def test_payload_accounting_owner_cannot_be_set_by_metadata():
+    store = RuntimePayloadStore(max_bytes=1024)
+    reference = store.put_bytes(b"safe", metadata={"_accountingTenant": "forged"})
+    item = store.get(reference["id"])
+    assert item is not None
+    assert "_accountingTenant" not in item.metadata
+    assert "_accountingTenant" not in reference
+    store.clear()
+
+
 def test_payload_store_rejects_a_single_value_larger_than_total_budget():
     store = RuntimePayloadStore(max_entries=4, max_bytes=8)
     with pytest.raises(ResourceExhaustedError, match="resource_exhausted"):

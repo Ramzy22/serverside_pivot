@@ -8,6 +8,7 @@ allocations cannot be accounted for precisely from Python.
 from __future__ import annotations
 
 from collections import Counter
+from contextvars import ContextVar
 from dataclasses import dataclass, fields
 from enum import StrEnum
 from numbers import Real
@@ -33,6 +34,46 @@ class ResourceKind(StrEnum):
     EXPORT = "export"
     DOWNLOAD = "download"
     CDC = "cdc"
+
+
+@dataclass(frozen=True)
+class WorkloadAccount:
+    """Server-owned accounting identity, distinct from data access scope."""
+
+    tenant_id: str | None = None
+
+    def __post_init__(self) -> None:
+        value = self.tenant_id
+        if value is not None and (
+            not isinstance(value, str) or not value.strip()
+            or value.strip() != value or value.lower() == "system"
+        ):
+            raise ValueError("accounting tenant must be a nonempty non-system identifier")
+
+    @classmethod
+    def tenant(cls, value: str) -> "WorkloadAccount":
+        if not isinstance(value, str) or not value.strip() or value.strip().lower() == "system":
+            raise ValueError("accounting tenant must be a nonempty non-system identifier")
+        return cls(value.strip())
+
+
+SYSTEM_ACCOUNT = WorkloadAccount()
+current_workload_account: ContextVar[WorkloadAccount] = ContextVar(
+    "pivot_current_workload_account", default=SYSTEM_ACCOUNT
+)
+
+
+def account_for_principal(principal: Any) -> WorkloadAccount:
+    """Resolve billing identity from the authenticated principal, never row scope.
+
+    A host may put an authorized account in principal attributes during
+    authentication. Data-tenant claims deliberately do not provide a fallback.
+    """
+    attributes = getattr(principal, "attributes", None)
+    value = attributes.get("accounting_tenant") if isinstance(attributes, Mapping) else None
+    if value is None:
+        return SYSTEM_ACCOUNT
+    return WorkloadAccount.tenant(value)
 
 
 class ResourceExhaustedError(RuntimeError):
@@ -73,6 +114,14 @@ class ResourceLimits:
     max_queries: int = 10
     max_exports: int = 2
     max_downloads: int = 4
+    tenant_bytes: int = 256 * _MIB
+    system_bytes: int = 64 * _MIB
+    tenant_max_queries: int = 4
+    tenant_max_exports: int = 1
+    tenant_max_downloads: int = 2
+    system_max_queries: int = 2
+    system_max_exports: int = 1
+    system_max_downloads: int = 1
     worker_hard_limit_bytes: int = 2 * _GIB
     rss_soft_limit_bytes: int = int(2 * _GIB * 0.85)
     native_headroom_bytes: int = 256 * _MIB
@@ -124,10 +173,22 @@ class ResourceLimits:
                 return default
             return parsed if parsed > 0 else default
 
+        def strict_tenant_value(name: str, default: int) -> int:
+            raw = source.get(name)
+            if raw is None:
+                return default
+            try:
+                parsed = int(raw)
+            except (TypeError, ValueError) as exc:
+                raise ValueError(f"{name} must be a positive integer") from exc
+            if parsed <= 0:
+                raise ValueError(f"{name} must be a positive integer")
+            return parsed
+
         worker_hard_limit = value(
             "PIVOT_WORKER_MEMORY_HARD_LIMIT_BYTES", defaults.worker_hard_limit_bytes
         )
-        return cls(
+        resolved = cls(
             total_bytes=value("PIVOT_RESOURCE_MAX_BYTES", defaults.total_bytes),
             headroom_bytes=value(
                 "PIVOT_RESOURCE_HEADROOM_BYTES", defaults.headroom_bytes
@@ -147,6 +208,14 @@ class ResourceLimits:
             max_downloads=value(
                 "PIVOT_MAX_CONCURRENT_DOWNLOADS", defaults.max_downloads
             ),
+            tenant_bytes=strict_tenant_value("PIVOT_TENANT_MAX_BYTES", defaults.tenant_bytes),
+            system_bytes=strict_tenant_value("PIVOT_SYSTEM_MAX_BYTES", defaults.system_bytes),
+            tenant_max_queries=strict_tenant_value("PIVOT_TENANT_MAX_CONCURRENT_QUERIES", defaults.tenant_max_queries),
+            tenant_max_exports=strict_tenant_value("PIVOT_TENANT_MAX_CONCURRENT_EXPORTS", defaults.tenant_max_exports),
+            tenant_max_downloads=strict_tenant_value("PIVOT_TENANT_MAX_CONCURRENT_DOWNLOADS", defaults.tenant_max_downloads),
+            system_max_queries=strict_tenant_value("PIVOT_SYSTEM_MAX_CONCURRENT_QUERIES", defaults.system_max_queries),
+            system_max_exports=strict_tenant_value("PIVOT_SYSTEM_MAX_CONCURRENT_EXPORTS", defaults.system_max_exports),
+            system_max_downloads=strict_tenant_value("PIVOT_SYSTEM_MAX_CONCURRENT_DOWNLOADS", defaults.system_max_downloads),
             worker_hard_limit_bytes=worker_hard_limit,
             rss_soft_limit_bytes=value(
                 "PIVOT_WORKER_RSS_SOFT_LIMIT_BYTES", int(worker_hard_limit * 0.85)
@@ -158,6 +227,10 @@ class ResourceLimits:
                 "PIVOT_DUCKDB_MEMORY_LIMIT", defaults.duckdb_memory_limit_bytes
             ),
         )
+        available = resolved.total_bytes - resolved.headroom_bytes
+        if resolved.tenant_bytes > available or resolved.system_bytes > available:
+            raise ValueError("account byte budgets must fit within worker available bytes")
+        return resolved
 
     @classmethod
     def for_testing(cls, **overrides: int) -> "ResourceLimits":
@@ -175,6 +248,14 @@ class ResourceLimits:
             "max_queries": 10,
             "max_exports": 2,
             "max_downloads": 4,
+            "tenant_bytes": 1024,
+            "system_bytes": 1024,
+            "tenant_max_queries": 10,
+            "tenant_max_exports": 2,
+            "tenant_max_downloads": 4,
+            "system_max_queries": 10,
+            "system_max_exports": 2,
+            "system_max_downloads": 4,
             "worker_hard_limit_bytes": 4096,
             "rss_soft_limit_bytes": 3481,
             "native_headroom_bytes": 1,
@@ -201,6 +282,19 @@ class ResourceLimits:
             ResourceKind.QUERY: self.max_queries,
             ResourceKind.EXPORT: self.max_exports,
             ResourceKind.DOWNLOAD: self.max_downloads,
+        }.get(kind)
+
+    def account_slots_for(self, account: WorkloadAccount, kind: ResourceKind) -> int | None:
+        if account == SYSTEM_ACCOUNT:
+            return {
+                ResourceKind.QUERY: self.system_max_queries,
+                ResourceKind.EXPORT: self.system_max_exports,
+                ResourceKind.DOWNLOAD: self.system_max_downloads,
+            }.get(kind)
+        return {
+            ResourceKind.QUERY: self.tenant_max_queries,
+            ResourceKind.EXPORT: self.tenant_max_exports,
+            ResourceKind.DOWNLOAD: self.tenant_max_downloads,
         }.get(kind)
 
 
@@ -246,11 +340,13 @@ class ResourceLease:
     """The sole authority for a reservation held by a governor."""
 
     def __init__(
-        self, governor: "ResourceGovernor", kind: ResourceKind, reserved_bytes: int
+        self, governor: "ResourceGovernor", kind: ResourceKind, reserved_bytes: int,
+        account: WorkloadAccount = SYSTEM_ACCOUNT,
     ) -> None:
         self._governor = governor
         self.kind = kind
         self.reserved_bytes = reserved_bytes
+        self.account = account
         self._released = False
 
     def grow(self, additional_bytes: int) -> None:
@@ -264,6 +360,11 @@ class ResourceLease:
 
     def release(self) -> None:
         self._governor._release(self)
+
+    def resize(self, new_bytes: int) -> None:
+        if not isinstance(new_bytes, int) or isinstance(new_bytes, bool) or new_bytes < 0:
+            raise ValueError("new_bytes must be a non-negative integer")
+        self._governor._resize(self, new_bytes)
 
     def __enter__(self) -> "ResourceLease":
         return self
@@ -286,23 +387,36 @@ class ResourceGovernor:
         self._lock = RLock()
         self._reserved_by_kind: Counter[ResourceKind] = Counter()
         self._active_slots: Counter[ResourceKind] = Counter()
+        self._reserved_by_account: Counter[WorkloadAccount] = Counter()
+        self._high_water_account_reserved_bytes = 0
+        self._active_slots_by_account: Counter[tuple[WorkloadAccount, ResourceKind]] = Counter()
         self._admitted: Counter[ResourceKind] = Counter()
         self._rejected: Counter[tuple[ResourceKind, str]] = Counter()
-        self._lease_records: dict[int, tuple[ResourceLease, ResourceKind, int]] = {}
+        self._lease_records: dict[int, tuple[ResourceLease, ResourceKind, int, WorkloadAccount]] = {}
         self._high_water_rss_bytes = 0
 
-    def reserve(self, kind: ResourceKind, estimated_bytes: int) -> ResourceLease:
+    def reserve(
+        self, kind: ResourceKind, estimated_bytes: int, *,
+        account: WorkloadAccount = SYSTEM_ACCOUNT,
+    ) -> ResourceLease:
         if not isinstance(kind, ResourceKind):
             kind = ResourceKind(kind)
+        if not isinstance(account, WorkloadAccount):
+            raise TypeError("account must be a trusted WorkloadAccount")
         self._validate_requested_bytes(estimated_bytes)
         with self._lock:
-            self._ensure_capacity(kind, estimated_bytes, include_slot=True)
+            self._ensure_capacity(kind, estimated_bytes, account=account, include_slot=True)
             self._reserved_by_kind[kind] += estimated_bytes
+            self._reserved_by_account[account] += estimated_bytes
+            self._high_water_account_reserved_bytes = max(
+                self._high_water_account_reserved_bytes, self._reserved_by_account[account]
+            )
             if self.limits.slots_for(kind) is not None:
                 self._active_slots[kind] += 1
+                self._active_slots_by_account[(account, kind)] += 1
             self._admitted[kind] += 1
-            lease = ResourceLease(self, kind, estimated_bytes)
-            self._lease_records[id(lease)] = (lease, kind, estimated_bytes)
+            lease = ResourceLease(self, kind, estimated_bytes, account)
+            self._lease_records[id(lease)] = (lease, kind, estimated_bytes, account)
             return lease
 
     def _grow(self, lease: ResourceLease, additional_bytes: int) -> None:
@@ -310,12 +424,37 @@ class ResourceGovernor:
             record = self._lease_records.get(id(lease))
             if record is None or record[0] is not lease:
                 raise RuntimeError("Cannot grow an inactive resource lease")
-            _, kind, recorded_bytes = record
-            self._ensure_capacity(kind, additional_bytes, include_slot=False)
+            _, kind, recorded_bytes, account = record
+            self._ensure_capacity(kind, additional_bytes, account=account, include_slot=False)
             self._reserved_by_kind[kind] += additional_bytes
+            self._reserved_by_account[account] += additional_bytes
+            self._high_water_account_reserved_bytes = max(
+                self._high_water_account_reserved_bytes, self._reserved_by_account[account]
+            )
             updated_bytes = recorded_bytes + additional_bytes
-            self._lease_records[id(lease)] = (lease, kind, updated_bytes)
+            self._lease_records[id(lease)] = (lease, kind, updated_bytes, account)
             lease.reserved_bytes = updated_bytes
+
+    def _resize(self, lease: ResourceLease, new_bytes: int) -> None:
+        with self._lock:
+            record = self._lease_records.get(id(lease))
+            if record is None or record[0] is not lease:
+                raise RuntimeError("Cannot resize an inactive resource lease")
+            _, kind, old_bytes, account = record
+            delta = new_bytes - old_bytes
+            if delta > 0:
+                self._ensure_capacity(kind, delta, account=account, include_slot=False)
+            self._reserved_by_kind[kind] += delta
+            self._reserved_by_account[account] += delta
+            self._high_water_account_reserved_bytes = max(
+                self._high_water_account_reserved_bytes, self._reserved_by_account[account]
+            )
+            if self._reserved_by_kind[kind] <= 0:
+                self._reserved_by_kind.pop(kind, None)
+            if self._reserved_by_account[account] <= 0:
+                self._reserved_by_account.pop(account, None)
+            self._lease_records[id(lease)] = (lease, kind, new_bytes, account)
+            lease.reserved_bytes = new_bytes
 
     def _release(self, lease: ResourceLease) -> None:
         with self._lock:
@@ -323,19 +462,26 @@ class ResourceGovernor:
             if record is None or record[0] is not lease:
                 lease._released = True
                 return
-            _, kind, recorded_bytes = record
+            _, kind, recorded_bytes, account = record
             self._reserved_by_kind[kind] -= recorded_bytes
+            self._reserved_by_account[account] -= recorded_bytes
             if self._reserved_by_kind[kind] <= 0:
                 self._reserved_by_kind.pop(kind, None)
+            if self._reserved_by_account[account] <= 0:
+                self._reserved_by_account.pop(account, None)
             if self.limits.slots_for(kind) is not None:
                 self._active_slots[kind] -= 1
+                self._active_slots_by_account[(account, kind)] -= 1
                 if self._active_slots[kind] <= 0:
                     self._active_slots.pop(kind, None)
+                if self._active_slots_by_account[(account, kind)] <= 0:
+                    self._active_slots_by_account.pop((account, kind), None)
             lease.reserved_bytes = recorded_bytes
             lease._released = True
 
     def _ensure_capacity(
-        self, kind: ResourceKind, requested_bytes: int, *, include_slot: bool
+        self, kind: ResourceKind, requested_bytes: int, *,
+        account: WorkloadAccount, include_slot: bool,
     ) -> None:
         rss = self._sample_rss()
         if rss is None:
@@ -346,6 +492,10 @@ class ResourceGovernor:
         slot_limit = self.limits.slots_for(kind)
         if include_slot and slot_limit is not None and self._active_slots[kind] >= slot_limit:
             self._reject(kind, "slot")
+        account_slot_limit = self.limits.account_slots_for(account, kind)
+        if (include_slot and account_slot_limit is not None
+                and self._active_slots_by_account[(account, kind)] >= account_slot_limit):
+            self._reject(kind, "tenant_slot")
 
         class_limit = self.limits.limit_for(kind)
         if self._reserved_by_kind[kind] + requested_bytes > class_limit:
@@ -354,6 +504,9 @@ class ResourceGovernor:
         total_reserved = sum(self._reserved_by_kind.values())
         if total_reserved + requested_bytes > self.limits.total_bytes - self.limits.headroom_bytes:
             self._reject(kind, "total_bytes")
+        account_limit = self.limits.system_bytes if account == SYSTEM_ACCOUNT else self.limits.tenant_bytes
+        if self._reserved_by_account[account] + requested_bytes > account_limit:
+            self._reject(kind, "tenant_bytes")
 
     def _sample_rss(self) -> int | None:
         """Accept only non-negative, integral-valued real numeric readings."""
@@ -395,6 +548,9 @@ class ResourceGovernor:
                 rejected[kind.value][reason] = count
             return {
                 "reserved_bytes": sum(self._reserved_by_kind.values()),
+                "max_tenant_reserved_bytes": max(self._reserved_by_account.values(), default=0),
+                "high_water_tenant_reserved_bytes": self._high_water_account_reserved_bytes,
+                "active_account_count": len(self._reserved_by_account),
                 "reserved_bytes_by_kind": {
                     kind.value: self._reserved_by_kind[kind] for kind in kinds
                 },
@@ -406,3 +562,30 @@ class ResourceGovernor:
                 "rss_bytes": current_rss,
                 "high_water_rss_bytes": self._high_water_rss_bytes,
             }
+
+
+_worker_governor_lock = RLock()
+_worker_governor: ResourceGovernor | None = None
+_worker_governor_pid: int | None = None
+
+
+def _reset_worker_governor_after_fork() -> None:
+    global _worker_governor_lock, _worker_governor, _worker_governor_pid
+    _worker_governor_lock = RLock()
+    _worker_governor = None
+    _worker_governor_pid = None
+
+
+if hasattr(os, "register_at_fork"):
+    os.register_at_fork(after_in_child=_reset_worker_governor_after_fork)
+
+
+def get_worker_resource_governor() -> ResourceGovernor:
+    """Return the sole default admission owner for this Python worker process."""
+    global _worker_governor, _worker_governor_pid
+    with _worker_governor_lock:
+        pid = os.getpid()
+        if _worker_governor is None or _worker_governor_pid != pid:
+            _worker_governor = ResourceGovernor(ResourceLimits.from_environment())
+            _worker_governor_pid = pid
+        return _worker_governor

@@ -414,13 +414,18 @@ def apply_rls_to_spec(
             })
         return spec
     if user.attributes:
-        protected_fields = {str(field) for field in user.attributes.keys()}
+        # Workload accounting is not a dataset column or row-security claim.
+        row_attributes = {
+            field: value for field, value in user.attributes.items()
+            if field != "accounting_tenant"
+        }
+        protected_fields = {str(field) for field in row_attributes.keys()}
         spec.filters = [
             filter_spec
             for filter_spec in list(spec.filters or [])
             if not _filter_references_fields(filter_spec, protected_fields)
         ]
-        for field, value in user.attributes.items():
+        for field, value in row_attributes.items():
             if isinstance(value, (list, tuple, set, frozenset)):
                 values = list(value)
                 if isinstance(value, (set, frozenset)):

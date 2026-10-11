@@ -69,6 +69,8 @@ def test_memory_workload_cli_emits_rss_and_admission_metrics_without_large_fixtu
     assert report["memory"]["peakRssBytes"] > 0
     assert report["resourceGovernor"]["rejections"] > 0
     assert report["resourceGovernor"]["admitted"] > 0
+    assert report["resourceGovernor"]["tenantRejections"] > 0
+    assert report["resourceGovernor"]["maxTenantReservedBytes"] > 0
     assert report["throughput"]["requestsPerSecond"] > 0
 
 

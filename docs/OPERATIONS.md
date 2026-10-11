@@ -69,6 +69,42 @@ RSS high-water, reservations, admissions, and rejection counts. Accounted
 bytes are an admission-control estimate; they are not the process's native
 total memory and must not be treated as one.
 
+All default runtime services, controllers, hierarchy caches, and local payload
+and CDC stores in a Python worker use one process-local governor. Each request
+is charged to one server-resolved accounting account, separate from its row
+security tenants. Hosts may set the authenticated principal's
+`attributes.accounting_tenant`; a query reading several authorized data tenants
+is still charged entirely to that one account. Browser envelopes and filters
+cannot select the account. Missing accounting identity uses the smaller capped
+`system` bucket. An application with service principals should provision a
+trusted account claim or size the system budget for its intended workload.
+
+Admission requires both worker and local-account capacity. Defaults are 256 MiB
+per account, 64 MiB for `system`, with account query/export/download slot caps
+of 4/1/2 and system caps of 2/1/1. Override with `PIVOT_TENANT_MAX_BYTES`,
+`PIVOT_SYSTEM_MAX_BYTES`, `PIVOT_TENANT_MAX_CONCURRENT_QUERIES`,
+`PIVOT_TENANT_MAX_CONCURRENT_EXPORTS`,
+`PIVOT_TENANT_MAX_CONCURRENT_DOWNLOADS`, and the corresponding
+`PIVOT_SYSTEM_MAX_CONCURRENT_*` variables. Invalid tenant/system settings fail
+startup. These limits provide **per-worker fairness**, not a deployment-wide
+query concurrency quota. Health metrics include aggregate account counts and
+high-water usage, never account identifiers.
+
+Local exact CDC jobs retain worker `CDC` reservations until replacement,
+deletion, or configured expiry; loading and cloning use additional short-lived
+worker reservations. Redis exact CDC state has a separate atomic durable
+namespace budget (`PIVOT_CDC_MAX_BYTES`, 128 MiB by default) and per-account
+budget (`PIVOT_CDC_TENANT_MAX_BYTES`, 64 MiB by default). Redis state, owner/size
+index, and both totals change together. Reopened stores reconcile counters
+from indexed jobs; unindexed state fails closed. Durable jobs do not have an
+independent Redis key TTL. `PIVOT_CDC_JOB_TTL_SECONDS` optionally enables
+indexed cleanup; without it, jobs persist until explicitly deleted. Redis
+storage limits do not replace local worker reservations for loading or
+serializing state. A rejected CDC update remains unpublished and requires
+authoritative recomputation. CDC job IDs distinguish accounting owners even
+when their aggregate specs match. After a restart, register a tenant-owned job
+under the same trusted account before replaying its events.
+
 Recommended baseline environment:
 
 ```env
@@ -111,10 +147,11 @@ python scripts/benchmark_pivot_runtime.py --memory-workload \
   --rows 1000000 --concurrent-requests 4 --max-rss-bytes 2147483648 --json > memory-1m.json
 ```
 
-The report includes latency, admitted/rejected work, throughput, current RSS,
-and peak RSS. A non-zero exit means the requested RSS ceiling was exceeded or
-the workload failed to demonstrate an admission rejection; it does not claim
-that application-accounted bytes equal total native process memory. Keep the
+The report includes latency, admitted/rejected work (including local account
+rejections), throughput, current RSS, and peak RSS. A non-zero exit means the
+requested RSS ceiling was exceeded or the workload failed to demonstrate an
+admission rejection; it does not claim that application-accounted bytes equal
+total native process memory. Keep the
 JSON alongside the exact image/tag, deployment limits, and admin health
 snapshot for release review.
 

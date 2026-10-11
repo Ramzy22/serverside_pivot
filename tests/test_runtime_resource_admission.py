@@ -5,7 +5,7 @@ import threading
 
 import pytest
 
-from pivot_engine.resource_governor import ResourceExhaustedError, ResourceGovernor, ResourceKind, ResourceLimits
+from pivot_engine.resource_governor import ResourceExhaustedError, ResourceGovernor, ResourceKind, ResourceLimits, WorkloadAccount
 from pivot_engine.runtime import PivotRequestContext, PivotRuntimeService, PivotViewState
 from pivot_engine.runtime.lifecycle import RuntimeRequestLifecycle
 from pivot_engine.runtime.resilience import CircuitBreaker, PivotRequestTimeout
@@ -109,6 +109,43 @@ async def test_capacity_is_held_until_cancelled_backend_cleanup_completes(timeou
     finally:
         cleanup_release.set()
         with pytest.raises(PivotRequestTimeout if timeout else asyncio.CancelledError):
+            await task
+    assert governor.snapshot()["reserved_bytes"] == 0
+
+
+@pytest.mark.asyncio
+async def test_cancelled_query_keeps_its_tenant_slot_until_cleanup():
+    governor = _governor(max_queries=2, tenant_max_queries=1, query_bytes=100,
+                         tenant_bytes=100)
+    lifecycle = RuntimeRequestLifecycle(resource_governor=governor)
+    alice = PivotRequestContext(table="sales", accounting_account=WorkloadAccount.tenant("alice"))
+    bob = PivotRequestContext(table="sales", accounting_account=WorkloadAccount.tenant("bob"))
+    started, cleaning, release = asyncio.Event(), asyncio.Event(), asyncio.Event()
+
+    async def blocked():
+        started.set()
+        try:
+            await asyncio.Event().wait()
+        finally:
+            cleaning.set()
+            await release.wait()
+
+    task = asyncio.create_task(lifecycle.run_backend_operation(
+        alice, "data", blocked, reservation_bytes=20,
+    ))
+    try:
+        await asyncio.wait_for(started.wait(), 1)
+        task.cancel()
+        await asyncio.wait_for(cleaning.wait(), 1)
+        with pytest.raises(ResourceExhaustedError) as rejected:
+            await lifecycle.run_backend_operation(alice, "data", lambda: None,
+                                                  reservation_bytes=1)
+        assert rejected.value.reason == "tenant_slot"
+        assert await lifecycle.run_backend_operation(bob, "data", lambda: "ok",
+                                                     reservation_bytes=1) == "ok"
+    finally:
+        release.set()
+        with pytest.raises(asyncio.CancelledError):
             await task
     assert governor.snapshot()["reserved_bytes"] == 0
 

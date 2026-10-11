@@ -5,6 +5,8 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional
 
+from ..resource_governor import SYSTEM_ACCOUNT, WorkloadAccount
+
 
 def safe_int(value: Any, default: int = 0) -> int:
     """Convert value to int with a safe fallback."""
@@ -92,6 +94,7 @@ class PivotRequestContext:
     # authenticated and authorized a mutation request.  It is deliberately
     # absent from frontend-derived state and never serialized back to clients.
     mutation_grant: Optional[Any] = field(default=None, repr=False, compare=False)
+    accounting_account: WorkloadAccount = field(default=SYSTEM_ACCOUNT, repr=False, compare=False)
 
     @classmethod
     def from_frontend(

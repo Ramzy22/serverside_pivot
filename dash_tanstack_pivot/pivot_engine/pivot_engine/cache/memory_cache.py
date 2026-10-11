@@ -2,12 +2,14 @@
 
 import threading
 import time
+import weakref
 from collections import OrderedDict
 from typing import Any, Optional, Protocol
 
 from ..resource_governor import (
     ResourceExhaustedError, ResourceGovernor, ResourceKind, ResourceLease,
     ResourceLimits, estimate_value_bytes,
+    current_workload_account,
 )
 
 
@@ -29,12 +31,19 @@ class MemoryCache:
                  governor: Optional[ResourceGovernor] = None):
         self._cache: OrderedDict[str, tuple[Any, float]] = OrderedDict()
         self._charges: dict[str, tuple[int, Optional[ResourceLease]]] = {}
+        self._finalizer = weakref.finalize(self, self._release_charges, self._charges)
         self.default_ttl = ttl
         self.max_size = max(0, int(max_size))
         self.max_bytes = max(0, int(max_bytes))
         self.governor = governor
         self._bytes = 0
         self._lock = threading.RLock()
+
+    @staticmethod
+    def _release_charges(charges: dict[str, tuple[int, Optional[ResourceLease]]]) -> None:
+        for _, lease in charges.values():
+            if lease is not None:
+                lease.release()
 
     @property
     def bytes_used(self) -> int:
@@ -61,6 +70,35 @@ class MemoryCache:
         expiry = time.time() + (self.default_ttl if ttl is None else ttl)
         with self._lock:
             self.get_all_keys()
+            if key in self._cache:
+                old_charge, old_lease = self._charges[key]
+                account = current_workload_account.get()
+                if old_lease is not None and old_lease.account == account:
+                    try:
+                        old_lease.resize(charge)
+                    except ResourceExhaustedError:
+                        return False
+                    self._cache[key] = (value, expiry)
+                    self._cache.move_to_end(key)
+                    self._charges[key] = (charge, old_lease)
+                    self._bytes += charge - old_charge
+                    while self._bytes > self.max_bytes:
+                        self._remove(next(iter(self._cache)))
+                    return True
+                if self.governor is not None:
+                    try:
+                        new_lease = self.governor.reserve(
+                            ResourceKind.CACHE, charge, account=account
+                        )
+                    except ResourceExhaustedError:
+                        return False
+                    self._remove(key)
+                    self._cache[key] = (value, expiry)
+                    self._charges[key] = (charge, new_lease)
+                    self._bytes += charge
+                    while self._bytes > self.max_bytes:
+                        self._remove(next(iter(self._cache)))
+                    return True
             self._remove(key)
             while self._cache and (
                 len(self._cache) >= self.max_size or self._bytes + charge > self.max_bytes
@@ -69,7 +107,9 @@ class MemoryCache:
             lease = None
             if self.governor is not None and charge:
                 try:
-                    lease = self.governor.reserve(ResourceKind.CACHE, charge)
+                    lease = self.governor.reserve(
+                        ResourceKind.CACHE, charge, account=current_workload_account.get()
+                    )
                 except ResourceExhaustedError:
                     return False
             self._cache[key] = (value, expiry)

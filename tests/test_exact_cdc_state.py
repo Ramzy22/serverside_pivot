@@ -1,5 +1,7 @@
 from datetime import date, datetime, timezone
 from decimal import Decimal
+import asyncio
+from concurrent.futures import ThreadPoolExecutor
 
 import fakeredis
 import pytest
@@ -19,7 +21,9 @@ from pivot_engine.streaming.exact_state import (
     MemoryCDCStateStore,
     RedisCDCStateStore,
     StateVersionConflict,
+    _encoded_snapshot_size,
 )
+from pivot_engine.resource_governor import ResourceGovernor, ResourceLimits, WorkloadAccount, current_workload_account
 
 
 @pytest.fixture
@@ -139,6 +143,71 @@ async def test_memory_store_rejects_an_oversized_snapshot_without_persisting_it(
 
 
 @pytest.mark.asyncio
+async def test_memory_cdc_accounts_retained_jobs_together_and_releases_on_delete():
+    sample = CDCJobSnapshot.empty("one").with_checkpoint("0", 1, "evt")
+    size = _encoded_snapshot_size(sample)
+    governor = ResourceGovernor(
+        ResourceLimits.for_testing(total_bytes=4 * size, cdc_bytes=3 * size - 1,
+                                   tenant_bytes=4 * size, system_bytes=4 * size),
+        rss_bytes_getter=lambda: 0,
+    )
+    store = MemoryCDCStateStore(governor=governor)
+    first = await store.compare_and_swap("one", 0, sample)
+    assert first.version == 1
+    assert governor.snapshot()["reserved_bytes_by_kind"]["cdc"] == size + len(str(first.version)) - len(str(sample.version))
+    second = CDCJobSnapshot.empty("two").with_checkpoint("0", 1, "evt")
+    with pytest.raises(CDCStateBudgetExceeded):
+        await store.compare_and_swap("two", 0, second)
+    assert (await store.load("two")).version == 0
+    await store.delete("one")
+    assert governor.snapshot()["reserved_bytes_by_kind"]["cdc"] == 0
+
+
+@pytest.mark.asyncio
+async def test_memory_cdc_expiry_releases_retained_charge():
+    clock = [100.0]
+    governor = ResourceGovernor(ResourceLimits.for_testing(), rss_bytes_getter=lambda: 0)
+    store = MemoryCDCStateStore(governor=governor, job_ttl_seconds=5, clock=lambda: clock[0])
+    await store.compare_and_swap("expiring", 0, CDCJobSnapshot.empty("expiring"))
+    assert governor.snapshot()["reserved_bytes_by_kind"]["cdc"] > 0
+    clock[0] = 106.0
+    assert (await store.load("expiring")).version == 0
+    assert governor.snapshot()["reserved_bytes_by_kind"]["cdc"] == 0
+
+
+@pytest.mark.asyncio
+async def test_memory_cdc_expiry_index_stays_bounded_under_replacements():
+    store = MemoryCDCStateStore(job_ttl_seconds=3600, clock=lambda: 100.0)
+    snapshot = CDCJobSnapshot.empty("hot")
+    for version in range(1100):
+        snapshot = await store.compare_and_swap("hot", version, snapshot)
+    assert len(store._expiry_heap) <= 1024
+    await store.delete("hot")
+
+
+def test_memory_cdc_store_is_thread_safe_across_event_loops():
+    sample = CDCJobSnapshot.empty("one").with_checkpoint("0", 1, "evt")
+    size = _encoded_snapshot_size(sample)
+    governor = ResourceGovernor(ResourceLimits.for_testing(
+        total_bytes=4 * size, cdc_bytes=3 * size - 1,
+        tenant_bytes=4 * size, system_bytes=4 * size,
+    ), rss_bytes_getter=lambda: 0)
+    store = MemoryCDCStateStore(governor=governor)
+
+    def write(job):
+        try:
+            return asyncio.run(store.compare_and_swap(
+                job, 0, CDCJobSnapshot.empty(job).with_checkpoint("0", 1, "evt")
+            ))
+        except CDCStateBudgetExceeded:
+            return None
+
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        results = list(pool.map(write, ("one", "two")))
+    assert sum(result is not None for result in results) == 1
+
+
+@pytest.mark.asyncio
 async def test_redis_snapshot_persists_checkpoint_across_store_recreation(fake_runtime_state):
     first = RedisCDCStateStore(fake_runtime_state)
     snapshot = await first.load("job-sales")
@@ -152,6 +221,103 @@ async def test_redis_snapshot_persists_checkpoint_across_store_recreation(fake_r
 
     assert (await second.load("job-sales")).checkpoint("0") == (4, "evt-4")
     assert persisted.version == 1
+
+
+@pytest.mark.asyncio
+async def test_redis_cdc_tenant_and_namespace_budgets_are_atomic_across_jobs(fake_runtime_state):
+    sample = CDCJobSnapshot.empty("one").with_checkpoint("0", 1, "evt")
+    size = _encoded_snapshot_size(sample)
+    account = WorkloadAccount.tenant("payer")
+    token = current_workload_account.set(account)
+    try:
+        first = RedisCDCStateStore(fake_runtime_state, tenant_max_bytes=2 * size - 1,
+                                   namespace_max_bytes=4 * size)
+        await first.compare_and_swap("one", 0, sample)
+        second = RedisCDCStateStore(fake_runtime_state, tenant_max_bytes=2 * size - 1,
+                                    namespace_max_bytes=4 * size)
+        with pytest.raises(CDCStateBudgetExceeded):
+            await second.compare_and_swap("two", 0, CDCJobSnapshot.empty("two").with_checkpoint("0", 1, "evt"))
+        assert (await second.load("two")).version == 0
+        await first.delete("one")
+        await second.compare_and_swap("two", 0, CDCJobSnapshot.empty("two").with_checkpoint("0", 1, "evt"))
+    finally:
+        current_workload_account.reset(token)
+
+
+@pytest.mark.asyncio
+async def test_redis_cdc_rebuilds_durable_totals_after_restart(fake_runtime_state):
+    store = RedisCDCStateStore(fake_runtime_state)
+    snapshot = CDCJobSnapshot.empty("one").with_checkpoint("0", 1, "evt")
+    await store.compare_and_swap("one", 0, snapshot)
+    _, total_key, tenants_key = store._ledger_keys()
+    fake_runtime_state.client.delete(total_key, tenants_key)
+    reopened = RedisCDCStateStore(fake_runtime_state)
+    assert (await reopened.load("one")).version == 1
+    assert int(fake_runtime_state.client.get(total_key)) > 0
+
+
+@pytest.mark.asyncio
+async def test_redis_cdc_rejects_unindexed_state_after_restart(fake_runtime_state):
+    store = RedisCDCStateStore(fake_runtime_state)
+    fake_runtime_state.client.set(
+        store._key("orphan"), store._encode(CDCJobSnapshot.empty("orphan"))
+    )
+    reopened = RedisCDCStateStore(fake_runtime_state)
+    with pytest.raises(ExactCDCStateError, match="unindexed"):
+        await reopened.load("orphan")
+
+
+@pytest.mark.asyncio
+async def test_redis_cdc_expiry_removes_state_and_durable_totals_on_recovery(fake_runtime_state):
+    clock = [100.0]
+    first = RedisCDCStateStore(fake_runtime_state, job_ttl_seconds=5, clock=lambda: clock[0])
+    await first.compare_and_swap("expiring", 0, CDCJobSnapshot.empty("expiring"))
+    clock[0] = 106.0
+    reopened = RedisCDCStateStore(fake_runtime_state, job_ttl_seconds=5, clock=lambda: clock[0])
+    assert (await reopened.load("expiring")).version == 0
+    assert int(fake_runtime_state.client.get(reopened._ledger_keys()[1])) == 0
+
+
+@pytest.mark.asyncio
+async def test_redis_concurrent_jobs_cannot_overspend_one_namespace(fake_runtime_state):
+    sample = CDCJobSnapshot.empty("one").with_checkpoint("0", 1, "evt")
+    size = _encoded_snapshot_size(sample)
+    store = RedisCDCStateStore(fake_runtime_state, namespace_max_bytes=2 * size - 1,
+                               tenant_max_bytes=2 * size)
+    await store.load("warmup")
+
+    def write(job):
+        token = current_workload_account.set(WorkloadAccount.tenant("payer"))
+        try:
+            return asyncio.run(store.compare_and_swap(
+                job, 0, CDCJobSnapshot.empty(job).with_checkpoint("0", 1, "evt")
+            ))
+        except (CDCStateBudgetExceeded, StateVersionConflict):
+            return None
+        finally:
+            current_workload_account.reset(token)
+
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        results = list(pool.map(write, ("one", "two")))
+    assert sum(result is not None for result in results) == 1
+    assert int(fake_runtime_state.client.get(store._ledger_keys()[1])) == size
+
+
+@pytest.mark.asyncio
+async def test_redis_cdc_charges_each_owner_without_splitting_namespace(fake_runtime_state):
+    sample = CDCJobSnapshot.empty("one").with_checkpoint("0", 1, "evt")
+    size = _encoded_snapshot_size(sample)
+    store = RedisCDCStateStore(fake_runtime_state, namespace_max_bytes=2 * size,
+                               tenant_max_bytes=size)
+    for account_name, job in (("payer-a", "one"), ("payer-b", "two")):
+        token = current_workload_account.set(WorkloadAccount.tenant(account_name))
+        try:
+            await store.compare_and_swap(
+                job, 0, CDCJobSnapshot.empty(job).with_checkpoint("0", 1, "evt")
+            )
+        finally:
+            current_workload_account.reset(token)
+    assert int(fake_runtime_state.client.get(store._ledger_keys()[1])) == 2 * size
 
 
 @pytest.mark.asyncio

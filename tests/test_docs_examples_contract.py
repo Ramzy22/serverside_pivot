@@ -19,6 +19,16 @@ import pytest
 REPO_ROOT = pathlib.Path(__file__).parent.parent
 EXAMPLES_DIR = REPO_ROOT / "examples"
 
+
+def test_operations_document_explains_worker_and_accounting_budgets():
+    operations = (REPO_ROOT / "docs" / "OPERATIONS.md").read_text(encoding="utf-8")
+    for required in (
+        "PIVOT_TENANT_MAX_BYTES", "PIVOT_SYSTEM_MAX_BYTES",
+        "PIVOT_CDC_TENANT_MAX_BYTES", "PIVOT_CDC_JOB_TTL_SECONDS",
+        "per-worker fairness", "accounting_tenant",
+    ):
+        assert required in operations
+
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------

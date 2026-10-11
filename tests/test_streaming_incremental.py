@@ -17,6 +17,7 @@ from pivot_engine.streaming.exact_state import (
 from pivot_engine.cdc.models import Change
 from pivot_engine.runtime.distributed import DistributedRuntimeSettings, RedisRuntimeState
 from pivot_engine.types.pivot_spec import PivotSpec, Measure
+from pivot_engine.resource_governor import WorkloadAccount, current_workload_account
 
 
 @pytest.fixture
@@ -68,6 +69,32 @@ async def test_create_real_time_aggregation_job(stream_processor):
     assert isinstance(job_id, str)
     assert job_id.startswith("agg_job_")
     assert job_id in stream_processor.aggregation_jobs
+
+
+@pytest.mark.asyncio
+async def test_identical_cdc_specs_have_distinct_accounting_jobs():
+    processor = StreamAggregationProcessor(state_store=MemoryCDCStateStore())
+    spec = PivotSpec(table="sales", rows=[], measures=[
+        Measure(field="sales", agg="sum", alias="total_sales")
+    ], filters=[])
+    jobs = []
+    for name in ("payer-a", "payer-b"):
+        token = current_workload_account.set(WorkloadAccount.tenant(name))
+        try:
+            job_id = await processor.create_real_time_aggregation_job(spec)
+            await processor.bootstrap_job(job_id, [{"id": 1, "sales": 10}],
+                                          checkpoints={"0": (0, "snapshot")})
+            jobs.append(job_id)
+        finally:
+            current_workload_account.reset(token)
+    assert jobs[0] != jobs[1]
+    assert await processor.process_change(_exact_change(
+        "INSERT", "evt-1", 1, new_row={"id": 2, "sales": 5}
+    )) == {"exact": 2, "invalidated": 0, "ignored": 0}
+    for job_id in jobs:
+        result = await processor.get_job_result(job_id)
+        assert result.status == "fresh"
+        assert result.values == {"total_sales": 15}
 
 
 @pytest.mark.asyncio

@@ -16,7 +16,7 @@ from typing import Any, Callable, Dict, Optional
 from ..tanstack_adapter import TanStackOperation, TanStackRequest
 from ..security import MutationAuthorizationError
 from ..security_events import log_authorization_denied
-from ..resource_governor import ResourceExhaustedError, ResourceGovernor, ResourceKind
+from ..resource_governor import ResourceExhaustedError, ResourceGovernor, ResourceKind, account_for_principal, current_workload_account
 from .lifecycle import RuntimeRequestLifecycle
 from .contracts import (
     RUNTIME_SCHEMA_VERSION,
@@ -134,6 +134,8 @@ class RuntimeHttpGateway:
                 runtime_state=self.distributed_runtime,
                 governor=self.resource_governor,
             )
+        if self._payload_store.governor is not self.resource_governor:
+            raise ValueError("Runtime payload store must use its worker governor")
         return self._payload_store
 
     @staticmethod
@@ -224,6 +226,7 @@ class RuntimeHttpGateway:
             session_id=f"principal:{self._principal_id(principal)}",
             client_instance=str(request.get("clientInstance") or "default"),
             principal=principal,
+            accounting_account=account_for_principal(principal),
         )
 
     async def _process_filter_options(
@@ -448,6 +451,7 @@ class RuntimeHttpGateway:
         return validate_runtime_response_v1(response)
 
     async def process(self, envelope: Any, *, principal: Any) -> Dict[str, Any]:
+        token = current_workload_account.set(account_for_principal(principal))
         try:
             return await self._process(envelope, principal=principal)
         except ResourceExhaustedError as exc:
@@ -456,6 +460,8 @@ class RuntimeHttpGateway:
             return validate_runtime_response_v1(build_resource_exhausted_response(
                 exc, kind=envelope["kind"], request_id=envelope["requestId"],
             ))
+        finally:
+            current_workload_account.reset(token)
 
     async def _process(self, envelope: Any, *, principal: Any) -> Dict[str, Any]:
         """Validate, authorize, execute, and encode exactly one V1 request."""
@@ -652,6 +658,7 @@ def register_runtime_http_transport(
             lifecycle = gateway._lifecycle()
             lease = lifecycle.resource_governor.reserve(
                 ResourceKind.DOWNLOAD, lifecycle.reservation_bytes(ResourceKind.DOWNLOAD),
+                account=account_for_principal(user),
             )
             response = await payload_response(token, request, user, lease)
             return AdmittedPayloadResponse(response, lease)

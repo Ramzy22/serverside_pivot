@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import asyncio
 from typing import Any, Callable, Optional
-from ..resource_governor import ResourceGovernor, ResourceLimits
+from ..resource_governor import ResourceGovernor, get_worker_resource_governor
 
 from .compatibility import RuntimeCompatibilityMixin
 from .models import PivotRequestContext, PivotServiceResponse, PivotViewState
@@ -39,7 +39,7 @@ class PivotRuntimeService(RuntimeCompatibilityMixin):
     ):
         # One service-scoped owner is shared by all sessions and transports in
         # this worker. Hosts may inject their worker governor explicitly.
-        self.resource_governor = resource_governor or ResourceGovernor(ResourceLimits.from_environment())
+        self.resource_governor = resource_governor or get_worker_resource_governor()
         try:
             from ..admin_api import register_resource_governor
 
@@ -67,7 +67,15 @@ class PivotRuntimeService(RuntimeCompatibilityMixin):
                     "Distributed runtime services require the coordinator to use "
                     "their shared Redis runtime state."
                 )
-        self._adapter_getter = adapter_getter
+        def checked_adapter_getter():
+            adapter = adapter_getter()
+            controller = getattr(adapter, "controller", None)
+            bound_governor = getattr(controller, "resource_governor", None)
+            if bound_governor is not None and bound_governor is not self.resource_governor:
+                raise ValueError("Runtime controller must use its worker governor")
+            return adapter
+
+        self._adapter_getter = checked_adapter_getter
         self._lifecycle = RuntimeRequestLifecycle(
             resource_governor=self.resource_governor,
             session_gate=resolved_session_gate,
@@ -89,7 +97,7 @@ class PivotRuntimeService(RuntimeCompatibilityMixin):
         self._export_service = RuntimeExportService()
         self._drill_service = RuntimeDrillService()
         self._router = RuntimeRequestRouter(
-            adapter_getter=adapter_getter,
+            adapter_getter=self._adapter_getter,
             lifecycle=self._lifecycle,
             tree_service=self._tree_service,
             detail_service=self._detail_service,

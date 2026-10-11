@@ -15,6 +15,7 @@ from .backends.duckdb_backend import DuckDBBackend
 from .backends.ibis_backend import IbisBackend
 from .backends.execution import CancellationUnavailableError
 from .cache.memory_cache import MemoryCache
+from .resource_governor import ResourceGovernor, get_worker_resource_governor
 from .cache.redis_cache import RedisCache
 from .types.pivot_spec import PivotSpec
 from .util.sql_builder import quote_ident
@@ -44,9 +45,11 @@ class PivotController:
         enable_delta: bool = True,
         tile_size: int = 100,
         cache_ttl: int = 300,
+        resource_governor: Optional[ResourceGovernor] = None,
         **cache_options: Any
     ):
         self.enable_arrow = True
+        self.resource_governor = resource_governor or get_worker_resource_governor()
         if backend_uri == ":memory:":
             backend_uri = ":memory:shared_pivot_db"
 
@@ -55,11 +58,19 @@ class PivotController:
             if cache == "redis":
                 self.cache = RedisCache(**cache_options)
             elif cache == "memory":
-                self.cache = MemoryCache(ttl=cache_ttl)
+                self.cache = MemoryCache(
+                    ttl=cache_ttl, max_bytes=self.resource_governor.limits.cache_bytes,
+                    governor=self.resource_governor,
+                )
             else:
                 raise ValueError(f"Unknown cache type: {cache}")
         else:
-            self.cache = cache or MemoryCache(ttl=cache_ttl)
+            self.cache = cache or MemoryCache(
+                ttl=cache_ttl, max_bytes=self.resource_governor.limits.cache_bytes,
+                governor=self.resource_governor,
+            )
+        if isinstance(self.cache, MemoryCache) and self.cache.governor is not self.resource_governor:
+            raise ValueError("Controller memory cache must use its worker governor")
 
         # Initialize Backend and Planner
         self.backend = None
@@ -654,6 +665,8 @@ class PivotController:
 
     def close(self):
         """Close any resources held by the controller"""
+        if hasattr(self, 'cache') and hasattr(self.cache, 'clear'):
+            self.cache.clear()
         if hasattr(self, 'backend') and hasattr(self.backend, 'close'):
             self.backend.close()
 

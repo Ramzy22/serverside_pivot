@@ -24,6 +24,7 @@ from pivot_engine.streaming.exact_state import (
     StateVersionConflict,
     validate_cdc_snapshot_limits,
 )
+from pivot_engine.resource_governor import SYSTEM_ACCOUNT, current_workload_account
 from ibis.expr.api import Table as IbisTable
 
 
@@ -98,7 +99,11 @@ class StreamAggregationProcessor:
             default=str,
             separators=(",", ":"),
         )
-        job_id = f"agg_job_{pivot_spec.table}_{hashlib.sha256(stable_spec.encode('utf-8')).hexdigest()[:16]}"
+        accounting_account = current_workload_account.get()
+        fingerprint_input = stable_spec
+        if accounting_account.tenant_id is not None:
+            fingerprint_input += "\0account:" + accounting_account.tenant_id
+        job_id = f"agg_job_{pivot_spec.table}_{hashlib.sha256(fingerprint_input.encode('utf-8')).hexdigest()[:16]}"
 
         # Create the streaming job configuration
         job_config = {
@@ -109,6 +114,7 @@ class StreamAggregationProcessor:
             'filters': pivot_spec.filters,
             'window_size': 60,  # 60 seconds default window
             'last_update': time.time(),
+            'accounting_account': accounting_account,
             # 'current_state': {}  REMOVED: State is now managed by state_store
         }
 
@@ -356,6 +362,28 @@ class StreamAggregationProcessor:
             )
         return normalized
 
+    def _account_for_job(self, job_id: str):
+        job = self.aggregation_jobs.get(str(job_id)) or {}
+        return job.get("accounting_account", SYSTEM_ACCOUNT)
+
+    async def _load_exact_job(self, job_id: str) -> CDCJobSnapshot:
+        token = current_workload_account.set(self._account_for_job(job_id))
+        try:
+            return await self.cdc_state_store.load(str(job_id))
+        finally:
+            current_workload_account.reset(token)
+
+    async def _save_exact_job(
+        self, job_id: str, expected_version: int, snapshot: CDCJobSnapshot
+    ) -> CDCJobSnapshot:
+        token = current_workload_account.set(self._account_for_job(job_id))
+        try:
+            return await self.cdc_state_store.compare_and_swap(
+                str(job_id), expected_version, snapshot
+            )
+        finally:
+            current_workload_account.reset(token)
+
     async def bootstrap_job(
         self,
         job_id: str,
@@ -374,7 +402,7 @@ class StreamAggregationProcessor:
             raise KeyError(f"Unknown streaming job: {job_id}")
         normalized_checkpoints = self._normalized_checkpoints(checkpoints)
         for _ in range(2):
-            current = await self.cdc_state_store.load(str(job_id))
+            current = await self._load_exact_job(str(job_id))
             if current.status == "fresh" and current.checkpoints:
                 # A recreated worker recovered durable exact state.  Never
                 # rescan and overwrite it with a later, uncoordinated source
@@ -389,7 +417,7 @@ class StreamAggregationProcessor:
                     if not isinstance(row, Mapping):
                         raise ExactCDCStateError("CDC bootstrap rows must be mappings.")
                     self._apply_row(bootstrapped, job, row, 1)
-                await self.cdc_state_store.compare_and_swap(
+                await self._save_exact_job(
                     str(job_id), current.version, bootstrapped
                 )
                 return
@@ -406,14 +434,14 @@ class StreamAggregationProcessor:
         self, job_id: str, reason: str, *, discard_state: bool = False
     ) -> None:
         for _ in range(2):
-            snapshot = await self.cdc_state_store.load(job_id)
+            snapshot = await self._load_exact_job(job_id)
             invalidated = (
                 CDCJobSnapshot.empty(job_id) if discard_state else snapshot.clone()
             )
             invalidated.status = "invalidated"
             invalidated.invalidation_reason = reason
             try:
-                await self.cdc_state_store.compare_and_swap(
+                await self._save_exact_job(
                     job_id, snapshot.version, invalidated
                 )
                 return
@@ -457,7 +485,7 @@ class StreamAggregationProcessor:
         for job in self._jobs_for_table(change.table):
             job_id = str(job["job_id"])
             for _ in range(2):
-                snapshot = await self.cdc_state_store.load(job_id)
+                snapshot = await self._load_exact_job(job_id)
                 decision = snapshot.accept(
                     change.partition, int(change.sequence), str(change.event_id)
                 )
@@ -479,7 +507,7 @@ class StreamAggregationProcessor:
                     break
                 try:
                     next_snapshot = self._apply_exact_transition(snapshot, job, change)
-                    await self.cdc_state_store.compare_and_swap(
+                    await self._save_exact_job(
                         job_id, snapshot.version, next_snapshot
                 )
                 except StateVersionConflict:
@@ -511,7 +539,7 @@ class StreamAggregationProcessor:
         job = self.aggregation_jobs.get(job_id)
         if job is None:
             return None
-        snapshot = await self.cdc_state_store.load(job_id)
+        snapshot = await self._load_exact_job(job_id)
         if snapshot.status == "uninitialized" or (
             snapshot.status == "fresh" and not snapshot.checkpoints
         ):
