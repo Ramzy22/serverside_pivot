@@ -1,5 +1,13 @@
 // Build a TSV string directly from server-side raw data objects.
 // `visibleColumns` is the TanStack leaf-column list (without __row_number__).
+/**
+ * @typedef {Record<string, unknown> & {depth?: number, _id?: string}} RawTsvRow
+ * @typedef {{id: string, columnDef: {header?: unknown, accessorFn?: (row: RawTsvRow, index: number) => unknown, accessorKey?: string}}} RawTsvColumn
+ * @param {RawTsvRow[] | null | undefined} rawRows
+ * @param {boolean} withHeaders
+ * @param {RawTsvColumn[] | null | undefined} visibleColumns
+ * @returns {string | null}
+ */
 export function buildTsvFromRawRows(rawRows, withHeaders, visibleColumns) {
     if (!Array.isArray(rawRows) || rawRows.length === 0 || !Array.isArray(visibleColumns)) return null;
 

@@ -33,6 +33,8 @@
 - Create: `dash_tanstack_pivot/tsconfig.checked-js.json`
 - Create: `dash_tanstack_pivot/scripts/verify_checked_js_gate.mjs`
 - Modify: `dash_tanstack_pivot/package.json`
+- Modify: `dash_tanstack_pivot/src/lib/runtime/runtimeResponseDedup.js`
+- Modify: `dash_tanstack_pivot/src/lib/utils/rawTableTsv.js`
 
 **Interfaces:**
 - Consumes: the six source files named in the spec and the installed `typescript` package.
@@ -40,7 +42,7 @@
 
 - [ ] **Step 1: Write the compiler probe first.** Load the dedicated config with the TypeScript API. Assert its root file set contains exactly the six spec-listed modules. Override the compiler host's `readFile` for `src/lib/utils/formatting.js` to append `/** @type {number} */ const __pivotJsGateProbe = 'bad';`. Compile and assert a TS2322 diagnostic from that file; exit nonzero otherwise.
 - [ ] **Step 2: Run `node scripts/verify_checked_js_gate.mjs` before adding the config.** Expected: nonzero because the required JS project is absent.
-- [ ] **Step 3: Add the dedicated config.** Extend `tsconfig.json`; set `checkJs: true`, retain `strict: true` and `noEmit: true`; override inherited `include` with an empty list; list `virtualAxes.js`, `formatting.js`, `Icons.js`, `useRuntimeExportState.js`, `useCellInteraction.js`, and `DrillThroughModal.js` as root `files`.
+- [ ] **Step 3: Add the dedicated config and repair two modules' declared types.** Extend `tsconfig.json`; set `checkJs: true`, retain `strict: true` and `noEmit: true`; override inherited `include` with an empty list; list `runtimeResponseDedup.js`, `formatting.js`, `Icons.js`, `useRuntimeExportState.js`, `useCellInteraction.js`, and `rawTableTsv.js` as root `files`. Add JSDoc parameter contracts to `runtimeResponseDedup.js` and `rawTableTsv.js` so their seven initial implicit-any diagnostics are resolved without suppressions.
 - [ ] **Step 4: Add npm scripts.** `typecheck:js` runs `tsc --project tsconfig.checked-js.json --noEmit` and the compiler probe. Existing `typecheck` runs the existing `tsc --noEmit` then `npm run typecheck:js`.
 - [ ] **Step 5: Run `npm run typecheck` and the compiler probe.** Expected: exit 0, and the in-memory deliberate error is detected by the probe.
 - [ ] **Step 6: Commit the config, probe, and package script changes.**

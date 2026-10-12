@@ -8,7 +8,7 @@ The existing `dash_tanstack_pivot/tsconfig.json` enables `allowJs` but sets `che
 
 ## Chosen approach
 
-Use a dedicated, strict JavaScript-checking project with an explicit checked-file manifest. Add it to `npm run typecheck` and the release gate immediately, starting with six self-contained JS modules that have no current strict diagnostics. The seventh diagnostic-free module is the package entry point, which imports unchecked modules and therefore cannot be admitted independently. Expand the manifest domain by domain after resolving each batch's diagnostics. TypeScript source checking remains in place. The final batch removes the subset boundary and turns on `checkJs` for the entire supported `src/lib` tree; only then may documentation claim complete JavaScript checking.
+Use a dedicated, strict JavaScript-checking project with an explicit checked-file manifest. Add it to `npm run typecheck` and the release gate immediately, starting with six small JS modules whose isolated compiler project can pass strict checking with minimal JSDoc repairs. The package entry point imports unchecked modules and cannot be admitted independently. Expand the manifest domain by domain after resolving each batch's diagnostics. TypeScript source checking remains in place. The final batch removes the subset boundary and turns on `checkJs` for the entire supported `src/lib` tree; only then may documentation claim complete JavaScript checking.
 
 Avoid broad `@ts-nocheck`, generated diagnostic baselines, or relaxing strictness to make a batch appear green. Use JSDoc types, declaration boundaries for third-party APIs, or conversion to TypeScript where that makes ownership clearer. A narrow `@ts-expect-error` is permitted only with a local explanation and a test of the runtime contract.
 
@@ -20,7 +20,7 @@ Avoid broad `@ts-nocheck`, generated diagnostic baselines, or relaxing strictnes
 
 ## Contract and batches
 
-The checked manifest is reviewed code, not generated from whichever files happen to compile. The first batch is `virtualAxes.js`, `formatting.js`, `Icons.js`, `useRuntimeExportState.js`, `useCellInteraction.js`, and `DrillThroughModal.js`. Subsequent batches prioritize data/transport and table behavior, then workspace and optional presentation/chart modules. Imported source dependencies are also within the compiler's effective project; a batch is accepted only when the command succeeds without suppressing those dependencies.
+The checked manifest is reviewed code, not generated from whichever files happen to compile. The first batch is `runtimeResponseDedup.js`, `formatting.js`, `Icons.js`, `useRuntimeExportState.js`, `useCellInteraction.js`, and `rawTableTsv.js`. The initial `virtualAxes.js` and `DrillThroughModal.js` candidates had 58 diagnostics when isolated as roots, so they move to later batches rather than weakening strictness. Subsequent batches prioritize data/transport and table behavior, then workspace and optional presentation/chart modules. Imported source dependencies are also within the compiler's effective project; a batch is accepted only when the command succeeds without suppressing those dependencies.
 
 Each batch records: included JS modules, remaining JS modules, diagnostic counts by error code, and tests exercising the touched behavior. CI runs both the existing TypeScript check and the checked-JS project on every change. A test verifies that a deliberate type error in an admitted JS fixture makes the release command fail, so a misconfigured include cannot silently turn the gate into a no-op.
 

@@ -5,6 +5,11 @@
  * permitted for a request/status pair. Keeping this outside workspace
  * presentation makes the policy reusable by the eventual response domain.
  */
+/**
+ * @param {{kind?: string, status?: string, requestId?: string | number, request_id?: string | number} | null | undefined} response
+ * @param {{requestId?: string | number, request_id?: string | number, columnId?: string, column_id?: string, search?: unknown, offset?: number, options?: unknown[]} | null | undefined} payload
+ * @returns {string | null}
+ */
 export function buildRuntimeResponseProcessingKey(response, payload) {
   if (!response || typeof response !== 'object') return null;
   const kind = response.kind || 'unknown';
@@ -23,6 +28,11 @@ export function buildRuntimeResponseProcessingKey(response, payload) {
   return null;
 }
 
+/**
+ * @param {{current: Set<string>}} handledKeysRef
+ * @param {string | null | undefined} responseKey
+ * @returns {boolean}
+ */
 export function markRuntimeResponseHandled(handledKeysRef, responseKey) {
   if (!responseKey) return true;
   const handledKeys = handledKeysRef.current;
@@ -30,7 +40,7 @@ export function markRuntimeResponseHandled(handledKeysRef, responseKey) {
   handledKeys.add(responseKey);
   if (handledKeys.size > 128) {
     const oldestKey = handledKeys.values().next().value;
-    handledKeys.delete(oldestKey);
+    if (oldestKey !== undefined) handledKeys.delete(oldestKey);
   }
   return true;
 }
