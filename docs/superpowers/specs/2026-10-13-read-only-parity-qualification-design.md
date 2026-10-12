@@ -69,7 +69,8 @@ requirement has a stable ID and contains:
 - AG Grid version, edition, row model, configuration, reference behavior,
   documentation link, and live reference-test ID/result.
 - Product-supported behavior and a difference classification: `equivalent`,
-  `deliberately_different`, `narrower`, `unsupported`, or `unverified`.
+  `deliberately_different`, `narrower`, `unsupported`, `unverified`, or
+  `not_comparable` for host-integration behavior with no AG Grid analogue.
 - Constraints, prerequisites, unsupported combinations, applicable hosts, and
   whether the requirement is mandatory for release.
 - Shared-test ID, host browser-test IDs, evidence paths, observed result,
@@ -82,7 +83,8 @@ duplicate IDs, unknown hosts, missing expected behavior, missing reference
 configuration, missing constraints, missing verification mapping, and any
 supported inventory workflow with no requirements. Editing maps only to an
 excluded entry. A host-only workflow does not acquire fictitious results in
-the other two hosts.
+the other two hosts. Its AG Grid reference is explicitly `not_applicable`
+with a reason, not a fabricated competitor test or parity result.
 
 For selected-range copy, separate requirements cover the exact logical cells,
 display order, pinned columns without duplication, hidden-column policy,
