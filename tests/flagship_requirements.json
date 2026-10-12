@@ -170,7 +170,7 @@
       "id": "hierarchy-expand.round-trip",
       "inventory_id": "hierarchy-expand",
       "task": "Expand then collapse a hierarchy group",
-      "expected": "Expanding Éclair shows account 東京 and sales 120; collapsing removes that child while preserving group sales 120, grand sales 200 and the active measure columns.",
+      "expected": "Expanding Éclair shows account 東京 and sales 120.25; collapsing removes that child while preserving group sales 120.25, grand sales 200 and the active measure columns.",
       "ag_grid": {
         "reference": "ssrm-read-only-v1",
         "docs": [
@@ -180,7 +180,7 @@
         "test_id": "ag-grid.hierarchy-expand.round-trip",
         "result": "unverified"
       },
-      "product_behavior": "Qualification target: Expanding Éclair shows account 東京 and sales 120; collapsing removes that child while preserving group sales 120, grand sales 200 and the active measure columns.",
+      "product_behavior": "Qualification target: Expanding Éclair shows account 東京 and sales 120.25; collapsing removes that child while preserving group sales 120.25, grand sales 200 and the active measure columns.",
       "difference": "unverified",
       "constraints": [
         "One parent selected; scope=Included; expansion state measured by logical row IDs.",
@@ -580,7 +580,7 @@
       "id": "header-filter.apply-clear",
       "inventory_id": "header-filter",
       "task": "Filter through a header menu",
-      "expected": "Set region=Éclair in the header filter: the correlated request names the exact field/value and grand sales becomes 120; clearing restores 200 while retaining the scope filter.",
+      "expected": "Set region=Éclair in the header filter: the correlated request names the exact field/value and grand sales becomes 120.25; clearing restores 200 while retaining the scope filter.",
       "ag_grid": {
         "reference": "ssrm-read-only-v1",
         "docs": [
@@ -590,7 +590,7 @@
         "test_id": "ag-grid.header-filter.apply-clear",
         "result": "unverified"
       },
-      "product_behavior": "Qualification target: Set region=Éclair in the header filter: the correlated request names the exact field/value and grand sales becomes 120; clearing restores 200 while retaining the scope filter.",
+      "product_behavior": "Qualification target: Set region=Éclair in the header filter: the correlated request names the exact field/value and grand sales becomes 120.25; clearing restores 200 while retaining the scope filter.",
       "difference": "unverified",
       "constraints": [
         "Use equality rather than ambiguous text search; same fixture and locale.",
@@ -621,7 +621,7 @@
       "id": "sorting.direction-order",
       "inventory_id": "sorting",
       "task": "Sort a measure ascending then descending",
-      "expected": "Ascending total sales orders München (79.75) before Éclair (120); descending reverses them; the header reports the active direction and totals stay outside the sortable leaf sequence.",
+      "expected": "Ascending total sales orders München (79.75) before Éclair (120.25); descending reverses them; the header reports the active direction and totals stay outside the sortable leaf sequence.",
       "ag_grid": {
         "reference": "ssrm-read-only-v1",
         "docs": [
@@ -631,7 +631,7 @@
         "test_id": "ag-grid.sorting.direction-order",
         "result": "unverified"
       },
-      "product_behavior": "Qualification target: Ascending total sales orders München (79.75) before Éclair (120); descending reverses them; the header reports the active direction and totals stay outside the sortable leaf sequence.",
+      "product_behavior": "Qualification target: Ascending total sales orders München (79.75) before Éclair (120.25); descending reverses them; the header reports the active direction and totals stay outside the sortable leaf sequence.",
       "difference": "unverified",
       "constraints": [
         "Tie-free fixture; specify null/tie ordering in any extended case.",
@@ -744,7 +744,7 @@
       "id": "totals.subtotals",
       "inventory_id": "totals",
       "task": "Inspect group subtotals",
-      "expected": "Éclair subtotal sales is 120 and München is 79.75; expanding children never counts subtotal rows twice in the grand total of 200.",
+      "expected": "Éclair subtotal sales is 120.25 and München is 79.75; expanding children never counts subtotal rows twice in the grand total of 200.",
       "ag_grid": {
         "reference": "ssrm-read-only-v1",
         "docs": [
@@ -754,7 +754,7 @@
         "test_id": "ag-grid.totals.subtotals",
         "result": "unverified"
       },
-      "product_behavior": "Qualification target: Éclair subtotal sales is 120 and München is 79.75; expanding children never counts subtotal rows twice in the grand total of 200.",
+      "product_behavior": "Qualification target: Éclair subtotal sales is 120.25 and München is 79.75; expanding children never counts subtotal rows twice in the grand total of 200.",
       "difference": "unverified",
       "constraints": [
         "Sum aggregates on original source records; subtotal visibility option recorded.",
@@ -826,7 +826,7 @@
       "id": "layout-modes.switch",
       "inventory_id": "layout-modes",
       "task": "Choose hierarchy, outline and tabular layouts",
-      "expected": "Each selected mode changes the declared hierarchy presentation while retaining the same logical region/account keys and sales totals 120/79.75/200; switching back restores the initial mode.",
+      "expected": "Each selected mode changes the declared hierarchy presentation while retaining the same logical region/account keys and sales totals 120.25/79.75/200; switching back restores the initial mode.",
       "ag_grid": {
         "reference": "ssrm-read-only-v1",
         "docs": [
@@ -836,7 +836,7 @@
         "test_id": "ag-grid.layout-modes.switch",
         "result": "unverified"
       },
-      "product_behavior": "Qualification target: Each selected mode changes the declared hierarchy presentation while retaining the same logical region/account keys and sales totals 120/79.75/200; switching back restores the initial mode.",
+      "product_behavior": "Qualification target: Each selected mode changes the declared hierarchy presentation while retaining the same logical region/account keys and sales totals 120.25/79.75/200; switching back restores the initial mode.",
       "difference": "unverified",
       "constraints": [
         "Product presentation modes are compared individually; no blanket AG Grid mode equivalence.",
@@ -867,7 +867,7 @@
       "id": "density.cycle",
       "inventory_id": "density",
       "task": "Cycle row density",
-      "expected": "Record baseline row height; each density choice uses its configured height within 1 CSS px, preserves row IDs and values, and restores baseline height when cycled back.",
+      "expected": "Starting at Normal (44 CSS px), cycle to Loose (56 CSS px), Compact (36 CSS px), then Normal (44 CSS px). Every measured data-row height is within 1 CSS px of its target; logical row IDs and sales total 200 remain unchanged.",
       "ag_grid": {
         "reference": "ssrm-read-only-v1",
         "docs": [
@@ -875,12 +875,35 @@
         ],
         "behavior": "Unobserved: Observe row-height configuration changes and grid redraw behavior.",
         "test_id": "ag-grid.density.cycle",
-        "result": "unverified"
+        "result": "unverified",
+        "case": {
+          "density_sequence": [
+            {
+              "name": "Normal",
+              "height_css_px": 44
+            },
+            {
+              "name": "Loose",
+              "height_css_px": 56
+            },
+            {
+              "name": "Compact",
+              "height_css_px": 36
+            },
+            {
+              "name": "Normal",
+              "height_css_px": 44
+            }
+          ],
+          "tolerance_css_px": 1,
+          "browser_zoom_percent": 100,
+          "wrap_cells": false
+        }
       },
-      "product_behavior": "Qualification target: Record baseline row height; each density choice uses its configured height within 1 CSS px, preserves row IDs and values, and restores baseline height when cycled back.",
+      "product_behavior": "Qualification target: Starting at Normal (44 CSS px), cycle to Loose (56 CSS px), Compact (36 CSS px), then Normal (44 CSS px). Every measured data-row height is within 1 CSS px of its target; logical row IDs and sales total 200 remain unchanged.",
       "difference": "unverified",
       "constraints": [
-        "Fixed font and browser zoom; check visible geometry, not screenshot alone.",
+        "Initial spacingMode=1 (Normal); browser zoom=100%, fixed font and viewport; disable wrapped cells and row spanning; cycle all three published density choices.",
         "Live reference and installed-host evidence are absent; this requirement is not a pass."
       ],
       "hosts": [
@@ -1072,7 +1095,7 @@
       "id": "copy-selection.logical-cells",
       "inventory_id": "copy-selection",
       "task": "Copy only the selected logical cells",
-      "expected": "Selecting Q1 sales and units for Éclair and München copies a 2x2 body representing [100.25,2] then [49.75,3], with no unrelated row or measure.",
+      "expected": "First move Q1 sales before Q1 units in the displayed column order in both systems. Selecting those columns for Éclair then München copies a 2x2 body [100.25,2] then [49.75,3], with no unrelated row or measure.",
       "ag_grid": {
         "reference": "ssrm-read-only-v1",
         "docs": [
@@ -1080,12 +1103,39 @@
         ],
         "behavior": "Unobserved: Observe actual clipboard bytes for the identical loaded cell rectangle.",
         "test_id": "ag-grid.copy-selection.logical-cells",
-        "result": "unverified"
+        "result": "unverified",
+        "case": {
+          "displayed_measure_fields": [
+            "ventes_€",
+            "unités",
+            "écart"
+          ],
+          "setup_action": "Move Q1 sales before Q1 units in the displayed column order",
+          "selected_regions": [
+            "Éclair",
+            "München"
+          ],
+          "selected_measure_fields": [
+            "ventes_€",
+            "unités"
+          ],
+          "expected_body": [
+            [
+              100.25,
+              2
+            ],
+            [
+              49.75,
+              3
+            ]
+          ],
+          "reference_setup": "Apply the same sales-first displayed column order before the reference selection."
+        }
       },
-      "product_behavior": "Qualification target: Selecting Q1 sales and units for Éclair and München copies a 2x2 body representing [100.25,2] then [49.75,3], with no unrelated row or measure.",
+      "product_behavior": "Qualification target: First move Q1 sales before Q1 units in the displayed column order in both systems. Selecting those columns for Éclair then München copies a 2x2 body [100.25,2] then [49.75,3], with no unrelated row or measure.",
       "difference": "unverified",
       "constraints": [
-        "Selection defined by logical IDs; number formatting disabled for this raw-value case; no headers.",
+        "Explicit sales-first reorder is a prerequisite because the existing export qualification uses units-first display order; verify displayed IDs before selection; disable number formatting for raw-value copy; no headers.",
         "Live reference and installed-host evidence are absent; this requirement is not a pass."
       ],
       "hosts": [
@@ -1933,7 +1983,7 @@
       "id": "number-format.decimals",
       "inventory_id": "number-format",
       "task": "Change decimal formatting",
-      "expected": "Two decimals show raw 100.25 as 100.25 and raw 20 as 20.00; one decimal shows 100.25 according to the recorded rounding rule and leaves raw sum 200 unchanged.",
+      "expected": "With decimal format and locale en-GB, values [100.25,20,-100.25] display ['100.25','20.00','-100.25'] at two decimals and ['100.3','20.0','-100.3'] at one decimal (nearest, ties away from zero). Apply once to default scope and once to selected sales columns only; unselected controls retain two decimals in the selected-scope case, and raw fixture sales sum stays 200.",
       "ag_grid": {
         "reference": "ssrm-read-only-v1",
         "docs": [
@@ -1941,12 +1991,42 @@
         ],
         "behavior": "Unobserved: Observe display-only number formatters with identical locale and rounding policy.",
         "test_id": "ag-grid.number-format.decimals",
-        "result": "unverified"
+        "result": "unverified",
+        "case": {
+          "values": [
+            100.25,
+            20,
+            -100.25
+          ],
+          "two_decimal_text": [
+            "100.25",
+            "20.00",
+            "-100.25"
+          ],
+          "one_decimal_text": [
+            "100.3",
+            "20.0",
+            "-100.3"
+          ],
+          "rounding": "nearest, ties away from zero",
+          "locale": "en-GB",
+          "format": "decimal",
+          "scopes": [
+            "default",
+            "selected-columns"
+          ],
+          "reference_formatter": {
+            "locale": "en-GB",
+            "style": "decimal",
+            "roundingMode": "halfExpand",
+            "useGrouping": false
+          }
+        }
       },
-      "product_behavior": "Qualification target: Two decimals show raw 100.25 as 100.25 and raw 20 as 20.00; one decimal shows 100.25 according to the recorded rounding rule and leaves raw sum 200 unchanged.",
+      "product_behavior": "Qualification target: With decimal format and locale en-GB, values [100.25,20,-100.25] display ['100.25','20.00','-100.25'] at two decimals and ['100.3','20.0','-100.3'] at one decimal (nearest, ties away from zero). Apply once to default scope and once to selected sales columns only; unselected controls retain two decimals in the selected-scope case, and raw fixture sales sum stays 200.",
       "difference": "unverified",
       "constraints": [
-        "Record rounding rule and locale; test selected versus default scope independently.",
+        "Use the five-row sales fixture plus a read-only -100.25 formatting edge cell; disable group separators; test default and selected-column scope separately; use Intl.NumberFormat en-GB with roundingMode=halfExpand in the reference.",
         "Live reference and installed-host evidence are absent; this requirement is not a pass."
       ],
       "hosts": [
@@ -2015,7 +2095,7 @@
       "id": "color-scales.scale",
       "inventory_id": "color-scales",
       "task": "Apply a color scale",
-      "expected": "Configured minimum/midpoint/maximum values map to the declared three colors on the selected measure column; other columns stay unchanged and displayed numeric values remain exact.",
+      "expected": "For column color scale redGreen with minimum 0 and maximum 200, selected sales values 0,100,200 have computed backgrounds rgba(248, 105, 107, 0.82), rgba(248, 105, 107, 0.06), rgba(99, 190, 123, 0.82), respectively. Unselected columns retain their prior styles and displayed numeric values remain 0,100,200.",
       "ag_grid": {
         "reference": "ssrm-read-only-v1",
         "docs": [
@@ -2023,12 +2103,36 @@
         ],
         "behavior": "Unobserved: Observe equivalent cell styling callbacks if available; built-in conditional-format UI may differ.",
         "test_id": "ag-grid.color-scales.scale",
-        "result": "unverified"
+        "result": "unverified",
+        "case": {
+          "palette": "redGreen",
+          "mode": "col",
+          "minimum": 0,
+          "maximum": 200,
+          "selected_field": "sales",
+          "stops": [
+            {
+              "value": 0,
+              "background": "rgba(248, 105, 107, 0.82)"
+            },
+            {
+              "value": 100,
+              "background": "rgba(248, 105, 107, 0.06)"
+            },
+            {
+              "value": 200,
+              "background": "rgba(99, 190, 123, 0.82)"
+            }
+          ],
+          "unselected_columns": "retain prior styles",
+          "reference_style_callback": "Use the identical explicit stop colors and opacity on the selected sales column."
+        }
       },
-      "product_behavior": "Qualification target: Configured minimum/midpoint/maximum values map to the declared three colors on the selected measure column; other columns stay unchanged and displayed numeric values remain exact.",
+      "product_behavior": "Qualification target: For column color scale redGreen with minimum 0 and maximum 200, selected sales values 0,100,200 have computed backgrounds rgba(248, 105, 107, 0.82), rgba(248, 105, 107, 0.06), rgba(99, 190, 123, 0.82), respectively. Unselected columns retain their prior styles and displayed numeric values remain 0,100,200.",
       "difference": "unverified",
       "constraints": [
-        "Literal scale stops recorded; inspect computed styles and underlying values.",
+        "Use a deterministic three-row scale fixture with sales 0,100,200 and an unselected numeric control column; colorScaleMode=col, colorPalette=redGreen; no overlapping cell-format rules or total rows in the sampled range; compare browser-normalized RGBA.",
+        "Current source applies column-scale mode to all numeric columns with statistics; selected-column-only styling is a potential product gap. Retain the unselected-column check and qualify the observed result without narrowing the public promise.",
         "Live reference and installed-host evidence are absent; this requirement is not a pass."
       ],
       "hosts": [
@@ -2384,7 +2488,7 @@
       "id": "range-chart.source",
       "inventory_id": "range-chart",
       "task": "Chart a selected range",
-      "expected": "A chart created from the selected Q1 sales/units rows uses exactly [Éclair:100.25/2,München:49.75/3], with no excluded/unselected row or extra series; subsequent source changes follow the recorded snapshot/live policy.",
+      "expected": "Create an unlocked bar chart from selected Q1 sales/units for Éclair then München. Its initial source rows are exactly [['Éclair',100.25,2],['München',49.75,3]] with sales then units series; no excluded or unselected row or extra series appears. Locked and live source changes are qualified by their separate mandatory cases.",
       "ag_grid": {
         "reference": "ssrm-read-only-v1",
         "docs": [
@@ -2392,12 +2496,37 @@
         ],
         "behavior": "Unobserved: Observe integrated chart creation from the same selected range under SSRM and its source constraints.",
         "test_id": "ag-grid.range-chart.source",
-        "result": "unverified"
+        "result": "unverified",
+        "case": {
+          "source": "selection",
+          "chart_type": "bar",
+          "locked": false,
+          "selected_regions": [
+            "Éclair",
+            "München"
+          ],
+          "series_fields": [
+            "ventes_€",
+            "unités"
+          ],
+          "expected_initial_rows": [
+            [
+              "Éclair",
+              100.25,
+              2
+            ],
+            [
+              "München",
+              49.75,
+              3
+            ]
+          ]
+        }
       },
-      "product_behavior": "Qualification target: A chart created from the selected Q1 sales/units rows uses exactly [Éclair:100.25/2,München:49.75/3], with no excluded/unselected row or extra series; subsequent source changes follow the recorded snapshot/live policy.",
+      "product_behavior": "Qualification target: Create an unlocked bar chart from selected Q1 sales/units for Éclair then München. Its initial source rows are exactly [['Éclair',100.25,2],['München',49.75,3]] with sales then units series; no excluded or unselected row or extra series appears. Locked and live source changes are qualified by their separate mandatory cases.",
       "difference": "unverified",
       "constraints": [
-        "Loaded range only; chart source policy recorded per chart type; compare data oracle not visual appearance alone.",
+        "Loaded selected range only; set displayed sales-before-units series order and chart type=bar; source=selection; initial chart is unlocked; compare parsed chart source rather than visual appearance alone.",
         "Live reference and installed-host evidence are absent; this requirement is not a pass."
       ],
       "hosts": [
@@ -2418,6 +2547,141 @@
         ],
         "streamlit": [
           "browser.range-chart.source"
+        ]
+      }
+    },
+    {
+      "id": "range-chart.locked-source",
+      "inventory_id": "range-chart",
+      "task": "Keep locked chart data when selection changes",
+      "expected": "Lock a bar chart created from Q1 sales/units for Éclair then München; change the active grid selection to München only. Chart rows remain exactly [['Éclair',100.25,2],['München',49.75,3]] and both sales/units series retain their original order.",
+      "ag_grid": {
+        "reference": "ssrm-read-only-v1",
+        "docs": [
+          "https://www.ag-grid.com/javascript-data-grid/server-side-model-datasource/"
+        ],
+        "behavior": "Unobserved: Compare the same selection-source bar chart with reference chart data unlinked while reselecting München only.",
+        "test_id": "ag-grid.range-chart.locked-source",
+        "result": "unverified",
+        "case": {
+          "source": "selection",
+          "chart_type": "bar",
+          "locked": true,
+          "selected_regions": [
+            "Éclair",
+            "München"
+          ],
+          "series_fields": [
+            "ventes_€",
+            "unités"
+          ],
+          "next_selected_regions": [
+            "München"
+          ],
+          "expected_rows_after_reselection": [
+            [
+              "Éclair",
+              100.25,
+              2
+            ],
+            [
+              "München",
+              49.75,
+              3
+            ]
+          ],
+          "reference_linked": false
+        }
+      },
+      "product_behavior": "Qualification target: Lock a bar chart created from Q1 sales/units for Éclair then München; change the active grid selection to München only. Chart rows remain exactly [['Éclair',100.25,2],['München',49.75,3]] and both sales/units series retain their original order.",
+      "difference": "unverified",
+      "constraints": [
+        "Loaded selection-source chart; existing chart lock/unlock controls only; same row/series IDs and sales-first setup as range-chart.source.",
+        "Live reference and installed-host evidence are absent; this requirement is not a pass."
+      ],
+      "hosts": [
+        "dash",
+        "react",
+        "streamlit"
+      ],
+      "required": true,
+      "shared_tests": [
+        "shared.range-chart.locked-source"
+      ],
+      "browser_tests": {
+        "dash": [
+          "browser.range-chart.locked-source"
+        ],
+        "react": [
+          "browser.range-chart.locked-source"
+        ],
+        "streamlit": [
+          "browser.range-chart.locked-source"
+        ]
+      }
+    },
+    {
+      "id": "range-chart.live-source",
+      "inventory_id": "range-chart",
+      "task": "Update live chart data when selection changes",
+      "expected": "Keep the selection-source bar chart unlocked, then change the active grid selection from Éclair/München to München only. Chart rows update to exactly [['München',49.75,3]] with sales then units series; Éclair is removed and no old-series data remains.",
+      "ag_grid": {
+        "reference": "ssrm-read-only-v1",
+        "docs": [
+          "https://www.ag-grid.com/javascript-data-grid/server-side-model-datasource/"
+        ],
+        "behavior": "Unobserved: Compare the same selection-source bar chart with reference chart data linked while reselecting München only.",
+        "test_id": "ag-grid.range-chart.live-source",
+        "result": "unverified",
+        "case": {
+          "source": "selection",
+          "chart_type": "bar",
+          "locked": false,
+          "selected_regions": [
+            "Éclair",
+            "München"
+          ],
+          "series_fields": [
+            "ventes_€",
+            "unités"
+          ],
+          "next_selected_regions": [
+            "München"
+          ],
+          "expected_rows_after_reselection": [
+            [
+              "München",
+              49.75,
+              3
+            ]
+          ],
+          "reference_linked": true
+        }
+      },
+      "product_behavior": "Qualification target: Keep the selection-source bar chart unlocked, then change the active grid selection from Éclair/München to München only. Chart rows update to exactly [['München',49.75,3]] with sales then units series; Éclair is removed and no old-series data remains.",
+      "difference": "unverified",
+      "constraints": [
+        "Loaded selection-source chart; existing chart lock/unlock controls only; same row/series IDs and sales-first setup as range-chart.source.",
+        "Live reference and installed-host evidence are absent; this requirement is not a pass."
+      ],
+      "hosts": [
+        "dash",
+        "react",
+        "streamlit"
+      ],
+      "required": true,
+      "shared_tests": [
+        "shared.range-chart.live-source"
+      ],
+      "browser_tests": {
+        "dash": [
+          "browser.range-chart.live-source"
+        ],
+        "react": [
+          "browser.range-chart.live-source"
+        ],
+        "streamlit": [
+          "browser.range-chart.live-source"
         ]
       }
     },

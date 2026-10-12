@@ -1,14 +1,17 @@
 """Behavioral checks for the parity contract's fail-closed validation."""
 
 from dataclasses import FrozenInstanceError, replace
+from decimal import Decimal
 import importlib
 import importlib.util
 import json
 from pathlib import Path
+import re
 
 import pytest
 
 from tests.flagship_capabilities import CAPABILITIES
+from tests.export_qualification_fixture import FLAGSHIP_QUALIFICATION_SOURCE_ROWS
 
 
 CONTRACT_PATH = Path(__file__).with_name("flagship_requirements.json")
@@ -139,6 +142,86 @@ def test_validator_detects_new_supported_inventory_without_requirements(contract
     extra = replace(CAPABILITIES[0], id="new-published-workflow")
     with pytest.raises(ValueError, match="coverage"):
         contract.validate_requirements(requirements, (*CAPABILITIES, extra))
+
+
+@pytest.mark.parametrize("inventory_id", ["initial-workspace", "runtime-error", "copy-selection"])
+def test_validator_rejects_supported_inventory_with_only_optional_requirements(contract, requirements, inventory_id):
+    changed = [replace(r, required=False) if r.inventory_id == inventory_id else r for r in requirements]
+    with pytest.raises(ValueError, match="mandatory coverage"):
+        contract.validate_requirements(changed, CAPABILITIES)
+
+
+def test_validator_allows_optional_supplement_without_weakening_mandatory_coverage(contract, requirements):
+    supplement = replace(requirements[0], id="initial-workspace.optional-supplement", required=False)
+    contract.validate_requirements([*requirements, supplement], CAPABILITIES)
+
+
+@pytest.mark.parametrize("requirement_id", [
+    "hierarchy-expand.round-trip", "header-filter.apply-clear", "sorting.direction-order",
+    "totals.subtotals", "layout-modes.switch",
+])
+def test_eclair_acceptance_oracle_matches_source_records(requirements, requirement_id):
+    # The sum is derived from the fixture, independently of contract text.
+    sales = sum(Decimal(str(row["ventes_€"])) for row in FLAGSHIP_QUALIFICATION_SOURCE_ROWS
+                if row["region"] == "Éclair" and row["scope"] == "Included")
+    assert sales == Decimal("120.25")
+    requirement = next(r for r in requirements if r.id == requirement_id)
+    for promise in (requirement.expected, requirement.product_behavior):
+        numbers = re.findall(r"\b120(?:\.\d+)?\b", promise)
+        assert numbers and all(Decimal(number) == sales for number in numbers)
+
+
+def test_density_case_has_independent_geometry_targets(requirements):
+    requirement = next(r for r in requirements if r.id == "density.cycle")
+    case = requirement.ag_grid.get("case", {})
+    assert case.get("density_sequence") == [
+        {"name": "Normal", "height_css_px": 44},
+        {"name": "Loose", "height_css_px": 56},
+        {"name": "Compact", "height_css_px": 36},
+        {"name": "Normal", "height_css_px": 44},
+    ]
+    assert case["tolerance_css_px"] == 1
+
+
+def test_decimal_case_has_exact_tie_rounding_outputs(requirements):
+    case = next(r for r in requirements if r.id == "number-format.decimals").ag_grid.get("case", {})
+    assert case.get("values") == [100.25, 20, -100.25]
+    assert case.get("two_decimal_text") == ["100.25", "20.00", "-100.25"]
+    assert case.get("one_decimal_text") == ["100.3", "20.0", "-100.3"]
+    assert case.get("rounding") == "nearest, ties away from zero"
+
+
+def test_color_scale_case_has_literal_stops_and_computed_colors(requirements):
+    case = next(r for r in requirements if r.id == "color-scales.scale").ag_grid.get("case", {})
+    assert case.get("palette") == "redGreen"
+    assert case.get("stops") == [
+        {"value": 0, "background": "rgba(248, 105, 107, 0.82)"},
+        {"value": 100, "background": "rgba(248, 105, 107, 0.06)"},
+        {"value": 200, "background": "rgba(99, 190, 123, 0.82)"},
+    ]
+
+
+@pytest.mark.parametrize("requirement_id,locked,expected_rows", [
+    ("range-chart.locked-source", True, [["Éclair", 100.25, 2], ["München", 49.75, 3]]),
+    ("range-chart.live-source", False, [["München", 49.75, 3]]),
+])
+def test_chart_source_policy_has_exact_result_after_reselection(requirements, requirement_id, locked, expected_rows):
+    matches = [r for r in requirements if r.id == requirement_id]
+    assert len(matches) == 1, "source-policy requirement is missing"
+    case = matches[0].ag_grid["case"]
+    assert case["locked"] is locked
+    assert case["next_selected_regions"] == ["München"]
+    assert case["expected_rows_after_reselection"] == expected_rows
+    assert matches[0].required is True
+
+
+def test_selected_copy_records_sales_first_reorder_and_exact_body(requirements):
+    requirement = next(r for r in requirements if r.id == "copy-selection.logical-cells")
+    case = requirement.ag_grid.get("case", {})
+    assert case.get("displayed_measure_fields") == ["ventes_€", "unités", "écart"]
+    assert case.get("setup_action") == "Move Q1 sales before Q1 units in the displayed column order"
+    assert case.get("expected_body") == [[100.25, 2], [49.75, 3]]
+    assert requirement.ag_grid["options"]["valueFields"] == ["ventes_€", "unités", "écart"]
 
 
 def test_validator_rejects_cross_host_mapping_for_host_only_case(contract, requirements):

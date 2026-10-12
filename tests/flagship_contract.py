@@ -102,6 +102,7 @@ def validate_requirements(requirements: Iterable[Requirement], capabilities: Ite
         raise ValueError("duplicate inventory id")
     seen = set()
     covered = set()
+    mandatory_covered = set()
     excluded = set()
     for requirement in requirements:
         label = requirement.id
@@ -139,6 +140,8 @@ def validate_requirements(requirements: Iterable[Requirement], capabilities: Ite
             if not _ids(requirement.shared_tests):
                 raise ValueError(f"{label}: missing shared verification mapping")
             covered.add(requirement.inventory_id)
+            if requirement.required:
+                mandatory_covered.add(requirement.inventory_id)
         else:
             if requirement.required or requirement.difference != "unsupported" or requirement.shared_tests or requirement.browser_tests:
                 raise ValueError(f"{label}: excluded inventory entry cannot be a release requirement")
@@ -170,6 +173,8 @@ def validate_requirements(requirements: Iterable[Requirement], capabilities: Ite
     expected_excluded = set(inventory) - expected
     if covered != expected or excluded != expected_excluded:
         raise ValueError(f"inventory coverage mismatch: missing {sorted((expected - covered) | (expected_excluded - excluded))}")
+    if mandatory_covered != expected:
+        raise ValueError(f"mandatory coverage mismatch: missing {sorted(expected - mandatory_covered)}")
 
 
 def _escape(value) -> str:
