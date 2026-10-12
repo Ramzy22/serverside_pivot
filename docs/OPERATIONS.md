@@ -155,6 +155,24 @@ total native process memory. Keep the
 JSON alongside the exact image/tag, deployment limits, and admin health
 snapshot for release review.
 
+## JavaScript type-checking coverage
+
+`npm run typecheck` runs the TypeScript project and a separate strict
+`checkJs` project. The checked-JS root manifest currently covers six of the
+134 JavaScript source files under `dash_tanstack_pivot/src/lib`:
+`runtimeResponseDedup.js`, `formatting.js`, `Icons.js`,
+`useRuntimeExportState.js`, `useCellInteraction.js`, and `rawTableTsv.js`.
+The other 128 files are **not yet qualified as checked**. TypeScript also
+checks any source dependencies imported by a listed root. This is an initial
+release gate, not a claim of full-tree JavaScript checking.
+
+Run `npm run typecheck:js` from `dash_tanstack_pivot` to check this project.
+The command includes an in-memory negative probe that must be rejected with
+TS2322. To admit another JS file, add it to
+`tsconfig.checked-js.json`, resolve its diagnostics without blanket
+suppression, update these coverage counts, and run the host builds and tests.
+Both CI and release run `npm run build`, whose first step is `typecheck`.
+
 ## Export contract and release qualification
 
 The public host contract is deliberately narrower than the runtime protocol:
