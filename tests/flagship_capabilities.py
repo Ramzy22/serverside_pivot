@@ -1,8 +1,8 @@
-"""The release contract for the three published flagship applications.
+"""Published workflow inventory for the three flagship applications.
 
 The matrix names user-visible workflows, not internal modules.  A capability
-is either supported on every publishing host or intentionally unavailable;
-there is no implicit "best effort" state for a flagship claim.
+has explicit host applicability. Atomic promises and observed results live in
+flagship_requirements.json; inventory support is not certification evidence.
 """
 
 from __future__ import annotations
@@ -21,6 +21,7 @@ class FlagshipCapability:
     verification: str
     supported: bool = True
     disabled_reason: str | None = None
+    hosts: tuple[str, ...] = HOSTS
 
 
 CAPABILITIES = (
@@ -65,10 +66,10 @@ CAPABILITIES = (
     FlagshipCapability("range-chart", "Analysis", "A selected range can open a chart.", "browser"),
     FlagshipCapability("chart-pane", "Analysis", "A chart pane opens, resizes, docks/floats, and closes while the grid remains usable.", "browser"),
     FlagshipCapability("chart-export", "Analysis", "Chart export produces its selected artifact.", "browser"),
-    FlagshipCapability("streamlit-no-rerun", "Host integration", "Streamlit scrolling and chart-pane resizing stay inside the component and do not rerun the script.", "browser"),
-    FlagshipCapability("react-direct-transport", "Host integration", "React uses V1 HTTP envelopes and direct payload fetches without Dash callbacks.", "browser"),
-    FlagshipCapability("dash-callback-transport", "Host integration", "Dash callbacks receive and apply the same runtime semantics.", "browser"),
-    FlagshipCapability("editing", "Explicitly unavailable", "Cell and row editing are not a public flagship feature.", "static", supported=False, disabled_reason="Editing remains outside the public component contract."),
+    FlagshipCapability("streamlit-no-rerun", "Host integration", "Streamlit scrolling and chart-pane resizing stay inside the component and do not rerun the script.", "browser", hosts=("streamlit",)),
+    FlagshipCapability("react-direct-transport", "Host integration", "React uses V1 HTTP envelopes and direct payload fetches without Dash callbacks.", "browser", hosts=("react",)),
+    FlagshipCapability("dash-callback-transport", "Host integration", "Dash callbacks receive and apply the same runtime semantics.", "browser", hosts=("dash",)),
+    FlagshipCapability("editing", "Explicitly unavailable", "Cell and row editing are not a public flagship feature.", "static", supported=False, disabled_reason="Editing remains outside the public component contract.", hosts=()),
 )
 
 
@@ -77,17 +78,10 @@ def capability_ids() -> set[str]:
 
 
 def markdown_matrix() -> str:
-    rows = [
-        "# Flagship functionality certification",
-        "",
-        "Every supported workflow must pass in Dash, React, and Streamlit.",
-        "",
-        "| Group | Capability | Verification | Dash | React | Streamlit |",
-        "| --- | --- | --- | --- | --- | --- |",
-    ]
-    for capability in CAPABILITIES:
-        status = "required" if capability.supported else "intentionally unavailable"
-        rows.append(
-            f"| {capability.group} | {capability.workflow} | {capability.verification} | {status} | {status} | {status} |"
-        )
-    return "\n".join(rows) + "\n"
+    from pathlib import Path
+
+    from tests.flagship_contract import load_requirements, render_matrix, validate_requirements
+
+    requirements = load_requirements(Path(__file__).with_name("flagship_requirements.json"))
+    validate_requirements(requirements, CAPABILITIES)
+    return render_matrix(requirements)

@@ -766,7 +766,10 @@ def test_flagship_certification_document_is_generated_from_the_matrix_contract()
     assert "tests/flagship_capabilities.py" in document
     assert "python scripts/certify_flagship.py" in document
     matrix = markdown_matrix()
-    assert matrix.count("| required | required | required |") == len([item for item in CAPABILITIES if item.supported])
+    assert "| required | required | required |" not in matrix
+    assert "| unverified | unverified | unverified |" in matrix
+    host_line = next(line for line in matrix.splitlines() if "streamlit-no-rerun.local-interactions" in line)
+    assert "| not_applicable | not_applicable | unverified |" in host_line
 
 
 def test_flagship_qualification_data_is_environment_gated(monkeypatch):

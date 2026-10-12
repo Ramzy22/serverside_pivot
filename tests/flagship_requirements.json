@@ -1,0 +1,2774 @@
+{
+  "schema_version": 1,
+  "references": {
+    "ssrm-read-only-v1": {
+      "version": "36.2.0",
+      "edition": "Enterprise",
+      "row_model": "SSRM",
+      "options": {
+        "rowModelType": "serverSide",
+        "pivotMode": true,
+        "cellSelection": true,
+        "useValueFormatterForExport": true,
+        "suppressClipboardPaste": true,
+        "serverSideEnableClientSideSort": false,
+        "locale": "en-GB",
+        "fixture": "flagship-qualification-v1",
+        "rowGroupFields": [
+          "region",
+          "account"
+        ],
+        "pivotFields": [
+          "period"
+        ],
+        "valueFields": [
+          "ventes_€",
+          "unités",
+          "écart"
+        ],
+        "filter": {
+          "scope": "Included"
+        },
+        "modules": [
+          "ServerSideRowModelModule",
+          "RowGroupingModule",
+          "PivotModule",
+          "CellSelectionModule",
+          "ClipboardModule",
+          "CsvExportModule",
+          "ExcelExportModule",
+          "IntegratedChartsModule"
+        ]
+      }
+    }
+  },
+  "requirements": [
+    {
+      "id": "initial-workspace.populated",
+      "inventory_id": "initial-workspace",
+      "task": "Open the configured pivot",
+      "expected": "With scope=Included, render Éclair and München with Q1 sales 150, Q2 sales 50 and grand sales 200; units totals are 5, 5 and 10; variance totals are -8.25, 1.5 and -6.75.",
+      "ag_grid": {
+        "reference": "ssrm-read-only-v1",
+        "docs": [
+          "https://www.ag-grid.com/javascript-data-grid/server-side-model-datasource/"
+        ],
+        "behavior": "Unobserved: Compare grouped SSRM pivot values and totals against the same literal five-row fixture.",
+        "test_id": "ag-grid.initial-workspace.populated",
+        "result": "unverified"
+      },
+      "product_behavior": "Qualification target: With scope=Included, render Éclair and München with Q1 sales 150, Q2 sales 50 and grand sales 200; units totals are 5, 5 and 10; variance totals are -8.25, 1.5 and -6.75.",
+      "difference": "unverified",
+      "constraints": [
+        "Rows region/account; columns period; three sum measures; collapsed groups initially.",
+        "Live reference and installed-host evidence are absent; this requirement is not a pass."
+      ],
+      "hosts": [
+        "dash",
+        "react",
+        "streamlit"
+      ],
+      "required": true,
+      "shared_tests": [
+        "shared.initial-workspace.populated"
+      ],
+      "browser_tests": {
+        "dash": [
+          "browser.initial-workspace.populated"
+        ],
+        "react": [
+          "browser.initial-workspace.populated"
+        ],
+        "streamlit": [
+          "browser.initial-workspace.populated"
+        ]
+      }
+    },
+    {
+      "id": "runtime-error.visible",
+      "inventory_id": "runtime-error",
+      "task": "Observe a failed runtime request",
+      "expected": "A controlled request failure replaces loading with one visible error state associated with that request; no raw exception or credential is displayed.",
+      "ag_grid": {
+        "reference": "ssrm-read-only-v1",
+        "docs": [
+          "https://www.ag-grid.com/javascript-data-grid/server-side-model-datasource/"
+        ],
+        "behavior": "Unobserved: Observe datasource failure UI separately from product error presentation.",
+        "test_id": "ag-grid.runtime-error.visible",
+        "result": "unverified"
+      },
+      "product_behavior": "Qualification target: A controlled request failure replaces loading with one visible error state associated with that request; no raw exception or credential is displayed.",
+      "difference": "unverified",
+      "constraints": [
+        "Inject a deterministic failed V1 envelope; do not infer error visibility from console output.",
+        "Live reference and installed-host evidence are absent; this requirement is not a pass."
+      ],
+      "hosts": [
+        "dash",
+        "react",
+        "streamlit"
+      ],
+      "required": true,
+      "shared_tests": [
+        "shared.runtime-error.visible"
+      ],
+      "browser_tests": {
+        "dash": [
+          "browser.runtime-error.visible"
+        ],
+        "react": [
+          "browser.runtime-error.visible"
+        ],
+        "streamlit": [
+          "browser.runtime-error.visible"
+        ]
+      }
+    },
+    {
+      "id": "runtime-error.recovery",
+      "inventory_id": "runtime-error",
+      "task": "Retry after a runtime failure",
+      "expected": "The next valid request removes the error, renders the original fixture totals 200/10/-6.75 and ignores any late response from the failed request.",
+      "ag_grid": {
+        "reference": "ssrm-read-only-v1",
+        "docs": [
+          "https://www.ag-grid.com/javascript-data-grid/server-side-model-datasource/"
+        ],
+        "behavior": "Unobserved: Observe retry/purge behavior after a failed SSRM datasource response.",
+        "test_id": "ag-grid.runtime-error.recovery",
+        "result": "unverified"
+      },
+      "product_behavior": "Qualification target: The next valid request removes the error, renders the original fixture totals 200/10/-6.75 and ignores any late response from the failed request.",
+      "difference": "unverified",
+      "constraints": [
+        "Correlate request IDs and response ordering; fresh fixture for retry.",
+        "Live reference and installed-host evidence are absent; this requirement is not a pass."
+      ],
+      "hosts": [
+        "dash",
+        "react",
+        "streamlit"
+      ],
+      "required": true,
+      "shared_tests": [
+        "shared.runtime-error.recovery"
+      ],
+      "browser_tests": {
+        "dash": [
+          "browser.runtime-error.recovery"
+        ],
+        "react": [
+          "browser.runtime-error.recovery"
+        ],
+        "streamlit": [
+          "browser.runtime-error.recovery"
+        ]
+      }
+    },
+    {
+      "id": "hierarchy-expand.round-trip",
+      "inventory_id": "hierarchy-expand",
+      "task": "Expand then collapse a hierarchy group",
+      "expected": "Expanding Éclair shows account 東京 and sales 120; collapsing removes that child while preserving group sales 120, grand sales 200 and the active measure columns.",
+      "ag_grid": {
+        "reference": "ssrm-read-only-v1",
+        "docs": [
+          "https://www.ag-grid.com/javascript-data-grid/server-side-model-datasource/"
+        ],
+        "behavior": "Unobserved: Observe expanding and collapsing the same server-side group.",
+        "test_id": "ag-grid.hierarchy-expand.round-trip",
+        "result": "unverified"
+      },
+      "product_behavior": "Qualification target: Expanding Éclair shows account 東京 and sales 120; collapsing removes that child while preserving group sales 120, grand sales 200 and the active measure columns.",
+      "difference": "unverified",
+      "constraints": [
+        "One parent selected; scope=Included; expansion state measured by logical row IDs.",
+        "Live reference and installed-host evidence are absent; this requirement is not a pass."
+      ],
+      "hosts": [
+        "dash",
+        "react",
+        "streamlit"
+      ],
+      "required": true,
+      "shared_tests": [
+        "shared.hierarchy-expand.round-trip"
+      ],
+      "browser_tests": {
+        "dash": [
+          "browser.hierarchy-expand.round-trip"
+        ],
+        "react": [
+          "browser.hierarchy-expand.round-trip"
+        ],
+        "streamlit": [
+          "browser.hierarchy-expand.round-trip"
+        ]
+      }
+    },
+    {
+      "id": "hierarchy-expand-all.round-trip",
+      "inventory_id": "hierarchy-expand-all",
+      "task": "Expand and collapse all branches",
+      "expected": "Expand all exposes 東京 and القاهرة under their correct parents; collapse all removes both account rows and retains Éclair/München and totals without duplicates.",
+      "ag_grid": {
+        "reference": "ssrm-read-only-v1",
+        "docs": [
+          "https://www.ag-grid.com/javascript-data-grid/server-side-model-datasource/"
+        ],
+        "behavior": "Unobserved: Observe recursive server-side group expansion and collapse.",
+        "test_id": "ag-grid.hierarchy-expand-all.round-trip",
+        "result": "unverified"
+      },
+      "product_behavior": "Qualification target: Expand all exposes 東京 and القاهرة under their correct parents; collapse all removes both account rows and retains Éclair/München and totals without duplicates.",
+      "difference": "unverified",
+      "constraints": [
+        "Two-level region/account fixture; no unknown future depth.",
+        "Live reference and installed-host evidence are absent; this requirement is not a pass."
+      ],
+      "hosts": [
+        "dash",
+        "react",
+        "streamlit"
+      ],
+      "required": true,
+      "shared_tests": [
+        "shared.hierarchy-expand-all.round-trip"
+      ],
+      "browser_tests": {
+        "dash": [
+          "browser.hierarchy-expand-all.round-trip"
+        ],
+        "react": [
+          "browser.hierarchy-expand-all.round-trip"
+        ],
+        "streamlit": [
+          "browser.hierarchy-expand-all.round-trip"
+        ]
+      }
+    },
+    {
+      "id": "vertical-virtual-scroll.window",
+      "inventory_id": "vertical-virtual-scroll",
+      "task": "Scroll to a later row window",
+      "expected": "Scrolling past the first loaded window requests the corresponding later logical row range and renders its oracle row IDs once, in order; scrolling back restores the first row without stale values.",
+      "ag_grid": {
+        "reference": "ssrm-read-only-v1",
+        "docs": [
+          "https://www.ag-grid.com/javascript-data-grid/server-side-model-datasource/"
+        ],
+        "behavior": "Unobserved: Observe SSRM block requests and displayed rows while scrolling.",
+        "test_id": "ag-grid.vertical-virtual-scroll.window",
+        "result": "unverified"
+      },
+      "product_behavior": "Qualification target: Scrolling past the first loaded window requests the corresponding later logical row range and renders its oracle row IDs once, in order; scrolling back restores the first row without stale values.",
+      "difference": "unverified",
+      "constraints": [
+        "Use an extended deterministic fixture exceeding two configured cache blocks; correlate range and request ID.",
+        "Live reference and installed-host evidence are absent; this requirement is not a pass."
+      ],
+      "hosts": [
+        "dash",
+        "react",
+        "streamlit"
+      ],
+      "required": true,
+      "shared_tests": [
+        "shared.vertical-virtual-scroll.window"
+      ],
+      "browser_tests": {
+        "dash": [
+          "browser.vertical-virtual-scroll.window"
+        ],
+        "react": [
+          "browser.vertical-virtual-scroll.window"
+        ],
+        "streamlit": [
+          "browser.vertical-virtual-scroll.window"
+        ]
+      }
+    },
+    {
+      "id": "horizontal-virtual-scroll.window",
+      "inventory_id": "horizontal-virtual-scroll",
+      "task": "Scroll to later pivot columns",
+      "expected": "Scroll to the last pivot measure, verify its header/value match the oracle and the correlated column window, then return to the first; row labels and totals remain aligned.",
+      "ag_grid": {
+        "reference": "ssrm-read-only-v1",
+        "docs": [
+          "https://www.ag-grid.com/javascript-data-grid/server-side-model-datasource/"
+        ],
+        "behavior": "Unobserved: Observe virtualised SSRM pivot columns; product window transport may differ.",
+        "test_id": "ag-grid.horizontal-virtual-scroll.window",
+        "result": "unverified"
+      },
+      "product_behavior": "Qualification target: Scroll to the last pivot measure, verify its header/value match the oracle and the correlated column window, then return to the first; row labels and totals remain aligned.",
+      "difference": "unverified",
+      "constraints": [
+        "Use a wide deterministic fixture exceeding the viewport; same displayed column order in both systems.",
+        "Live reference and installed-host evidence are absent; this requirement is not a pass."
+      ],
+      "hosts": [
+        "dash",
+        "react",
+        "streamlit"
+      ],
+      "required": true,
+      "shared_tests": [
+        "shared.horizontal-virtual-scroll.window"
+      ],
+      "browser_tests": {
+        "dash": [
+          "browser.horizontal-virtual-scroll.window"
+        ],
+        "react": [
+          "browser.horizontal-virtual-scroll.window"
+        ],
+        "streamlit": [
+          "browser.horizontal-virtual-scroll.window"
+        ]
+      }
+    },
+    {
+      "id": "saved-scroll.restore",
+      "inventory_id": "saved-scroll",
+      "task": "Restore a saved scroll position",
+      "expected": "Save after vertical/horizontal scrolling; reload and restore the same logical first visible row and column, with scroller offsets within 2 CSS px at the same viewport.",
+      "ag_grid": {
+        "reference": "ssrm-read-only-v1",
+        "docs": [
+          "https://www.ag-grid.com/javascript-data-grid/grid-state/"
+        ],
+        "behavior": "Unobserved: Observe grid state scroll restoration under SSRM; unsupported restore combinations remain differences.",
+        "test_id": "ag-grid.saved-scroll.restore",
+        "result": "unverified"
+      },
+      "product_behavior": "Qualification target: Save after vertical/horizontal scrolling; reload and restore the same logical first visible row and column, with scroller offsets within 2 CSS px at the same viewport.",
+      "difference": "unverified",
+      "constraints": [
+        "Save only after rendering settles; fixed viewport, font, zoom and fixture; local origin storage.",
+        "Live reference and installed-host evidence are absent; this requirement is not a pass."
+      ],
+      "hosts": [
+        "dash",
+        "react",
+        "streamlit"
+      ],
+      "required": true,
+      "shared_tests": [
+        "shared.saved-scroll.restore"
+      ],
+      "browser_tests": {
+        "dash": [
+          "browser.saved-scroll.restore"
+        ],
+        "react": [
+          "browser.saved-scroll.restore"
+        ],
+        "streamlit": [
+          "browser.saved-scroll.restore"
+        ]
+      }
+    },
+    {
+      "id": "layout-field-zones.move",
+      "inventory_id": "layout-field-zones",
+      "task": "Move a field among layout zones",
+      "expected": "Move account from Rows to Columns and scope to Filters; model lists each field in the intended zone once and the next correlated request contains that layout; displayed cells equal the oracle for the new axes.",
+      "ag_grid": {
+        "reference": "ssrm-read-only-v1",
+        "docs": [
+          "https://www.ag-grid.com/javascript-data-grid/server-side-model-pivoting/"
+        ],
+        "behavior": "Unobserved: Observe row-group, pivot and filter configuration changes under SSRM.",
+        "test_id": "ag-grid.layout-field-zones.move",
+        "result": "unverified"
+      },
+      "product_behavior": "Qualification target: Move account from Rows to Columns and scope to Filters; model lists each field in the intended zone once and the next correlated request contains that layout; displayed cells equal the oracle for the new axes.",
+      "difference": "unverified",
+      "constraints": [
+        "Read-only field layout; valid fields only; restore initial layout after the case.",
+        "Live reference and installed-host evidence are absent; this requirement is not a pass."
+      ],
+      "hosts": [
+        "dash",
+        "react",
+        "streamlit"
+      ],
+      "required": true,
+      "shared_tests": [
+        "shared.layout-field-zones.move"
+      ],
+      "browser_tests": {
+        "dash": [
+          "browser.layout-field-zones.move"
+        ],
+        "react": [
+          "browser.layout-field-zones.move"
+        ],
+        "streamlit": [
+          "browser.layout-field-zones.move"
+        ]
+      }
+    },
+    {
+      "id": "layout-values.add-remove",
+      "inventory_id": "layout-values",
+      "task": "Add and remove a measure",
+      "expected": "Add sum(unités) to a sales-only pivot: units totals become Q1=5,Q2=5,all=10; remove it and all unit headers/cells disappear while sales remains 200.",
+      "ag_grid": {
+        "reference": "ssrm-read-only-v1",
+        "docs": [
+          "https://www.ag-grid.com/javascript-data-grid/server-side-model-pivoting/"
+        ],
+        "behavior": "Unobserved: Observe adding/removing server-side aggregated value columns.",
+        "test_id": "ag-grid.layout-values.add-remove",
+        "result": "unverified"
+      },
+      "product_behavior": "Qualification target: Add sum(unités) to a sales-only pivot: units totals become Q1=5,Q2=5,all=10; remove it and all unit headers/cells disappear while sales remains 200.",
+      "difference": "unverified",
+      "constraints": [
+        "Fresh sales-only initial layout; no editing or duplicate measure aliases.",
+        "Live reference and installed-host evidence are absent; this requirement is not a pass."
+      ],
+      "hosts": [
+        "dash",
+        "react",
+        "streamlit"
+      ],
+      "required": true,
+      "shared_tests": [
+        "shared.layout-values.add-remove"
+      ],
+      "browser_tests": {
+        "dash": [
+          "browser.layout-values.add-remove"
+        ],
+        "react": [
+          "browser.layout-values.add-remove"
+        ],
+        "streamlit": [
+          "browser.layout-values.add-remove"
+        ]
+      }
+    },
+    {
+      "id": "layout-values.aggregation",
+      "inventory_id": "layout-values",
+      "task": "Change a measure aggregation",
+      "expected": "Changing Q1 ventes_€ from sum to average produces 75 from 100.25 and 49.75; changing back restores 150 in the same header position.",
+      "ag_grid": {
+        "reference": "ssrm-read-only-v1",
+        "docs": [
+          "https://www.ag-grid.com/javascript-data-grid/server-side-model-pivoting/"
+        ],
+        "behavior": "Unobserved: Observe datasource requests and results for changed aggregation functions.",
+        "test_id": "ag-grid.layout-values.aggregation",
+        "result": "unverified"
+      },
+      "product_behavior": "Qualification target: Changing Q1 ventes_€ from sum to average produces 75 from 100.25 and 49.75; changing back restores 150 in the same header position.",
+      "difference": "unverified",
+      "constraints": [
+        "Literal fixture; aggregation oracle computes source records, not visible child averages.",
+        "Live reference and installed-host evidence are absent; this requirement is not a pass."
+      ],
+      "hosts": [
+        "dash",
+        "react",
+        "streamlit"
+      ],
+      "required": true,
+      "shared_tests": [
+        "shared.layout-values.aggregation"
+      ],
+      "browser_tests": {
+        "dash": [
+          "browser.layout-values.aggregation"
+        ],
+        "react": [
+          "browser.layout-values.aggregation"
+        ],
+        "streamlit": [
+          "browser.layout-values.aggregation"
+        ]
+      }
+    },
+    {
+      "id": "layout-swap.transpose",
+      "inventory_id": "layout-swap",
+      "task": "Swap row and column axes",
+      "expected": "Swap axes: periods become row keys and regions become column keys; Q1/Éclair sales is 100.25, Q1/München is 49.75; swap back restores original axes and grand sales 200.",
+      "ag_grid": {
+        "reference": "ssrm-read-only-v1",
+        "docs": [
+          "https://www.ag-grid.com/javascript-data-grid/server-side-model-pivoting/"
+        ],
+        "behavior": "Unobserved: Observe reconfiguring SSRM row-group and pivot columns to transpose the analysis.",
+        "test_id": "ag-grid.layout-swap.transpose",
+        "result": "unverified"
+      },
+      "product_behavior": "Qualification target: Swap axes: periods become row keys and regions become column keys; Q1/Éclair sales is 100.25, Q1/München is 49.75; swap back restores original axes and grand sales 200.",
+      "difference": "unverified",
+      "constraints": [
+        "Two-axis supported layout; compare logical values rather than DOM order alone.",
+        "Live reference and installed-host evidence are absent; this requirement is not a pass."
+      ],
+      "hosts": [
+        "dash",
+        "react",
+        "streamlit"
+      ],
+      "required": true,
+      "shared_tests": [
+        "shared.layout-swap.transpose"
+      ],
+      "browser_tests": {
+        "dash": [
+          "browser.layout-swap.transpose"
+        ],
+        "react": [
+          "browser.layout-swap.transpose"
+        ],
+        "streamlit": [
+          "browser.layout-swap.transpose"
+        ]
+      }
+    },
+    {
+      "id": "global-filter.apply-clear",
+      "inventory_id": "global-filter",
+      "task": "Search then clear the global filter",
+      "expected": "Searching München leaves only its matching hierarchy and sales 79.75; clearing restores both included regions and grand sales 200 without the excluded São Paulo row.",
+      "ag_grid": {
+        "reference": "ssrm-read-only-v1",
+        "docs": [
+          "https://www.ag-grid.com/javascript-data-grid/server-side-model-datasource/"
+        ],
+        "behavior": "Unobserved: Observe an equivalent server-side external/global filter; datasource owns matching semantics.",
+        "test_id": "ag-grid.global-filter.apply-clear",
+        "result": "unverified"
+      },
+      "product_behavior": "Qualification target: Searching München leaves only its matching hierarchy and sales 79.75; clearing restores both included regions and grand sales 200 without the excluded São Paulo row.",
+      "difference": "unverified",
+      "constraints": [
+        "The scope=Included filter remains active; string matching semantics recorded with requests.",
+        "Live reference and installed-host evidence are absent; this requirement is not a pass."
+      ],
+      "hosts": [
+        "dash",
+        "react",
+        "streamlit"
+      ],
+      "required": true,
+      "shared_tests": [
+        "shared.global-filter.apply-clear"
+      ],
+      "browser_tests": {
+        "dash": [
+          "browser.global-filter.apply-clear"
+        ],
+        "react": [
+          "browser.global-filter.apply-clear"
+        ],
+        "streamlit": [
+          "browser.global-filter.apply-clear"
+        ]
+      }
+    },
+    {
+      "id": "header-filter.apply-clear",
+      "inventory_id": "header-filter",
+      "task": "Filter through a header menu",
+      "expected": "Set region=Éclair in the header filter: the correlated request names the exact field/value and grand sales becomes 120; clearing restores 200 while retaining the scope filter.",
+      "ag_grid": {
+        "reference": "ssrm-read-only-v1",
+        "docs": [
+          "https://www.ag-grid.com/javascript-data-grid/server-side-model-datasource/"
+        ],
+        "behavior": "Unobserved: Observe server-side column filter model updates and result refresh.",
+        "test_id": "ag-grid.header-filter.apply-clear",
+        "result": "unverified"
+      },
+      "product_behavior": "Qualification target: Set region=Éclair in the header filter: the correlated request names the exact field/value and grand sales becomes 120; clearing restores 200 while retaining the scope filter.",
+      "difference": "unverified",
+      "constraints": [
+        "Use equality rather than ambiguous text search; same fixture and locale.",
+        "Live reference and installed-host evidence are absent; this requirement is not a pass."
+      ],
+      "hosts": [
+        "dash",
+        "react",
+        "streamlit"
+      ],
+      "required": true,
+      "shared_tests": [
+        "shared.header-filter.apply-clear"
+      ],
+      "browser_tests": {
+        "dash": [
+          "browser.header-filter.apply-clear"
+        ],
+        "react": [
+          "browser.header-filter.apply-clear"
+        ],
+        "streamlit": [
+          "browser.header-filter.apply-clear"
+        ]
+      }
+    },
+    {
+      "id": "sorting.direction-order",
+      "inventory_id": "sorting",
+      "task": "Sort a measure ascending then descending",
+      "expected": "Ascending total sales orders München (79.75) before Éclair (120); descending reverses them; the header reports the active direction and totals stay outside the sortable leaf sequence.",
+      "ag_grid": {
+        "reference": "ssrm-read-only-v1",
+        "docs": [
+          "https://www.ag-grid.com/javascript-data-grid/server-side-model-datasource/"
+        ],
+        "behavior": "Unobserved: Observe server-side sort model and displayed grouped row order.",
+        "test_id": "ag-grid.sorting.direction-order",
+        "result": "unverified"
+      },
+      "product_behavior": "Qualification target: Ascending total sales orders München (79.75) before Éclair (120); descending reverses them; the header reports the active direction and totals stay outside the sortable leaf sequence.",
+      "difference": "unverified",
+      "constraints": [
+        "Tie-free fixture; specify null/tie ordering in any extended case.",
+        "Live reference and installed-host evidence are absent; this requirement is not a pass."
+      ],
+      "hosts": [
+        "dash",
+        "react",
+        "streamlit"
+      ],
+      "required": true,
+      "shared_tests": [
+        "shared.sorting.direction-order"
+      ],
+      "browser_tests": {
+        "dash": [
+          "browser.sorting.direction-order"
+        ],
+        "react": [
+          "browser.sorting.direction-order"
+        ],
+        "streamlit": [
+          "browser.sorting.direction-order"
+        ]
+      }
+    },
+    {
+      "id": "filter-options.values",
+      "inventory_id": "filter-options",
+      "task": "Load and select server filter options",
+      "expected": "The region filter lists Éclair and München as selectable options for the active scope; selecting München produces sales 79.75; clearing restores 200.",
+      "ag_grid": {
+        "reference": "ssrm-read-only-v1",
+        "docs": [
+          "https://www.ag-grid.com/javascript-data-grid/server-side-model-datasource/"
+        ],
+        "behavior": "Unobserved: Observe a server-backed set-filter values callback and resulting SSRM filter request.",
+        "test_id": "ag-grid.filter-options.values",
+        "result": "unverified"
+      },
+      "product_behavior": "Qualification target: The region filter lists Éclair and München as selectable options for the active scope; selecting München produces sales 79.75; clearing restores 200.",
+      "difference": "unverified",
+      "constraints": [
+        "Options must be tied to the active filter context; no hard-coded UI-only option evidence.",
+        "Live reference and installed-host evidence are absent; this requirement is not a pass."
+      ],
+      "hosts": [
+        "dash",
+        "react",
+        "streamlit"
+      ],
+      "required": true,
+      "shared_tests": [
+        "shared.filter-options.values"
+      ],
+      "browser_tests": {
+        "dash": [
+          "browser.filter-options.values"
+        ],
+        "react": [
+          "browser.filter-options.values"
+        ],
+        "streamlit": [
+          "browser.filter-options.values"
+        ]
+      }
+    },
+    {
+      "id": "totals.controls",
+      "inventory_id": "totals",
+      "task": "Toggle row, column and grand totals",
+      "expected": "For the included fixture the Q1 sales total is 150, Q2 is 50 and grand total is 200; disabling each totals control removes only its declared total rows/columns; enabling restores the same IDs and values.",
+      "ag_grid": {
+        "reference": "ssrm-read-only-v1",
+        "docs": [
+          "https://www.ag-grid.com/javascript-data-grid/server-side-model-pivoting/"
+        ],
+        "behavior": "Unobserved: Observe SSRM aggregation/pivot totals with explicit reference options.",
+        "test_id": "ag-grid.totals.controls",
+        "result": "unverified"
+      },
+      "product_behavior": "Qualification target: For the included fixture the Q1 sales total is 150, Q2 is 50 and grand total is 200; disabling each totals control removes only its declared total rows/columns; enabling restores the same IDs and values.",
+      "difference": "unverified",
+      "constraints": [
+        "Record subtotal policy separately; total rows may have different labels between products.",
+        "Live reference and installed-host evidence are absent; this requirement is not a pass."
+      ],
+      "hosts": [
+        "dash",
+        "react",
+        "streamlit"
+      ],
+      "required": true,
+      "shared_tests": [
+        "shared.totals.controls"
+      ],
+      "browser_tests": {
+        "dash": [
+          "browser.totals.controls"
+        ],
+        "react": [
+          "browser.totals.controls"
+        ],
+        "streamlit": [
+          "browser.totals.controls"
+        ]
+      }
+    },
+    {
+      "id": "totals.subtotals",
+      "inventory_id": "totals",
+      "task": "Inspect group subtotals",
+      "expected": "Éclair subtotal sales is 120 and München is 79.75; expanding children never counts subtotal rows twice in the grand total of 200.",
+      "ag_grid": {
+        "reference": "ssrm-read-only-v1",
+        "docs": [
+          "https://www.ag-grid.com/javascript-data-grid/server-side-model-pivoting/"
+        ],
+        "behavior": "Unobserved: Observe server-side group aggregation with visible subtotals.",
+        "test_id": "ag-grid.totals.subtotals",
+        "result": "unverified"
+      },
+      "product_behavior": "Qualification target: Éclair subtotal sales is 120 and München is 79.75; expanding children never counts subtotal rows twice in the grand total of 200.",
+      "difference": "unverified",
+      "constraints": [
+        "Sum aggregates on original source records; subtotal visibility option recorded.",
+        "Live reference and installed-host evidence are absent; this requirement is not a pass."
+      ],
+      "hosts": [
+        "dash",
+        "react",
+        "streamlit"
+      ],
+      "required": true,
+      "shared_tests": [
+        "shared.totals.subtotals"
+      ],
+      "browser_tests": {
+        "dash": [
+          "browser.totals.subtotals"
+        ],
+        "react": [
+          "browser.totals.subtotals"
+        ],
+        "streamlit": [
+          "browser.totals.subtotals"
+        ]
+      }
+    },
+    {
+      "id": "row-numbers.toggle",
+      "inventory_id": "row-numbers",
+      "task": "Show and hide row numbers",
+      "expected": "Enabling row numbers adds one dedicated number column without changing measure data; displayed data-row numbering starts at 1 and follows visible order; disabling removes that column and leaves selection intact.",
+      "ag_grid": {
+        "reference": "ssrm-read-only-v1",
+        "docs": [
+          "https://www.ag-grid.com/javascript-data-grid/server-side-model-datasource/"
+        ],
+        "behavior": "Unobserved: Observe row-number presentation and state if available under SSRM; exact numbering remains unobserved.",
+        "test_id": "ag-grid.row-numbers.toggle",
+        "result": "unverified"
+      },
+      "product_behavior": "Qualification target: Enabling row numbers adds one dedicated number column without changing measure data; displayed data-row numbering starts at 1 and follows visible order; disabling removes that column and leaves selection intact.",
+      "difference": "unverified",
+      "constraints": [
+        "Totals and group numbering policy must be recorded; no assertion based only on toolbar state.",
+        "Live reference and installed-host evidence are absent; this requirement is not a pass."
+      ],
+      "hosts": [
+        "dash",
+        "react",
+        "streamlit"
+      ],
+      "required": true,
+      "shared_tests": [
+        "shared.row-numbers.toggle"
+      ],
+      "browser_tests": {
+        "dash": [
+          "browser.row-numbers.toggle"
+        ],
+        "react": [
+          "browser.row-numbers.toggle"
+        ],
+        "streamlit": [
+          "browser.row-numbers.toggle"
+        ]
+      }
+    },
+    {
+      "id": "layout-modes.switch",
+      "inventory_id": "layout-modes",
+      "task": "Choose hierarchy, outline and tabular layouts",
+      "expected": "Each selected mode changes the declared hierarchy presentation while retaining the same logical region/account keys and sales totals 120/79.75/200; switching back restores the initial mode.",
+      "ag_grid": {
+        "reference": "ssrm-read-only-v1",
+        "docs": [
+          "https://www.ag-grid.com/javascript-data-grid/server-side-model-datasource/"
+        ],
+        "behavior": "Unobserved: Observe supported group display types; identical product layout names may have no direct analogue.",
+        "test_id": "ag-grid.layout-modes.switch",
+        "result": "unverified"
+      },
+      "product_behavior": "Qualification target: Each selected mode changes the declared hierarchy presentation while retaining the same logical region/account keys and sales totals 120/79.75/200; switching back restores the initial mode.",
+      "difference": "unverified",
+      "constraints": [
+        "Product presentation modes are compared individually; no blanket AG Grid mode equivalence.",
+        "Live reference and installed-host evidence are absent; this requirement is not a pass."
+      ],
+      "hosts": [
+        "dash",
+        "react",
+        "streamlit"
+      ],
+      "required": true,
+      "shared_tests": [
+        "shared.layout-modes.switch"
+      ],
+      "browser_tests": {
+        "dash": [
+          "browser.layout-modes.switch"
+        ],
+        "react": [
+          "browser.layout-modes.switch"
+        ],
+        "streamlit": [
+          "browser.layout-modes.switch"
+        ]
+      }
+    },
+    {
+      "id": "density.cycle",
+      "inventory_id": "density",
+      "task": "Cycle row density",
+      "expected": "Record baseline row height; each density choice uses its configured height within 1 CSS px, preserves row IDs and values, and restores baseline height when cycled back.",
+      "ag_grid": {
+        "reference": "ssrm-read-only-v1",
+        "docs": [
+          "https://www.ag-grid.com/javascript-data-grid/server-side-model-datasource/"
+        ],
+        "behavior": "Unobserved: Observe row-height configuration changes and grid redraw behavior.",
+        "test_id": "ag-grid.density.cycle",
+        "result": "unverified"
+      },
+      "product_behavior": "Qualification target: Record baseline row height; each density choice uses its configured height within 1 CSS px, preserves row IDs and values, and restores baseline height when cycled back.",
+      "difference": "unverified",
+      "constraints": [
+        "Fixed font and browser zoom; check visible geometry, not screenshot alone.",
+        "Live reference and installed-host evidence are absent; this requirement is not a pass."
+      ],
+      "hosts": [
+        "dash",
+        "react",
+        "streamlit"
+      ],
+      "required": true,
+      "shared_tests": [
+        "shared.density.cycle"
+      ],
+      "browser_tests": {
+        "dash": [
+          "browser.density.cycle"
+        ],
+        "react": [
+          "browser.density.cycle"
+        ],
+        "streamlit": [
+          "browser.density.cycle"
+        ]
+      }
+    },
+    {
+      "id": "column-sizing.resize",
+      "inventory_id": "column-sizing",
+      "task": "Resize a measure column",
+      "expected": "Dragging a column edge by +40 CSS px changes that column width by 40±2 CSS px; neighboring IDs/order and logical values remain intact after horizontal scrolling.",
+      "ag_grid": {
+        "reference": "ssrm-read-only-v1",
+        "docs": [
+          "https://www.ag-grid.com/javascript-data-grid/server-side-model-datasource/"
+        ],
+        "behavior": "Unobserved: Observe column width changes via resize interaction.",
+        "test_id": "ag-grid.column-sizing.resize",
+        "result": "unverified"
+      },
+      "product_behavior": "Qualification target: Dragging a column edge by +40 CSS px changes that column width by 40±2 CSS px; neighboring IDs/order and logical values remain intact after horizontal scrolling.",
+      "difference": "unverified",
+      "constraints": [
+        "Initial width safely above minWidth and below maxWidth; fixed viewport.",
+        "Live reference and installed-host evidence are absent; this requirement is not a pass."
+      ],
+      "hosts": [
+        "dash",
+        "react",
+        "streamlit"
+      ],
+      "required": true,
+      "shared_tests": [
+        "shared.column-sizing.resize"
+      ],
+      "browser_tests": {
+        "dash": [
+          "browser.column-sizing.resize"
+        ],
+        "react": [
+          "browser.column-sizing.resize"
+        ],
+        "streamlit": [
+          "browser.column-sizing.resize"
+        ]
+      }
+    },
+    {
+      "id": "column-sizing.auto-size",
+      "inventory_id": "column-sizing",
+      "task": "Auto-size a visible column",
+      "expected": "Auto-size yields a width large enough for the longest visible header/value plus configured padding, within min/max width; invoking twice changes width by at most 2 CSS px and never hides a column.",
+      "ag_grid": {
+        "reference": "ssrm-read-only-v1",
+        "docs": [
+          "https://www.ag-grid.com/javascript-data-grid/server-side-model-datasource/"
+        ],
+        "behavior": "Unobserved: Observe column auto-size with rendered-row sampling and explicit sizing constraints.",
+        "test_id": "ag-grid.column-sizing.auto-size",
+        "result": "unverified"
+      },
+      "product_behavior": "Qualification target: Auto-size yields a width large enough for the longest visible header/value plus configured padding, within min/max width; invoking twice changes width by at most 2 CSS px and never hides a column.",
+      "difference": "unverified",
+      "constraints": [
+        "Same visible rows/font/padding; virtualisation limits auto-size to rendered sample.",
+        "Live reference and installed-host evidence are absent; this requirement is not a pass."
+      ],
+      "hosts": [
+        "dash",
+        "react",
+        "streamlit"
+      ],
+      "required": true,
+      "shared_tests": [
+        "shared.column-sizing.auto-size"
+      ],
+      "browser_tests": {
+        "dash": [
+          "browser.column-sizing.auto-size"
+        ],
+        "react": [
+          "browser.column-sizing.auto-size"
+        ],
+        "streamlit": [
+          "browser.column-sizing.auto-size"
+        ]
+      }
+    },
+    {
+      "id": "column-pinning.round-trip",
+      "inventory_id": "column-pinning",
+      "task": "Pin then unpin a measure column",
+      "expected": "Pinned column remains visible while horizontally scrolling to the last column, appears once in DOM/logical export order, and unpin restores its prior order without changing values.",
+      "ag_grid": {
+        "reference": "ssrm-read-only-v1",
+        "docs": [
+          "https://www.ag-grid.com/javascript-data-grid/server-side-model-datasource/"
+        ],
+        "behavior": "Unobserved: Observe pin/unpin while scrolling across the same visible columns.",
+        "test_id": "ag-grid.column-pinning.round-trip",
+        "result": "unverified"
+      },
+      "product_behavior": "Qualification target: Pinned column remains visible while horizontally scrolling to the last column, appears once in DOM/logical export order, and unpin restores its prior order without changing values.",
+      "difference": "unverified",
+      "constraints": [
+        "Single left pin; compare logical order with reference pinned-first presentation.",
+        "Live reference and installed-host evidence are absent; this requirement is not a pass."
+      ],
+      "hosts": [
+        "dash",
+        "react",
+        "streamlit"
+      ],
+      "required": true,
+      "shared_tests": [
+        "shared.column-pinning.round-trip"
+      ],
+      "browser_tests": {
+        "dash": [
+          "browser.column-pinning.round-trip"
+        ],
+        "react": [
+          "browser.column-pinning.round-trip"
+        ],
+        "streamlit": [
+          "browser.column-pinning.round-trip"
+        ]
+      }
+    },
+    {
+      "id": "cell-selection.range-clear",
+      "inventory_id": "cell-selection",
+      "task": "Select and clear a cell rectangle",
+      "expected": "Selecting two adjacent rows by two measure columns identifies exactly four logical cells; clearing removes range highlights and no later copy reuses the cleared range.",
+      "ag_grid": {
+        "reference": "ssrm-read-only-v1",
+        "docs": [
+          "https://www.ag-grid.com/javascript-data-grid/cell-selection/"
+        ],
+        "behavior": "Unobserved: Observe rectangular cell selection and clearing under SSRM.",
+        "test_id": "ag-grid.cell-selection.range-clear",
+        "result": "unverified"
+      },
+      "product_behavior": "Qualification target: Selecting two adjacent rows by two measure columns identifies exactly four logical cells; clearing removes range highlights and no later copy reuses the cleared range.",
+      "difference": "unverified",
+      "constraints": [
+        "Selection excludes group labels/totals unless explicitly included; compare logical cell IDs.",
+        "Live reference and installed-host evidence are absent; this requirement is not a pass."
+      ],
+      "hosts": [
+        "dash",
+        "react",
+        "streamlit"
+      ],
+      "required": true,
+      "shared_tests": [
+        "shared.cell-selection.range-clear"
+      ],
+      "browser_tests": {
+        "dash": [
+          "browser.cell-selection.range-clear"
+        ],
+        "react": [
+          "browser.cell-selection.range-clear"
+        ],
+        "streamlit": [
+          "browser.cell-selection.range-clear"
+        ]
+      }
+    },
+    {
+      "id": "copy-selection.logical-cells",
+      "inventory_id": "copy-selection",
+      "task": "Copy only the selected logical cells",
+      "expected": "Selecting Q1 sales and units for Éclair and München copies a 2x2 body representing [100.25,2] then [49.75,3], with no unrelated row or measure.",
+      "ag_grid": {
+        "reference": "ssrm-read-only-v1",
+        "docs": [
+          "https://www.ag-grid.com/javascript-data-grid/clipboard/"
+        ],
+        "behavior": "Unobserved: Observe actual clipboard bytes for the identical loaded cell rectangle.",
+        "test_id": "ag-grid.copy-selection.logical-cells",
+        "result": "unverified"
+      },
+      "product_behavior": "Qualification target: Selecting Q1 sales and units for Éclair and München copies a 2x2 body representing [100.25,2] then [49.75,3], with no unrelated row or measure.",
+      "difference": "unverified",
+      "constraints": [
+        "Selection defined by logical IDs; number formatting disabled for this raw-value case; no headers.",
+        "Live reference and installed-host evidence are absent; this requirement is not a pass."
+      ],
+      "hosts": [
+        "dash",
+        "react",
+        "streamlit"
+      ],
+      "required": true,
+      "shared_tests": [
+        "shared.copy-selection.logical-cells"
+      ],
+      "browser_tests": {
+        "dash": [
+          "browser.copy-selection.logical-cells"
+        ],
+        "react": [
+          "browser.copy-selection.logical-cells"
+        ],
+        "streamlit": [
+          "browser.copy-selection.logical-cells"
+        ]
+      }
+    },
+    {
+      "id": "copy-selection.display-order",
+      "inventory_id": "copy-selection",
+      "task": "Copy in the displayed order",
+      "expected": "After descending region order and moving units before sales, selected body rows are München then Éclair and columns are units then sales; output does not revert to source/configuration order.",
+      "ag_grid": {
+        "reference": "ssrm-read-only-v1",
+        "docs": [
+          "https://www.ag-grid.com/javascript-data-grid/clipboard/"
+        ],
+        "behavior": "Unobserved: Observe clipboard order after row sorting and displayed column reordering.",
+        "test_id": "ag-grid.copy-selection.display-order",
+        "result": "unverified"
+      },
+      "product_behavior": "Qualification target: After descending region order and moving units before sales, selected body rows are München then Éclair and columns are units then sales; output does not revert to source/configuration order.",
+      "difference": "unverified",
+      "constraints": [
+        "Two selected rows; same display reorder/filter state in both systems.",
+        "Live reference and installed-host evidence are absent; this requirement is not a pass."
+      ],
+      "hosts": [
+        "dash",
+        "react",
+        "streamlit"
+      ],
+      "required": true,
+      "shared_tests": [
+        "shared.copy-selection.display-order"
+      ],
+      "browser_tests": {
+        "dash": [
+          "browser.copy-selection.display-order"
+        ],
+        "react": [
+          "browser.copy-selection.display-order"
+        ],
+        "streamlit": [
+          "browser.copy-selection.display-order"
+        ]
+      }
+    },
+    {
+      "id": "copy-selection.pinned-columns",
+      "inventory_id": "copy-selection",
+      "task": "Copy a range spanning pinned columns",
+      "expected": "Selecting pinned Q1 units plus unpinned Q1 sales copies exactly two fields per row in displayed order; each pinned logical cell appears once despite pinned/scrollable rendering.",
+      "ag_grid": {
+        "reference": "ssrm-read-only-v1",
+        "docs": [
+          "https://www.ag-grid.com/javascript-data-grid/clipboard/"
+        ],
+        "behavior": "Unobserved: Observe cell-selection clipboard across pinned and center column containers.",
+        "test_id": "ag-grid.copy-selection.pinned-columns",
+        "result": "unverified"
+      },
+      "product_behavior": "Qualification target: Selecting pinned Q1 units plus unpinned Q1 sales copies exactly two fields per row in displayed order; each pinned logical cell appears once despite pinned/scrollable rendering.",
+      "difference": "unverified",
+      "constraints": [
+        "One left-pinned column; horizontal scroll active; range crosses the pinned boundary.",
+        "Live reference and installed-host evidence are absent; this requirement is not a pass."
+      ],
+      "hosts": [
+        "dash",
+        "react",
+        "streamlit"
+      ],
+      "required": true,
+      "shared_tests": [
+        "shared.copy-selection.pinned-columns"
+      ],
+      "browser_tests": {
+        "dash": [
+          "browser.copy-selection.pinned-columns"
+        ],
+        "react": [
+          "browser.copy-selection.pinned-columns"
+        ],
+        "streamlit": [
+          "browser.copy-selection.pinned-columns"
+        ]
+      }
+    },
+    {
+      "id": "copy-selection.hidden-columns",
+      "inventory_id": "copy-selection",
+      "task": "Copy around a hidden column",
+      "expected": "Hiding Q1 variance before selecting the visible sales/units rectangle omits variance from body and headers; no hidden-field placeholder widens the copied rectangle.",
+      "ag_grid": {
+        "reference": "ssrm-read-only-v1",
+        "docs": [
+          "https://www.ag-grid.com/javascript-data-grid/clipboard/"
+        ],
+        "behavior": "Unobserved: Observe whether hidden columns participate in cell selection and clipboard.",
+        "test_id": "ag-grid.copy-selection.hidden-columns",
+        "result": "unverified"
+      },
+      "product_behavior": "Qualification target: Hiding Q1 variance before selecting the visible sales/units rectangle omits variance from body and headers; no hidden-field placeholder widens the copied rectangle.",
+      "difference": "unverified",
+      "constraints": [
+        "Hidden-column policy is visible-column-only; reference option configured to match or recorded as different.",
+        "Live reference and installed-host evidence are absent; this requirement is not a pass."
+      ],
+      "hosts": [
+        "dash",
+        "react",
+        "streamlit"
+      ],
+      "required": true,
+      "shared_tests": [
+        "shared.copy-selection.hidden-columns"
+      ],
+      "browser_tests": {
+        "dash": [
+          "browser.copy-selection.hidden-columns"
+        ],
+        "react": [
+          "browser.copy-selection.hidden-columns"
+        ],
+        "streamlit": [
+          "browser.copy-selection.hidden-columns"
+        ]
+      }
+    },
+    {
+      "id": "copy-selection.formatted-values",
+      "inventory_id": "copy-selection",
+      "task": "Copy formatted rather than raw values",
+      "expected": "With en-GB fixed two decimals, selected sales 100.25 and units 2 copy as '100.25' and '2.00'; raw-value policy is tested separately and cannot be inferred from numeric export.",
+      "ag_grid": {
+        "reference": "ssrm-read-only-v1",
+        "docs": [
+          "https://www.ag-grid.com/javascript-data-grid/clipboard/"
+        ],
+        "behavior": "Unobserved: Observe clipboard value formatting with matching value formatters and useValueFormatterForExport=true.",
+        "test_id": "ag-grid.copy-selection.formatted-values",
+        "result": "unverified"
+      },
+      "product_behavior": "Qualification target: With en-GB fixed two decimals, selected sales 100.25 and units 2 copy as '100.25' and '2.00'; raw-value policy is tested separately and cannot be inferred from numeric export.",
+      "difference": "unverified",
+      "constraints": [
+        "Explicit number formatter and locale; clipboard uses displayed formatted values for this case.",
+        "Live reference and installed-host evidence are absent; this requirement is not a pass."
+      ],
+      "hosts": [
+        "dash",
+        "react",
+        "streamlit"
+      ],
+      "required": true,
+      "shared_tests": [
+        "shared.copy-selection.formatted-values"
+      ],
+      "browser_tests": {
+        "dash": [
+          "browser.copy-selection.formatted-values"
+        ],
+        "react": [
+          "browser.copy-selection.formatted-values"
+        ],
+        "streamlit": [
+          "browser.copy-selection.formatted-values"
+        ]
+      }
+    },
+    {
+      "id": "copy-selection.tabs",
+      "inventory_id": "copy-selection",
+      "task": "Copy a cell containing a tab",
+      "expected": "A cell containing 'left\\tright' round-trips through the clipboard TSV parser as one field with its internal tab unchanged; adjacent fields and column count remain exact.",
+      "ag_grid": {
+        "reference": "ssrm-read-only-v1",
+        "docs": [
+          "https://www.ag-grid.com/javascript-data-grid/clipboard/"
+        ],
+        "behavior": "Unobserved: Observe clipboard quoting/escaping for embedded tabs under the pinned options.",
+        "test_id": "ag-grid.copy-selection.tabs",
+        "result": "unverified"
+      },
+      "product_behavior": "Qualification target: A cell containing 'left\\tright' round-trips through the clipboard TSV parser as one field with its internal tab unchanged; adjacent fields and column count remain exact.",
+      "difference": "unverified",
+      "constraints": [
+        "Dedicated edge fixture; tab-containing field is quoted with double quotes in TSV.",
+        "Live reference and installed-host evidence are absent; this requirement is not a pass."
+      ],
+      "hosts": [
+        "dash",
+        "react",
+        "streamlit"
+      ],
+      "required": true,
+      "shared_tests": [
+        "shared.copy-selection.tabs"
+      ],
+      "browser_tests": {
+        "dash": [
+          "browser.copy-selection.tabs"
+        ],
+        "react": [
+          "browser.copy-selection.tabs"
+        ],
+        "streamlit": [
+          "browser.copy-selection.tabs"
+        ]
+      }
+    },
+    {
+      "id": "copy-selection.newlines",
+      "inventory_id": "copy-selection",
+      "task": "Copy cells containing line breaks",
+      "expected": "Cells containing LF and CRLF round-trip as their original strings in a quoted TSV field; no extra logical row is created and the neighboring field remains aligned.",
+      "ag_grid": {
+        "reference": "ssrm-read-only-v1",
+        "docs": [
+          "https://www.ag-grid.com/javascript-data-grid/clipboard/"
+        ],
+        "behavior": "Unobserved: Observe clipboard quoting/escaping of LF/CRLF in selected cells.",
+        "test_id": "ag-grid.copy-selection.newlines",
+        "result": "unverified"
+      },
+      "product_behavior": "Qualification target: Cells containing LF and CRLF round-trip as their original strings in a quoted TSV field; no extra logical row is created and the neighboring field remains aligned.",
+      "difference": "unverified",
+      "constraints": [
+        "Dedicated edge fixture; compare parsed field content and literal line-break bytes.",
+        "Live reference and installed-host evidence are absent; this requirement is not a pass."
+      ],
+      "hosts": [
+        "dash",
+        "react",
+        "streamlit"
+      ],
+      "required": true,
+      "shared_tests": [
+        "shared.copy-selection.newlines"
+      ],
+      "browser_tests": {
+        "dash": [
+          "browser.copy-selection.newlines"
+        ],
+        "react": [
+          "browser.copy-selection.newlines"
+        ],
+        "streamlit": [
+          "browser.copy-selection.newlines"
+        ]
+      }
+    },
+    {
+      "id": "copy-selection.unicode",
+      "inventory_id": "copy-selection",
+      "task": "Copy multilingual selected values",
+      "expected": "Clipboard strings preserve Éclair, München, 東京, القاهرة and emoji without replacement characters or Unicode normalization changes; parsed row/column counts remain exact.",
+      "ag_grid": {
+        "reference": "ssrm-read-only-v1",
+        "docs": [
+          "https://www.ag-grid.com/javascript-data-grid/clipboard/"
+        ],
+        "behavior": "Unobserved: Observe selected-cell clipboard with the same multilingual fixture.",
+        "test_id": "ag-grid.copy-selection.unicode",
+        "result": "unverified"
+      },
+      "product_behavior": "Qualification target: Clipboard strings preserve Éclair, München, 東京, القاهرة and emoji without replacement characters or Unicode normalization changes; parsed row/column counts remain exact.",
+      "difference": "unverified",
+      "constraints": [
+        "Dedicated edge fixture includes emoji; use UTF-8 clipboard text and identical browser.",
+        "Live reference and installed-host evidence are absent; this requirement is not a pass."
+      ],
+      "hosts": [
+        "dash",
+        "react",
+        "streamlit"
+      ],
+      "required": true,
+      "shared_tests": [
+        "shared.copy-selection.unicode"
+      ],
+      "browser_tests": {
+        "dash": [
+          "browser.copy-selection.unicode"
+        ],
+        "react": [
+          "browser.copy-selection.unicode"
+        ],
+        "streamlit": [
+          "browser.copy-selection.unicode"
+        ]
+      }
+    },
+    {
+      "id": "copy-selection.empty-values",
+      "inventory_id": "copy-selection",
+      "task": "Copy null and empty selected cells",
+      "expected": "A null cell and an empty-string cell each produce an empty field; interior and trailing empty fields remain in the parsed rectangle without dropping columns.",
+      "ag_grid": {
+        "reference": "ssrm-read-only-v1",
+        "docs": [
+          "https://www.ag-grid.com/javascript-data-grid/clipboard/"
+        ],
+        "behavior": "Unobserved: Observe clipboard representation for null, empty and trailing empty values.",
+        "test_id": "ag-grid.copy-selection.empty-values",
+        "result": "unverified"
+      },
+      "product_behavior": "Qualification target: A null cell and an empty-string cell each produce an empty field; interior and trailing empty fields remain in the parsed rectangle without dropping columns.",
+      "difference": "unverified",
+      "constraints": [
+        "Dedicated edge fixture; missing values become empty strings, never literal null/undefined.",
+        "Live reference and installed-host evidence are absent; this requirement is not a pass."
+      ],
+      "hosts": [
+        "dash",
+        "react",
+        "streamlit"
+      ],
+      "required": true,
+      "shared_tests": [
+        "shared.copy-selection.empty-values"
+      ],
+      "browser_tests": {
+        "dash": [
+          "browser.copy-selection.empty-values"
+        ],
+        "react": [
+          "browser.copy-selection.empty-values"
+        ],
+        "streamlit": [
+          "browser.copy-selection.empty-values"
+        ]
+      }
+    },
+    {
+      "id": "copy-selection.headers",
+      "inventory_id": "copy-selection",
+      "task": "Copy with optional headers",
+      "expected": "No-header action emits only the selected body; with-headers action prepends exactly the selected displayed column labels in the same order and never includes unselected columns.",
+      "ag_grid": {
+        "reference": "ssrm-read-only-v1",
+        "docs": [
+          "https://www.ag-grid.com/javascript-data-grid/clipboard/"
+        ],
+        "behavior": "Unobserved: Observe includeHeaders clipboard option on the selected range.",
+        "test_id": "ag-grid.copy-selection.headers",
+        "result": "unverified"
+      },
+      "product_behavior": "Qualification target: No-header action emits only the selected body; with-headers action prepends exactly the selected displayed column labels in the same order and never includes unselected columns.",
+      "difference": "unverified",
+      "constraints": [
+        "Merged pivot header handling has its own explicit case; same selected rectangle reused.",
+        "Live reference and installed-host evidence are absent; this requirement is not a pass."
+      ],
+      "hosts": [
+        "dash",
+        "react",
+        "streamlit"
+      ],
+      "required": true,
+      "shared_tests": [
+        "shared.copy-selection.headers"
+      ],
+      "browser_tests": {
+        "dash": [
+          "browser.copy-selection.headers"
+        ],
+        "react": [
+          "browser.copy-selection.headers"
+        ],
+        "streamlit": [
+          "browser.copy-selection.headers"
+        ]
+      }
+    },
+    {
+      "id": "copy-selection.merged-headers",
+      "inventory_id": "copy-selection",
+      "task": "Copy a selection with merged pivot headers",
+      "expected": "Merged-header copy retains each selected pivot group label and its selected measure labels in their correct span; parsed HTML colspan widths sum to the selected column count.",
+      "ag_grid": {
+        "reference": "ssrm-read-only-v1",
+        "docs": [
+          "https://www.ag-grid.com/javascript-data-grid/clipboard/"
+        ],
+        "behavior": "Unobserved: Observe pivot header serialization; product merged-header variant may differ from default AG Grid clipboard.",
+        "test_id": "ag-grid.copy-selection.merged-headers",
+        "result": "unverified"
+      },
+      "product_behavior": "Qualification target: Merged-header copy retains each selected pivot group label and its selected measure labels in their correct span; parsed HTML colspan widths sum to the selected column count.",
+      "difference": "unverified",
+      "constraints": [
+        "HTML representation; a selection crossing two period groups; no claim TSV carries merged-cell structure.",
+        "Live reference and installed-host evidence are absent; this requirement is not a pass."
+      ],
+      "hosts": [
+        "dash",
+        "react",
+        "streamlit"
+      ],
+      "required": true,
+      "shared_tests": [
+        "shared.copy-selection.merged-headers"
+      ],
+      "browser_tests": {
+        "dash": [
+          "browser.copy-selection.merged-headers"
+        ],
+        "react": [
+          "browser.copy-selection.merged-headers"
+        ],
+        "streamlit": [
+          "browser.copy-selection.merged-headers"
+        ]
+      }
+    },
+    {
+      "id": "copy-selection.unloaded-rows",
+      "inventory_id": "copy-selection",
+      "task": "Select beyond the loaded row window",
+      "expected": "Copy either returns every selected logical cell after explicit loading or reports the unavailable range without overwriting the clipboard; silently truncating to loaded rows fails.",
+      "ag_grid": {
+        "reference": "ssrm-read-only-v1",
+        "docs": [
+          "https://www.ag-grid.com/javascript-data-grid/clipboard/"
+        ],
+        "behavior": "Unobserved: Observe actual AG Grid SSRM selection/copy behavior across unloaded cache blocks; do not substitute Client-Side Row Model evidence.",
+        "test_id": "ag-grid.copy-selection.unloaded-rows",
+        "result": "unverified"
+      },
+      "product_behavior": "Qualification target: Copy either returns every selected logical cell after explicit loading or reports the unavailable range without overwriting the clipboard; silently truncating to loaded rows fails.",
+      "difference": "unverified",
+      "constraints": [
+        "Extended fixture spans unloaded SSRM blocks; accepted branch and loaded-row constraint must be reported as a difference, not equivalence.",
+        "Live reference and installed-host evidence are absent; this requirement is not a pass."
+      ],
+      "hosts": [
+        "dash",
+        "react",
+        "streamlit"
+      ],
+      "required": true,
+      "shared_tests": [
+        "shared.copy-selection.unloaded-rows"
+      ],
+      "browser_tests": {
+        "dash": [
+          "browser.copy-selection.unloaded-rows"
+        ],
+        "react": [
+          "browser.copy-selection.unloaded-rows"
+        ],
+        "streamlit": [
+          "browser.copy-selection.unloaded-rows"
+        ]
+      }
+    },
+    {
+      "id": "copy-current-table.visible-scope",
+      "inventory_id": "copy-current-table",
+      "task": "Copy the current collapsed table",
+      "expected": "With the account level collapsed, clipboard includes headers, both visible region aggregates and grand total; it omits account leaf rows and excludes São Paulo while preserving displayed column order.",
+      "ag_grid": {
+        "reference": "ssrm-read-only-v1",
+        "docs": [
+          "https://www.ag-grid.com/javascript-data-grid/clipboard/"
+        ],
+        "behavior": "Unobserved: Observe an equivalent displayed-table operation if SSRM supports it; absence is a product-specific difference.",
+        "test_id": "ag-grid.copy-current-table.visible-scope",
+        "result": "unverified"
+      },
+      "product_behavior": "Qualification target: With the account level collapsed, clipboard includes headers, both visible region aggregates and grand total; it omits account leaf rows and excludes São Paulo while preserving displayed column order.",
+      "difference": "unverified",
+      "constraints": [
+        "Scope=Included; this is a table snapshot, separate from selected-range copy.",
+        "Live reference and installed-host evidence are absent; this requirement is not a pass."
+      ],
+      "hosts": [
+        "dash",
+        "react",
+        "streamlit"
+      ],
+      "required": true,
+      "shared_tests": [
+        "shared.copy-current-table.visible-scope"
+      ],
+      "browser_tests": {
+        "dash": [
+          "browser.copy-current-table.visible-scope"
+        ],
+        "react": [
+          "browser.copy-current-table.visible-scope"
+        ],
+        "streamlit": [
+          "browser.copy-current-table.visible-scope"
+        ]
+      }
+    },
+    {
+      "id": "copy-all-records.complete-scope",
+      "inventory_id": "copy-all-records",
+      "task": "Copy records in collapsed branches",
+      "expected": "Clipboard includes both account leaf rows 東京 and القاهرة plus their parent hierarchy and declared totals, despite both branches being collapsed; excluded São Paulo and 北京 never appear.",
+      "ag_grid": {
+        "reference": "ssrm-read-only-v1",
+        "docs": [
+          "https://www.ag-grid.com/javascript-data-grid/clipboard/"
+        ],
+        "behavior": "Unobserved: Observe whether SSRM offers a complete matching hierarchy clipboard operation without loading every node; no client-side substitution.",
+        "test_id": "ag-grid.copy-all-records.complete-scope",
+        "result": "unverified"
+      },
+      "product_behavior": "Qualification target: Clipboard includes both account leaf rows 東京 and القاهرة plus their parent hierarchy and declared totals, despite both branches being collapsed; excluded São Paulo and 北京 never appear.",
+      "difference": "unverified",
+      "constraints": [
+        "Same active scope/filter/sort; full matching hierarchy is requested from the server.",
+        "Live reference and installed-host evidence are absent; this requirement is not a pass."
+      ],
+      "hosts": [
+        "dash",
+        "react",
+        "streamlit"
+      ],
+      "required": true,
+      "shared_tests": [
+        "shared.copy-all-records.complete-scope"
+      ],
+      "browser_tests": {
+        "dash": [
+          "browser.copy-all-records.complete-scope"
+        ],
+        "react": [
+          "browser.copy-all-records.complete-scope"
+        ],
+        "streamlit": [
+          "browser.copy-all-records.complete-scope"
+        ]
+      }
+    },
+    {
+      "id": "keyboard-copy.selection",
+      "inventory_id": "keyboard-copy",
+      "task": "Use Ctrl/Cmd+C on the active grid range",
+      "expected": "With grid focus and a 2x2 selected range, Ctrl+C on Windows/Linux and Cmd+C on macOS copy exactly the same representation as Copy Selection, once per keystroke.",
+      "ag_grid": {
+        "reference": "ssrm-read-only-v1",
+        "docs": [
+          "https://www.ag-grid.com/javascript-data-grid/clipboard/"
+        ],
+        "behavior": "Unobserved: Observe native grid shortcut copy for an identical selected range.",
+        "test_id": "ag-grid.keyboard-copy.selection",
+        "result": "unverified"
+      },
+      "product_behavior": "Qualification target: With grid focus and a 2x2 selected range, Ctrl+C on Windows/Linux and Cmd+C on macOS copy exactly the same representation as Copy Selection, once per keystroke.",
+      "difference": "unverified",
+      "constraints": [
+        "Platform shortcut recorded; clipboard permission granted; no active editable input.",
+        "Live reference and installed-host evidence are absent; this requirement is not a pass."
+      ],
+      "hosts": [
+        "dash",
+        "react",
+        "streamlit"
+      ],
+      "required": true,
+      "shared_tests": [
+        "shared.keyboard-copy.selection"
+      ],
+      "browser_tests": {
+        "dash": [
+          "browser.keyboard-copy.selection"
+        ],
+        "react": [
+          "browser.keyboard-copy.selection"
+        ],
+        "streamlit": [
+          "browser.keyboard-copy.selection"
+        ]
+      }
+    },
+    {
+      "id": "keyboard-copy.native-input",
+      "inventory_id": "keyboard-copy",
+      "task": "Copy from an input or dialog",
+      "expected": "When focus is in global search, a filter text input or an editable field in a dialog, Ctrl/Cmd+C copies the input's selected text and does not replace it with grid selection content.",
+      "ag_grid": {
+        "reference": "ssrm-read-only-v1",
+        "docs": [
+          "https://www.ag-grid.com/javascript-data-grid/clipboard/"
+        ],
+        "behavior": "Unobserved: Observe clipboard shortcut handling when focus is outside the grid's cell-selection owner.",
+        "test_id": "ag-grid.keyboard-copy.native-input",
+        "result": "unverified"
+      },
+      "product_behavior": "Qualification target: When focus is in global search, a filter text input or an editable field in a dialog, Ctrl/Cmd+C copies the input's selected text and does not replace it with grid selection content.",
+      "difference": "unverified",
+      "constraints": [
+        "Real focused controls and native selection; clipboard checked after each input/dialog scenario.",
+        "Live reference and installed-host evidence are absent; this requirement is not a pass."
+      ],
+      "hosts": [
+        "dash",
+        "react",
+        "streamlit"
+      ],
+      "required": true,
+      "shared_tests": [
+        "shared.keyboard-copy.native-input"
+      ],
+      "browser_tests": {
+        "dash": [
+          "browser.keyboard-copy.native-input"
+        ],
+        "react": [
+          "browser.keyboard-copy.native-input"
+        ],
+        "streamlit": [
+          "browser.keyboard-copy.native-input"
+        ]
+      }
+    },
+    {
+      "id": "export-csv.exact-document",
+      "inventory_id": "export-csv",
+      "task": "Download a filtered CSV",
+      "expected": "Parse the actual CSV download: header order matches the displayed columns, included hierarchy strings survive UTF-8, São Paulo is absent, and totals are sales 150/50/200, units 5/5/10, variance -8.25/1.5/-6.75.",
+      "ag_grid": {
+        "reference": "ssrm-read-only-v1",
+        "docs": [
+          "https://www.ag-grid.com/javascript-data-grid/server-side-model-datasource/"
+        ],
+        "behavior": "Unobserved: Observe actual CSV export under SSRM for loaded data; completeness constraints must be explicit.",
+        "test_id": "ag-grid.export-csv.exact-document",
+        "result": "unverified"
+      },
+      "product_behavior": "Qualification target: Parse the actual CSV download: header order matches the displayed columns, included hierarchy strings survive UTF-8, São Paulo is absent, and totals are sales 150/50/200, units 5/5/10, variance -8.25/1.5/-6.75.",
+      "difference": "unverified",
+      "constraints": [
+        "CSV is a host download choice; no notification-only evidence; documented hierarchy scope.",
+        "Live reference and installed-host evidence are absent; this requirement is not a pass."
+      ],
+      "hosts": [
+        "dash",
+        "react",
+        "streamlit"
+      ],
+      "required": true,
+      "shared_tests": [
+        "shared.export-csv.exact-document"
+      ],
+      "browser_tests": {
+        "dash": [
+          "browser.export-csv.exact-document"
+        ],
+        "react": [
+          "browser.export-csv.exact-document"
+        ],
+        "streamlit": [
+          "browser.export-csv.exact-document"
+        ]
+      }
+    },
+    {
+      "id": "export-xlsx.exact-workbook",
+      "inventory_id": "export-xlsx",
+      "task": "Download a filtered XLSX workbook",
+      "expected": "Open the actual XLSX as a valid workbook; numeric totals are 150/50/200,5/5/10,-8.25/1.5/-6.75; Unicode labels and displayed column order match the oracle and merged headers have correct spans.",
+      "ag_grid": {
+        "reference": "ssrm-read-only-v1",
+        "docs": [
+          "https://www.ag-grid.com/javascript-data-grid/excel-export/"
+        ],
+        "behavior": "Unobserved: Observe Excel export with server-side loaded data and pivot headers.",
+        "test_id": "ag-grid.export-xlsx.exact-workbook",
+        "result": "unverified"
+      },
+      "product_behavior": "Qualification target: Open the actual XLSX as a valid workbook; numeric totals are 150/50/200,5/5/10,-8.25/1.5/-6.75; Unicode labels and displayed column order match the oracle and merged headers have correct spans.",
+      "difference": "unverified",
+      "constraints": [
+        "XLSX is the default host export; verify workbook cell types, not file extension/ZIP signature alone.",
+        "Live reference and installed-host evidence are absent; this requirement is not a pass."
+      ],
+      "hosts": [
+        "dash",
+        "react",
+        "streamlit"
+      ],
+      "required": true,
+      "shared_tests": [
+        "shared.export-xlsx.exact-workbook"
+      ],
+      "browser_tests": {
+        "dash": [
+          "browser.export-xlsx.exact-workbook"
+        ],
+        "react": [
+          "browser.export-xlsx.exact-workbook"
+        ],
+        "streamlit": [
+          "browser.export-xlsx.exact-workbook"
+        ]
+      }
+    },
+    {
+      "id": "large-delivery.progress",
+      "inventory_id": "large-delivery",
+      "task": "Observe large delivery progress",
+      "expected": "For an operation over the large-delivery threshold, progress becomes visible, advances with correlated operation state and completes only after a validated clipboard/download output is available.",
+      "ag_grid": {
+        "reference": "ssrm-read-only-v1",
+        "docs": [
+          "https://www.ag-grid.com/javascript-data-grid/server-side-model-datasource/"
+        ],
+        "behavior": "Unobserved: Observe any comparable SSRM delivery progress; product server-job UI may have no direct analogue.",
+        "test_id": "ag-grid.large-delivery.progress",
+        "result": "unverified"
+      },
+      "product_behavior": "Qualification target: For an operation over the large-delivery threshold, progress becomes visible, advances with correlated operation state and completes only after a validated clipboard/download output is available.",
+      "difference": "unverified",
+      "constraints": [
+        "Deterministic extended fixture and recorded server-owned budgets/thresholds; no inferred progress from elapsed time.",
+        "Live reference and installed-host evidence are absent; this requirement is not a pass."
+      ],
+      "hosts": [
+        "dash",
+        "react",
+        "streamlit"
+      ],
+      "required": true,
+      "shared_tests": [
+        "shared.large-delivery.progress"
+      ],
+      "browser_tests": {
+        "dash": [
+          "browser.large-delivery.progress"
+        ],
+        "react": [
+          "browser.large-delivery.progress"
+        ],
+        "streamlit": [
+          "browser.large-delivery.progress"
+        ]
+      }
+    },
+    {
+      "id": "large-delivery.cancel-retry",
+      "inventory_id": "large-delivery",
+      "task": "Cancel a large delivery then retry",
+      "expected": "Cancel changes the operation to cancelled, stops execution/output, preserves server admission accounting until actual cleanup, and ignores late responses; a fresh smaller export then produces the correct 200 total.",
+      "ag_grid": {
+        "reference": "ssrm-read-only-v1",
+        "docs": [
+          "https://www.ag-grid.com/javascript-data-grid/server-side-model-datasource/"
+        ],
+        "behavior": "Unobserved: Observe cancellation/retry for a comparable reference operation if available; classify missing server-job semantics explicitly.",
+        "test_id": "ag-grid.large-delivery.cancel-retry",
+        "result": "unverified"
+      },
+      "product_behavior": "Qualification target: Cancel changes the operation to cancelled, stops execution/output, preserves server admission accounting until actual cleanup, and ignores late responses; a fresh smaller export then produces the correct 200 total.",
+      "difference": "unverified",
+      "constraints": [
+        "Observe server execution/admission state plus UI; no stale completed/partial artifact from the cancelled action.",
+        "Live reference and installed-host evidence are absent; this requirement is not a pass."
+      ],
+      "hosts": [
+        "dash",
+        "react",
+        "streamlit"
+      ],
+      "required": true,
+      "shared_tests": [
+        "shared.large-delivery.cancel-retry"
+      ],
+      "browser_tests": {
+        "dash": [
+          "browser.large-delivery.cancel-retry"
+        ],
+        "react": [
+          "browser.large-delivery.cancel-retry"
+        ],
+        "streamlit": [
+          "browser.large-delivery.cancel-retry"
+        ]
+      }
+    },
+    {
+      "id": "large-delivery.selected-part",
+      "inventory_id": "large-delivery",
+      "task": "Deliver a selected part of a large result",
+      "expected": "Selecting part 2 delivers only its declared row interval and headers; parsed row IDs/order and counts match the part manifest, with no duplicate boundary rows from parts 1 or 3.",
+      "ag_grid": {
+        "reference": "ssrm-read-only-v1",
+        "docs": [
+          "https://www.ag-grid.com/javascript-data-grid/server-side-model-datasource/"
+        ],
+        "behavior": "Unobserved: Observe reference export chunk/part operation if available under SSRM; absence is not equivalence.",
+        "test_id": "ag-grid.large-delivery.selected-part",
+        "result": "unverified"
+      },
+      "product_behavior": "Qualification target: Selecting part 2 delivers only its declared row interval and headers; parsed row IDs/order and counts match the part manifest, with no duplicate boundary rows from parts 1 or 3.",
+      "difference": "unverified",
+      "constraints": [
+        "Extended deterministic fixture; retain part boundaries and active filters in the operation manifest.",
+        "Live reference and installed-host evidence are absent; this requirement is not a pass."
+      ],
+      "hosts": [
+        "dash",
+        "react",
+        "streamlit"
+      ],
+      "required": true,
+      "shared_tests": [
+        "shared.large-delivery.selected-part"
+      ],
+      "browser_tests": {
+        "dash": [
+          "browser.large-delivery.selected-part"
+        ],
+        "react": [
+          "browser.large-delivery.selected-part"
+        ],
+        "streamlit": [
+          "browser.large-delivery.selected-part"
+        ]
+      }
+    },
+    {
+      "id": "number-format.decimals",
+      "inventory_id": "number-format",
+      "task": "Change decimal formatting",
+      "expected": "Two decimals show raw 100.25 as 100.25 and raw 20 as 20.00; one decimal shows 100.25 according to the recorded rounding rule and leaves raw sum 200 unchanged.",
+      "ag_grid": {
+        "reference": "ssrm-read-only-v1",
+        "docs": [
+          "https://www.ag-grid.com/javascript-data-grid/server-side-model-datasource/"
+        ],
+        "behavior": "Unobserved: Observe display-only number formatters with identical locale and rounding policy.",
+        "test_id": "ag-grid.number-format.decimals",
+        "result": "unverified"
+      },
+      "product_behavior": "Qualification target: Two decimals show raw 100.25 as 100.25 and raw 20 as 20.00; one decimal shows 100.25 according to the recorded rounding rule and leaves raw sum 200 unchanged.",
+      "difference": "unverified",
+      "constraints": [
+        "Record rounding rule and locale; test selected versus default scope independently.",
+        "Live reference and installed-host evidence are absent; this requirement is not a pass."
+      ],
+      "hosts": [
+        "dash",
+        "react",
+        "streamlit"
+      ],
+      "required": true,
+      "shared_tests": [
+        "shared.number-format.decimals"
+      ],
+      "browser_tests": {
+        "dash": [
+          "browser.number-format.decimals"
+        ],
+        "react": [
+          "browser.number-format.decimals"
+        ],
+        "streamlit": [
+          "browser.number-format.decimals"
+        ]
+      }
+    },
+    {
+      "id": "cell-format.apply-close",
+      "inventory_id": "cell-format",
+      "task": "Apply a cell format and close the dialog",
+      "expected": "Apply a configured foreground/background to the selected range: computed style matches chosen colors only for that range; closing the dialog returns focus to the grid and copying still works.",
+      "ag_grid": {
+        "reference": "ssrm-read-only-v1",
+        "docs": [
+          "https://www.ag-grid.com/javascript-data-grid/server-side-model-datasource/"
+        ],
+        "behavior": "Unobserved: Observe cell style configuration; product formatting dialog is an interaction difference.",
+        "test_id": "ag-grid.cell-format.apply-close",
+        "result": "unverified"
+      },
+      "product_behavior": "Qualification target: Apply a configured foreground/background to the selected range: computed style matches chosen colors only for that range; closing the dialog returns focus to the grid and copying still works.",
+      "difference": "unverified",
+      "constraints": [
+        "Styles compared via computed CSS values; no data mutation; unselected control cells checked.",
+        "Live reference and installed-host evidence are absent; this requirement is not a pass."
+      ],
+      "hosts": [
+        "dash",
+        "react",
+        "streamlit"
+      ],
+      "required": true,
+      "shared_tests": [
+        "shared.cell-format.apply-close"
+      ],
+      "browser_tests": {
+        "dash": [
+          "browser.cell-format.apply-close"
+        ],
+        "react": [
+          "browser.cell-format.apply-close"
+        ],
+        "streamlit": [
+          "browser.cell-format.apply-close"
+        ]
+      }
+    },
+    {
+      "id": "color-scales.scale",
+      "inventory_id": "color-scales",
+      "task": "Apply a color scale",
+      "expected": "Configured minimum/midpoint/maximum values map to the declared three colors on the selected measure column; other columns stay unchanged and displayed numeric values remain exact.",
+      "ag_grid": {
+        "reference": "ssrm-read-only-v1",
+        "docs": [
+          "https://www.ag-grid.com/javascript-data-grid/server-side-model-datasource/"
+        ],
+        "behavior": "Unobserved: Observe equivalent cell styling callbacks if available; built-in conditional-format UI may differ.",
+        "test_id": "ag-grid.color-scales.scale",
+        "result": "unverified"
+      },
+      "product_behavior": "Qualification target: Configured minimum/midpoint/maximum values map to the declared three colors on the selected measure column; other columns stay unchanged and displayed numeric values remain exact.",
+      "difference": "unverified",
+      "constraints": [
+        "Literal scale stops recorded; inspect computed styles and underlying values.",
+        "Live reference and installed-host evidence are absent; this requirement is not a pass."
+      ],
+      "hosts": [
+        "dash",
+        "react",
+        "streamlit"
+      ],
+      "required": true,
+      "shared_tests": [
+        "shared.color-scales.scale"
+      ],
+      "browser_tests": {
+        "dash": [
+          "browser.color-scales.scale"
+        ],
+        "react": [
+          "browser.color-scales.scale"
+        ],
+        "streamlit": [
+          "browser.color-scales.scale"
+        ]
+      }
+    },
+    {
+      "id": "color-scales.data-bars",
+      "inventory_id": "color-scales",
+      "task": "Apply data bars",
+      "expected": "For configured bounds 0..200, a value 100 has a bar occupying 50%±1% of the usable cell width; zero has no bar and values outside the bounds follow recorded clamping rules.",
+      "ag_grid": {
+        "reference": "ssrm-read-only-v1",
+        "docs": [
+          "https://www.ag-grid.com/javascript-data-grid/server-side-model-datasource/"
+        ],
+        "behavior": "Unobserved: Observe equivalent custom cell rendering; no invented built-in data-bar parity.",
+        "test_id": "ag-grid.color-scales.data-bars",
+        "result": "unverified"
+      },
+      "product_behavior": "Qualification target: For configured bounds 0..200, a value 100 has a bar occupying 50%±1% of the usable cell width; zero has no bar and values outside the bounds follow recorded clamping rules.",
+      "difference": "unverified",
+      "constraints": [
+        "Fixed cell padding; negative-value policy recorded separately; bars do not obscure text.",
+        "Live reference and installed-host evidence are absent; this requirement is not a pass."
+      ],
+      "hosts": [
+        "dash",
+        "react",
+        "streamlit"
+      ],
+      "required": true,
+      "shared_tests": [
+        "shared.color-scales.data-bars"
+      ],
+      "browser_tests": {
+        "dash": [
+          "browser.color-scales.data-bars"
+        ],
+        "react": [
+          "browser.color-scales.data-bars"
+        ],
+        "streamlit": [
+          "browser.color-scales.data-bars"
+        ]
+      }
+    },
+    {
+      "id": "themes.select-override",
+      "inventory_id": "themes",
+      "task": "Select and override a theme",
+      "expected": "Selecting the dark theme changes the configured workspace background/text tokens; applying a recorded color override changes its computed target color and leaves contrast-readable values and controls interactive.",
+      "ag_grid": {
+        "reference": "ssrm-read-only-v1",
+        "docs": [
+          "https://www.ag-grid.com/javascript-data-grid/server-side-model-datasource/"
+        ],
+        "behavior": "Unobserved: Observe AG Grid theming parameters and custom overrides for equivalent tokens.",
+        "test_id": "ag-grid.themes.select-override",
+        "result": "unverified"
+      },
+      "product_behavior": "Qualification target: Selecting the dark theme changes the configured workspace background/text tokens; applying a recorded color override changes its computed target color and leaves contrast-readable values and controls interactive.",
+      "difference": "unverified",
+      "constraints": [
+        "Reference/product theme names may differ; compare explicitly chosen tokens, not identical screenshots.",
+        "Live reference and installed-host evidence are absent; this requirement is not a pass."
+      ],
+      "hosts": [
+        "dash",
+        "react",
+        "streamlit"
+      ],
+      "required": true,
+      "shared_tests": [
+        "shared.themes.select-override"
+      ],
+      "browser_tests": {
+        "dash": [
+          "browser.themes.select-override"
+        ],
+        "react": [
+          "browser.themes.select-override"
+        ],
+        "streamlit": [
+          "browser.themes.select-override"
+        ]
+      }
+    },
+    {
+      "id": "zoom-immersive.round-trip",
+      "inventory_id": "zoom-immersive",
+      "task": "Zoom and enter immersive mode",
+      "expected": "Changing zoom to 125% scales the declared table geometry within 2 CSS px; immersive mode expands the workspace, accepts a selection/copy, and exiting restores prior zoom and viewport position.",
+      "ag_grid": {
+        "reference": "ssrm-read-only-v1",
+        "docs": [
+          "https://www.ag-grid.com/javascript-data-grid/server-side-model-datasource/"
+        ],
+        "behavior": "Unobserved: Observe equivalent grid sizing/container changes; product immersive controls are separate.",
+        "test_id": "ag-grid.zoom-immersive.round-trip",
+        "result": "unverified"
+      },
+      "product_behavior": "Qualification target: Changing zoom to 125% scales the declared table geometry within 2 CSS px; immersive mode expands the workspace, accepts a selection/copy, and exiting restores prior zoom and viewport position.",
+      "difference": "unverified",
+      "constraints": [
+        "Fixed browser deviceScaleFactor; product zoom separated from browser zoom.",
+        "Live reference and installed-host evidence are absent; this requirement is not a pass."
+      ],
+      "hosts": [
+        "dash",
+        "react",
+        "streamlit"
+      ],
+      "required": true,
+      "shared_tests": [
+        "shared.zoom-immersive.round-trip"
+      ],
+      "browser_tests": {
+        "dash": [
+          "browser.zoom-immersive.round-trip"
+        ],
+        "react": [
+          "browser.zoom-immersive.round-trip"
+        ],
+        "streamlit": [
+          "browser.zoom-immersive.round-trip"
+        ]
+      }
+    },
+    {
+      "id": "formula-columns.add-remove",
+      "inventory_id": "formula-columns",
+      "task": "Create and remove a formula measure",
+      "expected": "Create double_sales=2*sum(ventes_€): totals are Q1=300,Q2=100,all=400; removing the formula removes its header/values and leaves original sales 200 unchanged.",
+      "ag_grid": {
+        "reference": "ssrm-read-only-v1",
+        "docs": [
+          "https://www.ag-grid.com/javascript-data-grid/server-side-model-pivoting/"
+        ],
+        "behavior": "Unobserved: Observe equivalent derived-value configuration if supported under SSRM; server formula authoring may be product-specific.",
+        "test_id": "ag-grid.formula-columns.add-remove",
+        "result": "unverified"
+      },
+      "product_behavior": "Qualification target: Create double_sales=2*sum(ventes_€): totals are Q1=300,Q2=100,all=400; removing the formula removes its header/values and leaves original sales 200 unchanged.",
+      "difference": "unverified",
+      "constraints": [
+        "Supported formula grammar only; aggregation stage explicitly post-sum; invalid formulas handled separately.",
+        "Live reference and installed-host evidence are absent; this requirement is not a pass."
+      ],
+      "hosts": [
+        "dash",
+        "react",
+        "streamlit"
+      ],
+      "required": true,
+      "shared_tests": [
+        "shared.formula-columns.add-remove"
+      ],
+      "browser_tests": {
+        "dash": [
+          "browser.formula-columns.add-remove"
+        ],
+        "react": [
+          "browser.formula-columns.add-remove"
+        ],
+        "streamlit": [
+          "browser.formula-columns.add-remove"
+        ]
+      }
+    },
+    {
+      "id": "custom-dimensions.add-remove",
+      "inventory_id": "custom-dimensions",
+      "task": "Create and remove a custom category",
+      "expected": "Create IncludedGroup mapping Éclair/München to 'Included cities': one group totals sales 200; removing it restores original region keys without changing the base dataset.",
+      "ag_grid": {
+        "reference": "ssrm-read-only-v1",
+        "docs": [
+          "https://www.ag-grid.com/javascript-data-grid/server-side-model-pivoting/"
+        ],
+        "behavior": "Unobserved: Observe equivalent server-side grouping on a derived dimension; editor UI may differ.",
+        "test_id": "ag-grid.custom-dimensions.add-remove",
+        "result": "unverified"
+      },
+      "product_behavior": "Qualification target: Create IncludedGroup mapping Éclair/München to 'Included cities': one group totals sales 200; removing it restores original region keys without changing the base dataset.",
+      "difference": "unverified",
+      "constraints": [
+        "Use supported categorical mapping syntax; no arbitrary executable formula or data editing.",
+        "Live reference and installed-host evidence are absent; this requirement is not a pass."
+      ],
+      "hosts": [
+        "dash",
+        "react",
+        "streamlit"
+      ],
+      "required": true,
+      "shared_tests": [
+        "shared.custom-dimensions.add-remove"
+      ],
+      "browser_tests": {
+        "dash": [
+          "browser.custom-dimensions.add-remove"
+        ],
+        "react": [
+          "browser.custom-dimensions.add-remove"
+        ],
+        "streamlit": [
+          "browser.custom-dimensions.add-remove"
+        ]
+      }
+    },
+    {
+      "id": "report-mode.restore-definition",
+      "inventory_id": "report-mode",
+      "task": "Save and select a report definition",
+      "expected": "Save a report definition with period columns and sales measure, change layout, then select it: model and visible headers/values restore the saved definition and sales total 200; switching back to pivot remains interactive.",
+      "ag_grid": {
+        "reference": "ssrm-read-only-v1",
+        "docs": [
+          "https://www.ag-grid.com/javascript-data-grid/grid-state/"
+        ],
+        "behavior": "Unobserved: Observe equivalent application-managed grid-state/report restoration; no direct AG Grid report-mode assumption.",
+        "test_id": "ag-grid.report-mode.restore-definition",
+        "result": "unverified"
+      },
+      "product_behavior": "Qualification target: Save a report definition with period columns and sales measure, change layout, then select it: model and visible headers/values restore the saved definition and sales total 200; switching back to pivot remains interactive.",
+      "difference": "unverified",
+      "constraints": [
+        "Report definition storage and mode transitions recorded; excludes unpublished report features.",
+        "Live reference and installed-host evidence are absent; this requirement is not a pass."
+      ],
+      "hosts": [
+        "dash",
+        "react",
+        "streamlit"
+      ],
+      "required": true,
+      "shared_tests": [
+        "shared.report-mode.restore-definition"
+      ],
+      "browser_tests": {
+        "dash": [
+          "browser.report-mode.restore-definition"
+        ],
+        "react": [
+          "browser.report-mode.restore-definition"
+        ],
+        "streamlit": [
+          "browser.report-mode.restore-definition"
+        ]
+      }
+    },
+    {
+      "id": "persistence.reload",
+      "inventory_id": "persistence",
+      "task": "Restore a local view after reload",
+      "expected": "Save resized width (+40 px), compact density and period/region axes; reload and restore the same model plus widths within 2 CSS px and row heights within 1 CSS px, with no host transport error.",
+      "ag_grid": {
+        "reference": "ssrm-read-only-v1",
+        "docs": [
+          "https://www.ag-grid.com/javascript-data-grid/grid-state/"
+        ],
+        "behavior": "Unobserved: Observe grid-state serialization/restoration under SSRM with matching column IDs.",
+        "test_id": "ag-grid.persistence.reload",
+        "result": "unverified"
+      },
+      "product_behavior": "Qualification target: Save resized width (+40 px), compact density and period/region axes; reload and restore the same model plus widths within 2 CSS px and row heights within 1 CSS px, with no host transport error.",
+      "difference": "unverified",
+      "constraints": [
+        "Same origin, fixture and version; local storage enabled; viewport fixed.",
+        "Live reference and installed-host evidence are absent; this requirement is not a pass."
+      ],
+      "hosts": [
+        "dash",
+        "react",
+        "streamlit"
+      ],
+      "required": true,
+      "shared_tests": [
+        "shared.persistence.reload"
+      ],
+      "browser_tests": {
+        "dash": [
+          "browser.persistence.reload"
+        ],
+        "react": [
+          "browser.persistence.reload"
+        ],
+        "streamlit": [
+          "browser.persistence.reload"
+        ]
+      }
+    },
+    {
+      "id": "undo-redo.layout",
+      "inventory_id": "undo-redo",
+      "task": "Undo and redo a layout change",
+      "expected": "After adding units and swapping axes, undo restores each prior model in reverse order and redo restores both changes in order; values/totals match each state and redo is cleared after a new layout edit.",
+      "ag_grid": {
+        "reference": "ssrm-read-only-v1",
+        "docs": [
+          "https://www.ag-grid.com/javascript-data-grid/grid-state/"
+        ],
+        "behavior": "Unobserved: Observe application-managed layout history; AG Grid cell-edit undo is not a matching task.",
+        "test_id": "ag-grid.undo-redo.layout",
+        "result": "unverified"
+      },
+      "product_behavior": "Qualification target: After adding units and swapping axes, undo restores each prior model in reverse order and redo restores both changes in order; values/totals match each state and redo is cleared after a new layout edit.",
+      "difference": "unverified",
+      "constraints": [
+        "Read-only layout history only; no cell-edit undo claim.",
+        "Live reference and installed-host evidence are absent; this requirement is not a pass."
+      ],
+      "hosts": [
+        "dash",
+        "react",
+        "streamlit"
+      ],
+      "required": true,
+      "shared_tests": [
+        "shared.undo-redo.layout"
+      ],
+      "browser_tests": {
+        "dash": [
+          "browser.undo-redo.layout"
+        ],
+        "react": [
+          "browser.undo-redo.layout"
+        ],
+        "streamlit": [
+          "browser.undo-redo.layout"
+        ]
+      }
+    },
+    {
+      "id": "range-chart.source",
+      "inventory_id": "range-chart",
+      "task": "Chart a selected range",
+      "expected": "A chart created from the selected Q1 sales/units rows uses exactly [Éclair:100.25/2,München:49.75/3], with no excluded/unselected row or extra series; subsequent source changes follow the recorded snapshot/live policy.",
+      "ag_grid": {
+        "reference": "ssrm-read-only-v1",
+        "docs": [
+          "https://www.ag-grid.com/javascript-data-grid/server-side-model-datasource/"
+        ],
+        "behavior": "Unobserved: Observe integrated chart creation from the same selected range under SSRM and its source constraints.",
+        "test_id": "ag-grid.range-chart.source",
+        "result": "unverified"
+      },
+      "product_behavior": "Qualification target: A chart created from the selected Q1 sales/units rows uses exactly [Éclair:100.25/2,München:49.75/3], with no excluded/unselected row or extra series; subsequent source changes follow the recorded snapshot/live policy.",
+      "difference": "unverified",
+      "constraints": [
+        "Loaded range only; chart source policy recorded per chart type; compare data oracle not visual appearance alone.",
+        "Live reference and installed-host evidence are absent; this requirement is not a pass."
+      ],
+      "hosts": [
+        "dash",
+        "react",
+        "streamlit"
+      ],
+      "required": true,
+      "shared_tests": [
+        "shared.range-chart.source"
+      ],
+      "browser_tests": {
+        "dash": [
+          "browser.range-chart.source"
+        ],
+        "react": [
+          "browser.range-chart.source"
+        ],
+        "streamlit": [
+          "browser.range-chart.source"
+        ]
+      }
+    },
+    {
+      "id": "chart-pane.lifecycle",
+      "inventory_id": "chart-pane",
+      "task": "Resize, dock, float and close a chart pane",
+      "expected": "Create one pane; resizing by +40 px changes bounds by 40±2 px; docking/floating preserves its source/series; closing removes the pane and a new grid selection still copies correctly.",
+      "ag_grid": {
+        "reference": "ssrm-read-only-v1",
+        "docs": [
+          "https://www.ag-grid.com/javascript-data-grid/server-side-model-datasource/"
+        ],
+        "behavior": "Unobserved: Observe reference chart container lifecycle; product docking UI may be a difference.",
+        "test_id": "ag-grid.chart-pane.lifecycle",
+        "result": "unverified"
+      },
+      "product_behavior": "Qualification target: Create one pane; resizing by +40 px changes bounds by 40±2 px; docking/floating preserves its source/series; closing removes the pane and a new grid selection still copies correctly.",
+      "difference": "unverified",
+      "constraints": [
+        "Fixed viewport; CSS geometry tolerance; no persisted chart restored unless specified.",
+        "Live reference and installed-host evidence are absent; this requirement is not a pass."
+      ],
+      "hosts": [
+        "dash",
+        "react",
+        "streamlit"
+      ],
+      "required": true,
+      "shared_tests": [
+        "shared.chart-pane.lifecycle"
+      ],
+      "browser_tests": {
+        "dash": [
+          "browser.chart-pane.lifecycle"
+        ],
+        "react": [
+          "browser.chart-pane.lifecycle"
+        ],
+        "streamlit": [
+          "browser.chart-pane.lifecycle"
+        ]
+      }
+    },
+    {
+      "id": "chart-export.artifact",
+      "inventory_id": "chart-export",
+      "task": "Export the selected chart",
+      "expected": "The chosen chart image download is a valid image with the chart's declared dimensions and includes its selected series/labels; export neither replaces grid data nor creates a second pane.",
+      "ag_grid": {
+        "reference": "ssrm-read-only-v1",
+        "docs": [
+          "https://www.ag-grid.com/javascript-data-grid/server-side-model-datasource/"
+        ],
+        "behavior": "Unobserved: Observe integrated chart image download; identical image rendering is not assumed.",
+        "test_id": "ag-grid.chart-export.artifact",
+        "result": "unverified"
+      },
+      "product_behavior": "Qualification target: The chosen chart image download is a valid image with the chart's declared dimensions and includes its selected series/labels; export neither replaces grid data nor creates a second pane.",
+      "difference": "unverified",
+      "constraints": [
+        "Record chosen image format and device scale; retain private image evidence with parsed metadata.",
+        "Live reference and installed-host evidence are absent; this requirement is not a pass."
+      ],
+      "hosts": [
+        "dash",
+        "react",
+        "streamlit"
+      ],
+      "required": true,
+      "shared_tests": [
+        "shared.chart-export.artifact"
+      ],
+      "browser_tests": {
+        "dash": [
+          "browser.chart-export.artifact"
+        ],
+        "react": [
+          "browser.chart-export.artifact"
+        ],
+        "streamlit": [
+          "browser.chart-export.artifact"
+        ]
+      }
+    },
+    {
+      "id": "journey-selection.filter-pin-scroll-copy",
+      "inventory_id": "copy-selection",
+      "task": "Combine filter, pin, scroll and copy",
+      "expected": "Filter to München, pin Q1 units, scroll horizontally, select its Q1 units/sales and copy with headers; parsed body is [3,49.75] in displayed order, each header/cell occurs once, and excluded rows are absent.",
+      "ag_grid": {
+        "reference": "ssrm-read-only-v1",
+        "docs": [
+          "https://www.ag-grid.com/javascript-data-grid/clipboard/"
+        ],
+        "behavior": "Unobserved: Observe the full selection sequence on the reference with matching filters/pinning/selection.",
+        "test_id": "ag-grid.journey-selection.filter-pin-scroll-copy",
+        "result": "unverified"
+      },
+      "product_behavior": "Qualification target: Filter to München, pin Q1 units, scroll horizontally, select its Q1 units/sales and copy with headers; parsed body is [3,49.75] in displayed order, each header/cell occurs once, and excluded rows are absent.",
+      "difference": "unverified",
+      "constraints": [
+        "Mandatory combined journey; fixed formatting disabled; same configured display order.",
+        "Live reference and installed-host evidence are absent; this requirement is not a pass."
+      ],
+      "hosts": [
+        "dash",
+        "react",
+        "streamlit"
+      ],
+      "required": true,
+      "shared_tests": [
+        "shared.journey-selection.filter-pin-scroll-copy"
+      ],
+      "browser_tests": {
+        "dash": [
+          "browser.journey-selection.filter-pin-scroll-copy"
+        ],
+        "react": [
+          "browser.journey-selection.filter-pin-scroll-copy"
+        ],
+        "streamlit": [
+          "browser.journey-selection.filter-pin-scroll-copy"
+        ]
+      }
+    },
+    {
+      "id": "journey-analysis.aggregate-expand-swap-export",
+      "inventory_id": "layout-swap",
+      "task": "Combine aggregation, expansion, swap and export",
+      "expected": "Change sales to average, expand region/account, swap axes and download; Q1/Éclair=100.25 and Q1/München=49.75, Q1 grand average=75; exported axes/order and numeric cells equal the independent source oracle.",
+      "ag_grid": {
+        "reference": "ssrm-read-only-v1",
+        "docs": [
+          "https://www.ag-grid.com/javascript-data-grid/server-side-model-pivoting/"
+        ],
+        "behavior": "Unobserved: Observe the same SSRM aggregation/expansion/axis configuration and export constraints.",
+        "test_id": "ag-grid.journey-analysis.aggregate-expand-swap-export",
+        "result": "unverified"
+      },
+      "product_behavior": "Qualification target: Change sales to average, expand region/account, swap axes and download; Q1/Éclair=100.25 and Q1/München=49.75, Q1 grand average=75; exported axes/order and numeric cells equal the independent source oracle.",
+      "difference": "unverified",
+      "constraints": [
+        "Mandatory combined journey; server aggregation must not average subtotal rows.",
+        "Live reference and installed-host evidence are absent; this requirement is not a pass."
+      ],
+      "hosts": [
+        "dash",
+        "react",
+        "streamlit"
+      ],
+      "required": true,
+      "shared_tests": [
+        "shared.journey-analysis.aggregate-expand-swap-export"
+      ],
+      "browser_tests": {
+        "dash": [
+          "browser.journey-analysis.aggregate-expand-swap-export"
+        ],
+        "react": [
+          "browser.journey-analysis.aggregate-expand-swap-export"
+        ],
+        "streamlit": [
+          "browser.journey-analysis.aggregate-expand-swap-export"
+        ]
+      }
+    },
+    {
+      "id": "journey-persistence.resize-density-reload",
+      "inventory_id": "persistence",
+      "task": "Combine resize, density, save and reload",
+      "expected": "Resize the sales column +40 px, choose compact density, save and reload; restored model matches the saved model, width is within 2 CSS px and height within 1 CSS px, with original totals 200/10/-6.75.",
+      "ag_grid": {
+        "reference": "ssrm-read-only-v1",
+        "docs": [
+          "https://www.ag-grid.com/javascript-data-grid/grid-state/"
+        ],
+        "behavior": "Unobserved: Observe state restoration after column resize and row-height configuration.",
+        "test_id": "ag-grid.journey-persistence.resize-density-reload",
+        "result": "unverified"
+      },
+      "product_behavior": "Qualification target: Resize the sales column +40 px, choose compact density, save and reload; restored model matches the saved model, width is within 2 CSS px and height within 1 CSS px, with original totals 200/10/-6.75.",
+      "difference": "unverified",
+      "constraints": [
+        "Mandatory combined journey; fresh origin storage and fixed viewport/font.",
+        "Live reference and installed-host evidence are absent; this requirement is not a pass."
+      ],
+      "hosts": [
+        "dash",
+        "react",
+        "streamlit"
+      ],
+      "required": true,
+      "shared_tests": [
+        "shared.journey-persistence.resize-density-reload"
+      ],
+      "browser_tests": {
+        "dash": [
+          "browser.journey-persistence.resize-density-reload"
+        ],
+        "react": [
+          "browser.journey-persistence.resize-density-reload"
+        ],
+        "streamlit": [
+          "browser.journey-persistence.resize-density-reload"
+        ]
+      }
+    },
+    {
+      "id": "journey-recovery.cancel-new-work",
+      "inventory_id": "large-delivery",
+      "task": "Combine cancel, cleanup and a fresh operation",
+      "expected": "Cancel an expensive export, observe actual server cleanup/admission release, start a new filtered operation and obtain sales 79.75 for München; no stale cancelled response or output mutates the fresh result.",
+      "ag_grid": {
+        "reference": "ssrm-read-only-v1",
+        "docs": [
+          "https://www.ag-grid.com/javascript-data-grid/server-side-model-datasource/"
+        ],
+        "behavior": "Unobserved: Observe equivalent reference operation cancellation where supported; missing server execution accounting is a recorded difference.",
+        "test_id": "ag-grid.journey-recovery.cancel-new-work",
+        "result": "unverified"
+      },
+      "product_behavior": "Qualification target: Cancel an expensive export, observe actual server cleanup/admission release, start a new filtered operation and obtain sales 79.75 for München; no stale cancelled response or output mutates the fresh result.",
+      "difference": "unverified",
+      "constraints": [
+        "Mandatory combined journey; correlate both operation/request IDs and admission lifetime.",
+        "Live reference and installed-host evidence are absent; this requirement is not a pass."
+      ],
+      "hosts": [
+        "dash",
+        "react",
+        "streamlit"
+      ],
+      "required": true,
+      "shared_tests": [
+        "shared.journey-recovery.cancel-new-work"
+      ],
+      "browser_tests": {
+        "dash": [
+          "browser.journey-recovery.cancel-new-work"
+        ],
+        "react": [
+          "browser.journey-recovery.cancel-new-work"
+        ],
+        "streamlit": [
+          "browser.journey-recovery.cancel-new-work"
+        ]
+      }
+    },
+    {
+      "id": "streamlit-no-rerun.local-interactions",
+      "inventory_id": "streamlit-no-rerun",
+      "task": "Scroll and resize without a Streamlit rerun",
+      "expected": "Scrolling the component and resizing a chart pane leave the host script-run counter unchanged, preserve grid state and produce no iframe sizing/permission error.",
+      "ag_grid": {
+        "result": "not_applicable",
+        "reason": "AG Grid is a grid library and has no streamlit host transport or lifecycle analogue."
+      },
+      "product_behavior": "Qualification target: Scrolling the component and resizing a chart pane leave the host script-run counter unchanged, preserve grid state and produce no iframe sizing/permission error.",
+      "difference": "not_comparable",
+      "constraints": [
+        "Counter observed before and after each real interaction; installed wheel frontend loaded.",
+        "Only streamlit is applicable; other hosts are explicitly excluded."
+      ],
+      "hosts": [
+        "streamlit"
+      ],
+      "required": true,
+      "shared_tests": [
+        "shared.streamlit-no-rerun.local-interactions"
+      ],
+      "browser_tests": {
+        "streamlit": [
+          "browser.streamlit-no-rerun.local-interactions"
+        ]
+      }
+    },
+    {
+      "id": "react-direct-transport.v1",
+      "inventory_id": "react-direct-transport",
+      "task": "Use React direct V1 runtime transport",
+      "expected": "Every correlated React request uses a schemaVersion=1 V1 HTTP envelope/direct payload fetch; no Dash callback endpoint is requested; the returned fixture totals 200/10/-6.75 render.",
+      "ag_grid": {
+        "result": "not_applicable",
+        "reason": "AG Grid is a grid library and has no react host transport or lifecycle analogue."
+      },
+      "product_behavior": "Qualification target: Every correlated React request uses a schemaVersion=1 V1 HTTP envelope/direct payload fetch; no Dash callback endpoint is requested; the returned fixture totals 200/10/-6.75 render.",
+      "difference": "not_comparable",
+      "constraints": [
+        "Installed npm tarball and production build; mount/unmount must release transport subscriptions.",
+        "Only react is applicable; other hosts are explicitly excluded."
+      ],
+      "hosts": [
+        "react"
+      ],
+      "required": true,
+      "shared_tests": [
+        "shared.react-direct-transport.v1"
+      ],
+      "browser_tests": {
+        "react": [
+          "browser.react-direct-transport.v1"
+        ]
+      }
+    },
+    {
+      "id": "dash-callback-transport.v1",
+      "inventory_id": "dash-callback-transport",
+      "task": "Use Dash callback runtime transport",
+      "expected": "Dash callback requests/outputs carry the corresponding V1 request identity and semantic layout/filter payload; applying the response renders 200/10/-6.75 with no stale callback update.",
+      "ag_grid": {
+        "result": "not_applicable",
+        "reason": "AG Grid is a grid library and has no dash host transport or lifecycle analogue."
+      },
+      "product_behavior": "Qualification target: Dash callback requests/outputs carry the corresponding V1 request identity and semantic layout/filter payload; applying the response renders 200/10/-6.75 with no stale callback update.",
+      "difference": "not_comparable",
+      "constraints": [
+        "Installed Python wheel; capture callback request/response correlation and error recovery.",
+        "Only dash is applicable; other hosts are explicitly excluded."
+      ],
+      "hosts": [
+        "dash"
+      ],
+      "required": true,
+      "shared_tests": [
+        "shared.dash-callback-transport.v1"
+      ],
+      "browser_tests": {
+        "dash": [
+          "browser.dash-callback-transport.v1"
+        ]
+      }
+    },
+    {
+      "id": "editing.excluded",
+      "inventory_id": "editing",
+      "task": "Cell and row editing are excluded",
+      "expected": "The published flagship contract makes no cell/row editing promise and no editing qualification result is counted toward release.",
+      "ag_grid": {
+        "result": "not_applicable",
+        "reason": "Editing is explicitly outside this read-only qualification scope."
+      },
+      "product_behavior": "Editing remains outside the public component contract.",
+      "difference": "unsupported",
+      "constraints": [
+        "Explicitly excluded; a future editing promise requires a separate contract and evidence."
+      ],
+      "hosts": [],
+      "required": false,
+      "shared_tests": [],
+      "browser_tests": {}
+    }
+  ]
+}
