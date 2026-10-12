@@ -169,7 +169,8 @@ release gate, not a claim of full-tree JavaScript checking.
 Run `npm run typecheck:js` from `dash_tanstack_pivot` to check this project.
 The command includes an in-memory negative probe that must be rejected with
 TS2322. To admit another JS file, add it to
-`tsconfig.checked-js.json`, resolve its diagnostics without blanket
+`tsconfig.checked-js.json` and the `expectedRoots` list in
+`scripts/verify_checked_js_gate.mjs`, resolve its diagnostics without blanket
 suppression, update these coverage counts, and run the host builds and tests.
 Both CI and release run `npm run build`, whose first step is `typecheck`.
 
