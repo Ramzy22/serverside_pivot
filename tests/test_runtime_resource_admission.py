@@ -9,8 +9,11 @@ from pivot_engine.resource_governor import ResourceExhaustedError, ResourceGover
 from pivot_engine.runtime import PivotRequestContext, PivotRuntimeService, PivotViewState
 from pivot_engine.runtime.lifecycle import RuntimeRequestLifecycle
 from pivot_engine.runtime.resilience import CircuitBreaker, PivotRequestTimeout
+from pivot_engine.runtime.tree_service import TreeRuntimeService
 from pivot_engine.tanstack_adapter import TanStackResponse
 from pivot_engine.backends.duckdb_backend import DuckDBBackend
+from pivot_engine.backends.execution import CancellationUnavailableError
+from pivot_engine.backends.ibis_backend import IbisBackend
 
 
 def _governor(**limits):
@@ -147,6 +150,95 @@ async def test_cancelled_query_keeps_its_tenant_slot_until_cleanup():
         release.set()
         with pytest.raises(asyncio.CancelledError):
             await task
+    assert governor.snapshot()["reserved_bytes"] == 0
+
+
+@pytest.mark.asyncio
+async def test_cancelled_noncancellable_ibis_query_keeps_capacity_until_executor_exits():
+    governor = _governor(max_queries=1, query_bytes=64)
+    lifecycle = RuntimeRequestLifecycle(resource_governor=governor)
+    context = PivotRequestContext(table="sales")
+    started, release, finished = threading.Event(), threading.Event(), threading.Event()
+
+    class UnsupportedConnection:
+        name = "unsupported"
+
+    class BlockingExpression:
+        def execute(self):
+            started.set()
+            try:
+                if not release.wait(5):
+                    raise AssertionError("test did not release the executor thread")
+                return [{"value": 1}]
+            finally:
+                finished.set()
+
+    backend = IbisBackend(connection=UnsupportedConnection())
+    task = asyncio.create_task(lifecycle.run_backend_operation(
+        context, "data",
+        lambda: backend.execute_async({"ibis_expr": BlockingExpression()}, return_arrow=False),
+        resource_kind=ResourceKind.QUERY, reservation_bytes=64,
+    ))
+    try:
+        assert await asyncio.to_thread(started.wait, 2)
+        task.cancel()
+        with pytest.raises(asyncio.TimeoutError):
+            await asyncio.wait_for(asyncio.shield(task), timeout=0.05)
+        task.cancel()
+        with pytest.raises(asyncio.TimeoutError):
+            await asyncio.wait_for(asyncio.shield(task), timeout=0.05)
+        assert governor.snapshot()["active_slots"]["query"] == 1
+        assert governor.snapshot()["reserved_bytes_by_kind"]["query"] == 64
+        with pytest.raises(ResourceExhaustedError):
+            await lifecycle.run_backend_operation(context, "data", lambda: None)
+    finally:
+        release.set()
+        with pytest.raises(CancellationUnavailableError):
+            await asyncio.wait_for(task, timeout=2)
+        backend.close()
+    assert finished.is_set()
+    assert governor.snapshot()["reserved_bytes"] == 0
+
+
+@pytest.mark.asyncio
+async def test_cancelled_tree_query_keeps_capacity_until_executor_exits():
+    governor = _governor(max_queries=1, query_bytes=64)
+    lifecycle = RuntimeRequestLifecycle(resource_governor=governor)
+    context = PivotRequestContext(table="sales")
+    started, release, finished = threading.Event(), threading.Event(), threading.Event()
+
+    class BlockingTreeExpression:
+        def execute(self):
+            started.set()
+            try:
+                if not release.wait(5):
+                    raise AssertionError("test did not release the tree executor")
+                return [{"node": "north"}]
+            finally:
+                finished.set()
+
+    task = asyncio.create_task(lifecycle.run_backend_operation(
+        context, "data",
+        lambda: TreeRuntimeService._execute_rows_async(BlockingTreeExpression()),
+        resource_kind=ResourceKind.QUERY, reservation_bytes=64,
+    ))
+    try:
+        assert await asyncio.to_thread(started.wait, 2)
+        task.cancel()
+        with pytest.raises(asyncio.TimeoutError):
+            await asyncio.wait_for(asyncio.shield(task), timeout=0.05)
+        task.cancel()
+        with pytest.raises(asyncio.TimeoutError):
+            await asyncio.wait_for(asyncio.shield(task), timeout=0.05)
+        assert governor.snapshot()["active_slots"]["query"] == 1
+        assert governor.snapshot()["reserved_bytes_by_kind"]["query"] == 64
+        with pytest.raises(ResourceExhaustedError):
+            await lifecycle.run_backend_operation(context, "data", lambda: None)
+    finally:
+        release.set()
+        with pytest.raises(asyncio.CancelledError):
+            await asyncio.wait_for(task, timeout=2)
+    assert finished.is_set()
     assert governor.snapshot()["reserved_bytes"] == 0
 
 

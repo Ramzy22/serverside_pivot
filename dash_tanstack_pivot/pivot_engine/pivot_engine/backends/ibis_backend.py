@@ -381,6 +381,15 @@ class IbisBackend:
             return await asyncio.shield(task)
         except asyncio.CancelledError as exc:
             # The underlying executor future cannot stop the physical query.
+            # Keep the runtime reservation owned until that thread actually
+            # exits, even if the caller cancels this wrapper again.
+            while not task.done():
+                try:
+                    await asyncio.shield(task)
+                except asyncio.CancelledError:
+                    continue
+                except Exception:
+                    break
             # Do not let an outer asyncio timeout claim database cancellation.
             raise CancellationUnavailableError() from exc
         finally:

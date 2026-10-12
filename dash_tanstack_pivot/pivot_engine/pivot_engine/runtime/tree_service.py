@@ -401,7 +401,20 @@ class TreeRuntimeService:
                 return frame
             return []
 
-        return await loop.run_in_executor(None, execute_rows)
+        worker = loop.run_in_executor(None, execute_rows)
+        try:
+            return await asyncio.shield(worker)
+        except asyncio.CancelledError:
+            # Cancelling the await cannot stop the executor thread. Keep the
+            # caller's query reservation alive until that thread exits.
+            while not worker.done():
+                try:
+                    await asyncio.shield(worker)
+                except asyncio.CancelledError:
+                    continue
+                except Exception:
+                    break
+            raise
 
     def _coerce_values_for_field(
         self,
