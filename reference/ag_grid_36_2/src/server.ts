@@ -4,7 +4,7 @@ import { createServer, type IncomingMessage, type RequestListener, type ServerRe
 import { extname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { createServer as createViteServer } from 'vite';
-import { queryRows, type QueryRequest } from './fixture.ts';
+import { distinctFilterValues, queryRows, type QueryRequest } from './fixture.ts';
 
 const appRoot = fileURLToPath(new URL('..', import.meta.url));
 const fixturePath = fileURLToPath(new URL('../../../tests/data/flagship_parity_rows.json', import.meta.url));
@@ -13,6 +13,12 @@ const rawFixture = readFileSync(fixturePath);
 const fixture = JSON.parse(rawFixture.toString('utf8'));
 const config = JSON.parse(readFileSync(configPath, 'utf8'));
 const fixtureSha256 = createHash('sha256').update(rawFixture).digest('hex');
+const filterValues = Object.fromEntries(
+  (config.filterValueFields as string[]).map((field) => [
+    field,
+    distinctFilterValues(fixture.rows, field, {}),
+  ]),
+);
 const trace: Array<Record<string, unknown>> = [];
 
 function json(response: ServerResponse, status: number, body: unknown): void {
@@ -51,11 +57,21 @@ export function createReferenceHandler(fallback: RequestListener = staticFallbac
     void (async () => {
       const pathname = new URL(request.url || '/', 'http://localhost').pathname;
       if (pathname === '/reference-config.json' && request.method === 'GET') {
-        json(response, 200, { ...config, fixtureSha256 });
+        json(response, 200, { ...config, filterValues, fixtureSha256 });
         return;
       }
       if (pathname === '/request-trace.json' && request.method === 'GET') {
         json(response, 200, trace);
+        return;
+      }
+      if (pathname === '/api/filter-values' && request.method === 'POST') {
+        const payload = await readRequest(request) as { field?: string; filterModel?: QueryRequest['filterModel'] };
+        if (!payload || typeof payload.field !== 'string' || !config.filterValueFields.includes(payload.field)
+            || !payload.filterModel || typeof payload.filterModel !== 'object' || Array.isArray(payload.filterModel)) {
+          json(response, 400, { error: 'Invalid Set Filter values request' });
+          return;
+        }
+        json(response, 200, { values: distinctFilterValues(fixture.rows, payload.field, payload.filterModel) });
         return;
       }
       if (pathname === '/api/rows' && request.method === 'POST') {

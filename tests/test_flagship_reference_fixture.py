@@ -35,6 +35,7 @@ def test_reference_config_uses_real_ssrm_and_required_modules():
     assert config["options"]["cellSelection"] is True
     assert config["options"]["locale"] == "en-GB"
     assert set(expected["modules"]).issubset(config["modules"])
+    assert "FiltersToolPanelModule" in config["modules"]
 
 
 def test_fixture_preserves_oracle_and_copy_edge_cases():

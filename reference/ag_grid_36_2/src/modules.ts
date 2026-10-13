@@ -1,0 +1,25 @@
+import {
+  ColumnApiModule, CsvExportModule, GridStateModule, ModuleRegistry,
+  NumberFilterModule, TextFilterModule,
+} from 'ag-grid-community';
+import {
+  CellSelectionModule, ClipboardModule, ColumnMenuModule, ColumnsToolPanelModule,
+  ContextMenuModule, ExcelExportModule, FiltersToolPanelModule, IntegratedChartsModule,
+  PivotModule, RowGroupingModule, RowGroupingPanelModule, ServerSideRowModelModule,
+  SetFilterModule,
+} from 'ag-grid-enterprise';
+import { AgChartsEnterpriseModule } from 'ag-charts-enterprise';
+
+const referenceModules = [
+  ServerSideRowModelModule, RowGroupingModule, PivotModule, CellSelectionModule,
+  ClipboardModule, CsvExportModule, ExcelExportModule,
+  IntegratedChartsModule.with(AgChartsEnterpriseModule), GridStateModule,
+  ColumnMenuModule, ContextMenuModule, ColumnsToolPanelModule, FiltersToolPanelModule,
+  RowGroupingPanelModule, SetFilterModule, TextFilterModule, NumberFilterModule,
+  ColumnApiModule,
+];
+
+export function registerReferenceModules() {
+  ModuleRegistry.registerModules(referenceModules);
+  return referenceModules;
+}

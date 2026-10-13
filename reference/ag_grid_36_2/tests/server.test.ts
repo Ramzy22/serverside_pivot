@@ -20,6 +20,10 @@ test('reference config reports pinned options, modules and raw fixture SHA-256',
   assert.equal(config.fixtureSha256, createHash('sha256').update(raw).digest('hex'));
   assert.equal(config.options.rowModelType, 'serverSide');
   assert.equal(config.options.pivotMode, true);
+  assert.deepEqual(config.filterValues.region, ['Éclair', 'München', 'São Paulo']);
+  assert.deepEqual(config.filterValues.account, ['東京', 'القاهرة', '北京']);
+  assert.deepEqual(config.filterValues.scope, ['Included', 'Excluded']);
+  assert.deepEqual(config.filterValues.period, ['Q1', 'Q2']);
 });
 
 test('HTTP datasource processes and records an actual SSRM getRows request', async () => {
@@ -41,4 +45,55 @@ test('HTTP datasource processes and records an actual SSRM getRows request', asy
   const trace = await (await fetch(`${origin}/request-trace.json`)).json();
   assert.equal(trace.at(-1).request.startRow, 0);
   assert.equal(trace.at(-1).response.rowCount, 2);
+});
+
+test('Set Filter values reflect the active other-column filter context', async () => {
+  const filtered = await fetch(`${origin}/api/filter-values`, {
+    method: 'POST', headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ field: 'region', filterModel: { scope: { filterType: 'set', values: ['Included'] } } }),
+  });
+  assert.equal(filtered.status, 200);
+  assert.deepEqual((await filtered.json()).values, ['Éclair', 'München']);
+  const scope = await fetch(`${origin}/api/filter-values`, {
+    method: 'POST', headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ field: 'scope', filterModel: { scope: { filterType: 'set', values: ['Included'] } } }),
+  });
+  assert.deepEqual((await scope.json()).values, ['Included', 'Excluded']);
+});
+
+test('HTTP SSRM aggregation honors first and last rather than summing', async () => {
+  const request = {
+    startRow: 0, endRow: 50,
+    rowGroupCols: [{ id: 'region', field: 'region' }], groupKeys: [],
+    pivotCols: [], pivotMode: false,
+    filterModel: { scope: { filterType: 'set', values: ['Included'] } }, sortModel: [],
+  };
+  for (const [aggFunc, expected] of [['first', 100.25], ['last', 20]] as const) {
+    const response = await fetch(`${origin}/api/rows`, {
+      method: 'POST', headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ ...request, valueCols: [{ id: 'ventes_€', field: 'ventes_€', aggFunc }] }),
+    });
+    assert.equal(response.status, 200);
+    const result = await response.json();
+    assert.equal(result.rowData.find((row: { region: string }) => row.region === 'Éclair')['ventes_€'], expected);
+  }
+});
+
+test('HTTP SSRM blank Set Filter includes both empty and null source cells', async () => {
+  const request = {
+    startRow: 0, endRow: 50, rowGroupCols: [], groupKeys: [], pivotCols: [], valueCols: [],
+    pivotMode: false, sortModel: [],
+    filterModel: { scope: { filterType: 'set', values: ['Included'] }, copyEmpty: { filterType: 'set', values: [null] } },
+  };
+  const empty = await fetch(`${origin}/api/rows`, {
+    method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(request),
+  });
+  assert.equal(empty.status, 200);
+  assert.deepEqual((await empty.json()).rowData.map((row: { rowId: string }) => row.rowId), ['q2-munchen']);
+  const missing = await fetch(`${origin}/api/rows`, {
+    method: 'POST', headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ ...request, filterModel: { ...request.filterModel, copyEmpty: undefined, copyNull: { filterType: 'set', values: [null] } } }),
+  });
+  assert.equal(missing.status, 200);
+  assert.deepEqual((await missing.json()).rowData.map((row: { rowId: string }) => row.rowId), ['q2-munchen']);
 });

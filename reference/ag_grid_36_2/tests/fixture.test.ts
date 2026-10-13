@@ -64,3 +64,29 @@ test('SSRM returns distinct sorted groups after a set filter and windows the res
   assert.equal(result.rowCount, 2);
   assert.deepEqual(result.rowData.map((row) => row.region), ['Éclair']);
 });
+
+test('SSRM first and last aggregation use source order within a group', () => {
+  const request = { ...baseRequest, pivotMode: false, pivotCols: [], valueCols: [{ id: 'ventes_€', field: 'ventes_€', aggFunc: 'first' }] };
+  const first = queryRows(fixture.rows, request);
+  assert.equal(first.rowData.find((row) => row.region === 'Éclair')?.['ventes_€'], 100.25);
+  const last = queryRows(fixture.rows, { ...request, valueCols: [{ id: 'ventes_€', field: 'ventes_€', aggFunc: 'last' }] });
+  assert.equal(last.rowData.find((row) => row.region === 'Éclair')?.['ventes_€'], 20);
+  assert.throws(
+    () => queryRows(fixture.rows, { ...request, valueCols: [{ id: 'ventes_€', field: 'ventes_€', aggFunc: 'median' }] }),
+    /Unsupported SSRM aggregation: median/,
+  );
+});
+
+test('SSRM Set Filter blank model matches empty strings and nulls', () => {
+  const request = { ...baseRequest, rowGroupCols: [], pivotMode: false, pivotCols: [], valueCols: [] };
+  const empty = queryRows(fixture.rows, { ...request, filterModel: {
+    scope: { filterType: 'set', values: ['Included'] },
+    copyEmpty: { filterType: 'set', values: [null] },
+  } });
+  assert.deepEqual(empty.rowData.map((row) => row.rowId), ['q2-munchen']);
+  const missing = queryRows(fixture.rows, { ...request, filterModel: {
+    scope: { filterType: 'set', values: ['Included'] },
+    copyNull: { filterType: 'set', values: [null] },
+  } });
+  assert.deepEqual(missing.rowData.map((row) => row.rowId), ['q2-munchen']);
+});

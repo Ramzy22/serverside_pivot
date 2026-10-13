@@ -26,9 +26,10 @@ export type QueryResult = {
 
 const fieldOf = (column: Column): string => column.field || column.id;
 const keyOf = (value: unknown): string => value == null ? '' : String(value);
+const setKeyOf = (value: unknown): string | null => value == null || value === '' ? null : String(value).toLocaleLowerCase('en-GB');
 
 function matchesOne(value: unknown, filter: Filter): boolean {
-  if (filter.values) return filter.values.some((candidate) => candidate === value);
+  if (filter.values) return filter.values.some((candidate) => setKeyOf(candidate) === setKeyOf(value));
   if (filter.conditions?.length) {
     const values = filter.conditions.map((condition) => matchesOne(value, condition));
     return filter.operator === 'OR' ? values.some(Boolean) : values.every(Boolean);
@@ -49,6 +50,13 @@ function matchesOne(value: unknown, filter: Filter): boolean {
   }
 }
 
+export function distinctFilterValues(sourceRows: DataRow[], field: string, filterModel: Record<string, Filter>): unknown[] {
+  const matching = sourceRows.filter((row) => Object.entries(filterModel || {}).every(
+    ([otherField, filter]) => otherField === field || matchesOne(row[otherField], filter),
+  ));
+  return Array.from(new Set(matching.map((row) => row[field])));
+}
+
 function aggregate(rows: DataRow[], column: Column): number | null {
   const values = rows.map((row) => row[fieldOf(column)]).filter((value): value is number => typeof value === 'number');
   if (!values.length) return null;
@@ -57,7 +65,10 @@ function aggregate(rows: DataRow[], column: Column): number | null {
     case 'min': return Math.min(...values);
     case 'max': return Math.max(...values);
     case 'count': return values.length;
-    default: return values.reduce((sum, value) => sum + value, 0);
+    case 'first': return values[0];
+    case 'last': return values[values.length - 1];
+    case 'sum': return values.reduce((sum, value) => sum + value, 0);
+    default: throw new Error(`Unsupported SSRM aggregation: ${column.aggFunc}`);
   }
 }
 
