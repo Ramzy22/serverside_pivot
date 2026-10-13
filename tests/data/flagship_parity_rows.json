@@ -1,0 +1,11 @@
+{
+  "id": "flagship-qualification-v1",
+  "locale": "en-GB",
+  "rows": [
+    {"rowId": "q1-eclair", "region": "Éclair", "account": "東京", "scope": "Included", "period": "Q1", "ventes_€": 100.25, "unités": 2, "écart": -12.5, "extrema": 100, "copyTab": "left\tright", "copyLF": "", "copyCRLF": "", "copyUnicode": "Éclair", "copyNull": "value", "copyEmpty": "value"},
+    {"rowId": "q2-eclair", "region": "Éclair", "account": "東京", "scope": "Included", "period": "Q2", "ventes_€": 20.0, "unités": 1, "écart": 2.5, "extrema": 100, "copyTab": "", "copyLF": "first\nsecond", "copyCRLF": "", "copyUnicode": "東京", "copyNull": "value", "copyEmpty": "value"},
+    {"rowId": "q1-munchen", "region": "München", "account": "القاهرة", "scope": "Included", "period": "Q1", "ventes_€": 49.75, "unités": 3, "écart": 4.25, "extrema": -100, "copyTab": "", "copyLF": "", "copyCRLF": "first\r\nsecond", "copyUnicode": "القاهرة", "copyNull": "value", "copyEmpty": "value"},
+    {"rowId": "q2-munchen", "region": "München", "account": "القاهرة", "scope": "Included", "period": "Q2", "ventes_€": 30.0, "unités": 4, "écart": -1.0, "extrema": -100, "copyTab": "", "copyLF": "", "copyCRLF": "", "copyUnicode": "Éclair München 東京 القاهرة 🚀", "copyNull": null, "copyEmpty": ""},
+    {"rowId": "q1-sao-paulo", "region": "São Paulo", "account": "北京", "scope": "Excluded", "period": "Q1", "ventes_€": 999999.5, "unités": 11, "écart": 99.0, "extrema": 0, "copyTab": "", "copyLF": "", "copyCRLF": "", "copyUnicode": "São Paulo 北京", "copyNull": null, "copyEmpty": ""}
+  ]
+}

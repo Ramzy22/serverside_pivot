@@ -8,7 +8,9 @@ published example to a database, credentials, or a generated data file.
 from __future__ import annotations
 
 from functools import lru_cache
+import json
 import os
+from pathlib import Path
 from random import Random
 from typing import Any
 
@@ -49,8 +51,19 @@ def _qualification_data_enabled() -> bool:
     return os.environ.get("PIVOT_FLAGSHIP_EXPORT_QUALIFICATION_DATA") == "1"
 
 
+def _parity_data_enabled() -> bool:
+    return os.environ.get("PIVOT_FLAGSHIP_PARITY_DATA") == "1"
+
+
+def _parity_rows() -> list[dict[str, Any]]:
+    fixture_path = Path(__file__).resolve().parents[1] / "tests" / "data" / "flagship_parity_rows.json"
+    return json.loads(fixture_path.read_text(encoding="utf-8"))["rows"]
+
+
 def build_demo_table(row_count: int = DEMO_ROW_COUNT) -> pa.Table:
     """Build a stable analytics dataset with useful categorical cardinality."""
+    if _parity_data_enabled():
+        return pa.Table.from_pylist(_parity_rows())
     if _qualification_data_enabled():
         return pa.Table.from_pylist(QUALIFICATION_SOURCE_ROWS)
 
@@ -111,7 +124,7 @@ def get_demo_adapter():
 
 def workspace_config(host: str) -> dict[str, Any]:
     """Return public workspace props shared by all three flagship hosts."""
-    if _qualification_data_enabled():
+    if _qualification_data_enabled() or _parity_data_enabled():
         return {
             "id": f"flagship-{host}-pivot",
             "table": TABLE_NAME,
@@ -124,7 +137,10 @@ def workspace_config(host: str) -> dict[str, Any]:
                 {"field": "unités", "agg": "sum", "label": "Unités"},
                 {"field": "écart", "agg": "sum", "label": "Écart"},
             ],
-            "availableFieldList": ["region", "account", "scope", "period", "ventes_€", "unités", "écart"],
+            "availableFieldList": [
+                "region", "account", "scope", "period", "ventes_€", "unités", "écart",
+                *(["rowId", "extrema", "copyTab", "copyLF", "copyCRLF", "copyUnicode", "copyNull", "copyEmpty"] if _parity_data_enabled() else []),
+            ],
             "filters": {
                 "scope": {
                     "operator": "AND",
