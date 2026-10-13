@@ -4,13 +4,20 @@
   "version": "0.0.88",
   "type": "module",
   "scripts": {
-    "dev": "node ../../dash_tanstack_pivot/node_modules/vite/bin/vite.js --config vite.config.ts",
-    "build": "node ../../dash_tanstack_pivot/node_modules/vite/bin/vite.js build --config vite.config.ts"
+    "dev": "vite --config vite.config.ts",
+    "build": "vite build --config vite.config.ts",
+    "preview": "vite preview --config vite.config.ts --host 127.0.0.1 --port 5174 --strictPort"
   },
   "dependencies": {
-    "dash_tanstack_pivot": "^0.0.88",
+    "dash_tanstack_pivot": "file:./release-package.tgz",
     "react": "^18.3.1",
     "react-dom": "^18.3.1",
     "styled-components": "^6.1.17"
+  },
+  "devDependencies": {
+    "@types/react": "^18.3.18",
+    "@types/react-dom": "^18.3.5",
+    "typescript": "^5.8.3",
+    "vite": "^6.2.2"
   }
 }
