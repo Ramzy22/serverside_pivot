@@ -6,6 +6,8 @@
   "options": {
     "rowModelType": "serverSide",
     "pivotMode": true,
+    "grandTotalRow": "bottom",
+    "pivotRowTotals": "after",
     "cellSelection": true,
     "useValueFormatterForExport": true,
     "suppressClipboardPaste": true,

@@ -23,10 +23,34 @@ test('SSRM root groups aggregate filtered pivot values and report a row count', 
   assert.deepEqual(result.pivotResultFields, [
     'Q1|ventes_€', 'Q1|unités', 'Q1|écart',
     'Q2|ventes_€', 'Q2|unités', 'Q2|écart',
+    'Total|ventes_€', 'Total|unités', 'Total|écart',
   ]);
   assert.deepEqual(result.rowData.map((row) => [row.region, row['Q1|ventes_€'], row['Q2|ventes_€']]), [
     ['Éclair', 100.25, 20], ['München', 49.75, 30],
   ]);
+});
+
+test('SSRM root supplies independently aggregated grand totals for each pivot and measure', () => {
+  const result = queryRows(fixture.rows, baseRequest);
+  assert.equal(result.grandTotalData?.['Q1|ventes_€'], 150);
+  assert.equal(result.grandTotalData?.['Q2|ventes_€'], 50);
+  assert.equal(result.grandTotalData?.['Q1|unités'], 5);
+  assert.equal(result.grandTotalData?.['Q2|unités'], 5);
+  assert.equal(result.grandTotalData?.['Q1|écart'], -8.25);
+  assert.equal(result.grandTotalData?.['Q2|écart'], 1.5);
+  assert.equal(result.grandTotalData?.['ventes_€'], 200);
+  assert.equal(result.grandTotalData?.['unités'], 10);
+  assert.equal(result.grandTotalData?.['écart'], -6.75);
+});
+
+test('SSRM pivot result exposes period and total columns for each grouped row', () => {
+  const result = queryRows(fixture.rows, baseRequest);
+  assert.ok(result.pivotResultFields?.includes('Total|ventes_€'));
+  assert.ok(result.pivotResultFields?.includes('Total|unités'));
+  assert.ok(result.pivotResultFields?.includes('Total|écart'));
+  assert.equal(result.rowData.find((row) => row.region === 'Éclair')?.['Total|ventes_€'], 120.25);
+  assert.equal(result.rowData.find((row) => row.region === 'München')?.['Total|ventes_€'], 79.75);
+  assert.equal(result.grandTotalData?.['Total|ventes_€'], 200);
 });
 
 test('SSRM child route uses group keys and requested window', () => {

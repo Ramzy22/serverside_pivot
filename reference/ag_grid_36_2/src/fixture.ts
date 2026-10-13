@@ -22,6 +22,7 @@ export type QueryResult = {
   rowData: DataRow[];
   rowCount: number;
   pivotResultFields?: string[];
+  grandTotalData?: DataRow;
 };
 
 const fieldOf = (column: Column): string => column.field || column.id;
@@ -92,6 +93,7 @@ export function queryRows(sourceRows: DataRow[], request: QueryRequest): QueryRe
     ? Array.from(new Set(filtered.map((row) => request.pivotCols.map((column) => keyOf(row[fieldOf(column)])).join('|'))))
       .sort((left, right) => compare(left, right))
       .flatMap((key) => request.valueCols.map((column) => `${key}|${column.id}`))
+      .concat(request.valueCols.map((column) => `Total|${column.id}`))
     : undefined;
   let result: DataRow[];
   if (grouping) {
@@ -108,7 +110,7 @@ export function queryRows(sourceRows: DataRow[], request: QueryRequest): QueryRe
         for (const pivotField of pivotFields) {
           const parts = pivotField.split('|');
           const column = request.valueCols.find((item) => item.id === parts.at(-1))!;
-          const matching = rows.filter((row) => request.pivotCols.every((item, index) => keyOf(row[fieldOf(item)]) === parts[index]));
+          const matching = parts[0] === 'Total' ? rows : rows.filter((row) => request.pivotCols.every((item, index) => keyOf(row[fieldOf(item)]) === parts[index]));
           output[pivotField] = aggregate(matching, column);
         }
       } else {
@@ -123,7 +125,7 @@ export function queryRows(sourceRows: DataRow[], request: QueryRequest): QueryRe
         for (const pivotField of pivotFields) {
           const parts = pivotField.split('|');
           const column = request.valueCols.find((item) => item.id === parts.at(-1))!;
-          output[pivotField] = request.pivotCols.every((item, index) => keyOf(row[fieldOf(item)]) === parts[index])
+          output[pivotField] = (parts[0] === 'Total' || request.pivotCols.every((item, index) => keyOf(row[fieldOf(item)]) === parts[index]))
             ? aggregate([row], column) : null;
         }
       }
@@ -143,5 +145,17 @@ export function queryRows(sourceRows: DataRow[], request: QueryRequest): QueryRe
     rowData: result.slice(request.startRow, request.endRow),
     rowCount: result.length,
     ...(pivotFields ? { pivotResultFields: pivotFields } : {}),
+    ...(!request.groupKeys.length ? {
+      grandTotalData: Object.fromEntries([
+        ...request.valueCols.map((column) => [column.id, aggregate(filtered, column)]),
+        ...(pivotFields || []).map((pivotField) => {
+          const parts = pivotField.split('|');
+          const column = request.valueCols.find((item) => item.id === parts.at(-1))!;
+          const matching = parts[0] === 'Total' ? filtered : filtered.filter((row) => request.pivotCols.every((item, index) =>
+            keyOf(row[fieldOf(item)]) === parts[index]));
+          return [pivotField, aggregate(matching, column)];
+        }),
+      ]),
+    } : {}),
   };
 }
