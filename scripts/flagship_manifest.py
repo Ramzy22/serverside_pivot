@@ -13,11 +13,14 @@ import hashlib
 import json
 from pathlib import Path
 import re
+import subprocess
+import tempfile
 from typing import Mapping, Sequence
 import xml.etree.ElementTree as ET
 
 from scripts.flagship_artifacts import ArtifactBinding
-from tests.flagship_contract import CaseResult, DIFFERENCES, HOSTS, Requirement, RESULTS
+from tests.flagship_capabilities import CAPABILITIES
+from tests.flagship_contract import CaseResult, DIFFERENCES, HOSTS, Requirement, RESULTS, load_requirements, validate_requirements
 
 
 @dataclass(frozen=True)
@@ -49,6 +52,30 @@ def _hash(value: object) -> bool:
 
 def _identifier(value: object) -> bool:
     return isinstance(value, str) and re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_.:-]{0,159}", value) is not None
+
+
+def read_committed_contract(binding: ArtifactBinding) -> bytes:
+    """Read the exact contract archived for the build, ignoring worktree drift."""
+    if not isinstance(binding.source_commit, str) or re.fullmatch(r"[0-9a-f]{40}|[0-9a-f]{64}", binding.source_commit) is None:
+        raise ValueError("invalid contract source commit")
+    repository = binding.paths.get("source_repository", Path(__file__).resolve().parents[1])
+    return subprocess.run(
+        ["git", "show", f"{binding.source_commit}:tests/flagship_requirements.json"],
+        cwd=repository, check=True, capture_output=True,
+    ).stdout
+
+
+def load_committed_requirements(binding: ArtifactBinding) -> tuple[Requirement, ...]:
+    """Validate the complete inventory and hash-bound contract from source Git."""
+    data = read_committed_contract(binding)
+    if hashlib.sha256(data).hexdigest() != binding.sha256.get("contract"):
+        raise ValueError("contract hash does not match built source commit")
+    with tempfile.TemporaryDirectory(prefix="pf-contract-") as directory:
+        path = Path(directory) / "requirements.json"
+        path.write_bytes(data)
+        requirements = load_requirements(path)
+    validate_requirements(requirements, CAPABILITIES)
+    return requirements
 
 
 def _binding_valid(binding: ArtifactBinding) -> bool:
@@ -126,15 +153,23 @@ def _case_issues(case: CaseResult, binding: ArtifactBinding, requirement: Requir
                 data = path.read_bytes()
                 if hashlib.sha256(data).hexdigest() != case.evidence_sha256.get(name):
                     issues.append("evidence_invalid")
-                if case.system == "ag_grid" and path.suffix == ".json":
+                if path.suffix == ".json":
                     observations.append(json.loads(data))
             except (OSError, ValueError, TypeError):
                 issues.append("evidence_invalid")
         if case.system == "product" and browser_case:
             expected = binding.expected_loaded_assets.get(case.host, {})
+            observed_assets = {}
+            for observation in observations:
+                if isinstance(observation, dict) and isinstance(observation.get("loadedAssetSha256"), dict):
+                    for path, value in observation["loadedAssetSha256"].items():
+                        if path in observed_assets and observed_assets[path] != value:
+                            issues.append("asset_mismatch")
+                        observed_assets[path] = value
             if (not isinstance(case.loaded_assets, Mapping) or not case.loaded_assets
                     or not any(isinstance(path, str) and path.endswith((".js", ".mjs")) for path in case.loaded_assets)
-                    or any(expected.get(path) != value for path, value in case.loaded_assets.items())):
+                    or any(expected.get(path) != value for path, value in case.loaded_assets.items())
+                    or observed_assets != case.loaded_assets):
                 issues.append("asset_mismatch")
         elif case.system == "ag_grid":
             def live(observation):
@@ -149,12 +184,65 @@ def _case_issues(case: CaseResult, binding: ArtifactBinding, requirement: Requir
                         and config.get("fixtureSha256") == binding.sha256.get("fixture")
                         and (config.get("rowModelType") == "serverSide" or isinstance(options, dict) and options.get("rowModelType") == "serverSide")
                         and isinstance(options, dict)
-                        and all(options.get(key) == value for key, value in requirement.ag_grid.get("options", {}).items())
-                        and isinstance(observation.get("trace"), list) and bool(observation["trace"])
+                        and _reference_options_match(config, requirement.ag_grid.get("options", {}))
+                        and _live_ssrm_trace(observation.get("trace"), options)
                         and isinstance(observation.get("observed"), str) and bool(observation["observed"].strip()))
             if not any(live(item) for item in observations):
                 issues.append("reference_unobserved")
     return sorted(set(issues))
+
+
+def _reference_options_match(config: Mapping, required: Mapping) -> bool:
+    options = config.get("options", {})
+    for key, value in required.items():
+        if key == "modules":
+            # Task 3 records the module registry beside grid options. Extra
+            # supporting modules do not weaken the required baseline.
+            modules = config.get("modules", options.get("modules", []))
+            if (not isinstance(modules, list) or not all(isinstance(module, str) for module in modules)
+                    or not isinstance(value, list) or not set(value) <= set(modules)):
+                return False
+        elif options.get(key) != value:
+            return False
+    return True
+
+
+def _live_ssrm_trace(trace: object, options: Mapping) -> bool:
+    """Require a datasource request and successful response for this config.
+
+    Reference hooks retain the actual getRows payload and parsed HTTP result.
+    A label, empty object or request-only event is not a live observation.
+    """
+    if not isinstance(trace, list):
+        return False
+    for entry in trace:
+        if not isinstance(entry, dict) or entry.get("error"):
+            continue
+        request, response = entry.get("request"), entry.get("response")
+        if not isinstance(request, dict) or not isinstance(response, dict):
+            continue
+        start, end = request.get("startRow"), request.get("endRow")
+        rows, count = response.get("rowData"), response.get("rowCount")
+        if (type(start) is not int or type(end) is not int or start < 0 or end <= start
+                or not isinstance(rows, list) or not rows or not all(isinstance(row, dict) and row for row in rows)
+                or type(count) is not int or count < len(rows)
+                or len(rows) > end - start
+                or not isinstance(request.get("groupKeys"), list)
+                or not all(isinstance(key, str) for key in request["groupKeys"])
+                or not isinstance(request.get("filterModel"), dict)
+                or not isinstance(request.get("sortModel"), list)
+                or request.get("pivotMode") is not options.get("pivotMode")):
+            continue
+        columns_match = True
+        for key, option in (("rowGroupCols", "rowGroupFields"), ("pivotCols", "pivotFields"), ("valueCols", "valueFields")):
+            columns = request.get(key)
+            if (not isinstance(columns, list) or not all(isinstance(column, dict) and isinstance(column.get("field"), str) for column in columns)
+                    or [column["field"] for column in columns] != options.get(option)):
+                columns_match = False
+                break
+        if columns_match and len(request["groupKeys"]) <= len(request["rowGroupCols"]):
+            return True
+    return False
 
 
 def _status(cases: list[dict]) -> str:
@@ -173,6 +261,12 @@ def evaluate_manifest(requirements: tuple[Requirement, ...], binding: ArtifactBi
     """
     requirements = tuple(requirements)
     global_issues = []
+    try:
+        validate_requirements(requirements, CAPABILITIES)
+        if requirements != load_committed_requirements(binding):
+            raise ValueError("requirements differ from the built source contract")
+    except (OSError, ValueError, TypeError, subprocess.CalledProcessError):
+        global_issues.append("contract_invalid")
     if (not requirements or len({item.id for item in requirements}) != len(requirements)
             or not any(item.required for item in requirements)
             or any(not _identifier(item.id) or not set(item.hosts) <= set(HOSTS)
@@ -338,7 +432,7 @@ def publish_safe_manifest(raw: Mapping[str, object], destination: Path) -> None:
         "issues": issues(raw.get("issues", [])),
         "systemIssues": {system: issues(raw.get("systemIssues", {}).get(system, [])) for system in ("product", "ag_grid")},
         "binding": {"sourceCommit": binding.get("sourceCommit") if isinstance(binding.get("sourceCommit"), str) and re.fullmatch(r"[0-9a-f]{40}|[0-9a-f]{64}", binding["sourceCommit"]) else None,
-            "sha256": {key: hashes[key] for key in ("source_commit", "wheel", "npm_tarball", "fixture") if _hash(hashes.get(key))},
+            "sha256": {key: hashes[key] for key in ("source_commit", "contract", "wheel", "npm_tarball", "fixture") if _hash(hashes.get(key))},
             "versions": {key: versions[key] for key in ("python", "node", "npm", "dash", "react", "streamlit", "browser", "driver")
                          if isinstance(versions.get(key), str) and re.fullmatch(r"(?:Python |Chrome |chromedriver |v)?[0-9][0-9A-Za-z.+_-]{0,59}", versions[key])},
             "expectedAssetSha256": {host: sorted({value for value in binding.get("expectedLoadedAssets", {}).get(host, {}).values() if _hash(value)}) for host in HOSTS}},

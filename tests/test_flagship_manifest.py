@@ -4,36 +4,54 @@ from dataclasses import asdict, replace
 import hashlib
 import json
 from pathlib import Path
+import subprocess
 
 import pytest
 
 from scripts import flagship_manifest as manifest
-from tests.flagship_contract import CaseResult, Requirement
+from tests.flagship_contract import CaseResult, Requirement, load_requirements
 
 
 def digest(value):
     return hashlib.sha256(value.encode()).hexdigest()
 
 
+@pytest.fixture(scope="module")
+def source_contract(tmp_path_factory):
+    """Commit a complete synthetic contract; evaluation must use these exact bytes."""
+    repository = tmp_path_factory.mktemp("contract-source")
+    original = load_requirements(Path(__file__).with_name("flagship_requirements.json"))
+    requirements = (
+        Requirement("copy.cells", "copy-selection", "Copy cells", "Exact cells", {
+            **original[0].ag_grid, "test_id": "reference.copy"}, "Exact cells", "unverified",
+            ("Loaded fixture",), ("dash", "react", "streamlit"), True,
+            ("unit.copy",), {host: ("browser.copy",) for host in ("dash", "react", "streamlit")}),
+        Requirement("dash.transport", "dash-callback-transport", "Callback", "Callback response", {
+            "result": "not_applicable", "reason": "Dash integration only"}, "Response", "not_comparable",
+            ("Dash only",), ("dash",), True, ("unit.transport",), {"dash": ("browser.transport",)}),
+        *(item for item in original if item.inventory_id not in {"copy-selection", "dash-callback-transport"}),
+    )
+    contract = repository / "tests" / "flagship_requirements.json"
+    contract.parent.mkdir()
+    contract.write_text(json.dumps({"schema_version": 1, "requirements": [asdict(item) for item in requirements]}), encoding="utf-8")
+    subprocess.run(["git", "init", "-q", str(repository)], check=True)
+    subprocess.run(["git", "add", "."], cwd=repository, check=True)
+    subprocess.run(["git", "-c", "user.name=Qualification test", "-c", "user.email=test@example.invalid", "-c", "commit.gpgsign=false", "commit", "-qm", "Synthetic full inventory"], cwd=repository, check=True)
+    commit = subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=repository, text=True).strip()
+    committed = subprocess.check_output(["git", "show", f"{commit}:tests/flagship_requirements.json"], cwd=repository)
+    return repository, commit, hashlib.sha256(committed).hexdigest(), requirements
+
+
 @pytest.fixture
-def qualification(tmp_path):
+def qualification(tmp_path, source_contract):
+    repository, commit, contract_hash, requirements = source_contract
     binding = manifest.QualificationBinding(
-        source_commit="a" * 40, run_id="current-run",
-        sha256={"source_commit": digest("a" * 40), "wheel": digest("wheel"),
+        source_commit=commit, run_id="current-run", paths={"source_repository": repository},
+        sha256={"source_commit": digest(commit), "contract": contract_hash, "wheel": digest("wheel"),
                 "npm_tarball": digest("npm"), "fixture": digest("fixture"),
                 **{f"{host}:/entry.js": digest(host) for host in ("dash", "react", "streamlit")}},
         expected_loaded_assets={host: {"/entry.js": digest(host)} for host in ("dash", "react", "streamlit")},
         versions={"python": "3.13", "node": "24", "dash": "3.2", "react": "19", "streamlit": "1.50"},
-    )
-    requirements = (
-        Requirement("copy.cells", "selection", "Copy cells", "Exact cells", {
-            "version": "36.2.0", "edition": "Enterprise", "row_model": "SSRM",
-            "test_id": "reference.copy", "result": "unverified"}, "Exact cells", "unverified",
-            ("Loaded fixture",), ("dash", "react", "streamlit"), True,
-            ("unit.copy",), {host: ("browser.copy",) for host in ("dash", "react", "streamlit")}),
-        Requirement("dash.transport", "dash-host", "Callback", "Callback response", {
-            "result": "not_applicable", "reason": "Dash integration only"}, "Response", "not_comparable",
-            ("Dash only",), ("dash",), True, ("unit.transport",), {"dash": ("browser.transport",)}),
     )
     cases = []
     for requirement in requirements:
@@ -45,9 +63,18 @@ def qualification(tmp_path):
             evidence = tmp_path / "runs" / binding.run_id / f"{requirement.id}-{index}.json"
             evidence.parent.mkdir(parents=True, exist_ok=True)
             evidence.write_text(json.dumps({
-                "observed": "Observed exact output", "trace": [{"request": "getRows"}],
+                "observed": "Observed exact output", "trace": [{
+                    "request": {"startRow": 0, "endRow": 50, "groupKeys": [], "pivotMode": True,
+                        "rowGroupCols": [{"field": field} for field in ("region", "account")],
+                        "pivotCols": [{"field": "period"}],
+                        "valueCols": [{"field": field, "aggFunc": "sum"} for field in requirements[0].ag_grid["options"]["valueFields"]],
+                        "filterModel": {}, "sortModel": []},
+                    "response": {"rowData": [{"region": "Group", "Q1_sales": 100}], "rowCount": 1,
+                                 "pivotResultFields": ["Q1_sales"]},
+                }],
                 "config": {"version": "36.2.0", "edition": "Enterprise", "rowModelType": "serverSide",
-                           "fixtureSha256": binding.sha256["fixture"]},
+                           "fixtureSha256": binding.sha256["fixture"], "options": dict(requirement.ag_grid.get("options", {}))},
+                "loadedAssetSha256": {"/entry.js": digest(host)} if host else {},
             }))
             cases.append(manifest.BoundCaseResult(
                 requirement.id, system, host, test_id, "passed", "Observed exact output", "Chrome 140",
@@ -84,7 +111,6 @@ def test_one_applicable_host_case_cannot_be_hidden_by_other_passes(qualification
 
 def test_missing_reference_fails_only_parity_and_does_not_infer_live_pass_from_contract(qualification):
     requirements, binding, cases = qualification
-    requirements = (replace(requirements[0], ag_grid={**requirements[0].ag_grid, "result": "passed"}), requirements[1])
     result = manifest.evaluate_manifest(requirements, binding, [case for case in cases if case.system == "product"])
     assert result["releaseResult"] == "passed"
     assert result["parityResult"] == "failed"
@@ -156,7 +182,7 @@ def test_case_envelope_rejects_stale_top_level_binding_and_does_not_upgrade_bare
     envelope = {"schema_version": 1, "run_id": binding.run_id, "source_commit": binding.source_commit,
                 "sha256": binding.sha256, "results": [asdict(case) for case in cases]}
     path.write_text(json.dumps(envelope))
-    assert len(manifest.load_case_envelope(path, binding)) == 9
+    assert len(manifest.load_case_envelope(path, binding)) == len(cases)
     envelope["run_id"] = "historical-run"
     path.write_text(json.dumps(envelope))
     with pytest.raises(ValueError, match="binding"):
@@ -225,6 +251,67 @@ def test_empty_contract_and_empty_binding_cannot_pass():
     assert result["releaseResult"] == result["parityResult"] == "failed"
 
 
+@pytest.mark.parametrize("damage", ["one-row", "downgraded", "contract-hash"])
+def test_contract_inventory_and_exact_committed_promises_are_mandatory(qualification, damage):
+    requirements, binding, cases = qualification
+    if damage == "one-row":
+        requirements = requirements[:1]
+        cases = [case for case in cases if case.requirement_id == requirements[0].id]
+    elif damage == "downgraded":
+        # Other mandatory runtime-error rows still cover this inventory ID;
+        # only comparison with the committed atomic contract detects the cut.
+        index = next(i for i, requirement in enumerate(requirements) if requirement.inventory_id == "runtime-error")
+        weakened = replace(requirements[index], required=False)
+        requirements = (*requirements[:index], weakened, *requirements[index + 1:])
+        cases = [case for case in cases if case.requirement_id != weakened.id]
+    else:
+        binding = replace(binding, sha256={**binding.sha256, "contract": "0" * 64})
+        cases = [replace(case, sha256=binding.sha256) for case in cases]
+    result = manifest.evaluate_manifest(requirements, binding, cases)
+    assert result["releaseResult"] == result["parityResult"] == "failed"
+    assert "contract_invalid" in result["issues"]
+
+
+def test_committed_contract_loading_ignores_working_tree_drift(qualification):
+    requirements, binding, _ = qualification
+    path = binding.paths["source_repository"] / "tests" / "flagship_requirements.json"
+    original = path.read_bytes()
+    try:
+        path.write_text('{"schema_version": 1, "requirements": []}')
+        assert manifest.load_committed_requirements(binding) == requirements
+    finally:
+        path.write_bytes(original)
+
+
+def test_product_asset_claim_must_match_hashed_browser_network_evidence(qualification):
+    requirements, binding, cases = qualification
+    case = cases[1]
+    evidence = Path(case.evidence_paths[0])
+    observation = json.loads(evidence.read_text())
+    observation["loadedAssetSha256"]["/entry.js"] = "0" * 64
+    evidence.write_text(json.dumps(observation))
+    cases[1] = replace(case, evidence_sha256={str(evidence): hashlib.sha256(evidence.read_bytes()).hexdigest()})
+    result = manifest.evaluate_manifest(requirements, binding, cases)
+    assert result["releaseResult"] == result["parityResult"] == "failed"
+    assert "asset_mismatch" in result["requirements"]["copy.cells"]["hosts"]["dash"]["issues"]
+
+
+@pytest.mark.parametrize("trace", [[{"request": "getRows"}], [{"request": {}, "response": {}}],
+    [{"request": {"startRow": 0, "endRow": 10}, "response": {"rowData": [], "rowCount": 0}}]])
+def test_nonempty_dummy_reference_trace_is_not_live_ssrm_evidence(qualification, trace):
+    requirements, binding, cases = qualification
+    index = next(i for i, case in enumerate(cases) if case.system == "ag_grid")
+    case = cases[index]
+    evidence = Path(case.evidence_paths[0])
+    observation = json.loads(evidence.read_text())
+    observation["trace"] = trace
+    evidence.write_text(json.dumps(observation))
+    cases[index] = replace(case, evidence_sha256={str(evidence): hashlib.sha256(evidence.read_bytes()).hexdigest()})
+    result = manifest.evaluate_manifest(requirements, binding, cases)
+    assert result["releaseResult"] == "passed"
+    assert result["parityResult"] == "failed"
+
+
 def test_not_applicable_reference_requires_a_host_only_contract_exclusion(qualification):
     requirements, binding, cases = qualification
     forged = replace(requirements[0], ag_grid={"result": "not_applicable", "reason": "Avoid missing reference"})
@@ -241,10 +328,7 @@ def test_shared_runtime_case_does_not_need_a_browser_observation(qualification):
 
 def test_excluded_editing_has_no_fictitious_pass(qualification):
     requirements, binding, cases = qualification
-    editing = Requirement("editing.excluded", "editing", "Editing unavailable", "Unavailable",
-        {"result": "not_applicable", "reason": "Excluded from read-only release"}, "Unavailable",
-        "unsupported", ("Read only",), (), False, (), {})
-    result = manifest.evaluate_manifest((*requirements, editing), binding, cases)
+    result = manifest.evaluate_manifest(requirements, binding, cases)
     assert result["releaseResult"] == result["parityResult"] == "passed"
     assert result["requirements"]["editing.excluded"]["releaseResult"] == "not_applicable"
     assert result["requirements"]["editing.excluded"]["parityResult"] == "not_applicable"
@@ -252,10 +336,28 @@ def test_excluded_editing_has_no_fictitious_pass(qualification):
 
 def test_reference_options_must_match_the_declared_configuration(qualification):
     requirements, binding, cases = qualification
-    configured = replace(requirements[0], ag_grid={**requirements[0].ag_grid, "options": {"pivotMode": True}})
-    result = manifest.evaluate_manifest((configured, requirements[1]), binding, cases)
+    index = next(i for i, case in enumerate(cases) if case.system == "ag_grid")
+    evidence = Path(cases[index].evidence_paths[0])
+    record = json.loads(evidence.read_text())
+    record["config"]["options"]["pivotMode"] = False
+    evidence.write_text(json.dumps(record))
+    cases[index] = replace(cases[index], evidence_sha256={str(evidence): hashlib.sha256(evidence.read_bytes()).hexdigest()})
+    result = manifest.evaluate_manifest(requirements, binding, cases)
     assert result["releaseResult"] == "passed"
     assert result["parityResult"] == "failed"
+
+
+def test_reference_config_accepts_registered_modules_in_task3_top_level_shape(qualification):
+    requirements, binding, cases = qualification
+    index = next(i for i, case in enumerate(cases) if case.system == "ag_grid")
+    case = cases[index]
+    evidence = Path(case.evidence_paths[0])
+    observation = json.loads(evidence.read_text())
+    observation["config"]["modules"] = [*observation["config"]["options"].pop("modules"), "ColumnApiModule"]
+    evidence.write_text(json.dumps(observation))
+    cases[index] = replace(case, evidence_sha256={str(evidence): hashlib.sha256(evidence.read_bytes()).hexdigest()})
+    result = manifest.evaluate_manifest(requirements, binding, cases)
+    assert result["releaseResult"] == result["parityResult"] == "passed"
 
 
 def test_junit_declared_test_count_cannot_hide_missing_testcases(qualification, tmp_path):

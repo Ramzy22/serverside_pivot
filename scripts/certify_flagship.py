@@ -10,6 +10,7 @@ feature matrix in one artifact directory.
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import os
 import re
@@ -891,9 +892,8 @@ def _certify_installed_release(artifact_dir: Path, started_at: datetime, *, buil
     from scripts.flagship_artifacts import ArtifactBinding, build_artifacts, start_installed_hosts, cleanup_python_environment
     from scripts.flagship_manifest import (
         QualificationBinding, apply_junit_result, evaluate_manifest,
-        load_case_envelope, publish_safe_manifest,
+        load_case_envelope, publish_safe_manifest, read_committed_contract, load_committed_requirements,
     )
-    from tests.flagship_contract import load_requirements
 
     result = "failed"
     code = 1
@@ -909,7 +909,18 @@ def _certify_installed_release(artifact_dir: Path, started_at: datetime, *, buil
     try:
         build_options = {"build_wheelhouse": build_wheelhouse} if build_wheelhouse is not None else {}
         artifacts = build_artifacts(ROOT, artifact_dir / "release-artifacts", **build_options)
-        binding = QualificationBinding(**{key: getattr(artifacts, key) for key in ArtifactBinding.__dataclass_fields__}, run_id=run_id)
+        values = {key: getattr(artifacts, key) for key in ArtifactBinding.__dataclass_fields__}
+        values["sha256"] = dict(artifacts.sha256)
+        values["paths"] = {"source_repository": ROOT, **artifacts.paths}
+        binding = QualificationBinding(**values, run_id=run_id)
+        try:
+            contract_bytes = read_committed_contract(binding)
+            binding.sha256["contract"] = hashlib.sha256(contract_bytes).hexdigest()
+            (private / "source-contract.json").write_bytes(contract_bytes)
+        except (OSError, ValueError, subprocess.CalledProcessError):
+            # A missing source object cannot qualify; retain the browser exit
+            # code and let the manifest report the invalid contract binding.
+            pass
         binding_path = artifact_dir / "artifact-binding.json"
         environment = os.environ.copy()
         environment.pop("PYTHONPATH", None)
@@ -941,7 +952,10 @@ def _certify_installed_release(artifact_dir: Path, started_at: datetime, *, buil
             cleanup_python_environment(artifacts)
         completed = True
     finally:
-        requirements = load_requirements(ROOT / "tests" / "flagship_requirements.json")
+        try:
+            requirements = load_committed_requirements(binding)
+        except (OSError, ValueError, TypeError, subprocess.CalledProcessError):
+            requirements = ()
         cases = []
         envelope_issues = []
         for system, path in envelopes.items():
