@@ -164,13 +164,34 @@ def test_installed_release_rejects_zero_exit_with_skipped_missing_or_empty_brows
     assert json.loads((evidence / "flagship-certification.json").read_text())["result"] == "failed"
 
 
+def test_installed_release_records_cleanup_failure_as_failed(tmp_path, monkeypatch):
+    from scripts import certify_flagship, flagship_artifacts
+    monkeypatch.setattr(flagship_artifacts, "build_artifacts", lambda source, output: ArtifactBinding())
+    @contextmanager
+    def hosts(binding, output):
+        yield {"dash": "http://127.0.0.1:1", "react": "http://127.0.0.1:2", "streamlit": "http://127.0.0.1:8502"}
+    monkeypatch.setattr(flagship_artifacts, "start_installed_hosts", hosts)
+    def suite(evidence, environment, **kwargs):
+        names = ("test_flagship_startup_navigation_and_controls", "test_flagship_copy_current_table_all_records_and_export_xlsx", "test_flagship_sidebar_filter_report_and_chart_entrypoints")
+        kwargs["junit_path"].write_text("<testsuite>" + "".join(f'<testcase name="{name}[{host}]"/>' for name in names for host in ("dash", "react", "streamlit")) + "</testsuite>")
+        return 0
+    monkeypatch.setattr(certify_flagship, "_run_browser_suite", suite)
+    def cleanup(binding):
+        raise RuntimeError("owned environment cleanup failed")
+    monkeypatch.setattr(flagship_artifacts, "cleanup_python_environment", cleanup)
+    evidence = tmp_path / "evidence"
+    with pytest.raises(RuntimeError, match="cleanup failed"):
+        certify_flagship.main(["--installed-release", "--artifact-dir", str(evidence)])
+    assert json.loads((evidence / "flagship-certification.json").read_text())["result"] == "failed"
+
+
 @pytest.mark.parametrize("body", [b"good release", b"altered release", None])
 def test_certification_suite_checks_actual_loaded_assets_before_saving_evidence(tmp_path, body):
     from tests import test_flagship_certification as suite
     digest = hashlib.sha256(b"good release").hexdigest()
 
     class Browser:
-        _pivot_artifact_binding = ArtifactBinding(expected_loaded_assets={"react": {"/assets/index.js": digest}})
+        _pivot_artifact_binding = ArtifactBinding(expected_loaded_assets={"react": {"/assets/index.js": digest}}, host_origins={"react": "http://127.0.0.1:39002"})
         _pivot_artifact_host = "react"
         _pivot_loaded_assets = {}
         def get_log(self, kind):
@@ -242,15 +263,107 @@ def test_release_environment_does_not_inherit_global_distribution_metadata(tmp_p
     from scripts import flagship_artifacts
     environment = tmp_path / "isolated-env"
     python = flagship_artifacts._create_python_environment(environment)
-    paths = json.loads(subprocess.check_output([str(python), "-c", "import json,sys; print(json.dumps(sys.path))"], text=True))
-    import sysconfig
-    assert str(Path(sysconfig.get_path("purelib")).resolve()) not in {str(Path(path).resolve()) for path in paths if path}
+    try:
+        paths = json.loads(subprocess.check_output([str(python), "-c", "import json,sys; print(json.dumps(sys.path))"], text=True))
+        import sysconfig
+        assert str(Path(sysconfig.get_path("purelib")).resolve()) not in {str(Path(path).resolve()) for path in paths if path}
+    finally:
+        flagship_artifacts.cleanup_python_environment(ArtifactBinding(paths={
+            "python": python, "environment": python.parent.parent,
+            "environment_record": tmp_path / "isolated-env.location.json",
+        }))
+
+
+@pytest.mark.skipif(os.name != "nt", reason="Windows installer path bound")
+def test_short_environment_installs_long_wheel_member_and_records_cleanup(tmp_path):
+    from scripts import flagship_artifacts
+    nested = tmp_path / "nested-evidence-directory-for-path-regression" / "release"
+    nested.mkdir(parents=True)
+    member = "path_probe/backends/impala/tests/snapshots/test_bucket_histogram/test_bucket_to_case/close_extreme_false_include_under_include_over/snapshot.txt"
+    assert len(str(nested / "python-env/Lib/site-packages" / member)) > 260
+    wheel = tmp_path / "path_probe-0.0.0-py3-none-any.whl"
+    metadata = "path_probe-0.0.0.dist-info"
+    with zipfile.ZipFile(wheel, "w") as archive:
+        archive.writestr(member, b"installed long-path snapshot")
+        archive.writestr(metadata + "/METADATA", "Metadata-Version: 2.1\nName: path-probe\nVersion: 0.0.0\n")
+        archive.writestr(metadata + "/WHEEL", "Wheel-Version: 1.0\nGenerator: path-test\nRoot-Is-Purelib: true\nTag: py3-none-any\n")
+        archive.writestr(metadata + "/RECORD", "\n".join(name + ",," for name in archive.namelist()))
+    python = flagship_artifacts._create_python_environment(nested / "python-env")
+    record = nested / "python-env.location.json"
+    binding = ArtifactBinding(paths={"python": python, "environment": python.parent.parent, "environment_record": record})
+    try:
+        subprocess.run([str(python), "-m", "pip", "--isolated", "install", "--no-index", "--no-deps", str(wheel)], check=True, capture_output=True, text=True)
+        installed = python.parent.parent / "Lib/site-packages" / member
+        assert installed.read_bytes() == b"installed long-path snapshot"
+        assert len(str(installed)) < 260
+        assert json.loads(record.read_text())["environment"] == str(python.parent.parent)
+        assert not python.parent.parent.is_relative_to(nested)
+        flagship_artifacts.cleanup_python_environment(binding)
+        assert not python.parent.parent.exists()
+        assert json.loads(record.read_text())["state"] == "cleaned"
+    finally:
+        if hasattr(flagship_artifacts, "cleanup_python_environment") and python.parent.parent.exists():
+            flagship_artifacts.cleanup_python_environment(binding)
+
+
+def test_environment_cleanup_rejects_unowned_directory(tmp_path):
+    from scripts import flagship_artifacts
+    unrelated = tmp_path / "user-data"
+    unrelated.mkdir()
+    (unrelated / "keep.txt").write_text("preserve unrelated data")
+    binding = ArtifactBinding(paths={"python": unrelated / "Scripts/python.exe", "environment": unrelated, "environment_record": tmp_path / "fake.json"})
+    with pytest.raises(ValueError, match="owned"):
+        flagship_artifacts.cleanup_python_environment(binding)
+    assert (unrelated / "keep.txt").read_text() == "preserve unrelated data"
+
+
+@pytest.mark.parametrize("url", ["http://127.0.0.1:39002/assets/index.js", "http://127.0.0.1:39003/assets/index.js", "https://foreign.example/assets/index.js"])
+def test_loaded_asset_requires_bound_host_origin_even_when_bytes_match(url):
+    body = b"exact release bytes"
+    binding = ArtifactBinding(expected_loaded_assets={"react": {"/assets/index.js": hashlib.sha256(body).hexdigest()}}, host_origins={"react": "http://127.0.0.1:39002"})
+    if url.startswith("http://127.0.0.1:39002/"):
+        assert verify_loaded_asset(binding, "react", url, body) == hashlib.sha256(body).hexdigest()
+    else:
+        with pytest.raises(ValueError, match="foreign origin"):
+            verify_loaded_asset(binding, "react", url, body)
+
+
+def test_host_cleanup_retains_ownership_after_launcher_exits():
+    import psutil
+    from scripts import flagship_artifacts
+    command = [sys.executable, "-c", "import subprocess,sys; child=subprocess.Popen([sys.executable,'-c','import time; time.sleep(120)']); print(child.pid,flush=True)"]
+    owned = flagship_artifacts._launch_host_process(command, stdout=subprocess.PIPE, text=True)
+    child = psutil.Process(int(owned.stdout.readline()))
+    try:
+        owned.wait(timeout=10)
+        assert child.is_running()
+        flagship_artifacts._stop_process(owned)
+        with pytest.raises(psutil.NoSuchProcess):
+            child.status()
+    finally:
+        if child.is_running():
+            child.kill()
+            child.wait(timeout=5)
+
+
+def test_cleanup_refuses_reused_pid_and_preserves_unrelated_process():
+    import psutil
+    from scripts import flagship_artifacts
+    unrelated = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(120)"])
+    try:
+        stale = flagship_artifacts.OwnedHostProcess(unrelated, psutil.Process(unrelated.pid).create_time() - 1)
+        with pytest.raises(RuntimeError, match="ownership"):
+            flagship_artifacts._stop_process(stale)
+        assert unrelated.poll() is None
+    finally:
+        unrelated.terminate()
+        unrelated.wait(timeout=5)
 
 
 def test_host_cleanup_terminates_spawned_descendants():
     import psutil
-    from scripts.flagship_artifacts import _stop_process
-    process = subprocess.Popen([sys.executable, "-c", (
+    from scripts.flagship_artifacts import _stop_process, _launch_host_process
+    process = _launch_host_process([sys.executable, "-c", (
         "import subprocess,sys,time; "
         "child=subprocess.Popen([sys.executable,'-c','import time; time.sleep(120)']); "
         "print(child.pid,flush=True); time.sleep(120)"
@@ -265,8 +378,8 @@ def test_host_cleanup_terminates_spawned_descendants():
             child.kill()
             child.wait(timeout=5)
         if process.poll() is None:
-            process.kill()
-            process.wait(timeout=5)
+            _stop_process(process)
+        process.stdout.close()
 
 
 def _assert_browser_loaded_bound_assets(binding: ArtifactBinding, urls: dict[str, str], evidence: Path) -> None:
@@ -302,13 +415,13 @@ def _assert_browser_loaded_bound_assets(binding: ArtifactBinding, urls: dict[str
             loaded = driver._pivot_loaded_assets
             observations[host] = {"browserVersion": driver.capabilities["browserVersion"], "cellCount": len(cells), "loadedAssetSha256": loaded}
             (evidence / "browser-assets.json").write_text(json.dumps({
-                "sourceCommit": binding.source_commit, "sha256": binding.sha256,
+                "sourceCommit": binding.source_commit, "sha256": binding.sha256, "versions": binding.versions,
                 "observations": observations,
             }, indent=2), encoding="utf-8")
         finally:
             driver.quit()
     (evidence / "browser-assets.json").write_text(json.dumps({
-        "sourceCommit": binding.source_commit, "sha256": binding.sha256,
+        "sourceCommit": binding.source_commit, "sha256": binding.sha256, "versions": binding.versions,
         "observations": observations,
     }, indent=2), encoding="utf-8")
 
@@ -352,10 +465,12 @@ def test_clean_artifacts_serve_installed_hosts_and_match_loaded_bytes(tmp_path: 
         assert b"/@vite/client" not in index
         dash_path = next(path for path in binding.expected_loaded_assets["dash"] if path.endswith(".js"))
         with urllib.request.urlopen(urls["dash"] + dash_path, timeout=10) as response:
-            verify_loaded_asset(binding, "dash", dash_path, response.read())
+            verify_loaded_asset(binding, "dash", urls["dash"] + dash_path, response.read())
         react_path = next(path for path in binding.expected_loaded_assets["react"] if path.endswith(".js"))
         with urllib.request.urlopen(urls["react"] + react_path, timeout=10) as response:
-            verify_loaded_asset(binding, "react", react_path, response.read())
+            verify_loaded_asset(binding, "react", urls["react"] + react_path, response.read())
         with urllib.request.urlopen(urls["react"] + "/v1/workspace-config", timeout=10) as response:
             assert json.loads(response.read())["table"]
         _assert_browser_loaded_bound_assets(binding, urls, tmp_path)
+    from scripts.flagship_artifacts import cleanup_python_environment
+    cleanup_python_environment(binding)

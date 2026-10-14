@@ -884,24 +884,26 @@ def _installed_browser_report_passed(path: Path) -> bool:
 
 
 def _certify_installed_release(artifact_dir: Path, started_at: datetime) -> int:
-    from scripts.flagship_artifacts import build_artifacts, start_installed_hosts
+    from scripts.flagship_artifacts import build_artifacts, start_installed_hosts, cleanup_python_environment
 
     result = "failed"
     try:
         binding = build_artifacts(ROOT, artifact_dir / "release-artifacts")
         binding_path = artifact_dir / "artifact-binding.json"
-        binding_path.write_text(json.dumps({
-            "sourceCommit": binding.source_commit,
-            "sha256": binding.sha256,
-            "versions": binding.versions,
-            "expectedLoadedAssets": binding.expected_loaded_assets,
-        }, indent=2) + "\n", encoding="utf-8")
         environment = os.environ.copy()
         environment.pop("PYTHONPATH", None)
         environment["PIVOT_FLAGSHIP_ARTIFACT_BINDING"] = str(binding_path)
         environment["PIVOT_REQUIRE_BROWSER_EVIDENCE"] = "1"
         junit_path = artifact_dir / "installed-browser.junit.xml"
         with start_installed_hosts(binding, artifact_dir / "installed-hosts") as urls:
+            binding.host_origins.update(urls)
+            binding_path.write_text(json.dumps({
+                "sourceCommit": binding.source_commit,
+                "sha256": binding.sha256,
+                "versions": binding.versions,
+                "expectedLoadedAssets": binding.expected_loaded_assets,
+                "hostOrigins": binding.host_origins,
+            }, indent=2) + "\n", encoding="utf-8")
             for host, url in urls.items():
                 environment[f"PIVOT_FLAGSHIP_{host.upper()}_URL"] = url
             code = _run_browser_suite(
@@ -910,7 +912,9 @@ def _certify_installed_release(artifact_dir: Path, started_at: datetime) -> int:
             )
             if code == 0 and not _installed_browser_report_passed(junit_path):
                 code = 1
-        result = "passed" if code == 0 else "failed"
+        if code == 0:
+            cleanup_python_environment(binding)
+            result = "passed"
         return code
     finally:
         _write_matrix(artifact_dir, result=result, started_at=started_at, completed_at=datetime.now(UTC))

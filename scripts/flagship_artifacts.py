@@ -17,6 +17,7 @@ import urllib.error
 import urllib.request
 import venv
 import zipfile
+import uuid
 from contextlib import ExitStack, contextmanager
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -31,6 +32,10 @@ class ArtifactBinding:
     paths: dict[str, Path] = field(default_factory=dict)
     versions: dict[str, str] = field(default_factory=dict)
     expected_loaded_assets: dict[str, dict[str, str]] = field(default_factory=dict)
+    host_origins: dict[str, str] = field(default_factory=dict)
+
+
+_OWNED_ENVIRONMENTS: dict[Path, tuple[str, Path]] = {}
 
 
 def _digest(data: bytes) -> str:
@@ -72,8 +77,42 @@ def _python_in(environment: Path) -> Path:
 
 
 def _create_python_environment(environment: Path) -> Path:
-    venv.EnvBuilder(with_pip=True, system_site_packages=False).create(environment)
-    return _python_in(environment)
+    record = environment.with_name(environment.name + ".location.json").resolve()
+    record.parent.mkdir(parents=True, exist_ok=True)
+    root = Path(tempfile.mkdtemp(prefix="pf-env-")).resolve()
+    if os.name == "nt" and len(str(root)) > 80:
+        root.rmdir()
+        raise ValueError("Temporary directory is too long for the release environment")
+    token = uuid.uuid4().hex
+    _OWNED_ENVIRONMENTS[root] = (token, record)
+    ownership = {"environment": str(root), "ownershipId": token, "record": str(record)}
+    (root / ".pivot-flagship-owned-env.json").write_text(json.dumps(ownership), encoding="utf-8")
+    private_record = {**ownership, "python": str(_python_in(root)), "state": "created"}
+    record.write_text(json.dumps(private_record, indent=2), encoding="utf-8")
+    venv.EnvBuilder(with_pip=True, system_site_packages=False).create(root)
+    private_record["state"] = "ready"
+    record.write_text(json.dumps(private_record, indent=2), encoding="utf-8")
+    return _python_in(root)
+
+
+def cleanup_python_environment(binding: ArtifactBinding) -> None:
+    """Remove only a short environment allocated and recorded by this process."""
+    root = binding.paths["environment"].resolve()
+    record = binding.paths["environment_record"].resolve()
+    ownership = _OWNED_ENVIRONMENTS.get(root)
+    if ownership is None or ownership[1] != record:
+        raise ValueError("Refusing cleanup of an unowned environment")
+    marker = json.loads((root / ".pivot-flagship-owned-env.json").read_text(encoding="utf-8"))
+    info = json.loads(record.read_text(encoding="utf-8"))
+    expected = {"environment": str(root), "ownershipId": ownership[0], "record": str(record)}
+    if (root.parent != Path(tempfile.gettempdir()).resolve() or not root.name.startswith("pf-env-")
+            or marker != expected or any(info.get(key) != value for key, value in expected.items())
+            or binding.paths["python"].absolute() != _python_in(root).absolute()):
+        raise ValueError("Refusing cleanup of an unowned environment")
+    shutil.rmtree(root)
+    info["state"] = "cleaned"
+    record.write_text(json.dumps(info, indent=2), encoding="utf-8")
+    del _OWNED_ENVIRONMENTS[root]
 
 
 def _file_hashes(paths: list[Path], base: Path, url_prefix: str = "") -> dict[str, str]:
@@ -144,8 +183,12 @@ def _build_from_snapshot(commit: str, snapshot: Path, output: Path) -> ArtifactB
         raise RuntimeError(f"Expected one npm tarball, found {len(tarballs)}")
     npm_tarball = tarballs[0]
 
-    environment = output / "python-env"
-    python = _create_python_environment(environment)
+    python = _create_python_environment(output / "python-env")
+    environment = python.parent.parent
+    environment_record = output / "python-env.location.json"
+    private_record = json.loads(environment_record.read_text(encoding="utf-8"))
+    private_record.update(sourceCommit=commit, wheelSha256=_digest(wheel.read_bytes()))
+    environment_record.write_text(json.dumps(private_record, indent=2), encoding="utf-8")
     _run([str(python), "-m", "pip", "--isolated", "install", "--force-reinstall", f"{wheel}[streamlit,api]"], output)
 
     app = output / "installed-app"
@@ -199,7 +242,7 @@ def _build_from_snapshot(commit: str, snapshot: Path, output: Path) -> ArtifactB
     return ArtifactBinding(
         source_commit=commit,
         sha256=hashes,
-        paths={"wheel": wheel, "npm_tarball": npm_tarball, "python": python, "app": app, "react_dist": react_dist},
+        paths={"wheel": wheel, "npm_tarball": npm_tarball, "python": python, "environment": environment, "environment_record": environment_record, "app": app, "react_dist": react_dist},
         versions=versions,
         expected_loaded_assets=assets,
     )
@@ -225,20 +268,168 @@ def _owns_listener(process: subprocess.Popen, url: str) -> bool:
     import psutil
 
     endpoint = urlsplit(url)
-    try:
-        root = psutil.Process(process.pid)
-        for owner in (root, *root.children(recursive=True)):
-            try:
-                if any(connection.status == psutil.CONN_LISTEN
-                       and connection.laddr.port == endpoint.port
-                       and connection.laddr.ip in (endpoint.hostname, "0.0.0.0", "::")
-                       for connection in (getattr(owner, "net_connections", None) or owner.connections)(kind="tcp")):
-                    return True
-            except psutil.NoSuchProcess:
-                continue
-    except psutil.NoSuchProcess:
-        pass
+    if not isinstance(process, OwnedHostProcess):
+        return False
+    for owner in process.members():
+        try:
+            if any(connection.status == psutil.CONN_LISTEN
+                   and connection.laddr.port == endpoint.port
+                   and connection.laddr.ip in (endpoint.hostname, "0.0.0.0", "::")
+                   for connection in (getattr(owner, "net_connections", None) or owner.connections)(kind="tcp")):
+                return True
+        except psutil.NoSuchProcess:
+            continue
     return False
+
+
+class _WindowsJob:
+    """Kernel-owned process membership survives launcher exit and PID reuse."""
+
+    def __init__(self):
+        import ctypes
+        from ctypes import wintypes
+
+        self.ctypes = ctypes
+        self.kernel = ctypes.WinDLL("kernel32", use_last_error=True)
+        self.kernel.CreateJobObjectW.argtypes = (wintypes.LPVOID, wintypes.LPCWSTR)
+        self.kernel.CreateJobObjectW.restype = wintypes.HANDLE
+        self.kernel.SetInformationJobObject.argtypes = (wintypes.HANDLE, ctypes.c_int, wintypes.LPVOID, wintypes.DWORD)
+        self.kernel.SetInformationJobObject.restype = wintypes.BOOL
+        self.kernel.AssignProcessToJobObject.argtypes = (wintypes.HANDLE, wintypes.HANDLE)
+        self.kernel.AssignProcessToJobObject.restype = wintypes.BOOL
+        self.kernel.QueryInformationJobObject.argtypes = (wintypes.HANDLE, ctypes.c_int, wintypes.LPVOID, wintypes.DWORD, wintypes.LPVOID)
+        self.kernel.QueryInformationJobObject.restype = wintypes.BOOL
+        self.kernel.TerminateJobObject.argtypes = (wintypes.HANDLE, wintypes.UINT)
+        self.kernel.TerminateJobObject.restype = wintypes.BOOL
+        self.kernel.CloseHandle.argtypes = (wintypes.HANDLE,)
+        self.kernel.CloseHandle.restype = wintypes.BOOL
+
+        class BasicLimits(ctypes.Structure):
+            _fields_ = [("process_time", ctypes.c_longlong), ("job_time", ctypes.c_longlong),
+                        ("flags", wintypes.DWORD), ("min_working", ctypes.c_size_t),
+                        ("max_working", ctypes.c_size_t), ("active_limit", wintypes.DWORD),
+                        ("affinity", ctypes.c_size_t), ("priority", wintypes.DWORD),
+                        ("scheduling", wintypes.DWORD)]
+        class ExtendedLimits(ctypes.Structure):
+            _fields_ = [("basic", BasicLimits), ("io", ctypes.c_ulonglong * 6),
+                        ("process_memory", ctypes.c_size_t), ("job_memory", ctypes.c_size_t),
+                        ("peak_process", ctypes.c_size_t), ("peak_job", ctypes.c_size_t)]
+        self.handle = self.kernel.CreateJobObjectW(None, None)
+        if not self.handle:
+            raise ctypes.WinError(ctypes.get_last_error())
+        limits = ExtendedLimits()
+        limits.basic.flags = 0x2000  # JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE
+        if not self.kernel.SetInformationJobObject(self.handle, 9, ctypes.byref(limits), ctypes.sizeof(limits)):
+            self.close()
+            raise ctypes.WinError(ctypes.get_last_error())
+
+    def assign(self, process):
+        if not self.kernel.AssignProcessToJobObject(self.handle, int(process._handle)):
+            raise self.ctypes.WinError(self.ctypes.get_last_error())
+
+    def pids(self):
+        count = 128
+        while True:
+            buffer = self.ctypes.create_string_buffer(8 + count * self.ctypes.sizeof(self.ctypes.c_size_t))
+            if self.kernel.QueryInformationJobObject(self.handle, 3, buffer, len(buffer), None):
+                returned = self.ctypes.c_ulong.from_buffer(buffer, 4).value
+                return list((self.ctypes.c_size_t * returned).from_buffer(buffer, 8))
+            if self.ctypes.get_last_error() != 234:  # ERROR_MORE_DATA
+                raise self.ctypes.WinError(self.ctypes.get_last_error())
+            count *= 2
+
+    def stop(self):
+        if not self.kernel.TerminateJobObject(self.handle, 1):
+            raise self.ctypes.WinError(self.ctypes.get_last_error())
+        deadline = time.monotonic() + 5
+        while self.pids():
+            if time.monotonic() >= deadline:
+                raise RuntimeError("Owned Windows job did not stop")
+            time.sleep(0.02)
+        self.close()
+
+    def close(self):
+        if self.handle:
+            self.kernel.CloseHandle(self.handle)
+            self.handle = None
+
+
+@dataclass
+class OwnedHostProcess:
+    process: subprocess.Popen
+    created_at: float
+    job: _WindowsJob | None = None
+    stopped: bool = False
+
+    @property
+    def pid(self):
+        return self.process.pid
+
+    @property
+    def stdout(self):
+        return self.process.stdout
+
+    def poll(self):
+        return self.process.poll()
+
+    def wait(self, timeout=None):
+        return self.process.wait(timeout=timeout)
+
+    def members(self):
+        import psutil
+        if self.stopped:
+            return []
+        if self.job is not None:
+            members = []
+            for pid in self.job.pids():
+                try:
+                    members.append(psutil.Process(pid))
+                except psutil.NoSuchProcess:
+                    pass
+            return members
+        try:
+            if psutil.Process(self.pid).create_time() != self.created_at:
+                raise RuntimeError("Host process ownership changed (PID reused)")
+        except psutil.NoSuchProcess:
+            pass
+        # POSIX launch uses a new process group. A reused group-leader PID is
+        # rejected above; psutil also rechecks each captured identity before kill.
+        members = []
+        for owner in psutil.process_iter():
+            try:
+                if os.name != "nt" and os.getpgid(owner.pid) == self.pid:
+                    owner.create_time()
+                    members.append(owner)
+            except (psutil.NoSuchProcess, ProcessLookupError):
+                continue
+        return members
+
+
+def _launch_host_process(command: list[str], **kwargs) -> OwnedHostProcess:
+    import psutil
+
+    job = _WindowsJob() if os.name == "nt" else None
+    bootstrap = "import json,subprocess,sys; command=json.loads(sys.stdin.readline()); sys.exit(subprocess.call(command))"
+    try:
+        process = subprocess.Popen(
+            [sys.executable, "-I", "-S", "-c", bootstrap], stdin=subprocess.PIPE,
+            start_new_session=os.name != "nt", **kwargs,
+        )
+        created_at = psutil.Process(process.pid).create_time()
+        if job is not None:
+            job.assign(process)
+        owned = OwnedHostProcess(process, created_at, job)
+        payload = json.dumps(command) + "\n"
+        process.stdin.write(payload if kwargs.get("text") else payload.encode())
+        process.stdin.close()
+        return owned
+    except BaseException:
+        if "process" in locals():
+            process.terminate()
+            process.wait(timeout=5)
+        if job is not None:
+            job.close()
+        raise
 
 
 @contextmanager
@@ -282,21 +473,26 @@ def start_installed_hosts(binding: ArtifactBinding, output: Path) -> Iterator[di
         for name, command, cwd, health in commands:
             log = stack.enter_context((output / f"{name}.log").open("wb"))
             reservations[name].close()
-            process = subprocess.Popen(command, cwd=cwd, env=child_env, stdout=log, stderr=subprocess.STDOUT)
+            process = _launch_host_process(command, cwd=cwd, env=child_env, stdout=log, stderr=subprocess.STDOUT)
             stack.callback(_stop_process, process)
             (output / f"{name}.pid").write_text(str(process.pid), encoding="ascii")
             _wait_for(health, process)
-        yield {name: f"http://127.0.0.1:{ports[name]}" for name in ("dash", "react", "streamlit")}
+        urls = {name: f"http://127.0.0.1:{ports[name]}" for name in ("dash", "react", "streamlit")}
+        binding.host_origins.update(urls)
+        yield urls
 
 
-def _stop_process(process: subprocess.Popen[bytes]) -> None:
+def _stop_process(process: OwnedHostProcess) -> None:
     import psutil
 
-    try:
-        root = psutil.Process(process.pid)
-        owned = [*reversed(root.children(recursive=True)), root]
-    except psutil.NoSuchProcess:
+    if process.stopped:
         return
+    if process.job is not None:
+        process.job.stop()
+        process.wait(timeout=5)
+        process.stopped = True
+        return
+    owned = process.members()
     for child in owned:
         try:
             child.terminate()
@@ -310,12 +506,14 @@ def _stop_process(process: subprocess.Popen[bytes]) -> None:
             pass
     _, survivors = psutil.wait_procs(survivors, timeout=5)
     process.wait(timeout=5)
+    process.stopped = True
     if survivors:
         raise RuntimeError("Installed host process tree did not stop")
 
 
 def verify_loaded_asset(binding: ArtifactBinding, host: str, url: str, body: bytes) -> str:
     """Reject an unrecorded or changed production asset returned by a host."""
+    _verify_asset_origin(binding, host, url)
     path = urlsplit(url).path
     if path == "/@vite/client" or path.startswith("/@vite/"):
         raise ValueError("Vite development client is forbidden in a release host")
@@ -343,14 +541,30 @@ def verify_loaded_asset(binding: ArtifactBinding, host: str, url: str, body: byt
     return actual
 
 
+def _verify_asset_origin(binding: ArtifactBinding, host: str, url: str) -> None:
+    parsed = urlsplit(url)
+    expected = binding.host_origins.get(host)
+    if parsed.netloc:
+        if not expected:
+            raise ValueError(f"Missing installed host origin: {host}")
+        wanted = urlsplit(expected)
+        def origin(value):
+            return value.scheme.lower(), value.hostname, value.port or {"http": 80, "https": 443}.get(value.scheme)
+        if parsed.username or parsed.password or origin(parsed) != origin(wanted):
+            raise ValueError(f"foreign origin for installed {host} asset")
+    elif expected:
+        raise ValueError(f"Installed host origin is required for {host} asset")
+
+
 def load_artifact_binding(path: Path) -> ArtifactBinding:
     record = json.loads(path.read_text(encoding="utf-8"))
     assets = record["expectedLoadedAssets"]
-    if not all(assets.get(host) for host in ("dash", "react", "streamlit")):
+    origins = record["hostOrigins"]
+    if not all(assets.get(host) and origins.get(host) for host in ("dash", "react", "streamlit")):
         raise ValueError("Artifact binding omits a host's production assets")
     return ArtifactBinding(
         source_commit=record["sourceCommit"], sha256=record["sha256"],
-        versions=record["versions"], expected_loaded_assets=assets,
+        versions=record["versions"], expected_loaded_assets=assets, host_origins=origins,
     )
 
 
@@ -376,6 +590,7 @@ def verify_browser_assets(binding: ArtifactBinding, host: str, driver, entries: 
             )
         )
         if own_asset and path.endswith((".js", ".mjs", ".css")):
+            _verify_asset_origin(binding, host, resource)
             response = driver.execute_cdp_cmd("Network.getResponseBody", {"requestId": params["requestId"]})
             body = base64.b64decode(response["body"]) if response.get("base64Encoded") else response["body"].encode()
             loaded[path] = verify_loaded_asset(binding, host, resource, body)
