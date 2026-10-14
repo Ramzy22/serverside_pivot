@@ -25,6 +25,7 @@ from contextlib import ExitStack, contextmanager
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Callable, Iterator
+from uuid import uuid4
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -876,29 +877,52 @@ def _installed_browser_report_passed(path: Path) -> bool:
     cases = report.findall(".//testcase")
     expected = {f"{name}[{host}]" for name in INSTALLED_BROWSER_CASES for host in QUALIFICATION_HOSTS}
     names = [case.get("name") for case in cases]
-    return (
-        len(names) == len(expected) and set(names) == expected
-        and not any(case.find(tag) is not None for case in cases for tag in ("skipped", "failure", "error"))
-        and not any(int(suite.get(tag, "0")) for suite in report.iter("testsuite") for tag in ("skipped", "failures", "errors"))
-    )
+    try:
+        return (
+            len(names) == len(expected) and set(names) == expected
+            and not any(case.find(tag) is not None for case in cases for tag in ("skipped", "failure", "error"))
+            and not any(int(suite.get(tag, "0")) for suite in report.iter("testsuite") for tag in ("skipped", "failures", "errors"))
+        )
+    except ValueError:
+        return False
 
 
 def _certify_installed_release(artifact_dir: Path, started_at: datetime, *, build_wheelhouse: Path | None = None) -> int:
-    from scripts.flagship_artifacts import build_artifacts, start_installed_hosts, cleanup_python_environment
+    from scripts.flagship_artifacts import ArtifactBinding, build_artifacts, start_installed_hosts, cleanup_python_environment
+    from scripts.flagship_manifest import (
+        QualificationBinding, apply_junit_result, evaluate_manifest,
+        load_case_envelope, publish_safe_manifest,
+    )
+    from tests.flagship_contract import load_requirements
 
     result = "failed"
+    code = 1
+    completed = False
+    # A new input location prevents a partial rerun inheriting case files from
+    # a retained prior invocation, even when its artifact directory is reused.
+    run_id = uuid4().hex
+    private = artifact_dir / "private" / "runs" / run_id
+    private.mkdir(parents=True)
+    envelopes = {system: private / f"{system}-case-results.json" for system in ("product", "ag_grid")}
+    binding = QualificationBinding(run_id=run_id)
+    junit_path = private / "installed-browser.junit.xml"
     try:
         build_options = {"build_wheelhouse": build_wheelhouse} if build_wheelhouse is not None else {}
-        binding = build_artifacts(ROOT, artifact_dir / "release-artifacts", **build_options)
+        artifacts = build_artifacts(ROOT, artifact_dir / "release-artifacts", **build_options)
+        binding = QualificationBinding(**{key: getattr(artifacts, key) for key in ArtifactBinding.__dataclass_fields__}, run_id=run_id)
         binding_path = artifact_dir / "artifact-binding.json"
         environment = os.environ.copy()
         environment.pop("PYTHONPATH", None)
         environment["PIVOT_FLAGSHIP_ARTIFACT_BINDING"] = str(binding_path)
         environment["PIVOT_REQUIRE_BROWSER_EVIDENCE"] = "1"
-        junit_path = artifact_dir / "installed-browser.junit.xml"
-        with start_installed_hosts(binding, artifact_dir / "installed-hosts") as urls:
+        environment["PIVOT_FLAGSHIP_RUN_ID"] = run_id
+        environment["PIVOT_FLAGSHIP_CASE_RESULTS"] = str(envelopes["product"])
+        environment["PIVOT_FLAGSHIP_REFERENCE_CASE_RESULTS"] = str(envelopes["ag_grid"])
+        environment["PIVOT_FLAGSHIP_EVIDENCE_ROOT"] = str(private)
+        with start_installed_hosts(artifacts, artifact_dir / "installed-hosts") as urls:
             binding.host_origins.update(urls)
             binding_path.write_text(json.dumps({
+                "runId": run_id,
                 "sourceCommit": binding.source_commit,
                 "sha256": binding.sha256,
                 "versions": binding.versions,
@@ -914,11 +938,36 @@ def _certify_installed_release(artifact_dir: Path, started_at: datetime, *, buil
             if code == 0 and not _installed_browser_report_passed(junit_path):
                 code = 1
         if code == 0:
-            cleanup_python_environment(binding)
-            result = "passed"
-        return code
+            cleanup_python_environment(artifacts)
+        completed = True
     finally:
+        requirements = load_requirements(ROOT / "tests" / "flagship_requirements.json")
+        cases = []
+        envelope_issues = []
+        for system, path in envelopes.items():
+            try:
+                loaded = load_case_envelope(path, binding)
+                if any(case.system != system for case in loaded):
+                    raise ValueError("case envelope system does not match its input")
+                cases.extend(loaded)
+            except (OSError, ValueError, TypeError):
+                envelope_issues.append(system)
+        report = evaluate_manifest(requirements, binding, cases)
+        for system in envelope_issues:
+            report["systemIssues"][system].append("case_envelope_invalid")
+            report["parityResult"] = "failed"
+            if system == "product":
+                report["releaseResult"] = "failed"
+        apply_junit_result(report, junit_path, system="product")
+        if code != 0 or not completed:
+            report["issues"].append("browser_exit_nonzero" if completed else "qualification_incomplete")
+            report["releaseResult"] = report["parityResult"] = "failed"
+        # Raw reasons and evidence paths are retained only in the private tree.
+        (private / "read-only-qualification.raw.json").write_text(json.dumps(report, indent=2) + "\n", encoding="utf-8")
+        publish_safe_manifest(report, artifact_dir / "read-only-qualification.json")
+        result = "passed" if report["releaseResult"] == report["parityResult"] == "passed" else "failed"
         _write_matrix(artifact_dir, result=result, started_at=started_at, completed_at=datetime.now(UTC))
+    return code if code != 0 else 0 if result == "passed" else 1
 
 
 def main(argv: list[str] | None = None) -> int:
