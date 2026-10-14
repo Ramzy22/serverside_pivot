@@ -37,6 +37,7 @@ dependencies = [
     "pyarrow_hotfix>=0.4",
     "ibis-framework[duckdb]>=4.0.0",
     "pandas>=1.5.0",
+    "psutil>=5.9",
 ]
 
 [project.urls]

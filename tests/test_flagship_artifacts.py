@@ -3,8 +3,10 @@
 from __future__ import annotations
 
 import hashlib
+import email
 import json
 import os
+import shutil
 import socket
 import sys
 import threading
@@ -27,6 +29,31 @@ from scripts.flagship_artifacts import (
 
 
 ROOT = Path(__file__).resolve().parents[1]
+
+
+def test_wheel_metadata_declares_resource_governor_runtime_dependency(tmp_path):
+    import tomllib
+    from packaging.requirements import Requirement
+    # Generate actual backend metadata from the production project config,
+    # without npm/bundles or importing the engine into the test runner.
+    package = tmp_path / "package"
+    package.mkdir()
+    for filename in ("pyproject.toml", "README.md", "setup.py"):
+        shutil.copy2(ROOT / "dash_tanstack_pivot" / filename, package / filename)
+    configuration = tomllib.loads((package / "pyproject.toml").read_text(encoding="utf-8"))
+    for name in configuration["tool"]["setuptools"]["packages"]:
+        relative = name.replace(".", "/")
+        if name.startswith("pivot_engine"):
+            relative = "pivot_engine/" + relative
+        (package / relative).mkdir(parents=True, exist_ok=True)
+    metadata_dir = tmp_path / "metadata"
+    metadata_dir.mkdir()
+    subprocess.run([sys.executable, "-c", "from setuptools.build_meta import prepare_metadata_for_build_wheel; prepare_metadata_for_build_wheel(" + repr(str(metadata_dir)) + ")"],
+                   cwd=package, check=True, capture_output=True, text=True)
+    metadata = email.message_from_bytes(next(metadata_dir.glob("*.dist-info/METADATA")).read_bytes())
+    dependencies = [Requirement(value) for value in metadata.get_all("Requires-Dist")]
+    assert any(dependency.name == "psutil" and dependency.marker is None
+               and str(dependency.specifier) == ">=5.9" for dependency in dependencies)
 
 
 def _test_build_wheelhouse(path):
