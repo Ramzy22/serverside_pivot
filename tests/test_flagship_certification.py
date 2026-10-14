@@ -863,6 +863,12 @@ def flagship_driver(flagship_host, flagship_artifacts):
     downloads = flagship_artifacts / "downloads"
     downloads.mkdir(exist_ok=True)
     options = _qualification_chrome_options(downloads)
+    binding_path = os.environ.get("PIVOT_FLAGSHIP_ARTIFACT_BINDING")
+    binding = None
+    if binding_path:
+        from scripts.flagship_artifacts import load_artifact_binding
+
+        binding = load_artifact_binding(Path(binding_path))
     try:
         driver = webdriver.Chrome(options=options)
     except WebDriverException as exc:
@@ -870,6 +876,11 @@ def flagship_driver(flagship_host, flagship_artifacts):
             pytest.fail("Chrome WebDriver is required for browser evidence")
         pytest.skip(f"Chrome WebDriver is not available: {exc}")
     driver.set_page_load_timeout(30)
+    if binding is not None:
+        driver._pivot_artifact_binding = binding
+        driver._pivot_artifact_host = flagship_host
+        driver._pivot_loaded_assets = {}
+        driver.execute_cdp_cmd("Network.enable", {"maxTotalBufferSize": 50000000, "maxResourceBufferSize": 50000000})
     driver.execute_cdp_cmd("Browser.setDownloadBehavior", {
         "behavior": "allow", "downloadPath": str(downloads), "eventsEnabled": True,
     })
@@ -886,7 +897,10 @@ def flagship_driver(flagship_host, flagship_artifacts):
     try:
         yield driver
     finally:
-        driver.quit()
+        try:
+            _verify_release_asset_batch(driver, require_assets=True)
+        finally:
+            driver.quit()
 
 
 def _qualification_chrome_options(downloads: Path):
@@ -915,18 +929,23 @@ def _qualification_chrome_options(downloads: Path):
 
 def _switch_to_workspace(driver, host: str, timeout: int = 30):
     _, _, _, _, _, By, EC, WebDriverWait = _selenium()
+    _verify_release_asset_batch(driver)
     driver.get(_host_url(host))
     wait = WebDriverWait(driver, timeout)
     if host != "streamlit":
         driver._pivot_workspace_shadow = False
-        return wait.until(EC.presence_of_element_located((By.CSS_SELECTOR, '[role="gridcell"]')))
+        cell = wait.until(EC.presence_of_element_located((By.CSS_SELECTOR, '[role="gridcell"]')))
+        _verify_release_asset_batch(driver, require_assets=True)
+        return cell
 
     # Streamlit V2 isolates a component in an open ShadowRoot (rather than
     # the iframe used by the older component API). Selenium's ordinary CSS
     # lookups stop at that boundary, so retain the document context and query
     # through open roots explicitly.
     driver._pivot_workspace_shadow = True
-    return wait.until(lambda current: _workspace_element(current, '[role="gridcell"]', required=False))
+    cell = wait.until(lambda current: _workspace_element(current, '[role="gridcell"]', required=False))
+    _verify_release_asset_batch(driver, require_assets=True)
+    return cell
 
 
 def _workspace_elements(driver, selector: str):
@@ -992,9 +1011,23 @@ def _workspace_has_exact_text(driver, selector: str, text: str) -> bool:
     ))
 
 
+def _verify_release_asset_batch(driver, entries=None, *, require_assets=False):
+    binding = getattr(driver, "_pivot_artifact_binding", None)
+    if binding is None:
+        return {}
+    from scripts.flagship_artifacts import verify_browser_assets
+
+    loaded = verify_browser_assets(binding, driver._pivot_artifact_host, driver, entries)
+    driver._pivot_loaded_assets.update(loaded)
+    if require_assets and not any(path.endswith((".js", ".mjs")) for path in driver._pivot_loaded_assets):
+        raise ValueError(f"No installed {driver._pivot_artifact_host} component assets observed")
+    return dict(driver._pivot_loaded_assets)
+
+
 def _save_evidence(driver, directory: Path, test_name: str):
     browser_logs = driver.get_log("browser")
     performance_logs = driver.get_log("performance")
+    loaded_assets = _verify_release_asset_batch(driver, performance_logs, require_assets=True)
     driver.execute_script(
         """
         const apply = root => {
@@ -1037,6 +1070,9 @@ def _save_evidence(driver, directory: Path, test_name: str):
         browser_summary["sourceCounts"][source] = browser_summary["sourceCounts"].get(source, 0) + 1
 
     network_summary = {"entryCount": len(performance_logs), "methodCounts": {}, "statusCounts": {}, "resourceTypeCounts": {}}
+    if getattr(driver, "_pivot_artifact_binding", None) is not None:
+        network_summary["loadedAssetSha256"] = loaded_assets
+        network_summary["sourceCommit"] = driver._pivot_artifact_binding.source_commit
     for entry in performance_logs:
         try:
             event = json.loads(entry.get("message", "{}"))["message"]

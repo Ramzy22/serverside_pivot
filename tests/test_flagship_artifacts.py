@@ -3,15 +3,17 @@
 from __future__ import annotations
 
 import hashlib
-import base64
 import json
 import os
+import socket
+import sys
+import threading
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 import subprocess
 import urllib.request
 import zipfile
 from contextlib import contextmanager
 from pathlib import Path
-from urllib.parse import urlsplit
 
 import pytest
 
@@ -116,7 +118,8 @@ def test_installed_release_binds_browser_environment_and_preserves_failure(tmp_p
 
     monkeypatch.setattr(flagship_artifacts, "start_installed_hosts", installed_hosts)
 
-    def browser_suite(evidence, environment):
+    def browser_suite(evidence, environment, **kwargs):
+        assert environment["PIVOT_REQUIRE_BROWSER_EVIDENCE"] == "1"
         assert environment["PIVOT_FLAGSHIP_REACT_URL"] == "http://127.0.0.1:39002"
         assert environment["PIVOT_FLAGSHIP_DASH_URL"] == "http://127.0.0.1:39001"
         assert environment["PIVOT_FLAGSHIP_STREAMLIT_URL"] == "http://127.0.0.1:8502"
@@ -133,10 +136,135 @@ def test_installed_release_binds_browser_environment_and_preserves_failure(tmp_p
     assert json.loads((evidence / "flagship-certification.json").read_text())["result"] == "failed"
 
 
+@pytest.mark.parametrize("report", [None, '<testsuite><testcase name="browser"><skipped/></testcase></testsuite>', '<testsuite/>'])
+def test_installed_release_rejects_zero_exit_with_skipped_missing_or_empty_browser_report(tmp_path, monkeypatch, report):
+    from scripts import certify_flagship, flagship_artifacts
+
+    monkeypatch.setattr(flagship_artifacts, "build_artifacts", lambda source, output: ArtifactBinding())
+    @contextmanager
+    def hosts(binding, output):
+        yield {"dash": "http://127.0.0.1:1", "react": "http://127.0.0.1:2", "streamlit": "http://127.0.0.1:8502"}
+    monkeypatch.setattr(flagship_artifacts, "start_installed_hosts", hosts)
+    def suite(evidence, environment, **kwargs):
+        if report is not None:
+            (kwargs.get("junit_path") or evidence / "installed-browser.junit.xml").write_text(report)
+        return 0
+    monkeypatch.setattr(certify_flagship, "_run_browser_suite", suite)
+    evidence = tmp_path / "evidence"
+    assert certify_flagship.main(["--installed-release", "--artifact-dir", str(evidence)]) == 1
+    assert json.loads((evidence / "flagship-certification.json").read_text())["result"] == "failed"
+
+
+@pytest.mark.parametrize("body", [b"good release", b"altered release", None])
+def test_certification_suite_checks_actual_loaded_assets_before_saving_evidence(tmp_path, body):
+    from tests import test_flagship_certification as suite
+    digest = hashlib.sha256(b"good release").hexdigest()
+
+    class Browser:
+        _pivot_artifact_binding = ArtifactBinding(expected_loaded_assets={"react": {"/assets/index.js": digest}})
+        _pivot_artifact_host = "react"
+        _pivot_loaded_assets = {}
+        def get_log(self, kind):
+            if kind != "performance" or body is None:
+                return []
+            return [{"message": json.dumps({"message": {"method": "Network.responseReceived", "params": {
+                "requestId": "asset-1", "type": "Script", "response": {
+                    "url": "http://127.0.0.1:39002/assets/index.js", "status": 200, "mimeType": "text/javascript",
+                },
+            }}})}]
+        def execute_cdp_cmd(self, command, arguments):
+            assert command == "Network.getResponseBody" and arguments == {"requestId": "asset-1"}
+            return {"body": body.decode(), "base64Encoded": False}
+        def execute_script(self, script):
+            return None
+        def save_screenshot(self, path):
+            return True
+
+    if body == b"good release":
+        suite._save_evidence(Browser(), tmp_path, "asset-consumer")
+        record = json.loads((tmp_path / "asset-consumer.network.json").read_text())
+        assert record["loadedAssetSha256"] == {"/assets/index.js": digest}
+    else:
+        with pytest.raises(ValueError, match="hash mismatch|No installed .*assets"):
+            suite._save_evidence(Browser(), tmp_path, "asset-consumer")
+
+
+def test_installed_hosts_reject_occupied_streamlit_port_before_launch(tmp_path, monkeypatch):
+    from scripts import flagship_artifacts
+    with socket.socket() as listener:
+        if os.name == "nt":
+            listener.setsockopt(socket.SOL_SOCKET, socket.SO_EXCLUSIVEADDRUSE, 1)
+        listener.bind(("127.0.0.1", 8502))
+        listener.listen()
+        def forbidden_launch(*args, **kwargs):
+            raise AssertionError("Launched a host before rejecting the foreign listener")
+        monkeypatch.setattr(flagship_artifacts.subprocess, "Popen", forbidden_launch)
+        binding = ArtifactBinding(paths={"app": tmp_path, "python": Path(sys.executable)})
+        with pytest.raises(RuntimeError, match="occupied.*8502"):
+            with start_installed_hosts(binding, tmp_path / "hosts"):
+                pass
+        assert not list((tmp_path / "hosts").glob("*.pid"))
+
+
+def test_health_200_from_foreign_process_cannot_satisfy_installed_host_startup():
+    from scripts.flagship_artifacts import _wait_for
+    class Handler(BaseHTTPRequestHandler):
+        def do_GET(self):
+            self.send_response(200)
+            self.end_headers()
+        def log_message(self, *args):
+            pass
+    server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    process = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(120)"])
+    try:
+        with pytest.raises(RuntimeError, match="not owned"):
+            _wait_for(f"http://127.0.0.1:{server.server_port}", process, timeout=2)
+    finally:
+        process.terminate()
+        process.wait(timeout=5)
+        server.shutdown()
+        server.server_close()
+        thread.join(timeout=5)
+
+
+def test_release_environment_does_not_inherit_global_distribution_metadata(tmp_path):
+    from scripts import flagship_artifacts
+    environment = tmp_path / "isolated-env"
+    python = flagship_artifacts._create_python_environment(environment)
+    paths = json.loads(subprocess.check_output([str(python), "-c", "import json,sys; print(json.dumps(sys.path))"], text=True))
+    import sysconfig
+    assert str(Path(sysconfig.get_path("purelib")).resolve()) not in {str(Path(path).resolve()) for path in paths if path}
+
+
+def test_host_cleanup_terminates_spawned_descendants():
+    import psutil
+    from scripts.flagship_artifacts import _stop_process
+    process = subprocess.Popen([sys.executable, "-c", (
+        "import subprocess,sys,time; "
+        "child=subprocess.Popen([sys.executable,'-c','import time; time.sleep(120)']); "
+        "print(child.pid,flush=True); time.sleep(120)"
+    )], stdout=subprocess.PIPE, text=True)
+    child = psutil.Process(int(process.stdout.readline()))
+    try:
+        _stop_process(process)
+        with pytest.raises(psutil.NoSuchProcess):
+            child.status()
+    finally:
+        if child.is_running():
+            child.kill()
+            child.wait(timeout=5)
+        if process.poll() is None:
+            process.kill()
+            process.wait(timeout=5)
+
+
 def _assert_browser_loaded_bound_assets(binding: ArtifactBinding, urls: dict[str, str], evidence: Path) -> None:
     from selenium import webdriver
     from selenium.webdriver.chrome.options import Options
     from selenium.webdriver.support.ui import WebDriverWait
+    from tests.test_flagship_certification import _save_evidence
 
     options = Options()
     for argument in ("--headless=new", "--no-sandbox", "--disable-dev-shm-usage", "--disable-background-networking", "--disable-component-update", "--window-size=1680,1200"):
@@ -146,6 +274,9 @@ def _assert_browser_loaded_bound_assets(binding: ArtifactBinding, urls: dict[str
     for host, url in urls.items():
         driver = webdriver.Chrome(options=options)
         try:
+            driver._pivot_artifact_binding = binding
+            driver._pivot_artifact_host = host
+            driver._pivot_loaded_assets = {}
             driver.execute_cdp_cmd("Network.enable", {"maxTotalBufferSize": 50000000, "maxResourceBufferSize": 50000000})
             driver.get(url)
             cells = WebDriverWait(driver, 45).until(lambda browser: browser.execute_script("""
@@ -158,25 +289,13 @@ def _assert_browser_loaded_bound_assets(binding: ArtifactBinding, urls: dict[str
                 };
                 return find(document).map(cell => cell.textContent).filter(text => text.trim());
             """))
-            loaded = {}
-            for entry in driver.get_log("performance"):
-                event = json.loads(entry["message"])["message"]
-                if event["method"] != "Network.responseReceived":
-                    continue
-                resource = event["params"]["response"]["url"]
-                path = urlsplit(resource).path
-                assert not path.startswith("/@vite/"), resource
-                own_asset = (
-                    host == "react" and path.startswith("/assets/")
-                    or host == "dash" and path.startswith("/_dash-component-suites/dash_tanstack_pivot/")
-                    or host == "streamlit" and Path(path).name in {Path(name).name for name in binding.expected_loaded_assets[host]}
-                )
-                if own_asset:
-                    response = driver.execute_cdp_cmd("Network.getResponseBody", {"requestId": event["params"]["requestId"]})
-                    body = base64.b64decode(response["body"]) if response.get("base64Encoded") else response["body"].encode()
-                    loaded[path] = verify_loaded_asset(binding, host, resource, body)
-            assert loaded, f"No installed {host} component assets observed"
+            _save_evidence(driver, evidence, f"{host}-installed-assets")
+            loaded = driver._pivot_loaded_assets
             observations[host] = {"browserVersion": driver.capabilities["browserVersion"], "cellCount": len(cells), "loadedAssetSha256": loaded}
+            (evidence / "browser-assets.json").write_text(json.dumps({
+                "sourceCommit": binding.source_commit, "sha256": binding.sha256,
+                "observations": observations,
+            }, indent=2), encoding="utf-8")
         finally:
             driver.quit()
     (evidence / "browser-assets.json").write_text(json.dumps({

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import hashlib
+import base64
 import json
 import os
 import shutil
@@ -59,6 +60,11 @@ def _snapshot(source: Path, output: Path) -> tuple[str, Path]:
 
 def _python_in(environment: Path) -> Path:
     return environment / ("Scripts/python.exe" if os.name == "nt" else "bin/python")
+
+
+def _create_python_environment(environment: Path) -> Path:
+    venv.EnvBuilder(with_pip=True, system_site_packages=False).create(environment)
+    return _python_in(environment)
 
 
 def _file_hashes(paths: list[Path], base: Path, url_prefix: str = "") -> dict[str, str]:
@@ -130,9 +136,8 @@ def _build_from_snapshot(commit: str, snapshot: Path, output: Path) -> ArtifactB
     npm_tarball = tarballs[0]
 
     environment = output / "python-env"
-    venv.EnvBuilder(with_pip=True, system_site_packages=True).create(environment)
-    python = _python_in(environment)
-    _run([str(python), "-m", "pip", "install", "--no-deps", "--force-reinstall", str(wheel)], output)
+    python = _create_python_environment(environment)
+    _run([str(python), "-m", "pip", "--isolated", "install", "--force-reinstall", f"{wheel}[streamlit,api]"], output)
 
     app = output / "installed-app"
     (app / "examples").mkdir(parents=True)
@@ -199,16 +204,32 @@ def _wait_for(url: str, process: subprocess.Popen[bytes], timeout: float = 60) -
         try:
             with urllib.request.urlopen(url, timeout=2) as response:
                 if response.status == 200:
+                    if not _owns_listener(process, url):
+                        raise RuntimeError(f"Installed host listener is not owned by the launched process: {url}")
                     return
         except (urllib.error.URLError, TimeoutError, OSError):
             time.sleep(0.25)
     raise RuntimeError(f"Installed host did not start: {url}")
 
 
-def _free_port() -> int:
-    with socket.socket() as listener:
-        listener.bind(("127.0.0.1", 0))
-        return int(listener.getsockname()[1])
+def _owns_listener(process: subprocess.Popen, url: str) -> bool:
+    import psutil
+
+    endpoint = urlsplit(url)
+    try:
+        root = psutil.Process(process.pid)
+        for owner in (root, *root.children(recursive=True)):
+            try:
+                if any(connection.status == psutil.CONN_LISTEN
+                       and connection.laddr.port == endpoint.port
+                       and connection.laddr.ip in (endpoint.hostname, "0.0.0.0", "::")
+                       for connection in (getattr(owner, "net_connections", None) or owner.connections)(kind="tcp")):
+                    return True
+            except psutil.NoSuchProcess:
+                continue
+    except psutil.NoSuchProcess:
+        pass
+    return False
 
 
 @contextmanager
@@ -225,21 +246,33 @@ def start_installed_hosts(binding: ArtifactBinding, output: Path) -> Iterator[di
     child_env.pop("PYTHONPATH", None)
     child_env["PYTHONPATH"] = str(app)
     child_env["PIVOT_FLAGSHIP_PARITY_DATA"] = "1"
-    ports = {name: _free_port() for name in ("runtime", "dash", "react")}
-    # The committed runtime demo permits the Streamlit origin on this port.
-    # Keep its production CORS policy intact while avoiding other host conflicts.
-    ports["streamlit"] = 8502
-    child_env["PIVOT_RUNTIME_UPSTREAM"] = f"http://127.0.0.1:{ports['runtime']}"
-    child_env["PIVOT_RUNTIME_ENDPOINT"] = f"http://127.0.0.1:{ports['runtime']}/v1/runtime"
-    commands = (
-        ("runtime", [str(python), "-m", "uvicorn", "examples.flagship_runtime_server:app", "--host", "127.0.0.1", "--port", str(ports["runtime"])], app, f"http://127.0.0.1:{ports['runtime']}/health"),
-        ("dash", [str(python), "-c", f"from examples.flagship_dash import app; app.run(debug=False, use_reloader=False, host='127.0.0.1', port={ports['dash']})"], app, f"http://127.0.0.1:{ports['dash']}"),
-        ("react", [npm, "run", "preview", "--", "--port", str(ports["react"])], react_app, f"http://127.0.0.1:{ports['react']}"),
-        ("streamlit", [str(python), "-m", "streamlit", "run", "examples/flagship_streamlit.py", "--server.address", "127.0.0.1", "--server.port", str(ports["streamlit"]), "--server.headless", "true", "--browser.gatherUsageStats", "false"], app, f"http://127.0.0.1:{ports['streamlit']}/_stcore/health"),
-    )
     with ExitStack() as stack:
+        reservations = {}
+        ports = {}
+        for name in ("runtime", "dash", "react", "streamlit"):
+            listener = stack.enter_context(socket.socket())
+            if os.name == "nt":
+                listener.setsockopt(socket.SOL_SOCKET, socket.SO_EXCLUSIVEADDRUSE, 1)
+            port = 8502 if name == "streamlit" else 0
+            try:
+                listener.bind(("127.0.0.1", port))
+            except OSError as error:
+                raise RuntimeError(f"occupied installed host port: {port}") from error
+            reservations[name] = listener
+            ports[name] = listener.getsockname()[1]
+        # Streamlit keeps its configured demo CORS origin; all reservations are
+        # checked before any process is started and listener ownership is verified.
+        child_env["PIVOT_RUNTIME_UPSTREAM"] = f"http://127.0.0.1:{ports['runtime']}"
+        child_env["PIVOT_RUNTIME_ENDPOINT"] = f"http://127.0.0.1:{ports['runtime']}/v1/runtime"
+        commands = (
+            ("runtime", [str(python), "-m", "uvicorn", "examples.flagship_runtime_server:app", "--host", "127.0.0.1", "--port", str(ports["runtime"])], app, f"http://127.0.0.1:{ports['runtime']}/health"),
+            ("dash", [str(python), "-c", f"from examples.flagship_dash import app; app.run(debug=False, use_reloader=False, host='127.0.0.1', port={ports['dash']})"], app, f"http://127.0.0.1:{ports['dash']}"),
+            ("react", [npm, "run", "preview", "--", "--port", str(ports["react"])], react_app, f"http://127.0.0.1:{ports['react']}"),
+            ("streamlit", [str(python), "-m", "streamlit", "run", "examples/flagship_streamlit.py", "--server.address", "127.0.0.1", "--server.port", str(ports["streamlit"]), "--server.headless", "true", "--browser.gatherUsageStats", "false"], app, f"http://127.0.0.1:{ports['streamlit']}/_stcore/health"),
+        )
         for name, command, cwd, health in commands:
             log = stack.enter_context((output / f"{name}.log").open("wb"))
+            reservations[name].close()
             process = subprocess.Popen(command, cwd=cwd, env=child_env, stdout=log, stderr=subprocess.STDOUT)
             stack.callback(_stop_process, process)
             (output / f"{name}.pid").write_text(str(process.pid), encoding="ascii")
@@ -248,13 +281,28 @@ def start_installed_hosts(binding: ArtifactBinding, output: Path) -> Iterator[di
 
 
 def _stop_process(process: subprocess.Popen[bytes]) -> None:
-    if process.poll() is None:
-        process.terminate()
+    import psutil
+
+    try:
+        root = psutil.Process(process.pid)
+        owned = [*reversed(root.children(recursive=True)), root]
+    except psutil.NoSuchProcess:
+        return
+    for child in owned:
         try:
-            process.wait(timeout=10)
-        except subprocess.TimeoutExpired:
-            process.kill()
-            process.wait()
+            child.terminate()
+        except psutil.NoSuchProcess:
+            pass
+    _, survivors = psutil.wait_procs(owned, timeout=5)
+    for child in survivors:
+        try:
+            child.kill()
+        except psutil.NoSuchProcess:
+            pass
+    _, survivors = psutil.wait_procs(survivors, timeout=5)
+    process.wait(timeout=5)
+    if survivors:
+        raise RuntimeError("Installed host process tree did not stop")
 
 
 def verify_loaded_asset(binding: ArtifactBinding, host: str, url: str, body: bytes) -> str:
@@ -284,3 +332,42 @@ def verify_loaded_asset(binding: ArtifactBinding, host: str, url: str, body: byt
     if actual != expected:
         raise ValueError(f"asset hash mismatch: {host} {path}")
     return actual
+
+
+def load_artifact_binding(path: Path) -> ArtifactBinding:
+    record = json.loads(path.read_text(encoding="utf-8"))
+    assets = record["expectedLoadedAssets"]
+    if not all(assets.get(host) for host in ("dash", "react", "streamlit")):
+        raise ValueError("Artifact binding omits a host's production assets")
+    return ArtifactBinding(
+        source_commit=record["sourceCommit"], sha256=record["sha256"],
+        versions=record["versions"], expected_loaded_assets=assets,
+    )
+
+
+def verify_browser_assets(binding: ArtifactBinding, host: str, driver, entries: list[dict] | None = None) -> dict[str, str]:
+    """Hash actual CDP response bodies before their performance batch is discarded."""
+    loaded = {}
+    for entry in driver.get_log("performance") if entries is None else entries:
+        event = json.loads(entry["message"])["message"]
+        params = event.get("params", {})
+        resource = params.get("response", params.get("request", {})).get("url", "")
+        path = urlsplit(resource).path
+        if path == "/@vite/client" or path.startswith("/@vite/"):
+            raise ValueError("Vite development client is forbidden in a release host")
+        if event["method"] != "Network.responseReceived":
+            continue
+        own_asset = (
+            host == "react" and path.startswith("/assets/")
+            or host == "dash" and path.startswith("/_dash-component-suites/dash_tanstack_pivot/")
+            or host == "streamlit" and (
+                path.startswith("/_stcore/bidi-components/serverside-pivot.")
+                or path.startswith("/_stcore/component/serverside-pivot/")
+                or Path(path).name in {Path(name).name for name in binding.expected_loaded_assets[host]}
+            )
+        )
+        if own_asset and path.endswith((".js", ".mjs", ".css")):
+            response = driver.execute_cdp_cmd("Network.getResponseBody", {"requestId": params["requestId"]})
+            body = base64.b64decode(response["body"]) if response.get("base64Encoded") else response["body"].encode()
+            loaded[path] = verify_loaded_asset(binding, host, resource, body)
+    return loaded

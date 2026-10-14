@@ -861,6 +861,28 @@ def _certify_export_qualification(
     return 0 if passed else 1
 
 
+INSTALLED_BROWSER_CASES = (
+    "test_flagship_startup_navigation_and_controls",
+    "test_flagship_copy_current_table_all_records_and_export_xlsx",
+    "test_flagship_sidebar_filter_report_and_chart_entrypoints",
+)
+
+
+def _installed_browser_report_passed(path: Path) -> bool:
+    try:
+        report = ET.parse(path).getroot()
+    except (OSError, ET.ParseError):
+        return False
+    cases = report.findall(".//testcase")
+    expected = {f"{name}[{host}]" for name in INSTALLED_BROWSER_CASES for host in QUALIFICATION_HOSTS}
+    names = [case.get("name") for case in cases]
+    return (
+        len(names) == len(expected) and set(names) == expected
+        and not any(case.find(tag) is not None for case in cases for tag in ("skipped", "failure", "error"))
+        and not any(int(suite.get(tag, "0")) for suite in report.iter("testsuite") for tag in ("skipped", "failures", "errors"))
+    )
+
+
 def _certify_installed_release(artifact_dir: Path, started_at: datetime) -> int:
     from scripts.flagship_artifacts import build_artifacts, start_installed_hosts
 
@@ -877,10 +899,17 @@ def _certify_installed_release(artifact_dir: Path, started_at: datetime) -> int:
         environment = os.environ.copy()
         environment.pop("PYTHONPATH", None)
         environment["PIVOT_FLAGSHIP_ARTIFACT_BINDING"] = str(binding_path)
+        environment["PIVOT_REQUIRE_BROWSER_EVIDENCE"] = "1"
+        junit_path = artifact_dir / "installed-browser.junit.xml"
         with start_installed_hosts(binding, artifact_dir / "installed-hosts") as urls:
             for host, url in urls.items():
                 environment[f"PIVOT_FLAGSHIP_{host.upper()}_URL"] = url
-            code = _run_browser_suite(artifact_dir, environment)
+            code = _run_browser_suite(
+                artifact_dir, environment, junit_path=junit_path,
+                selection=" or ".join(INSTALLED_BROWSER_CASES),
+            )
+            if code == 0 and not _installed_browser_report_passed(junit_path):
+                code = 1
         result = "passed" if code == 0 else "failed"
         return code
     finally:
