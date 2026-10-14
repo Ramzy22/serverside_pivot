@@ -576,33 +576,41 @@ def _stop_process(process: OwnedHostProcess) -> None:
         raise RuntimeError("Installed host process tree did not stop")
 
 
-def verify_loaded_asset(binding: ArtifactBinding, host: str, url: str, body: bytes) -> str:
-    """Reject an unrecorded or changed production asset returned by a host."""
+def resolve_loaded_asset(binding: ArtifactBinding, host: str, url: str) -> tuple[str, str]:
+    """Resolve a served URL to its canonical bound path and expected SHA-256."""
     _verify_asset_origin(binding, host, url)
     path = urlsplit(url).path
     if path == "/@vite/client" or path.startswith("/@vite/"):
         raise ValueError("Vite development client is forbidden in a release host")
-    expected = binding.expected_loaded_assets.get(host, {}).get(path)
+    canonical = path
+    expected = binding.expected_loaded_assets.get(host, {}).get(canonical)
     if expected is None and host == "dash":
         from dash.fingerprint import check_fingerprint
 
         original_path, fingerprinted = check_fingerprint(path)
         if fingerprinted:
-            expected = binding.expected_loaded_assets.get(host, {}).get(original_path)
+            canonical = original_path
+            expected = binding.expected_loaded_assets.get(host, {}).get(canonical)
     if expected is None and host == "streamlit":
         # Streamlit serves wheel component files below its own versioned URL.
         # Their hashed filenames are unique within the installed build.
         matches = [
-            digest for bound_path, digest in binding.expected_loaded_assets.get(host, {}).items()
+            (bound_path, digest) for bound_path, digest in binding.expected_loaded_assets.get(host, {}).items()
             if Path(bound_path).name == Path(path).name
         ]
         if len(matches) == 1:
-            expected = matches[0]
+            canonical, expected = matches[0]
     if expected is None:
         raise ValueError(f"unbound asset: {host} {path}")
+    return canonical, expected
+
+
+def verify_loaded_asset(binding: ArtifactBinding, host: str, url: str, body: bytes) -> str:
+    """Reject an unrecorded or changed production asset returned by a host."""
+    _, expected = resolve_loaded_asset(binding, host, url)
     actual = hashlib.sha256(body).hexdigest()
     if actual != expected:
-        raise ValueError(f"asset hash mismatch: {host} {path}")
+        raise ValueError(f"asset hash mismatch: {host} {urlsplit(url).path}")
     return actual
 
 

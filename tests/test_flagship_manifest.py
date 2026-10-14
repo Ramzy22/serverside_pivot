@@ -296,6 +296,61 @@ def test_product_asset_claim_must_match_hashed_browser_network_evidence(qualific
     assert "asset_mismatch" in result["requirements"]["copy.cells"]["hosts"]["dash"]["issues"]
 
 
+def _served_alias_evidence(qualification, host, representation="alias/alias", damage=None):
+    """Model Task 4's wheel paths and actual served URLs without a web server."""
+    requirements, binding, cases = qualification
+    canonical, alias = {
+        "dash": ("/_dash-component-suites/dash_tanstack_pivot/dash_tanstack_pivot.min.js",
+                 "/_dash-component-suites/dash_tanstack_pivot/dash_tanstack_pivot.v0_0_88mabc123.min.js"),
+        "streamlit": ("/streamlit_pivot/frontend/build/pivot-workspace-123.js",
+                      "/_stcore/component/serverside-pivot/pivot-workspace-123.js"),
+    }[host]
+    origin = "http://127.0.0.1:39001"
+    hashes = {key: value for key, value in binding.sha256.items() if key != f"{host}:/entry.js"}
+    hashes[f"{host}:{canonical}"] = digest(host)
+    binding = replace(binding, sha256=hashes, host_origins={host: origin},
+        expected_loaded_assets={**binding.expected_loaded_assets, host: {canonical: digest(host)}})
+    claimed_kind, observed_kind = representation.split("/")
+    claimed_url = origin + (alias if claimed_kind == "alias" else canonical)
+    observed_url = alias if observed_kind == "alias" else canonical
+    for index, case in enumerate(cases):
+        case = replace(case, sha256=hashes)
+        if case.host == host:
+            claimed = {claimed_url: "0" * 64 if damage == "stale-claimed" else digest(host)}
+            observed = {observed_url: "0" * 64 if damage == "stale-observed" else digest(host)}
+            if damage == "foreign-claimed":
+                claimed = {"http://foreign.invalid" + alias: digest(host)}
+            if damage == "foreign-observed":
+                observed = {"http://foreign.invalid" + alias: digest(host)}
+            if damage == "missing-observed":
+                observed = {}
+            evidence = Path(case.evidence_paths[0])
+            observation = json.loads(evidence.read_text())
+            observation["loadedAssetSha256"] = observed
+            evidence.write_text(json.dumps(observation))
+            case = replace(case, loaded_assets=claimed,
+                evidence_sha256={str(evidence): hashlib.sha256(evidence.read_bytes()).hexdigest()})
+        cases[index] = case
+    return requirements, binding, cases
+
+
+@pytest.mark.parametrize("host", ["dash", "streamlit"])
+@pytest.mark.parametrize("representation", ["alias/alias", "canonical/alias", "alias/canonical"])
+def test_real_served_asset_aliases_qualify_the_same_bound_bytes(qualification, host, representation):
+    requirements, binding, cases = _served_alias_evidence(qualification, host, representation)
+    result = manifest.evaluate_manifest(requirements, binding, cases)
+    assert result["releaseResult"] == result["parityResult"] == "passed"
+
+
+@pytest.mark.parametrize("host", ["dash", "streamlit"])
+@pytest.mark.parametrize("damage", ["stale-claimed", "stale-observed", "foreign-claimed", "foreign-observed", "missing-observed"])
+def test_asset_aliases_do_not_accept_stale_foreign_or_missing_observations(qualification, host, damage):
+    requirements, binding, cases = _served_alias_evidence(qualification, host, damage=damage)
+    result = manifest.evaluate_manifest(requirements, binding, cases)
+    assert result["releaseResult"] == result["parityResult"] == "failed"
+    assert "asset_mismatch" in result["requirements"]["copy.cells"]["hosts"][host]["issues"]
+
+
 @pytest.mark.parametrize("trace", [[{"request": "getRows"}], [{"request": {}, "response": {}}],
     [{"request": {"startRow": 0, "endRow": 10}, "response": {"rowData": [], "rowCount": 0}}]])
 def test_nonempty_dummy_reference_trace_is_not_live_ssrm_evidence(qualification, trace):

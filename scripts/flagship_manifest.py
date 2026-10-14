@@ -15,10 +15,11 @@ from pathlib import Path
 import re
 import subprocess
 import tempfile
+from urllib.parse import urlsplit
 from typing import Mapping, Sequence
 import xml.etree.ElementTree as ET
 
-from scripts.flagship_artifacts import ArtifactBinding
+from scripts.flagship_artifacts import ArtifactBinding, resolve_loaded_asset
 from tests.flagship_capabilities import CAPABILITIES
 from tests.flagship_contract import CaseResult, DIFFERENCES, HOSTS, Requirement, RESULTS, load_requirements, validate_requirements
 
@@ -122,6 +123,30 @@ def load_case_envelope(path: Path, binding: QualificationBinding) -> tuple[Bound
     return tuple(records)
 
 
+def _canonical_assets(binding: ArtifactBinding, host: str, assets: Mapping) -> dict[str, str]:
+    """Apply Task 4's URL/origin/alias rules to digest-only case evidence."""
+    if not isinstance(assets, Mapping):
+        raise ValueError("asset observations must be a mapping")
+    canonical = {}
+    for url, digest in assets.items():
+        if not isinstance(url, str) or not _hash(digest):
+            raise ValueError("invalid asset observation")
+        parsed = urlsplit(url)
+        if not parsed.scheme and not parsed.netloc:
+            if not url.startswith("/"):
+                raise ValueError("asset observation must be an absolute path or URL")
+            # Task 4's network summary retains response paths after verifying
+            # their origin. Explicit URLs still pass the original origin gate.
+            origin = binding.host_origins.get(host)
+            if origin:
+                url = origin.rstrip("/") + url
+        path, expected = resolve_loaded_asset(binding, host, url)
+        if digest != expected:
+            raise ValueError("observed asset hash differs from bound artifact")
+        canonical[path] = digest
+    return canonical
+
+
 def _case_issues(case: CaseResult, binding: ArtifactBinding, requirement: Requirement) -> list[str]:
     issues = []
     if not isinstance(case, BoundCaseResult):
@@ -158,18 +183,16 @@ def _case_issues(case: CaseResult, binding: ArtifactBinding, requirement: Requir
             except (OSError, ValueError, TypeError):
                 issues.append("evidence_invalid")
         if case.system == "product" and browser_case:
-            expected = binding.expected_loaded_assets.get(case.host, {})
-            observed_assets = {}
-            for observation in observations:
-                if isinstance(observation, dict) and isinstance(observation.get("loadedAssetSha256"), dict):
-                    for path, value in observation["loadedAssetSha256"].items():
-                        if path in observed_assets and observed_assets[path] != value:
-                            issues.append("asset_mismatch")
-                        observed_assets[path] = value
-            if (not isinstance(case.loaded_assets, Mapping) or not case.loaded_assets
-                    or not any(isinstance(path, str) and path.endswith((".js", ".mjs")) for path in case.loaded_assets)
-                    or any(expected.get(path) != value for path, value in case.loaded_assets.items())
-                    or observed_assets != case.loaded_assets):
+            try:
+                claimed_assets = _canonical_assets(binding, case.host, case.loaded_assets)
+                observed_assets = {}
+                for observation in observations:
+                    if isinstance(observation, dict) and "loadedAssetSha256" in observation:
+                        observed_assets.update(_canonical_assets(binding, case.host, observation["loadedAssetSha256"]))
+                if (not claimed_assets or not any(path.endswith((".js", ".mjs")) for path in claimed_assets)
+                        or observed_assets != claimed_assets):
+                    raise ValueError("browser observations do not match the claimed assets")
+            except (ValueError, TypeError):
                 issues.append("asset_mismatch")
         elif case.system == "ag_grid":
             def live(observation):

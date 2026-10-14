@@ -284,6 +284,27 @@ def test_streamlit_component_url_verifies_the_wheel_asset_bytes() -> None:
         )
 
 
+@pytest.mark.parametrize("host,canonical,alias", [
+    ("dash", "/_dash-component-suites/dash_tanstack_pivot/dash_tanstack_pivot.min.js",
+     "/_dash-component-suites/dash_tanstack_pivot/dash_tanstack_pivot.v0_0_88mabc123.min.js"),
+    ("streamlit", "/streamlit_pivot/frontend/build/pivot-workspace-123.js",
+     "/_stcore/component/serverside-pivot/pivot-workspace-123.js"),
+])
+def test_asset_resolver_returns_canonical_paths_and_enforces_the_existing_origin_gate(host, canonical, alias):
+    from scripts.flagship_artifacts import resolve_loaded_asset
+
+    body = b"bound release component"
+    digest = hashlib.sha256(body).hexdigest()
+    binding = ArtifactBinding(expected_loaded_assets={host: {canonical: digest}},
+        host_origins={host: "http://127.0.0.1:39001"})
+    for path in (canonical, alias):
+        url = "http://127.0.0.1:39001" + path
+        assert resolve_loaded_asset(binding, host, url) == (canonical, digest)
+        assert verify_loaded_asset(binding, host, url, body) == digest
+    with pytest.raises(ValueError, match="foreign origin"):
+        resolve_loaded_asset(binding, host, "http://foreign.invalid" + alias)
+
+
 @pytest.mark.parametrize("conflicting_flag", ["--reuse-running", "--skip-build", "--export-qualification"])
 def test_installed_release_rejects_flags_that_bypass_its_fresh_build(tmp_path: Path, conflicting_flag: str) -> None:
     from scripts import certify_flagship
