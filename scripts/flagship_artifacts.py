@@ -81,7 +81,7 @@ def _prepare_build_wheelhouse(wheelhouse: Path, package: Path, output: Path) -> 
             if not tags.intersection(supported):
                 raise ValueError(f"incompatible wheel: {filename}")
             with zipfile.ZipFile(path) as archive:
-                metadata_names = [name for name in archive.namelist() if name.endswith(".dist-info/METADATA")]
+                metadata_names = [name for name in archive.namelist() if name.count("/") == 1 and name.endswith(".dist-info/METADATA")]
                 if len(metadata_names) != 1:
                     raise ValueError(f"invalid metadata: {filename}")
                 metadata = email.message_from_bytes(archive.read(metadata_names[0]))

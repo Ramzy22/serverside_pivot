@@ -43,6 +43,21 @@ def _test_build_wheelhouse(path):
     return path
 
 
+def test_build_wheelhouse_ignores_vendored_dependency_metadata(tmp_path):
+    from scripts import flagship_artifacts
+    wheelhouse = _test_build_wheelhouse(tmp_path / "wheelhouse")
+    target = wheelhouse / "setuptools-84.0.0-py3-none-any.whl"
+    with zipfile.ZipFile(target, "a") as archive:
+        archive.writestr("setuptools/_vendor/packaging-26.0.dist-info/METADATA", "Name: packaging\nVersion: 26.0\n")
+    manifest = wheelhouse / "wheelhouse-sha256.json"
+    hashes = json.loads(manifest.read_text())
+    hashes[target.name] = hashlib.sha256(target.read_bytes()).hexdigest()
+    manifest.write_text(json.dumps(hashes))
+    output = tmp_path / "output"
+    env = flagship_artifacts._prepare_build_wheelhouse(wheelhouse, ROOT / "dash_tanstack_pivot", output)
+    assert (Path(env["PIP_FIND_LINKS"]) / target.name).read_bytes() == target.read_bytes()
+
+
 @pytest.mark.parametrize("damage", ["missing", "altered", "manifest-missing", "metadata", "required-wheel-missing"])
 def test_build_wheelhouse_rejects_missing_or_altered_requirements(tmp_path, damage):
     from scripts import flagship_artifacts
@@ -451,12 +466,14 @@ def test_host_cleanup_retains_ownership_after_launcher_exits():
         owned.wait(timeout=10)
         assert child.is_running()
         flagship_artifacts._stop_process(owned)
-        with pytest.raises(psutil.NoSuchProcess):
-            child.status()
+        # Job termination and psutil process visibility need not be atomic.
+        gone, alive = psutil.wait_procs([child], timeout=5)
+        assert child in gone and not alive
     finally:
         if child.is_running():
             child.kill()
             child.wait(timeout=5)
+        owned.stdout.close()
 
 
 def test_cleanup_refuses_reused_pid_and_preserves_unrelated_process():
