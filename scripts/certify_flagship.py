@@ -883,12 +883,13 @@ def _installed_browser_report_passed(path: Path) -> bool:
     )
 
 
-def _certify_installed_release(artifact_dir: Path, started_at: datetime) -> int:
+def _certify_installed_release(artifact_dir: Path, started_at: datetime, *, build_wheelhouse: Path | None = None) -> int:
     from scripts.flagship_artifacts import build_artifacts, start_installed_hosts, cleanup_python_environment
 
     result = "failed"
     try:
-        binding = build_artifacts(ROOT, artifact_dir / "release-artifacts")
+        build_options = {"build_wheelhouse": build_wheelhouse} if build_wheelhouse is not None else {}
+        binding = build_artifacts(ROOT, artifact_dir / "release-artifacts", **build_options)
         binding_path = artifact_dir / "artifact-binding.json"
         environment = os.environ.copy()
         environment.pop("PYTHONPATH", None)
@@ -927,12 +928,17 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--skip-build", action="store_true", help="Do not rebuild bundles before certification.")
     parser.add_argument("--wheel", type=Path, help="Prebuilt wheel to reinstall when --skip-build is used.")
     parser.add_argument("--installed-release", action="store_true", help="Build fresh committed wheel/npm artifacts and run browsers against their installed hosts; retain private evidence.")
+    parser.add_argument("--build-wheelhouse", type=Path, help="Installed-release only: build dependencies from hash-pinned wheels plus wheelhouse-sha256.json; isolation stays enabled, runtime installation is unchanged.")
     parser.add_argument(
         "--export-qualification",
         action="store_true",
         help="Require normal and constrained export evidence from every flagship host.",
     )
     args = parser.parse_args(argv)
+
+    if args.build_wheelhouse is not None and not args.installed_release:
+        print("Build wheelhouse requires --installed-release", file=sys.stderr)
+        return 1
 
     if args.installed_release and (args.reuse_running or args.skip_build or args.export_qualification or args.wheel):
         print("Installed release requires a fresh build and cannot combine with legacy/export flags", file=sys.stderr)
@@ -965,7 +971,7 @@ def main(argv: list[str] | None = None) -> int:
         artifact_dir.mkdir(parents=True, exist_ok=True)
     started_at = datetime.now(UTC)
     if args.installed_release:
-        return _certify_installed_release(artifact_dir, started_at)
+        return _certify_installed_release(artifact_dir, started_at, build_wheelhouse=args.build_wheelhouse)
     if not args.export_qualification:
         print("Legacy diagnostic mode: results are not current installed-release qualification", file=sys.stderr)
     environment = os.environ.copy()

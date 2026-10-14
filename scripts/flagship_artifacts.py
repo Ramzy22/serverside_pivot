@@ -18,6 +18,7 @@ import urllib.request
 import venv
 import zipfile
 import uuid
+import email
 from contextlib import ExitStack, contextmanager
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -42,9 +43,9 @@ def _digest(data: bytes) -> str:
     return hashlib.sha256(data).hexdigest()
 
 
-def _run(command: list[str], cwd: Path) -> str:
+def _run(command: list[str], cwd: Path, *, env: dict[str, str] | None = None) -> str:
     try:
-        completed = subprocess.run(command, cwd=cwd, check=True, text=True, capture_output=True)
+        completed = subprocess.run(command, cwd=cwd, env=env, check=True, text=True, capture_output=True)
     except subprocess.CalledProcessError as error:
         # The caller retains private build output. Do not discard the installer
         # or bundler diagnostics behind CalledProcessError's command-only text.
@@ -54,6 +55,63 @@ def _run(command: list[str], cwd: Path) -> str:
             print(error.stderr, file=sys.stderr, end="")
         raise
     return completed.stdout.strip()
+
+
+def _prepare_build_wheelhouse(wheelhouse: Path, package: Path, output: Path) -> dict[str, str]:
+    """Validate hash-pinned wheels and stage only these build-time inputs."""
+    import tomllib
+    from packaging.requirements import Requirement
+    from packaging.tags import sys_tags
+    from packaging.utils import canonicalize_name, parse_wheel_filename
+    from packaging.specifiers import SpecifierSet
+
+    try:
+        wheelhouse = wheelhouse.resolve(strict=True)
+        manifest = json.loads((wheelhouse / "wheelhouse-sha256.json").read_text(encoding="utf-8"))
+        wheels = {path.name: path for path in wheelhouse.glob("*.whl")}
+        if not isinstance(manifest, dict) or not manifest or set(manifest) != set(wheels):
+            raise ValueError("manifest must name every wheel exactly")
+        candidates = []
+        supported = set(sys_tags())
+        for filename, expected in manifest.items():
+            path = wheels[filename]
+            if path.is_symlink() or not isinstance(expected, str) or _digest(path.read_bytes()) != expected:
+                raise ValueError(f"hash mismatch: {filename}")
+            name, version, _, tags = parse_wheel_filename(filename)
+            if not tags.intersection(supported):
+                raise ValueError(f"incompatible wheel: {filename}")
+            with zipfile.ZipFile(path) as archive:
+                metadata_names = [name for name in archive.namelist() if name.endswith(".dist-info/METADATA")]
+                if len(metadata_names) != 1:
+                    raise ValueError(f"invalid metadata: {filename}")
+                metadata = email.message_from_bytes(archive.read(metadata_names[0]))
+                if canonicalize_name(metadata.get("Name", "")) != name or metadata.get("Version") != str(version):
+                    raise ValueError(f"metadata mismatch: {filename}")
+                requires_python = metadata.get("Requires-Python")
+                if requires_python and not SpecifierSet(requires_python).contains(".".join(map(str, sys.version_info[:3]))):
+                    raise ValueError(f"incompatible Python: {filename}")
+            candidates.append((name, version))
+        requirements = tomllib.loads((package / "pyproject.toml").read_text(encoding="utf-8"))["build-system"]["requires"]
+        for text in requirements:
+            requirement = Requirement(text)
+            if requirement.marker is not None and not requirement.marker.evaluate():
+                continue
+            if requirement.url or not any(name == canonicalize_name(requirement.name) and version in requirement.specifier for name, version in candidates):
+                raise ValueError(f"missing required wheel: {text}")
+    except (OSError, ValueError, KeyError, zipfile.BadZipFile) as error:
+        raise ValueError(f"Invalid build wheelhouse: {error}") from error
+
+    staged = output / "build-wheelhouse"
+    staged.mkdir(parents=True)
+    for filename, source in wheels.items():
+        shutil.copyfile(source, staged / filename)
+        if _digest((staged / filename).read_bytes()) != manifest[filename]:
+            raise ValueError(f"Invalid build wheelhouse: changed while staging {filename}")
+    (output / "build-wheelhouse.json").write_text(json.dumps({
+        "source": str(wheelhouse), "staged": str(staged), "sha256": manifest,
+        "buildSystemRequires": requirements,
+    }, indent=2), encoding="utf-8")
+    return {**os.environ, "PIP_NO_INDEX": "1", "PIP_FIND_LINKS": str(staged)}
 
 
 def _snapshot(source: Path, output: Path) -> tuple[str, Path]:
@@ -144,7 +202,7 @@ def _installed_module_paths(python: Path, cwd: Path) -> dict[str, str]:
     return json.loads(_run([str(python), "-c", probe], cwd))
 
 
-def build_artifacts(source: Path, output: Path) -> ArtifactBinding:
+def build_artifacts(source: Path, output: Path, *, build_wheelhouse: Path | None = None) -> ArtifactBinding:
     """Build and install every host from one committed, isolated source snapshot."""
     source = source.resolve(strict=True)
     output = output.resolve()
@@ -155,11 +213,12 @@ def build_artifacts(source: Path, output: Path) -> ArtifactBinding:
     # when pytest or a release job chooses a deeply nested evidence directory.
     with tempfile.TemporaryDirectory(prefix="pf-") as short_root:
         commit, snapshot = _snapshot(source, Path(short_root))
-        return _build_from_snapshot(commit, snapshot, output)
+        return _build_from_snapshot(commit, snapshot, output, build_wheelhouse=build_wheelhouse)
 
 
-def _build_from_snapshot(commit: str, snapshot: Path, output: Path) -> ArtifactBinding:
+def _build_from_snapshot(commit: str, snapshot: Path, output: Path, *, build_wheelhouse: Path | None = None) -> ArtifactBinding:
     package = snapshot / "dash_tanstack_pivot"
+    build_environment = _prepare_build_wheelhouse(build_wheelhouse, package, output) if build_wheelhouse is not None else None
     npm = shutil.which("npm")
     if npm is None:
         raise RuntimeError("npm is required to build release artifacts")
@@ -172,7 +231,11 @@ def _build_from_snapshot(commit: str, snapshot: Path, output: Path) -> ArtifactB
 
     wheel_dir = output / "wheels"
     wheel_dir.mkdir()
-    _run([sys.executable, "-m", "build", "--wheel", "--outdir", str(wheel_dir), "."], package)
+    build_command = [sys.executable, "-m", "build", "--wheel", "--outdir", str(wheel_dir), "."]
+    if build_environment is None:
+        _run(build_command, package)
+    else:
+        _run(build_command, package, env=build_environment)
     wheels = list(wheel_dir.glob("*.whl"))
     if len(wheels) != 1:
         raise RuntimeError(f"Expected one wheel, found {len(wheels)}")
@@ -239,6 +302,8 @@ def _build_from_snapshot(commit: str, snapshot: Path, output: Path) -> ArtifactB
         **{f"dash:{name}": digest for name, digest in assets["dash"].items()},
         **{f"streamlit:{name}": digest for name, digest in assets["streamlit"].items()},
     }
+    if build_wheelhouse is not None:
+        hashes.update({f"build-input:{name}": digest for name, digest in json.loads((output / "build-wheelhouse.json").read_text(encoding="utf-8"))["sha256"].items()})
     return ArtifactBinding(
         source_commit=commit,
         sha256=hashes,

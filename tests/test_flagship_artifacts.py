@@ -29,6 +29,119 @@ from scripts.flagship_artifacts import (
 ROOT = Path(__file__).resolve().parents[1]
 
 
+def _test_build_wheelhouse(path):
+    path.mkdir()
+    hashes = {}
+    for name, version in (("setuptools", "84.0.0"), ("wheel", "0.45.1")):
+        wheel = path / f"{name}-{version}-py3-none-any.whl"
+        with zipfile.ZipFile(wheel, "w") as archive:
+            prefix = f"{name}-{version}.dist-info/"
+            archive.writestr(prefix + "METADATA", f"Metadata-Version: 2.1\nName: {name}\nVersion: {version}\nRequires-Python: >=3.8\n")
+            archive.writestr(prefix + "WHEEL", "Wheel-Version: 1.0\nTag: py3-none-any\n")
+        hashes[wheel.name] = hashlib.sha256(wheel.read_bytes()).hexdigest()
+    (path / "wheelhouse-sha256.json").write_text(json.dumps(hashes))
+    return path
+
+
+@pytest.mark.parametrize("damage", ["missing", "altered", "manifest-missing", "metadata", "required-wheel-missing"])
+def test_build_wheelhouse_rejects_missing_or_altered_requirements(tmp_path, damage):
+    from scripts import flagship_artifacts
+    wheelhouse = _test_build_wheelhouse(tmp_path / "wheelhouse")
+    target = wheelhouse / "wheel-0.45.1-py3-none-any.whl"
+    if damage in ("missing", "required-wheel-missing"):
+        target.unlink()
+        if damage == "required-wheel-missing":
+            manifest = wheelhouse / "wheelhouse-sha256.json"
+            hashes = json.loads(manifest.read_text())
+            del hashes[target.name]
+            manifest.write_text(json.dumps(hashes))
+    elif damage == "altered":
+        with target.open("ab") as stream:
+            stream.write(b"altered after manifest")
+    elif damage == "manifest-missing":
+        (wheelhouse / "wheelhouse-sha256.json").unlink()
+    else:
+        with zipfile.ZipFile(target, "w") as archive:
+            archive.writestr("wheel-0.45.1.dist-info/METADATA", "Name: foreign\nVersion: 0.45.1\n")
+        hashes = json.loads((wheelhouse / "wheelhouse-sha256.json").read_text())
+        hashes[target.name] = hashlib.sha256(target.read_bytes()).hexdigest()
+        (wheelhouse / "wheelhouse-sha256.json").write_text(json.dumps(hashes))
+    with pytest.raises(ValueError, match="wheelhouse"):
+        flagship_artifacts._prepare_build_wheelhouse(wheelhouse, ROOT / "dash_tanstack_pivot", tmp_path / "output")
+
+
+@pytest.mark.parametrize("offline", [False, True])
+def test_build_wheelhouse_environment_does_not_leak_to_npm_or_runtime_install(tmp_path, monkeypatch, offline):
+    from scripts import flagship_artifacts
+    wheelhouse = _test_build_wheelhouse(tmp_path / "wheelhouse")
+    package = tmp_path / "snapshot" / "dash_tanstack_pivot"
+    package.mkdir(parents=True)
+    (package / "pyproject.toml").write_text('[build-system]\nrequires=["setuptools>=61.0", "wheel"]\n')
+    output = tmp_path / "output"
+    output.mkdir()
+    calls = []
+    before = {name: os.environ.get(name) for name in ("PIP_NO_INDEX", "PIP_FIND_LINKS")}
+
+    def command(command, cwd, *, env=None):
+        calls.append((command, env))
+        if command[1:4] == ["-m", "build", "--wheel"]:
+            (output / "wheels" / "release.whl").write_bytes(b"built wheel")
+        elif "pack" in command:
+            (output / "release.tgz").write_bytes(b"packed npm")
+        elif "pip" in command:
+            raise RuntimeError("runtime installation reached")
+        return ""
+
+    def environment(path):
+        (output / "python-env.location.json").write_text("{}")
+        return tmp_path / "short" / "Scripts" / "python.exe"
+
+    monkeypatch.setattr(flagship_artifacts, "_run", command)
+    monkeypatch.setattr(flagship_artifacts, "_create_python_environment", environment)
+    with pytest.raises(RuntimeError, match="runtime installation reached"):
+        flagship_artifacts._build_from_snapshot("a" * 40, package.parent, output, build_wheelhouse=wheelhouse if offline else None)
+    build = [env for command, env in calls if command[1:4] == ["-m", "build", "--wheel"]]
+    assert len(build) == 1
+    if offline:
+        assert build[0]["PIP_NO_INDEX"] == "1"
+        staged = Path(build[0]["PIP_FIND_LINKS"])
+        assert staged != wheelhouse and staged.is_dir()
+        for name, digest in json.loads((wheelhouse / "wheelhouse-sha256.json").read_text()).items():
+            assert hashlib.sha256((staged / name).read_bytes()).hexdigest() == digest
+        record = json.loads((output / "build-wheelhouse.json").read_text())
+        assert record["sha256"] == json.loads((wheelhouse / "wheelhouse-sha256.json").read_text())
+    else:
+        assert build[0] is None
+        assert not (output / "build-wheelhouse.json").exists()
+    assert all(env is None for command, env in calls if command[1:4] != ["-m", "build", "--wheel"])
+    assert {name: os.environ.get(name) for name in before} == before
+
+
+def test_release_command_environment_is_subprocess_local(tmp_path, monkeypatch):
+    from scripts.flagship_artifacts import _run
+    monkeypatch.delenv("PIVOT_TEST_BUILD_ENV", raising=False)
+    assert _run([sys.executable, "-c", "import os; print(os.environ['PIVOT_TEST_BUILD_ENV'])"], tmp_path,
+                env={**os.environ, "PIVOT_TEST_BUILD_ENV": "build-only"}) == "build-only"
+    assert "PIVOT_TEST_BUILD_ENV" not in os.environ
+
+
+def test_installed_cli_passes_wheelhouse_only_to_artifact_build(tmp_path, monkeypatch):
+    from scripts import certify_flagship, flagship_artifacts
+    wheelhouse = _test_build_wheelhouse(tmp_path / "wheelhouse")
+    def build(source, output, *, build_wheelhouse=None):
+        assert build_wheelhouse == wheelhouse
+        raise RuntimeError("build option forwarded")
+    monkeypatch.setattr(flagship_artifacts, "build_artifacts", build)
+    with pytest.raises(RuntimeError, match="build option forwarded"):
+        certify_flagship.main(["--installed-release", "--build-wheelhouse", str(wheelhouse), "--artifact-dir", str(tmp_path / "evidence")])
+
+
+def test_build_wheelhouse_cli_rejects_legacy_mode(tmp_path):
+    from scripts import certify_flagship
+    assert certify_flagship.main(["--build-wheelhouse", str(tmp_path), "--artifact-dir", str(tmp_path / "evidence")]) == 1
+    assert not (tmp_path / "evidence").exists()
+
+
 def test_failed_release_command_retains_stdout_and_stderr(tmp_path, capsys):
     from scripts.flagship_artifacts import _run
     with pytest.raises(subprocess.CalledProcessError):
@@ -428,7 +541,8 @@ def _assert_browser_loaded_bound_assets(binding: ArtifactBinding, urls: dict[str
 
 @pytest.mark.skipif(os.environ.get("PIVOT_RUN_ARTIFACT_TESTS") != "1", reason="real release build is opt-in")
 def test_clean_artifacts_serve_installed_hosts_and_match_loaded_bytes(tmp_path: Path) -> None:
-    binding = build_artifacts(ROOT, tmp_path / "release")
+    wheelhouse = os.environ.get("PIVOT_FLAGSHIP_BUILD_WHEELHOUSE")
+    binding = build_artifacts(ROOT, tmp_path / "release", build_wheelhouse=Path(wheelhouse) if wheelhouse else None)
     assert binding.source_commit and len(binding.source_commit) == 40
     assert binding.sha256["wheel"] and binding.sha256["npm_tarball"]
     committed_fixture = subprocess.check_output(
