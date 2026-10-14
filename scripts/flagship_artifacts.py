@@ -38,7 +38,16 @@ def _digest(data: bytes) -> str:
 
 
 def _run(command: list[str], cwd: Path) -> str:
-    completed = subprocess.run(command, cwd=cwd, check=True, text=True, capture_output=True)
+    try:
+        completed = subprocess.run(command, cwd=cwd, check=True, text=True, capture_output=True)
+    except subprocess.CalledProcessError as error:
+        # The caller retains private build output. Do not discard the installer
+        # or bundler diagnostics behind CalledProcessError's command-only text.
+        if error.stdout:
+            print(error.stdout, file=sys.stderr, end="")
+        if error.stderr:
+            print(error.stderr, file=sys.stderr, end="")
+        raise
     return completed.stdout.strip()
 
 

@@ -29,6 +29,15 @@ from scripts.flagship_artifacts import (
 ROOT = Path(__file__).resolve().parents[1]
 
 
+def test_failed_release_command_retains_stdout_and_stderr(tmp_path, capsys):
+    from scripts.flagship_artifacts import _run
+    with pytest.raises(subprocess.CalledProcessError):
+        _run([sys.executable, "-c", "import sys; print('private stdout proof'); print('private stderr proof',file=sys.stderr); sys.exit(3)"], tmp_path)
+    diagnostic = capsys.readouterr().err
+    assert "private stdout proof" in diagnostic
+    assert "private stderr proof" in diagnostic
+
+
 def test_source_snapshot_preserves_commit_bytes_despite_git_autocrlf(tmp_path: Path) -> None:
     source = tmp_path / "repository"
     source.mkdir()
