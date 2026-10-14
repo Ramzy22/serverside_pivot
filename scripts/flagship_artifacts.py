@@ -45,7 +45,7 @@ def _snapshot(source: Path, output: Path) -> tuple[str, Path]:
     commit = _run(["git", "rev-parse", "HEAD"], source)
     snapshot = output / "source"
     archive = output / "source.tar"
-    subprocess.run(["git", "archive", "--format=tar", f"--output={archive}", commit], cwd=source, check=True)
+    subprocess.run(["git", "-c", "core.autocrlf=false", "archive", "--format=tar", f"--output={archive}", commit], cwd=source, check=True)
     snapshot.mkdir()
     with tarfile.open(archive) as contents:
         for member in contents.getmembers():

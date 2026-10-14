@@ -20,10 +20,27 @@ from scripts.flagship_artifacts import (
     build_artifacts,
     start_installed_hosts,
     verify_loaded_asset,
+    _snapshot,
 )
 
 
 ROOT = Path(__file__).resolve().parents[1]
+
+
+def test_source_snapshot_preserves_commit_bytes_despite_git_autocrlf(tmp_path: Path) -> None:
+    source = tmp_path / "repository"
+    source.mkdir()
+    subprocess.run(["git", "init", str(source)], check=True, capture_output=True)
+    for key, value in (("user.name", "Artifact Test"), ("user.email", "artifact-test@example.invalid"), ("core.autocrlf", "true")):
+        subprocess.run(["git", "config", key, value], cwd=source, check=True)
+    (source / "fixture.json").write_bytes(b'{"row":1}\n{"row":2}\n')
+    subprocess.run(["git", "add", "fixture.json"], cwd=source, check=True, capture_output=True)
+    subprocess.run(["git", "commit", "-m", "fixture"], cwd=source, check=True, capture_output=True)
+    output = tmp_path / "snapshot"
+    output.mkdir()
+    commit, snapshot = _snapshot(source, output)
+    assert (snapshot / "fixture.json").read_bytes() == b'{"row":1}\n{"row":2}\n'
+    assert commit == subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=source, text=True).strip()
 
 
 def test_loaded_asset_rejects_bytes_other_than_the_bound_release(tmp_path: Path) -> None:
