@@ -3,6 +3,7 @@ import { dirname, resolve } from 'node:path';
 import { defineConfig } from 'vite';
 
 const root = dirname(fileURLToPath(import.meta.url));
+const runtimeUpstream = process.env.PIVOT_RUNTIME_UPSTREAM || 'http://127.0.0.1:8765';
 
 export default defineConfig({
     root,
@@ -11,7 +12,7 @@ export default defineConfig({
         strictPort: true,
         proxy: {
             '/v1': {
-                target: 'http://127.0.0.1:8765',
+                target: runtimeUpstream,
                 changeOrigin: true,
             },
         },
@@ -21,7 +22,7 @@ export default defineConfig({
         strictPort: true,
         proxy: {
             '/v1': {
-                target: 'http://127.0.0.1:8765',
+                target: runtimeUpstream,
                 changeOrigin: true,
             },
         },

@@ -6,9 +6,11 @@ import hashlib
 import json
 import os
 import shutil
+import socket
 import subprocess
 import sys
 import tarfile
+import tempfile
 import time
 import urllib.error
 import urllib.request
@@ -95,7 +97,14 @@ def build_artifacts(source: Path, output: Path) -> ArtifactBinding:
     if output.exists() and any(output.iterdir()):
         raise ValueError(f"Artifact output must be empty: {output}")
     output.mkdir(parents=True, exist_ok=True)
-    commit, snapshot = _snapshot(source, output)
+    # setuptools' configured ../.setuptools-build can exceed Windows MAX_PATH
+    # when pytest or a release job chooses a deeply nested evidence directory.
+    with tempfile.TemporaryDirectory(prefix="pf-") as short_root:
+        commit, snapshot = _snapshot(source, Path(short_root))
+        return _build_from_snapshot(commit, snapshot, output)
+
+
+def _build_from_snapshot(commit: str, snapshot: Path, output: Path) -> ArtifactBinding:
     package = snapshot / "dash_tanstack_pivot"
     npm = shutil.which("npm")
     if npm is None:
@@ -139,7 +148,9 @@ def build_artifacts(source: Path, output: Path) -> ArtifactBinding:
     react_app = app / "examples" / "flagship_react"
     shutil.copytree(snapshot / "examples" / "flagship_react", react_app, ignore=shutil.ignore_patterns("node_modules", "dist", "release-package.tgz"))
     shutil.copy2(npm_tarball, react_app / "release-package.tgz")
-    _run([npm, "install", "--package-lock-only", "--ignore-scripts", "--legacy-peer-deps", "--no-audit", "--no-fund"], react_app)
+    # Registry dependencies stay locked. The local tarball is rebuilt for this
+    # commit and bound separately by SHA-256, so its lock entry has no stale
+    # integrity from an earlier release.
     _run([npm, "ci", "--ignore-scripts", "--legacy-peer-deps", "--no-audit", "--no-fund"], react_app)
     installed_package = react_app / "node_modules" / "dash_tanstack_pivot" / "dist" / "react" / "index.mjs"
     if not installed_package.is_file() or installed_package.read_bytes() != (package / "dist" / "react" / "index.mjs").read_bytes():
@@ -174,7 +185,7 @@ def build_artifacts(source: Path, output: Path) -> ArtifactBinding:
     return ArtifactBinding(
         source_commit=commit,
         sha256=hashes,
-        paths={"source": snapshot, "wheel": wheel, "npm_tarball": npm_tarball, "python": python, "app": app, "react_dist": react_dist},
+        paths={"wheel": wheel, "npm_tarball": npm_tarball, "python": python, "app": app, "react_dist": react_dist},
         versions=versions,
         expected_loaded_assets=assets,
     )
@@ -194,6 +205,12 @@ def _wait_for(url: str, process: subprocess.Popen[bytes], timeout: float = 60) -
     raise RuntimeError(f"Installed host did not start: {url}")
 
 
+def _free_port() -> int:
+    with socket.socket() as listener:
+        listener.bind(("127.0.0.1", 0))
+        return int(listener.getsockname()[1])
+
+
 @contextmanager
 def start_installed_hosts(binding: ArtifactBinding, output: Path) -> Iterator[dict[str, str]]:
     """Serve copied examples with the isolated wheel and packed React build."""
@@ -208,19 +225,26 @@ def start_installed_hosts(binding: ArtifactBinding, output: Path) -> Iterator[di
     child_env.pop("PYTHONPATH", None)
     child_env["PYTHONPATH"] = str(app)
     child_env["PIVOT_FLAGSHIP_PARITY_DATA"] = "1"
+    ports = {name: _free_port() for name in ("runtime", "dash", "react")}
+    # The committed runtime demo permits the Streamlit origin on this port.
+    # Keep its production CORS policy intact while avoiding other host conflicts.
+    ports["streamlit"] = 8502
+    child_env["PIVOT_RUNTIME_UPSTREAM"] = f"http://127.0.0.1:{ports['runtime']}"
+    child_env["PIVOT_RUNTIME_ENDPOINT"] = f"http://127.0.0.1:{ports['runtime']}/v1/runtime"
     commands = (
-        ("runtime", [str(python), "-m", "uvicorn", "examples.flagship_runtime_server:app", "--host", "127.0.0.1", "--port", "8765"], app, "http://127.0.0.1:8765/health"),
-        ("dash", [str(python), "examples/flagship_dash.py"], app, "http://127.0.0.1:8050"),
-        ("react", [npm, "run", "preview"], react_app, "http://127.0.0.1:5174"),
-        ("streamlit", [str(python), "-m", "streamlit", "run", "examples/flagship_streamlit.py", "--server.address", "127.0.0.1", "--server.port", "8502", "--server.headless", "true", "--browser.gatherUsageStats", "false"], app, "http://127.0.0.1:8502/_stcore/health"),
+        ("runtime", [str(python), "-m", "uvicorn", "examples.flagship_runtime_server:app", "--host", "127.0.0.1", "--port", str(ports["runtime"])], app, f"http://127.0.0.1:{ports['runtime']}/health"),
+        ("dash", [str(python), "-c", f"from examples.flagship_dash import app; app.run(debug=False, use_reloader=False, host='127.0.0.1', port={ports['dash']})"], app, f"http://127.0.0.1:{ports['dash']}"),
+        ("react", [npm, "run", "preview", "--", "--port", str(ports["react"])], react_app, f"http://127.0.0.1:{ports['react']}"),
+        ("streamlit", [str(python), "-m", "streamlit", "run", "examples/flagship_streamlit.py", "--server.address", "127.0.0.1", "--server.port", str(ports["streamlit"]), "--server.headless", "true", "--browser.gatherUsageStats", "false"], app, f"http://127.0.0.1:{ports['streamlit']}/_stcore/health"),
     )
     with ExitStack() as stack:
         for name, command, cwd, health in commands:
             log = stack.enter_context((output / f"{name}.log").open("wb"))
             process = subprocess.Popen(command, cwd=cwd, env=child_env, stdout=log, stderr=subprocess.STDOUT)
             stack.callback(_stop_process, process)
+            (output / f"{name}.pid").write_text(str(process.pid), encoding="ascii")
             _wait_for(health, process)
-        yield {"dash": "http://127.0.0.1:8050", "react": "http://127.0.0.1:5174", "streamlit": "http://127.0.0.1:8502"}
+        yield {name: f"http://127.0.0.1:{ports[name]}" for name in ("dash", "react", "streamlit")}
 
 
 def _stop_process(process: subprocess.Popen[bytes]) -> None:
@@ -239,6 +263,21 @@ def verify_loaded_asset(binding: ArtifactBinding, host: str, url: str, body: byt
     if path == "/@vite/client" or path.startswith("/@vite/"):
         raise ValueError("Vite development client is forbidden in a release host")
     expected = binding.expected_loaded_assets.get(host, {}).get(path)
+    if expected is None and host == "dash":
+        from dash.fingerprint import check_fingerprint
+
+        original_path, fingerprinted = check_fingerprint(path)
+        if fingerprinted:
+            expected = binding.expected_loaded_assets.get(host, {}).get(original_path)
+    if expected is None and host == "streamlit":
+        # Streamlit serves wheel component files below its own versioned URL.
+        # Their hashed filenames are unique within the installed build.
+        matches = [
+            digest for bound_path, digest in binding.expected_loaded_assets.get(host, {}).items()
+            if Path(bound_path).name == Path(path).name
+        ]
+        if len(matches) == 1:
+            expected = matches[0]
     if expected is None:
         raise ValueError(f"unbound asset: {host} {path}")
     actual = hashlib.sha256(body).hexdigest()

@@ -1,7 +1,8 @@
 """Build and certify the published Dash, React, and Streamlit showcases.
 
-This is intentionally a release command rather than a developer convenience:
-it exercises the built workspace bundles in browsers and leaves auditable
+Use --installed-release for fresh commit-bound wheel/npm artifact hosts.
+The legacy path supports local diagnostics; --export-qualification retains
+its separate publication and redaction rules. Browser runs leave auditable
 screenshots, browser logs, network traces, clipboard/download checks, and the
 feature matrix in one artifact directory.
 """
@@ -860,18 +861,49 @@ def _certify_export_qualification(
     return 0 if passed else 1
 
 
+def _certify_installed_release(artifact_dir: Path, started_at: datetime) -> int:
+    from scripts.flagship_artifacts import build_artifacts, start_installed_hosts
+
+    result = "failed"
+    try:
+        binding = build_artifacts(ROOT, artifact_dir / "release-artifacts")
+        binding_path = artifact_dir / "artifact-binding.json"
+        binding_path.write_text(json.dumps({
+            "sourceCommit": binding.source_commit,
+            "sha256": binding.sha256,
+            "versions": binding.versions,
+            "expectedLoadedAssets": binding.expected_loaded_assets,
+        }, indent=2) + "\n", encoding="utf-8")
+        environment = os.environ.copy()
+        environment.pop("PYTHONPATH", None)
+        environment["PIVOT_FLAGSHIP_ARTIFACT_BINDING"] = str(binding_path)
+        with start_installed_hosts(binding, artifact_dir / "installed-hosts") as urls:
+            for host, url in urls.items():
+                environment[f"PIVOT_FLAGSHIP_{host.upper()}_URL"] = url
+            code = _run_browser_suite(artifact_dir, environment)
+        result = "passed" if code == 0 else "failed"
+        return code
+    finally:
+        _write_matrix(artifact_dir, result=result, started_at=started_at, completed_at=datetime.now(UTC))
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--artifact-dir", type=Path)
     parser.add_argument("--reuse-running", action="store_true", help="Use already-running local flagship services.")
     parser.add_argument("--skip-build", action="store_true", help="Do not rebuild bundles before certification.")
     parser.add_argument("--wheel", type=Path, help="Prebuilt wheel to reinstall when --skip-build is used.")
+    parser.add_argument("--installed-release", action="store_true", help="Build fresh committed wheel/npm artifacts and run browsers against their installed hosts; retain private evidence.")
     parser.add_argument(
         "--export-qualification",
         action="store_true",
         help="Require normal and constrained export evidence from every flagship host.",
     )
     args = parser.parse_args(argv)
+
+    if args.installed_release and (args.reuse_running or args.skip_build or args.export_qualification or args.wheel):
+        print("Installed release requires a fresh build and cannot combine with legacy/export flags", file=sys.stderr)
+        return 1
 
     default_artifact_dir = (
         EXPORT_QUALIFICATION_ARTIFACT_DIR
@@ -899,6 +931,10 @@ def main(argv: list[str] | None = None) -> int:
     else:
         artifact_dir.mkdir(parents=True, exist_ok=True)
     started_at = datetime.now(UTC)
+    if args.installed_release:
+        return _certify_installed_release(artifact_dir, started_at)
+    if not args.export_qualification:
+        print("Legacy diagnostic mode: results are not current installed-release qualification", file=sys.stderr)
     environment = os.environ.copy()
     python_paths = [str(ROOT), str(PACKAGE), str(PACKAGE / "pivot_engine")]
     environment["PYTHONPATH"] = os.pathsep.join(python_paths + [environment.get("PYTHONPATH", "")])
