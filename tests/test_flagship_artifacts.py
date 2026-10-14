@@ -31,7 +31,8 @@ from scripts.flagship_artifacts import (
 ROOT = Path(__file__).resolve().parents[1]
 
 
-def test_wheel_metadata_declares_resource_governor_runtime_dependency(tmp_path):
+@pytest.mark.parametrize("requirement", ["psutil>=5.9", "sqlglot<30"])
+def test_wheel_metadata_declares_engine_runtime_dependencies(tmp_path, requirement):
     import tomllib
     from packaging.requirements import Requirement
     # Generate actual backend metadata from the production project config,
@@ -52,8 +53,33 @@ def test_wheel_metadata_declares_resource_governor_runtime_dependency(tmp_path):
                    cwd=package, check=True, capture_output=True, text=True)
     metadata = email.message_from_bytes(next(metadata_dir.glob("*.dist-info/METADATA")).read_bytes())
     dependencies = [Requirement(value) for value in metadata.get_all("Requires-Dist")]
-    assert any(dependency.name == "psutil" and dependency.marker is None
-               and str(dependency.specifier) == ">=5.9" for dependency in dependencies)
+    expected = Requirement(requirement)
+    assert any(dependency.name == expected.name and dependency.marker is None
+               and dependency.specifier == expected.specifier for dependency in dependencies)
+
+
+@pytest.mark.skipif(not os.environ.get("PIVOT_FLAGSHIP_INSTALLED_PYTHON"), reason="isolated installed wheel is opt-in")
+def test_installed_wheel_bootstraps_arrow_without_source_imports(tmp_path):
+    python = Path(os.environ["PIVOT_FLAGSHIP_INSTALLED_PYTHON"]).resolve(strict=True)
+    environment = python.parent.parent
+    assert "include-system-site-packages = false" in (environment / "pyvenv.cfg").read_text().lower()
+    # An empty cwd and isolated Python prevent the checkout from satisfying
+    # imports; a one-row Arrow table catches memtable cleanup compatibility.
+    completed = subprocess.run([str(python), "-I", "-c", """
+import json
+import pyarrow as pa
+import pivot_engine
+from pivot_engine import create_tanstack_adapter
+adapter = create_tanstack_adapter(backend_uri=":memory:")
+adapter.controller.load_data_from_arrow("bootstrap", pa.table({"x": [1]}), register_checkpoint=False)
+rows = adapter.controller.planner.con.table("bootstrap").to_pyarrow().to_pylist()
+assert rows == [{"x": 1}], rows
+print(json.dumps({"engine": pivot_engine.__file__, "rows": rows}))
+"""], cwd=tmp_path, capture_output=True, text=True)
+    assert completed.returncode == 0, completed.stdout + completed.stderr
+    result = json.loads(completed.stdout)
+    assert Path(result["engine"]).is_relative_to(environment)
+    assert "site-packages" in Path(result["engine"]).parts
 
 
 def _test_build_wheelhouse(path):
