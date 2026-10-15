@@ -24,6 +24,7 @@ _SAFE_OBSERVATIONS = frozenset({
     "visibleError", "loadingCleared", "failedRequestCorrelated", "retryCorrelated",
     "fixtureTotalsVerified", "staleCellsAbsent", "newDownloads", "networkFailureCount",
     "infrastructureUnavailable", "actionCompleted", "lateResponseAbsent",
+    "lateResponseUnverified", "staleResponseUnverified", "privateExceptionHidden",
 })
 
 
@@ -144,38 +145,12 @@ if (!window.__pivotRecoveryProbe) {
 """
 
 
-def _envelopes(value):
-    if isinstance(value, str):
-        try:
-            value = json.loads(value)
-        except (ValueError, TypeError):
-            return
-    if isinstance(value, dict):
-        if value.get("schemaVersion") == 1 and value.get("requestId") and value.get("kind"):
-            yield value
-        else:
-            for child in value.values():
-                yield from _envelopes(child)
-    elif isinstance(value, list):
-        for child in value:
-            yield from _envelopes(child)
-
-
 def _network(driver):
     from tests.test_flagship_certification import _verify_release_asset_batch
 
     entries = driver.get_log("performance")
     _verify_release_asset_batch(driver, entries)
     return [json.loads(entry["message"])["message"] for entry in entries]
-
-
-def _correlated_failed_request(events):
-    failed = {event["params"]["requestId"] for event in events if event["method"] == "Network.loadingFailed"
-              and event["params"].get("blockedReason") == "inspector"}
-    return next((envelope["requestId"] for event in events
-                 if event["method"] == "Network.requestWillBeSent" and event["params"]["requestId"] in failed
-                 for envelope in _envelopes(event["params"]["request"].get("postData", ""))
-                 if envelope["kind"] == "data"), None)
 
 
 def _visible_error(driver):
@@ -210,6 +185,33 @@ def _click_workspace_control(driver, selector):
     driver.execute_script("arguments[0].scrollIntoView({block: 'center', inline: 'center'});", element)
     element.click()
     return element
+
+
+def _post_retry_data_response(trace, failed_id, checkpoint):
+    """An earlier auto-refresh cannot masquerade as the clicked Retry."""
+    requests = {entry["requestId"]: entry["at"] for entry in trace
+                if entry.get("phase") == "request" and entry.get("kind") == "data"
+                and entry.get("requestId") != failed_id and entry.get("at", -1) > checkpoint}
+    return next((entry["requestId"] for entry in trace
+                 if entry.get("phase") == "response" and entry.get("kind") == "data"
+                 and entry.get("status") == "data" and entry.get("rawExpectedTotal") is True
+                 and entry.get("requestId") in requests
+                 and entry.get("at", -1) >= requests[entry["requestId"]]), None)
+
+
+def _visible_workspace_text(driver):
+    """Include Streamlit's open shadow roots, not only ordinary page text."""
+    return driver.execute_script("""
+      const text = [document.body?.innerText || ''];
+      const visit = root => {
+        for (const element of root.querySelectorAll('*')) if (element.shadowRoot) {
+          text.push(element.shadowRoot.textContent || '');
+          visit(element.shadowRoot);
+        }
+      };
+      visit(document);
+      return text.join('\\n');
+    """)
 
 
 def qualify_runtime_recovery(host: str) -> None:
@@ -291,6 +293,8 @@ def qualify_runtime_recovery(host: str) -> None:
 
         failed_id = wait.until(failed_request)
         assert not fault_file.exists(), "Demo fault was not consumed by the server"
+        secret_hidden = "PIVOT_QUALIFICATION_PRIVATE_SENTINEL" not in _visible_workspace_text(driver)
+        assert secret_hidden, "Backend exception detail appeared in visible workspace text"
         visible = False
         try:
             WebDriverWait(driver, 5).until(lambda current: _visible_error(current))
@@ -303,38 +307,34 @@ def qualify_runtime_recovery(host: str) -> None:
         no_downloads = set(downloads.iterdir()) == before
         assert no_downloads, "Failed request created a completed or partial download"
         results["runtime-error.visible"].update(
-            result="passed" if visible and loading_cleared and failed_id else "failed",
-            visibleError=visible, loadingCleared=loading_cleared, failedRequestCorrelated=bool(failed_id), newDownloads=0,
+            result="passed" if visible and loading_cleared and failed_id and secret_hidden else "failed",
+            visibleError=visible, loadingCleared=loading_cleared, failedRequestCorrelated=bool(failed_id),
+            privateExceptionHidden=secret_hidden, newDownloads=0,
         )
         driver.save_screenshot(str(directory / "failed.png"))
         retry = _wait_for_visible_workspace_element(driver, '[role="alert"] button')
         assert retry.text == "Retry", "Recovery did not use the visible Retry action"
+        retry_checkpoint = driver.execute_script("return performance.now()")
         _click_workspace_control(driver, '[role="alert"] button')
 
         def recovered(current):
             nonlocal trace
             trace = current.execute_script("return window.__pivotRecoveryProbe || []")
-            responses = {entry["requestId"] for entry in trace if entry["phase"] == "response"
-                         and entry["kind"] == "data" and entry["status"] == "data"
-                         and entry["rawExpectedTotal"]}
-            requests = [entry for entry in trace if entry["phase"] == "request" and entry["kind"] == "data"]
-            failed_at = next((entry["at"] for entry in requests if entry["requestId"] == failed_id), None)
-            return failed_at is not None and any(entry["at"] > failed_at and entry["requestId"] != failed_id
-                                                 and entry["requestId"] in responses for entry in requests) and _totals(current)
+            return _post_retry_data_response(trace, failed_id, retry_checkpoint) and _totals(current)
 
         wait.until(recovered)
-        snapshot = [cell.text for cell in _workspace_elements(driver, '[role="gridcell"]')]
-        # The failed V1 request is terminal: confirm no late successful
-        # response for it, and unchanged fixture cells after a fresh event turn.
-        driver.execute_async_script("const done=arguments[0]; requestAnimationFrame(() => requestAnimationFrame(done));")
-        stable = snapshot == [cell.text for cell in _workspace_elements(driver, '[role="gridcell"]')]
+        retry_id = _post_retry_data_response(trace, failed_id, retry_checkpoint)
+        assert retry_id != failed_id
         events.extend(_network(driver))
-        late_absent = not any(entry["phase"] == "response" and entry["status"] == "data"
-                              and entry["requestId"] == failed_id for entry in trace)
+        assert "PIVOT_QUALIFICATION_PRIVATE_SENTINEL" not in _visible_workspace_text(driver)
+        # A server-terminal error has no late data response to supersede. The
+        # clicked Retry and exact totals are observed, but this requirement's
+        # stale/late facet needs a separate controlled delayed-response case.
         results["runtime-error.recovery"].update(
-            result="passed" if stable and late_absent and not _visible_error(driver) else "failed",
-            retryCorrelated=True, fixtureTotalsVerified=True, staleCellsAbsent=stable,
-            lateResponseAbsent=late_absent, newDownloads=len(set(downloads.iterdir()) - before),
+            result="blocked" if not _visible_error(driver) else "failed",
+            retryCorrelated=True, fixtureTotalsVerified=True, actionCompleted=True,
+            lateResponseUnverified=True, staleResponseUnverified=True,
+            newDownloads=len(set(downloads.iterdir()) - before),
         )
         assert set(downloads.iterdir()) == before, "Recovery unexpectedly created a download"
     except Exception as error:

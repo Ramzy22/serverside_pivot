@@ -56,6 +56,25 @@ def test_workspace_control_scrolls_into_view_before_physical_click(monkeypatch):
     assert events == ["scroll", "click"]
 
 
+def test_recovery_proof_rejects_a_success_requested_before_retry_click():
+    from tests.flagship_browser_support import _post_retry_data_response
+
+    trace = [
+        {"phase": "request", "kind": "data", "requestId": "failed", "at": 1},
+        {"phase": "response", "kind": "data", "requestId": "failed", "status": "error", "at": 2},
+        {"phase": "request", "kind": "data", "requestId": "auto-refresh", "at": 9},
+        {"phase": "response", "kind": "data", "requestId": "auto-refresh", "status": "data",
+         "rawExpectedTotal": True, "at": 11},
+    ]
+    assert _post_retry_data_response(trace, "failed", 10) is None
+    trace.extend([
+        {"phase": "request", "kind": "data", "requestId": "clicked-retry", "at": 12},
+        {"phase": "response", "kind": "data", "requestId": "clicked-retry", "status": "data",
+         "rawExpectedTotal": True, "at": 13},
+    ])
+    assert _post_retry_data_response(trace, "failed", 10) == "clicked-retry"
+
+
 def test_recovery_probe_reads_exact_raw_grand_total_from_real_v1_envelope(monkeypatch):
     from fastapi.testclient import TestClient
     from examples import flagship_demo_data
@@ -117,6 +136,7 @@ def test_guarded_demo_fault_yields_one_safe_v1_error_then_real_data(monkeypatch,
     monkeypatch.setenv("PIVOT_FLAGSHIP_PARITY_DATA", "1")
     marker = tmp_path / "fail-next-data-request"
     monkeypatch.setenv("PIVOT_FLAGSHIP_TEST_FAULT_FILE", str(marker))
+    monkeypatch.setenv("PIVOT_FLAGSHIP_EVIDENCE_ROOT", str(tmp_path))
     flagship_demo_data.get_demo_adapter.cache_clear()
     config = flagship_demo_data.workspace_config("react")
     state_keys = ("rowFields", "colFields", "valConfigs", "filters", "sorting", "expanded",
@@ -136,7 +156,7 @@ def test_guarded_demo_fault_yields_one_safe_v1_error_then_real_data(monkeypatch,
         error = failed.json()
         assert error["requestId"] == "first-failed"
         assert error["status"] == "error"
-        assert "one-shot" not in failed.text
+        assert "PIVOT_QUALIFICATION_PRIVATE_SENTINEL" not in failed.text
         assert not marker.exists()
         recovered = client.post("/v1/runtime", json={**request, "requestId": "fresh-retry", "windowSeq": 2})
         assert recovered.status_code == 200
@@ -173,6 +193,39 @@ def test_demo_fault_switch_is_inert_without_parity_qualification(monkeypatch, tm
         assert response.status_code == 200
         assert response.json()["status"] == "data"
         assert marker.exists()
+    finally:
+        flagship_demo_data.get_demo_adapter.cache_clear()
+
+
+@pytest.mark.parametrize("name,contents", [
+    ("customer-data.txt", "one-shot"),
+    ("fail-next-data-request", "customer bytes"),
+])
+def test_guarded_demo_fault_never_consumes_an_unrelated_env_path(monkeypatch, tmp_path, name, contents):
+    from fastapi.testclient import TestClient
+    from examples import flagship_demo_data
+    from examples.flagship_runtime_server import app
+
+    monkeypatch.setenv("PIVOT_FLAGSHIP_PARITY_DATA", "1")
+    monkeypatch.setenv("PIVOT_FLAGSHIP_EVIDENCE_ROOT", str(tmp_path))
+    unrelated = tmp_path / name
+    unrelated.write_text(contents, encoding="ascii")
+    monkeypatch.setenv("PIVOT_FLAGSHIP_TEST_FAULT_FILE", str(unrelated))
+    flagship_demo_data.get_demo_adapter.cache_clear()
+    config = flagship_demo_data.workspace_config("react")
+    try:
+        response = TestClient(app).post("/v1/runtime", json={
+            "schemaVersion": 1, "kind": "data", "requestId": "unrelated-path",
+            "table": config["table"], "sessionId": f"unrelated-{name}-{contents}",
+            "clientInstance": f"unrelated-{name}-{contents}",
+            "stateEpoch": 1, "windowSeq": 1,
+            "state": {"rowFields": config["rowFields"], "colFields": config["colFields"],
+                      "valConfigs": config["valConfigs"], "filters": config["filters"]},
+            "payload": {"intent": "viewport", "start": 0, "end": 95},
+        })
+        assert response.status_code == 200
+        assert response.json()["status"] == "data"
+        assert unrelated.read_text(encoding="ascii") == contents
     finally:
         flagship_demo_data.get_demo_adapter.cache_clear()
 

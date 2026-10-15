@@ -136,7 +136,20 @@ class _OneShotFaultAdapter:
         return getattr(self._adapter, name)
 
     async def handle_virtual_scroll_request(self, *args, **kwargs):
-        marker = Path(os.environ["PIVOT_FLAGSHIP_TEST_FAULT_FILE"])
+        evidence_root = os.environ.get("PIVOT_FLAGSHIP_EVIDENCE_ROOT")
+        marker_path = os.environ.get("PIVOT_FLAGSHIP_TEST_FAULT_FILE")
+        if not evidence_root or not marker_path:
+            return await self._adapter.handle_virtual_scroll_request(*args, **kwargs)
+        root = Path(evidence_root).resolve()
+        marker = Path(marker_path)
+        if marker.name != "fail-next-data-request" or marker.resolve() != root / "fail-next-data-request":
+            return await self._adapter.handle_virtual_scroll_request(*args, **kwargs)
+        try:
+            armed = marker.read_bytes() == b"one-shot"
+        except FileNotFoundError:
+            armed = False
+        if not armed:
+            return await self._adapter.handle_virtual_scroll_request(*args, **kwargs)
         claimed = marker.with_name(f"{marker.name}.claimed-{os.getpid()}-{threading.get_ident()}")
         try:
             marker.rename(claimed)
@@ -144,7 +157,7 @@ class _OneShotFaultAdapter:
             pass
         else:
             claimed.unlink()
-            raise DatabaseExecutionError("qualification-only injected failure")
+            raise DatabaseExecutionError("PIVOT_QUALIFICATION_PRIVATE_SENTINEL")
         return await self._adapter.handle_virtual_scroll_request(*args, **kwargs)
 
 
