@@ -267,13 +267,28 @@ export function useRuntimeResponseLifecycle({
       if (responseRequestId && activeExportRequestIdRef.current && activeExportRequestIdRef.current !== responseRequestId) {
         return;
       }
-      if (activeExportRequestIdRef.current === responseRequestId) {
+      if (!payload.partId && activeExportRequestIdRef.current === responseRequestId) {
         activeExportRequestIdRef.current = null;
       }
       const partId = payload.partId;
       const copyIntent = pendingCopyIntentRef.current;
       const payloadRef = payload.payloadRef && typeof payload.payloadRef === 'object' ? payload.payloadRef : null;
       const filename = payload.filename || payloadRef && payloadRef.filename || 'pivot_export.xlsx';
+      const isPartCurrent = () => !partId || !responseRequestId || (
+        !cancelledExportRequestIdsRef.current.has(responseRequestId)
+        && activeExportRequestIdRef.current === responseRequestId);
+      const finishPart = completed => {
+        if (!partId) return;
+        if (!isPartCurrent()) return;
+        setPartModal(prev => prev && prev.processingPartId === partId ? {
+          ...prev,
+          processingPartId: null,
+          completedParts: completed ? new Set([...prev.completedParts, partId]) : prev.completedParts
+        } : prev);
+        if (activeExportRequestIdRef.current === responseRequestId) {
+          activeExportRequestIdRef.current = null;
+        }
+      };
       const readExportPayloadText = () => {
         if (payloadRef && typeof payloadRef.url === 'string' && payloadRef.url) {
           return fetch(payloadRef.url, {
@@ -311,9 +326,11 @@ export function useRuntimeResponseLifecycle({
           }
           return response.blob();
         }).then(blob => {
+          if (!isPartCurrent()) return false;
           const url = URL.createObjectURL(blob);
           triggerExportDownload(url, filename);
           window.setTimeout(() => URL.revokeObjectURL(url), 1000);
+          return true;
         });
       };
       const downloadLegacyBase64 = () => {
@@ -329,13 +346,7 @@ export function useRuntimeResponseLifecycle({
         window.setTimeout(() => URL.revokeObjectURL(url), 1000);
         return true;
       };
-      if (partId) {
-        setPartModal(prev => prev ? {
-          ...prev,
-          processingPartId: null,
-          completedParts: new Set([...prev.completedParts, partId])
-        } : null);
-      } else {
+      if (!partId) {
         setIsExporting(false);
         setIsCopying(false);
         pendingCopyIntentRef.current = null;
@@ -343,6 +354,7 @@ export function useRuntimeResponseLifecycle({
       if (runtimeResponse.status === 'ok') {
         if (copyIntent) {
           readExportPayloadText().then(text => {
+            if (!isPartCurrent()) return false;
             const responseContentType = payload.contentType || payloadRef && payloadRef.contentType;
             const isHtmlPayload = payload.format === 'html' || responseContentType && String(responseContentType).toLowerCase().includes('text/html') || /^\s*<!doctype html/i.test(text) || /^\s*<html[\s>]/i.test(text) || /^\s*<table[\s>]/i.test(text);
             if (isHtmlPayload) {
@@ -356,32 +368,42 @@ export function useRuntimeResponseLifecycle({
               text: lines.join('\n')
             }, null);
           }).then(copied => {
+            if (!isPartCurrent()) return;
             if (copied) {
+              finishPart(true);
               showNotification(`Copied ${payload.rows ?? ''} rows`, 'success');
+            } else {
+              finishPart(false);
+              showNotification('Copy failed', 'error');
             }
           }).catch(error => {
+            if (!isPartCurrent()) return;
             console.error('Copy export payload failed:', error);
+            finishPart(false);
             showNotification('Copy failed', 'error');
           });
         } else {
           if (payloadRef && typeof payloadRef.url === 'string' && payloadRef.url) {
-            downloadPayloadReference().then(() => {
+            downloadPayloadReference().then(downloaded => {
+              if (!downloaded || !isPartCurrent()) return;
+              finishPart(true);
               showNotification(`Downloaded ${payload.rows ?? ''} rows`, 'success');
             }).catch(error => {
+              if (!isPartCurrent()) return;
               console.error('Export payload download failed:', error);
+              finishPart(false);
               showNotification('Export failed', 'error');
             });
           } else if (downloadLegacyBase64()) {
+            finishPart(true);
             showNotification(`Downloaded ${payload.rows ?? ''} rows`, 'success');
           } else {
+            finishPart(false);
             showNotification('Export failed', 'error');
           }
         }
       } else {
-        if (partId) setPartModal(prev => prev ? {
-          ...prev,
-          processingPartId: null
-        } : null);
+        finishPart(false);
         showNotification(copyIntent ? 'Copy failed' : 'Export failed', 'error');
       }
       return;
