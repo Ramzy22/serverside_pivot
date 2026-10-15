@@ -30,24 +30,27 @@ function loadLifecycle() {
     return load(path.join(frontend, 'src/lib/runtime/useRuntimeResponseLifecycle.js')).useRuntimeResponseLifecycle;
 }
 
-function runPartResponse({status = 'ok', payload = {}, copyIntent = false, copyRichToClipboard = async () => true} = {}) {
+function runPartResponse({status = 'ok', payload = {}, includePartId = true, activeRequestId = 'export-1',
+    copyIntent = false, copyRichToClipboard = async () => true} = {}) {
     const useRuntimeResponseLifecycle = loadLifecycle();
     let modal = {processingPartId: 'part-1', completedParts: new Set()};
     const notifications = [];
     const downloads = [];
     const noop = () => {};
-    const activeExportRequestIdRef = {current: 'export-1'};
+    const activeExportRequestIdRef = {current: activeRequestId};
     const cancelledExportRequestIdsRef = {current: new Set()};
     useRuntimeResponseLifecycle({
         runtimeResponse: {
             schemaVersion: 1, kind: 'export', status, requestId: 'export-1',
-            payload: {partId: 'part-1', rows: 7, filename: 'part.csv', ...payload},
+            payload: {rows: 7, filename: 'part.csv', ...(includePartId ? {partId: 'part-1'} : {}), ...payload},
         },
         activeExportRequestIdRef,
         cancelledExportRequestIdsRef,
         handledRuntimeResponseKeysRef: {current: new Set()},
         pendingCopyIntentRef: {current: copyIntent ? {kind: 'part'} : null},
         setPartModal: update => {modal = update(modal);},
+        setIsExporting: noop,
+        setIsCopying: noop,
         copyRichToClipboard,
         triggerExportDownload: (...args) => downloads.push(args),
         showNotification: (...args) => notifications.push(args),
@@ -71,6 +74,21 @@ test('failed V1 export part clears processing without marking part complete', ()
     assert.equal(run.modal.completedParts.has('part-1'), false);
     assert.deepEqual(run.downloads, []);
     assert.deepEqual(run.notifications, [['Export failed', 'error']]);
+});
+
+test('current export errors lacking partId clear the active part without completing it', () => {
+    for (const status of ['error', 'stale']) {
+        const run = runPartResponse({status, includePartId: false, payload: {code: 'resource_exhausted'}});
+        assert.equal(run.modal.processingPartId, null);
+        assert.equal(run.modal.completedParts.has('part-1'), false);
+        assert.deepEqual(run.downloads, []);
+    }
+});
+
+test('an unrelated export error lacking partId cannot clear a newer active part', () => {
+    const run = runPartResponse({status: 'error', includePartId: false, activeRequestId: 'export-2'});
+    assert.equal(run.modal.processingPartId, 'part-1');
+    assert.equal(run.modal.completedParts.has('part-1'), false);
 });
 
 test('retained export part stays retryable when payload download fails', async () => {
@@ -115,6 +133,14 @@ test('copy part is not complete when clipboard write rejects the payload', async
     await settle();
     assert.equal(run.modal.processingPartId, null);
     assert.equal(run.modal.completedParts.has('part-1'), false);
+});
+
+test('malformed inline payload clears the pending part instead of throwing or completing it', () => {
+    const run = runPartResponse({payload: {data: '%%%not-base64%%%', format: 'csv'}});
+    assert.equal(run.modal.processingPartId, null);
+    assert.equal(run.modal.completedParts.has('part-1'), false);
+    assert.deepEqual(run.downloads, []);
+    assert.deepEqual(run.notifications, [['Export failed', 'error']]);
 });
 
 test('cancelled retained part cannot start a download or report success after fetch settles', async () => {

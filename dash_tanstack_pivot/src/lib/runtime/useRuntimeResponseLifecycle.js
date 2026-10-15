@@ -267,6 +267,8 @@ export function useRuntimeResponseLifecycle({
       if (responseRequestId && activeExportRequestIdRef.current && activeExportRequestIdRef.current !== responseRequestId) {
         return;
       }
+      const currentUnidentifiedPartFailure = !payload.partId && runtimeResponse.status !== 'ok'
+        && responseRequestId && activeExportRequestIdRef.current === responseRequestId;
       if (!payload.partId && activeExportRequestIdRef.current === responseRequestId) {
         activeExportRequestIdRef.current = null;
       }
@@ -394,16 +396,26 @@ export function useRuntimeResponseLifecycle({
               finishPart(false);
               showNotification('Export failed', 'error');
             });
-          } else if (downloadLegacyBase64()) {
-            finishPart(true);
-            showNotification(`Downloaded ${payload.rows ?? ''} rows`, 'success');
           } else {
-            finishPart(false);
-            showNotification('Export failed', 'error');
+            let downloaded = false;
+            try {
+              downloaded = downloadLegacyBase64();
+            } catch (error) {
+              console.error('Inline export download failed:', error);
+            }
+            finishPart(downloaded);
+            showNotification(downloaded ? `Downloaded ${payload.rows ?? ''} rows` : 'Export failed', downloaded ? 'success' : 'error');
           }
         }
       } else {
-        finishPart(false);
+        if (currentUnidentifiedPartFailure) {
+          setPartModal(prev => prev && prev.processingPartId ? {
+            ...prev,
+            processingPartId: null
+          } : prev);
+        } else {
+          finishPart(false);
+        }
         showNotification(copyIntent ? 'Copy failed' : 'Export failed', 'error');
       }
       return;
