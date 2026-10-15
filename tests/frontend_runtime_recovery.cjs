@@ -482,3 +482,68 @@ test('the viewport recovery boundary rejects stale generation, epoch, client and
         assert.equal(requests[0].requestId, 'viewport:s:tab-a:8');
     }
 });
+
+test('an unkeyed error keeps its received generation across callback reruns and distinct later errors remain retryable', () => {
+    const scheduler = hooks();
+    const load = loadSource(scheduler.api, {getVirtualItems: () => [], measure: noop});
+    const {useServerSideRowModel} = load('hooks/useServerSideRowModel.js');
+    const {useRuntimeDataRetry} = load('runtime/useRuntimeDataRetry.js');
+    const {RuntimeDataError} = load('components/RuntimeDataError.js');
+    const run = lifecycle();
+    run.args.requestVersionRef.current = 6;
+    const requests = [];
+    const scroll = {scrollTop: 0, clientHeight: 320};
+    const args = {parentRef: {current: scroll}, serverSide: true, rowCount: 1000, rowHeight: 32,
+        data: [], requestVersionRef: run.args.requestVersionRef, stateEpoch: 3,
+        sessionId: 's', clientInstance: 'tab-a', setProps: value => requests.push(value.runtimeRequest),
+    };
+    function render() {
+        return scheduler.render(() => {
+            const model = useServerSideRowModel(args);
+            const recovery = useRuntimeDataRetry({runtimeDataError: run.error,
+                setRuntimeDataError: run.args.setRuntimeDataError,
+                requestVersionRef: run.args.requestVersionRef, stateEpochRef: run.args.stateEpochRef,
+                clientInstanceRef: run.args.clientInstanceRef,
+                requestVisibleViewportRefresh: model.requestVisibleViewportRefresh});
+            return {model, alert: RuntimeDataError({error: recovery.runtimeDataError, onRetry: recovery.retryRuntimeData, theme: {}})};
+        }, false);
+    }
+    const originalNow = Date.now;
+    let now = 10000;
+    Date.now = () => now;
+    try {
+        render().model.requestVisibleViewportRefresh();
+        // Both identity fields are optional in a valid V1 error response.
+        const unkeyed = {...failure};
+        delete unkeyed.requestId;
+        delete unkeyed.windowSeq;
+        run.render(unkeyed);
+        assert.equal(run.error.failedRequest.windowSeq, 7);
+        const captured = run.error;
+        now += 500;
+        scroll.scrollTop = 3200;
+        render().model.requestVisibleViewportRefresh();
+        assert.equal(requests[1].requestId, 'viewport:s:tab-a:8');
+        run.render(unkeyed, {recordProfilerResponse: () => {}});
+        const oldButton = elements(render().alert).find(node => node.type === 'button');
+        oldButton.props.onClick();
+        assert.equal(requests.length, 2, 'reprocessing an unkeyed error cannot rebind Retry to active request 8');
+        assert.equal(run.error, captured);
+        assert.equal(run.error.failedRequest.windowSeq, 7);
+        assert.equal(oldButton.props.disabled, true);
+
+        // A genuinely new received error, even with identical contents and no
+        // optional identity, belongs to the current request and remains usable.
+        const later = {...unkeyed};
+        run.render(later);
+        assert.equal(run.error.failedRequest.windowSeq, 8);
+        const currentButton = elements(render().alert).find(node => node.type === 'button');
+        assert.equal(currentButton.props.disabled, false);
+        currentButton.props.onClick();
+        assert.equal(requests[2].requestId, 'viewport:s:tab-a:9');
+        run.render(success(9));
+        assert.equal(render().alert, null);
+        run.render(unkeyed, {recordProfilerResponse: () => {}});
+        assert.equal(render().alert, null, 'an already-handled error cannot reappear after current success');
+    } finally {Date.now = originalNow; scheduler.cleanup();}
+});

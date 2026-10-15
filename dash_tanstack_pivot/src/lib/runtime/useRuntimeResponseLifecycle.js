@@ -1,4 +1,4 @@
-import { useEffect } from 'react';
+import { useEffect, useRef } from 'react';
 
 import { htmlTableToTsv } from '../utils/exportUtils';
 import { applyRuntimePatchEnvelope, coerceTransportNumber } from '../hooks/usePivotNormalization';
@@ -58,11 +58,18 @@ export function useRuntimeResponseLifecycle({
   stateEpochRef,
   triggerExportDownload,
 }) {
+  const handledUnkeyedDataErrorsRef = useRef(new WeakSet());
   useEffect(() => {
     if (!runtimeResponse || typeof runtimeResponse !== 'object') return;
     const payload = runtimeResponse.payload && typeof runtimeResponse.payload === 'object' ? runtimeResponse.payload : {};
     const responseProcessingKey = buildRuntimeResponseProcessingKey(runtimeResponse, payload);
     if (responseProcessingKey && !markRuntimeResponseHandled(handledRuntimeResponseKeysRef, responseProcessingKey)) return;
+    if (!responseProcessingKey && runtimeResponse.kind === 'data' && runtimeResponse.status === 'error') {
+      // Optional V1 identity can be absent. Capture fallback generation only
+      // once for this received object; callback rerenders cannot rebind it.
+      if (handledUnkeyedDataErrorsRef.current.has(runtimeResponse)) return;
+      handledUnkeyedDataErrorsRef.current.add(runtimeResponse);
+    }
     recordProfilerResponse(runtimeResponse);
     if ((runtimeResponse.kind === 'data' || runtimeResponse.kind === 'update' || runtimeResponse.kind === 'transaction') && runtimeResponse.status === 'data') {
       const payloadRef = payload.payloadRef && typeof payload.payloadRef === 'object' ? payload.payloadRef : null;

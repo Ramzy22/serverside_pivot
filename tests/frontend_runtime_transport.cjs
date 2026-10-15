@@ -131,6 +131,7 @@ test('workspace passes the configured payload transport privately to the runtime
 });
 
 function lifecycleHarness(payloadTransport, overrides = {}) {
+    const handledUnkeyedDataErrorsRef = {current: new WeakSet()};
     let effect;
     let dependencies;
     let effectPending = false;
@@ -144,6 +145,7 @@ function lifecycleHarness(payloadTransport, overrides = {}) {
             }
         },
         useCallback: fn => fn,
+        useRef: () => handledUnkeyedDataErrorsRef,
     });
     const {useRuntimeResponseLifecycle} = load('runtime/useRuntimeResponseLifecycle.js');
     const {useRuntimeDataCommit} = load('hooks/useRuntimeDataCommit.js');
