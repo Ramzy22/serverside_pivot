@@ -12,11 +12,13 @@ import json
 import os
 from pathlib import Path
 from random import Random
+import threading
 from typing import Any
 
 import pyarrow as pa
 
 from pivot_engine import create_tanstack_adapter
+from pivot_engine.backends.execution import DatabaseExecutionError
 
 
 TABLE_NAME = "revenue_operations"
@@ -119,7 +121,31 @@ def get_demo_adapter():
     """Create the in-memory adapter once per demo process."""
     adapter = create_tanstack_adapter(backend_uri=":memory:")
     adapter.controller.load_data_from_arrow(TABLE_NAME, build_demo_table())
+    if _parity_data_enabled() and os.environ.get("PIVOT_FLAGSHIP_TEST_FAULT_FILE"):
+        return _OneShotFaultAdapter(adapter)
     return adapter
+
+
+class _OneShotFaultAdapter:
+    """Test-only data fault; no browser request can arm it or choose its path."""
+
+    def __init__(self, adapter):
+        self._adapter = adapter
+
+    def __getattr__(self, name):
+        return getattr(self._adapter, name)
+
+    async def handle_virtual_scroll_request(self, *args, **kwargs):
+        marker = Path(os.environ["PIVOT_FLAGSHIP_TEST_FAULT_FILE"])
+        claimed = marker.with_name(f"{marker.name}.claimed-{os.getpid()}-{threading.get_ident()}")
+        try:
+            marker.rename(claimed)
+        except FileNotFoundError:
+            pass
+        else:
+            claimed.unlink()
+            raise DatabaseExecutionError("qualification-only injected failure")
+        return await self._adapter.handle_virtual_scroll_request(*args, **kwargs)
 
 
 def workspace_config(host: str) -> dict[str, Any]:
