@@ -355,7 +355,7 @@ export function useRuntimeResponseLifecycle({
       }
       if (runtimeResponse.status === 'ok') {
         if (copyIntent) {
-          readExportPayloadText().then(text => {
+          Promise.resolve().then(readExportPayloadText).then(text => {
             if (!isPartCurrent()) return false;
             const responseContentType = payload.contentType || payloadRef && payloadRef.contentType;
             const isHtmlPayload = payload.format === 'html' || responseContentType && String(responseContentType).toLowerCase().includes('text/html') || /^\s*<!doctype html/i.test(text) || /^\s*<html[\s>]/i.test(text) || /^\s*<table[\s>]/i.test(text);

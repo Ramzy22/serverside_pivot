@@ -143,6 +143,15 @@ test('malformed inline payload clears the pending part instead of throwing or co
     assert.deepEqual(run.notifications, [['Export failed', 'error']]);
 });
 
+test('malformed inline copy payload clears the pending part without a completed check', async () => {
+    const run = runPartResponse({copyIntent: true, payload: {data: '%%%not-base64%%%', format: 'html'}});
+    await settle();
+    assert.equal(run.modal.processingPartId, null);
+    assert.equal(run.modal.completedParts.has('part-1'), false);
+    assert.deepEqual(run.downloads, []);
+    assert.deepEqual(run.notifications, [['Copy failed', 'error']]);
+});
+
 test('cancelled retained part cannot start a download or report success after fetch settles', async () => {
     const originalFetch = global.fetch;
     const originalCreateObjectURL = URL.createObjectURL;
