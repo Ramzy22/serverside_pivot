@@ -175,7 +175,7 @@ export const useServerSideViewportController = ({
         const numericVersion = Number(
             normalizedMeta.version !== undefined
                 ? normalizedMeta.version
-                : normalizedMeta.window_seq
+                : (normalizedMeta.windowSeq ?? normalizedMeta.window_seq)
         );
         if (!Number.isFinite(numericVersion)) return false;
 

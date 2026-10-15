@@ -27,6 +27,7 @@ export function useRuntimeRequestSession({ dataVersion, id }) {
   const [stateEpoch, setStateEpoch] = useState(0);
   const [abortGeneration, setAbortGeneration] = useState(0);
   const [structuralInFlight, setStructuralInFlight] = useState(false);
+  const [runtimeDataError, setRuntimeDataError] = useState(null);
   const [pendingRowTransitions, setPendingRowTransitions] = useState(() => new Map());
   const [pendingColumnSkeletonCount, setPendingColumnSkeletonCount] = useState(0);
   const tableDataRef = useRef([]);
@@ -108,6 +109,7 @@ export function useRuntimeRequestSession({ dataVersion, id }) {
     requestVersionRef,
     rowEditSessions,
     rowEditSessionsRef,
+    runtimeDataError,
     sessionIdRef,
     setAbortGeneration,
     setComparisonCellEpoch,
@@ -122,6 +124,7 @@ export function useRuntimeRequestSession({ dataVersion, id }) {
     setPropagationLogEpoch,
     setPropagationMethodUI,
     setRowEditSessions,
+    setRuntimeDataError,
     setStateEpoch,
     setStructuralInFlight,
     stateEpoch,

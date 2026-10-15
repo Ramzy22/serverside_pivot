@@ -35,6 +35,7 @@ import { useColumnDefs } from '../hooks/useColumnDefs';
 import { normalizeSortingState, updateSortingForColumn } from '../utils/sorting';
 import { useRuntimeChartModels } from '../runtime/useRuntimeChartModels';
 import { useRuntimeColumnAutoSizing } from '../runtime/useRuntimeColumnAutoSizing';
+import { useRuntimeDataRetry } from './useRuntimeDataRetry';
 import { useRuntimeFilterPopover } from '../runtime/useRuntimeFilterPopover';
 import { useRuntimeColorScalePresentation } from '../runtime/useRuntimeColorScalePresentation';
 import { useRuntimeViewportTableData } from '../runtime/useRuntimeViewportTableData';
@@ -989,6 +990,11 @@ export function useViewportRuntimeStage(input, transport) {
     showSubtotals: stage.showSubtotals
   }));
   stage.requestUrgentColumnViewportRef.current = stage.requestUrgentColumnViewport;
+  stage.retryRuntimeData = useRuntimeDataRetry({
+    runtimeDataError: stage.runtimeDataError,
+    setRuntimeDataError: stage.setRuntimeDataError,
+    requestVisibleViewportRefresh: stage.requestVisibleViewportRefresh,
+  });
   stage.scheduleSilentViewportRefresh = useCallback(() => {
     if (!stage.serverSide || typeof stage.requestVisibleViewportRefresh !== 'function') return;
     if (stage.deferredViewportRefreshTimeoutRef.current !== null) {

@@ -6,6 +6,7 @@ import { buildRuntimeResponseProcessingKey, markRuntimeResponseHandled } from '.
 import { HttpPivotTransport } from './httpTransport';
 
 const FILTER_OPTION_PAGE_SIZE = 250;
+const ignoreDataError = () => {};
 // Dash uses its callback graph for envelopes and same-origin HTTP for retained
 // data. Direct hosts always provide their configured transport below.
 const dashPayloadTransport = {
@@ -46,6 +47,7 @@ export function useRuntimeResponseLifecycle({
   setIsCopying,
   setIsExporting,
   setPartModal,
+  setRuntimeDataError = ignoreDataError,
   setTransportChartDataState,
   setTransportDataState,
   setTransportFilterOptionMetaState,
@@ -91,6 +93,7 @@ export function useRuntimeResponseLifecycle({
             payloadUncompressedBytes: coerceTransportNumber(payloadRef.uncompressedBytes, null),
             payloadCompressed: payloadRef.contentEncoding === 'gzip'
           });
+          if (runtimeResponse.kind === 'data') setRuntimeDataError(null);
         }).catch(error => {
           if (abortController.signal.aborted || error && error.name === 'AbortError') return;
           payloadFetchSettled = true;
@@ -118,6 +121,7 @@ export function useRuntimeResponseLifecycle({
         return;
       }
       commitRuntimeDataPayload(runtimeResponse, payload);
+      if (runtimeResponse.kind === 'data') setRuntimeDataError(null);
       return;
     }
     if (runtimeResponse.kind === 'transaction' && runtimeResponse.status === 'patched') {
@@ -401,6 +405,12 @@ export function useRuntimeResponseLifecycle({
     }
     if ((runtimeResponse.status === 'stale' || runtimeResponse.status === 'error') && (runtimeResponse.kind === 'data' || runtimeResponse.kind === 'update' || runtimeResponse.kind === 'transaction')) {
       resolvePendingRequest(runtimeResponse);
+      if (runtimeResponse.kind === 'data' && runtimeResponse.status === 'error'
+        && runtimePayloadCommitIsCurrent(runtimeResponse, payload)) {
+        // Backend messages may contain exception details or credentials. Only
+        // presentation-owned copy crosses the inline grid error boundary.
+        setRuntimeDataError(previous => previous && !previous.retrying ? previous : { retrying: false });
+      }
       if (runtimeResponse.status === 'stale') {
         scheduleSilentViewportRefresh();
       }
@@ -416,5 +426,5 @@ export function useRuntimeResponseLifecycle({
         status: runtimeResponse.status
       });
     }
-  }, [clearPendingTransactionHistoryRequest, commitRuntimeDataPayload, emitEditLifecycleEvent, finalizeTransactionHistoryResponse, hydrateVisibleEditOverlay, payloadTransport, reconcileOptimisticCellValuesWithPayload, recordProfilerResponse, resolvePendingRequest, runtimePayloadCommitIsCurrent, runtimeResponse, scheduleSilentViewportRefresh, setIsExporting, setIsCopying, showNotification]);
+  }, [clearPendingTransactionHistoryRequest, commitRuntimeDataPayload, emitEditLifecycleEvent, finalizeTransactionHistoryResponse, hydrateVisibleEditOverlay, payloadTransport, reconcileOptimisticCellValuesWithPayload, recordProfilerResponse, resolvePendingRequest, runtimePayloadCommitIsCurrent, runtimeResponse, scheduleSilentViewportRefresh, setIsExporting, setIsCopying, setRuntimeDataError, showNotification]);
 }

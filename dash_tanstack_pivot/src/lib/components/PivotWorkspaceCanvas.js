@@ -10,6 +10,7 @@ import {
 import { ChartWorkspace } from './Charts/ChartWorkspace';
 import { PaginationBar } from './PivotSmallComponents';
 import { PivotTableBody } from './Table/PivotTableBody';
+import { RuntimeDataError } from './RuntimeDataError';
 
 const LazyDetailDrawer = React.lazy(() => import(/* webpackChunkName: "pivot-detail-drawer" */ './Table/DetailDrawer'));
 const LazyDetailSidePanel = React.lazy(() => import(/* webpackChunkName: "pivot-detail-sidepanel" */ './Table/DetailSidePanel'));
@@ -61,6 +62,8 @@ export function PivotWorkspaceCanvas({ canvas }) {
     handleStartChartCanvasVerticalResize,
     immersiveMode,
     isRequestPending,
+    runtimeDataError,
+    retryRuntimeData,
     layoutMode,
     leftCols,
     leftHeaderGroups,
@@ -165,6 +168,8 @@ export function PivotWorkspaceCanvas({ canvas }) {
     onHorizontalResizeStart={handleStartChartCanvasResize}
     onVerticalResizeStart={handleStartChartCanvasVerticalResize}
   >
+    <div style={{ display: 'flex', flex: 1, minWidth: 0, minHeight: 0, overflow: 'hidden', flexDirection: 'column' }}>
+      <RuntimeDataError error={runtimeDataError} onRetry={retryRuntimeData} theme={theme} />
     <div style={{ display: 'flex', flex: 1, minWidth: 0, minHeight: 0, overflow: 'hidden' }}>
       <PivotTableBody
         key={`pivot-body-${editValueDisplayMode}-${layoutMode}-${showSubtotals ? 'with-subtotals' : 'no-subtotals'}`}
@@ -243,6 +248,7 @@ export function PivotWorkspaceCanvas({ canvas }) {
           />
         </React.Suspense>
       )}
+    </div>
     </div>
   </ChartWorkspace>;
 }

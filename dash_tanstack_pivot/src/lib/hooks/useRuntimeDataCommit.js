@@ -10,6 +10,7 @@ export function useRuntimeDataCommit({
     clientInstanceRef,
     stateEpochRef,
     latestDataVersionRef,
+    requestVersionRef = /** @type {{ current: number } | null} */ (null),
     pendingDataProfilerCommitRef,
     finalizeTransactionHistoryResponse,
     hydrateVisibleEditOverlay,
@@ -44,6 +45,18 @@ export function useRuntimeDataCommit({
             return false;
         }
 
+        // A user retry is a fresh viewport generation. Late responses from
+        // superseded windows must neither replace its cells nor dismiss errors.
+        const windowSeq = coerceTransportNumber(
+            (response && (response.windowSeq ?? response.window_seq))
+                ?? (payload && (payload.windowSeq ?? payload.window_seq ?? payload.version)),
+            null
+        );
+        if (response && response.kind === 'data' && requestVersionRef
+            && Number.isFinite(windowSeq) && windowSeq < requestVersionRef.current) {
+            return false;
+        }
+
         const committedPayload = resolvedPayload && typeof resolvedPayload === 'object' ? resolvedPayload : payload;
         const committedVersion = coerceTransportNumber(
             committedPayload && committedPayload.dataVersion !== undefined
@@ -56,7 +69,7 @@ export function useRuntimeDataCommit({
         }
 
         return true;
-    }, [clientInstanceRef, latestDataVersionRef, stateEpochRef]);
+    }, [clientInstanceRef, latestDataVersionRef, requestVersionRef, stateEpochRef]);
 
     const commitRuntimeDataPayload = useCallback((response, payload, clientProfile = null) => {
         finalizeTransactionHistoryResponse(response, payload);

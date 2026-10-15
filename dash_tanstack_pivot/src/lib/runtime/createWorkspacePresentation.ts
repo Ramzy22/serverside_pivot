@@ -12,6 +12,8 @@ export function createWorkspacePresentation(
 ): WorkspacePresentation {
     return freeze<WorkspacePresentation>({
         COPY_ROW_LIMIT: source.COPY_ROW_LIMIT,
+        runtimeDataError: source.runtimeDataError,
+        retryRuntimeData: source.retryRuntimeData,
         EXPORT_ROW_LIMIT: source.EXPORT_ROW_LIMIT,
         activateChartCategory: source.activateChartCategory,
         activeChartDefinitionId: source.activeChartDefinitionId,

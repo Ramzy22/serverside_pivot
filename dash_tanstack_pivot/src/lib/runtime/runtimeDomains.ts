@@ -371,6 +371,8 @@ export interface WorkspacePresentation {
     readonly isCopying: boolean;
     readonly isExporting: boolean;
     readonly isRequestPending: boolean;
+    readonly runtimeDataError: { readonly retrying: boolean } | null;
+    readonly retryRuntimeData: RuntimeCommand;
     readonly layoutMode: string;
     readonly leftCols: WorkspaceCollection;
     readonly leftHeaderGroups: WorkspaceCollection;

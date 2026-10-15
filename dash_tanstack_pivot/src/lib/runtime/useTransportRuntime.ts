@@ -57,6 +57,7 @@ interface TransportResponseState extends CoreTransportState {
     readonly rowCount?: number;
     readonly stateEpochRef: RuntimeRef<number>;
     readonly latestDataVersionRef: RuntimeRef<number>;
+    readonly requestVersionRef: RuntimeRef<number>;
     readonly completedChartRequestSignaturesRef: RuntimeRef<Readonly<Record<string, string>>>;
     readonly clearPendingTransactionHistoryRequest: RuntimeCallback;
     readonly copyRichToClipboard: RuntimeCallback;
@@ -70,6 +71,7 @@ interface TransportResponseState extends CoreTransportState {
     readonly setIsCopying: RuntimeCallback;
     readonly setIsExporting: RuntimeCallback;
     readonly setPartModal: RuntimeCallback;
+    readonly setRuntimeDataError: RuntimeCallback;
     readonly setTransportChartDataState: RuntimeCallback;
     readonly setTransportDataState: RuntimeCallback;
     readonly setTransportFilterOptionMetaState: RuntimeCallback;
@@ -175,6 +177,7 @@ export function useTransportResponseRuntime(
         clientInstanceRef: runtime.clientInstanceRef,
         stateEpochRef: runtime.stateEpochRef,
         latestDataVersionRef: runtime.latestDataVersionRef,
+        requestVersionRef: runtime.requestVersionRef,
         pendingDataProfilerCommitRef: response.pendingDataProfilerCommitRef,
         finalizeTransactionHistoryResponse: responseCallback(response, 'finalizeTransactionHistoryResponse'),
         hydrateVisibleEditOverlay: responseCallback(response, 'hydrateVisibleEditOverlay'),
@@ -211,6 +214,7 @@ export function useTransportResponseRuntime(
         setIsCopying: responseCallback(response, 'setIsCopying'),
         setIsExporting: responseCallback(response, 'setIsExporting'),
         setPartModal: responseCallback(response, 'setPartModal'),
+        setRuntimeDataError: responseCallback(response, 'setRuntimeDataError'),
         setTransportChartDataState: responseCallback(response, 'setTransportChartDataState'),
         setTransportDataState: responseCallback(response, 'setTransportDataState'),
         setTransportFilterOptionMetaState: responseCallback(response, 'setTransportFilterOptionMetaState'),

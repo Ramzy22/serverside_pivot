@@ -1148,8 +1148,12 @@ export const useServerSideRowModel = ({
         structuralInFlight,
     ]);
 
-    const requestVisibleViewportRefresh = useCallback((overrideColStart = colStart, overrideColEnd = colEnd) => {
-        if (!serverSide || !parentRef.current || structuralInFlight) return false;
+    const requestVisibleViewportRefresh = useCallback((overrideColStart = colStart, overrideColEnd = colEnd, options = {}) => {
+        if (!serverSide || !parentRef.current || (structuralInFlight && !options.retry)) return false;
+
+        // Explicit recovery retires the failed request and any queued stale
+        // window, then goes through normal current-viewport request generation.
+        if (options.retry) resetViewportRequestState({ urgencyToken: columnRangeUrgencyToken });
 
         const scrollEl = parentRef.current;
         const estimatedFirstRow = virtualRows.length > 0
@@ -1185,15 +1189,17 @@ export const useServerSideRowModel = ({
             overrideColStart,
             overrideColEnd,
             Date.now(),
-            { silent: true }
+            { silent: !options.retry }
         );
     }, [
         blockSize,
         colEnd,
         colStart,
+        columnRangeUrgencyToken,
         collectBlocksNeeded,
         parentRef,
         requestViewport,
+        resetViewportRequestState,
         rowCount,
         rowHeight,
         serverSide,
