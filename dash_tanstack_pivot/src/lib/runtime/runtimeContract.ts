@@ -192,10 +192,32 @@ export function isRuntimeRequestV1(value: unknown): value is RuntimeRequestV1 {
 /** Runtime responses are always V1; hosts do not need version fallbacks. */
 export function isRuntimeResponseV1(value: unknown): value is RuntimeResponseV1 {
     const candidate = asRecord(value);
+    // Match the canonical response schema at the HTTP boundary, including
+    // optional metadata: malformed identity/message fields must never reach
+    // shared response processing simply because the required fields exist.
+    const identityFields = ['requestId', 'table', 'sessionId', 'clientInstance'];
+    const sequenceFields = ['stateEpoch', 'windowSeq'];
+    const allowedFields = new Set([
+        'schemaVersion', 'kind', 'status', 'payload', 'message', 'profile',
+        ...identityFields, ...sequenceFields,
+    ]);
     return candidate.schemaVersion === RUNTIME_SCHEMA_VERSION
         && typeof candidate.status === 'string'
+        && candidate.status.length > 0
         && typeof candidate.payload === 'object'
         && candidate.payload !== null
         && !Array.isArray(candidate.payload)
-        && (RUNTIME_COMMAND_KINDS as readonly string[]).includes(String(candidate.kind));
+        && typeof candidate.kind === 'string'
+        && (RUNTIME_COMMAND_KINDS as readonly string[]).includes(candidate.kind)
+        && Object.keys(candidate).every(key => allowedFields.has(key))
+        && identityFields.every(key => !(key in candidate)
+            || typeof candidate[key] === 'string' && candidate[key].length > 0)
+        && sequenceFields.every(key => {
+            const sequence = candidate[key];
+            return !(key in candidate)
+                || typeof sequence === 'number' && Number.isInteger(sequence) && sequence >= 0;
+        })
+        && (!('message' in candidate) || typeof candidate.message === 'string')
+        && (!('profile' in candidate) || candidate.profile !== null
+            && typeof candidate.profile === 'object' && !Array.isArray(candidate.profile));
 }

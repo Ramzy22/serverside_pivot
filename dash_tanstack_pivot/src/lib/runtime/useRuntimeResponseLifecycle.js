@@ -65,6 +65,7 @@ export function useRuntimeResponseLifecycle({
         const fetchToken = payloadRef.id || payloadRef.url;
         const payloadFetchStartedAt = Date.now();
         const abortController = new AbortController();
+        let payloadFetchSettled = false;
         activeRuntimePayloadFetchRef.current = {
           token: fetchToken,
           requestId: runtimeResponse.requestId || null
@@ -73,7 +74,8 @@ export function useRuntimeResponseLifecycle({
           signal: abortController.signal
         }).then(remotePayload => {
           const activeFetch = activeRuntimePayloadFetchRef.current;
-          if (!activeFetch || activeFetch.token !== fetchToken) return;
+          if (abortController.signal.aborted || !activeFetch || activeFetch.token !== fetchToken) return;
+          payloadFetchSettled = true;
           const resolvedPayload = {
             ...payload,
             ...(remotePayload && typeof remotePayload === 'object' ? remotePayload : {}),
@@ -90,7 +92,8 @@ export function useRuntimeResponseLifecycle({
             payloadCompressed: payloadRef.contentEncoding === 'gzip'
           });
         }).catch(error => {
-          if (error && error.name === 'AbortError') return;
+          if (abortController.signal.aborted || error && error.name === 'AbortError') return;
+          payloadFetchSettled = true;
           resolvePendingRequest(runtimeResponse);
           console.error('Runtime payload fetch failed:', error);
           showNotification('The server data payload expired before it could be loaded.', 'error');
@@ -98,6 +101,12 @@ export function useRuntimeResponseLifecycle({
         });
         return () => {
           abortController.abort();
+          // Effect dependencies can change while delivery is unfinished. Let
+          // the replacement effect fetch this response again, while completed
+          // deliveries remain deduplicated. An aborted fetch cannot commit.
+          if (!payloadFetchSettled && responseProcessingKey) {
+            handledRuntimeResponseKeysRef.current.delete(responseProcessingKey);
+          }
           const activeFetch = activeRuntimePayloadFetchRef.current;
           if (activeFetch && activeFetch.token === fetchToken) {
             activeRuntimePayloadFetchRef.current = null;

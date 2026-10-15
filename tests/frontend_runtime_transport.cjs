@@ -71,6 +71,34 @@ test('HTTP rejects malformed or non-V1 failures with safe errors', async () => {
     }
 });
 
+test('HTTP rejects malformed optional V1 error metadata with a safe status error', async t => {
+    const {HttpPivotTransport} = loadRuntime()('runtime/httpTransport.ts');
+    for (const [field, value] of [
+        ['requestId', {secret: 'SECRET'}], ['message', {secret: 'SECRET'}],
+        ['stateEpoch', -1], ['windowSeq', -1], ['stateEpoch', 1.5], ['windowSeq', 1.5],
+        ['table', {secret: 'SECRET'}], ['sessionId', []], ['clientInstance', 42],
+        ['requestId', ''], ['table', ''], ['sessionId', ''], ['clientInstance', ''],
+        ['profile', []], ['profile', null], ['unexpectedField', 'SECRET'],
+    ]) {
+        await t.test(`${field}=${JSON.stringify(value)}`, async () => {
+            const transport = new HttpPivotTransport({fetchImpl: async () => jsonResponse({...exhausted, [field]: value}, 503)});
+            await assert.rejects(transport.request(request), error => {
+                assert.equal(error.message, 'Runtime request failed with status 503.');
+                return true;
+            });
+        });
+    }
+});
+
+test('HTTP preserves valid optional error metadata including zero sequence and empty message', async () => {
+    const {HttpPivotTransport} = loadRuntime()('runtime/httpTransport.ts');
+    const response = {...exhausted, table: 'sales', sessionId: 'principal:alice', clientInstance: 'tab-a',
+        stateEpoch: 0, windowSeq: 0, message: '', profile: {query: {totalMs: 1}},
+    };
+    const transport = new HttpPivotTransport({fetchImpl: async () => jsonResponse(response, 503)});
+    assert.deepEqual(await transport.request(request), response);
+});
+
 test('HTTP still validates successful V1 envelopes and resolves payload references', async () => {
     const {HttpPivotTransport} = loadRuntime()('runtime/httpTransport.ts');
     const transport = new HttpPivotTransport({endpoint: 'https://runtime.example/v1/runtime', fetchImpl: async () => jsonResponse({
@@ -104,7 +132,19 @@ test('workspace passes the configured payload transport privately to the runtime
 
 function lifecycleHarness(payloadTransport, overrides = {}) {
     let effect;
-    const load = loadRuntime({useEffect: fn => {effect = fn;}, useCallback: fn => fn});
+    let dependencies;
+    let effectPending = false;
+    let cleanup;
+    const load = loadRuntime({
+        useEffect: (fn, nextDependencies) => {
+            if (!dependencies || nextDependencies.some((value, index) => !Object.is(value, dependencies[index]))) {
+                effect = fn;
+                dependencies = nextDependencies;
+                effectPending = true;
+            }
+        },
+        useCallback: fn => fn,
+    });
     const {useRuntimeResponseLifecycle} = load('runtime/useRuntimeResponseLifecycle.js');
     const {useRuntimeDataCommit} = load('hooks/useRuntimeDataCommit.js');
     const committed = [];
@@ -130,9 +170,20 @@ function lifecycleHarness(payloadTransport, overrides = {}) {
         },
         ...overrides,
     };
-    useRuntimeResponseLifecycle(args);
-    const cleanup = effect();
-    return {args, state, committed, resolved, notifications, cleanup, get refreshes() {return refreshes;}};
+    function render(nextArgs = {}) {
+        Object.assign(args, nextArgs);
+        useRuntimeResponseLifecycle(args);
+        if (effectPending) {
+            if (cleanup) cleanup();
+            cleanup = effect();
+            effectPending = false;
+        }
+    }
+    render();
+    return {args, state, committed, resolved, notifications, render,
+        cleanup: () => {if (cleanup) cleanup(); cleanup = undefined;},
+        get refreshes() {return refreshes;},
+    };
 }
 const settle = () => new Promise(resolve => setImmediate(resolve));
 
@@ -175,6 +226,48 @@ test('Dash retained data uses the explicit same-origin HTTP transport by default
         run.cleanup();
         assert.equal(seen.options.signal.aborted, true);
     } finally {global.fetch = originalFetch;}
+});
+
+test('transport identity changes restart an unfinished retained delivery without stranding it or committing stale rows', async () => {
+    let firstSignal;
+    let releaseFirst;
+    let replacementCalls = 0;
+    const firstTransport = {fetchPayload: (_reference, {signal}) => {
+        firstSignal = signal;
+        // Custom transports may finish despite abort; the stale result must
+        // still be excluded after the replacement fetch starts.
+        return new Promise(resolve => {
+            releaseFirst = resolve;
+        });
+    }};
+    const nextTransport = {fetchPayload: async () => {
+        replacementCalls++;
+        return {data: [{id: 'second-row', amount: 24}], dataVersion: 7, rowCount: 1};
+    }};
+    const run = lifecycleHarness(firstTransport);
+    run.render({payloadTransport: nextTransport});
+    await settle();
+    assert.equal(firstSignal.aborted, true);
+    assert.equal(replacementCalls, 1, 'an interrupted delivery must restart with the current transport');
+    assert.equal(run.committed.length, 1);
+    assert.equal(run.committed[0].data[0].amount, 24);
+    releaseFirst({data: [{id: 'first-row', amount: 12}], dataVersion: 7, rowCount: 1});
+    await settle();
+    assert.equal(run.committed.length, 1);
+    assert.equal(run.committed[0].data[0].amount, 24);
+    run.render({showNotification: () => {}});
+    await settle();
+    assert.equal(replacementCalls, 1, 'completed delivery must not replay on callback changes');
+    run.render({runtimeResponse: {...run.args.runtimeResponse, requestId: 'window-2', payload: {
+        ...run.args.runtimeResponse.payload, payloadRef: {id: 'blob-2', url: '/v1/runtime/payload/blob-2', requestId: 'window-2'},
+    }}});
+    await settle();
+    assert.equal(firstSignal.aborted, true, 'a new response still cleans up the previous delivery');
+    assert.equal(replacementCalls, 2);
+    assert.equal(run.committed.length, 2);
+    assert.equal(run.committed[1].data[0].amount, 24);
+    assert.equal(run.notifications.length, 0);
+    run.cleanup();
 });
 
 test('payload resolution preserves current client, epoch, version and active-fetch guards', async () => {
