@@ -192,6 +192,7 @@ export function useTransportResponseRuntime(
         activeRuntimePayloadFetchRef: response.activeRuntimePayloadFetchRef,
         cancelledExportRequestIdsRef: response.cancelledExportRequestIdsRef,
         clearPendingTransactionHistoryRequest: responseCallback(response, 'clearPendingTransactionHistoryRequest'),
+        clientInstanceRef: runtime.clientInstanceRef,
         commitRuntimeDataPayload: commit.commitRuntimeDataPayload,
         copyRichToClipboard: viewport.delivery.copy,
         emitEditLifecycleEvent: responseCallback(response, 'emitEditLifecycleEvent'),
@@ -206,6 +207,7 @@ export function useTransportResponseRuntime(
         profilingEnabledRef: runtime.profilingEnabledRef,
         reconcileOptimisticCellValuesWithPayload: responseCallback(response, 'reconcileOptimisticCellValuesWithPayload'),
         recordProfilerResponse: transport.profiling.recordResponse,
+        requestVersionRef: runtime.requestVersionRef,
         resolvePendingRequest: responseCallback(response, 'resolvePendingRequest'),
         runtimePayloadCommitIsCurrent: commit.runtimePayloadCommitIsCurrent,
         runtimeResponse: runtime.runtimeResponse,
@@ -220,6 +222,7 @@ export function useTransportResponseRuntime(
         setTransportFilterOptionMetaState: responseCallback(response, 'setTransportFilterOptionMetaState'),
         setTransportFilterOptionsState: responseCallback(response, 'setTransportFilterOptionsState'),
         showNotification: responseCallback(response, 'showNotification'),
+        stateEpochRef: runtime.stateEpochRef,
         triggerExportDownload: viewport.delivery.download,
     });
     useRuntimeResponsePostCommit({

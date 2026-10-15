@@ -371,7 +371,15 @@ export interface WorkspacePresentation {
     readonly isCopying: boolean;
     readonly isExporting: boolean;
     readonly isRequestPending: boolean;
-    readonly runtimeDataError: { readonly retrying: boolean } | null;
+    readonly runtimeDataError: {
+        readonly retrying: boolean;
+        readonly failedRequest: {
+            readonly requestId: string | null;
+            readonly windowSeq: number | null;
+            readonly stateEpoch: number | null;
+            readonly clientInstance: string | null;
+        };
+    } | null;
     readonly retryRuntimeData: RuntimeCommand;
     readonly layoutMode: string;
     readonly leftCols: WorkspaceCollection;

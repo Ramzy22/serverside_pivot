@@ -24,6 +24,7 @@ export function useRuntimeResponseLifecycle({
   activeRuntimePayloadFetchRef,
   cancelledExportRequestIdsRef,
   clearPendingTransactionHistoryRequest,
+  clientInstanceRef,
   commitRuntimeDataPayload,
   copyRichToClipboard,
   emitEditLifecycleEvent,
@@ -39,6 +40,7 @@ export function useRuntimeResponseLifecycle({
   profilingEnabledRef,
   reconcileOptimisticCellValuesWithPayload,
   recordProfilerResponse,
+  requestVersionRef,
   resolvePendingRequest,
   runtimePayloadCommitIsCurrent,
   runtimeResponse,
@@ -53,6 +55,7 @@ export function useRuntimeResponseLifecycle({
   setTransportFilterOptionMetaState,
   setTransportFilterOptionsState,
   showNotification,
+  stateEpochRef,
   triggerExportDownload,
 }) {
   useEffect(() => {
@@ -409,7 +412,17 @@ export function useRuntimeResponseLifecycle({
         && runtimePayloadCommitIsCurrent(runtimeResponse, payload)) {
         // Backend messages may contain exception details or credentials. Only
         // presentation-owned copy crosses the inline grid error boundary.
-        setRuntimeDataError(previous => previous && !previous.retrying ? previous : { retrying: false });
+        const failedRequest = {
+          requestId: runtimeResponse.requestId || runtimeResponse.request_id || null,
+          windowSeq: coerceTransportNumber(runtimeResponse.windowSeq ?? runtimeResponse.window_seq
+            ?? payload.windowSeq ?? payload.window_seq ?? payload.version, requestVersionRef?.current ?? null),
+          stateEpoch: coerceTransportNumber(runtimeResponse.stateEpoch ?? runtimeResponse.state_epoch,
+            stateEpochRef?.current ?? null),
+          clientInstance: runtimeResponse.clientInstance || runtimeResponse.client_instance || clientInstanceRef?.current || null,
+        };
+        setRuntimeDataError(previous => previous && !previous.retrying
+          && Object.keys(failedRequest).every(key => previous.failedRequest?.[key] === failedRequest[key])
+          ? previous : { retrying: false, failedRequest });
       }
       if (runtimeResponse.status === 'stale') {
         scheduleSilentViewportRefresh();
@@ -426,5 +439,5 @@ export function useRuntimeResponseLifecycle({
         status: runtimeResponse.status
       });
     }
-  }, [clearPendingTransactionHistoryRequest, commitRuntimeDataPayload, emitEditLifecycleEvent, finalizeTransactionHistoryResponse, hydrateVisibleEditOverlay, payloadTransport, reconcileOptimisticCellValuesWithPayload, recordProfilerResponse, resolvePendingRequest, runtimePayloadCommitIsCurrent, runtimeResponse, scheduleSilentViewportRefresh, setIsExporting, setIsCopying, setRuntimeDataError, showNotification]);
+  }, [clearPendingTransactionHistoryRequest, clientInstanceRef, commitRuntimeDataPayload, emitEditLifecycleEvent, finalizeTransactionHistoryResponse, hydrateVisibleEditOverlay, payloadTransport, reconcileOptimisticCellValuesWithPayload, recordProfilerResponse, requestVersionRef, resolvePendingRequest, runtimePayloadCommitIsCurrent, runtimeResponse, scheduleSilentViewportRefresh, setIsExporting, setIsCopying, setRuntimeDataError, showNotification, stateEpochRef]);
 }

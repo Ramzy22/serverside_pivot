@@ -990,11 +990,14 @@ export function useViewportRuntimeStage(input, transport) {
     showSubtotals: stage.showSubtotals
   }));
   stage.requestUrgentColumnViewportRef.current = stage.requestUrgentColumnViewport;
-  stage.retryRuntimeData = useRuntimeDataRetry({
+  ({ retryRuntimeData: stage.retryRuntimeData, runtimeDataError: stage.runtimeDataError } = useRuntimeDataRetry({
     runtimeDataError: stage.runtimeDataError,
     setRuntimeDataError: stage.setRuntimeDataError,
     requestVisibleViewportRefresh: stage.requestVisibleViewportRefresh,
-  });
+    requestVersionRef: stage.requestVersionRef,
+    stateEpochRef: stage.stateEpochRef,
+    clientInstanceRef: stage.clientInstanceRef,
+  }));
   stage.scheduleSilentViewportRefresh = useCallback(() => {
     if (!stage.serverSide || typeof stage.requestVisibleViewportRefresh !== 'function') return;
     if (stage.deferredViewportRefreshTimeoutRef.current !== null) {

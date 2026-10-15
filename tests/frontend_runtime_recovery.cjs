@@ -79,6 +79,9 @@ const failure = {
     message: 'Traceback password=SECRET db://admin:SECRET@internal',
     payload: {code: 'resource_exhausted', resourceKind: 'query', retryAfterMs: 1501},
 };
+const retryIdentity = (windowSeq, stateEpoch = 3) => ({
+    requestId: `viewport:s:tab-a:${windowSeq}`, windowSeq, stateEpoch, clientInstance: 'tab-a',
+});
 function lifecycle() {
     const scheduler = hooks();
     const load = loadSource(scheduler.api);
@@ -120,6 +123,7 @@ test('current generic and structured data failures expose safe inline recovery a
         run.render({...failure, payload});
         assert.ok(run.error, 'the terminal data failure needs inline recovery');
         assert.equal(run.error.retrying, false);
+        assert.deepEqual(run.error.failedRequest, retryIdentity(7));
         assert.doesNotMatch(JSON.stringify(run.error), /SECRET|Traceback|db:\/\//);
         assert.deepEqual(run.resolved, ['viewport:s:tab-a:7']);
         assert.deepEqual(run.notifications, []);
@@ -258,12 +262,12 @@ test('Retry immediately creates a fresh current viewport request despite failed 
     const model = scheduler.render(() => useServerSideRowModel(args), false);
     assert.equal(model.requestVisibleViewportRefresh(), true);
     assert.equal(requests[0].requestId, 'viewport:s:tab-a:7');
-    assert.equal(model.requestVisibleViewportRefresh(undefined, undefined, {retry: true}), true,
+    assert.equal(model.requestVisibleViewportRefresh(undefined, undefined, {retry: retryIdentity(7)}), true,
         'a failed inflight entry must not suppress the user retry');
     assert.equal(requests[1].requestId, 'viewport:s:tab-a:8');
     assert.equal(pending[1].silent, false, 'user retry retains the ordinary loading path');
     scroll.scrollTop = 3200;
-    assert.equal(model.requestVisibleViewportRefresh(12, 15, {retry: true}), true);
+    assert.equal(model.requestVisibleViewportRefresh(12, 15, {retry: retryIdentity(8)}), true);
     assert.equal(requests[2].requestId, 'viewport:s:tab-a:9');
     assert.equal(requests[2].payload.start, 96, 'retry derives row window from current scroll');
     assert.equal(requests[2].payload.state_epoch, 3);
@@ -289,10 +293,12 @@ test('the rendered Retry action drives real viewport generation, pending UI and 
     function render() {
         return scheduler.render(() => {
             const viewport = useServerSideRowModel(args);
-            const retry = useRuntimeDataRetry({runtimeDataError: run.error,
+            const recovery = useRuntimeDataRetry({runtimeDataError: run.error,
                 setRuntimeDataError: run.args.setRuntimeDataError,
+                requestVersionRef: run.args.requestVersionRef, stateEpochRef: run.args.stateEpochRef,
+                clientInstanceRef: run.args.clientInstanceRef,
                 requestVisibleViewportRefresh: viewport.requestVisibleViewportRefresh});
-            return RuntimeDataError({error: run.error, onRetry: retry, theme: {}});
+            return RuntimeDataError({error: recovery.runtimeDataError, onRetry: recovery.retryRuntimeData, theme: {}});
         }, false);
     }
     let alert = render();
@@ -359,7 +365,7 @@ test('explicit error recovery can retry a failed structural request before its l
         sessionId: 's', clientInstance: 'tab-a', setProps: value => requests.push(value.runtimeRequest),
     }), false);
     assert.equal(model.requestVisibleViewportRefresh(), false);
-    assert.equal(model.requestVisibleViewportRefresh(undefined, undefined, {retry: true}), true,
+    assert.equal(model.requestVisibleViewportRefresh(undefined, undefined, {retry: retryIdentity(7, 4)}), true,
         'a failed structural request must not leave Retry blocked for ten seconds');
     assert.equal(requests[0].requestId, 'viewport:s:tab-a:8');
     assert.equal(requests[0].payload.state_epoch, 4);
@@ -402,5 +408,77 @@ test('direct HTTP overload and thrown failures reach shared safe recovery while 
             assert.match(html, /Retry/);
         }
         scheduler.cleanup();
+    }
+});
+
+test('an old alert cannot retire a newer active viewport request but the current failure remains retryable', () => {
+    const scheduler = hooks();
+    const load = loadSource(scheduler.api, {getVirtualItems: () => [], measure: noop});
+    const {useServerSideRowModel} = load('hooks/useServerSideRowModel.js');
+    const {useRuntimeDataRetry} = load('runtime/useRuntimeDataRetry.js');
+    const {RuntimeDataError} = load('components/RuntimeDataError.js');
+    const run = lifecycle();
+    run.args.requestVersionRef.current = 6;
+    const requests = [];
+    const scroll = {scrollTop: 0, clientHeight: 320};
+    const args = {parentRef: {current: scroll}, serverSide: true, rowCount: 1000, rowHeight: 32,
+        data: [], requestVersionRef: run.args.requestVersionRef, stateEpoch: 3,
+        sessionId: 's', clientInstance: 'tab-a', setProps: value => requests.push(value.runtimeRequest),
+    };
+    function render() {
+        return scheduler.render(() => {
+            const model = useServerSideRowModel(args);
+            const recovery = useRuntimeDataRetry({runtimeDataError: run.error,
+                setRuntimeDataError: run.args.setRuntimeDataError,
+                requestVersionRef: run.args.requestVersionRef, stateEpochRef: run.args.stateEpochRef,
+                clientInstanceRef: run.args.clientInstanceRef,
+                requestVisibleViewportRefresh: model.requestVisibleViewportRefresh});
+            return {model, alert: RuntimeDataError({error: recovery.runtimeDataError, onRetry: recovery.retryRuntimeData, theme: {}})};
+        }, false);
+    }
+    const originalNow = Date.now;
+    let now = 10000;
+    Date.now = () => now;
+    try {
+        const first = render();
+        assert.equal(first.model.requestVisibleViewportRefresh(), true);
+        run.render(failure);
+        const failed = render();
+        const oldRetry = elements(failed.alert).find(node => node.type === 'button').props.onClick;
+        now += 500;
+        scroll.scrollTop = 3200;
+        assert.equal(failed.model.requestVisibleViewportRefresh(), true);
+        assert.equal(requests[1].requestId, 'viewport:s:tab-a:8');
+        oldRetry(); // A click already queued before React rerenders must also be safe.
+        assert.equal(requests.length, 2, 'the old alert must not supersede active request 8 with request 9');
+        const active = render();
+        assert.equal(elements(active.alert).find(node => node.type === 'button').props.disabled, true);
+        run.render({...failure, requestId: 'viewport:s:tab-a:8', windowSeq: 8});
+        const current = render();
+        const retryCurrent = elements(current.alert).find(node => node.type === 'button');
+        assert.equal(retryCurrent.props.disabled, false);
+        retryCurrent.props.onClick();
+        assert.equal(requests[2].requestId, 'viewport:s:tab-a:9');
+        run.render(success(9));
+        assert.equal(render().alert, null);
+    } finally {Date.now = originalNow; scheduler.cleanup();}
+});
+
+test('the viewport recovery boundary rejects stale generation, epoch, client and unscoped bypass tokens', () => {
+    for (const retry of [retryIdentity(6), retryIdentity(7, 2), {...retryIdentity(7), clientInstance: 'other-tab'}, true]) {
+        const scheduler = hooks();
+        const load = loadSource(scheduler.api, {getVirtualItems: () => [], measure: noop});
+        const {useServerSideRowModel} = load('hooks/useServerSideRowModel.js');
+        const requests = [];
+        const model = scheduler.render(() => useServerSideRowModel({
+            parentRef: {current: {scrollTop: 0, clientHeight: 320}}, serverSide: true,
+            rowCount: 1000, rowHeight: 32, data: [], requestVersionRef: {current: 7},
+            stateEpoch: 3, sessionId: 's', clientInstance: 'tab-a',
+            setProps: value => requests.push(value.runtimeRequest),
+        }), false);
+        assert.equal(model.requestVisibleViewportRefresh(undefined, undefined, {retry}), false);
+        assert.equal(requests.length, 0, 'an invalid retry token cannot fall through to ordinary dispatch');
+        assert.equal(model.requestVisibleViewportRefresh(undefined, undefined, {retry: retryIdentity(7)}), true);
+        assert.equal(requests[0].requestId, 'viewport:s:tab-a:8');
     }
 });

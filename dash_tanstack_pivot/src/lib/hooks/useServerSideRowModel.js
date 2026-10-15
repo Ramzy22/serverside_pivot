@@ -866,6 +866,7 @@ export const useServerSideRowModel = ({
 
         const reqCount = reqEnd - reqStart + 1;
         inflightRequestRef.current = {
+            requestId,
             start: reqStart,
             end: reqEnd,
             colStart: requestedColStart,
@@ -1149,11 +1150,19 @@ export const useServerSideRowModel = ({
     ]);
 
     const requestVisibleViewportRefresh = useCallback((overrideColStart = colStart, overrideColEnd = colEnd, options = {}) => {
-        if (!serverSide || !parentRef.current || (structuralInFlight && !options.retry)) return false;
+        const failed = options.retry;
+        const inflight = inflightRequestRef.current;
+        const retryIsCurrent = Boolean(failed && Number.isFinite(failed.windowSeq)
+            && failed.windowSeq === requestVersionRef.current && failed.stateEpoch === stateEpoch
+            && failed.clientInstance === clientInstance
+            && !(inflight && inflight.version === failed.windowSeq && failed.requestId
+                && inflight.requestId !== failed.requestId));
+        if (failed && !retryIsCurrent) return false;
+        if (!serverSide || !parentRef.current || (structuralInFlight && !retryIsCurrent)) return false;
 
         // Explicit recovery retires the failed request and any queued stale
         // window, then goes through normal current-viewport request generation.
-        if (options.retry) resetViewportRequestState({ urgencyToken: columnRangeUrgencyToken });
+        if (retryIsCurrent) resetViewportRequestState({ urgencyToken: columnRangeUrgencyToken });
 
         const scrollEl = parentRef.current;
         const estimatedFirstRow = virtualRows.length > 0
@@ -1189,16 +1198,18 @@ export const useServerSideRowModel = ({
             overrideColStart,
             overrideColEnd,
             Date.now(),
-            { silent: !options.retry }
+            { silent: !retryIsCurrent }
         );
     }, [
         blockSize,
         colEnd,
         colStart,
         columnRangeUrgencyToken,
+        clientInstance,
         collectBlocksNeeded,
         parentRef,
         requestViewport,
+        requestVersionRef,
         resetViewportRequestState,
         rowCount,
         rowHeight,
