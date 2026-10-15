@@ -22,7 +22,7 @@ except ImportError:
 
 from .models import PivotRequestContext, PivotViewState
 from .async_bridge import run_awaitable_sync
-from .contracts import build_runtime_response, normalize_runtime_request
+from .contracts import build_resource_exhausted_response, build_runtime_response, normalize_runtime_request
 from .dataset_authorization import (
     RuntimeDatasetAuthorizationError,
     RuntimeDatasetAuthorizer,
@@ -879,6 +879,8 @@ def register_dash_pivot_transport_callback(
         report_def,
         table_name,
         sort_options,
+        *,
+        response_metadata,
     ):
         """Main transport adapter callback for one pivot instance."""
         callback_started_at = time.perf_counter()
@@ -946,6 +948,16 @@ def register_dash_pivot_transport_callback(
             request_id = request_id or bootstrap_request_id
             if triggered_prop is None:
                 triggered_prop = f"{_normalize_id(pivot_id)}.bootstrap"
+
+        response_metadata.update(
+            kind=request_kind,
+            request_id=request_id,
+            table=table_name or request_payload.get("table"),
+            session_id=request_payload.get("session_id"),
+            client_instance=request_payload.get("client_instance"),
+            state_epoch=request_payload.get("state_epoch"),
+            window_seq=request_payload.get("window_seq"),
+        )
 
         if request_kind == "filter_options":
             column_id = request_payload.get("columnId") or request_payload.get("column_id")
@@ -1021,6 +1033,10 @@ def register_dash_pivot_transport_callback(
                         } if profiling_enabled else None,
                     )
                 )
+
+            principal_session_id = _principal_session_id(authorization.principal)
+            if principal_session_id:
+                response_metadata["session_id"] = principal_session_id
 
             from ..tanstack_adapter import TanStackOperation, TanStackRequest
 
@@ -1162,6 +1178,13 @@ def register_dash_pivot_transport_callback(
         principal_session_id = _principal_session_id(authorization.principal)
         if principal_session_id:
             context.session_id = principal_session_id
+        response_metadata.update(
+            table=resolved_table,
+            session_id=context.session_id,
+            client_instance=context.client_instance,
+            state_epoch=context.state_epoch,
+            window_seq=context.window_seq,
+        )
         # Runtime state_override is a snapshot attached to a specific runtimeRequest.
         # When a normal Dash prop (viewMode, reportDef, rowFields, etc.) triggers this
         # callback, reusing the previous runtimeRequest override can force the backend
@@ -1351,6 +1374,10 @@ def register_dash_pivot_transport_callback(
             finally:
                 current_workload_account.reset(account_token)
             service_finished_at = time.perf_counter()
+        except ResourceExhaustedError:
+            # The callback boundary also covers filter queries and payload
+            # retention, and encodes every admission failure identically.
+            raise
         except Exception as exc:  # pragma: no cover - defensive
             service_finished_at = time.perf_counter()
             _debug_print(debug, f"Error in pivot runtime service: {exc}")
@@ -1658,14 +1685,28 @@ def register_dash_pivot_transport_callback(
             ),
         )
 
+    async def _update_with_resource_errors(*callback_values):
+        response_metadata = {}
+        try:
+            return await _update_pivot_table_async(
+                *callback_values, response_metadata=response_metadata,
+            )
+        except ResourceExhaustedError as exc:
+            response = build_resource_exhausted_response(
+                exc, kind=response_metadata["kind"], request_id=response_metadata["request_id"],
+            )
+            return _response_tuple(_build_runtime_response(
+                **response_metadata, status=response["status"], payload=response["payload"],
+            ))
+
     if getattr(app, "_use_async", False):
         @app.callback(*callback_args)
         async def _update_pivot_table(*callback_values):
-            return await _update_pivot_table_async(*callback_values)
+            return await _update_with_resource_errors(*callback_values)
     else:
         @app.callback(*callback_args)
         def _update_pivot_table(*callback_values):
-            return run_awaitable_sync(_update_pivot_table_async(*callback_values))
+            return run_awaitable_sync(_update_with_resource_errors(*callback_values))
 
     registry.add(callback_key)
     return True

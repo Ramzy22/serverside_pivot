@@ -176,5 +176,5 @@ export function PivotWorkspace({ transport, onStateChange, ...initialProps }: Pi
         if (nextProps.runtimeRequest) dispatch(nextProps.runtimeRequest);
     }, [dispatch, onStateChange]);
 
-    return <PivotRuntimeRoot {...runtimeProps} setProps={publish} />;
+    return <PivotRuntimeRoot {...runtimeProps} setProps={publish} payloadTransport={transport} />;
 }

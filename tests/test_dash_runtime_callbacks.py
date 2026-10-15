@@ -263,6 +263,100 @@ def test_transport_callback_uses_runtime_request_as_primary_trigger():
         assert view_state_prop in state_props
 
 
+def _post_runtime_request(app, component_id, envelope):
+    output = f"{component_id}.runtimeResponse"
+    callback = app.callback_map[output]
+    response = app.server.test_client().post("/_dash-update-component", json={
+        "output": output,
+        "outputs": {"id": component_id, "property": "runtimeResponse"},
+        "changedPropIds": [f"{component_id}.runtimeRequest"],
+        "inputs": [{**item, "value": envelope if item["property"] == "runtimeRequest" else None}
+                   for item in callback["inputs"]],
+        "state": [{**item, "value": "sales" if item["property"] == "table" else None}
+                  for item in callback["state"]],
+    })
+    assert response.status_code == 200
+    return response.json["response"][component_id]["runtimeResponse"]
+
+
+@pytest.mark.parametrize("retry_after_ms, expected_retry", [(1501, 1501), (0, 1), (90000, 60000)])
+@pytest.mark.parametrize("request_kind", ["data", "export", "filter_options"])
+def test_dash_overload_returns_safe_retryable_v1_error(retry_after_ms, expected_retry, request_kind):
+    from pivot_engine.resource_governor import ResourceExhaustedError, ResourceKind
+
+    class ExhaustedService:
+        async def process_async(self, state, context):
+            raise ResourceExhaustedError(
+                ResourceKind.QUERY, reason="SECRET backend memory/path", retry_after_ms=retry_after_ms,
+            )
+
+        def _adapter_getter(self):
+            return self
+
+        async def handle_request(self, *args, **kwargs):
+            raise ResourceExhaustedError(
+                ResourceKind.QUERY, reason="SECRET backend memory/path", retry_after_ms=retry_after_ms,
+            )
+
+    app = Dash(__name__)
+    app.layout = html.Div([DashTanstackPivot(id="overloaded", table="sales")])
+    register_dash_pivot_transport_callback(app, lambda: ExhaustedService(), pivot_id="overloaded")
+    envelope = {
+        "schemaVersion": 1, "kind": request_kind, "requestId": "overload-1", "table": "sales",
+        "sessionId": "session-a", "clientInstance": "tab-a", "stateEpoch": 3, "windowSeq": 7,
+        "payload": {"intent": "viewport", "start": 0, "end": 10, "columnId": "region"},
+    }
+    body = _post_runtime_request(app, "overloaded", envelope)
+    assert body["schemaVersion"] == 1
+    assert body["kind"] == request_kind
+    assert body["status"] == "error"
+    assert body["requestId"] == "overload-1"
+    assert body["table"] == "sales"
+    assert body["sessionId"] == "session-a"
+    assert body["clientInstance"] == "tab-a"
+    assert body["stateEpoch"] == 3
+    assert body["windowSeq"] == 7
+    assert body["payload"] == {
+        "code": "resource_exhausted", "resourceKind": "query", "retryAfterMs": expected_retry,
+    }
+    assert "SECRET" not in json.dumps(body)
+
+
+@pytest.mark.parametrize("kind", ["data", "export"])
+def test_dash_payload_retention_overload_uses_the_same_safe_error(monkeypatch, kind):
+    from pivot_engine.resource_governor import ResourceGovernor, ResourceLimits
+    from pivot_engine.runtime import PivotServiceResponse
+
+    monkeypatch.setenv("PIVOT_RUNTIME_PAYLOAD_REF_MIN_BYTES", "1")
+    governor = ResourceGovernor(ResourceLimits.for_testing(payload_bytes=128), rss_bytes_getter=lambda: 0)
+
+    class Service:
+        resource_governor = governor
+
+        async def process_async(self, state, context):
+            if kind == "export":
+                return PivotServiceResponse(status="export", export_payload={
+                    "content": b"x" * 1024, "format": "csv", "contentType": "text/csv",
+                })
+            return PivotServiceResponse(status="data", data=[{"id": "row-1", "value": "x" * 1024}])
+
+    app = Dash(__name__)
+    app.layout = html.Div([DashTanstackPivot(id="retention", table="sales")])
+    register_dash_pivot_transport_callback(app, lambda: Service(), pivot_id="retention")
+    body = _post_runtime_request(app, "retention", {
+        "schemaVersion": 1, "kind": kind, "requestId": "retention-1", "table": "sales",
+        "sessionId": "session-a", "clientInstance": "tab-a", "stateEpoch": 3, "windowSeq": 7,
+        "payload": {"intent": "viewport", "start": 0, "end": 10},
+    })
+    assert body["status"] == "error"
+    assert body["kind"] == kind
+    assert body["requestId"] == "retention-1"
+    assert body["payload"] == {
+        "code": "resource_exhausted", "resourceKind": "payload", "retryAfterMs": 1000,
+    }
+    assert governor.snapshot()["reserved_bytes"] == 0
+
+
 def test_runtime_payload_ref_externalizes_nested_rows_and_serves_json(monkeypatch):
     monkeypatch.setenv("PIVOT_RUNTIME_PAYLOAD_REF_MIN_ROWS", "9999")
     monkeypatch.setenv("PIVOT_RUNTIME_PAYLOAD_REF_MIN_NESTED_BYTES", "1")

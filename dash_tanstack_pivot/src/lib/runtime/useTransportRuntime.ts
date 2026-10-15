@@ -7,6 +7,7 @@ import type { CoreRuntimeDomain, PivotObject, TransportRuntimeDomain, ViewportRu
 import { useRuntimeChartRequestDispatch } from './useRuntimeChartRequestDispatch';
 import { useRuntimeResponseLifecycle } from './useRuntimeResponseLifecycle';
 import { useRuntimeResponsePostCommit } from './useRuntimeResponsePostCommit';
+import type { PivotTransport } from './httpTransport';
 
 const asObject = (value: unknown): PivotObject => value && typeof value === 'object' && !Array.isArray(value)
     ? value as PivotObject
@@ -166,6 +167,7 @@ export function useTransportResponseRuntime(
     core: CoreRuntimeDomain,
     transport: TransportRuntimeDomain,
     viewport: ViewportRuntimeDomain,
+    payloadTransport?: Pick<PivotTransport, 'fetchPayload'>,
 ): void {
     const runtime = core as TransportResponseState;
     const response = runtime;
@@ -181,6 +183,7 @@ export function useTransportResponseRuntime(
         setTransportDataState: responseCallback(response, 'setTransportDataState'),
     });
     useRuntimeResponseLifecycle({
+        payloadTransport,
         activeChartRequestRef: response.activeChartRequestRef,
         activeExportRequestIdRef: response.activeExportRequestIdRef,
         activeRuntimePayloadFetchRef: response.activeRuntimePayloadFetchRef,

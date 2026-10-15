@@ -124,7 +124,7 @@ def test_runtime_response_lifecycle_receives_delivery_callbacks_from_viewport_do
     assert "viewport: ViewportRuntimeDomain" in transport
     assert "copyRichToClipboard: viewport.delivery.copy" in transport
     assert "triggerExportDownload: viewport.delivery.download" in transport
-    assert "useTransportResponseRuntime(core, transport, viewport);" in root
+    assert "useTransportResponseRuntime(core, transport, viewport, payloadTransport);" in root
 
 
 def test_chart_preview_uses_consistent_longhand_flex_properties():

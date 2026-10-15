@@ -3,8 +3,14 @@ import { useEffect } from 'react';
 import { htmlTableToTsv } from '../utils/exportUtils';
 import { applyRuntimePatchEnvelope, coerceTransportNumber } from '../hooks/usePivotNormalization';
 import { buildRuntimeResponseProcessingKey, markRuntimeResponseHandled } from './runtimeResponseDedup';
+import { HttpPivotTransport } from './httpTransport';
 
 const FILTER_OPTION_PAGE_SIZE = 250;
+// Dash uses its callback graph for envelopes and same-origin HTTP for retained
+// data. Direct hosts always provide their configured transport below.
+const dashPayloadTransport = {
+  fetchPayload: (reference, options) => new HttpPivotTransport().fetchPayload(reference, options)
+};
 
 /**
  * Applies one server response exactly once. This transport lifecycle owns data
@@ -26,6 +32,7 @@ export function useRuntimeResponseLifecycle({
   pendingCopyIntentRef,
   pendingDataProfilerCommitRef,
   pendingServerFilterOptionsRef,
+  payloadTransport = dashPayloadTransport,
   pivotProfilerRef,
   profilerComponentIdRef,
   profilingEnabledRef,
@@ -62,17 +69,8 @@ export function useRuntimeResponseLifecycle({
           token: fetchToken,
           requestId: runtimeResponse.requestId || null
         };
-        fetch(payloadRef.url, {
-          method: 'GET',
-          headers: {
-            Accept: 'application/json'
-          },
+        payloadTransport.fetchPayload(payloadRef, {
           signal: abortController.signal
-        }).then(response => {
-          if (!response.ok) {
-            throw new Error(`Payload fetch failed with status ${response.status}`);
-          }
-          return response.json();
         }).then(remotePayload => {
           const activeFetch = activeRuntimePayloadFetchRef.current;
           if (!activeFetch || activeFetch.token !== fetchToken) return;
@@ -409,5 +407,5 @@ export function useRuntimeResponseLifecycle({
         status: runtimeResponse.status
       });
     }
-  }, [clearPendingTransactionHistoryRequest, commitRuntimeDataPayload, emitEditLifecycleEvent, finalizeTransactionHistoryResponse, hydrateVisibleEditOverlay, reconcileOptimisticCellValuesWithPayload, recordProfilerResponse, resolvePendingRequest, runtimePayloadCommitIsCurrent, runtimeResponse, scheduleSilentViewportRefresh, setIsExporting, setIsCopying, showNotification]);
+  }, [clearPendingTransactionHistoryRequest, commitRuntimeDataPayload, emitEditLifecycleEvent, finalizeTransactionHistoryResponse, hydrateVisibleEditOverlay, payloadTransport, reconcileOptimisticCellValuesWithPayload, recordProfilerResponse, resolvePendingRequest, runtimePayloadCommitIsCurrent, runtimeResponse, scheduleSilentViewportRefresh, setIsExporting, setIsCopying, showNotification]);
 }

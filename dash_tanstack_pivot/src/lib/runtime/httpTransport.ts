@@ -122,10 +122,19 @@ export class HttpPivotTransport implements PivotTransport {
             body: JSON.stringify(request),
             signal: options.signal,
         });
-        const body = await readJson(response);
         if (!response.ok) {
+            // Admission/authentication failures use the same V1 envelope as a
+            // successful request. Preserve their safe metadata for consumers;
+            // opaque gateways and malformed bodies must not expose raw text.
+            try {
+                const body = await readJson(response);
+                if (isRuntimeResponseV1(body) && body.status === 'error') return body;
+            } catch (error) {
+                if (error instanceof Error && error.name === 'AbortError') throw error;
+            }
             throw new Error(`Runtime request failed with status ${response.status}.`);
         }
+        const body = await readJson(response);
         if (!isRuntimeResponseV1(body)) {
             throw new Error('Runtime server returned an invalid V1 response.');
         }
