@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from contextlib import contextmanager
 from dataclasses import asdict, dataclass, field
+import hashlib
 import json
 import os
 from pathlib import Path
@@ -73,6 +74,11 @@ class LiveCase:
     observed: str = ""
     parsed_output: object = field(default_factory=dict)
 
+    @property
+    def download_dir(self) -> Path:
+        safe_id = re.sub(r"[^a-zA-Z0-9._-]", "_", self.requirement_id)
+        return self.evidence_root / "runs" / self.run_id / safe_id / "downloads"
+
     def save(self, result: str, diagnostic: str = "") -> CaseResult:
         requirements = {item.id: item for item in comparable_requirements()}
         requirement = requirements[self.requirement_id]
@@ -123,6 +129,15 @@ class LiveCase:
         if result == "passed" and (not self.observed or not snapshot.get("trace")):
             raise AssertionError("A passing AG Grid result requires observed state and a live SSRM trace")
         snapshot["parsed_output"] = self.parsed_output
+        snapshot["downloads"] = []
+        for download in self.download_dir.glob("*"):
+            if not download.is_file() or download.name.endswith(".crdownload"):
+                continue
+            snapshot["downloads"].append({
+                "path": str(download), "bytes": download.stat().st_size,
+                "sha256": hashlib.sha256(download.read_bytes()).hexdigest(),
+            })
+            paths.append(str(download))
         evidence = case_dir / "observation.json"
         evidence.write_text(json.dumps(snapshot, ensure_ascii=False, indent=2), encoding="utf-8")
         paths.append(str(evidence))
@@ -167,12 +182,21 @@ def reference_case(requirement_id: str, run_id: str, evidence_root: Path | None 
     driver = None
     page_loaded = False
     case = LiveCase(requirement_id, None, evidence_root, run_id)
+    case.download_dir.mkdir(parents=True, exist_ok=True)
+    options.add_experimental_option("prefs", {
+        "download.default_directory": str(case.download_dir),
+        "download.prompt_for_download": False,
+        "download.directory_upgrade": True,
+    })
     try:
         with urlopen(url, timeout=5) as response:
             if response.status != 200:
                 raise OSError(f"Reference HTTP status {response.status}")
         driver = webdriver.Chrome(options=options)
         case.driver = driver
+        driver.execute_cdp_cmd("Browser.setDownloadBehavior", {
+            "behavior": "allow", "downloadPath": str(case.download_dir),
+        })
         origin = urlsplit(url)
         driver.execute_cdp_cmd("Browser.grantPermissions", {
             "origin": f"{origin.scheme}://{origin.netloc}",

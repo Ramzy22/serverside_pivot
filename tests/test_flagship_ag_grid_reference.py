@@ -5,6 +5,8 @@ from __future__ import annotations
 import os
 import csv
 import io
+import hashlib
+import zipfile
 from pathlib import Path
 
 import pytest
@@ -12,6 +14,7 @@ from selenium.webdriver.support.ui import WebDriverWait
 from selenium.webdriver.common.action_chains import ActionChains
 from selenium.webdriver.common.by import By
 from selenium.webdriver.common.keys import Keys
+from openpyxl import load_workbook
 
 from tests.flagship_reference_support import DEFAULT_EVIDENCE, reference_case, start_reference_run
 
@@ -704,3 +707,115 @@ def test_reference_pin_menu_round_trip_retains_single_column_during_scroll(refer
         copies['after_unpin'] = _copy_sales_units(driver)
         assert driver.execute_script('return window.referenceEvidence.trace()') == trace
         case.observed = 'Real header menu Pin Left/No Pin round trip; Q1 sales remained at fixed x during end scroll and appeared once per row/logical order; actual two-column header clipboard before/during/after pin preserved exact sales/units order and values; original order/geometry restored without SSRM requests'
+
+
+def _prepare_full_export(case):
+    """Load both account branches so SSRM export has a bounded, explicit scope."""
+    driver = case.driver
+    config = driver.execute_script('return window.referenceConfig')
+    assert (config['version'], config['edition'], config['rowModel']) == ('36.2.0', 'Enterprise', 'SSRM')
+    assert config['options']['rowModelType'] == 'serverSide'
+    assert config['options']['pivotMode'] is True
+    assert config['options']['filter'] == {'scope': 'Included'}
+    driver.execute_script('window.referenceGrid.expandAll()')
+    rows = WebDriverWait(driver, 10).until(lambda browser: (
+        rows if [row['label'] for row in rows] == ['Éclair', '東京', 'München', 'القاهرة', 'Total'] else False
+    ) if (rows := _displayed_rows(browser)) else False)
+    trace = driver.execute_script('return window.referenceEvidence.trace()')
+    assert {tuple(entry['request']['groupKeys']) for entry in trace if 'response' in entry} >= {
+        (), ('Éclair',), ('München',)}
+    assert all(entry['request']['filterModel'] == {'scope': {'filterType': 'set', 'values': ['Included']}}
+               for entry in trace)
+    columns = driver.execute_script('return window.referenceGrid.getAllDisplayedColumns().map(c => ({id:c.getColId(),header:c.getColDef().headerName ?? c.getColDef().field ?? ""}))')
+    assert len(rows) == 5
+    return {'rows': rows, 'columns': columns, 'trace': trace}
+
+
+def _download_after_click(case, button, suffix):
+    before = set(case.download_dir.iterdir())
+    case.driver.find_element(By.ID, button).click()
+    found = WebDriverWait(case.driver, 15).until(lambda _: (
+        paths[0] if len(paths) == 1 and paths[0].stat().st_size > 0 else False
+    ) if (paths := [path for path in case.download_dir.iterdir()
+                   if path not in before and path.suffix.lower() == suffix and not path.name.endswith('.crdownload')]) else False)
+    assert found.is_file() and found.suffix.lower() == suffix
+    return found
+
+
+_EXPORT_IDS = ['ag-Grid-AutoColumn'] + [
+    f'{period}|{field}' for period in ('Q1', 'Q2', 'Total')
+    for field in ('ventes_€', 'unités', 'écart', 'extrema')
+]
+_EXPORT_MEASURES = ['Ventes_€', 'Unités', 'Écart', 'Extrema'] * 3
+_EXPORT_LABELS = [
+    ' -> Éclair', ' -> Éclair -> 東京', ' -> München', ' -> München -> القاهرة', 'Total ',
+]
+_EXPORT_NUMERIC = [
+    [100.25, 2, -12.5, 100, 20, 1, 2.5, 100, 120.25, 3, -10, 100],
+    [100.25, 2, -12.5, 100, 20, 1, 2.5, 100, 120.25, 3, -10, 100],
+    [49.75, 3, 4.25, -100, 30, 4, -1, -100, 79.75, 7, 3.25, -100],
+    [49.75, 3, 4.25, -100, 30, 4, -1, -100, 79.75, 7, 3.25, -100],
+    [150, 5, -8.25, -100, 50, 5, 1.5, -100, 200, 10, -6.75, -100],
+]
+_EXPORT_FORMATTED = [
+    ['100.25', '2.00', '-12.50', '100', '20.00', '1.00', '2.50', '100', '120.25', '3.00', '-10.00', '100'],
+    ['100.25', '2.00', '-12.50', '100', '20.00', '1.00', '2.50', '100', '120.25', '3.00', '-10.00', '100'],
+    ['49.75', '3.00', '4.25', '-100', '30.00', '4.00', '-1.00', '-100', '79.75', '7.00', '3.25', '-100'],
+    ['49.75', '3.00', '4.25', '-100', '30.00', '4.00', '-1.00', '-100', '79.75', '7.00', '3.25', '-100'],
+    ['150.00', '5.00', '-8.25', '-100', '50.00', '5.00', '1.50', '-100', '200.00', '10.00', '-6.75', '-100'],
+]
+
+
+def _assert_export_column_order(prepared):
+    assert [column['id'] for column in prepared['columns']] == _EXPORT_IDS
+    assert [column['header'] for column in prepared['columns']] == ['Region / account', *_EXPORT_MEASURES]
+
+
+def test_reference_csv_export_download_has_filtered_unicode_rows_and_totals(reference_run):
+    """An absent, partial, unfiltered, or numerically wrong CSV fails export parity."""
+    with reference_case('export-csv.exact-document', reference_run) as case:
+        prepared = _prepare_full_export(case)
+        file = _download_after_click(case, 'csv', '.csv')
+        raw = file.read_bytes()
+        try:
+            text = raw.decode('utf-8-sig')
+        except UnicodeError as error:
+            raise AssertionError('CSV download is not UTF-8') from error
+        rows = list(csv.reader(io.StringIO(text, newline='')))
+        case.parsed_output = {'prepared': prepared, 'filename': file.name, 'sha256': hashlib.sha256(raw).hexdigest(), 'rows': rows}
+        _assert_export_column_order(prepared)
+        assert rows == [
+            ['', 'Q1', '', '', '', 'Q2', '', '', '', 'Total', '', '', ''],
+            ['Region / account', *_EXPORT_MEASURES],
+            *[[label, *values] for label, values in zip(_EXPORT_LABELS, _EXPORT_FORMATTED)],
+        ]
+        assert 'São Paulo' not in text
+        case.observed = 'Clicked real Export CSV button after both SSRM account branches loaded; parsed UTF-8 download, hierarchy labels, included-only filter and exact grand totals'
+
+
+def test_reference_excel_export_download_has_numeric_cells_and_merged_pivot_headers(reference_run):
+    """An invalid or text-typed workbook, wrong totals, or wrong pivot groups fails."""
+    with reference_case('export-xlsx.exact-workbook', reference_run) as case:
+        prepared = _prepare_full_export(case)
+        file = _download_after_click(case, 'excel', '.xlsx')
+        assert zipfile.is_zipfile(file)
+        try:
+            workbook = load_workbook(file, data_only=False, read_only=False)
+        except Exception as error:
+            raise AssertionError('Downloaded XLSX is not a readable workbook') from error
+        assert len(workbook.worksheets) == 1
+        sheet = workbook.active
+        rows = [[cell.value for cell in row] for row in sheet.iter_rows()]
+        types = [[cell.data_type for cell in row] for row in sheet.iter_rows()]
+        merged = [str(item) for item in sheet.merged_cells.ranges]
+        case.parsed_output = {'prepared': prepared, 'filename': file.name, 'sha256': hashlib.sha256(file.read_bytes()).hexdigest(), 'rows': rows, 'types': types, 'merged': merged}
+        _assert_export_column_order(prepared)
+        assert rows == [
+            ['Region / account', 'Q1', None, None, None, 'Q2', None, None, None, 'Total', None, None, None],
+            [None, *_EXPORT_MEASURES],
+            *[[label, *values] for label, values in zip(_EXPORT_LABELS, _EXPORT_NUMERIC)],
+        ]
+        assert all(row == ['s', *['n'] * 12] for row in types[2:])
+        assert set(merged) == {'A1:A2', 'B1:E1', 'F1:I1', 'J1:M1'}
+        assert 'São Paulo' not in str(rows)
+        case.observed = 'Clicked real Export Excel button after both SSRM account branches loaded; opened downloaded XLSX and checked Unicode, numeric totals and merged pivot headers'
