@@ -542,6 +542,55 @@ def test_submenu_helper_matches_exact_title_with_child_indicator_and_opens_child
 
 
 @pytest.mark.flagship
+def test_selection_copy_helper_chooses_raw_menu_action_in_real_browser(tmp_path):
+    """A rounded default action must not satisfy a raw-value clipboard case."""
+    if os.environ.get("PIVOT_RUN_FLAGSHIP_BROWSER_TESTS") != "1":
+        pytest.skip("Enable Chrome helper regression explicitly")
+    from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+    from selenium import webdriver
+    from tests.flagship_browser_support import _copy_selected
+    from tests.test_flagship_certification import _qualification_chrome_options
+
+    html = b'''<!doctype html><button id="cell" oncontextmenu="event.preventDefault(); document.querySelector('#menu').hidden=false">Cell</button>
+      <div id="menu" role="menu" hidden>
+      <button role="menuitem" title="Copy Selection" onclick="navigator.clipboard.writeText('100\\t2\\r\\n50\\t3')">Copy Selection</button>
+      <button role="menuitem" title="Copy Selection (Raw Values)" onclick="navigator.clipboard.writeText('100.25\\t2\\r\\n49.75\\t3')">Copy Selection (Raw Values)</button>
+      </div>'''
+
+    class Handler(BaseHTTPRequestHandler):
+        def do_GET(self):
+            self.send_response(200)
+            self.send_header("Content-Type", "text/html; charset=utf-8")
+            self.send_header("Content-Length", str(len(html)))
+            self.end_headers()
+            self.wfile.write(html)
+
+        def log_message(self, *args):
+            pass
+
+    server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    driver = webdriver.Chrome(options=_qualification_chrome_options(tmp_path))
+    try:
+        origin = f"http://127.0.0.1:{server.server_port}"
+        driver.execute_cdp_cmd("Browser.grantPermissions", {
+            "origin": origin, "permissions": ["clipboardReadWrite", "clipboardSanitizedWrite"]})
+        driver.get(origin)
+        observation = {"clipboardLineSeparator": "\r\n"}
+        _copy_selected(driver, driver.find_element("css selector", "#cell"),
+                       [["100.25", "2"], ["49.75", "3"]], observation,
+                       menu_label="Copy Selection (Raw Values)")
+        assert observation["copyMenuAction"] == "Copy Selection (Raw Values)"
+        assert observation["parsedTSV"] == [["100.25", "2"], ["49.75", "3"]]
+    finally:
+        driver.quit()
+        server.shutdown()
+        server.server_close()
+        thread.join(timeout=5)
+
+
+@pytest.mark.flagship
 @pytest.mark.parametrize("host", ["dash", "react", "streamlit"])
 @pytest.mark.parametrize("requirement", ["cell-selection.range-clear", "copy-selection.logical-cells",
                                          "copy-selection.display-order", "copy-selection.pinned-columns"])

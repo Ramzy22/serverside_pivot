@@ -31,7 +31,7 @@ _SAFE_OBSERVATIONS = frozenset({
     "lateResponseUnverified", "staleResponseUnverified", "privateExceptionHidden",
     "logicalCellsVerified", "clipboardBytesVerified", "displayOrderVerified",
     "pinnedNoDuplicates", "horizontalScrollVerified", "rangeCleared", "clearedCopyAbsent",
-    "selectedCellCount", "rawCopyUnavailable",
+    "selectedCellCount",
     "nativeKeyboardCopyVerified", "clearedClipboardMonitored",
 })
 
@@ -159,7 +159,7 @@ def _select_rectangle(driver, row_ids, column_ids):
     return ids
 
 
-def _copy_selected(driver, cell, expected, observation):
+def _copy_selected(driver, cell, expected, observation, *, menu_label="Copy Selection"):
     from selenium.webdriver.common.action_chains import ActionChains
     from selenium.webdriver.support.ui import WebDriverWait
     from tests.test_flagship_certification import _clipboard_text
@@ -169,7 +169,11 @@ def _copy_selected(driver, cell, expected, observation):
         "const done=arguments[arguments.length-1]; navigator.clipboard.writeText(arguments[0]).then(()=>done(true),()=>done(false));",
         sentinel)
     ActionChains(driver).context_click(cell).perform()
-    _selection_menu(driver, "Copy Selection").click()
+    menu_item = _selection_menu(driver, menu_label)
+    clicked_title = menu_item.get_attribute("title")
+    assert clicked_title == menu_label, "Selection copy menu action differs from the requested action"
+    menu_item.click()
+    observation["copyMenuAction"] = clicked_title
     text = WebDriverWait(driver, SELECTION_COPY_TIMEOUT).until(lambda current: (
         value if (value := _clipboard_text(current)) != sentinel else False))
     observation["clipboardText"] = text
@@ -333,8 +337,6 @@ def qualify_selected_clipboard(host: str, requirement: str) -> None:
             _wait_selection_sort(driver, checkpoint, sales, observation)
             wait.until(lambda current: [row["label"] for row in _selection_rows(current)] == ["Éclair", "München"])
             columns = [sales, units]
-            observation["actions"].append("default whole-number format retained because raw copy is not exposed")
-            _inspect_selection_number_format(driver, observation)
         elif requirement in ("copy-selection.display-order", "copy-selection.pinned-columns"):
             _selection_number_format(driver, observation)
             observation["actions"].append("set displayed numeric precision to 2dp")
@@ -387,7 +389,6 @@ def qualify_selected_clipboard(host: str, requirement: str) -> None:
         result.update(logicalCellsVerified=True, selectedCellCount=4)
         if requirement == "copy-selection.logical-cells":
             expected = [["100.25", "2"], ["49.75", "3"]]
-            result["rawCopyUnavailable"] = True
         elif requirement == "copy-selection.display-order":
             expected = [["3.00", "49.75"], ["2.00", "100.25"]]
         elif requirement == "copy-selection.pinned-columns":
@@ -397,7 +398,9 @@ def qualify_selected_clipboard(host: str, requirement: str) -> None:
             literal = {"Éclair": {sales: "100", units: "2"}, "München": {sales: "50", units: "3"}}
             expected = [[literal[row["label"]][column] for column in columns] for row in rows]
         observation["expectedClipboardCells"] = expected
-        _copy_selected(driver, _selection_cell(driver, row_ids[0], columns[0]), expected, observation)
+        menu_label = "Copy Selection (Raw Values)" if requirement == "copy-selection.logical-cells" else "Copy Selection"
+        _copy_selected(driver, _selection_cell(driver, row_ids[0], columns[0]), expected, observation,
+                       menu_label=menu_label)
         result["clipboardBytesVerified"] = True
         if requirement == "copy-selection.display-order":
             assert [row["label"] for row in rows] == ["München", "Éclair"], "Descending displayed region order differs from the contract"
