@@ -12,6 +12,7 @@ from typing import Iterator
 from uuid import uuid4
 from datetime import datetime, timezone
 from urllib.request import urlopen
+from urllib.parse import urlsplit
 
 from selenium.common.exceptions import TimeoutException
 
@@ -172,6 +173,11 @@ def reference_case(requirement_id: str, run_id: str, evidence_root: Path | None 
                 raise OSError(f"Reference HTTP status {response.status}")
         driver = webdriver.Chrome(options=options)
         case.driver = driver
+        origin = urlsplit(url)
+        driver.execute_cdp_cmd("Browser.grantPermissions", {
+            "origin": f"{origin.scheme}://{origin.netloc}",
+            "permissions": ["clipboardReadWrite", "clipboardSanitizedWrite"],
+        })
         driver.get(url)
         page_loaded = True
         WebDriverWait(driver, 20).until(

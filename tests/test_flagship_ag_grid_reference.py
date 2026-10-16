@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import os
+import csv
+import io
 from pathlib import Path
 
 import pytest
@@ -15,6 +17,170 @@ from tests.flagship_reference_support import DEFAULT_EVIDENCE, reference_case, s
 
 
 pytestmark = pytest.mark.flagship
+
+
+def _clipboard(driver, *, sentinel=None):
+    result = driver.execute_async_script("""
+      const done = arguments[arguments.length - 1], sentinel = arguments[0];
+      (async () => {
+        if (!navigator.clipboard) throw new Error('Clipboard API unavailable');
+        for (const name of ['clipboard-read', 'clipboard-write']) {
+          const permission = await navigator.permissions.query({name});
+          if (permission.state !== 'granted') throw new Error(name + ': ' + permission.state);
+        }
+        if (sentinel !== null) await navigator.clipboard.writeText(sentinel);
+        return await navigator.clipboard.readText();
+      })().then(text => done({text}), error => done({error: String(error)}));
+    """, sentinel)
+    if "error" in result:
+        raise RuntimeError("Clipboard infrastructure unavailable: " + result["error"])
+    return result["text"]
+
+
+def _select_rectangle(driver, first, last, rows=(0, 1), columns=None):
+    start = driver.find_element(By.CSS_SELECTOR, f'.ag-row[row-index="{rows[0]}"] [col-id="{first}"]')
+    end = driver.find_element(By.CSS_SELECTOR, f'.ag-row[row-index="{rows[1]}"] [col-id="{last}"]')
+    start.click()
+    ActionChains(driver).key_down(Keys.SHIFT).click(end).key_up(Keys.SHIFT).perform()
+    selected = driver.execute_script("""
+      return [...document.querySelectorAll('[role=gridcell].ag-cell-range-selected')]
+        .map(e => ({rowIndex: e.closest('[row-index]').getAttribute('row-index'), colId: e.getAttribute('col-id'), text: e.innerText, rawText: e.textContent}));
+    """)
+    assert {(cell['rowIndex'], cell['colId']) for cell in selected} == {
+        (str(row), column) for row in range(rows[0], rows[1] + 1) for column in (columns or (first, last))}
+    return selected
+
+
+def _copy_selection(driver, *, headers=False):
+    sentinel = "task-3d-clipboard-must-change"
+    assert _clipboard(driver, sentinel=sentinel) == sentinel
+    # Both commands are actual UI actions; the context-menu command is AG Grid's
+    # built-in Copy with Headers rather than an API-only substitute.
+    if headers:
+        cell = driver.find_element(By.CSS_SELECTOR, '[role=gridcell].ag-cell-range-selected')
+        ActionChains(driver).context_click(cell).perform()
+        menu = WebDriverWait(driver, 5).until(lambda browser: browser.find_element(By.CSS_SELECTOR, '.ag-menu.ag-popup-child'))
+        options = menu.find_elements(By.CSS_SELECTOR, '.ag-menu-option')
+        choices = [option for option in options if option.text.strip() == 'Copy with Headers']
+        if len(choices) != 1:
+            raise RuntimeError('Copy with Headers UI unavailable: ' + menu.text)
+        choices[0].click()
+    else:
+        driver.find_element(By.ID, 'copy').click()
+    text = WebDriverWait(driver, 5).until(lambda browser: value if (value := _clipboard(browser)) != sentinel else False)
+    return {"text": text, "rows": list(csv.reader(io.StringIO(text, newline=""), delimiter="\t"))}
+
+
+def test_reference_copy_formatted_selection_exact_rectangle(reference_run):
+    """Copying unrelated cells or bypassing the value formatter fails."""
+    with reference_case('copy-selection.formatted-values', reference_run) as case:
+        case.driver.execute_cdp_cmd('Browser.resetPermissions', {})
+        with pytest.raises(RuntimeError, match='Clipboard infrastructure unavailable:.*clipboard-read'):
+            _clipboard(case.driver)
+        case.driver.execute_cdp_cmd('Browser.grantPermissions', {
+            'origin': case.driver.execute_script('return location.origin'),
+            'permissions': ['clipboardReadWrite', 'clipboardSanitizedWrite'],
+        })
+        selected = _select_rectangle(case.driver, 'Q1|ventes_€', 'Q1|unités', rows=(0, 0))
+        copied = _copy_selection(case.driver)
+        case.parsed_output = {"selected": selected, "clipboard": copied}
+        assert copied['rows'] == [['100.25', '2.00']]
+        _assert_cells(selected, {('0', 'Q1|ventes_€'): '100.25', ('0', 'Q1|unités'): '2.00'})
+        case.observed = 'Mouse-selected Q1 sales/units for Éclair; Copy selection delivered exact formatted 1x2 clipboard body'
+
+
+def test_reference_copy_headers_opt_in_exact_selected_order(reference_run):
+    """Missing headers, extra pivot groups, or unselected columns fails."""
+    with reference_case('copy-selection.headers', reference_run) as case:
+        selected = _select_rectangle(case.driver, 'Q1|ventes_€', 'Q1|unités')
+        body = _copy_selection(case.driver)
+        headers = _copy_selection(case.driver, headers=True)
+        case.parsed_output = {"selected": selected, "body": body, "with_headers": headers}
+        assert body['rows'] == [['100.25', '2.00'], ['49.75', '3.00']]
+        assert headers['rows'] == [['Ventes_€', 'Unités'], ['100.25', '2.00'], ['49.75', '3.00']]
+        case.observed = 'Same mouse-selected 2x2 rectangle copied through body button and real Copy with Headers context menu; exact parsed rows and header order agree'
+
+
+def test_reference_copy_pinned_boundary_without_duplicate_cells(reference_run):
+    """Pinned rendering duplicated in clipboard or source-order copy fails."""
+    with reference_case('copy-selection.pinned-columns', reference_run) as case:
+        driver = case.driver
+        driver.execute_script("window.referenceGrid.setColumnsPinned(['Q1|unités'], 'left')")
+        driver.execute_script("document.querySelector('.ag-body-horizontal-scroll-viewport').scrollLeft = 40")
+        WebDriverWait(driver, 5).until(lambda browser: browser.execute_script("return document.querySelector('.ag-body-horizontal-scroll-viewport').scrollLeft > 0"))
+        order = driver.execute_script("return window.referenceGrid.getAllDisplayedColumns().map(c => c.getColId())")
+        assert order[:3] == ['ag-Grid-AutoColumn', 'Q1|unités', 'Q1|ventes_€']
+        WebDriverWait(driver, 5).until(lambda browser: browser.find_element(By.CSS_SELECTOR, '.ag-grid-pinned-left-cells [role="gridcell"][col-id="Q1|unités"]'))
+        selected = _select_rectangle(driver, 'Q1|unités', 'Q1|ventes_€')
+        copied = _copy_selection(driver)
+        case.parsed_output = {"order": order, "selected": selected, "clipboard": copied}
+        assert copied['rows'] == [['2.00', '100.25'], ['3.00', '49.75']]
+        _assert_cells(selected, {('0', 'Q1|unités'): '2.00', ('1', 'Q1|unités'): '3.00',
+                                 ('0', 'Q1|ventes_€'): '100.25', ('1', 'Q1|ventes_€'): '49.75'})
+        case.observed = 'Pinned Q1 units via column API; scrolled 40px; mouse-selected across pinned/center containers; exact 2x2 clipboard contains each logical cell once in display order'
+
+
+def test_reference_copy_display_order_after_sort_and_reorder(reference_run):
+    """Clipboard reverting to fixture row order or measure order fails."""
+    with reference_case('copy-selection.display-order', reference_run) as case:
+        driver = case.driver
+        count = len(driver.execute_script('return window.referenceEvidence.trace()'))
+        driver.execute_script("""
+          window.referenceGrid.moveColumns(['Q1|unités'], 1);
+          window.referenceGrid.applyColumnState({state:[{colId:'region',sort:'desc'}], defaultState:{sort:null}});
+        """)
+        request = _wait_request(driver, count)
+        labels = _wait_column(driver, 'ag-Grid-AutoColumn', ['München', 'Éclair', 'Total'])
+        order = driver.execute_script('return window.referenceGrid.getAllDisplayedColumns().map(c=>c.getColId())')
+        assert order[:3] == ['ag-Grid-AutoColumn', 'Q1|unités', 'Q1|ventes_€']
+        assert request['request']['sortModel'][0]['sort'] == 'desc'
+        selected = _select_rectangle(driver, 'Q1|unités', 'Q1|ventes_€')
+        copied = _copy_selection(driver)
+        case.parsed_output = {"order": order, "labels": labels, "request": request, "selected": selected, "clipboard": copied}
+        assert copied['rows'] == [['3.00', '49.75'], ['2.00', '100.25']]
+        _assert_cells(selected, {('0', 'Q1|unités'): '3.00', ('0', 'Q1|ventes_€'): '49.75',
+                                 ('1', 'Q1|unités'): '2.00', ('1', 'Q1|ventes_€'): '100.25'})
+        case.observed = 'Column API reordered units before sales and requested descending region order; real selection/copy preserved exact visible row and field order'
+
+
+@pytest.mark.parametrize('requirement,fields,expected', [
+    ('tabs', ['copyTab', 'rowId'], [['left\tright', 'q1-eclair'], ['', 'q2-eclair'], ['', 'q1-munchen'], ['', 'q2-munchen']]),
+    ('newlines', ['copyLF', 'copyCRLF'], [['', ''], ['first\nsecond', ''], ['', 'first\r\nsecond'], ['', '']]),
+    ('unicode', ['copyUnicode', 'rowId'], [['Éclair', 'q1-eclair'], ['東京', 'q2-eclair'], ['القاهرة', 'q1-munchen'], ['Éclair München 東京 القاهرة 🚀', 'q2-munchen']]),
+    ('empty-values', ['rowId', 'copyNull', 'copyEmpty'], [['q1-eclair', 'value', 'value'], ['q2-eclair', 'value', 'value'], ['q1-munchen', 'value', 'value'], ['q2-munchen', '', '']]),
+])
+def test_reference_copy_special_text_from_same_ssrm_fixture(reference_run, requirement, fields, expected):
+    """Quoted TSV corruption, lost trailing empties, or Unicode changes fails."""
+    with reference_case('copy-selection.' + requirement, reference_run) as case:
+        driver = case.driver
+        driver.execute_script("""
+          window.referenceGrid.setGridOption('pivotMode', false);
+          window.referenceGrid.setRowGroupColumns([]);
+          window.referenceGrid.applyColumnState({
+            state: arguments[0].map(colId=>({colId, hide:false, pinned:null})),
+            defaultState:{hide:true}, applyOrder:true});
+        """, fields)
+        visible = _wait_column(driver, 'rowId' if 'rowId' in fields else 'copyLF',
+                               ['q1-eclair', 'q2-eclair', 'q1-munchen', 'q2-munchen', ''] if 'rowId' in fields else ['', 'first second', '', '', ''])
+        order = driver.execute_script('return window.referenceGrid.getAllDisplayedColumns().map(c=>c.getColId())')
+        assert order == fields
+        selected = _select_rectangle(driver, fields[0], fields[-1], rows=(0, 3), columns=fields)
+        copied = _copy_selection(driver)
+        case.parsed_output = {"setup": "pivot off, row grouping removed, selected fixture fields shown via column API", "order": order,
+                              "visible": visible, "selected": selected, "clipboard": copied}
+        actual_dom = {(cell['rowIndex'], cell['colId']): cell['rawText'] for cell in selected}
+        assert actual_dom == {(str(row), field): expected[row][column]
+                              for row in range(4) for column, field in enumerate(fields)}
+        case.observed = 'Same SSRM fixture flattened via column APIs; visible logical cells and actual clipboard TSV captured against literal special-text oracle'
+        assert copied['rows'] == expected
+        # DOM innerText normalizes CRLF and can trim whitespace; clipboard must
+        # preserve the literal source strings independently of that rendering.
+        assert len(selected) == 4 * len(fields)
+        trace = driver.execute_script('return window.referenceEvidence.trace()')
+        assert trace[-1]['request']['pivotMode'] is False
+        assert trace[-1]['request']['rowGroupCols'] == []
+        assert trace[-1]['response']['rowCount'] == 4
+        case.observed = 'Same SSRM fixture flattened via column APIs; exact visible field order and mouse-selected logical cells verified; actual clipboard TSV parsed and compared with literal special-text oracle'
 
 
 def _assert_cells(cells, expected):
