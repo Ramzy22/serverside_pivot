@@ -48,7 +48,8 @@
     "GroupFilterModule",
     "TextFilterModule",
     "NumberFilterModule",
-    "ColumnApiModule"
+    "ColumnApiModule",
+    "ColumnAutoSizeModule"
   ],
   "allowedReferenceDiagnostics": ["AG Grid Enterprise unlicensed evaluation watermark", "AG Grid Enterprise licence console warning"]
 }

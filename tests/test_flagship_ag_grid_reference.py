@@ -565,3 +565,142 @@ def test_reference_hierarchy_expansion_requests_child_and_collapses_cleanly(refe
             ("0", "Total|ventes_€"): "120.25", ("2", "Total|ventes_€"): "200.00",
         })
         assert before_columns == after_columns
+
+
+def _column_geometry(driver, column):
+    """Measure rendered header/cells, including text fit, independently of column state."""
+    return driver.execute_script("""
+      const id = arguments[0];
+      const measure = e => { const r=e.getBoundingClientRect(), style=getComputedStyle(e);
+        const textRange=document.createRange(); textRange.selectNodeContents(e);
+        return {
+        left:r.left, width:r.width, text:e.innerText,
+        textWidth:textRange.getBoundingClientRect().width,
+        padding:parseFloat(style.paddingLeft)+parseFloat(style.paddingRight),
+        rowIndex:e.closest('[row-index]')?.getAttribute('row-index') ?? null,
+      }; };
+      const header=[...document.querySelectorAll('.ag-header-cell[col-id]')].find(e=>e.getAttribute('col-id')===id);
+      if (!header) return null;
+      const text=header.querySelector('.ag-header-cell-text');
+      const range=document.createRange(); range.selectNodeContents(text);
+      return {header:measure(header), headerTextWidth:range.getBoundingClientRect().width,
+        headerTextAvailable:text.getBoundingClientRect().width,
+        cells:[...document.querySelectorAll('[role=gridcell][col-id]')]
+          .filter(e=>e.getAttribute('col-id')===id).map(measure),
+        constraints:{minWidth:window.referenceGrid.getColumn(id).getColDef().minWidth ?? null,
+          maxWidth:window.referenceGrid.getColumn(id).getColDef().maxWidth ?? null},
+        state:window.referenceGrid.getColumnState().find(c=>c.colId===id),
+        order:window.referenceGrid.getAllDisplayedColumns().map(c=>c.getColId())};
+    """, column)
+
+
+def _assert_column_content_fit(geometry):
+    """Reject clipping against actual glyph bounds plus computed CSS padding."""
+    header = geometry['header']
+    assert header['width'] + 1 >= geometry['headerTextWidth'] + header['padding']
+    assert geometry['headerTextWidth'] <= geometry['headerTextAvailable'] + 1
+    for cell in geometry['cells']:
+        assert cell['width'] + 1 >= cell['textWidth'] + cell['padding'], (
+            'Rendered value plus CSS padding must fit', cell)
+    for bound, compare in (('minWidth', lambda width, limit: width >= limit),
+                           ('maxWidth', lambda width, limit: width <= limit)):
+        limit = geometry['constraints'][bound]
+        if limit is not None:
+            assert compare(header['width'], limit), (bound, limit, header['width'])
+
+
+def test_reference_auto_size_double_click_fits_visible_text_and_is_stable(reference_run):
+    """No-op auto-size, clipping, displaced cells or unstable repeated sizing fails."""
+    with reference_case('column-sizing.auto-size', reference_run) as case:
+        driver = case.driver
+        column = 'Q1|ventes_€'
+        _wait_column(driver, column, ['100.25', '49.75', '150.00'])
+        trace = driver.execute_script('return window.referenceEvidence.trace()')
+        handle = driver.find_element(By.CSS_SELECTOR, f'.ag-header-cell[col-id="{column}"] .ag-header-cell-resize')
+        ActionChains(driver).click_and_hold(handle).move_by_offset(80, 0).release().perform()
+        wide = _column_geometry(driver, column)
+        snapshots = []
+        case.parsed_output = {'wide': wide, 'auto_sized': snapshots, 'initial_request': trace}
+        for _ in range(2):
+            handle = driver.find_element(By.CSS_SELECTOR, f'.ag-header-cell[col-id="{column}"] .ag-header-cell-resize')
+            ActionChains(driver).double_click(handle).perform()
+            # Wait for the browser's pending paint before reading layout; a no-op
+            # remains a concrete failed width assertion with evidence, not a timeout.
+            driver.execute_async_script('const done=arguments[arguments.length-1]; requestAnimationFrame(()=>requestAnimationFrame(done))')
+            geometry = _column_geometry(driver, column)
+            snapshots.append(geometry)
+            assert geometry['header']['width'] < wide['header']['width'] - 20, 'Double-click auto-size must shrink the deliberately widened visible column'
+            _assert_column_content_fit(geometry)
+            assert geometry['order'] == wide['order']
+            assert [cell['text'] for cell in sorted(geometry['cells'], key=lambda cell: cell['rowIndex'])] == ['100.25', '49.75', '150.00']
+            for cell in geometry['cells']:
+                assert abs(cell['left'] - geometry['header']['left']) <= 1
+                assert abs(cell['width'] - geometry['header']['width']) <= 1
+            assert abs(geometry['state']['width'] - geometry['header']['width']) <= 1
+        assert abs(snapshots[0]['header']['width'] - snapshots[1]['header']['width']) <= 2
+        assert driver.execute_script('return window.referenceEvidence.trace()') == trace
+        case.observed = 'Mouse widened Q1 sales then double-clicked resize handle twice; measured header/value glyph bounds plus computed CSS padding fit within active width constraints, cell/header widths align, values/order unchanged and repeat width within 2px; no SSRM request'
+
+
+def _copy_sales_units(driver):
+    selected = _select_rectangle(driver, 'Q1|ventes_€', 'Q1|unités')
+    copied = _copy_selection(driver, headers=True)
+    assert copied['rows'] == [['Ventes_€', 'Unités'], ['100.25', '2.00'], ['49.75', '3.00']]
+    return {'selected': selected, 'clipboard': copied}
+
+
+def _pin_menu(driver, column, label):
+    header = driver.find_element(By.CSS_SELECTOR, f'.ag-header-cell[col-id="{column}"]')
+    ActionChains(driver).move_to_element(header).perform()
+    header.find_element(By.CSS_SELECTOR, '.ag-header-cell-menu-button').click()
+    pin = WebDriverWait(driver, 5).until(lambda browser: next((
+        e for e in browser.find_elements(By.CSS_SELECTOR, '.ag-menu-option') if e.text.strip() == 'Pin Column'), False))
+    ActionChains(driver).move_to_element(pin).perform()
+    WebDriverWait(driver, 5).until(lambda browser: next((
+        e for e in browser.find_elements(By.CSS_SELECTOR, '.ag-menu-option') if e.text.strip() == label), False)).click()
+
+
+def test_reference_pin_menu_round_trip_retains_single_column_during_scroll(reference_run):
+    """Pinning that scrolls away, duplicates cells or changes unpinned order fails."""
+    with reference_case('column-pinning.round-trip', reference_run) as case:
+        driver = case.driver
+        driver.set_window_size(1000, 800)
+        column = 'Q1|ventes_€'
+        _wait_column(driver, column, ['100.25', '49.75', '150.00'])
+        before = _column_geometry(driver, column)
+        trace = driver.execute_script('return window.referenceEvidence.trace()')
+        copies = {'before_pin': _copy_sales_units(driver)}
+        case.parsed_output = {'before': before, 'copies': copies}
+        _pin_menu(driver, column, 'Pin Left')
+        pinned = WebDriverWait(driver, 5).until(lambda browser: (
+            geometry if geometry['state']['pinned'] == 'left' else False
+        ) if (geometry := _column_geometry(browser, column)) else False)
+        driver.execute_script("document.querySelector('.ag-body-horizontal-scroll-viewport').scrollLeft=99999")
+        _wait_column(driver, 'Total|extrema', ['100', '-100', '-100'])
+        scrolled = _column_geometry(driver, column)
+        scroll = driver.execute_script("const v=document.querySelector('.ag-body-horizontal-scroll-viewport'); return {left:v.scrollLeft,max:v.scrollWidth-v.clientWidth}")
+        case.parsed_output.update({'pinned': pinned, 'scrolled': scrolled, 'scroll': scroll})
+        assert scroll['left'] == scroll['max'] > 0
+        assert abs(scrolled['header']['left'] - pinned['header']['left']) <= 1
+        assert scrolled['order'].count(column) == 1
+        assert len(scrolled['cells']) == 3
+        assert sorted((cell['rowIndex'], cell['text']) for cell in scrolled['cells']) == [('0', '100.25'), ('1', '49.75'), ('2', '150.00')]
+        for cell in scrolled['cells']:
+            assert abs(cell['left'] - scrolled['header']['left']) <= 1
+        driver.execute_script("document.querySelector('.ag-body-horizontal-scroll-viewport').scrollLeft=0")
+        _wait_column(driver, 'Q1|unités', ['2.00', '3.00', '5.00'])
+        copies['while_pinned'] = _copy_sales_units(driver)
+        _pin_menu(driver, column, 'No Pin')
+        driver.execute_script("document.querySelector('.ag-body-horizontal-scroll-viewport').scrollLeft=0")
+        _wait_column(driver, column, ['100.25', '49.75', '150.00'])
+        unpinned = WebDriverWait(driver, 5).until(lambda browser: (
+            geometry if abs(geometry['header']['left'] - before['header']['left']) <= 1 else False
+        ) if (geometry := _column_geometry(browser, column)) else False)
+        case.parsed_output['unpinned'] = unpinned
+        assert unpinned['state']['pinned'] is None
+        assert unpinned['order'] == before['order']
+        assert abs(unpinned['header']['left'] - before['header']['left']) <= 1
+        assert abs(unpinned['header']['width'] - before['header']['width']) <= 1
+        copies['after_unpin'] = _copy_sales_units(driver)
+        assert driver.execute_script('return window.referenceEvidence.trace()') == trace
+        case.observed = 'Real header menu Pin Left/No Pin round trip; Q1 sales remained at fixed x during end scroll and appeared once per row/logical order; actual two-column header clipboard before/during/after pin preserved exact sales/units order and values; original order/geometry restored without SSRM requests'
