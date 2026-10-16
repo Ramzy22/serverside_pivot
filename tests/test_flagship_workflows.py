@@ -454,6 +454,31 @@ def test_selected_clipboard_oracle_checks_exact_bytes_and_parsed_cells():
 
 
 @pytest.mark.flagship
+def test_number_format_helper_uses_dialog_ok_and_commits_precision(tmp_path):
+    """Exercise the helper against real DOM events; no product behavior is mocked."""
+    if os.environ.get("PIVOT_RUN_FLAGSHIP_BROWSER_TESTS") != "1":
+        pytest.skip("Enable Chrome helper regression explicitly")
+    from urllib.parse import quote
+    from selenium import webdriver
+    from tests.flagship_browser_support import _selection_number_format
+    from tests.test_flagship_certification import _qualification_chrome_options
+
+    html = """<button data-testid="pivot-toolbar-format">Format</button>
+      <button title="Open number format options" onclick="document.querySelector('[role=dialog]').hidden=false">Number Format</button>
+      <div role="dialog" aria-label="Format Cells" hidden><input type="number" value="0">
+      <button onclick="document.querySelector('output').textContent=document.querySelector('input').value; this.parentElement.remove()">OK</button></div>
+      <output></output>"""
+    driver = webdriver.Chrome(options=_qualification_chrome_options(tmp_path))
+    try:
+        driver.get("data:text/html," + quote(html))
+        _selection_number_format(driver)
+        assert driver.find_element("css selector", "output").text == "2"
+        assert not driver.find_elements("css selector", '[role="dialog"]')
+    finally:
+        driver.quit()
+
+
+@pytest.mark.flagship
 @pytest.mark.parametrize("host", ["dash", "react", "streamlit"])
 @pytest.mark.parametrize("requirement", ["cell-selection.range-clear", "copy-selection.logical-cells",
                                          "copy-selection.display-order", "copy-selection.pinned-columns"])

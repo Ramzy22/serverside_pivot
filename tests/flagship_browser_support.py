@@ -69,6 +69,54 @@ def _selection_cell(driver, row_id, column_id):
         driver, f'[role="gridcell"][data-rowid="{row_id}"][data-colid="{column_id}"]')
 
 
+def _selection_rows(driver):
+    from tests.test_flagship_certification import _workspace_elements
+
+    return [{"id": cell.get_attribute("data-rowid"), "label": cell.text.strip()}
+            for cell in _workspace_elements(driver, '[role="gridcell"][data-colid="hierarchy"]')
+            if cell.is_displayed() and cell.text.strip() in ("Éclair", "München")]
+
+
+def _reorder_selection_column(driver, column, direction, first, second, observation):
+    from selenium.webdriver.common.keys import Keys
+    from selenium.webdriver.support.ui import WebDriverWait
+    from tests.test_flagship_certification import _qualification_leaf_order, _wait_for_visible_workspace_element
+
+    rows_before = _selection_rows(driver)
+    order_before = _qualification_leaf_order(driver)
+    header = _wait_for_visible_workspace_element(driver, f'[role="columnheader"][data-header-column-id="{column}"]')
+    # Element key input focuses this tabIndex=0 header without a sorting click.
+    header.send_keys(Keys.CONTROL + direction + Keys.NULL)
+    WebDriverWait(driver, 8).until(lambda current: (
+        _qualification_leaf_order(current).index(first) < _qualification_leaf_order(current).index(second)))
+    rows_after, order_after = _selection_rows(driver), _qualification_leaf_order(driver)
+    observation["actions"].append({"action": "header Ctrl+Arrow", "column": column,
+        "direction": "left" if direction == Keys.ARROW_LEFT else "right",
+        "columnOrderBefore": order_before, "columnOrderAfter": order_after,
+        "rowsBefore": rows_before, "rowsAfter": rows_after})
+    assert order_before != order_after, "Column move had no displayed effect"
+    assert rows_after == rows_before, "Column reorder unexpectedly sorted the displayed rows"
+
+
+def _wait_selection_sort(driver, checkpoint, column, observation):
+    from selenium.webdriver.support.ui import WebDriverWait
+    from tests.test_flagship_certification import _wait_for_visible_workspace_element
+
+    def correlated_response(current):
+        trace = current.execute_script("return window.__pivotRecoveryProbe || []")
+        requests = {entry["requestId"] for entry in trace if entry["phase"] == "request"
+                    and entry["kind"] == "data" and entry["at"] > checkpoint}
+        return next((entry["requestId"] for entry in trace if entry["phase"] == "response"
+                     and entry["kind"] == "data" and entry["status"] == "data"
+                     and entry["requestId"] in requests and entry["at"] > checkpoint), None)
+
+    request_id = WebDriverWait(driver, 12).until(correlated_response)
+    header = _wait_for_visible_workspace_element(driver, f'[role="columnheader"][data-header-column-id="{column}"]')
+    assert header.get_attribute("aria-sort") == "desc", "Descending sort indicator absent"
+    observation["actions"].append({"action": "sort completed", "column": column,
+        "indicator": header.get_attribute("aria-sort"), "requestId": request_id, "displayedRows": _selection_rows(driver)})
+
+
 def _select_rectangle(driver, row_ids, column_ids):
     from selenium.webdriver.common.action_chains import ActionChains
     from selenium.webdriver.support.ui import WebDriverWait
@@ -89,7 +137,7 @@ def _copy_selected(driver, cell, expected, observation):
     from tests.test_flagship_certification import _clipboard_text
 
     sentinel = "qualification clipboard checkpoint"
-    driver.execute_async_script(
+    assert driver.execute_async_script(
         "const done=arguments[arguments.length-1]; navigator.clipboard.writeText(arguments[0]).then(()=>done(true),()=>done(false));",
         sentinel)
     ActionChains(driver).context_click(cell).perform()
@@ -114,7 +162,7 @@ def _selection_number_format(driver):
     number.send_keys(Keys.CONTROL, "a")
     number.send_keys("2")
     for button in _workspace_elements(driver, dialog + ' button'):
-        if button.text.strip() == "Apply":
+        if button.text.strip() == "OK":
             button.click()
             break
     WebDriverWait(driver, 8).until(lambda current: not _workspace_elements(current, dialog))
@@ -158,6 +206,7 @@ def qualify_selected_clipboard(host: str, requirement: str) -> None:
         driver._pivot_artifact_binding, driver._pivot_artifact_host = binding, host
         driver._pivot_loaded_assets = {}
         driver.execute_cdp_cmd("Network.enable", {"maxTotalBufferSize": 50000000, "maxResourceBufferSize": 50000000})
+        driver.execute_cdp_cmd("Page.addScriptToEvaluateOnNewDocument", {"source": _PROBE_SCRIPT})
         driver.execute_cdp_cmd("Browser.grantPermissions", {
             "origin": _origin(_host_url(host)), "permissions": ["clipboardReadWrite", "clipboardSanitizedWrite"]})
         _switch_to_workspace(driver, host)
@@ -165,51 +214,60 @@ def qualify_selected_clipboard(host: str, requirement: str) -> None:
                       infrastructureUnavailable=False)
         wait = WebDriverWait(driver, 12)
         sales, units = "Q1_ventes_€_sum", "Q1_unités_sum"
-        row_ids = [cell.get_attribute("data-rowid") for cell in _workspace_elements(driver, '[data-colid="hierarchy"]')
-                   if cell.is_displayed() and cell.text.strip() in ("Éclair", "München")]
-        labels = {cell.get_attribute("data-rowid"): cell.text.strip()
-                  for cell in _workspace_elements(driver, '[data-colid="hierarchy"]') if cell.is_displayed()}
-        assert len(row_ids) == 2 and [labels[row] for row in row_ids] == ["Éclair", "München"], "Initial displayed fixture rows differ"
+        rows = _selection_rows(driver)
+        assert len(rows) == 2 and {row["label"] for row in rows} == {"Éclair", "München"}, "Initial displayed fixture row set differs"
         assert not any("São Paulo" in cell.text for cell in _workspace_elements(driver, '[data-colid="hierarchy"]'))
-        observation["initialRows"] = [{"id": row, "label": labels[row]} for row in row_ids]
+        observation["initialRows"] = rows
         columns = [units, sales]
         if requirement == "copy-selection.logical-cells":
-            header = _wait_for_visible_workspace_element(driver, f'[data-header-column-id="{sales}"]')
-            ActionChains(driver).click(header).key_down(Keys.CONTROL).send_keys(Keys.ARROW_LEFT).key_up(Keys.CONTROL).perform()
-            wait.until(lambda current: _qualification_leaf_order(current).index(sales) < _qualification_leaf_order(current).index(units))
+            _reorder_selection_column(driver, sales, Keys.ARROW_LEFT, sales, units, observation)
+            checkpoint = driver.execute_script("return performance.now()")
+            header = _wait_for_visible_workspace_element(driver, f'[role="columnheader"][data-header-column-id="{sales}"]')
+            header.send_keys(Keys.ALT + Keys.ARROW_DOWN + Keys.NULL)
+            observation["actions"].append("physical Q1 sales Alt+Down descending sort establishes Éclair then München")
+            _wait_selection_sort(driver, checkpoint, sales, observation)
+            wait.until(lambda current: [row["label"] for row in _selection_rows(current)] == ["Éclair", "München"])
             columns = [sales, units]
-            observation["actions"].append("physical Ctrl+Left moved Q1 sales before units; default whole-number format retained because raw copy is not exposed")
+            observation["actions"].append("default whole-number format retained because raw copy is not exposed")
         elif requirement in ("copy-selection.display-order", "copy-selection.pinned-columns"):
             _selection_number_format(driver)
             observation["actions"].append("set displayed numeric precision to 2dp")
         if requirement == "copy-selection.display-order":
             # Exercise a real move in both directions, ending in required units-first order.
-            header = _wait_for_visible_workspace_element(driver, f'[data-header-column-id="{units}"]')
-            ActionChains(driver).click(header).key_down(Keys.CONTROL).send_keys(Keys.ARROW_RIGHT).key_up(Keys.CONTROL).perform()
-            wait.until(lambda current: _qualification_leaf_order(current).index(sales) < _qualification_leaf_order(current).index(units))
-            header = _wait_for_visible_workspace_element(driver, f'[data-header-column-id="{units}"]')
-            ActionChains(driver).click(header).key_down(Keys.CONTROL).send_keys(Keys.ARROW_LEFT).key_up(Keys.CONTROL).perform()
-            header = _wait_for_visible_workspace_element(driver, '[data-header-column-id="hierarchy"]')
+            _reorder_selection_column(driver, units, Keys.ARROW_RIGHT, sales, units, observation)
+            _reorder_selection_column(driver, units, Keys.ARROW_LEFT, units, sales, observation)
+            header = _wait_for_visible_workspace_element(driver, '[role="columnheader"][data-header-column-id="hierarchy"]')
+            checkpoint = driver.execute_script("return performance.now()")
             ActionChains(driver).context_click(header).perform()
             ActionChains(driver).move_to_element(_selection_menu(driver, "Sort")).perform()
             _selection_menu(driver, "Descending").click()
             observation["actions"].append("physical hierarchy Sort > Descending")
-            wait.until(lambda current: [cell.text.strip() for cell in _workspace_elements(current, '[data-colid="hierarchy"]')
-                       if cell.is_displayed() and cell.text.strip() in ("Éclair", "München")] == ["München", "Éclair"])
-            row_ids.reverse()
+            _wait_selection_sort(driver, checkpoint, "hierarchy", observation)
+        rows = _selection_rows(driver)
+        row_ids = [row["id"] for row in rows]
+        observation["selectedRows"] = rows
         if requirement == "copy-selection.pinned-columns":
-            header = _wait_for_visible_workspace_element(driver, f'[data-header-column-id="{units}"]')
+            header = _wait_for_visible_workspace_element(driver, f'[role="columnheader"][data-header-column-id="{units}"]')
             ActionChains(driver).context_click(header).perform()
             ActionChains(driver).move_to_element(_selection_menu(driver, "Pin")).perform()
             _selection_menu(driver, "Pin Left").click()
+            wait.until(lambda current: _wait_for_visible_workspace_element(current,
+                f'[role="columnheader"][data-header-column-id="{units}"]').get_attribute("data-pinned") == "left")
+            observation["pinnedHeader"] = {"column": units, "side": "left"}
             scroller = _wait_for_visible_workspace_element(driver, '[data-pivot-scroll-container]')
+            def left(column):
+                return driver.execute_script("return arguments[0].getBoundingClientRect().left", _selection_cell(driver, row_ids[0], column))
+            pinned_before, center_before = left(units), left(sales)
+            scroll_before = driver.execute_script("return arguments[0].scrollLeft", scroller)
             # A native wheel action makes horizontal scrolling part of the real interaction.
             from selenium.webdriver.common.actions.wheel_input import ScrollOrigin
-            ActionChains(driver).scroll_from_origin(ScrollOrigin.from_element(scroller), 70, 0).perform()
-            wait.until(lambda current: current.execute_script("return arguments[0].scrollLeft", scroller) > 0)
-            before = driver.execute_script("return arguments[0].getBoundingClientRect().left", _selection_cell(driver, row_ids[0], units))
+            ActionChains(driver).scroll_from_origin(ScrollOrigin.from_element(scroller), 24, 0).perform()
+            wait.until(lambda current: current.execute_script("return arguments[0].scrollLeft", scroller) > scroll_before)
+            assert abs(left(units) - pinned_before) <= 1, "Pinned units moved with horizontal scroll"
+            assert left(sales) < center_before - 1, "Unpinned sales did not scroll"
             observation["scrollLeft"] = driver.execute_script("return arguments[0].scrollLeft", scroller)
-            observation["pinnedCellLeft"] = before
+            observation["pinGeometry"] = {"pinnedBefore": pinned_before, "pinnedAfter": left(units),
+                                          "centerBefore": center_before, "centerAfter": left(sales)}
             result["horizontalScrollVerified"] = True
         order = _qualification_leaf_order(driver)
         observation["displayedColumnIds"] = order
@@ -222,12 +280,16 @@ def qualify_selected_clipboard(host: str, requirement: str) -> None:
         elif requirement == "copy-selection.display-order":
             expected = [["3.00", "49.75"], ["2.00", "100.25"]]
         elif requirement == "copy-selection.pinned-columns":
-            expected = [["2.00", "100.25"], ["3.00", "49.75"]]
+            literal = {"Éclair": ["2.00", "100.25"], "München": ["3.00", "49.75"]}
+            expected = [literal[row["label"]] for row in rows]
         else:
-            expected = [["2", "100"], ["3", "50"]]
+            literal = {"Éclair": ["2", "100"], "München": ["3", "50"]}
+            expected = [literal[row["label"]] for row in rows]
         observation["expectedClipboardCells"] = expected
         _copy_selected(driver, _selection_cell(driver, row_ids[0], columns[0]), expected, observation)
         result["clipboardBytesVerified"] = True
+        if requirement == "copy-selection.display-order":
+            assert [row["label"] for row in rows] == ["München", "Éclair"], "Descending displayed region order differs from the contract"
         if requirement == "cell-selection.range-clear":
             _click_workspace_control(driver, '[data-pivot-status-action="clear-selection"]')
             wait.until(lambda current: not _selection_ids(current))
@@ -256,6 +318,10 @@ def qualify_selected_clipboard(host: str, requirement: str) -> None:
                 screenshot = directory / "final.png"
                 driver.save_screenshot(str(screenshot))
                 paths.append(str(screenshot))
+                observation["runtimeTrace"] = driver.execute_script("return window.__pivotRecoveryProbe || []")
+            except Exception as error:
+                result["result"] = "blocked"
+                diagnostic += f"; evidence collection: {type(error).__name__}"
             finally:
                 driver.quit()
         observation.update(diagnostic=diagnostic, result=result)
