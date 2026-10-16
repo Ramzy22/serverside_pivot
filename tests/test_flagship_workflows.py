@@ -453,6 +453,17 @@ def test_selected_clipboard_oracle_checks_exact_bytes_and_parsed_cells():
         ["100.25", "2"], ["49.75", "3"]]
 
 
+def test_selected_clipboard_oracle_checks_native_windows_bytes_without_normalizing_cells():
+    from tests.flagship_browser_support import assert_selected_clipboard
+
+    body = [["100.25", "2"], ["49.75", "3"]]
+    assert assert_selected_clipboard("100.25\t2\r\n49.75\t3", body, line_separator="\r\n") == body
+    for wrong in ("100.25\t2\n49.75\t3", "100.25\t2\r\n49.75\t3\r\n",
+                  "100.25\t2\r\n49.75\t3\t", "100.25\t2\r\n49.75\n3"):
+        with pytest.raises(AssertionError):
+            assert_selected_clipboard(wrong, body, line_separator="\r\n")
+
+
 def test_clipboard_monitor_rejects_a_write_after_the_old_single_read_window():
     import time
     from tests.flagship_browser_support import assert_clipboard_stable
@@ -474,7 +485,8 @@ def test_clipboard_monitor_observes_the_whole_interval():
 
 
 @pytest.mark.flagship
-def test_number_format_helper_uses_dialog_ok_and_commits_precision(tmp_path):
+@pytest.mark.parametrize("initial_format_open", [True, False])
+def test_number_format_helper_uses_dialog_ok_and_commits_precision(tmp_path, initial_format_open):
     """Exercise the helper against real DOM events; no product behavior is mocked."""
     if os.environ.get("PIVOT_RUN_FLAGSHIP_BROWSER_TESTS") != "1":
         pytest.skip("Enable Chrome helper regression explicitly")
@@ -483,11 +495,11 @@ def test_number_format_helper_uses_dialog_ok_and_commits_precision(tmp_path):
     from tests.flagship_browser_support import _selection_number_format
     from tests.test_flagship_certification import _qualification_chrome_options
 
-    html = """<button data-testid="pivot-toolbar-format">Format</button>
-      <button title="Open number format options" onclick="document.querySelector('[role=dialog]').hidden=false">Number Format</button>
+    html = """<button data-testid="pivot-toolbar-format" onclick="const options=document.querySelector('[title]'); options.hidden=!options.hidden">Format</button>
+      <button title="Open number format options" INITIAL_HIDDEN onclick="document.querySelector('[role=dialog]').hidden=false">Number Format</button>
       <div role="dialog" aria-label="Format Cells" hidden><input type="number" value="0">
       <button onclick="document.querySelector('output').textContent=document.querySelector('input').value; this.parentElement.remove()">OK</button></div>
-      <output></output>"""
+      <output></output>""".replace("INITIAL_HIDDEN", "" if initial_format_open else "hidden")
     driver = webdriver.Chrome(options=_qualification_chrome_options(tmp_path))
     try:
         driver.get("data:text/html," + quote(html))

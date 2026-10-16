@@ -36,9 +36,10 @@ _SAFE_OBSERVATIONS = frozenset({
 })
 
 
-def assert_selected_clipboard(text: str, expected: list[list[str]]) -> list[list[str]]:
+def assert_selected_clipboard(text: str, expected: list[list[str]], *, line_separator="\n") -> list[list[str]]:
     """The oracle is literal, including separators and absence of headers/extra rows."""
-    exact = "\n".join("\t".join(row) for row in expected)
+    assert line_separator in ("\n", "\r\n"), "Unsupported clipboard line separator"
+    exact = line_separator.join("\t".join(row) for row in expected)
     assert text == exact, "Selected clipboard bytes differ from the literal fixture oracle"
     parsed = list(csv.reader(io.StringIO(text), delimiter="\t"))
     assert parsed == expected, "Selected clipboard logical cells differ"
@@ -173,11 +174,10 @@ def _copy_selected(driver, cell, expected, observation):
         value if (value := _clipboard_text(current)) != sentinel else False))
     observation["clipboardText"] = text
     observation["parsedTSV"] = list(csv.reader(io.StringIO(text), delimiter="\t"))
-    assert_selected_clipboard(text, expected)
+    assert_selected_clipboard(text, expected, line_separator=observation["clipboardLineSeparator"])
 
 
-def _selection_number_format(driver, observation=None):
-    """Explicit two-decimal presentation for order/pinning; never claim raw copy."""
+def _open_selection_number_format(driver, observation=None):
     from selenium.webdriver.common.keys import Keys
     from selenium.webdriver.support.ui import WebDriverWait
     from tests.test_flagship_certification import _workspace_elements, _wait_for_visible_workspace_element
@@ -192,15 +192,27 @@ def _selection_number_format(driver, observation=None):
           return {testId:el?.getAttribute('data-testid'),title:el?.getAttribute('title'),text:el?.textContent};
         """)
     button = _wait_for_visible_workspace_element(driver, '[data-testid="pivot-toolbar-format"]')
-    steps.append({"before": "toolbar activation", "formatOptionsVisible": any(
-        item.is_displayed() for item in _workspace_elements(driver, '[title="Open number format options"]'))})
-    button.send_keys(Keys.SPACE)
-    steps.append({"after": "toolbar Space", "focusedControl": active_control()})
+    already_open = any(item.is_displayed() for item in _workspace_elements(driver, '[title="Open number format options"]'))
+    steps.append({"before": "toolbar activation", "formatOptionsVisible": already_open})
+    if not already_open:
+        button.send_keys(Keys.SPACE)
+        steps.append({"after": "toolbar Space", "focusedControl": active_control()})
     options = _wait_for_visible_workspace_element(driver, '[title="Open number format options"]')
     steps.append({"formatBandVisible": options.is_displayed()})
     options.send_keys(Keys.SPACE)
     steps.append({"after": "options Space", "focusedControl": active_control()})
     dialog = '[role="dialog"][aria-label="Format Cells"]'
+    _wait_for_visible_workspace_element(driver, dialog)
+    return dialog
+
+
+def _selection_number_format(driver, observation=None):
+    """Explicit two-decimal presentation for order/pinning; never claim raw copy."""
+    from selenium.webdriver.common.keys import Keys
+    from selenium.webdriver.support.ui import WebDriverWait
+    from tests.test_flagship_certification import _workspace_elements, _wait_for_visible_workspace_element
+
+    dialog = _open_selection_number_format(driver, observation)
     number = _wait_for_visible_workspace_element(driver, dialog + ' input[type="number"]')
     number.send_keys(Keys.CONTROL, "a")
     number.send_keys("2")
@@ -208,6 +220,23 @@ def _selection_number_format(driver, observation=None):
         if button.text.strip() == "OK":
             button.send_keys(Keys.SPACE)
             break
+    WebDriverWait(driver, 8).until(lambda current: not _workspace_elements(current, dialog))
+
+
+def _inspect_selection_number_format(driver, observation):
+    """Record actual UI categories/precision without applying a new format."""
+    from selenium.webdriver.common.keys import Keys
+    from selenium.webdriver.support.ui import WebDriverWait
+    from tests.test_flagship_certification import _workspace_elements, _wait_for_visible_workspace_element
+
+    dialog = _open_selection_number_format(driver, observation)
+    observation["rawCopyFormatOptions"] = {
+        "dialogText": _wait_for_visible_workspace_element(driver, dialog).text,
+        "buttons": [button.text for button in _workspace_elements(driver, dialog + " button")],
+        "numberInputs": [{name: field.get_attribute(name) for name in ("value", "min", "max", "step")}
+                         for field in _workspace_elements(driver, dialog + ' input[type="number"]')],
+    }
+    _wait_for_visible_workspace_element(driver, dialog + ' button[title="Close"]').send_keys(Keys.SPACE)
     WebDriverWait(driver, 8).until(lambda current: not _workspace_elements(current, dialog))
 
 
@@ -282,6 +311,8 @@ def qualify_selected_clipboard(host: str, requirement: str) -> None:
         _switch_to_workspace(driver, host)
         result.update(result="failed", browser=f"{driver.capabilities['browserName']} {driver.capabilities['browserVersion']}",
                       infrastructureUnavailable=False)
+        observation["browserPlatform"] = driver.capabilities.get("platformName")
+        observation["clipboardLineSeparator"] = "\r\n" if str(driver.capabilities.get("platformName", "")).lower() == "windows" else "\n"
         wait = WebDriverWait(driver, 12)
         sales, units = "Q1_ventes_€_sum", "Q1_unités_sum"
         rows = _selection_rows(driver)
@@ -303,6 +334,7 @@ def qualify_selected_clipboard(host: str, requirement: str) -> None:
             wait.until(lambda current: [row["label"] for row in _selection_rows(current)] == ["Éclair", "München"])
             columns = [sales, units]
             observation["actions"].append("default whole-number format retained because raw copy is not exposed")
+            _inspect_selection_number_format(driver, observation)
         elif requirement in ("copy-selection.display-order", "copy-selection.pinned-columns"):
             _selection_number_format(driver, observation)
             observation["actions"].append("set displayed numeric precision to 2dp")
@@ -376,7 +408,7 @@ def qualify_selected_clipboard(host: str, requirement: str) -> None:
             positive = WebDriverWait(driver, SELECTION_COPY_TIMEOUT).until(lambda current: (
                 value if (value := _clipboard_text(current)) != checkpoint else False))
             observation["nativePositiveClipboard"] = positive
-            assert_selected_clipboard(positive, expected)
+            assert_selected_clipboard(positive, expected, line_separator=observation["clipboardLineSeparator"])
             result["nativeKeyboardCopyVerified"] = True
             _wait_for_visible_workspace_element(driver, '[data-pivot-status-action="clear-selection"]').send_keys(Keys.SPACE)
             wait.until(lambda current: not _selection_ids(current))
