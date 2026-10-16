@@ -9,6 +9,8 @@ from __future__ import annotations
 
 from dataclasses import asdict
 import hashlib
+import csv
+import io
 import json
 import os
 from pathlib import Path
@@ -25,7 +27,244 @@ _SAFE_OBSERVATIONS = frozenset({
     "fixtureTotalsVerified", "staleCellsAbsent", "newDownloads", "networkFailureCount",
     "infrastructureUnavailable", "actionCompleted", "lateResponseAbsent",
     "lateResponseUnverified", "staleResponseUnverified", "privateExceptionHidden",
+    "logicalCellsVerified", "clipboardBytesVerified", "displayOrderVerified",
+    "pinnedNoDuplicates", "horizontalScrollVerified", "rangeCleared", "clearedCopyAbsent",
+    "selectedCellCount", "rawCopyUnavailable",
 })
+
+
+def assert_selected_clipboard(text: str, expected: list[list[str]]) -> list[list[str]]:
+    """The oracle is literal, including separators and absence of headers/extra rows."""
+    exact = "\n".join("\t".join(row) for row in expected)
+    assert text == exact, "Selected clipboard bytes differ from the literal fixture oracle"
+    parsed = list(csv.reader(io.StringIO(text), delimiter="\t"))
+    assert parsed == expected, "Selected clipboard logical cells differ"
+    return parsed
+
+
+def _selection_ids(driver):
+    from tests.test_flagship_certification import _workspace_elements
+
+    # Keep the list as well as the set: duplicated pinned DOM nodes must not
+    # disappear silently in a set comparison.
+    return [(cell.get_attribute("data-rowid"), cell.get_attribute("data-colid"))
+            for cell in _workspace_elements(driver, '[role="gridcell"][aria-selected="true"]')
+            if cell.is_displayed()]
+
+
+def _selection_menu(driver, label):
+    from selenium.webdriver.support.ui import WebDriverWait
+    from tests.test_flagship_certification import _workspace_elements
+
+    return WebDriverWait(driver, 8).until(lambda current: next((
+        item for item in _workspace_elements(current, '[role="menuitem"]')
+        if item.is_displayed() and item.is_enabled() and item.text.strip() == label
+    ), False))
+
+
+def _selection_cell(driver, row_id, column_id):
+    from tests.test_flagship_certification import _wait_for_visible_workspace_element
+
+    return _wait_for_visible_workspace_element(
+        driver, f'[role="gridcell"][data-rowid="{row_id}"][data-colid="{column_id}"]')
+
+
+def _select_rectangle(driver, row_ids, column_ids):
+    from selenium.webdriver.common.action_chains import ActionChains
+    from selenium.webdriver.support.ui import WebDriverWait
+
+    first = _selection_cell(driver, row_ids[0], column_ids[0])
+    last = _selection_cell(driver, row_ids[-1], column_ids[-1])
+    ActionChains(driver).move_to_element(first).click_and_hold().move_to_element(last).release().perform()
+    expected = {(row, col) for row in row_ids for col in column_ids}
+    WebDriverWait(driver, 8).until(lambda current: set(_selection_ids(current)) == expected)
+    ids = _selection_ids(driver)
+    assert len(ids) == len(expected), "Pinned cells are selected more than once in the displayed DOM"
+    return ids
+
+
+def _copy_selected(driver, cell, expected, observation):
+    from selenium.webdriver.common.action_chains import ActionChains
+    from selenium.webdriver.support.ui import WebDriverWait
+    from tests.test_flagship_certification import _clipboard_text
+
+    sentinel = "qualification clipboard checkpoint"
+    driver.execute_async_script(
+        "const done=arguments[arguments.length-1]; navigator.clipboard.writeText(arguments[0]).then(()=>done(true),()=>done(false));",
+        sentinel)
+    ActionChains(driver).context_click(cell).perform()
+    _selection_menu(driver, "Copy Selection").click()
+    text = WebDriverWait(driver, 8).until(lambda current: (
+        value if (value := _clipboard_text(current)) != sentinel else False))
+    observation["clipboardText"] = text
+    observation["parsedTSV"] = list(csv.reader(io.StringIO(text), delimiter="\t"))
+    assert_selected_clipboard(text, expected)
+
+
+def _selection_number_format(driver):
+    """Explicit two-decimal presentation for order/pinning; never claim raw copy."""
+    from selenium.webdriver.common.keys import Keys
+    from selenium.webdriver.support.ui import WebDriverWait
+    from tests.test_flagship_certification import _workspace_elements, _wait_for_visible_workspace_element
+
+    _click_workspace_control(driver, '[data-testid="pivot-toolbar-format"]')
+    _click_workspace_control(driver, '[title="Open number format options"]')
+    dialog = '[role="dialog"][aria-label="Format Cells"]'
+    number = _wait_for_visible_workspace_element(driver, dialog + ' input[type="number"]')
+    number.send_keys(Keys.CONTROL, "a")
+    number.send_keys("2")
+    for button in _workspace_elements(driver, dialog + ' button'):
+        if button.text.strip() == "Apply":
+            button.click()
+            break
+    WebDriverWait(driver, 8).until(lambda current: not _workspace_elements(current, dialog))
+
+
+def qualify_selected_clipboard(host: str, requirement: str) -> None:
+    """Physical selection/menu/keyboard actions against fresh installed hosts.
+
+    A clipboard read is an OS/browser read. No copy event, clipboard method,
+    React state, runtime payload, or product handler is replaced by this case.
+    """
+    import pytest
+
+    if os.environ.get("PIVOT_RUN_FLAGSHIP_BROWSER_TESTS") != "1":
+        pytest.skip("Enable installed flagship browser qualification explicitly")
+    from scripts.flagship_artifacts import load_artifact_binding
+    from tests.test_flagship_certification import (
+        _host_url, _origin, _qualification_chrome_options, _switch_to_workspace,
+        _workspace_elements, _qualification_leaf_order, _wait_for_visible_workspace_element,
+        _clipboard_text, _verify_release_asset_batch,
+    )
+    from selenium import webdriver
+    from selenium.webdriver.common.action_chains import ActionChains
+    from selenium.webdriver.common.keys import Keys
+    from selenium.webdriver.support.ui import WebDriverWait
+
+    binding = load_artifact_binding(Path(os.environ["PIVOT_FLAGSHIP_ARTIFACT_BINDING"]))
+    run_id = os.environ["PIVOT_FLAGSHIP_RUN_ID"]
+    directory = Path(os.environ["PIVOT_FLAGSHIP_EVIDENCE_ROOT"]) / requirement / host
+    assert ("runs", run_id) in tuple(zip(directory.parts, directory.parts[1:]))
+    directory.mkdir(parents=True, exist_ok=True)
+    downloads = directory / "downloads"
+    downloads.mkdir(exist_ok=True)
+    driver = None
+    result = {"result": "blocked", "browser": "unavailable", "infrastructureUnavailable": True}
+    observation = {"requirement": requirement, "actions": [], "expectedRawBody": [["100.25", "2"], ["49.75", "3"]]}
+    diagnostic = ""
+    paths = []
+    try:
+        driver = webdriver.Chrome(options=_qualification_chrome_options(downloads))
+        driver._pivot_artifact_binding, driver._pivot_artifact_host = binding, host
+        driver._pivot_loaded_assets = {}
+        driver.execute_cdp_cmd("Network.enable", {"maxTotalBufferSize": 50000000, "maxResourceBufferSize": 50000000})
+        driver.execute_cdp_cmd("Browser.grantPermissions", {
+            "origin": _origin(_host_url(host)), "permissions": ["clipboardReadWrite", "clipboardSanitizedWrite"]})
+        _switch_to_workspace(driver, host)
+        result.update(result="failed", browser=f"{driver.capabilities['browserName']} {driver.capabilities['browserVersion']}",
+                      infrastructureUnavailable=False)
+        wait = WebDriverWait(driver, 12)
+        sales, units = "Q1_ventes_€_sum", "Q1_unités_sum"
+        row_ids = [cell.get_attribute("data-rowid") for cell in _workspace_elements(driver, '[data-colid="hierarchy"]')
+                   if cell.is_displayed() and cell.text.strip() in ("Éclair", "München")]
+        labels = {cell.get_attribute("data-rowid"): cell.text.strip()
+                  for cell in _workspace_elements(driver, '[data-colid="hierarchy"]') if cell.is_displayed()}
+        assert len(row_ids) == 2 and [labels[row] for row in row_ids] == ["Éclair", "München"], "Initial displayed fixture rows differ"
+        assert not any("São Paulo" in cell.text for cell in _workspace_elements(driver, '[data-colid="hierarchy"]'))
+        observation["initialRows"] = [{"id": row, "label": labels[row]} for row in row_ids]
+        columns = [units, sales]
+        if requirement == "copy-selection.logical-cells":
+            header = _wait_for_visible_workspace_element(driver, f'[data-header-column-id="{sales}"]')
+            ActionChains(driver).click(header).key_down(Keys.CONTROL).send_keys(Keys.ARROW_LEFT).key_up(Keys.CONTROL).perform()
+            wait.until(lambda current: _qualification_leaf_order(current).index(sales) < _qualification_leaf_order(current).index(units))
+            columns = [sales, units]
+            observation["actions"].append("physical Ctrl+Left moved Q1 sales before units; default whole-number format retained because raw copy is not exposed")
+        elif requirement in ("copy-selection.display-order", "copy-selection.pinned-columns"):
+            _selection_number_format(driver)
+            observation["actions"].append("set displayed numeric precision to 2dp")
+        if requirement == "copy-selection.display-order":
+            # Exercise a real move in both directions, ending in required units-first order.
+            header = _wait_for_visible_workspace_element(driver, f'[data-header-column-id="{units}"]')
+            ActionChains(driver).click(header).key_down(Keys.CONTROL).send_keys(Keys.ARROW_RIGHT).key_up(Keys.CONTROL).perform()
+            wait.until(lambda current: _qualification_leaf_order(current).index(sales) < _qualification_leaf_order(current).index(units))
+            header = _wait_for_visible_workspace_element(driver, f'[data-header-column-id="{units}"]')
+            ActionChains(driver).click(header).key_down(Keys.CONTROL).send_keys(Keys.ARROW_LEFT).key_up(Keys.CONTROL).perform()
+            header = _wait_for_visible_workspace_element(driver, '[data-header-column-id="hierarchy"]')
+            ActionChains(driver).context_click(header).perform()
+            ActionChains(driver).move_to_element(_selection_menu(driver, "Sort")).perform()
+            _selection_menu(driver, "Descending").click()
+            observation["actions"].append("physical hierarchy Sort > Descending")
+            wait.until(lambda current: [cell.text.strip() for cell in _workspace_elements(current, '[data-colid="hierarchy"]')
+                       if cell.is_displayed() and cell.text.strip() in ("Éclair", "München")] == ["München", "Éclair"])
+            row_ids.reverse()
+        if requirement == "copy-selection.pinned-columns":
+            header = _wait_for_visible_workspace_element(driver, f'[data-header-column-id="{units}"]')
+            ActionChains(driver).context_click(header).perform()
+            ActionChains(driver).move_to_element(_selection_menu(driver, "Pin")).perform()
+            _selection_menu(driver, "Pin Left").click()
+            scroller = _wait_for_visible_workspace_element(driver, '[data-pivot-scroll-container]')
+            # A native wheel action makes horizontal scrolling part of the real interaction.
+            from selenium.webdriver.common.actions.wheel_input import ScrollOrigin
+            ActionChains(driver).scroll_from_origin(ScrollOrigin.from_element(scroller), 70, 0).perform()
+            wait.until(lambda current: current.execute_script("return arguments[0].scrollLeft", scroller) > 0)
+            before = driver.execute_script("return arguments[0].getBoundingClientRect().left", _selection_cell(driver, row_ids[0], units))
+            observation["scrollLeft"] = driver.execute_script("return arguments[0].scrollLeft", scroller)
+            observation["pinnedCellLeft"] = before
+            result["horizontalScrollVerified"] = True
+        order = _qualification_leaf_order(driver)
+        observation["displayedColumnIds"] = order
+        assert order.index(columns[0]) < order.index(columns[1]), "Displayed columns are in the wrong order"
+        observation["selectedIds"] = _select_rectangle(driver, row_ids, columns)
+        result.update(logicalCellsVerified=True, selectedCellCount=4)
+        if requirement == "copy-selection.logical-cells":
+            expected = [["100.25", "2"], ["49.75", "3"]]
+            result["rawCopyUnavailable"] = True
+        elif requirement == "copy-selection.display-order":
+            expected = [["3.00", "49.75"], ["2.00", "100.25"]]
+        elif requirement == "copy-selection.pinned-columns":
+            expected = [["2.00", "100.25"], ["3.00", "49.75"]]
+        else:
+            expected = [["2", "100"], ["3", "50"]]
+        observation["expectedClipboardCells"] = expected
+        _copy_selected(driver, _selection_cell(driver, row_ids[0], columns[0]), expected, observation)
+        result["clipboardBytesVerified"] = True
+        if requirement == "cell-selection.range-clear":
+            _click_workspace_control(driver, '[data-pivot-status-action="clear-selection"]')
+            wait.until(lambda current: not _selection_ids(current))
+            result["rangeCleared"] = True
+            # A native copy after clearing must not replay the previous range.
+            sentinel = "clipboard after clear"
+            assert driver.execute_async_script("const done=arguments[arguments.length-1]; navigator.clipboard.writeText(arguments[0]).then(()=>done(true),()=>done(false));", sentinel)
+            ActionChains(driver).key_down(Keys.CONTROL).send_keys("c").key_up(Keys.CONTROL).perform()
+            import time
+            time.sleep(0.25)
+            observation["clipboardAfterClear"] = _clipboard_text(driver)
+            assert observation["clipboardAfterClear"] == sentinel, "Cleared selection was reused by copy"
+            result["clearedCopyAbsent"] = True
+        result.update(result="passed", displayOrderVerified=True,
+                      pinnedNoDuplicates=requirement == "copy-selection.pinned-columns")
+    except Exception as error:
+        frame = traceback.extract_tb(error.__traceback__)[-1]
+        diagnostic = f"{type(error).__name__} at {Path(frame.filename).name}:{frame.lineno}: {error}"
+    finally:
+        if driver is not None:
+            try:
+                _verify_release_asset_batch(driver, require_assets=True)
+                result["loadedAssetSha256"] = dict(driver._pivot_loaded_assets)
+                observation["finalSelectedIds"] = _selection_ids(driver)
+                observation["finalVisibleRows"] = [cell.text for cell in _workspace_elements(driver, '[data-colid="hierarchy"]') if cell.is_displayed()]
+                screenshot = directory / "final.png"
+                driver.save_screenshot(str(screenshot))
+                paths.append(str(screenshot))
+            finally:
+                driver.quit()
+        observation.update(diagnostic=diagnostic, result=result)
+        evidence = directory / "observation.json"
+        evidence.write_text(json.dumps(observation, ensure_ascii=False, indent=2), encoding="utf-8")
+        paths.append(str(evidence))
+        result["evidence_paths"] = paths
+        record_case(requirement, host, result, directory)
+    assert result["result"] == "passed", f"{host} {requirement}: {diagnostic}; evidence: {directory}"
 
 
 def assert_cancellation_lifetime(samples: Sequence[Mapping[str, object]]) -> None:

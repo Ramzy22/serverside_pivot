@@ -435,3 +435,29 @@ def test_flagship_runtime_error_recovery(host, installed_workflow_hosts):
     from tests.flagship_browser_support import qualify_runtime_recovery
 
     qualify_runtime_recovery(host)
+
+
+@pytest.mark.parametrize("text", ["100\t2\n50\t3", "100.25\t2\t2\n49.75\t3\t3",
+                                      "49.75\t3\n100.25\t2", "100.25\t2\n49.75\t3\n"])
+def test_selected_clipboard_oracle_rejects_rounding_duplicates_order_and_extra_rows(text):
+    from tests.flagship_browser_support import assert_selected_clipboard
+
+    with pytest.raises(AssertionError):
+        assert_selected_clipboard(text, [["100.25", "2"], ["49.75", "3"]])
+
+
+def test_selected_clipboard_oracle_checks_exact_bytes_and_parsed_cells():
+    from tests.flagship_browser_support import assert_selected_clipboard
+
+    assert assert_selected_clipboard("100.25\t2\n49.75\t3", [["100.25", "2"], ["49.75", "3"]]) == [
+        ["100.25", "2"], ["49.75", "3"]]
+
+
+@pytest.mark.flagship
+@pytest.mark.parametrize("host", ["dash", "react", "streamlit"])
+@pytest.mark.parametrize("requirement", ["cell-selection.range-clear", "copy-selection.logical-cells",
+                                         "copy-selection.display-order", "copy-selection.pinned-columns"])
+def test_flagship_selected_clipboard(host, requirement, installed_workflow_hosts):
+    from tests.flagship_browser_support import qualify_selected_clipboard
+
+    qualify_selected_clipboard(host, requirement)
