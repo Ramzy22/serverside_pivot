@@ -19,7 +19,7 @@ type ReferenceConfig = {
     sideBar: { toolPanels: string[] }; cacheBlockSize: number;
     serverSidePivotResultFieldSeparator: string; suppressAggFuncInHeader: boolean;
     defaultColDef: { sortable: boolean; filter: 'agTextColumnFilter'; resizable: boolean; minWidth: number; useValueFormatterForExport: boolean };
-    autoGroupColumnDef: { headerName: string; minWidth: number; pinned: 'left' };
+    autoGroupColumnDef: { headerName: string; minWidth: number; pinned: 'left'; filter: 'agGroupColumnFilter' };
     valueFormatter: Intl.NumberFormatOptions & { locale: string };
   };
 };
@@ -94,6 +94,14 @@ Object.assign(window, {
 const referenceEvidence = {
   get ready() { return grid.querySelector('[role="gridcell"]') !== null && datasourceTrace.some((entry) => entry.response); },
   trace: () => structuredClone(datasourceTrace),
+  columnModel: () => ({
+    filterModel: structuredClone(api.getState().filter?.filterModel ?? {}),
+    values: api.getValueColumns().map((column) => ({
+      field: column.getColDef().field,
+      aggFunc: column.getAggFunc(),
+    })),
+    pivots: api.getPivotColumns().map((column) => column.getColId()),
+  }),
   displayedRows: () => Array.from({ length: api.getDisplayedRowCount() }, (_, index) => {
     const node = api.getDisplayedRowAtIndex(index);
     return {

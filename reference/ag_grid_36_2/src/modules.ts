@@ -6,7 +6,7 @@ import {
   CellSelectionModule, ClipboardModule, ColumnMenuModule, ColumnsToolPanelModule,
   ContextMenuModule, ExcelExportModule, FiltersToolPanelModule, IntegratedChartsModule,
   PivotModule, RowGroupingModule, RowGroupingPanelModule, ServerSideRowModelModule,
-  SetFilterModule,
+  SetFilterModule, GroupFilterModule,
 } from 'ag-grid-enterprise';
 import { AgChartsEnterpriseModule } from 'ag-charts-enterprise';
 
@@ -15,7 +15,7 @@ const referenceModules = [
   ClipboardModule, CsvExportModule, ExcelExportModule,
   IntegratedChartsModule.with(AgChartsEnterpriseModule), GridStateModule,
   ColumnMenuModule, ContextMenuModule, ColumnsToolPanelModule, FiltersToolPanelModule,
-  RowGroupingPanelModule, SetFilterModule, TextFilterModule, NumberFilterModule,
+  RowGroupingPanelModule, SetFilterModule, GroupFilterModule, TextFilterModule, NumberFilterModule,
   ColumnApiModule,
 ];
 

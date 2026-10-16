@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { ModuleRegistry } from 'ag-grid-community';
-import { FiltersToolPanelModule } from 'ag-grid-enterprise';
+import { FiltersToolPanelModule, GroupFilterModule } from 'ag-grid-enterprise';
 import { registerReferenceModules } from '../src/modules.ts';
 
 test('the configured Filters side panel module is passed to the real AG Grid registry', () => {
@@ -18,4 +18,5 @@ test('the configured Filters side panel module is passed to the real AG Grid reg
   }
   assert.ok(passed.includes(FiltersToolPanelModule));
   assert.ok(passed.some((module) => module.moduleName === FiltersToolPanelModule.moduleName));
+  assert.ok(passed.includes(GroupFilterModule), 'Grouped hidden fields must have a real header-filter UI');
 });

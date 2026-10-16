@@ -9,6 +9,7 @@ import pytest
 from selenium.webdriver.support.ui import WebDriverWait
 from selenium.webdriver.common.action_chains import ActionChains
 from selenium.webdriver.common.by import By
+from selenium.webdriver.common.keys import Keys
 
 from tests.flagship_reference_support import DEFAULT_EVIDENCE, reference_case, start_reference_run
 
@@ -40,6 +41,154 @@ def _wait_column(driver, column, values):
     return WebDriverWait(driver, 10).until(lambda browser: (
         cells if sorted((cell["rowIndex"], cell["text"]) for cell in cells if cell["colId"] == column) == expected else False
     ) if (cells := browser.execute_script("return window.referenceEvidence.visibleCells()")) else False)
+
+
+def _column_model(driver):
+    assert driver.execute_script("return typeof window.referenceEvidence.columnModel === 'function'"), (
+        "Reference must expose active filter, pivot and aggregate column model for observation"
+    )
+    return driver.execute_script("return window.referenceEvidence.columnModel()")
+
+
+def _wait_request(driver, count):
+    return WebDriverWait(driver, 10).until(lambda browser: (
+        trace[-1] if len(trace) > count and "response" in trace[-1] else False
+    ) if (trace := browser.execute_script("return window.referenceEvidence.trace()")) else False)
+
+
+def _q1_header_slots(driver):
+    slots = driver.execute_script("""
+      return ['Q1|ventes_€', 'Q1|unités', 'Q1|écart'].map(id => {
+        const header = [...document.querySelectorAll('.ag-header-cell')].find(e => e.getAttribute('col-id') === id);
+        const cell = [...document.querySelectorAll('.ag-row[row-index="0"] [role="gridcell"]')].find(e => e.getAttribute('col-id') === id);
+        if (!header || !cell) return null;
+        const h = header.getBoundingClientRect(), c = cell.getBoundingClientRect();
+        return {colId: header.getAttribute('col-id'), text: header.querySelector('.ag-header-cell-text')?.innerText,
+          slot: header.getAttribute('aria-colindex'), left: h.left, width: h.width, top: h.top,
+          cellLeft: c.left, cellWidth: c.width};
+      });
+    """)
+    assert all(slots), "Q1 sales and neighboring headers/cells must be rendered"
+    assert [(item["colId"], item["text"], item["slot"]) for item in slots] == [
+        ("Q1|ventes_€", "Ventes_€", "2"), ("Q1|unités", "Unités", "3"), ("Q1|écart", "Écart", "4")]
+    for item in slots:
+        assert abs(item["left"] - item["cellLeft"]) <= 1
+        assert abs(item["width"] - item["cellWidth"]) <= 1
+    assert slots[0]["left"] < slots[1]["left"] < slots[2]["left"]
+    return slots
+
+
+def test_reference_value_columns_remove_and_add_units_with_exact_pivot_values(reference_run):
+    """Missing valueCols updates or stale unit headers/cells after removal fails."""
+    with reference_case("layout-values.add-remove", reference_run) as case:
+        driver = case.driver
+        _column_model(driver)
+        observations = []
+        for fields in (["ventes_€"], ["ventes_€", "unités"], ["ventes_€"]):
+            count = len(driver.execute_script("return window.referenceEvidence.trace()"))
+            driver.execute_script("window.referenceGrid.setValueColumns(arguments[0])", fields)
+            request = _wait_request(driver, count)
+            model = _column_model(driver)
+            sales = _wait_column(driver, "Q1|ventes_€", ["100.25", "49.75", "150.00"])
+            columns = driver.execute_script("return window.referenceGrid.getAllDisplayedColumns().map(c => c.getColId())")
+            assert [value["field"] for value in request["request"]["valueCols"]] == fields
+            assert model["values"] == [{"field": field, "aggFunc": "sum"} for field in fields]
+            assert model["pivots"] == ["period"]
+            assert request["request"]["filterModel"] == {"scope": {"filterType": "set", "values": ["Included"]}}
+            labels = _wait_column(driver, "ag-Grid-AutoColumn", ["Éclair", "München", "Total"])
+            if "unités" in fields:
+                units = _wait_column(driver, "Q1|unités", ["2.00", "3.00", "5.00"])
+                q2_units = _wait_column(driver, "Q2|unités", ["1.00", "4.00", "5.00"])
+                assert "Total|unités" in columns
+            else:
+                units = []
+                q2_units = []
+                assert not any("unités" in column for column in columns)
+                assert not any("unités" in cell["colId"] for cell in sales)
+                assert not driver.find_elements(By.CSS_SELECTOR, '.ag-header-cell[col-id$="|unités"]')
+            driver.execute_script("document.querySelector('.ag-body-horizontal-scroll-viewport').scrollLeft = 99999")
+            totals = _wait_column(driver, "Total|ventes_€", ["120.25", "79.75", "200.00"])
+            if "unités" in fields:
+                unit_totals = _wait_column(driver, "Total|unités", ["3.00", "7.00", "10.00"])
+            else:
+                unit_totals = []
+            observations.append({"request": request, "model": model, "columns": columns, "labels": labels,
+                                 "sales": sales, "units": units, "q2_units": q2_units, "unit_totals": unit_totals, "totals": totals})
+            case.parsed_output = observations
+            driver.execute_script("document.querySelector('.ag-body-horizontal-scroll-viewport').scrollLeft = 0")
+        case.observed = "AG Grid value-column API reduced to sales, added sum(units), then removed units; SSRM models, exact pivot cells and sales grand 200 agree"
+
+
+def test_reference_aggregate_average_round_trip_updates_request_and_cells(reference_run):
+    """A changed aggregate label without datasource avg or exact values fails."""
+    with reference_case("layout-values.aggregation", reference_run) as case:
+        driver = case.driver
+        _column_model(driver)
+        baseline_headers = _q1_header_slots(driver)
+        observations = []
+        for aggregate, values in (("avg", ["100.25", "49.75", "75.00"]), ("sum", ["100.25", "49.75", "150.00"])):
+            count = len(driver.execute_script("return window.referenceEvidence.trace()"))
+            before = driver.execute_script("return window.referenceGrid.getAllDisplayedColumns().map(c => c.getColId())")
+            driver.execute_script("window.referenceGrid.setColumnAggFunc('ventes_€', arguments[0])", aggregate)
+            request = _wait_request(driver, count)
+            cells = _wait_column(driver, "Q1|ventes_€", values)
+            headers = _q1_header_slots(driver)
+            assert headers == baseline_headers
+            labels = _wait_column(driver, "ag-Grid-AutoColumn", ["Éclair", "München", "Total"])
+            model = _column_model(driver)
+            after = driver.execute_script("return window.referenceGrid.getAllDisplayedColumns().map(c => c.getColId())")
+            observations.append({"request": request, "model": model, "cells": cells, "labels": labels, "columns": after,
+                                 "baseline_headers": baseline_headers, "headers": headers})
+            case.parsed_output = observations
+            assert before == after
+            assert model["pivots"] == ["period"]
+            assert next(value for value in request["request"]["valueCols"] if value["field"] == "ventes_€")["aggFunc"] == aggregate
+            assert next(value for value in model["values"] if value["field"] == "ventes_€")["aggFunc"] == aggregate
+            assert request["request"]["filterModel"] == {"scope": {"filterType": "set", "values": ["Included"]}}
+        case.observed = "Changed sales aggregate via AG Grid API sum to avg to sum; SSRM requests matched and Q1 grand cell changed 150 to 75 to 150 in unchanged column order"
+
+
+def test_reference_region_filter_apply_clear_preserves_scope_and_exact_sales(reference_run):
+    """Header popup selections must issue a matching filter and recalculate cells."""
+    with reference_case("header-filter.apply-clear", reference_run) as case:
+        driver = case.driver
+        assert driver.execute_script("return window.referenceConfig.options.autoGroupColumnDef.filter") == "agGroupColumnFilter"
+        assert "GroupFilterModule" in driver.execute_script("return window.referenceConfig.modules")
+        observations = []
+        for region, labels, sales in (("Éclair", ["Éclair", "Total"], ["120.25", "120.25"]), (None, ["Éclair", "München", "Total"], ["120.25", "79.75", "200.00"])):
+            buttons = driver.find_elements(By.CSS_SELECTOR, '.ag-header-cell[col-id="ag-Grid-AutoColumn"] .ag-header-cell-filter-button')
+            assert len(buttons) == 1, "Actual grouped-region header filter button must exist; filter API calls cannot substitute"
+            buttons[0].click()
+            menu = WebDriverWait(driver, 5).until(lambda browser: browser.find_element(By.CSS_SELECTOR, '.ag-filter-menu'))
+            assert menu.get_attribute("aria-label") == "Column Filter"
+            assert menu.find_element(By.CSS_SELECTOR, '.ag-group-filter-field-select-wrapper .ag-picker-field-display').text == "Region"
+            items = WebDriverWait(driver, 5).until(lambda browser: (
+                items if len(items) == 3 else False
+            ) if (items := menu.find_elements(By.CSS_SELECTOR, '.ag-set-filter-item')) else False)
+            assert [item.text for item in items] == ["(Select All)", "München", "Éclair"]
+            popup_before = menu.text
+            # Default Set Filter applies immediately: unchecking München selects
+            # Éclair alone; Select All clears the region filter on the next open.
+            target = "München" if region else "(Select All)"
+            count = len(driver.execute_script("return window.referenceEvidence.trace()"))
+            next(item for item in items if item.text == target).find_element(By.CSS_SELECTOR, 'input[type="checkbox"]').click()
+            request = _wait_request(driver, count)
+            popup_after = menu.text
+            ActionChains(driver).send_keys(Keys.ESCAPE).perform()
+            labels_cells = _wait_column(driver, "ag-Grid-AutoColumn", labels)
+            driver.execute_script("document.querySelector('.ag-body-horizontal-scroll-viewport').scrollLeft = 99999")
+            cells = _wait_column(driver, "Total|ventes_€", sales)
+            model = _column_model(driver)
+            observations.append({"request": request, "model": model, "labels": labels_cells, "sales": cells,
+                                 "popup_before": popup_before, "popup_after": popup_after, "clicked_option": target})
+            case.parsed_output = observations
+            expected = {"scope": {"filterType": "set", "values": ["Included"]}}
+            if region:
+                expected["region"] = {"filterType": "set", "values": [region]}
+            assert request["request"]["filterModel"] == expected == model["filterModel"]
+            assert [row["label"] for row in _displayed_rows(driver)] == labels
+            driver.execute_script("document.querySelector('.ag-body-horizontal-scroll-viewport').scrollLeft = 0")
+        case.observed = "Clicked actual Region/account header filter popup, selected Éclair by unchecking München, then cleared with Select All; immediate SSRM apply changed visible total 200 to 120.25 to 200 while scope=Included remained"
 
 
 def test_reference_sort_total_sales_updates_request_header_and_displayed_order(reference_run):

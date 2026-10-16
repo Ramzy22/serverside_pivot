@@ -20,7 +20,7 @@
     "serverSidePivotResultFieldSeparator": "|",
     "suppressAggFuncInHeader": true,
     "defaultColDef": {"sortable": true, "filter": "agTextColumnFilter", "resizable": true, "minWidth": 115, "useValueFormatterForExport": true},
-    "autoGroupColumnDef": {"headerName": "Region / account", "minWidth": 220, "pinned": "left"},
+    "autoGroupColumnDef": {"headerName": "Region / account", "minWidth": 220, "pinned": "left", "filter": "agGroupColumnFilter"},
     "valueFormatter": {"locale": "en-GB", "minimumFractionDigits": 2, "maximumFractionDigits": 2, "useGrouping": false},
     "locale": "en-GB",
     "fixture": "flagship-qualification-v1",
@@ -45,6 +45,7 @@
     "FiltersToolPanelModule",
     "RowGroupingPanelModule",
     "SetFilterModule",
+    "GroupFilterModule",
     "TextFilterModule",
     "NumberFilterModule",
     "ColumnApiModule"
