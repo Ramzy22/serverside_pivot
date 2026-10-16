@@ -74,7 +74,7 @@ def _selection_menu(driver, label):
 
     return WebDriverWait(driver, 8).until(lambda current: next((
         item for item in _workspace_elements(current, '[role="menuitem"]')
-        if item.is_displayed() and item.is_enabled() and item.text.strip() == label
+        if item.is_displayed() and item.is_enabled() and item.get_attribute("title") == label
     ), False))
 
 

@@ -511,6 +511,37 @@ def test_number_format_helper_uses_dialog_ok_and_commits_precision(tmp_path, ini
 
 
 @pytest.mark.flagship
+@pytest.mark.parametrize("label,child", [("Sort", "Descending"), ("Pin", "Pin Left")])
+def test_submenu_helper_matches_exact_title_with_child_indicator_and_opens_child(tmp_path, label, child):
+    if os.environ.get("PIVOT_RUN_FLAGSHIP_BROWSER_TESTS") != "1":
+        pytest.skip("Enable Chrome helper regression explicitly")
+    from urllib.parse import quote
+    from selenium import webdriver
+    from selenium.webdriver.common.action_chains import ActionChains
+    from tests.flagship_browser_support import _selection_menu
+    from tests.test_flagship_certification import _qualification_chrome_options
+
+    html = f'''<div role="menu"><div role="menuitem" title="{label} unrelated">{label} unrelated</div>
+      <div role="menuitem" title="{label}" aria-haspopup="menu" tabindex="0"
+        onmouseenter="document.querySelector('#child').hidden=false"><span>{label}</span><span>▶</span></div>
+      </div><div role="menu" id="child" hidden><div role="menuitem" title="{child}">{child}</div></div>'''
+    driver = webdriver.Chrome(options=_qualification_chrome_options(tmp_path))
+    try:
+        driver.get("data:text/html;charset=utf-8," + quote(html))
+        parent = _selection_menu(driver, label)
+        assert parent.get_attribute("role") == "menuitem"
+        assert parent.get_attribute("title") == label
+        assert "▶" in parent.text
+        ActionChains(driver).move_to_element(parent).perform()
+        target = _selection_menu(driver, child)
+        assert target.is_displayed()
+        assert target.get_attribute("title") == child
+        assert driver.find_element("css selector", "#child").is_displayed()
+    finally:
+        driver.quit()
+
+
+@pytest.mark.flagship
 @pytest.mark.parametrize("host", ["dash", "react", "streamlit"])
 @pytest.mark.parametrize("requirement", ["cell-selection.range-clear", "copy-selection.logical-cells",
                                          "copy-selection.display-order", "copy-selection.pinned-columns"])
