@@ -16,12 +16,14 @@ import os
 from pathlib import Path
 import re
 import traceback
+import time
 from typing import Mapping, Sequence
 
 from tests.flagship_contract import HOSTS, RESULTS, load_requirements
 
 
 ROOT = Path(__file__).resolve().parents[1]
+SELECTION_COPY_TIMEOUT = 8
 _SAFE_OBSERVATIONS = frozenset({
     "visibleError", "loadingCleared", "failedRequestCorrelated", "retryCorrelated",
     "fixtureTotalsVerified", "staleCellsAbsent", "newDownloads", "networkFailureCount",
@@ -30,6 +32,7 @@ _SAFE_OBSERVATIONS = frozenset({
     "logicalCellsVerified", "clipboardBytesVerified", "displayOrderVerified",
     "pinnedNoDuplicates", "horizontalScrollVerified", "rangeCleared", "clearedCopyAbsent",
     "selectedCellCount", "rawCopyUnavailable",
+    "nativeKeyboardCopyVerified", "clearedClipboardMonitored",
 })
 
 
@@ -40,6 +43,18 @@ def assert_selected_clipboard(text: str, expected: list[list[str]]) -> list[list
     parsed = list(csv.reader(io.StringIO(text), delimiter="\t"))
     assert parsed == expected, "Selected clipboard logical cells differ"
     return parsed
+
+
+def assert_clipboard_stable(read, expected, *, timeout, poll=0.05):
+    started = time.monotonic()
+    samples = 0
+    while True:
+        assert read() == expected, "Clipboard changed after selection clear"
+        samples += 1
+        elapsed = time.monotonic() - started
+        if elapsed >= timeout:
+            return {"durationSeconds": elapsed, "sampleCount": samples, "pollSeconds": poll}
+        time.sleep(min(poll, timeout - elapsed))
 
 
 def _selection_ids(driver):
@@ -77,19 +92,31 @@ def _selection_rows(driver):
             if cell.is_displayed() and cell.text.strip() in ("Éclair", "München")]
 
 
+def _selection_column_order(driver):
+    """Read actual body geometry, excluding duplicate/group header containers."""
+    from tests.test_flagship_certification import _workspace_elements
+
+    first_row = _selection_rows(driver)[0]["id"]
+    cells = _workspace_elements(driver, f'[role="gridcell"][data-rowid="{first_row}"]')
+    positions = [(driver.execute_script("return arguments[0].getBoundingClientRect().left", cell),
+                  cell.get_attribute("data-colid")) for cell in cells if cell.is_displayed()]
+    return [column for _, column in sorted(positions)]
+
+
 def _reorder_selection_column(driver, column, direction, first, second, observation):
     from selenium.webdriver.common.keys import Keys
     from selenium.webdriver.support.ui import WebDriverWait
-    from tests.test_flagship_certification import _qualification_leaf_order, _wait_for_visible_workspace_element
+    from tests.test_flagship_certification import _wait_for_visible_workspace_element
 
     rows_before = _selection_rows(driver)
-    order_before = _qualification_leaf_order(driver)
+    order_before = _selection_column_order(driver)
     header = _wait_for_visible_workspace_element(driver, f'[role="columnheader"][data-header-column-id="{column}"]')
     # Element key input focuses this tabIndex=0 header without a sorting click.
     header.send_keys(Keys.CONTROL + direction + Keys.NULL)
     WebDriverWait(driver, 8).until(lambda current: (
-        _qualification_leaf_order(current).index(first) < _qualification_leaf_order(current).index(second)))
-    rows_after, order_after = _selection_rows(driver), _qualification_leaf_order(driver)
+        (order := _selection_column_order(current)) != order_before
+        and order.index(first) < order.index(second)))
+    rows_after, order_after = _selection_rows(driver), _selection_column_order(driver)
     observation["actions"].append({"action": "header Ctrl+Arrow", "column": column,
         "direction": "left" if direction == Keys.ARROW_LEFT else "right",
         "columnOrderBefore": order_before, "columnOrderAfter": order_after,
@@ -142,30 +169,73 @@ def _copy_selected(driver, cell, expected, observation):
         sentinel)
     ActionChains(driver).context_click(cell).perform()
     _selection_menu(driver, "Copy Selection").click()
-    text = WebDriverWait(driver, 8).until(lambda current: (
+    text = WebDriverWait(driver, SELECTION_COPY_TIMEOUT).until(lambda current: (
         value if (value := _clipboard_text(current)) != sentinel else False))
     observation["clipboardText"] = text
     observation["parsedTSV"] = list(csv.reader(io.StringIO(text), delimiter="\t"))
     assert_selected_clipboard(text, expected)
 
 
-def _selection_number_format(driver):
+def _selection_number_format(driver, observation=None):
     """Explicit two-decimal presentation for order/pinning; never claim raw copy."""
     from selenium.webdriver.common.keys import Keys
     from selenium.webdriver.support.ui import WebDriverWait
     from tests.test_flagship_certification import _workspace_elements, _wait_for_visible_workspace_element
 
-    _click_workspace_control(driver, '[data-testid="pivot-toolbar-format"]')
-    _click_workspace_control(driver, '[title="Open number format options"]')
+    steps = []
+    if observation is not None:
+        observation["numberFormatSteps"] = steps
+    def active_control():
+        return driver.execute_script("""
+          let el=document.activeElement;
+          while (el?.shadowRoot?.activeElement) el=el.shadowRoot.activeElement;
+          return {testId:el?.getAttribute('data-testid'),title:el?.getAttribute('title'),text:el?.textContent};
+        """)
+    button = _wait_for_visible_workspace_element(driver, '[data-testid="pivot-toolbar-format"]')
+    steps.append({"before": "toolbar activation", "formatOptionsVisible": any(
+        item.is_displayed() for item in _workspace_elements(driver, '[title="Open number format options"]'))})
+    button.send_keys(Keys.SPACE)
+    steps.append({"after": "toolbar Space", "focusedControl": active_control()})
+    options = _wait_for_visible_workspace_element(driver, '[title="Open number format options"]')
+    steps.append({"formatBandVisible": options.is_displayed()})
+    options.send_keys(Keys.SPACE)
+    steps.append({"after": "options Space", "focusedControl": active_control()})
     dialog = '[role="dialog"][aria-label="Format Cells"]'
     number = _wait_for_visible_workspace_element(driver, dialog + ' input[type="number"]')
     number.send_keys(Keys.CONTROL, "a")
     number.send_keys("2")
     for button in _workspace_elements(driver, dialog + ' button'):
         if button.text.strip() == "OK":
-            button.click()
+            button.send_keys(Keys.SPACE)
             break
     WebDriverWait(driver, 8).until(lambda current: not _workspace_elements(current, dialog))
+
+
+def _selection_keyboard_copy(driver, observation):
+    """Observe trusted key delivery at the grid without replacing any handler."""
+    from selenium.webdriver.common.keys import Keys
+    from selenium.webdriver.support.ui import WebDriverWait
+    from tests.test_flagship_certification import _wait_for_visible_workspace_element
+
+    grid = _wait_for_visible_workspace_element(driver, '[role="grid"][data-pivot-scroll-container]')
+    driver.execute_script("""
+      if (!arguments[0].__pivotSelectionKeyObserver) {
+        window.__pivotSelectionKeys=window.__pivotSelectionKeys||[];
+        arguments[0].__pivotSelectionKeyObserver=true;
+        arguments[0].addEventListener('keydown',event=>{
+          if (event.ctrlKey && event.key.toLowerCase()==='c')
+            window.__pivotSelectionKeys.push({trusted:event.isTrusted,at:performance.now(),
+              targetRole:event.target.getAttribute('role')});
+        },true);
+      }
+    """, grid)
+    before = driver.execute_script("return window.__pivotSelectionKeys.length")
+    grid.send_keys(Keys.CONTROL + "c" + Keys.NULL)
+    WebDriverWait(driver, SELECTION_COPY_TIMEOUT).until(lambda current:
+        current.execute_script("return window.__pivotSelectionKeys.length") > before)
+    events = driver.execute_script("return window.__pivotSelectionKeys")
+    assert events[-1]["trusted"] is True and events[-1]["targetRole"] == "grid", "Copy key missed the workspace grid"
+    observation["nativeCopyKeys"] = events
 
 
 def qualify_selected_clipboard(host: str, requirement: str) -> None:
@@ -181,7 +251,7 @@ def qualify_selected_clipboard(host: str, requirement: str) -> None:
     from scripts.flagship_artifacts import load_artifact_binding
     from tests.test_flagship_certification import (
         _host_url, _origin, _qualification_chrome_options, _switch_to_workspace,
-        _workspace_elements, _qualification_leaf_order, _wait_for_visible_workspace_element,
+        _workspace_elements, _wait_for_visible_workspace_element,
         _clipboard_text, _verify_release_asset_batch,
     )
     from selenium import webdriver
@@ -218,8 +288,12 @@ def qualify_selected_clipboard(host: str, requirement: str) -> None:
         assert len(rows) == 2 and {row["label"] for row in rows} == {"Éclair", "München"}, "Initial displayed fixture row set differs"
         assert not any("São Paulo" in cell.text for cell in _workspace_elements(driver, '[data-colid="hierarchy"]'))
         observation["initialRows"] = rows
-        columns = [units, sales]
+        initial_order = _selection_column_order(driver)
+        observation["initialDisplayedColumnIds"] = initial_order
+        columns = sorted([units, sales], key=initial_order.index)
         if requirement == "copy-selection.logical-cells":
+            if initial_order.index(sales) < initial_order.index(units):
+                _reorder_selection_column(driver, units, Keys.ARROW_LEFT, units, sales, observation)
             _reorder_selection_column(driver, sales, Keys.ARROW_LEFT, sales, units, observation)
             checkpoint = driver.execute_script("return performance.now()")
             header = _wait_for_visible_workspace_element(driver, f'[role="columnheader"][data-header-column-id="{sales}"]')
@@ -230,12 +304,14 @@ def qualify_selected_clipboard(host: str, requirement: str) -> None:
             columns = [sales, units]
             observation["actions"].append("default whole-number format retained because raw copy is not exposed")
         elif requirement in ("copy-selection.display-order", "copy-selection.pinned-columns"):
-            _selection_number_format(driver)
+            _selection_number_format(driver, observation)
             observation["actions"].append("set displayed numeric precision to 2dp")
         if requirement == "copy-selection.display-order":
             # Exercise a real move in both directions, ending in required units-first order.
-            _reorder_selection_column(driver, units, Keys.ARROW_RIGHT, sales, units, observation)
+            if initial_order.index(units) < initial_order.index(sales):
+                _reorder_selection_column(driver, sales, Keys.ARROW_LEFT, sales, units, observation)
             _reorder_selection_column(driver, units, Keys.ARROW_LEFT, units, sales, observation)
+            columns = [units, sales]
             header = _wait_for_visible_workspace_element(driver, '[role="columnheader"][data-header-column-id="hierarchy"]')
             checkpoint = driver.execute_script("return performance.now()")
             ActionChains(driver).context_click(header).perform()
@@ -247,6 +323,9 @@ def qualify_selected_clipboard(host: str, requirement: str) -> None:
         row_ids = [row["id"] for row in rows]
         observation["selectedRows"] = rows
         if requirement == "copy-selection.pinned-columns":
+            if _selection_column_order(driver).index(sales) < _selection_column_order(driver).index(units):
+                _reorder_selection_column(driver, units, Keys.ARROW_LEFT, units, sales, observation)
+            columns = [units, sales]
             header = _wait_for_visible_workspace_element(driver, f'[role="columnheader"][data-header-column-id="{units}"]')
             ActionChains(driver).context_click(header).perform()
             ActionChains(driver).move_to_element(_selection_menu(driver, "Pin")).perform()
@@ -269,7 +348,7 @@ def qualify_selected_clipboard(host: str, requirement: str) -> None:
             observation["pinGeometry"] = {"pinnedBefore": pinned_before, "pinnedAfter": left(units),
                                           "centerBefore": center_before, "centerAfter": left(sales)}
             result["horizontalScrollVerified"] = True
-        order = _qualification_leaf_order(driver)
+        order = _selection_column_order(driver)
         observation["displayedColumnIds"] = order
         assert order.index(columns[0]) < order.index(columns[1]), "Displayed columns are in the wrong order"
         observation["selectedIds"] = _select_rectangle(driver, row_ids, columns)
@@ -283,26 +362,36 @@ def qualify_selected_clipboard(host: str, requirement: str) -> None:
             literal = {"Éclair": ["2.00", "100.25"], "München": ["3.00", "49.75"]}
             expected = [literal[row["label"]] for row in rows]
         else:
-            literal = {"Éclair": ["2", "100"], "München": ["3", "50"]}
-            expected = [literal[row["label"]] for row in rows]
+            literal = {"Éclair": {sales: "100", units: "2"}, "München": {sales: "50", units: "3"}}
+            expected = [[literal[row["label"]][column] for column in columns] for row in rows]
         observation["expectedClipboardCells"] = expected
         _copy_selected(driver, _selection_cell(driver, row_ids[0], columns[0]), expected, observation)
         result["clipboardBytesVerified"] = True
         if requirement == "copy-selection.display-order":
             assert [row["label"] for row in rows] == ["München", "Éclair"], "Descending displayed region order differs from the contract"
         if requirement == "cell-selection.range-clear":
-            _click_workspace_control(driver, '[data-pivot-status-action="clear-selection"]')
+            checkpoint = "clipboard before native copy"
+            assert driver.execute_async_script("const done=arguments[arguments.length-1]; navigator.clipboard.writeText(arguments[0]).then(()=>done(true),()=>done(false));", checkpoint)
+            _selection_keyboard_copy(driver, observation)
+            positive = WebDriverWait(driver, SELECTION_COPY_TIMEOUT).until(lambda current: (
+                value if (value := _clipboard_text(current)) != checkpoint else False))
+            observation["nativePositiveClipboard"] = positive
+            assert_selected_clipboard(positive, expected)
+            result["nativeKeyboardCopyVerified"] = True
+            _wait_for_visible_workspace_element(driver, '[data-pivot-status-action="clear-selection"]').send_keys(Keys.SPACE)
             wait.until(lambda current: not _selection_ids(current))
             result["rangeCleared"] = True
             # A native copy after clearing must not replay the previous range.
             sentinel = "clipboard after clear"
             assert driver.execute_async_script("const done=arguments[arguments.length-1]; navigator.clipboard.writeText(arguments[0]).then(()=>done(true),()=>done(false));", sentinel)
-            ActionChains(driver).key_down(Keys.CONTROL).send_keys("c").key_up(Keys.CONTROL).perform()
-            import time
-            time.sleep(0.25)
+            _selection_keyboard_copy(driver, observation)
+            observation["clearMonitor"] = {"requestedSeconds": SELECTION_COPY_TIMEOUT, "startedAt": time.monotonic()}
+            observation["clearMonitor"].update(assert_clipboard_stable(
+                lambda: _clipboard_text(driver), sentinel, timeout=SELECTION_COPY_TIMEOUT))
             observation["clipboardAfterClear"] = _clipboard_text(driver)
             assert observation["clipboardAfterClear"] == sentinel, "Cleared selection was reused by copy"
             result["clearedCopyAbsent"] = True
+            result["clearedClipboardMonitored"] = True
         result.update(result="passed", displayOrderVerified=True,
                       pinnedNoDuplicates=requirement == "copy-selection.pinned-columns")
     except Exception as error:

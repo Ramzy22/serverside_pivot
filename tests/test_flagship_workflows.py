@@ -453,6 +453,26 @@ def test_selected_clipboard_oracle_checks_exact_bytes_and_parsed_cells():
         ["100.25", "2"], ["49.75", "3"]]
 
 
+def test_clipboard_monitor_rejects_a_write_after_the_old_single_read_window():
+    import time
+    from tests.flagship_browser_support import assert_clipboard_stable
+
+    started = time.monotonic()
+    def delayed_clipboard():
+        return "checkpoint" if time.monotonic() - started < 0.5 else "stale selection"
+
+    with pytest.raises(AssertionError, match="changed"):
+        assert_clipboard_stable(delayed_clipboard, "checkpoint", timeout=0.75, poll=0.02)
+
+
+def test_clipboard_monitor_observes_the_whole_interval():
+    from tests.flagship_browser_support import assert_clipboard_stable
+
+    result = assert_clipboard_stable(lambda: "checkpoint", "checkpoint", timeout=0.08, poll=0.02)
+    assert result["durationSeconds"] >= 0.08
+    assert result["sampleCount"] >= 3
+
+
 @pytest.mark.flagship
 def test_number_format_helper_uses_dialog_ok_and_commits_precision(tmp_path):
     """Exercise the helper against real DOM events; no product behavior is mocked."""
