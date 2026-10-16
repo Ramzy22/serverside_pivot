@@ -1,10 +1,12 @@
-import { createGrid, type GridOptions } from 'ag-grid-community';
+import { createGrid, ModuleRegistry, RowApiModule, type GridOptions } from 'ag-grid-community';
+import { ServerSideRowModelApiModule } from 'ag-grid-enterprise';
 import { buildReferenceColumnDefs } from './grid-config.ts';
 import { registerReferenceModules } from './modules.ts';
 
 import './style.css';
 
 type ReferenceConfig = {
+  modules: string[];
   filterValues: Record<string, unknown[]>;
   options: {
     rowModelType: 'serverSide'; pivotMode: boolean; cellSelection: boolean;
@@ -23,6 +25,8 @@ type ReferenceConfig = {
 };
 
 registerReferenceModules();
+// Required only by the read-only displayed-row and expansion evidence probes.
+ModuleRegistry.registerModules([RowApiModule, ServerSideRowModelApiModule]);
 
 // Read-only browser evidence for the local parity harness. The request/response
 // copies identify which visible state came from the real SSRM datasource.
@@ -80,10 +84,28 @@ const gridOptions: GridOptions = {
 const grid = document.querySelector<HTMLElement>('#grid');
 if (!grid) throw new Error('Grid mount is missing');
 const api = createGrid(grid, gridOptions);
-Object.assign(window, { referenceGrid: api, referenceConfig: config });
+Object.assign(window, {
+  referenceGrid: api,
+  referenceConfig: {
+    ...config,
+    modules: [...new Set([...config.modules, 'RowApiModule', 'ServerSideRowModelApiModule'])],
+  },
+});
 const referenceEvidence = {
   get ready() { return grid.querySelector('[role="gridcell"]') !== null && datasourceTrace.some((entry) => entry.response); },
   trace: () => structuredClone(datasourceTrace),
+  displayedRows: () => Array.from({ length: api.getDisplayedRowCount() }, (_, index) => {
+    const node = api.getDisplayedRowAtIndex(index);
+    return {
+      index,
+      label: node?.footer ? 'Total' : node?.key ?? '',
+      parentKey: node?.parent?.key ?? null,
+      level: node?.level ?? null,
+      footer: node?.footer === true,
+      expanded: node?.expanded === true,
+      data: structuredClone(node?.data ?? null),
+    };
+  }),
   visibleCells: () => Array.from(grid.querySelectorAll<HTMLElement>('[role="gridcell"]'))
     .filter((cell) => cell.getClientRects().length > 0)
     .map((cell) => ({

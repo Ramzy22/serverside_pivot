@@ -92,6 +92,7 @@ class LiveCase:
                   config: window.referenceConfig ?? null,
                   trace: window.referenceEvidence?.trace() ?? [],
                   visibleCells: window.referenceEvidence?.visibleCells() ?? [],
+                  displayedRows: window.referenceEvidence?.displayedRows?.() ?? [],
                   visibleHeaders: [...document.querySelectorAll('[role=columnheader]')]
                     .filter(e => e.getClientRects().length).map(e => e.innerText),
                   state: window.referenceGrid?.getState() ?? null,
