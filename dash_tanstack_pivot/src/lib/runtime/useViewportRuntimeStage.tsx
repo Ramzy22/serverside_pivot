@@ -597,6 +597,13 @@ export function useViewportRuntimeStage(input, transport) {
         }
       });
       actions.push({
+        label: 'Copy Selection (Raw Values)',
+        onClick: () => {
+          const payload = stage.buildSelectedClipboardPayload(false, selectionForMenu, { rawValues: true });
+          if (payload) stage.copyRichToClipboard(payload);
+        }
+      });
+      actions.push({
         label: 'Copy Selection with Headers',
         onClick: () => {
           const payload = stage.buildSelectedClipboardPayload(true, selectionForMenu);

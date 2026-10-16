@@ -203,6 +203,86 @@ function makeCommandOptions(overrides = {}) {
         '"Region, area",Amount\r\n"North, ""East""",42',
     );
 
+    // A numeric formatter must not replace logical values in the explicit raw action.
+    // The same selected rectangle must retain displayed row/column order in both MIME forms.
+    const exportUtils = loadFrontendModule('src/lib/utils/exportUtils.js', {
+        'file-saver': {saveAs: () => undefined},
+    });
+    const sales = {id: 'sales', columnDef: {header: 'Sales'}};
+    const units = {id: 'units', columnDef: {header: 'Units'}};
+    const rows = [
+        {id: 'munich', original: {sales: 49.75, units: 3}, getValue: id => ({sales: 49.75, units: 3})[id]},
+        {id: 'eclair', original: {sales: 100.25, units: 2}, getValue: id => ({sales: 100.25, units: 2})[id]},
+    ];
+    const selected = {
+        'munich:units': 3, 'munich:sales': 49.75,
+        'eclair:units': 2, 'eclair:sales': 100.25,
+    };
+    const {useRuntimeClipboardExportPresentation: makePresentation} = loadFrontendModule(
+        'src/lib/runtime/useRuntimeClipboardExportPresentation.js',
+        {
+            react: {useCallback: callback => callback},
+            '../utils/exportUtils': exportUtils,
+            '../utils/helpers': {
+                formatDisplayLabel: value => String(value),
+                formatValue: value => String(Math.round(value)),
+            },
+        },
+    );
+    const selectionPresentation = makePresentation({
+        getDisplayRows: () => rows,
+        getDisplayHeaderTextForColumn: column => column.columnDef.header,
+        getDisplayHeaderTextStackForColumn: column => [column.columnDef.header],
+        matchesSelectedColumnToValueConfig: () => false,
+        resolveDisplayedCellValue: (_rowId, _columnId, value) => value,
+        selectedCells: selected,
+        table: {getVisibleLeafColumns: () => [units, sales]},
+        theme: {},
+    });
+    const displayedSelection = selectionPresentation.buildSelectedClipboardPayload(false, selected);
+    assert.equal(displayedSelection.text, '3\t50\n2\t100');
+    const rawSelection = selectionPresentation.buildSelectedClipboardPayload(false, selected, {rawValues: true});
+    assert.equal(rawSelection.text, '3\t49.75\n2\t100.25');
+    assert.match(rawSelection.html, /<td[^>]*>3<\/td><td[^>]*>49\.75<\/td>/);
+    assert.match(rawSelection.html, /<td[^>]*>2<\/td><td[^>]*>100\.25<\/td>/);
+    const rawWithHeaders = selectionPresentation.buildSelectedClipboardPayload(true, selected, {rawValues: true});
+    assert.equal(rawWithHeaders.text, 'Units\tSales\n3\t49.75\n2\t100.25');
+    assert.match(rawWithHeaders.html, /<th[^>]*>Units<\/th><th[^>]*>Sales<\/th>/);
+
+    const contractOrderPresentation = makePresentation({
+        getDisplayRows: () => [rows[1], rows[0]],
+        getDisplayHeaderTextForColumn: column => column.columnDef.header,
+        getDisplayHeaderTextStackForColumn: column => [column.columnDef.header],
+        matchesSelectedColumnToValueConfig: () => false,
+        resolveDisplayedCellValue: (_rowId, _columnId, value) => value,
+        table: {getVisibleLeafColumns: () => [sales, units]},
+        theme: {},
+    });
+    const contractDisplayed = contractOrderPresentation.buildSelectedClipboardPayload(false, selected);
+    const contractRaw = contractOrderPresentation.buildSelectedClipboardPayload(false, selected, {rawValues: true});
+    assert.equal(contractDisplayed.text, '100\t2\n50\t3');
+    assert.equal(contractRaw.text, '100.25\t2\n49.75\t3');
+    assert.match(contractDisplayed.html, /<td[^>]*>100<\/td><td[^>]*>2<\/td>/);
+    assert.match(contractRaw.html, /<td[^>]*>100\.25<\/td><td[^>]*>2<\/td>/);
+    assert.match(contractRaw.html, /<td[^>]*>49\.75<\/td><td[^>]*>3<\/td>/);
+
+    const sparsePresentation = makePresentation({
+        getDisplayRows: () => rows,
+        getDisplayHeaderTextForColumn: column => column.columnDef.header,
+        getDisplayHeaderTextStackForColumn: column => [column.columnDef.header],
+        matchesSelectedColumnToValueConfig: () => false,
+        resolveDisplayedCellValue: (rowId, columnId, value) => rowId === 'munich' && columnId === 'sales' ? 12.375 : rowId === 'eclair' && columnId === 'units' ? 999 : value,
+        table: {getVisibleLeafColumns: () => [units, sales, sales]},
+        theme: {},
+    });
+    const sparse = {
+        'munich:units': 0, 'munich:sales': 49.75,
+        'eclair:sales': null,
+    };
+    const sparseRaw = sparsePresentation.buildSelectedClipboardPayload(false, sparse, {rawValues: true});
+    assert.equal(sparseRaw.text, '0\t12.375\n\t');
+    assert.match(sparseRaw.html, /<td[^>]*>0<\/td><td[^>]*>12\.375<\/td>/);
+
     console.log('frontend export qualification passed');
 })().catch(error => {
     console.error(error);

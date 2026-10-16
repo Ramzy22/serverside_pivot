@@ -189,7 +189,7 @@ export function useRuntimeClipboardExportPresentation({
     groupSeparator === 'thin_space' || groupSeparator === 'space' ? 'plain_space' : groupSeparator
   ), []);
 
-  const getExportCellDisplayValue = useCallback((rowLike, column, rowIndex, overrideValue = undefined) => {
+  const getExportCellDisplayValue = useCallback((rowLike, column, rowIndex, overrideValue = undefined, rawValues = false) => {
     if (!column) return '';
     const rowData = getExportRowData(rowLike) || {};
     const rawValue = getExportRawCellValue(rowLike, column, rowIndex, overrideValue);
@@ -200,6 +200,7 @@ export function useRuntimeClipboardExportPresentation({
     const rowId = getExportRowId(rowLike, rowData, rowIndex);
     const displayedValue = typeof resolveDisplayedCellValue === 'function' ? resolveDisplayedCellValue(rowId, column.id, rawValue) : rawValue;
     if (displayedValue === undefined || displayedValue === null) return '';
+    if (rawValues && typeof displayedValue === 'number') return String(displayedValue);
     if (typeof displayedValue === 'number' && Number.isFinite(displayedValue)) {
       const matchingValueConfig = Array.isArray(valConfigs) ? valConfigs.find(config => matchesSelectedColumnToValueConfig(column.id, config)) || null : null;
       const effectiveDecimalPlaces = columnDecimalOverrides && columnDecimalOverrides[column.id] !== undefined ? columnDecimalOverrides[column.id] : decimalPlaces;
@@ -272,13 +273,19 @@ export function useRuntimeClipboardExportPresentation({
     return buildTableClipboardPayload({ withHeaders, mergedHeaders, rows });
   }, [buildTableClipboardPayload, table]);
 
-  const buildSelectedClipboardPayload = useCallback((withHeaders = false, selectionMap = selectedCells) => {
+  const buildSelectedClipboardPayload = useCallback((withHeaders = false, selectionMap = selectedCells, { rawValues = false } = {}) => {
     const keys = Object.keys(selectionMap || {});
     if (keys.length === 0) return null;
     const visibleRows = getDisplayRows();
     const visibleCols = table && typeof table.getVisibleLeafColumns === 'function' ? table.getVisibleLeafColumns() : [];
+    const seenColumnIds = new Set();
+    const orderedCols = visibleCols.filter(column => {
+      if (!column || seenColumnIds.has(column.id)) return false;
+      seenColumnIds.add(column.id);
+      return true;
+    });
     const rowIdMap = {}; visibleRows.forEach((row, index) => { rowIdMap[row.id] = index; });
-    const colIdMap = {}; visibleCols.forEach((column, index) => { colIdMap[column.id] = index; });
+    const colIdMap = {}; orderedCols.forEach((column, index) => { colIdMap[column.id] = index; });
     let minR = Infinity; let maxR = -1; let minC = Infinity; let maxC = -1;
     const selectedGrid = {};
     keys.forEach(key => {
@@ -290,15 +297,16 @@ export function useRuntimeClipboardExportPresentation({
     });
     if (minR === Infinity) return null;
     const exportRows = visibleRows.slice(minR, maxR + 1);
-    const exportColumns = visibleCols.slice(minC, maxC + 1).filter(column => column && isExportableColumnId(column.id));
+    const exportColumns = orderedCols.slice(minC, maxC + 1).filter(column => isExportableColumnId(column.id));
     if (exportRows.length === 0 || exportColumns.length === 0) return null;
     return buildStyledHtmlTableExport({
       rows: exportRows, columns: exportColumns, includeHeaders: withHeaders,
       getHeaderLabel: column => getExportHeaderLabel(column, false, mergedHeaderSeparator), getHeaderStyle: getExportHeaderStyle,
       getCellValue: (rowLike, column, rowIndex) => {
         const absoluteRowIndex = minR + rowIndex; const absoluteColIndex = colIdMap[column.id];
-        const overrideValue = selectedGrid[absoluteRowIndex] && Object.prototype.hasOwnProperty.call(selectedGrid[absoluteRowIndex], absoluteColIndex) ? selectedGrid[absoluteRowIndex][absoluteColIndex] : '';
-        return getExportCellDisplayValue(rowLike, column, absoluteRowIndex, overrideValue);
+        if (!selectedGrid[absoluteRowIndex] || !Object.prototype.hasOwnProperty.call(selectedGrid[absoluteRowIndex], absoluteColIndex)) return '';
+        const overrideValue = selectedGrid[absoluteRowIndex][absoluteColIndex];
+        return getExportCellDisplayValue(rowLike, column, absoluteRowIndex, overrideValue, rawValues);
       },
       getCellStyle: (rowLike, column, _value, rowIndex) => {
         const absoluteRowIndex = minR + rowIndex; const absoluteColIndex = colIdMap[column.id];
