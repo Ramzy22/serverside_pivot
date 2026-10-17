@@ -693,7 +693,12 @@ export function buildStyledHtmlTableExport({
 
 export function htmlTableToTsv(html) {
     if (!html || typeof DOMParser === 'undefined') return '';
-    const doc = new DOMParser().parseFromString(String(html), 'text/html');
+    // HTML parsing normalizes raw CR/CRLF to LF, but character references
+    // retain CR. Protect text without changing tag/attribute whitespace.
+    const source = String(html).replace(/<!--[\s\S]*?-->|<(?:"[^"]*"|'[^']*'|[^'">])*>|[^<]+/g, (part) => (
+        part.startsWith('<') ? part : part.replace(/\r/g, '&#13;')
+    ));
+    const doc = new DOMParser().parseFromString(source, 'text/html');
     const table = doc.querySelector('table');
     if (!table) return doc.body ? doc.body.textContent || '' : '';
     return Array.from(table.querySelectorAll('tr')).map((row) => (
