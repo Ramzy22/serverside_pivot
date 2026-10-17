@@ -226,6 +226,17 @@ export function useRuntimeClipboardExportPresentation({
     return String(displayedValue);
   }, [columnDecimalOverrides, columnFormatOverrides, columnGroupSeparatorOverrides, decimalPlaces, defaultValueFormat, getExportGroupSeparator, getExportRawCellValue, getExportRowData, getExportRowId, matchesSelectedColumnToValueConfig, numberGroupSeparator, resolveDisplayedCellValue, valConfigs]);
 
+  const getClipboardCellDisplayValue = useCallback((rowLike, column, rowIndex, overrideValue = undefined, rawValues = false) => {
+    if (column && column.id === 'hierarchy') {
+      const rowData = getExportRowData(rowLike) || {};
+      const label = rowData._label !== undefined && rowData._label !== null ? rowData._label : rowData._id !== undefined && rowData._id !== null ? rowData._id : '';
+      // Selected values may already be formatted. Recover source separators
+      // only for clipboard payloads, retaining ordinary export formatting.
+      if (/[\t\r\n]/.test(String(label))) overrideValue = String(label);
+    }
+    return getExportCellDisplayValue(rowLike, column, rowIndex, overrideValue, rawValues);
+  }, [getExportCellDisplayValue, getExportRowData]);
+
   const getExportHeaderStyle = useCallback(column => {
     const parentText = column && column.parent ? getDisplayHeaderTextForColumn(column.parent) : '';
     const underGrandTotal = parentText === 'Grand Total' || parentText.startsWith('Grand Total');
@@ -273,11 +284,11 @@ export function useRuntimeClipboardExportPresentation({
       table, rows: exportRows, columns: exportColumns, includeHeaders: withHeaders,
       getHeaderLabel: column => getExportHeaderLabel(column, mergedHeaders, mergedHeaderSeparator), getHeaderStyle: getExportHeaderStyle,
       getHeaderStack: getDisplayHeaderTextStackForColumn,
-      getCellValue: (rowLike, column, rowIndex) => getExportCellDisplayValue(rowLike, column, rowIndex),
+      getCellValue: (rowLike, column, rowIndex) => getClipboardCellDisplayValue(rowLike, column, rowIndex),
       getCellStyle: (rowLike, column, _value, rowIndex) => getExportCellStyle(rowLike, column, rowIndex),
       tableStyle: { fontFamily: fontFamily || "'Inter', ui-sans-serif, system-ui, sans-serif", fontSize: fontSize || '13px' },
     });
-  }, [fontFamily, fontSize, getDisplayRows, getDisplayHeaderTextStackForColumn, getExportCellDisplayValue, getExportCellStyle, getExportColumns, getExportHeaderLabel, getExportHeaderStyle, loadedRows, mergedHeaderSeparator, serverSide, table]);
+  }, [fontFamily, fontSize, getDisplayRows, getDisplayHeaderTextStackForColumn, getClipboardCellDisplayValue, getExportCellStyle, getExportColumns, getExportHeaderLabel, getExportHeaderStyle, loadedRows, mergedHeaderSeparator, serverSide, table]);
 
   const buildAllRowsClipboardPayload = useCallback(({
     withHeaders = true, mergedHeaders = false,
@@ -317,7 +328,7 @@ export function useRuntimeClipboardExportPresentation({
         const absoluteRowIndex = minR + rowIndex; const absoluteColIndex = colIdMap[column.id];
         if (!selectedGrid[absoluteRowIndex] || !Object.prototype.hasOwnProperty.call(selectedGrid[absoluteRowIndex], absoluteColIndex)) return '';
         const overrideValue = selectedGrid[absoluteRowIndex][absoluteColIndex];
-        return getExportCellDisplayValue(rowLike, column, absoluteRowIndex, overrideValue, rawValues);
+        return getClipboardCellDisplayValue(rowLike, column, absoluteRowIndex, overrideValue, rawValues);
       },
       getCellStyle: (rowLike, column, _value, rowIndex) => {
         const absoluteRowIndex = minR + rowIndex; const absoluteColIndex = colIdMap[column.id];
@@ -326,7 +337,7 @@ export function useRuntimeClipboardExportPresentation({
       },
       tableStyle: { fontFamily: fontFamily || "'Inter', ui-sans-serif, system-ui, sans-serif", fontSize: fontSize || '13px' },
     });
-  }, [fontFamily, fontSize, getDisplayOrderedLeafColumns, getDisplayRows, getExportCellDisplayValue, getExportCellStyle, getExportHeaderLabel, getExportHeaderStyle, isExportableColumnId, mergedHeaderSeparator, selectedCells]);
+  }, [fontFamily, fontSize, getDisplayOrderedLeafColumns, getDisplayRows, getClipboardCellDisplayValue, getExportCellStyle, getExportHeaderLabel, getExportHeaderStyle, isExportableColumnId, mergedHeaderSeparator, selectedCells]);
 
   const buildExportStyleProfile = useCallback((colIds, { withHeaders = true, mergedHeaders = false } = {}) => {
     const columnsById = new Map();

@@ -61,9 +61,8 @@ export function escapeHtml(value) {
 }
 
 export function escapeTsv(value) {
-    return String(value === undefined || value === null ? '' : value)
-        .replace(/\r?\n/g, ' ')
-        .replace(/\t/g, ' ');
+    const text = String(value === undefined || value === null ? '' : value);
+    return /["\t\r\n]/.test(text) ? `"${text.replace(/"/g, '""')}"` : text;
 }
 
 export function escapeCsv(value) {
