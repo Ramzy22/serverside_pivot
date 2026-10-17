@@ -106,6 +106,7 @@ const referenceEvidence = {
     const node = api.getDisplayedRowAtIndex(index);
     return {
       index,
+      id: node?.id ?? null,
       label: node?.footer ? 'Total' : node?.key ?? '',
       parentKey: node?.parent?.key ?? null,
       level: node?.level ?? null,

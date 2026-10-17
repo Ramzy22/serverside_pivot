@@ -20,6 +20,7 @@ const filterValues = Object.fromEntries(
   ]),
 );
 const trace: Array<Record<string, unknown>> = [];
+const filterValuesTrace: Array<Record<string, unknown>> = [];
 
 function json(response: ServerResponse, status: number, body: unknown): void {
   response.writeHead(status, { 'content-type': 'application/json; charset=utf-8', 'cache-control': 'no-store' });
@@ -64,6 +65,10 @@ export function createReferenceHandler(fallback: RequestListener = staticFallbac
         json(response, 200, trace);
         return;
       }
+      if (pathname === '/filter-values-trace.json' && request.method === 'GET') {
+        json(response, 200, filterValuesTrace);
+        return;
+      }
       if (pathname === '/api/filter-values' && request.method === 'POST') {
         const payload = await readRequest(request) as { field?: string; filterModel?: QueryRequest['filterModel'] };
         if (!payload || typeof payload.field !== 'string' || !config.filterValueFields.includes(payload.field)
@@ -71,7 +76,9 @@ export function createReferenceHandler(fallback: RequestListener = staticFallbac
           json(response, 400, { error: 'Invalid Set Filter values request' });
           return;
         }
-        json(response, 200, { values: distinctFilterValues(fixture.rows, payload.field, payload.filterModel) });
+        const result = { values: distinctFilterValues(fixture.rows, payload.field, payload.filterModel) };
+        filterValuesTrace.push({ request: payload, response: result });
+        json(response, 200, result);
         return;
       }
       if (pathname === '/api/rows' && request.method === 'POST') {

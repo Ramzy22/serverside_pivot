@@ -26,6 +26,10 @@ DEFAULT_EVIDENCE = ROOT / "artifacts" / "flagship-ag-grid-reference"
 MANIFEST_SCHEMA = 1
 
 
+class ReferenceWorkflowUnavailable(RuntimeError):
+    """The pinned reference exposes no UI path for the requested workflow."""
+
+
 def comparable_requirements():
     return tuple(
         requirement for requirement in load_requirements(CONTRACT)
@@ -62,6 +66,8 @@ def load_case_results(evidence_root: Path, expected_run_id: str) -> tuple[CaseRe
 
 def classify_reference_exception(error: Exception, *, page_loaded: bool) -> str:
     """A visible UI timeout is a failed behavior; unavailable infrastructure is blocked."""
+    if isinstance(error, ReferenceWorkflowUnavailable):
+        return "blocked"
     return "failed" if page_loaded and isinstance(error, TimeoutException) else "blocked"
 
 
@@ -87,7 +93,11 @@ class LiveCase:
         case_dir.mkdir(parents=True, exist_ok=True)
         paths = []
         browser = "unavailable"
-        snapshot = {"observed": self.observed, "diagnostic": diagnostic}
+        snapshot = {"observed": self.observed, "diagnostic": diagnostic,
+                    "provenance": {
+                        "config_sha256": hashlib.sha256((ROOT / "reference" / "ag_grid_36_2" / "reference-config.json").read_bytes()).hexdigest(),
+                        "fixture_sha256": hashlib.sha256((ROOT / "tests" / "data" / "flagship_parity_rows.json").read_bytes()).hexdigest(),
+                    }}
         unexpected_console = []
         if self.driver is not None:
             browser = f"{self.driver.capabilities.get('browserName', 'Chrome')} {self.driver.capabilities.get('browserVersion', 'unknown')}"

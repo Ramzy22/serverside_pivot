@@ -16,7 +16,7 @@ from selenium.webdriver.common.by import By
 from selenium.webdriver.common.keys import Keys
 from openpyxl import load_workbook
 
-from tests.flagship_reference_support import DEFAULT_EVIDENCE, reference_case, start_reference_run
+from tests.flagship_reference_support import DEFAULT_EVIDENCE, ReferenceWorkflowUnavailable, reference_case, start_reference_run
 
 
 pytestmark = pytest.mark.flagship
@@ -530,6 +530,9 @@ def test_reference_hierarchy_expansion_requests_child_and_collapses_cleanly(refe
     """An expand icon without a rendered server child must fail hierarchy parity."""
     with reference_case("hierarchy-expand.round-trip", reference_run) as case:
         driver = case.driver
+        before_rows = _displayed_rows(driver)
+        assert [row["label"] for row in before_rows] == ["\u00c9clair", "M\u00fcnchen", "Total"]
+        assert all(row["id"] for row in before_rows)
         parent = WebDriverWait(driver, 10).until(lambda browser: browser.find_element(
             By.CSS_SELECTOR, '.ag-row[row-index="0"] .ag-group-contracted'
         ))
@@ -538,6 +541,11 @@ def test_reference_hierarchy_expansion_requests_child_and_collapses_cleanly(refe
             visible if any(item["text"] == "東京" for item in visible) else False
         ) if (visible := browser.execute_script("return window.referenceEvidence.visibleCells()")) else False)
         expanded_trace = driver.execute_script("return window.referenceEvidence.trace()")
+        expanded_rows = _displayed_rows(driver)
+        assert [row["label"] for row in expanded_rows] == ["\u00c9clair", "\u6771\u4eac", "M\u00fcnchen", "Total"]
+        assert len({row["id"] for row in expanded_rows}) == 4
+        assert expanded_rows[1]["parentKey"] == "\u00c9clair" and expanded_rows[1]["level"] == 1
+        assert expanded_rows[0]["id"] == before_rows[0]["id"]
         before_columns = driver.execute_script("return window.referenceGrid.getAllDisplayedColumns().map(c => c.getColId())")
         driver.execute_script("document.querySelector('.ag-body-horizontal-scroll-viewport').scrollLeft = document.querySelector('.ag-body-horizontal-scroll-viewport').scrollWidth")
         totals = WebDriverWait(driver, 5).until(lambda browser: (
@@ -548,9 +556,14 @@ def test_reference_hierarchy_expansion_requests_child_and_collapses_cleanly(refe
             visible if not any(item["text"] == "東京" for item in visible) else False
         ) if (visible := browser.execute_script("return window.referenceEvidence.visibleCells()")) else False)
         after_columns = driver.execute_script("return window.referenceGrid.getAllDisplayedColumns().map(c => c.getColId())")
+        collapsed_rows = _displayed_rows(driver)
         case.observed = "Éclair expanded to 東京 via SSRM child request and collapsed; sales 120.25 and grand 200 retained"
-        case.parsed_output = {"expanded_cells": expanded, "total_cells": totals, "collapsed_cells": collapsed,
+        case.parsed_output = {"before_rows": before_rows, "expanded_rows": expanded_rows, "collapsed_rows": collapsed_rows,
+                              "expanded_cells": expanded, "total_cells": totals, "collapsed_cells": collapsed,
                               "before_columns": before_columns, "after_columns": after_columns}
+        assert [row["id"] for row in collapsed_rows] == [row["id"] for row in before_rows]
+        assert [row["data"]["Total|ventes_\u20ac"] for row in collapsed_rows] == [120.25, 79.75, 200]
+        assert all(f"Total|{field}" in after_columns for field in ("ventes_\u20ac", "unit\u00e9s", "\u00e9cart"))
         child_requests = [entry for entry in expanded_trace if entry["request"]["groupKeys"] == ["Éclair"]]
         assert child_requests
         assert child_requests[-1]["response"]["rowData"][0]["account"] == "東京"
@@ -568,6 +581,77 @@ def test_reference_hierarchy_expansion_requests_child_and_collapses_cleanly(refe
             ("0", "Total|ventes_€"): "120.25", ("2", "Total|ventes_€"): "200.00",
         })
         assert before_columns == after_columns
+
+
+def test_reference_global_filter_requires_a_real_search_control(reference_run):
+    """An API-only region filter cannot certify a global-search workflow."""
+    with pytest.raises(ReferenceWorkflowUnavailable, match="global search control"):
+        with reference_case("global-filter.apply-clear", reference_run) as case:
+            driver = case.driver
+            config = driver.execute_script("return window.referenceConfig")
+            controls = driver.find_elements(By.CSS_SELECTOR, 'input[type="search"], [role="searchbox"]')
+            case.parsed_output = {"search_controls": len(controls), "config_fixture_sha256": config["fixtureSha256"]}
+            assert config["options"]["filter"] == {"scope": "Included"}
+            if not controls:
+                raise ReferenceWorkflowUnavailable("Fixed AG Grid reference has no global search control")
+            raise AssertionError("Global-search UI is present; implement the real gesture and SSRM assertion")
+
+
+def test_reference_filter_options_values_follow_active_scope_and_selection(reference_run):
+    """A stale or hard-coded option list, or a selection without SSRM filtering, fails."""
+    with reference_case("filter-options.values", reference_run) as case:
+        driver = case.driver
+        config = driver.execute_script("return window.referenceConfig")
+        assert config["options"]["filter"] == {"scope": "Included"}
+        assert config["filterValueFields"] == ["region", "account", "scope", "period"]
+        assert config["fixtureSha256"] == hashlib.sha256((Path(__file__).parent / "data" / "flagship_parity_rows.json").read_bytes()).hexdigest()
+        snapshots = []
+        for selected, labels, totals in (
+            (True, ["M\u00fcnchen", "Total"], ["79.75", "79.75"]),
+            (False, ["\u00c9clair", "M\u00fcnchen", "Total"], ["120.25", "79.75", "200.00"]),
+        ):
+            prior_values_trace = driver.execute_async_script("""
+              const done = arguments[arguments.length - 1];
+              fetch('/filter-values-trace.json').then(r => r.json()).then(done);
+            """)
+            button = driver.find_element(By.CSS_SELECTOR, '.ag-header-cell[col-id="ag-Grid-AutoColumn"] .ag-header-cell-filter-button')
+            button.click()
+            menu = WebDriverWait(driver, 5).until(lambda browser: browser.find_element(By.CSS_SELECTOR, '.ag-filter-menu'))
+            options = WebDriverWait(driver, 5).until(lambda browser: (
+                items if len(items) == 3 else False
+            ) if (items := menu.find_elements(By.CSS_SELECTOR, '.ag-set-filter-item')) else False)
+            option_labels = [item.text for item in options]
+            assert option_labels == ["(Select All)", "M\u00fcnchen", "\u00c9clair"]
+            values_trace = driver.execute_async_script("""
+              const done = arguments[arguments.length - 1];
+              fetch('/filter-values-trace.json').then(r => { if (!r.ok) throw new Error('filter-values trace unavailable'); return r.json(); })
+                .then(done, error => done({error: String(error)}));
+            """)
+            assert isinstance(values_trace, list) and values_trace, values_trace
+            region_events = [entry for entry in values_trace[len(prior_values_trace):] if entry["request"]["field"] == "region"]
+            assert region_events, values_trace
+            latest = region_events[-1]
+            assert latest["request"] == {"field": "region", "filterModel": {"scope": {"filterType": "set", "values": ["Included"]}, **({"region": {"filterType": "set", "values": ["M\u00fcnchen"]}} if not selected else {})}}
+            assert latest["response"]["values"] == ["\u00c9clair", "M\u00fcnchen"]
+            target = "\u00c9clair" if selected else "(Select All)"
+            request_count = len(driver.execute_script("return window.referenceEvidence.trace()"))
+            next(item for item in options if item.text == target).find_element(By.CSS_SELECTOR, 'input[type="checkbox"]').click()
+            request = _wait_request(driver, request_count)
+            ActionChains(driver).send_keys(Keys.ESCAPE).perform()
+            rows = WebDriverWait(driver, 10).until(lambda browser: (
+                rows if [row["label"] for row in rows] == labels else False
+            ) if (rows := _displayed_rows(browser)) else False)
+            driver.execute_script("document.querySelector('.ag-body-horizontal-scroll-viewport').scrollLeft=99999")
+            cells = _wait_column(driver, "Total|ventes_\u20ac", totals)
+            expected_model = {"scope": {"filterType": "set", "values": ["Included"]}}
+            if selected:
+                expected_model["region"] = {"filterType": "set", "values": ["M\u00fcnchen"]}
+            assert request["request"]["filterModel"] == expected_model
+            assert [row["data"]["Total|ventes_\u20ac"] for row in rows] == ([79.75, 79.75] if selected else [120.25, 79.75, 200])
+            snapshots.append({"options": option_labels, "values_request": latest, "rows": rows, "cells": cells, "ssrm": request})
+            case.parsed_output = snapshots
+            driver.execute_script("document.querySelector('.ag-body-horizontal-scroll-viewport').scrollLeft=0")
+        case.observed = "Opened the real Region Set Filter twice; server option requests honored scope=Included, selecting M\u00fcnchen changed SSRM filter and sales to 79.75, and Select All restored sales 200"
 
 
 def _column_geometry(driver, column):
