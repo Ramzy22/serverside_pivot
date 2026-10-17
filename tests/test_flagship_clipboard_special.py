@@ -2,12 +2,9 @@
 
 import csv
 import io
+import os
 
 import pytest
-from selenium import webdriver
-from selenium.webdriver.common.action_chains import ActionChains
-from selenium.webdriver.common.keys import Keys
-from selenium.webdriver.support.ui import WebDriverWait
 
 from tests.test_flagship_workflows import installed_workflow_hosts
 from tests.test_flagship_certification import (
@@ -22,6 +19,21 @@ from tests.test_flagship_certification import (
 from tests.flagship_browser_support import _selection_menu
 
 
+pytestmark = pytest.mark.skipif(
+    os.environ.get("PIVOT_RUN_FLAGSHIP_BROWSER_TESTS") != "1",
+    reason="Opt in to installed-host clipboard browser qualification",
+)
+
+
+def _browser_tools():
+    from selenium import webdriver
+    from selenium.webdriver.common.action_chains import ActionChains
+    from selenium.webdriver.common.keys import Keys
+    from selenium.webdriver.support.ui import WebDriverWait
+
+    return webdriver, ActionChains, Keys, WebDriverWait
+
+
 @pytest.mark.flagship
 @pytest.mark.parametrize("host", ["dash", "react", "streamlit"])
 @pytest.mark.parametrize(
@@ -30,6 +42,7 @@ from tests.flagship_browser_support import _selection_menu
 )
 def test_installed_host_copies_embedded_delimiters_losslessly(host, field, source, installed_workflow_hosts, tmp_path):
     """Copy Selection retains one logical cell and its source delimiters."""
+    webdriver, ActionChains, Keys, WebDriverWait = _browser_tools()
     downloads = tmp_path / "downloads"
     downloads.mkdir()
     driver = webdriver.Chrome(options=_qualification_chrome_options(downloads))
@@ -51,9 +64,15 @@ def test_installed_host_copies_embedded_delimiters_losslessly(host, field, sourc
                          if cell.is_displayed() and source in (cell.get_attribute("data-rowid") or "")), None)
 
         cell = WebDriverWait(driver, 20).until(source_cell)
+        sentinel = f"before {host} {field} Copy Selection"
+        assert driver.execute_async_script(
+            "const done=arguments[arguments.length-1]; navigator.clipboard.writeText(arguments[0]).then(()=>done(true),()=>done(false));",
+            sentinel,
+        )
         ActionChains(driver).click(cell).context_click(cell).perform()
         _selection_menu(driver, "Copy Selection").click()
-        copied = WebDriverWait(driver, 8).until(lambda current: _clipboard_text(current) or False)
+        copied = WebDriverWait(driver, 8).until(
+            lambda current: (value if (value := _clipboard_text(current)) != sentinel else False))
         parsed = list(csv.reader(io.StringIO(copied, newline=""), delimiter="\t", quotechar='"'))
         assert len(parsed) == 1, (host, field, copied, parsed)
         assert len(parsed[0]) == 1, (host, field, copied, parsed)
@@ -71,6 +90,7 @@ def test_installed_host_copies_embedded_delimiters_losslessly(host, field, sourc
 @pytest.mark.parametrize("host", ["dash", "react", "streamlit"])
 def test_installed_host_server_table_copy_preserves_crlf(host, installed_workflow_hosts, tmp_path):
     """Both server copy commands preserve a CRLF cell and table geometry."""
+    webdriver, ActionChains, Keys, WebDriverWait = _browser_tools()
     downloads = tmp_path / "downloads"
     downloads.mkdir()
     driver = webdriver.Chrome(options=_qualification_chrome_options(downloads))
@@ -106,10 +126,12 @@ def test_installed_host_server_table_copy_preserves_crlf(host, installed_workflo
             copied = WebDriverWait(driver, 30).until(
                 lambda current: (value if (value := _clipboard_text(current)) != sentinel else False))
             parsed = list(csv.reader(io.StringIO(copied, newline=""), delimiter="\t", quotechar='"'))
-            assert parsed and all(len(row) == len(parsed[0]) for row in parsed), (host, menu_label, parsed)
+            assert len(parsed) >= 5 and len(parsed[0]) >= 3, (host, menu_label, parsed)
+            assert all(len(row) == len(parsed[0]) for row in parsed), (host, menu_label, parsed)
             normalized = [[cell.replace("\r\n", "\n") for cell in row] for row in parsed]
-            assert any(cell.endswith("first\nsecond") for row in normalized for cell in row), (
-                host, menu_label, copied, parsed,
-            )
+            matching_rows = [row for row in normalized if any(cell.endswith("first\nsecond") for cell in row)]
+            assert len(matching_rows) == 1, (host, menu_label, copied, parsed)
+            assert any(cell.strip() in {"49.75", "49,75"} for cell in matching_rows[0]), (
+                host, menu_label, copied, parsed)
     finally:
         driver.quit()
