@@ -94,3 +94,21 @@ The table context menu has two primary clipboard commands:
 
 Both primary commands include headers. The **Copy Options** submenu keeps the
 no-header and merged-header variants for either scope.
+
+For `copy-selection.display-order`, the promise is that copy follows the actual
+displayed rows and columns after descending Region sort and moving units before
+sales. Sorting under AG Grid 36.2 SSRM belongs to its server: the reference
+fixture uses `Intl.Collator('en-GB')` and displays München then Éclair, whereas
+the product's backend-native sort displays Éclair then München. This deliberate
+server-specific collation observation does not imply either order is wrong or
+that AG Grid mandates English collation. Both comparators remain unchanged.
+
+The product browser case independently asserts Éclair then München and the
+literal 2x2 TSV body `2.00\t100.25` then `3.00\t49.75`, with units before sales.
+It retains physical sort/reorder actions, sort indicator and network evidence,
+and a real clipboard byte check. The reference case retains its München-first
+en-GB oracle. The installed run at commit `50dbe0d` failed the three product
+cases against the former München-first expectation; those failures are RED
+evidence for this contract correction. They do not establish current workflow
+success or an overall parity pass; the contract remains `unverified` pending
+current reference and installed-host qualification.

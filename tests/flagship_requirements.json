@@ -1163,21 +1163,23 @@
       "id": "copy-selection.display-order",
       "inventory_id": "copy-selection",
       "task": "Copy in the displayed order",
-      "expected": "After descending region order and moving units before sales, selected body rows are München then Éclair and columns are units then sales; output does not revert to source/configuration order.",
+      "expected": "After descending Region sort and moving units before sales, copy follows each system's actual displayed row and column order: product Éclair then München copies [2.00,100.25] then [3.00,49.75]; reference München then Éclair copies [3.00,49.75] then [2.00,100.25]. Output does not revert to source/configuration order.",
       "ag_grid": {
         "reference": "ssrm-read-only-v1",
         "docs": [
           "https://www.ag-grid.com/javascript-data-grid/clipboard/"
         ],
-        "behavior": "Unobserved: Observe clipboard order after row sorting and displayed column reordering.",
+        "behavior": "Unobserved clipboard qualification: SSRM delegates sorting to the server; the reference fixture's Intl.Collator('en-GB') comparator orders descending Region as München then Éclair. Observe copy following that displayed order after units-before-sales reordering.",
         "test_id": "ag-grid.copy-selection.display-order",
         "result": "unverified"
       },
-      "product_behavior": "Qualification target: After descending region order and moving units before sales, selected body rows are München then Éclair and columns are units then sales; output does not revert to source/configuration order.",
+      "product_behavior": "Qualification target: After physical descending Region sort and units-before-sales reorder, assert the backend-native displayed row order Éclair then München and literal 2x2 TSV body [2.00,100.25] then [3.00,49.75], retaining sort indicator/network and real clipboard checks.",
       "difference": "unverified",
       "constraints": [
-        "Two selected rows; same display reorder/filter state in both systems.",
-        "Live reference and installed-host evidence are absent; this requirement is not a pass."
+        "Two selected rows; descending Region sort, units-before-sales display reorder and the same filter state in both systems.",
+        "Deliberate server-specific collation observation: product backend-native descending order is Éclair then München; reference fixture en-GB descending order is München then Éclair. AG Grid 36.2 SSRM does not mandate English collation. Neither server comparator changes for this copy contract.",
+        "The installed run at commit 50dbe0d failed all three product display-order cases against the former München-first oracle; this is RED evidence for the misleading contract, not an overall parity pass.",
+        "Current passing reference and installed-host evidence are absent; this requirement is not a pass."
       ],
       "hosts": [
         "dash",

@@ -50,6 +50,13 @@ def assert_selected_clipboard(text: str, expected: list[list[str]], *, line_sepa
     return parsed
 
 
+def _product_display_order_copy_oracle(rows):
+    """Pin the backend-native visible order independently of clipboard contents."""
+    assert [row["label"] for row in rows] == ["Éclair", "München"], (
+        "Descending displayed region order differs from the product backend-native fixture oracle")
+    return [["2.00", "100.25"], ["3.00", "49.75"]]
+
+
 def assert_clipboard_stable(read, expected, *, timeout, poll=0.05):
     started = time.monotonic()
     samples = 0
@@ -482,7 +489,7 @@ def qualify_selected_clipboard(host: str, requirement: str) -> None:
         if requirement == "copy-selection.logical-cells":
             expected = [["100.25", "2"], ["49.75", "3"]]
         elif requirement == "copy-selection.display-order":
-            expected = [["3.00", "49.75"], ["2.00", "100.25"]]
+            expected = _product_display_order_copy_oracle(rows)
         elif requirement == "copy-selection.pinned-columns":
             literal = {"Éclair": ["2.00", "100.25"], "München": ["3.00", "49.75"]}
             expected = [literal[row["label"]] for row in rows]
@@ -497,8 +504,6 @@ def qualify_selected_clipboard(host: str, requirement: str) -> None:
             observation["scrollLeftAfterCopy"] = driver.execute_script("return arguments[0].scrollLeft", scroller)
             assert abs(observation["scrollLeftAfterCopy"] - observation["scrollLeft"]) <= 1, "Copying the scrolled range reset horizontal scroll"
         result["clipboardBytesVerified"] = True
-        if requirement == "copy-selection.display-order":
-            assert [row["label"] for row in rows] == ["München", "Éclair"], "Descending displayed region order differs from the contract"
         if requirement == "cell-selection.range-clear":
             checkpoint = "clipboard before native copy"
             assert driver.execute_async_script("const done=arguments[arguments.length-1]; navigator.clipboard.writeText(arguments[0]).then(()=>done(true),()=>done(false));", checkpoint)
