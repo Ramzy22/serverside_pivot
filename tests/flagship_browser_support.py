@@ -407,8 +407,47 @@ def qualify_selected_clipboard(host: str, requirement: str) -> None:
         row_ids = [row["id"] for row in rows]
         observation["selectedRows"] = rows
         if requirement == "copy-selection.pinned-columns":
-            if _selection_column_order(driver).index(sales) < _selection_column_order(driver).index(units):
-                _reorder_selection_column(driver, units, Keys.ARROW_LEFT, units, sales, observation)
+            # Pin a later leaf without reordering the core columns. Its displayed
+            # neighbour is Q1 units, but Q1 sales/variance and Q2 units lie between
+            # those endpoints in core order. A core-order rectangle includes
+            # those unwanted cells even though the mouse crosses only two leaves.
+            later = "Q2_ventes_€_sum"
+            core_order = _selection_column_order(driver)
+            assert core_order == initial_order, "Pinned qualification must not pre-reorder core columns"
+            assert core_order.index(later) > core_order.index(units) + 1
+            assert core_order.index(units) < core_order.index(sales) < core_order.index(later)
+            header = _wait_for_visible_workspace_element(driver, f'[role="columnheader"][data-header-column-id="{later}"]')
+            ActionChains(driver).context_click(header).perform()
+            ActionChains(driver).move_to_element(_selection_menu(driver, "Pin")).perform()
+            _selection_menu(driver, "Pin Left").click()
+            wait.until(lambda current: _wait_for_visible_workspace_element(current,
+                f'[role="columnheader"][data-header-column-id="{later}"]').get_attribute("data-pinned") == "left")
+            # Focusing the later header can reveal it by scrolling the center.
+            # Return physically to the start so both boundary cells are exposed.
+            scroller = _wait_for_visible_workspace_element(driver, '[data-pivot-scroll-container]')
+            offset = driver.execute_script("return arguments[0].scrollLeft", scroller)
+            if offset:
+                from selenium.webdriver.common.actions.wheel_input import ScrollOrigin
+                ActionChains(driver).scroll_from_origin(ScrollOrigin.from_element(scroller), -int(offset) - 1, 0).perform()
+                wait.until(lambda current: current.execute_script("return arguments[0].scrollLeft", scroller) == 0)
+            boundary_order = _selection_column_order(driver)
+            assert boundary_order.index(units) == boundary_order.index(later) + 1, "Pinned and center endpoints are not visually adjacent"
+            assert boundary_order != core_order, "Pinning did not distinguish displayed and core order"
+            boundary = {"coreColumnIds": core_order, "displayedColumnIds": boundary_order,
+                        "columns": [later, units], "clipboardLineSeparator": observation["clipboardLineSeparator"]}
+            observation["pinnedBoundarySelection"] = boundary
+            observation["actions"].append("physical drag across adjacent pinned Q2 sales and center Q1 units, without core reorder")
+            boundary["selectedIds"] = _select_rectangle(driver, row_ids, [later, units])
+            assert not any(column == sales for _, column in boundary["selectedIds"]), "Intervening core-order Q1 sales was selected"
+            literal_boundary = {"Éclair": ["20.00", "2.00"], "München": ["30.00", "3.00"]}
+            boundary["expectedClipboardCells"] = [literal_boundary[row["label"]] for row in rows]
+            _copy_selected(driver, _selection_cell(driver, row_ids[0], later),
+                           boundary["expectedClipboardCells"], boundary)
+            header = _wait_for_visible_workspace_element(driver, f'[role="columnheader"][data-header-column-id="{later}"]')
+            ActionChains(driver).context_click(header).perform()
+            _geometry_pin_submenu(driver, "left")
+            _selection_menu(driver, "Unpin").click()
+            wait.until(lambda current: _selection_column_order(current) == core_order)
             columns = [units, sales]
             header = _wait_for_visible_workspace_element(driver, f'[role="columnheader"][data-header-column-id="{units}"]')
             ActionChains(driver).context_click(header).perform()
