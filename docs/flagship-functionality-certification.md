@@ -95,6 +95,19 @@ The table context menu has two primary clipboard commands:
 Both primary commands include headers. The **Copy Options** submenu keeps the
 no-header and merged-header variants for either scope.
 
+Clipboard plain text now uses quoted TSV for values or headers containing a
+tab, line break, or quote; quotes inside a field are doubled. Ordinary fields
+remain unchanged. The shared serializer retains source LF and CRLF bytes, and
+the server HTML-to-TSV copy path protects carriage returns before browser HTML
+parsing. Installed Dash, React, and Streamlit tests verify that tabs and line
+breaks stay within one logical copied cell for selection and that Current Table
+and All Records retain table geometry. Windows Chromium itself converts LF to
+CRLF in `text/plain` and CRLF to LF in `text/html`, so byte-exact line-ending
+identity is not promised after the OS clipboard boundary. The pinned AG Grid
+36.2 SSRM reference fixture's plain-text copy left these delimiters unescaped
+and failed its TSV round-trip oracle; this is a narrow observed advantage, not
+an overall AG Grid comparison or a release-parity pass.
+
 For `copy-selection.display-order`, the promise is that copy follows the actual
 displayed rows and columns after descending Region sort and moving units before
 sales. Sorting under AG Grid 36.2 SSRM belongs to its server: the reference

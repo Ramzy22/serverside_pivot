@@ -1335,15 +1335,15 @@
         "docs": [
           "https://www.ag-grid.com/javascript-data-grid/clipboard/"
         ],
-        "behavior": "Unobserved: Observe clipboard quoting/escaping for embedded tabs under the pinned options.",
+        "behavior": "Observed in the pinned AG Grid 36.2 SSRM fixture: text/plain contains an unescaped embedded tab, so the fixed TSV parser sees an extra field. The reference oracle failed; this is not a general AG Grid claim.",
         "test_id": "ag-grid.copy-selection.tabs",
         "result": "unverified"
       },
-      "product_behavior": "Qualification target: A cell containing 'left\\tright' round-trips through the clipboard TSV parser as one field with its internal tab unchanged; adjacent fields and column count remain exact.",
+      "product_behavior": "The shared clipboard serializer quotes embedded tabs; installed-host selection tests assert one parsed field retaining 'left\\tright' in Dash, React and Streamlit. Overall release qualification remains pending.",
       "difference": "unverified",
       "constraints": [
         "Dedicated edge fixture; tab-containing field is quoted with double quotes in TSV.",
-        "Live reference and installed-host evidence are absent; this requirement is not a pass."
+        "The pinned reference has a failing live browser observation and the product has scoped installed-host tests; these are not yet a complete release-bound parity result."
       ],
       "hosts": [
         "dash",
@@ -1370,21 +1370,22 @@
       "id": "copy-selection.newlines",
       "inventory_id": "copy-selection",
       "task": "Copy cells containing line breaks",
-      "expected": "Cells containing LF and CRLF round-trip as their original strings in a quoted TSV field; no extra logical row is created and the neighboring field remains aligned.",
+      "expected": "The serializer retains exact source LF and CRLF in quoted TSV fields. After the OS clipboard boundary, line-ending normalization is allowed, but each value stays one logical field and does not create an extra row or shift its neighbor.",
       "ag_grid": {
         "reference": "ssrm-read-only-v1",
         "docs": [
           "https://www.ag-grid.com/javascript-data-grid/clipboard/"
         ],
-        "behavior": "Unobserved: Observe clipboard quoting/escaping of LF/CRLF in selected cells.",
+        "behavior": "Observed in the pinned AG Grid 36.2 SSRM fixture: text/plain contains unescaped line breaks, so the fixed TSV parser sees extra rows. The reference oracle failed; this is not a general AG Grid claim.",
         "test_id": "ag-grid.copy-selection.newlines",
         "result": "unverified"
       },
-      "product_behavior": "Qualification target: Cells containing LF and CRLF round-trip as their original strings in a quoted TSV field; no extra logical row is created and the neighboring field remains aligned.",
+      "product_behavior": "The shared serializer quotes source LF and CRLF exactly. Installed-host selection tests parse each as one cell after platform newline normalization; current-table and all-records copy also preserve table geometry. Overall release qualification remains pending.",
       "difference": "unverified",
       "constraints": [
-        "Dedicated edge fixture; compare parsed field content and literal line-break bytes.",
-        "Live reference and installed-host evidence are absent; this requirement is not a pass."
+        "Dedicated edge fixture; compare exact source line-break bytes before the OS clipboard boundary and normalized line-break content afterward.",
+        "Windows Chromium normalizes LF to CRLF in text/plain and CRLF to LF in text/html; exact LF-versus-CRLF round-trip is not promised across that boundary.",
+        "The pinned reference has a failing live browser observation and the product has scoped installed-host tests; these are not yet a complete release-bound parity result."
       ],
       "hosts": [
         "dash",
