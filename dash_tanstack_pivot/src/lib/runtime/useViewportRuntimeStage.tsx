@@ -47,6 +47,7 @@ import { useRuntimeColumnMeasurement } from '../runtime/useRuntimeColumnMeasurem
 import { useRuntimeSelectionFormatting } from '../runtime/useRuntimeSelectionFormatting';
 import { useRuntimeViewSnapshot } from '../runtime/useRuntimeViewSnapshot';
 import { useRuntimeDisplayNavigation } from '../runtime/useRuntimeDisplayNavigation';
+import { getDisplayOrderedLeafColumns } from './displayColumnOrder';
 import { useRuntimeViewRestoreScroll } from '../runtime/useRuntimeViewRestoreScroll';
 import { createRuntimeExportCommands } from '../runtime/createRuntimeExportCommands';
 const LazyPivotChartModal = React.lazy(() => import(/* webpackChunkName: "pivot-charts" */ '../components/Charts/PivotCharts').then(module => ({
@@ -497,7 +498,7 @@ export function useViewportRuntimeStage(input, transport) {
         [key]: value
       };
       stage.setSelectedCells(selectionForMenu);
-      const visibleCols = stage.table.getVisibleLeafColumns();
+      const visibleCols = getDisplayOrderedLeafColumns(stage.table);
       const colIndex = visibleCols.findIndex(c => c.id === colId);
       const displayRowIndex = row ? stage.resolveDisplayRowIndex(row.id, row.index) : -1;
       if (row && displayRowIndex >= 0 && colIndex >= 0) {

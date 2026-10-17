@@ -1,0 +1,16 @@
+/** Rendered positional axis, including non-data gutters: left, center, right. */
+export function getDisplayOrderedLeafColumns(table) {
+  if (!table) return [];
+  const hasPinnedRegions = ['getLeftVisibleLeafColumns', 'getCenterVisibleLeafColumns', 'getRightVisibleLeafColumns']
+    .every(method => typeof table[method] === 'function');
+  return hasPinnedRegions ? [
+    ...table.getLeftVisibleLeafColumns(),
+    ...table.getCenterVisibleLeafColumns(),
+    ...table.getRightVisibleLeafColumns(),
+  ] : typeof table.getVisibleLeafColumns === 'function' ? table.getVisibleLeafColumns() : [];
+}
+
+/** A gutter occupies display space but cannot become a selected data cell. */
+export function isSelectableDisplayColumn(column) {
+  return !!column && column.id !== '__report_config__';
+}

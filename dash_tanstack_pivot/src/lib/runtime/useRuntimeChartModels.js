@@ -1,4 +1,5 @@
 import { useCallback, useMemo } from 'react';
+import { getDisplayOrderedLeafColumns } from './displayColumnOrder';
 
 import {
   TABLE_OVERLAY_CHART_PANE_ID,
@@ -68,7 +69,7 @@ export function useRuntimeChartModels({
   selectedCells,
 }) {
   const chartModelingActive = chartPanelOpen || chartCanvasPanes.length > 0 || !!chartModal || chartPanelLocked || Object.keys(chartPaneDataById).length > 0;
-  const visibleLeafColumns = useMemo(() => table.getVisibleLeafColumns(), [columns, columnVisibility, columnPinning, columnOrderKey, columnSizing]);
+  const visibleLeafColumns = useMemo(() => getDisplayOrderedLeafColumns(table), [table, columns, columnVisibility, columnPinning, columnOrderKey, columnSizing]);
   const chartDisplayRows = useMemo(() => chartModelingActive ? [...effectiveTopRows, ...effectiveCenterRows, ...effectiveBottomRows] : [], [chartModelingActive, effectiveTopRows, effectiveCenterRows, effectiveBottomRows]);
   const liveSelectionChartModel = useMemo(() => !chartModelingActive ? null : chartPanelType === 'combo' ? buildComboSelectionChartModel(selectedCells, chartDisplayRows, visibleLeafColumns, {
     hierarchyLevel: chartPanelHierarchyLevel,

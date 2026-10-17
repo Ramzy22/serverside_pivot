@@ -1,5 +1,6 @@
 import { useCallback, useEffect } from 'react';
 import { isEditableKeyboardTarget } from '../hooks/usePivotNormalization';
+import { getDisplayOrderedLeafColumns, isSelectableDisplayColumn } from './displayColumnOrder';
 
 /**
  * Owns cell-oriented selection: keyboard navigation, range dragging, fill,
@@ -42,13 +43,13 @@ export function useRuntimeCellSelection({
     const cStart = Math.min(start.colIndex, end.colIndex);
     const cEnd = Math.max(start.colIndex, end.colIndex);
     const visibleRows = getDisplayRows();
-    const visibleCols = table.getVisibleLeafColumns();
+    const visibleCols = getDisplayOrderedLeafColumns(table);
     const newSelection = {};
     for (let r = rStart; r <= rEnd; r++) {
       for (let c = cStart; c <= cEnd; c++) {
         const row = visibleRows[r];
         const col = visibleCols[c];
-        if (row && col) {
+        if (row && isSelectableDisplayColumn(col)) {
           newSelection[`${row.id}:${col.id}`] = row.getValue(col.id);
         }
       }
@@ -73,7 +74,8 @@ export function useRuntimeCellSelection({
         return;
       }
     }
-    const visibleLeafColumnsAll = tableRef.current && tableRef.current.getVisibleLeafColumns ? tableRef.current.getVisibleLeafColumns().filter(c => c.id !== '__report_config__') : [];
+    const displayColumns = getDisplayOrderedLeafColumns(tableRef.current);
+    const visibleLeafColumnsAll = displayColumns.filter(isSelectableDisplayColumn);
     const visibleRowsAll = getDisplayRows();
 
     if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'a') {
@@ -87,8 +89,9 @@ export function useRuntimeCellSelection({
       setSelectedCells(allSelection);
       isSelectAllServerRef.current = serverSide;
       if (visibleRowsAll.length > 0 && visibleLeafColumnsAll.length > 0) {
-        setLastSelected({ rowIndex: 0, colIndex: 0 });
-        setDragStart({ rowIndex: 0, colIndex: 0 });
+        const firstDisplayIndex = displayColumns.indexOf(visibleLeafColumnsAll[0]);
+        setLastSelected({ rowIndex: 0, colIndex: firstDisplayIndex });
+        setDragStart({ rowIndex: 0, colIndex: firstDisplayIndex });
       }
       return;
     }
@@ -109,7 +112,11 @@ export function useRuntimeCellSelection({
       return;
     }
     if (!lastSelected) return;
-    const { rowIndex, colIndex } = lastSelected;
+    const { rowIndex } = lastSelected;
+    // Navigate the data columns, then map back onto the rendered positional
+    // axis so gutters never shift mouse, scroll, and keyboard anchors apart.
+    const colIndex = visibleLeafColumnsAll.indexOf(displayColumns[lastSelected.colIndex]);
+    if (colIndex < 0) return;
     let nextRow = rowIndex;
     let nextCol = colIndex;
     const visibleLeafColumns = visibleLeafColumnsAll;
@@ -188,21 +195,23 @@ export function useRuntimeCellSelection({
     const nextRowObj = visibleRowsAll[nextRow];
     const nextColObj = visibleLeafColumns[nextCol];
     if (nextRowObj && nextColObj) {
+      const nextDisplayCol = displayColumns.indexOf(nextColObj);
       const key = `${nextRowObj.id}:${nextColObj.id}`;
       const value = nextRowObj.getValue(nextColObj.id);
       if (e.shiftKey && e.key.startsWith('Arrow')) {
-        setSelectedCells(selectRange(dragStart || lastSelected, { rowIndex: nextRow, colIndex: nextCol }));
+        setSelectedCells(selectRange(dragStart || lastSelected, { rowIndex: nextRow, colIndex: nextDisplayCol }));
       } else {
         setSelectedCells({ [key]: value });
-        setDragStart({ rowIndex: nextRow, colIndex: nextCol });
+        setDragStart({ rowIndex: nextRow, colIndex: nextDisplayCol });
       }
-      setLastSelected({ rowIndex: nextRow, colIndex: nextCol });
+      setLastSelected({ rowIndex: nextRow, colIndex: nextDisplayCol });
       scrollToDisplayRow(nextRow);
-      scrollToDisplayColumn(nextCol);
+      scrollToDisplayColumn(nextDisplayCol);
     }
   }, [buildSelectedClipboardPayload, copyCurrentTableToClipboard, copyRichToClipboard, dragStart, getDisplayRows, handleRedo, handleUndo, isSelectAllServerRef, lastSelected, scrollToDisplayColumn, scrollToDisplayRow, selectedCells, selectRange, serverSide, setDragStart, setLastSelected, setSelectedCells, tableRef]);
 
   const handleCellMouseDown = useCallback((event, rowIndex, colIndex, rowId, colId, value) => {
+    if (!isSelectableDisplayColumn({ id: colId })) return;
     if (event.button === 2) return;
     if (event.shiftKey) {
       event.preventDefault();

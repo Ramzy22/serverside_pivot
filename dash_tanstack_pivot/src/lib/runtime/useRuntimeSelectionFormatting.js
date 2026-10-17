@@ -2,6 +2,7 @@ import { useCallback, useMemo } from 'react';
 
 import { formatAggLabel, formatDisplayLabel } from '../utils/helpers';
 import { normalizeSparklineValConfigsForView } from '../utils/sparklines';
+import { getDisplayOrderedLeafColumns, isSelectableDisplayColumn } from './displayColumnOrder';
 
 const NON_VALUE_SELECTION_COLUMNS = new Set(['hierarchy', '__row_number__', '__report_config__']);
 
@@ -28,7 +29,7 @@ export function useRuntimeSelectionFormatting({
     const keys = Object.keys(selectionMap || {});
     if (keys.length === 0) return null;
     const visibleRows = getDisplayRows();
-    const visibleColumns = table.getVisibleLeafColumns();
+    const visibleColumns = getDisplayOrderedLeafColumns(table).filter(isSelectableDisplayColumn);
     const rowIdMap = {};
     visibleRows.forEach((row, index) => { rowIdMap[row.id] = index; });
     const colIdMap = {};
