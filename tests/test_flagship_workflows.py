@@ -598,3 +598,59 @@ def test_flagship_selected_clipboard(host, requirement, installed_workflow_hosts
     from tests.flagship_browser_support import qualify_selected_clipboard
 
     qualify_selected_clipboard(host, requirement)
+
+
+def test_navigation_response_rejects_child_under_wrong_parent():
+    from tests.flagship_browser_support import _navigation_response_matches
+
+    rows = [
+        {"id": "Grand Total", "path": "__grand_total__", "total": 200, "q1": 150, "q2": 50},
+        {"id": "Éclair", "path": "Éclair", "total": 120.25, "q1": 100.25, "q2": 20},
+        {"id": "München", "path": "München", "total": 79.75, "q1": 49.75, "q2": 30},
+        {"id": "東京", "path": "München|||東京", "total": 120.25, "q1": 100.25, "q2": 20},
+    ]
+    assert not _navigation_response_matches({"rows": rows}, ("東京",))
+
+
+def test_navigation_dom_rejects_wrong_rendered_group_total():
+    from tests.flagship_browser_support import _navigation_dom_matches
+
+    cells = [
+        {"rowid": rowid, "colid": colid, "text": value}
+        for rowid, values in {
+            "Éclair": ("100", "20", "120"),
+            "München": ("50", "30", "80"),
+            "__grand_total__": ("150", "50", "200"),
+            "Éclair|||東京": ("100", "20", "999"),
+        }.items()
+        for colid, value in zip(
+            ("Q1_ventes_€_sum", "Q2_ventes_€_sum", "__RowTotal__ventes_€_sum"), values)
+    ]
+    assert not _navigation_dom_matches(cells, ("東京",))
+
+
+def test_navigation_dom_rejects_duplicate_cell_with_conflicting_value():
+    from tests.flagship_browser_support import _navigation_dom_matches
+
+    columns = ("Q1_ventes_€_sum", "Q2_ventes_€_sum", "__RowTotal__ventes_€_sum")
+    cells = [
+        {"rowid": rowid, "colid": colid, "text": value}
+        for rowid, values in {
+            "Éclair": ("100", "20", "120"),
+            "München": ("50", "30", "80"),
+            "__grand_total__": ("150", "50", "200"),
+        }.items()
+        for colid, value in zip(columns, values)
+    ]
+    cells.append({"rowid": "Éclair", "colid": columns[2], "text": "999"})
+    assert not _navigation_dom_matches(cells, ())
+
+
+@pytest.mark.flagship
+@pytest.mark.parametrize("host", ["dash", "react", "streamlit"])
+@pytest.mark.parametrize("requirement", ["hierarchy-expand.round-trip", "hierarchy-expand-all.round-trip"])
+def test_flagship_hierarchy_navigation(host, requirement, installed_workflow_hosts):
+    """A real installed grid must change rows and correlate V1 traffic after expansion."""
+    from tests.flagship_browser_support import qualify_hierarchy_navigation
+
+    qualify_hierarchy_navigation(host, requirement)

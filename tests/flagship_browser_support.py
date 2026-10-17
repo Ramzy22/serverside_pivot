@@ -33,6 +33,7 @@ _SAFE_OBSERVATIONS = frozenset({
     "pinnedNoDuplicates", "horizontalScrollVerified", "rangeCleared", "clearedCopyAbsent",
     "selectedCellCount",
     "nativeKeyboardCopyVerified", "clearedClipboardMonitored",
+    "expandedChildrenVerified", "collapsedChildrenVerified", "v1RequestsCorrelated",
 })
 
 
@@ -799,3 +800,304 @@ def qualify_runtime_recovery(host: str) -> None:
             record_case(requirement, host, result, directory)
     failed = [name for name, result in results.items() if result["result"] != "passed"]
     assert not failed, f"{host} workflow requirements did not pass: {', '.join(failed)}; {diagnostic}; evidence: {directory}"
+
+
+_NAVIGATION_PROBE_SCRIPT = r"""
+if (!window.__pivotNavigationTrace) {
+  const trace = [];
+  const visit = (raw, phase) => {
+    let value = raw;
+    if (typeof value === 'string') { try { value = JSON.parse(value); } catch (_) { return; } }
+    if (!value || typeof value !== 'object') return;
+    if (value.schemaVersion === 1 && value.kind === 'data' && typeof value.requestId === 'string') {
+      const rows = Array.isArray(value.payload?.data) ? value.payload.data : [];
+      trace.push({phase, at: performance.now(), requestId: value.requestId,
+        schemaVersion: value.schemaVersion, status: value.status || null,
+        rows: rows.map(row => ({id: row?._id, path: row?._path,
+          total: row?.['__RowTotal__ventes_€_sum'],
+          q1: row?.['Q1_ventes_€_sum'], q2: row?.['Q2_ventes_€_sum']}))});
+      return;
+    }
+    if (Array.isArray(value)) value.forEach(item => visit(item, phase));
+    else Object.values(value).forEach(item => visit(item, phase));
+  };
+  const originalFetch = window.fetch.bind(window);
+  window.fetch = (...args) => {
+    if (args[1]?.body) visit(args[1].body, 'request');
+    return originalFetch(...args).then(response => {
+      response.clone().text().then(body => visit(body, 'response')).catch(() => {});
+      return response;
+    });
+  };
+  const originalSend = XMLHttpRequest.prototype.send;
+  XMLHttpRequest.prototype.send = function(body) {
+    visit(body, 'request');
+    this.addEventListener('load', () => visit(this.responseText, 'response'));
+    return originalSend.call(this, body);
+  };
+  window.__pivotNavigationTrace = trace;
+}
+"""
+
+
+def _navigation_rows(driver):
+    return driver.execute_script("""
+      const rows = [];
+      const visit = root => {
+        for (const cell of root.querySelectorAll('[role="gridcell"][data-colid="hierarchy"]')) {
+          if (cell.getClientRects().length && cell.innerText.trim())
+            rows.push([cell.getAttribute('data-rowid'), cell.innerText.trim()]);
+        }
+        for (const element of root.querySelectorAll('*')) if (element.shadowRoot) visit(element.shadowRoot);
+      };
+      visit(document);
+      return rows;
+    """)
+
+
+def _navigation_columns(driver):
+    return driver.execute_script("""
+      const ids = [];
+      const visit = root => {
+        for (const cell of root.querySelectorAll('[role="gridcell"][data-colid]')) {
+          if (cell.getClientRects().length && cell.getAttribute('data-rowid') === 'Éclair')
+            ids.push(cell.getAttribute('data-colid'));
+        }
+        for (const element of root.querySelectorAll('*')) if (element.shadowRoot) visit(element.shadowRoot);
+      };
+      visit(document);
+      return ids;
+    """)
+
+
+def _navigation_cells(driver):
+    return driver.execute_script("""
+      const cells = [];
+      const visit = root => {
+        for (const cell of root.querySelectorAll('[role="gridcell"][data-colid][data-rowid]')) {
+          if (cell.getClientRects().length) cells.push({
+            rowid: cell.getAttribute('data-rowid'),
+            colid: cell.getAttribute('data-colid'),
+            text: cell.innerText.trim(),
+          });
+        }
+        for (const element of root.querySelectorAll('*')) if (element.shadowRoot) visit(element.shadowRoot);
+      };
+      visit(document);
+      return cells;
+    """)
+
+
+def _navigation_dom_matches(cells, expected_children):
+    columns = ("Q1_ventes_€_sum", "Q2_ventes_€_sum", "__RowTotal__ventes_€_sum")
+    expected = {
+        "Éclair": ("100", "20", "120"),
+        "München": ("50", "30", "80"),
+        "__grand_total__": ("150", "50", "200"),
+        "Éclair|||東京": ("100", "20", "120"),
+        "München|||القاهرة": ("50", "30", "80"),
+    }
+    keys = {"Éclair", "München", "__grand_total__"}
+    keys.update({"東京": "Éclair|||東京", "القاهرة": "München|||القاهرة"}[child]
+                for child in expected_children)
+    actual = [(cell["rowid"], cell["colid"], cell["text"])
+              for cell in cells if cell["colid"] in columns]
+    if len(actual) != len(keys) * len(columns):
+        return False
+    if len({(rowid, colid) for rowid, colid, _ in actual}) != len(actual):
+        return False
+    if {rowid for rowid, _, _ in actual} != keys:
+        return False
+    return all((rowid, colid, value) in actual
+               for rowid in keys for colid, value in zip(columns, expected[rowid]))
+
+
+def _navigation_response_matches(entry, expected_children):
+    rows = [row for row in entry["rows"] if row.get("id")]
+    by_id = {row["id"]: row for row in rows}
+    if len(by_id) != len(rows):
+        return False
+    expected = {
+        "Grand Total": (200, 150, 50),
+        "Éclair": (120.25, 100.25, 20),
+        "München": (79.75, 49.75, 30),
+        "東京": (120.25, 100.25, 20),
+        "القاهرة": (79.75, 49.75, 30),
+    }
+    for key in ("Grand Total", "Éclair", "München", *expected_children):
+        row = by_id.get(key)
+        if not row or (row.get("total"), row.get("q1"), row.get("q2")) != expected[key]:
+            return False
+        expected_path = {
+            "Grand Total": "__grand_total__",
+            "Éclair": "Éclair",
+            "München": "München",
+            "東京": "Éclair|||東京",
+            "القاهرة": "München|||القاهرة",
+        }[key]
+        if row.get("path") != expected_path:
+            return False
+    return {key for key in ("東京", "القاهرة") if key in by_id} == set(expected_children)
+
+
+def _navigation_response_after(trace, checkpoint, expected_children):
+    requests = {entry["requestId"] for entry in trace
+                if entry["phase"] == "request" and entry["at"] > checkpoint}
+    return next((entry for entry in trace if entry["phase"] == "response"
+                 and entry["requestId"] in requests and entry["status"] == "data"
+                 and entry["at"] > checkpoint
+                 and _navigation_response_matches(entry, expected_children)), None)
+
+
+def qualify_hierarchy_navigation(host: str, requirement: str) -> None:
+    """Exercise hierarchy controls on installed artifacts and record exact V1/DOM evidence."""
+    import pytest
+
+    if os.environ.get("PIVOT_RUN_FLAGSHIP_BROWSER_TESTS") != "1":
+        pytest.skip("Enable installed flagship browser qualification explicitly")
+    if not os.environ.get("PIVOT_FLAGSHIP_ARTIFACT_BINDING"):
+        pytest.fail("Installed artifact binding is required")
+    from scripts.flagship_artifacts import load_artifact_binding
+    from tests.test_flagship_certification import (
+        _qualification_chrome_options, _switch_to_workspace, _wait_for_visible_workspace_element,
+        _verify_release_asset_batch,
+    )
+    from selenium import webdriver
+    from selenium.webdriver.common.action_chains import ActionChains
+    from selenium.webdriver.support.ui import WebDriverWait
+
+    run_id = os.environ["PIVOT_FLAGSHIP_RUN_ID"]
+    directory = Path(os.environ["PIVOT_FLAGSHIP_EVIDENCE_ROOT"]) / requirement / host
+    assert ("runs", run_id) in tuple(zip(directory.parts, directory.parts[1:]))
+    directory.mkdir(parents=True, exist_ok=True)
+    downloads = directory / "downloads"
+    downloads.mkdir(exist_ok=True)
+    binding = load_artifact_binding(Path(os.environ["PIVOT_FLAGSHIP_ARTIFACT_BINDING"]))
+    driver = None
+    result = {"result": "blocked", "browser": "unavailable", "infrastructureUnavailable": True}
+    observation = {"requirement": requirement, "states": []}
+    paths = []
+    diagnostic = ""
+    try:
+        driver = webdriver.Chrome(options=_qualification_chrome_options(downloads))
+        driver._pivot_artifact_binding, driver._pivot_artifact_host = binding, host
+        driver._pivot_loaded_assets = {}
+        driver.execute_cdp_cmd("Network.enable", {"maxTotalBufferSize": 50000000, "maxResourceBufferSize": 50000000})
+        driver.execute_cdp_cmd("Page.addScriptToEvaluateOnNewDocument", {"source": _NAVIGATION_PROBE_SCRIPT})
+        _switch_to_workspace(driver, host)
+        result.update(result="failed", browser=f"{driver.capabilities['browserName']} {driver.capabilities['browserVersion']}",
+                      infrastructureUnavailable=False)
+        wait = WebDriverWait(driver, 15)
+        initial = _navigation_rows(driver)
+        assert [label for _, label in initial].count("Éclair") == 1
+        assert [label for _, label in initial].count("München") == 1
+        assert not any(label in ("東京", "القاهرة") for _, label in initial)
+        assert _totals(driver), "Initial fixture grand total is missing"
+        initial_columns = _navigation_columns(driver)
+        assert {"Q1_ventes_€_sum", "Q2_ventes_€_sum"}.issubset(initial_columns)
+        initial_cells = _navigation_cells(driver)
+        assert _navigation_dom_matches(initial_cells, ())
+        observation["states"].append({"phase": "initial", "rows": initial, "columns": initial_columns,
+                                      "salesCells": [cell for cell in initial_cells if "ventes_€_sum" in cell["colid"]]})
+
+        if requirement == "hierarchy-expand.round-trip":
+            parent_id = next(row_id for row_id, label in initial if label == "Éclair")
+            parent = _selection_cell(driver, parent_id, "hierarchy")
+            checkpoint = driver.execute_script("return performance.now()")
+            parent.find_element("css selector", "button").click()
+            expected_children = ("東京",)
+        else:
+            from tests.test_flagship_certification import _wait_for_visible_workspace_element
+            header = _wait_for_visible_workspace_element(driver, '[role="columnheader"][data-header-column-id="hierarchy"]')
+            ActionChains(driver).context_click(header).perform()
+            checkpoint = driver.execute_script("return performance.now()")
+            _selection_menu(driver, "Expand All Rows").click()
+            expected_children = ("東京", "القاهرة")
+
+        def expanded(current):
+            rows = _navigation_rows(current)
+            labels = [label for _, label in rows]
+            trace = current.execute_script("return window.__pivotNavigationTrace || []")
+            return (all(labels.count(child) == 1 for child in expected_children)
+                    and _navigation_response_after(trace, checkpoint, expected_children)
+                    and _totals(current))
+
+        wait.until(expanded)
+        expanded_rows = _navigation_rows(driver)
+        labels = [label for _, label in expanded_rows]
+        assert labels.count("Éclair") == labels.count("München") == 1
+        assert labels.index("Éclair") < labels.index("東京")
+        assert "München" not in labels[labels.index("Éclair") + 1:labels.index("東京")]
+        if requirement == "hierarchy-expand-all.round-trip":
+            assert labels.index("München") < labels.index("القاهرة")
+            assert "Éclair" not in labels[labels.index("München") + 1:labels.index("القاهرة")]
+        response = _navigation_response_after(
+            driver.execute_script("return window.__pivotNavigationTrace || []"), checkpoint, expected_children)
+        assert response is not None
+        expanded_columns = _navigation_columns(driver)
+        assert set(expanded_columns) == set(initial_columns)
+        expanded_cells = _navigation_cells(driver)
+        assert _navigation_dom_matches(expanded_cells, expected_children)
+        observation["states"].append({"phase": "expanded", "rows": expanded_rows,
+                                      "columns": expanded_columns, "responseRequestId": response["requestId"],
+                                      "salesCells": [cell for cell in expanded_cells if "ventes_€_sum" in cell["colid"]]})
+        driver.save_screenshot(str(directory / "expanded.png"))
+        paths.append(str(directory / "expanded.png"))
+
+        checkpoint = driver.execute_script("return performance.now()")
+        if requirement == "hierarchy-expand.round-trip":
+            _selection_cell(driver, parent_id, "hierarchy").find_element("css selector", "button").click()
+        else:
+            header = _wait_for_visible_workspace_element(driver, '[role="columnheader"][data-header-column-id="hierarchy"]')
+            ActionChains(driver).context_click(header).perform()
+            _selection_menu(driver, "Collapse All Rows").click()
+
+        def collapsed(current):
+            rows = _navigation_rows(current)
+            labels = [label for _, label in rows]
+            trace = current.execute_script("return window.__pivotNavigationTrace || []")
+            return (all(child not in labels for child in expected_children)
+                    and _navigation_response_after(trace, checkpoint, ()) and _totals(current))
+
+        wait.until(collapsed)
+        final_rows = _navigation_rows(driver)
+        final_labels = [label for _, label in final_rows]
+        assert final_labels.count("Éclair") == final_labels.count("München") == 1
+        assert all(child not in final_labels for child in ("東京", "القاهرة"))
+        collapsed_response = _navigation_response_after(
+            driver.execute_script("return window.__pivotNavigationTrace || []"), checkpoint, ())
+        assert collapsed_response is not None
+        collapsed_columns = _navigation_columns(driver)
+        assert set(collapsed_columns) == set(initial_columns)
+        collapsed_cells = _navigation_cells(driver)
+        assert _navigation_dom_matches(collapsed_cells, ())
+        observation["states"].append({"phase": "collapsed", "rows": final_rows,
+                                      "columns": collapsed_columns,
+                                      "responseRequestId": collapsed_response["requestId"],
+                                      "salesCells": [cell for cell in collapsed_cells if "ventes_€_sum" in cell["colid"]]})
+        result.update(result="passed", actionCompleted=True, fixtureTotalsVerified=True,
+                      expandedChildrenVerified=True, collapsedChildrenVerified=True,
+                      v1RequestsCorrelated=True)
+    except Exception as error:
+        frame = traceback.extract_tb(error.__traceback__)[-1]
+        diagnostic = f"{type(error).__name__} at {Path(frame.filename).name}:{frame.lineno}: {error}"
+    finally:
+        if driver is not None:
+            try:
+                _verify_release_asset_batch(driver, require_assets=True)
+                result["loadedAssetSha256"] = dict(driver._pivot_loaded_assets)
+                driver.save_screenshot(str(directory / "final.png"))
+                paths.append(str(directory / "final.png"))
+                observation["v1Trace"] = driver.execute_script("return window.__pivotNavigationTrace || []")
+            except Exception as error:
+                result["result"] = "blocked"
+                diagnostic += f"; evidence collection: {type(error).__name__}"
+            finally:
+                driver.quit()
+        observation.update(diagnostic=diagnostic, result={k: v for k, v in result.items() if k != "loadedAssetSha256"})
+        evidence = directory / "observation.json"
+        evidence.write_text(json.dumps(observation, ensure_ascii=False, indent=2), encoding="utf-8")
+        paths.append(str(evidence))
+        result["evidence_paths"] = paths
+        record_case(requirement, host, result, directory)
+    assert result["result"] == "passed", f"{host} {requirement}: {diagnostic}; evidence: {directory}"
