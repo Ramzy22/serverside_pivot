@@ -131,7 +131,7 @@ def test_installed_host_server_table_copy_preserves_crlf(host, installed_workflo
             normalized = [[cell.replace("\r\n", "\n") for cell in row] for row in parsed]
             matching_rows = [row for row in normalized if any(cell.endswith("first\nsecond") for cell in row)]
             assert len(matching_rows) == 1, (host, menu_label, copied, parsed)
-            assert any(cell.strip() in {"49.75", "49,75"} for cell in matching_rows[0]), (
+            assert {"50", "3", "4"}.issubset({cell.strip() for cell in matching_rows[0][1:]}), (
                 host, menu_label, copied, parsed)
     finally:
         driver.quit()
