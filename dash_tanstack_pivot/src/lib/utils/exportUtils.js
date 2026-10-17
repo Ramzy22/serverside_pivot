@@ -553,6 +553,7 @@ export function buildStyledHtmlTableExport({
     columns = null,
     includeHeaders = true,
     getHeaderLabel = null,
+    getHeaderStack = null,
     getHeaderStyle = null,
     getCellValue = null,
     getCellStyle = null,
@@ -589,7 +590,26 @@ export function buildStyledHtmlTableExport({
 
         // HTML header: multi-level when table has multiple header groups
         const headerGroups = table && typeof table.getHeaderGroups === 'function' ? table.getHeaderGroups() : [];
-        if (headerGroups.length > 1) {
+        if (typeof getHeaderStack === 'function') {
+            const merged = buildMergedHeaderRows(exportColumns, { getHeaderStack, getHeaderLabel });
+            merged.rows.forEach(({ cells }) => {
+                const rowCells = cells.map((cell) => {
+                    const column = exportColumns[cell.startIndex];
+                    const width = cell.colSpan === 1 ? getColumnSize(column) : null;
+                    const style = {
+                        ...DEFAULT_HEADER_STYLE,
+                        width: width ? `${width}px` : undefined,
+                        minWidth: width ? `${width}px` : undefined,
+                        ...(typeof getHeaderStyle === 'function' ? getHeaderStyle(column, cell.startIndex) : null),
+                    };
+                    let attrs = `style="${escapeHtml(styleObjectToCss(style))}"`;
+                    if (cell.colSpan > 1) attrs += ` colspan="${cell.colSpan}"`;
+                    if (cell.rowSpan > 1) attrs += ` rowspan="${cell.rowSpan}"`;
+                    return `<th ${attrs}>${escapeHtml(cell.label)}</th>`;
+                }).join('');
+                htmlRows.push(`<tr>${rowCells}</tr>`);
+            });
+        } else if (headerGroups.length > 1) {
             headerGroups.forEach((hg) => {
                 let rowCells = '';
                 hg.headers.forEach((h) => {

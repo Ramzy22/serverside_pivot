@@ -34,6 +34,9 @@ _SAFE_OBSERVATIONS = frozenset({
     "selectedCellCount",
     "nativeKeyboardCopyVerified", "clearedClipboardMonitored",
     "expandedChildrenVerified", "collapsedChildrenVerified", "v1RequestsCorrelated",
+    "resizeDeltaVerified", "autoSizeFitVerified", "autoSizeIdempotent", "pinRoundTripVerified",
+    "geometryScrollVerified", "logicalValuesPreserved",
+    "clipboardOrderVerified", "lastColumnVisible",
 })
 
 
@@ -57,6 +60,52 @@ def assert_clipboard_stable(read, expected, *, timeout, poll=0.05):
         if elapsed >= timeout:
             return {"durationSeconds": elapsed, "sampleCount": samples, "pollSeconds": poll}
         time.sleep(min(poll, timeout - elapsed))
+
+
+def assert_resize_geometry(before, after):
+    assert abs((after["width"] - before["width"]) - 40) <= 2, "Resize missed +40±2 CSS px"
+    assert after["order"] == before["order"], "Resize changed displayed column order"
+    assert after["cells"] == before["cells"], "Resize changed logical cell IDs or values"
+    assert after["neighbors"] == before["neighbors"], "Resize changed neighboring cell IDs or values"
+
+
+def assert_auto_size_geometry(before, first, second, *, min_width, max_width):
+    assert first["order"] == before["order"] == second["order"], "Auto-size hid or reordered a column"
+    assert min_width <= first["width"] <= max_width, "Auto-size exceeded column bounds"
+    assert first["width"] >= before["requiredWidth"], "Auto-size clipped longest visible text"
+    assert first["fits"] is True and second["fits"] is True, "Auto-sized rendered text overflows its column"
+    assert abs(second["width"] - first["width"]) <= 2, "Repeated auto-size was not idempotent"
+
+
+def assert_pin_round_trip(before, pinned, scrolled, end, restored, column):
+    assert pinned["pinnedLeft"] == [column] and scrolled["pinnedLeft"] == [column], "Target column not pinned left"
+    expected_order = [before["order"][0], column, *[id for id in before["order"][1:] if id != column]]
+    assert pinned["order"] == expected_order, "Pin did not change logical column order to the requested position"
+    assert len(set(pinned["order"])) == len(pinned["order"]), "Pinned column duplicated"
+    assert scrolled["order"] == pinned["order"], "Horizontal scroll changed pinned logical order"
+    assert scrolled["scrollLeft"] > pinned["scrollLeft"], "Horizontal scroll did not move"
+    assert abs(scrolled["pinnedX"] - pinned["pinnedX"]) <= 1, "Pinned column moved during scroll"
+    assert scrolled["centerX"] < pinned["centerX"] - 1, "Center column did not move during scroll"
+    assert end["pinnedLeft"] == [column] and abs(end["pinnedX"] - pinned["pinnedX"]) <= 1, "Pinned cell did not survive last-column scroll"
+    assert end["scrollLeft"] > scrolled["scrollLeft"] and abs(end["scrollLeft"] - end["maxScrollLeft"]) <= 2, "Did not reach last horizontal column"
+    assert end["lastColumnVisible"] is True, "Last column is not actually visible"
+    assert all(state["cells"] == before["cells"] for state in (pinned, scrolled, end, restored)), "Pinning changed or duplicated logical cells"
+    assert restored["pinnedLeft"] == before["pinnedLeft"] == [], "Unpin did not clear left pin"
+    assert restored["order"] == before["order"], "Unpin did not restore prior logical order"
+
+
+def assert_pinned_clipboard_order(rows, order):
+    assert len(order) >= 4 and order[0] == "hierarchy", "Pinned clipboard oracle requires the fixed fixture layout"
+    assert order[1] == "Q2_ventes_€_sum", "Q2 sales was not first displayed measure"
+    assert len(rows) >= 3 and len(rows[0]) == len(order), "Clipboard headers missing or column count changed"
+    assert all(label.strip() for label in rows[0]), "Clipboard header label missing"
+    assert all(len(row) == len(order) for row in rows[1:]), "Clipboard row width differs from header/order"
+    by_label = {row[0]: row for row in rows[1:] if row[0] in ("Éclair", "München")}
+    assert len(by_label) == 2 and sum(row[0] in by_label for row in rows[1:]) == 2, "Fixture rows missing or duplicated"
+    for label, q2, q1 in (("Éclair", 20, 100), ("München", 30, 50)):
+        row = by_label[label]
+        assert float(row[order.index("Q2_ventes_€_sum")]) == q2, "Pinned Q2 sales not in clipboard display position"
+        assert float(row[order.index("Q1_ventes_€_sum")]) == q1, "Unpinned Q1 sales shifted or changed in clipboard"
 
 
 def _selection_ids(driver):
@@ -450,6 +499,316 @@ def qualify_selected_clipboard(host: str, requirement: str) -> None:
             finally:
                 driver.quit()
         observation.update(diagnostic=diagnostic, result=result)
+        evidence = directory / "observation.json"
+        evidence.write_text(json.dumps(observation, ensure_ascii=False, indent=2), encoding="utf-8")
+        paths.append(str(evidence))
+        result["evidence_paths"] = paths
+        record_case(requirement, host, result, directory)
+    assert result["result"] == "passed", f"{host} {requirement}: {diagnostic}; evidence: {directory}"
+
+
+def _geometry_header(driver, column):
+    from tests.test_flagship_certification import _workspace_elements
+
+    candidates = _workspace_elements(driver, f'[role="columnheader"][data-header-column-id="{column}"]')
+    return next((header for header in candidates if header.is_displayed() and
+                 header.find_elements("css selector", 'div[style*="cursor: col-resize"]')), None)
+
+
+def _geometry_snapshot(driver, column, *, center="Q1_unités_sum"):
+    from tests.test_flagship_certification import _workspace_elements
+
+    header = _geometry_header(driver, column)
+    assert header is not None, f"Visible resizable header {column} absent"
+    rows = _selection_rows(driver)
+    assert len(rows) == 2 and {row["label"] for row in rows} == {"Éclair", "München"}
+    ids = [row["id"] for row in rows]
+    target_cells = [cell for cell in _workspace_elements(driver, f'[role="gridcell"][data-colid="{column}"]')
+                    if cell.is_displayed() and cell.get_attribute("data-rowid") in ids]
+    assert len(target_cells) == 2, "Target logical cells are missing or duplicated"
+    cells = sorted((cell.get_attribute("data-rowid"), cell.get_attribute("data-colid"), cell.text.strip())
+                   for cell in target_cells)
+    assert all(value for _, _, value in cells), "Visible target value missing"
+    neighbor_cells = [cell for cell in _workspace_elements(driver, '[role="gridcell"][data-colid="Q1_unités_sum"]')
+                      if cell.is_displayed() and cell.get_attribute("data-rowid") in ids]
+    assert len(neighbor_cells) == 2, "Neighbor logical cells are missing or duplicated"
+    neighbors = sorted((cell.get_attribute("data-rowid"), cell.get_attribute("data-colid"), cell.text.strip())
+                       for cell in neighbor_cells)
+    scroller = next((el for el in _workspace_elements(driver, '[data-pivot-scroll-container]') if el.is_displayed()), None)
+    assert scroller is not None, "Grid scroll container absent"
+    rect = lambda element: driver.execute_script("return arguments[0].getBoundingClientRect().toJSON()", element)
+    center_cell = _selection_cell(driver, ids[0], center)
+    fits = driver.execute_script("""
+      const content=arguments[0].querySelector('[data-header-content="true"]');
+      return content.scrollWidth <= content.clientWidth+2
+        && arguments[1].every(cell => cell.scrollWidth <= cell.clientWidth+2);
+    """, header, target_cells)
+    return {"width": rect(header)["width"], "order": _selection_column_order(driver),
+            "cells": cells, "neighbors": neighbors, "fits": fits,
+            "pinnedLeft": [column] if header.get_attribute("data-pinned") == "left" else [],
+            "pinnedX": rect(target_cells[0])["left"], "centerX": rect(center_cell)["left"],
+            "scrollLeft": driver.execute_script("return arguments[0].scrollLeft", scroller)}
+
+
+def _geometry_required_width(driver, column):
+    """Read natural rendered text and computed chrome without altering the DOM."""
+    from tests.test_flagship_certification import _workspace_elements
+
+    header = _geometry_header(driver, column)
+    assert header is not None
+    labels = header.find_elements("css selector", '[data-header-text="true"]')
+    cells = [cell for cell in _workspace_elements(driver, f'[role="gridcell"][data-colid="{column}"]')
+             if cell.is_displayed()]
+    assert labels and cells
+    return driver.execute_script("""
+      const chrome = (style) => ['paddingLeft','paddingRight','borderLeftWidth','borderRightWidth']
+        .reduce((sum,key) => sum + (parseFloat(style[key]) || 0), 0);
+      const naturalText = element => {
+        const canvas = document.createElement('canvas'), context = canvas.getContext('2d');
+        context.font = getComputedStyle(element).font;
+        return context.measureText(element.innerText.trim()).width;
+      };
+      const header = arguments[0], labels = arguments[1], cells = arguments[2];
+      const content = header.querySelector('[data-header-content="true"]');
+      const label = labels[0];
+      const controls = [...content.children].filter(child => child !== label)
+        .reduce((sum,child) => {
+          const style = getComputedStyle(child);
+          return sum + child.getBoundingClientRect().width + (parseFloat(style.marginLeft)||0)
+            + (parseFloat(style.marginRight)||0);
+        }, 0);
+      const headerNeed = naturalText(label) + controls + chrome(getComputedStyle(header))
+        + chrome(getComputedStyle(content)) + chrome(getComputedStyle(label));
+      const clone = content.cloneNode(true);
+      Object.assign(clone.style, {position:'absolute',left:'-100000px',top:'0',visibility:'hidden',
+        pointerEvents:'none',width:'max-content',minWidth:'0',maxWidth:'none',overflow:'visible',
+        display:'inline-flex',flex:'0 0 auto'});
+      for (const text of clone.querySelectorAll('[data-header-text="true"]'))
+        Object.assign(text.style, {flex:'0 0 auto',width:'auto',minWidth:'0',maxWidth:'none',
+          overflow:'visible',textOverflow:'clip',display:'inline-block'});
+      header.appendChild(clone);
+      const cloneWidth = Math.ceil(clone.scrollWidth || clone.getBoundingClientRect().width || 0);
+      header.removeChild(clone);
+      const cellNeed = Math.max(...cells.map(cell => naturalText(cell) + chrome(getComputedStyle(cell))));
+      return {requiredWidth: Math.ceil(Math.max(headerNeed, cellNeed)),
+        headerTextWidth: naturalText(label), headerControlsWidth: controls,
+        headerChrome:chrome(getComputedStyle(header)), contentChrome:chrome(getComputedStyle(content)),
+        labelChrome:chrome(getComputedStyle(label)), cloneWidth,
+        cellTextWidths: cells.map(naturalText),
+        renderedOverflow: content.scrollWidth > content.clientWidth + 2
+          || cells.some(cell => cell.scrollWidth > cell.clientWidth + 2)};
+    """, header, labels, cells)
+
+
+def _geometry_at_end(driver, column, last_column):
+    from tests.test_flagship_certification import _workspace_elements
+
+    scroller = next(el for el in _workspace_elements(driver, '[data-pivot-scroll-container]') if el.is_displayed())
+    target = next(cell for cell in _workspace_elements(driver, f'[role="gridcell"][data-colid="{column}"]')
+                  if cell.is_displayed() and cell.get_attribute("data-rowid") == "Éclair")
+    last = next(cell for cell in _workspace_elements(driver, f'[role="gridcell"][data-colid="{last_column}"]')
+                if cell.is_displayed() and cell.get_attribute("data-rowid") == "Éclair")
+    return driver.execute_script("""
+      const [scroller,target,last] = arguments;
+      const viewport=scroller.getBoundingClientRect(), pinned=target.getBoundingClientRect(), end=last.getBoundingClientRect();
+      return {scrollLeft:scroller.scrollLeft,maxScrollLeft:scroller.scrollWidth-scroller.clientWidth,
+        pinnedX:pinned.left,lastColumnVisible:end.right<=viewport.right+2 && end.right>viewport.left
+          && end.left<viewport.right};
+    """, scroller, target, last)
+
+
+def _geometry_pin_submenu(driver, pinned):
+    from selenium.webdriver.common.action_chains import ActionChains
+
+    title = f"Pin ({pinned})" if pinned else "Pin"
+    ActionChains(driver).move_to_element(_selection_menu(driver, title)).perform()
+
+
+def _geometry_copy_current_table(driver):
+    from selenium.webdriver.support.ui import WebDriverWait
+    from tests.test_flagship_certification import _workspace_elements
+
+    item = WebDriverWait(driver, 8).until(lambda current: next((
+        item for item in _workspace_elements(current, '[role="menuitem"]')
+        if item.is_displayed() and item.is_enabled() and item.text.strip() == "Copy Current Table"
+    ), False))
+    item.click()
+
+
+def qualify_column_geometry(host: str, requirement: str) -> None:
+    """Use physical resize, double-click and pin/menu gestures on installed hosts."""
+    import pytest
+    if os.environ.get("PIVOT_RUN_FLAGSHIP_BROWSER_TESTS") != "1":
+        pytest.skip("Enable installed flagship browser qualification explicitly")
+    if not os.environ.get("PIVOT_FLAGSHIP_ARTIFACT_BINDING"):
+        pytest.fail("Installed artifact binding is required")
+    from scripts.flagship_artifacts import load_artifact_binding
+    from tests.test_flagship_certification import (
+        _host_url, _origin, _qualification_chrome_options, _switch_to_workspace,
+        _wait_for_visible_workspace_element, _verify_release_asset_batch,
+    )
+    from selenium import webdriver
+    from selenium.webdriver.common.action_chains import ActionChains
+    from selenium.webdriver.common.actions.wheel_input import ScrollOrigin
+    from selenium.webdriver.support.ui import WebDriverWait
+
+    binding = load_artifact_binding(Path(os.environ["PIVOT_FLAGSHIP_ARTIFACT_BINDING"]))
+    run_id = os.environ["PIVOT_FLAGSHIP_RUN_ID"]
+    directory = Path(os.environ["PIVOT_FLAGSHIP_EVIDENCE_ROOT"]) / requirement / host
+    assert ("runs", run_id) in tuple(zip(directory.parts, directory.parts[1:]))
+    directory.mkdir(parents=True, exist_ok=True)
+    downloads = directory / "downloads"
+    downloads.mkdir(exist_ok=True)
+    result = {"result": "blocked", "browser": "unavailable", "infrastructureUnavailable": True}
+    observation = {"requirement": requirement, "states": [], "actions": []}
+    diagnostic, paths, driver = "", [], None
+    sales = "Q2_ventes_€_sum" if requirement == "column-pinning.round-trip" else "Q1_ventes_€_sum"
+    try:
+        driver = webdriver.Chrome(options=_qualification_chrome_options(downloads))
+        driver._pivot_artifact_binding, driver._pivot_artifact_host = binding, host
+        driver._pivot_loaded_assets = {}
+        driver.execute_cdp_cmd("Network.enable", {"maxTotalBufferSize": 50000000, "maxResourceBufferSize": 50000000})
+        if requirement == "column-pinning.round-trip":
+            driver.execute_cdp_cmd("Page.addScriptToEvaluateOnNewDocument", {"source": """
+              window.__pivotGeometryExports = [];
+              const captureExport = raw => {
+                try {
+                  const value = typeof raw === 'string' ? JSON.parse(raw) : raw;
+                  const visit = item => {
+                    if (!item || typeof item !== 'object') return;
+                    if (item.kind === 'export' && item.payload)
+                      window.__pivotGeometryExports.push({colIds: item.payload.colIds || null});
+                    else Object.values(item).forEach(visit);
+                  };
+                  visit(value);
+                } catch (_) {}
+              };
+              const originalFetch = window.fetch.bind(window);
+              window.fetch = (...args) => {
+                if (args[1]?.body) captureExport(args[1].body);
+                return originalFetch(...args);
+              };
+              const originalSend = XMLHttpRequest.prototype.send;
+              XMLHttpRequest.prototype.send = function(body) {
+                captureExport(body);
+                return originalSend.call(this, body);
+              };
+            """})
+            driver.execute_cdp_cmd("Browser.grantPermissions", {
+                "origin": _origin(_host_url(host)),
+                "permissions": ["clipboardReadWrite", "clipboardSanitizedWrite"]})
+        _switch_to_workspace(driver, host)
+        result.update(result="failed", browser=f"{driver.capabilities['browserName']} {driver.capabilities['browserVersion']}",
+                      infrastructureUnavailable=False)
+        wait = WebDriverWait(driver, 12)
+        before = _geometry_snapshot(driver, sales)
+        if requirement == "column-sizing.auto-size":
+            before.update(_geometry_required_width(driver, sales))
+        observation["states"].append({"phase": "before", **before})
+        assert "hierarchy" in before["order"] and sales in before["order"]
+        driver.save_screenshot(str(directory / "before.png"))
+        paths.append(str(directory / "before.png"))
+        header = _geometry_header(driver, sales)
+        handle = header.find_element("css selector", 'div[style*="cursor: col-resize"]')
+        if requirement == "column-sizing.resize":
+            assert 60 + 42 < before["width"] < 600 - 42, "Fixture width not safely inside resize bounds"
+            ActionChains(driver).move_to_element(handle).click_and_hold().move_by_offset(40, 0).release().perform()
+            observation["actions"].append("trusted mouse drag of visible header resize handle +40 CSS px")
+            wait.until(lambda current: abs(_geometry_snapshot(current, sales)["width"] - before["width"]) >= 38)
+            after = _geometry_snapshot(driver, sales)
+            assert_resize_geometry(before, after)
+            observation["states"].append({"phase": "resized", **after})
+            scroller = _wait_for_visible_workspace_element(driver, '[data-pivot-scroll-container]')
+            ActionChains(driver).scroll_from_origin(ScrollOrigin.from_element(scroller), 40, 0).perform()
+            wait.until(lambda current: current.execute_script("return arguments[0].scrollLeft", scroller) > 0)
+            scrolled = _geometry_snapshot(driver, sales)
+            observation["states"].append({"phase": "scrolled", **scrolled})
+            assert scrolled["cells"] == before["cells"] and scrolled["width"] == after["width"]
+            assert len(set(scrolled["order"])) == len(scrolled["order"])
+            result.update(resizeDeltaVerified=True, geometryScrollVerified=True, logicalValuesPreserved=True)
+        elif requirement == "column-sizing.auto-size":
+            ActionChains(driver).double_click(handle).perform()
+            observation["actions"].append("trusted double-click of visible header resize handle")
+            wait.until(lambda current: abs(_geometry_snapshot(current, sales)["width"] - before["width"]) > 2)
+            first = _geometry_snapshot(driver, sales)
+            observation["states"].append({"phase": "auto-sized", **first})
+            handle = _geometry_header(driver, sales).find_element("css selector", 'div[style*="cursor: col-resize"]')
+            ActionChains(driver).double_click(handle).perform()
+            observation["actions"].append("repeat trusted double-click on the same column")
+            second = _geometry_snapshot(driver, sales)
+            observation["states"].append({"phase": "repeated", **second})
+            assert_auto_size_geometry(before, first, second, min_width=60, max_width=600)
+            assert first["cells"] == second["cells"] == before["cells"]
+            result.update(autoSizeFitVerified=True, autoSizeIdempotent=True, logicalValuesPreserved=True)
+        elif requirement == "column-pinning.round-trip":
+            ActionChains(driver).context_click(header).perform()
+            _geometry_pin_submenu(driver, None)
+            _selection_menu(driver, "Pin Left").click()
+            observation["actions"].append("context menu Pin > Pin Left on Q2 sales")
+            wait.until(lambda current: _geometry_snapshot(current, sales)["pinnedLeft"] == [sales])
+            pinned = _geometry_snapshot(driver, sales)
+            observation["states"].append({"phase": "pinned", **pinned})
+            driver.save_screenshot(str(directory / "pinned.png"))
+            paths.append(str(directory / "pinned.png"))
+            scroller = _wait_for_visible_workspace_element(driver, '[data-pivot-scroll-container]')
+            ActionChains(driver).scroll_from_origin(ScrollOrigin.from_element(scroller), 40, 0).perform()
+            wait.until(lambda current: current.execute_script("return arguments[0].scrollLeft", scroller) > pinned["scrollLeft"])
+            scrolled = _geometry_snapshot(driver, sales)
+            observation["states"].append({"phase": "pinned-scrolled", **scrolled})
+            last_column = before["order"][-1]
+            ActionChains(driver).scroll_from_origin(ScrollOrigin.from_element(scroller), 10000, 0).perform()
+            wait.until(lambda current: (
+                (end := _geometry_at_end(current, sales, last_column))["maxScrollLeft"] > scrolled["scrollLeft"]
+                and abs(end["scrollLeft"] - end["maxScrollLeft"]) <= 2 and end["lastColumnVisible"]))
+            end = {**_geometry_snapshot(driver, sales), **_geometry_at_end(driver, sales, last_column)}
+            observation["states"].append({"phase": "last-column", **end})
+            driver.save_screenshot(str(directory / "last-column.png"))
+            paths.append(str(directory / "last-column.png"))
+            from tests.test_flagship_certification import _clipboard_text
+            sentinel = "geometry clipboard checkpoint"
+            assert driver.execute_async_script(
+                "const done=arguments[arguments.length-1]; navigator.clipboard.writeText(arguments[0]).then(()=>done(true),()=>done(false));",
+                sentinel)
+            _selection_cell(driver, "Éclair", sales)
+            ActionChains(driver).context_click(_selection_cell(driver, "Éclair", sales)).perform()
+            _geometry_copy_current_table(driver)
+            copied = WebDriverWait(driver, 20).until(lambda current: (
+                value if (value := _clipboard_text(current)) != sentinel else False))
+            parsed = list(csv.reader(io.StringIO(copied), delimiter="\t"))
+            observation["clipboardRows"] = parsed
+            observation["exportRequests"] = driver.execute_script("return window.__pivotGeometryExports || []")
+            observation["actions"].append("Copy Current Table from pinned cell, parse OS clipboard headers and raw fixture positions")
+            assert_pinned_clipboard_order(parsed, pinned["order"])
+            ActionChains(driver).context_click(_geometry_header(driver, sales)).perform()
+            _geometry_pin_submenu(driver, "left")
+            _selection_menu(driver, "Unpin").click()
+            observation["actions"].append("context menu Pin > Unpin")
+            wait.until(lambda current: _geometry_snapshot(current, sales)["pinnedLeft"] == [])
+            restored = _geometry_snapshot(driver, sales)
+            observation["states"].append({"phase": "unpinned", **restored})
+            assert_pin_round_trip(before, pinned, scrolled, end, restored, sales)
+            result.update(pinRoundTripVerified=True, geometryScrollVerified=True,
+                          logicalValuesPreserved=True, lastColumnVisible=True, clipboardOrderVerified=True)
+        else:
+            raise AssertionError(f"Unmapped column geometry requirement {requirement}")
+        result["result"] = "passed"
+    except Exception as error:
+        frame = traceback.extract_tb(error.__traceback__)[-1]
+        diagnostic = f"{type(error).__name__} at {Path(frame.filename).name}:{frame.lineno}: {error}"
+    finally:
+        if driver is not None:
+            try:
+                _verify_release_asset_batch(driver, require_assets=True)
+                result["loadedAssetSha256"] = dict(driver._pivot_loaded_assets)
+                screenshot = directory / "final.png"
+                driver.save_screenshot(str(screenshot))
+                paths.append(str(screenshot))
+            except Exception as error:
+                result["result"] = "blocked"
+                diagnostic += f"; evidence collection: {type(error).__name__}"
+            finally:
+                driver.quit()
+        observation.update(diagnostic=diagnostic, result={k: v for k, v in result.items() if k != "loadedAssetSha256"})
         evidence = directory / "observation.json"
         evidence.write_text(json.dumps(observation, ensure_ascii=False, indent=2), encoding="utf-8")
         paths.append(str(evidence))

@@ -1620,6 +1620,7 @@ export function useViewportRuntimeStage(input, transport) {
   const columnMeasurement = useRuntimeColumnMeasurement({
     autoSizeBounds: stage.autoSizeBounds,
     id: stage.id,
+    parentRef: stage.parentRef,
     table: stage.table,
   });
   for (const [key, value] of Object.entries(columnMeasurement)) stage[key] = value;

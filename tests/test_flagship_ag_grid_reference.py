@@ -491,19 +491,34 @@ def test_reference_startup_exposes_live_request_and_visible_groups(reference_run
 
 
 def test_reference_column_resize_changes_visible_geometry_and_retains_values(reference_run):
-    """A handle drag that changes no width or corrupts rows must fail resizing."""
+    """A no-op drag, displaced neighbor, stale values or fetch must fail resizing."""
     with reference_case("column-sizing.resize", reference_run) as case:
         driver = case.driver
         driver.set_window_size(1000, 800)
+        columns = ["Q1|ventes_€", "Q1|unités"]
+        geometry_script = """
+          return arguments[0].map(colId => {
+            const header = document.querySelector(`.ag-header-cell[col-id="${colId}"]`);
+            const cell = document.querySelector(`.ag-row[row-index="0"] [role="gridcell"][col-id="${colId}"]`);
+            if (!header || !cell) return {colId, missing: true};
+            const h = header.getBoundingClientRect(), c = cell.getBoundingClientRect();
+            return {colId, header: {left: h.left, width: h.width},
+              cell: {left: c.left, width: c.width, text: cell.innerText}};
+          });
+        """
         before = driver.execute_script("return window.referenceEvidence.headerGeometry()")
+        before_geometry = driver.execute_script(geometry_script, columns)
+        before_rows = driver.execute_script("return window.referenceEvidence.displayedRows()")
+        before_cells = driver.execute_script("return window.referenceEvidence.visibleCells()")
+        before_trace = driver.execute_script("return window.referenceEvidence.trace()")
         before_order = driver.execute_script("return window.referenceGrid.getAllDisplayedColumns().map(c => c.getColId())")
         sales = next(item for item in before if item["colId"] == "Q1|ventes_€")
         handle = driver.find_element(By.CSS_SELECTOR, '.ag-header-cell[col-id="Q1|ventes_€"] .ag-header-cell-resize')
         ActionChains(driver).click_and_hold(handle).move_by_offset(40, 0).release().perform()
         after = driver.execute_script("return window.referenceEvidence.headerGeometry()")
+        after_geometry = driver.execute_script(geometry_script, columns)
         after_order = driver.execute_script("return window.referenceGrid.getAllDisplayedColumns().map(c => c.getColId())")
         resized = next(item for item in after if item["colId"] == sales["colId"])
-        cells = driver.execute_script("return window.referenceEvidence.visibleCells()")
         scroll = driver.execute_script("""
           const viewport = document.querySelector('.ag-body-horizontal-scroll-viewport');
           viewport.scrollLeft = viewport.scrollWidth;
@@ -516,12 +531,37 @@ def test_reference_column_resize_changes_visible_geometry_and_retains_values(ref
         restored = WebDriverWait(driver, 5).until(lambda browser: (
             visible if any(item["colId"] == "Q1|ventes_€" for item in visible) else False
         ) if (visible := browser.execute_script("return window.referenceEvidence.visibleCells()")) else False)
-        case.observed = f"Dragged Q1 sales by 40 px; measured {sales['width']} -> {resized['width']} px; horizontal scroll {scroll}"
+        after_rows = driver.execute_script("return window.referenceEvidence.displayedRows()")
+        after_trace = driver.execute_script("return window.referenceEvidence.trace()")
+        case.observed = (f"Dragged Q1 sales by 40 px; measured {sales['width']} -> {resized['width']} px, "
+                         f"neighbor/header/cell geometry and {len(after_rows)} displayed rows; "
+                         f"horizontal scroll {scroll}; SSRM requests {len(before_trace)} -> {len(after_trace)}")
         case.parsed_output = {"before": before, "after": after, "before_order": before_order, "after_order": after_order,
-                              "scroll": scroll, "right_cells": right_cells, "restored_cells": restored}
+                              "before_geometry": before_geometry, "after_geometry": after_geometry,
+                              "before_rows": before_rows, "after_rows": after_rows,
+                              "before_cells": before_cells, "scroll": scroll,
+                              "right_cells": right_cells, "restored_cells": restored,
+                              "before_trace": before_trace, "after_trace": after_trace}
         assert 38 <= resized["width"] - sales["width"] <= 42
         assert before_order == after_order
+        assert before_rows == after_rows
+        assert before_trace == after_trace, "Resizing and horizontal scrolling must not reload SSRM data"
+        assert all(not item.get("missing") for item in before_geometry + after_geometry)
+        prior, current = (dict((item["colId"], item) for item in geometry)
+                          for geometry in (before_geometry, after_geometry))
+        for col_id in columns:
+            assert abs(current[col_id]["header"]["width"] - current[col_id]["cell"]["width"]) <= 1
+            assert abs(current[col_id]["header"]["left"] - current[col_id]["cell"]["left"]) <= 1
+            assert current[col_id]["cell"]["text"] == prior[col_id]["cell"]["text"]
+        assert 38 <= current[columns[0]]["cell"]["width"] - prior[columns[0]]["cell"]["width"] <= 42
+        assert abs(current[columns[1]]["header"]["width"] - prior[columns[1]]["header"]["width"]) <= 1
+        assert 38 <= current[columns[1]]["header"]["left"] - prior[columns[1]]["header"]["left"] <= 42
         assert scroll["left"] > 0
+        baseline_values = {(item["rowIndex"], item["colId"]): item["text"] for item in before_cells}
+        restored_values = {(item["rowIndex"], item["colId"]): item["text"] for item in restored}
+        for row in ("0", "1", "2"):
+            for col_id in columns:
+                assert restored_values[(row, col_id)] == baseline_values[(row, col_id)]
         assert any(cell["colId"] == "Q1|ventes_€" and cell["text"] == "100.25" for cell in restored)
         assert any(cell["colId"] == "Total|ventes_€" and cell["text"] == "120.25" for cell in right_cells)
 

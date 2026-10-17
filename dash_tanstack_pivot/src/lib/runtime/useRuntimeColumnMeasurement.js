@@ -6,11 +6,18 @@ import { useCallback } from 'react';
  * DOM measurement is kept separate from column ordering and pinning commands
  * so virtual-column changes have one isolated browser-facing dependency.
  */
-export function useRuntimeColumnMeasurement({ autoSizeBounds, id, table }) {
+export function useRuntimeColumnMeasurement({ autoSizeBounds, id, parentRef, table }) {
+  const getMeasurementRoot = useCallback(() => {
+    if (parentRef && parentRef.current) return parentRef.current;
+    if (typeof document === 'undefined') return null;
+    return (typeof id === 'string' && id ? document.getElementById(id) : null) || document;
+  }, [id, parentRef]);
+
   const getRenderedHeaderWidthForColumn = useCallback(columnId => {
     if (typeof document === 'undefined' || typeof window === 'undefined' || !columnId) return null;
-    const scopedRoot = typeof id === 'string' && id ? document.getElementById(id) : null;
-    const headerElements = Array.from((scopedRoot || document).querySelectorAll('[role="columnheader"][data-header-column-id]'))
+    const scopedRoot = getMeasurementRoot();
+    if (!scopedRoot) return null;
+    const headerElements = Array.from(scopedRoot.querySelectorAll('[role="columnheader"][data-header-column-id]'))
       .filter(element => element && element.dataset && element.dataset.headerColumnId === String(columnId));
     if (headerElements.length === 0) return null;
     let maxMeasuredWidth = null;
@@ -20,7 +27,7 @@ export function useRuntimeColumnMeasurement({ autoSizeBounds, id, table }) {
       const horizontalChrome = (parseFloat(headerStyle.paddingLeft || '0') || 0) + (parseFloat(headerStyle.paddingRight || '0') || 0)
         + (parseFloat(headerStyle.borderLeftWidth || '0') || 0) + (parseFloat(headerStyle.borderRightWidth || '0') || 0);
       let naturalContentWidth = 0;
-      if (headerContent && document.body) {
+      if (headerContent) {
         const measurementClone = headerContent.cloneNode(true);
         measurementClone.style.position = 'absolute'; measurementClone.style.left = '-100000px'; measurementClone.style.top = '0';
         measurementClone.style.visibility = 'hidden'; measurementClone.style.pointerEvents = 'none'; measurementClone.style.width = 'max-content';
@@ -31,21 +38,27 @@ export function useRuntimeColumnMeasurement({ autoSizeBounds, id, table }) {
           textElement.style.flex = '0 0 auto'; textElement.style.width = 'auto'; textElement.style.minWidth = '0';
           textElement.style.maxWidth = 'none'; textElement.style.overflow = 'visible'; textElement.style.textOverflow = 'clip'; textElement.style.display = 'inline-block';
         });
-        document.body.appendChild(measurementClone);
-        naturalContentWidth = Math.ceil(measurementClone.scrollWidth || measurementClone.getBoundingClientRect().width || 0);
-        document.body.removeChild(measurementClone);
+        // Keep the clone in the header's own style/inheritance scope. Streamlit
+        // mounts the workspace in a ShadowRoot, which document.body cannot see.
+        headerElement.appendChild(measurementClone);
+        try {
+          naturalContentWidth = Math.ceil(measurementClone.scrollWidth || measurementClone.getBoundingClientRect().width || 0);
+        } finally {
+          headerElement.removeChild(measurementClone);
+        }
       }
       const candidateWidth = naturalContentWidth > 0 ? naturalContentWidth + horizontalChrome + autoSizeBounds.headerOverscan : null;
       if (!Number.isFinite(candidateWidth)) return;
       maxMeasuredWidth = maxMeasuredWidth === null ? candidateWidth : Math.max(maxMeasuredWidth, candidateWidth);
     });
     return maxMeasuredWidth;
-  }, [autoSizeBounds.headerOverscan, id]);
+  }, [autoSizeBounds.headerOverscan, getMeasurementRoot]);
 
   const getRenderedCellWidthForColumn = useCallback(columnId => {
     if (typeof document === 'undefined' || typeof window === 'undefined' || !columnId) return null;
-    const scopedRoot = typeof id === 'string' && id ? document.getElementById(id) : null;
-    const cellElements = Array.from((scopedRoot || document).querySelectorAll('[role="gridcell"][data-colid]'))
+    const scopedRoot = getMeasurementRoot();
+    if (!scopedRoot) return null;
+    const cellElements = Array.from(scopedRoot.querySelectorAll('[role="gridcell"][data-colid]'))
       .filter(element => element && element.dataset && element.dataset.colid === String(columnId));
     if (cellElements.length === 0) return null;
     let maxMeasuredWidth = null;
@@ -71,7 +84,7 @@ export function useRuntimeColumnMeasurement({ autoSizeBounds, id, table }) {
       maxMeasuredWidth = maxMeasuredWidth === null ? candidateWidth : Math.max(maxMeasuredWidth, candidateWidth);
     });
     return maxMeasuredWidth;
-  }, [autoSizeBounds.cellOverscan, id]);
+  }, [autoSizeBounds.cellOverscan, getMeasurementRoot]);
 
   const queueHeaderFitValidation = useCallback((columnId, measuredWidth) => {
     if (typeof window === 'undefined' || !columnId || !table || typeof table.setColumnSizing !== 'function') return;

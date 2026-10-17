@@ -283,6 +283,92 @@ function makeCommandOptions(overrides = {}) {
     assert.equal(sparseRaw.text, '0\t12.375\n\t');
     assert.match(sparseRaw.html, /<td[^>]*>0<\/td><td[^>]*>12\.375<\/td>/);
 
+    // A pinned measure can appear after an unpinned measure in TanStack's
+    // core leaf list while being rendered first. Current-table copy and local
+    // export must follow the rendered order without duplicating pinned cells.
+    const q1 = {id: 'Q1', columnDef: {header: 'Q1'}};
+    const q2 = {id: 'Q2', columnDef: {header: 'Q2'}};
+    const hierarchy = {id: 'hierarchy', columnDef: {header: 'Region'}};
+    const total = {id: '__RowTotal__sum', columnDef: {header: 'Total'}};
+    const pinnedRow = {id: 'north', original: {_label: 'North', Q1: 10, Q2: 20, __RowTotal__sum: 30, hidden: 40}};
+    const pinnedTable = {
+        getVisibleLeafColumns: () => [hierarchy, q1, q2, total, q2],
+        getLeftVisibleLeafColumns: () => [hierarchy, q2],
+        getCenterVisibleLeafColumns: () => [q1, q2],
+        getRightVisibleLeafColumns: () => [total],
+    };
+    const pinnedPresentation = makePresentation({
+        cachedColSchema: {total_center_cols: 3, columns: [{id: 'Q1'}, {id: 'Q2'}, {id: 'offscreen'}]},
+        getDisplayRows: () => [pinnedRow],
+        getDisplayHeaderTextForColumn: column => column.columnDef.header,
+        getDisplayHeaderTextStackForColumn: column => [column.columnDef.header],
+        matchesSelectedColumnToValueConfig: () => false,
+        resolveDisplayedCellValue: (_rowId, _columnId, value) => value,
+        serverSide: true,
+        table: pinnedTable,
+        theme: {},
+        totalCenterCols: 3,
+    });
+    const renderedIds = ['hierarchy', 'Q2', 'Q1', '__RowTotal__sum'];
+    assert.deepStrictEqual(pinnedPresentation.getInstantiatedExportColIds(), renderedIds);
+    assert.deepStrictEqual(pinnedPresentation.getExportColumns().map(column => column.id), renderedIds);
+    assert.deepStrictEqual(pinnedPresentation.getServerExportColumnTarget({currentTable: true}).colIds, renderedIds);
+    assert.deepStrictEqual(pinnedPresentation.getCompleteServerExportColIds(), ['hierarchy', 'Q2', 'Q1', 'offscreen', '__RowTotal__sum']);
+    const pinnedClipboard = pinnedPresentation.buildTableClipboardPayload({withHeaders: true});
+    assert.equal(pinnedClipboard.text, 'Region\tQ2\tQ1\tTotal\nNorth\t20\t10\t30');
+    assert.doesNotMatch(pinnedClipboard.text, /Hidden|40/);
+    assert.match(pinnedClipboard.html, /<th[^>]*>Region<\/th><th[^>]*>Q2<\/th><th[^>]*>Q1<\/th><th[^>]*>Total<\/th>/);
+
+    const pinnedPayloads = [];
+    const pinnedCommands = createRuntimeExportCommands(makeCommandOptions({
+        getServerExportColumnTarget: pinnedPresentation.getServerExportColumnTarget,
+        dispatchServerSideRuntimeSetProps: update => pinnedPayloads.push(update.runtimeRequest.payload),
+    }));
+    pinnedCommands.copyCurrentTableToClipboard();
+    assert.deepStrictEqual(pinnedPayloads.at(-1).colIds, renderedIds);
+
+    // TanStack header groups retain core order after pinning. Rich HTML must
+    // derive merged headers from the same displayed leaves as its body.
+    const groupedPinnedPresentation = makePresentation({
+        getDisplayRows: () => [pinnedRow],
+        getDisplayHeaderTextForColumn: column => column.columnDef.header,
+        getDisplayHeaderTextStackForColumn: column => column.id === 'hierarchy' || column.id === '__RowTotal__sum'
+            ? [column.columnDef.header] : [column.columnDef.header, 'Sales'],
+        matchesSelectedColumnToValueConfig: () => false,
+        resolveDisplayedCellValue: (_rowId, _columnId, value) => value,
+        serverSide: true,
+        table: {
+            ...pinnedTable,
+            getHeaderGroups: () => [
+                {headers: [hierarchy, q1, q2, total].map(column => ({column, colSpan: 1, rowSpan: 1}))},
+                {headers: [q1, q2].map(column => ({column, colSpan: 1, rowSpan: 1}))},
+            ],
+        },
+        theme: {},
+    });
+    const groupedHtml = groupedPinnedPresentation.buildTableClipboardPayload({withHeaders: true}).html;
+    assert.match(groupedHtml, /<th[^>]*>Region<\/th><th[^>]*>Q2<\/th><th[^>]*>Q1<\/th><th[^>]*>Total<\/th>/);
+    assert.match(groupedHtml, /<tr><th[^>]*>Sales<\/th><th[^>]*>Sales<\/th><\/tr>/);
+
+    // A right-pinned measure must follow even a virtual/offscreen center
+    // measure in complete exports; the instantiated list alone cannot infer
+    // that boundary.
+    const q3 = {id: 'Q3', columnDef: {header: 'Q3'}};
+    const rightPinnedPresentation = makePresentation({
+        cachedColSchema: {total_center_cols: 4, columns: [{id: 'Q1'}, {id: 'Q2'}, {id: 'offscreen'}, {id: 'Q3'}]},
+        serverSide: true,
+        table: {
+            getVisibleLeafColumns: () => [hierarchy, q1, q2, q3, total],
+            getLeftVisibleLeafColumns: () => [hierarchy, q2],
+            getCenterVisibleLeafColumns: () => [q1],
+            getRightVisibleLeafColumns: () => [q3, total],
+        },
+        theme: {},
+        totalCenterCols: 4,
+    });
+    assert.deepStrictEqual(rightPinnedPresentation.getInstantiatedExportColIds(), ['hierarchy', 'Q2', 'Q1', 'Q3', '__RowTotal__sum']);
+    assert.deepStrictEqual(rightPinnedPresentation.getCompleteServerExportColIds(), ['hierarchy', 'Q2', 'Q1', 'offscreen', 'Q3', '__RowTotal__sum']);
+
     console.log('frontend export qualification passed');
 })().catch(error => {
     console.error(error);

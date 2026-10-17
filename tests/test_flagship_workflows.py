@@ -646,6 +646,115 @@ def test_navigation_dom_rejects_duplicate_cell_with_conflicting_value():
     assert not _navigation_dom_matches(cells, ())
 
 
+def test_resize_geometry_requires_exact_delta_and_unchanged_logical_cells():
+    from tests.flagship_browser_support import assert_resize_geometry
+
+    before = {"width": 120, "order": ["hierarchy", "sales", "units"],
+              "cells": [("Éclair", "sales", "100")], "neighbors": [("Éclair", "units", "2")]}
+    good = {**before, "width": 160}
+    assert_resize_geometry(before, good)
+    for broken in ({**good, "width": 157}, {**good, "order": ["hierarchy", "units", "sales"]},
+                   {**good, "cells": [("Éclair", "sales", "999")]},
+                   {**good, "neighbors": [("Éclair", "units", "999")]}):
+        with pytest.raises(AssertionError):
+            assert_resize_geometry(before, broken)
+
+
+def test_auto_size_geometry_requires_fit_idempotence_and_all_columns():
+    from tests.flagship_browser_support import assert_auto_size_geometry
+
+    base = {"width": 120, "requiredWidth": 180, "order": ["hierarchy", "sales", "units"], "fits": True}
+    assert_auto_size_geometry(base, {**base, "width": 184}, {**base, "width": 185}, min_width=60, max_width=600)
+    for broken in ({**base, "width": 175}, {**base, "width": 610},
+                   {**base, "width": 184, "order": ["hierarchy", "sales"]}):
+        with pytest.raises(AssertionError):
+            assert_auto_size_geometry(base, broken, {**base, "width": 185}, min_width=60, max_width=600)
+    with pytest.raises(AssertionError):
+        assert_auto_size_geometry(base, {**base, "width": 184}, {**base, "width": 188}, min_width=60, max_width=600)
+    with pytest.raises(AssertionError):
+        assert_auto_size_geometry(base, {**base, "width": 184, "fits": False}, {**base, "width": 185}, min_width=60, max_width=600)
+
+
+def test_pin_round_trip_requires_stationary_unique_cell_and_restored_order():
+    from tests.flagship_browser_support import assert_pin_round_trip
+
+    before = {"order": ["hierarchy", "sales", "units", "q2_sales"], "cells": [("Éclair", "q2_sales", "20")],
+              "pinnedLeft": [], "pinnedX": 250, "centerX": 400, "scrollLeft": 0}
+    pinned = {**before, "order": ["hierarchy", "q2_sales", "sales", "units"], "pinnedLeft": ["q2_sales"]}
+    scrolled = {**pinned, "pinnedX": 250, "centerX": 360, "scrollLeft": 40}
+    restored = {**before, "scrollLeft": 0}
+    end = {**scrolled, "scrollLeft": 900, "maxScrollLeft": 900, "lastColumnVisible": True}
+    assert_pin_round_trip(before, pinned, scrolled, end, restored, "q2_sales")
+    for broken in ({**scrolled, "pinnedX": 260}, {**scrolled, "centerX": 400},
+                   {**scrolled, "cells": [("Éclair", "q2_sales", "20"), ("Éclair", "q2_sales", "20")]},
+                   {**scrolled, "scrollLeft": 0}):
+        with pytest.raises(AssertionError):
+            assert_pin_round_trip(before, pinned, broken, end, restored, "q2_sales")
+    with pytest.raises(AssertionError):
+        assert_pin_round_trip(before, pinned, scrolled, end, {**restored, "order": pinned["order"]}, "q2_sales")
+    with pytest.raises(AssertionError):
+        assert_pin_round_trip(before, pinned, scrolled, {**end, "lastColumnVisible": False}, restored, "q2_sales")
+    with pytest.raises(AssertionError):
+        assert_pin_round_trip(before, pinned, scrolled, {**end, "scrollLeft": 800}, restored, "q2_sales")
+
+
+def test_pinned_clipboard_order_requires_raw_fixture_values_in_pinned_positions():
+    from tests.flagship_browser_support import assert_pinned_clipboard_order
+
+    order = ["hierarchy", "Q2_ventes_€_sum", "Q1_ventes_€_sum", "Q1_unités_sum"]
+    rows = [["Region > Account", "Ventes €", "Ventes €", "Unités"],
+            ["Éclair", "20", "100", "2"], ["München", "30", "50", "3"]]
+    assert_pinned_clipboard_order(rows, order)
+    with pytest.raises(AssertionError):
+        assert_pinned_clipboard_order([rows[0], ["Éclair", "100", "20", "2"], rows[2]], order)
+    with pytest.raises(AssertionError):
+        assert_pinned_clipboard_order([rows[0], rows[1], rows[1]], order)
+
+
+@pytest.mark.flagship
+def test_pin_submenu_helper_uses_stateful_live_title(tmp_path):
+    if os.environ.get("PIVOT_RUN_FLAGSHIP_BROWSER_TESTS") != "1":
+        pytest.skip("Enable Chrome helper regression explicitly")
+    from urllib.parse import quote
+    from selenium import webdriver
+    from tests.flagship_browser_support import _geometry_pin_submenu
+    from tests.test_flagship_certification import _qualification_chrome_options
+
+    html = '''<div role="menu"><div role="menuitem" title="Pin" onmouseenter="document.querySelector('#unused').hidden=false">Pin</div>
+      <div role="menuitem" title="Pin (left)" onmouseenter="document.querySelector('#child').hidden=false">Pin (left)</div></div>
+      <div id="unused" role="menu" hidden><div role="menuitem" title="Wrong">Wrong</div></div>
+      <div id="child" role="menu" hidden><div role="menuitem" title="Unpin">Unpin</div></div>'''
+    driver = webdriver.Chrome(options=_qualification_chrome_options(tmp_path))
+    try:
+        driver.get("data:text/html;charset=utf-8," + quote(html))
+        _geometry_pin_submenu(driver, "left")
+        assert driver.find_element("css selector", "#child").is_displayed()
+        assert not driver.find_element("css selector", "#unused").is_displayed()
+    finally:
+        driver.quit()
+
+
+@pytest.mark.flagship
+def test_geometry_copy_menu_chooses_exact_visible_label_not_description(tmp_path):
+    if os.environ.get("PIVOT_RUN_FLAGSHIP_BROWSER_TESTS") != "1":
+        pytest.skip("Enable Chrome helper regression explicitly")
+    from urllib.parse import quote
+    from selenium import webdriver
+    from tests.flagship_browser_support import _geometry_copy_current_table
+    from tests.test_flagship_certification import _qualification_chrome_options
+
+    html = '''<div role="menu"><div role="menuitem" title="Copy Current Table other" onclick="document.querySelector('output').textContent='wrong'">Copy Current Table other</div>
+      <div role="menuitem" title="Copy the current expanded/collapsed table, with its active sorting, filters, and visible column order."
+      onclick="document.querySelector('output').textContent='clicked'">Copy Current Table</div></div><output></output>'''
+    driver = webdriver.Chrome(options=_qualification_chrome_options(tmp_path))
+    try:
+        driver.get("data:text/html;charset=utf-8," + quote(html))
+        _geometry_copy_current_table(driver)
+        assert driver.find_element("css selector", "output").text == "clicked"
+    finally:
+        driver.quit()
+
+
 @pytest.mark.flagship
 @pytest.mark.parametrize("host", ["dash", "react", "streamlit"])
 @pytest.mark.parametrize("requirement", ["hierarchy-expand.round-trip", "hierarchy-expand-all.round-trip"])
@@ -654,3 +763,14 @@ def test_flagship_hierarchy_navigation(host, requirement, installed_workflow_hos
     from tests.flagship_browser_support import qualify_hierarchy_navigation
 
     qualify_hierarchy_navigation(host, requirement)
+
+
+@pytest.mark.flagship
+@pytest.mark.parametrize("host", ["dash", "react", "streamlit"])
+@pytest.mark.parametrize("requirement", ["column-sizing.resize", "column-sizing.auto-size",
+                                         "column-pinning.round-trip"])
+def test_flagship_column_geometry(host, requirement, installed_workflow_hosts):
+    """Qualify physical column gestures against each installed host."""
+    from tests.flagship_browser_support import qualify_column_geometry
+
+    qualify_column_geometry(host, requirement)

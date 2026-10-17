@@ -52,22 +52,36 @@ export function useRuntimeClipboardExportPresentation({
     return !!id && !EXPORT_SKIP_COL_IDS.has(id) && !id.startsWith('__schema_placeholder__');
   }, []);
 
-  const getInstantiatedExportColIds = useCallback(() => {
-    const columns = table && typeof table.getVisibleLeafColumns === 'function' ? table.getVisibleLeafColumns() : [];
-    const ids = [];
+  const getDisplayOrderedLeafColumns = useCallback(() => {
+    if (!table) return [];
+    const hasPinnedRegions = ['getLeftVisibleLeafColumns', 'getCenterVisibleLeafColumns', 'getRightVisibleLeafColumns']
+      .every(method => typeof table[method] === 'function');
+    const columns = hasPinnedRegions
+      ? [
+        ...table.getLeftVisibleLeafColumns(),
+        ...table.getCenterVisibleLeafColumns(),
+        ...table.getRightVisibleLeafColumns(),
+      ]
+      : typeof table.getVisibleLeafColumns === 'function' ? table.getVisibleLeafColumns() : [];
     const seen = new Set();
-    columns.forEach(column => {
-      const columnId = column && column.id;
-      if (!isExportableColumnId(columnId) || seen.has(columnId)) return;
-      ids.push(columnId);
-      seen.add(columnId);
+    return columns.filter(column => {
+      if (!column || !column.id || seen.has(column.id)) return false;
+      seen.add(column.id);
+      return true;
     });
-    return ids;
-  }, [isExportableColumnId, table]);
+  }, [table]);
+
+  const getInstantiatedExportColIds = useCallback(() => {
+    return getDisplayOrderedLeafColumns().filter(column => isExportableColumnId(column.id)).map(column => column.id);
+  }, [getDisplayOrderedLeafColumns, isExportableColumnId]);
 
   const getCompleteServerExportColIds = useCallback(() => {
     const knownIds = getInstantiatedExportColIds();
     if (!serverSide) return knownIds;
+    const rightPinnedIds = table && typeof table.getRightVisibleLeafColumns === 'function'
+      ? table.getRightVisibleLeafColumns().map(column => column && column.id).filter(isExportableColumnId)
+      : [];
+    const rightPinnedSet = new Set(rightPinnedIds);
     const schemaTotal = cachedColSchema && Number.isFinite(Number(cachedColSchema.total_center_cols)) ? Math.max(0, Math.floor(Number(cachedColSchema.total_center_cols))) : null;
     const schemaColumns = cachedColSchema && Array.isArray(cachedColSchema.columns) ? cachedColSchema.columns : [];
     if (schemaTotal && schemaTotal > 0) {
@@ -89,17 +103,18 @@ export function useRuntimeClipboardExportPresentation({
         orderedIds.push(columnId);
         seen.add(columnId);
       };
-      knownIds.filter(columnId => !seenCenterIds.has(columnId) && !String(columnId).startsWith('__RowTotal__')).forEach(pushId);
-      // TanStack's visible leaf list carries the user's live column order.
-      // Preserve that order for instantiated center columns, then fill any
-      // virtual/off-screen gaps from the complete cached schema.
-      knownIds.filter(columnId => seenCenterIds.has(columnId)).forEach(pushId);
-      centerIds.forEach(pushId);
-      knownIds.filter(columnId => String(columnId).startsWith('__RowTotal__')).forEach(pushId);
+      knownIds.filter(columnId => !rightPinnedSet.has(columnId) && !seenCenterIds.has(columnId)
+        && !String(columnId).startsWith('__RowTotal__')).forEach(pushId);
+      // Preserve live display order for instantiated center columns, then
+      // fill virtual/off-screen gaps before right-pinned columns.
+      knownIds.filter(columnId => !rightPinnedSet.has(columnId) && seenCenterIds.has(columnId)).forEach(pushId);
+      centerIds.filter(columnId => !rightPinnedSet.has(columnId)).forEach(pushId);
+      knownIds.filter(columnId => !rightPinnedSet.has(columnId) && String(columnId).startsWith('__RowTotal__')).forEach(pushId);
+      rightPinnedIds.forEach(pushId);
       return orderedIds.length > 0 ? orderedIds : null;
     }
     return null;
-  }, [cachedColSchema, getInstantiatedExportColIds, isExportableColumnId, serverSide]);
+  }, [cachedColSchema, getInstantiatedExportColIds, isExportableColumnId, serverSide, table]);
 
   const getServerExportColumnTarget = useCallback(({ currentTable = false } = {}) => {
     const knownColIds = getInstantiatedExportColIds();
@@ -133,9 +148,9 @@ export function useRuntimeClipboardExportPresentation({
   }, [getCompleteServerExportColIds, getInstantiatedExportColIds, totalCenterCols]);
 
   const getExportColumns = useCallback(columnsOverride => {
-    const columns = Array.isArray(columnsOverride) ? columnsOverride : table && typeof table.getVisibleLeafColumns === 'function' ? table.getVisibleLeafColumns() : [];
+    const columns = Array.isArray(columnsOverride) ? columnsOverride : getDisplayOrderedLeafColumns();
     return columns.filter(column => column && isExportableColumnId(column.id));
-  }, [isExportableColumnId, table]);
+  }, [getDisplayOrderedLeafColumns, isExportableColumnId]);
 
   const getExportHeaderLabel = useCallback((column, mergedHeaders = false, separator = mergedHeaderSeparator) => {
     if (!column) return '';
@@ -257,10 +272,12 @@ export function useRuntimeClipboardExportPresentation({
     return buildStyledHtmlTableExport({
       table, rows: exportRows, columns: exportColumns, includeHeaders: withHeaders,
       getHeaderLabel: column => getExportHeaderLabel(column, mergedHeaders, mergedHeaderSeparator), getHeaderStyle: getExportHeaderStyle,
-      getCellValue: getExportCellDisplayValue, getCellStyle: (rowLike, column, _value, rowIndex) => getExportCellStyle(rowLike, column, rowIndex),
+      getHeaderStack: getDisplayHeaderTextStackForColumn,
+      getCellValue: (rowLike, column, rowIndex) => getExportCellDisplayValue(rowLike, column, rowIndex),
+      getCellStyle: (rowLike, column, _value, rowIndex) => getExportCellStyle(rowLike, column, rowIndex),
       tableStyle: { fontFamily: fontFamily || "'Inter', ui-sans-serif, system-ui, sans-serif", fontSize: fontSize || '13px' },
     });
-  }, [fontFamily, fontSize, getDisplayRows, getExportCellDisplayValue, getExportCellStyle, getExportColumns, getExportHeaderLabel, getExportHeaderStyle, loadedRows, mergedHeaderSeparator, serverSide, table]);
+  }, [fontFamily, fontSize, getDisplayRows, getDisplayHeaderTextStackForColumn, getExportCellDisplayValue, getExportCellStyle, getExportColumns, getExportHeaderLabel, getExportHeaderStyle, loadedRows, mergedHeaderSeparator, serverSide, table]);
 
   const buildAllRowsClipboardPayload = useCallback(({
     withHeaders = true, mergedHeaders = false,
@@ -277,13 +294,7 @@ export function useRuntimeClipboardExportPresentation({
     const keys = Object.keys(selectionMap || {});
     if (keys.length === 0) return null;
     const visibleRows = getDisplayRows();
-    const visibleCols = table && typeof table.getVisibleLeafColumns === 'function' ? table.getVisibleLeafColumns() : [];
-    const seenColumnIds = new Set();
-    const orderedCols = visibleCols.filter(column => {
-      if (!column || seenColumnIds.has(column.id)) return false;
-      seenColumnIds.add(column.id);
-      return true;
-    });
+    const orderedCols = getDisplayOrderedLeafColumns();
     const rowIdMap = {}; visibleRows.forEach((row, index) => { rowIdMap[row.id] = index; });
     const colIdMap = {}; orderedCols.forEach((column, index) => { colIdMap[column.id] = index; });
     let minR = Infinity; let maxR = -1; let minC = Infinity; let maxC = -1;
@@ -315,11 +326,11 @@ export function useRuntimeClipboardExportPresentation({
       },
       tableStyle: { fontFamily: fontFamily || "'Inter', ui-sans-serif, system-ui, sans-serif", fontSize: fontSize || '13px' },
     });
-  }, [fontFamily, fontSize, getDisplayRows, getExportCellDisplayValue, getExportCellStyle, getExportHeaderLabel, getExportHeaderStyle, isExportableColumnId, mergedHeaderSeparator, selectedCells, table]);
+  }, [fontFamily, fontSize, getDisplayOrderedLeafColumns, getDisplayRows, getExportCellDisplayValue, getExportCellStyle, getExportHeaderLabel, getExportHeaderStyle, isExportableColumnId, mergedHeaderSeparator, selectedCells]);
 
   const buildExportStyleProfile = useCallback((colIds, { withHeaders = true, mergedHeaders = false } = {}) => {
     const columnsById = new Map();
-    if (table && typeof table.getVisibleLeafColumns === 'function') table.getVisibleLeafColumns().forEach(column => { if (column && column.id) columnsById.set(column.id, column); });
+    getDisplayOrderedLeafColumns().forEach(column => { if (column && column.id) columnsById.set(column.id, column); });
     const requestedIds = Array.isArray(colIds) && colIds.length > 0 ? colIds.filter(isExportableColumnId) : getInstantiatedExportColIds();
     const headerLabels = {}; const columnWidths = {};
     const exportColumns = requestedIds.map(columnId => {
@@ -347,7 +358,7 @@ export function useRuntimeClipboardExportPresentation({
       headerLabels, mergedHeaderRows, headerFormatting, columnWidths, decimalPlaces, defaultValueFormat, numberGroupSeparator, columnDecimalOverrides, columnFormatOverrides, columnGroupSeparatorOverrides, valConfigs, conditionalFormatting, cellFormatRules, colorScaleMode, colorPalette,
       colorScaleStats: colorScaleStats ? { byCol: colorScaleStats.byCol || {}, table: colorScaleStats.table || null } : null,
     };
-  }, [cellFormatRules, colorPalette, colorScaleMode, colorScaleStats, columnDecimalOverrides, columnFormatOverrides, columnGroupSeparatorOverrides, conditionalFormatting, decimalPlaces, defaultValueFormat, fontFamily, fontSize, getDisplayHeaderTextForColumn, getDisplayHeaderTextStackForColumn, getExportHeaderLabel, getInstantiatedExportColIds, headerFormatting, isExportableColumnId, mergedHeaderSeparator, numberGroupSeparator, rowHeight, table, theme, valConfigs]);
+  }, [cellFormatRules, colorPalette, colorScaleMode, colorScaleStats, columnDecimalOverrides, columnFormatOverrides, columnGroupSeparatorOverrides, conditionalFormatting, decimalPlaces, defaultValueFormat, fontFamily, fontSize, getDisplayHeaderTextForColumn, getDisplayHeaderTextStackForColumn, getDisplayOrderedLeafColumns, getExportHeaderLabel, getInstantiatedExportColIds, headerFormatting, isExportableColumnId, mergedHeaderSeparator, numberGroupSeparator, rowHeight, table, theme, valConfigs]);
 
   const copyToClipboard = useCallback(payload => writeClipboardPayload(payload && typeof payload === 'object' && (payload.html !== undefined || payload.text !== undefined) ? payload : { text: payload }), []);
   const copyTextToClipboard = useCallback((text, successMessage = 'Copied!') => {
