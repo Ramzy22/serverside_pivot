@@ -65,3 +65,51 @@ def test_installed_host_copies_embedded_delimiters_losslessly(host, field, sourc
         assert normalized_cell.endswith(normalized_source), (host, field, copied, parsed)
     finally:
         driver.quit()
+
+
+@pytest.mark.flagship
+@pytest.mark.parametrize("host", ["dash", "react", "streamlit"])
+def test_installed_host_server_table_copy_preserves_crlf(host, installed_workflow_hosts, tmp_path):
+    """Both server copy commands preserve a CRLF cell and table geometry."""
+    downloads = tmp_path / "downloads"
+    downloads.mkdir()
+    driver = webdriver.Chrome(options=_qualification_chrome_options(downloads))
+    try:
+        driver.execute_cdp_cmd("Browser.grantPermissions", {
+            "origin": _origin(_host_url(host)),
+            "permissions": ["clipboardReadWrite", "clipboardSanitizedWrite"],
+        })
+        _switch_to_workspace(driver, host)
+        chips = [chip for chip in _workspace_elements(driver, '[data-sidebar-field-chip="available"]')
+                 if chip.is_displayed()]
+        next(chip for chip in chips if chip.text.strip() == "CopyCRLF").send_keys(Keys.ENTER)
+        _wait_for_visible_workspace_element(driver, '[data-sidebar-drop-zone="rows"]').send_keys(Keys.ENTER)
+        _wait_for_visible_workspace_element(driver, '[title="Expand all hierarchy levels"]').click()
+
+        def target_cell(current):
+            return next((cell for cell in _workspace_elements(current, '[role="gridcell"][data-colid="hierarchy"]')
+                         if cell.is_displayed() and "first\r\nsecond" in (cell.get_attribute("data-rowid") or "")), None)
+
+        target = WebDriverWait(driver, 20).until(target_cell)
+        for menu_label in ("Copy Current Table", "Copy All Records"):
+            sentinel = f"before {menu_label}"
+            assert driver.execute_async_script(
+                "const done=arguments[arguments.length-1]; navigator.clipboard.writeText(arguments[0]).then(()=>done(true),()=>done(false));",
+                sentinel,
+            )
+            ActionChains(driver).context_click(target).perform()
+            menu_item = WebDriverWait(driver, 8).until(lambda current: next((
+                item for item in _workspace_elements(current, '[role="menuitem"]')
+                if item.is_displayed() and item.is_enabled() and item.text.strip() == menu_label
+            ), None))
+            menu_item.click()
+            copied = WebDriverWait(driver, 30).until(
+                lambda current: (value if (value := _clipboard_text(current)) != sentinel else False))
+            parsed = list(csv.reader(io.StringIO(copied, newline=""), delimiter="\t", quotechar='"'))
+            assert parsed and all(len(row) == len(parsed[0]) for row in parsed), (host, menu_label, parsed)
+            normalized = [[cell.replace("\r\n", "\n") for cell in row] for row in parsed]
+            assert any(cell.endswith("first\nsecond") for row in normalized for cell in row), (
+                host, menu_label, copied, parsed,
+            )
+    finally:
+        driver.quit()
