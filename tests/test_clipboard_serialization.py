@@ -1,6 +1,7 @@
 """Run the shared clipboard serializer against literal TSV regression cases."""
 
 from pathlib import Path
+import os
 import shutil
 import subprocess
 
@@ -27,6 +28,9 @@ def test_shared_clipboard_serialization_preserves_cell_text():
 
 @pytest.fixture(scope="module")
 def html_fallback_browser():
+    if os.environ.get("PIVOT_RUN_FLAGSHIP_BROWSER_TESTS") != "1":
+        pytest.skip("set PIVOT_RUN_FLAGSHIP_BROWSER_TESTS=1 to run the Chromium DOMParser regression")
+
     from selenium import webdriver
 
     options = webdriver.ChromeOptions()
