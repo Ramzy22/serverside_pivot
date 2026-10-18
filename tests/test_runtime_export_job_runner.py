@@ -534,6 +534,7 @@ def test_real_flat_all_rows_exports_use_bounded_arrow_pages_before_python_conver
     runner, store, payloads, governor, service, context, job = setup_runner(tmp_path, adapter, governor=adapter.controller.resource_governor)
     state = PivotViewState(row_fields=["region"], val_configs=[{"field": "sales", "agg": "sum"}],
                            layout_mode="tabular", show_subtotals=False, show_col_totals=False,
+                           measure_axis={"placement": "none", "labelField": "Measure Name", "members": []},
                            export_request={"format": fmt, "allRows": True})
     try:
         runner.start(job, context, state)

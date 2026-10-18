@@ -889,7 +889,8 @@ class RuntimeRequestRouter:
 
         flat = not state.row_fields or (state.layout_mode == "tabular" and not state.show_subtotals)
         if (not isinstance(adapter, TanStackPivotAdapter) or not flat or state.col_fields
-                or state.view_mode not in {"pivot", "table"} or state.measure_axis
+                or state.view_mode not in {"pivot", "table"}
+                or (state.measure_axis and state.measure_axis.get("placement", "none") != "none")
                 or any(config.get("agg") == "formula" or config.get("showAs") or config.get("show_as")
                        for config in state.val_configs if isinstance(config, dict))
                 # Inspect the normalized request columns consumed by the
