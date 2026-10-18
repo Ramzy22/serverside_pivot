@@ -175,6 +175,27 @@ export interface TransportRuntimeDomain {
 
 export type RuntimeCommand = (...args: unknown[]) => unknown;
 
+export interface ExportJobProgress {
+    readonly phase: 'queued' | 'running' | 'cancelling' | 'cancelled' | 'completed' | 'failed' | 'interrupted';
+    readonly rowsWritten: number;
+    readonly bytesWritten: number;
+    readonly totalRows: number | null;
+    readonly percent: number | null;
+    readonly deliveryFailed?: boolean;
+}
+
+/** Imperative lifecycle port; job state stays private to its owner. */
+export interface ExportJobController {
+    readonly configure: RuntimeCommand;
+    readonly start: RuntimeCommand;
+    readonly poll: RuntimeCommand;
+    readonly cancel: RuntimeCommand;
+    readonly retry: RuntimeCommand;
+    readonly dismiss: RuntimeCommand;
+    readonly dispose: () => void;
+    readonly handleResponse: RuntimeCommand;
+}
+
 /** Renderer callbacks are intentionally opaque at the domain boundary. */
 export type WorkspaceRenderer = (...args: unknown[]) => React.ReactNode;
 export type WorkspaceCollection = readonly PivotObject[];
@@ -280,6 +301,8 @@ export interface WorkspacePresentation {
     readonly bodyRowsTopOffset: number;
     readonly canApplySelectionValueFormat: boolean;
     readonly cancelActiveExportRequest: RuntimeCommand;
+    readonly retryExportJob: RuntimeCommand;
+    readonly dismissExportJob: RuntimeCommand;
     readonly cellFormatRules: WorkspaceCollection;
     readonly centerColIndexMap: Readonly<Record<string, number>>;
     readonly centerCols: WorkspaceCollection;
@@ -324,7 +347,7 @@ export interface WorkspacePresentation {
     readonly effectiveCenterRows: WorkspaceCollection;
     readonly effectiveTopRows: WorkspaceCollection;
     readonly exportPivot: RuntimeCommand;
-    readonly exportProgress: WorkspaceRecord | null;
+    readonly exportProgress: ExportJobProgress | number | null;
     readonly fieldPanelSizes: WorkspaceRecord;
     readonly filterAnchorEl: HTMLElement | null;
     readonly filterOptionMeta: WorkspaceRecord;

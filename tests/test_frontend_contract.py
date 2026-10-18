@@ -107,6 +107,18 @@ def with_pivot_workspace_shell(component_source):
     return component_source + "\n" + runtime_source + "\n" + shell_source + "\n" + sparkline_source
 
 
+def test_export_job_lifecycle_executes_shared_frontend_commands_and_overlay():
+    node = shutil.which("node")
+    if not node:
+        pytest.skip("Node.js is required for the frontend source regression")
+    result = subprocess.run(
+        [node, str(Path(__file__).with_name("frontend_export_job_lifecycle.cjs"))],
+        cwd=Path(__file__).resolve().parents[1], capture_output=True, text=True,
+        timeout=30, check=False,
+    )
+    assert result.returncode == 0, result.stderr or result.stdout
+
+
 def test_tabular_value_resolution_executes_source_against_runtime_hierarchy_rows():
     node = shutil.which("node")
     if not node:

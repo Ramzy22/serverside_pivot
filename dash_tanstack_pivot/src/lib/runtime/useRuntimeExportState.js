@@ -1,4 +1,4 @@
-import { useRef, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 
 export const EXPORT_ROW_LIMIT = 100_000;
 export const COPY_ROW_LIMIT = 10_000;
@@ -7,7 +7,9 @@ export const COPY_ROW_LIMIT = 10_000;
 export function useRuntimeExportState() {
   const [isExporting, setIsExporting] = useState(false);
   const [isCopying, setIsCopying] = useState(false);
-  const [exportProgress, setExportProgress] = useState(null);
+  const [exportProgress, setExportProgress] = useState(/** @type {import('./runtimeDomains').ExportJobProgress | number | null} */ (null));
+  const exportJobControllerRef = useRef(/** @type {import('./runtimeDomains').ExportJobController | null} */ (null));
+  useEffect(() => () => exportJobControllerRef.current?.dispose(), []);
   const pendingCopyIntentRef = useRef(null);
   const exportRequestSequenceRef = useRef(0);
   const activeExportRequestIdRef = useRef(null);
@@ -20,6 +22,7 @@ export function useRuntimeExportState() {
     activeExportRequestIdRef,
     cancelledExportRequestIdsRef,
     exportProgress,
+    exportJobControllerRef,
     exportRequestSequenceRef,
     isCopying,
     isExporting,

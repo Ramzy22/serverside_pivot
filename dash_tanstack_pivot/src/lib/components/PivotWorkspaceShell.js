@@ -48,6 +48,37 @@ const loadingAnimationStyles = `
 }
 `;
 
+export function ExportDeliveryOverlay({exportProgress, isCopying, theme, cancelActiveExportRequest, retryExportJob, dismissExportJob}) {
+    const progress = exportProgress && typeof exportProgress === 'object' ? exportProgress : null;
+    const phase = progress?.phase;
+    const terminal = ['cancelled', 'completed', 'failed', 'interrupted'].includes(phase);
+    const percent = progress ? progress.percent : typeof exportProgress === 'number' ? exportProgress : null;
+    const labels = {queued: 'Queued', running: 'Running', cancelling: 'Cancelling — waiting for server cleanup',
+        cancelled: 'Cancelled', completed: progress?.deliveryFailed ? 'Completed — download failed' : 'Completed', failed: 'Failed', interrupted: 'Interrupted — retry'};
+    return (
+        <div role="dialog" aria-label="Export progress" aria-modal="true" data-export-phase={phase || 'running'} style={{position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.45)', zIndex: 10001, display: 'flex', alignItems: 'center', justifyContent: 'center'}}>
+            <div style={{background: theme.background, color: theme.text, borderRadius: 14, padding: '32px 40px 28px', boxShadow: '0 12px 40px rgba(0,0,0,0.35)', display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 16, minWidth: 280, border: `1px solid ${theme.border}`}}>
+                <span role="status" aria-live="polite" style={{fontSize: 14, fontWeight: 600}}>{isCopying ? 'Copying to clipboard…' : labels[phase] || 'Exporting all rows…'}</span>
+                {!terminal && <div role="progressbar" aria-label="Export rows" aria-valuemin={0} aria-valuemax={100} aria-valuenow={percent === null ? undefined : percent}
+                    style={{width: '100%', height: 6, background: theme.border || '#e5e7eb', borderRadius: 3, overflow: 'hidden', position: 'relative'}}>
+                    <style>{`@keyframes pivot-bar-slide{0%{transform:translateX(-150%)}100%{transform:translateX(350%)}}`}</style>
+                    <div style={{position: 'absolute', left: 0, top: 0, height: '100%', width: percent === null ? '40%' : `${percent}%`, borderRadius: 3,
+                        background: theme.accent || '#4f8ef7', animation: percent === null ? 'pivot-bar-slide 1.4s ease-in-out infinite' : undefined}}/>
+                </div>}
+                {progress && <span style={{fontSize: 12}}>{progress.rowsWritten.toLocaleString()} rows · {progress.bytesWritten.toLocaleString()} bytes</span>}
+                {!terminal && percent !== null && <span style={{fontSize: 12}}>{percent}%</span>}
+                {terminal ? <div style={{display: 'flex', gap: 12}}>
+                    {['failed', 'interrupted', 'cancelled'].includes(phase) || progress?.deliveryFailed ? <button onClick={retryExportJob}>Retry</button> : null}
+                    <button onClick={dismissExportJob}>Close</button>
+                </div> : <button onClick={cancelActiveExportRequest} disabled={phase === 'cancelling'}
+                    style={{padding: '7px 28px', background: '#dc2626', color: '#fff', border: 'none', borderRadius: 7, cursor: phase === 'cancelling' ? 'wait' : 'pointer'}}>
+                    {phase === 'cancelling' ? 'Cancelling…' : 'Cancel'}
+                </button>}
+            </div>
+        </div>
+    );
+}
+
 export function PivotWorkspaceShell({ workspace }) {
     // The shell intentionally receives only presentation props. Runtime
     // coordination, request state, and caches stay behind the workspace-model
@@ -57,7 +88,7 @@ export function PivotWorkspaceShell({ workspace }) {
         COPY_ROW_LIMIT, EXPORT_ROW_LIMIT, activateChartCategory, activeReportId, announcement,
         cancelActiveExportRequest, chartCanvasPaneModels, chartCanvasPanes, chartPaneDataById,
         comparisonValueState, contextMenu, customDimensions, dispatchExportPart, editValueDisplayMode,
-        exportProgress, filters, fontFamily, fontSize, handleCancelPreviewChartPane,
+        exportProgress, retryExportJob, dismissExportJob, filters, fontFamily, fontSize, handleCancelPreviewChartPane,
         handleConfirmPreviewChartPane, handleSetPivotMode, id, immersiveMode, immersiveModeHovering,
         isCopying, isExporting, loadingCssVars, notification, numberGroupSeparator, partModal,
         pivotMode, previewChartPaneId, reportDef, resolveCurrentCellValue, resolveDisplayedCellValue,
@@ -283,39 +314,8 @@ return (
                     </div>
                 );
             })()}
-            {(isExporting || isCopying) && (
-                <div style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.45)', zIndex: 10001, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
-                    <div style={{ position: 'relative', background: theme.background, color: theme.text, borderRadius: '14px', padding: '32px 40px 28px', boxShadow: '0 12px 40px rgba(0,0,0,0.35)', display: 'flex', flexDirection: 'column', alignItems: 'center', gap: '16px', minWidth: '280px', border: `1px solid ${theme.border}`, fontFamily: "'Inter',ui-sans-serif,system-ui,sans-serif" }}>
-                        <button
-                            onClick={cancelActiveExportRequest}
-                            style={{ position: 'absolute', top: '10px', right: '10px', width: '26px', height: '26px', borderRadius: '50%', background: '#dc2626', border: 'none', cursor: 'pointer', color: '#fff', fontSize: '13px', fontWeight: 700, lineHeight: 1, display: 'flex', alignItems: 'center', justifyContent: 'center', boxShadow: '0 1px 4px rgba(220,38,38,0.4)', transition: 'background 0.15s' }}
-                            onMouseEnter={e => e.currentTarget.style.background = '#b91c1c'}
-                            onMouseLeave={e => e.currentTarget.style.background = '#dc2626'}
-                            title="Cancel"
-                        >✕</button>
-                        <span style={{ fontSize: '14px', fontWeight: 600, letterSpacing: '0.01em' }}>
-                            {isCopying ? 'Copying to clipboard…' : 'Exporting all rows…'}
-                        </span>
-                        {/* Progress bar */}
-                        <div style={{ width: '100%', height: 6, background: theme.border || '#e5e7eb', borderRadius: 3, overflow: 'hidden', position: 'relative' }}>
-                            <style>{`@keyframes pivot-bar-slide{0%{transform:translateX(-150%)}100%{transform:translateX(350%)}}`}</style>
-                            {exportProgress !== null ? (
-                                <div style={{ position: 'absolute', left: 0, top: 0, height: '100%', width: `${exportProgress}%`, borderRadius: 3, background: theme.accent || '#4f8ef7', transition: 'width 0.2s ease' }}/>
-                            ) : (
-                                <div style={{ position: 'absolute', left: 0, top: 0, height: '100%', width: '40%', borderRadius: 3, background: theme.accent || '#4f8ef7', animation: 'pivot-bar-slide 1.4s ease-in-out infinite' }}/>
-                            )}
-                        </div>
-                        {exportProgress !== null && (
-                            <span style={{ fontSize: '12px', color: theme.textSec || theme.text, opacity: 0.8, marginTop: '-8px' }}>{exportProgress}%</span>
-                        )}
-                        <button
-                            onClick={cancelActiveExportRequest}
-                            style={{ marginTop: '4px', padding: '7px 28px', fontSize: '13px', fontWeight: 600, background: '#dc2626', border: 'none', borderRadius: '7px', color: '#fff', cursor: 'pointer', letterSpacing: '0.02em', boxShadow: '0 2px 8px rgba(220,38,38,0.35)', transition: 'background 0.15s' }}
-                            onMouseEnter={e => e.currentTarget.style.background = '#b91c1c'}
-                            onMouseLeave={e => e.currentTarget.style.background = '#dc2626'}
-                        >Cancel</button>
-                    </div>
-                </div>
+            {(isExporting || isCopying || (exportProgress && typeof exportProgress === 'object')) && (
+                <ExportDeliveryOverlay {...{exportProgress, isCopying, theme, cancelActiveExportRequest, retryExportJob, dismissExportJob}}/>
             )}
             {sparklineDataModal && (
                 <div

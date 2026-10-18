@@ -10,7 +10,8 @@ const ignoreDataError = () => {};
 // Dash uses its callback graph for envelopes and same-origin HTTP for retained
 // data. Direct hosts always provide their configured transport below.
 const dashPayloadTransport = {
-  fetchPayload: (reference, options) => new HttpPivotTransport().fetchPayload(reference, options)
+  fetchPayload: (reference, options) => new HttpPivotTransport().fetchPayload(reference, options),
+  fetchExportPayload: (reference, options) => new HttpPivotTransport().fetchExportPayload(reference, options),
 };
 
 /**
@@ -23,6 +24,7 @@ export function useRuntimeResponseLifecycle({
   activeExportRequestIdRef,
   activeRuntimePayloadFetchRef,
   cancelledExportRequestIdsRef,
+  exportJobControllerRef,
   clearPendingTransactionHistoryRequest,
   clientInstanceRef,
   commitRuntimeDataPayload,
@@ -34,7 +36,7 @@ export function useRuntimeResponseLifecycle({
   pendingCopyIntentRef,
   pendingDataProfilerCommitRef,
   pendingServerFilterOptionsRef,
-  payloadTransport = dashPayloadTransport,
+  payloadTransport = /** @type {import('./httpTransport').RuntimePayloadTransport} */ (dashPayloadTransport),
   pivotProfilerRef,
   profilerComponentIdRef,
   profilingEnabledRef,
@@ -256,6 +258,15 @@ export function useRuntimeResponseLifecycle({
       return;
     }
     if (runtimeResponse.kind === 'export') {
+      if (exportJobControllerRef?.current?.handleResponse(runtimeResponse, {
+        triggerExportDownload, showNotification,
+        fetchExportPayload: (reference, options) => payloadTransport.fetchExportPayload
+          ? payloadTransport.fetchExportPayload(reference, options)
+          : Promise.reject(new Error('The configured transport does not support export payload delivery.')),
+      })) return;
+      // Job progress is never a legacy inline export, including late responses
+      // from a disposed or superseded controller.
+      if (runtimeResponse.status === 'export_job' || payload.jobId) return;
       const responseRequestId = runtimeResponse.requestId ? String(runtimeResponse.requestId) : null;
       if (responseRequestId && cancelledExportRequestIdsRef.current.has(responseRequestId)) {
         cancelledExportRequestIdsRef.current.delete(responseRequestId);

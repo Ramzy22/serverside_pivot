@@ -1690,6 +1690,7 @@ export function useViewportRuntimeStage(input, transport) {
     dispatchServerSideRuntimeSetProps: stage.dispatchServerSideRuntimeSetProps,
     EXPORT_ROW_LIMIT: stage.EXPORT_ROW_LIMIT,
     exportRequestSequenceRef: stage.exportRequestSequenceRef,
+    exportJobControllerRef: stage.exportJobControllerRef,
     getDisplayHeaderTextForColumn: stage.getDisplayHeaderTextForColumn,
     getDisplayHeaderTextStackForColumn: stage.getDisplayHeaderTextStackForColumn,
     getDisplayRows: stage.getDisplayRows,
@@ -1719,6 +1720,11 @@ export function useViewportRuntimeStage(input, transport) {
   stage.dispatchExportPart = exportCommands.dispatchExportPart;
   stage.dispatchServerExportRequest = exportCommands.dispatchServerExportRequest;
   stage.exportPivot = exportCommands.exportPivot;
+  stage.startExportJob = exportCommands.startExportJob;
+  stage.pollExportJob = exportCommands.pollExportJob;
+  stage.cancelExportJob = exportCommands.cancelExportJob;
+  stage.retryExportJob = exportCommands.retryExportJob;
+  stage.dismissExportJob = exportCommands.dismissExportJob;
   stage.getServerExportStyleIds = exportCommands.getServerExportStyleIds;
   const columnCommands = useRuntimeColumnCommands({
     colFields: stage.colFields,

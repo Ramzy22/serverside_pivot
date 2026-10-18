@@ -27,7 +27,14 @@ export interface PivotTransport {
         reference: PayloadReference,
         options?: RuntimeTransportRequestOptions,
     ): Promise<JsonObject>;
+    /** Binary completed-export delivery, retaining the transport's auth context. */
+    fetchExportPayload?(
+        reference: PayloadReference,
+        options?: RuntimeTransportRequestOptions,
+    ): Promise<Blob>;
 }
+
+export type RuntimePayloadTransport = Pick<PivotTransport, 'fetchPayload' | 'fetchExportPayload'>;
 
 export interface HttpPivotTransportOptions {
     readonly endpoint?: string;
@@ -160,6 +167,18 @@ export class HttpPivotTransport implements PivotTransport {
         }
         return body as JsonObject;
     }
+
+    async fetchExportPayload(
+        reference: PayloadReference,
+        options: RuntimeTransportRequestOptions = {},
+    ): Promise<Blob> {
+        const response = await this.fetchImpl(this.resolvePayloadUrl(reference.url), {
+            method: 'GET', credentials: 'same-origin',
+            headers: { Accept: '*/*', ...this.headers }, signal: options.signal,
+        });
+        if (!response.ok) throw new Error(`Export payload fetch failed with status ${response.status}.`);
+        return response.blob();
+    }
 }
 
 interface QueuedViewportRequest {
@@ -204,6 +223,15 @@ export class LatestViewportScheduler implements PivotTransport {
         options: RuntimeTransportRequestOptions = {},
     ): Promise<JsonObject> {
         return this.transport.fetchPayload(reference, options);
+    }
+
+    fetchExportPayload(
+        reference: PayloadReference,
+        options: RuntimeTransportRequestOptions = {},
+    ): Promise<Blob> {
+        return this.transport.fetchExportPayload
+            ? this.transport.fetchExportPayload(reference, options)
+            : Promise.reject(new Error('The configured transport does not support export payload delivery.'));
     }
 
     private async flush(options: RuntimeTransportRequestOptions): Promise<void> {

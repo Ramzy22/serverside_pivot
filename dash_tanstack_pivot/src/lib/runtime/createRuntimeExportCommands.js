@@ -1,5 +1,167 @@
 import { exportPivotTable, exportPivotTableCsv } from '../utils/exportUtils';
 
+const terminalExportPhases = new Set(['cancelled', 'completed', 'failed', 'interrupted']);
+
+/** One host-neutral owner for export identity, polling, and delivery. */
+function createExportJobController(initialPorts) {
+  let ports = initialPorts;
+  let job = null;
+  const ownedRequests = new Set();
+  const isCurrent = candidate => job === candidate && !candidate.disposed;
+  const clearPoll = candidate => {
+    clearTimeout(candidate.pollTimer);
+    candidate.pollTimer = null;
+  };
+  const clearRequests = candidate => {
+    for (const request of candidate.requests.values()) clearTimeout(request.timer);
+    candidate.requests.clear();
+  };
+  const publish = candidate => {
+    if (!isCurrent(candidate)) return;
+    const {phase, rowsWritten, bytesWritten, totalRows} = candidate;
+    ports.setExportProgress({phase, rowsWritten, bytesWritten, totalRows,
+      percent: totalRows > 0 ? Math.min(100, Math.floor(rowsWritten / totalRows * 100)) : null});
+    ports.setIsExporting(!terminalExportPhases.has(phase));
+  };
+  const finishPart = (candidate, completed) => {
+    const partId = candidate.payload.partId;
+    if (partId && isCurrent(candidate)) ports.setPartModal(previous => previous && previous.processingPartId === partId
+      ? {...previous, processingPartId: null, completedParts: completed ? new Set([...previous.completedParts, partId]) : previous.completedParts}
+      : previous);
+  };
+  const stop = candidate => {
+    if (!candidate) return;
+    candidate.disposed = true;
+    clearPoll(candidate);
+    clearRequests(candidate);
+    candidate.downloadAbort?.abort();
+    if (candidate.downloadUrl) URL.revokeObjectURL(candidate.downloadUrl);
+    clearTimeout(candidate.revokeTimer);
+  };
+  const terminal = (candidate, phase) => {
+    candidate.phase = phase;
+    clearPoll(candidate); clearRequests(candidate);
+    ports.activeExportRequestIdRef.current = null;
+    publish(candidate);
+    if (phase !== 'completed') finishPart(candidate, false);
+  };
+  const schedulePoll = candidate => {
+    clearPoll(candidate);
+    if (isCurrent(candidate) && !terminalExportPhases.has(candidate.phase)) {
+      candidate.pollTimer = setTimeout(() => poll(candidate.jobId), 500);
+    }
+  };
+  const send = (candidate, action, payload, runtimeFields = {}) => {
+    clearPoll(candidate);
+    const requestId = ports.dispatch(payload, runtimeFields);
+    ownedRequests.add(requestId);
+    // Bound historical correlation while preserving the latest generation.
+    if (ownedRequests.size > 1024) ownedRequests.delete(ownedRequests.values().next().value);
+    const timer = setTimeout(() => {
+      if (!isCurrent(candidate) || !candidate.requests.has(requestId)) return;
+      candidate.requests.delete(requestId);
+      // A lost cancel response cannot establish server cleanup. Keep asking.
+      if (candidate.cancelRequested && candidate.jobId) schedulePoll(candidate);
+      else terminal(candidate, 'interrupted');
+    }, 15000);
+    candidate.requests.set(requestId, {action, timer});
+    return requestId;
+  };
+  const poll = jobId => {
+    if (!job || !isCurrent(job) || job.jobId !== jobId || terminalExportPhases.has(job.phase)) return;
+    if ([...job.requests.values()].some(request => request.action === 'status' || request.action === 'cancel')) return;
+    return send(job, 'status', {action: 'status', jobId, table: job.payload.table});
+  };
+  const cancel = jobId => {
+    if (!job || !isCurrent(job) || terminalExportPhases.has(job.phase) || (jobId && job.jobId !== jobId)) return false;
+    if (job.cancelRequested) return true;
+    job.cancelRequested = true;
+    job.phase = 'cancelling';
+    // Retire reads dispatched before the cancellation decision. The cancel
+    // reply and subsequent polls are the authoritative server observations.
+    for (const [requestId, request] of job.requests) {
+      if (request.action === 'status') {
+        clearTimeout(request.timer); job.requests.delete(requestId);
+      }
+    }
+    clearPoll(job); publish(job);
+    if (job.jobId) send(job, 'cancel', {action: 'cancel', jobId: job.jobId, table: job.payload.table});
+    return true;
+  };
+  const start = (payload, runtimeFields = {}) => {
+    stop(job);
+    job = {payload: {...payload, action: 'start'}, runtimeFields, phase: 'queued', jobId: null,
+      rowsWritten: 0, bytesWritten: 0, totalRows: null, requests: new Map(), cancelRequested: false};
+    if (payload.partId) ports.setPartModal(previous => previous ? {...previous, processingPartId: payload.partId} : previous);
+    ports.pendingCopyIntentRef.current = null;
+    publish(job);
+    return send(job, 'start', job.payload, runtimeFields);
+  };
+  const download = async (candidate, payload, delivery) => {
+    const ref = payload.payloadRef;
+    candidate.downloadAbort = new AbortController();
+    try {
+      if (!ref || !ref.url) throw new Error('Missing completed export payload.');
+      const blob = await delivery.fetchExportPayload(ref, {signal: candidate.downloadAbort.signal});
+      if (!isCurrent(candidate) || candidate.downloadAbort.signal.aborted) return;
+      candidate.downloadUrl = URL.createObjectURL(blob);
+      delivery.triggerExportDownload(candidate.downloadUrl, ref.filename || (candidate.payload.format === 'csv' ? 'pivot.csv' : 'pivot.xlsx'));
+      candidate.revokeTimer = setTimeout(() => {
+        URL.revokeObjectURL(candidate.downloadUrl); candidate.downloadUrl = null;
+      }, 1000);
+      finishPart(candidate, true);
+      delivery.showNotification(`Downloaded ${candidate.rowsWritten} rows`, 'success');
+    } catch (error) {
+      if (!isCurrent(candidate) || candidate.downloadAbort.signal.aborted) return;
+      // Server completion is truthful even when browser delivery fails.
+      candidate.deliveryFailed = true;
+      ports.setExportProgress({phase: 'completed', rowsWritten: candidate.rowsWritten, bytesWritten: candidate.bytesWritten,
+        totalRows: candidate.totalRows, percent: null, deliveryFailed: true});
+      finishPart(candidate, false);
+      delivery.showNotification('Export download failed. Retry the export.', 'error');
+    }
+  };
+  return {
+    configure: nextPorts => {ports = nextPorts;}, start, poll, cancel,
+    retry: () => job && start(job.payload, job.runtimeFields),
+    dismiss: () => {stop(job); job = null; ports.setExportProgress(null); ports.setIsExporting(false);},
+    dispose: () => {stop(job);},
+    handleResponse: (response, delivery) => {
+      const requestId = response.requestId;
+      if (!ownedRequests.has(requestId)) return false;
+      const candidate = job;
+      if (!candidate || !isCurrent(candidate) || terminalExportPhases.has(candidate.phase)) return true;
+      const request = candidate.requests.get(requestId);
+      if (!request) return true;
+      clearTimeout(request.timer); candidate.requests.delete(requestId);
+      const payload = response.payload || {};
+      if (response.status !== 'export_job') {
+        if (candidate.cancelRequested && payload.code !== 'export_job_not_found') schedulePoll(candidate);
+        else terminal(candidate, payload.code === 'export_job_not_found' ? 'interrupted' : 'failed');
+        return true;
+      }
+      if (!payload.jobId || (candidate.jobId && candidate.jobId !== payload.jobId)) return true;
+      candidate.jobId = payload.jobId;
+      candidate.rowsWritten = Math.max(candidate.rowsWritten, Number(payload.rowsWritten) || 0);
+      candidate.bytesWritten = Math.max(candidate.bytesWritten, Number(payload.bytesWritten) || 0);
+      candidate.totalRows = Number.isFinite(payload.totalRows) && payload.totalRows >= candidate.rowsWritten ? payload.totalRows : null;
+      if (candidate.cancelRequested && request.action === 'start' && !terminalExportPhases.has(payload.phase)) {
+        send(candidate, 'cancel', {action: 'cancel', jobId: candidate.jobId, table: candidate.payload.table});
+      }
+      if (terminalExportPhases.has(payload.phase)) {
+        terminal(candidate, payload.phase);
+        if (payload.phase === 'completed') void download(candidate, payload, delivery);
+        return true;
+      }
+      if (!candidate.cancelRequested && payload.phase === 'running') candidate.phase = 'running';
+      if (payload.phase === 'cancelling') {candidate.phase = 'cancelling'; candidate.cancelRequested = true;}
+      publish(candidate);
+      if (![...candidate.requests.values()].some(pending => pending.action === 'cancel')) schedulePoll(candidate);
+      return true;
+    },
+  };
+}
+
 /**
  * Creates the export request and download commands for the workspace.
  *
@@ -17,6 +179,7 @@ export function createRuntimeExportCommands({
   dispatchServerSideRuntimeSetProps,
   EXPORT_ROW_LIMIT,
   exportRequestSequenceRef,
+  exportJobControllerRef = {current: null},
   getDisplayHeaderTextForColumn,
   getDisplayHeaderTextStackForColumn,
   getDisplayRows,
@@ -77,14 +240,29 @@ export function createRuntimeExportCommands({
     activeExportRequestIdRef.current = requestId;
     dispatchServerSideRuntimeSetProps({
       runtimeRequest: {
-        kind: 'export', requestId, abort_generation: abortGenerationRef.current,
+        schemaVersion: 1, kind: 'export', requestId, abort_generation: abortGenerationRef.current,
         ...runtimeFields, payload,
       },
     });
     return requestId;
   };
 
+  const jobPorts = {dispatch: dispatchServerExportRequest, activeExportRequestIdRef, pendingCopyIntentRef,
+    setExportProgress, setIsExporting, setPartModal};
+  if (!exportJobControllerRef.current) exportJobControllerRef.current = createExportJobController(jobPorts);
+  const jobs = exportJobControllerRef.current;
+  jobs.configure(jobPorts);
+  const startExportJob = (format = 'xlsx', scope = {}) => {
+    if (format !== 'xlsx' && format !== 'csv') throw new TypeError('Export format must be either xlsx or csv.');
+    const allRows = scope.allRows !== false;
+    return jobs.start(buildServerExportPayload({format, includeHeaders: true,
+      rowStart: 0, rowEnd: rowCount, columnTarget: getServerExportColumnTarget({currentTable: !allRows}),
+      styleOptions: {withHeaders: true, mergedHeaders: true}, ...scope, allRows}));
+  };
+
   const cancelActiveExportRequest = () => {
+    if (jobs.cancel()) return;
+    jobs.dismiss();
     const activeRequestId = activeExportRequestIdRef.current;
     if (activeRequestId) {
       cancelledExportRequestIdsRef.current.add(activeRequestId);
@@ -147,11 +325,7 @@ export function createRuntimeExportCommands({
         });
         return;
       }
-      setIsExporting(true);
-      dispatchServerExportRequest(buildServerExportPayload({
-        format, includeHeaders: true, rowStart: 0, rowEnd: rowCount, columnTarget,
-        styleOptions: { withHeaders: true, mergedHeaders: true }, allRows: true,
-      }));
+      startExportJob(format, {columnTarget, allRows: true});
       return;
     }
 
@@ -206,18 +380,22 @@ export function createRuntimeExportCommands({
     const isCopyMode = mode === 'copy';
     const partColumnTarget = { mode: useIdColumns ? 'ids' : 'window', colIds, knownColIds: Array.isArray(knownColIds) ? knownColIds : [] };
     const runtimeFields = useColumnWindow ? { col_start: colStart, col_end: colEnd - 1 } : {};
-    dispatchServerExportRequest(buildServerExportPayload({
+    const payload = buildServerExportPayload({
       format: isCopyMode ? 'html' : exportFormat, includeHeaders: isCopyMode ? !!(copyIntent && copyIntent.withHeaders) : true,
       rowStart, rowEnd, columnTarget: partColumnTarget, partId, partLabel,
       colStart: useColumnWindow ? colStart : null, colEnd: useColumnWindow ? colEnd - 1 : null,
       styleOptions: { withHeaders: isCopyMode ? !!(copyIntent && copyIntent.withHeaders) : true, mergedHeaders: isCopyMode ? !!(copyIntent && copyIntent.mergedHeaders) : true },
       allRows: false,
-    }), runtimeFields);
+    });
+    if (isCopyMode) dispatchServerExportRequest(payload, runtimeFields);
+    else jobs.start(payload, runtimeFields);
   };
 
   return {
     buildServerExportPayload, cancelActiveExportRequest, copyAllRecordsToClipboard,
     copyCurrentTableToClipboard,
     dispatchExportPart, dispatchServerExportRequest, exportPivot, getServerExportStyleIds,
+    startExportJob, pollExportJob: jobs.poll, cancelExportJob: jobs.cancel,
+    retryExportJob: jobs.retry, dismissExportJob: jobs.dismiss,
   };
 }

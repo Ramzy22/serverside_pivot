@@ -8,11 +8,11 @@ import { useViewportRuntime } from './useViewportRuntime';
 import { useWorkspaceRuntime } from './useWorkspaceRuntime';
 import { createWorkspaceViewModel } from './workspaceViewModel';
 import type { PivotRuntimeProps } from './runtimeDomains';
-import type { PivotTransport } from './httpTransport';
+import type { RuntimePayloadTransport } from './httpTransport';
 
 /** Typed runtime composition boundary for the public Dash component. */
 export function PivotRuntimeRoot({ payloadTransport, ...props }: PivotRuntimeProps & {
-    readonly payloadTransport?: Pick<PivotTransport, 'fetchPayload'>;
+    readonly payloadTransport?: RuntimePayloadTransport;
 }) {
     const core = useCoreRuntime(props);
     const transport = useTransportRuntime(core);

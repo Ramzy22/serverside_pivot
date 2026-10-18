@@ -3,11 +3,11 @@ import { useRuntimeDataCommit } from '../hooks/useRuntimeDataCommit';
 import { useRuntimeTransport } from '../hooks/useRuntimeTransport';
 
 import type { RuntimeRequestV1 } from './runtimeContract';
-import type { CoreRuntimeDomain, PivotObject, TransportRuntimeDomain, ViewportRuntimeDomain, WorkspaceRuntimeDomain } from './runtimeDomains';
+import type { CoreRuntimeDomain, ExportJobController, PivotObject, TransportRuntimeDomain, ViewportRuntimeDomain, WorkspaceRuntimeDomain } from './runtimeDomains';
 import { useRuntimeChartRequestDispatch } from './useRuntimeChartRequestDispatch';
 import { useRuntimeResponseLifecycle } from './useRuntimeResponseLifecycle';
 import { useRuntimeResponsePostCommit } from './useRuntimeResponsePostCommit';
-import type { PivotTransport } from './httpTransport';
+import type { RuntimePayloadTransport } from './httpTransport';
 
 const asObject = (value: unknown): PivotObject => value && typeof value === 'object' && !Array.isArray(value)
     ? value as PivotObject
@@ -44,6 +44,7 @@ interface CoreTransportState extends CoreRuntimeDomain {
 interface TransportResponseState extends CoreTransportState {
     readonly activeChartRequestRef: RuntimeRef<PivotObject | null>;
     readonly activeExportRequestIdRef: RuntimeRef<string | null>;
+    readonly exportJobControllerRef: RuntimeRef<ExportJobController | null>;
     readonly activeRuntimePayloadFetchRef: RuntimeRef<string | null>;
     readonly cancelledExportRequestIdsRef: RuntimeRef<ReadonlySet<string>>;
     readonly handledRuntimeResponseKeysRef: RuntimeRef<ReadonlySet<string>>;
@@ -169,7 +170,7 @@ export function useTransportResponseRuntime(
     core: CoreRuntimeDomain,
     transport: TransportRuntimeDomain,
     viewport: ViewportRuntimeDomain,
-    payloadTransport?: Pick<PivotTransport, 'fetchPayload'>,
+    payloadTransport?: RuntimePayloadTransport,
 ): void {
     const runtime = core as TransportResponseState;
     const response = runtime;
@@ -189,6 +190,7 @@ export function useTransportResponseRuntime(
         payloadTransport,
         activeChartRequestRef: response.activeChartRequestRef,
         activeExportRequestIdRef: response.activeExportRequestIdRef,
+        exportJobControllerRef: response.exportJobControllerRef,
         activeRuntimePayloadFetchRef: response.activeRuntimePayloadFetchRef,
         cancelledExportRequestIdsRef: response.cancelledExportRequestIdsRef,
         clearPendingTransactionHistoryRequest: responseCallback(response, 'clearPendingTransactionHistoryRequest'),

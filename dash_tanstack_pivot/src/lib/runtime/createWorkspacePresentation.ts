@@ -32,6 +32,8 @@ export function createWorkspacePresentation(
         bodyRowsTopOffset: source.bodyRowsTopOffset,
         canApplySelectionValueFormat: source.canApplySelectionValueFormat,
         cancelActiveExportRequest: source.cancelActiveExportRequest,
+        retryExportJob: source.retryExportJob,
+        dismissExportJob: source.dismissExportJob,
         cellFormatRules: source.cellFormatRules,
         centerColIndexMap: source.centerColIndexMap,
         centerCols: source.centerCols,
