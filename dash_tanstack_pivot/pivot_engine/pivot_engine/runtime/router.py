@@ -892,6 +892,10 @@ class RuntimeRequestRouter:
                 or state.view_mode not in {"pivot", "table"} or state.measure_axis
                 or any(config.get("agg") == "formula" or config.get("showAs") or config.get("show_as")
                        for config in state.val_configs if isinstance(config, dict))
+                # Inspect the normalized request columns consumed by the
+                # response mapper, including canonical windowFn and aliases.
+                or any(adapter._normalize_window_fn(column.get("windowFn")) or column.get("isFormula")
+                       for column in request.columns if isinstance(column, dict))
                 or not adapter.controller._uses_duckdb_ibis()):
             raise ResourceExhaustedError(ResourceKind.EXPORT, reason="bounded_export_layout_unavailable")
         scoped = adapter._request_with_row_scope(request, context.row_scope)
@@ -916,6 +920,11 @@ class RuntimeRequestRouter:
             self.export_service.limits.ensure_rows(emitted + table.num_rows)
             if any(pa.types.is_nested(field.type) or pa.types.is_dictionary(field.type) for field in table.schema):
                 raise ResourceExhaustedError(ResourceKind.EXPORT, reason="bounded_arrow_type_unavailable")
+            if table.num_rows == 0:
+                # Bounded batch splitting omits empty batches, but the schema
+                # still defines the headers for an empty exported document.
+                yield adapter.convert_pivot_result_to_tanstack_format(table, request)
+                return
             for batch in iter_bounded_record_batches(table, max_batch_bytes=batch_bytes, max_batch_rows=batch_rows):
                 # Scalar Arrow values can expand in Python; reserve conservative
                 # per-cell/container and Unicode costs BEFORE the conversion.

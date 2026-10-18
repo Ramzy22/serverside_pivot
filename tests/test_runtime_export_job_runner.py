@@ -684,3 +684,60 @@ def test_cancel_between_owner_claim_and_submission_never_executes_adapter(tmp_pa
     finally:
         runner.close()
         payloads.clear()
+
+
+@pytest.mark.parametrize("fmt", ["csv", "xlsx"])
+@pytest.mark.parametrize("all_rows", [False, True])
+def test_empty_bounded_export_preserves_column_headers(tmp_path, fmt, all_rows):
+    import pyarrow as pa
+    from pivot_engine import create_tanstack_adapter
+    adapter = create_tanstack_adapter(backend_uri=":memory:")
+    adapter.controller.load_data_from_arrow("sales", pa.table({
+        "region": pa.array([], type=pa.string()), "sales": pa.array([], type=pa.float64()),
+    }))
+    runner, store, payloads, governor, service, context, job = setup_runner(tmp_path, adapter, governor=adapter.controller.resource_governor)
+    state = PivotViewState(row_fields=["region"], val_configs=[{"field": "sales", "agg": "sum"}],
+                           layout_mode="tabular", show_subtotals=False, show_col_totals=False,
+                           export_request={"format": fmt, "allRows": all_rows})
+    try:
+        runner.start(job, context, state)
+        done = wait_for(lambda: (item := snapshot(store)).phase in {"completed", "failed"} and item)
+        assert done.phase == "completed" and done.rows_written == 0
+        item = payloads.get(done.payload_ref["id"])
+        document = read_csv_export(item.file_path) if fmt == "csv" else read_xlsx_export(item.file_path)
+        assert document == [["Region", "sales"]]
+    finally:
+        runner.close()
+        payloads.clear()
+        adapter.controller.close()
+
+
+@pytest.mark.parametrize("fmt", ["csv", "xlsx"])
+@pytest.mark.parametrize("window_fn", ["percent_of_grand_total", " PERCENT_OF_TOTAL ", "percent_of_col", "percent_of_row"])
+def test_bounded_export_rejects_normalized_window_functions_before_native_execution(tmp_path, monkeypatch, fmt, window_fn):
+    import pyarrow as pa
+    from pivot_engine import create_tanstack_adapter
+    adapter = create_tanstack_adapter(backend_uri=":memory:")
+    adapter.controller.load_data_from_arrow("sales", pa.table({
+        "region": [f"R{i:04d}" for i in range(350)], "sales": [1.0] * 350,
+    }))
+    native_calls = []
+    original = adapter.controller.run_pivot_async
+    async def execute(*args, **kwargs):
+        native_calls.append(True)
+        return await original(*args, **kwargs)
+    monkeypatch.setattr(adapter.controller, "run_pivot_async", execute)
+    runner, store, payloads, governor, service, context, job = setup_runner(tmp_path, adapter, governor=adapter.controller.resource_governor)
+    state = PivotViewState(row_fields=["region"], val_configs=[{"field": "sales", "agg": "sum", "windowFn": window_fn}],
+                           layout_mode="tabular", show_subtotals=False, show_col_totals=False,
+                           export_request={"format": fmt, "allRows": True})
+    try:
+        runner.start(job, context, state)
+        done = wait_for(lambda: (item := snapshot(store)).phase in {"completed", "failed"} and item)
+        assert native_calls == []
+        assert done.phase == "failed" and done.payload_ref is None
+        assert list(tmp_path.iterdir()) == []
+    finally:
+        runner.close()
+        payloads.clear()
+        adapter.controller.close()
