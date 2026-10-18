@@ -47,9 +47,8 @@ export interface PivotViewStateSnapshot {
     reportDef?: JsonObject | null;
 }
 
-export interface RuntimeRequestV1 {
+interface RuntimeRequestEnvelopeV1 {
     schemaVersion: typeof RUNTIME_SCHEMA_VERSION;
-    kind: RuntimeCommandKind;
     requestId: string;
     table?: string;
     sessionId?: string;
@@ -59,8 +58,28 @@ export interface RuntimeRequestV1 {
     abortGeneration?: number;
     cacheKey?: string;
     state?: PivotViewStateSnapshot;
-    payload: JsonObject;
 }
+
+export type ExportRequestPayload =
+    | (JsonObject & { action?: undefined; jobId?: never })
+    | (JsonObject & { action: 'start'; jobId?: never })
+    | (JsonObject & { action: 'status' | 'cancel'; jobId: string });
+
+export type RuntimeRequestV1 = RuntimeRequestEnvelopeV1 & (
+    | { kind: 'export'; payload: ExportRequestPayload }
+    | { kind: Exclude<RuntimeCommandKind, 'export'>; payload: JsonObject }
+);
+
+export type ExportJobPhase = 'queued' | 'running' | 'cancelling' | 'cancelled' | 'completed' | 'failed' | 'interrupted';
+export type ExportJobPayload = JsonObject & {
+    jobId: string;
+    rowsWritten: number;
+    bytesWritten: number;
+    totalRows: number | null;
+} & (
+    | { phase: 'completed'; payloadRef: JsonObject }
+    | { phase: Exclude<ExportJobPhase, 'completed'>; payloadRef?: never }
+);
 
 /** Generated directly from the canonical JSON Schema for boundary consumers. */
 export type RuntimeRequestSchemaV1 = PivotRuntimeProtocolRequestV1;
@@ -178,15 +197,40 @@ export function createRuntimeRequest(
         cacheKey: stringValue(input.cacheKey || input.cache_key || payload.cacheKey || payload.cache_key),
         ...(Object.keys(state).length > 0 ? { state: state as PivotViewStateSnapshot } : {}),
         payload,
-    };
+    } as RuntimeRequestV1;
 }
+
+const isExportRequestPayload = (value: unknown): boolean => {
+    const payload = asRecord(value);
+    if (!('action' in payload)) return !('jobId' in payload);
+    if (payload.action === 'start') return !('jobId' in payload);
+    return (payload.action === 'status' || payload.action === 'cancel')
+        && typeof payload.jobId === 'string' && payload.jobId.length > 0;
+};
+
+const isExportJobPayload = (value: unknown): boolean => {
+    const payload = asRecord(value);
+    const phases: readonly string[] = ['queued', 'running', 'cancelling', 'cancelled', 'completed', 'failed', 'interrupted'];
+    const allowed = new Set(['jobId', 'phase', 'rowsWritten', 'bytesWritten', 'totalRows', 'payloadRef']);
+    const counter = (item: unknown): boolean => typeof item === 'number' && Number.isInteger(item) && item >= 0;
+    return typeof payload.jobId === 'string' && payload.jobId.length > 0
+        && typeof payload.phase === 'string' && phases.includes(payload.phase)
+        && counter(payload.rowsWritten) && counter(payload.bytesWritten)
+        && (payload.totalRows === null || counter(payload.totalRows))
+        && Object.keys(payload).every(key => allowed.has(key))
+        && (payload.phase === 'completed'
+            ? payload.payloadRef !== null && typeof payload.payloadRef === 'object'
+                && !Array.isArray(payload.payloadRef) && Object.keys(payload.payloadRef).length > 0
+            : !('payloadRef' in payload));
+};
 
 export function isRuntimeRequestV1(value: unknown): value is RuntimeRequestV1 {
     const candidate = asRecord(value);
     return candidate.schemaVersion === RUNTIME_SCHEMA_VERSION
         && typeof candidate.requestId === 'string'
         && (RUNTIME_COMMAND_KINDS as readonly string[]).includes(String(candidate.kind))
-        && Object.prototype.toString.call(candidate.payload) === '[object Object]';
+        && Object.prototype.toString.call(candidate.payload) === '[object Object]'
+        && (candidate.kind !== 'export' || isExportRequestPayload(candidate.payload));
 }
 
 /** Runtime responses are always V1; hosts do not need version fallbacks. */
@@ -218,6 +262,9 @@ export function isRuntimeResponseV1(value: unknown): value is RuntimeResponseV1 
                 || typeof sequence === 'number' && Number.isInteger(sequence) && sequence >= 0;
         })
         && (!('message' in candidate) || typeof candidate.message === 'string')
+        && (candidate.kind !== 'export' || candidate.status !== 'export_job'
+            && !('jobId' in asRecord(candidate.payload) || 'phase' in asRecord(candidate.payload))
+            || isExportJobPayload(candidate.payload))
         && (!('profile' in candidate) || candidate.profile !== null
             && typeof candidate.profile === 'object' && !Array.isArray(candidate.profile));
 }

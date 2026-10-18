@@ -18,10 +18,27 @@
     "abortGeneration": { "type": "integer", "minimum": 0 },
     "cacheKey": { "type": "string" },
     "state": { "$ref": "#/$defs/viewState" },
-    "payload": { "$ref": "#/$defs/jsonObject" }
+    "payload": { "anyOf": [{ "$ref": "#/$defs/exportPayload" }, { "$ref": "#/$defs/jsonObject" }] }
   },
   "additionalProperties": false,
+  "allOf": [{
+    "if": { "properties": { "kind": { "const": "export" } }, "required": ["kind"] },
+    "then": { "properties": { "payload": { "$ref": "#/$defs/exportPayload" } } }
+  }],
   "$defs": {
+    "exportPayload": {
+      "type": "object",
+      "properties": {
+        "action": { "enum": ["start", "status", "cancel"] },
+        "jobId": { "type": "string", "minLength": 1 }
+      },
+      "allOf": [{ "$ref": "#/$defs/jsonObject" }, {
+        "if": { "properties": { "action": { "enum": ["status", "cancel"] } }, "required": ["action"] },
+        "then": { "required": ["jobId"] },
+        "else": { "not": { "required": ["jobId"] } }
+      }],
+      "additionalProperties": true
+    },
     "jsonValue": {
       "anyOf": [
         { "type": "null" },

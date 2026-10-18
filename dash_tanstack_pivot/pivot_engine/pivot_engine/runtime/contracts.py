@@ -14,6 +14,7 @@ import json
 from pathlib import Path
 from typing import Any, Dict, Optional
 from ..resource_governor import ResourceExhaustedError
+from .export_jobs import ExportJobSnapshot
 
 try:  # Keep import errors actionable for library consumers.
     from jsonschema import Draft202012Validator
@@ -298,6 +299,16 @@ def build_runtime_response(
     if isinstance(profile, dict) and profile:
         response["profile"] = profile
     return response
+
+
+def build_export_job_response(
+    snapshot: ExportJobSnapshot, *, request_id: Optional[str] = None,
+) -> Dict[str, Any]:
+    """Encode only public observations; identity/accounting stay server-side."""
+    return build_runtime_response(
+        kind="export", request_id=request_id, status="export_job",
+        payload=snapshot.to_payload(),
+    )
 
 
 def build_resource_exhausted_response(

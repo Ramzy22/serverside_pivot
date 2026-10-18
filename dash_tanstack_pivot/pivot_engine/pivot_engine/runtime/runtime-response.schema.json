@@ -17,11 +17,42 @@
     "stateEpoch": { "type": "integer", "minimum": 0 },
     "windowSeq": { "type": "integer", "minimum": 0 },
     "message": { "type": "string" },
-    "payload": { "$ref": "#/$defs/jsonObject" },
+    "payload": { "anyOf": [{ "$ref": "#/$defs/exportJobPayload" }, { "$ref": "#/$defs/jsonObject" }] },
     "profile": { "$ref": "#/$defs/jsonObject" }
   },
   "additionalProperties": false,
+  "allOf": [{
+    "if": {
+      "properties": {
+        "kind": { "const": "export" }
+      },
+      "required": ["kind", "payload"],
+      "anyOf": [
+        { "properties": { "status": { "const": "export_job" } }, "required": ["status"] },
+        { "properties": { "payload": { "anyOf": [{ "required": ["jobId"] }, { "required": ["phase"] }] } } }
+      ]
+    },
+    "then": { "properties": { "payload": { "$ref": "#/$defs/exportJobPayload" } } }
+  }],
   "$defs": {
+    "exportJobPayload": {
+      "type": "object",
+      "required": ["jobId", "phase", "rowsWritten", "bytesWritten", "totalRows"],
+      "properties": {
+        "jobId": { "type": "string", "minLength": 1 },
+        "phase": { "enum": ["queued", "running", "cancelling", "cancelled", "completed", "failed", "interrupted"] },
+        "rowsWritten": { "type": "integer", "minimum": 0 },
+        "bytesWritten": { "type": "integer", "minimum": 0 },
+        "totalRows": { "type": ["integer", "null"], "minimum": 0 },
+        "payloadRef": { "$ref": "#/$defs/jsonObject", "minProperties": 1 }
+      },
+      "allOf": [{
+        "if": { "properties": { "phase": { "const": "completed" } }, "required": ["phase"] },
+        "then": { "required": ["payloadRef"] },
+        "else": { "not": { "required": ["payloadRef"] } }
+      }],
+      "additionalProperties": false
+    },
     "jsonValue": {
       "anyOf": [
         { "type": "null" },

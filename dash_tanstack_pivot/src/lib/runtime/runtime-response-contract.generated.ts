@@ -5,9 +5,9 @@
  * and run json-schema-to-typescript to regenerate this file.
  */
 
-export type JsonValue = null | boolean | number | string | JsonValue[] | JsonObject;
-
-export interface PivotRuntimeProtocolResponseV1 {
+export type PivotRuntimeProtocolResponseV1 = {
+  [k: string]: unknown;
+} & {
   schemaVersion: 1;
   kind: "data" | "filter_options" | "chart" | "detail" | "drill" | "update" | "transaction" | "export";
   status: string;
@@ -18,9 +18,24 @@ export interface PivotRuntimeProtocolResponseV1 {
   stateEpoch?: number;
   windowSeq?: number;
   message?: string;
-  payload: JsonObject;
-  profile?: JsonObject;
-}
+  payload: ExportJobPayload | JsonObject1;
+  profile?: JsonObject1;
+};
+export type ExportJobPayload = {
+  [k: string]: unknown;
+} & {
+  jobId: string;
+  phase: "queued" | "running" | "cancelling" | "cancelled" | "completed" | "failed" | "interrupted";
+  rowsWritten: number;
+  bytesWritten: number;
+  totalRows: number | null;
+  payloadRef?: JsonObject;
+};
+export type JsonValue = null | boolean | number | string | JsonValue[] | JsonObject1;
+
 export interface JsonObject {
+  [k: string]: JsonValue;
+}
+export interface JsonObject1 {
   [k: string]: JsonValue;
 }
