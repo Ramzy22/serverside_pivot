@@ -323,3 +323,14 @@ def distributed_runtime_from_env(*, client: Optional[Any] = None) -> Optional[Re
     if not settings.enabled:
         return None
     return RedisRuntimeState(settings, client=client)
+
+
+def export_job_store_for_runtime(runtime_state: Optional[RedisRuntimeState], **kwargs: Any):
+    """Use one deployment namespace, or a local registry when Redis is disabled."""
+    if runtime_state is None:
+        from .export_job_store import LocalExportJobStore
+
+        return LocalExportJobStore(**kwargs)
+    from .redis_export_job_store import RedisExportJobStore
+
+    return RedisExportJobStore(runtime_state, **kwargs)

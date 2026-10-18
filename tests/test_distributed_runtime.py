@@ -175,6 +175,29 @@ def test_runtime_exports_distributed_configuration_contract():
     assert PublicSettings is DistributedRuntimeSettings
 
 
+def test_export_job_store_factory_is_local_without_redis_and_namespaced_when_enabled():
+    from pivot_engine.runtime.distributed import export_job_store_for_runtime
+
+    local = export_job_store_for_runtime(None)
+    from pivot_engine.runtime.export_jobs import ExportJobSnapshot
+
+    snapshot = ExportJobSnapshot("job", "alice", "account", "sales")
+    assert local.create(snapshot) == snapshot
+    server = fakeredis.FakeServer()
+    first_state = _payload_runtime_state(fakeredis.FakeRedis(server=server))
+    second_state = _payload_runtime_state(fakeredis.FakeRedis(server=server))
+    first = export_job_store_for_runtime(first_state)
+    second = export_job_store_for_runtime(second_state)
+    first.create(snapshot)
+    assert second.request_cancel("job").phase == "cancelled"
+    assert first.get("job", "alice", "sales").phase == "cancelled"
+    other_state = RedisRuntimeState(
+        DistributedRuntimeSettings(enabled=True, key_prefix="other-deployment"),
+        client=fakeredis.FakeRedis(server=server),
+    )
+    assert export_job_store_for_runtime(other_state).get("job", "alice", "sales") is None
+
+
 def test_distributed_runtime_rejects_missing_or_insecure_redis_configuration(
     monkeypatch,
 ):
