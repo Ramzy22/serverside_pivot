@@ -19,7 +19,20 @@ _REQUIRED_MEMBERS = frozenset(
         "package/dist/react/react.d.ts",
     }
 )
-_IMPORT_PATTERN = re.compile(r"(?:from\s*|import\s*\()\s*['\"]([^'\"]+)['\"]")
+_IMPORT_PATTERN = re.compile(r"(?:\bfrom\s*|\bimport\s*(?:\(\s*)?)['\"]([^'\"]+)['\"]")
+
+
+def _runtime_imports(source: str):
+    """Exclude standalone JSDoc type annotations retained by the bundler.
+
+    Keep the check conservative: no broad comment/string stripping that could
+    swallow executable imports after JavaScript regexes or template literals.
+    """
+    for match in _IMPORT_PATTERN.finditer(source):
+        prefix = source[source.rfind("\n", 0, match.start()) + 1:match.start()]
+        if re.fullmatch(r"\s*/\*\*\s*@type\s*\{", prefix):
+            continue
+        yield match.group(1)
 
 
 def _member_for_relative(source_name: str, relative: str) -> str | None:
@@ -73,7 +86,7 @@ def verify_npm_package(archive_path: Path) -> list[str]:
             except (AttributeError, OSError, UnicodeDecodeError):
                 errors.append(f"cannot read npm package module: {source_name}")
                 continue
-            for relative in _IMPORT_PATTERN.findall(source):
+            for relative in _runtime_imports(source):
                 target_name = _member_for_relative(source_name, relative)
                 if target_name is None:
                     continue

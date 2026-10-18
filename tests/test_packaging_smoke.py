@@ -18,6 +18,7 @@ Full deterministic release gate (install + import + multi-instance regression):
 """
 
 import pathlib
+import pytest
 import sys
 import json
 import io
@@ -438,6 +439,28 @@ def test_npm_package_contract_rejects_missing_react_entry(tmp_path):
 
     assert "missing required npm package member: package/dist/react/index.mjs" in violations
     assert "missing required npm package member: package/dist/react/react.d.ts" in violations
+
+
+@pytest.mark.parametrize("source,missing", [
+    ("/** @type {import('./runtimeDomains').ExportJobProgress} */ null; export const value = 1;", []),
+    ("const url='https://example.invalid';\n/** @type {import('./ignored').Port} */ null; import './missing.mjs';", ["missing.mjs"]),
+    ("/** @type {import('./httpTransport').Port} */ null; import('./actual.mjs');", ["actual.mjs"]),
+])
+def test_npm_contract_ignores_jsdoc_but_checks_real_static_and_dynamic_imports(tmp_path, source, missing):
+    archive_path = tmp_path / "package.tgz"
+    files = {
+        "package/package.json": '{"exports":{".":{"import":"./dist/react/index.mjs"},"./react":{"import":"./dist/react/index.mjs"}}}',
+        "package/dist/react/index.mjs": source,
+        "package/dist/react/react.d.ts": "export declare const value: number;",
+    }
+    with tarfile.open(archive_path, "w:gz") as archive:
+        for name, content in files.items():
+            encoded = content.encode()
+            info = tarfile.TarInfo(name)
+            info.size = len(encoded)
+            archive.addfile(info, fileobj=io.BytesIO(encoded))
+    violations = _ci_module("verify_npm_package_contract.py", "npm_comment_contract").verify_npm_package(archive_path)
+    assert violations == [f"npm package module is missing: package/dist/react/{name}" for name in missing]
 
 
 # ---------------------------------------------------------------------------
