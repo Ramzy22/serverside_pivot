@@ -9,7 +9,7 @@ from typing import Any, Awaitable, Callable, Optional, Tuple
 
 from ..export_limits import ExportLimitError
 from ..resource_governor import (
-    ResourceExhaustedError, ResourceGovernor, ResourceKind,
+    ResourceExhaustedError, ResourceGovernor, ResourceKind, ResourceLease,
     current_workload_account, get_worker_resource_governor,
 )
 from ..backends.execution import (
@@ -110,6 +110,7 @@ class RuntimeRequestLifecycle:
         *,
         resource_kind: Optional[ResourceKind] = None,
         reservation_bytes: Optional[int] = None,
+        export_lease: Optional[ResourceLease] = None,
     ) -> Any:
         # Legacy callers still participate in admission. Export uses its own
         # class; every other backend operation defaults to the query class.
@@ -117,14 +118,21 @@ class RuntimeRequestLifecycle:
             ResourceKind.EXPORT if trigger_kind == "export" else ResourceKind.QUERY
         )
         amount = self.reservation_bytes(kind) if reservation_bytes is None else reservation_bytes
-        lease = self.resource_governor.reserve(kind, amount, account=context.accounting_account)
+        if export_lease is not None and (
+            kind != ResourceKind.EXPORT or export_lease.kind != kind
+            or export_lease.account != context.accounting_account or export_lease._released
+            or export_lease._governor is not self.resource_governor
+        ):
+            raise ValueError("An export lease must belong to this governor and account.")
+        lease = export_lease or self.resource_governor.reserve(kind, amount, account=context.accounting_account)
         account_token = current_workload_account.set(context.accounting_account)
         try:
             return await self._run_admitted_operation(context, trigger_kind, operation)
         finally:
             # The awaited operation includes native cancellation acknowledgement.
             current_workload_account.reset(account_token)
-            lease.release()
+            if export_lease is None:
+                lease.release()
 
     def reservation_bytes(self, kind: ResourceKind) -> int:
         """Reserve a positive share of the configured class budget per slot."""

@@ -8,7 +8,7 @@ import time
 from typing import Any, Callable, Dict, List, Optional
 
 from ..backends.execution import DatabaseExecutionError
-from ..resource_governor import ResourceExhaustedError, ResourceKind
+from ..resource_governor import ResourceExhaustedError, ResourceKind, ResourceLease
 from ..tanstack_adapter import TanStackRequest, TanStackResponse
 from ..security import MutationAuthorizationError
 from .detail_service import DetailRuntimeService
@@ -98,6 +98,8 @@ class RuntimeRequestRouter:
         self,
         state: PivotViewState,
         context: PivotRequestContext,
+        *,
+        export_lease: Optional[ResourceLease] = None,
     ) -> PivotServiceResponse:
         """Process one pivot request and return a transport-neutral response."""
         service_started_at = time.perf_counter()
@@ -257,6 +259,7 @@ class RuntimeRequestRouter:
                     execute_export,
                     resource_kind=ResourceKind.EXPORT,
                     reservation_bytes=self.lifecycle.reservation_bytes(ResourceKind.EXPORT),
+                    export_lease=export_lease,
                 )
             except ResourceExhaustedError:
                 raise

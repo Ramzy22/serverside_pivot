@@ -11,6 +11,9 @@ import os
 import re
 import tempfile
 import zipfile
+from contextvars import ContextVar
+from dataclasses import dataclass, field
+import threading
 from typing import Any, AsyncIterable, Dict, Iterable, List, Optional, Tuple
 
 from ..tanstack_adapter import TanStackResponse
@@ -22,6 +25,48 @@ from ..export_limits import (
     ExportLimits,
 )
 from .models import PivotViewState, first_present
+
+
+class ExportCancelledError(RuntimeError):
+    """Cooperative writer stop; the runner acknowledges after cleanup."""
+
+
+@dataclass
+class ExportWriteControl:
+    directory: str
+    lease: ResourceLease
+    progress: Any
+    ensure_bytes: Any = lambda size: None
+    cancelled: threading.Event = field(default_factory=threading.Event)
+    paths: set[str] = field(default_factory=set)
+
+    def checkpoint(self, rows: int | None = None, size: int | None = None) -> None:
+        if self.cancelled.is_set():
+            raise ExportCancelledError()
+        if size is not None:
+            self.ensure_bytes(size)
+        if size is not None and size > self.lease.reserved_bytes:
+            self.lease.grow(size - self.lease.reserved_bytes)
+        if rows is not None or size is not None:
+            self.progress(rows, size)
+
+
+current_export_write: ContextVar[ExportWriteControl | None] = ContextVar("pivot_export_write", default=None)
+
+
+def _export_checkpoint(rows=None, size=None):
+    control = current_export_write.get()
+    if control is not None:
+        control.checkpoint(rows, size)
+
+
+def _export_tempfile(prefix, suffix):
+    control = current_export_write.get()
+    _export_checkpoint()
+    fd, path = tempfile.mkstemp(prefix=prefix, suffix=suffix, dir=control.directory if control else None)
+    if control is not None:
+        control.paths.add(path)
+    return fd, path
 
 
 class RuntimeExportService:
@@ -58,6 +103,7 @@ class RuntimeExportService:
             # Reject a materialized allRows/hierarchy response before a derived
             # list or temporary document is allocated.
             self.limits.ensure_rows(len(response_rows))
+        _export_checkpoint()
         payload = self._build_export_payload(response, state, export_request)
         rows = int(payload.get("rows") or 0)
         content_length = int(payload.get("contentLength") or 0)
@@ -102,7 +148,7 @@ class RuntimeExportService:
         field_order: Optional[List[str]] = None
         header_map = self._build_export_header_map(columns or [], state)
         emitted_rows = 0
-        fd, content_path = tempfile.mkstemp(prefix="pivot_stream_", suffix=f".{ext}")
+        fd, content_path = _export_tempfile(prefix="pivot_stream_", suffix=f".{ext}")
 
         async def _items():
             if hasattr(batches, "__aiter__"):
@@ -126,6 +172,7 @@ class RuntimeExportService:
                 if export_fmt == "html":
                     output.write("<table><thead><tr>")
                 async for raw_batch in _items():
+                    _export_checkpoint()
                     rows = _rows_from_batch(raw_batch)
                     if not rows:
                         continue
@@ -144,6 +191,7 @@ class RuntimeExportService:
                             output.write("</tr></thead><tbody>")
                     self.limits.ensure_rows(emitted_rows + len(rows))
                     for row in rows:
+                        _export_checkpoint()
                         values = ["" if row.get(key) is None else row.get(key) for key in (field_order or [])]
                         if export_fmt == "html":
                             output.write("<tr>" + "".join(f"<td>{html.escape(str(value))}</td>" for value in values) + "</tr>")
@@ -153,6 +201,7 @@ class RuntimeExportService:
                     output.flush()
                     current_bytes = os.path.getsize(content_path)
                     self.limits.ensure_bytes(current_bytes)
+                    _export_checkpoint(emitted_rows, current_bytes)
                     if export_lease is not None and current_bytes > export_lease.reserved_bytes:
                         export_lease.grow(current_bytes - export_lease.reserved_bytes)
                 if export_fmt == "html":
@@ -160,7 +209,7 @@ class RuntimeExportService:
                     output.flush()
             content_length = os.path.getsize(content_path)
             self.limits.ensure_bytes(content_length)
-        except Exception:
+        except BaseException:
             try:
                 os.close(fd)
             except OSError:
@@ -261,7 +310,7 @@ class RuntimeExportService:
                 return "'" + value
             return value
 
-        fd, content_path = tempfile.mkstemp(prefix="pivot_export_", suffix=f".{ext}")
+        fd, content_path = _export_tempfile(prefix="pivot_export_", suffix=f".{ext}")
         try:
             if export_fmt == "xlsx":
                 os.close(fd)
@@ -296,10 +345,15 @@ class RuntimeExportService:
                                 _cell(key, RuntimeExportService._export_header_for_key(key, header_map, state, style_profile))
                                 for key in field_order
                             ])
-                        for row in rows:
+                        for row_index, row in enumerate(rows, 1):
+                            _export_checkpoint()
                             writer.writerow([_cell(key, row.get(key)) for key in field_order])
+                            if row_index % 128 == 0:
+                                buf.flush()
+                                _export_checkpoint(row_index, os.path.getsize(content_path))
             content_length = os.path.getsize(content_path)
-        except Exception:
+            _export_checkpoint(len(rows), content_length)
+        except BaseException:
             try:
                 os.close(fd)
             except OSError:
@@ -635,132 +689,144 @@ class RuntimeExportService:
                 normalized.append(sorted(cells, key=lambda cell: cell["start"]))
             return normalized
 
-        sheet_rows: List[str] = []
-        merge_ranges: List[str] = []
-        excel_row = 1
-        if include_headers and field_order:
-            merged_header_rows = _merged_header_rows()
-            if merged_header_rows:
-                for header_row_index, header_row in enumerate(merged_header_rows):
+        # Spool worksheet rows to disk; styles and merges remain small metadata.
+        control = current_export_write.get()
+        with tempfile.TemporaryFile(mode="w+", encoding="utf-8", newline="",
+                                    dir=control.directory if control else None) as sheet_rows:
+            merge_ranges: List[str] = []
+            excel_row = 1
+            if include_headers and field_order:
+                merged_header_rows = _merged_header_rows()
+                if merged_header_rows:
+                    for header_row_index, header_row in enumerate(merged_header_rows):
+                        cells = "".join(
+                            _cell_xml(
+                                excel_row,
+                                cell["start"],
+                                cell["label"],
+                                _xf_id(RuntimeExportService._export_header_style(
+                                    cell["styleKey"], cell["label"], style_profile, state
+                                )),
+                            )
+                            for cell in header_row
+                        )
+                        sheet_rows.write(f'<row r="{excel_row}" customHeight="1" ht="24">{cells}</row>')
+                        for cell in header_row:
+                            if cell["end"] > cell["start"] or cell["rowSpan"] > 1:
+                                merge_ranges.append(
+                                    f'{_col_name(cell["start"])}{excel_row}:{_col_name(cell["end"])}{excel_row + cell["rowSpan"] - 1}'
+                                )
+                        excel_row += 1
+                else:
+                    headers = [RuntimeExportService._export_header_for_key(key, header_map, state, style_profile) for key in field_order]
                     cells = "".join(
                         _cell_xml(
                             excel_row,
-                            cell["start"],
-                            cell["label"],
-                            _xf_id(RuntimeExportService._export_header_style(
-                                cell["styleKey"], cell["label"], style_profile, state
-                            )),
+                            col_index,
+                            header,
+                            _xf_id(RuntimeExportService._export_header_style(key, header, style_profile, state)),
                         )
-                        for cell in header_row
+                        for col_index, (key, header) in enumerate(zip(field_order, headers))
                     )
-                    sheet_rows.append(f'<row r="{excel_row}" customHeight="1" ht="24">{cells}</row>')
-                    for cell in header_row:
-                        if cell["end"] > cell["start"] or cell["rowSpan"] > 1:
-                            merge_ranges.append(
-                                f'{_col_name(cell["start"])}{excel_row}:{_col_name(cell["end"])}{excel_row + cell["rowSpan"] - 1}'
-                            )
+                    sheet_rows.write(f'<row r="{excel_row}" customHeight="1" ht="24">{cells}</row>')
                     excel_row += 1
-            else:
-                headers = [RuntimeExportService._export_header_for_key(key, header_map, state, style_profile) for key in field_order]
-                cells = "".join(
-                    _cell_xml(
-                        excel_row,
-                        col_index,
-                        header,
-                        _xf_id(RuntimeExportService._export_header_style(key, header, style_profile, state)),
-                    )
-                    for col_index, (key, header) in enumerate(zip(field_order, headers))
-                )
-                sheet_rows.append(f'<row r="{excel_row}" customHeight="1" ht="24">{cells}</row>')
+            for row in rows:
+                _export_checkpoint()
+                cells = []
+                for col_index, key in enumerate(field_order):
+                    raw_value = row.get(key)
+                    header_label = RuntimeExportService._export_header_for_key(key, header_map, state, style_profile)
+                    style = RuntimeExportService._export_cell_style(key, raw_value, row, header_label, style_profile)
+                    number_format = _number_format_code(key) if _is_number(raw_value) else None
+                    cells.append(_cell_xml(excel_row, col_index, raw_value, _xf_id(style, number_format)))
+                row_height = max(1.0, _css_number(style_profile.get("rowHeight"), 20.0) * 0.75)
+                sheet_rows.write(f'<row r="{excel_row}" customHeight="1" ht="{row_height:g}">{"".join(cells)}</row>')
                 excel_row += 1
-        for row in rows:
-            cells = []
-            for col_index, key in enumerate(field_order):
-                raw_value = row.get(key)
-                header_label = RuntimeExportService._export_header_for_key(key, header_map, state, style_profile)
-                style = RuntimeExportService._export_cell_style(key, raw_value, row, header_label, style_profile)
-                number_format = _number_format_code(key) if _is_number(raw_value) else None
-                cells.append(_cell_xml(excel_row, col_index, raw_value, _xf_id(style, number_format)))
-            row_height = max(1.0, _css_number(style_profile.get("rowHeight"), 20.0) * 0.75)
-            sheet_rows.append(f'<row r="{excel_row}" customHeight="1" ht="{row_height:g}">{"".join(cells)}</row>')
-            excel_row += 1
 
-        column_xml = []
-        for index, key in enumerate(field_order, start=1):
-            pixel_width = RuntimeExportService._export_column_width(key, style_profile)
-            if pixel_width:
-                excel_width = max(1.0, min(255.0, (pixel_width - 5) / 7))
-                column_xml.append(f'<col min="{index}" max="{index}" width="{excel_width:.2f}" customWidth="1"/>')
+            column_xml = []
+            for index, key in enumerate(field_order, start=1):
+                pixel_width = RuntimeExportService._export_column_width(key, style_profile)
+                if pixel_width:
+                    excel_width = max(1.0, min(255.0, (pixel_width - 5) / 7))
+                    column_xml.append(f'<col min="{index}" max="{index}" width="{excel_width:.2f}" customWidth="1"/>')
 
-        worksheet_xml = (
-            '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>'
-            '<worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" '
-            'xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships">'
-            f'{"<cols>" + "".join(column_xml) + "</cols>" if column_xml else ""}'
-            f'<sheetData>{"".join(sheet_rows)}</sheetData>'
-            + (f'<mergeCells count="{len(merge_ranges)}">' + "".join(
-                f'<mergeCell ref="{merge_range}"/>' for merge_range in merge_ranges
-            ) + '</mergeCells>' if merge_ranges else '')
-            + '</worksheet>'
-        )
-        num_fmts_xml = (
-            f'<numFmts count="{len(num_fmts)}">'
-            + "".join(f'<numFmt numFmtId="{fmt_id}" formatCode="{_xml_text(code)}"/>' for fmt_id, code in num_fmts)
-            + "</numFmts>"
-            if num_fmts
-            else ""
-        )
-        styles_xml = (
-            '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>'
-            f'<styleSheet xmlns="{spreadsheet_ns}">'
-            f'{num_fmts_xml}'
-            f'<fonts count="{len(fonts)}">{"".join(fonts)}</fonts>'
-            f'<fills count="{len(fills)}">{"".join(fills)}</fills>'
-            f'<borders count="{len(borders)}">{"".join(borders)}</borders>'
-            '<cellStyleXfs count="1"><xf numFmtId="0" fontId="0" fillId="0" borderId="0"/></cellStyleXfs>'
-            f'<cellXfs count="{len(cell_xfs)}">{"".join(cell_xfs)}</cellXfs>'
-            '<cellStyles count="1"><cellStyle name="Normal" xfId="0" builtinId="0"/></cellStyles>'
-            '<dxfs count="0"/>'
-            '</styleSheet>'
-        )
-        workbook_xml = (
-            '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>'
-            '<workbook xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" '
-            'xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships">'
-            '<sheets><sheet name="Pivot" sheetId="1" r:id="rId1"/></sheets>'
-            '</workbook>'
-        )
-        content_types_xml = (
-            '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>'
-            '<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types">'
-            '<Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/>'
-            '<Default Extension="xml" ContentType="application/xml"/>'
-            '<Override PartName="/xl/workbook.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet.main+xml"/>'
-            '<Override PartName="/xl/worksheets/sheet1.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml"/>'
-            '<Override PartName="/xl/styles.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.styles+xml"/>'
-            '</Types>'
-        )
-        root_rels_xml = (
-            '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>'
-            '<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">'
-            '<Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="xl/workbook.xml"/>'
-            '</Relationships>'
-        )
-        workbook_rels_xml = (
-            '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>'
-            '<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">'
-            '<Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet" Target="worksheets/sheet1.xml"/>'
-            '<Relationship Id="rId2" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/styles" Target="styles.xml"/>'
-            '</Relationships>'
-        )
+            worksheet_xml = (
+                '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>'
+                '<worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" '
+                'xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships">'
+                f'{"<cols>" + "".join(column_xml) + "</cols>" if column_xml else ""}'
+                '<sheetData>__PIVOT_ROWS__</sheetData>'
+                + (f'<mergeCells count="{len(merge_ranges)}">' + "".join(
+                    f'<mergeCell ref="{merge_range}"/>' for merge_range in merge_ranges
+                ) + '</mergeCells>' if merge_ranges else '')
+                + '</worksheet>'
+            )
+            num_fmts_xml = (
+                f'<numFmts count="{len(num_fmts)}">'
+                + "".join(f'<numFmt numFmtId="{fmt_id}" formatCode="{_xml_text(code)}"/>' for fmt_id, code in num_fmts)
+                + "</numFmts>"
+                if num_fmts
+                else ""
+            )
+            styles_xml = (
+                '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>'
+                f'<styleSheet xmlns="{spreadsheet_ns}">'
+                f'{num_fmts_xml}'
+                f'<fonts count="{len(fonts)}">{"".join(fonts)}</fonts>'
+                f'<fills count="{len(fills)}">{"".join(fills)}</fills>'
+                f'<borders count="{len(borders)}">{"".join(borders)}</borders>'
+                '<cellStyleXfs count="1"><xf numFmtId="0" fontId="0" fillId="0" borderId="0"/></cellStyleXfs>'
+                f'<cellXfs count="{len(cell_xfs)}">{"".join(cell_xfs)}</cellXfs>'
+                '<cellStyles count="1"><cellStyle name="Normal" xfId="0" builtinId="0"/></cellStyles>'
+                '<dxfs count="0"/>'
+                '</styleSheet>'
+            )
+            workbook_xml = (
+                '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>'
+                '<workbook xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" '
+                'xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships">'
+                '<sheets><sheet name="Pivot" sheetId="1" r:id="rId1"/></sheets>'
+                '</workbook>'
+            )
+            content_types_xml = (
+                '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>'
+                '<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types">'
+                '<Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/>'
+                '<Default Extension="xml" ContentType="application/xml"/>'
+                '<Override PartName="/xl/workbook.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet.main+xml"/>'
+                '<Override PartName="/xl/worksheets/sheet1.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml"/>'
+                '<Override PartName="/xl/styles.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.styles+xml"/>'
+                '</Types>'
+            )
+            root_rels_xml = (
+                '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>'
+                '<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">'
+                '<Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="xl/workbook.xml"/>'
+                '</Relationships>'
+            )
+            workbook_rels_xml = (
+                '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>'
+                '<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">'
+                '<Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet" Target="worksheets/sheet1.xml"/>'
+                '<Relationship Id="rId2" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/styles" Target="styles.xml"/>'
+                '</Relationships>'
+            )
 
-        with zipfile.ZipFile(content_path, "w", compression=zipfile.ZIP_DEFLATED) as workbook:
-            workbook.writestr("[Content_Types].xml", content_types_xml)
-            workbook.writestr("_rels/.rels", root_rels_xml)
-            workbook.writestr("xl/workbook.xml", workbook_xml)
-            workbook.writestr("xl/_rels/workbook.xml.rels", workbook_rels_xml)
-            workbook.writestr("xl/worksheets/sheet1.xml", worksheet_xml)
-            workbook.writestr("xl/styles.xml", styles_xml)
+            with zipfile.ZipFile(content_path, "w", compression=zipfile.ZIP_DEFLATED) as workbook:
+                _export_checkpoint()
+                workbook.writestr("[Content_Types].xml", content_types_xml)
+                workbook.writestr("_rels/.rels", root_rels_xml)
+                workbook.writestr("xl/workbook.xml", workbook_xml)
+                workbook.writestr("xl/_rels/workbook.xml.rels", workbook_rels_xml)
+                before_rows, after_rows = worksheet_xml.split("__PIVOT_ROWS__")
+                sheet_rows.seek(0)
+                with workbook.open("xl/worksheets/sheet1.xml", "w") as worksheet:
+                    worksheet.write(before_rows.encode("utf-8"))
+                    while chunk := sheet_rows.read(64 * 1024):
+                        _export_checkpoint()
+                        worksheet.write(chunk.encode("utf-8"))
+                    worksheet.write(after_rows.encode("utf-8"))
+                workbook.writestr("xl/styles.xml", styles_xml)
 
     @staticmethod
     def _export_key_aliases(key: str) -> List[str]:
