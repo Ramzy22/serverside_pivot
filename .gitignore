@@ -148,6 +148,7 @@ dmypy.json
 .DS_Store?
 /.runlogs/
 /examples/flagship_react/dist/
+/.worktrees/
 ._*
 .Spotlight-V100
 .Trashes
