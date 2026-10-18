@@ -65,7 +65,7 @@ def _parity_rows() -> list[dict[str, Any]]:
 def build_demo_table(row_count: int = DEMO_ROW_COUNT) -> pa.Table:
     """Build a stable analytics dataset with useful categorical cardinality."""
     if os.environ.get("PIVOT_FLAGSHIP_EXPORT_JOB_DATA") == "1":
-        return pa.table({"region": [f"R{i:04d} 東京" for i in range(512)],
+        return pa.table({"region": [f"R{i:04d} \u6771\u4eac" for i in range(512)],
                          "sales": [i + .25 for i in range(512)]})
     if _parity_data_enabled():
         return pa.Table.from_pylist(_parity_rows())
@@ -224,7 +224,15 @@ def _instrument_export_qualification(adapter):
                 await native.execute_async({"sql": "SELECT sum(i) FROM range(10000000000) t(i)"})
             else:
                 await asyncio.sleep(.35)
-        return await original(spec, **kwargs)
+        try:
+            return await original(spec, **kwargs)
+        except Exception as exc:
+            (root / f"export-query-error-{os.getpid()}-{uuid4().hex}.json").write_text(
+                json.dumps({"errorType": type(exc).__name__, "causeType": type(exc.__cause__).__name__
+                            if exc.__cause__ is not None else None,
+                            "cause": str(exc.__cause__) if exc.__cause__ is not None else str(exc),
+                            "offset": spec.offset, "limit": spec.limit}), encoding="utf-8")
+            raise
     adapter.controller.run_pivot_async = query
 
 

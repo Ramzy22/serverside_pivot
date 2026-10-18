@@ -32,7 +32,7 @@ def test_export_qualification_fixture_is_flat_and_does_not_replace_parity(monkey
     assert config["colFields"] == [] and config["showSubtotals"] is False
     table = demo.build_demo_table()
     assert table.num_rows == 512
-    assert table.to_pylist()[0] == {"region": "R0000 東京", "sales": 0.25}
+    assert table.to_pylist()[0] == {"region": "R0000 \u6771\u4eac", "sales": 0.25}
     monkeypatch.delenv("PIVOT_FLAGSHIP_EXPORT_JOB_DATA")
     assert demo.workspace_config("react")["colFields"] == ["period"]
 

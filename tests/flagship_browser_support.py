@@ -160,7 +160,7 @@ def _assert_flat_export(path, fmt, count):
     assert rows[0] == ["Region", "Sales (Sum)"], rows[0]
     assert len(rows) == count + 1
     assert [(row[0], float(row[1])) for row in rows[1:]] == [
-        (f"R{i:04d} 東京", i + .25) for i in range(count)]
+        (f"R{i:04d} \u6771\u4eac", i + .25) for i in range(count)]
     return {"rows": count, "columns": 2, "headers": rows[0], "firstRow": rows[1], "lastRow": rows[-1],
             "sha256": hashlib.sha256(path.read_bytes()).hexdigest()}
 
@@ -247,7 +247,7 @@ def qualify_export_jobs(host, requirement):
             button("Close")
             search = _workspace_elements(driver, '[data-testid="pivot-global-search"]')[0]
             search.send_keys("R0000")
-            wait.until(lambda _: any("R0000 東京" in el.text for el in _workspace_elements(driver, '[role="gridcell"]')))
+            wait.until(lambda _: any("R0000 \u6771\u4eac" in el.text for el in _workspace_elements(driver, '[role="gridcell"]')))
             # Wait for the filtered V1 viewport to settle before starting fresh work.
             time.sleep(.8)
             count = 1

@@ -560,6 +560,51 @@ def test_real_flat_all_rows_exports_use_bounded_arrow_pages_before_python_conver
         adapter.controller.close()
 
 
+@pytest.mark.parametrize("suffix", ["Caf\u00e9", "\u6771\u4eac"])
+def test_real_unicode_xlsx_export_job_completes(tmp_path, suffix):
+    import pyarrow as pa
+    import duckdb
+    from packaging.version import Version
+    from pivot_engine import create_tanstack_adapter
+
+    if suffix == "\u6771\u4eac" and Version(duckdb.__version__) < Version("1.5.6"):
+        pytest.skip("DuckDB before 1.5.6 rejects this grouped Unicode Arrow query")
+
+    adapter = create_tanstack_adapter(backend_uri=":memory:")
+    source_table = pa.table({
+        "region": [f"R{i:04d} {suffix}" for i in range(512)],
+        "sales": [i + .25 for i in range(512)],
+    })
+    adapter.controller.load_data_from_arrow("sales", source_table)
+    runner, store, payloads, _, _, context, job = setup_runner(
+        tmp_path, adapter, governor=adapter.controller.resource_governor)
+    state = PivotViewState(
+        row_fields=["region"], val_configs=[{"field": "sales", "agg": "sum", "label": "Sales"}],
+        layout_mode="tabular", show_subtotals=False, show_col_totals=False,
+        measure_axis={"placement": "none", "labelField": "Measure Name", "members": []},
+        export_request={"format": "xlsx", "allRows": True},
+    )
+    try:
+        runner.start(job, context, state)
+        done = wait_for(lambda: (item := snapshot(store)).phase in {"failed", "completed"} and item, timeout=15)
+        assert done.phase == "completed"
+        item = payloads.get(done.payload_ref["id"])
+        document = read_xlsx_export(item.file_path)
+        assert len(document) == 513
+        assert document[1] == [f"R0000 {suffix}", "0.25"]
+        from openpyxl import load_workbook
+        workbook = load_workbook(item.file_path, read_only=True, data_only=True)
+        try:
+            assert workbook.active["B2"].value == .25
+            assert workbook.active["B2"].data_type == "n"
+        finally:
+            workbook.close()
+    finally:
+        runner.close()
+        payloads.clear()
+        adapter.controller.close()
+
+
 def test_unsupported_hierarchical_all_rows_rejects_before_adapter_execution(tmp_path):
     called = []
     class Unsafe(Adapter):

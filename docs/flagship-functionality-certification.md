@@ -110,6 +110,12 @@ then start smaller filtered work. Server samples and raw traces remain private.
 The artifact binding records source commit, wheel/npm/fixture and loaded asset
 SHA-256 values plus browser version and per-case evidence hashes.
 
+The 512-row fixture includes Japanese text. Its grouped, sorted DuckDB query
+reproduces an upstream Unicode error with DuckDB 1.5.0 but passes the focused
+job test with 1.5.6; the installed-release manifest records the exact DuckDB
+version used. Passing evidence for one version must not be projected onto
+another supported version.
+
 Bounded large jobs support flat/table DuckDB-Ibis layouts. Complex pivot columns,
 subtotals, formula/window measures and unsafe providers reject up front. Redis
 is optional for one worker; multi-worker cancellation and interrupted retry
