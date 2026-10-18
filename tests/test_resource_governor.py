@@ -114,6 +114,28 @@ def test_cache_failed_replacement_preserves_old_entry_and_owner():
         cache.clear()
 
 
+def test_cache_zero_byte_replacement_releases_previous_account_charge():
+    from pivot_engine.cache.memory_cache import MemoryCache
+    from pivot_engine.resource_governor import current_workload_account
+
+    governor = ResourceGovernor(ResourceLimits.for_testing(cache_bytes=100), rss_bytes_getter=lambda: 0)
+    cache = MemoryCache(max_bytes=100, governor=governor)
+    first = current_workload_account.set(WorkloadAccount.tenant("payer-a"))
+    try:
+        assert cache.set("last-page", b"abc")
+    finally:
+        current_workload_account.reset(first)
+    second = current_workload_account.set(WorkloadAccount.tenant("payer-b"))
+    try:
+        assert cache.set("last-page", b"")
+        assert cache.get("last-page") == b""
+        assert cache.bytes_used == 0
+        assert governor.snapshot()["reserved_bytes"] == 0
+    finally:
+        current_workload_account.reset(second)
+        cache.clear()
+
+
 def test_two_cache_instances_share_worker_and_tenant_budget():
     from pivot_engine.cache.memory_cache import MemoryCache
     from pivot_engine.resource_governor import current_workload_account

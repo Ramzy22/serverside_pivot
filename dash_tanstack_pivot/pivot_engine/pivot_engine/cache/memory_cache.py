@@ -85,7 +85,7 @@ class MemoryCache:
                     while self._bytes > self.max_bytes:
                         self._remove(next(iter(self._cache)))
                     return True
-                if self.governor is not None:
+                if self.governor is not None and charge:
                     try:
                         new_lease = self.governor.reserve(
                             ResourceKind.CACHE, charge, account=account
