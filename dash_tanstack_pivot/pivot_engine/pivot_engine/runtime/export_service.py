@@ -3,22 +3,17 @@
 from __future__ import annotations
 
 import csv
-import asyncio
 from decimal import Decimal
 import html
 import math
 import os
-import pickle
 import re
 import tempfile
 import zipfile
-from contextvars import ContextVar
-from dataclasses import dataclass, field
-import threading
 from typing import Any, AsyncIterable, Dict, Iterable, List, Optional, Tuple
 
 from ..tanstack_adapter import TanStackResponse
-from ..resource_governor import ResourceExhaustedError, ResourceKind, ResourceLease
+from ..resource_governor import ResourceLease
 from ..export_limits import (
     DEFAULT_EXPORT_MAX_BYTES,
     DEFAULT_EXPORT_MAX_ROWS,
@@ -26,81 +21,17 @@ from ..export_limits import (
     ExportLimits,
 )
 from .models import PivotViewState, first_present
-
-
-class ExportCancelledError(RuntimeError):
-    """Cooperative writer stop; the runner acknowledges after cleanup."""
-
-
-@dataclass
-class ExportWriteControl:
-    directory: str
-    lease: ResourceLease
-    progress: Any
-    ensure_bytes: Any = lambda size: None
-    cancelled: threading.Event = field(default_factory=threading.Event)
-    paths: set[str] = field(default_factory=set)
-    workspace_bytes: int = 0
-
-    def reserve_workspace(self, size: int) -> None:
-        if size > self.lease.reserved_bytes:
-            self.lease.grow(size - self.lease.reserved_bytes)
-
-    def checkpoint(self, rows: int | None = None, size: int | None = None) -> None:
-        if self.cancelled.is_set():
-            raise ExportCancelledError()
-        if size is not None:
-            self.ensure_bytes(size)
-        if size is not None:
-            self.reserve_workspace(self.workspace_bytes + size)
-        if rows is not None or size is not None:
-            self.progress(rows, size)
-
-
-current_export_write: ContextVar[ExportWriteControl | None] = ContextVar("pivot_export_write", default=None)
-
-
-def _export_checkpoint(rows=None, size=None):
-    control = current_export_write.get()
-    if control is not None:
-        control.checkpoint(rows, size)
-
-
-def _export_tempfile(prefix, suffix):
-    control = current_export_write.get()
-    _export_checkpoint()
-    fd, path = tempfile.mkstemp(prefix=prefix, suffix=suffix, dir=control.directory if control else None)
-    if control is not None:
-        control.paths.add(path)
-    return fd, path
-
-
-class _DiskExportRows:
-    """Trusted internal row spool; only bounded pages enter Python memory."""
-
-    def __init__(self, stream):
-        self.stream = stream
-        self.count = 0
-        self.first = None
-
-    def append(self, row):
-        if self.first is None:
-            self.first = row
-        pickle.dump(row, self.stream, protocol=pickle.HIGHEST_PROTOCOL)
-        self.count += 1
-
-    def __len__(self):
-        return self.count
-
-    def __getitem__(self, index):
-        if index != 0 or self.first is None:
-            raise IndexError(index)
-        return self.first
-
-    def __iter__(self):
-        self.stream.seek(0)
-        for _ in range(self.count):
-            yield pickle.load(self.stream)
+# Re-export writer controls for existing runner/router import paths.
+from .bounded_export import (
+    ExportCancelledError,
+    ExportWriteControl,
+    _DiskExportRows,
+    _export_checkpoint,
+    _export_tempfile,
+    build_paged_export as _build_paged_export,
+    build_streamed_export as _build_streamed_export,
+    current_export_write,
+)
 
 
 class RuntimeExportService:
@@ -154,33 +85,14 @@ class RuntimeExportService:
             self.limits.ensure_rows(rows)
         self.limits.ensure_bytes(content_length)
 
-    async def build_paged_export(self, pages, state, export_request):
-        """Spool validated bounded response pages, then reuse faithful writers.
-
-        The spool is private, anonymous and never deserializes external input.
-        It preserves Decimal/date values without retaining all Python rows.
-        """
-        control = current_export_write.get()
-        columns = []
-        with tempfile.TemporaryFile(mode="w+b", dir=control.directory if control else None) as stream:
-            rows = _DiskExportRows(stream)
-            try:
-                async for page in pages:
-                    _export_checkpoint()
-                    if not columns:
-                        columns = page.columns or []
-                    projected = self._project_export_rows_for_layout(page.data, state)
-                    self.limits.ensure_rows(len(rows) + len(projected))
-                    for row in projected:
-                        _export_checkpoint()
-                        rows.append(row)
-                    if control:
-                        control.workspace_bytes = stream.tell()
-                        control.reserve_workspace(control.workspace_bytes)
-                return self.build_export_payload(TanStackResponse(data=rows, columns=columns), state, export_request)
-            finally:
-                if control:
-                    control.workspace_bytes = 0
+    async def build_paged_export(
+        self,
+        pages: AsyncIterable[TanStackResponse],
+        state: PivotViewState,
+        export_request: Optional[Dict[str, Any]],
+    ) -> Dict[str, Any]:
+        """Spool bounded response pages and reuse the document writers."""
+        return await _build_paged_export(self, pages, state, export_request)
 
     async def build_streamed_export(
         self,
@@ -192,105 +104,10 @@ class RuntimeExportService:
         export_lease: Optional[ResourceLease] = None,
     ) -> Dict[str, Any]:
         """Write native record batches without retaining the full result."""
-        request_payload = export_request if isinstance(export_request, dict) else {}
-        export_fmt = self.normalize_export_format(request_payload.get("format"))
-        if export_fmt not in {"csv", "tsv", "html"}:
-            raise ResourceExhaustedError(
-                ResourceKind.EXPORT,
-                reason="bounded_format_unavailable",
-            )
-        delimiter = "\t" if export_fmt == "tsv" else ","
-        ext = "tsv" if export_fmt == "tsv" else export_fmt
-        content_type = {
-            "tsv": "text/tab-separated-values;charset=utf-8",
-            "html": "text/html;charset=utf-8",
-        }.get(export_fmt, "text/csv;charset=utf-8")
-        filename = str(request_payload.get("filename") or f"pivot_export.{ext}")
-        include_headers = bool(first_present(request_payload, "includeHeaders", "include_headers", default=True))
-        field_order: Optional[List[str]] = None
-        header_map = self._build_export_header_map(columns or [], state)
-        emitted_rows = 0
-        fd, content_path = _export_tempfile(prefix="pivot_stream_", suffix=f".{ext}")
-
-        async def _items():
-            if hasattr(batches, "__aiter__"):
-                async for value in batches:  # type: ignore[union-attr]
-                    yield value
-            else:
-                for value in batches:  # type: ignore[union-attr]
-                    yield value
-                    await asyncio.sleep(0)
-        def _rows_from_batch(batch: Any) -> List[Dict[str, Any]]:
-            if hasattr(batch, "to_pylist"):
-                batch = batch.to_pylist()
-            if not isinstance(batch, list):
-                batch = list(batch)
-            rows = [row for row in batch if isinstance(row, dict)]
-            return self._project_export_rows_for_layout(rows, state)
-
-        try:
-            with os.fdopen(fd, "w", encoding="utf-8", newline="") as output:
-                writer = csv.writer(output, delimiter=delimiter) if export_fmt != "html" else None
-                if export_fmt == "html":
-                    output.write("<table><thead><tr>")
-                async for raw_batch in _items():
-                    _export_checkpoint()
-                    rows = _rows_from_batch(raw_batch)
-                    if not rows:
-                        continue
-                    if field_order is None:
-                        field_order = self._resolve_export_field_order(
-                            rows, columns or [], request_payload.get("colIds"), state,
-                        )
-                        if include_headers:
-                            labels = [self._export_header_for_key(key, header_map, state, {}) for key in field_order]
-                            if export_fmt == "html":
-                                output.write("".join(f"<th>{html.escape(str(label))}</th>" for label in labels))
-                                output.write("</tr></thead><tbody>")
-                            else:
-                                writer.writerow(labels)
-                        elif export_fmt == "html":
-                            output.write("</tr></thead><tbody>")
-                    self.limits.ensure_rows(emitted_rows + len(rows))
-                    for row in rows:
-                        _export_checkpoint()
-                        values = ["" if row.get(key) is None else row.get(key) for key in (field_order or [])]
-                        if export_fmt == "html":
-                            output.write("<tr>" + "".join(f"<td>{html.escape(str(value))}</td>" for value in values) + "</tr>")
-                        else:
-                            writer.writerow(values)
-                    emitted_rows += len(rows)
-                    output.flush()
-                    current_bytes = os.path.getsize(content_path)
-                    self.limits.ensure_bytes(current_bytes)
-                    _export_checkpoint(emitted_rows, current_bytes)
-                    if export_lease is not None and current_bytes > export_lease.reserved_bytes:
-                        export_lease.grow(current_bytes - export_lease.reserved_bytes)
-                if export_fmt == "html":
-                    output.write("</tbody></table>")
-                    output.flush()
-            content_length = os.path.getsize(content_path)
-            self.limits.ensure_bytes(content_length)
-        except BaseException:
-            try:
-                os.close(fd)
-            except OSError:
-                pass
-            try:
-                os.remove(content_path)
-            except OSError:
-                pass
-            raise
-        return {
-            "contentPath": content_path,
-            "contentLength": content_length,
-            "contentType": content_type,
-            "format": export_fmt,
-            "filename": filename,
-            "rows": emitted_rows,
-            "columns": len(field_order or []),
-            "partId": request_payload.get("partId"),
-        }
+        return await _build_streamed_export(
+            self, batches, state, export_request,
+            columns=columns, export_lease=export_lease,
+        )
 
     @staticmethod
     def _build_export_payload(
