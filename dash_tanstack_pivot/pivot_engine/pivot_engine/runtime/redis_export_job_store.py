@@ -1,7 +1,8 @@
-"""Redis export control state using JSON and WATCH/MULTI fencing.
+"""Redis export control state using JSON and atomic server-time fencing.
 
 Each record, its cancellation intent and owner lease share one key, so every
-decision is a single-key atomic transaction. No native handles or output
+decision is a single-key atomic transaction. Lua checks Redis TIME at commit,
+so a paused client cannot commit after its ownership deadline. No output
 bytes are stored here. Active keys survive owner death until a reader or the
 expiry sweeper converts them to interrupted; terminal records have a Redis TTL.
 """
@@ -17,7 +18,45 @@ from urllib.parse import quote, unquote
 
 from .distributed import DistributedRuntimeUnavailable, RedisRuntimeState
 from .export_job_store import ExportJobStore, _JobRecord
-from .export_jobs import ExportJobSnapshot, EXPORT_JOB_TERMINAL_PHASES
+from .export_jobs import ExportJobSnapshot
+
+
+_COMMIT_RECORD = """
+local raw = redis.call('GET', KEYS[1])
+if (raw or '') ~= ARGV[1] then return 0 end
+local stamp = redis.call('TIME')
+local now = tonumber(stamp[1]) + tonumber(stamp[2]) / 1000000
+local candidate = nil
+if ARGV[2] ~= '' then candidate = cjson.decode(ARGV[2]) end
+local function terminal(phase)
+    return phase == 'cancelled' or phase == 'completed'
+        or phase == 'failed' or phase == 'interrupted'
+end
+if raw then
+    local current = cjson.decode(raw)
+    if not terminal(current.snapshot.phase) and now >= current.deadline then
+        -- The only valid write after lease loss is the fenced interruption.
+        -- Returning -1 retries the Python transition against fresh Redis time.
+        if not candidate or candidate.snapshot.phase ~= 'interrupted'
+            or candidate.snapshot.owner_epoch ~= current.snapshot.owner_epoch + 1
+            or candidate.owner_id ~= cjson.null then
+            return -1
+        end
+    elseif terminal(current.snapshot.phase) and now >= current.deadline then
+        if candidate then return -1 end
+    end
+end
+if not candidate then
+    redis.call('DEL', KEYS[1])
+elseif now >= candidate.deadline then
+    return -1
+elseif terminal(candidate.snapshot.phase) then
+    redis.call('SET', KEYS[1], ARGV[2], 'PX', math.max(1, math.ceil((candidate.deadline - now) * 1000)))
+else
+    redis.call('SET', KEYS[1], ARGV[2])
+end
+return 1
+"""
 
 
 def _json_value(value: Any) -> Any:
@@ -30,9 +69,16 @@ def _json_value(value: Any) -> Any:
 
 class RedisExportJobStore(ExportJobStore):
     def __init__(self, runtime_state: RedisRuntimeState, **kwargs: Any) -> None:
-        super().__init__(**kwargs)
         self._runtime_state = runtime_state
+        # Accept the common constructor's clock argument for API symmetry;
+        # distributed leases always use the Redis server clock instead.
+        kwargs["clock"] = self._redis_time
+        super().__init__(**kwargs)
         self._prefix = runtime_state.key("export-jobs") + ":"
+
+    def _redis_time(self) -> float:
+        seconds, microseconds = self._runtime_state._call(self._runtime_state.client.time)
+        return float(seconds) + float(microseconds) / 1_000_000
 
     def _key(self, job_id: str) -> str:
         return self._prefix + quote(job_id, safe="")
@@ -70,17 +116,13 @@ class RedisExportJobStore(ExportJobStore):
                 with self._runtime_state.client.pipeline() as pipe:
                     try:
                         pipe.watch(key)
-                        record, result = update(self._decode(pipe.get(key)))
+                        raw = pipe.get(key)
+                        record, result = update(self._decode(raw))
                         pipe.multi()
-                        if record is None:
-                            pipe.delete(key)
-                        elif record.snapshot.phase in EXPORT_JOB_TERMINAL_PHASES:
-                            remaining_ms = max(1, math.ceil((record.deadline - self._clock()) * 1000))
-                            pipe.set(key, self._encode(record), px=remaining_ms)
-                        else:
-                            pipe.set(key, self._encode(record))
-                        pipe.execute()
-                        return result
+                        pipe.eval(_COMMIT_RECORD, 1, key, raw or b"",
+                                  self._encode(record) if record is not None else b"")
+                        if pipe.execute()[0] == 1:
+                            return result
                     except WatchError:
                         continue
             raise DistributedRuntimeUnavailable("Distributed export job state is contended.")

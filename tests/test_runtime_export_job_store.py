@@ -5,6 +5,7 @@ from dataclasses import replace
 import importlib
 import json
 import threading
+from types import SimpleNamespace
 
 import fakeredis
 import pytest
@@ -27,17 +28,65 @@ def job(job_id="job-a"):
 
 
 @pytest.fixture(params=["local", "redis"])
-def stores(request):
+def stores(request, monkeypatch):
     clock = Clock()
     if request.param == "local":
         cls = importlib.import_module("pivot_engine.runtime.export_job_store").LocalExportJobStore
         first = cls(clock=clock, lease_seconds=10, ttl_seconds=30)
         return first, first, clock, None
     cls = importlib.import_module("pivot_engine.runtime.redis_export_job_store").RedisExportJobStore
+    # Control the actual Redis TIME command, including TIME calls made by Lua.
+    import fakeredis.commands_mixins.server_mixin as redis_server
+    monkeypatch.setattr(redis_server, "time", SimpleNamespace(time=clock))
     server = fakeredis.FakeServer()
     settings = DistributedRuntimeSettings(enabled=True, key_prefix="export-tests")
     states = [RedisRuntimeState(settings, client=fakeredis.FakeRedis(server=server)) for _ in range(2)]
     return (*(cls(state, clock=clock, lease_seconds=10, ttl_seconds=30) for state in states), clock, server)
+
+
+@pytest.mark.parametrize("operation", ["complete", "progress", "fail", "acknowledge_cancel", "heartbeat"])
+def test_redis_owner_write_delayed_past_lease_cannot_commit(stores, monkeypatch, operation):
+    first, second, clock, server = stores
+    if server is None:
+        pytest.skip("Redis transaction commit boundary.")
+    first.create(job())
+    claimed = first.claim("job-a", "worker-a")
+    if operation == "acknowledge_cancel":
+        second.request_cancel("job-a")
+    # Pause after the client-side time check, immediately before Redis commits.
+    client = first._runtime_state.client
+    real_pipeline = client.pipeline
+    delayed = False
+
+    def pipeline(*args, **kwargs):
+        pipe = real_pipeline(*args, **kwargs)
+        execute = pipe.execute
+
+        def delayed_execute(*args, **kwargs):
+            nonlocal delayed
+            if not delayed:
+                delayed = True
+                clock.now = 111
+            return execute(*args, **kwargs)
+
+        pipe.execute = delayed_execute
+        return pipe
+
+    monkeypatch.setattr(client, "pipeline", pipeline)
+    events = {
+        "complete": {"phase": "completed", "payload_ref": {"id": "late"}},
+        "progress": {"rows_written": 9, "bytes_written": 90},
+        "fail": "failed", "acknowledge_cancel": "cancelled",
+    }
+    if operation == "heartbeat":
+        assert first.heartbeat("job-a", claimed.owner_epoch) is False
+    else:
+        assert first.advance("job-a", claimed.owner_epoch, events[operation]) is None
+    observed = second.get("job-a", "alice", "sales")
+    assert observed.phase == "interrupted"
+    assert observed.owner_epoch > claimed.owner_epoch
+    assert observed.rows_written == observed.bytes_written == 0
+    assert observed.payload_ref is None
 
 
 def test_create_replay_keeps_identity_and_observed_state(stores):
