@@ -555,7 +555,7 @@ def _register_runtime_payload_endpoint(app: Any) -> None:
         if item is None:
             return Response("payload expired or not found", status=404, content_type="text/plain")
         metadata = item.metadata if isinstance(item.metadata, dict) else {}
-        expected_subject = metadata.get("subject")
+        expected_subject = metadata.get("dashSessionSubject") or metadata.get("subject")
         if (
             not isinstance(expected_subject, str)
             or not expected_subject
@@ -567,6 +567,23 @@ def _register_runtime_payload_endpoint(app: Any) -> None:
             # Deliberately use the same response as a missing token. This
             # prevents a payload reference from becoming an oracle.
             return Response("payload expired or not found", status=404, content_type="text/plain")
+
+        if metadata.get("dashSessionSubject") is not None:
+            from flask import request as flask_request
+            principal_getter = getattr(app, "_pivot_runtime_job_principal_getter", None)
+            authorizer = getattr(app, "_pivot_runtime_job_dataset_authorizer", None)
+            if principal_getter is None or authorizer is None:
+                return Response("payload expired or not found", status=404, content_type="text/plain")
+            try:
+                principal = principal_getter(flask_request)
+                if inspect.isawaitable(principal):
+                    principal = run_awaitable_sync(principal)
+                authorizer.authorize(principal=principal, table=metadata.get("table"), operation="export")
+                if (str(getattr(principal, "id", "")) != metadata.get("subject")
+                        or (account_for_principal(principal).tenant_id or "system") != metadata.get("accountingAccountId")):
+                    raise RuntimeDatasetAuthorizationError("Export payload owner mismatch.")
+            except Exception:
+                return Response("payload expired or not found", status=404, content_type="text/plain")
 
         owner = metadata.get("_accountingTenant")
         try:
@@ -817,6 +834,8 @@ def register_dash_pivot_transport_callback(
 
     include_drill_store = drill_store_id is not None
     _register_runtime_payload_endpoint(app)
+    setattr(app, "_pivot_runtime_job_principal_getter", principal_getter)
+    setattr(app, "_pivot_runtime_job_dataset_authorizer", dataset_authorizer)
 
     outputs = [Output(pivot_id, "runtimeResponse")]
     if include_drill_store:
@@ -958,6 +977,39 @@ def register_dash_pivot_transport_callback(
             state_epoch=request_payload.get("state_epoch"),
             window_seq=request_payload.get("window_seq"),
         )
+
+        if request_kind == "export" and request_payload.get("action") in {"start", "status", "cancel"}:
+            resolved_table = table_name or transport_request.get("table") or request_payload.get("table")
+            try:
+                authorization = await _resolve_dash_principal(
+                    dataset_authorizer=dataset_authorizer, principal_getter=principal_getter,
+                    table=resolved_table, operation="export",
+                    require_authorization=require_dataset_authorization,
+                )
+                envelope = dict(runtime_request) if isinstance(runtime_request, dict) else {}
+                envelope["table"] = resolved_table
+                envelope["payload"] = request_payload
+                export_gateway = getattr(app, "_pivot_runtime_export_gateway", None)
+                if export_gateway is None:
+                    from .http_transport import RuntimeHttpGateway
+                    service = runtime_service_getter()
+                    setattr(app, "_pivot_runtime_resource_governor", service.resource_governor)
+                    export_gateway = RuntimeHttpGateway(
+                        runtime_service_getter, payload_store=_get_runtime_payload_store(app),
+                        payload_url_prefix="/_dash_tanstack_pivot/payload",
+                        dataset_authorizer=dataset_authorizer,
+                    )
+                    setattr(app, "_pivot_runtime_export_gateway", export_gateway)
+                response = await export_gateway.process(
+                    envelope, principal=authorization.principal,
+                    payload_session_subject=payload_subject,
+                )
+                return _response_tuple(response)
+            except RuntimeDatasetAuthorizationError:
+                return _response_tuple(_build_runtime_response(
+                    kind="export", request_id=request_id, status="error", payload={},
+                    table=resolved_table, message="Dataset access is not authorized.",
+                ))
 
         if request_kind == "filter_options":
             column_id = request_payload.get("columnId") or request_payload.get("column_id")

@@ -10,6 +10,7 @@ import inspect
 import json
 import os
 import time
+import uuid
 from dataclasses import replace
 from typing import Any, Callable, Dict, Optional
 
@@ -23,6 +24,7 @@ from .contracts import (
     RuntimeContractError,
     build_runtime_response,
     build_resource_exhausted_response,
+    build_export_job_response,
     validate_runtime_request_v1,
     validate_runtime_response_v1,
 )
@@ -38,7 +40,10 @@ from .dataset_authorization import (
     RuntimeDatasetAuthorizer,
 )
 from .payload_store import RuntimePayloadStore, runtime_payload_store_from_env
-from .distributed import RedisRuntimeState, distributed_runtime_from_env
+from .distributed import RedisRuntimeState, DistributedRuntimeUnavailable, distributed_runtime_from_env
+from .distributed import export_job_store_for_runtime
+from .export_jobs import ExportJobSnapshot
+from .export_job_runner import ExportJobRunner
 from .request_factory import RuntimeRequestFactory
 from .router import DistributedEditingUnavailable
 
@@ -98,6 +103,8 @@ class RuntimeHttpGateway:
         self.distributed_runtime = distributed_runtime or distributed_runtime_from_env()
         self._payload_store = payload_store
         self._fallback_lifecycle: Optional[RuntimeRequestLifecycle] = None
+        self._export_job_store = None
+        self._export_job_runner = None
         self.payload_url_prefix = payload_url_prefix.rstrip("/")
         self.inline_payload_bytes = (
             _inline_limit_bytes()
@@ -137,6 +144,71 @@ class RuntimeHttpGateway:
         if self._payload_store.governor is not self.resource_governor:
             raise ValueError("Runtime payload store must use its worker governor")
         return self._payload_store
+
+    @property
+    def export_job_store(self):
+        if self._export_job_store is None:
+            self._export_job_store = export_job_store_for_runtime(self.distributed_runtime)
+        return self._export_job_store
+
+    @property
+    def export_job_runner(self):
+        if self._export_job_runner is None:
+            self._export_job_runner = ExportJobRunner(
+                self._runtime_service_getter(), self.export_job_store, self.payload_store,
+            )
+        return self._export_job_runner
+
+    def close(self) -> None:
+        if self._export_job_runner is not None:
+            self._export_job_runner.close()
+
+    def _export_job_response(self, request, snapshot):
+        response = build_export_job_response(snapshot, request_id=request.get("requestId"))
+        payload = response["payload"]
+        reference = payload.get("payloadRef")
+        if isinstance(reference, dict) and reference.get("id"):
+            reference["url"] = f'{self.payload_url_prefix}/{reference["id"]}'
+        return validate_runtime_response_v1(response)
+
+    def _missing_export_job(self, request, *, principal, table):
+        log_authorization_denied(
+            principal=principal, table=table, operation="export", reason="job_not_found",
+        )
+        return validate_runtime_response_v1(build_runtime_response(
+            kind="export", request_id=request.get("requestId"), status="error",
+            payload={"code": "export_job_not_found"},
+        ))
+
+    def _process_export_job(self, request, context, state):
+        payload = _object(request.get("payload"))
+        action = payload.get("action")
+        store = self.export_job_store
+        subject = self._principal_id(context.principal)
+        account = context.accounting_account.tenant_id or "system"
+        if action == "start":
+            snapshot = ExportJobSnapshot(uuid.uuid4().hex, subject, account, context.table)
+            store.create(snapshot)
+            try:
+                self.export_job_runner.start(snapshot, context, state)
+            except BaseException:
+                store.request_cancel(snapshot.job_id)
+                raise
+            current = store.get(snapshot.job_id, subject, context.table, accounting_account_id=account)
+            return self._export_job_response(request, current or snapshot)
+        job_id = payload.get("jobId")
+        snapshot = store.get(job_id, subject, context.table, accounting_account_id=account)
+        if snapshot is None:
+            return self._missing_export_job(request, principal=context.principal, table=context.table)
+        if action == "cancel":
+            snapshot = store.request_cancel(
+                job_id, subject=subject, table=context.table, accounting_account_id=account,
+            )
+            if snapshot is None:
+                return self._missing_export_job(request, principal=context.principal, table=context.table)
+            if self._export_job_runner is not None:
+                self._export_job_runner.signal_cancel(job_id)
+        return self._export_job_response(request, snapshot)
 
     @staticmethod
     def _principal_id(principal: Any) -> str:
@@ -450,24 +522,34 @@ class RuntimeHttpGateway:
         )
         return validate_runtime_response_v1(response)
 
-    async def process(self, envelope: Any, *, principal: Any) -> Dict[str, Any]:
+    async def process(self, envelope: Any, *, principal: Any,
+                      payload_session_subject: Optional[str] = None) -> Dict[str, Any]:
         token = current_workload_account.set(account_for_principal(principal))
         try:
-            return await self._process(envelope, principal=principal)
+            return await self._process(envelope, principal=principal,
+                                       payload_session_subject=payload_session_subject)
         except ResourceExhaustedError as exc:
             # Validation and authorization have already completed before any
             # admitted backend operation or payload retention is attempted.
             return validate_runtime_response_v1(build_resource_exhausted_response(
                 exc, kind=envelope["kind"], request_id=envelope["requestId"],
             ))
+        except DistributedRuntimeUnavailable:
+            return validate_runtime_response_v1(build_runtime_response(
+                kind="export", request_id=envelope.get("requestId"), status="error",
+                payload={"code": "distributed_runtime_unavailable"},
+            ))
         finally:
             current_workload_account.reset(token)
 
-    async def _process(self, envelope: Any, *, principal: Any) -> Dict[str, Any]:
+    async def _process(self, envelope: Any, *, principal: Any,
+                       payload_session_subject: Optional[str] = None) -> Dict[str, Any]:
         """Validate, authorize, execute, and encode exactly one V1 request."""
         started_at = time.perf_counter()
         request = validate_runtime_request_v1(envelope)
         context = self._context_from_request(request, principal=principal)
+        if payload_session_subject is not None:
+            context = replace(context, session_id=payload_session_subject)
         kind = str(request["kind"])
         dataset_operation = (
             "mutate"
@@ -512,6 +594,8 @@ class RuntimeHttpGateway:
             principal=principal,
             row_scope=row_scope,
         )
+        if kind == "export" and _object(request.get("payload")).get("action") in {"start", "status", "cancel"}:
+            return self._process_export_job(request, context, state)
         service = self._runtime_service_getter()
         if request["kind"] == "filter_options":
             result = await self._process_filter_options(
@@ -576,6 +660,7 @@ def register_runtime_http_transport(
         dataset_authorizer=dataset_authorizer,
         distributed_runtime=distributed_runtime,
     )
+    app.add_event_handler("shutdown", gateway.close)
     router = APIRouter(prefix=normalized_prefix, tags=["pivot-runtime"])
 
     @router.post("")
@@ -587,6 +672,11 @@ def register_runtime_http_transport(
                     status_code=503, content=response,
                     headers={"Retry-After": str((response["payload"]["retryAfterMs"] + 999) // 1000)},
                 )
+            error_code = _object(response.get("payload")).get("code")
+            if error_code == "export_job_not_found":
+                return JSONResponse(status_code=404, content=response)
+            if error_code == "distributed_runtime_unavailable":
+                return JSONResponse(status_code=503, content=response)
             return response
         except (MutationAuthorizationError, RuntimeDatasetAuthorizationError) as exc:
             candidate = envelope if isinstance(envelope, dict) else {}
@@ -677,7 +767,9 @@ def register_runtime_http_transport(
 
     async def payload_response(token, request, user, lease):
         item = gateway.payload_store.get(token)
-        if item is None or item.metadata.get("subject") != gateway._principal_id(user):
+        if (item is None or item.metadata.get("subject") != gateway._principal_id(user)
+                or (item.metadata.get("accountingAccountId") is not None
+                    and item.metadata["accountingAccountId"] != (account_for_principal(user).tenant_id or "system"))):
             raise HTTPException(status_code=404, detail="Runtime payload was not found.")
         etag = f'W/"{item.token}-{item.size}"'
         if request.headers.get("if-none-match") == etag:

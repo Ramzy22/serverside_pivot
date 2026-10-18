@@ -3,6 +3,8 @@
 from dataclasses import dataclass, field
 import logging
 import asyncio
+import threading
+import time
 
 import fakeredis
 import pytest
@@ -20,6 +22,233 @@ from pivot_engine.runtime.distributed import DistributedRuntimeSettings, RedisRu
 from pivot_engine.runtime.payload_store import RedisPayloadBackend, RuntimePayloadStore
 from pivot_engine.resource_governor import ResourceExhaustedError, ResourceGovernor, ResourceKind, ResourceLimits
 from pivot_engine.runtime import PivotRuntimeService
+from pivot_engine.runtime.export_jobs import ExportJobSnapshot
+from pivot_engine.runtime.export_job_store import LocalExportJobStore
+from pivot_engine.tanstack_adapter import TanStackResponse
+
+
+def _job_request(action, job_id=None, **payload):
+    return {
+        **_runtime_request(request_id=f"export-{action}"),
+        "kind": "export", "state": {},
+        "payload": {"action": action, **({"jobId": job_id} if job_id else {}), **payload},
+    }
+
+
+class _JobAdapter:
+    def __init__(self, *, slow=False):
+        self.started = threading.Event()
+        self.slow = slow
+        self.calls = 0
+
+    async def handle_request(self, *_args, **_kwargs):
+        self.calls += 1
+        self.started.set()
+        if self.slow:
+            await asyncio.Event().wait()
+        return TanStackResponse(data=[{"value": 17}], columns=[{"id": "value"}], total_rows=1)
+
+    handle_virtual_scroll_request = handle_request
+
+
+def _job_host(*, slow=False, distributed=None, governor=None):
+    adapter = _JobAdapter(slow=slow)
+    service = PivotRuntimeService(lambda: adapter, resource_governor=governor)
+    current = [_User("alice", {"accounting_tenant": "trusted"})]
+    app = FastAPI()
+    gateway = register_runtime_http_transport(
+        app, lambda: service, current_user_dependency=lambda: current[0],
+        dataset_authorizer=_dataset_policy("export"), distributed_runtime=distributed,
+    )
+    return app, gateway, adapter, current
+
+
+def _wait_job(client, job_id, phase):
+    deadline = time.monotonic() + 5
+    while time.monotonic() < deadline:
+        response = client.post("/v1/runtime", json=_job_request("status", job_id))
+        assert response.status_code == 200, response.text
+        if response.json()["payload"]["phase"] == phase:
+            return response.json()["payload"]
+        time.sleep(.01)
+    raise AssertionError(f"Job did not become {phase}: {response.text}")
+
+
+def test_http_export_job_completes_downloads_and_status_does_not_requery():
+    app, gateway, adapter, current = _job_host()
+    with TestClient(app) as client:
+        response = client.post("/v1/runtime", json=_job_request("start", format="csv"))
+        assert response.status_code == 200
+        payload = response.json()["payload"]
+        assert "jobId" in payload, payload
+        done = _wait_job(client, payload["jobId"], "completed")
+        assert done["rowsWritten"] == 1 and done["bytesWritten"] > 0
+        assert done["totalRows"] is None
+        assert adapter.calls == 1
+        assert done["payloadRef"]["url"].startswith("/v1/runtime/payload/")
+        download = client.get(done["payloadRef"]["url"])
+        assert download.status_code == 200
+        assert download.content.decode("utf-8-sig").splitlines() == ["Value", "17"]
+        current[0] = _User("alice", {"accounting_tenant": "other"})
+        assert client.get(done["payloadRef"]["url"]).status_code == 404
+        current[0] = _User("bob", {"accounting_tenant": "trusted"})
+        assert client.get(done["payloadRef"]["url"]).status_code == 404
+    assert gateway.resource_governor.snapshot()["active_slots"]["export"] == 0
+    gateway.payload_store.clear()
+
+
+@pytest.mark.parametrize("action", ["status", "cancel"])
+@pytest.mark.parametrize("attack", ["subject", "account", "table", "unknown"])
+def test_export_job_lookup_hides_identity_and_progress_and_logs_denial(action, attack, caplog):
+    app, gateway, adapter, current = _job_host()
+    permission = {"roles": {"viewer"}, "operations": {"export"}, "rowSecurity": {"mode": "global"}}
+    gateway.dataset_authorizer = RuntimeDatasetAuthorizer({"sales": permission, "other": permission})
+    # A private in-progress snapshot makes any leaked counters observable.
+    store = gateway.export_job_store
+    store.create(ExportJobSnapshot("secret-job", "alice", "trusted", "sales"))
+    owner = store.claim("secret-job", "private-owner")
+    store.advance("secret-job", owner.owner_epoch, {"rows_written": 4711, "bytes_written": 9001})
+    envelope = _job_request(action, "missing-job" if attack == "unknown" else "secret-job",
+                            accounting_tenant="trusted", subject="alice")
+    if attack == "subject":
+        current[0] = _User("bob", {"accounting_tenant": "trusted"})
+    elif attack == "account":
+        current[0] = _User("alice", {"accounting_tenant": "other"})
+    elif attack == "table":
+        envelope["table"] = "other"
+    with TestClient(app) as client, caplog.at_level(logging.WARNING):
+        response = client.post("/v1/runtime", json=envelope)
+    assert response.status_code == 404
+    assert response.json()["payload"] == {"code": "export_job_not_found"}
+    assert all(secret not in response.text for secret in ["4711", "9001", "trusted", "secret-job", "private-owner"])
+    assert "event=authorization_denied" in caplog.text and "operation=export" in caplog.text
+    assert adapter.calls == 0
+    assert store.get("secret-job", "alice", "sales", accounting_account_id="trusted").phase == "running"
+
+
+def test_export_jobs_cross_worker_cancel_uses_registry_and_no_view_query():
+    shared = fakeredis.FakeRedis(decode_responses=False)
+    app_a, gateway_a, adapter_a, _ = _job_host(slow=True, distributed=_distributed_payload_state(shared))
+    app_b, gateway_b, adapter_b, _ = _job_host(distributed=_distributed_payload_state(shared))
+    with TestClient(app_a) as owner, TestClient(app_b) as other:
+        response = owner.post("/v1/runtime", json=_job_request("start", format="csv"))
+        assert "jobId" in response.json()["payload"], response.text
+        job_id = response.json()["payload"]["jobId"]
+        assert adapter_a.started.wait(2)
+        cancelling = other.post("/v1/runtime", json=_job_request("cancel", job_id))
+        assert cancelling.status_code == 200
+        assert cancelling.json()["payload"]["phase"] in {"cancelling", "cancelled"}
+        _wait_job(other, job_id, "cancelled")
+        assert adapter_a.calls == 1 and adapter_b.calls == 0
+        assert gateway_a.resource_governor.snapshot()["active_slots"]["export"] == 0
+        assert gateway_b._export_job_runner is None
+
+
+def test_export_job_admission_rejection_is_stable_v1_error():
+    governor = ResourceGovernor(ResourceLimits.for_testing(max_exports=1), rss_bytes_getter=lambda: 0)
+    app, gateway, adapter, _ = _job_host(governor=governor)
+    with TestClient(app) as client, governor.reserve(ResourceKind.EXPORT, 1):
+        response = client.post("/v1/runtime", json=_job_request("start", format="csv"))
+        assert response.status_code == 503
+        assert response.json()["payload"] == {
+            "code": "resource_exhausted", "resourceKind": "export", "retryAfterMs": 1000,
+        }
+        assert "jobId" not in response.json()["payload"] and adapter.calls == 0
+    gateway.payload_store.clear()
+
+
+@pytest.mark.parametrize("action", ["start", "status", "cancel"])
+def test_distributed_job_registry_outage_is_stable_and_fail_closed(action):
+    class OfflineRedis:
+        def ping(self):
+            return True
+
+        def __getattr__(self, _name):
+            def fail(*_args, **_kwargs):
+                raise ConnectionError("SECRET redis credentials")
+            return fail
+    app, gateway, adapter, _ = _job_host(distributed=_distributed_payload_state(OfflineRedis()))
+    with TestClient(app) as client:
+        response = client.post("/v1/runtime", json=_job_request(action, "missing" if action != "start" else None))
+        assert response.status_code == 503
+        assert response.json()["payload"] == {"code": "distributed_runtime_unavailable"}
+        assert "SECRET" not in response.text and adapter.calls == 0
+
+
+def test_expired_export_job_is_missing_and_shutdown_cleans_running_work():
+    app, gateway, adapter, _ = _job_host(slow=True)
+    now = [100.0]
+    gateway._export_job_store = LocalExportJobStore(ttl_seconds=1, clock=lambda: now[0])
+    gateway.export_job_store.create(ExportJobSnapshot("expired", "alice", "trusted", "sales"))
+    gateway.export_job_store.request_cancel("expired")
+    now[0] = 102
+    with TestClient(app) as client:
+        missing = client.post("/v1/runtime", json=_job_request("status", "expired"))
+        assert missing.status_code == 404
+        start = client.post("/v1/runtime", json=_job_request("start", format="csv"))
+        assert "jobId" in start.json()["payload"], start.text
+        assert adapter.started.wait(2)
+    assert gateway.resource_governor.snapshot()["active_slots"]["export"] == 0
+    assert gateway.export_job_store.get(start.json()["payload"]["jobId"], "alice", "sales").phase == "cancelled"
+
+
+def test_dash_export_jobs_share_authenticated_semantics_and_completed_download():
+    from dash import Dash, html
+    from dash_tanstack_pivot import DashTanstackPivot
+    from pivot_engine.runtime.dash_callbacks import register_dash_pivot_transport_callback
+    adapter = _JobAdapter()
+    service = PivotRuntimeService(lambda: adapter)
+    current = [_User("alice", {"accounting_tenant": "trusted"})]
+    app = Dash(__name__)
+    app.layout = html.Div([DashTanstackPivot(id="jobs", table="sales")])
+    register_dash_pivot_transport_callback(
+        app, lambda: service, pivot_id="jobs", dataset_authorizer=_dataset_policy("export"),
+        principal_getter=lambda _request: current[0], require_dataset_authorization=True,
+    )
+    client = app.server.test_client()
+    callback = app.callback_map["jobs.runtimeResponse"]
+
+    def post(envelope):
+        response = client.post("/_dash-update-component", json={
+            "output": "jobs.runtimeResponse", "outputs": {"id": "jobs", "property": "runtimeResponse"},
+            "changedPropIds": ["jobs.runtimeRequest"],
+            "inputs": [{**item, "value": envelope if item["property"] == "runtimeRequest" else None}
+                       for item in callback["inputs"]],
+            "state": [{**item, "value": "sales" if item["property"] == "table" else None}
+                      for item in callback["state"]],
+        })
+        assert response.status_code == 200, response.data
+        return response.json["response"]["jobs"]["runtimeResponse"]
+
+    try:
+        started = post(_job_request("start", format="csv"))
+        assert "jobId" in started["payload"], started
+        job_id = started["payload"]["jobId"]
+        deadline = time.monotonic() + 5
+        while time.monotonic() < deadline:
+            completed = post(_job_request("status", job_id))
+            if completed["payload"]["phase"] == "completed":
+                break
+            time.sleep(.01)
+        assert completed["payload"]["phase"] == "completed"
+        assert adapter.calls == 1
+        url = completed["payload"]["payloadRef"]["url"]
+        download = client.get(url)
+        assert download.status_code == 200
+        assert download.data.decode("utf-8-sig").splitlines() == ["Value", "17"]
+        current[0] = _User("alice", {"accounting_tenant": "other"})
+        denied = post(_job_request("cancel", job_id))
+        assert denied["payload"] == {"code": "export_job_not_found"}
+        assert client.get(url).status_code == 404
+        current[0] = _User("bob", {"accounting_tenant": "trusted"})
+        assert post(_job_request("status", job_id))["payload"] == {"code": "export_job_not_found"}
+        assert client.get(url).status_code == 404
+        assert adapter.calls == 1
+    finally:
+        gateway = getattr(app, "_pivot_runtime_export_gateway", None)
+        if gateway is not None:
+            gateway.close()
+            gateway.payload_store.clear()
 
 
 @dataclass

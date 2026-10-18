@@ -199,7 +199,10 @@ class ExportJobRunner:
             reference = self.payload_store.put_file(
                 content_path, content_type=metadata.get("contentType", "application/octet-stream"),
                 metadata={**{k: v for k, v in metadata.items() if k not in {"contentPath", "contentLength"}},
-                          "subject": execution.job.subject, "table": execution.job.table},
+                          "subject": execution.job.subject, "table": execution.job.table,
+                          "accountingAccountId": execution.job.accounting_account_id,
+                          **({"dashSessionSubject": execution.context.session_id}
+                             if execution.context.session_id != f"principal:{execution.job.subject}" else {})},
             )
             result = self.job_store.advance(job_id, execution.epoch, {"phase": "completed", "payload_ref": reference})
             if result is not None and result.phase == "completed":
