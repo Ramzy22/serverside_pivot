@@ -292,6 +292,8 @@ def _build_from_snapshot(commit: str, snapshot: Path, output: Path, *, build_whe
         "dash": _run([str(python), "-c", "import dash; print(dash.__version__)"], app),
         "streamlit": _run([str(python), "-c", "import streamlit; print(streamlit.__version__)"], app),
         "react": _run([shutil.which("node") or "node", "-p", "require('./node_modules/react/package.json').version"], react_app),
+        "duckdb": _run([str(python), "-c", "import duckdb; print(duckdb.__version__)"], app),
+        "ibis": _run([str(python), "-c", "import ibis; print(ibis.__version__)"], app),
     }
     hashes = {
         "source_commit": _digest(commit.encode()),

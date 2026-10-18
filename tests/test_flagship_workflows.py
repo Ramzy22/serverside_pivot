@@ -37,6 +37,50 @@ def test_export_qualification_fixture_is_flat_and_does_not_replace_parity(monkey
     assert demo.workspace_config("react")["colFields"] == ["period"]
 
 
+def test_export_fixture_samples_a_snapshot_while_writer_paths_change(monkeypatch, tmp_path):
+    from types import SimpleNamespace
+    from examples import flagship_demo_data as demo
+
+    assert hasattr(demo, "_existing_export_paths"), "Private sampler must snapshot mutable writer paths"
+    first, late = tmp_path / "first", tmp_path / "late"
+    first.touch()
+    late.touch()
+    control = SimpleNamespace(paths={str(first)})
+    def writer_changes_paths(path):
+        control.paths.add(str(late))
+        return Path(path)
+    monkeypatch.setattr(demo, "Path", writer_changes_paths)
+    assert demo._existing_export_paths(control) == [str(first)]
+
+
+def test_export_fixture_copies_writer_path_set_before_iteration(tmp_path):
+    from types import SimpleNamespace
+    from examples.flagship_demo_data import _existing_export_paths
+
+    path = tmp_path / "writer.csv"
+    path.touch()
+    class ConcurrentPaths(set):
+        def __iter__(self):
+            raise RuntimeError("set changed size during iteration")
+        def copy(self):
+            return {str(path)}
+    assert _existing_export_paths(SimpleNamespace(paths=ConcurrentPaths())) == [str(path)]
+
+
+def test_export_fixture_holds_only_after_real_measured_progress():
+    from types import SimpleNamespace
+    from examples.flagship_demo_data import _hold_measured_progress
+
+    observed = []
+    control = SimpleNamespace(progress=lambda rows, size: observed.append((rows, size)))
+    _hold_measured_progress(control, lambda: observed.append(("paused", tuple(observed))))
+    control.progress(128, 2048)
+    assert observed == [(128, 2048), ("paused", ((128, 2048),))]
+    control.progress(256, 4096)
+    assert observed[-1] == (256, 4096)
+    assert len(observed) == 3
+
+
 def test_export_progress_proof_rejects_fabricated_or_uncorrelated_counters():
     from tests import flagship_browser_support as support
 
@@ -56,6 +100,25 @@ def test_export_progress_proof_rejects_fabricated_or_uncorrelated_counters():
     ):
         with pytest.raises(AssertionError):
             support.assert_export_job_trace(broken)
+
+
+def test_cancel_trace_allows_zero_writer_progress_before_native_query_stops():
+    from tests.flagship_browser_support import assert_export_job_trace
+
+    trace = [
+        {"direction": "request", "requestId": "start", "payload": {"action": "start"}},
+        {"direction": "response", "requestId": "start", "payload": {
+            "jobId": "job", "phase": "running", "rowsWritten": 0, "bytesWritten": 0}},
+        {"direction": "request", "requestId": "cancel", "payload": {"action": "cancel", "jobId": "job"}},
+        {"direction": "response", "requestId": "cancel", "payload": {
+            "jobId": "job", "phase": "cancelling", "rowsWritten": 0, "bytesWritten": 0}},
+        {"direction": "request", "requestId": "poll", "payload": {"action": "status", "jobId": "job"}},
+        {"direction": "response", "requestId": "poll", "payload": {
+            "jobId": "job", "phase": "cancelled", "rowsWritten": 0, "bytesWritten": 0}},
+    ]
+    assert assert_export_job_trace(trace, require_progress=False) == "job"
+    with pytest.raises(AssertionError, match="No measured export progress"):
+        assert_export_job_trace(trace)
 
 
 def test_export_cancel_ack_requires_server_terminal_and_cleanup_before_visible_cancelled():

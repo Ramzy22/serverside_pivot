@@ -132,6 +132,26 @@ def get_demo_adapter():
     return adapter
 
 
+def _existing_export_paths(control):
+    paths = control.paths.copy()
+    return [path for path in paths if Path(path).exists()]
+
+
+def _hold_measured_progress(control, pause):
+    """Expose already-recorded writer progress to browser polling in the test fixture."""
+    original = control.progress
+    held = False
+
+    def measured(rows, size):
+        nonlocal held
+        original(rows, size)
+        if rows > 0 and not held:
+            held = True
+            pause()
+
+    control.progress = measured
+
+
 def _instrument_export_qualification(adapter):
     """Private fixture instrumentation; no public route or request can arm it."""
     import asyncio
@@ -159,6 +179,7 @@ def _instrument_export_qualification(adapter):
         if control is not None:
             key = id(control)
             if key not in controls:
+                _hold_measured_progress(control, lambda: time.sleep(1.2))
                 marker = root / "slow-next-export"
                 try:
                     marker.unlink()
@@ -176,7 +197,7 @@ def _instrument_export_qualification(adapter):
                         "taskDone": task.done(), "nativeRunning": native.execution_metrics()["running"],
                         "reservedBytes": 0 if control.lease._released else control.lease.reserved_bytes,
                         "activeSlots": control.lease._governor.snapshot()["active_slots"]["export"],
-                        "temporaryFiles": [p for p in control.paths if Path(p).exists()],
+                        "temporaryFiles": _existing_export_paths(control),
                     }
                     path.with_suffix(".cleanup.json").write_text(json.dumps(event), encoding="utf-8")
                 control.lease.release = record_release
@@ -192,7 +213,7 @@ def _instrument_export_qualification(adapter):
                                 "cancelRequested": control.cancelled.is_set(),
                                 "reservedBytes": 0 if released else control.lease.reserved_bytes,
                                 "activeSlots": control.lease._governor.snapshot()["active_slots"]["export"],
-                                "temporaryFiles": [p for p in control.paths if Path(p).exists()],
+                                "temporaryFiles": _existing_export_paths(control),
                             }) + "\n")
                             output.flush()
                             if released and task.done() and metrics["running"] == 0:

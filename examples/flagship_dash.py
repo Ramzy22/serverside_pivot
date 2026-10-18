@@ -15,9 +15,9 @@ if str(_ROOT) not in sys.path:
     sys.path.insert(0, str(_ROOT))
 
 from dash_tanstack_pivot import DashTanstackPivot
-from pivot_engine import register_pivot_app
+from pivot_engine import RuntimeDatasetAuthorizer, register_pivot_app
 
-from examples.flagship_demo_data import DEMO_ROW_COUNT, get_demo_adapter, workspace_config
+from examples.flagship_demo_data import DEMO_ROW_COUNT, TABLE_NAME, get_demo_adapter, workspace_config
 
 
 app = Dash(
@@ -93,7 +93,22 @@ app.layout = html.Div(
     ],
 )
 
-register_pivot_app(app, adapter_getter=get_demo_adapter, pivot_id="flagship-dash-pivot")
+class _DemoPrincipal:
+    id = "flagship-demo"
+    role = "viewer"
+    attributes = {}
+
+
+register_pivot_app(
+    app, adapter_getter=get_demo_adapter, pivot_id="flagship-dash-pivot",
+    runtime_dataset_authorizer=RuntimeDatasetAuthorizer({
+        TABLE_NAME: {
+            "roles": {"viewer"}, "operations": {"read", "export"},
+            "rowSecurity": {"mode": "global"},
+        },
+    }),
+    runtime_principal_getter=lambda _request: _DemoPrincipal(),
+)
 
 
 if __name__ == "__main__":

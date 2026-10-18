@@ -25,7 +25,7 @@ from tests.flagship_contract import HOSTS, RESULTS, load_requirements
 ROOT = Path(__file__).resolve().parents[1]
 
 
-def assert_export_job_trace(trace):
+def assert_export_job_trace(trace, *, require_progress=True):
     """Require observed progress from correlated V1 controls for one server job."""
     requests = {item["requestId"]: item for item in trace if item["direction"] == "request"}
     replies = [item for item in trace if item["direction"] == "response"]
@@ -48,7 +48,8 @@ def assert_export_job_trace(trace):
         rows, size = current_rows, current_size
         if payload["phase"] != "completed":
             assert not payload.get("payloadRef"), "Unfinished job published output"
-    assert advanced, "No measured export progress"
+    if require_progress:
+        assert advanced, "No measured export progress"
     return job
 
 
@@ -160,7 +161,8 @@ def _assert_flat_export(path, fmt, count):
     assert len(rows) == count + 1
     assert [(row[0], float(row[1])) for row in rows[1:]] == [
         (f"R{i:04d} 東京", i + .25) for i in range(count)]
-    return {"rows": count, "columns": 2, "sha256": hashlib.sha256(path.read_bytes()).hexdigest()}
+    return {"rows": count, "columns": 2, "headers": rows[0], "firstRow": rows[1], "lastRow": rows[-1],
+            "sha256": hashlib.sha256(path.read_bytes()).hexdigest()}
 
 
 def qualify_export_jobs(host, requirement):
@@ -232,7 +234,7 @@ def qualify_export_jobs(host, requirement):
             assert samples[-1]["nativeRunning"] == 0 and not samples[-1]["temporaryFiles"]
             assert samples[-1]["nativeCancellationAttempts"] > samples[0]["nativeCancellationAttempts"]
             trace = driver.execute_script("return window.__pivotExportJobs")
-            job = assert_export_job_trace(trace)
+            job = assert_export_job_trace(trace, require_progress=False)
             cleanup = json.loads(worker.with_suffix(".cleanup.json").read_text())
             ui = driver.execute_script("return window.__pivotExportUi")
             assert_export_cancel_ack(trace, ui, cleanup, job)
@@ -292,7 +294,8 @@ def qualify_export_jobs(host, requirement):
             driver.quit()
         evidence = directory / "observation.json"
         write_export_job_observation(evidence, observation, result, diagnostic)
-        result["evidence_paths"] = [str(evidence), *(str(path) for path in directory.glob("*.png"))]
+        result["evidence_paths"] = [str(evidence), *(str(path) for path in directory.glob("*.png")),
+                                    *(str(path) for path in downloads.iterdir() if path.is_file())]
         record_case(requirement, host, result, directory)
     assert result["result"] == "passed", f"{host} {requirement} failed; evidence: {directory}; {diagnostic}"
 

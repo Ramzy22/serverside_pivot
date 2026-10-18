@@ -30,6 +30,7 @@ from pivot_engine.resource_governor import ResourceExhaustedError, ResourceGover
 from pivot_engine.runtime import PivotRuntimeService
 from pivot_engine.runtime.export_jobs import ExportJobSnapshot
 from pivot_engine.runtime.export_job_store import LocalExportJobStore
+from pivot_engine.runtime.contracts import validate_runtime_request_v1
 from pivot_engine.tanstack_adapter import TanStackResponse
 
 
@@ -125,6 +126,24 @@ def test_http_export_job_completes_downloads_and_status_does_not_requery():
         assert client.get(done["payloadRef"]["url"]).status_code == 404
     assert gateway.resource_governor.snapshot()["active_slots"]["export"] == 0
     gateway.payload_store.clear()
+
+
+def test_export_job_uses_frontend_state_override_for_flat_layout():
+    app, gateway, adapter, current = _job_host()
+    envelope = _job_request("start", format="csv", layout_mode="tabular", state_override={
+        "rowFields": ["region"], "colFields": [],
+        "valConfigs": [{"field": "sales", "agg": "sum"}],
+        "showSubtotals": False, "showRowTotals": False, "showColTotals": False,
+    })
+    request = validate_runtime_request_v1(envelope)
+    scope = gateway.dataset_authorizer.authorize(
+        principal=current[0], table="sales", operation="export",
+    )
+    state = gateway._state_from_request(request, principal=current[0], row_scope=scope)
+    assert state.row_fields == ["region"]
+    assert state.val_configs == [{"field": "sales", "agg": "sum"}]
+    assert state.show_subtotals is False
+    assert state.layout_mode == "tabular"
 
 
 @pytest.mark.parametrize("action", ["status", "cancel"])
