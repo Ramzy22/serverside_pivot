@@ -2938,7 +2938,7 @@
       "id": "journey-recovery.cancel-new-work",
       "inventory_id": "large-delivery",
       "task": "Combine cancel, cleanup and a fresh operation",
-      "expected": "Cancel an expensive export, observe actual server cleanup/admission release, start a new filtered operation and obtain sales 79.75 for München; no stale cancelled response or output mutates the fresh result.",
+      "expected": "Cancel an expensive supported flat export, observe native cleanup and admission release, then filter to R0000 東京 and obtain exactly one row with sales 0.25 in CSV/XLSX; no stale cancelled response or output mutates the fresh result.",
       "ag_grid": {
         "reference": "ssrm-read-only-v1",
         "docs": [
@@ -2948,7 +2948,7 @@
         "test_id": "ag-grid.journey-recovery.cancel-new-work",
         "result": "unverified"
       },
-      "product_behavior": "Qualification target: Cancel an expensive export, observe actual server cleanup/admission release, start a new filtered operation and obtain sales 79.75 for München; no stale cancelled response or output mutates the fresh result.",
+      "product_behavior": "Qualification target: after server-acknowledged cleanup, fresh filtered work yields exactly R0000 東京 and sales 0.25 with validated headers in CSV/XLSX; cancellation produces no stale or partial download.",
       "difference": "unverified",
       "constraints": [
         "Mandatory combined journey; correlate both operation/request IDs and admission lifetime.",

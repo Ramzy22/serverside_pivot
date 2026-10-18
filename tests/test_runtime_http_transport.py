@@ -80,6 +80,30 @@ def _wait_job(client, job_id, phase):
     raise AssertionError(f"Job did not become {phase}: {response.text}")
 
 
+def test_gateway_shutdown_closes_active_runner_without_removed_fastapi_app_hook():
+    class CurrentFastAPI(FastAPI):
+        def __getattribute__(self, name):
+            if name == "add_event_handler":
+                raise AttributeError("Removed from FastAPI 0.145; register on router")
+            return super().__getattribute__(name)
+
+    adapter = _JobAdapter(slow=True)
+    service = PivotRuntimeService(lambda: adapter)
+    app = CurrentFastAPI()
+    gateway = register_runtime_http_transport(
+        app, lambda: service, current_user_dependency=lambda: _User("alice"),
+        dataset_authorizer=_dataset_policy("export"),
+    )
+    with TestClient(app) as client:
+        response = client.post("/v1/runtime", json=_job_request("start", format="csv"))
+        assert response.status_code == 200
+        assert adapter.started.wait(3)
+        runner = gateway.export_job_runner
+        assert not runner._closed
+    assert runner._closed
+    assert service._router.lifecycle.resource_governor.snapshot()["active_slots"]["export"] == 0
+
+
 def test_http_export_job_completes_downloads_and_status_does_not_requery():
     app, gateway, adapter, current = _job_host()
     with TestClient(app) as client:

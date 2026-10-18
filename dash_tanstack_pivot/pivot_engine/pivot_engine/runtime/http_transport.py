@@ -674,7 +674,7 @@ def register_runtime_http_transport(
         dataset_authorizer=dataset_authorizer,
         distributed_runtime=distributed_runtime,
     )
-    app.add_event_handler("shutdown", gateway.close)
+    app.router.add_event_handler("shutdown", gateway.close)
     router = APIRouter(prefix=normalized_prefix, tags=["pivot-runtime"])
 
     @router.post("")

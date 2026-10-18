@@ -167,21 +167,23 @@ def _instrument_export_qualification(adapter):
                     armed = False
                 controls[key] = (control, armed)
                 path = root / f"export-worker-{os.getpid()}-{uuid4().hex}.jsonl"
+                task = asyncio.current_task()
                 def sample():
                     with path.open("w", encoding="utf-8") as output:
                         while True:
                             released = control.lease._released
+                            metrics = native.execution_metrics()
                             output.write(json.dumps({
-                                "at": time.time(), "executorRunning": not released,
-                                "nativeRunning": native.execution_metrics()["running"],
-                                "nativeCancellationAttempts": native.execution_metrics()["cancellation_attempts"],
+                                "at": time.time(), "executorRunning": not task.done() or metrics["running"] > 0,
+                                "nativeRunning": metrics["running"],
+                                "nativeCancellationAttempts": metrics["cancellation_attempts"],
                                 "cancelRequested": control.cancelled.is_set(),
                                 "reservedBytes": 0 if released else control.lease.reserved_bytes,
                                 "activeSlots": control.lease._governor.snapshot()["active_slots"]["export"],
                                 "temporaryFiles": [p for p in control.paths if Path(p).exists()],
                             }) + "\n")
                             output.flush()
-                            if released:
+                            if released and task.done() and metrics["running"] == 0:
                                 return
                             time.sleep(.01)
                 threading.Thread(target=sample, daemon=True).start()

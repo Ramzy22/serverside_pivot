@@ -66,6 +66,18 @@ def test_installed_export_runner_selects_workflows_and_rejects_missing_cases(mon
     runner._run_browser_suite(tmp_path, {"PIVOT_FLAGSHIP_EXPORT_JOB_DATA": "1"})
     assert "tests/test_flagship_workflows.py" in commands[0]
     assert "tests/test_flagship_certification.py" not in commands[0]
+    report = tmp_path / "junit.xml"
+    names = [f"test_flagship_export_jobs[{requirement}-{host}]"
+             for requirement in ("large-delivery.progress", "large-delivery.cancel-retry", "journey-recovery.cancel-new-work")
+             for host in ("dash", "react", "streamlit")]
+    cases = [f'<testcase name="{name}"/>' for name in names]
+    report.write_text('<testsuite tests="9">' + ''.join(cases) + '</testsuite>')
+    assert runner._installed_browser_report_passed(report, export_jobs=True)
+    report.write_text('<testsuite tests="9">' + ''.join(cases[:-1]) + '</testsuite>')
+    assert not runner._installed_browser_report_passed(report, export_jobs=True)
+    report.write_text('<testsuite tests="9">' + ''.join(cases[:-1]) +
+                      f'<testcase name="{names[-1]}"><skipped/></testcase></testsuite>')
+    assert not runner._installed_browser_report_passed(report, export_jobs=True)
 
 
 def test_visible_totals_use_display_format_without_losing_exact_protocol_oracle(monkeypatch):

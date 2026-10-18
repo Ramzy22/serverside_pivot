@@ -156,8 +156,9 @@ def qualify_export_jobs(host, requirement):
                          if el.is_displayed()), False)
 
         def button(label):
-            element = next(el for el in _workspace_elements(driver, '[aria-label="Export progress"] button')
-                           if el.text == label and el.is_displayed() and el.is_enabled())
+            element = wait.until(lambda _: next((
+                el for el in _workspace_elements(driver, '[aria-label="Export progress"] button')
+                if el.text == label and el.is_displayed() and el.is_enabled()), False))
             element.click()
 
         cancelled = requirement != "large-delivery.progress"
@@ -206,11 +207,23 @@ def qualify_export_jobs(host, requirement):
             wait.until(lambda _: phase("running"))
             bar = _workspace_elements(driver, '[role="progressbar"]')[0]
             assert bar.get_attribute("aria-valuenow") is None
+            if not cancelled:
+                def measured(_):
+                    trace = driver.execute_script("return window.__pivotExportJobs")
+                    return next((item for item in trace if item["direction"] == "response"
+                                 and item["payload"].get("phase") == "running"
+                                 and item["payload"].get("rowsWritten", 0) > 0), False)
+                progress = wait.until(measured)
+                assert progress["payload"]["totalRows"] is None
+                wait.until(lambda _: any("rows" in el.text and "bytes" in el.text
+                                         and not el.text.startswith("0 rows")
+                                         for el in _workspace_elements(driver, '[aria-label="Export progress"] span')))
             wait.until(lambda _: phase("completed"))
             path = _wait_for_download(downloads, fmt, timeout=25)
             observation["downloads"][fmt] = _assert_flat_export(path, fmt, count)
             trace = driver.execute_script("return window.__pivotExportJobs")
-            assert_export_job_trace(trace)
+            fresh_job = assert_export_job_trace(trace)
+            assert fresh_job != observation.get("cancelledJobId"), "Retry reused the cancelled job"
             assert trace[-1]["payload"]["phase"] == "completed"
             observation["trace"].extend(trace)
             driver.save_screenshot(str(directory / f"{fmt}.png"))
