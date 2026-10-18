@@ -22,6 +22,8 @@
   },
   "additionalProperties": false,
   "allOf": [{
+    "$comment": "This conditional only narrows declared fields; it does not add an open object to generated TypeScript.",
+    "tsType": "unknown",
     "if": {
       "properties": {
         "kind": { "const": "export" }
@@ -47,6 +49,7 @@
         "payloadRef": { "$ref": "#/$defs/jsonObject", "minProperties": 1 }
       },
       "allOf": [{
+        "tsType": "unknown",
         "if": { "properties": { "phase": { "const": "completed" } }, "required": ["phase"] },
         "then": { "required": ["payloadRef"] },
         "else": { "not": { "required": ["payloadRef"] } }

@@ -222,3 +222,38 @@ process.stdout.write(JSON.stringify(results));
         {"action": "start", "jobId": "forged"}, {"action": "invented"},
     ]), text=True, capture_output=True, check=True)
     assert json.loads(result.stdout) == [True, True, True, False, False, False, False, True, False, False]
+
+
+def test_generated_types_reject_unknown_runtime_envelope_fields():
+    root = Path(__file__).resolve().parents[1]
+    script = r"""
+const path = require('node:path');
+const ts = require('./dash_tanstack_pivot/node_modules/typescript');
+const probe = path.resolve('dash_tanstack_pivot/src/lib/runtime/contract-type-probe.ts');
+const source = `
+import type { PivotRuntimeProtocolRequestV1 as Request } from './runtime-contract.generated';
+import type { PivotRuntimeProtocolResponseV1 as Response } from './runtime-response-contract.generated';
+const requestHasClosedEnvelope: false = null as unknown as (string extends keyof Request ? true : false);
+const responseHasClosedEnvelope: false = null as unknown as (string extends keyof Response ? true : false);
+const request: Request = { schemaVersion: 1, kind: 'data', requestId: 'id', payload: {},
+    // @ts-expect-error Runtime envelope members are explicitly enumerated.
+    unreviewedField: true,
+};
+const response: Response = { schemaVersion: 1, kind: 'data', status: 'data', payload: {},
+    // @ts-expect-error Runtime envelope members are explicitly enumerated.
+    unreviewedField: true,
+};
+`;
+const options = {strict: true, noEmit: true, skipLibCheck: true, target: ts.ScriptTarget.ES2020, module: ts.ModuleKind.CommonJS};
+const host = ts.createCompilerHost(options);
+const read = host.getSourceFile.bind(host);
+host.getSourceFile = (filename, languageVersion, onError, shouldCreate) => path.resolve(filename) === probe
+    ? ts.createSourceFile(filename, source, languageVersion, true)
+    : read(filename, languageVersion, onError, shouldCreate);
+const program = ts.createProgram([probe], options, host);
+const diagnostics = ts.getPreEmitDiagnostics(program);
+for (const diagnostic of diagnostics) process.stdout.write(ts.flattenDiagnosticMessageText(diagnostic.messageText, '\n') + '\n');
+process.exitCode = diagnostics.length ? 1 : 0;
+"""
+    result = subprocess.run(["node", "-e", script], cwd=root, text=True, capture_output=True)
+    assert result.returncode == 0, result.stdout + result.stderr
