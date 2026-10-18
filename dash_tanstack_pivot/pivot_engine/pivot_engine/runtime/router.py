@@ -9,11 +9,11 @@ from typing import Any, Callable, Dict, List, Optional
 
 from ..backends.execution import DatabaseExecutionError
 from ..resource_governor import ResourceExhaustedError, ResourceKind, ResourceLease
-from ..tanstack_adapter import TanStackRequest, TanStackResponse
-from ..security import MutationAuthorizationError
+from ..tanstack_adapter import TanStackRequest, TanStackResponse, TanStackPivotAdapter
+from ..security import MutationAuthorizationError, apply_rls_to_spec
 from .detail_service import DetailRuntimeService
 from .drill_service import RuntimeDrillService
-from .export_service import ExportLimitError, RuntimeExportService
+from .export_service import ExportLimitError, RuntimeExportService, current_export_write
 from .lifecycle import RuntimeRequestLifecycle
 from .models import (
     PivotRequestContext,
@@ -235,6 +235,11 @@ class RuntimeRequestRouter:
             execution_started_at = time.perf_counter()
 
             async def execute_export():
+                bounded_flat_part = (isinstance(adapter, TanStackPivotAdapter) and not state.col_fields
+                                     and (not state.row_fields or state.layout_mode == "tabular" and not state.show_subtotals))
+                if export_lease is not None and (export_all_rows or bounded_flat_part):
+                    payload = await self._execute_bounded_flat_export(adapter, export_request, state, export_context, export_lease)
+                    return TanStackResponse(data=[], columns=[]), payload, time.perf_counter()
                 response = await self._execute_tanstack_data_request(
                     adapter,
                     export_request,
@@ -876,6 +881,96 @@ class RuntimeRequestRouter:
             ),
         )
         return _svc_response
+
+    async def _execute_bounded_flat_export(self, adapter, request, state, context, lease):
+        """Page native Arrow results before response mapping can call to_pylist."""
+        import pyarrow as pa
+        from ..export_executor import iter_bounded_record_batches
+
+        flat = not state.row_fields or (state.layout_mode == "tabular" and not state.show_subtotals)
+        if (not isinstance(adapter, TanStackPivotAdapter) or not flat or state.col_fields
+                or state.view_mode not in {"pivot", "table"} or state.measure_axis
+                or any(config.get("agg") == "formula" or config.get("showAs") or config.get("show_as")
+                       for config in state.val_configs if isinstance(config, dict))
+                or not adapter.controller._uses_duckdb_ibis()):
+            raise ResourceExhaustedError(ResourceKind.EXPORT, reason="bounded_export_layout_unavailable")
+        scoped = adapter._request_with_row_scope(request, context.row_scope)
+        spec = adapter.convert_tanstack_request_to_pivot_spec(scoped)
+        if context.principal is not None or context.row_scope is not None:
+            spec = apply_rls_to_spec(spec, context.principal, row_scope=context.row_scope)
+        spec.totals = False
+        spec.subtotals = None
+        # Group keys provide deterministic tie-breaking between OFFSET pages.
+        sort = list(spec.sort or []) if isinstance(spec.sort, list) else []
+        sorted_fields = {item.get("field") for item in sort}
+        spec.sort = sort + [{"field": field, "order": "asc"} for field in spec.rows if field not in sorted_fields]
+        control = current_export_write.get()
+        batch_bytes = max(1, min(self.export_service.max_bytes, lease.reserved_bytes // 16, 1024 * 1024))
+        batch_rows = max(1, min(128, lease.reserved_bytes // 1024))
+        emitted = 0
+
+        async def convert(table):
+            nonlocal emitted
+            if not isinstance(table, pa.Table):
+                raise ResourceExhaustedError(ResourceKind.EXPORT, reason="bounded_arrow_unavailable")
+            self.export_service.limits.ensure_rows(emitted + table.num_rows)
+            if any(pa.types.is_nested(field.type) or pa.types.is_dictionary(field.type) for field in table.schema):
+                raise ResourceExhaustedError(ResourceKind.EXPORT, reason="bounded_arrow_type_unavailable")
+            for batch in iter_bounded_record_batches(table, max_batch_bytes=batch_bytes, max_batch_rows=batch_rows):
+                # Scalar Arrow values can expand in Python; reserve conservative
+                # per-cell/container and Unicode costs BEFORE the conversion.
+                memory_bound = batch.nbytes * 8 + batch.num_rows * (256 + 256 * batch.num_columns)
+                if control:
+                    control.checkpoint()
+                    control.reserve_workspace(control.workspace_bytes + memory_bound)
+                converted = adapter.convert_pivot_result_to_tanstack_format(pa.Table.from_batches([batch]), request)
+                if state.row_fields:
+                    adapter._annotate_flat_group_rows(converted.data, request.grouping or [])
+                emitted += len(converted.data)
+                yield converted
+
+        async def pages():
+            all_rows = bool(request.full_export)
+            offset = 0 if all_rows else request.pagination.get("startRow", 0)
+            remaining = None if all_rows else request.pagination.get("pageSize", self.export_service.max_rows)
+            exhausted = False
+            while True:
+                if control:
+                    control.checkpoint()
+                page_spec = spec.copy()
+                page_spec.offset = offset
+                page_spec.limit = min(batch_rows, self.export_service.max_rows - emitted + 1)
+                if remaining is not None:
+                    page_spec.limit = min(page_spec.limit, remaining)
+                table = await adapter.controller.run_pivot_async(page_spec, return_format="arrow", force_refresh=True)
+                if not isinstance(table, pa.Table) or table.num_rows > page_spec.limit:
+                    raise ResourceExhaustedError(ResourceKind.EXPORT, reason="bounded_arrow_rows")
+                count = table.num_rows
+                async for response in convert(table):
+                    yield response
+                if remaining is not None:
+                    remaining -= count
+                if count < page_spec.limit:
+                    exhausted = True
+                    break
+                if remaining == 0:
+                    break
+                offset += count
+            include_total = all_rows or (exhausted and bool(remaining)) or context.include_grand_total
+            if state.show_col_totals and state.row_fields and include_total:
+                total_spec = spec.copy()
+                total_spec.rows = []
+                total_spec.full_rows = []
+                total_spec.sort = []
+                total_spec.limit = 1
+                total_spec.offset = 0
+                table = await adapter.controller.run_pivot_async(total_spec, return_format="arrow", force_refresh=True)
+                async for response in convert(table):
+                    for row in response.data:
+                        row.update({"_id": "Grand Total", "_isTotal": True, "_path": "__grand_total__"})
+                    yield response
+
+        return await self.export_service.build_paged_export(pages(), state, state.export_request)
 
     async def _execute_tanstack_data_request(
         self,

@@ -8,6 +8,7 @@ from decimal import Decimal
 import html
 import math
 import os
+import pickle
 import re
 import tempfile
 import zipfile
@@ -39,14 +40,19 @@ class ExportWriteControl:
     ensure_bytes: Any = lambda size: None
     cancelled: threading.Event = field(default_factory=threading.Event)
     paths: set[str] = field(default_factory=set)
+    workspace_bytes: int = 0
+
+    def reserve_workspace(self, size: int) -> None:
+        if size > self.lease.reserved_bytes:
+            self.lease.grow(size - self.lease.reserved_bytes)
 
     def checkpoint(self, rows: int | None = None, size: int | None = None) -> None:
         if self.cancelled.is_set():
             raise ExportCancelledError()
         if size is not None:
             self.ensure_bytes(size)
-        if size is not None and size > self.lease.reserved_bytes:
-            self.lease.grow(size - self.lease.reserved_bytes)
+        if size is not None:
+            self.reserve_workspace(self.workspace_bytes + size)
         if rows is not None or size is not None:
             self.progress(rows, size)
 
@@ -67,6 +73,34 @@ def _export_tempfile(prefix, suffix):
     if control is not None:
         control.paths.add(path)
     return fd, path
+
+
+class _DiskExportRows:
+    """Trusted internal row spool; only bounded pages enter Python memory."""
+
+    def __init__(self, stream):
+        self.stream = stream
+        self.count = 0
+        self.first = None
+
+    def append(self, row):
+        if self.first is None:
+            self.first = row
+        pickle.dump(row, self.stream, protocol=pickle.HIGHEST_PROTOCOL)
+        self.count += 1
+
+    def __len__(self):
+        return self.count
+
+    def __getitem__(self, index):
+        if index != 0 or self.first is None:
+            raise IndexError(index)
+        return self.first
+
+    def __iter__(self):
+        self.stream.seek(0)
+        for _ in range(self.count):
+            yield pickle.load(self.stream)
 
 
 class RuntimeExportService:
@@ -99,7 +133,7 @@ class RuntimeExportService:
     ) -> Dict[str, Any]:
         """Write an export and enforce the configured row and byte budgets."""
         response_rows = getattr(response, "data", None)
-        if isinstance(response_rows, list):
+        if isinstance(response_rows, (list, _DiskExportRows)):
             # Reject a materialized allRows/hierarchy response before a derived
             # list or temporary document is allocated.
             self.limits.ensure_rows(len(response_rows))
@@ -119,6 +153,34 @@ class RuntimeExportService:
         if rows > self.max_rows:
             self.limits.ensure_rows(rows)
         self.limits.ensure_bytes(content_length)
+
+    async def build_paged_export(self, pages, state, export_request):
+        """Spool validated bounded response pages, then reuse faithful writers.
+
+        The spool is private, anonymous and never deserializes external input.
+        It preserves Decimal/date values without retaining all Python rows.
+        """
+        control = current_export_write.get()
+        columns = []
+        with tempfile.TemporaryFile(mode="w+b", dir=control.directory if control else None) as stream:
+            rows = _DiskExportRows(stream)
+            try:
+                async for page in pages:
+                    _export_checkpoint()
+                    if not columns:
+                        columns = page.columns or []
+                    projected = self._project_export_rows_for_layout(page.data, state)
+                    self.limits.ensure_rows(len(rows) + len(projected))
+                    for row in projected:
+                        _export_checkpoint()
+                        rows.append(row)
+                    if control:
+                        control.workspace_bytes = stream.tell()
+                        control.reserve_workspace(control.workspace_bytes)
+                return self.build_export_payload(TanStackResponse(data=rows, columns=columns), state, export_request)
+            finally:
+                if control:
+                    control.workspace_bytes = 0
 
     async def build_streamed_export(
         self,
@@ -258,17 +320,17 @@ class RuntimeExportService:
         # allocating a second full list before writing the file. Tabular
         # projection and subtotal filtering intentionally create derived rows
         # only when their presentation contract requires it.
-        response_rows = response.data if isinstance(response.data, list) else []
+        response_rows = response.data if isinstance(response.data, (list, _DiskExportRows)) else []
         rows = (
             response_rows
-            if all(isinstance(row, dict) for row in response_rows)
+            if isinstance(response_rows, _DiskExportRows) or all(isinstance(row, dict) for row in response_rows)
             else [row for row in response_rows if isinstance(row, dict)]
         )
         is_tabular_without_subtotals = (
             str(getattr(state, "layout_mode", "") or "").strip().lower() == "tabular"
             and not bool(getattr(state, "show_subtotals", False))
         )
-        if is_tabular_without_subtotals:
+        if is_tabular_without_subtotals and not isinstance(rows, _DiskExportRows):
             # The normal tabular query is flat and contains no subtotal rows.
             # Retain this export-side guard for responses produced by custom
             # adapters or stale hierarchy caches: the toggle must be honored
@@ -282,7 +344,8 @@ class RuntimeExportService:
         # repeats the ancestor labels on every leaf row.  Prepare the same row
         # shape before resolving fields so CSV, HTML/copy, and XLSX all export
         # what the user sees rather than a single indented hierarchy column.
-        rows = RuntimeExportService._project_export_rows_for_layout(rows, state)
+        if not isinstance(rows, _DiskExportRows):
+            rows = RuntimeExportService._project_export_rows_for_layout(rows, state)
         field_order = RuntimeExportService._resolve_export_field_order(
             rows,
             response.columns or [],
