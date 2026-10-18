@@ -951,7 +951,8 @@ class RuntimeRequestRouter:
                 page_spec.limit = min(batch_rows, self.export_service.max_rows - emitted + 1)
                 if remaining is not None:
                     page_spec.limit = min(page_spec.limit, remaining)
-                table = await adapter.controller.run_pivot_async(page_spec, return_format="arrow", force_refresh=True)
+                table = await adapter.controller.run_pivot_async(
+                    page_spec, return_format="arrow", force_refresh=True, raise_execution_errors=True)
                 if not isinstance(table, pa.Table) or table.num_rows > page_spec.limit:
                     raise ResourceExhaustedError(ResourceKind.EXPORT, reason="bounded_arrow_rows")
                 count = table.num_rows
@@ -973,7 +974,8 @@ class RuntimeRequestRouter:
                 total_spec.sort = []
                 total_spec.limit = 1
                 total_spec.offset = 0
-                table = await adapter.controller.run_pivot_async(total_spec, return_format="arrow", force_refresh=True)
+                table = await adapter.controller.run_pivot_async(
+                    total_spec, return_format="arrow", force_refresh=True, raise_execution_errors=True)
                 async for response in convert(table):
                     for row in response.data:
                         row.update({"_id": "Grand Total", "_isTotal": True, "_path": "__grand_total__"})

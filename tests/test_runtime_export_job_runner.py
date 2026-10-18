@@ -741,3 +741,39 @@ def test_bounded_export_rejects_normalized_window_functions_before_native_execut
         runner.close()
         payloads.clear()
         adapter.controller.close()
+
+
+def test_real_backend_failure_cannot_publish_an_empty_successful_bounded_export(tmp_path, monkeypatch):
+    import pyarrow as pa
+    from pivot_engine import create_tanstack_adapter
+
+    adapter = create_tanstack_adapter(backend_uri=":memory:")
+    adapter.controller.load_data_from_arrow("sales", pa.table({"region": ["R0"], "sales": [7.0]}))
+    backend = adapter.controller.backend
+    execute = backend.execute_async
+
+    async def invalid_native_statement(*_args, **kwargs):
+        return await execute({"sql": "SELECT CAST('not-a-number' AS INTEGER)"}, **kwargs)
+
+    monkeypatch.setattr(backend, "execute_async", invalid_native_statement)
+    runner, store, payloads, governor, service, context, job = setup_runner(
+        tmp_path, adapter, governor=adapter.controller.resource_governor)
+    state = PivotViewState(row_fields=["region"], val_configs=[{"field": "sales", "agg": "sum"}],
+                           layout_mode="tabular", show_subtotals=False, show_col_totals=False,
+                           export_request={"format": "csv", "allRows": True})
+    try:
+        runner.start(job, context, state)
+        done = wait_for(lambda: (item := snapshot(store)).phase in {"completed", "failed"} and item)
+        assert done.phase == "failed", "A failed SQL statement was published as an empty successful export"
+        assert done.payload_ref is None and payloads._size_snapshot()["entries"] == 0
+        wait_for(lambda: governor.snapshot()["active_slots"]["export"] == 0)
+        assert governor.snapshot()["reserved_bytes"] == 0 and list(tmp_path.iterdir()) == []
+        assert backend.execution_metrics()["running"] == 0
+        assert backend.con.con.execute("SELECT 7 AS healthy").fetchone() == (7,)
+        state.export_request = None
+        viewport = asyncio.run(service._router.process_async(state, context))
+        assert viewport.status == "data", "Default viewport failure behavior changed"
+    finally:
+        runner.close()
+        payloads.clear()
+        adapter.controller.close()

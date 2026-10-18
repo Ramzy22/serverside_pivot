@@ -103,12 +103,14 @@ def test_http_transport_resolves_runtime_payload_urls_for_cross_origin_hosts():
 
 
 def test_runtime_export_fetches_payload_before_reporting_download_success():
-    source = (ROOT / "dash_tanstack_pivot" / "src" / "lib" / "runtime" / "useRuntimeResponseLifecycle.js").read_text(encoding="utf-8")
+    import subprocess
 
-    assert "const downloadPayloadReference = () =>" in source
-    assert "return response.blob();" in source
-    assert "downloadPayloadReference().then(() =>" in source
-    assert "showNotification(`Downloaded ${payload.rows ?? ''} rows`, 'success');" in source
+    completed = subprocess.run([
+        "node", "--test", "--test-name-pattern=server completion remains delivering",
+        str(ROOT / "tests" / "frontend_export_job_lifecycle.cjs"),
+    ], cwd=ROOT, text=True, capture_output=True)
+    assert completed.returncode == 0, completed.stdout + completed.stderr
+    assert "# pass 1" in completed.stdout, "Async delivery ordering regression did not execute"
 
 
 def test_runtime_response_lifecycle_receives_delivery_callbacks_from_viewport_domain():

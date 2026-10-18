@@ -9,6 +9,7 @@ import datetime
 import math
 import os
 from contextlib import nullcontext
+from contextvars import ContextVar
 import re
 import json
 import hashlib
@@ -20,6 +21,9 @@ from ibis.expr.api import Table as IbisTable
 from collections import OrderedDict
 
 from .controller import PivotController
+
+
+_raise_query_execution_errors = ContextVar("pivot_raise_query_execution_errors", default=False)
 from .cache_coordinator import CacheCoordinator, CacheInvalidationEvent, CacheNamespaces
 from .lifecycle import get_task_manager
 from .tree import TreeExpansionManager
@@ -2330,14 +2334,19 @@ class ScalablePivotController(PivotController):
         return_format: str = "arrow",
         force_refresh: bool = False,
         profile_sink: Optional[Dict[str, Any]] = None,
+        raise_execution_errors: bool = False,
     ) -> Union[Dict[str, Any], pa.Table]:
         """Delegate pivot execution to the dedicated query-execution service."""
-        return await self.query_executor.execute(
-            spec,
-            return_format=return_format,
-            force_refresh=force_refresh,
-            profile_sink=profile_sink,
-        )
+        token = _raise_query_execution_errors.set(raise_execution_errors)
+        try:
+            return await self.query_executor.execute(
+                spec,
+                return_format=return_format,
+                force_refresh=force_refresh,
+                profile_sink=profile_sink,
+            )
+        finally:
+            _raise_query_execution_errors.reset(token)
 
     async def _trigger_materialization(self, spec: PivotSpec):
         """Helper to run materialization in background"""
@@ -2402,6 +2411,8 @@ class ScalablePivotController(PivotController):
             valid_results = []
             for idx, r in enumerate(results):
                 if isinstance(r, Exception):
+                    if _raise_query_execution_errors.get():
+                        raise r
                     print(f"Query execution error [{idx}] {debug_context}: {r}")
                     valid_results.append(pa.table({}))
                 else:

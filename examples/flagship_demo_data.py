@@ -251,7 +251,7 @@ def workspace_config(host: str) -> dict[str, Any]:
             "rowFields": ["region"], "colFields": [],
             "valConfigs": [{"field": "sales", "agg": "sum", "label": "Sales"}],
             "availableFieldList": ["region", "sales"], "filters": {}, "sorting": [],
-            "expanded": {}, "layoutMode": "tabular", "showSubtotals": False,
+            "expanded": {}, "viewState": {"layoutMode": "tabular"}, "showSubtotals": False,
             "showRowTotals": False, "showColTotals": False, "persistence": False,
             "style": {"height": "760px", "width": "100%"},
         }

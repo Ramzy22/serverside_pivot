@@ -347,6 +347,7 @@ test('server completion remains delivering until the file downloads and Close ca
         assert.equal(h.state.progress.phase, 'completed');
         assert.equal(h.state.progress.delivery, 'pending');
         assert.equal(h.state.exporting, true);
+        assert.deepEqual(h.notices, [], 'server completion cannot announce download success before binary delivery');
         const overlay = shellModule().ExportDeliveryOverlay({exportProgress: h.state.progress, theme: {}, dismissExportJob: h.commands.dismissExportJob});
         const buttons = elements(overlay).filter(node => node.type === 'button');
         assert.ok(buttons.every(button => button.props.disabled), 'delivery does not expose Close or Cancel');
@@ -354,6 +355,7 @@ test('server completion remains delivering until the file downloads and Close ca
         assert.equal(signal.aborted, false);
         release(new Response('a,b')); await settle();
         assert.deepEqual(h.downloads, [['blob:delivered', 'part.csv']]);
+        assert.deepEqual(h.notices, [['Downloaded 0 rows', 'success']]);
         assert.equal(h.state.progress.delivery, 'delivered');
         assert.equal(h.state.exporting, false);
         h.commands.dismissExportJob(); assert.equal(h.state.progress, null);

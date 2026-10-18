@@ -26,7 +26,9 @@ def test_export_qualification_fixture_is_flat_and_does_not_replace_parity(monkey
     monkeypatch.setenv("PIVOT_FLAGSHIP_PARITY_DATA", "1")
     monkeypatch.setenv("PIVOT_FLAGSHIP_EXPORT_JOB_DATA", "1")
     config = demo.workspace_config("react")
-    assert config.get("layoutMode") == "tabular"
+    assert config.get("viewState", {}).get("layoutMode") == "tabular"
+    from dash_tanstack_pivot import DashTanstackPivot
+    assert DashTanstackPivot(**config).id == "flagship-react-pivot"
     assert config["colFields"] == [] and config["showSubtotals"] is False
     table = demo.build_demo_table()
     assert table.num_rows == 512
