@@ -20,8 +20,9 @@ function createExportJobController(initialPorts) {
     if (!isCurrent(candidate)) return;
     const {phase, rowsWritten, bytesWritten, totalRows} = candidate;
     ports.setExportProgress({phase, rowsWritten, bytesWritten, totalRows,
+      delivery: candidate.delivery, deliveryFailed: candidate.deliveryFailed,
       percent: totalRows > 0 ? Math.min(100, Math.floor(rowsWritten / totalRows * 100)) : null});
-    ports.setIsExporting(!terminalExportPhases.has(phase));
+    ports.setIsExporting(candidate.delivery === 'pending' || !terminalExportPhases.has(phase));
   };
   const finishPart = (candidate, completed) => {
     const partId = candidate.payload.partId;
@@ -53,7 +54,14 @@ function createExportJobController(initialPorts) {
   };
   const send = (candidate, action, payload, runtimeFields = {}) => {
     clearPoll(candidate);
-    const requestId = ports.dispatch(payload, runtimeFields);
+    let requestId;
+    try {
+      requestId = ports.dispatch(payload, runtimeFields);
+    } catch (error) {
+      if (candidate.cancelRequested && candidate.jobId) schedulePoll(candidate);
+      else terminal(candidate, 'failed');
+      return;
+    }
     ownedRequests.add(requestId);
     // Bound historical correlation while preserving the latest generation.
     if (ownedRequests.size > 1024) ownedRequests.delete(ownedRequests.values().next().value);
@@ -73,6 +81,7 @@ function createExportJobController(initialPorts) {
     return send(job, 'status', {action: 'status', jobId, table: job.payload.table});
   };
   const cancel = jobId => {
+    if (job && isCurrent(job) && job.delivery === 'pending') return true;
     if (!job || !isCurrent(job) || terminalExportPhases.has(job.phase) || (jobId && job.jobId !== jobId)) return false;
     if (job.cancelRequested) return true;
     job.cancelRequested = true;
@@ -110,13 +119,15 @@ function createExportJobController(initialPorts) {
         URL.revokeObjectURL(candidate.downloadUrl); candidate.downloadUrl = null;
       }, 1000);
       finishPart(candidate, true);
+      candidate.delivery = 'delivered';
+      publish(candidate);
       delivery.showNotification(`Downloaded ${candidate.rowsWritten} rows`, 'success');
     } catch (error) {
       if (!isCurrent(candidate) || candidate.downloadAbort.signal.aborted) return;
       // Server completion is truthful even when browser delivery fails.
+      candidate.delivery = 'failed';
       candidate.deliveryFailed = true;
-      ports.setExportProgress({phase: 'completed', rowsWritten: candidate.rowsWritten, bytesWritten: candidate.bytesWritten,
-        totalRows: candidate.totalRows, percent: null, deliveryFailed: true});
+      publish(candidate);
       finishPart(candidate, false);
       delivery.showNotification('Export download failed. Retry the export.', 'error');
     }
@@ -124,7 +135,10 @@ function createExportJobController(initialPorts) {
   return {
     configure: nextPorts => {ports = nextPorts;}, start, poll, cancel,
     retry: () => job && start(job.payload, job.runtimeFields),
-    dismiss: () => {stop(job); job = null; ports.setExportProgress(null); ports.setIsExporting(false);},
+    dismiss: () => {
+      if (job?.delivery === 'pending') return;
+      stop(job); job = null; ports.setExportProgress(null); ports.setIsExporting(false);
+    },
     dispose: () => {stop(job);},
     handleResponse: (response, delivery) => {
       const requestId = response.requestId;
@@ -145,10 +159,14 @@ function createExportJobController(initialPorts) {
       candidate.rowsWritten = Math.max(candidate.rowsWritten, Number(payload.rowsWritten) || 0);
       candidate.bytesWritten = Math.max(candidate.bytesWritten, Number(payload.bytesWritten) || 0);
       candidate.totalRows = Number.isFinite(payload.totalRows) && payload.totalRows >= candidate.rowsWritten ? payload.totalRows : null;
-      if (candidate.cancelRequested && request.action === 'start' && !terminalExportPhases.has(payload.phase)) {
+      if (candidate.cancelRequested && (request.action === 'start' ||
+          request.action === 'status' && ['queued', 'running'].includes(payload.phase)) && !terminalExportPhases.has(payload.phase)) {
+        // A timeout or failed dispatch may mean the first cancel never reached
+        // the server. Repeat the idempotent action until its state acknowledges it.
         send(candidate, 'cancel', {action: 'cancel', jobId: candidate.jobId, table: candidate.payload.table});
       }
       if (terminalExportPhases.has(payload.phase)) {
+        if (payload.phase === 'completed') candidate.delivery = 'pending';
         terminal(candidate, payload.phase);
         if (payload.phase === 'completed') void download(candidate, payload, delivery);
         return true;

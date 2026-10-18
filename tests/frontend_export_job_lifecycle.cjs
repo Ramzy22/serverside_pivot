@@ -27,7 +27,7 @@ function modules() {
     return name => load(path.join(frontend, 'src/lib/runtime', name));
 }
 
-function harness({partModal = null, payloadTransport} = {}) {
+function harness({partModal = null, payloadTransport, beforeDispatch} = {}) {
     const load = modules();
     const requests = [], downloads = [], notices = [];
     const state = {progress: null, exporting: false, modal: partModal};
@@ -38,7 +38,7 @@ function harness({partModal = null, payloadTransport} = {}) {
         exportRequestSequenceRef: {current: 0}, exportJobControllerRef: ref,
         pendingCopyIntentRef: {current: null}, buildExportStyleProfile: () => ({}),
         getServerExportColumnTarget: () => ({colIds: ['region', 'sales'], totalCols: 2}),
-        dispatchServerSideRuntimeSetProps: update => requests.push(update.runtimeRequest),
+        dispatchServerSideRuntimeSetProps: update => {beforeDispatch?.(update); requests.push(update.runtimeRequest);},
         COPY_ROW_LIMIT: 10, EXPORT_ROW_LIMIT: 100, rowCount: 8, tableName: 'sales',
         layoutMode: 'outline', serverSide: true, partModal, payloadTransport,
         setExportProgress: value => {state.progress = value;},
@@ -59,6 +59,20 @@ function harness({partModal = null, payloadTransport} = {}) {
 }
 
 const settle = () => new Promise(resolve => setImmediate(resolve));
+function shellModule() {
+    const filename = path.join(frontend, 'src/lib/components/PivotWorkspaceShell.js');
+    const code = babel.transformSync(fs.readFileSync(filename, 'utf8'), {filename,
+        presets: [[localRequire('@babel/preset-env'), {targets: {node: 'current'}, modules: 'commonjs'}], localRequire('@babel/preset-react')]}).code;
+    const mod = {exports: {}};
+    const empty = () => null;
+    const imports = new Proxy({__esModule: true, default: empty}, {get: (target, name) => target[name] || empty});
+    new Function('module', 'exports', 'require', code)(mod, mod.exports, name => name === 'react' ? localRequire('react') : imports);
+    return mod.exports;
+}
+function elements(tree) {
+    if (!tree || typeof tree !== 'object') return [];
+    return [tree, ...localRequire('react').Children.toArray(tree.props?.children).flatMap(elements)];
+}
 function fakeTimers() {
     const originalSet = global.setTimeout, originalClear = global.clearTimeout;
     const pending = new Map(); let id = 0;
@@ -301,5 +315,81 @@ test('configured binary delivery is aborted on retry and cannot download after i
         h.commands.startExportJob('csv'); assert.equal(signal.aborted, true);
         release(new Response('old')); await settle();
         assert.deepEqual(h.downloads, []); assert.equal(h.state.progress.phase, 'queued');
+    } finally {h.ref.current?.dispose(); timers.restore();}
+});
+
+test('part job progress and cancel controls render above the retained part selector', () => {
+    const shell = shellModule();
+    const progress = {phase: 'running', rowsWritten: 2, bytesWritten: 10, totalRows: null, percent: null};
+    const tree = shell.PivotWorkspaceShell({workspace: {presentation: {
+        styles: {}, theme: {}, uiConfig: {}, comparisonValueState: {activeCount: 0}, chartCanvasPanes: [],
+        isExporting: true, exportProgress: progress, EXPORT_ROW_LIMIT: 100,
+        partModal: {mode: 'export', rowsPerPart: 3, colsPerPart: 2, totalRows: 8, totalCols: 2, processingPartId: 'r1_c0', completedParts: new Set()},
+    }}});
+    const all = elements(tree);
+    const selector = all.find(node => node.props?.style?.position === 'fixed' && elements(node).some(child => child.type === 'input'));
+    const overlayComponent = all.find(node => node.type === shell.ExportDeliveryOverlay);
+    assert.ok(selector); assert.ok(overlayComponent);
+    const overlay = shell.ExportDeliveryOverlay(overlayComponent.props);
+    assert.ok(overlay.props.style.zIndex > selector.props.style.zIndex, 'job overlay must receive pointer events above part selection');
+    const cancel = elements(overlay).find(node => node.type === 'button');
+    assert.equal(cancel.props.disabled, false);
+});
+
+test('server completion remains delivering until the file downloads and Close cannot discard it', async () => {
+    const timers = fakeTimers(); const h = harness(); let release, signal;
+    const originalFetch = global.fetch, originalCreate = URL.createObjectURL;
+    global.fetch = (_url, options) => {signal = options.signal; return new Promise(resolve => {release = resolve;});};
+    URL.createObjectURL = () => 'blob:delivered';
+    try {
+        h.commands.exportPivot('csv');
+        h.respond(h.snapshot('completed', {payloadRef: {id: 'file', url: '/file', filename: 'part.csv'}}));
+        assert.equal(h.state.progress.phase, 'completed');
+        assert.equal(h.state.progress.delivery, 'pending');
+        assert.equal(h.state.exporting, true);
+        const overlay = shellModule().ExportDeliveryOverlay({exportProgress: h.state.progress, theme: {}, dismissExportJob: h.commands.dismissExportJob});
+        const buttons = elements(overlay).filter(node => node.type === 'button');
+        assert.ok(buttons.every(button => button.props.disabled), 'delivery does not expose Close or Cancel');
+        h.commands.dismissExportJob();
+        assert.equal(signal.aborted, false);
+        release(new Response('a,b')); await settle();
+        assert.deepEqual(h.downloads, [['blob:delivered', 'part.csv']]);
+        assert.equal(h.state.progress.delivery, 'delivered');
+        assert.equal(h.state.exporting, false);
+        h.commands.dismissExportJob(); assert.equal(h.state.progress, null);
+    } finally {h.ref.current?.dispose(); timers.restore(); global.fetch = originalFetch; URL.createObjectURL = originalCreate;}
+});
+
+test('lost cancel retries the idempotent cancel when status still reports queued or running', () => {
+    for (const phase of ['queued', 'running']) {
+        const timers = fakeTimers(); const h = harness();
+        try {
+            h.commands.exportPivot(); h.respond(h.snapshot(phase));
+            h.commands.cancelActiveExportRequest();
+            h.respond({code: 'transport_unavailable'}, undefined, 'error');
+            timers.run(500); h.respond(h.snapshot(phase));
+            assert.equal(h.requests.at(-1).payload.action, 'cancel');
+            assert.equal(h.requests.filter(request => request.payload.action === 'cancel').length, 2);
+            assert.equal(h.state.progress.phase, 'cancelling');
+            h.respond(h.snapshot('cancelled'));
+            assert.equal(h.state.progress.phase, 'cancelled');
+            assert.deepEqual(h.downloads, []);
+        } finally {h.ref.current?.dispose(); timers.restore();}
+    }
+});
+
+test('a synchronous cancel dispatch failure keeps the job cancellable and retries after status', () => {
+    const timers = fakeTimers(); let attempts = 0;
+    const h = harness({beforeDispatch: update => {
+        if (update.runtimeRequest.payload.action === 'cancel' && ++attempts === 1) throw new Error('host dispatch failed');
+    }});
+    try {
+        h.commands.exportPivot(); h.respond(h.snapshot('running'));
+        assert.doesNotThrow(() => h.commands.cancelActiveExportRequest());
+        assert.equal(h.state.progress.phase, 'cancelling');
+        timers.run(500); h.respond(h.snapshot('running'));
+        assert.equal(attempts, 2);
+        assert.equal(h.requests.at(-1).payload.action, 'cancel');
+        h.respond(h.snapshot('cancelled')); assert.equal(h.state.progress.phase, 'cancelled');
     } finally {h.ref.current?.dispose(); timers.restore();}
 });

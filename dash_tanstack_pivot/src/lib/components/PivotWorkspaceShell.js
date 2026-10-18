@@ -51,12 +51,13 @@ const loadingAnimationStyles = `
 export function ExportDeliveryOverlay({exportProgress, isCopying, theme, cancelActiveExportRequest, retryExportJob, dismissExportJob}) {
     const progress = exportProgress && typeof exportProgress === 'object' ? exportProgress : null;
     const phase = progress?.phase;
-    const terminal = ['cancelled', 'completed', 'failed', 'interrupted'].includes(phase);
+    const delivering = progress?.delivery === 'pending';
+    const terminal = !delivering && ['cancelled', 'completed', 'failed', 'interrupted'].includes(phase);
     const percent = progress ? progress.percent : typeof exportProgress === 'number' ? exportProgress : null;
     const labels = {queued: 'Queued', running: 'Running', cancelling: 'Cancelling — waiting for server cleanup',
-        cancelled: 'Cancelled', completed: progress?.deliveryFailed ? 'Completed — download failed' : 'Completed', failed: 'Failed', interrupted: 'Interrupted — retry'};
+        cancelled: 'Cancelled', completed: delivering ? 'Preparing download…' : progress?.deliveryFailed ? 'Completed — download failed' : 'Completed', failed: 'Failed', interrupted: 'Interrupted — retry'};
     return (
-        <div role="dialog" aria-label="Export progress" aria-modal="true" data-export-phase={phase || 'running'} style={{position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.45)', zIndex: 10001, display: 'flex', alignItems: 'center', justifyContent: 'center'}}>
+        <div role="dialog" aria-label="Export progress" aria-modal="true" data-export-phase={phase || 'running'} style={{position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.45)', zIndex: 10003, display: 'flex', alignItems: 'center', justifyContent: 'center'}}>
             <div style={{background: theme.background, color: theme.text, borderRadius: 14, padding: '32px 40px 28px', boxShadow: '0 12px 40px rgba(0,0,0,0.35)', display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 16, minWidth: 280, border: `1px solid ${theme.border}`}}>
                 <span role="status" aria-live="polite" style={{fontSize: 14, fontWeight: 600}}>{isCopying ? 'Copying to clipboard…' : labels[phase] || 'Exporting all rows…'}</span>
                 {!terminal && <div role="progressbar" aria-label="Export rows" aria-valuemin={0} aria-valuemax={100} aria-valuenow={percent === null ? undefined : percent}
@@ -70,9 +71,9 @@ export function ExportDeliveryOverlay({exportProgress, isCopying, theme, cancelA
                 {terminal ? <div style={{display: 'flex', gap: 12}}>
                     {['failed', 'interrupted', 'cancelled'].includes(phase) || progress?.deliveryFailed ? <button onClick={retryExportJob}>Retry</button> : null}
                     <button onClick={dismissExportJob}>Close</button>
-                </div> : <button onClick={cancelActiveExportRequest} disabled={phase === 'cancelling'}
-                    style={{padding: '7px 28px', background: '#dc2626', color: '#fff', border: 'none', borderRadius: 7, cursor: phase === 'cancelling' ? 'wait' : 'pointer'}}>
-                    {phase === 'cancelling' ? 'Cancelling…' : 'Cancel'}
+                </div> : <button onClick={cancelActiveExportRequest} disabled={delivering || phase === 'cancelling'}
+                    style={{padding: '7px 28px', background: '#dc2626', color: '#fff', border: 'none', borderRadius: 7, cursor: delivering || phase === 'cancelling' ? 'wait' : 'pointer'}}>
+                    {delivering ? 'Downloading…' : phase === 'cancelling' ? 'Cancelling…' : 'Cancel'}
                 </button>}
             </div>
         </div>

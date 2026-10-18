@@ -181,6 +181,7 @@ export interface ExportJobProgress {
     readonly bytesWritten: number;
     readonly totalRows: number | null;
     readonly percent: number | null;
+    readonly delivery?: 'pending' | 'delivered' | 'failed';
     readonly deliveryFailed?: boolean;
 }
 
