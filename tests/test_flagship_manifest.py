@@ -129,6 +129,24 @@ def test_skipped_export_job_browser_cannot_qualify_release(qualification, requir
     assert result["requirements"][requirement_id]["hosts"]["streamlit"]["result"] != "passed"
 
 
+def test_export_job_observation_binds_assets_where_manifest_validates_them(qualification):
+    from tests import flagship_browser_support as support
+
+    assert hasattr(support, "write_export_job_observation"), "Export evidence writer lacks manifest provenance"
+    requirements, binding, cases = qualification
+    index = next(i for i, case in enumerate(cases) if case.requirement_id == "large-delivery.progress"
+                 and case.host == "dash" and case.test_id.startswith("browser."))
+    case = cases[index]
+    path = Path(case.evidence_paths[0])
+    observation = json.loads(path.read_text())
+    observation.pop("loadedAssetSha256")
+    support.write_export_job_observation(path, observation, {
+        "result": "passed", "loadedAssetSha256": case.loaded_assets}, "")
+    cases[index] = replace(case, evidence_sha256={str(path): hashlib.sha256(path.read_bytes()).hexdigest()})
+    result = manifest.evaluate_manifest(requirements, binding, cases)
+    assert result["releaseResult"] == "passed"
+
+
 @pytest.mark.parametrize("damage", ["commit", "run", "fixture", "wheel", "npm_tarball", "bundle", "evidence", "unbound", "browser"])
 def test_stale_or_unbound_product_passes_fail_release(qualification, damage):
     requirements, binding, cases = qualification

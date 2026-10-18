@@ -56,6 +56,31 @@ def test_export_progress_proof_rejects_fabricated_or_uncorrelated_counters():
             support.assert_export_job_trace(broken)
 
 
+def test_export_cancel_ack_requires_server_terminal_and_cleanup_before_visible_cancelled():
+    from tests import flagship_browser_support as support
+
+    assert hasattr(support, "assert_export_cancel_ack"), "Missing cleanup/acknowledgement ordering proof"
+    cleanup = {"releasedAtMs": 1000, "taskDone": True, "nativeRunning": 0,
+               "activeSlots": 0, "reservedBytes": 0, "temporaryFiles": []}
+    trace = [
+        {"direction": "request", "requestId": "cancel", "payload": {"action": "cancel", "jobId": "job"}},
+        {"direction": "response", "requestId": "cancel", "atMs": 1010,
+         "payload": {"jobId": "job", "phase": "cancelled"}},
+    ]
+    ui = [{"phase": "cancelling", "atMs": 900}, {"phase": "cancelled", "atMs": 1020}]
+    support.assert_export_cancel_ack(trace, ui, cleanup, "job")
+    for broken_trace, broken_ui, broken_cleanup in (
+        (trace[:1], ui, cleanup),
+        (trace, [*ui[:1], {"phase": "cancelled", "atMs": 999}], cleanup),
+        (trace, ui, {**cleanup, "nativeRunning": 1}),
+        (trace, ui, {**cleanup, "taskDone": False}),
+        (trace, ui, {**cleanup, "activeSlots": 1}),
+        ([trace[0], {**trace[1], "atMs": 999}], ui, cleanup),
+    ):
+        with pytest.raises(AssertionError):
+            support.assert_export_cancel_ack(broken_trace, broken_ui, broken_cleanup, "job")
+
+
 def test_installed_export_runner_selects_workflows_and_rejects_missing_cases(monkeypatch, tmp_path):
     from scripts import certify_flagship as runner
 

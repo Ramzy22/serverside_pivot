@@ -50,6 +50,31 @@ def assert_export_job_trace(trace):
             assert not payload.get("payloadRef"), "Unfinished job published output"
     assert advanced, "No measured export progress"
     return job
+
+
+def assert_export_cancel_ack(trace, ui, cleanup, job_id):
+    """Server terminal and visible acknowledgement must follow actual cleanup."""
+    assert cleanup["taskDone"] is True and cleanup["nativeRunning"] == 0
+    assert cleanup["activeSlots"] == cleanup["reservedBytes"] == 0
+    assert not cleanup["temporaryFiles"]
+    requests = {item["requestId"]: item for item in trace if item["direction"] == "request"}
+    replies = [item for item in trace if item["direction"] == "response"
+               and item["payload"].get("jobId") == job_id and item["payload"].get("phase") == "cancelled"]
+    assert replies, "No server-acknowledged cancelled response"
+    for reply in replies:
+        request = requests.get(reply["requestId"])
+        assert request and request["payload"].get("action") in {"cancel", "status"}
+        assert request["payload"].get("jobId") == job_id
+        assert reply["atMs"] >= cleanup["releasedAtMs"], "Server acknowledged before cleanup"
+    visible = [event for event in ui if event["phase"] == "cancelled"]
+    assert visible, "No visible cancelled acknowledgement"
+    assert all(event["atMs"] >= cleanup["releasedAtMs"] for event in visible), "UI acknowledged before cleanup"
+
+
+def write_export_job_observation(path, observation, result, diagnostic):
+    observation.update(diagnostic=diagnostic, result=result,
+                       loadedAssetSha256=dict(result.get("loadedAssetSha256", {})))
+    path.write_text(json.dumps(observation, indent=2), encoding="utf-8")
 SELECTION_COPY_TIMEOUT = 8
 _SAFE_OBSERVATIONS = frozenset({
     "measuredProgressVerified", "serverCancellationVerified", "nativeCleanupVerified",
@@ -77,7 +102,7 @@ if (!window.__pivotExportJobs) {
     if (!value || typeof value !== 'object') return;
     if (value.schemaVersion === 1 && value.kind === 'export' && value.requestId) {
       trace.push({direction, requestId: value.requestId, status: value.status,
-                  payload: value.payload, at: performance.now()}); return;
+                  payload: value.payload, at: performance.now(), atMs: Date.now()}); return;
     }
     Object.values(value).forEach(child => visit(child, direction));
   }
@@ -95,6 +120,27 @@ if (!window.__pivotExportJobs) {
     this.addEventListener('load', () => visit(this.responseText, 'response'));
     return send.call(this, body);
   };
+  window.__pivotExportUi = [];
+  const roots = new WeakSet();
+  let previousPhase = null;
+  const capture = () => {
+    let phase = null;
+    const visit = root => {
+      if (!roots.has(root)) {
+        roots.add(root);
+        new MutationObserver(capture).observe(root, {subtree: true, childList: true,
+          attributes: true, attributeFilter: ['data-export-phase']});
+      }
+      const dialog = root.querySelector('[data-export-phase]');
+      if (dialog) phase = dialog.getAttribute('data-export-phase');
+      for (const element of root.querySelectorAll('*')) if (element.shadowRoot) visit(element.shadowRoot);
+    };
+    visit(document);
+    if (phase && phase !== previousPhase) window.__pivotExportUi.push({phase, atMs: Date.now()});
+    previousPhase = phase;
+  };
+  capture();
+  setInterval(capture, 100);
 }
 """
 
@@ -184,13 +230,17 @@ def qualify_export_jobs(host, requirement):
             samples = [json.loads(line) for line in worker.read_text().splitlines()]
             assert_cancellation_lifetime(samples)
             assert samples[-1]["nativeRunning"] == 0 and not samples[-1]["temporaryFiles"]
-            assert samples[-1]["nativeCancellationAttempts"] > 0
+            assert samples[-1]["nativeCancellationAttempts"] > samples[0]["nativeCancellationAttempts"]
             trace = driver.execute_script("return window.__pivotExportJobs")
             job = assert_export_job_trace(trace)
+            cleanup = json.loads(worker.with_suffix(".cleanup.json").read_text())
+            ui = driver.execute_script("return window.__pivotExportUi")
+            assert_export_cancel_ack(trace, ui, cleanup, job)
             assert any(item["direction"] == "request" and item["payload"].get("action") == "cancel"
                        and item["payload"].get("jobId") == job for item in trace)
             assert not list(downloads.iterdir()), "Cancelled export created a partial download"
-            observation.update(cleanup=samples, cancelledJobId=job, cancelledTrace=trace)
+            observation.update(cleanup=samples, releaseEvent=cleanup, uiPhases=ui,
+                               cancelledJobId=job, cancelledTrace=trace)
             driver.save_screenshot(str(directory / "cancelled.png"))
             button("Close")
             search = _workspace_elements(driver, '[data-testid="pivot-global-search"]')[0]
@@ -240,9 +290,8 @@ def qualify_export_jobs(host, requirement):
             result["loadedAssetSha256"] = dict(driver._pivot_loaded_assets)
             driver.save_screenshot(str(directory / "final.png"))
             driver.quit()
-        observation.update(diagnostic=diagnostic, result=result)
         evidence = directory / "observation.json"
-        evidence.write_text(json.dumps(observation, indent=2), encoding="utf-8")
+        write_export_job_observation(evidence, observation, result, diagnostic)
         result["evidence_paths"] = [str(evidence), *(str(path) for path in directory.glob("*.png"))]
         record_case(requirement, host, result, directory)
     assert result["result"] == "passed", f"{host} {requirement} failed; evidence: {directory}; {diagnostic}"

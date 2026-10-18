@@ -168,6 +168,18 @@ def _instrument_export_qualification(adapter):
                 controls[key] = (control, armed)
                 path = root / f"export-worker-{os.getpid()}-{uuid4().hex}.jsonl"
                 task = asyncio.current_task()
+                release = control.lease.release
+                def record_release():
+                    release()
+                    event = {
+                        "releasedAtMs": int(time.time() * 1000),
+                        "taskDone": task.done(), "nativeRunning": native.execution_metrics()["running"],
+                        "reservedBytes": 0 if control.lease._released else control.lease.reserved_bytes,
+                        "activeSlots": control.lease._governor.snapshot()["active_slots"]["export"],
+                        "temporaryFiles": [p for p in control.paths if Path(p).exists()],
+                    }
+                    path.with_suffix(".cleanup.json").write_text(json.dumps(event), encoding="utf-8")
+                control.lease.release = record_release
                 def sample():
                     with path.open("w", encoding="utf-8") as output:
                         while True:
