@@ -3,12 +3,14 @@
 from __future__ import annotations
 
 import asyncio
+import atexit
 import inspect
 import json
 import os
 import secrets
 import traceback
 import time
+import threading
 import weakref
 from dataclasses import dataclass
 from typing import Any, Callable, Dict, Optional, Set
@@ -42,6 +44,76 @@ from ..security_events import log_authorization_denied
 
 
 _PAYLOAD_SESSION_SUBJECT_KEY = "_dash_tanstack_pivot_payload_subject"
+_DASH_RESOURCE_LOCK = threading.RLock()
+
+
+class _DashExportRegistration:
+    """Keep a pivot's service and authorization together for its whole lifetime."""
+
+    def __init__(self, key, service_getter, dataset_authorizer, principal_getter):
+        self.key = key
+        self.service_getter = service_getter
+        self.dataset_authorizer = dataset_authorizer
+        self.principal_getter = principal_getter
+        self._lock = threading.RLock()
+        self._gateway = None
+        self._closed = False
+
+    def gateway(self, app):
+        with self._lock:
+            if self._gateway is None:
+                if self._closed:
+                    raise RuntimeError("Dash export registration is closed.")
+                from .http_transport import RuntimeHttpGateway
+                service = self.service_getter()
+                with _DASH_RESOURCE_LOCK:
+                    setattr(app, "_pivot_runtime_resource_governor", service.resource_governor)
+                    store = _get_runtime_payload_store(app)
+                self._gateway = RuntimeHttpGateway(
+                    self.service_getter, payload_store=store,
+                    payload_url_prefix="/_dash_tanstack_pivot/payload",
+                    dataset_authorizer=self.dataset_authorizer,
+                    export_payload_metadata={"dashRegistration": self.key},
+                )
+            return self._gateway
+
+    def close(self):
+        with self._lock:
+            self._closed = True
+            if self._gateway is not None:
+                self._gateway.close()
+
+
+def _close_dash_export_registrations(registrations):
+    for registration in tuple(registrations.values()):
+        registration.close()
+
+
+def _register_dash_export_shutdown(cleanup):
+    # ThreadPoolExecutor joins workers before ordinary atexit callbacks. Use
+    # the same pre-join facility when Python provides it, so cancellation can
+    # unblock those workers. Other runtimes require explicit host close while
+    # work is active; atexit/finalization remain best-effort fallbacks there.
+    register_before_join = getattr(threading, "_register_atexit", None)
+    if callable(register_before_join):
+        register_before_join(cleanup)
+    atexit.register(cleanup)
+
+
+def _dash_export_registrations(app):
+    with _DASH_RESOURCE_LOCK:
+        registrations = getattr(app, "_pivot_runtime_export_registrations", None)
+        if registrations is None:
+            registrations = {}
+            setattr(app, "_pivot_runtime_export_registrations", registrations)
+            # Flask teardown runs per request, not at application shutdown.
+            # Hosts can invoke this callable on graceful shutdown. Normal
+            # interpreter exit and collection of the Dash app also close work.
+            cleanup = weakref.finalize(app, _close_dash_export_registrations, registrations)
+            cleanup.atexit = False
+            setattr(app, "_pivot_runtime_close_export_jobs", cleanup)
+            _register_dash_export_shutdown(cleanup)
+        return registrations
 
 
 def _normalize_id(value: Any) -> str:
@@ -492,6 +564,11 @@ def _is_production_environment() -> bool:
 
 
 def _get_runtime_payload_store(app: Any) -> RuntimePayloadStore:
+    with _DASH_RESOURCE_LOCK:
+        return _get_runtime_payload_store_locked(app)
+
+
+def _get_runtime_payload_store_locked(app: Any) -> RuntimePayloadStore:
     governor = getattr(app, "_pivot_runtime_resource_governor", None)
     if governor is None:
         governor = get_worker_resource_governor()
@@ -570,8 +647,9 @@ def _register_runtime_payload_endpoint(app: Any) -> None:
 
         if metadata.get("dashSessionSubject") is not None:
             from flask import request as flask_request
-            principal_getter = getattr(app, "_pivot_runtime_job_principal_getter", None)
-            authorizer = getattr(app, "_pivot_runtime_job_dataset_authorizer", None)
+            registration = getattr(app, "_pivot_runtime_export_registrations", {}).get(metadata.get("dashRegistration"))
+            principal_getter = registration.principal_getter if registration is not None else None
+            authorizer = registration.dataset_authorizer if registration is not None else None
             if principal_getter is None or authorizer is None:
                 return Response("payload expired or not found", status=404, content_type="text/plain")
             try:
@@ -834,8 +912,10 @@ def register_dash_pivot_transport_callback(
 
     include_drill_store = drill_store_id is not None
     _register_runtime_payload_endpoint(app)
-    setattr(app, "_pivot_runtime_job_principal_getter", principal_getter)
-    setattr(app, "_pivot_runtime_job_dataset_authorizer", dataset_authorizer)
+    export_registration = _DashExportRegistration(
+        callback_key, runtime_service_getter, dataset_authorizer, principal_getter,
+    )
+    _dash_export_registrations(app)[callback_key] = export_registration
 
     outputs = [Output(pivot_id, "runtimeResponse")]
     if include_drill_store:
@@ -989,17 +1069,7 @@ def register_dash_pivot_transport_callback(
                 envelope = dict(runtime_request) if isinstance(runtime_request, dict) else {}
                 envelope["table"] = resolved_table
                 envelope["payload"] = request_payload
-                export_gateway = getattr(app, "_pivot_runtime_export_gateway", None)
-                if export_gateway is None:
-                    from .http_transport import RuntimeHttpGateway
-                    service = runtime_service_getter()
-                    setattr(app, "_pivot_runtime_resource_governor", service.resource_governor)
-                    export_gateway = RuntimeHttpGateway(
-                        runtime_service_getter, payload_store=_get_runtime_payload_store(app),
-                        payload_url_prefix="/_dash_tanstack_pivot/payload",
-                        dataset_authorizer=dataset_authorizer,
-                    )
-                    setattr(app, "_pivot_runtime_export_gateway", export_gateway)
+                export_gateway = export_registration.gateway(app)
                 response = await export_gateway.process(
                     envelope, principal=authorization.principal,
                     payload_session_subject=payload_subject,

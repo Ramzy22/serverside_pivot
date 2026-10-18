@@ -5,6 +5,12 @@ import logging
 import asyncio
 import threading
 import time
+import os
+from pathlib import Path
+import subprocess
+import sys
+import textwrap
+from concurrent.futures import ThreadPoolExecutor
 
 import fakeredis
 import pytest
@@ -245,10 +251,230 @@ def test_dash_export_jobs_share_authenticated_semantics_and_completed_download()
         assert client.get(url).status_code == 404
         assert adapter.calls == 1
     finally:
+        _close_dash_jobs(app)
+
+
+def _dash_job_host(registrations):
+    from dash import Dash, html
+    from dash_tanstack_pivot import DashTanstackPivot
+    from pivot_engine.runtime.dash_callbacks import register_dash_pivot_transport_callback
+    app = Dash(__name__)
+    app.layout = html.Div([DashTanstackPivot(id=name, table=table)
+                           for name, table, *_ in registrations])
+    for name, table, service, policy, getter in registrations:
+        register_dash_pivot_transport_callback(
+            app, lambda service=service: service, pivot_id=name, dataset_authorizer=policy,
+            principal_getter=getter, require_dataset_authorization=True,
+        )
+    return app
+
+
+def _dash_job_post(app, client, name, envelope, table="sales"):
+    callback = app.callback_map[f"{name}.runtimeResponse"]
+    response = client.post("/_dash-update-component", json={
+        "output": f"{name}.runtimeResponse", "outputs": {"id": name, "property": "runtimeResponse"},
+        "changedPropIds": [f"{name}.runtimeRequest"],
+        "inputs": [{**item, "value": envelope if item["property"] == "runtimeRequest" else None}
+                   for item in callback["inputs"]],
+        "state": [{**item, "value": table if item["property"] == "table" else None}
+                  for item in callback["state"]],
+    })
+    assert response.status_code == 200, response.data
+    return response.json["response"][name]["runtimeResponse"]
+
+
+def _dash_job_done(app, client, name, job_id, table="sales"):
+    deadline = time.monotonic() + 5
+    while time.monotonic() < deadline:
+        response = _dash_job_post(app, client, name, _job_request("status", job_id), table)
+        if response["payload"].get("phase") == "completed":
+            return response["payload"]
+        assert response["status"] != "error", response
+        time.sleep(.01)
+    raise AssertionError(response)
+
+
+def _close_dash_jobs(app):
+    close = getattr(app, "_pivot_runtime_close_export_jobs", None)
+    if close:
+        close()
+    else:
         gateway = getattr(app, "_pivot_runtime_export_gateway", None)
-        if gateway is not None:
+        if gateway:
             gateway.close()
-            gateway.payload_store.clear()
+    store = getattr(app, "_pivot_runtime_payload_store", None)
+    if store:
+        store.clear()
+
+
+@pytest.mark.parametrize("table_b", ["sales", "other"])
+def test_dash_export_jobs_use_each_pivots_service_and_policy(table_b):
+    adapters = [_JobAdapter(), _JobAdapter()]
+    services = [PivotRuntimeService(lambda adapter=adapter: adapter) for adapter in adapters]
+    principal = _User("alice", {"accounting_tenant": "trusted"})
+    policy_b = RuntimeDatasetAuthorizer({table_b: {
+        "roles": {"viewer"}, "operations": {"export"}, "rowSecurity": {"mode": "global"},
+    }})
+    app = _dash_job_host([
+        ("a", "sales", services[0], _dataset_policy("export"), lambda _: principal),
+        ("b", table_b, services[1], policy_b, lambda _: principal),
+    ])
+    client = app.server.test_client()
+    try:
+        for name, table in [("a", "sales"), ("b", table_b)]:
+            start = _dash_job_post(app, client, name, _job_request("start", format="csv"), table)
+            assert "jobId" in start["payload"], start
+            _dash_job_done(app, client, name, start["payload"]["jobId"], table)
+        assert [adapter.calls for adapter in adapters] == [1, 1]
+    finally:
+        _close_dash_jobs(app)
+
+
+def test_dash_export_download_keeps_own_registration_auth_and_session():
+    service = PivotRuntimeService(lambda: _JobAdapter())
+    current = [_User("alice", {"accounting_tenant": "trusted"})]
+    other = _User("alice", {"accounting_tenant": "trusted"})
+    app = _dash_job_host([
+        ("a", "sales", service, _dataset_policy("export"), lambda _: current[0]),
+        ("b", "sales", service, _dataset_policy("export"), lambda _: other),
+    ])
+    client = app.server.test_client()
+    try:
+        start = _dash_job_post(app, client, "a", _job_request("start", format="csv"))
+        done = _dash_job_done(app, client, "a", start["payload"]["jobId"])
+        url = done["payloadRef"]["url"]
+        assert client.get(url).status_code == 200
+        assert app.server.test_client().get(url).status_code == 404
+        current[0] = _User("alice", {"accounting_tenant": "trusted"}, role="revoked")
+        assert client.get(url).status_code == 404
+    finally:
+        _close_dash_jobs(app)
+
+
+def test_dash_concurrent_first_export_starts_remain_pollable(monkeypatch):
+    import pivot_engine.runtime.http_transport as transport
+    constructor = transport.RuntimeHttpGateway
+    gateways = []
+    def delayed_gateway(*args, **kwargs):
+        time.sleep(.05)
+        gateway = constructor(*args, **kwargs)
+        gateways.append(gateway)
+        return gateway
+    monkeypatch.setattr(transport, "RuntimeHttpGateway", delayed_gateway)
+    adapter = _JobAdapter()
+    governor = ResourceGovernor(ResourceLimits(tenant_max_exports=2), rss_bytes_getter=lambda: 0)
+    service = PivotRuntimeService(lambda: adapter, resource_governor=governor)
+    app = _dash_job_host([("a", "sales", service, _dataset_policy("export"),
+                          lambda _: _User("alice", {"accounting_tenant": "trusted"}))])
+    # Finish Flask setup before the competing requests.
+    app.server.test_client().get("/_dash-layout")
+    barrier = threading.Barrier(2)
+    def start():
+        client = app.server.test_client()
+        barrier.wait()
+        return client, _dash_job_post(app, client, "a", _job_request("start", format="csv"))
+    try:
+        with ThreadPoolExecutor(max_workers=2) as pool:
+            results = list(pool.map(lambda _: start(), range(2)))
+        for client, response in results:
+            assert "jobId" in response["payload"], response
+            _dash_job_done(app, client, "a", response["payload"]["jobId"])
+        assert adapter.calls == 2
+    finally:
+        for gateway in gateways:
+            gateway.close()
+        _close_dash_jobs(app)
+
+
+@pytest.mark.parametrize("resource", ["export_job_store", "export_job_runner", "payload_store"])
+def test_gateway_concurrent_lazy_resources_have_one_owner(resource, monkeypatch):
+    import pivot_engine.runtime.http_transport as transport
+    factories = {"export_job_store": "export_job_store_for_runtime",
+                 "export_job_runner": "ExportJobRunner", "payload_store": "runtime_payload_store_from_env"}
+    factory_name = factories[resource]
+    original = getattr(transport, factory_name)
+    created = []
+    def delayed_factory(*args, **kwargs):
+        time.sleep(.05)
+        value = original(*args, **kwargs)
+        created.append(value)
+        return value
+    monkeypatch.setattr(transport, factory_name, delayed_factory)
+    gateway = RuntimeHttpGateway(lambda: service)
+    service = PivotRuntimeService(lambda: _JobAdapter())
+    barrier = threading.Barrier(2)
+    def get_resource(_):
+        barrier.wait()
+        return getattr(gateway, resource)
+    try:
+        with ThreadPoolExecutor(max_workers=2) as pool:
+            first, second = pool.map(get_resource, range(2))
+        assert first is second
+    finally:
+        for value in created:
+            if resource == "export_job_runner":
+                value.close()
+        gateway.close()
+
+
+@pytest.mark.parametrize("prejoin_hook", [True, False])
+@pytest.mark.parametrize("pivot_count", [1, 2])
+def test_dash_shutdown_hook_stops_running_export_and_releases_admission(monkeypatch, prejoin_hook, pivot_count):
+    import atexit
+    callbacks = []
+    monkeypatch.setattr(atexit, "register", lambda function, *args: callbacks.append((function, args)))
+    if not prejoin_hook:
+        monkeypatch.setattr(threading, "_register_atexit", None)
+    adapter = _JobAdapter(slow=True)
+    governor = ResourceGovernor(ResourceLimits(tenant_max_exports=2), rss_bytes_getter=lambda: 0)
+    service = PivotRuntimeService(lambda: adapter, resource_governor=governor)
+    principal = _User("alice", {"accounting_tenant": "trusted"})
+    app = _dash_job_host([
+        (name, "sales", service, _dataset_policy("export"), lambda _: principal) for name in ["a", "b"]
+    ])
+    client = app.server.test_client()
+    try:
+        starts = {name: _dash_job_post(app, client, name, _job_request("start", format="csv"))
+                  for name in ["a", "b"][:pivot_count]}
+        assert adapter.started.wait(2)
+        assert service.resource_governor.snapshot()["active_slots"]["export"] == pivot_count
+        assert len(callbacks) == 1
+        function, args = callbacks[0]
+        function(*args)
+        assert service.resource_governor.snapshot()["active_slots"]["export"] == 0
+        for name, start in starts.items():
+            status = _dash_job_post(app, client, name, _job_request("status", start["payload"]["jobId"]))
+            assert status["payload"]["phase"] == "cancelled"
+        app._pivot_runtime_close_export_jobs()  # explicit host cleanup is idempotent
+    finally:
+        _close_dash_jobs(app)
+
+
+def test_dash_process_exit_cancels_exports_before_executor_threads_join():
+    script = textwrap.dedent('''
+        import runpy
+        import atexit
+        helpers = runpy.run_path("tests/test_runtime_http_transport.py")
+        globals().update({key: value for key, value in helpers.items() if not key.startswith("__")})
+        adapter = _JobAdapter(slow=True)
+        service = PivotRuntimeService(lambda: adapter)
+        app = _dash_job_host([("a", "sales", service, _dataset_policy("export"),
+                              lambda _: _User("alice", {"accounting_tenant": "trusted"}))])
+        response = _dash_job_post(app, app.server.test_client(), "a", _job_request("start", format="csv"))
+        assert "jobId" in response["payload"], response
+        assert adapter.started.wait(2)
+        def verify_cleanup():
+            assert service.resource_governor.snapshot()["active_slots"]["export"] == 0
+            print("export-cleanup-complete", flush=True)
+        atexit.register(verify_cleanup)
+    ''')
+    env = dict(os.environ)
+    root = Path(__file__).resolve().parents[1]
+    env["PYTHONPATH"] = str(root / "dash_tanstack_pivot" / "pivot_engine") + os.pathsep + env.get("PYTHONPATH", "")
+    result = subprocess.run([sys.executable, "-c", script], cwd=root, env=env,
+                            capture_output=True, text=True, timeout=15)
+    assert result.returncode == 0, result.stderr
+    assert "export-cleanup-complete" in result.stdout, result.stderr
 
 
 @dataclass

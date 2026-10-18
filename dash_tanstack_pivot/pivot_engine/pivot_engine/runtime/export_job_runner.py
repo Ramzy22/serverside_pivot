@@ -48,12 +48,14 @@ class ExportJobRunner:
     """
 
     def __init__(self, service, job_store, payload_store, *, max_workers=2, max_pending=2,
-                 temp_directory=None, poll_interval_seconds=.1, cancellation_warning_seconds=5):
+                 temp_directory=None, poll_interval_seconds=.1, cancellation_warning_seconds=5,
+                 payload_metadata=None):
         if (max_workers < 1 or max_pending < 0
                 or any(not math.isfinite(value) or value <= 0
                        for value in (poll_interval_seconds, cancellation_warning_seconds))):
             raise ValueError("Invalid export executor bounds.")
         self.service, self.job_store, self.payload_store = service, job_store, payload_store
+        self._payload_metadata = dict(payload_metadata or {})
         self.owner_id = uuid.uuid4().hex
         self.directory = Path(temp_directory or Path(tempfile.gettempdir()) / "pivot_export_jobs").resolve()
         self.directory.mkdir(parents=True, exist_ok=True)
@@ -198,7 +200,8 @@ class ExportJobRunner:
             os.utime(content_path, None)
             reference = self.payload_store.put_file(
                 content_path, content_type=metadata.get("contentType", "application/octet-stream"),
-                metadata={**{k: v for k, v in metadata.items() if k not in {"contentPath", "contentLength"}},
+                metadata={**self._payload_metadata,
+                          **{k: v for k, v in metadata.items() if k not in {"contentPath", "contentLength"}},
                           "subject": execution.job.subject, "table": execution.job.table,
                           "accountingAccountId": execution.job.accounting_account_id,
                           **({"dashSessionSubject": execution.context.session_id}

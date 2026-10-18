@@ -9,6 +9,7 @@ payloads so UI state is never used as a data channel.
 import inspect
 import json
 import os
+import threading
 import time
 import uuid
 from dataclasses import replace
@@ -98,8 +99,12 @@ class RuntimeHttpGateway:
         mutation_authorizer: Optional[RuntimeMutationAuthorizer] = None,
         dataset_authorizer: Optional[RuntimeDatasetAuthorizer] = None,
         distributed_runtime: Optional[RedisRuntimeState] = None,
+        export_payload_metadata: Optional[Dict[str, Any]] = None,
     ) -> None:
         self._runtime_service_getter = runtime_service_getter
+        self._resource_lock = threading.RLock()
+        self._closed = False
+        self._export_payload_metadata = dict(export_payload_metadata or {})
         self.distributed_runtime = distributed_runtime or distributed_runtime_from_env()
         self._payload_store = payload_store
         self._fallback_lifecycle: Optional[RuntimeRequestLifecycle] = None
@@ -125,10 +130,11 @@ class RuntimeHttpGateway:
             return lifecycle
         # Compatibility with hosts providing their own service implementation:
         # retain one gateway lifecycle, never create a per-request governor.
-        if self._fallback_lifecycle is None:
-            governor = getattr(service, "resource_governor", None)
-            self._fallback_lifecycle = RuntimeRequestLifecycle(resource_governor=governor)
-        return self._fallback_lifecycle
+        with self._resource_lock:
+            if self._fallback_lifecycle is None:
+                governor = getattr(service, "resource_governor", None)
+                self._fallback_lifecycle = RuntimeRequestLifecycle(resource_governor=governor)
+            return self._fallback_lifecycle
 
     @property
     def resource_governor(self) -> ResourceGovernor:
@@ -136,32 +142,40 @@ class RuntimeHttpGateway:
 
     @property
     def payload_store(self) -> RuntimePayloadStore:
-        if self._payload_store is None:
-            self._payload_store = runtime_payload_store_from_env(
-                runtime_state=self.distributed_runtime,
-                governor=self.resource_governor,
-            )
-        if self._payload_store.governor is not self.resource_governor:
-            raise ValueError("Runtime payload store must use its worker governor")
-        return self._payload_store
+        with self._resource_lock:
+            if self._payload_store is None:
+                self._payload_store = runtime_payload_store_from_env(
+                    runtime_state=self.distributed_runtime,
+                    governor=self.resource_governor,
+                )
+            if self._payload_store.governor is not self.resource_governor:
+                raise ValueError("Runtime payload store must use its worker governor")
+            return self._payload_store
 
     @property
     def export_job_store(self):
-        if self._export_job_store is None:
-            self._export_job_store = export_job_store_for_runtime(self.distributed_runtime)
-        return self._export_job_store
+        with self._resource_lock:
+            if self._export_job_store is None:
+                self._export_job_store = export_job_store_for_runtime(self.distributed_runtime)
+            return self._export_job_store
 
     @property
     def export_job_runner(self):
-        if self._export_job_runner is None:
-            self._export_job_runner = ExportJobRunner(
-                self._runtime_service_getter(), self.export_job_store, self.payload_store,
-            )
-        return self._export_job_runner
+        with self._resource_lock:
+            if self._closed:
+                raise RuntimeError("Runtime export gateway is closed.")
+            if self._export_job_runner is None:
+                self._export_job_runner = ExportJobRunner(
+                    self._runtime_service_getter(), self.export_job_store, self.payload_store,
+                    payload_metadata=self._export_payload_metadata,
+                )
+            return self._export_job_runner
 
     def close(self) -> None:
-        if self._export_job_runner is not None:
-            self._export_job_runner.close()
+        with self._resource_lock:
+            self._closed = True
+            if self._export_job_runner is not None:
+                self._export_job_runner.close()
 
     def _export_job_response(self, request, snapshot):
         response = build_export_job_response(snapshot, request_id=request.get("requestId"))
