@@ -23,8 +23,37 @@ from tests.flagship_contract import HOSTS, RESULTS, load_requirements
 
 
 ROOT = Path(__file__).resolve().parents[1]
+
+
+def assert_export_job_trace(trace):
+    """Require observed progress from correlated V1 controls for one server job."""
+    requests = {item["requestId"]: item for item in trace if item["direction"] == "request"}
+    replies = [item for item in trace if item["direction"] == "response"]
+    assert replies, "No export job responses"
+    job = replies[0]["payload"].get("jobId")
+    assert job, "No server-issued job ID"
+    rows = size = 0
+    advanced = False
+    for reply in replies:
+        request = requests.get(reply["requestId"])
+        assert request, "Uncorrelated response"
+        payload = reply["payload"]
+        assert payload.get("jobId") == job, "Unexpected job ID"
+        assert request["payload"].get("action") in {"start", "status", "cancel"}
+        if request["payload"]["action"] != "start":
+            assert request["payload"].get("jobId") == job
+        current_rows, current_size = payload["rowsWritten"], payload["bytesWritten"]
+        assert current_rows >= rows and current_size >= size, "Progress counters regressed"
+        advanced |= current_rows > rows or current_size > size
+        rows, size = current_rows, current_size
+        if payload["phase"] != "completed":
+            assert not payload.get("payloadRef"), "Unfinished job published output"
+    assert advanced, "No measured export progress"
+    return job
 SELECTION_COPY_TIMEOUT = 8
 _SAFE_OBSERVATIONS = frozenset({
+    "measuredProgressVerified", "serverCancellationVerified", "nativeCleanupVerified",
+    "noPartialDownloadVerified", "parsedCsvVerified", "parsedXlsxVerified",
     "visibleError", "loadingCleared", "failedRequestCorrelated", "retryCorrelated",
     "fixtureTotalsVerified", "staleCellsAbsent", "newDownloads", "networkFailureCount",
     "infrastructureUnavailable", "actionCompleted", "lateResponseAbsent",
@@ -38,6 +67,172 @@ _SAFE_OBSERVATIONS = frozenset({
     "geometryScrollVerified", "logicalValuesPreserved",
     "clipboardOrderVerified", "lastColumnVisible",
 })
+
+
+_EXPORT_JOB_PROBE = """
+if (!window.__pivotExportJobs) {
+  const trace = window.__pivotExportJobs = [];
+  function visit(value, direction) {
+    if (typeof value === 'string') { try { value = JSON.parse(value); } catch (_) { return; } }
+    if (!value || typeof value !== 'object') return;
+    if (value.schemaVersion === 1 && value.kind === 'export' && value.requestId) {
+      trace.push({direction, requestId: value.requestId, status: value.status,
+                  payload: value.payload, at: performance.now()}); return;
+    }
+    Object.values(value).forEach(child => visit(child, direction));
+  }
+  const fetch = window.fetch.bind(window);
+  window.fetch = (...args) => {
+    visit(args[1]?.body, 'request');
+    return fetch(...args).then(response => {
+      response.clone().text().then(text => visit(text, 'response')).catch(() => {});
+      return response;
+    });
+  };
+  const send = XMLHttpRequest.prototype.send;
+  XMLHttpRequest.prototype.send = function(body) {
+    visit(body, 'request');
+    this.addEventListener('load', () => visit(this.responseText, 'response'));
+    return send.call(this, body);
+  };
+}
+"""
+
+
+def _assert_flat_export(path, fmt, count):
+    if fmt == "csv":
+        with path.open(encoding="utf-8-sig", newline="") as source:
+            rows = list(csv.reader(source))
+    else:
+        from openpyxl import load_workbook
+        workbook = load_workbook(path, read_only=True, data_only=True)
+        try:
+            rows = [list(row) for row in workbook.active.iter_rows(values_only=True)]
+        finally:
+            workbook.close()
+    assert rows[0] == ["Region", "Sales"], rows[0]
+    assert len(rows) == count + 1
+    assert [(row[0], float(row[1])) for row in rows[1:]] == [
+        (f"R{i:04d} 東京", i + .25) for i in range(count)]
+    return {"rows": count, "columns": 2, "sha256": hashlib.sha256(path.read_bytes()).hexdigest()}
+
+
+def qualify_export_jobs(host, requirement):
+    import pytest
+    if os.environ.get("PIVOT_RUN_FLAGSHIP_BROWSER_TESTS") != "1":
+        pytest.skip("Enable installed flagship browser qualification explicitly")
+    assert os.environ.get("PIVOT_FLAGSHIP_EXPORT_JOB_DATA") == "1", "Flat export fixture required"
+    from scripts.flagship_artifacts import load_artifact_binding
+    from tests.test_flagship_certification import (
+        _qualification_chrome_options, _switch_to_workspace, _click_export,
+        _workspace_elements, _wait_for_download, _verify_release_asset_batch,
+    )
+    from selenium import webdriver
+    from selenium.webdriver.support.ui import WebDriverWait
+
+    root = Path(os.environ["PIVOT_FLAGSHIP_EVIDENCE_ROOT"])
+    directory = root / requirement / host
+    directory.mkdir(parents=True, exist_ok=True)
+    downloads = directory / "downloads"
+    downloads.mkdir(exist_ok=True)
+    result = {"result": "blocked", "browser": "unavailable", "infrastructureUnavailable": True}
+    observation = {"requirement": requirement, "downloads": {}, "trace": [], "cleanup": []}
+    driver = None
+    diagnostic = ""
+    try:
+        binding = load_artifact_binding(Path(os.environ["PIVOT_FLAGSHIP_ARTIFACT_BINDING"]))
+        driver = webdriver.Chrome(options=_qualification_chrome_options(downloads))
+        driver._pivot_artifact_binding, driver._pivot_artifact_host = binding, host
+        driver._pivot_loaded_assets = {}
+        driver.execute_cdp_cmd("Network.enable", {})
+        driver.execute_cdp_cmd("Page.addScriptToEvaluateOnNewDocument", {"source": _EXPORT_JOB_PROBE})
+        _switch_to_workspace(driver, host)
+        result.update(result="failed", browser=f"Chrome {driver.capabilities['browserVersion']}",
+                      infrastructureUnavailable=False)
+        wait = WebDriverWait(driver, 25)
+
+        def phase(value):
+            return next((el for el in _workspace_elements(driver, f'[data-export-phase="{value}"]')
+                         if el.is_displayed()), False)
+
+        def button(label):
+            element = next(el for el in _workspace_elements(driver, '[aria-label="Export progress"] button')
+                           if el.text == label and el.is_displayed() and el.is_enabled())
+            element.click()
+
+        cancelled = requirement != "large-delivery.progress"
+        count = 512
+        if cancelled:
+            previous = set(root.glob("export-worker-*.jsonl"))
+            (root / "slow-next-export").write_text("one-shot", encoding="ascii")
+            _click_export(driver, "csv")
+            wait.until(lambda _: phase("running"))
+
+            def native_running(_):
+                files = set(root.glob("export-worker-*.jsonl")) - previous
+                return next((path for path in files if any(
+                    json.loads(line).get("nativeRunning", 0) > 0 for line in path.read_text().splitlines())), False)
+
+            worker = wait.until(native_running)
+            bar = _workspace_elements(driver, '[role="progressbar"]')[0]
+            assert bar.get_attribute("aria-valuenow") is None, "Unknown total has fabricated percentage"
+            button("Cancel")
+            wait.until(lambda _: phase("cancelling"))
+            wait.until(lambda _: phase("cancelled"))
+            wait.until(lambda _: json.loads(worker.read_text().splitlines()[-1])["executorRunning"] is False)
+            samples = [json.loads(line) for line in worker.read_text().splitlines()]
+            assert_cancellation_lifetime(samples)
+            assert samples[-1]["nativeRunning"] == 0 and not samples[-1]["temporaryFiles"]
+            assert samples[-1]["nativeCancellationAttempts"] > 0
+            trace = driver.execute_script("return window.__pivotExportJobs")
+            job = assert_export_job_trace(trace)
+            assert any(item["direction"] == "request" and item["payload"].get("action") == "cancel"
+                       and item["payload"].get("jobId") == job for item in trace)
+            assert not list(downloads.iterdir()), "Cancelled export created a partial download"
+            observation.update(cleanup=samples, cancelledJobId=job, cancelledTrace=trace)
+            driver.save_screenshot(str(directory / "cancelled.png"))
+            button("Close")
+            search = _workspace_elements(driver, '[data-testid="pivot-global-search"]')[0]
+            search.send_keys("R0000")
+            wait.until(lambda _: any("R0000 東京" in el.text for el in _workspace_elements(driver, '[role="gridcell"]')))
+            # Wait for the filtered V1 viewport to settle before starting fresh work.
+            time.sleep(.8)
+            count = 1
+            result.update(serverCancellationVerified=True, nativeCleanupVerified=True, noPartialDownloadVerified=True)
+
+        for fmt in ("csv", "xlsx"):
+            driver.execute_script("window.__pivotExportJobs.length = 0")
+            _click_export(driver, fmt)
+            wait.until(lambda _: phase("running"))
+            bar = _workspace_elements(driver, '[role="progressbar"]')[0]
+            assert bar.get_attribute("aria-valuenow") is None
+            wait.until(lambda _: phase("completed"))
+            path = _wait_for_download(downloads, fmt, timeout=25)
+            observation["downloads"][fmt] = _assert_flat_export(path, fmt, count)
+            trace = driver.execute_script("return window.__pivotExportJobs")
+            assert_export_job_trace(trace)
+            assert trace[-1]["payload"]["phase"] == "completed"
+            observation["trace"].extend(trace)
+            driver.save_screenshot(str(directory / f"{fmt}.png"))
+            button("Close")
+        assert not list(downloads.glob("*.crdownload"))
+        _verify_release_asset_batch(driver, require_assets=True)
+        result.update(result="passed", measuredProgressVerified=True, parsedCsvVerified=True,
+                      parsedXlsxVerified=True, loadedAssetSha256=dict(driver._pivot_loaded_assets))
+    except Exception:
+        diagnostic = traceback.format_exc()
+    finally:
+        if driver is not None:
+            observation["traceAtExit"] = driver.execute_script("return window.__pivotExportJobs || []")
+            result["loadedAssetSha256"] = dict(driver._pivot_loaded_assets)
+            driver.save_screenshot(str(directory / "final.png"))
+            driver.quit()
+        observation.update(diagnostic=diagnostic, result=result)
+        evidence = directory / "observation.json"
+        evidence.write_text(json.dumps(observation, indent=2), encoding="utf-8")
+        result["evidence_paths"] = [str(evidence), *(str(path) for path in directory.glob("*.png"))]
+        record_case(requirement, host, result, directory)
+    assert result["result"] == "passed", f"{host} {requirement} failed; evidence: {directory}; {diagnostic}"
 
 
 def assert_selected_clipboard(text: str, expected: list[list[str]], *, line_separator="\n") -> list[list[str]]:

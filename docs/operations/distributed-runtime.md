@@ -53,6 +53,39 @@ service: enable persistence appropriate to the payload TTL, alert on
 availability and memory pressure, and restrict network access to application
 workers over TLS.
 
+## Cancellable export jobs
+
+Redis is optional for a single worker: the default job registry and bounded
+executor are process-local. V1 export `start`, `status`, and `cancel` use the
+same dataset authorization and server-resolved accounting identity. A missing
+in-flight job after a single-worker restart means Interrupted and fresh Retry.
+
+Multi-worker cancellation requires the existing distributed Redis mode and
+deployment namespace. Any worker can read status or request cancellation; only
+the fenced lease owner can publish output. Redis holds small JSON job records,
+cancel intent and heartbeat state, separately from completed payload bytes.
+After owner death/heartbeat expiry another worker reports Interrupted; work is
+not resumed. Redis loss fails closed rather than falling back to local jobs.
+
+Cancelling is pending cleanup, not acknowledgement. Native execution, writers
+and temporary files must stop before Cancelled and before export admission is
+released. Alert on `export_cancellation_cleanup_pending`; a backend that does
+not acknowledge interruption remains charged. A completed file is exposed only
+after the fenced terminal transition wins; cancellation wins revoke staged
+payloads. Row, byte, per-file and payload-store budgets still apply.
+
+Bounded large exports currently support flat/table DuckDB-Ibis layouts without
+pivot columns, subtotals, formula/window measures or unsafe providers. Unsupported
+complex layouts reject before unbounded materialization. This is not a promise
+that every pivot layout supports large jobs. Small compatible exports retain
+the existing writers and fidelity rules.
+
+An S3-compatible completed-artifact store is deferred and optional. There is no
+current resumable job/download promise or object-store deployment dependency.
+
+The real multi-process test uses `PIVOT_TEST_REDIS_URL` only in tests. An unset
+URL skips the integration and provides no distributed release evidence.
+
 ## Editing is deliberately unavailable
 
 This release does not ship a durable, cross-worker edit-session/event store.

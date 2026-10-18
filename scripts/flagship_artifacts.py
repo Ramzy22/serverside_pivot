@@ -298,6 +298,7 @@ def _build_from_snapshot(commit: str, snapshot: Path, output: Path, *, build_whe
         "wheel": _digest(wheel.read_bytes()),
         "npm_tarball": _digest(npm_tarball.read_bytes()),
         "fixture": _digest(fixture.read_bytes()),
+        "export_job_fixture": _digest((app / "examples" / "flagship_demo_data.py").read_bytes()),
         **{f"react:{name}": digest for name, digest in assets["react"].items()},
         **{f"dash:{name}": digest for name, digest in assets["dash"].items()},
         **{f"streamlit:{name}": digest for name, digest in assets["streamlit"].items()},
@@ -498,7 +499,7 @@ def _launch_host_process(command: list[str], **kwargs) -> OwnedHostProcess:
 
 
 @contextmanager
-def start_installed_hosts(binding: ArtifactBinding, output: Path) -> Iterator[dict[str, str]]:
+def start_installed_hosts(binding: ArtifactBinding, output: Path, *, environment: dict[str, str] | None = None) -> Iterator[dict[str, str]]:
     """Serve copied examples with the isolated wheel and packed React build."""
     app = binding.paths["app"]
     python = binding.paths["python"]
@@ -507,7 +508,7 @@ def start_installed_hosts(binding: ArtifactBinding, output: Path) -> Iterator[di
     if npm is None:
         raise RuntimeError("npm is required to serve the installed React build")
     output.mkdir(parents=True, exist_ok=True)
-    child_env = os.environ.copy()
+    child_env = dict(os.environ if environment is None else environment)
     child_env.pop("PYTHONPATH", None)
     child_env["PYTHONPATH"] = str(app)
     child_env["PIVOT_FLAGSHIP_PARITY_DATA"] = "1"

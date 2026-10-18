@@ -20,6 +20,54 @@ from uuid import uuid4
 import pytest
 
 
+def test_export_qualification_fixture_is_flat_and_does_not_replace_parity(monkeypatch):
+    from examples import flagship_demo_data as demo
+
+    monkeypatch.setenv("PIVOT_FLAGSHIP_PARITY_DATA", "1")
+    monkeypatch.setenv("PIVOT_FLAGSHIP_EXPORT_JOB_DATA", "1")
+    config = demo.workspace_config("react")
+    assert config.get("layoutMode") == "tabular"
+    assert config["colFields"] == [] and config["showSubtotals"] is False
+    table = demo.build_demo_table()
+    assert table.num_rows == 512
+    assert table.to_pylist()[0] == {"region": "R0000 東京", "sales": 0.25}
+    monkeypatch.delenv("PIVOT_FLAGSHIP_EXPORT_JOB_DATA")
+    assert demo.workspace_config("react")["colFields"] == ["period"]
+
+
+def test_export_progress_proof_rejects_fabricated_or_uncorrelated_counters():
+    from tests import flagship_browser_support as support
+
+    assert hasattr(support, "assert_export_job_trace"), "Missing correlated export job proof"
+    trace = [
+        {"direction": "request", "requestId": "start", "payload": {"action": "start"}},
+        {"direction": "response", "requestId": "start", "payload": {
+            "jobId": "server-job", "phase": "running", "rowsWritten": 0, "bytesWritten": 0, "totalRows": None}},
+        {"direction": "request", "requestId": "poll", "payload": {"action": "status", "jobId": "server-job"}},
+        {"direction": "response", "requestId": "poll", "payload": {
+            "jobId": "server-job", "phase": "running", "rowsWritten": 128, "bytesWritten": 1024, "totalRows": None}},
+    ]
+    assert support.assert_export_job_trace(trace) == "server-job"
+    for broken in (
+        [trace[0], trace[1], trace[2], {**trace[3], "requestId": "unrelated"}],
+        [*trace, {**trace[3], "payload": {**trace[3]["payload"], "rowsWritten": 1}}],
+    ):
+        with pytest.raises(AssertionError):
+            support.assert_export_job_trace(broken)
+
+
+def test_installed_export_runner_selects_workflows_and_rejects_missing_cases(monkeypatch, tmp_path):
+    from scripts import certify_flagship as runner
+
+    commands = []
+    class Completed:
+        returncode = 0
+    monkeypatch.setattr(runner.subprocess, "run", lambda command, **kwargs: commands.append(command) or Completed())
+    runner._run_browser_suite(tmp_path, {"PIVOT_FLAGSHIP_EXPORT_JOB_DATA": "1"})
+    assert "tests/test_flagship_workflows.py" in commands[0]
+    assert "tests/test_flagship_certification.py" not in commands[0]
+
+
 def test_visible_totals_use_display_format_without_losing_exact_protocol_oracle(monkeypatch):
     from tests import test_flagship_certification
     from tests.flagship_browser_support import _totals
@@ -774,3 +822,13 @@ def test_flagship_column_geometry(host, requirement, installed_workflow_hosts):
     from tests.flagship_browser_support import qualify_column_geometry
 
     qualify_column_geometry(host, requirement)
+
+
+@pytest.mark.flagship
+@pytest.mark.parametrize("host", ["dash", "react", "streamlit"])
+@pytest.mark.parametrize("requirement", ["large-delivery.progress", "large-delivery.cancel-retry",
+                                        "journey-recovery.cancel-new-work"])
+def test_flagship_export_jobs(host, requirement, installed_workflow_hosts):
+    from tests.flagship_browser_support import qualify_export_jobs
+
+    qualify_export_jobs(host, requirement)

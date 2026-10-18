@@ -117,6 +117,18 @@ def test_missing_reference_fails_only_parity_and_does_not_infer_live_pass_from_c
     assert result["requirements"]["copy.cells"]["reference"]["result"] == "unverified"
 
 
+@pytest.mark.parametrize("requirement_id", ["large-delivery.progress", "large-delivery.cancel-retry",
+                                           "journey-recovery.cancel-new-work"])
+def test_skipped_export_job_browser_cannot_qualify_release(qualification, requirement_id):
+    requirements, binding, cases = qualification
+    target = next(i for i, case in enumerate(cases) if case.requirement_id == requirement_id
+                  and case.host == "streamlit" and case.test_id.startswith("browser."))
+    cases[target] = replace(cases[target], result="skipped", observed="Redis/browser unavailable")
+    result = manifest.evaluate_manifest(requirements, binding, cases)
+    assert result["releaseResult"] == "failed"
+    assert result["requirements"][requirement_id]["hosts"]["streamlit"]["result"] != "passed"
+
+
 @pytest.mark.parametrize("damage", ["commit", "run", "fixture", "wheel", "npm_tarball", "bundle", "evidence", "unbound", "browser"])
 def test_stale_or_unbound_product_passes_fail_release(qualification, damage):
     requirements, binding, cases = qualification

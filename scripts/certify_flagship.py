@@ -181,7 +181,9 @@ def _run_browser_suite(
         "PIVOT_RUN_FLAGSHIP_BROWSER_TESTS": "1",
         "PIVOT_FLAGSHIP_ARTIFACT_DIR": str(artifact_dir),
     }
-    command = [sys.executable, "-m", "pytest", "tests/test_flagship_certification.py", "-m", "flagship", "-q"]
+    suite = ("tests/test_flagship_workflows.py" if environment.get("PIVOT_FLAGSHIP_EXPORT_JOB_DATA") == "1"
+             else "tests/test_flagship_certification.py")
+    command = [sys.executable, "-m", "pytest", suite, "-m", "flagship", "-q"]
     if selection:
         command.extend(["-k", selection])
     if junit_path is not None:
@@ -870,13 +872,16 @@ INSTALLED_BROWSER_CASES = (
 )
 
 
-def _installed_browser_report_passed(path: Path) -> bool:
+def _installed_browser_report_passed(path: Path, *, export_jobs: bool = False) -> bool:
     try:
         report = ET.parse(path).getroot()
     except (OSError, ET.ParseError):
         return False
     cases = report.findall(".//testcase")
-    expected = {f"{name}[{host}]" for name in INSTALLED_BROWSER_CASES for host in QUALIFICATION_HOSTS}
+    expected = ({f"test_flagship_export_jobs[{requirement}-{host}]"
+                 for requirement in ("large-delivery.progress", "large-delivery.cancel-retry", "journey-recovery.cancel-new-work")
+                 for host in QUALIFICATION_HOSTS} if export_jobs else
+                {f"{name}[{host}]" for name in INSTALLED_BROWSER_CASES for host in QUALIFICATION_HOSTS})
     names = [case.get("name") for case in cases]
     try:
         return (
@@ -888,7 +893,8 @@ def _installed_browser_report_passed(path: Path) -> bool:
         return False
 
 
-def _certify_installed_release(artifact_dir: Path, started_at: datetime, *, build_wheelhouse: Path | None = None) -> int:
+def _certify_installed_release(artifact_dir: Path, started_at: datetime, *, build_wheelhouse: Path | None = None,
+                               export_jobs: bool = False) -> int:
     from scripts.flagship_artifacts import ArtifactBinding, build_artifacts, start_installed_hosts, cleanup_python_environment
     from scripts.flagship_manifest import (
         QualificationBinding, apply_junit_result, evaluate_manifest,
@@ -930,7 +936,10 @@ def _certify_installed_release(artifact_dir: Path, started_at: datetime, *, buil
         environment["PIVOT_FLAGSHIP_CASE_RESULTS"] = str(envelopes["product"])
         environment["PIVOT_FLAGSHIP_REFERENCE_CASE_RESULTS"] = str(envelopes["ag_grid"])
         environment["PIVOT_FLAGSHIP_EVIDENCE_ROOT"] = str(private)
-        with start_installed_hosts(artifacts, artifact_dir / "installed-hosts") as urls:
+        if export_jobs:
+            environment["PIVOT_FLAGSHIP_EXPORT_JOB_DATA"] = "1"
+        options = {"environment": environment} if export_jobs else {}
+        with start_installed_hosts(artifacts, artifact_dir / "installed-hosts", **options) as urls:
             binding.host_origins.update(urls)
             binding_path.write_text(json.dumps({
                 "runId": run_id,
@@ -944,9 +953,9 @@ def _certify_installed_release(artifact_dir: Path, started_at: datetime, *, buil
                 environment[f"PIVOT_FLAGSHIP_{host.upper()}_URL"] = url
             code = _run_browser_suite(
                 artifact_dir, environment, junit_path=junit_path,
-                selection=" or ".join(INSTALLED_BROWSER_CASES),
+                selection="test_flagship_export_jobs" if export_jobs else " or ".join(INSTALLED_BROWSER_CASES),
             )
-            if code == 0 and not _installed_browser_report_passed(junit_path):
+            if code == 0 and not _installed_browser_report_passed(junit_path, export_jobs=export_jobs):
                 code = 1
         if code == 0:
             cleanup_python_environment(artifacts)
@@ -991,6 +1000,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--skip-build", action="store_true", help="Do not rebuild bundles before certification.")
     parser.add_argument("--wheel", type=Path, help="Prebuilt wheel to reinstall when --skip-build is used.")
     parser.add_argument("--installed-release", action="store_true", help="Build fresh committed wheel/npm artifacts and run browsers against their installed hosts; retain private evidence.")
+    parser.add_argument("--cancellable-exports", action="store_true", help="Installed-release only: qualify the three export job journeys per host against the supported flat fixture. The complete release/parity gate remains fail-closed.")
     parser.add_argument("--build-wheelhouse", type=Path, help="Installed-release only: build dependencies from hash-pinned wheels plus wheelhouse-sha256.json; isolation stays enabled, runtime installation is unchanged.")
     parser.add_argument(
         "--export-qualification",
@@ -998,6 +1008,10 @@ def main(argv: list[str] | None = None) -> int:
         help="Require normal and constrained export evidence from every flagship host.",
     )
     args = parser.parse_args(argv)
+
+    if args.cancellable_exports and not args.installed_release:
+        print("Cancellable export qualification requires --installed-release", file=sys.stderr)
+        return 1
 
     if args.build_wheelhouse is not None and not args.installed_release:
         print("Build wheelhouse requires --installed-release", file=sys.stderr)
@@ -1034,7 +1048,8 @@ def main(argv: list[str] | None = None) -> int:
         artifact_dir.mkdir(parents=True, exist_ok=True)
     started_at = datetime.now(UTC)
     if args.installed_release:
-        return _certify_installed_release(artifact_dir, started_at, build_wheelhouse=args.build_wheelhouse)
+        options = {"export_jobs": True} if args.cancellable_exports else {}
+        return _certify_installed_release(artifact_dir, started_at, build_wheelhouse=args.build_wheelhouse, **options)
     if not args.export_qualification:
         print("Legacy diagnostic mode: results are not current installed-release qualification", file=sys.stderr)
     environment = os.environ.copy()

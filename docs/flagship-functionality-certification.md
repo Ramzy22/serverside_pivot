@@ -91,6 +91,36 @@ Cell and row editing are intentionally unavailable in the public flagship
 promise until they are restored as a supported feature and receive browser
 coverage.
 
+## Cancellable export qualification
+
+Build exact committed wheel/npm artifacts and run the three job journeys in
+each installed host with:
+
+```powershell
+python scripts/certify_flagship.py --installed-release --cancellable-exports --artifact-dir artifacts/cancellable-exports
+```
+
+This uses a separate deterministic 512-row flat/table fixture and never changes
+the complex parity fixture. Required browser cases correlate V1 start/status/
+cancel requests and server job IDs, verify monotonic observed counters and an
+indeterminate indicator for unknown totals, parse CSV/XLSX headers, Unicode and
+numeric cells, and verify no partial download after cancellation. Cancel tests
+sample a real native DuckDB statement and export admission through cleanup,
+then start smaller filtered work. Server samples and raw traces remain private.
+The artifact binding records source commit, wheel/npm/fixture and loaded asset
+SHA-256 values plus browser version and per-case evidence hashes.
+
+Bounded large jobs support flat/table DuckDB-Ibis layouts. Complex pivot columns,
+subtotals, formula/window measures and unsafe providers reject up front. Redis
+is optional for one worker; multi-worker cancellation and interrupted retry
+require distributed Redis. Restart means a fresh retry, never resumption. S3
+and resumable artifacts remain optional future work.
+
+Nine passing export cases are only export evidence. Missing shared cases,
+other required workflows, unavailable infrastructure, skipped cases or missing
+live reference evidence still fail the complete release/parity manifest; this
+command cannot promote an incomplete matrix to a qualified release.
+
 ## Clipboard modes
 
 The table context menu has two primary clipboard commands:

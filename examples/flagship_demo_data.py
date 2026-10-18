@@ -64,6 +64,9 @@ def _parity_rows() -> list[dict[str, Any]]:
 
 def build_demo_table(row_count: int = DEMO_ROW_COUNT) -> pa.Table:
     """Build a stable analytics dataset with useful categorical cardinality."""
+    if os.environ.get("PIVOT_FLAGSHIP_EXPORT_JOB_DATA") == "1":
+        return pa.table({"region": [f"R{i:04d} 東京" for i in range(512)],
+                         "sales": [i + .25 for i in range(512)]})
     if _parity_data_enabled():
         return pa.Table.from_pylist(_parity_rows())
     if _qualification_data_enabled():
@@ -121,9 +124,73 @@ def get_demo_adapter():
     """Create the in-memory adapter once per demo process."""
     adapter = create_tanstack_adapter(backend_uri=":memory:")
     adapter.controller.load_data_from_arrow(TABLE_NAME, build_demo_table())
-    if _parity_data_enabled() and os.environ.get("PIVOT_FLAGSHIP_TEST_FAULT_FILE"):
+    if os.environ.get("PIVOT_FLAGSHIP_EXPORT_JOB_DATA") == "1":
+        _instrument_export_qualification(adapter)
+    if (_parity_data_enabled() and os.environ.get("PIVOT_FLAGSHIP_TEST_FAULT_FILE")
+            and os.environ.get("PIVOT_FLAGSHIP_EXPORT_JOB_DATA") != "1"):
         return _OneShotFaultAdapter(adapter)
     return adapter
+
+
+def _instrument_export_qualification(adapter):
+    """Private fixture instrumentation; no public route or request can arm it."""
+    import asyncio
+    import time
+    from uuid import uuid4
+    from pivot_engine.backends.duckdb_backend import DuckDBBackend
+    from pivot_engine.runtime.export_service import current_export_write
+
+    root_value = os.environ.get("PIVOT_FLAGSHIP_EVIDENCE_ROOT")
+    if not root_value:
+        return
+    root = Path(root_value).resolve()
+    root.mkdir(parents=True, exist_ok=True)
+    original = adapter.controller.run_pivot_async
+    native = DuckDBBackend(":memory:", max_connections=1)
+    checkin = native.pool.checkin
+    def slow_checkin(*args, **kwargs):
+        time.sleep(.25)  # expose native cleanup while the export lease is charged
+        return checkin(*args, **kwargs)
+    native.pool.checkin = slow_checkin
+    controls = {}
+
+    async def query(spec, **kwargs):
+        control = current_export_write.get()
+        if control is not None:
+            key = id(control)
+            if key not in controls:
+                marker = root / "slow-next-export"
+                try:
+                    marker.unlink()
+                    armed = True
+                except FileNotFoundError:
+                    armed = False
+                controls[key] = (control, armed)
+                path = root / f"export-worker-{os.getpid()}-{uuid4().hex}.jsonl"
+                def sample():
+                    with path.open("w", encoding="utf-8") as output:
+                        while True:
+                            released = control.lease._released
+                            output.write(json.dumps({
+                                "at": time.time(), "executorRunning": not released,
+                                "nativeRunning": native.execution_metrics()["running"],
+                                "nativeCancellationAttempts": native.execution_metrics()["cancellation_attempts"],
+                                "cancelRequested": control.cancelled.is_set(),
+                                "reservedBytes": 0 if released else control.lease.reserved_bytes,
+                                "activeSlots": control.lease._governor.snapshot()["active_slots"]["export"],
+                                "temporaryFiles": [p for p in control.paths if Path(p).exists()],
+                            }) + "\n")
+                            output.flush()
+                            if released:
+                                return
+                            time.sleep(.01)
+                threading.Thread(target=sample, daemon=True).start()
+            if controls[key][1] and (spec.offset or 0) >= 128:
+                await native.execute_async({"sql": "SELECT sum(i) FROM range(10000000000) t(i)"})
+            else:
+                await asyncio.sleep(.35)
+        return await original(spec, **kwargs)
+    adapter.controller.run_pivot_async = query
 
 
 class _OneShotFaultAdapter:
@@ -163,6 +230,17 @@ class _OneShotFaultAdapter:
 
 def workspace_config(host: str) -> dict[str, Any]:
     """Return public workspace props shared by all three flagship hosts."""
+    if os.environ.get("PIVOT_FLAGSHIP_EXPORT_JOB_DATA") == "1":
+        return {
+            "id": f"flagship-{host}-pivot", "table": TABLE_NAME,
+            "pivotTitle": "Bounded export qualification", "serverSide": True,
+            "rowFields": ["region"], "colFields": [],
+            "valConfigs": [{"field": "sales", "agg": "sum", "label": "Sales"}],
+            "availableFieldList": ["region", "sales"], "filters": {}, "sorting": [],
+            "expanded": {}, "layoutMode": "tabular", "showSubtotals": False,
+            "showRowTotals": False, "showColTotals": False, "persistence": False,
+            "style": {"height": "760px", "width": "100%"},
+        }
     if _qualification_data_enabled() or _parity_data_enabled():
         return {
             "id": f"flagship-{host}-pivot",

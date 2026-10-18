@@ -1904,7 +1904,7 @@
       "id": "large-delivery.progress",
       "inventory_id": "large-delivery",
       "task": "Observe large delivery progress",
-      "expected": "For an operation over the large-delivery threshold, progress becomes visible, advances with correlated operation state and completes only after a validated clipboard/download output is available.",
+      "expected": "Supported bounded flat/table CSV/XLSX jobs show monotonic measured rows/bytes correlated to the server-issued jobId; unknown totals stay indeterminate and completion requires a parsed, validated download.",
       "ag_grid": {
         "reference": "ssrm-read-only-v1",
         "docs": [
@@ -1914,7 +1914,7 @@
         "test_id": "ag-grid.large-delivery.progress",
         "result": "unverified"
       },
-      "product_behavior": "Qualification target: For an operation over the large-delivery threshold, progress becomes visible, advances with correlated operation state and completes only after a validated clipboard/download output is available.",
+      "product_behavior": "Qualification target: supported bounded flat/table CSV/XLSX jobs expose measured rows/bytes, unknown totals stay indeterminate, and both parsed formats preserve exact headers, Unicode and numeric values.",
       "difference": "unverified",
       "constraints": [
         "Deterministic extended fixture and recorded server-owned budgets/thresholds; no inferred progress from elapsed time.",
@@ -1945,7 +1945,7 @@
       "id": "large-delivery.cancel-retry",
       "inventory_id": "large-delivery",
       "task": "Cancel a large delivery then retry",
-      "expected": "Cancel changes the operation to cancelled, stops execution/output, preserves server admission accounting until actual cleanup, and ignores late responses; a fresh smaller export then produces the correct 200 total.",
+      "expected": "Cancel sends a correlated V1 cancel action, shows cancelling until native execution and temporary-file cleanup finish with admission retained, then acknowledges cancelled without a partial download; a fresh smaller filtered export preserves exact headers and numeric values in CSV/XLSX.",
       "ag_grid": {
         "reference": "ssrm-read-only-v1",
         "docs": [
@@ -1955,7 +1955,7 @@
         "test_id": "ag-grid.large-delivery.cancel-retry",
         "result": "unverified"
       },
-      "product_behavior": "Qualification target: Cancel changes the operation to cancelled, stops execution/output, preserves server admission accounting until actual cleanup, and ignores late responses; a fresh smaller export then produces the correct 200 total.",
+      "product_behavior": "Qualification target: server-acknowledged cancellation retains admission through native cleanup and prevents output publication; fresh filtered CSV/XLSX work preserves exact values and headers. Complex pivot layouts reject before bounded execution.",
       "difference": "unverified",
       "constraints": [
         "Observe server execution/admission state plus UI; no stale completed/partial artifact from the cancelled action.",
