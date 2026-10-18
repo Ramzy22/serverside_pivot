@@ -1,7 +1,7 @@
 # Flagship functionality certification
 
 The read-only parity source of truth is the versioned workflow contract in
-`tests/flagship_requirements.json`. Its 70 atomic requirements cover all 44
+`tests/flagship_requirements.json`. Its 71 atomic requirements cover all 44
 supported entries in `tests/flagship_capabilities.py`, including selection-copy
 edge cases and four combined journeys. Editing has one explicitly excluded
 entry. A supported inventory entry, wired control, or passing validator is not
@@ -28,6 +28,15 @@ independent `CaseResult` observations. A missing mapped browser case remains
 `unverified`; failures, blocks and skips remain visible. It never publishes
 private observed values or raw evidence paths. The generated matrix is not
 maintained as a second source of truth in this document.
+
+Runtime-error recovery is scoped to a visible Retry after a terminal error:
+the clicked action must produce a distinct successful request, clear the error,
+and restore the fixture totals. A terminal HTTP error cannot subsequently
+return data. Ignoring a delayed older response after a newer success is a
+separate, required `runtime-error.superseded-response` workflow; it remains
+unqualified until a controlled overlapping-request test passes in all three
+installed hosts. Passing Retry does not pass that workflow or overall release
+qualification.
 
 Case IDs in the seed contract are planned verification mappings, not assertions
 that those tests have already run or been implemented. Reference results and

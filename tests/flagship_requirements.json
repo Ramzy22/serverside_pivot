@@ -129,7 +129,7 @@
       "id": "runtime-error.recovery",
       "inventory_id": "runtime-error",
       "task": "Retry after a runtime failure",
-      "expected": "The next valid request removes the error, renders the original fixture totals 200/10/-6.75 and ignores any late response from the failed request.",
+      "expected": "Clicking the visible Retry action sends a distinct valid request, removes the error, displays the fixture totals 200/10/-7 at the configured precision, and returns raw -6.75 in the correlated V1 response.",
       "ag_grid": {
         "reference": "ssrm-read-only-v1",
         "docs": [
@@ -139,11 +139,11 @@
         "test_id": "ag-grid.runtime-error.recovery",
         "result": "unverified"
       },
-      "product_behavior": "Qualification target: The next valid request removes the error, renders the original fixture totals 200/10/-6.75 and ignores any late response from the failed request.",
+      "product_behavior": "Qualification target: Clicking the visible Retry action sends a distinct valid request, removes the error, displays the fixture totals 200/10/-7 at the configured precision, and returns raw -6.75 in the correlated V1 response.",
       "difference": "unverified",
       "constraints": [
-        "Correlate request IDs and response ordering; fresh fixture for retry.",
-        "Live reference and installed-host evidence are absent; this requirement is not a pass."
+        "Correlate the failed and post-click request IDs; use a fresh fixture for retry.",
+        "A terminal error cannot later return data; delayed-response supersession is tracked separately. Reference parity remains unverified."
       ],
       "hosts": [
         "dash",
@@ -163,6 +163,47 @@
         ],
         "streamlit": [
           "browser.runtime-error.recovery"
+        ]
+      }
+    },
+    {
+      "id": "runtime-error.superseded-response",
+      "inventory_id": "runtime-error",
+      "task": "Ignore a delayed response superseded by a newer request",
+      "expected": "When an older data request completes after a newer successful request, the displayed rows and totals remain those of the newer request in every host.",
+      "ag_grid": {
+        "reference": "ssrm-read-only-v1",
+        "docs": [
+          "https://www.ag-grid.com/javascript-data-grid/server-side-model-datasource/"
+        ],
+        "behavior": "Unobserved: Observe how SSRM handles a delayed datasource success after a newer request supersedes it.",
+        "test_id": "ag-grid.runtime-error.superseded-response",
+        "result": "unverified"
+      },
+      "product_behavior": "Qualification target: A delayed older data response must not overwrite the rows or totals from a newer successful request.",
+      "difference": "unverified",
+      "constraints": [
+        "Use two controlled, distinguishable data responses and prove their request and completion order; do not fabricate a second response after a terminal HTTP error.",
+        "No installed-host or live AG Grid reference observation exists yet; this remains a required, unqualified workflow."
+      ],
+      "hosts": [
+        "dash",
+        "react",
+        "streamlit"
+      ],
+      "required": true,
+      "shared_tests": [
+        "shared.runtime-error.superseded-response"
+      ],
+      "browser_tests": {
+        "dash": [
+          "browser.runtime-error.superseded-response"
+        ],
+        "react": [
+          "browser.runtime-error.superseded-response"
+        ],
+        "streamlit": [
+          "browser.runtime-error.superseded-response"
         ]
       }
     },

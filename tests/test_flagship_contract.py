@@ -97,6 +97,19 @@ def test_selected_copy_has_distinct_edge_contracts(requirements):
     assert "dialog" in keyboard.expected.lower()
 
 
+def test_retry_and_superseded_response_have_separate_required_evidence(requirements):
+    retry = next(r for r in requirements if r.id == "runtime-error.recovery")
+    stale = next(r for r in requirements if r.id == "runtime-error.superseded-response")
+    assert retry.required and stale.required
+    assert "retry" in retry.expected.lower()
+    assert "late response" not in retry.expected.lower()
+    assert "older" in stale.expected.lower() and "newer" in stale.expected.lower()
+    assert set(retry.hosts) == set(stale.hosts) == {"dash", "react", "streamlit"}
+    for host in retry.hosts:
+        assert retry.browser_tests[host] == ("browser.runtime-error.recovery",)
+        assert stale.browser_tests[host] == ("browser.runtime-error.superseded-response",)
+
+
 @pytest.mark.parametrize("change,match", [
     ({"id": ""}, "id"),
     ({"inventory_id": ""}, "inventory"),

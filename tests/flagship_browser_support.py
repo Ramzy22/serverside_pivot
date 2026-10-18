@@ -1170,16 +1170,14 @@ def qualify_runtime_recovery(host: str) -> None:
         assert retry_id != failed_id
         events.extend(_network(driver))
         assert "PIVOT_QUALIFICATION_PRIVATE_SENTINEL" not in _visible_workspace_text(driver)
-        # A server-terminal error has no late data response to supersede. The
-        # clicked Retry and exact totals are observed, but this requirement's
-        # stale/late facet needs a separate controlled delayed-response case.
-        results["runtime-error.recovery"].update(
-            result="blocked" if not _visible_error(driver) else "failed",
-            retryCorrelated=True, fixtureTotalsVerified=True, actionCompleted=True,
-            lateResponseUnverified=True, staleResponseUnverified=True,
-            newDownloads=len(set(downloads.iterdir()) - before),
-        )
         assert set(downloads.iterdir()) == before, "Recovery unexpectedly created a download"
+        # A terminal server error cannot yield a second, late data response.
+        # Delayed-response supersession is a distinct required contract case.
+        results["runtime-error.recovery"].update(
+            result="passed" if not _visible_error(driver) else "failed",
+            retryCorrelated=True, fixtureTotalsVerified=True, actionCompleted=True,
+            newDownloads=0,
+        )
     except Exception as error:
         frame = traceback.extract_tb(error.__traceback__)[-1]
         diagnostic = f"{type(error).__name__} at {Path(frame.filename).name}:{frame.lineno}"
