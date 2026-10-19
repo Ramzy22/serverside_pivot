@@ -12,6 +12,28 @@ import pytest
 from scripts import flagship_reference_runner as runner
 
 
+def test_windows_checkout_preserves_exact_committed_fixture_bytes(tmp_path):
+    """Git newline conversion must not invalidate the installed fixture binding."""
+    root = Path(__file__).resolve().parents[1]
+    source = tmp_path / "checkout"
+    source.mkdir()
+    fixture_name = "tests/data/flagship_parity_rows.json"
+    fixture = source / fixture_name
+    fixture.parent.mkdir(parents=True)
+    committed_bytes = subprocess.check_output(["git", "show", f"HEAD:{fixture_name}"], cwd=root)
+    fixture.write_bytes(committed_bytes)
+    attributes = root / ".gitattributes"
+    if attributes.exists():
+        (source / ".gitattributes").write_bytes(attributes.read_bytes())
+    subprocess.run(["git", "init", "--quiet", str(source)], check=True)
+    subprocess.run(["git", "-c", "core.autocrlf=false", "add", "."], cwd=source, check=True)
+    fixture.unlink()
+    subprocess.run(["git", "-c", "core.autocrlf=true", "checkout-index", "--all", "--force"],
+                   cwd=source, check=True)
+
+    assert fixture.read_bytes() == committed_bytes, "checkout changed the hash-bound fixture bytes"
+
+
 @pytest.fixture
 def harness(tmp_path, monkeypatch):
     source = tmp_path / "source"

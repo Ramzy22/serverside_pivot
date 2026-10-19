@@ -1,0 +1,2 @@
+# Qualification binds the raw fixture bytes shared by Git archives and reference servers.
+/tests/data/flagship_parity_rows.json text eol=lf
