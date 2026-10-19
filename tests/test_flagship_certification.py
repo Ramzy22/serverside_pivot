@@ -761,6 +761,173 @@ def test_flagship_capability_matrix_covers_every_published_workflow():
     ]
 
 
+def _managed_reference_qualification(tmp_path, monkeypatch, *, damage=None):
+    """Replace external builds/processes while keeping envelope evaluation real."""
+    from contextlib import contextmanager
+    from dataclasses import asdict
+    import hashlib
+    import subprocess
+    from scripts import certify_flagship as runner, flagship_artifacts, flagship_reference_runner
+    from tests.flagship_contract import CaseResult, load_requirements
+    from tests import flagship_reference_support as support
+
+    requirements = load_requirements(ROOT / "tests/flagship_requirements.json")
+    comparable = [item for item in requirements if item.ag_grid.get("test_id")]
+    commit = subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=ROOT, text=True).strip()
+    artifacts = flagship_artifacts.ArtifactBinding(source_commit=commit, sha256={
+        "fixture": hashlib.sha256((ROOT / "tests/data/flagship_parity_rows.json").read_bytes()).hexdigest(),
+    })
+    if damage == "fixture-mismatch":
+        artifacts.sha256["fixture"] = "f" * 64
+    monkeypatch.setattr(flagship_artifacts, "build_artifacts", lambda *args, **kwargs: artifacts)
+    monkeypatch.setattr(flagship_artifacts, "cleanup_python_environment", lambda binding: None)
+    events = []
+
+    @contextmanager
+    def hosts(*args, **kwargs):
+        yield {host: f"http://127.0.0.1:{39001 + index}" for index, host in enumerate(HOSTS)}
+
+    @contextmanager
+    def reference(source, evidence):
+        events.append("start")
+        assert source == ROOT
+        assert evidence.is_relative_to(tmp_path / "qualification/private")
+        try:
+            if damage in {"missing-server", "bad-config"}:
+                raise ValueError(damage)
+            yield flagship_reference_runner.ReferenceServer("http://127.0.0.1:39111/", "c" * 64,
+                                                          artifacts.sha256["fixture"], {})
+        finally:
+            events.append("stop")
+
+    def product(evidence, environment, **kwargs):
+        suite = ET.Element("testsuite")
+        for name in runner.INSTALLED_BROWSER_CASES:
+            for host in HOSTS:
+                ET.SubElement(suite, "testcase", name=f"{name}[{host}]")
+        ET.ElementTree(suite).write(kwargs["junit_path"])
+        return 0
+
+    def browser(evidence, environment, junit_path):
+        events.append("browser")
+        assert environment["AG_GRID_REFERENCE_LIVE"] == "1"
+        assert environment["AG_GRID_REFERENCE_URL"] == "http://127.0.0.1:39111/"
+        assert environment["AG_GRID_REFERENCE_RUN_ID"] == environment["PIVOT_FLAGSHIP_RUN_ID"]
+        raw = Path(environment["AG_GRID_REFERENCE_EVIDENCE"])
+        assert raw == evidence / "private"
+        assert junit_path.name == "ag-grid-reference.junit.xml"
+        assert junit_path != Path(environment["PIVOT_FLAGSHIP_CASE_RESULTS"]).with_name("installed-browser.junit.xml")
+        if damage == "pytest-raises":
+            raise RuntimeError("reference pytest could not start")
+        if damage == "missing-junit":
+            return 0
+        run_id = support.start_reference_run(raw, environment["AG_GRID_REFERENCE_RUN_ID"])
+        suite = ET.Element("testsuite")
+        records = []
+        raw_status = {"nonzero": "failed", "skipped": "skipped", "failure": "failed"}.get(damage, "blocked")
+        for requirement in comparable:
+            case = ET.SubElement(suite, "testcase", classname="tests.test_flagship_ag_grid_reference",
+                                 name="test_" + requirement.id)
+            properties = ET.SubElement(case, "properties")
+            ET.SubElement(properties, "property", name="ag_grid_test_id", value=requirement.ag_grid["test_id"])
+            observation = raw / "runs" / run_id / requirement.id / "observation.json"
+            observation.parent.mkdir(parents=True)
+            observation.write_text("{}")
+            records.append(asdict(CaseResult(requirement.id, "ag_grid", None, requirement.ag_grid["test_id"],
+                                            raw_status, "Infrastructure test", "unavailable", (str(observation),))))
+        if damage == "incomplete-junit":
+            suite.remove(list(suite)[-1])
+        if damage == "wrong-junit-id":
+            suite.find("testcase/properties/property").set("value", "ag-grid.unmapped")
+        if damage == "duplicate-junit-id":
+            list(suite)[-1].find("properties/property").set("value", comparable[0].ag_grid["test_id"])
+        if damage in {"skipped", "failure", "error"}:
+            ET.SubElement(suite.find("testcase"), damage)
+        if damage == "summary-skipped":
+            suite.set("skipped", "1")
+        ET.ElementTree(suite).write(junit_path)
+        if damage == "malformed-junit":
+            junit_path.write_text("<not-xml")
+        if damage == "incomplete-raw":
+            records.pop()
+        if damage == "duplicate-raw":
+            records[-1] = records[0]
+        if damage == "stale-raw":
+            run_id = "previous-run"
+        (raw / "case-results.json").write_text(json.dumps({"schema_version": 1, "run_id": run_id, "results": records}))
+        return 7 if damage == "nonzero" else 0
+
+    monkeypatch.setattr(flagship_artifacts, "start_installed_hosts", hosts)
+    monkeypatch.setattr(flagship_reference_runner, "start_reference_server", reference)
+    monkeypatch.setattr(runner, "_run_browser_suite", product)
+    monkeypatch.setattr(runner, "_run_reference_suite", browser, raising=False)
+    evidence = tmp_path / "qualification"
+    assert runner.main(["--installed-release", "--artifact-dir", str(evidence)]) == 1
+    reports = list((evidence / "private/runs").glob("*/read-only-qualification.raw.json"))
+    assert len(reports) == 1
+    return events, json.loads(reports[0].read_text()), reports[0].parent
+
+
+def test_installed_qualifier_runs_managed_reference_and_binds_current_raw_observations(tmp_path, monkeypatch):
+    events, report, private = _managed_reference_qualification(tmp_path, monkeypatch)
+    assert events == ["start", "browser", "stop"]
+    assert (private / "ag_grid-case-results.json").is_file()
+    assert "case_envelope_invalid" not in report["systemIssues"]["ag_grid"]
+    assert report["junit"]["ag_grid"] == {"tests": 67, "skipped": 0, "failures": 0, "errors": 0}
+
+
+def test_installed_qualifier_rejects_reference_fixture_drift_before_launch(tmp_path, monkeypatch):
+    events, report, private = _managed_reference_qualification(tmp_path, monkeypatch, damage="fixture-mismatch")
+    assert events == []
+    assert "case_envelope_invalid" in report["systemIssues"]["ag_grid"]
+    assert not (private / "ag_grid-case-results.json").exists()
+
+
+@pytest.mark.parametrize("damage,status,issue", [
+    ("nonzero", "failed", "browser_exit_nonzero"), ("skipped", "skipped", "junit_skipped"),
+    ("failure", "failed", "junit_failures"), ("error", "blocked", "junit_errors"),
+    ("summary-skipped", "blocked", "junit_skipped"),
+])
+def test_installed_qualifier_retains_complete_failed_reference_observations(tmp_path, monkeypatch, damage, status, issue):
+    events, report, private = _managed_reference_qualification(tmp_path, monkeypatch, damage=damage)
+    envelope = json.loads((private / "ag_grid-case-results.json").read_text())
+    assert len(envelope["results"]) == 67
+    assert {case["result"] for case in envelope["results"]} == {status}
+    assert events == ["start", "browser", "stop"]
+    assert report["parityResult"] == "failed"
+    assert "case_envelope_invalid" not in report["systemIssues"]["ag_grid"]
+    assert issue in report["systemIssues"]["ag_grid"]
+
+
+@pytest.mark.parametrize("damage", ["missing-server", "bad-config", "incomplete-junit",
+                                    "wrong-junit-id", "duplicate-junit-id",
+                                    "pytest-raises", "missing-junit", "malformed-junit",
+                                    "incomplete-raw", "duplicate-raw", "stale-raw"])
+def test_installed_qualifier_reference_failure_stays_invalid_and_cleans_up(tmp_path, monkeypatch, damage):
+    events, report, private = _managed_reference_qualification(tmp_path, monkeypatch, damage=damage)
+    assert events[0] == "start" and events[-1] == "stop"
+    assert report["parityResult"] == "failed"
+    assert "case_envelope_invalid" in report["systemIssues"]["ag_grid"]
+    assert not (private / "ag_grid-case-results.json").exists()
+    assert "ag_grid" in report["junit"]
+
+
+def test_reference_suite_enables_live_cases_and_selects_the_complete_module(tmp_path, monkeypatch):
+    from scripts import certify_flagship as runner
+    from types import SimpleNamespace
+
+    def run(command, *, cwd, env):
+        assert command[3:6] == ["tests/test_flagship_ag_grid_reference.py", "-m", "flagship"]
+        assert "-k" not in command
+        assert env["AG_GRID_REFERENCE_LIVE"] == "1"
+        assert env["AG_GRID_REFERENCE_EVIDENCE"] == str(tmp_path / "private")
+        assert f"--junitxml={tmp_path / 'reference.xml'}" in command
+        return SimpleNamespace(returncode=7)
+
+    monkeypatch.setattr(runner.subprocess, "run", run)
+    assert runner._run_reference_suite(tmp_path, {}, tmp_path / "reference.xml") == 7
+
+
 def test_flagship_certification_document_is_generated_from_the_matrix_contract():
     document = (ROOT / "docs" / "flagship-functionality-certification.md").read_text(encoding="utf-8")
     assert "tests/flagship_capabilities.py" in document

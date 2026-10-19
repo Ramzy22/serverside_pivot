@@ -16,7 +16,7 @@ from selenium.webdriver.common.by import By
 from selenium.webdriver.common.keys import Keys
 from openpyxl import load_workbook
 
-from tests.flagship_reference_support import DEFAULT_EVIDENCE, ReferenceWorkflowUnavailable, reference_case, start_reference_run
+from tests.flagship_reference_support import DEFAULT_EVIDENCE, ReferenceWorkflowUnavailable, load_case_results, reference_case, start_reference_run
 
 
 pytestmark = [
@@ -201,6 +201,17 @@ def _assert_cells(cells, expected):
 def reference_run():
     root = Path(os.environ.get("AG_GRID_REFERENCE_EVIDENCE", DEFAULT_EVIDENCE)).resolve()
     return start_reference_run(root, os.environ.get("AG_GRID_REFERENCE_RUN_ID"))
+
+
+@pytest.fixture(autouse=True)
+def reference_junit_identity(reference_run, record_property):
+    """Label JUnit only with identities actually observed by this browser case."""
+    root = Path(os.environ.get("AG_GRID_REFERENCE_EVIDENCE", DEFAULT_EVIDENCE)).resolve()
+    before = {case.test_id for case in load_case_results(root, reference_run)}
+    yield
+    for case in load_case_results(root, reference_run):
+        if case.test_id not in before:
+            record_property("ag_grid_test_id", case.test_id)
 
 
 def _displayed_rows(driver):

@@ -25,7 +25,7 @@ import xml.etree.ElementTree as ET
 from contextlib import ExitStack, contextmanager
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Callable, Iterator
+from typing import Callable, Iterator, Mapping
 from uuid import uuid4
 
 
@@ -221,6 +221,37 @@ def _run_with_hosts(
         ))
         _wait_for("http://127.0.0.1:8502/_stcore/health", process=streamlit_process)
         return browser_suite()
+
+
+def _run_reference_suite(artifact_dir: Path, environment: Mapping[str, str], junit_path: Path) -> int:
+    """Execute every committed reference browser case with private raw output."""
+    child_environment = {
+        **environment,
+        "AG_GRID_REFERENCE_LIVE": "1",
+        "AG_GRID_REFERENCE_EVIDENCE": str(artifact_dir / "private"),
+    }
+    command = [sys.executable, "-m", "pytest", "tests/test_flagship_ag_grid_reference.py",
+               "-m", "flagship", "-q", "-o", "junit_family=xunit1", f"--junitxml={junit_path}"]
+    return subprocess.run(command, cwd=ROOT, env=child_environment).returncode
+
+
+def _reference_junit_issues(path: Path, expected_ids: set[str]) -> list[str]:
+    """A green subset, duplicate identity, or unlabelled case cannot qualify."""
+    from scripts.flagship_manifest import apply_junit_result
+
+    report = {"systemIssues": {"ag_grid": []}}
+    apply_junit_result(report, path, system="ag_grid")
+    issues = report["systemIssues"]["ag_grid"]
+    try:
+        cases = list(ET.parse(path).getroot().iter("testcase"))
+        identities = [case.findall("./properties/property[@name='ag_grid_test_id']") for case in cases]
+        ids = [properties[0].get("value") for properties in identities if len(properties) == 1]
+        if (not expected_ids or len(ids) != len(cases) or len(ids) != len(expected_ids)
+                or set(ids) != expected_ids):
+            issues.append("junit_invalid")
+    except (OSError, ET.ParseError):
+        pass  # apply_junit_result already records the missing/malformed report.
+    return sorted(set(issues))
 
 
 def _run_qualification_phase(
@@ -900,6 +931,8 @@ def _certify_installed_release(artifact_dir: Path, started_at: datetime, *, buil
         QualificationBinding, apply_junit_result, evaluate_manifest,
         load_case_envelope, publish_safe_manifest, read_committed_contract, load_committed_requirements,
     )
+    from scripts.flagship_reference_runner import start_reference_server
+    from tests.flagship_reference_support import load_case_results, write_reference_case_envelope
 
     result = "failed"
     code = 1
@@ -912,6 +945,8 @@ def _certify_installed_release(artifact_dir: Path, started_at: datetime, *, buil
     envelopes = {system: private / f"{system}-case-results.json" for system in ("product", "ag_grid")}
     binding = QualificationBinding(run_id=run_id)
     junit_path = private / "installed-browser.junit.xml"
+    reference_junit_path = private / "ag-grid-reference.junit.xml"
+    reference_issues: list[str] = []
     try:
         build_options = {"build_wheelhouse": build_wheelhouse} if build_wheelhouse is not None else {}
         artifacts = build_artifacts(ROOT, artifact_dir / "release-artifacts", **build_options)
@@ -959,6 +994,35 @@ def _certify_installed_release(artifact_dir: Path, started_at: datetime, *, buil
                 code = 1
         if code == 0:
             cleanup_python_environment(artifacts)
+        try:
+            reference_requirements = load_committed_requirements(binding)
+            expected_reference = {(item.id, item.ag_grid["test_id"]) for item in reference_requirements
+                                  if item.ag_grid.get("result") != "not_applicable"}
+            if hashlib.sha256((ROOT / "tests/data/flagship_parity_rows.json").read_bytes()).hexdigest() != binding.sha256.get("fixture"):
+                raise ValueError("reference fixture differs from the built artifact fixture")
+            with start_reference_server(ROOT, private) as reference:
+                reference_environment = {
+                    **environment,
+                    "AG_GRID_REFERENCE_LIVE": "1",
+                    "AG_GRID_REFERENCE_URL": reference.url,
+                    "AG_GRID_REFERENCE_RUN_ID": run_id,
+                    "AG_GRID_REFERENCE_EVIDENCE": str(artifact_dir / "private"),
+                }
+                reference_code = _run_reference_suite(artifact_dir, reference_environment, reference_junit_path)
+            reference_issues.extend(_reference_junit_issues(reference_junit_path, {test for _, test in expected_reference}))
+            if reference_code != 0:
+                reference_issues.append("browser_exit_nonzero")
+            if not set(reference_issues) & {"junit_missing", "junit_invalid", "junit_empty"}:
+                raw_cases = load_case_results(artifact_dir / "private", run_id)
+                actual_reference = [(case.requirement_id, case.test_id) for case in raw_cases]
+                if len(actual_reference) != len(expected_reference) or set(actual_reference) != expected_reference:
+                    raise ValueError("reference observations do not cover the exact committed map")
+                write_reference_case_envelope(artifact_dir / "private", envelopes["ag_grid"], binding)
+        except Exception as error:
+            reference_issues.append("qualification_incomplete")
+            (private / "reference-error.json").write_text(json.dumps({
+                "type": type(error).__name__, "reason": str(error),
+            }, indent=2) + "\n", encoding="utf-8")
         completed = True
     finally:
         try:
@@ -982,6 +1046,10 @@ def _certify_installed_release(artifact_dir: Path, started_at: datetime, *, buil
             if system == "product":
                 report["releaseResult"] = "failed"
         apply_junit_result(report, junit_path, system="product")
+        apply_junit_result(report, reference_junit_path, system="ag_grid")
+        if reference_issues:
+            report["systemIssues"]["ag_grid"] = sorted(set(report["systemIssues"]["ag_grid"]) | set(reference_issues))
+            report["parityResult"] = "failed"
         if code != 0 or not completed:
             report["issues"].append("browser_exit_nonzero" if completed else "qualification_incomplete")
             report["releaseResult"] = report["parityResult"] = "failed"
