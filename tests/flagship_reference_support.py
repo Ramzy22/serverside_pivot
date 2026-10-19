@@ -9,6 +9,7 @@ import json
 import os
 from pathlib import Path
 import re
+import tempfile
 from typing import Iterator
 from uuid import uuid4
 from datetime import datetime, timezone
@@ -18,6 +19,7 @@ from urllib.parse import urlsplit
 from selenium.common.exceptions import TimeoutException
 
 from tests.flagship_contract import CaseResult, load_requirements
+from scripts.flagship_manifest import QualificationBinding, load_case_envelope
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -62,6 +64,61 @@ def load_case_results(evidence_root: Path, expected_run_id: str) -> tuple[CaseRe
         raise ValueError("reference case-results run id or schema does not match")
     return tuple(CaseResult(**{**record, "evidence_paths": tuple(record.get("evidence_paths", ()))})
                  for record in manifest["results"])
+
+
+def write_reference_case_envelope(
+    raw_root: Path, output_path: Path, binding: QualificationBinding,
+) -> None:
+    """Bind current private observations without upgrading their raw outcomes.
+
+    Content validity remains the evaluator's responsibility. Hashes freeze the
+    captured bytes so later replacements cannot qualify, while path checks stop
+    retained evidence from an earlier invocation being rebound here.
+    """
+    if not re.fullmatch(r"[a-zA-Z0-9_-]+", binding.run_id):
+        raise ValueError("invalid reference run id")
+    run_root = (Path(raw_root) / "runs" / binding.run_id).resolve()
+    output_path = Path(output_path).resolve()
+    if not output_path.is_relative_to(run_root):
+        raise ValueError("reference envelope must remain in the current-run private tree")
+    provenance = {
+        "run_id": binding.run_id,
+        "source_commit": binding.source_commit,
+        "sha256": dict(binding.sha256),
+    }
+    records = []
+    seen = set()
+    for case in load_case_results(raw_root, binding.run_id):
+        if case.requirement_id in seen:
+            raise ValueError("duplicate reference requirement id")
+        seen.add(case.requirement_id)
+        if case.system != "ag_grid" or case.host is not None:
+            raise ValueError("reference case must describe AG Grid")
+        evidence_hashes = {}
+        for name in case.evidence_paths:
+            path = Path(name).resolve(strict=True)
+            if not path.is_relative_to(run_root) or path == output_path:
+                raise ValueError("reference evidence must remain in the current-run private tree")
+            if name in evidence_hashes:
+                raise ValueError("duplicate reference evidence path")
+            evidence_hashes[name] = hashlib.sha256(path.read_bytes()).hexdigest()
+        records.append({**asdict(case), **provenance, "loaded_assets": {},
+                        "evidence_sha256": evidence_hashes})
+    envelope = {"schema_version": MANIFEST_SCHEMA, **provenance, "results": records}
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    temporary = None
+    try:
+        with tempfile.NamedTemporaryFile(mode="w", encoding="utf-8", dir=output_path.parent,
+                                         prefix=".reference-envelope-", suffix=".json", delete=False) as stream:
+            temporary = Path(stream.name)
+            json.dump(envelope, stream, ensure_ascii=False, indent=2)
+            stream.flush()
+            os.fsync(stream.fileno())
+        load_case_envelope(temporary, binding)
+        os.replace(temporary, output_path)
+    finally:
+        if temporary is not None:
+            temporary.unlink(missing_ok=True)
 
 
 def classify_reference_exception(error: Exception, *, page_loaded: bool) -> str:

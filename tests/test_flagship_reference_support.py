@@ -7,11 +7,63 @@ import os
 from pathlib import Path
 import subprocess
 import sys
+from dataclasses import asdict
 
 import pytest
 from selenium.common.exceptions import TimeoutException
 
 from tests import flagship_reference_support as support
+from scripts.flagship_manifest import QualificationBinding, load_case_envelope
+
+
+@pytest.fixture
+def raw_reference(tmp_path):
+    binding = QualificationBinding(source_commit="a" * 40, run_id="current-run",
+                                   paths={}, sha256={"fixture": "b" * 64})
+    support.start_reference_run(tmp_path, binding.run_id)
+    case = support.LiveCase("initial-workspace.populated", None, tmp_path, binding.run_id)
+    result = case.save("blocked", "private diagnostic")
+    output = tmp_path / "runs" / binding.run_id / "reference-cases.json"
+    return tmp_path, binding, result, output
+
+
+@pytest.mark.parametrize("status", ["blocked", "failed"])
+def test_reference_envelope_preserves_nonpassing_status_and_binding(raw_reference, status):
+    root, binding, result, output = raw_reference
+    raw = json.loads((root / "case-results.json").read_text())
+    raw["results"][0]["result"] = status
+    (root / "case-results.json").write_text(json.dumps(raw))
+    support.write_reference_case_envelope(root, output, binding)
+    (bound,) = load_case_envelope(output, binding)
+    assert bound.result == status
+    assert bound.test_id == result.test_id
+    assert bound.sha256 == binding.sha256
+    assert bound.evidence_sha256.keys() == set(result.evidence_paths)
+
+
+@pytest.mark.parametrize("damage", ["wrong_run", "missing", "duplicate", "old_path", "public_output"])
+def test_reference_envelope_rejects_invalid_inputs_without_replacing_output(raw_reference, damage):
+    root, binding, result, output = raw_reference
+    raw = json.loads((root / "case-results.json").read_text())
+    if damage == "wrong_run":
+        raw["run_id"] = "old-run"
+    elif damage == "missing":
+        Path(result.evidence_paths[0]).unlink()
+    elif damage == "duplicate":
+        raw["results"].append(asdict(result))
+    elif damage == "old_path":
+        old = root / "runs" / "old-run" / "observation.json"
+        old.parent.mkdir(parents=True)
+        old.write_bytes(Path(result.evidence_paths[0]).read_bytes())
+        raw["results"][0]["evidence_paths"] = [str(old)]
+    else:
+        output = root / "public" / "reference-cases.json"
+    (root / "case-results.json").write_text(json.dumps(raw))
+    output.parent.mkdir(parents=True, exist_ok=True)
+    output.write_text("previous complete envelope")
+    with pytest.raises((ValueError, OSError)):
+        support.write_reference_case_envelope(root, output, binding)
+    assert output.read_text() == "previous complete envelope"
 
 
 @pytest.mark.parametrize("opt_in,live_skipped", [(None, True), ("1", False), ("true", True)])

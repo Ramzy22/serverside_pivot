@@ -95,6 +95,45 @@ def test_complete_bound_cases_pass_both_gates_and_declare_host_exclusions(qualif
     assert result["requirements"]["copy.cells"]["hosts"]["dash"]["result"] == "passed"
 
 
+@pytest.mark.parametrize("damage", [None, "fixture", "changed_bytes", "trace", "blocked", "failed"])
+def test_raw_reference_adapter_remains_subject_to_evaluator(qualification, tmp_path, damage):
+    from tests import flagship_reference_support as support
+
+    requirements, binding, cases = qualification
+    target = next(i for i, case in enumerate(cases) if case.system == "ag_grid")
+    original = cases[target]
+    observation = Path(original.evidence_paths[0])
+    data = json.loads(observation.read_text())
+    if damage == "fixture":
+        data["config"]["fixtureSha256"] = "0" * 64
+    elif damage == "trace":
+        data["trace"] = []
+    observation.write_text(json.dumps(data))
+    screenshot = observation.with_suffix(".png")
+    screenshot.write_bytes(b"private screenshot")
+    raw = {key: value for key, value in asdict(original).items() if key in CaseResult.__dataclass_fields__}
+    raw["evidence_paths"] = [str(observation), str(screenshot)]
+    raw["result"] = damage if damage in {"blocked", "failed"} else "passed"
+    support.start_reference_run(tmp_path, binding.run_id)
+    (tmp_path / "case-results.json").write_text(json.dumps({
+        "schema_version": 1, "run_id": binding.run_id, "results": [raw],
+    }))
+    envelope = tmp_path / "runs" / binding.run_id / "reference-cases.json"
+    support.write_reference_case_envelope(tmp_path, envelope, binding)
+    (bound,) = manifest.load_case_envelope(envelope, binding)
+    assert isinstance(bound, manifest.BoundCaseResult)
+    assert bound.result == raw["result"]
+    assert bound.test_id == original.test_id
+    assert bound.evidence_sha256[str(screenshot)] == hashlib.sha256(b"private screenshot").hexdigest()
+    if damage == "changed_bytes":
+        screenshot.write_bytes(b"substituted screenshot")
+    cases[target] = bound
+    evaluated = manifest.evaluate_manifest(requirements, binding, cases)
+    assert evaluated["releaseResult"] == "passed"
+    assert evaluated["parityResult"] == ("passed" if damage is None else "failed")
+    assert "private screenshot" not in json.dumps(evaluated)
+
+
 @pytest.mark.parametrize("state", ["missing", "failed", "skipped", "blocked", "not_applicable"])
 def test_one_applicable_host_case_cannot_be_hidden_by_other_passes(qualification, state):
     requirements, binding, cases = qualification
