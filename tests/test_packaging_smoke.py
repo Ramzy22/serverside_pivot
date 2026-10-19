@@ -533,6 +533,21 @@ def test_combined_host_build_installs_the_streamlit_lockfile():
     assert "npm --prefix streamlit_pivot/frontend run build" in streamlit_build
 
 
+def test_streamlit_frontend_lockfile_is_a_tracked_build_prerequisite():
+    """The nested npm ci build must not depend on a local-only lockfile."""
+    relative = "dash_tanstack_pivot/streamlit_pivot/frontend/package-lock.json"
+    tracked = subprocess.run(
+        ["git", "ls-files", "--error-unmatch", relative],
+        cwd=REPO_ROOT, text=True, capture_output=True, check=False,
+    )
+    assert tracked.returncode == 0, tracked.stderr
+    frontend = PKG_DIR / "streamlit_pivot" / "frontend"
+    package = json.loads((frontend / "package.json").read_text(encoding="utf-8"))
+    lock = json.loads((frontend / "package-lock.json").read_text(encoding="utf-8"))
+    for section in ("dependencies", "devDependencies"):
+        assert lock["packages"][""][section] == package[section]
+
+
 def test_component_asset_metadata_uses_the_distribution_version():
     """A release must not serve a previous version's cached Dash bundle.
 
