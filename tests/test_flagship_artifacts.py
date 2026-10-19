@@ -323,7 +323,7 @@ def test_installed_release_binds_browser_environment_and_preserves_failure(tmp_p
     monkeypatch.setattr(flagship_artifacts, "build_artifacts", lambda source, output: binding)
 
     @contextmanager
-    def installed_hosts(actual_binding, output):
+    def installed_hosts(actual_binding, output, **kwargs):
         assert actual_binding is binding
         yield {"dash": "http://127.0.0.1:39001", "react": "http://127.0.0.1:39002", "streamlit": "http://127.0.0.1:8502"}
 
@@ -353,7 +353,7 @@ def test_installed_release_rejects_zero_exit_with_skipped_missing_or_empty_brows
 
     monkeypatch.setattr(flagship_artifacts, "build_artifacts", lambda source, output: ArtifactBinding())
     @contextmanager
-    def hosts(binding, output):
+    def hosts(binding, output, **kwargs):
         yield {"dash": "http://127.0.0.1:1", "react": "http://127.0.0.1:2", "streamlit": "http://127.0.0.1:8502"}
     monkeypatch.setattr(flagship_artifacts, "start_installed_hosts", hosts)
     def suite(evidence, environment, **kwargs):
@@ -366,25 +366,29 @@ def test_installed_release_rejects_zero_exit_with_skipped_missing_or_empty_brows
     assert json.loads((evidence / "flagship-certification.json").read_text())["result"] == "failed"
 
 
-def test_installed_release_records_cleanup_failure_as_failed(tmp_path, monkeypatch):
+@pytest.mark.parametrize("browser_code", [0, 7])
+def test_installed_release_records_cleanup_failure_as_failed(tmp_path, monkeypatch, browser_code):
     from scripts import certify_flagship, flagship_artifacts
-    monkeypatch.setattr(flagship_artifacts, "build_artifacts", lambda source, output: ArtifactBinding())
+    binding = ArtifactBinding(paths={"environment": tmp_path / "owned-env",
+                                    "environment_record": tmp_path / "owned-env.location.json"})
+    monkeypatch.setattr(flagship_artifacts, "build_artifacts", lambda source, output: binding)
     @contextmanager
-    def hosts(binding, output):
+    def hosts(binding, output, **kwargs):
         yield {"dash": "http://127.0.0.1:1", "react": "http://127.0.0.1:2", "streamlit": "http://127.0.0.1:8502"}
     monkeypatch.setattr(flagship_artifacts, "start_installed_hosts", hosts)
     def suite(evidence, environment, **kwargs):
         names = ("test_flagship_startup_navigation_and_controls", "test_flagship_copy_current_table_all_records_and_export_xlsx", "test_flagship_sidebar_filter_report_and_chart_entrypoints")
         kwargs["junit_path"].write_text("<testsuite>" + "".join(f'<testcase name="{name}[{host}]"/>' for name in names for host in ("dash", "react", "streamlit")) + "</testsuite>")
-        return 0
+        return browser_code
     monkeypatch.setattr(certify_flagship, "_run_browser_suite", suite)
     def cleanup(binding):
         raise RuntimeError("owned environment cleanup failed")
     monkeypatch.setattr(flagship_artifacts, "cleanup_python_environment", cleanup)
     evidence = tmp_path / "evidence"
-    with pytest.raises(RuntimeError, match="cleanup failed"):
-        certify_flagship.main(["--installed-release", "--artifact-dir", str(evidence)])
+    assert certify_flagship.main(["--installed-release", "--artifact-dir", str(evidence)]) == (browser_code or 1)
     assert json.loads((evidence / "flagship-certification.json").read_text())["result"] == "failed"
+    diagnostic, = (evidence / "private/runs").glob("*/cleanup-error.json")
+    assert json.loads(diagnostic.read_text())["reason"] == "owned environment cleanup failed"
 
 
 @pytest.mark.parametrize("body", [b"good release", b"altered release", None])

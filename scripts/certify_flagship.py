@@ -175,6 +175,7 @@ def _run_browser_suite(
     *,
     junit_path: Path | None = None,
     selection: str | None = None,
+    node_ids: list[str] | None = None,
 ) -> int:
     child_environment = {
         **environment,
@@ -183,7 +184,9 @@ def _run_browser_suite(
     }
     suite = ("tests/test_flagship_workflows.py" if environment.get("PIVOT_FLAGSHIP_EXPORT_JOB_DATA") == "1"
              else "tests/test_flagship_certification.py")
-    command = [sys.executable, "-m", "pytest", suite, "-m", "flagship", "-q"]
+    if node_ids is not None and not node_ids:
+        return 1  # An empty committed selection must never fall back to a smoke suite.
+    command = [sys.executable, "-m", "pytest", *(node_ids if node_ids is not None else [suite]), "-m", "flagship", "-q"]
     if selection:
         command.extend(["-k", selection])
     if junit_path is not None:
@@ -903,25 +906,106 @@ INSTALLED_BROWSER_CASES = (
 )
 
 
-def _installed_browser_report_passed(path: Path, *, export_jobs: bool = False) -> bool:
+EXPORT_JOB_REQUIREMENTS = frozenset({
+    "large-delivery.progress", "large-delivery.cancel-retry", "journey-recovery.cancel-new-work",
+})
+
+# This registry describes authored assertions, not release requirements. The
+# committed contract decides which host/test combinations must be qualified.
+# A journey may produce multiple mapped records (runtime error and recovery).
+PRODUCT_BROWSER_JOURNEYS = {
+    **{f"browser.{name}": "test_flagship_runtime_error_recovery[{host}]"
+       for name in ("runtime-error.visible", "runtime-error.recovery")},
+    **{f"browser.{name}": f"test_flagship_selected_clipboard[{name}-{{host}}]"
+       for name in ("cell-selection.range-clear", "copy-selection.logical-cells",
+                    "copy-selection.display-order", "copy-selection.pinned-columns")},
+    **{f"browser.{name}": f"test_flagship_hierarchy_navigation[{name}-{{host}}]"
+       for name in ("hierarchy-expand.round-trip", "hierarchy-expand-all.round-trip")},
+    **{f"browser.{name}": f"test_flagship_column_geometry[{name}-{{host}}]"
+       for name in ("column-sizing.resize", "column-sizing.auto-size", "column-pinning.round-trip")},
+    **{f"browser.{name}": f"test_flagship_export_jobs[{name}-{{host}}]"
+       for name in EXPORT_JOB_REQUIREMENTS},
+}
+
+
+def _product_browser_plan(requirements, *, export_jobs: bool = False):
+    plan = {}
+    for requirement in requirements:
+        if not requirement.required or export_jobs and requirement.id not in EXPORT_JOB_REQUIREMENTS:
+            continue
+        for host in requirement.hosts:
+            for test_id in requirement.browser_tests[host]:
+                journey = PRODUCT_BROWSER_JOURNEYS.get(test_id)
+                plan[(requirement.id, host, test_id)] = (
+                    f"tests/test_flagship_workflows.py::{journey.format(host=host)}" if journey else None
+                )
+    return plan
+
+
+def _installed_browser_coverage(path: Path, requirements, cases, *, export_jobs: bool = False) -> dict:
+    """Match exact JUnit identities and already-loaded bound browser records.
+
+    The manifest separately validates provenance/assets/evidence for every
+    record; this check prevents a green process or unrelated green JUnit subset
+    from standing in for the committed product browser map.
+    """
+    from collections import Counter
+    from scripts.flagship_manifest import apply_junit_result
+
+    plan = _product_browser_plan(requirements, export_jobs=export_jobs)
+    selected = sorted({node for node in plan.values() if node})
+    expected = {("tests.test_flagship_workflows", node.split("::", 1)[1]) for node in selected}
+    junit_report = {"systemIssues": {"product": []}}
+    apply_junit_result(junit_report, path, system="product")
     try:
-        report = ET.parse(path).getroot()
+        junit_cases = list(ET.parse(path).getroot().iter("testcase"))
     except (OSError, ET.ParseError):
+        junit_cases = []
+    actual = [(case.get("classname"), case.get("name")) for case in junit_cases]
+    records = [case for case in cases if case.system == "product" and case.test_id.startswith("browser.")]
+    keys = [(case.requirement_id, case.host, case.test_id) for case in records]
+
+    def identity(key):
+        return dict(zip(("requirementId", "host", "testId"), key))
+
+    missing_implementations = [identity(key) for key, node in plan.items() if node is None]
+    missing_records = [identity(key) for key in plan if key not in keys]
+    unexpected_records = [identity(key) for key in keys if key not in plan]
+    duplicate_records = [identity(key) for key, count in Counter(keys).items() if count > 1]
+    unsuccessful_records = [identity(key) for key, case in zip(keys, records) if case.result != "passed"]
+    missing_junit = [f"{module}::{name}" for module, name in sorted(expected - set(actual))]
+    unexpected_junit = [f"{module}::{name}" for module, name in actual if (module, name) not in expected]
+    duplicate_junit = [f"{module}::{name}" for (module, name), count in Counter(actual).items() if count > 1]
+    issues = junit_report["systemIssues"]["product"]
+    passed = bool(plan) and not any((missing_implementations, missing_records, unexpected_records,
+                                    duplicate_records, unsuccessful_records, missing_junit,
+                                    unexpected_junit, duplicate_junit, issues))
+    return {
+        "scope": "partial-cancellable-exports" if export_jobs else "complete-installed-release",
+        "result": "passed" if passed else "failed", "requiredCaseCount": len(plan),
+        "selectedCaseCount": len(selected), "selectedNodeIds": selected,
+        "missingImplementations": missing_implementations, "missingEnvelopeCases": missing_records,
+        "unexpectedEnvelopeCases": unexpected_records, "duplicateEnvelopeCases": duplicate_records,
+        "unsuccessfulEnvelopeCases": unsuccessful_records,
+        "missingJUnitCases": missing_junit, "unexpectedJUnitCases": unexpected_junit,
+        "duplicateJUnitCases": duplicate_junit, "junitIssues": issues,
+    }
+
+
+def _installed_browser_report_passed(path: Path, *, export_jobs: bool = False) -> bool:
+    # Kept for the standalone nine-case export diagnostic. Full qualification
+    # requires the committed contract and bound records via the coverage gate.
+    if not export_jobs:
         return False
-    cases = report.findall(".//testcase")
-    expected = ({f"test_flagship_export_jobs[{requirement}-{host}]"
-                 for requirement in ("large-delivery.progress", "large-delivery.cancel-retry", "journey-recovery.cancel-new-work")
-                 for host in QUALIFICATION_HOSTS} if export_jobs else
-                {f"{name}[{host}]" for name in INSTALLED_BROWSER_CASES for host in QUALIFICATION_HOSTS})
-    names = [case.get("name") for case in cases]
-    try:
-        return (
-            len(names) == len(expected) and set(names) == expected
-            and not any(case.find(tag) is not None for case in cases for tag in ("skipped", "failure", "error"))
-            and not any(int(suite.get(tag, "0")) for suite in report.iter("testsuite") for tag in ("skipped", "failures", "errors"))
-        )
-    except ValueError:
+    from scripts.flagship_manifest import apply_junit_result
+    report = {"systemIssues": {"product": []}}
+    apply_junit_result(report, path, system="product")
+    if report["systemIssues"]["product"]:
         return False
+    expected = {f"test_flagship_export_jobs[{requirement}-{host}]"
+                for requirement in EXPORT_JOB_REQUIREMENTS for host in QUALIFICATION_HOSTS}
+    names = [case.get("name") for case in ET.parse(path).getroot().iter("testcase")]
+    return len(names) == len(expected) and set(names) == expected
 
 
 def _certify_installed_release(artifact_dir: Path, started_at: datetime, *, build_wheelhouse: Path | None = None,
@@ -947,6 +1031,7 @@ def _certify_installed_release(artifact_dir: Path, started_at: datetime, *, buil
     junit_path = private / "installed-browser.junit.xml"
     reference_junit_path = private / "ag-grid-reference.junit.xml"
     reference_issues: list[str] = []
+    product_issues: list[str] = []
     try:
         build_options = {"build_wheelhouse": build_wheelhouse} if build_wheelhouse is not None else {}
         artifacts = build_artifacts(ROOT, artifact_dir / "release-artifacts", **build_options)
@@ -962,6 +1047,17 @@ def _certify_installed_release(artifact_dir: Path, started_at: datetime, *, buil
             # A missing source object cannot qualify; retain the browser exit
             # code and let the manifest report the invalid contract binding.
             pass
+        try:
+            product_requirements = load_committed_requirements(binding)
+        except (OSError, ValueError, TypeError, subprocess.CalledProcessError):
+            product_requirements = ()
+        plan = _product_browser_plan(product_requirements, export_jobs=export_jobs)
+        selected = sorted({node for node in plan.values() if node})
+        if export_jobs:
+            print("Partial cancellable-export coverage: nine cases cannot qualify the complete release gate.", flush=True)
+        missing_ids = sorted({key[0] for key, node in plan.items() if node is None})
+        if missing_ids:
+            print("Missing product browser implementations: " + ", ".join(missing_ids), flush=True)
         binding_path = artifact_dir / "artifact-binding.json"
         environment = os.environ.copy()
         environment.pop("PYTHONPATH", None)
@@ -971,29 +1067,62 @@ def _certify_installed_release(artifact_dir: Path, started_at: datetime, *, buil
         environment["PIVOT_FLAGSHIP_CASE_RESULTS"] = str(envelopes["product"])
         environment["PIVOT_FLAGSHIP_REFERENCE_CASE_RESULTS"] = str(envelopes["ag_grid"])
         environment["PIVOT_FLAGSHIP_EVIDENCE_ROOT"] = str(private)
-        if export_jobs:
-            environment["PIVOT_FLAGSHIP_EXPORT_JOB_DATA"] = "1"
-        options = {"environment": environment} if export_jobs else {}
-        with start_installed_hosts(artifacts, artifact_dir / "installed-hosts", **options) as urls:
-            binding.host_origins.update(urls)
-            binding_path.write_text(json.dumps({
-                "runId": run_id,
-                "sourceCommit": binding.source_commit,
-                "sha256": binding.sha256,
-                "versions": binding.versions,
-                "expectedLoadedAssets": binding.expected_loaded_assets,
-                "hostOrigins": binding.host_origins,
-            }, indent=2) + "\n", encoding="utf-8")
-            for host, url in urls.items():
-                environment[f"PIVOT_FLAGSHIP_{host.upper()}_URL"] = url
-            code = _run_browser_suite(
-                artifact_dir, environment, junit_path=junit_path,
-                selection="test_flagship_export_jobs" if export_jobs else " or ".join(INSTALLED_BROWSER_CASES),
-            )
-            if code == 0 and not _installed_browser_report_passed(junit_path, export_jobs=export_jobs):
-                code = 1
-        if code == 0:
-            cleanup_python_environment(artifacts)
+        environment["PIVOT_FLAGSHIP_TEST_FAULT_FILE"] = str(private / "fail-next-data-request")
+        environment["PIVOT_FLAGSHIP_PARITY_DATA"] = "1"
+        # Caller state must not silently replace the parity fixture in full mode.
+        environment.pop("PIVOT_FLAGSHIP_EXPORT_JOB_DATA", None)
+        environment.pop("PIVOT_FLAGSHIP_EXPORT_QUALIFICATION_DATA", None)
+        phase_reports = []
+        code = 0
+        try:
+            for phase in (("exports",) if export_jobs else ("parity", "exports")):
+                phase_nodes = [node for node in selected if ("::test_flagship_export_jobs[" in node) == (phase == "exports")]
+                if not phase_nodes and product_requirements:
+                    continue
+                phase_environment = dict(environment)
+                if phase == "exports":
+                    phase_environment["PIVOT_FLAGSHIP_EXPORT_JOB_DATA"] = "1"
+                phase_junit = private / f"product-{phase}.junit.xml"
+                phase_reports.append(phase_junit)
+                with start_installed_hosts(artifacts, artifact_dir / f"installed-hosts-{phase}", environment=phase_environment) as urls:
+                    binding.host_origins.update(urls)
+                    binding_path.write_text(json.dumps({
+                        "runId": run_id, "sourceCommit": binding.source_commit,
+                        "sha256": binding.sha256, "versions": binding.versions,
+                        "expectedLoadedAssets": binding.expected_loaded_assets,
+                        "hostOrigins": binding.host_origins,
+                    }, indent=2) + "\n", encoding="utf-8")
+                    for host, url in urls.items():
+                        phase_environment[f"PIVOT_FLAGSHIP_{host.upper()}_URL"] = url
+                    phase_code = _run_browser_suite(artifact_dir, phase_environment, junit_path=phase_junit, node_ids=phase_nodes)
+                    if phase_code and not code:
+                        code = phase_code
+                # Even a failing parity journey cannot suppress export coverage.
+                if not product_requirements:
+                    break
+        finally:
+            combined = ET.Element("testsuites")
+            for phase_junit in phase_reports:
+                phase_report = {"systemIssues": {"product": []}}
+                apply_junit_result(phase_report, phase_junit, system="product")
+                product_issues.extend(phase_report["systemIssues"]["product"])
+                try:
+                    combined.append(ET.parse(phase_junit).getroot())
+                except (OSError, ET.ParseError):
+                    pass
+            ET.ElementTree(combined).write(junit_path, encoding="utf-8", xml_declaration=True)
+            # Cleanup validates the ownership record itself. Never infer ownership
+            # from an arbitrary/reused interpreter path, nor mask browser failure.
+            if artifacts.paths.get("environment") and artifacts.paths.get("environment_record"):
+                try:
+                    cleanup_python_environment(artifacts)
+                except Exception as error:
+                    product_issues.append("qualification_incomplete")
+                    (private / "cleanup-error.json").write_text(json.dumps({
+                        "type": type(error).__name__, "reason": str(error),
+                    }, indent=2) + "\n", encoding="utf-8")
+                    if not code:
+                        code = 1
         try:
             reference_requirements = load_committed_requirements(binding)
             expected_reference = {(item.id, item.ag_grid["test_id"]) for item in reference_requirements
@@ -1047,6 +1176,26 @@ def _certify_installed_release(artifact_dir: Path, started_at: datetime, *, buil
                 report["releaseResult"] = "failed"
         apply_junit_result(report, junit_path, system="product")
         apply_junit_result(report, reference_junit_path, system="ag_grid")
+        coverage = _installed_browser_coverage(junit_path, requirements, cases, export_jobs=export_jobs)
+        (private / "product-browser-coverage.json").write_text(json.dumps(coverage, indent=2) + "\n", encoding="utf-8")
+        if coverage["result"] != "passed":
+            if coverage["missingJUnitCases"] or coverage["unexpectedJUnitCases"] or coverage["duplicateJUnitCases"]:
+                product_issues.append("junit_invalid")
+            if not coverage["requiredCaseCount"] or coverage["missingImplementations"] or coverage["missingEnvelopeCases"]:
+                product_issues.append("case_missing")
+            if coverage["unexpectedEnvelopeCases"]:
+                product_issues.append("case_unmapped")
+            if coverage["duplicateEnvelopeCases"]:
+                product_issues.append("case_duplicate")
+            if coverage["unsuccessfulEnvelopeCases"]:
+                product_issues.append("case_invalid")
+        if export_jobs:
+            # Partial execution can never become release qualification, even if
+            # a future envelope contains additional passing historical records.
+            product_issues.append("qualification_incomplete")
+        if product_issues:
+            report["systemIssues"]["product"] = sorted(set(report["systemIssues"]["product"]) | set(product_issues))
+            report["releaseResult"] = report["parityResult"] = "failed"
         if reference_issues:
             report["systemIssues"]["ag_grid"] = sorted(set(report["systemIssues"]["ag_grid"]) | set(reference_issues))
             report["parityResult"] = "failed"

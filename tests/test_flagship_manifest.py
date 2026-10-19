@@ -502,7 +502,7 @@ def test_installed_runner_publishes_failed_requirement_manifest_even_when_smoke_
     monkeypatch.setattr(flagship_artifacts, "cleanup_python_environment", lambda binding: None)
 
     @contextmanager
-    def hosts(binding, output):
+    def hosts(binding, output, **kwargs):
         yield {host: f"http://127.0.0.1:{39001 + index}" for index, host in enumerate(("dash", "react", "streamlit"))}
 
     monkeypatch.setattr(flagship_artifacts, "start_installed_hosts", hosts)

@@ -761,7 +761,127 @@ def test_flagship_capability_matrix_covers_every_published_workflow():
     ]
 
 
-def _managed_reference_qualification(tmp_path, monkeypatch, *, damage=None):
+def _product_coverage_fixture(tmp_path):
+    from scripts.flagship_manifest import BoundCaseResult
+    from tests.flagship_contract import load_requirements
+
+    requirements = tuple(item for item in load_requirements(ROOT / "tests/flagship_requirements.json")
+                         if item.id in {"runtime-error.visible", "runtime-error.recovery", "column-sizing.resize"})
+    suite = ET.Element("testsuite")
+    for host in HOSTS:
+        for name in (f"test_flagship_runtime_error_recovery[{host}]",
+                     f"test_flagship_column_geometry[column-sizing.resize-{host}]"):
+            ET.SubElement(suite, "testcase", classname="tests.test_flagship_workflows", name=name)
+    path = tmp_path / "product.xml"
+    ET.ElementTree(suite).write(path)
+    cases = tuple(BoundCaseResult(item.id, "product", host, test_id, "passed", "Observed", "Chrome 140")
+                  for item in requirements for host in item.hosts for test_id in item.browser_tests[host])
+    return path, requirements, cases
+
+
+def test_full_product_coverage_rejects_green_legacy_smoke_subset(tmp_path):
+    from scripts import certify_flagship as runner
+
+    path = tmp_path / "smoke.xml"
+    suite = ET.Element("testsuite")
+    for name in runner.INSTALLED_BROWSER_CASES:
+        for host in HOSTS:
+            ET.SubElement(suite, "testcase", classname="tests.test_flagship_certification", name=f"{name}[{host}]")
+    ET.ElementTree(suite).write(path)
+    assert not runner._installed_browser_report_passed(path)
+
+
+def test_complete_mapped_product_identities_cover_multiple_records_per_journey(tmp_path):
+    from scripts import certify_flagship as runner
+
+    path, requirements, cases = _product_coverage_fixture(tmp_path)
+    report = runner._installed_browser_coverage(path, requirements, cases)
+    assert report["result"] == "passed"
+    assert report["requiredCaseCount"] == 9
+    assert report["selectedCaseCount"] == 6
+    assert report["missingImplementations"] == []
+
+
+@pytest.mark.parametrize("damage", ["skip", "failure", "wrong-class", "duplicate", "summary-skipped",
+                                    "missing-envelope", "failed-envelope", "duplicate-envelope"])
+def test_product_coverage_rejects_incomplete_or_substituted_case_evidence(tmp_path, damage):
+    from dataclasses import replace
+    from scripts import certify_flagship as runner
+
+    path, requirements, cases = _product_coverage_fixture(tmp_path)
+    tree = ET.parse(path)
+    suite = tree.getroot()
+    if damage in {"skip", "failure"}:
+        ET.SubElement(list(suite)[-1], "skipped" if damage == "skip" else "failure")
+    elif damage == "wrong-class":
+        list(suite)[-1].set("classname", "unrelated.tests")
+    elif damage == "duplicate":
+        list(suite)[-1].set("name", list(suite)[0].get("name"))
+    elif damage == "summary-skipped":
+        suite.set("skipped", "1")
+    elif damage == "missing-envelope":
+        cases = cases[:-1]
+    elif damage == "failed-envelope":
+        cases = (*cases[:-1], replace(cases[-1], result="failed"))
+    elif damage == "duplicate-envelope":
+        cases = (*cases, cases[0])
+    tree.write(path)
+    assert runner._installed_browser_coverage(path, requirements, cases)["result"] == "failed"
+
+
+def test_full_product_plan_reports_missing_contract_ids_and_selects_all_authored_journeys(tmp_path):
+    from scripts import certify_flagship as runner
+    from tests.flagship_contract import load_requirements
+
+    requirements = load_requirements(ROOT / "tests/flagship_requirements.json")
+    report = runner._installed_browser_coverage(tmp_path / "absent.xml", requirements, ())
+    assert {"requirementId": "initial-workspace.populated", "host": "dash",
+            "testId": "browser.initial-workspace.populated"} in report["missingImplementations"]
+    assert "tests/test_flagship_workflows.py::test_flagship_runtime_error_recovery[react]" in report["selectedNodeIds"]
+    assert "tests/test_flagship_workflows.py::test_flagship_export_jobs[large-delivery.progress-streamlit]" in report["selectedNodeIds"]
+    assert not any("test_flagship_startup_navigation" in item for item in report["selectedNodeIds"])
+    assert report["result"] == "failed"
+
+
+def test_export_only_product_evidence_is_explicitly_partial(tmp_path):
+    from scripts import certify_flagship as runner
+    from scripts.flagship_manifest import BoundCaseResult
+    from tests.flagship_contract import load_requirements
+
+    requirements = load_requirements(ROOT / "tests/flagship_requirements.json")
+    ids = ("large-delivery.progress", "large-delivery.cancel-retry", "journey-recovery.cancel-new-work")
+    suite = ET.Element("testsuite")
+    cases = []
+    for requirement in ids:
+        for host in HOSTS:
+            ET.SubElement(suite, "testcase", classname="tests.test_flagship_workflows",
+                          name=f"test_flagship_export_jobs[{requirement}-{host}]")
+            cases.append(BoundCaseResult(requirement, "product", host, f"browser.{requirement}",
+                                         "passed", "Observed", "Chrome 140"))
+    path = tmp_path / "exports.xml"
+    ET.ElementTree(suite).write(path)
+    partial = runner._installed_browser_coverage(path, requirements, cases, export_jobs=True)
+    assert partial["scope"] == "partial-cancellable-exports"
+    assert partial["result"] == "passed"
+    assert partial["requiredCaseCount"] == 9
+    assert runner._installed_browser_coverage(path, requirements, cases)["result"] == "failed"
+
+
+def test_product_suite_uses_exact_parametrized_nodes_and_never_broadens_empty_selection(tmp_path, monkeypatch):
+    from scripts import certify_flagship as runner
+    from types import SimpleNamespace
+
+    commands = []
+    monkeypatch.setattr(runner.subprocess, "run", lambda command, **kwargs: commands.append(command) or SimpleNamespace(returncode=0))
+    nodes = ["tests/test_flagship_workflows.py::test_flagship_runtime_error_recovery[dash]"]
+    assert runner._run_browser_suite(tmp_path, {}, node_ids=nodes) == 0
+    assert commands[0][3:4] == nodes
+    assert "-k" not in commands[0]
+    assert runner._run_browser_suite(tmp_path, {}, node_ids=[]) == 1
+    assert len(commands) == 1
+
+
+def _managed_reference_qualification(tmp_path, monkeypatch, *, damage=None, product_damage=None):
     """Replace external builds/processes while keeping envelope evaluation real."""
     from contextlib import contextmanager
     from dataclasses import asdict
@@ -776,15 +896,18 @@ def _managed_reference_qualification(tmp_path, monkeypatch, *, damage=None):
     commit = subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=ROOT, text=True).strip()
     artifacts = flagship_artifacts.ArtifactBinding(source_commit=commit, sha256={
         "fixture": hashlib.sha256((ROOT / "tests/data/flagship_parity_rows.json").read_bytes()).hexdigest(),
-    })
+    }, paths={"environment": tmp_path / "owned-env", "environment_record": tmp_path / "owned-env.location.json"})
     if damage == "fixture-mismatch":
         artifacts.sha256["fixture"] = "f" * 64
     monkeypatch.setattr(flagship_artifacts, "build_artifacts", lambda *args, **kwargs: artifacts)
-    monkeypatch.setattr(flagship_artifacts, "cleanup_python_environment", lambda binding: None)
+    cleanup_calls = []
+    monkeypatch.setattr(flagship_artifacts, "cleanup_python_environment", lambda binding: cleanup_calls.append(binding))
     events = []
 
     @contextmanager
     def hosts(*args, **kwargs):
+        if product_damage:
+            assert kwargs["environment"]["PIVOT_FLAGSHIP_TEST_FAULT_FILE"].endswith("fail-next-data-request")
         yield {host: f"http://127.0.0.1:{39001 + index}" for index, host in enumerate(HOSTS)}
 
     @contextmanager
@@ -802,9 +925,16 @@ def _managed_reference_qualification(tmp_path, monkeypatch, *, damage=None):
 
     def product(evidence, environment, **kwargs):
         suite = ET.Element("testsuite")
-        for name in runner.INSTALLED_BROWSER_CASES:
-            for host in HOSTS:
-                ET.SubElement(suite, "testcase", name=f"{name}[{host}]")
+        if product_damage == "all-authored":
+            assert kwargs["node_ids"]
+            for node in kwargs["node_ids"]:
+                ET.SubElement(suite, "testcase", classname="tests.test_flagship_workflows", name=node.split("::")[1])
+            fixture_is_flat = environment.get("PIVOT_FLAGSHIP_EXPORT_JOB_DATA") == "1"
+            assert all(("test_flagship_export_jobs[" in node) == fixture_is_flat for node in kwargs["node_ids"])
+        else:
+            for name in runner.INSTALLED_BROWSER_CASES:
+                for host in HOSTS:
+                    ET.SubElement(suite, "testcase", name=f"{name}[{host}]")
         ET.ElementTree(suite).write(kwargs["junit_path"])
         return 0
 
@@ -863,9 +993,27 @@ def _managed_reference_qualification(tmp_path, monkeypatch, *, damage=None):
     monkeypatch.setattr(runner, "_run_reference_suite", browser, raising=False)
     evidence = tmp_path / "qualification"
     assert runner.main(["--installed-release", "--artifact-dir", str(evidence)]) == 1
+    if product_damage:
+        assert cleanup_calls == [artifacts], "Owned environment must be cleaned even when coverage fails"
     reports = list((evidence / "private/runs").glob("*/read-only-qualification.raw.json"))
     assert len(reports) == 1
     return events, json.loads(reports[0].read_text()), reports[0].parent
+
+
+@pytest.mark.parametrize("product_damage", ["green-subset", "all-authored"])
+def test_installed_qualifier_rejects_missing_product_map_even_with_valid_reference_envelope(tmp_path, monkeypatch, product_damage):
+    events, report, private = _managed_reference_qualification(tmp_path, monkeypatch, product_damage=product_damage)
+    assert events == ["start", "browser", "stop"]
+    assert "case_envelope_invalid" not in report["systemIssues"]["ag_grid"]
+    assert report["releaseResult"] == "failed"
+    assert "case_missing" in report["systemIssues"]["product"]
+    coverage = json.loads((private / "product-browser-coverage.json").read_text())
+    assert coverage["scope"] == "complete-installed-release"
+    assert coverage["missingImplementations"]
+    assert coverage["selectedCaseCount"] == 39
+    if product_damage == "all-authored":
+        assert coverage["missingJUnitCases"] == []
+        assert coverage["unexpectedJUnitCases"] == []
 
 
 def test_installed_qualifier_runs_managed_reference_and_binds_current_raw_observations(tmp_path, monkeypatch):
