@@ -151,6 +151,14 @@ def _run_bundled_server_export_order(javascript):
         ),
         is_exportable: "(columnId) => Boolean(columnId)",
     }
+    table_match = re.search(
+        r"([A-Za-z_$][\w$]*)\s*&&\s*typeof\s+\1\.getRightVisibleLeafColumns",
+        callback,
+    )
+    if table_match:
+        bindings[table_match.group(1)] = (
+            "{getRightVisibleLeafColumns: () => [{id: '__RowTotal__sum'}]}"
+        )
     script = "\n".join(
         [*(f"const {name} = {value};" for name, value in bindings.items()),
          f"const callback = {callback};",
