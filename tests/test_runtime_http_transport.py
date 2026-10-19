@@ -93,6 +93,12 @@ def test_export_start_replay_uses_one_server_job_and_new_request_starts_another(
         assert replay.json()["payload"]["jobId"] == first.json()["payload"]["jobId"]
         _wait_job(client, first.json()["payload"]["jobId"], "completed")
         assert adapter.calls == 1
+        # Publication precedes final file/lease cleanup. Admission is only
+        # promised after that cleanup, not on the first completed status.
+        deadline = time.monotonic() + 5
+        while gateway.resource_governor.snapshot()["active_slots"]["export"]:
+            assert time.monotonic() < deadline, "completed export did not release admission"
+            time.sleep(.01)
         second = client.post("/v1/runtime", json=_job_request("start", format="csv"))
         assert second.status_code == 200, second.text
         assert second.json()["payload"]["jobId"] != first.json()["payload"]["jobId"]
