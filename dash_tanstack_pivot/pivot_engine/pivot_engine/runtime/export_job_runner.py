@@ -38,6 +38,7 @@ class _Execution:
     future: Future | None = None
     resources_released: bool = False
     finalized: bool = False
+    cleanup_last_logged: float = 0
 
 
 class ExportJobRunner:
@@ -147,6 +148,11 @@ class ExportJobRunner:
                     executions = list(self._active.values())
                 for execution in executions:
                     if execution.future is not None and execution.future.done():
+                        # Cleanup can outlive the database task. Keep the
+                        # cancelling owner lease alive until local unlink and
+                        # terminal acknowledgement really finish.
+                        if execution.epoch:
+                            self.job_store.heartbeat(execution.job.job_id, execution.epoch)
                         self._finalize(execution)
                         continue
                     if not execution.epoch:
@@ -278,7 +284,10 @@ class ExportJobRunner:
                 self._active.pop(execution.job.job_id, None)
                 execution.finalized = True
             except Exception:
-                log.exception("Export cleanup/terminal acknowledgement failed: %s", execution.job.job_id)
+                now = time.monotonic()
+                if now - execution.cleanup_last_logged >= 5:
+                    log.exception("Export cleanup/terminal acknowledgement failed: %s", execution.job.job_id)
+                    execution.cleanup_last_logged = now
 
     def close(self) -> None:
         with self._lock:
@@ -290,10 +299,17 @@ class ExportJobRunner:
             except Exception:
                 log.exception("Export registry unavailable during shutdown: %s", job_id)
         self._executor.shutdown(wait=True)
-        with self._lock:
-            for execution in list(self._active.values()):
-                if execution.future is not None and execution.future.done():
-                    self._finalize(execution)
-            if not self._active:
-                self._stop.set()
-        self._monitor.join(timeout=max(.1, self._poll * 2))
+        # Do not let process shutdown abandon locked partial files or an
+        # unacknowledged cancellation. The worker threads are finished, but
+        # final unlink/registry work can still require a retry (notably on
+        # Windows while a file handle is being released).
+        while True:
+            with self._lock:
+                for execution in list(self._active.values()):
+                    if execution.future is not None and execution.future.done():
+                        self._finalize(execution)
+                if not self._active:
+                    self._stop.set()
+                    break
+            time.sleep(self._poll)
+        self._monitor.join()

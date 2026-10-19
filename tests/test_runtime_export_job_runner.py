@@ -186,6 +186,57 @@ def test_cancel_retries_partial_file_cleanup_before_acknowledgement(tmp_path, mo
         runner.close()
 
 
+def test_close_waits_for_retryable_partial_file_cleanup(tmp_path, monkeypatch):
+    started, release, allow_unlink = threading.Event(), threading.Event(), threading.Event()
+
+    class HoldingAdapter(Adapter):
+        async def handle_request(self, *_args, **_kwargs):
+            started.set()
+            try:
+                await asyncio.Event().wait()
+            finally:
+                while not release.is_set():
+                    await asyncio.sleep(.005)
+
+        handle_virtual_scroll_request = handle_request
+
+    runner, store, payloads, governor, service, context, job = setup_runner(tmp_path, HoldingAdapter())
+    partial = tmp_path / "pivot_export_shutdown_partial.csv"
+    real_unlink = Path.unlink
+
+    def locked_unlink(path, *args, **kwargs):
+        if path == partial and not allow_unlink.is_set():
+            raise PermissionError("partial file is temporarily locked")
+        return real_unlink(path, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "unlink", locked_unlink)
+    shutdown = threading.Thread(target=runner.close, daemon=True)
+    try:
+        runner.start(job, context, PivotViewState(export_request={"format": "csv"}))
+        assert started.wait(2)
+        partial.write_text("incomplete", encoding="utf-8")
+        runner._active[job.job_id].control.paths.add(str(partial))
+        runner.signal_cancel(job.job_id)
+        release.set()
+        wait_for(lambda: runner._active[job.job_id].future.done())
+        shutdown.start()
+        shutdown.join(.5)
+        assert shutdown.is_alive(), "shutdown must not abandon a locked partial file"
+        assert snapshot(store).phase == "cancelling"
+        assert governor.snapshot()["active_slots"]["export"] == 1
+        allow_unlink.set()
+        shutdown.join(3)
+        assert not shutdown.is_alive()
+        assert snapshot(store).phase == "cancelled"
+        assert not partial.exists()
+    finally:
+        release.set()
+        allow_unlink.set()
+        if shutdown.is_alive():
+            shutdown.join(3)
+        runner.close()
+
+
 def test_cancel_before_claim_owns_no_admission(tmp_path):
     entered, release = threading.Event(), threading.Event()
     class DelayedStore(LocalExportJobStore):
