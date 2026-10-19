@@ -7,11 +7,11 @@ payloads so UI state is never used as a data channel.
 """
 
 import inspect
+import hashlib
 import json
 import os
 import threading
 import time
-import uuid
 from dataclasses import replace
 from typing import Any, Callable, Dict, Optional
 
@@ -201,8 +201,13 @@ class RuntimeHttpGateway:
         subject = self._principal_id(context.principal)
         account = context.accounting_account.tenant_id or "system"
         if action == "start":
-            snapshot = ExportJobSnapshot(uuid.uuid4().hex, subject, account, context.table)
-            store.create(snapshot)
+            # A replay of the same V1 Start is the same logical job, even if
+            # its first HTTP acknowledgement was lost. Identity comes from
+            # the authenticated server context, never a client-supplied job ID.
+            identity = json.dumps([subject, account, context.table, request["requestId"]],
+                                  ensure_ascii=False, separators=(",", ":")).encode("utf-8")
+            job_id = hashlib.blake2b(identity, digest_size=16).hexdigest()
+            snapshot = store.create(ExportJobSnapshot(job_id, subject, account, context.table))
             try:
                 self.export_job_runner.start(snapshot, context, state)
             except BaseException:

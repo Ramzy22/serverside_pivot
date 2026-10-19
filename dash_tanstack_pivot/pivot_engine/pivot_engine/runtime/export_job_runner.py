@@ -36,6 +36,7 @@ class _Execution:
     cancel_started: float | None = None
     cancel_warned: bool = False
     future: Future | None = None
+    resources_released: bool = False
     finalized: bool = False
 
 
@@ -145,6 +146,9 @@ class ExportJobRunner:
                 with self._lock:
                     executions = list(self._active.values())
                 for execution in executions:
+                    if execution.future is not None and execution.future.done():
+                        self._finalize(execution)
+                        continue
                     if not execution.epoch:
                         continue
                     valid = self.job_store.heartbeat(execution.job.job_id, execution.epoch)
@@ -166,6 +170,9 @@ class ExportJobRunner:
                 with self._lock:
                     for execution in list(self._active.values()):
                         self._cancel(execution)
+            with self._lock:
+                if self._closed and not self._active:
+                    self._stop.set()
 
     def _sweep_orphans(self):
         cutoff = time.time() - max(self.job_store.ttl_seconds, self.job_store.lease_seconds,
@@ -257,19 +264,21 @@ class ExportJobRunner:
         with self._lock:
             if execution.finalized:
                 return
-            execution.finalized = True
-        try:
-            # Either asyncio.run awaited native/writer cleanup, or the future
-            # was cancelled before any execution began. Both are safe to free.
-            for path in execution.control.paths:
-                Path(path).unlink(missing_ok=True)
-            execution.lease.release()
-            with self._lock:
+            try:
+                # Either asyncio.run awaited native/writer cleanup, or the
+                # future was cancelled before any execution began.
+                if not execution.resources_released:
+                    for path in list(execution.control.paths):
+                        Path(path).unlink(missing_ok=True)
+                        execution.control.paths.discard(path)
+                    execution.lease.release()
+                    self._capacity.release()
+                    execution.resources_released = True
+                self._acknowledge_stopped(execution.job, execution.epoch)
                 self._active.pop(execution.job.job_id, None)
-                self._capacity.release()
-            self._acknowledge_stopped(execution.job, execution.epoch)
-        except Exception:
-            log.exception("Export cleanup/terminal acknowledgement failed: %s", execution.job.job_id)
+                execution.finalized = True
+            except Exception:
+                log.exception("Export cleanup/terminal acknowledgement failed: %s", execution.job.job_id)
 
     def close(self) -> None:
         with self._lock:
@@ -281,5 +290,10 @@ class ExportJobRunner:
             except Exception:
                 log.exception("Export registry unavailable during shutdown: %s", job_id)
         self._executor.shutdown(wait=True)
-        self._stop.set()
-        self._monitor.join()
+        with self._lock:
+            for execution in list(self._active.values()):
+                if execution.future is not None and execution.future.done():
+                    self._finalize(execution)
+            if not self._active:
+                self._stop.set()
+        self._monitor.join(timeout=max(.1, self._poll * 2))

@@ -44,6 +44,12 @@ principal and checks the same dataset export permission. Status and cancel
 are bound to the server-resolved subject/account, not to a client-provided
 tenant, session, or filename. An unauthorized or unknown ID reveals no job
 metadata. Concurrent/replayed starts and cancels are idempotent where safe.
+The V1 Start `requestId` is its replay key within the authenticated
+subject/account/table scope. A client retries an unacknowledged Start with
+the same `requestId`; a deliberate new export allocates a new one. The
+server derives the opaque job identity and retains the terminal observation
+only for the configured job TTL. A lost status response instead polls the
+known job again, without starting a second export.
 
 The state machine is:
 

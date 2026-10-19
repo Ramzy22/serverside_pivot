@@ -52,12 +52,16 @@ function createExportJobController(initialPorts) {
       candidate.pollTimer = setTimeout(() => poll(candidate.jobId), 500);
     }
   };
-  const send = (candidate, action, payload, runtimeFields = {}) => {
+  const send = (candidate, action, payload, runtimeFields = {}, replayRequestId = null) => {
     clearPoll(candidate);
     let requestId;
     try {
-      requestId = ports.dispatch(payload, runtimeFields);
+      requestId = ports.dispatch(payload, runtimeFields, replayRequestId);
     } catch (error) {
+      if (action === 'start') {
+        candidate.pollTimer = setTimeout(() => send(candidate, 'start', payload, runtimeFields, candidate.startRequestId), 500);
+        return;
+      }
       if (candidate.cancelRequested && candidate.jobId) schedulePoll(candidate);
       else terminal(candidate, 'failed');
       return;
@@ -69,7 +73,9 @@ function createExportJobController(initialPorts) {
       if (!isCurrent(candidate) || !candidate.requests.has(requestId)) return;
       candidate.requests.delete(requestId);
       // A lost cancel response cannot establish server cleanup. Keep asking.
-      if (candidate.cancelRequested && candidate.jobId) schedulePoll(candidate);
+      if (action === 'start' && !candidate.jobId) {
+        send(candidate, 'start', candidate.payload, candidate.runtimeFields, candidate.startRequestId);
+      } else if (candidate.jobId) schedulePoll(candidate);
       else terminal(candidate, 'interrupted');
     }, 15000);
     candidate.requests.set(requestId, {action, timer});
@@ -98,13 +104,15 @@ function createExportJobController(initialPorts) {
     return true;
   };
   const start = (payload, runtimeFields = {}) => {
+    if (job && isCurrent(job) && !terminalExportPhases.has(job.phase)) return job.startRequestId;
     stop(job);
     job = {payload: {...payload, action: 'start'}, runtimeFields, phase: 'queued', jobId: null,
-      rowsWritten: 0, bytesWritten: 0, totalRows: null, requests: new Map(), cancelRequested: false};
+      rowsWritten: 0, bytesWritten: 0, totalRows: null, requests: new Map(), cancelRequested: false,
+      startRequestId: ports.allocateRequestId()};
     if (payload.partId) ports.setPartModal(previous => previous ? {...previous, processingPartId: payload.partId} : previous);
     ports.pendingCopyIntentRef.current = null;
     publish(job);
-    return send(job, 'start', job.payload, runtimeFields);
+    return send(job, 'start', job.payload, runtimeFields, job.startRequestId);
   };
   const download = async (candidate, payload, delivery) => {
     const ref = payload.payloadRef;
@@ -252,9 +260,12 @@ export function createRuntimeExportCommands({
     return payload;
   };
 
-  const dispatchServerExportRequest = (payload, runtimeFields = {}) => {
+  const allocateRequestId = () => {
     exportRequestSequenceRef.current += 1;
-    const requestId = `export:${clientInstanceRef.current}:${Date.now()}:${exportRequestSequenceRef.current}`;
+    return `export:${clientInstanceRef.current}:${Date.now()}:${exportRequestSequenceRef.current}`;
+  };
+  const dispatchServerExportRequest = (payload, runtimeFields = {}, replayRequestId = null) => {
+    const requestId = replayRequestId || allocateRequestId();
     activeExportRequestIdRef.current = requestId;
     dispatchServerSideRuntimeSetProps({
       runtimeRequest: {
@@ -265,7 +276,7 @@ export function createRuntimeExportCommands({
     return requestId;
   };
 
-  const jobPorts = {dispatch: dispatchServerExportRequest, activeExportRequestIdRef, pendingCopyIntentRef,
+  const jobPorts = {dispatch: dispatchServerExportRequest, allocateRequestId, activeExportRequestIdRef, pendingCopyIntentRef,
     setExportProgress, setIsExporting, setPartModal};
   if (!exportJobControllerRef.current) exportJobControllerRef.current = createExportJobController(jobPorts);
   const jobs = exportJobControllerRef.current;

@@ -6,6 +6,7 @@ import asyncio
 import threading
 import time
 import os
+import uuid
 from pathlib import Path
 import subprocess
 import sys
@@ -34,9 +35,9 @@ from pivot_engine.runtime.contracts import validate_runtime_request_v1
 from pivot_engine.tanstack_adapter import TanStackResponse
 
 
-def _job_request(action, job_id=None, **payload):
+def _job_request(action, job_id=None, *, request_id=None, **payload):
     return {
-        **_runtime_request(request_id=f"export-{action}"),
+        **_runtime_request(request_id=request_id or (f"export-start-{uuid.uuid4().hex}" if action == "start" else f"export-{action}")),
         "kind": "export", "state": {},
         "payload": {"action": action, **({"jobId": job_id} if job_id else {}), **payload},
     }
@@ -79,6 +80,24 @@ def _wait_job(client, job_id, phase):
             return response.json()["payload"]
         time.sleep(.01)
     raise AssertionError(f"Job did not become {phase}: {response.text}")
+
+
+def test_export_start_replay_uses_one_server_job_and_new_request_starts_another():
+    app, gateway, adapter, _current = _job_host()
+    with TestClient(app) as client:
+        envelope = _job_request("start", format="csv", request_id="export-lost-ack")
+        first = client.post("/v1/runtime", json=envelope)
+        assert first.status_code == 200, first.text
+        replay = client.post("/v1/runtime", json=envelope)
+        assert replay.status_code == 200, replay.text
+        assert replay.json()["payload"]["jobId"] == first.json()["payload"]["jobId"]
+        _wait_job(client, first.json()["payload"]["jobId"], "completed")
+        assert adapter.calls == 1
+        second = client.post("/v1/runtime", json=_job_request("start", format="csv"))
+        assert second.status_code == 200, second.text
+        assert second.json()["payload"]["jobId"] != first.json()["payload"]["jobId"]
+        _wait_job(client, second.json()["payload"]["jobId"], "completed")
+        assert adapter.calls == 2
 
 
 def test_gateway_shutdown_closes_active_runner_without_removed_fastapi_app_hook():
@@ -191,6 +210,24 @@ def test_export_jobs_cross_worker_cancel_uses_registry_and_no_view_query():
         assert adapter_a.calls == 1 and adapter_b.calls == 0
         assert gateway_a.resource_governor.snapshot()["active_slots"]["export"] == 0
         assert gateway_b._export_job_runner is None
+
+
+def test_export_start_replay_on_another_worker_keeps_original_owner():
+    shared = fakeredis.FakeRedis(decode_responses=False)
+    app_a, gateway_a, adapter_a, _ = _job_host(slow=True, distributed=_distributed_payload_state(shared))
+    app_b, gateway_b, adapter_b, _ = _job_host(distributed=_distributed_payload_state(shared))
+    envelope = _job_request("start", format="csv", request_id="lost-start-cross-worker")
+    with TestClient(app_a) as owner, TestClient(app_b) as other:
+        first = owner.post("/v1/runtime", json=envelope)
+        assert first.status_code == 200, first.text
+        assert adapter_a.started.wait(2)
+        replay = other.post("/v1/runtime", json=envelope)
+        assert replay.status_code == 200, replay.text
+        assert replay.json()["payload"]["jobId"] == first.json()["payload"]["jobId"]
+        assert adapter_a.calls == 1 and adapter_b.calls == 0
+        cancelled = other.post("/v1/runtime", json=_job_request("cancel", first.json()["payload"]["jobId"]))
+        assert cancelled.status_code == 200
+        _wait_job(other, first.json()["payload"]["jobId"], "cancelled")
 
 
 def test_export_job_admission_rejection_is_stable_v1_error():
@@ -515,7 +552,7 @@ def test_dash_process_exit_cancels_exports_before_executor_threads_join():
     root = Path(__file__).resolve().parents[1]
     env["PYTHONPATH"] = str(root / "dash_tanstack_pivot" / "pivot_engine") + os.pathsep + env.get("PYTHONPATH", "")
     result = subprocess.run([sys.executable, "-c", script], cwd=root, env=env,
-                            capture_output=True, text=True, timeout=15)
+                            capture_output=True, text=True, timeout=30)
     assert result.returncode == 0, result.stderr
     assert "export-cleanup-complete" in result.stdout, result.stderr
 

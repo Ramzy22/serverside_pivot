@@ -137,6 +137,42 @@ test('cancel before start acknowledgement sends server cancellation once identit
     } finally {h.ref.current?.dispose(); timers.restore();}
 });
 
+test('lost start acknowledgement replays one logical start and cancels its recovered job', () => {
+    const timers = fakeTimers(); const h = harness();
+    try {
+        h.commands.exportPivot('csv');
+        const first = h.requests.at(-1);
+        timers.run(15000);
+        assert.equal(h.state.progress.phase, 'queued', 'a lost response does not prove server interruption');
+        assert.equal(h.state.exporting, true);
+        const replay = h.requests.at(-1);
+        assert.equal(replay.payload.action, 'start');
+        assert.equal(replay.requestId, first.requestId, 'recovery must identify the original server job');
+        h.commands.cancelActiveExportRequest();
+        assert.equal(h.state.progress.phase, 'cancelling');
+        h.respond(h.snapshot('running'), replay);
+        assert.equal(h.requests.at(-1).payload.action, 'cancel');
+        h.respond(h.snapshot('cancelled'));
+        assert.equal(h.state.progress.phase, 'cancelled');
+    } finally {h.ref.current?.dispose(); timers.restore();}
+});
+
+test('lost status response keeps polling the known job and blocks duplicate starts', () => {
+    const timers = fakeTimers(); const h = harness();
+    try {
+        h.commands.exportPivot('csv'); h.respond(h.snapshot('running'));
+        h.commands.pollExportJob('job-1');
+        timers.run(15000);
+        assert.equal(h.state.progress.phase, 'running');
+        const count = h.requests.length;
+        h.commands.startExportJob('xlsx');
+        assert.equal(h.requests.length, count, 'an active job cannot be silently superseded');
+        timers.run(500);
+        assert.equal(h.requests.at(-1).payload.action, 'status');
+        assert.equal(h.requests.at(-1).payload.jobId, 'job-1');
+    } finally {h.ref.current?.dispose(); timers.restore();}
+});
+
 test('stale completed poll cannot download while cancellation acknowledgement is pending', async () => {
     const timers = fakeTimers(); const h = harness();
     try {
