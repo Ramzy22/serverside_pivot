@@ -1101,28 +1101,40 @@ def _certify_installed_release(artifact_dir: Path, started_at: datetime, *, buil
                 if not product_requirements:
                     break
         finally:
-            combined = ET.Element("testsuites")
-            for phase_junit in phase_reports:
-                phase_report = {"systemIssues": {"product": []}}
-                apply_junit_result(phase_report, phase_junit, system="product")
-                product_issues.extend(phase_report["systemIssues"]["product"])
+            try:
+                combined = ET.Element("testsuites")
+                for phase_junit in phase_reports:
+                    phase_report = {"systemIssues": {"product": []}}
+                    try:
+                        apply_junit_result(phase_report, phase_junit, system="product")
+                        product_issues.extend(phase_report["systemIssues"]["product"])
+                        combined.append(ET.parse(phase_junit).getroot())
+                    except (LookupError, ValueError, ET.ParseError):
+                        # Expat raises LookupError for an unknown XML encoding,
+                        # which is malformed evidence, not a new browser exit.
+                        product_issues.append("junit_invalid")
+                    except OSError:
+                        product_issues.append("junit_missing")
                 try:
-                    combined.append(ET.parse(phase_junit).getroot())
-                except (OSError, ET.ParseError):
-                    pass
-            ET.ElementTree(combined).write(junit_path, encoding="utf-8", xml_declaration=True)
-            # Cleanup validates the ownership record itself. Never infer ownership
-            # from an arbitrary/reused interpreter path, nor mask browser failure.
-            if artifacts.paths.get("environment") and artifacts.paths.get("environment_record"):
-                try:
-                    cleanup_python_environment(artifacts)
-                except Exception as error:
+                    ET.ElementTree(combined).write(junit_path, encoding="utf-8", xml_declaration=True)
+                except OSError:
                     product_issues.append("qualification_incomplete")
-                    (private / "cleanup-error.json").write_text(json.dumps({
-                        "type": type(error).__name__, "reason": str(error),
-                    }, indent=2) + "\n", encoding="utf-8")
-                    if not code:
-                        code = 1
+            finally:
+                # Evidence processing/writing cannot bypass owned cleanup.
+                # Cleanup validates ownership and must preserve a browser failure.
+                if artifacts.paths.get("environment") and artifacts.paths.get("environment_record"):
+                    try:
+                        cleanup_python_environment(artifacts)
+                    except Exception as error:
+                        product_issues.append("qualification_incomplete")
+                        if not code:
+                            code = 1
+                        try:
+                            (private / "cleanup-error.json").write_text(json.dumps({
+                                "type": type(error).__name__, "reason": str(error),
+                            }, indent=2) + "\n", encoding="utf-8")
+                        except OSError:
+                            pass  # The summary still records the cleanup failure.
         try:
             reference_requirements = load_committed_requirements(binding)
             expected_reference = {(item.id, item.ag_grid["test_id"]) for item in reference_requirements

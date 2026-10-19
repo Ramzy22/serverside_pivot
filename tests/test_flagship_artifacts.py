@@ -391,6 +391,74 @@ def test_installed_release_records_cleanup_failure_as_failed(tmp_path, monkeypat
     assert json.loads(diagnostic.read_text())["reason"] == "owned environment cleanup failed"
 
 
+@pytest.mark.parametrize("browser_code", [0, 7])
+@pytest.mark.parametrize("evidence_error", ["unknown-encoding", "unsupported-encoding", "aggregate-write", "cleanup-diagnostic-write"])
+def test_installed_release_always_cleans_owned_environment_when_reporting_fails(
+    tmp_path, monkeypatch, browser_code, evidence_error,
+):
+    import xml.etree.ElementTree as ET
+    from scripts import certify_flagship, flagship_artifacts
+
+    binding = ArtifactBinding(paths={"environment": tmp_path / "owned-env",
+                                    "environment_record": tmp_path / "owned-env.location.json"})
+    monkeypatch.setattr(flagship_artifacts, "build_artifacts", lambda source, output: binding)
+    events = []
+
+    @contextmanager
+    def hosts(binding, output, **kwargs):
+        try:
+            yield {"dash": "http://127.0.0.1:1", "react": "http://127.0.0.1:2", "streamlit": "http://127.0.0.1:8502"}
+        finally:
+            events.append("hosts-stopped")
+
+    def browser(evidence, environment, **kwargs):
+        report = kwargs["junit_path"]
+        if evidence_error in {"unknown-encoding", "unsupported-encoding"}:
+            encoding = "invalid-encoding" if evidence_error == "unknown-encoding" else "UTF-7"
+            report.write_bytes(f'<?xml version="1.0" encoding="{encoding}"?><testsuite/>'.encode("ascii"))
+        else:
+            report.write_text('<testsuite><testcase name="observed"/></testsuite>')
+        return browser_code
+
+    original_xml_write = ET.ElementTree.write
+
+    def xml_write(tree, destination, *args, **kwargs):
+        if evidence_error == "aggregate-write" and Path(destination).name == "installed-browser.junit.xml":
+            events.append("aggregate-write-failed")
+            raise OSError("aggregate output unavailable")
+        return original_xml_write(tree, destination, *args, **kwargs)
+
+    original_text_write = Path.write_text
+
+    def text_write(path, *args, **kwargs):
+        if evidence_error == "cleanup-diagnostic-write" and path.name == "cleanup-error.json":
+            raise OSError("cleanup diagnostic unavailable")
+        if path.name == "read-only-qualification.raw.json":
+            events.append("final-report")
+        return original_text_write(path, *args, **kwargs)
+
+    def cleanup(actual):
+        assert actual is binding
+        events.append("cleanup")
+        if evidence_error == "cleanup-diagnostic-write":
+            raise RuntimeError("cleanup failed")
+
+    monkeypatch.setattr(flagship_artifacts, "start_installed_hosts", hosts)
+    monkeypatch.setattr(flagship_artifacts, "cleanup_python_environment", cleanup)
+    monkeypatch.setattr(certify_flagship, "_run_browser_suite", browser)
+    monkeypatch.setattr(ET.ElementTree, "write", xml_write)
+    monkeypatch.setattr(Path, "write_text", text_write)
+    evidence = tmp_path / "evidence"
+    assert certify_flagship.main(["--installed-release", "--artifact-dir", str(evidence)]) == (browser_code or 1)
+    assert events.count("cleanup") == 1
+    assert events.index("hosts-stopped") < events.index("cleanup") < events.index("final-report")
+    raw, = (evidence / "private/runs").glob("*/read-only-qualification.raw.json")
+    report = json.loads(raw.read_text())
+    assert report["releaseResult"] == "failed"
+    issue = "junit_invalid" if evidence_error in {"unknown-encoding", "unsupported-encoding"} else "qualification_incomplete"
+    assert issue in report["systemIssues"]["product"]
+
+
 @pytest.mark.parametrize("body", [b"good release", b"altered release", None])
 def test_certification_suite_checks_actual_loaded_assets_before_saving_evidence(tmp_path, body):
     from tests import test_flagship_certification as suite
