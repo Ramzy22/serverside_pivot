@@ -19,7 +19,13 @@ from openpyxl import load_workbook
 from tests.flagship_reference_support import DEFAULT_EVIDENCE, ReferenceWorkflowUnavailable, reference_case, start_reference_run
 
 
-pytestmark = pytest.mark.flagship
+pytestmark = [
+    pytest.mark.flagship,
+    pytest.mark.skipif(
+        os.environ.get("AG_GRID_REFERENCE_LIVE") != "1",
+        reason="Live AG Grid reference requires AG_GRID_REFERENCE_LIVE=1 and a managed server",
+    ),
+]
 
 
 def _clipboard(driver, *, sentinel=None):
