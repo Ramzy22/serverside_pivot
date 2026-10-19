@@ -1,7 +1,5 @@
 """
-RED-phase tests for the /api/drill-through REST endpoint (DRILL-03 through DRILL-06).
-
-These tests FAIL until Plan 02 adds the Flask route at /api/drill-through.
+Tests for the /api/drill-through REST endpoint (DRILL-03 through DRILL-06).
 They use the Dash test client (app.server.test_client()) to hit the endpoint directly.
 
 Coverage:
@@ -18,6 +16,8 @@ import os
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..', 'dash_presentation')))
 
 import pytest
+import pyarrow as pa
+import pyarrow.compute as pc
 
 
 DRILL_TABLE = "nasdaq_trader_demo_history"
@@ -30,23 +30,36 @@ TEXT_FILTER = "TSLA"
 
 
 # ---------------------------------------------------------------------------
-# Fixture: Flask test client (module-scoped so we pay data-gen cost once)
+# Fixture: Flask test client backed by deterministic in-memory Arrow data
 # ---------------------------------------------------------------------------
 
 @pytest.fixture(scope="module")
 def client():
-    """Return a Flask test client for the Dash app.
+    """Exercise the real route and controller without optional demo files."""
+    import app as app_module
 
-    If the app module cannot be imported (e.g., missing deps or the route has
-    not been added yet), the fixture raises ImportError which pytest reports as
-    an ERROR on every test in this module — that counts as RED state.
-    """
-    from app import app, get_adapter  # noqa: F401  (get_adapter triggers data load)
-    get_adapter()  # pre-warm: loads the 2M-row simulation table
-    # Set TESTING on Flask's underlying server, not Dash's config wrapper
-    app.server.config['TESTING'] = True
-    with app.server.test_client() as c:
-        yield c
+    table = pa.table({
+        'desk': [ROOT_VALUE] * 12 + ['Other Desk', 'Other Desk'],
+        'strategy': [CHILD_VALUE] * 6 + ['Momentum'] * 6 + [CHILD_VALUE, 'Momentum'],
+        'day_pnl': [30, -20, 100, 10, -50, 70, 0, 40, 90, 20, 60, 80, 500, -500],
+        'symbol': ['TSLA', 'AAPL', 'MSFT', 'NVDA', 'AMZN', 'META',
+                   'TSLA', 'GOOG', 'IBM', 'ORCL', 'TSLA', 'INTC', 'TSLA', 'AMD'],
+    })
+
+    def load_test_data(adapter):
+        adapter.controller.load_data_from_arrow(DRILL_TABLE, table)
+        assert table.filter(pc.equal(table[ROOT_FIELD], ROOT_VALUE)).num_rows >= 11
+
+    with pytest.MonkeyPatch.context() as patch:
+        patch.setattr(app_module, '_adapter', None)
+        patch.setattr(app_module, 'load_initial_data', load_test_data)
+        patch.setitem(app_module.app.server.config, 'TESTING', True)
+        adapter = app_module.get_adapter()
+        try:
+            with app_module.app.server.test_client() as c:
+                yield c
+        finally:
+            adapter.controller.close()
 
 
 # ---------------------------------------------------------------------------
@@ -54,10 +67,7 @@ def client():
 # ---------------------------------------------------------------------------
 
 def test_endpoint_returns_rows(client):
-    """GET /api/drill-through returns 200 and JSON body with a 'rows' list.
-
-    FAILS (404) until the Flask route is registered in Plan 02.
-    """
+    """GET /api/drill-through returns the requested root rows."""
     resp = client.get(
         "/api/drill-through",
         query_string={
@@ -70,12 +80,14 @@ def test_endpoint_returns_rows(client):
     )
     assert resp.status_code == 200, (
         f"Expected 200, got {resp.status_code}. "
-        "Route /api/drill-through does not exist yet — add it in Plan 02."
+        "Route /api/drill-through must return successfully."
     )
     data = resp.get_json()
     assert data is not None, "Response body is not JSON"
     assert 'rows' in data, f"'rows' key missing from response: {data.keys()}"
     assert isinstance(data['rows'], list), f"'rows' should be a list, got {type(data['rows'])}"
+    assert len(data['rows']) == 10
+    assert all(row[ROOT_FIELD] == ROOT_VALUE for row in data['rows'])
 
 
 # ---------------------------------------------------------------------------
@@ -83,12 +95,7 @@ def test_endpoint_returns_rows(client):
 # ---------------------------------------------------------------------------
 
 def test_pagination(client):
-    """Page 0 and page 1 return different, non-overlapping rows.
-
-    Also checks that each page returns at most page_size rows.
-
-    FAILS (404) until the Flask route is registered in Plan 02.
-    """
+    """Sorted five-row pages contain the expected non-overlapping records."""
     page_size = 5
     resp0 = client.get(
         "/api/drill-through",
@@ -98,6 +105,8 @@ def test_pagination(client):
             "row_fields": ROOT_FIELD,
             "page": 0,
             "page_size": page_size,
+            "sort_col": SORT_FIELD,
+            "sort_dir": "asc",
         },
     )
     resp1 = client.get(
@@ -108,6 +117,8 @@ def test_pagination(client):
             "row_fields": ROOT_FIELD,
             "page": 1,
             "page_size": page_size,
+            "sort_col": SORT_FIELD,
+            "sort_dir": "asc",
         },
     )
     assert resp0.status_code == 200, f"page=0 got {resp0.status_code}"
@@ -123,6 +134,8 @@ def test_pagination(client):
     assert rows0 != rows1, (
         "page=0 and page=1 returned identical rows — pagination is not working"
     )
+    assert [row[SORT_FIELD] for row in rows0] == [-50, -20, 0, 10, 20]
+    assert [row[SORT_FIELD] for row in rows1] == [30, 40, 60, 70, 80]
 
 
 # ---------------------------------------------------------------------------
@@ -130,14 +143,8 @@ def test_pagination(client):
 # ---------------------------------------------------------------------------
 
 def test_sort_and_filter(client):
-    """Passing sort_col and sort_dir returns rows; passing filter returns matching rows.
-
-    For sort: the endpoint must accept the params without a 500 error and return rows.
-    For filter: at least one returned row must contain the filter string in some field.
-
-    FAILS (404) until the Flask route is registered in Plan 02.
-    """
-    # Sort check: just verify the endpoint accepts the params and returns rows
+    """Sorting orders the root rows; text filtering returns every TSLA row."""
+    # Check exact descending values so ignoring or reversing the sort fails.
     resp_sort = client.get(
         "/api/drill-through",
         query_string={
@@ -153,6 +160,7 @@ def test_sort_and_filter(client):
     assert resp_sort.status_code == 200, f"sort request got {resp_sort.status_code}"
     sort_rows = resp_sort.get_json()['rows']
     assert isinstance(sort_rows, list), "'rows' must be a list"
+    assert [row[SORT_FIELD] for row in sort_rows] == [100, 90, 80, 70, 60, 40, 30, 20, 10, 0]
 
     # Filter check: filter=TSLA should return rows containing "TSLA"
     resp_filter = client.get(
@@ -169,17 +177,9 @@ def test_sort_and_filter(client):
     assert resp_filter.status_code == 200, f"filter request got {resp_filter.status_code}"
     filter_rows = resp_filter.get_json()['rows']
     assert isinstance(filter_rows, list), "'rows' must be a list"
-    # At least one row must contain the filter text in any field value
-    if filter_rows:
-        has_match = any(
-            TEXT_FILTER in str(v)
-            for row in filter_rows
-            for v in row.values()
-        )
-        assert has_match, (
-            f"filter={TEXT_FILTER} was passed but none of the returned rows contain it. "
-            f"First row: {filter_rows[0]}"
-        )
+    assert len(filter_rows) == 4
+    assert all(row['symbol'] == TEXT_FILTER for row in filter_rows)
+    assert sorted(row[SORT_FIELD] for row in filter_rows) == [0, 30, 60, 500]
 
 
 # ---------------------------------------------------------------------------
@@ -187,10 +187,7 @@ def test_sort_and_filter(client):
 # ---------------------------------------------------------------------------
 
 def test_coordinate_filters(client):
-    """Passing row_path with two field values returns only matching rows.
-
-    FAILS (404) until the Flask route is registered in Plan 02.
-    """
+    """Passing row_path with two field values returns exactly matching rows."""
     resp = client.get(
         "/api/drill-through",
         query_string={
@@ -204,6 +201,7 @@ def test_coordinate_filters(client):
     assert resp.status_code == 200, f"coordinate filter request got {resp.status_code}"
     rows = resp.get_json()['rows']
     assert isinstance(rows, list), "'rows' must be a list"
+    assert sorted(row[SORT_FIELD] for row in rows) == [-50, -20, 10, 30, 70, 100]
     for row in rows:
         assert row.get(ROOT_FIELD) == ROOT_VALUE, (
             f"Expected {ROOT_FIELD}={ROOT_VALUE!r}, got {row.get(ROOT_FIELD)} in row {row}"
@@ -218,10 +216,7 @@ def test_coordinate_filters(client):
 # ---------------------------------------------------------------------------
 
 def test_total_rows_count_in_response(client):
-    """Response JSON contains a 'total_rows' integer >= len(rows).
-
-    FAILS (404 or missing key) until the Flask route is implemented in Plan 02.
-    """
+    """The total counts all root matches, including those beyond this page."""
     resp = client.get(
         "/api/drill-through",
         query_string={
@@ -243,3 +238,4 @@ def test_total_rows_count_in_response(client):
     assert data['total_rows'] >= len(data.get('rows', [])), (
         f"total_rows ({data['total_rows']}) < len(rows) ({len(data.get('rows', []))})"
     )
+    assert data['total_rows'] == 12
