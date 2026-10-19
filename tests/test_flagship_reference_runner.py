@@ -26,7 +26,7 @@ def harness(tmp_path, monkeypatch):
     (app / "package.json").write_text(json.dumps({"dependencies": versions}))
     state = {"source": source, "app": app, "evidence": tmp_path / "private", "commands": [], "children": [],
              "payload": {**config, "filterValues": {}, "fixtureSha256": hashlib.sha256(fixture.read_bytes()).hexdigest()},
-             "timeout": False, "fail_build": False}
+             "timeout": False, "fail_build": False, "compete": False, "competitors": []}
     real_popen = subprocess.Popen
 
     def run(command, *, cwd, check, stdout, stderr, **kwargs):
@@ -46,14 +46,25 @@ def harness(tmp_path, monkeypatch):
         assert env["NODE_ENV"] == "production"
         assert command[1:] == ["--import", "tsx", "src/server.ts"]
         state["commands"].append(["start"])
-        script = "import time; time.sleep(60)" if state["timeout"] else (
+        script = (
             "from http.server import HTTPServer, BaseHTTPRequestHandler\n"
             f"body = {json.dumps(state['payload']).encode()!r}\n"
             "class Handler(BaseHTTPRequestHandler):\n"
             " def do_GET(self):\n"
             "  self.send_response(200); self.end_headers(); self.wfile.write(body)\n"
-            f"HTTPServer(('127.0.0.1', {int(env['REFERENCE_PORT'])}), Handler).serve_forever()\n"
+            f"server = HTTPServer(('127.0.0.1', {int(env['REFERENCE_PORT'])}), Handler)\n"
+            f"print('AG Grid SSRM local reference: http://127.0.0.1:{int(env['REFERENCE_PORT'])}', flush=True)\n"
+            "server.serve_forever()\n"
         )
+        if state["compete"]:
+            # Another launch wins the released port while our owned child is
+            # still importing. Its configuration and fixture match exactly.
+            competitor = real_popen([sys.executable, "-c", script],
+                                    stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            state["competitors"].append(competitor)
+            state["competitor_url"] = f"http://127.0.0.1:{env['REFERENCE_PORT']}/"
+        if state["timeout"] or state["compete"]:
+            script = "import time; time.sleep(60)"
         child = real_popen([sys.executable, "-c", script], stdout=stdout, stderr=stderr)
         state["children"].append(child)
         return child
@@ -61,7 +72,13 @@ def harness(tmp_path, monkeypatch):
     monkeypatch.setattr(runner.subprocess, "run", run)
     monkeypatch.setattr(runner.subprocess, "Popen", popen)
     monkeypatch.setattr(runner, "READINESS_TIMEOUT", 2)
-    return state
+    try:
+        yield state
+    finally:
+        for child in state["competitors"]:
+            if child.poll() is None:
+                child.terminate()
+            child.wait(timeout=5)
 
 
 def test_runs_in_order_and_yields_exact_provenance_then_stops_owned_child(harness):
@@ -98,6 +115,17 @@ def test_timeout_cleans_up_child(harness):
         with runner.start_reference_server(harness["source"], harness["evidence"]):
             pytest.fail("unready child yielded")
     assert harness["children"][0].poll() is not None
+
+
+def test_rejects_matching_competing_listener_while_owned_child_is_starting(harness):
+    harness["compete"] = True
+    with pytest.raises(TimeoutError):
+        with runner.start_reference_server(harness["source"], harness["evidence"]):
+            pytest.fail("yielded a competing listener without proof owned child bound")
+    assert harness["children"][0].poll() is not None
+    assert harness["competitors"][0].poll() is None
+    with urlopen(harness["competitor_url"] + "reference-config.json", timeout=1) as response:
+        assert json.load(response) == harness["payload"]
 
 
 def test_caller_failure_cleans_up_child(harness):

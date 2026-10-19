@@ -79,6 +79,10 @@ def start_reference_server(source_root: Path, evidence_root: Path) -> Iterator[R
     env = {**os.environ, "REFERENCE_PORT": str(port), "NODE_ENV": "production"}
     # Bypass environment HTTP proxies for this strictly local readiness probe.
     opener = build_opener(ProxyHandler({}))
+    # server.ts emits this line only in its successful listen callback. The
+    # unique log belongs to this child, so a matching service winning the port
+    # cannot satisfy readiness while this child is still importing or binding.
+    bound_message = f"AG Grid SSRM local reference: {url.rstrip('/')}".encode()
     with (logs / "server.log").open("wb") as output:
         child = subprocess.Popen([node, "--import", "tsx", "src/server.ts"],
                                  cwd=app, env=env, stdout=output, stderr=subprocess.STDOUT)
@@ -90,6 +94,9 @@ def start_reference_server(source_root: Path, evidence_root: Path) -> Iterator[R
                 remaining = deadline - time.monotonic()
                 if remaining <= 0:
                     raise TimeoutError(f"reference server readiness timed out; see {logs}")
+                if bound_message not in (logs / "server.log").read_bytes().splitlines():
+                    time.sleep(min(0.05, remaining))
+                    continue
                 try:
                     with opener.open(url + "reference-config.json", timeout=min(1.0, remaining)) as response:
                         served = json.load(response)
