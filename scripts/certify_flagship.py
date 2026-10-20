@@ -17,6 +17,7 @@ import re
 import shutil
 import subprocess
 import sys
+import tarfile
 import tempfile
 import time
 import urllib.error
@@ -228,14 +229,52 @@ def _run_with_hosts(
 
 def _run_reference_suite(artifact_dir: Path, environment: Mapping[str, str], junit_path: Path) -> int:
     """Execute every committed reference browser case with private raw output."""
+    source = Path(environment.get("AG_GRID_REFERENCE_SOURCE_ROOT", ROOT))
     child_environment = {
         **environment,
+        "PYTHONPATH": str(source),
         "AG_GRID_REFERENCE_LIVE": "1",
         "AG_GRID_REFERENCE_EVIDENCE": str(artifact_dir / "private"),
     }
     command = [sys.executable, "-m", "pytest", "tests/test_flagship_ag_grid_reference.py",
                "-m", "flagship", "-q", "-o", "junit_family=xunit1", f"--junitxml={junit_path}"]
-    return subprocess.run(command, cwd=ROOT, env=child_environment).returncode
+    return subprocess.run(command, cwd=source, env=child_environment).returncode
+
+
+@contextmanager
+def _committed_reference_source(binding) -> Iterator[Path]:
+    """Archive only pinned reference inputs from the artifact's exact commit."""
+    if re.fullmatch(r"[0-9a-f]{40}|[0-9a-f]{64}", binding.source_commit) is None:
+        raise ValueError("invalid reference source commit")
+    repository = binding.paths.get("source_repository", ROOT)
+    with tempfile.TemporaryDirectory(prefix="pfr-") as directory:
+        root = Path(directory)
+        archive = root / "reference.tar"
+        source = root / "source"
+        source.mkdir()
+        subprocess.run([
+            "git", "-c", "core.autocrlf=false", "archive", "--format=tar", f"--output={archive}",
+            binding.source_commit, "--", "reference/ag_grid_36_2", "tests", "scripts", "pytest.ini",
+        ], cwd=repository, check=True)
+        with tarfile.open(archive) as contents:
+            for member in contents.getmembers():
+                target = (source / member.name).resolve()
+                if not target.is_relative_to(source.resolve()) or member.issym() or member.islnk():
+                    raise ValueError("unsafe reference source archive entry")
+            contents.extractall(source, filter="data")
+        archive.unlink()
+        # These coordinator helpers execute in this process. Refuse to attach
+        # committed provenance if their loaded source differs from the snapshot.
+        coordinator = Path(__file__).resolve().parents[1]
+        for relative in (
+            "scripts/flagship_reference_runner.py", "tests/flagship_reference_support.py",
+            "tests/flagship_contract.py", "tests/flagship_capabilities.py",
+        ):
+            current = (coordinator / relative).read_bytes().replace(b"\r\n", b"\n")
+            committed = (source / relative).read_bytes().replace(b"\r\n", b"\n")
+            if current != committed:
+                raise ValueError(f"reference coordinator differs from artifact commit: {relative}")
+        yield source
 
 
 def _reference_junit_issues(path: Path, expected_ids: set[str]) -> list[str]:
@@ -252,7 +291,7 @@ def _reference_junit_issues(path: Path, expected_ids: set[str]) -> list[str]:
         if (not expected_ids or len(ids) != len(cases) or len(ids) != len(expected_ids)
                 or set(ids) != expected_ids):
             issues.append("junit_invalid")
-    except (OSError, ET.ParseError):
+    except (OSError, ET.ParseError, LookupError):
         pass  # apply_junit_result already records the missing/malformed report.
     return sorted(set(issues))
 
@@ -1139,11 +1178,14 @@ def _certify_installed_release(artifact_dir: Path, started_at: datetime, *, buil
             reference_requirements = load_committed_requirements(binding)
             expected_reference = {(item.id, item.ag_grid["test_id"]) for item in reference_requirements
                                   if item.ag_grid.get("result") != "not_applicable"}
-            if hashlib.sha256((ROOT / "tests/data/flagship_parity_rows.json").read_bytes()).hexdigest() != binding.sha256.get("fixture"):
-                raise ValueError("reference fixture differs from the built artifact fixture")
-            with start_reference_server(ROOT, private) as reference:
+            with ExitStack() as reference_stack:
+                source = reference_stack.enter_context(_committed_reference_source(binding))
+                if hashlib.sha256((source / "tests/data/flagship_parity_rows.json").read_bytes()).hexdigest() != binding.sha256.get("fixture"):
+                    raise ValueError("reference fixture differs from the built artifact fixture")
+                reference = reference_stack.enter_context(start_reference_server(source, private))
                 reference_environment = {
                     **environment,
+                    "AG_GRID_REFERENCE_SOURCE_ROOT": str(source),
                     "AG_GRID_REFERENCE_LIVE": "1",
                     "AG_GRID_REFERENCE_URL": reference.url,
                     "AG_GRID_REFERENCE_RUN_ID": run_id,

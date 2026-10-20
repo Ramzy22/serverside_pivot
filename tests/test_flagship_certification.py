@@ -881,7 +881,8 @@ def test_product_suite_uses_exact_parametrized_nodes_and_never_broadens_empty_se
     assert len(commands) == 1
 
 
-def _managed_reference_qualification(tmp_path, monkeypatch, *, damage=None, product_damage=None):
+def _managed_reference_qualification(tmp_path, monkeypatch, *, damage=None, product_damage=None,
+                                     repository=None, source_commit=None):
     """Replace external builds/processes while keeping envelope evaluation real."""
     from contextlib import contextmanager
     from dataclasses import asdict
@@ -891,12 +892,16 @@ def _managed_reference_qualification(tmp_path, monkeypatch, *, damage=None, prod
     from tests.flagship_contract import CaseResult, load_requirements
     from tests import flagship_reference_support as support
 
-    requirements = load_requirements(ROOT / "tests/flagship_requirements.json")
+    source_repository = repository or ROOT
+    if repository is not None:
+        monkeypatch.setattr(runner, "ROOT", repository)
+    requirements = load_requirements(source_repository / "tests/flagship_requirements.json")
     comparable = [item for item in requirements if item.ag_grid.get("test_id")]
-    commit = subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=ROOT, text=True).strip()
+    commit = source_commit or subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=source_repository, text=True).strip()
     artifacts = flagship_artifacts.ArtifactBinding(source_commit=commit, sha256={
-        "fixture": hashlib.sha256((ROOT / "tests/data/flagship_parity_rows.json").read_bytes()).hexdigest(),
-    }, paths={"environment": tmp_path / "owned-env", "environment_record": tmp_path / "owned-env.location.json"})
+        "fixture": hashlib.sha256((source_repository / "tests/data/flagship_parity_rows.json").read_bytes()).hexdigest(),
+    }, paths={"source_repository": source_repository, "environment": tmp_path / "owned-env",
+              "environment_record": tmp_path / "owned-env.location.json"})
     if damage == "fixture-mismatch":
         artifacts.sha256["fixture"] = "f" * 64
     monkeypatch.setattr(flagship_artifacts, "build_artifacts", lambda *args, **kwargs: artifacts)
@@ -913,7 +918,11 @@ def _managed_reference_qualification(tmp_path, monkeypatch, *, damage=None, prod
     @contextmanager
     def reference(source, evidence):
         events.append("start")
-        assert source == ROOT
+        if repository is not None:
+            assert (source / "reference/ag_grid_36_2/src/main.ts").read_bytes() == b"committed reference implementation\n"
+            assert not (source / "reference/ag_grid_36_2/untracked.ts").exists()
+            assert (source / "tests/test_flagship_ag_grid_reference.py").read_bytes().replace(b"\r\n", b"\n") == (ROOT / "tests/test_flagship_ag_grid_reference.py").read_bytes().replace(b"\r\n", b"\n")
+            assert (source / "tests/flagship_reference_support.py").read_bytes().replace(b"\r\n", b"\n") == (ROOT / "tests/flagship_reference_support.py").read_bytes().replace(b"\r\n", b"\n")
         assert evidence.is_relative_to(tmp_path / "qualification/private")
         try:
             if damage in {"missing-server", "bad-config"}:
@@ -978,6 +987,8 @@ def _managed_reference_qualification(tmp_path, monkeypatch, *, damage=None, prod
         ET.ElementTree(suite).write(junit_path)
         if damage == "malformed-junit":
             junit_path.write_text("<not-xml")
+        if damage == "unknown-encoding-junit":
+            junit_path.write_bytes(b'<?xml version="1.0" encoding="UNKNOWN-ENCODING"?><testsuite/>')
         if damage == "incomplete-raw":
             records.pop()
         if damage == "duplicate-raw":
@@ -1022,6 +1033,85 @@ def test_installed_qualifier_runs_managed_reference_and_binds_current_raw_observ
     assert (private / "ag_grid-case-results.json").is_file()
     assert "case_envelope_invalid" not in report["systemIssues"]["ag_grid"]
     assert report["junit"]["ag_grid"] == {"tests": 67, "skipped": 0, "failures": 0, "errors": 0}
+
+
+@pytest.mark.parametrize("coordinator_mismatch", [False, True])
+def test_reference_qualification_uses_artifact_commit_despite_dirty_checkout_and_new_head(tmp_path, monkeypatch, coordinator_mismatch):
+    import shutil
+    import subprocess
+
+    repository = tmp_path / "source"
+    implementation = repository / "reference/ag_grid_36_2/src/main.ts"
+    implementation.parent.mkdir(parents=True)
+    implementation.write_bytes(b"committed reference implementation\n")
+    for relative in (
+        "pytest.ini",
+        "tests/flagship_requirements.json", "tests/data/flagship_parity_rows.json",
+        "tests/test_flagship_ag_grid_reference.py", "tests/flagship_reference_support.py",
+        "tests/flagship_contract.py", "tests/flagship_capabilities.py",
+        "scripts/flagship_reference_runner.py", "scripts/flagship_manifest.py", "scripts/flagship_artifacts.py",
+    ):
+        target = repository / relative
+        target.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copyfile(ROOT / relative, target)
+    if coordinator_mismatch:
+        (repository / "tests/flagship_reference_support.py").write_text("# different committed coordinator\n")
+    subprocess.run(["git", "init", "-q", str(repository)], check=True)
+    subprocess.run(["git", "add", "."], cwd=repository, check=True)
+    commit_command = ["git", "-c", "user.name=Reference regression", "-c", "user.email=test@example.invalid",
+                      "-c", "commit.gpgsign=false", "commit", "-qm", "Reference source"]
+    subprocess.run(commit_command, cwd=repository, check=True)
+    commit = subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=repository, text=True).strip()
+    implementation.write_bytes(b"later HEAD implementation\n")
+    subprocess.run(["git", "add", "."], cwd=repository, check=True)
+    subprocess.run(commit_command, cwd=repository, check=True)
+    implementation.write_bytes(b"dirty reference implementation\n")
+    (repository / "reference/ag_grid_36_2/untracked.ts").write_bytes(b"untracked reference input\n")
+    harness = repository / "tests/test_flagship_ag_grid_reference.py"
+    harness.write_text("raise RuntimeError('dirty harness must not execute')\n")
+    (repository / "tests/flagship_reference_support.py").write_text("raise RuntimeError('dirty support must not execute')\n")
+
+    events, report, private = _managed_reference_qualification(
+        tmp_path, monkeypatch, repository=repository, source_commit=commit,
+    )
+    if coordinator_mismatch:
+        assert events == []
+        assert "qualification_incomplete" in report["systemIssues"]["ag_grid"]
+        assert not (private / "ag_grid-case-results.json").exists()
+        assert "reference coordinator differs from artifact commit" in (private / "reference-error.json").read_text()
+        return
+    assert events == ["start", "browser", "stop"]
+    envelope = json.loads((private / "ag_grid-case-results.json").read_text())
+    assert envelope["source_commit"] == commit
+    assert "case_envelope_invalid" not in report["systemIssues"]["ag_grid"]
+    assert implementation.read_bytes() == b"dirty reference implementation\n"
+
+
+def test_reference_suite_runs_committed_harness_without_mutable_pythonpath(tmp_path, monkeypatch):
+    from types import SimpleNamespace
+    from scripts import certify_flagship as runner
+
+    calls = []
+    def run(command, **kwargs):
+        calls.append((command, kwargs))
+        return SimpleNamespace(returncode=0)
+    monkeypatch.setattr(runner.subprocess, "run", run)
+    source = tmp_path / "committed"
+    environment = {"AG_GRID_REFERENCE_SOURCE_ROOT": str(source), "PYTHONPATH": str(ROOT)}
+    assert runner._run_reference_suite(tmp_path, environment, tmp_path / "junit.xml") == 0
+    command, options = calls[0]
+    assert options["cwd"] == source
+    assert options["env"]["PYTHONPATH"] == str(source)
+    assert "tests/test_flagship_ag_grid_reference.py" in command
+
+
+def test_reference_unknown_xml_encoding_still_publishes_failed_sanitized_report(tmp_path, monkeypatch):
+    _, report, private = _managed_reference_qualification(tmp_path, monkeypatch, damage="unknown-encoding-junit")
+    public = json.loads((tmp_path / "qualification/read-only-qualification.json").read_text())
+    assert "junit_invalid" in report["systemIssues"]["ag_grid"]
+    assert "junit_invalid" in public["systemIssues"]["ag_grid"]
+    assert public["parityResult"] == "failed"
+    assert not (private / "ag_grid-case-results.json").exists()
 
 
 def test_installed_qualifier_rejects_reference_fixture_drift_before_launch(tmp_path, monkeypatch):

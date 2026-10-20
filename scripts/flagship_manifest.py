@@ -407,7 +407,7 @@ def apply_junit_result(raw: dict, path: Path, *, system: str) -> None:
                 issues.append(f"junit_{key}")
     except OSError:
         issues.append("junit_missing")
-    except (ET.ParseError, ValueError, TypeError):
+    except (ET.ParseError, ValueError, TypeError, LookupError):
         issues.append("junit_invalid")
     raw.setdefault("junit", {})[system] = counts
     raw["systemIssues"][system] = sorted(set(raw["systemIssues"][system]) | set(issues))
