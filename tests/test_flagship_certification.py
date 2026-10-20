@@ -898,8 +898,11 @@ def _managed_reference_qualification(tmp_path, monkeypatch, *, damage=None, prod
     requirements = load_requirements(source_repository / "tests/flagship_requirements.json")
     comparable = [item for item in requirements if item.ag_grid.get("test_id")]
     commit = source_commit or subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=source_repository, text=True).strip()
+    committed_fixture = subprocess.check_output(
+        ["git", "show", f"{commit}:tests/data/flagship_parity_rows.json"], cwd=source_repository,
+    )
     artifacts = flagship_artifacts.ArtifactBinding(source_commit=commit, sha256={
-        "fixture": hashlib.sha256((source_repository / "tests/data/flagship_parity_rows.json").read_bytes()).hexdigest(),
+        "fixture": hashlib.sha256(committed_fixture).hexdigest(),
     }, paths={"source_repository": source_repository, "environment": tmp_path / "owned-env",
               "environment_record": tmp_path / "owned-env.location.json"})
     if damage == "fixture-mismatch":
