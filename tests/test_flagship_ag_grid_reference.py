@@ -729,19 +729,36 @@ def test_reference_late_superseded_ssrm_success_cannot_restore_old_rows(referenc
             [row['label'] for row in _displayed_rows(browser)] == ['München', 'Total']
             and any(event['phase'] == 'response' and event['requestId'] == 'München'
                     for event in browser.execute_script('return window.referenceSupersession.trace'))))
-        driver.execute_script('window.referenceSupersession.release()')
+        newer_rows = _displayed_rows(driver)
+        samples = driver.execute_async_script("""
+          const done = arguments[arguments.length - 1];
+          const capture = () => window.referenceEvidence.displayedRows();
+          const samples = [capture()];
+          window.referenceSupersession.release();
+          const interval = setInterval(() => samples.push(capture()), 25);
+          setTimeout(() => {clearInterval(interval); samples.push(capture()); done(samples);}, 1500);
+        """)
         WebDriverWait(driver, 10).until(lambda browser: any(
             event['phase'] == 'response' and event['requestId'] == 'Éclair'
             for event in browser.execute_script('return window.referenceSupersession.trace')))
-        driver.execute_async_script('setTimeout(arguments[arguments.length-1], 400)')
         rows = _displayed_rows(driver)
         trace = driver.execute_script('return window.referenceSupersession.trace')
         from tests.flagship_browser_support import assert_superseded_response
         assert [row['label'] for row in rows] == ['München', 'Total']
-        assert [row['data']['Total|ventes_€'] for row in rows] == [79.75, 79.75]
+        expected_measures = {
+            'Q1|ventes_€': 49.75, 'Q1|unités': 3, 'Q1|écart': 4.25, 'Q1|extrema': -100,
+            'Q2|ventes_€': 30, 'Q2|unités': 4, 'Q2|écart': -1, 'Q2|extrema': -100,
+            'Total|ventes_€': 79.75, 'Total|unités': 7,
+            'Total|écart': 3.25, 'Total|extrema': -100,
+        }
+        for row in rows:
+            assert {key: row['data'].get(key) for key in expected_measures} == expected_measures
         assert assert_superseded_response(trace, 'Éclair', 'München', 79.75)
-        case.parsed_output = {'trace': trace, 'rows': rows}
-        case.observed = 'Older real SSRM Éclair response delivered after newer München response; visible München rows and 79.75 total persisted'
+        assert all(sample == newer_rows for sample in samples), (
+            'A visible reference row or measure changed during the post-release observation')
+        assert rows == newer_rows
+        case.parsed_output = {'trace': trace, 'rows': rows, 'postReleaseSamples': samples}
+        case.observed = 'Older real SSRM Éclair response delivered after newer München response; all displayed rows and measures persisted for 1.5 seconds'
 
 
 def test_reference_filter_options_values_follow_active_scope_and_selection(reference_run):

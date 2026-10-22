@@ -36,7 +36,9 @@ return data. Ignoring a delayed older response after a newer success is a
 separate, required `runtime-error.superseded-response` workflow. Its browser
 case holds a genuine row-bearing response for an Éclair search, lets a newer
 München response render, releases the old response, and checks both the V1
-completion order and visible rows/totals in each installed host. A metadata-only
+completion order and every visible fixture cell in each installed host. The
+observation starts when the old response is released and samples for 1.5 seconds;
+it cannot prove the absence of changes outside that window. A metadata-only
 response cannot satisfy the case. The AG Grid reference has the analogous
 controlled SSRM case. Passing either case in an unbound diagnostic run does not
 pass current-artifact or overall release qualification.

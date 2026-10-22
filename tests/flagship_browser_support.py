@@ -1325,6 +1325,38 @@ def assert_superseded_response(trace, old_id, new_id, visible_total):
     return True
 
 
+def assert_stable_visible_snapshots(expected, samples):
+    """Reject even a transient change to any rendered cell after old delivery."""
+    def signature(cells):
+        values = [(cell["rowid"], cell["colid"], cell["text"]) for cell in cells]
+        assert len(values) == len({(rowid, colid) for rowid, colid, _ in values}), (
+            "Duplicate visible cells in observation")
+        return sorted(values)
+
+    assert expected and len(samples) >= 2, "Missing bounded visible-cell observations"
+    baseline = signature(expected)
+    for index, sample in enumerate(samples):
+        assert signature(sample) == baseline, f"visible cells changed after old response at sample {index}"
+    return True
+
+
+def supersession_fixture_matches(cells):
+    """Independently verify every rendered measure for the newer fixture slice."""
+    measures = {
+        "Q1_ventes_€_sum": "50", "Q1_unités_sum": "3", "Q1_écart_sum": "4",
+        "Q2_ventes_€_sum": "30", "Q2_unités_sum": "4", "Q2_écart_sum": "-1",
+        "__RowTotal__ventes_€_sum": "80", "__RowTotal__unités_sum": "7",
+        "__RowTotal__écart_sum": "3",
+    }
+    expected = {
+        (rowid, colid): value
+        for rowid, label in (("München", "München"), ("__grand_total__", "Grand Total"))
+        for colid, value in {"hierarchy": label, **measures}.items()
+    }
+    actual = {(cell["rowid"], cell["colid"]): cell["text"] for cell in cells}
+    return len(cells) == len(actual) and actual == expected
+
+
 def supersession_ids(trace):
     old_id = next(item["requestId"] for item in trace
                   if item.get("phase") == "ready" and item.get("term") == "Éclair"
@@ -1383,6 +1415,30 @@ if (!window.__pivotSupersession) {
 """
 
 
+_SUPERSESSION_OBSERVE_SCRIPT = r"""
+const done = arguments[arguments.length - 1];
+const capture = () => {
+  const cells = [];
+  const visit = root => {
+    for (const cell of root.querySelectorAll('[role="gridcell"][data-colid][data-rowid]')) {
+      if (cell.getClientRects().length) cells.push({
+        rowid: cell.getAttribute('data-rowid'),
+        colid: cell.getAttribute('data-colid'),
+        text: cell.innerText.trim(),
+      });
+    }
+    for (const element of root.querySelectorAll('*')) if (element.shadowRoot) visit(element.shadowRoot);
+  };
+  visit(document);
+  return cells;
+};
+const samples = [capture()];
+window.__pivotSupersession.release();
+const interval = setInterval(() => samples.push(capture()), 25);
+setTimeout(() => {clearInterval(interval); samples.push(capture()); done(samples);}, 1500);
+"""
+
+
 def qualify_superseded_response(host: str) -> None:
     """Exercise the same two real searched data requests through an installed host."""
     import pytest
@@ -1432,22 +1488,16 @@ def qualify_superseded_response(host: str) -> None:
                                        and item["total"] == 79.75
                                        for item in current.execute_script("return window.__pivotSupersession.trace")))
         def visible_new(current):
-            cells = _navigation_cells(current)
-            total_column = "__RowTotal__ventes_€_sum"
-            totals = {(cell["rowid"], cell["colid"]): cell["text"] for cell in cells
-                      if cell["colid"] == total_column}
-            return totals == {("München", total_column): "80",
-                              ("__grand_total__", total_column): "80"}
+            return supersession_fixture_matches(_navigation_cells(current))
         wait.until(visible_new)
-        driver.execute_script("window.__pivotSupersession.release()")
+        newer_cells = _navigation_cells(driver)
+        samples = driver.execute_async_script(_SUPERSESSION_OBSERVE_SCRIPT)
         wait.until(lambda current: any(item["phase"] == "response" and item["term"] == "Éclair"
                                        for item in current.execute_script("return window.__pivotSupersession.trace")))
-        # Give the host's promise/callback commit and React render cycle time to
-        # process the delivered old envelope before checking the visible rows.
-        driver.execute_async_script("setTimeout(arguments[arguments.length-1], 400)")
         trace = driver.execute_script("return window.__pivotSupersession.trace")
         old_id, new_id = supersession_ids(trace)
         assert assert_superseded_response(trace, old_id, new_id, 79.75)
+        assert assert_stable_visible_snapshots(newer_cells, samples)
         assert visible_new(driver), "The late old response restored its rows"
         assert not _visible_error(driver), "The late old response exposed an error"
         result.update(result="passed", actionCompleted=True, staleCellsAbsent=True,
@@ -1468,6 +1518,8 @@ def qualify_superseded_response(host: str) -> None:
                 driver.quit()
         evidence = directory / "observation.json"
         evidence.write_text(json.dumps({"diagnostic": diagnostic, "trace": trace,
+                                        "postReleaseSamples": locals().get("samples", []),
+                                        "newerVisibleCells": locals().get("newer_cells", []),
                                         "loadedAssetSha256": result.get("loadedAssetSha256", {}),
                                         "result": {key: value for key, value in result.items()
                                                    if key != "loadedAssetSha256"}}, indent=2), encoding="utf-8")

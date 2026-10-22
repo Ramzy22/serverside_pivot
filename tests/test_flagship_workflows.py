@@ -254,6 +254,21 @@ def test_supersession_ids_ignore_metadata_responses_without_rows():
     assert supersession_ids(trace) == ("old-rows", "new-rows")
 
 
+def test_supersession_observation_rejects_non_sales_cell_rollback():
+    from tests.flagship_browser_support import (assert_stable_visible_snapshots,
+                                                supersession_fixture_matches)
+
+    newer = [
+        {"rowid": "München", "colid": "__RowTotal__ventes_€_sum", "text": "80"},
+        {"rowid": "München", "colid": "__RowTotal__unités_sum", "text": "7"},
+    ]
+    rolled_back = [newer[0], {**newer[1], "text": "3"}]
+    assert assert_stable_visible_snapshots(newer, [newer, newer])
+    with pytest.raises(AssertionError, match="visible cells changed"):
+        assert_stable_visible_snapshots(newer, [newer, rolled_back, newer])
+    assert not supersession_fixture_matches(rolled_back)
+
+
 def test_superseded_response_has_an_installed_browser_case_for_every_host():
     from scripts.certify_flagship import _product_browser_plan
     from tests.flagship_contract import load_requirements

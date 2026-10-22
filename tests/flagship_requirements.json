@@ -184,7 +184,7 @@
       "difference": "unverified",
       "constraints": [
         "Use two controlled, distinguishable data responses and prove their request and completion order; do not fabricate a second response after a terminal HTTP error.",
-        "No installed-host or live AG Grid reference observation exists yet; this remains a required, unqualified workflow."
+        "Live host and reference cases exist, but release qualification requires their observations to be bound to the final commit and built artifacts."
       ],
       "hosts": [
         "dash",
