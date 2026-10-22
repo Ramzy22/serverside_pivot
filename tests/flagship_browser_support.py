@@ -1302,6 +1302,181 @@ def _post_retry_data_response(trace, failed_id, checkpoint):
                  and entry.get("at", -1) >= requests[entry["requestId"]]), None)
 
 
+def assert_superseded_response(trace, old_id, new_id, visible_total):
+    """Require two distinct successful deliveries in the reverse request order."""
+    assert old_id != new_id
+    positions = {}
+    for index, event in enumerate(trace):
+        key = (event.get("requestId"), event.get("phase"))
+        if key[0] in (old_id, new_id) and key not in positions:
+            positions[key] = index
+    assert all((request_id, phase) in positions for request_id in (old_id, new_id)
+               for phase in ("request", "response")), "Both requests need observed responses"
+    old_request = positions[(old_id, "request")]
+    new_request = positions[(new_id, "request")]
+    new_response = positions[(new_id, "response")]
+    old_response = positions[(old_id, "response")]
+    assert old_request < new_request < new_response < old_response
+    totals = {event["requestId"]: event["total"] for event in trace
+              if event.get("phase") == "response" and event.get("requestId") in (old_id, new_id)}
+    assert totals[old_id] is not None and totals[new_id] is not None
+    assert totals[old_id] != totals[new_id]
+    assert visible_total == totals[new_id], "A late older response replaced the newer visible total"
+    return True
+
+
+def supersession_ids(trace):
+    old_id = next(item["requestId"] for item in trace
+                  if item.get("phase") == "ready" and item.get("term") == "Éclair"
+                  and item.get("total") == 120.25)
+    new_id = next(item["requestId"] for item in trace
+                  if item.get("phase") == "response" and item.get("term") == "München"
+                  and item.get("total") == 79.75)
+    return old_id, new_id
+
+
+_SUPERSESSION_PROBE_SCRIPT = r"""
+if (!window.__pivotSupersession) {
+  const nativeFetch = window.fetch.bind(window);
+  const trace = [];
+  let armed = false, releaseOld = null;
+  const findEnvelope = (raw, phase, depth = 0) => {
+    if (depth > 8 || raw == null) return null;
+    if (typeof raw === 'string') {
+      if (!raw.trim().startsWith('{') && !raw.trim().startsWith('[')) return null;
+      try { return findEnvelope(JSON.parse(raw), phase, depth + 1); } catch (_) { return null; }
+    }
+    if (typeof raw !== 'object') return null;
+    if (raw.schemaVersion === 1 && raw.kind === 'data' && raw.requestId != null
+        && (phase === 'request' ? !raw.status : raw.status === 'data')) return raw;
+    for (const value of Object.values(raw)) {
+      const found = findEnvelope(value, phase, depth + 1);
+      if (found) return found;
+    }
+    return null;
+  };
+  const totalOf = envelope => {
+    const rows = envelope?.payload?.data;
+    const grand = Array.isArray(rows) ? rows.find(row => row?._isTotal && row?._id === 'Grand Total') : null;
+    return grand?.['__RowTotal__ventes_€_sum'] ?? null;
+  };
+  window.fetch = (...args) => {
+    const envelope = armed ? findEnvelope(args[1]?.body, 'request') : null;
+    const term = envelope?.state?.filters?.global;
+    if (term !== 'Éclair' && term !== 'München') return nativeFetch(...args);
+    const requestId = String(envelope.requestId);
+    trace.push({phase:'request', requestId, term, at:performance.now(), total:null});
+    const init = term === 'Éclair' ? {...args[1], signal:undefined} : args[1];
+    return nativeFetch(args[0], init).then(async response => {
+      const returned = findEnvelope(await response.clone().text(), 'response');
+      const total = totalOf(returned);
+      if (term === 'Éclair' && total !== null) {
+        trace.push({phase:'ready', requestId, term, at:performance.now(), total});
+        await new Promise(resolve => { releaseOld = resolve; });
+      }
+      trace.push({phase:'response', requestId, term, at:performance.now(), total});
+      return response;
+    });
+  };
+  window.__pivotSupersession = {trace, arm:() => {armed = true}, release:() => releaseOld?.()};
+}
+"""
+
+
+def qualify_superseded_response(host: str) -> None:
+    """Exercise the same two real searched data requests through an installed host."""
+    import pytest
+    if os.environ.get("PIVOT_RUN_FLAGSHIP_BROWSER_TESTS") != "1":
+        pytest.skip("Enable installed flagship browser qualification explicitly")
+    if not os.environ.get("PIVOT_FLAGSHIP_ARTIFACT_BINDING"):
+        pytest.fail("Installed artifact binding is required; browser absence is not a pass")
+    from scripts.flagship_artifacts import load_artifact_binding
+    from tests.test_flagship_certification import (
+        _host_url, _qualification_chrome_options, _switch_to_workspace,
+        _wait_for_visible_workspace_element, _workspace_elements,
+    )
+    from selenium import webdriver
+    from selenium.webdriver.support.ui import WebDriverWait
+
+    run_id = os.environ["PIVOT_FLAGSHIP_RUN_ID"]
+    directory = Path(os.environ["PIVOT_FLAGSHIP_EVIDENCE_ROOT"]) / "superseded-response" / host
+    if ("runs", run_id) not in tuple(zip(directory.parts, directory.parts[1:])):
+        pytest.fail("Workflow evidence must be inside this run's private evidence tree")
+    directory.mkdir(parents=True, exist_ok=True)
+    downloads = directory / "downloads"
+    downloads.mkdir(exist_ok=True)
+    binding = load_artifact_binding(Path(os.environ["PIVOT_FLAGSHIP_ARTIFACT_BINDING"]))
+    driver = None
+    result = {"result": "blocked", "browser": "unavailable", "infrastructureUnavailable": True}
+    trace, diagnostic = [], ""
+    try:
+        driver = webdriver.Chrome(options=_qualification_chrome_options(downloads))
+        driver._pivot_artifact_binding = binding
+        driver._pivot_artifact_host = host
+        driver._pivot_loaded_assets = {}
+        driver.execute_cdp_cmd("Network.enable", {"maxTotalBufferSize": 50000000, "maxResourceBufferSize": 50000000})
+        driver.execute_cdp_cmd("Page.addScriptToEvaluateOnNewDocument", {"source": _SUPERSESSION_PROBE_SCRIPT})
+        _switch_to_workspace(driver, host)
+        wait = WebDriverWait(driver, 15)
+        wait.until(_totals)
+        result.update(result="failed", browser=f"{driver.capabilities['browserName']} {driver.capabilities['browserVersion']}",
+                      infrastructureUnavailable=False)
+        driver.execute_script("window.__pivotSupersession.arm()")
+        search = _wait_for_visible_workspace_element(driver, '[data-testid="pivot-global-search"]')
+        search.send_keys("Éclair")
+        wait.until(lambda current: any(item["phase"] == "ready" and item["term"] == "Éclair"
+                                       for item in current.execute_script("return window.__pivotSupersession.trace")))
+        search.clear()
+        search.send_keys("München")
+        wait.until(lambda current: any(item["phase"] == "response" and item["term"] == "München"
+                                       and item["total"] == 79.75
+                                       for item in current.execute_script("return window.__pivotSupersession.trace")))
+        def visible_new(current):
+            cells = _navigation_cells(current)
+            total_column = "__RowTotal__ventes_€_sum"
+            totals = {(cell["rowid"], cell["colid"]): cell["text"] for cell in cells
+                      if cell["colid"] == total_column}
+            return totals == {("München", total_column): "80",
+                              ("__grand_total__", total_column): "80"}
+        wait.until(visible_new)
+        driver.execute_script("window.__pivotSupersession.release()")
+        wait.until(lambda current: any(item["phase"] == "response" and item["term"] == "Éclair"
+                                       for item in current.execute_script("return window.__pivotSupersession.trace")))
+        # Give the host's promise/callback commit and React render cycle time to
+        # process the delivered old envelope before checking the visible rows.
+        driver.execute_async_script("setTimeout(arguments[arguments.length-1], 400)")
+        trace = driver.execute_script("return window.__pivotSupersession.trace")
+        old_id, new_id = supersession_ids(trace)
+        assert assert_superseded_response(trace, old_id, new_id, 79.75)
+        assert visible_new(driver), "The late old response restored its rows"
+        assert not _visible_error(driver), "The late old response exposed an error"
+        result.update(result="passed", actionCompleted=True, staleCellsAbsent=True,
+                      v1RequestsCorrelated=True, fixtureTotalsVerified=True)
+    except Exception as error:
+        frame = traceback.extract_tb(error.__traceback__)[-1]
+        diagnostic = f"{type(error).__name__} at {Path(frame.filename).name}:{frame.lineno}"
+    finally:
+        paths = []
+        if driver is not None:
+            try:
+                trace = driver.execute_script("return window.__pivotSupersession?.trace || []")
+                driver.save_screenshot(str(directory / "final.png"))
+                paths.append(str(directory / "final.png"))
+                result["loadedAssetSha256"] = dict(driver._pivot_loaded_assets)
+                _network(driver)
+            finally:
+                driver.quit()
+        evidence = directory / "observation.json"
+        evidence.write_text(json.dumps({"diagnostic": diagnostic, "trace": trace,
+                                        "loadedAssetSha256": result.get("loadedAssetSha256", {}),
+                                        "result": {key: value for key, value in result.items()
+                                                   if key != "loadedAssetSha256"}}, indent=2), encoding="utf-8")
+        paths.append(str(evidence))
+        result["evidence_paths"] = paths
+        record_case("runtime-error.superseded-response", host, result, directory)
+    assert result["result"] == "passed", f"{host} superseded response did not qualify: {diagnostic}; evidence: {directory}"
+
+
 def _visible_workspace_text(driver):
     """Include Streamlit's open shadow roots, not only ordinary page text."""
     return driver.execute_script("""

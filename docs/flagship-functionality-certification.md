@@ -33,10 +33,13 @@ Runtime-error recovery is scoped to a visible Retry after a terminal error:
 the clicked action must produce a distinct successful request, clear the error,
 and restore the fixture totals. A terminal HTTP error cannot subsequently
 return data. Ignoring a delayed older response after a newer success is a
-separate, required `runtime-error.superseded-response` workflow; it remains
-unqualified until a controlled overlapping-request test passes in all three
-installed hosts. Passing Retry does not pass that workflow or overall release
-qualification.
+separate, required `runtime-error.superseded-response` workflow. Its browser
+case holds a genuine row-bearing response for an Éclair search, lets a newer
+München response render, releases the old response, and checks both the V1
+completion order and visible rows/totals in each installed host. A metadata-only
+response cannot satisfy the case. The AG Grid reference has the analogous
+controlled SSRM case. Passing either case in an unbound diagnostic run does not
+pass current-artifact or overall release qualification.
 
 Case IDs in the seed contract are planned verification mappings, not assertions
 that those tests have already run or been implemented. Reference results and

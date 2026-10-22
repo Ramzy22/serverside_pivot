@@ -955,6 +955,7 @@ EXPORT_JOB_REQUIREMENTS = frozenset({
 PRODUCT_BROWSER_JOURNEYS = {
     **{f"browser.{name}": "test_flagship_runtime_error_recovery[{host}]"
        for name in ("runtime-error.visible", "runtime-error.recovery")},
+    "browser.runtime-error.superseded-response": "test_flagship_superseded_response[{host}]",
     **{f"browser.{name}": f"test_flagship_selected_clipboard[{name}-{{host}}]"
        for name in ("cell-selection.range-clear", "copy-selection.logical-cells",
                     "copy-selection.display-order", "copy-selection.pinned-columns")},

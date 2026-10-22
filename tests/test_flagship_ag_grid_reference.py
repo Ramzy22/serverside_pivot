@@ -689,6 +689,61 @@ def test_reference_application_search_filters_and_clears_ssrm(reference_run):
         case.observed = "Used the reference application's global search control; SSRM requests, visible hierarchy and totals changed then restored while scope=Included remained"
 
 
+def test_reference_late_superseded_ssrm_success_cannot_restore_old_rows(reference_run):
+    """Hold a real old HTTP result until a newer searched view has rendered."""
+    with reference_case("runtime-error.superseded-response", reference_run) as case:
+        driver = case.driver
+        driver.execute_script("""
+          const nativeFetch = window.fetch.bind(window);
+          const trace = [];
+          let releaseOld;
+          window.referenceSupersession = {trace, release: () => releaseOld?.()};
+          window.fetch = (input, options) => {
+            if (input !== '/api/rows' || !options?.body) return nativeFetch(input, options);
+            const query = JSON.parse(options.body);
+            const requestId = query.globalSearch;
+            if (!['Éclair', 'München'].includes(requestId)) return nativeFetch(input, options);
+            trace.push({phase:'request', requestId, at:performance.now()});
+            return nativeFetch(input, options).then(async response => {
+              const body = await response.clone().json();
+              const total = body.grandTotalData['Total|ventes_€'];
+              if (requestId === 'Éclair') {
+                trace.push({phase:'ready', requestId, at:performance.now(), total});
+                await new Promise(resolve => {releaseOld = resolve});
+              }
+              trace.push({phase:'response', requestId, at:performance.now(), total});
+              return response;
+            });
+          };
+        """)
+        search = driver.find_element(By.CSS_SELECTOR, 'input[type="search"][aria-label="Global search"]')
+        search.send_keys('Éclair')
+        driver.find_element(By.ID, 'search-apply').click()
+        WebDriverWait(driver, 10).until(lambda browser: any(
+            event['phase'] == 'ready' and event['requestId'] == 'Éclair'
+            for event in browser.execute_script('return window.referenceSupersession.trace')))
+        search.clear()
+        search.send_keys('München')
+        driver.find_element(By.ID, 'search-apply').click()
+        WebDriverWait(driver, 10).until(lambda browser: (
+            [row['label'] for row in _displayed_rows(browser)] == ['München', 'Total']
+            and any(event['phase'] == 'response' and event['requestId'] == 'München'
+                    for event in browser.execute_script('return window.referenceSupersession.trace'))))
+        driver.execute_script('window.referenceSupersession.release()')
+        WebDriverWait(driver, 10).until(lambda browser: any(
+            event['phase'] == 'response' and event['requestId'] == 'Éclair'
+            for event in browser.execute_script('return window.referenceSupersession.trace')))
+        driver.execute_async_script('setTimeout(arguments[arguments.length-1], 400)')
+        rows = _displayed_rows(driver)
+        trace = driver.execute_script('return window.referenceSupersession.trace')
+        from tests.flagship_browser_support import assert_superseded_response
+        assert [row['label'] for row in rows] == ['München', 'Total']
+        assert [row['data']['Total|ventes_€'] for row in rows] == [79.75, 79.75]
+        assert assert_superseded_response(trace, 'Éclair', 'München', 79.75)
+        case.parsed_output = {'trace': trace, 'rows': rows}
+        case.observed = 'Older real SSRM Éclair response delivered after newer München response; visible München rows and 79.75 total persisted'
+
+
 def test_reference_filter_options_values_follow_active_scope_and_selection(reference_run):
     """A stale or hard-coded option list, or a selection without SSRM filtering, fails."""
     with reference_case("filter-options.values", reference_run) as case:

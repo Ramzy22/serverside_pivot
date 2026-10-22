@@ -225,6 +225,95 @@ def test_recovery_proof_rejects_a_success_requested_before_retry_click():
     assert _post_retry_data_response(trace, "failed", 10) == "clicked-retry"
 
 
+def test_superseded_response_oracle_requires_late_old_success_without_visible_rollback():
+    from tests.flagship_browser_support import assert_superseded_response
+
+    trace = [
+        {"phase": "request", "requestId": "old", "at": 1, "total": None},
+        {"phase": "request", "requestId": "new", "at": 2, "total": None},
+        {"phase": "response", "requestId": "new", "at": 3, "total": 79.75},
+        {"phase": "response", "requestId": "old", "at": 4, "total": 200.0},
+    ]
+    assert assert_superseded_response(trace, "old", "new", 79.75) is True
+    with pytest.raises(AssertionError):
+        assert_superseded_response(trace, "old", "new", 200.0)
+    with pytest.raises(AssertionError):
+        assert_superseded_response(trace[:3], "old", "new", 79.75)
+    with pytest.raises(AssertionError):
+        assert_superseded_response([*trace[:2], trace[3], trace[2]], "old", "new", 79.75)
+
+
+def test_supersession_ids_ignore_metadata_responses_without_rows():
+    from tests.flagship_browser_support import supersession_ids
+
+    trace = [
+        {"phase": "ready", "requestId": "old-rows", "term": "Éclair", "total": 120.25},
+        {"phase": "response", "requestId": "new-metadata", "term": "München", "total": None},
+        {"phase": "response", "requestId": "new-rows", "term": "München", "total": 79.75},
+    ]
+    assert supersession_ids(trace) == ("old-rows", "new-rows")
+
+
+def test_superseded_response_has_an_installed_browser_case_for_every_host():
+    from scripts.certify_flagship import _product_browser_plan
+    from tests.flagship_contract import load_requirements
+
+    requirements = load_requirements(Path(__file__).parent / "flagship_requirements.json")
+    plan = _product_browser_plan(requirements)
+    for host in ("dash", "react", "streamlit"):
+        assert plan[("runtime-error.superseded-response", host,
+                     "browser.runtime-error.superseded-response")] == (
+            f"tests/test_flagship_workflows.py::test_flagship_superseded_response[{host}]"
+        )
+
+
+def test_supersession_probe_selects_outgoing_dash_request_not_nested_previous_response():
+    from tests.flagship_browser_support import _SUPERSESSION_PROBE_SCRIPT
+
+    script = f"""
+      const oldRequest = {{schemaVersion:1, kind:'data', requestId:'old',
+        state:{{filters:{{global:'Éclair'}}}}}};
+      const metadataRequest = {{...oldRequest, requestId:'metadata'}};
+      const newRequest = {{schemaVersion:1, kind:'data', requestId:'new',
+        state:{{filters:{{global:'München'}}}}}};
+      const previous = {{schemaVersion:1, kind:'data', requestId:'previous', status:'data',
+        state:{{filters:{{global:'Éclair'}}}}}};
+      const envelope = (request, total) => ({{schemaVersion:1, kind:'data',
+        requestId:request.requestId, status:'data', payload:{{data:[{{_isTotal:true,
+        _id:'Grand Total', '__RowTotal__ventes_€_sum':total}}]}}}});
+      let next = 0;
+      global.window = {{fetch: async () => {{
+        const index = next++;
+        const body = index === 0 ? {{...envelope(metadataRequest, null), payload:{{data:[]}}}}
+          : index === 1 ? envelope(oldRequest, 120.25) : envelope(newRequest, 79.75);
+        return {{clone:() => ({{text:async () => JSON.stringify(body)}})}};
+      }}}};
+      global.performance = {{now: () => next}};
+      eval({json.dumps(_SUPERSESSION_PROBE_SCRIPT)});
+      (async () => {{
+        window.__pivotSupersession.arm();
+        await window.fetch('/_dash-update-component', {{body:JSON.stringify({{
+          inputs:[{{value:JSON.stringify(previous)}}, {{value:JSON.stringify(metadataRequest)}}]
+        }})}});
+        const old = window.fetch('/_dash-update-component', {{body:JSON.stringify({{
+          inputs:[{{value:JSON.stringify(previous)}}, {{value:JSON.stringify(oldRequest)}}]
+        }})}});
+        await new Promise(resolve => setImmediate(resolve));
+        const newer = window.fetch('/_dash-update-component', {{body:JSON.stringify({{
+          inputs:[{{value:JSON.stringify(previous)}}, {{value:JSON.stringify(newRequest)}}]
+        }})}});
+        await newer;
+        window.__pivotSupersession.release();
+        await old;
+        process.stdout.write(JSON.stringify(window.__pivotSupersession.trace));
+      }})().catch(error => {{console.error(error); process.exitCode = 1}});
+    """
+    completed = subprocess.run(["node", "-e", script], capture_output=True, text=True, check=True, timeout=5)
+    trace = json.loads(completed.stdout)
+    from tests.flagship_browser_support import assert_superseded_response
+    assert assert_superseded_response(trace, "old", "new", 79.75)
+
+
 def test_recovery_probe_reads_exact_raw_grand_total_from_real_v1_envelope(monkeypatch):
     from fastapi.testclient import TestClient
     from examples import flagship_demo_data
@@ -585,6 +674,14 @@ def test_flagship_runtime_error_recovery(host, installed_workflow_hosts):
     from tests.flagship_browser_support import qualify_runtime_recovery
 
     qualify_runtime_recovery(host)
+
+
+@pytest.mark.flagship
+@pytest.mark.parametrize("host", ["dash", "react", "streamlit"])
+def test_flagship_superseded_response(host, installed_workflow_hosts):
+    from tests.flagship_browser_support import qualify_superseded_response
+
+    qualify_superseded_response(host)
 
 
 @pytest.mark.parametrize("text", ["100\t2\n50\t3", "100.25\t2\t2\n49.75\t3\t3",
