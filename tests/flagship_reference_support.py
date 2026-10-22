@@ -174,15 +174,30 @@ class LiveCase:
             """))
             try:
                 snapshot["console"] = self.driver.get_log("browser")
+                license_messages = {
+                    "AG Grid and AG Charts Enterprise License",
+                    "License Key Not Found",
+                    "All AG Grid and AG Charts Enterprise features are unlocked for trial.",
+                    "If you want to hide the watermark please email info@ag-grid.com for a trial license key.",
+                }
+
+                def console_text(entry):
+                    if entry.get("source") != "console-api":
+                        return None
+                    quoted = re.search(r'"([^"\n]*)"\s*$', entry.get("message", ""))
+                    return quoted.group(1) if quoted else None
+
+                has_license_banner = any(
+                    (console_text(entry) or "").strip("* ") == "AG Grid and AG Charts Enterprise License"
+                    for entry in snapshot["console"]
+                )
+
                 def expected_license(entry):
-                    message = entry.get("message", "")
-                    if "ag-grid-enterprise.js" not in message:
-                        return False
-                    return (any(token in message for token in (
-                        "AG Grid and AG Charts Enterprise License", "License Key Not Found",
-                        "All AG Grid and AG Charts Enterprise features are unlocked for trial",
-                        "If you want to hide the watermark",
-                    )) or bool(re.search(r'"\*{10,}"', message)))
+                    text = console_text(entry)
+                    return has_license_banner and text is not None and (
+                        text.strip("* ") in license_messages
+                        or bool(re.fullmatch(r"\*{10,}", text.strip()))
+                    )
 
                 unexpected_console = [entry for entry in snapshot["console"]
                                       if entry.get("level") == "SEVERE" and not expected_license(entry)]

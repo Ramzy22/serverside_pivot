@@ -133,6 +133,58 @@ def test_timeout_after_browser_navigation_is_failed_but_startup_failure_is_block
     assert support.classify_reference_exception(timeout, page_loaded=False) == "blocked"
 
 
+class _BrowserLogDriver:
+    capabilities = {"browserName": "chrome", "browserVersion": "reference"}
+
+    def __init__(self, messages):
+        self.messages = messages
+
+    def save_screenshot(self, path):
+        Path(path).write_bytes(b"reference screenshot")
+        return True
+
+    def execute_script(self, _script):
+        return {"trace": [{"request": "getRows"}]}
+
+    def get_log(self, kind):
+        assert kind == "browser"
+        return [{"level": "SEVERE", "source": "console-api", "message": message}
+                for message in self.messages]
+
+
+def test_reference_case_accepts_real_license_banner_from_hashed_bundle(tmp_path):
+    """A Vite asset hash must not turn an evaluation banner into a product error."""
+    run_id = support.start_reference_run(tmp_path)
+    prefix = "http://127.0.0.1:64476/assets/index--VseV9j3.js 20:177198 "
+    banner = [
+        '"****************************************************************************************************************************"',
+        '"***************************************** AG Grid and AG Charts Enterprise License *****************************************"',
+        '"************************************************** License Key Not Found ***************************************************"',
+        '"* All AG Grid and AG Charts Enterprise features are unlocked for trial.                                                    *"',
+        '"* If you want to hide the watermark please email info@ag-grid.com for a trial license key.                                 *"',
+        '"****************************************************************************************************************************"',
+    ]
+    case = support.LiveCase("initial-workspace.populated", _BrowserLogDriver([prefix + line for line in banner]),
+                            tmp_path, run_id, observed="Visible rows and SSRM request")
+    assert case.save("passed").result == "passed"
+    observation = json.loads((tmp_path / "runs" / run_id / "initial-workspace.populated" / "observation.json").read_text())
+    assert observation["unexpected_console"] == []
+
+
+@pytest.mark.parametrize("error_text", ["TypeError: render crashed", ""])
+def test_reference_case_rejects_unrelated_severe_error_amid_license_banner(tmp_path, error_text):
+    """A genuine error stays fatal even when the evaluation banner is present."""
+    run_id = support.start_reference_run(tmp_path)
+    prefix = "http://127.0.0.1:64476/assets/index--VseV9j3.js 20:177305 "
+    messages = [prefix + '"* AG Grid and AG Charts Enterprise License *"',
+                prefix + f'"{error_text}"']
+    case = support.LiveCase("initial-workspace.populated", _BrowserLogDriver(messages),
+                            tmp_path, run_id, observed="Visible rows and SSRM request")
+    with pytest.raises(AssertionError, match="Unexpected browser console error"):
+        case.save("passed")
+    assert support.load_case_results(tmp_path, run_id)[0].result == "failed"
+
+
 @pytest.mark.flagship
 @pytest.mark.skipif(
     os.environ.get("AG_GRID_REFERENCE_LIVE") != "1",
