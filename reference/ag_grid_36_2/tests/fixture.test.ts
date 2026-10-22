@@ -30,6 +30,17 @@ test('SSRM root groups aggregate filtered pivot values and report a row count', 
   ]);
 });
 
+test('application search narrows SSRM groups and grand totals without dropping the scope filter', () => {
+  const searched = queryRows(fixture.rows, { ...baseRequest, globalSearch: ' M\u00dcNCHEN ' });
+  assert.equal(searched.rowCount, 1);
+  assert.deepEqual(searched.rowData.map((row) => row.region), ['M\u00fcnchen']);
+  assert.equal(searched.rowData[0]['Total|ventes_\u20ac'], 79.75);
+  assert.equal(searched.grandTotalData?.['Total|ventes_\u20ac'], 79.75);
+  const cleared = queryRows(fixture.rows, { ...baseRequest, globalSearch: '' });
+  assert.equal(cleared.rowCount, 2);
+  assert.equal(cleared.grandTotalData?.['Total|ventes_\u20ac'], 200);
+});
+
 test('SSRM root supplies independently aggregated grand totals for each pivot and measure', () => {
   const result = queryRows(fixture.rows, baseRequest);
   assert.equal(result.grandTotalData?.['Q1|ventes_€'], 150);

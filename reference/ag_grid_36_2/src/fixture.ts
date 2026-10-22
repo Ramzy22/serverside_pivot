@@ -14,6 +14,7 @@ export type QueryRequest = {
   pivotCols: Column[];
   valueCols: Column[];
   pivotMode: boolean;
+  globalSearch?: string;
   filterModel: Record<string, Filter>;
   sortModel: Sort[];
 };
@@ -82,8 +83,11 @@ function compare(left: unknown, right: unknown): number {
 }
 
 export function queryRows(sourceRows: DataRow[], request: QueryRequest): QueryResult {
+  const search = request.globalSearch?.trim().toLocaleLowerCase('en-GB') || '';
   const filtered = sourceRows.filter((row) =>
-    Object.entries(request.filterModel || {}).every(([field, filter]) => matchesOne(row[field], filter)),
+    Object.entries(request.filterModel || {}).every(([field, filter]) => matchesOne(row[field], filter))
+    && (!search || Object.values(row).some((value) =>
+      value != null && String(value).toLocaleLowerCase('en-GB').includes(search))),
   );
   const routed = filtered.filter((row) => request.groupKeys.every((key, depth) =>
     keyOf(row[fieldOf(request.rowGroupCols[depth])]) === key,

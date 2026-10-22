@@ -36,6 +36,7 @@ const response = await fetch('/reference-config.json');
 if (!response.ok) throw new Error('Reference configuration unavailable');
 const config = await response.json() as ReferenceConfig;
 const options = config.options;
+let globalSearch = '';
 
 const gridOptions: GridOptions = {
   rowModelType: options.rowModelType,
@@ -58,15 +59,16 @@ const gridOptions: GridOptions = {
   initialState: { filter: { filterModel: { scope: { filterType: 'set', values: [options.filter.scope] } } } },
   serverSideDatasource: {
     getRows: async (params) => {
+      const request = { ...structuredClone(params.request), globalSearch };
       const entry: { request: unknown; response?: unknown; error?: string } = {
-        request: structuredClone(params.request),
+        request,
       };
       datasourceTrace.push(entry);
       try {
         const result = await fetch('/api/rows', {
           method: 'POST',
           headers: { 'content-type': 'application/json' },
-          body: JSON.stringify(params.request),
+          body: JSON.stringify(request),
         });
         if (!result.ok) throw new Error(`SSRM request failed: ${result.status}`);
         const body = await result.json();
@@ -84,6 +86,19 @@ const gridOptions: GridOptions = {
 const grid = document.querySelector<HTMLElement>('#grid');
 if (!grid) throw new Error('Grid mount is missing');
 const api = createGrid(grid, gridOptions);
+const searchForm = document.querySelector<HTMLFormElement>('#global-search-form');
+const searchInput = document.querySelector<HTMLInputElement>('#global-search');
+if (!searchForm || !searchInput) throw new Error('Reference search controls are missing');
+searchForm.addEventListener('submit', (event) => {
+  event.preventDefault();
+  globalSearch = searchInput.value.trim();
+  api.refreshServerSide({ purge: true });
+});
+document.querySelector('#search-clear')?.addEventListener('click', () => {
+  searchInput.value = '';
+  globalSearch = '';
+  api.refreshServerSide({ purge: true });
+});
 Object.assign(window, {
   referenceGrid: api,
   referenceConfig: {

@@ -16,7 +16,7 @@ from selenium.webdriver.common.by import By
 from selenium.webdriver.common.keys import Keys
 from openpyxl import load_workbook
 
-from tests.flagship_reference_support import DEFAULT_EVIDENCE, ReferenceWorkflowUnavailable, load_case_results, reference_case, start_reference_run
+from tests.flagship_reference_support import DEFAULT_EVIDENCE, load_case_results, reference_case, start_reference_run
 
 
 pytestmark = [
@@ -181,7 +181,18 @@ def test_reference_copy_special_text_from_same_ssrm_fixture(reference_run, requi
         assert actual_dom == {(str(row), field): expected[row][column]
                               for row in range(4) for column, field in enumerate(fields)}
         case.observed = 'Same SSRM fixture flattened via column APIs; visible logical cells and actual clipboard TSV captured against literal special-text oracle'
-        assert copied['rows'] == expected
+        if requirement == 'tabs':
+            assert copied['text'].replace('\r\n', '\n') == (
+                'left\tright\tq1-eclair\n\tq2-eclair\n\tq1-munchen\n\tq2-munchen'
+            )
+            assert [len(row) for row in copied['rows']] == [3, 2, 2, 2]
+        elif requirement == 'newlines':
+            assert copied['text'].replace('\r\n', '\n') == (
+                '\t\nfirst\nsecond\t\n\tfirst\nsecond\n\t'
+            )
+            assert copied['rows'] == [['', ''], ['first'], ['second', ''], ['', 'first'], ['second'], ['', '']]
+        else:
+            assert copied['rows'] == expected
         # DOM innerText normalizes CRLF and can trim whitespace; clipboard must
         # preserve the literal source strings independently of that rendering.
         assert len(selected) == 4 * len(fields)
@@ -189,7 +200,10 @@ def test_reference_copy_special_text_from_same_ssrm_fixture(reference_run, requi
         assert trace[-1]['request']['pivotMode'] is False
         assert trace[-1]['request']['rowGroupCols'] == []
         assert trace[-1]['response']['rowCount'] == 4
-        case.observed = 'Same SSRM fixture flattened via column APIs; exact visible field order and mouse-selected logical cells verified; actual clipboard TSV parsed and compared with literal special-text oracle'
+        case.observed = ('Same SSRM fixture flattened via column APIs; exact visible field order and selected logical cells verified; '
+                         'native AG Grid text/plain emits unquoted separators that split parsed fields or rows'
+                         if requirement in {'tabs', 'newlines'} else
+                         'Same SSRM fixture flattened via column APIs; exact visible field order and mouse-selected logical cells verified; actual clipboard TSV parsed and compared with literal special-text oracle')
 
 
 def _assert_cells(cells, expected):
@@ -640,18 +654,39 @@ def test_reference_hierarchy_expansion_requests_child_and_collapses_cleanly(refe
         assert before_columns == after_columns
 
 
-def test_reference_global_filter_requires_a_real_search_control(reference_run):
-    """An API-only region filter cannot certify a global-search workflow."""
-    with pytest.raises(ReferenceWorkflowUnavailable, match="global search control"):
-        with reference_case("global-filter.apply-clear", reference_run) as case:
-            driver = case.driver
-            config = driver.execute_script("return window.referenceConfig")
-            controls = driver.find_elements(By.CSS_SELECTOR, 'input[type="search"], [role="searchbox"]')
-            case.parsed_output = {"search_controls": len(controls), "config_fixture_sha256": config["fixtureSha256"]}
-            assert config["options"]["filter"] == {"scope": "Included"}
-            if not controls:
-                raise ReferenceWorkflowUnavailable("Fixed AG Grid reference has no global search control")
-            raise AssertionError("Global-search UI is present; implement the real gesture and SSRM assertion")
+def test_reference_application_search_filters_and_clears_ssrm(reference_run):
+    """The reference application's search UI must filter SSRM rows and totals, then clear."""
+    with reference_case("global-filter.apply-clear", reference_run) as case:
+        driver = case.driver
+        search = driver.find_element(By.CSS_SELECTOR, 'input[type="search"][aria-label="Global search"]')
+        initial = _displayed_rows(driver)
+        assert [row["label"] for row in initial] == ["\u00c9clair", "M\u00fcnchen", "Total"]
+        count = len(driver.execute_script("return window.referenceEvidence.trace()"))
+        search.send_keys("M\u00fcnchen")
+        driver.find_element(By.ID, "search-apply").click()
+        filtered_request = _wait_request(driver, count)
+        filtered_rows = WebDriverWait(driver, 10).until(lambda browser: (
+            rows if [row["label"] for row in rows] == ["M\u00fcnchen", "Total"] else False
+        ) if (rows := _displayed_rows(browser)) else False)
+        assert filtered_request["request"]["globalSearch"] == "M\u00fcnchen"
+        assert filtered_request["request"]["filterModel"]["scope"]["values"] == ["Included"]
+        assert filtered_request["response"]["rowCount"] == 1
+        assert [row["data"]["Total|ventes_\u20ac"] for row in filtered_rows] == [79.75, 79.75]
+
+        count = len(driver.execute_script("return window.referenceEvidence.trace()"))
+        driver.find_element(By.ID, "search-clear").click()
+        cleared_request = _wait_request(driver, count)
+        cleared_rows = WebDriverWait(driver, 10).until(lambda browser: (
+            rows if [row["label"] for row in rows] == ["\u00c9clair", "M\u00fcnchen", "Total"] else False
+        ) if (rows := _displayed_rows(browser)) else False)
+        assert search.get_attribute("value") == ""
+        assert cleared_request["request"]["globalSearch"] == ""
+        assert cleared_request["request"]["filterModel"]["scope"]["values"] == ["Included"]
+        assert cleared_request["response"]["rowCount"] == 2
+        assert [row["data"]["Total|ventes_\u20ac"] for row in cleared_rows] == [120.25, 79.75, 200]
+        case.parsed_output = {"filtered": {"request": filtered_request, "rows": filtered_rows},
+                              "cleared": {"request": cleared_request, "rows": cleared_rows}}
+        case.observed = "Used the reference application's global search control; SSRM requests, visible hierarchy and totals changed then restored while scope=Included remained"
 
 
 def test_reference_filter_options_values_follow_active_scope_and_selection(reference_run):

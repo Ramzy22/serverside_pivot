@@ -47,6 +47,27 @@ test('HTTP datasource processes and records an actual SSRM getRows request', asy
   assert.equal(trace.at(-1).response.rowCount, 2);
 });
 
+test('HTTP datasource applies application search before grouping and records the term', async () => {
+  const request = {
+    startRow: 0, endRow: 50,
+    rowGroupCols: [{ id: 'region', field: 'region' }], groupKeys: [], pivotCols: [],
+    valueCols: [{ id: 'ventes_\u20ac', field: 'ventes_\u20ac', aggFunc: 'sum' }],
+    pivotMode: false, filterModel: { scope: { filterType: 'set', values: ['Included'] } },
+    sortModel: [], globalSearch: 'M\u00fcnchen',
+  };
+  const response = await fetch(`${origin}/api/rows`, {
+    method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(request),
+  });
+  assert.equal(response.status, 200);
+  const result = await response.json();
+  assert.equal(result.rowCount, 1);
+  assert.deepEqual(result.rowData.map((row: { region: string }) => row.region), ['M\u00fcnchen']);
+  assert.equal(result.grandTotalData['ventes_\u20ac'], 79.75);
+  const trace = await (await fetch(`${origin}/request-trace.json`)).json();
+  assert.equal(trace.at(-1).request.globalSearch, 'M\u00fcnchen');
+  assert.equal(trace.at(-1).response.rowCount, 1);
+});
+
 test('Set Filter values reflect the active other-column filter context', async () => {
   const filtered = await fetch(`${origin}/api/filter-values`, {
     method: 'POST', headers: { 'content-type': 'application/json' },

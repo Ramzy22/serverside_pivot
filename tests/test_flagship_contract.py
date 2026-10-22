@@ -97,6 +97,14 @@ def test_selected_copy_has_distinct_edge_contracts(requirements):
     assert "dialog" in keyboard.expected.lower()
 
 
+def test_special_text_copy_declares_comparator_difference(requirements):
+    by_id = {requirement.id: requirement for requirement in requirements}
+    for edge in ("copy-selection.tabs", "copy-selection.newlines"):
+        assert by_id[edge].difference == "deliberately_different"
+        assert by_id[edge].required
+        assert set(by_id[edge].hosts) == {"dash", "react", "streamlit"}
+
+
 def test_retry_and_superseded_response_have_separate_required_evidence(requirements):
     retry = next(r for r in requirements if r.id == "runtime-error.recovery")
     stale = next(r for r in requirements if r.id == "runtime-error.superseded-response")

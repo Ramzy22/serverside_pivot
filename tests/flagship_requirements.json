@@ -586,15 +586,15 @@
         "docs": [
           "https://www.ag-grid.com/javascript-data-grid/server-side-model-datasource/"
         ],
-        "behavior": "Unobserved: Observe an equivalent server-side external/global filter; datasource owns matching semantics.",
+        "behavior": "The reference application supplies a labeled search control outside AG Grid. It sends the term with each SSRM getRows request; the fixture datasource filters source rows before grouping and aggregation. This is application integration, not AG Grid's built-in external filter.",
         "test_id": "ag-grid.global-filter.apply-clear",
         "result": "unverified"
       },
       "product_behavior": "Qualification target: Searching München leaves only its matching hierarchy and sales 79.75; clearing restores both included regions and grand sales 200 without the excluded São Paulo row.",
       "difference": "unverified",
       "constraints": [
-        "The scope=Included filter remains active; string matching semantics recorded with requests.",
-        "Live reference and installed-host evidence are absent; this requirement is not a pass."
+        "The reference application searches case-insensitively across source row values and preserves the scope=Included filter.",
+        "The browser test must verify both search and clear gestures, request terms, visible hierarchy and totals; installed-host evidence is still required."
       ],
       "hosts": [
         "dash",
@@ -1376,15 +1376,15 @@
         "docs": [
           "https://www.ag-grid.com/javascript-data-grid/clipboard/"
         ],
-        "behavior": "Observed in the pinned AG Grid 36.2 SSRM fixture: text/plain contains an unescaped embedded tab, so the fixed TSV parser sees an extra field. The reference oracle failed; this is not a general AG Grid claim.",
+        "behavior": "The pinned AG Grid 36.2 SSRM reference uses native range copy without a custom clipboard callback. Its text/plain contains an unquoted embedded tab, so a TSV parser sees an extra field. The live comparator asserts this exact native output; this is not a claim about customized AG Grid integrations.",
         "test_id": "ag-grid.copy-selection.tabs",
         "result": "unverified"
       },
       "product_behavior": "The shared clipboard serializer quotes embedded tabs; installed-host selection tests assert one parsed field retaining 'left\\tright' in Dash, React and Streamlit. Overall release qualification remains pending.",
-      "difference": "unverified",
+      "difference": "deliberately_different",
       "constraints": [
         "Dedicated edge fixture; tab-containing field is quoted with double quotes in TSV.",
-        "The pinned reference has a failing live browser observation and the product has scoped installed-host tests; these are not yet a complete release-bound parity result."
+        "The reference test passes only when native AG Grid output demonstrates the extra parsed field; product tests must independently prove lossless copy in each host."
       ],
       "hosts": [
         "dash",
@@ -1417,16 +1417,16 @@
         "docs": [
           "https://www.ag-grid.com/javascript-data-grid/clipboard/"
         ],
-        "behavior": "Observed in the pinned AG Grid 36.2 SSRM fixture: text/plain contains unescaped line breaks, so the fixed TSV parser sees extra rows. The reference oracle failed; this is not a general AG Grid claim.",
+        "behavior": "The pinned AG Grid 36.2 SSRM reference uses native range copy without a custom clipboard callback. Its text/plain contains unquoted line breaks, so a TSV parser sees extra rows. The live comparator asserts this exact native output; this is not a claim about customized AG Grid integrations.",
         "test_id": "ag-grid.copy-selection.newlines",
         "result": "unverified"
       },
       "product_behavior": "The shared serializer quotes source LF and CRLF exactly. Installed-host selection tests parse each as one cell after platform newline normalization; current-table and all-records copy also preserve table geometry. Overall release qualification remains pending.",
-      "difference": "unverified",
+      "difference": "deliberately_different",
       "constraints": [
         "Dedicated edge fixture; compare exact source line-break bytes before the OS clipboard boundary and normalized line-break content afterward.",
         "Windows Chromium normalizes LF to CRLF in text/plain and CRLF to LF in text/html; exact LF-versus-CRLF round-trip is not promised across that boundary.",
-        "The pinned reference has a failing live browser observation and the product has scoped installed-host tests; these are not yet a complete release-bound parity result."
+        "The reference test passes only when native AG Grid output demonstrates extra parsed rows; product tests must independently prove lossless copy in each host."
       ],
       "hosts": [
         "dash",
