@@ -901,8 +901,12 @@ def _managed_reference_qualification(tmp_path, monkeypatch, *, damage=None, prod
     committed_fixture = subprocess.check_output(
         ["git", "show", f"{commit}:tests/data/flagship_parity_rows.json"], cwd=source_repository,
     )
+    committed_scroll_fixture = subprocess.check_output(
+        ["git", "show", f"{commit}:tests/data/flagship_scroll_rows.json"], cwd=source_repository,
+    )
     artifacts = flagship_artifacts.ArtifactBinding(source_commit=commit, sha256={
         "fixture": hashlib.sha256(committed_fixture).hexdigest(),
+        "scroll_fixture": hashlib.sha256(committed_scroll_fixture).hexdigest(),
     }, paths={"source_repository": source_repository, "environment": tmp_path / "owned-env",
               "environment_record": tmp_path / "owned-env.location.json"})
     if damage == "fixture-mismatch":
@@ -1024,7 +1028,7 @@ def test_installed_qualifier_rejects_missing_product_map_even_with_valid_referen
     coverage = json.loads((private / "product-browser-coverage.json").read_text())
     assert coverage["scope"] == "complete-installed-release"
     assert coverage["missingImplementations"]
-    assert coverage["selectedCaseCount"] == 48
+    assert coverage["selectedCaseCount"] == 54
     if product_damage == "all-authored":
         assert coverage["missingJUnitCases"] == []
         assert coverage["unexpectedJUnitCases"] == []
@@ -1050,6 +1054,7 @@ def test_reference_qualification_uses_artifact_commit_despite_dirty_checkout_and
     for relative in (
         "pytest.ini",
         "tests/flagship_requirements.json", "tests/data/flagship_parity_rows.json",
+        "tests/data/flagship_scroll_rows.json",
         "tests/test_flagship_ag_grid_reference.py", "tests/flagship_reference_support.py",
         "tests/flagship_contract.py", "tests/flagship_capabilities.py",
         "scripts/flagship_reference_runner.py", "scripts/flagship_manifest.py", "scripts/flagship_artifacts.py",

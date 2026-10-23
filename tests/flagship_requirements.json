@@ -302,15 +302,15 @@
         "docs": [
           "https://www.ag-grid.com/javascript-data-grid/server-side-model-datasource/"
         ],
-        "behavior": "Unobserved: Observe SSRM block requests and displayed rows while scrolling.",
+        "behavior": "Wide 120-group SSRM fixture: a later 50-row block is requested; R119 appears once and R000 returns after scrolling back. A release run must observe this against the pinned browser and bundle.",
         "test_id": "ag-grid.vertical-virtual-scroll.window",
         "result": "unverified"
       },
       "product_behavior": "Qualification target: Scrolling past the first loaded window requests the corresponding later logical row range and renders its oracle row IDs once, in order; scrolling back restores the first row without stale values.",
       "difference": "unverified",
       "constraints": [
-        "Use an extended deterministic fixture exceeding two configured cache blocks; correlate range and request ID.",
-        "Live reference and installed-host evidence are absent; this requirement is not a pass."
+        "Use the deterministic 120-group, 24-period fixture; correlate a later range and request ID.",
+        "The committed matrix is an acceptance contract; only a release-bound browser result can pass this requirement."
       ],
       "hosts": [
         "dash",
@@ -343,15 +343,16 @@
         "docs": [
           "https://www.ag-grid.com/javascript-data-grid/server-side-model-datasource/"
         ],
-        "behavior": "Unobserved: Observe virtualised SSRM pivot columns; product window transport may differ.",
+        "behavior": "Wide SSRM fixture exposes 75 pivot measure columns in one response; the last Total/variance and first P23/sales render at opposite scroll extremes. Product V1 may fetch sparse column windows instead.",
         "test_id": "ag-grid.horizontal-virtual-scroll.window",
         "result": "unverified"
       },
       "product_behavior": "Qualification target: Scroll to the last pivot measure, verify its header/value match the oracle and the correlated column window, then return to the first; row labels and totals remain aligned.",
       "difference": "unverified",
       "constraints": [
-        "Use a wide deterministic fixture exceeding the viewport; same displayed column order in both systems.",
-        "Live reference and installed-host evidence are absent; this requirement is not a pass."
+        "Use the deterministic 120-group, 24-period fixture; compare first/last displayed columns and oracle values in both systems.",
+        "This journey uses server pivot-column order. Custom client column order while a sparse schema is still loading needs separate qualification.",
+        "The committed matrix is an acceptance contract; only a release-bound browser result can pass this requirement."
       ],
       "hosts": [
         "dash",

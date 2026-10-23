@@ -149,6 +149,9 @@ def qualify_virtual_scroll(host: str, requirement: str) -> None:
         first_column = "P23_unités_sum"
         last_column = "__RowTotal__écart_sum"
         wait.until(lambda current: _cell(_visible_cells(current), "R000", first_column, "1"))
+        first_header = _wait_for_visible_workspace_element(
+            driver, f'[role="columnheader"][data-header-column-id="{first_column}"]')
+        assert "unités" in (first_header.get_attribute("aria-label") or "").casefold()
         initial = {"cells": _visible_cells(driver), "trace": driver.execute_script("return window.__pivotScrollTrace || []")}
         observation["states"].append({"phase": "initial", **initial})
 
@@ -163,6 +166,9 @@ def qualify_virtual_scroll(host: str, requirement: str) -> None:
                         and _correlated(trace, row="R119", minimum_start=50,
                                         require_explicit_state=host != "dash"))
             correlated = wait.until(later)
+            labels = [item["text"] for item in _visible_cells(driver) if item["column"] == "hierarchy"
+                      and item["text"].startswith("R")]
+            assert labels == sorted(set(labels)) and "R119" in labels
             position = driver.execute_script("return {top:arguments[0].scrollTop,max:arguments[0].scrollHeight-arguments[0].clientHeight}", scroller)
             assert position["top"] > 0 and position["max"] > position["top"] - 2
             ActionChains(driver).scroll_from_origin(ScrollOrigin.from_element(scroller), 0, -10000).perform()
@@ -179,6 +185,12 @@ def qualify_virtual_scroll(host: str, requirement: str) -> None:
                         and _correlated(trace, minimum_column=1,
                                         require_explicit_state=host != "dash"))
             correlated = wait.until(later)
+            last_header = _wait_for_visible_workspace_element(
+                driver, f'[role="columnheader"][data-header-column-id="{last_column}"]')
+            assert "écart" in (last_header.get_attribute("aria-label") or "").casefold()
+            observation["states"].append({"phase": "last-header", "column": last_column,
+                                          "text": last_header.text,
+                                          "ariaLabel": last_header.get_attribute("aria-label")})
             position = driver.execute_script("return {left:arguments[0].scrollLeft,max:arguments[0].scrollWidth-arguments[0].clientWidth}", scroller)
             assert position["max"] > 0 and abs(position["left"] - position["max"]) <= 2
             ActionChains(driver).scroll_from_origin(ScrollOrigin.from_element(scroller), -100000, 0).perform()
