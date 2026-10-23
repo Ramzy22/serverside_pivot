@@ -962,11 +962,21 @@ PRODUCT_BROWSER_JOURNEYS = {
                     "copy-selection.headers", "copy-selection.formatted-values")},
     **{f"browser.{name}": f"test_flagship_hierarchy_navigation[{name}-{{host}}]"
        for name in ("hierarchy-expand.round-trip", "hierarchy-expand-all.round-trip")},
+    **{f"browser.{name}": f"test_flagship_virtual_scroll[{name}-{{host}}]"
+       for name in ("vertical-virtual-scroll.window", "horizontal-virtual-scroll.window")},
     **{f"browser.{name}": f"test_flagship_column_geometry[{name}-{{host}}]"
        for name in ("column-sizing.resize", "column-sizing.auto-size", "column-pinning.round-trip")},
     **{f"browser.{name}": f"test_flagship_export_jobs[{name}-{{host}}]"
        for name in EXPORT_JOB_REQUIREMENTS},
 }
+
+
+def _product_phase(node: str) -> str:
+    if "::test_flagship_export_jobs[" in node:
+        return "exports"
+    if "::test_flagship_virtual_scroll[" in node:
+        return "scroll"
+    return "parity"
 
 
 def _product_browser_plan(requirements, *, export_jobs: bool = False):
@@ -1113,16 +1123,19 @@ def _certify_installed_release(artifact_dir: Path, started_at: datetime, *, buil
         # Caller state must not silently replace the parity fixture in full mode.
         environment.pop("PIVOT_FLAGSHIP_EXPORT_JOB_DATA", None)
         environment.pop("PIVOT_FLAGSHIP_EXPORT_QUALIFICATION_DATA", None)
+        environment.pop("PIVOT_FLAGSHIP_SCROLL_DATA", None)
         phase_reports = []
         code = 0
         try:
-            for phase in (("exports",) if export_jobs else ("parity", "exports")):
-                phase_nodes = [node for node in selected if ("::test_flagship_export_jobs[" in node) == (phase == "exports")]
+            for phase in (("exports",) if export_jobs else ("parity", "scroll", "exports")):
+                phase_nodes = [node for node in selected if _product_phase(node) == phase]
                 if not phase_nodes and product_requirements:
                     continue
                 phase_environment = dict(environment)
                 if phase == "exports":
                     phase_environment["PIVOT_FLAGSHIP_EXPORT_JOB_DATA"] = "1"
+                elif phase == "scroll":
+                    phase_environment["PIVOT_FLAGSHIP_SCROLL_DATA"] = "1"
                 phase_junit = private / f"product-{phase}.junit.xml"
                 phase_reports.append(phase_junit)
                 with start_installed_hosts(artifacts, artifact_dir / f"installed-hosts-{phase}", environment=phase_environment) as urls:
@@ -1184,6 +1197,8 @@ def _certify_installed_release(artifact_dir: Path, started_at: datetime, *, buil
                 source = reference_stack.enter_context(_committed_reference_source(binding))
                 if hashlib.sha256((source / "tests/data/flagship_parity_rows.json").read_bytes()).hexdigest() != binding.sha256.get("fixture"):
                     raise ValueError("reference fixture differs from the built artifact fixture")
+                if hashlib.sha256((source / "tests/data/flagship_scroll_rows.json").read_bytes()).hexdigest() != binding.sha256.get("scroll_fixture"):
+                    raise ValueError("reference scroll fixture differs from the built artifact fixture")
                 reference = reference_stack.enter_context(start_reference_server(source, private))
                 reference_environment = {
                     **environment,

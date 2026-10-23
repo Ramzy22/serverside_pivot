@@ -261,10 +261,13 @@ def _build_from_snapshot(commit: str, snapshot: Path, output: Path, *, build_whe
         if candidate.is_file():
             shutil.copy2(candidate, app / "examples" / name)
     fixture = snapshot / "tests" / "data" / "flagship_parity_rows.json"
-    if not fixture.is_file():
-        raise FileNotFoundError(f"Required parity fixture missing: {fixture}")
+    scroll_fixture = snapshot / "tests" / "data" / "flagship_scroll_rows.json"
+    for required_fixture in (fixture, scroll_fixture):
+        if not required_fixture.is_file():
+            raise FileNotFoundError(f"Required flagship fixture missing: {required_fixture}")
     (app / "tests" / "data").mkdir(parents=True)
-    shutil.copy2(fixture, app / "tests" / "data" / fixture.name)
+    for required_fixture in (fixture, scroll_fixture):
+        shutil.copy2(required_fixture, app / "tests" / "data" / required_fixture.name)
     react_app = app / "examples" / "flagship_react"
     shutil.copytree(snapshot / "examples" / "flagship_react", react_app, ignore=shutil.ignore_patterns("node_modules", "dist", "release-package.tgz"))
     shutil.copy2(npm_tarball, react_app / "release-package.tgz")
@@ -300,6 +303,7 @@ def _build_from_snapshot(commit: str, snapshot: Path, output: Path, *, build_whe
         "wheel": _digest(wheel.read_bytes()),
         "npm_tarball": _digest(npm_tarball.read_bytes()),
         "fixture": _digest(fixture.read_bytes()),
+        "scroll_fixture": _digest(scroll_fixture.read_bytes()),
         "export_job_fixture": _digest((app / "examples" / "flagship_demo_data.py").read_bytes()),
         **{f"react:{name}": digest for name, digest in assets["react"].items()},
         **{f"dash:{name}": digest for name, digest in assets["dash"].items()},

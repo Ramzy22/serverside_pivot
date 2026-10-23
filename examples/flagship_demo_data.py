@@ -57,6 +57,15 @@ def _parity_data_enabled() -> bool:
     return os.environ.get("PIVOT_FLAGSHIP_PARITY_DATA") == "1"
 
 
+def _scroll_data_enabled() -> bool:
+    return os.environ.get("PIVOT_FLAGSHIP_SCROLL_DATA") == "1"
+
+
+def _scroll_rows() -> list[dict[str, Any]]:
+    fixture_path = Path(__file__).resolve().parents[1] / "tests" / "data" / "flagship_scroll_rows.json"
+    return json.loads(fixture_path.read_text(encoding="utf-8"))["rows"]
+
+
 def _parity_rows() -> list[dict[str, Any]]:
     fixture_path = Path(__file__).resolve().parents[1] / "tests" / "data" / "flagship_parity_rows.json"
     return json.loads(fixture_path.read_text(encoding="utf-8"))["rows"]
@@ -67,6 +76,8 @@ def build_demo_table(row_count: int = DEMO_ROW_COUNT) -> pa.Table:
     if os.environ.get("PIVOT_FLAGSHIP_EXPORT_JOB_DATA") == "1":
         return pa.table({"region": [f"R{i:04d} \u6771\u4eac" for i in range(512)],
                          "sales": [i + .25 for i in range(512)]})
+    if _scroll_data_enabled():
+        return pa.Table.from_pylist(_scroll_rows())
     if _parity_data_enabled():
         return pa.Table.from_pylist(_parity_rows())
     if _qualification_data_enabled():
@@ -284,8 +295,8 @@ def workspace_config(host: str) -> dict[str, Any]:
             "showRowTotals": False, "showColTotals": False, "persistence": False,
             "style": {"height": "760px", "width": "100%"},
         }
-    if _qualification_data_enabled() or _parity_data_enabled():
-        return {
+    if _qualification_data_enabled() or _parity_data_enabled() or _scroll_data_enabled():
+        config = {
             "id": f"flagship-{host}-pivot",
             "table": TABLE_NAME,
             "pivotTitle": "Export Qualification / تصدير",
@@ -333,6 +344,14 @@ def workspace_config(host: str) -> dict[str, Any]:
             },
             "style": {"height": "760px", "width": "100%"},
         }
+        if _scroll_data_enabled():
+            config["columnOrder"] = [
+                "hierarchy",
+                *(f"P{period:02d}_{field}_sum" for period in range(24)
+                  for field in ("unités", "ventes_€", "écart")),
+                "__RowTotal__unités_sum", "__RowTotal__ventes_€_sum", "__RowTotal__écart_sum",
+            ]
+        return config
     return {
         "id": f"flagship-{host}-pivot",
         "table": TABLE_NAME,

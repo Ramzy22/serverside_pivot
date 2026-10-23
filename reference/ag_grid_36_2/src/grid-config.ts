@@ -11,7 +11,7 @@ export type ReferenceConfig = {
 
 const aggregateChoices = ['sum', 'avg', 'min', 'max', 'count', 'first', 'last'];
 
-export function buildReferenceColumnDefs(config: ReferenceConfig, origin = ''): ColDef[] {
+export function buildReferenceColumnDefs(config: ReferenceConfig, origin = '', scenario = ''): ColDef[] {
   const { options } = config;
   const formatter = new Intl.NumberFormat(options.valueFormatter.locale, options.valueFormatter);
   const numeric = (value: unknown): string => typeof value === 'number' ? formatter.format(value) : '';
@@ -20,7 +20,7 @@ export function buildReferenceColumnDefs(config: ReferenceConfig, origin = ''): 
     filter: 'agSetColumnFilter',
     filterParams: {
       values: (params: SetFilterValuesFuncParams) => {
-        void fetch(`${origin}/api/filter-values`, {
+        void fetch(`${origin}/api/filter-values${scenario}`, {
           method: 'POST',
           headers: { 'content-type': 'application/json' },
           body: JSON.stringify({ field, filterModel: params.api.getFilterModel() }),

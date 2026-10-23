@@ -45,9 +45,11 @@ def start_reference_server(source_root: Path, evidence_root: Path) -> Iterator[R
     app = source_root / "reference" / "ag_grid_36_2"
     config_path = app / "reference-config.json"
     fixture_path = source_root / "tests" / "data" / "flagship_parity_rows.json"
+    scroll_fixture_path = source_root / "tests" / "data" / "flagship_scroll_rows.json"
     config_bytes = config_path.read_bytes()
     config = json.loads(config_bytes)
     fixture_sha256 = hashlib.sha256(fixture_path.read_bytes()).hexdigest()
+    scroll_fixture_sha256 = hashlib.sha256(scroll_fixture_path.read_bytes()).hexdigest()
     config_sha256 = hashlib.sha256(config_bytes).hexdigest()
     package = json.loads((app / "package.json").read_bytes())
     if config.get("version") != "36.2.0" or any(
@@ -103,14 +105,16 @@ def start_reference_server(source_root: Path, evidence_root: Path) -> Iterator[R
                 except (URLError, OSError):
                     time.sleep(min(0.05, max(0, deadline - time.monotonic())))
                     continue
-                if not isinstance(served, dict) or served.get("fixtureSha256") != fixture_sha256:
+                if (not isinstance(served, dict) or served.get("fixtureSha256") != fixture_sha256
+                        or served.get("scrollFixtureSha256") != scroll_fixture_sha256):
                     raise ValueError("reference fixture hash mismatch")
                 served_config = {key: value for key, value in served.items()
-                                 if key not in {"fixtureSha256", "filterValues"}}
+                                 if key not in {"fixtureSha256", "scrollFixtureSha256", "filterValues"}}
                 if served_config != config:
                     raise ValueError("reference config mismatch")
                 if (hashlib.sha256(config_path.read_bytes()).hexdigest() != config_sha256
-                        or hashlib.sha256(fixture_path.read_bytes()).hexdigest() != fixture_sha256):
+                        or hashlib.sha256(fixture_path.read_bytes()).hexdigest() != fixture_sha256
+                        or hashlib.sha256(scroll_fixture_path.read_bytes()).hexdigest() != scroll_fixture_sha256):
                     raise ValueError("reference source hashes changed during startup")
                 if child.poll() is not None:
                     raise RuntimeError("reference server exited during readiness")

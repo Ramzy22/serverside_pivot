@@ -72,6 +72,30 @@ def test_parity_env_uses_shared_rows_without_changing_default(monkeypatch):
     assert "copyTab" in config["availableFieldList"]
 
 
+def test_scroll_scenario_has_independent_row_and_column_windows(monkeypatch):
+    from scripts.generate_flagship_scroll_fixture import make_fixture
+
+    fixture = json.loads((ROOT / "tests" / "data" / "flagship_scroll_rows.json").read_text(encoding="utf-8"))
+    assert fixture == make_fixture(), "Tracked scroll rows must match their deterministic generator"
+    rows = fixture["rows"]
+    assert fixture["id"] == "flagship-scroll-v1"
+    assert len({row["region"] for row in rows}) == 120
+    assert len({row["period"] for row in rows}) == 24
+    assert len(rows) == 120 * 24
+    assert rows[0] == {"region": "R000", "account": "A000", "scope": "Included",
+                       "period": "P00", "ventes_€": 0.25, "unités": 1, "écart": 0.0}
+    assert rows[-1] == {"region": "R119", "account": "A119", "scope": "Included",
+                        "period": "P23", "ventes_€": 11923.25, "unités": 1, "écart": 119.0}
+    monkeypatch.setenv("PIVOT_FLAGSHIP_PARITY_DATA", "1")
+    monkeypatch.setenv("PIVOT_FLAGSHIP_SCROLL_DATA", "1")
+    assert flagship_demo_data.build_demo_table().to_pylist() == rows
+    config = flagship_demo_data.workspace_config("react")
+    assert config["rowFields"] == ["region", "account"]
+    assert config["colFields"] == ["period"]
+    assert config["columnOrder"][-1] == "__RowTotal__écart_sum"
+    assert len(config["columnOrder"]) == 1 + 24 * 3 + 3
+
+
 def test_reference_is_outside_product_distributions():
     npm_package = json.loads((ROOT / "dash_tanstack_pivot" / "package.json").read_text(encoding="utf-8"))
     assert all(not path.startswith("reference") for path in npm_package["files"])

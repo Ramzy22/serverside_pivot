@@ -42,12 +42,15 @@ def harness(tmp_path, monkeypatch):
     fixture = source / "tests/data/flagship_parity_rows.json"
     fixture.parent.mkdir(parents=True)
     fixture.write_bytes(b'{"rows":[]}\n')
+    scroll_fixture = source / "tests/data/flagship_scroll_rows.json"
+    scroll_fixture.write_bytes(b'{"rows":[{"region":"R000"}]}\n')
     config = {"version": "36.2.0", "options": {"pivotMode": True}}
     (app / "reference-config.json").write_text(json.dumps(config), encoding="utf-8")
     versions = {"ag-grid-community": "36.2.0", "ag-grid-enterprise": "36.2.0", "ag-charts-enterprise": "14.2.0"}
     (app / "package.json").write_text(json.dumps({"dependencies": versions}))
     state = {"source": source, "app": app, "evidence": tmp_path / "private", "commands": [], "children": [],
-             "payload": {**config, "filterValues": {}, "fixtureSha256": hashlib.sha256(fixture.read_bytes()).hexdigest()},
+             "payload": {**config, "filterValues": {}, "fixtureSha256": hashlib.sha256(fixture.read_bytes()).hexdigest(),
+                         "scrollFixtureSha256": hashlib.sha256(scroll_fixture.read_bytes()).hexdigest()},
              "timeout": False, "fail_build": False, "compete": False, "competitors": []}
     real_popen = subprocess.Popen
 
@@ -122,7 +125,8 @@ def test_runs_in_order_and_yields_exact_provenance_then_stops_owned_child(harnes
     assert any(b"fake command output" in p.read_bytes() for p in h["evidence"].rglob("*.log"))
 
 
-@pytest.mark.parametrize("field,value", [("version", "36.1.0"), ("fixtureSha256", "0" * 64), ("options", {"pivotMode": False})])
+@pytest.mark.parametrize("field,value", [("version", "36.1.0"), ("fixtureSha256", "0" * 64),
+                                         ("scrollFixtureSha256", "0" * 64), ("options", {"pivotMode": False})])
 def test_rejects_wrong_served_provenance_and_cleans_up(harness, field, value):
     harness["payload"][field] = value
     with pytest.raises(ValueError, match="reference"):

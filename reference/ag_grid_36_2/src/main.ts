@@ -32,7 +32,8 @@ ModuleRegistry.registerModules([RowApiModule, ServerSideRowModelApiModule]);
 // copies identify which visible state came from the real SSRM datasource.
 const datasourceTrace: Array<{ request: unknown; response?: unknown; error?: string }> = [];
 
-const response = await fetch('/reference-config.json');
+const scenario = new URLSearchParams(window.location.search).get('scenario') === 'scroll' ? '?scenario=scroll' : '';
+const response = await fetch(`/reference-config.json${scenario}`);
 if (!response.ok) throw new Error('Reference configuration unavailable');
 const config = await response.json() as ReferenceConfig;
 const options = config.options;
@@ -55,7 +56,7 @@ const gridOptions: GridOptions = {
   suppressAggFuncInHeader: options.suppressAggFuncInHeader,
   defaultColDef: options.defaultColDef,
   autoGroupColumnDef: options.autoGroupColumnDef,
-  columnDefs: buildReferenceColumnDefs(config),
+  columnDefs: buildReferenceColumnDefs(config, '', scenario),
   initialState: { filter: { filterModel: { scope: { filterType: 'set', values: [options.filter.scope] } } } },
   serverSideDatasource: {
     getRows: async (params) => {
@@ -65,7 +66,7 @@ const gridOptions: GridOptions = {
       };
       datasourceTrace.push(entry);
       try {
-        const result = await fetch('/api/rows', {
+        const result = await fetch(`/api/rows${scenario}`, {
           method: 'POST',
           headers: { 'content-type': 'application/json' },
           body: JSON.stringify(request),

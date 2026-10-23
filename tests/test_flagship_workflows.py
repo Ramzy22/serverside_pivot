@@ -296,6 +296,21 @@ def test_superseded_response_has_an_installed_browser_case_for_every_host():
         )
 
 
+def test_scroll_windows_have_dedicated_installed_browser_phase():
+    from scripts.certify_flagship import _product_browser_plan, _product_phase
+    from tests.flagship_contract import load_requirements
+
+    requirements = load_requirements(Path(__file__).parent / "flagship_requirements.json")
+    plan = _product_browser_plan(requirements)
+    for name in ("vertical-virtual-scroll.window", "horizontal-virtual-scroll.window"):
+        for host in ("dash", "react", "streamlit"):
+            node = plan[(name, host, f"browser.{name}")]
+            assert node == f"tests/test_flagship_workflows.py::test_flagship_virtual_scroll[{name}-{host}]"
+            assert _product_phase(node) == "scroll"
+    assert _product_phase("tests/test_flagship_workflows.py::test_flagship_hierarchy_navigation[hierarchy-expand.round-trip-dash]") == "parity"
+    assert _product_phase("tests/test_flagship_workflows.py::test_flagship_export_jobs[large-delivery.progress-dash]") == "exports"
+
+
 def test_supersession_probe_selects_outgoing_dash_request_not_nested_previous_response():
     from tests.flagship_browser_support import _SUPERSESSION_PROBE_SCRIPT
 
@@ -1089,6 +1104,16 @@ def test_flagship_hierarchy_navigation(host, requirement, installed_workflow_hos
     from tests.flagship_browser_support import qualify_hierarchy_navigation
 
     qualify_hierarchy_navigation(host, requirement)
+
+
+@pytest.mark.flagship
+@pytest.mark.parametrize("host", ["dash", "react", "streamlit"])
+@pytest.mark.parametrize("requirement", ["vertical-virtual-scroll.window", "horizontal-virtual-scroll.window"])
+def test_flagship_virtual_scroll(host, requirement, installed_workflow_hosts):
+    """Qualify later row and column windows against the wide installed fixture."""
+    from tests.flagship_scroll_support import qualify_virtual_scroll
+
+    qualify_virtual_scroll(host, requirement)
 
 
 @pytest.mark.flagship

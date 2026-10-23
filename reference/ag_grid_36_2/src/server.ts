@@ -8,11 +8,15 @@ import { distinctFilterValues, queryRows, type QueryRequest } from './fixture.ts
 
 const appRoot = fileURLToPath(new URL('..', import.meta.url));
 const fixturePath = fileURLToPath(new URL('../../../tests/data/flagship_parity_rows.json', import.meta.url));
+const scrollFixturePath = fileURLToPath(new URL('../../../tests/data/flagship_scroll_rows.json', import.meta.url));
 const configPath = join(appRoot, 'reference-config.json');
 const rawFixture = readFileSync(fixturePath);
 const fixture = JSON.parse(rawFixture.toString('utf8'));
 const config = JSON.parse(readFileSync(configPath, 'utf8'));
 const fixtureSha256 = createHash('sha256').update(rawFixture).digest('hex');
+const rawScrollFixture = readFileSync(scrollFixturePath);
+const scrollFixture = JSON.parse(rawScrollFixture.toString('utf8'));
+const scrollFixtureSha256 = createHash('sha256').update(rawScrollFixture).digest('hex');
 const filterValues = Object.fromEntries(
   (config.filterValueFields as string[]).map((field) => [
     field,
@@ -56,9 +60,15 @@ function staticFallback(request: IncomingMessage, response: ServerResponse): voi
 export function createReferenceHandler(fallback: RequestListener = staticFallback): RequestListener {
   return (request, response) => {
     void (async () => {
-      const pathname = new URL(request.url || '/', 'http://localhost').pathname;
+      const url = new URL(request.url || '/', 'http://localhost');
+      const pathname = url.pathname;
+      const scrollScenario = url.searchParams.get('scenario') === 'scroll';
+      const activeFixture = scrollScenario ? scrollFixture : fixture;
       if (pathname === '/reference-config.json' && request.method === 'GET') {
-        json(response, 200, { ...config, filterValues, fixtureSha256 });
+        json(response, 200, { ...config, filterValues: scrollScenario
+          ? Object.fromEntries((config.filterValueFields as string[]).map((field) => [field, distinctFilterValues(activeFixture.rows, field, {})]))
+          : filterValues, fixtureSha256: scrollScenario ? scrollFixtureSha256 : fixtureSha256,
+          scrollFixtureSha256 });
         return;
       }
       if (pathname === '/request-trace.json' && request.method === 'GET') {
@@ -76,7 +86,7 @@ export function createReferenceHandler(fallback: RequestListener = staticFallbac
           json(response, 400, { error: 'Invalid Set Filter values request' });
           return;
         }
-        const result = { values: distinctFilterValues(fixture.rows, payload.field, payload.filterModel) };
+        const result = { values: distinctFilterValues(activeFixture.rows, payload.field, payload.filterModel) };
         filterValuesTrace.push({ request: payload, response: result });
         json(response, 200, result);
         return;
@@ -90,7 +100,7 @@ export function createReferenceHandler(fallback: RequestListener = staticFallbac
           json(response, 400, { error: 'Invalid SSRM request' });
           return;
         }
-        const result = queryRows(fixture.rows, payload);
+        const result = queryRows(activeFixture.rows, payload);
         trace.push({ at: new Date().toISOString(), request: payload, response: result });
         json(response, 200, result);
         return;
