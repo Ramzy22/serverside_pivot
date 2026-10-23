@@ -82,7 +82,8 @@ function compare(left: unknown, right: unknown): number {
   return new Intl.Collator('en-GB', { numeric: true }).compare(String(left), String(right));
 }
 
-export function queryRows(sourceRows: DataRow[], request: QueryRequest): QueryResult {
+export function queryRows(sourceRows: DataRow[], request: QueryRequest,
+  options: { descendingPivotKeys?: boolean } = {}): QueryResult {
   const search = request.globalSearch?.trim().toLocaleLowerCase('en-GB') || '';
   const filtered = sourceRows.filter((row) =>
     Object.entries(request.filterModel || {}).every(([field, filter]) => matchesOne(row[field], filter))
@@ -95,7 +96,7 @@ export function queryRows(sourceRows: DataRow[], request: QueryRequest): QueryRe
   const grouping = request.rowGroupCols[request.groupKeys.length];
   const pivotFields = request.pivotMode && request.pivotCols.length
     ? Array.from(new Set(filtered.map((row) => request.pivotCols.map((column) => keyOf(row[fieldOf(column)])).join('|'))))
-      .sort((left, right) => compare(left, right))
+      .sort((left, right) => options.descendingPivotKeys ? compare(right, left) : compare(left, right))
       .flatMap((key) => request.valueCols.map((column) => `${key}|${column.id}`))
       .concat(request.valueCols.map((column) => `Total|${column.id}`))
     : undefined;

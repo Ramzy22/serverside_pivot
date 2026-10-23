@@ -4,6 +4,7 @@ import { test } from 'node:test';
 import { queryRows } from '../src/fixture.ts';
 
 const fixture = JSON.parse(readFileSync(new URL('../../../tests/data/flagship_parity_rows.json', import.meta.url), 'utf8'));
+const scrollFixture = JSON.parse(readFileSync(new URL('../../../tests/data/flagship_scroll_rows.json', import.meta.url), 'utf8'));
 const columns = (fields: string[]) => fields.map((field) => ({ id: field, field, displayName: field }));
 const baseRequest = {
   startRow: 0,
@@ -16,6 +17,18 @@ const baseRequest = {
   filterModel: { scope: { filterType: 'set', values: ['Included'] } },
   sortModel: [],
 };
+
+test('wide SSRM scenario orders pivot periods like the product and windows later groups', () => {
+  const first = queryRows(scrollFixture.rows, baseRequest, { descendingPivotKeys: true });
+  assert.equal(first.rowCount, 120);
+  assert.deepEqual(first.pivotResultFields?.slice(0, 3), ['P23|ventes_€', 'P23|unités', 'P23|écart']);
+  assert.deepEqual(first.pivotResultFields?.slice(-3), ['Total|ventes_€', 'Total|unités', 'Total|écart']);
+  assert.equal(first.rowData[0]['P23|ventes_€'], 23.25);
+  const later = queryRows(scrollFixture.rows, { ...baseRequest, startRow: 100, endRow: 120 },
+    { descendingPivotKeys: true });
+  assert.equal(later.rowData.at(-1)?.region, 'R119');
+  assert.equal(later.rowData.at(-1)?.['P23|ventes_€'], 11923.25);
+});
 
 test('SSRM root groups aggregate filtered pivot values and report a row count', () => {
   const result = queryRows(fixture.rows, baseRequest);

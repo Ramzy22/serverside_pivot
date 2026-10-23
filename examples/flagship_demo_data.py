@@ -345,12 +345,7 @@ def workspace_config(host: str) -> dict[str, Any]:
             "style": {"height": "760px", "width": "100%"},
         }
         if _scroll_data_enabled():
-            config["columnOrder"] = [
-                "hierarchy",
-                *(f"P{period:02d}_{field}_sum" for period in range(24)
-                  for field in ("unités", "ventes_€", "écart")),
-                "__RowTotal__unités_sum", "__RowTotal__ventes_€_sum", "__RowTotal__écart_sum",
-            ]
+            config["columnOrder"] = []
         return config
     return {
         "id": f"flagship-{host}-pivot",

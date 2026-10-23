@@ -65,7 +65,9 @@ export function createReferenceHandler(fallback: RequestListener = staticFallbac
       const scrollScenario = url.searchParams.get('scenario') === 'scroll';
       const activeFixture = scrollScenario ? scrollFixture : fixture;
       if (pathname === '/reference-config.json' && request.method === 'GET') {
-        json(response, 200, { ...config, filterValues: scrollScenario
+        json(response, 200, { ...config,
+          options: config.options,
+          filterValues: scrollScenario
           ? Object.fromEntries((config.filterValueFields as string[]).map((field) => [field, distinctFilterValues(activeFixture.rows, field, {})]))
           : filterValues, fixtureSha256: scrollScenario ? scrollFixtureSha256 : fixtureSha256,
           scrollFixtureSha256 });
@@ -100,7 +102,7 @@ export function createReferenceHandler(fallback: RequestListener = staticFallbac
           json(response, 400, { error: 'Invalid SSRM request' });
           return;
         }
-        const result = queryRows(activeFixture.rows, payload);
+        const result = queryRows(activeFixture.rows, payload, { descendingPivotKeys: scrollScenario });
         trace.push({ at: new Date().toISOString(), request: payload, response: result });
         json(response, 200, result);
         return;

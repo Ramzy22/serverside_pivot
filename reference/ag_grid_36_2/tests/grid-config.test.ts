@@ -42,3 +42,12 @@ test('measure columns offer only aggregations the SSRM backend implements', () =
   assert.equal(sales?.filter, 'agNumberColumnFilter');
   assert.equal(config.options.defaultColDef.filter, 'agTextColumnFilter');
 });
+
+test('wide scenario orders P23 before P00 while keeping Total last', () => {
+  const period = buildReferenceColumnDefs(config, '', '?scenario=scroll').find((candidate) => candidate.field === 'period');
+  const comparator = period?.pivotComparator;
+  assert.equal(typeof comparator, 'function');
+  assert.ok(comparator!('P23', 'P00') < 0);
+  assert.ok(comparator!('P00', 'Total') < 0);
+  assert.ok(comparator!('Total', 'P23') > 0);
+});

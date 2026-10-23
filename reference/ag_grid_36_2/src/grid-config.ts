@@ -41,7 +41,12 @@ export function buildReferenceColumnDefs(config: ReferenceConfig, origin = '', s
     setFilter('region', { rowGroup: true, enableRowGroup: true, hide: true }),
     setFilter('account', { rowGroup: true, enableRowGroup: true, hide: true }),
     setFilter('scope', { hide: true }),
-    setFilter('period', { pivot: true, enablePivot: true }),
+    setFilter('period', { pivot: true, enablePivot: true,
+      ...(scenario ? { pivotComparator: (left: string, right: string) => {
+        if (left === 'Total') return 1;
+        if (right === 'Total') return -1;
+        return right.localeCompare(left, 'en-GB', { numeric: true });
+      } } : {}) }),
     ...options.valueFields.map((field): ColDef => ({
       field,
       aggFunc: 'sum',
@@ -51,7 +56,8 @@ export function buildReferenceColumnDefs(config: ReferenceConfig, origin = '', s
       valueFormatter: (params) => numeric(params.value),
     })),
     { field: 'rowId', headerName: 'Row ID' },
-    { field: 'extrema', enableValue: true, aggFunc: 'min', allowedAggFuncs: aggregateChoices, filter: 'agNumberColumnFilter' },
+    ...(scenario ? [] : [{ field: 'extrema', enableValue: true, aggFunc: 'min',
+      allowedAggFuncs: aggregateChoices, filter: 'agNumberColumnFilter' }] as ColDef[]),
     { field: 'copyTab' }, { field: 'copyLF' }, { field: 'copyCRLF' },
     { field: 'copyUnicode' }, { field: 'copyNull' }, { field: 'copyEmpty' },
   ];

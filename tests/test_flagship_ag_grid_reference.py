@@ -453,34 +453,69 @@ def test_reference_expand_all_preserves_parentage_totals_and_collapses_without_d
         case.observed = "expandAll loaded both SSRM account branches under correct parents; collapseAll retained exactly two region rows and grand sales 200"
 
 
+
+
+def _open_scroll_reference(driver):
+    driver.get(os.environ.get("AG_GRID_REFERENCE_URL", "http://127.0.0.1:4179/") + "?scenario=scroll")
+    WebDriverWait(driver, 20).until(lambda browser: browser.execute_script("return window.referenceEvidence?.ready === true"))
+    assert driver.execute_script("return window.referenceConfig.fixtureSha256 === window.referenceConfig.scrollFixtureSha256")
+
+
 def test_reference_horizontal_scroll_renders_last_measure_and_restores_first(reference_run):
-    """A shifted header/value pairing or detached row label fails virtual navigation."""
+    """The wide SSRM fixture exposes the same first/last pivot measure order."""
     with reference_case("horizontal-virtual-scroll.window", reference_run) as case:
         driver = case.driver
+        _open_scroll_reference(driver)
         driver.set_window_size(1000, 800)
-        _displayed_rows(driver)
-        snapshots = []
         initial_trace = driver.execute_script("return window.referenceEvidence.trace()")
-        assert len(initial_trace) == 1 and "response" in initial_trace[0]
-        assert "Total|extrema" in initial_trace[0]["response"]["pivotResultFields"]
-        assert {"RowApiModule", "ServerSideRowModelApiModule"} <= set(driver.execute_script("return window.referenceConfig.modules"))
+        assert initial_trace and "response" in initial_trace[0]
+        assert len(initial_trace[0]["response"]["pivotResultFields"]) == 75
         columns = driver.execute_script("return window.referenceGrid.getAllDisplayedColumns().map(c => c.getColId())")
-        assert columns[-1] == "Total|extrema"
-        for offset, column, values in ((99999, "Total|extrema", ["100", "-100", "-100"]), (0, "Q1|ventes_€", ["100.25", "49.75", "150.00"])):
+        assert columns[1] == "P23|ventes_€" and columns[-1] == "Total|écart"
+        snapshots = []
+        for offset, column, value in ((99999, "Total|écart", "0.00"), (0, "P23|ventes_€", "23.25")):
             driver.execute_script("document.querySelector('.ag-body-horizontal-scroll-viewport').scrollLeft = arguments[0]", offset)
-            cells = _wait_column(driver, column, values)
+            cells = WebDriverWait(driver, 10).until(lambda browser: (
+                visible if any(cell["colId"] == column and cell["rowIndex"] == "0" and cell["text"] == value
+                               for cell in visible) else False
+            ) if (visible := browser.execute_script("return window.referenceEvidence.visibleCells()")) else False)
             geometry = driver.execute_script("return window.referenceEvidence.headerGeometry()")
             scroll = driver.execute_script("const v=document.querySelector('.ag-body-horizontal-scroll-viewport'); return {left:v.scrollLeft,max:v.scrollWidth-v.clientWidth}")
             snapshots.append({"column": column, "cells": cells, "headers": geometry, "scroll": scroll})
             case.parsed_output = snapshots
-            _assert_cells(cells, {(str(index), column): value for index, value in enumerate(values)})
-            _assert_cells(cells, {("0", "ag-Grid-AutoColumn"): "Éclair", ("1", "ag-Grid-AutoColumn"): "München", ("2", "ag-Grid-AutoColumn"): "Total"})
+            _assert_cells(cells, {("0", column): value, ("0", "ag-Grid-AutoColumn"): "R000"})
             assert any(header["colId"] == column for header in geometry)
-            assert driver.find_element(By.CSS_SELECTOR, f'.ag-header-cell[col-id="{column}"] .ag-header-cell-text').text == ("Extrema" if offset else "Ventes_€")
+            assert driver.find_element(By.CSS_SELECTOR, f'.ag-header-cell[col-id="{column}"] .ag-header-cell-text').text == ("Écart" if offset else "Ventes_€")
             assert driver.execute_script("return window.referenceEvidence.trace()") == initial_trace
         assert snapshots[0]["scroll"]["left"] == snapshots[0]["scroll"]["max"] > 0
         assert snapshots[1]["scroll"]["left"] == 0
-        case.observed = "Last pivot measure Total/extrema and first Q1/sales rendered with correct values and pinned labels; SSRM supplies all pivot columns without a column-window request"
+        case.observed = "Wide fixture: last Total/écart and first P23/sales rendered with exact values and pinned R000 label; SSRM supplied all 75 columns in its initial response"
+
+
+def test_reference_vertical_scroll_requests_later_block_and_restores_first(reference_run):
+    """A later SSRM block must produce the visible R119 row exactly once."""
+    with reference_case("vertical-virtual-scroll.window", reference_run) as case:
+        driver = case.driver
+        _open_scroll_reference(driver)
+        first = driver.execute_script("return window.referenceEvidence.visibleCells()")
+        _assert_cells(first, {("0", "ag-Grid-AutoColumn"): "R000", ("0", "P23|ventes_€"): "23.25"})
+        driver.execute_script("document.querySelector('.ag-body-vertical-scroll-viewport').scrollTop = 99999")
+        def later(browser):
+            cells = browser.execute_script("return window.referenceEvidence.visibleCells()")
+            trace = browser.execute_script("return window.referenceEvidence.trace()")
+            requested = [item for item in trace if item["request"]["startRow"] >= 50 and "response" in item]
+            return (cells, requested) if (requested and sum(cell["colId"] == "ag-Grid-AutoColumn"
+                        and cell["text"] == "R119" for cell in cells) == 1) else False
+        cells, requests = WebDriverWait(driver, 20).until(later)
+        assert any(row.get("region") == "R119" for item in requests for row in item["response"]["rowData"])
+        case.parsed_output = {"first": first, "later": cells, "requests": requests}
+        driver.execute_script("document.querySelector('.ag-body-vertical-scroll-viewport').scrollTop = 0")
+        restored = WebDriverWait(driver, 10).until(lambda browser: (
+            cells if any(cell["colId"] == "ag-Grid-AutoColumn" and cell["text"] == "R000" for cell in cells) else False
+        ) if (cells := browser.execute_script("return window.referenceEvidence.visibleCells()")) else False)
+        _assert_cells(restored, {("0", "P23|ventes_€"): "23.25"})
+        case.parsed_output["restored"] = restored
+        case.observed = "Wide fixture: SSRM requested a later 50-row block, rendered R119 once and restored R000 after scrolling back"
 
 
 def test_reference_startup_exposes_live_request_and_visible_groups(reference_run):

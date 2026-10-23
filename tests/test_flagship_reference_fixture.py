@@ -92,8 +92,7 @@ def test_scroll_scenario_has_independent_row_and_column_windows(monkeypatch):
     config = flagship_demo_data.workspace_config("react")
     assert config["rowFields"] == ["region", "account"]
     assert config["colFields"] == ["period"]
-    assert config["columnOrder"][-1] == "__RowTotal__écart_sum"
-    assert len(config["columnOrder"]) == 1 + 24 * 3 + 3
+    assert config["columnOrder"] == []
 
 
 def test_reference_is_outside_product_distributions():
