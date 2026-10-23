@@ -1024,7 +1024,7 @@ def test_installed_qualifier_rejects_missing_product_map_even_with_valid_referen
     coverage = json.loads((private / "product-browser-coverage.json").read_text())
     assert coverage["scope"] == "complete-installed-release"
     assert coverage["missingImplementations"]
-    assert coverage["selectedCaseCount"] == 42
+    assert coverage["selectedCaseCount"] == 45
     if product_damage == "all-authored":
         assert coverage["missingJUnitCases"] == []
         assert coverage["unexpectedJUnitCases"] == []

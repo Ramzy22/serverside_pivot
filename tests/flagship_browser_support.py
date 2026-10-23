@@ -310,6 +310,13 @@ def assert_selected_clipboard(text: str, expected: list[list[str]], *, line_sepa
     return parsed
 
 
+def selected_headers_oracle(columns: list[str]) -> list[str]:
+    """Literal Q1 fixture labels in the selected displayed order."""
+    labels = {"Q1_unités_sum": "Unités (Sum)", "Q1_ventes_€_sum": "Ventes € (Sum)"}
+    assert len(columns) == 2 and set(columns) == set(labels), "Header case must select only Q1 units and sales"
+    return [labels[column] for column in columns]
+
+
 def _product_display_order_copy_oracle(rows):
     """Pin the backend-native visible order independently of clipboard contents."""
     assert [row["label"] for row in rows] == ["Éclair", "München"], (
@@ -760,6 +767,25 @@ def qualify_selected_clipboard(host: str, requirement: str) -> None:
         menu_label = "Copy Selection (Raw Values)" if requirement == "copy-selection.logical-cells" else "Copy Selection"
         _copy_selected(driver, _selection_cell(driver, row_ids[0], columns[0]), expected, observation,
                        menu_label=menu_label)
+        if requirement == "copy-selection.headers":
+            selected_before_headers = set(observation["selectedIds"])
+            assert set(_selection_ids(driver)) == selected_before_headers, "Body copy changed the selected rectangle"
+            observation["withoutHeaders"] = {
+                "menuAction": observation["copyMenuAction"],
+                "clipboardText": observation["clipboardText"],
+                "parsedTSV": observation["parsedTSV"],
+            }
+            with_headers = [selected_headers_oracle(columns), *expected]
+            observation["expectedWithHeaders"] = with_headers
+            _copy_selected(driver, _selection_cell(driver, row_ids[0], columns[0]),
+                           with_headers, observation, menu_label="Copy Selection with Headers")
+            assert set(_selection_ids(driver)) == selected_before_headers, "Header copy changed the selected rectangle"
+            observation["withHeaders"] = {
+                "menuAction": observation["copyMenuAction"],
+                "clipboardText": observation["clipboardText"],
+                "parsedTSV": observation["parsedTSV"],
+            }
+            result["headerOptInVerified"] = True
         if requirement == "copy-selection.pinned-columns":
             observation["scrollLeftAfterCopy"] = driver.execute_script("return arguments[0].scrollLeft", scroller)
             assert abs(observation["scrollLeftAfterCopy"] - observation["scrollLeft"]) <= 1, "Copying the scrolled range reset horizontal scroll"

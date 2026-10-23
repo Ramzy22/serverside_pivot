@@ -729,6 +729,22 @@ def test_selected_clipboard_oracle_checks_exact_bytes_and_parsed_cells():
         ["100.25", "2"], ["49.75", "3"]]
 
 
+def test_selected_headers_oracle_has_only_selected_displayed_columns():
+    from tests.flagship_browser_support import selected_headers_oracle, assert_selected_clipboard
+
+    columns = ["Q1_unités_sum", "Q1_ventes_€_sum"]
+    assert selected_headers_oracle(columns) == ["Unités (Sum)", "Ventes € (Sum)"]
+    assert_selected_clipboard(
+        "Unités (Sum)\tVentes € (Sum)\n2\t100\n3\t50",
+        [selected_headers_oracle(columns), ["2", "100"], ["3", "50"]],
+    )
+    with pytest.raises(AssertionError):
+        assert_selected_clipboard(
+            "Unités (Sum)\tVentes € (Sum)\tÉcart (Sum)\n2\t100\n3\t50",
+            [selected_headers_oracle(columns), ["2", "100"], ["3", "50"]],
+        )
+
+
 def test_selected_clipboard_oracle_checks_native_windows_bytes_without_normalizing_cells():
     from tests.flagship_browser_support import assert_selected_clipboard
 
@@ -869,7 +885,8 @@ def test_selection_copy_helper_chooses_raw_menu_action_in_real_browser(tmp_path)
 @pytest.mark.flagship
 @pytest.mark.parametrize("host", ["dash", "react", "streamlit"])
 @pytest.mark.parametrize("requirement", ["cell-selection.range-clear", "copy-selection.logical-cells",
-                                         "copy-selection.display-order", "copy-selection.pinned-columns"])
+                                         "copy-selection.display-order", "copy-selection.pinned-columns",
+                                         "copy-selection.headers"])
 def test_flagship_selected_clipboard(host, requirement, installed_workflow_hosts):
     from tests.flagship_browser_support import qualify_selected_clipboard
 

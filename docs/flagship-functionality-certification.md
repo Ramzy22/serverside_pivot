@@ -186,3 +186,11 @@ This formatting action is an explicit comparison precondition, not a change to
 the product default. The reference Expand All case uses the AG Grid API, while
 the product case uses its header menu; this trigger difference is not evidence
 of menu parity. Neither case qualifies the other 69 requirements.
+
+For `copy-selection.headers`, the same physically selected Q1 units/sales
+rectangle is copied first without headers and then with the **Copy Selection
+with Headers** menu action. The browser case requires exactly the two selected
+leaf labels in displayed order, an unchanged selected rectangle, and identical
+body rows beneath the optional header. The product's default zero-decimal
+body and the reference's two-decimal body are evaluated against separate
+literal oracles; this case alone does not assert numeric-format equivalence.

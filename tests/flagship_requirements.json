@@ -1552,7 +1552,8 @@
       "difference": "unverified",
       "constraints": [
         "Merged pivot header handling has its own explicit case; same selected rectangle reused.",
-        "Live reference and installed-host evidence are absent; this requirement is not a pass."
+        "Product default numeric display is zero decimals while the AG Grid 36.2 reference starts at two; this case compares header opt-in, selected order and copy scope, not numeric-format equivalence.",
+        "A current-release manifest with bound installed-host and reference evidence is required before this requirement is a pass."
       ],
       "hosts": [
         "dash",
