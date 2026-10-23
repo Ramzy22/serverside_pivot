@@ -745,6 +745,18 @@ def test_selected_headers_oracle_has_only_selected_displayed_columns():
         )
 
 
+def test_formatted_selection_oracle_requires_two_decimal_display_values():
+    from tests.flagship_browser_support import formatted_selection_oracle, assert_selected_clipboard
+
+    rows = [{"label": "München"}, {"label": "Éclair"}]
+    columns = ["Q1_ventes_€_sum", "Q1_unités_sum"]
+    expected = formatted_selection_oracle(rows, columns)
+    assert expected == [["49.75", "3.00"], ["100.25", "2.00"]]
+    assert_selected_clipboard("49.75\t3.00\n100.25\t2.00", expected)
+    with pytest.raises(AssertionError):
+        assert_selected_clipboard("50\t3\n100\t2", expected)
+
+
 def test_selected_clipboard_oracle_checks_native_windows_bytes_without_normalizing_cells():
     from tests.flagship_browser_support import assert_selected_clipboard
 
@@ -886,7 +898,7 @@ def test_selection_copy_helper_chooses_raw_menu_action_in_real_browser(tmp_path)
 @pytest.mark.parametrize("host", ["dash", "react", "streamlit"])
 @pytest.mark.parametrize("requirement", ["cell-selection.range-clear", "copy-selection.logical-cells",
                                          "copy-selection.display-order", "copy-selection.pinned-columns",
-                                         "copy-selection.headers"])
+                                         "copy-selection.headers", "copy-selection.formatted-values"])
 def test_flagship_selected_clipboard(host, requirement, installed_workflow_hosts):
     from tests.flagship_browser_support import qualify_selected_clipboard
 

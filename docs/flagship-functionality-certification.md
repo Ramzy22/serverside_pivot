@@ -194,3 +194,9 @@ leaf labels in displayed order, an unchanged selected rectangle, and identical
 body rows beneath the optional header. The product's default zero-decimal
 body and the reference's two-decimal body are evaluated against separate
 literal oracles; this case alone does not assert numeric-format equivalence.
+
+For `copy-selection.formatted-values`, the product case uses the visible
+Format dialog to set two decimals before selecting Q1 sales and units. It
+requires the selected DOM cells and clipboard bytes to show `100.25`, `2.00`,
+`49.75` and `3.00` in displayed order. The reference case starts with its
+pinned two-decimal formatter. Raw-value copying remains a separate contract.

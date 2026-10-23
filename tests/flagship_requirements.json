@@ -1345,8 +1345,9 @@
       "product_behavior": "Qualification target: With en-GB fixed two decimals, selected sales 100.25 and units 2 copy as '100.25' and '2.00'; raw-value policy is tested separately and cannot be inferred from numeric export.",
       "difference": "unverified",
       "constraints": [
-        "Explicit number formatter and locale; clipboard uses displayed formatted values for this case.",
-        "Live reference and installed-host evidence are absent; this requirement is not a pass."
+        "Product hosts explicitly set two-decimal display through the Format dialog before selection; AG Grid 36.2 SSRM reference starts with a two-decimal formatter.",
+        "Clipboard must match the selected visible formatted cells; raw-value policy has its own case.",
+        "A current-release manifest with bound installed-host and reference evidence is required before this requirement is a pass."
       ],
       "hosts": [
         "dash",

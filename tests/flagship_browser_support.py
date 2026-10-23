@@ -317,6 +317,17 @@ def selected_headers_oracle(columns: list[str]) -> list[str]:
     return [labels[column] for column in columns]
 
 
+def formatted_selection_oracle(rows, columns: list[str]) -> list[list[str]]:
+    """Exact two-decimal Q1 values for the Included fixture rows."""
+    values = {
+        "Éclair": {"Q1_ventes_€_sum": "100.25", "Q1_unités_sum": "2.00"},
+        "München": {"Q1_ventes_€_sum": "49.75", "Q1_unités_sum": "3.00"},
+    }
+    assert len(rows) == 2 and {row["label"] for row in rows} == set(values)
+    assert len(columns) == 2 and set(columns) == set(next(iter(values.values())))
+    return [[values[row["label"]][column] for column in columns] for row in rows]
+
+
 def _product_display_order_copy_oracle(rows):
     """Pin the backend-native visible order independently of clipboard contents."""
     assert [row["label"] for row in rows] == ["Éclair", "München"], (
@@ -661,7 +672,8 @@ def qualify_selected_clipboard(host: str, requirement: str) -> None:
             _wait_selection_sort(driver, checkpoint, sales, observation)
             wait.until(lambda current: [row["label"] for row in _selection_rows(current)] == ["Éclair", "München"])
             columns = [sales, units]
-        elif requirement in ("copy-selection.display-order", "copy-selection.pinned-columns"):
+        elif requirement in ("copy-selection.display-order", "copy-selection.pinned-columns",
+                             "copy-selection.formatted-values"):
             _selection_number_format(driver, observation)
             observation["actions"].append("set displayed numeric precision to 2dp")
         if requirement == "copy-selection.display-order":
@@ -760,6 +772,13 @@ def qualify_selected_clipboard(host: str, requirement: str) -> None:
         elif requirement == "copy-selection.pinned-columns":
             literal = {"Éclair": ["2.00", "100.25"], "München": ["3.00", "49.75"]}
             expected = [literal[row["label"]] for row in rows]
+        elif requirement == "copy-selection.formatted-values":
+            expected = formatted_selection_oracle(rows, columns)
+            for row, values in zip(rows, expected):
+                for column, value in zip(columns, values):
+                    assert _selection_cell(driver, row["id"], column).text.strip() == value, (
+                        "Selected displayed value does not match the two-decimal fixture oracle")
+            observation["displayedSelectedCells"] = expected
         else:
             literal = {"Éclair": {sales: "100", units: "2"}, "München": {sales: "50", units: "3"}}
             expected = [[literal[row["label"]][column] for column in columns] for row in rows]
