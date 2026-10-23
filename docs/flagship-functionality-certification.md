@@ -175,3 +175,14 @@ cases against the former München-first expectation; those failures are RED
 evidence for this contract correction. They do not establish current workflow
 success or an overall parity pass; the contract remains `unverified` pending
 current reference and installed-host qualification.
+
+For hierarchy expansion, the reference fixture initially displays sales with
+two decimal places, while the product defaults to zero. The installed-host
+cases therefore open the visible Format toolbar and click **Increase decimal
+places** twice before expanding. The initial, expanded and collapsed DOM must
+then show exact values such as Éclair `120.25`, München `79.75` and grand total
+`200.00`; correlated V1 responses must retain the corresponding raw values.
+This formatting action is an explicit comparison precondition, not a change to
+the product default. The reference Expand All case uses the AG Grid API, while
+the product case uses its header menu; this trigger difference is not evidence
+of menu parity. Neither case qualifies the other 69 requirements.

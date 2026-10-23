@@ -225,7 +225,8 @@
       "difference": "unverified",
       "constraints": [
         "One parent selected; scope=Included; expansion state measured by logical row IDs.",
-        "Live reference and installed-host evidence are absent; this requirement is not a pass."
+        "Product hosts set global numeric display to two decimals through the Format toolbar before expansion; the AG Grid 36.2 SSRM reference starts at two decimals.",
+        "A current-release manifest with bound installed-host and reference evidence is required before this requirement is a pass."
       ],
       "hosts": [
         "dash",
@@ -266,7 +267,9 @@
       "difference": "unverified",
       "constraints": [
         "Two-level region/account fixture; no unknown future depth.",
-        "Live reference and installed-host evidence are absent; this requirement is not a pass."
+        "Product hosts set global numeric display to two decimals through the Format toolbar before expansion; the AG Grid 36.2 SSRM reference starts at two decimals.",
+        "AG Grid reference Expand All is triggered by its API; product Expand All is triggered by the header context menu.",
+        "A current-release manifest with bound installed-host and reference evidence is required before this requirement is a pass."
       ],
       "hosts": [
         "dash",

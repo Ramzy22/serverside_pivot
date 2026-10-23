@@ -1265,7 +1265,7 @@ def _visible_error(driver):
                     for button in element.find_elements("css selector", "button"))]
 
 
-def _totals(driver):
+def _totals(driver, *, decimal_places=0):
     from tests.test_flagship_certification import _workspace_elements
 
     rows = [row for row in _workspace_elements(driver, '[role="row"]') if "Grand Total" in row.text]
@@ -1273,9 +1273,13 @@ def _totals(driver):
         # Independent literal oracle: four Included fixture rows total these
         # three measures. Strip display punctuation but retain sign/decimals.
         values = [float(token.replace(",", "")) for token in re.findall(r"-?\d[\d,]*(?:\.\d+)?", row.text)]
-        # The default visible number format rounds the raw -6.75 to -7.
+        # The default display rounds -6.75 to -7; the hierarchy comparison
+        # explicitly selects two decimals and must retain the exact value.
         # The V1 response is checked separately for the exact raw total.
-        if all(expected in values for expected in (200.0, 10.0, -7.0)):
+        if decimal_places not in (0, 2):
+            raise ValueError(f"Unsupported fixture display precision: {decimal_places}")
+        expected_values = (200.0, 10.0, -6.75 if decimal_places == 2 else -7.0)
+        if all(expected in values for expected in expected_values):
             return True
     return False
 
@@ -1786,15 +1790,25 @@ def _navigation_cells(driver):
     """)
 
 
-def _navigation_dom_matches(cells, expected_children):
+def _navigation_dom_matches(cells, expected_children, *, decimal_places=0):
     columns = ("Q1_ventes_€_sum", "Q2_ventes_€_sum", "__RowTotal__ventes_€_sum")
-    expected = {
+    expected_integer = {
         "Éclair": ("100", "20", "120"),
         "München": ("50", "30", "80"),
         "__grand_total__": ("150", "50", "200"),
         "Éclair|||東京": ("100", "20", "120"),
         "München|||القاهرة": ("50", "30", "80"),
     }
+    expected_two_decimals = {
+        "Éclair": ("100.25", "20.00", "120.25"),
+        "München": ("49.75", "30.00", "79.75"),
+        "__grand_total__": ("150.00", "50.00", "200.00"),
+        "Éclair|||東京": ("100.25", "20.00", "120.25"),
+        "München|||القاهرة": ("49.75", "30.00", "79.75"),
+    }
+    if decimal_places not in (0, 2):
+        raise ValueError(f"Unsupported hierarchy display precision: {decimal_places}")
+    expected = expected_two_decimals if decimal_places == 2 else expected_integer
     keys = {"Éclair", "München", "__grand_total__"}
     keys.update({"東京": "Éclair|||東京", "القاهرة": "München|||القاهرة"}[child]
                 for child in expected_children)
@@ -1847,6 +1861,23 @@ def _navigation_response_after(trace, checkpoint, expected_children):
                  and _navigation_response_matches(entry, expected_children)), None)
 
 
+def _set_hierarchy_two_decimal_display(driver):
+    """Set global display precision through the visible toolbar before navigation."""
+    from tests.test_flagship_certification import _workspace_elements, _wait_for_visible_workspace_element
+    from selenium.webdriver.support.ui import WebDriverWait
+
+    toggle = _wait_for_visible_workspace_element(driver, '[data-testid="pivot-toolbar-format"]')
+    if not any(item.is_displayed() for item in _workspace_elements(driver, '[title="Increase decimal places"]')):
+        toggle.click()
+    increase = _wait_for_visible_workspace_element(driver, '[title="Increase decimal places"]')
+    for _ in range(2):
+        increase.click()
+    WebDriverWait(driver, 10).until(
+        lambda current: _navigation_dom_matches(_navigation_cells(current), (), decimal_places=2))
+    return {"control": "Format > Increase decimal places", "clicks": 2,
+            "decimalPlaces": 2, "selectionScoped": False}
+
+
 def qualify_hierarchy_navigation(host: str, requirement: str) -> None:
     """Exercise hierarchy controls on installed artifacts and record exact V1/DOM evidence."""
     import pytest
@@ -1891,10 +1922,11 @@ def qualify_hierarchy_navigation(host: str, requirement: str) -> None:
         assert [label for _, label in initial].count("München") == 1
         assert not any(label in ("東京", "القاهرة") for _, label in initial)
         assert _totals(driver), "Initial fixture grand total is missing"
+        observation["displayPrecondition"] = _set_hierarchy_two_decimal_display(driver)
         initial_columns = _navigation_columns(driver)
         assert {"Q1_ventes_€_sum", "Q2_ventes_€_sum"}.issubset(initial_columns)
         initial_cells = _navigation_cells(driver)
-        assert _navigation_dom_matches(initial_cells, ())
+        assert _navigation_dom_matches(initial_cells, (), decimal_places=2)
         observation["states"].append({"phase": "initial", "rows": initial, "columns": initial_columns,
                                       "salesCells": [cell for cell in initial_cells if "ventes_€_sum" in cell["colid"]]})
 
@@ -1918,7 +1950,7 @@ def qualify_hierarchy_navigation(host: str, requirement: str) -> None:
             trace = current.execute_script("return window.__pivotNavigationTrace || []")
             return (all(labels.count(child) == 1 for child in expected_children)
                     and _navigation_response_after(trace, checkpoint, expected_children)
-                    and _totals(current))
+                    and _totals(current, decimal_places=2))
 
         wait.until(expanded)
         expanded_rows = _navigation_rows(driver)
@@ -1935,7 +1967,7 @@ def qualify_hierarchy_navigation(host: str, requirement: str) -> None:
         expanded_columns = _navigation_columns(driver)
         assert set(expanded_columns) == set(initial_columns)
         expanded_cells = _navigation_cells(driver)
-        assert _navigation_dom_matches(expanded_cells, expected_children)
+        assert _navigation_dom_matches(expanded_cells, expected_children, decimal_places=2)
         observation["states"].append({"phase": "expanded", "rows": expanded_rows,
                                       "columns": expanded_columns, "responseRequestId": response["requestId"],
                                       "salesCells": [cell for cell in expanded_cells if "ventes_€_sum" in cell["colid"]]})
@@ -1955,7 +1987,8 @@ def qualify_hierarchy_navigation(host: str, requirement: str) -> None:
             labels = [label for _, label in rows]
             trace = current.execute_script("return window.__pivotNavigationTrace || []")
             return (all(child not in labels for child in expected_children)
-                    and _navigation_response_after(trace, checkpoint, ()) and _totals(current))
+                    and _navigation_response_after(trace, checkpoint, ())
+                    and _totals(current, decimal_places=2))
 
         wait.until(collapsed)
         final_rows = _navigation_rows(driver)
@@ -1968,7 +2001,7 @@ def qualify_hierarchy_navigation(host: str, requirement: str) -> None:
         collapsed_columns = _navigation_columns(driver)
         assert set(collapsed_columns) == set(initial_columns)
         collapsed_cells = _navigation_cells(driver)
-        assert _navigation_dom_matches(collapsed_cells, ())
+        assert _navigation_dom_matches(collapsed_cells, (), decimal_places=2)
         observation["states"].append({"phase": "collapsed", "rows": final_rows,
                                       "columns": collapsed_columns,
                                       "responseRequestId": collapsed_response["requestId"],

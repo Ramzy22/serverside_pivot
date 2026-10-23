@@ -184,6 +184,20 @@ def test_visible_totals_use_display_format_without_losing_exact_protocol_oracle(
     assert not _totals(object())
 
 
+def test_visible_totals_use_exact_two_decimal_fixture_when_requested(monkeypatch):
+    from tests import test_flagship_certification
+    from tests.flagship_browser_support import _totals
+
+    class Row:
+        text = "Grand Total 200.00 10.00 -6.75"
+
+    monkeypatch.setattr(test_flagship_certification, "_workspace_elements",
+                        lambda driver, selector: [Row()] if selector == '[role="row"]' else [])
+    assert _totals(object(), decimal_places=2)
+    Row.text = "Grand Total 200.00 10.00 -7.00"
+    assert not _totals(object(), decimal_places=2)
+
+
 def test_workspace_control_scrolls_into_view_before_physical_click(monkeypatch):
     from tests import test_flagship_certification
     from tests.flagship_browser_support import _click_workspace_control
@@ -906,6 +920,27 @@ def test_navigation_dom_rejects_duplicate_cell_with_conflicting_value():
     ]
     cells.append({"rowid": "Éclair", "colid": columns[2], "text": "999"})
     assert not _navigation_dom_matches(cells, ())
+
+
+def test_navigation_dom_requires_exact_two_decimal_display_when_requested():
+    from tests.flagship_browser_support import _navigation_dom_matches
+
+    columns = ("Q1_ventes_€_sum", "Q2_ventes_€_sum", "__RowTotal__ventes_€_sum")
+    values = {
+        "Éclair": ("100.25", "20.00", "120.25"),
+        "München": ("49.75", "30.00", "79.75"),
+        "__grand_total__": ("150.00", "50.00", "200.00"),
+        "Éclair|||東京": ("100.25", "20.00", "120.25"),
+    }
+    cells = [
+        {"rowid": rowid, "colid": colid, "text": value}
+        for rowid, row_values in values.items()
+        for colid, value in zip(columns, row_values)
+    ]
+    assert _navigation_dom_matches(cells, ("東京",), decimal_places=2)
+    rounded = [dict(cell, text="120") if cell["rowid"] == "Éclair" and
+               cell["colid"] == columns[2] else cell for cell in cells]
+    assert not _navigation_dom_matches(rounded, ("東京",), decimal_places=2)
 
 
 def test_resize_geometry_requires_exact_delta_and_unchanged_logical_cells():
