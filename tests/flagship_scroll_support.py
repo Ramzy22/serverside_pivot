@@ -25,6 +25,12 @@ if (!window.__pivotScrollTrace) {
     let value = raw;
     if (typeof value === 'string') { try { value = JSON.parse(value); } catch (_) { return; } }
     if (!value || typeof value !== 'object') return;
+    if (Array.isArray(value.colSchema?.columns) && (value.layoutRevision || value.colSchema?.layoutRevision)) {
+      trace.push({phase: 'payload', at: performance.now(),
+        layoutRevision:value.layoutRevision || value.colSchema.layoutRevision,
+        schema:value.colSchema.columns.map(column=>({index:column.index,id:column.id,layoutId:column.layoutId}))});
+      return;
+    }
     if (value.schemaVersion === 1 && value.kind === 'data' && typeof value.requestId === 'string') {
       const rows = Array.isArray(value.payload?.data) ? value.payload.data : [];
       trace.push({phase, at: performance.now(), requestId: value.requestId,
@@ -32,12 +38,15 @@ if (!window.__pivotScrollTrace) {
         end: value.payload?.end ?? null,
         colStart: value.payload?.col_start ?? value.payload?.colStart ?? null,
         colEnd: value.payload?.col_end ?? value.payload?.colEnd ?? null,
+        layoutRevision: value.payload?.layoutRevision ?? value.payload?.colSchema?.layoutRevision ?? null,
+        layoutManifest: value.payload?.layoutManifest ?? null,
+        pinnedColumnIds: value.payload?.pinnedColumnIds ?? null,
         showRowTotals: value.state?.showRowTotals ?? null,
         showColTotals: value.state?.showColTotals ?? null,
         needsColSchema: value.payload?.needs_col_schema ?? value.payload?.needsColSchema ?? null,
         dataVersion: value.payload?.dataVersion ?? null,
         schema: Array.isArray(value.payload?.colSchema?.columns)
-          ? value.payload.colSchema.columns.map(column => ({index:column.index,id:column.id})) : null,
+          ? value.payload.colSchema.columns.map(column => ({index:column.index,id:column.id,layoutId:column.layoutId})) : null,
         rows: rows.map(row => ({id: row?._id, path: row?._path,
           first: row?.['P23_unités_sum'], last: row?.['P00_unités_sum'],
           total: row?.['__RowTotal__unités_sum'],
@@ -230,3 +239,95 @@ def qualify_virtual_scroll(host: str, requirement: str) -> None:
         result["evidence_paths"] = paths
         record_case(requirement, host, result, directory)
     assert result["result"] == "passed", f"{host} virtual scroll failed: {diagnostic}; evidence: {directory}"
+
+
+def qualify_custom_pivot_order(host: str) -> None:
+    """Move a remote pivot group to the first display slot through the UI."""
+    import pytest
+    if os.environ.get("PIVOT_RUN_FLAGSHIP_BROWSER_TESTS") != "1":
+        pytest.skip("Enable installed flagship browser qualification explicitly")
+    from scripts.flagship_artifacts import load_artifact_binding
+    from tests.flagship_browser_support import _selection_menu
+    from tests.test_flagship_certification import (
+        _qualification_chrome_options, _switch_to_workspace,
+        _wait_for_visible_workspace_element,
+    )
+    from selenium import webdriver
+    from selenium.webdriver.common.action_chains import ActionChains
+    from selenium.webdriver.support.ui import WebDriverWait
+
+    requirement = "custom-pivot-order.sparse-window"
+    run_id = os.environ["PIVOT_FLAGSHIP_RUN_ID"]
+    directory = Path(os.environ["PIVOT_FLAGSHIP_EVIDENCE_ROOT"]) / requirement / host
+    assert ("runs", run_id) in tuple(zip(directory.parts, directory.parts[1:]))
+    directory.mkdir(parents=True, exist_ok=True)
+    downloads = directory / "downloads"
+    downloads.mkdir(exist_ok=True)
+    binding = load_artifact_binding(Path(os.environ["PIVOT_FLAGSHIP_ARTIFACT_BINDING"]))
+    result = {"result": "blocked", "browser": "unavailable", "infrastructureUnavailable": True}
+    observation = {"requirement": requirement, "states": []}
+    driver = None
+    diagnostic = ""
+    try:
+        driver = webdriver.Chrome(options=_qualification_chrome_options(downloads))
+        driver._pivot_artifact_binding, driver._pivot_artifact_host = binding, host
+        driver._pivot_loaded_assets = {}
+        driver.execute_cdp_cmd("Network.enable", {"maxTotalBufferSize": 50000000, "maxResourceBufferSize": 50000000})
+        driver.execute_cdp_cmd("Page.addScriptToEvaluateOnNewDocument", {"source": _SCROLL_PROBE})
+        _switch_to_workspace(driver, host)
+        result.update(result="failed", browser=f"{driver.capabilities['browserName']} {driver.capabilities['browserVersion']}",
+                      infrastructureUnavailable=False)
+        wait = WebDriverWait(driver, 25)
+        scroller = _wait_for_visible_workspace_element(driver, '[data-pivot-scroll-container]')
+        first = "P23_unités_sum"
+        moved = "P00_unités_sum"
+        wait.until(lambda current: _cell(_visible_cells(current), "R000", first, "1"))
+        driver.execute_script("arguments[0].scrollLeft=arguments[0].scrollWidth", scroller)
+        wait.until(lambda current: _cell(_visible_cells(current), "R000", moved, "1"))
+        header = _wait_for_visible_workspace_element(driver, f'[role="columnheader"][data-header-column-id="{moved}"]')
+        ActionChains(driver).context_click(header).perform()
+        _selection_menu(driver, "Move to Start").click()
+        driver.execute_script("arguments[0].scrollLeft=0", scroller)
+
+        def moved_first(current):
+            trace = current.execute_script("return window.__pivotScrollTrace || []")
+            replies = [entry for entry in trace if entry["phase"] in {"response", "payload"} and entry.get("schema")]
+            if not replies:
+                return False
+            schema = replies[-1]["schema"]
+            return bool(schema and schema[0]["id"].startswith("P00_")
+                        and _cell(_visible_cells(current), "R000", moved, "1"))
+
+        wait.until(moved_first)
+        trace = driver.execute_script("return window.__pivotScrollTrace || []")
+        changed = [entry for entry in trace if entry["phase"] == "request" and entry.get("layoutManifest")]
+        assert changed, "No saved layout manifest was sent after reordering"
+        revisions = [entry["layoutRevision"] for entry in trace if entry["phase"] in {"response", "payload"}
+                     and entry.get("layoutRevision")]
+        assert len(set(revisions)) >= 2, "Server did not issue a new layout revision"
+        observation["states"].append({"phase": "reordered", "trace": trace,
+                                      "cells": _visible_cells(driver)})
+        result.update(result="passed", actionCompleted=True, layoutRevisionVerified=True,
+                      sparseWindowVerified=True)
+    except Exception as error:
+        frame = traceback.extract_tb(error.__traceback__)[-1]
+        diagnostic = f"{type(error).__name__} at {Path(frame.filename).name}:{frame.lineno}"
+    finally:
+        paths = []
+        if driver is not None:
+            try:
+                driver.save_screenshot(str(directory / "final.png"))
+                paths.append(str(directory / "final.png"))
+                observation["trace"] = driver.execute_script("return window.__pivotScrollTrace || []")
+                observation["browserLog"] = [{"level": item.get("level"), "message": item.get("message", "")[:500]}
+                                             for item in driver.get_log("browser")]
+                _network(driver)
+                result["loadedAssetSha256"] = dict(driver._pivot_loaded_assets)
+            finally:
+                driver.quit()
+        evidence = directory / "observation.json"
+        evidence.write_text(json.dumps({"diagnostic": diagnostic, **observation}, indent=2), encoding="utf-8")
+        paths.append(str(evidence))
+        result["evidence_paths"] = paths
+        record_case(requirement, host, result, directory)
+    assert result["result"] == "passed", f"{host} custom pivot order failed: {diagnostic}; evidence: {directory}"

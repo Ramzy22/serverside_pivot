@@ -7,6 +7,7 @@ import re
 import shutil
 import subprocess
 import time
+from dataclasses import replace
 from pathlib import Path
 from concurrent.futures import ThreadPoolExecutor
 
@@ -16,6 +17,7 @@ sys.path.append(os.path.join(os.getcwd(), 'pivot_engine'))
 sys.path.append(os.path.join(os.getcwd(), 'dash_tanstack_pivot'))
 
 from pivot_engine.tanstack_adapter import create_tanstack_adapter, TanStackRequest, TanStackOperation
+from pivot_engine.column_layout import UnknownLayoutRevision
 from pivot_engine.types.pivot_spec import PivotSpec, Measure, PivotConfig
 
 
@@ -2746,6 +2748,57 @@ async def test_virtual_scroll_transport_columns_are_trimmed(adapter):
     assert response.columns
     for column in response.columns:
         assert set(column.keys()).issubset(allowed_keys)
+
+
+@pytest.mark.asyncio
+async def test_saved_layout_orders_sparse_window_and_fetches_off_window_pin(adapter):
+    make_wide_table(adapter, center_cols=30)
+    request = make_wide_request()
+    initial = await adapter.handle_virtual_scroll_request(
+        request, 0, 10, [], needs_col_schema=True, col_start=0, col_end=29,
+    )
+    catalog = initial.col_schema["columns"]
+    moved = catalog[-1]
+    pinned = catalog[-2]
+    ordered = replace(request, layout_manifest=(moved["layoutId"],),
+                      pinned_column_ids=(pinned["layoutId"],))
+    response = await adapter.handle_virtual_scroll_request(
+        ordered, 0, 10, [], needs_col_schema=True, col_start=0, col_end=1,
+    )
+    assert response.layout_revision
+    assert response.col_schema["layoutRevision"] == response.layout_revision
+    assert [col["id"] for col in response.col_schema["columns"][:2]] == [
+        moved["id"], catalog[0]["id"],
+    ]
+    assert response.col_schema["columns"][-1]["id"] == pinned["id"]
+    assert response.col_schema["columns"][-1]["index"] == 29
+    assert any(pinned["id"] in row for row in response.data)
+    unknown_pin = replace(ordered, pinned_column_ids=("p:" + "f" * 64,))
+    restricted = await adapter.handle_virtual_scroll_request(
+        unknown_pin, 0, 10, [], needs_col_schema=True, col_start=0, col_end=1,
+    )
+    assert all(column["id"] != pinned["id"] for column in restricted.col_schema["columns"])
+    token_request = replace(ordered, layout_manifest=None,
+                            layout_revision=response.layout_revision)
+    again = await adapter.handle_virtual_scroll_request(
+        token_request, 0, 10, [], needs_col_schema=True, col_start=0, col_end=1,
+    )
+    assert again.layout_revision == response.layout_revision
+    other_worker = type(adapter)(adapter.controller)
+    with pytest.raises(UnknownLayoutRevision):
+        await other_worker.handle_virtual_scroll_request(
+            token_request, 0, 10, [], needs_col_schema=True, col_start=0, col_end=1,
+        )
+    recovered = await other_worker.handle_virtual_scroll_request(
+        ordered, 0, 10, [], needs_col_schema=True, col_start=0, col_end=1,
+    )
+    assert recovered.layout_revision == response.layout_revision
+    full = await adapter.handle_hierarchical_request(ordered, [])
+    ordered_full = await adapter.apply_full_export_layout(full, ordered)
+    center_ids = [column["id"] for column in ordered_full.columns
+                  if column.get("id") in {entry["id"] for entry in catalog}]
+    assert center_ids[0] == moved["id"]
+    assert ordered_full.layout_revision == response.layout_revision
 
 
 @pytest.mark.asyncio

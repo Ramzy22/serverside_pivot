@@ -32,6 +32,7 @@ export function useRuntimeResponseLifecycle({
   emitEditLifecycleEvent,
   finalizeTransactionHistoryResponse,
   handledRuntimeResponseKeysRef,
+  layoutAcknowledgedManifestRef,
   hydrateVisibleEditOverlay,
   pendingCopyIntentRef,
   pendingDataProfilerCommitRef,
@@ -73,6 +74,12 @@ export function useRuntimeResponseLifecycle({
       handledUnkeyedDataErrorsRef.current.add(runtimeResponse);
     }
     recordProfilerResponse(runtimeResponse);
+    if (runtimeResponse.kind === 'data' && runtimeResponse.status === 'layout_required') {
+      resolvePendingRequest(runtimeResponse);
+      layoutAcknowledgedManifestRef.current = '__layout_retry__';
+      scheduleSilentViewportRefresh();
+      return;
+    }
     if ((runtimeResponse.kind === 'data' || runtimeResponse.kind === 'update' || runtimeResponse.kind === 'transaction') && runtimeResponse.status === 'data') {
       const payloadRef = payload.payloadRef && typeof payload.payloadRef === 'object' ? payload.payloadRef : null;
       if (payloadRef && typeof payloadRef.url === 'string' && payloadRef.url) {
@@ -491,5 +498,5 @@ export function useRuntimeResponseLifecycle({
         status: runtimeResponse.status
       });
     }
-  }, [clearPendingTransactionHistoryRequest, clientInstanceRef, commitRuntimeDataPayload, emitEditLifecycleEvent, finalizeTransactionHistoryResponse, hydrateVisibleEditOverlay, payloadTransport, reconcileOptimisticCellValuesWithPayload, recordProfilerResponse, requestVersionRef, resolvePendingRequest, runtimePayloadCommitIsCurrent, runtimeResponse, scheduleSilentViewportRefresh, setIsExporting, setIsCopying, setRuntimeDataError, showNotification, stateEpochRef]);
+  }, [clearPendingTransactionHistoryRequest, clientInstanceRef, commitRuntimeDataPayload, emitEditLifecycleEvent, finalizeTransactionHistoryResponse, hydrateVisibleEditOverlay, layoutAcknowledgedManifestRef, payloadTransport, reconcileOptimisticCellValuesWithPayload, recordProfilerResponse, requestVersionRef, resolvePendingRequest, runtimePayloadCommitIsCurrent, runtimeResponse, scheduleSilentViewportRefresh, setIsExporting, setIsCopying, setRuntimeDataError, showNotification, stateEpochRef]);
 }

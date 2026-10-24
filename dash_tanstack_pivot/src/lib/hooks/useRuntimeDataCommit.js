@@ -17,6 +17,10 @@ export function useRuntimeDataCommit({
     reconcileOptimisticCellValuesWithPayload,
     setFormulaErrors,
     setTransportDataState,
+    layoutRevisionRef,
+    layoutAcknowledgedManifestRef,
+    pivotLayoutOrderRef,
+    latestLayoutSentManifestRef,
 }) {
     const runtimePayloadCommitIsCurrent = useCallback((response, payload, resolvedPayload = null) => {
         const payloadRef = payload && payload.payloadRef && typeof payload.payloadRef === 'object'
@@ -67,6 +71,9 @@ export function useRuntimeDataCommit({
         if (Number.isFinite(committedVersion) && committedVersion < latestDataVersionRef.current) {
             return false;
         }
+        const layoutRevision = committedPayload?.layoutRevision;
+        const schemaRevision = committedPayload?.colSchema?.layoutRevision;
+        if (layoutRevision && schemaRevision && layoutRevision !== schemaRevision) return false;
 
         return true;
     }, [clientInstanceRef, latestDataVersionRef, requestVersionRef, stateEpochRef]);
@@ -87,6 +94,11 @@ export function useRuntimeDataCommit({
         } else if (payload.formulaErrors === null) {
             setFormulaErrors({});
         }
+        if (typeof payload.layoutRevision === 'string' && payload.layoutRevision
+            && latestLayoutSentManifestRef.current === pivotLayoutOrderRef.current) {
+            layoutRevisionRef.current = payload.layoutRevision;
+            layoutAcknowledgedManifestRef.current = pivotLayoutOrderRef.current.join('\u001f');
+        }
         setTransportDataState((previousState) => normalizeRuntimeDataEnvelope({
             ...payload,
             stateEpoch: response && response.stateEpoch !== undefined
@@ -103,6 +115,10 @@ export function useRuntimeDataCommit({
         reconcileOptimisticCellValuesWithPayload,
         setFormulaErrors,
         setTransportDataState,
+        layoutRevisionRef,
+        layoutAcknowledgedManifestRef,
+        pivotLayoutOrderRef,
+        latestLayoutSentManifestRef,
     ]);
 
     return {

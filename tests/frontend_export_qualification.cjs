@@ -27,8 +27,9 @@ function loadFrontendModule(relativePath, dependencyStubs = {}) {
     return sourceModule.exports;
 }
 
+const jobControllers = [];
 function makeCommandOptions(overrides = {}) {
-    return {
+    const options = {
         abortGenerationRef: {current: 0},
         activeExportRequestIdRef: {current: null},
         buildExportStyleProfile: () => ({}),
@@ -66,6 +67,9 @@ function makeCommandOptions(overrides = {}) {
         theme: {},
         ...overrides,
     };
+    options.exportJobControllerRef ||= {current: null};
+    jobControllers.push(options.exportJobControllerRef);
+    return options;
 }
 
 (async () => {
@@ -81,7 +85,10 @@ function makeCommandOptions(overrides = {}) {
     );
 
     const dispatchedPayloads = [];
+    const xlsxJobRef = {current: null};
+    const csvJobRef = {current: null};
     const commands = createRuntimeExportCommands(makeCommandOptions({
+        exportJobControllerRef: xlsxJobRef,
         dispatchServerSideRuntimeSetProps: update => {
             dispatchedPayloads.push(update.runtimeRequest.payload);
         },
@@ -89,7 +96,14 @@ function makeCommandOptions(overrides = {}) {
 
     commands.exportPivot();
     assert.equal(dispatchedPayloads.at(-1).format, 'xlsx');
-    commands.exportPivot('csv');
+    // A running server export owns its request until terminal delivery.
+    // Exercise CSV through a separate grid instance instead of trying to
+    // replace that active job with an unrelated format.
+    const csvCommands = createRuntimeExportCommands(makeCommandOptions({
+        exportJobControllerRef: csvJobRef,
+        dispatchServerSideRuntimeSetProps: update => dispatchedPayloads.push(update.runtimeRequest.payload),
+    }));
+    csvCommands.exportPivot('csv');
     assert.equal(dispatchedPayloads.at(-1).format, 'csv');
     assert.throws(() => commands.exportPivot('tsv'), /xlsx.*csv|csv.*xlsx/i);
 
@@ -369,6 +383,7 @@ function makeCommandOptions(overrides = {}) {
     assert.deepStrictEqual(rightPinnedPresentation.getInstantiatedExportColIds(), ['hierarchy', 'Q2', 'Q1', 'Q3', '__RowTotal__sum']);
     assert.deepStrictEqual(rightPinnedPresentation.getCompleteServerExportColIds(), ['hierarchy', 'Q2', 'Q1', 'offscreen', 'Q3', '__RowTotal__sum']);
 
+    for (const ref of jobControllers) ref.current?.dispose();
     console.log('frontend export qualification passed');
 })().catch(error => {
     console.error(error);

@@ -50,6 +50,32 @@ export const mergeColumnOrderWithIds = (order, availableIds) => {
     return ordered;
 };
 
+/** Retain identities absent from the current sparse schema in their saved slots. */
+export const reconcilePivotLayoutOrder = (savedIds, cellOrder, schema) => {
+    const entries = Array.isArray(schema?.columns) ? schema.columns.filter(Boolean) : [];
+    const byCell = new Map(entries.filter(entry => entry.layoutId).map(entry => [entry.id, entry.layoutId]));
+    const visible = normalizeColumnOrderValue(cellOrder).map(id => byCell.get(id)).filter(Boolean);
+    const uniqueVisible = normalizeColumnOrderValue(visible);
+    const current = normalizeColumnOrderValue(savedIds);
+    const visibleSet = new Set(uniqueVisible);
+    let cursor = 0;
+    const next = current.map(id => visibleSet.has(id) ? uniqueVisible[cursor++] : id);
+    while (cursor < uniqueVisible.length) next.push(uniqueVisible[cursor++]);
+    return normalizeColumnOrderValue(next);
+};
+
+export const pivotLayoutRequestFields = (manifest, revision, acknowledgedManifest, pinnedCellIds, schema, forceManifest = false, savedPinMap = {}) => {
+    const normalized = normalizeColumnOrderValue(manifest);
+    const entries = Array.isArray(schema?.columns) ? schema.columns.filter(Boolean) : [];
+    const byCell = new Map(entries.filter(entry => entry.layoutId).map(entry => [entry.id, entry.layoutId]));
+    const pinnedColumnIds = normalizeColumnOrderValue(pinnedCellIds.map(id => byCell.get(id) || savedPinMap[id])).slice(0, 64);
+    return {
+        layoutRevision: revision || undefined,
+        layoutManifest: forceManifest || !revision || acknowledgedManifest !== normalized.join('\u001f') ? normalized : undefined,
+        pinnedColumnIds,
+    };
+};
+
 export const areStringArraysEqual = (left, right) => (
     Array.isArray(left)
     && Array.isArray(right)

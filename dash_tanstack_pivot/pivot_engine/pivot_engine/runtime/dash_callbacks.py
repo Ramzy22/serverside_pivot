@@ -1694,6 +1694,7 @@ def register_dash_pivot_transport_callback(
                 "rowCount": result.total_rows if result.total_rows is not None else 0,
                 "columns": columns_out if columns_out is not no_update else None,
                 "colSchema": result.col_schema,
+                "layoutRevision": result.layout_revision,
                 "dataOffset": result.data_offset,
                 "dataVersion": result.data_version,
                 "transaction": result.transaction_result,

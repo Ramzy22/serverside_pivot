@@ -45,6 +45,11 @@ class TanStackRequest:
     # Full exports must bypass the interactive viewport cache so their result
     # cannot be truncated to a previously requested window.
     full_export: bool = False
+    # Server-owned pivot ordering. A manifest is sent only on change/miss;
+    # ordinary viewport windows carry the resolved layout revision.
+    layout_revision: Optional[str] = None
+    layout_manifest: Optional[tuple[str, ...]] = None
+    pinned_column_ids: tuple[str, ...] = ()
 
 
 @dataclass
@@ -61,3 +66,4 @@ class TanStackResponse:
     color_scale_stats: Optional[Dict[str, Any]] = None
     profile: Optional[Dict[str, Any]] = None
     formula_errors: Optional[Dict[str, str]] = None
+    layout_revision: Optional[str] = None

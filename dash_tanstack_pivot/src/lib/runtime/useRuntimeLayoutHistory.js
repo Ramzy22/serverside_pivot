@@ -24,6 +24,8 @@ export function useRuntimeLayoutHistory({
   setColExpanded,
   setColFields,
   setColumnOrder,
+  setPivotLayoutOrder,
+  setPivotPinnedLayoutIds,
   setColumnPinning,
   setExpanded,
   setFilters,
@@ -132,13 +134,15 @@ export function useRuntimeLayoutHistory({
     setColExpanded(snapshot.colExpanded && typeof snapshot.colExpanded === 'object' ? snapshot.colExpanded : {});
     setColumnPinning(snapshot.columnPinning && typeof snapshot.columnPinning === 'object' ? snapshot.columnPinning : { left: ['hierarchy'], right: [] });
     setColumnOrder(Array.isArray(snapshot.columnOrder) ? normalizeColumnOrderValue(snapshot.columnOrder) : []);
+    setPivotLayoutOrder(Array.isArray(snapshot.pivotLayoutOrder) ? normalizeColumnOrderValue(snapshot.pivotLayoutOrder) : []);
+    setPivotPinnedLayoutIds(snapshot.pivotPinnedLayoutIds && typeof snapshot.pivotPinnedLayoutIds === 'object' ? snapshot.pivotPinnedLayoutIds : {});
     setRowPinning(snapshot.rowPinning && typeof snapshot.rowPinning === 'object' ? snapshot.rowPinning : { top: [], bottom: [] });
     setShowRowTotals(Boolean(snapshot.showRowTotals));
     setShowColTotals(Boolean(snapshot.showColTotals));
     setShowSubtotals(Object.prototype.hasOwnProperty.call(snapshot, 'showSubtotals') ? Boolean(snapshot.showSubtotals) : true);
     setLayoutMode(normalizeLayoutModeValue(snapshot.layoutMode));
     setGrandTotalPinOverride(snapshot.grandTotalPinOverride === 'top' || snapshot.grandTotalPinOverride === 'bottom' ? snapshot.grandTotalPinOverride : false);
-  }, [normalizedInitialValConfigs, setColExpanded, setColFields, setColumnOrder, setColumnPinning, setExpanded, setFilters, setGrandTotalPinOverride, setLayoutMode, setRowFields, setRowPinning, setShowColTotals, setShowRowTotals, setShowSubtotals, setSorting, setValConfigs]);
+  }, [normalizedInitialValConfigs, setColExpanded, setColFields, setColumnOrder, setPivotLayoutOrder, setPivotPinnedLayoutIds, setColumnPinning, setExpanded, setFilters, setGrandTotalPinOverride, setLayoutMode, setRowFields, setRowPinning, setShowColTotals, setShowRowTotals, setShowSubtotals, setSorting, setValConfigs]);
 
   return {
     applyLayoutHistorySnapshot,

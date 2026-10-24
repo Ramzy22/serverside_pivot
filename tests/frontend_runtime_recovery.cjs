@@ -93,6 +93,8 @@ function lifecycle() {
     const args = {
         clientInstanceRef: {current: 'tab-a'}, stateEpochRef: {current: 3},
         latestDataVersionRef: {current: 6}, requestVersionRef: {current: 7},
+        layoutRevisionRef: {current: null}, layoutAcknowledgedManifestRef: {current: ''},
+        pivotLayoutOrderRef: {current: []}, latestLayoutSentManifestRef: {current: null},
         pendingDataProfilerCommitRef: {current: null}, finalizeTransactionHistoryResponse: noop,
         hydrateVisibleEditOverlay: noop, reconcileOptimisticCellValuesWithPayload: noop,
         setFormulaErrors: noop, setTransportDataState: update => committed.push(update({})),
@@ -129,6 +131,15 @@ test('current generic and structured data failures expose safe inline recovery a
         assert.deepEqual(run.notifications, []);
         assert.equal(run.refreshes, 0);
     }
+});
+
+test('unknown worker layout token retries with the saved manifest without showing a data error', () => {
+    const run = lifecycle();
+    run.render({...failure, status: 'layout_required', payload: {}});
+    assert.equal(run.args.layoutAcknowledgedManifestRef.current, '__layout_retry__');
+    assert.equal(run.refreshes, 1);
+    assert.equal(run.error, null);
+    assert.deepEqual(run.resolved, ['viewport:s:tab-a:7']);
 });
 
 test('stale, superseded, foreign-client and old-epoch failures stay silent', () => {

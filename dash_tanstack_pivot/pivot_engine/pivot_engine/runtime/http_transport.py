@@ -492,6 +492,7 @@ class RuntimeHttpGateway:
                 "rowCount": result.total_rows if result.total_rows is not None else 0,
                 "columns": result.columns,
                 "colSchema": result.col_schema,
+                "layoutRevision": result.layout_revision,
                 "dataOffset": result.data_offset,
                 "dataVersion": result.data_version,
                 "transaction": result.transaction_result,

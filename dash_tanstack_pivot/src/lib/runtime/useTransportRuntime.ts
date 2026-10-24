@@ -42,6 +42,10 @@ interface CoreTransportState extends CoreRuntimeDomain {
 }
 
 interface TransportResponseState extends CoreTransportState {
+    readonly layoutRevisionRef: RuntimeRef<string | null>;
+    readonly layoutAcknowledgedManifestRef: RuntimeRef<string>;
+    readonly pivotLayoutOrderRef: RuntimeRef<readonly string[]>;
+    readonly latestLayoutSentManifestRef: RuntimeRef<readonly string[] | null>;
     readonly activeChartRequestRef: RuntimeRef<PivotObject | null>;
     readonly activeExportRequestIdRef: RuntimeRef<string | null>;
     readonly exportJobControllerRef: RuntimeRef<ExportJobController | null>;
@@ -185,6 +189,10 @@ export function useTransportResponseRuntime(
         reconcileOptimisticCellValuesWithPayload: responseCallback(response, 'reconcileOptimisticCellValuesWithPayload'),
         setFormulaErrors: responseCallback(response, 'setFormulaErrors'),
         setTransportDataState: responseCallback(response, 'setTransportDataState'),
+        layoutRevisionRef: runtime.layoutRevisionRef,
+        layoutAcknowledgedManifestRef: runtime.layoutAcknowledgedManifestRef,
+        pivotLayoutOrderRef: runtime.pivotLayoutOrderRef,
+        latestLayoutSentManifestRef: runtime.latestLayoutSentManifestRef,
     });
     useRuntimeResponseLifecycle({
         payloadTransport,
@@ -200,6 +208,7 @@ export function useTransportResponseRuntime(
         emitEditLifecycleEvent: responseCallback(response, 'emitEditLifecycleEvent'),
         finalizeTransactionHistoryResponse: responseCallback(response, 'finalizeTransactionHistoryResponse'),
         handledRuntimeResponseKeysRef: response.handledRuntimeResponseKeysRef,
+        layoutAcknowledgedManifestRef: runtime.layoutAcknowledgedManifestRef,
         hydrateVisibleEditOverlay: responseCallback(response, 'hydrateVisibleEditOverlay'),
         pendingCopyIntentRef: response.pendingCopyIntentRef,
         pendingDataProfilerCommitRef: response.pendingDataProfilerCommitRef,

@@ -10,6 +10,8 @@ from typing import Any, Callable, Dict, List, Optional
 from ..backends.execution import DatabaseExecutionError
 from ..resource_governor import ResourceExhaustedError, ResourceKind, ResourceLease
 from ..tanstack_adapter import TanStackRequest, TanStackResponse, TanStackPivotAdapter
+from ..column_layout import UnknownLayoutRevision
+from ..column_layout import MAX_LAYOUT_MANIFEST_IDS
 from ..security import MutationAuthorizationError, apply_rls_to_spec
 from .detail_service import DetailRuntimeService
 from .drill_service import RuntimeDrillService
@@ -690,6 +692,8 @@ class RuntimeRequestRouter:
             )
         except ResourceExhaustedError:
             raise
+        except UnknownLayoutRevision:
+            return PivotServiceResponse(status="layout_required", message="Layout manifest required")
         except asyncio.CancelledError:
             execution_finished_at = time.perf_counter()
             if self.lifecycle.consume_superseded_cancel():
@@ -847,6 +851,7 @@ class RuntimeRequestRouter:
             total_rows=response_total_rows,
             columns=cols_payload if should_emit_columns else None,
             col_schema=schema_payload,
+            layout_revision=response.layout_revision,
             data_offset=context.start_row,
             data_version=response_version,
             color_scale_stats=response.color_scale_stats,
@@ -1052,17 +1057,23 @@ class RuntimeRequestRouter:
             # Hierarchical full exports deliberately bypass virtual-window
             # execution so the complete filtered hierarchy is produced.
             if state.row_fields and hasattr(adapter, "handle_hierarchical_request"):
-                return await adapter.handle_hierarchical_request(
+                full_response = await adapter.handle_hierarchical_request(
                     request,
                     expanded_paths,
                     user=context.principal,
                     row_scope=context.row_scope,
                 )
-            return await adapter.handle_request(
+                return await adapter.apply_full_export_layout(
+                    full_response, request, user=context.principal, row_scope=context.row_scope,
+                ) if hasattr(adapter, "apply_full_export_layout") else full_response
+            full_response = await adapter.handle_request(
                 request,
                 user=context.principal,
                 row_scope=context.row_scope,
             )
+            return await adapter.apply_full_export_layout(
+                full_response, request, user=context.principal, row_scope=context.row_scope,
+            ) if hasattr(adapter, "apply_full_export_layout") else full_response
         if state.view_mode == "tree" and trigger_kind != "chart":
             response_state = await self.tree_service.handle_data_request(
                 adapter,
@@ -1130,13 +1141,17 @@ class RuntimeRequestRouter:
             raw_col_ids = request_payload.get("colIds")
             requested_center_ids = None
             if isinstance(raw_col_ids, list):
+                if len(raw_col_ids) > MAX_LAYOUT_MANIFEST_IDS:
+                    raise ValueError("export column selection exceeds limit")
                 normalized_col_ids = []
+                seen_col_ids = set()
                 for value in raw_col_ids:
                     if value is None:
                         continue
                     column_id = str(value)
-                    if column_id:
+                    if column_id and column_id not in seen_col_ids:
                         normalized_col_ids.append(column_id)
+                        seen_col_ids.add(column_id)
                 requested_center_ids = normalized_col_ids or None
 
             payload_col_start = safe_int(

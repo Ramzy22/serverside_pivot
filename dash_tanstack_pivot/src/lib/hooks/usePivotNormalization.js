@@ -1512,8 +1512,10 @@ export const mergeSparseColSchema = (previousSchema, incomingSchema, fallbackSiz
     if (!Number.isFinite(totalRaw) || totalRaw < 0) return previousSchema;
 
     const total = Math.max(0, Math.floor(totalRaw));
+    const sameLayout = !incomingSchema.layoutRevision
+        || incomingSchema.layoutRevision === previousSchema?.layoutRevision;
     const nextColumns = Array.from({ length: total }, (_, index) => {
-        const previousColumn = previousSchema
+        const previousColumn = sameLayout && previousSchema
             && previousSchema.total_center_cols === total
             && Array.isArray(previousSchema.columns)
             ? previousSchema.columns[index]
@@ -1538,6 +1540,7 @@ export const mergeSparseColSchema = (previousSchema, incomingSchema, fallbackSiz
 
     return {
         total_center_cols: total,
+        layoutRevision: incomingSchema.layoutRevision || previousSchema?.layoutRevision || null,
         columns: nextColumns,
     };
 };

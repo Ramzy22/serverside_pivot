@@ -31,7 +31,7 @@
 
 ### Task 1: Pure identity and reconciliation resolver
 
-**Files:** Create `pivot_engine/runtime/column_layout.py`; test in `tests/test_runtime_column_layout.py`.
+**Files:** Create `pivot_engine/column_layout.py`; test in `tests/test_runtime_column_layout.py`.
 
 **Interfaces:** `resolve_column_layout(default_columns, saved_ids, *, allowed_ids=None)` returns ordered columns and a deterministic revision. Columns carry structured `pivot_path`, `measure_key`, and existing `cell_id`.
 

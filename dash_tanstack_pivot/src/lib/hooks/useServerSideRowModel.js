@@ -133,6 +133,7 @@ export const useServerSideRowModel = ({
     onViewportRequest = null,
     layoutMode = 'hierarchy',
     showSubtotals = true,
+    layoutRequestFields = null,
 }) => {
     // 1. Initialize Cache
     const {
@@ -929,6 +930,7 @@ export const useServerSideRowModel = ({
                     immersive_mode: immersiveMode || undefined,
                     layout_mode: layoutMode,
                     show_subtotal_footers: showSubtotals,
+                    ...(typeof layoutRequestFields === 'function' ? layoutRequestFields(false, true) : layoutRequestFields || {}),
                 },
             },
         });
@@ -978,6 +980,7 @@ export const useServerSideRowModel = ({
         immersiveMode,
         layoutMode,
         showSubtotals,
+        layoutRequestFields,
         scheduleViewportRetry,
         rowCount,
     ]);

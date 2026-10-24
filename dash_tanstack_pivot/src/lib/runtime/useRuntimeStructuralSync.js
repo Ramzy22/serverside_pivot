@@ -15,6 +15,7 @@ export function useRuntimeStructuralSync({
     beginExpansionRequest,
     beginStructuralTransaction,
     buildRuntimeRequestStateOverride,
+    buildLayoutRequestFields,
     markRequestPending,
     resolveStableRequestedColumnWindow,
     setPendingColumnSkeletonCount,
@@ -137,6 +138,7 @@ export function useRuntimeStructuralSync({
             include_grand_total: serverSidePinsGrandTotal || undefined,
             layout_mode: layoutMode, show_subtotal_footers: showSubtotals,
             state_override: requestStateOverride || undefined,
+            ...buildLayoutRequestFields(false, true),
           },
         },
       });
@@ -165,6 +167,7 @@ export function useRuntimeStructuralSync({
             include_grand_total: serverSidePinsGrandTotal || undefined,
             immersive_mode: immersiveMode || undefined, layout_mode: layoutMode,
             show_subtotal_footers: showSubtotals, state_override: requestStateOverride || undefined,
+            ...buildLayoutRequestFields(false, true),
           },
         },
       });
@@ -206,8 +209,9 @@ export function useRuntimeStructuralSync({
           needs_col_schema: serverSide || undefined, include_grand_total: serverSidePinsGrandTotal || undefined,
           immersive_mode: immersiveMode || undefined, layout_mode: layoutMode,
           show_subtotal_footers: showSubtotals, state_override: requestStateOverride || undefined,
+          ...buildLayoutRequestFields(schemaShapeChanged, true),
         },
       },
     });
-  }, [beginExpansionRequest, beginStructuralTransaction, buildRuntimeRequestStateOverride, clientInstanceRef, colFields, columnOrder, columnPinning, columnSizing, columnVisibility, customDimensions, detailConfig, detailMode, effectiveSortOptions, expanded, expansionScrollRestoreRafRef, expansionScrollRestoreRef, filters, grandTotalPinOverride, immersiveMode, lastPropsRef, latestDataVersionRef, latestRequestedViewportRef, latestViewportRef, layoutMode, markRequestPending, needsColSchemaRef, parentRef, pendingExpansionRef, reportDef, resolveStableRequestedColumnWindow, rowFields, rowPinning, runtimeMeasureAxis, serverSide, serverSideBlockSize, serverSidePinsGrandTotal, sessionIdRef, setPendingColumnSkeletonCount, setPropsRef, showColTotals, showRowTotals, showSubtotals, sorting, tableName, treeConfig, valConfigs, viewMode]);
+  }, [beginExpansionRequest, beginStructuralTransaction, buildLayoutRequestFields, buildRuntimeRequestStateOverride, clientInstanceRef, colFields, columnOrder, columnPinning, columnSizing, columnVisibility, customDimensions, detailConfig, detailMode, effectiveSortOptions, expanded, expansionScrollRestoreRafRef, expansionScrollRestoreRef, filters, grandTotalPinOverride, immersiveMode, lastPropsRef, latestDataVersionRef, latestRequestedViewportRef, latestViewportRef, layoutMode, markRequestPending, needsColSchemaRef, parentRef, pendingExpansionRef, reportDef, resolveStableRequestedColumnWindow, rowFields, rowPinning, runtimeMeasureAxis, serverSide, serverSideBlockSize, serverSidePinsGrandTotal, sessionIdRef, setPendingColumnSkeletonCount, setPropsRef, showColTotals, showRowTotals, showSubtotals, sorting, tableName, treeConfig, valConfigs, viewMode]);
 }

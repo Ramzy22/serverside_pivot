@@ -4,7 +4,7 @@ import React, { useMemo, useState, useRef, useEffect, useLayoutEffect, useCallba
 import { useReactTable, getCoreRowModel, getExpandedRowModel, getGroupedRowModel, getPaginationRowModel } from '@tanstack/react-table';
 import { useVirtualizer } from '@tanstack/react-virtual';
 import { buildTsvFromRawRows } from '../utils/rawTableTsv';
-import { areStringArraysEqual, collectColumnDefLeafIds, mergeColumnOrderWithIds } from '../utils/columnOrder';
+import { areStringArraysEqual, collectColumnDefLeafIds, mergeColumnOrderWithIds, reconcilePivotLayoutOrder, pivotLayoutRequestFields } from '../utils/columnOrder';
 import { compareFilterOptionValues } from '../utils/filterOptions';
 import Icons from '../utils/Icons';
 import { MAX_AUTO_SIZE_SAMPLE_ROWS, MAX_PENDING_ROW_TRANSITIONS, GRAND_TOTAL_ROW_ID, resolveTransportRowId, normalizeRowPinningState, getPinnedSideForRow } from '../hooks/usePivotNormalization';
@@ -418,7 +418,10 @@ export function useViewportRuntimeStage(input, transport) {
       }, 'separator', {
         label: stage.getLocaleText('menuResetColumnOrder', 'Reset Column Order'),
         disabled: stage.columnOrder.length === 0,
-        onClick: () => stage.setColumnOrderWithHistory([], 'layout:column-order-reset')
+        onClick: () => {
+          stage.setColumnOrderWithHistory([], 'layout:column-order-reset');
+          stage.setPivotLayoutOrder([]);
+        }
       }]
     });
 
@@ -754,6 +757,7 @@ export function useViewportRuntimeStage(input, transport) {
   });
   for (const [key, value] of Object.entries(filterPopover)) stage[key] = value;
   useEffect(() => {
+    if (stage.serverSide) return;
     const activeLeafIds = new Set();
     const stack = [...stage.columns];
     while (stack.length > 0) {
@@ -783,7 +787,7 @@ export function useViewportRuntimeStage(input, transport) {
       });
       return changed ? next : prev;
     });
-  }, [stage.columns]);
+  }, [stage.columns, stage.serverSide]);
   stage.parentRef = useRef(null);
   stage.expansionScrollRestoreRef = useRef(null);
   stage.expansionScrollRestoreRafRef = useRef(null);
@@ -837,6 +841,8 @@ export function useViewportRuntimeStage(input, transport) {
     columnFormatOverrides: stage.columnFormatOverrides,
     columnGroupSeparatorOverrides: stage.columnGroupSeparatorOverrides,
     columnOrder: stage.columnOrder,
+    pivotLayoutOrder: stage.pivotLayoutOrder,
+    pivotPinnedLayoutIds: stage.pivotPinnedLayoutIds,
     columnPinning: stage.columnPinning,
     columnSizing: stage.columnSizing,
     columnVisibility: stage.columnVisibility,
@@ -951,6 +957,32 @@ export function useViewportRuntimeStage(input, transport) {
       restorePassesRemaining: 3
     };
   }, [stage.serverSide]);
+  stage.layoutRequestFields = useCallback((forceManifest = false, recordRequest = false) => {
+    if (recordRequest) stage.latestLayoutSentManifestRef.current = stage.pivotLayoutOrder;
+    return pivotLayoutRequestFields(
+    stage.pivotLayoutOrder,
+    stage.layoutRevisionRef.current,
+    stage.layoutAcknowledgedManifestRef.current,
+    [...(stage.columnPinning?.left || []), ...(stage.columnPinning?.right || [])],
+    stage.cachedColSchema,
+    forceManifest,
+    stage.pivotPinnedLayoutIds
+  );
+  }, [stage.pivotLayoutOrder, stage.columnPinning, stage.cachedColSchema, stage.pivotPinnedLayoutIds]);
+  useEffect(() => {
+    if (!stage.serverSide) return;
+    const pinnedCells = [...(stage.columnPinning?.left || []), ...(stage.columnPinning?.right || [])];
+    const available = new Map((stage.cachedColSchema?.columns || []).filter(Boolean)
+      .filter(column => column.layoutId).map(column => [column.id, column.layoutId]));
+    stage.setPivotPinnedLayoutIds(previous => {
+      const next = {};
+      for (const cellId of pinnedCells) {
+        const identity = available.get(cellId) || previous?.[cellId];
+        if (identity) next[cellId] = identity;
+      }
+      return JSON.stringify(previous || {}) === JSON.stringify(next) ? previous : next;
+    });
+  }, [stage.serverSide, stage.columnPinning, stage.cachedColSchema]);
   ({
     rowVirtualizer: stage.rowVirtualizer,
     getRow: stage.getRow,
@@ -977,7 +1009,7 @@ export function useViewportRuntimeStage(input, transport) {
     blockLoadDebounceMs: stage.normalizedPerformanceConfig.blockLoadDebounceMs,
     rowOverscan: stage.normalizedPerformanceConfig.rowOverscan,
     prefetchColumns: stage.normalizedPerformanceConfig.prefetchColumns,
-    cacheKey: stage.serverSideCacheKey,
+    cacheKey: `${stage.serverSideCacheKey || ''}:layout:${stage.pivotLayoutOrder.join('\u001f')}:revision:${stage.cachedColSchema?.layoutRevision || ''}:pins:${[...(stage.columnPinning?.left || []), ...(stage.columnPinning?.right || [])].join('\u001f')}`,
     excludeGrandTotal: stage.serverSidePinsGrandTotal,
     immersiveMode: stage.immersiveMode,
     stateEpoch: stage.stateEpoch,
@@ -992,10 +1024,11 @@ export function useViewportRuntimeStage(input, transport) {
     columnRangeUrgencyToken: stage.columnRangeUrgencyToken,
     responseColStart: stage.responseSchemaWindow.start,
     responseColEnd: stage.responseSchemaWindow.end,
-    needsColSchema: stage.needsColSchema && stage.serverSide,
+    needsColSchema: stage.serverSide && (stage.needsColSchema || stage.layoutRequestFields().layoutManifest !== undefined),
     onViewportRequest: stage.handleViewportRequestMeta,
     layoutMode: stage.layoutMode,
-    showSubtotals: stage.showSubtotals
+    showSubtotals: stage.showSubtotals,
+    layoutRequestFields: stage.layoutRequestFields
   }));
   stage.requestUrgentColumnViewportRef.current = stage.requestUrgentColumnViewport;
   ({ retryRuntimeData: stage.retryRuntimeData, runtimeDataError: stage.runtimeDataError } = useRuntimeDataRetry({
@@ -1095,14 +1128,26 @@ export function useViewportRuntimeStage(input, transport) {
     toggleRowCheckbox: stage.toggleRowCheckbox
   });
   stage.availableColumnOrderIds = useMemo(() => collectColumnDefLeafIds(stage.columns), [stage.columns]);
-  stage.effectiveColumnOrder = useMemo(() => mergeColumnOrderWithIds(stage.columnOrder, stage.availableColumnOrderIds), [stage.availableColumnOrderIds, stage.columnOrder]);
+  stage.effectiveColumnOrder = useMemo(() => mergeColumnOrderWithIds(
+    stage.serverSide && stage.cachedColSchema?.layoutRevision ? stage.availableColumnOrderIds : stage.columnOrder,
+    stage.availableColumnOrderIds
+  ), [stage.availableColumnOrderIds, stage.columnOrder, stage.serverSide, stage.cachedColSchema?.layoutRevision]);
   stage.columnOrderKey = useMemo(() => stage.effectiveColumnOrder.join('\u001f'), [stage.effectiveColumnOrder]);
   useEffect(() => {
     if (stage.columnOrder.length === 0) return;
-    if (!areStringArraysEqual(stage.columnOrder, stage.effectiveColumnOrder)) {
+    if (!stage.serverSide && !areStringArraysEqual(stage.columnOrder, stage.effectiveColumnOrder)) {
       stage.setColumnOrder(stage.effectiveColumnOrder);
     }
-  }, [stage.columnOrder, stage.effectiveColumnOrder]);
+  }, [stage.columnOrder, stage.effectiveColumnOrder, stage.serverSide]);
+  useEffect(() => {
+    if (!stage.serverSide || stage.columnOrder.length === 0 || !stage.cachedColSchema) return;
+    stage.setPivotLayoutOrder(previous => {
+      const next = reconcilePivotLayoutOrder(previous, stage.columnOrder, stage.cachedColSchema);
+      return areStringArraysEqual(previous, next) ? previous : next;
+    });
+    // A saved legacy cell-ID order can acquire stable IDs as sparse catalog
+    // windows arrive. Only IDs named in that saved order enter the manifest.
+  }, [stage.serverSide, stage.columnOrder, stage.cachedColSchema]);
 
   // Auto-size new columns to fit their header text on spawn
   useEffect(() => {

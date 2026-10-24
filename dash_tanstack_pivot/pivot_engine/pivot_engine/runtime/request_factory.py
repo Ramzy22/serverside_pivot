@@ -347,6 +347,9 @@ class RuntimeRequestFactory:
             show_subtotal_footers=state.show_subtotals if state.layout_mode else False,
             version=context.window_seq,
             column_sort_options=column_sort_options or None,
+            layout_revision=context.layout_revision,
+            layout_manifest=context.layout_manifest,
+            pinned_column_ids=context.pinned_column_ids,
         )
 
     @staticmethod

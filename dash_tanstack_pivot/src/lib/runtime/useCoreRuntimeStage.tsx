@@ -498,6 +498,13 @@ export function useCoreRuntimeStage(props) {
   [stage.detailConfig, stage.setDetailConfig] = useState(() => stage.hasExternalDetailConfig ? stage.normalizedInitialDetailConfig : normalizeDetailConfigValue(stage.loadPersistedState('detailConfig', {})));
   [stage.columnVisibility, stage.setColumnVisibility] = useState(() => stage.loadPersistedState('columnVisibility', stage.initialColumnVisibility));
   [stage.columnOrder, stage.setColumnOrder] = useState(() => Array.isArray(stage.externalColumnOrder) ? normalizeColumnOrderValue(stage.externalColumnOrder) : normalizeColumnOrderValue(stage.loadPersistedState('columnOrder', [])));
+  [stage.pivotLayoutOrder, stage.setPivotLayoutOrder] = useState(() => normalizeColumnOrderValue(stage.loadPersistedState('pivotLayoutOrder', [])));
+  [stage.pivotPinnedLayoutIds, stage.setPivotPinnedLayoutIds] = useState(() => stage.loadPersistedState('pivotPinnedLayoutIds', {}));
+  stage.pivotLayoutOrderRef = useRef(stage.pivotLayoutOrder);
+  stage.pivotLayoutOrderRef.current = stage.pivotLayoutOrder;
+  stage.layoutRevisionRef = useRef(null);
+  stage.layoutAcknowledgedManifestRef = useRef('');
+  stage.latestLayoutSentManifestRef = useRef(null);
   [stage.columnSizing, stage.setColumnSizing] = useState(() => stage.loadPersistedState('columnSizing', {}));
   stage.externalColumnOrderKey = useMemo(() => JSON.stringify(normalizeColumnOrderValue(stage.externalColumnOrder)), [stage.externalColumnOrder]);
   useEffect(() => {
@@ -641,6 +648,9 @@ export function useCoreRuntimeStage(props) {
       stage.setPivotColumnSorting({});
       stage.setColumnVisibility({});
       stage.setColumnOrder([]);
+      stage.setPivotLayoutOrder([]);
+      stage.setPivotPinnedLayoutIds({});
+      stage.layoutRevisionRef.current = null;
       stage.setColumnSizing({});
       stage.setChartPanelSource(stage.initialChartDefinition.source);
       stage.setChartPanelType(stage.initialChartDefinition.chartType);
@@ -730,6 +740,8 @@ export function useCoreRuntimeStage(props) {
     stage.savePersistedState('grandTotalPinOverride', stage.grandTotalPinOverride);
     stage.savePersistedState('columnVisibility', stage.columnVisibility);
     stage.savePersistedState('columnOrder', stage.columnOrder);
+    stage.savePersistedState('pivotLayoutOrder', stage.pivotLayoutOrder);
+    stage.savePersistedState('pivotPinnedLayoutIds', stage.pivotPinnedLayoutIds);
     stage.savePersistedState('columnSizing', stage.columnSizing);
     stage.savePersistedState('measureAxis', stage.measureAxis);
     stage.savePersistedState('sidebarWidth', stage.sidebarWidth);
@@ -754,7 +766,7 @@ export function useCoreRuntimeStage(props) {
     stage.savePersistedState('activeReportId', stage.activeReportId);
     stage.savePersistedState('customDimensions', stage.customDimensions);
     stage.savePersistedState('frozenPivotConfig', stage.frozenPivotConfig);
-  }, [stage.id, stage.columnPinning, stage.rowPinning, stage.grandTotalPinOverride, stage.columnVisibility, stage.columnOrder, stage.columnSizing, stage.sidebarWidth, stage.fieldPanelSizes, stage.chartCanvasPanes, stage.tableCanvasSize, stage.chartPanelFloating, stage.chartPanelFloatingRect, stage.chartPanelLocked, stage.chartPanelLockedModel, stage.chartPanelLockedRequest, stage.viewMode, stage.detailMode, stage.treeConfig, stage.detailConfig, stage.persistence, stage.persistence_type, stage.reportDef, stage.savedReports, stage.activeReportId, stage.customDimensions, stage.measureAxis, stage.frozenPivotConfig]);
+  }, [stage.id, stage.columnPinning, stage.rowPinning, stage.grandTotalPinOverride, stage.columnVisibility, stage.columnOrder, stage.pivotLayoutOrder, stage.pivotPinnedLayoutIds, stage.columnSizing, stage.sidebarWidth, stage.fieldPanelSizes, stage.chartCanvasPanes, stage.tableCanvasSize, stage.chartPanelFloating, stage.chartPanelFloatingRect, stage.chartPanelLocked, stage.chartPanelLockedModel, stage.chartPanelLockedRequest, stage.viewMode, stage.detailMode, stage.treeConfig, stage.detailConfig, stage.persistence, stage.persistence_type, stage.reportDef, stage.savedReports, stage.activeReportId, stage.customDimensions, stage.measureAxis, stage.frozenPivotConfig]);
   useEffect(() => {
     const handleResize = () => {
       if (window.innerWidth < 768 && stage.columnPinning.right && stage.columnPinning.right.length > 0) {
@@ -1130,6 +1142,13 @@ export function useCoreRuntimeStage(props) {
     }
     if (restored.columnVisibility && typeof restored.columnVisibility === 'object') stage.setColumnVisibility(restored.columnVisibility);
     if (Array.isArray(restored.columnOrder)) stage.setColumnOrder(normalizeColumnOrderValue(restored.columnOrder));
+    if (Array.isArray(restored.pivotLayoutOrder)) {
+      stage.setPivotLayoutOrder(normalizeColumnOrderValue(restored.pivotLayoutOrder));
+      stage.layoutRevisionRef.current = null;
+    }
+    if (restored.pivotPinnedLayoutIds && typeof restored.pivotPinnedLayoutIds === 'object') {
+      stage.setPivotPinnedLayoutIds(restored.pivotPinnedLayoutIds);
+    }
     if (restored.columnSizing && typeof restored.columnSizing === 'object') stage.setColumnSizing(restored.columnSizing);
     if (restored.colExpanded && typeof restored.colExpanded === 'object') stage.setColExpanded(restored.colExpanded);
     if (typeof restored.decimalPlaces === 'number') stage.setDecimalPlaces(restored.decimalPlaces);
@@ -1710,13 +1729,15 @@ export function useCoreRuntimeStage(props) {
     colExpanded: stage.colExpanded,
     columnPinning: stage.columnPinning,
     columnOrder: stage.columnOrder,
+    pivotLayoutOrder: stage.pivotLayoutOrder,
+    pivotPinnedLayoutIds: stage.pivotPinnedLayoutIds,
     rowPinning: stage.rowPinning,
     showRowTotals: stage.showRowTotals,
     showColTotals: stage.showColTotals,
     showSubtotals: stage.showSubtotals,
     layoutMode: stage.layoutMode,
     grandTotalPinOverride: stage.grandTotalPinOverride
-  }, null), [stage.colExpanded, stage.colFields, stage.columnOrder, stage.columnPinning, stage.expanded, stage.filters, stage.grandTotalPinOverride, stage.rowFields, stage.rowPinning, stage.showColTotals, stage.showRowTotals, stage.showSubtotals, stage.layoutMode, stage.sorting, stage.valConfigs]);
+  }, null), [stage.colExpanded, stage.colFields, stage.columnOrder, stage.pivotLayoutOrder, stage.pivotPinnedLayoutIds, stage.columnPinning, stage.expanded, stage.filters, stage.grandTotalPinOverride, stage.rowFields, stage.rowPinning, stage.showColTotals, stage.showRowTotals, stage.showSubtotals, stage.layoutMode, stage.sorting, stage.valConfigs]);
   stage.layoutHistorySnapshotRef = useRef(stage.layoutHistorySnapshot);
   stage.layoutHistorySnapshotKey = useMemo(() => JSON.stringify(stage.layoutHistorySnapshot || {}), [stage.layoutHistorySnapshot]);
   useEffect(() => {

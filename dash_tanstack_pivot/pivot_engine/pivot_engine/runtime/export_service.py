@@ -1286,7 +1286,17 @@ class RuntimeExportService:
         if isinstance(col_ids, list) and col_ids:
             ordered: List[str] = []
             seen = set()
-            for column_id in col_ids:
+            requested = {str(value) for value in col_ids if value is not None}
+            server_order = [
+                str(column.get("id")) for column in columns
+                if isinstance(column, dict) and column.get("id") is not None
+                and str(column.get("id")) in requested
+            ]
+            fallback_ids = col_ids if not columns else [
+                value for value in col_ids
+                if value == "hierarchy" or str(value) in tabular_row_fields
+            ]
+            for column_id in [*server_order, *fallback_ids]:
                 field = _field_from_column_id(column_id)
                 # Older server-side clients can still send the hierarchy
                 # placeholder.  Expand it into tabular's real row columns.

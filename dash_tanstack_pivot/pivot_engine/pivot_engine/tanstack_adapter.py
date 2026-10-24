@@ -15,6 +15,7 @@ import time
 import json
 from collections import OrderedDict
 from dataclasses import replace
+import hashlib
 from .adapter_viewport_cache import AdapterViewportCache, AdapterViewportKeyBuilder
 from .scalable_pivot_controller import ScalablePivotController
 from .editing import EditDomainService, TransactionAdapterMixin
@@ -30,6 +31,10 @@ from .hierarchy_rows import (
 from .transport.contracts import TanStackOperation, TanStackRequest, TanStackResponse
 from .transport.request_mapper import TanStackRequestMapper
 from .transport.response_mapper import TanStackResponseMapper
+from .column_layout import (
+    LayoutRevisionStore, PivotColumnIdentity, UnknownLayoutRevision,
+    catalog_from_pivot_values, resolve_column_layout,
+)
 
 _adapter_logger = logging.getLogger("pivot_engine.adapter")
 _FORMULA_IDENTIFIER_RE = re.compile(r"\b[A-Za-z_][A-Za-z0-9_]*\b")
@@ -110,6 +115,7 @@ class TanStackPivotAdapter(TransactionAdapterMixin, FormulaEngineMixin):
         self.viewport_prefetch_enabled: bool = False
         self._request_mapper = TanStackRequestMapper()
         self._response_mapper = TanStackResponseMapper()
+        self._layout_revisions = LayoutRevisionStore()
 
     @property
     def _local_cache_generation(self) -> int:
@@ -1037,29 +1043,84 @@ class TanStackPivotAdapter(TransactionAdapterMixin, FormulaEngineMixin):
             if FormulaEngineMixin._is_column_formula_column(col) and col.get("id")
         ]
 
-    def _build_center_col_ids_from_discovered_values(
-        self,
-        discovered_values: list[Any],
-        request: "TanStackRequest",
-    ) -> list[str]:
-        dynamic_ids = self._dynamic_request_ids(request)
-        if not dynamic_ids:
-            return []
-
-        ordered: list[str] = []
-        for raw_value in discovered_values or []:
-            prefix = str(raw_value)
-            for dynamic_id in dynamic_ids:
-                ordered.append(f"{prefix}_{dynamic_id}")
-
+    def _resolve_pivot_column_layout(
+        self, discovered_values: list[dict[str, Any]], spec: PivotSpec,
+        request: "TanStackRequest", user: Optional[User],
+    ):
+        """Resolve current authorized catalog before interpreting display indices."""
+        catalog = list(catalog_from_pivot_values(
+            discovered_values, list(spec.columns), self._dynamic_request_ids(request),
+            row_totals=bool(request.row_totals),
+        ))
         for formula_id in self._column_formula_request_ids(request):
-            ordered.append(formula_id)
+            catalog.append(PivotColumnIdentity(
+                (("$formula", formula_id),), formula_id, formula_id,
+            ))
+        order_measure = spec.measures[0] if spec.measures else None
+        structural_key = hashlib.sha256(self._stable_json({
+            "table": spec.table,
+            "pivot_columns": list(spec.columns or []),
+            "filters": spec.filters or [],
+            "custom_dimensions": spec.custom_dimensions or [],
+            "measure_axis": spec.measure_axis.to_dict() if spec.measure_axis else None,
+            "column_sort_options": spec.column_sort_options or {},
+            "order_measure": vars(order_measure) if order_measure is not None else None,
+        }).encode("utf-8")).hexdigest()
+        principal = getattr(user, "id", None) or getattr(user, "user_id", None)
+        owner_scope = hashlib.sha256(self._stable_json({
+            "principal": principal,
+            "filters": spec.filters,
+            "table": spec.table,
+        }).encode("utf-8")).hexdigest()
+        if request.layout_manifest is not None:
+            saved_ids = request.layout_manifest
+        elif request.layout_revision:
+            saved_ids = self._layout_revisions.get(
+                owner_scope, structural_key, request.layout_revision
+            )
+        else:
+            saved_ids = ()
+        resolved = resolve_column_layout(
+            catalog, saved_ids, structural_key=structural_key,
+        )
+        self._layout_revisions.put(
+            owner_scope, structural_key, resolved.revision, saved_ids,
+        )
+        return resolved
 
-        if request.row_totals:
-            for dynamic_id in dynamic_ids:
-                ordered.append(f"__RowTotal__{dynamic_id}")
-
-        return ordered
+    async def apply_full_export_layout(
+        self, response: "TanStackResponse", request: "TanStackRequest",
+        *, user: Optional[User] = None, row_scope: Any = None,
+        include_schema: bool = False,
+    ) -> "TanStackResponse":
+        """Use the viewport's server order for a full hierarchy export."""
+        scoped_request = self._request_with_row_scope(request, row_scope)
+        spec = self.convert_tanstack_request_to_pivot_spec(scoped_request)
+        if user:
+            spec = apply_rls_to_spec(spec, user, row_scope=row_scope)
+        if not spec.columns or not spec.pivot_config or not spec.pivot_config.enabled:
+            return response
+        discovered = await self._discover_pivot_column_values(spec)
+        resolved = self._resolve_pivot_column_layout(discovered, spec, scoped_request, user)
+        by_id = {column.get("id"): column for column in response.columns or []
+                 if isinstance(column, dict) and column.get("id")}
+        center_ids = {column.cell_id for column in resolved.columns}
+        leading = [column for column in response.columns or []
+                   if isinstance(column, dict) and column.get("id") not in center_ids]
+        ordered_columns = [*leading, *(
+            by_id[column.cell_id] for column in resolved.columns if column.cell_id in by_id
+        )]
+        layout_schema = {
+            "layoutRevision": resolved.revision,
+            "total_center_cols": len(resolved.columns),
+            "columns": [
+                {"index": index, "id": column.cell_id,
+                 "layoutId": column.layout_id, "groupId": column.group_id}
+                for index, column in enumerate(resolved.columns)
+            ],
+        } if include_schema else response.col_schema
+        return replace(response, columns=ordered_columns,
+                       col_schema=layout_schema, layout_revision=resolved.revision)
 
     def _resolve_center_window_ids(
         self,
@@ -1074,10 +1135,11 @@ class TanStackPivotAdapter(TransactionAdapterMixin, FormulaEngineMixin):
             return None
 
         if requested_center_ids:
+            requested_set = {column_id for column_id in requested_center_ids if isinstance(column_id, str)}
             requested_order = [
                 col_id
-                for col_id in requested_center_ids
-                if isinstance(col_id, str) and col_id in center_col_ids
+                for col_id in center_col_ids
+                if col_id in requested_set
             ]
             return requested_order or None
 
@@ -1162,7 +1224,7 @@ class TanStackPivotAdapter(TransactionAdapterMixin, FormulaEngineMixin):
 
         return ordered_values
 
-    async def _discover_pivot_column_values(self, spec: PivotSpec) -> list[str]:
+    async def _discover_pivot_column_values(self, spec: PivotSpec) -> list[dict[str, Any]]:
         if not spec.columns:
             return []
 
@@ -1195,9 +1257,7 @@ class TanStackPivotAdapter(TransactionAdapterMixin, FormulaEngineMixin):
             cached_cols_table is not None
             and "_col_key" in cached_cols_table.column_names
         ):
-            return [
-                str(value) for value in cached_cols_table.column("_col_key").to_pylist()
-            ]
+            return cached_cols_table.to_pylist()
 
         col_results_table = await self.controller._execute_ibis_expr_async(
             col_query, spec.table
@@ -1208,9 +1268,7 @@ class TanStackPivotAdapter(TransactionAdapterMixin, FormulaEngineMixin):
             or "_col_key" not in col_results_table.column_names
         ):
             return []
-        discovered_values = [
-            str(value) for value in col_results_table.column("_col_key").to_pylist()
-        ]
+        discovered_values = col_results_table.to_pylist()
         self._locked_cache_store(
             self._pivot_column_catalog_cache,
             local_cache_key,
@@ -1229,9 +1287,13 @@ class TanStackPivotAdapter(TransactionAdapterMixin, FormulaEngineMixin):
         needs_col_schema: bool,
         requested_center_ids: Optional[List[str]] = None,
         discovered_center_ids: Optional[List[str]] = None,
+        discovered_layout: Optional[dict[str, PivotColumnIdentity]] = None,
+        pinned_center_ids: Optional[list[str]] = None,
+        layout_revision: Optional[str] = None,
     ) -> "TanStackResponse":
         """Apply column slicing and optionally build col_schema."""
-        if not needs_col_schema and col_end is None and not requested_center_ids:
+        if (not needs_col_schema and col_end is None and not requested_center_ids
+                and discovered_center_ids is None):
             return self._finalize_windowed_response(tanstack_result)
 
         row_meta_keys = {
@@ -1319,27 +1381,52 @@ class TanStackPivotAdapter(TransactionAdapterMixin, FormulaEngineMixin):
             needs_col_schema,
             requested_center_ids=requested_center_ids,
         )
+        if effective_window_ids is not None and pinned_center_ids:
+            effective_window_ids = list(dict.fromkeys(
+                [*effective_window_ids, *pinned_center_ids]
+            ))
+        layout_revision = layout_revision or tanstack_result.layout_revision
+        tanstack_result.layout_revision = layout_revision
+        if effective_window_ids is None and discovered_center_ids:
+            center_set = set(center_col_ids)
+            column_lookup = {column.get("id"): column for column in tanstack_result.columns or []
+                             if isinstance(column, dict) and column.get("id")}
+            leading_columns = [column for column in tanstack_result.columns or []
+                               if isinstance(column, dict) and column.get("id") not in center_set]
+            tanstack_result.columns = [*leading_columns, *(
+                column_lookup[col_id] for col_id in center_col_ids if col_id in column_lookup
+            )]
 
         if needs_col_schema:
+            existing_layout_schema = tanstack_result.col_schema if isinstance(tanstack_result.col_schema, dict) else {}
+            existing_layout_by_cell = {
+                column.get("id"): column
+                for column in existing_layout_schema.get("columns", [])
+                if isinstance(column, dict) and column.get("id")
+            }
             column_lookup = {
                 col.get("id"): col
                 for col in (tanstack_result.columns or [])
                 if isinstance(col, dict) and col.get("id")
             }
             schema_center_ids = effective_window_ids or center_col_ids
-            schema_start_index = 0
-            if schema_center_ids:
-                first_schema_id = schema_center_ids[0]
-                try:
-                    schema_start_index = center_col_ids.index(first_schema_id)
-                except ValueError:
-                    schema_start_index = 0
+            center_indices = {identity: index for index, identity in enumerate(center_col_ids)}
             tanstack_result.col_schema = {
                 "total_center_cols": len(center_col_ids),
+                **({"layoutRevision": layout_revision} if layout_revision else {}),
                 "columns": [
                     {
-                        "index": schema_start_index + i,
+                        "index": center_indices[col_id],
                         "id": col_id,
+                        **({
+                            "layoutId": discovered_layout[col_id].layout_id,
+                            "groupId": discovered_layout[col_id].group_id,
+                        } if discovered_layout and col_id in discovered_layout else {
+                            key: existing_layout_by_cell[col_id][key]
+                            for key in ("layoutId", "groupId")
+                            if col_id in existing_layout_by_cell
+                            and key in existing_layout_by_cell[col_id]
+                        }),
                         "size": 140,
                         "header": (
                             column_lookup.get(col_id, {}).get("header")
@@ -1357,15 +1444,16 @@ class TanStackPivotAdapter(TransactionAdapterMixin, FormulaEngineMixin):
                             )
                         ),
                     }
-                    for i, col_id in enumerate(schema_center_ids)
+                    for col_id in schema_center_ids
                 ],
             }
 
         if requested_center_ids:
+            requested_set = {column_id for column_id in requested_center_ids if isinstance(column_id, str)}
             requested_order = [
                 col_id
-                for col_id in requested_center_ids
-                if isinstance(col_id, str) and col_id in center_col_ids
+                for col_id in center_col_ids
+                if col_id in requested_set
             ]
             requested_ids = set(requested_order)
             keep_ids = requested_ids | pinned_ids
@@ -2518,6 +2606,23 @@ class TanStackPivotAdapter(TransactionAdapterMixin, FormulaEngineMixin):
                     request, user=user, row_scope=row_scope
                 )
             )
+            full_response = await self.apply_full_export_layout(
+                full_response, request, user=user, row_scope=row_scope,
+                include_schema=True,
+            )
+            formula_layout_columns = (
+                full_response.col_schema.get("columns", [])
+                if isinstance(full_response.col_schema, dict) else []
+            )
+            formula_center_ids = [
+                column["id"] for column in formula_layout_columns
+                if isinstance(column, dict) and isinstance(column.get("id"), str)
+            ] or None
+            formula_pinned_ids = [
+                column["id"] for column in formula_layout_columns
+                if isinstance(column, dict)
+                and column.get("layoutId") in request.pinned_column_ids
+            ]
             full_rows = list(full_response.data or [])
             grand_total_row = None
             regular_rows = []
@@ -2561,6 +2666,9 @@ class TanStackPivotAdapter(TransactionAdapterMixin, FormulaEngineMixin):
                 col_end,
                 needs_col_schema,
                 requested_center_ids=requested_center_ids,
+                discovered_center_ids=formula_center_ids,
+                pinned_center_ids=formula_pinned_ids,
+                layout_revision=full_response.layout_revision,
             )
             col_window_finished_at = time.perf_counter()
             completed_response = self._complete_virtual_scroll_response(
@@ -2622,6 +2730,9 @@ class TanStackPivotAdapter(TransactionAdapterMixin, FormulaEngineMixin):
             )
 
         discovered_center_ids: Optional[List[str]] = None
+        discovered_layout: Optional[dict[str, PivotColumnIdentity]] = None
+        pinned_center_ids: list[str] = []
+        resolved_layout_revision: Optional[str] = None
         if (
             pivot_spec.columns
             and pivot_spec.pivot_config
@@ -2631,12 +2742,17 @@ class TanStackPivotAdapter(TransactionAdapterMixin, FormulaEngineMixin):
             discovered_values = await self._discover_pivot_column_values(pivot_spec)
             column_catalog_finished_at = time.perf_counter()
             if discovered_values:
-                discovered_center_ids = (
-                    self._build_center_col_ids_from_discovered_values(
-                        discovered_values,
-                        request,
-                    )
+                resolved_layout = self._resolve_pivot_column_layout(
+                    discovered_values, pivot_spec, request, user,
                 )
+                discovered_center_ids = [column.cell_id for column in resolved_layout.columns]
+                discovered_layout = {column.cell_id: column for column in resolved_layout.columns}
+                resolved_layout_revision = resolved_layout.revision
+                pinned_ids = set(request.pinned_column_ids)
+                pinned_center_ids = [
+                    column.cell_id for column in resolved_layout.columns
+                    if column.layout_id in pinned_ids
+                ]
                 window_center_ids = self._resolve_center_window_ids(
                     discovered_center_ids,
                     request,
@@ -2645,6 +2761,10 @@ class TanStackPivotAdapter(TransactionAdapterMixin, FormulaEngineMixin):
                     needs_col_schema,
                     requested_center_ids=requested_center_ids,
                 )
+                if window_center_ids is not None:
+                    window_center_ids = list(dict.fromkeys(
+                        [*window_center_ids, *pinned_center_ids]
+                    ))
                 pivot_spec = pivot_spec.copy()
                 if pivot_spec.pivot_config:
                     pivot_spec.pivot_config.materialized_column_values = (
@@ -2759,6 +2879,9 @@ class TanStackPivotAdapter(TransactionAdapterMixin, FormulaEngineMixin):
                 needs_col_schema,
                 requested_center_ids=requested_center_ids,
                 discovered_center_ids=discovered_center_ids,
+                discovered_layout=discovered_layout,
+                pinned_center_ids=pinned_center_ids,
+                layout_revision=resolved_layout_revision,
             )
             col_window_finished_at = time.perf_counter()
             completed_response = self._complete_virtual_scroll_response(
@@ -2909,6 +3032,9 @@ class TanStackPivotAdapter(TransactionAdapterMixin, FormulaEngineMixin):
                 needs_col_schema,
                 requested_center_ids=requested_center_ids,
                 discovered_center_ids=discovered_center_ids,
+                discovered_layout=discovered_layout,
+                pinned_center_ids=pinned_center_ids,
+                layout_revision=resolved_layout_revision,
             )
             col_window_finished_at = time.perf_counter()
             completed_response = self._complete_virtual_scroll_response(
@@ -3001,6 +3127,9 @@ class TanStackPivotAdapter(TransactionAdapterMixin, FormulaEngineMixin):
                     needs_col_schema,
                     requested_center_ids=requested_center_ids,
                     discovered_center_ids=discovered_center_ids,
+                    discovered_layout=discovered_layout,
+                    pinned_center_ids=pinned_center_ids,
+                    layout_revision=resolved_layout_revision,
                 )
                 col_window_finished_at = time.perf_counter()
                 completed_response = self._complete_virtual_scroll_response(
@@ -3071,6 +3200,9 @@ class TanStackPivotAdapter(TransactionAdapterMixin, FormulaEngineMixin):
                     needs_col_schema,
                     requested_center_ids=requested_center_ids,
                     discovered_center_ids=discovered_center_ids,
+                    discovered_layout=discovered_layout,
+                    pinned_center_ids=pinned_center_ids,
+                    layout_revision=resolved_layout_revision,
                 )
                 col_window_finished_at = time.perf_counter()
                 completed_response = self._complete_virtual_scroll_response(
@@ -3139,6 +3271,9 @@ class TanStackPivotAdapter(TransactionAdapterMixin, FormulaEngineMixin):
                 needs_col_schema,
                 requested_center_ids=requested_center_ids,
                 discovered_center_ids=discovered_center_ids,
+                discovered_layout=discovered_layout,
+                pinned_center_ids=pinned_center_ids,
+                layout_revision=resolved_layout_revision,
             )
             col_window_finished_at = time.perf_counter()
             completed_response = self._complete_virtual_scroll_response(

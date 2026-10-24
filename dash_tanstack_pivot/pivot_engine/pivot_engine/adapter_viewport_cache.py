@@ -50,6 +50,9 @@ class AdapterViewportKeyBuilder:
             "layout_mode": str(getattr(request, "layout_mode", None) or "").strip().lower(),
             "show_subtotal_footers": bool(getattr(request, "show_subtotal_footers", False)),
             "column_sort_options": request.column_sort_options or {},
+            "layout_revision": getattr(request, "layout_revision", None),
+            "layout_manifest": getattr(request, "layout_manifest", None),
+            "pinned_column_ids": getattr(request, "pinned_column_ids", ()),
         }, 24)
 
     def center_column_catalog_key(self, request: Any) -> str:
@@ -61,6 +64,8 @@ class AdapterViewportKeyBuilder:
             "custom_dimensions": request.custom_dimensions or [],
             "measure_axis": request.measure_axis or None,
             "column_sort_options": request.column_sort_options or {},
+            "layout_revision": getattr(request, "layout_revision", None),
+            "layout_manifest": getattr(request, "layout_manifest", None),
         }, 24)
 
     def pivot_column_catalog_key(self, spec: Any) -> str:

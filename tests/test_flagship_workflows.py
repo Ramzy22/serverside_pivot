@@ -1118,6 +1118,14 @@ def test_flagship_virtual_scroll(host, requirement, installed_workflow_hosts):
 
 @pytest.mark.flagship
 @pytest.mark.parametrize("host", ["dash", "react", "streamlit"])
+def test_flagship_custom_pivot_order(host, installed_workflow_hosts):
+    from tests.flagship_scroll_support import qualify_custom_pivot_order
+
+    qualify_custom_pivot_order(host)
+
+
+@pytest.mark.flagship
+@pytest.mark.parametrize("host", ["dash", "react", "streamlit"])
 @pytest.mark.parametrize("requirement", ["column-sizing.resize", "column-sizing.auto-size",
                                          "column-pinning.round-trip"])
 def test_flagship_column_geometry(host, requirement, installed_workflow_hosts):

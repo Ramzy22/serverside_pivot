@@ -6,6 +6,7 @@ from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional
 
 from ..resource_governor import SYSTEM_ACCOUNT, WorkloadAccount
+from ..column_layout import parse_layout_metadata
 
 
 def safe_int(value: Any, default: int = 0) -> int:
@@ -86,6 +87,9 @@ class PivotRequestContext:
     request_id: Optional[str] = None
     cache_key: Optional[str] = None
     profiling: bool = False
+    layout_revision: Optional[str] = None
+    layout_manifest: Optional[tuple[str, ...]] = None
+    pinned_column_ids: tuple[str, ...] = ()
     principal: Optional[Any] = field(default=None, repr=False, compare=False)
     # Immutable row constraints derived from a server-owned dataset policy.
     # Browser envelopes must never create or modify this capability.
@@ -127,6 +131,7 @@ class PivotRequestContext:
         end_row = safe_int(first_present(viewport_meta, "end"), 1000) if viewport_active else None
         col_end_raw = first_present(viewport_meta, "col_end", "colEnd")
         col_end = safe_int(col_end_raw, 0) if col_end_raw is not None else None
+        layout_revision, layout_manifest, pinned_column_ids = parse_layout_metadata(viewport_meta)
 
         return cls(
             table=table,
@@ -148,6 +153,9 @@ class PivotRequestContext:
             request_id=str(first_present(viewport_meta, "requestId", "request_id", default="") or "") or None,
             cache_key=str(first_present(viewport_meta, "cacheKey", "cache_key", default="") or "") or None,
             profiling=bool(first_present(viewport_meta, "profile", "profiling", default=False)),
+            layout_revision=layout_revision,
+            layout_manifest=layout_manifest,
+            pinned_column_ids=pinned_column_ids,
         )
 
     @property
@@ -192,3 +200,4 @@ class PivotServiceResponse:
     edit_overlay: Optional[Dict[str, Any]] = None
     profile: Optional[Dict[str, Any]] = None
     formula_errors: Optional[Dict[str, str]] = None
+    layout_revision: Optional[str] = None

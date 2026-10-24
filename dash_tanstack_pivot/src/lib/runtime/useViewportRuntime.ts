@@ -37,6 +37,7 @@ export function useViewportRuntime(
             beginExpansionRequest: composed.beginExpansionRequest,
             beginStructuralTransaction: composed.beginStructuralTransaction,
             buildRuntimeRequestStateOverride: composed.buildRuntimeRequestStateOverride,
+            buildLayoutRequestFields: composed.layoutRequestFields,
             markRequestPending: composed.markRequestPending,
             resolveStableRequestedColumnWindow: composed.resolveStableRequestedColumnWindow,
             setPendingColumnSkeletonCount: composed.setPendingColumnSkeletonCount,

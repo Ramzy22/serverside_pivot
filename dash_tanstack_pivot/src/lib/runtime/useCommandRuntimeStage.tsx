@@ -2,6 +2,7 @@
 // Command-stage composition. Focused sub-hooks own individual state groups.
 import React, { useMemo, useRef, useEffect, useCallback } from 'react';
 import { buildMeasureAxisRuntimeConfig } from '../utils/measureAxis';
+import { pivotLayoutRequestFields } from '../utils/columnOrder';
 import Icons from '../utils/Icons';
 import { DEFAULT_CHART_PANEL_ROW_LIMIT, DEFAULT_CHART_PANEL_COLUMN_LIMIT, VALID_CHART_SERVER_SCOPES, MAX_TRANSACTION_HISTORY_ENTRIES, normalizeCustomDimensionsValue, cloneSerializable, normalizeTransactionRefreshModeValue, isParentAggregatePropagationEdit, normalizeTransactionHistoryPayload, cellValuesMatch, hasAppliedTransactionWork, shouldShowTransactionLoading, isEditableKeyboardTarget, getRequestedChartSeriesColumnIds } from '../hooks/usePivotNormalization';
 const DEFAULT_SERVER_SIDE_BLOCK_SIZE = 48;
@@ -117,6 +118,8 @@ export function useCommandRuntimeStage(input, transportDomain) {
     setColExpanded: stage.setColExpanded,
     setColFields: stage.setColFields,
     setColumnOrder: stage.setColumnOrder,
+    setPivotLayoutOrder: stage.setPivotLayoutOrder,
+    setPivotPinnedLayoutIds: stage.setPivotPinnedLayoutIds,
     setColumnPinning: stage.setColumnPinning,
     setExpanded: stage.setExpanded,
     setFilters: stage.setFilters,
@@ -418,6 +421,16 @@ export function useCommandRuntimeStage(input, transportDomain) {
   stage.dispatchServerSideRuntimeSetProps = useCallback(nextProps => {
     const runtimeRequest = nextProps && typeof nextProps === 'object' ? nextProps.runtimeRequest : null;
     const payload = runtimeRequest && typeof runtimeRequest === 'object' && runtimeRequest.payload && typeof runtimeRequest.payload === 'object' ? runtimeRequest.payload : null;
+    const exportStart = runtimeRequest?.kind === 'export' && (!payload?.action || payload.action === 'start');
+    const layoutFields = payload && (runtimeRequest.kind === 'data' || exportStart)
+      ? pivotLayoutRequestFields(stage.pivotLayoutOrderRef.current, stage.layoutRevisionRef.current,
+        stage.layoutAcknowledgedManifestRef.current,
+        [...(stage.columnPinning?.left || []), ...(stage.columnPinning?.right || [])], stage.cachedColSchema,
+        exportStart, stage.pivotPinnedLayoutIds)
+      : {};
+    if (payload && runtimeRequest.kind === 'data') {
+      stage.latestLayoutSentManifestRef.current = stage.pivotLayoutOrderRef.current;
+    }
     if (payload && !Object.prototype.hasOwnProperty.call(payload, 'state_override') && !Object.prototype.hasOwnProperty.call(payload, 'stateOverride')) {
       dispatchSetProps({
         ...nextProps,
@@ -425,14 +438,18 @@ export function useCommandRuntimeStage(input, transportDomain) {
           ...runtimeRequest,
           payload: {
             ...payload,
+            ...layoutFields,
             state_override: stage.buildRuntimeRequestStateOverride() || undefined
           }
         }
       });
       return;
     }
-    dispatchSetProps(nextProps);
-  }, [stage.buildRuntimeRequestStateOverride, dispatchSetProps]);
+    dispatchSetProps(payload ? {
+      ...nextProps,
+      runtimeRequest: { ...runtimeRequest, payload: { ...payload, ...layoutFields } }
+    } : nextProps);
+  }, [stage.buildRuntimeRequestStateOverride, stage.columnPinning, stage.cachedColSchema, stage.pivotPinnedLayoutIds, dispatchSetProps]);
   stage.buildChartRequestBase = useCallback((config, stateOverride = null) => {
     if (!stage.serverSide || stage.needsColSchema || stage.totalCenterCols === null) return null;
     const requestedRowLimit = Number(config && config.rowLimit);

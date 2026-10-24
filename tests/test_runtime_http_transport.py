@@ -29,6 +29,7 @@ from pivot_engine.runtime.distributed import DistributedRuntimeSettings, RedisRu
 from pivot_engine.runtime.payload_store import RedisPayloadBackend, RuntimePayloadStore
 from pivot_engine.resource_governor import ResourceExhaustedError, ResourceGovernor, ResourceKind, ResourceLimits
 from pivot_engine.runtime import PivotRuntimeService
+from pivot_engine.runtime.models import PivotRequestContext
 from pivot_engine.runtime.export_jobs import ExportJobSnapshot
 from pivot_engine.runtime.export_job_store import LocalExportJobStore
 from pivot_engine.runtime.contracts import validate_runtime_request_v1
@@ -69,6 +70,27 @@ def _job_host(*, slow=False, distributed=None, governor=None):
         dataset_authorizer=_dataset_policy("export"), distributed_runtime=distributed,
     )
     return app, gateway, adapter, current
+
+
+def test_v1_data_envelope_binds_cells_and_schema_to_layout_revision():
+    _app, gateway, _adapter, _current = _job_host()
+    context = PivotRequestContext.from_frontend(
+        table="sales", trigger_prop="grid.viewport", viewport={"start": 0, "end": 1},
+    )
+    revision = "a" * 64
+    envelope = gateway._response_from_service(
+        PivotServiceResponse(status="data", data=[{"sales": 7}], total_rows=1,
+                             col_schema={"layoutRevision": revision, "columns": [],
+                                         "total_center_cols": 0}, layout_revision=revision),
+        request={"kind": "data", "requestId": "layout-data"}, context=context,
+    )
+    assert envelope["payload"]["layoutRevision"] == revision
+    assert envelope["payload"]["colSchema"]["layoutRevision"] == revision
+    retry = gateway._response_from_service(
+        PivotServiceResponse(status="layout_required"),
+        request={"kind": "data", "requestId": "layout-retry"}, context=context,
+    )
+    assert retry["status"] == "layout_required"
 
 
 def _wait_job(client, job_id, phase):
