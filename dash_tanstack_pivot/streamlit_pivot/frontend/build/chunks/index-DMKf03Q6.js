@@ -8450,7 +8450,7 @@ const Ix = wt.memo(function({
   ] });
 }), Tx = wt.lazy(() => import(
   /* webpackChunkName: "pivot-sidebar" */
-  "./SidebarPanel-BRpW6hvL.js"
+  "./SidebarPanel-BtvNLryY.js"
 ).then((n) => ({ default: n.SidebarPanel })));
 function jx({ toolbar: n }) {
   const {
@@ -10175,7 +10175,7 @@ const Bc = ({ style: n, rowHeight: e }) => /* @__PURE__ */ m.jsx("div", { style:
   }), t;
 }, ub = wt.lazy(() => import(
   /* webpackChunkName: "pivot-detail-inline" */
-  "./InlineDetailPanel-C6UwAzTA.js"
+  "./InlineDetailPanel-Bjz19Dwj.js"
 )), cb = (n) => n.totalBg || n.select || n.background, db = (n, e) => {
   if (!n) return [];
   const t = n.id || n;
@@ -10982,13 +10982,13 @@ function hb({ error: n, onRetry: e, theme: t }) {
 }
 const gb = wt.lazy(() => import(
   /* webpackChunkName: "pivot-detail-drawer" */
-  "./DetailDrawer-CHJk3NVi.js"
+  "./DetailDrawer-Cefh5Xi6.js"
 )), mb = wt.lazy(() => import(
   /* webpackChunkName: "pivot-detail-sidepanel" */
-  "./DetailSidePanel-Bfswn9U0.js"
+  "./DetailSidePanel-Km_oafiz.js"
 )), yb = wt.lazy(() => import(
   /* webpackChunkName: "pivot-edit-panel" */
-  "./EditSidePanel-Bn_oGIdo.js"
+  "./EditSidePanel-uMb9TAR4.js"
 ));
 function xb({ canvas: n }) {
   const {
@@ -11312,17 +11312,17 @@ const vd = (n, e = 4) => {
 };
 wt.lazy(() => import(
   /* webpackChunkName: "pivot-charts" */
-  "./PivotCharts-ahyGQpsQ.js"
+  "./PivotCharts-oX_Ezb8D.js"
 ).then((n) => ({ default: n.PivotChartModal })));
 const wb = wt.lazy(() => import(
   /* webpackChunkName: "pivot-charts" */
-  "./PivotCharts-ahyGQpsQ.js"
+  "./PivotCharts-oX_Ezb8D.js"
 ).then((n) => ({ default: n.PivotChartPanel }))), Rb = wt.lazy(() => import(
   /* webpackChunkName: "pivot-context-menu" */
-  "./ContextMenu-B5v6aaOo.js"
+  "./ContextMenu-9NAlVFUt.js"
 )), Mb = wt.lazy(() => import(
   /* webpackChunkName: "pivot-sparkline-detail" */
-  "./SparklineDetailGraph-Ctct7pdN.js"
+  "./SparklineDetailGraph-C-maUgme.js"
 ).then((n) => ({ default: n.SparklineDetailGraph }))), Pb = () => null, _b = (n) => /* @__PURE__ */ m.jsx(wt.Suspense, { fallback: /* @__PURE__ */ m.jsx(Pb, {}), children: /* @__PURE__ */ m.jsx(wb, { ...n }) }), kb = `
 @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@300;500&family=Plus+Jakarta+Sans:wght@300;500;800&display=swap');
 @keyframes pivot-row-loader-enter {
@@ -13347,13 +13347,13 @@ function uC({
 const cC = 48;
 wt.lazy(() => import(
   /* webpackChunkName: "pivot-charts" */
-  "./PivotCharts-ahyGQpsQ.js"
+  "./PivotCharts-oX_Ezb8D.js"
 ).then((n) => ({
   default: n.PivotChartModal
 })));
 wt.lazy(() => import(
   /* webpackChunkName: "pivot-charts" */
-  "./PivotCharts-ahyGQpsQ.js"
+  "./PivotCharts-oX_Ezb8D.js"
 ).then((n) => ({
   default: n.PivotChartPanel
 })));
@@ -16197,13 +16197,13 @@ const tS = (n, e, t) => n * e + (t ? e : 0), nS = (n, e = {}) => {
 }, $c = !1;
 wt.lazy(() => import(
   /* webpackChunkName: "pivot-charts" */
-  "./PivotCharts-ahyGQpsQ.js"
+  "./PivotCharts-oX_Ezb8D.js"
 ).then((n) => ({
   default: n.PivotChartModal
 })));
 wt.lazy(() => import(
   /* webpackChunkName: "pivot-charts" */
-  "./PivotCharts-ahyGQpsQ.js"
+  "./PivotCharts-oX_Ezb8D.js"
 ).then((n) => ({
   default: n.PivotChartPanel
 })));
@@ -17387,8 +17387,22 @@ function lS({
     if (Number.isFinite(V) && V < t.current)
       return !1;
     const B = M == null ? void 0 : M.layoutRevision, O = (z = M == null ? void 0 : M.colSchema) == null ? void 0 : z.layoutRevision;
-    return !(B && O && B !== O);
-  }, [n, t, i, e]);
+    if (B && O && B !== O) return !1;
+    if (B) {
+      const N = v.current.join("");
+      if (w.current && w.current !== v.current || B === y.current && x.current !== N) return !1;
+    }
+    return !0;
+  }, [
+    n,
+    t,
+    i,
+    e,
+    y,
+    x,
+    v,
+    w
+  ]);
   return {
     commitRuntimeDataPayload: p.useCallback((E, S, D = null) => {
       s(E, S), u(S.editOverlay), c(S), l.current = {
@@ -26916,13 +26930,13 @@ const Ll = "__ALL__", Xo = (...n) => {
 };
 wt.lazy(() => import(
   /* webpackChunkName: "pivot-charts" */
-  "./PivotCharts-ahyGQpsQ.js"
+  "./PivotCharts-oX_Ezb8D.js"
 ).then((n) => ({
   default: n.PivotChartModal
 })));
 wt.lazy(() => import(
   /* webpackChunkName: "pivot-charts" */
-  "./PivotCharts-ahyGQpsQ.js"
+  "./PivotCharts-oX_Ezb8D.js"
 ).then((n) => ({
   default: n.PivotChartPanel
 })));
@@ -30004,12 +30018,12 @@ function xR({
 }
 const vR = wt.lazy(() => import(
   /* webpackChunkName: "pivot-charts" */
-  "./PivotCharts-ahyGQpsQ.js"
+  "./PivotCharts-oX_Ezb8D.js"
 ).then((n) => ({
   default: n.PivotChartModal
 }))), bR = wt.lazy(() => import(
   /* webpackChunkName: "pivot-charts" */
-  "./PivotCharts-ahyGQpsQ.js"
+  "./PivotCharts-oX_Ezb8D.js"
 ).then((n) => ({
   default: n.PivotChartPanel
 }))), my = () => null, CR = (n) => /* @__PURE__ */ m.jsx(wt.Suspense, { fallback: /* @__PURE__ */ m.jsx(my, {}), children: /* @__PURE__ */ m.jsx(vR, { ...n }) }), Ug = (n) => /* @__PURE__ */ m.jsx(wt.Suspense, { fallback: /* @__PURE__ */ m.jsx(my, {}), children: /* @__PURE__ */ m.jsx(bR, { ...n }) });

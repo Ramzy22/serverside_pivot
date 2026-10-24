@@ -74,9 +74,18 @@ export function useRuntimeDataCommit({
         const layoutRevision = committedPayload?.layoutRevision;
         const schemaRevision = committedPayload?.colSchema?.layoutRevision;
         if (layoutRevision && schemaRevision && layoutRevision !== schemaRevision) return false;
+        if (layoutRevision) {
+            const currentManifest = pivotLayoutOrderRef.current.join('\u001f');
+            if (latestLayoutSentManifestRef.current
+                && latestLayoutSentManifestRef.current !== pivotLayoutOrderRef.current) return false;
+            if (layoutRevision === layoutRevisionRef.current
+                && layoutAcknowledgedManifestRef.current !== currentManifest) return false;
+        }
 
         return true;
-    }, [clientInstanceRef, latestDataVersionRef, requestVersionRef, stateEpochRef]);
+    }, [clientInstanceRef, latestDataVersionRef, requestVersionRef, stateEpochRef,
+        layoutRevisionRef, layoutAcknowledgedManifestRef, pivotLayoutOrderRef,
+        latestLayoutSentManifestRef]);
 
     const commitRuntimeDataPayload = useCallback((response, payload, clientProfile = null) => {
         finalizeTransactionHistoryResponse(response, payload);

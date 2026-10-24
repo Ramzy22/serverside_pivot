@@ -1,4 +1,4 @@
-import { j as e, C as rr, r as Yr, c as rn, a as wr, n as It, e as Ct, t as he, l as nn, g as Ae, b as sn, d as Lr, f as on, p as ir, h as Er, i as Rr, k as ur, m as Dr, o as At, M as Nr, q as Pr, s as Mr, u as an, I as ln, v as cn, w as dn, x as Vr, y as _r, z as tr, A as un, B as xn, V as pn, D as Xr, E as Gr, F as fn, G as xr, H as hn, J as gn, K as bn, L as yn, N as Ir, O as vn, P as mn, Q as jn, R as Hr, S as kn } from "./index--Q_tEdOr.js";
+import { j as e, C as rr, r as Yr, c as rn, a as wr, n as It, e as Ct, t as he, l as nn, g as Ae, b as sn, d as Lr, f as on, p as ir, h as Er, i as Rr, k as ur, m as Dr, o as At, M as Nr, q as Pr, s as Mr, u as an, I as ln, v as cn, w as dn, x as Vr, y as _r, z as tr, A as un, B as xn, V as pn, D as Xr, E as Gr, F as fn, G as xr, H as hn, J as gn, K as bn, L as yn, N as Ir, O as vn, P as mn, Q as jn, R as Hr, S as kn } from "./index-DMKf03Q6.js";
 import { a as v, R as xt } from "./charts-DthW1Q8W.js";
 const Ar = [
   { value: "solid", label: "Solid", dash: "none" },
@@ -358,10 +358,10 @@ const Ar = [
 `)}`], { type: "text/csv;charset=utf-8" }), `${n}.csv`);
 }, Un = /* @__PURE__ */ new Set(["bar3d", "line3d", "scatter3d", "range", "boxplot", "nightingale"]), Kn = /* @__PURE__ */ new Set(["bar3d", "line3d", "scatter3d"]), Zn = xt.lazy(() => import(
   /* webpackChunkName: "pivot-echarts-2d" */
-  "./ECharts2dRenderer-By3cFzn7.js"
+  "./ECharts2dRenderer-O_KtruFg.js"
 )), qn = xt.lazy(() => import(
   /* webpackChunkName: "pivot-echarts-3d" */
-  "./ECharts3dRenderer-B-gsOjhA.js"
+  "./ECharts3dRenderer-Fv5vhme9.js"
 )), Jt = ({ chartType: t, echartsRef: n, option: i }) => {
   const a = Kn.has(t) ? qn : Zn;
   return /* @__PURE__ */ e.jsx(xt.Suspense, { fallback: /* @__PURE__ */ e.jsx("div", { "aria-label": "Loading chart", style: { width: "100%", height: "100%" } }), children: /* @__PURE__ */ e.jsx(a, { echartsRef: n, option: i }) });

@@ -142,6 +142,21 @@ test('unknown worker layout token retries with the saved manifest without showin
     assert.deepEqual(run.resolved, ['viewport:s:tab-a:7']);
 });
 
+test('a self-consistent response for the previous column order cannot commit', () => {
+    const run = lifecycle();
+    const oldRevision = 'a'.repeat(64);
+    run.args.requestVersionRef.current = 8;
+    run.args.layoutRevisionRef.current = oldRevision;
+    run.args.layoutAcknowledgedManifestRef.current = 'p:old';
+    run.args.pivotLayoutOrderRef.current = ['p:new'];
+    run.args.latestLayoutSentManifestRef.current = run.args.pivotLayoutOrderRef.current;
+    run.render({...success(8), payload: {
+        ...success(8).payload, layoutRevision: oldRevision,
+        colSchema: {layoutRevision: oldRevision, columns: []},
+    }});
+    assert.equal(run.committed.length, 0);
+});
+
 test('stale, superseded, foreign-client and old-epoch failures stay silent', () => {
     for (const response of [
         {...failure, status: 'stale'}, {...failure, windowSeq: 6},
