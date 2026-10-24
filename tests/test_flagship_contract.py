@@ -17,7 +17,7 @@ from tests.export_qualification_fixture import FLAGSHIP_QUALIFICATION_SOURCE_ROW
 CONTRACT_PATH = Path(__file__).with_name("flagship_requirements.json")
 SUPPORTED_IDS = {
     "initial-workspace", "runtime-error", "hierarchy-expand", "hierarchy-expand-all",
-    "vertical-virtual-scroll", "horizontal-virtual-scroll", "saved-scroll",
+    "vertical-virtual-scroll", "horizontal-virtual-scroll", "column-order", "saved-scroll",
     "layout-field-zones", "layout-values", "layout-swap", "global-filter",
     "header-filter", "sorting", "filter-options", "totals", "row-numbers",
     "layout-modes", "density", "column-sizing", "column-pinning", "cell-selection",

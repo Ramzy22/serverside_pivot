@@ -31,6 +31,7 @@ CAPABILITIES = (
     FlagshipCapability("hierarchy-expand-all", "Navigation", "Expand all and collapse all update the visible hierarchy.", "browser"),
     FlagshipCapability("vertical-virtual-scroll", "Navigation", "Vertical scroll requests and renders later row windows.", "browser"),
     FlagshipCapability("horizontal-virtual-scroll", "Navigation", "Horizontal scroll requests and renders later column windows.", "browser"),
+    FlagshipCapability("column-order", "Table", "Reordered pivot groups retain correct sparse cells across horizontal scrolling.", "browser"),
     FlagshipCapability("saved-scroll", "Navigation", "A saved view restores the table scroll position.", "browser"),
     FlagshipCapability("layout-field-zones", "Model", "Fields can move among Rows, Columns, Filters, and Values.", "browser"),
     FlagshipCapability("layout-values", "Model", "A value can be added, removed, and assigned an aggregation.", "browser"),

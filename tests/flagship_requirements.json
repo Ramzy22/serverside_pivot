@@ -376,6 +376,48 @@
       }
     },
     {
+      "id": "custom-pivot-order.sparse-window",
+      "inventory_id": "column-order",
+      "task": "Move a remote pivot group before the first visible group",
+      "expected": "After moving a far-right pivot leaf to the start, the grouped header and its R000 value appear first; sparse requests carry a layout revision and transmit the order manifest only when it changes.",
+      "ag_grid": {
+        "reference": "ssrm-read-only-v1",
+        "docs": [
+          "https://www.ag-grid.com/javascript-data-grid/column-moving/"
+        ],
+        "behavior": "The reference permits moving pivot columns through the column API; this specific wide SSRM journey has not been observed against the pinned reference fixture.",
+        "test_id": "ag-grid.custom-pivot-order.sparse-window",
+        "result": "unverified"
+      },
+      "product_behavior": "The server resolves stable path-and-measure identities, keeps pivot groups contiguous, and maps the reordered display window to the correct sparse cells.",
+      "difference": "unverified",
+      "constraints": [
+        "Whole pivot groups move across the center; leaves may reorder within their group, and row totals remain last.",
+        "A worker that lacks a layout token requests the bounded manifest and retries silently.",
+        "Editing is outside this read-only qualification."
+      ],
+      "hosts": [
+        "dash",
+        "react",
+        "streamlit"
+      ],
+      "required": true,
+      "shared_tests": [
+        "shared.custom-pivot-order.sparse-window"
+      ],
+      "browser_tests": {
+        "dash": [
+          "browser.custom-pivot-order.sparse-window"
+        ],
+        "react": [
+          "browser.custom-pivot-order.sparse-window"
+        ],
+        "streamlit": [
+          "browser.custom-pivot-order.sparse-window"
+        ]
+      }
+    },
+    {
       "id": "saved-scroll.restore",
       "inventory_id": "saved-scroll",
       "task": "Restore a saved scroll position",

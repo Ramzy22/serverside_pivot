@@ -286,6 +286,7 @@ def qualify_custom_pivot_order(host: str) -> None:
         wait.until(lambda current: _cell(_visible_cells(current), "R000", moved, "1"))
         header = _wait_for_visible_workspace_element(driver, f'[role="columnheader"][data-header-column-id="{moved}"]')
         ActionChains(driver).context_click(header).perform()
+        ActionChains(driver).move_to_element(_selection_menu(driver, "Move Column")).perform()
         _selection_menu(driver, "Move to Start").click()
         driver.execute_script("arguments[0].scrollLeft=0", scroller)
 
@@ -310,8 +311,10 @@ def qualify_custom_pivot_order(host: str) -> None:
         result.update(result="passed", actionCompleted=True, layoutRevisionVerified=True,
                       sparseWindowVerified=True)
     except Exception as error:
-        frame = traceback.extract_tb(error.__traceback__)[-1]
-        diagnostic = f"{type(error).__name__} at {Path(frame.filename).name}:{frame.lineno}"
+        frames = traceback.extract_tb(error.__traceback__)
+        diagnostic = f"{type(error).__name__} at " + " -> ".join(
+            f"{Path(frame.filename).name}:{frame.lineno}" for frame in frames[-4:]
+        )
     finally:
         paths = []
         if driver is not None:
