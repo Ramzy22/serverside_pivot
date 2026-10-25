@@ -5,6 +5,9 @@ from __future__ import annotations
 import json
 import os
 from pathlib import Path
+import csv
+import io
+import time
 import traceback
 
 from tests.flagship_browser_support import _network, record_case
@@ -25,6 +28,14 @@ if (!window.__pivotScrollTrace) {
     let value = raw;
     if (typeof value === 'string') { try { value = JSON.parse(value); } catch (_) { return; } }
     if (!value || typeof value !== 'object') return;
+    if (value.schemaVersion === 1 && value.kind === 'export' && typeof value.requestId === 'string') {
+      trace.push({phase, at: performance.now(), kind: 'export', requestId: value.requestId,
+        status: value.status || null, layoutManifest: value.payload?.layoutManifest ?? null,
+        layoutRevision: value.payload?.layoutRevision ?? null,
+        colIds: value.payload?.colIds ?? null, format: value.payload?.format ?? null,
+        payload: value.payload ?? null, state: phase === 'request' ? value.state ?? null : null});
+      return;
+    }
     if (Array.isArray(value.colSchema?.columns) && (value.layoutRevision || value.colSchema?.layoutRevision)) {
       trace.push({phase: 'payload', at: performance.now(),
         layoutRevision:value.layoutRevision || value.colSchema.layoutRevision,
@@ -247,11 +258,13 @@ def qualify_custom_pivot_order(host: str) -> None:
     if os.environ.get("PIVOT_RUN_FLAGSHIP_BROWSER_TESTS") != "1":
         pytest.skip("Enable installed flagship browser qualification explicitly")
     from scripts.flagship_artifacts import load_artifact_binding
-    from tests.flagship_browser_support import _selection_menu
+    from tests.flagship_browser_support import _geometry_copy_current_table, _selection_menu
     from tests.test_flagship_certification import (
-        _qualification_chrome_options, _switch_to_workspace,
-        _wait_for_visible_workspace_element,
+        _clipboard_text, _host_url, _origin, _qualification_chrome_options,
+        _switch_to_workspace, _wait_for_download, _wait_for_visible_workspace_element,
+        _workspace_elements,
     )
+    from openpyxl import load_workbook
     from selenium import webdriver
     from selenium.webdriver.common.action_chains import ActionChains
     from selenium.webdriver.support.ui import WebDriverWait
@@ -273,6 +286,10 @@ def qualify_custom_pivot_order(host: str) -> None:
         driver._pivot_artifact_binding, driver._pivot_artifact_host = binding, host
         driver._pivot_loaded_assets = {}
         driver.execute_cdp_cmd("Network.enable", {"maxTotalBufferSize": 50000000, "maxResourceBufferSize": 50000000})
+        driver.execute_cdp_cmd("Browser.grantPermissions", {
+            "origin": _origin(_host_url(host)),
+            "permissions": ["clipboardReadWrite", "clipboardSanitizedWrite"],
+        })
         driver.execute_cdp_cmd("Page.addScriptToEvaluateOnNewDocument", {"source": _SCROLL_PROBE})
         _switch_to_workspace(driver, host)
         result.update(result="failed", browser=f"{driver.capabilities['browserName']} {driver.capabilities['browserVersion']}",
@@ -308,8 +325,98 @@ def qualify_custom_pivot_order(host: str) -> None:
         assert len(set(revisions)) >= 2, "Server did not issue a new layout revision"
         observation["states"].append({"phase": "reordered", "trace": trace,
                                       "cells": _visible_cells(driver)})
+        layout_id = next(column["layoutId"] for entry in trace if entry.get("schema")
+                         for column in entry["schema"] if column["id"] == moved)
+        header = _wait_for_visible_workspace_element(driver, f'[role="columnheader"][data-header-column-id="{moved}"]')
+        width_before = driver.execute_script("return arguments[0].getBoundingClientRect().width", header)
+        handle = header.find_element("css selector", 'div[style*="cursor: col-resize"]')
+        ActionChains(driver).move_to_element(handle).click_and_hold().move_by_offset(38, 0).release().perform()
+        width_after = wait.until(lambda current: (
+            width if abs((width := current.execute_script(
+                "return arguments[0].getBoundingClientRect().width",
+                _wait_for_visible_workspace_element(current, f'[role="columnheader"][data-header-column-id="{moved}"]'),
+            )) - width_before) >= 34 else False
+        ))
+        observation["states"].append({"phase": "resized", "widthBefore": width_before,
+                                      "widthAfter": width_after})
+
+        header = _wait_for_visible_workspace_element(driver, f'[role="columnheader"][data-header-column-id="{moved}"]')
+        ActionChains(driver).context_click(header).perform()
+        ActionChains(driver).move_to_element(_selection_menu(driver, "Pin")).perform()
+        _selection_menu(driver, "Pin Left").click()
+        wait.until(lambda current: _wait_for_visible_workspace_element(
+            current, f'[role="columnheader"][data-header-column-id="{moved}"]'
+        ).get_attribute("data-pinned") == "left")
+        driver.execute_script("arguments[0].scrollLeft=arguments[0].scrollWidth", scroller)
+        wait.until(lambda current: any(
+            entry["phase"] == "request" and (entry.get("colStart") or 0) > 30
+            and layout_id in (entry.get("pinnedColumnIds") or [])
+            for entry in current.execute_script("return window.__pivotScrollTrace || []")
+        ))
+        def delivered_pinned_cell(current):
+            cells = [cell for cell in _workspace_elements(
+                current, f'[role="gridcell"][data-rowid="R000"][data-colid="{moved}"]'
+            ) if cell.is_displayed()]
+            return cells[0] if len(cells) == 1 and cells[0].text.strip() == "1" else False
+
+        pinned_cell = wait.until(delivered_pinned_cell)
+        observation["states"].append({"phase": "pinned-offscreen", "layoutId": layout_id,
+                                      "scrollLeft": driver.execute_script("return arguments[0].scrollLeft", scroller),
+                                      "pinnedCell": pinned_cell.text.strip()})
+
+        sentinel = "pivot layout clipboard checkpoint"
+        assert driver.execute_async_script(
+            "const done=arguments[arguments.length-1]; navigator.clipboard.writeText(arguments[0]).then(()=>done(true),()=>done(false));",
+            sentinel,
+        )
+        ActionChains(driver).context_click(pinned_cell).perform()
+        _geometry_copy_current_table(driver)
+        copied = wait.until(lambda current: (
+            value if (value := _clipboard_text(current)) != sentinel else False
+        ))
+        clipboard_rows = list(csv.reader(io.StringIO(copied), delimiter="\t"))
+        observation["clipboard"] = {"rows": clipboard_rows[:6], "rawLength": len(copied)}
+        assert clipboard_rows[0][:4] == ["Unités (Sum)", "Ventes € (Sum)", "Écart (Sum)", "Ventes € (Sum)"]
+        assert clipboard_rows[1][:4] == ["1", "0", "0", "23"]
+        assert clipboard_rows[1][-1] == "R000"
+        assert all(len(row) == len(clipboard_rows[0]) for row in clipboard_rows)
+
+        started_at = time.time()
+        _wait_for_visible_workspace_element(driver, "[data-testid='pivot-export-xlsx']").click()
+        downloaded = _wait_for_download(downloads, timeout=60, started_at=started_at)
+        workbook = load_workbook(downloaded, data_only=True)
+        sheet = workbook.active
+        workbook_rows = list(sheet.values)
+        assert sheet.merged_cells.ranges, "Pivot group headers were not merged in XLSX"
+        assert any("P00" in str(value) for row in workbook_rows[:4] for value in row)
+        assert any("R000" in row and 1 in row for row in workbook_rows)
+        observation["workbook"] = {"file": downloaded.name, "rows": workbook_rows[:6],
+                                   "mergedRanges": [str(item) for item in sheet.merged_cells.ranges]}
+        workbook.close()
+
+        _wait_for_visible_workspace_element(driver, "[data-testid='pivot-toolbar-theme']").click()
+        save_button = wait.until(lambda current: next((button for button in _workspace_elements(
+            current, "button"
+        ) if button.is_displayed() and button.text.strip() == "Save View"), False))
+        save_button.click()
+        driver.refresh()
+        _switch_to_workspace(driver, host)
+        scroller = _wait_for_visible_workspace_element(driver, '[data-pivot-scroll-container]')
+        restored = wait.until(lambda current: (
+            candidate if (candidate := _wait_for_visible_workspace_element(
+                current, f'[role="columnheader"][data-header-column-id="{moved}"]'
+            )).get_attribute("data-pinned") == "left" else False
+        ))
+        restored_width = driver.execute_script("return arguments[0].getBoundingClientRect().width", restored)
+        assert abs(restored_width - width_after) <= 2
+        assert _cell(_visible_cells(driver), "R000", moved, "1")
+        observation["states"].append({"phase": "restored", "width": restored_width,
+                                      "pinned": restored.get_attribute("data-pinned"),
+                                      "cells": _visible_cells(driver)})
         result.update(result="passed", actionCompleted=True, layoutRevisionVerified=True,
-                      sparseWindowVerified=True)
+                      sparseWindowVerified=True, pinningVerified=True,
+                      clipboardOrderVerified=True, workbookVerified=True,
+                      savedLayoutVerified=True)
     except Exception as error:
         frames = traceback.extract_tb(error.__traceback__)
         diagnostic = f"{type(error).__name__} at " + " -> ".join(

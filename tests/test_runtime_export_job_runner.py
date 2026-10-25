@@ -723,6 +723,62 @@ def test_unsupported_hierarchical_all_rows_rejects_before_adapter_execution(tmp_
         payloads.clear()
 
 
+def test_real_pivot_xlsx_export_job_pages_all_rows_with_group_headers(tmp_path, monkeypatch):
+    import pyarrow as pa
+    from openpyxl import load_workbook
+    from pivot_engine import create_tanstack_adapter
+
+    adapter = create_tanstack_adapter(backend_uri=":memory:")
+    adapter.controller.load_data_from_arrow("sales", pa.table({
+        "region": [f"R{i:02d}" for i in range(70) for _ in range(2)],
+        "period": [period for _ in range(70) for period in ("P00", "P01")],
+        "sales": [value for i in range(70) for value in (i + 1, i + 101)],
+    }))
+    windows = []
+    original_window = adapter.handle_virtual_scroll_request
+    async def checked_window(request, start, end, *args, **kwargs):
+        windows.append((start, end))
+        return await original_window(request, start, end, *args, **kwargs)
+    monkeypatch.setattr(adapter, "handle_virtual_scroll_request", checked_window)
+    runner, store, payloads, _, _, context, job = setup_runner(
+        tmp_path, adapter, governor=adapter.controller.resource_governor)
+    state = PivotViewState(
+        row_fields=["region"], col_fields=["period"],
+        val_configs=[{"field": "sales", "agg": "sum"}, {"field": "sales", "agg": "count"}],
+        show_col_totals=False, show_row_totals=False,
+        export_request={"format": "xlsx", "allRows": True, "style": {"mergedHeaderRows": [
+            [{"label": "Region", "columnIds": ["hierarchy"], "rowSpan": 2},
+             {"label": "P00", "columnIds": ["P00_sales_sum", "P00_sales_count"]},
+             {"label": "P01", "columnIds": ["P01_sales_sum", "P01_sales_count"]}],
+            [{"label": "Sales (Sum)", "columnIds": ["P00_sales_sum"]},
+             {"label": "Sales (Count)", "columnIds": ["P00_sales_count"]},
+             {"label": "Sales (Sum)", "columnIds": ["P01_sales_sum"]},
+             {"label": "Sales (Count)", "columnIds": ["P01_sales_count"]}],
+        ]}},
+    )
+    try:
+        runner.start(job, context, state)
+        done = wait_for(lambda: (item := snapshot(store)).phase in {"completed", "failed"} and item, timeout=10)
+        assert done.phase == "completed"
+        item = payloads.get(done.payload_ref["id"])
+        workbook = load_workbook(item.file_path, data_only=True)
+        try:
+            sheet = workbook.active
+            assert sheet.merged_cells.ranges
+            rows = list(sheet.values)
+            assert any("P00" in str(value) for row in rows[:3] for value in row)
+            assert len(rows) == 72
+            assert any("R00" in row and 1 in row and 101 in row for row in rows)
+            assert any("R69" in row and 70 in row and 170 in row for row in rows)
+            assert len(windows) >= 3 and all(end - start < 32 for start, end in windows)
+        finally:
+            workbook.close()
+    finally:
+        runner.close()
+        payloads.clear()
+        adapter.controller.close()
+
+
 @pytest.mark.parametrize("all_rows", [False, True])
 def test_overwide_arrow_page_rejected_before_to_pylist(tmp_path, monkeypatch, all_rows):
     import pyarrow as pa

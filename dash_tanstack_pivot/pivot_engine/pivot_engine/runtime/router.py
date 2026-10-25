@@ -240,7 +240,12 @@ class RuntimeRequestRouter:
                 bounded_flat_part = (isinstance(adapter, TanStackPivotAdapter) and not state.col_fields
                                      and (not state.row_fields or state.layout_mode == "tabular" and not state.show_subtotals))
                 if export_lease is not None and (export_all_rows or bounded_flat_part):
-                    payload = await self._execute_bounded_flat_export(adapter, export_request, state, export_context, export_lease)
+                    if export_all_rows and state.col_fields and isinstance(adapter, TanStackPivotAdapter):
+                        payload = await self._execute_bounded_pivot_export(
+                            adapter, export_request, state, export_context, export_lease)
+                    else:
+                        payload = await self._execute_bounded_flat_export(
+                            adapter, export_request, state, export_context, export_lease)
                     return TanStackResponse(data=[], columns=[]), payload, time.perf_counter()
                 response = await self._execute_tanstack_data_request(
                     adapter,
@@ -886,6 +891,72 @@ class RuntimeRequestRouter:
             ),
         )
         return _svc_response
+
+    async def _execute_bounded_pivot_export(self, adapter, request, state, context, lease):
+        """Page a grouped pivot into the disk-backed export writer."""
+        if (not adapter.controller._uses_duckdb_ibis()
+                or (state.measure_axis and state.measure_axis.get("placement", "none") != "none")
+                or any(config.get("agg") == "formula" or config.get("showAs") or config.get("show_as")
+                       for config in state.val_configs if isinstance(config, dict))
+                or any(adapter._normalize_window_fn(column.get("windowFn")) or column.get("isFormula")
+                       for column in request.columns if isinstance(column, dict))):
+            raise ResourceExhaustedError(ResourceKind.EXPORT, reason="bounded_export_layout_unavailable")
+
+        # A page is converted to Python objects before it reaches the disk
+        # spool. Keep that single-page allocation well inside the lease.
+        max_center_cols = 256
+        page_rows = max(1, min(32, lease.reserved_bytes // (512 * (max_center_cols + 16))))
+        control = current_export_write.get()
+
+        async def pages():
+            offset = 0
+            total_rows = None
+            revision = None
+            while total_rows is None or offset < total_rows:
+                if control:
+                    control.checkpoint()
+                response = await adapter.handle_virtual_scroll_request(
+                    request, offset, offset + page_rows - 1, [["__ALL__"]],
+                    user=context.principal, row_scope=context.row_scope,
+                    col_start=0, col_end=max_center_cols - 1,
+                    needs_col_schema=True, include_grand_total=False,
+                    _allow_prefetch=False,
+                )
+                schema = response.col_schema if isinstance(response.col_schema, dict) else {}
+                center_count = schema.get("total_center_cols")
+                if not isinstance(center_count, int) or center_count > max_center_cols:
+                    raise ResourceExhaustedError(ResourceKind.EXPORT, reason="bounded_export_columns")
+                current_revision = response.layout_revision or schema.get("layoutRevision")
+                if revision is None:
+                    revision = current_revision
+                elif current_revision != revision:
+                    raise ResourceExhaustedError(ResourceKind.EXPORT, reason="export_layout_changed")
+                if total_rows is None:
+                    total_rows = max(int(response.total_rows or 0), 0)
+                    self.export_service.limits.ensure_rows(total_rows)
+                rows = list(response.data or [])
+                if len(rows) > page_rows or (offset < total_rows and not rows):
+                    raise ResourceExhaustedError(ResourceKind.EXPORT, reason="bounded_export_rows")
+                yield response
+                offset += len(rows)
+                if not rows:
+                    break
+
+            if state.show_col_totals and total_rows:
+                total_response = await adapter.handle_virtual_scroll_request(
+                    request, 0, 0, [["__ALL__"]], user=context.principal,
+                    row_scope=context.row_scope, col_start=0, col_end=max_center_cols - 1,
+                    needs_col_schema=True, include_grand_total=True,
+                    _allow_prefetch=False,
+                )
+                if (total_response.layout_revision or (total_response.col_schema or {}).get("layoutRevision")) != revision:
+                    raise ResourceExhaustedError(ResourceKind.EXPORT, reason="export_layout_changed")
+                total_response.data = [row for row in total_response.data or []
+                                       if row.get("_isTotal") or row.get("_id") == "Grand Total"]
+                if total_response.data:
+                    yield total_response
+
+        return await self.export_service.build_paged_export(pages(), state, state.export_request)
 
     async def _execute_bounded_flat_export(self, adapter, request, state, context, lease):
         """Page native Arrow results before response mapping can call to_pylist."""
