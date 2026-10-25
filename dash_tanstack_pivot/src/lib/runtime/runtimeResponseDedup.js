@@ -7,7 +7,7 @@
  */
 /**
  * @param {{kind?: string, status?: string, requestId?: string | number, request_id?: string | number} | null | undefined} response
- * @param {{requestId?: string | number, request_id?: string | number, columnId?: string, column_id?: string, search?: unknown, offset?: number, options?: unknown[]} | null | undefined} payload
+ * @param {{requestId?: string | number, request_id?: string | number, columnId?: string, column_id?: string, search?: unknown, offset?: number, options?: unknown[], jobId?: string, phase?: string} | null | undefined} payload
  * @returns {string | null}
  */
 export function buildRuntimeResponseProcessingKey(response, payload) {
@@ -16,6 +16,9 @@ export function buildRuntimeResponseProcessingKey(response, payload) {
   const status = response.status || 'unknown';
   const requestId = response.requestId || response.request_id || payload && (payload.requestId || payload.request_id);
   if (requestId !== undefined && requestId !== null) {
+    if (kind === 'export' && status === 'export_job' && payload?.jobId && payload?.phase) {
+      return `${kind}:${status}:${requestId}:${payload.jobId}:${payload.phase}`;
+    }
     return `${kind}:${status}:${requestId}`;
   }
   if (kind === 'filter_options' && payload && typeof payload === 'object') {

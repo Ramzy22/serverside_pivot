@@ -71,7 +71,14 @@ function createExportJobController(initialPorts) {
     if (ownedRequests.size > 1024) ownedRequests.delete(ownedRequests.values().next().value);
     const timer = setTimeout(() => {
       if (!isCurrent(candidate) || !candidate.requests.has(requestId)) return;
-      candidate.requests.delete(requestId);
+      const timedOut = candidate.requests.get(requestId);
+      timedOut.expired = true;
+      // Keep correlation for a late authoritative response. Dash callbacks can
+      // arrive after the client deadline, even when the server job completed.
+      if (candidate.requests.size > 128) {
+        const oldestExpired = [...candidate.requests].find(([, pending]) => pending.expired)?.[0];
+        if (oldestExpired !== undefined) candidate.requests.delete(oldestExpired);
+      }
       // A lost cancel response cannot establish server cleanup. Keep asking.
       if (action === 'start' && !candidate.jobId) {
         send(candidate, 'start', candidate.payload, candidate.runtimeFields, candidate.startRequestId);
@@ -83,7 +90,7 @@ function createExportJobController(initialPorts) {
   };
   const poll = jobId => {
     if (!job || !isCurrent(job) || job.jobId !== jobId || terminalExportPhases.has(job.phase)) return;
-    if ([...job.requests.values()].some(request => request.action === 'status' || request.action === 'cancel')) return;
+    if ([...job.requests.values()].some(request => !request.expired && (request.action === 'status' || request.action === 'cancel'))) return;
     return send(job, 'status', {action: 'status', jobId, table: job.payload.table});
   };
   const cancel = jobId => {
@@ -153,10 +160,13 @@ function createExportJobController(initialPorts) {
       if (!ownedRequests.has(requestId)) return false;
       const candidate = job;
       if (!candidate || !isCurrent(candidate) || terminalExportPhases.has(candidate.phase)) return true;
-      const request = candidate.requests.get(requestId);
+      const payload = response.payload || {};
+      const request = candidate.requests.get(requestId) || (
+        !candidate.cancelRequested && response.status === 'export_job'
+        && payload.phase === 'completed' && candidate.jobId === payload.jobId
+        ? {action: 'status', timer: null} : null);
       if (!request) return true;
       clearTimeout(request.timer); candidate.requests.delete(requestId);
-      const payload = response.payload || {};
       if (response.status !== 'export_job') {
         if (candidate.cancelRequested && payload.code !== 'export_job_not_found') schedulePoll(candidate);
         else terminal(candidate, payload.code === 'export_job_not_found' ? 'interrupted' : 'failed');
@@ -182,7 +192,7 @@ function createExportJobController(initialPorts) {
       if (!candidate.cancelRequested && payload.phase === 'running') candidate.phase = 'running';
       if (payload.phase === 'cancelling') {candidate.phase = 'cancelling'; candidate.cancelRequested = true;}
       publish(candidate);
-      if (![...candidate.requests.values()].some(pending => pending.action === 'cancel')) schedulePoll(candidate);
+      if (![...candidate.requests.values()].some(pending => !pending.expired && pending.action === 'cancel')) schedulePoll(candidate);
       return true;
     },
   };

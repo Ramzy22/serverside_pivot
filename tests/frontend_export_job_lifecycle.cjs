@@ -173,6 +173,35 @@ test('lost status response keeps polling the known job and blocks duplicate star
     } finally {h.ref.current?.dispose(); timers.restore();}
 });
 
+test('completed status arriving after the polling timeout still delivers once', async () => {
+    const timers = fakeTimers(); const h = harness();
+    const originalFetch = global.fetch, originalCreate = URL.createObjectURL;
+    global.fetch = async () => new Response('done'); URL.createObjectURL = () => 'blob:late';
+    try {
+        h.commands.exportPivot('csv'); h.respond(h.snapshot('running'));
+        h.commands.pollExportJob('job-1'); const status = h.requests.at(-1);
+        timers.run(15000);
+        h.respond(h.snapshot('completed', {rowsWritten: 8, payloadRef: {url: '/late', filename: 'late.csv'}}), status);
+        await settle();
+        assert.equal(h.state.progress.phase, 'completed');
+        assert.deepEqual(h.downloads, [['blob:late', 'late.csv']]);
+    } finally {h.ref.current?.dispose(); timers.restore(); global.fetch = originalFetch; URL.createObjectURL = originalCreate;}
+});
+
+test('replayed start can advance from running to completed under one request identity', async () => {
+    const timers = fakeTimers(); const h = harness();
+    const originalFetch = global.fetch, originalCreate = URL.createObjectURL;
+    global.fetch = async () => new Response('done'); URL.createObjectURL = () => 'blob:replay';
+    try {
+        h.commands.exportPivot('csv'); const start = h.requests.at(-1);
+        h.respond(h.snapshot('running'), start);
+        h.respond(h.snapshot('completed', {rowsWritten: 8, payloadRef: {url: '/done', filename: 'done.csv'}}), start);
+        await settle();
+        assert.equal(h.state.progress.phase, 'completed');
+        assert.deepEqual(h.downloads, [['blob:replay', 'done.csv']]);
+    } finally {h.ref.current?.dispose(); timers.restore(); global.fetch = originalFetch; URL.createObjectURL = originalCreate;}
+});
+
 test('stale completed poll cannot download while cancellation acknowledgement is pending', async () => {
     const timers = fakeTimers(); const h = harness();
     try {
