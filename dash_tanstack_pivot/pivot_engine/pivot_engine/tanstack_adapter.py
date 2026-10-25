@@ -85,6 +85,8 @@ def _is_grand_total_row(row: Any) -> bool:
 class TanStackPivotAdapter(TransactionAdapterMixin, FormulaEngineMixin):
     """Direct TanStack adapter that bypasses REST API and connects to controller"""
 
+    bounded_pivot_export_capable = True
+
     def __init__(self, controller: ScalablePivotController, debug: bool = False):
         self.controller = controller
         self.edit_domain = EditDomainService()

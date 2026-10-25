@@ -240,7 +240,7 @@ class RuntimeRequestRouter:
                 bounded_flat_part = (isinstance(adapter, TanStackPivotAdapter) and not state.col_fields
                                      and (not state.row_fields or state.layout_mode == "tabular" and not state.show_subtotals))
                 if export_lease is not None and (export_all_rows or bounded_flat_part):
-                    if export_all_rows and state.col_fields and isinstance(adapter, TanStackPivotAdapter):
+                    if export_all_rows and state.col_fields and getattr(adapter, "bounded_pivot_export_capable", False) is True:
                         payload = await self._execute_bounded_pivot_export(
                             adapter, export_request, state, export_context, export_lease)
                     else:

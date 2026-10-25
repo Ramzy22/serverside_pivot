@@ -723,7 +723,8 @@ def test_unsupported_hierarchical_all_rows_rejects_before_adapter_execution(tmp_
         payloads.clear()
 
 
-def test_real_pivot_xlsx_export_job_pages_all_rows_with_group_headers(tmp_path, monkeypatch):
+@pytest.mark.parametrize("wrapped", [False, True])
+def test_real_pivot_xlsx_export_job_pages_all_rows_with_group_headers(tmp_path, monkeypatch, wrapped):
     import pyarrow as pa
     from openpyxl import load_workbook
     from pivot_engine import create_tanstack_adapter
@@ -740,8 +741,15 @@ def test_real_pivot_xlsx_export_job_pages_all_rows_with_group_headers(tmp_path, 
         windows.append((start, end))
         return await original_window(request, start, end, *args, **kwargs)
     monkeypatch.setattr(adapter, "handle_virtual_scroll_request", checked_window)
+    class DelegatingAdapter:
+        def __init__(self, target):
+            self.target = target
+        def __getattr__(self, name):
+            return getattr(self.target, name)
+
     runner, store, payloads, _, _, context, job = setup_runner(
-        tmp_path, adapter, governor=adapter.controller.resource_governor)
+        tmp_path, DelegatingAdapter(adapter) if wrapped else adapter,
+        governor=adapter.controller.resource_governor)
     state = PivotViewState(
         row_fields=["region"], col_fields=["period"],
         val_configs=[{"field": "sales", "agg": "sum"}, {"field": "sales", "agg": "count"}],
