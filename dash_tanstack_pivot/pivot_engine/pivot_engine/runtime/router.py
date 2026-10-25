@@ -912,6 +912,7 @@ class RuntimeRequestRouter:
             offset = 0
             total_rows = None
             revision = None
+            grand_total_row = None
             while total_rows is None or offset < total_rows:
                 if control:
                     control.checkpoint()
@@ -935,26 +936,34 @@ class RuntimeRequestRouter:
                     total_rows = max(int(response.total_rows or 0), 0)
                     self.export_service.limits.ensure_rows(total_rows)
                 rows = list(response.data or [])
-                if len(rows) > page_rows or (offset < total_rows and not rows):
+                regular_rows = []
+                for row in rows:
+                    if row.get("_isTotal") or row.get("_id") == "Grand Total" or row.get("_path") == "__grand_total__":
+                        grand_total_row = row
+                    else:
+                        regular_rows.append(row)
+                if len(regular_rows) > page_rows or (offset < total_rows and not rows):
                     raise ResourceExhaustedError(ResourceKind.EXPORT, reason="bounded_export_rows")
+                response.data = regular_rows
                 yield response
-                offset += len(rows)
-                if not rows:
+                offset += len(regular_rows)
+                if not regular_rows:
                     break
 
             if state.show_col_totals and total_rows:
-                total_response = await adapter.handle_virtual_scroll_request(
-                    request, 0, 0, [["__ALL__"]], user=context.principal,
-                    row_scope=context.row_scope, col_start=0, col_end=max_center_cols - 1,
-                    needs_col_schema=True, include_grand_total=True,
-                    _allow_prefetch=False,
-                )
-                if (total_response.layout_revision or (total_response.col_schema or {}).get("layoutRevision")) != revision:
-                    raise ResourceExhaustedError(ResourceKind.EXPORT, reason="export_layout_changed")
-                total_response.data = [row for row in total_response.data or []
-                                       if row.get("_isTotal") or row.get("_id") == "Grand Total"]
-                if total_response.data:
-                    yield total_response
+                if grand_total_row is None:
+                    total_response = await adapter.handle_virtual_scroll_request(
+                        request, 0, 0, [["__ALL__"]], user=context.principal,
+                        row_scope=context.row_scope, col_start=0, col_end=max_center_cols - 1,
+                        needs_col_schema=True, include_grand_total=True,
+                        _allow_prefetch=False,
+                    )
+                    if (total_response.layout_revision or (total_response.col_schema or {}).get("layoutRevision")) != revision:
+                        raise ResourceExhaustedError(ResourceKind.EXPORT, reason="export_layout_changed")
+                    grand_total_row = next((row for row in total_response.data or []
+                                            if row.get("_isTotal") or row.get("_id") == "Grand Total"), None)
+                if grand_total_row is not None:
+                    yield TanStackResponse(data=[grand_total_row], columns=[])
 
         return await self.export_service.build_paged_export(pages(), state, state.export_request)
 

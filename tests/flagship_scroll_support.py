@@ -388,12 +388,33 @@ def qualify_custom_pivot_order(host: str) -> None:
         sheet = workbook.active
         workbook_rows = list(sheet.values)
         assert sheet.merged_cells.ranges, "Pivot group headers were not merged in XLSX"
-        assert any("P00" in str(value) for row in workbook_rows[:4] for value in row)
-        assert any("R000" in row and 1 in row for row in workbook_rows)
+        assert workbook_rows[0][1] == "P00"
+        assert workbook_rows[1][1] == "Unités (Sum)"
+        assert workbook_rows[2][:4] == ("R000", 1, 0.25, 0)
+        assert workbook_rows[-1][0] == "Grand Total"
+        grand_total_count = sum(row[0] == "Grand Total" for row in workbook_rows)
         observation["workbook"] = {"file": downloaded.name, "rows": workbook_rows[:6],
+                                   "rowCount": len(workbook_rows), "grandTotalCount": grand_total_count,
                                    "mergedRanges": [str(item) for item in sheet.merged_cells.ranges]}
         workbook.close()
 
+        assert driver.execute_script("""
+          const find = root => {
+            for (const button of root.querySelectorAll('button')) {
+              if (button.textContent.trim() === 'Close') return button;
+            }
+            for (const element of root.querySelectorAll('*')) {
+              if (element.shadowRoot) {
+                const found = find(element.shadowRoot);
+                if (found) return found;
+              }
+            }
+            return null;
+          };
+          const button = find(document);
+          if (button) button.click();
+          return Boolean(button);
+        """)
         _wait_for_visible_workspace_element(driver, "[data-testid='pivot-toolbar-theme']").click()
         save_button = wait.until(lambda current: next((button for button in _workspace_elements(
             current, "button"
@@ -413,14 +434,15 @@ def qualify_custom_pivot_order(host: str) -> None:
         observation["states"].append({"phase": "restored", "width": restored_width,
                                       "pinned": restored.get_attribute("data-pinned"),
                                       "cells": _visible_cells(driver)})
+        assert grand_total_count == 1
         result.update(result="passed", actionCompleted=True, layoutRevisionVerified=True,
                       sparseWindowVerified=True, pinningVerified=True,
                       clipboardOrderVerified=True, workbookVerified=True,
                       savedLayoutVerified=True)
     except Exception as error:
         frames = traceback.extract_tb(error.__traceback__)
-        diagnostic = f"{type(error).__name__} at " + " -> ".join(
-            f"{Path(frame.filename).name}:{frame.lineno}" for frame in frames[-4:]
+        diagnostic = f"{type(error).__name__}: {str(error)[:300]} at " + " -> ".join(
+            f"{Path(frame.filename).name}:{frame.lineno}" for frame in (frames[:1] + frames[-4:])
         )
     finally:
         paths = []

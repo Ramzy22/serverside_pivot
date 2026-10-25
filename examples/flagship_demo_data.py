@@ -346,6 +346,7 @@ def workspace_config(host: str) -> dict[str, Any]:
         }
         if _scroll_data_enabled():
             config["columnOrder"] = []
+            config["persistence"] = True
         return config
     return {
         "id": f"flagship-{host}-pivot",

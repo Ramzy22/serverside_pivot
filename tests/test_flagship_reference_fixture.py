@@ -93,6 +93,7 @@ def test_scroll_scenario_has_independent_row_and_column_windows(monkeypatch):
     assert config["rowFields"] == ["region", "account"]
     assert config["colFields"] == ["period"]
     assert config["columnOrder"] == []
+    assert config["persistence"] is True
 
 
 def test_reference_is_outside_product_distributions():

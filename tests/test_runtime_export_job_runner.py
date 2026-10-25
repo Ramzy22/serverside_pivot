@@ -724,7 +724,8 @@ def test_unsupported_hierarchical_all_rows_rejects_before_adapter_execution(tmp_
 
 
 @pytest.mark.parametrize("wrapped", [False, True])
-def test_real_pivot_xlsx_export_job_pages_all_rows_with_group_headers(tmp_path, monkeypatch, wrapped):
+@pytest.mark.parametrize("show_col_totals", [False, True])
+def test_real_pivot_xlsx_export_job_pages_all_rows_with_group_headers(tmp_path, monkeypatch, wrapped, show_col_totals):
     import pyarrow as pa
     from openpyxl import load_workbook
     from pivot_engine import create_tanstack_adapter
@@ -753,7 +754,7 @@ def test_real_pivot_xlsx_export_job_pages_all_rows_with_group_headers(tmp_path, 
     state = PivotViewState(
         row_fields=["region"], col_fields=["period"],
         val_configs=[{"field": "sales", "agg": "sum"}, {"field": "sales", "agg": "count"}],
-        show_col_totals=False, show_row_totals=False,
+        show_col_totals=show_col_totals, show_row_totals=False,
         export_request={"format": "xlsx", "allRows": True, "style": {"mergedHeaderRows": [
             [{"label": "Region", "columnIds": ["hierarchy"], "rowSpan": 2},
              {"label": "P00", "columnIds": ["P00_sales_sum", "P00_sales_count"]},
@@ -775,7 +776,8 @@ def test_real_pivot_xlsx_export_job_pages_all_rows_with_group_headers(tmp_path, 
             assert sheet.merged_cells.ranges
             rows = list(sheet.values)
             assert any("P00" in str(value) for row in rows[:3] for value in row)
-            assert len(rows) == 72
+            assert len(rows) == 72 + int(show_col_totals)
+            assert sum(row[0] == "Grand Total" for row in rows) == int(show_col_totals)
             assert any("R00" in row and 1 in row and 101 in row for row in rows)
             assert any("R69" in row and 70 in row and 170 in row for row in rows)
             assert len(windows) >= 3 and all(end - start < 32 for start, end in windows)
