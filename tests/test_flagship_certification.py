@@ -1028,7 +1028,7 @@ def test_installed_qualifier_rejects_missing_product_map_even_with_valid_referen
     coverage = json.loads((private / "product-browser-coverage.json").read_text())
     assert coverage["scope"] == "complete-installed-release"
     assert coverage["missingImplementations"]
-    assert coverage["selectedCaseCount"] == 54
+    assert coverage["selectedCaseCount"] == 57
     if product_damage == "all-authored":
         assert coverage["missingJUnitCases"] == []
         assert coverage["unexpectedJUnitCases"] == []
@@ -1039,7 +1039,7 @@ def test_installed_qualifier_runs_managed_reference_and_binds_current_raw_observ
     assert events == ["start", "browser", "stop"]
     assert (private / "ag_grid-case-results.json").is_file()
     assert "case_envelope_invalid" not in report["systemIssues"]["ag_grid"]
-    assert report["junit"]["ag_grid"] == {"tests": 67, "skipped": 0, "failures": 0, "errors": 0}
+    assert report["junit"]["ag_grid"] == {"tests": 68, "skipped": 0, "failures": 0, "errors": 0}
 
 
 @pytest.mark.parametrize("coordinator_mismatch", [False, True])
@@ -1137,7 +1137,7 @@ def test_installed_qualifier_rejects_reference_fixture_drift_before_launch(tmp_p
 def test_installed_qualifier_retains_complete_failed_reference_observations(tmp_path, monkeypatch, damage, status, issue):
     events, report, private = _managed_reference_qualification(tmp_path, monkeypatch, damage=damage)
     envelope = json.loads((private / "ag_grid-case-results.json").read_text())
-    assert len(envelope["results"]) == 67
+    assert len(envelope["results"]) == 68
     assert {case["result"] for case in envelope["results"]} == {status}
     assert events == ["start", "browser", "stop"]
     assert report["parityResult"] == "failed"

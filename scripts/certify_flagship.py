@@ -964,6 +964,7 @@ PRODUCT_BROWSER_JOURNEYS = {
        for name in ("hierarchy-expand.round-trip", "hierarchy-expand-all.round-trip")},
     **{f"browser.{name}": f"test_flagship_virtual_scroll[{name}-{{host}}]"
        for name in ("vertical-virtual-scroll.window", "horizontal-virtual-scroll.window")},
+    "browser.custom-pivot-order.sparse-window": "test_flagship_custom_pivot_order[{host}]",
     **{f"browser.{name}": f"test_flagship_column_geometry[{name}-{{host}}]"
        for name in ("column-sizing.resize", "column-sizing.auto-size", "column-pinning.round-trip")},
     **{f"browser.{name}": f"test_flagship_export_jobs[{name}-{{host}}]"
@@ -974,7 +975,7 @@ PRODUCT_BROWSER_JOURNEYS = {
 def _product_phase(node: str) -> str:
     if "::test_flagship_export_jobs[" in node:
         return "exports"
-    if "::test_flagship_virtual_scroll[" in node:
+    if "::test_flagship_virtual_scroll[" in node or "::test_flagship_custom_pivot_order[" in node:
         return "scroll"
     return "parity"
 
