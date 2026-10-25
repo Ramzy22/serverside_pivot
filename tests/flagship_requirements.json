@@ -383,14 +383,15 @@
       "ag_grid": {
         "reference": "ssrm-read-only-v1",
         "docs": [
-          "https://www.ag-grid.com/javascript-data-grid/column-moving/"
+          "https://www.ag-grid.com/javascript-data-grid/column-moving/",
+          "https://www.ag-grid.com/javascript-data-grid/server-side-model-pivoting/"
         ],
-        "behavior": "The reference permits moving pivot columns through the column API; this specific wide SSRM journey has not been observed against the pinned reference fixture.",
+        "behavior": "Observed on AG Grid Enterprise 36.2.0 with SSRM and the pinned wide fixture: moveColumns placed the P00 result group before P23; R000 retained the expected formatted value, and the datasource was not called again because all 75 result columns arrived initially.",
         "test_id": "ag-grid.custom-pivot-order.sparse-window",
         "result": "unverified"
       },
       "product_behavior": "The server resolves stable path-and-measure identities, keeps pivot groups contiguous, and maps the reordered display window to the correct sparse cells.",
-      "difference": "unverified",
+      "difference": "deliberately_different",
       "constraints": [
         "Whole pivot groups move across the center; leaves may reorder within their group, and row totals remain last.",
         "A worker that lacks a layout token requests the bounded manifest and retries silently.",

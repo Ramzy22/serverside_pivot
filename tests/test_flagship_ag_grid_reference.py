@@ -492,6 +492,45 @@ def test_reference_horizontal_scroll_renders_last_measure_and_restores_first(ref
         case.observed = "Wide fixture: last Total/écart and first P23/sales rendered with exact values and pinned R000 label; SSRM supplied all 75 columns in its initial response"
 
 
+def test_reference_custom_pivot_order_moves_remote_group_without_refetch(reference_run):
+    """Observe the pinned SSRM reference's actual pivot group move semantics."""
+    with reference_case("custom-pivot-order.sparse-window", reference_run) as case:
+        driver = case.driver
+        _open_scroll_reference(driver)
+        driver.set_window_size(1000, 800)
+        initial_trace = driver.execute_script("return window.referenceEvidence.trace()")
+        fields = initial_trace[0]["response"]["pivotResultFields"]
+        group = [field for field in fields if field.startswith("P00|")]
+        assert len(group) == 3
+        before = driver.execute_script("""
+          return window.referenceGrid.getAllDisplayedColumns().map(column => ({
+            id: column.getColId(), pinned: column.getPinned()
+          }));
+        """)
+        assert before[0]["pinned"] == "left"
+        assert before[1]["id"].startswith("P23|")
+        driver.execute_script("window.referenceGrid.moveColumns(arguments[0], 1)", group)
+
+        def moved(browser):
+            order = browser.execute_script("""
+              return window.referenceGrid.getAllDisplayedColumns().map(column => column.getColId());
+            """)
+            cells = browser.execute_script("return window.referenceEvidence.visibleCells()")
+            return (order, cells) if order[1:4] == group and any(
+                cell["rowIndex"] == "0" and cell["colId"] == group[1]
+                for cell in cells
+            ) else False
+
+        order, cells = WebDriverWait(driver, 10).until(moved)
+        raw = initial_trace[0]["response"]["rowData"][0][group[1]]
+        _assert_cells(cells, {("0", group[1]): f"{raw:.2f}",
+                              ("0", "ag-Grid-AutoColumn"): "R000"})
+        assert driver.execute_script("return window.referenceEvidence.trace()") == initial_trace
+        case.parsed_output = {"before": before, "after": order, "cells": cells,
+                              "movedGroup": group, "rawValue": raw}
+        case.observed = "AG Grid 36.2 SSRM moved the full P00 pivot group to the first center slot without a datasource refetch; R000 retained the matching formatted value"
+
+
 def test_reference_vertical_scroll_requests_later_block_and_restores_first(reference_run):
     """A later SSRM block must produce the visible R119 row exactly once."""
     with reference_case("vertical-virtual-scroll.window", reference_run) as case:
