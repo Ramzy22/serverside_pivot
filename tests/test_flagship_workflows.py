@@ -532,6 +532,7 @@ def installed_workflow_hosts():
         ArtifactBinding, _create_python_environment, build_artifacts,
         cleanup_python_environment, start_installed_hosts,
     )
+    from scripts.flagship_manifest import read_committed_contract
 
     root = Path(__file__).resolve().parents[1]
     evidence = Path(tempfile.mkdtemp(prefix="pf-workflow-"))
@@ -560,6 +561,7 @@ def installed_workflow_hosts():
         wheelhouse = os.environ.get("PIVOT_FLAGSHIP_BUILD_WHEELHOUSE")
         binding = build_artifacts(root, evidence / "release-artifacts",
                                   build_wheelhouse=Path(wheelhouse) if wheelhouse else None)
+    binding.sha256["contract"] = hashlib.sha256(read_committed_contract(binding)).hexdigest()
     run_id = uuid4().hex
     selected = {
         "PIVOT_FLAGSHIP_ARTIFACT_BINDING": str(evidence / "artifact-binding.json"),
@@ -703,6 +705,37 @@ def test_record_case_is_bound_and_drops_raw_observations(tmp_path, monkeypatch):
     assert record["source_commit"] == "a" * 40
     assert record["run_id"] == "workflow-test"
     assert json.loads(record["observed"])["visibleError"] is False
+
+
+def test_passing_record_requires_observed_asset_digests(tmp_path, monkeypatch):
+    from tests.flagship_browser_support import record_case
+
+    binding_file = tmp_path / "binding.json"
+    binding_file.write_text(json.dumps({
+        "runId": "bound-run", "sourceCommit": "a" * 40,
+        "sha256": {"contract": "c" * 64},
+    }), encoding="utf-8")
+    monkeypatch.setenv("PIVOT_FLAGSHIP_ARTIFACT_BINDING", str(binding_file))
+    monkeypatch.setenv("PIVOT_FLAGSHIP_CASE_RESULTS", str(tmp_path / "results.json"))
+    monkeypatch.setenv("PIVOT_FLAGSHIP_RUN_ID", "bound-run")
+    directory = tmp_path / "private" / "runs" / "bound-run" / "dash"
+    directory.mkdir(parents=True)
+    observation = directory / "observation.json"
+    observation.write_text(json.dumps({"diagnostic": ""}), encoding="utf-8")
+    case = {"result": "passed", "browser": "chrome 155", "evidence_paths": [str(observation)],
+            "loadedAssetSha256": {"/entry.js": "d" * 64}}
+    missing_contract = json.loads(binding_file.read_text(encoding="utf-8"))
+    del missing_contract["sha256"]["contract"]
+    binding_file.write_text(json.dumps(missing_contract), encoding="utf-8")
+    with pytest.raises(ValueError, match="committed contract hash"):
+        record_case("custom-pivot-order.sparse-window", "dash", case, directory)
+    missing_contract["sha256"]["contract"] = "c" * 64
+    binding_file.write_text(json.dumps(missing_contract), encoding="utf-8")
+    with pytest.raises(ValueError, match="observation-level loaded asset"):
+        record_case("custom-pivot-order.sparse-window", "dash", case, directory)
+    observation.write_text(json.dumps({"diagnostic": "", "loadedAssetSha256": case["loadedAssetSha256"]}), encoding="utf-8")
+    record_case("custom-pivot-order.sparse-window", "dash", case, directory)
+    assert json.loads((tmp_path / "results.json").read_text())["results"][0]["result"] == "passed"
 
 
 def test_record_case_cannot_pass_without_browser_asset_evidence(tmp_path):

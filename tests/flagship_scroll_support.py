@@ -242,6 +242,7 @@ def qualify_virtual_scroll(host: str, requirement: str) -> None:
                                              for item in driver.get_log("browser")]
                 _network(driver)
                 result["loadedAssetSha256"] = dict(driver._pivot_loaded_assets)
+                observation["loadedAssetSha256"] = dict(driver._pivot_loaded_assets)
             finally:
                 driver.quit()
         evidence = directory / "observation.json"
@@ -459,6 +460,7 @@ def qualify_custom_pivot_order(host: str) -> None:
                                              for item in driver.get_log("browser")]
                 _network(driver)
                 result["loadedAssetSha256"] = dict(driver._pivot_loaded_assets)
+                observation["loadedAssetSha256"] = dict(driver._pivot_loaded_assets)
             finally:
                 driver.quit()
         evidence = directory / "observation.json"

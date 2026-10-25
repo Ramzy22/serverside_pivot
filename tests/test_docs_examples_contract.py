@@ -248,24 +248,32 @@ def test_exact_cdc_operations_documentation_declares_safety_and_performance_cont
         assert required in text
 
 
-def test_release_gates_publish_on_export_qualification_and_always_uploads_evidence():
+def test_release_gates_publish_on_complete_installed_qualification_and_uploads_evidence():
     workflow = (REPO_ROOT / ".github" / "workflows" / "release.yml").read_text(encoding="utf-8")
-    qualification = workflow.index("python scripts/certify_flagship.py --export-qualification")
+    qualification = workflow.index("python scripts/certify_flagship.py --installed-release")
     publish = workflow.index("- name: Publish to PyPI")
     assert qualification < publish
-    assert "selenium" in workflow[:qualification]
-    assert "python -m build --wheel" in workflow[:qualification]
+    assert 'dash_tanstack_pivot[dev,api,redis,streamlit,security]' in workflow[:qualification]
     qualification_command = workflow[qualification:workflow.index("\n", qualification)]
-    assert "--skip-build" in qualification_command
-    assert "--wheel" in qualification_command
-    assert "--artifact-dir \"$PIVOT_EXPORT_PUBLICATION_DIR\"" in qualification_command
-    assert "PIVOT_EXPORT_PUBLICATION_DIR=\"$RUNNER_TEMP/export-qualification-publication-" in workflow[:qualification]
+    assert "--cancellable-exports" not in qualification_command
+    assert "--artifact-dir \"$PIVOT_RELEASE_QUALIFICATION_DIR\"" in qualification_command
+    assert "PIVOT_RELEASE_QUALIFICATION_DIR=\"$RUNNER_TEMP/installed-release-qualification-" in workflow[:qualification]
     assert ">> \"$GITHUB_ENV\"" in workflow[:qualification]
-    upload = workflow.index("name: release-export-qualification-evidence")
+    upload = workflow.index("name: release-installed-qualification-evidence")
     upload_block = workflow[upload:publish]
     assert "if: always()" in upload_block
-    assert "path: ${{ env.PIVOT_EXPORT_PUBLICATION_DIR }}/" in upload_block
-    assert "artifacts/export-qualification" not in upload_block
+    assert "path: ${{ env.PIVOT_RELEASE_QUALIFICATION_DIR }}/" in upload_block
+    assert "--export-qualification" not in workflow[:publish]
+
+
+def test_dev_extra_declares_direct_python_test_dependencies():
+    import tomllib
+
+    project = tomllib.loads((REPO_ROOT / "dash_tanstack_pivot" / "pyproject.toml").read_text(encoding="utf-8"))
+    dependencies = "\n".join(project["project"]["optional-dependencies"]["dev"]).lower()
+    for name in ("pytest", "pytest-asyncio", "httpx", "fakeredis[lua]", "selenium",
+                 "openpyxl", "requests", "packaging", "flask", "werkzeug", "starlette", "tomli"):
+        assert name in dependencies
 
 
 def test_export_operations_documentation_names_formats_limits_and_release_command():

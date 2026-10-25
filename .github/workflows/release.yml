@@ -29,14 +29,13 @@ jobs:
 
       - name: Install dependencies
         run: |
-          python -m pip install --upgrade pip "setuptools<71" duckdb pyarrow "ibis-framework[duckdb]" pandas dash pytest selenium tomli redis jsonschema "python-jose[cryptography]" build twine
-          python -m pip install -r security/requirements-security.txt
+          python -m pip install --upgrade pip "setuptools<71" build twine
 
       - name: Add pivot-engine to PYTHONPATH
         run: echo "PYTHONPATH=$PYTHONPATH:${{ github.workspace }}/dash_tanstack_pivot/pivot_engine" >> $GITHUB_ENV
 
       - name: Install serverside-pivot (editable)
-        run: pip install -e dash_tanstack_pivot/
+        run: python -m pip install -e "dash_tanstack_pivot[dev,api,redis,streamlit,security]"
 
       - name: Install frontend dependencies
         run: npm ci
@@ -52,31 +51,24 @@ jobs:
           python scripts/ci/verify_bundle_contract.py
           python scripts/ci/verify_host_build_contract.py --package-dir dash_tanstack_pivot
 
-      - name: Build export qualification wheel
-        run: python -m build --wheel --outdir "$RUNNER_TEMP/export-qualification-wheel" dash_tanstack_pivot/
-
-      - name: Gate release on flagship export qualification
+      - name: Gate release on complete installed qualification
         run: |
-          WHEEL="$(find "$RUNNER_TEMP/export-qualification-wheel" -maxdepth 1 -name '*.whl' -print -quit)"
-          test -n "$WHEEL"
-          PIVOT_EXPORT_PUBLICATION_DIR="$RUNNER_TEMP/export-qualification-publication-$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT-$GITHUB_JOB"
-          echo "PIVOT_EXPORT_PUBLICATION_DIR=$PIVOT_EXPORT_PUBLICATION_DIR" >> "$GITHUB_ENV"
-          python scripts/certify_flagship.py --export-qualification --skip-build --wheel "$WHEEL" --artifact-dir "$PIVOT_EXPORT_PUBLICATION_DIR"
+          PIVOT_RELEASE_QUALIFICATION_DIR="$RUNNER_TEMP/installed-release-qualification-$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT-$GITHUB_JOB"
+          echo "PIVOT_RELEASE_QUALIFICATION_DIR=$PIVOT_RELEASE_QUALIFICATION_DIR" >> "$GITHUB_ENV"
+          python scripts/certify_flagship.py --installed-release --artifact-dir "$PIVOT_RELEASE_QUALIFICATION_DIR"
 
-      - name: Upload flagship export qualification evidence
+      - name: Upload complete installed qualification evidence
         if: always()
         uses: actions/upload-artifact@65462800fd760344b1a7b4382951275a0abb4808 # v4.3.3
         with:
-          name: release-export-qualification-evidence
-          path: ${{ env.PIVOT_EXPORT_PUBLICATION_DIR }}/
+          name: release-installed-qualification-evidence
+          path: ${{ env.PIVOT_RELEASE_QUALIFICATION_DIR }}/
           if-no-files-found: error
 
       - name: Pack and verify standalone React package
         run: |
           mkdir -p "$RUNNER_TEMP/serverside-pivot-npm"
-          cd dash_tanstack_pivot
-          npm pack --json --pack-destination "$RUNNER_TEMP/serverside-pivot-npm"
-          cd ..
+          cp "$PIVOT_RELEASE_QUALIFICATION_DIR"/release-artifacts/*.tgz "$RUNNER_TEMP/serverside-pivot-npm/"
           python scripts/ci/verify_npm_package_contract.py "$RUNNER_TEMP/serverside-pivot-npm"/*.tgz
 
       - name: Validate tag/version parity
@@ -156,8 +148,10 @@ jobs:
           test -f "$PIVOT_RELEASE_EVIDENCE_PATH"
           python scripts/verify_security_release_evidence.py --matrix security/certification-matrix.json --evidence "$PIVOT_RELEASE_EVIDENCE_PATH" --repository-root . --expected-tag "${GITHUB_REF_NAME}" --expected-commit "${GITHUB_SHA}" --expected-environment "$PIVOT_RELEASE_ENVIRONMENT" --expected-deployment-origin "$PIVOT_RELEASE_DEPLOYMENT_ORIGIN"
 
-      - name: Build distribution
-        run: python -m build dash_tanstack_pivot/
+      - name: Stage qualified distribution
+        run: |
+          mkdir -p dash_tanstack_pivot/dist
+          cp "$PIVOT_RELEASE_QUALIFICATION_DIR"/release-artifacts/wheels/*.whl dash_tanstack_pivot/dist/
 
       - name: Validate artifacts with twine check
         run: twine check dash_tanstack_pivot/dist/*

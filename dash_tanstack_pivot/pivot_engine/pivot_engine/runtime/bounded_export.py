@@ -10,7 +10,8 @@ import asyncio
 import csv
 import html
 import os
-import pickle
+# The only deserialization source below is this worker's anonymous spool.
+import pickle  # nosec B403
 import tempfile
 import threading
 from contextvars import ContextVar
@@ -98,7 +99,10 @@ class _DiskExportRows:
     def __iter__(self) -> Iterator[Dict[str, Any]]:
         self.stream.seek(0)
         for _ in range(self.count):
-            yield pickle.load(self.stream)
+            # The stream is the TemporaryFile opened by build_paged_export in
+            # this worker and contains only rows it wrote during this call.
+            # No token, path, upload, or Redis value can replace its handle.
+            yield pickle.load(self.stream)  # nosec B301
 
 
 class ExportFormatting(Protocol):

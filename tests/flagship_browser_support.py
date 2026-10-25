@@ -1167,7 +1167,8 @@ def qualify_column_geometry(host: str, requirement: str) -> None:
                 diagnostic += f"; evidence collection: {type(error).__name__}"
             finally:
                 driver.quit()
-        observation.update(diagnostic=diagnostic, result={k: v for k, v in result.items() if k != "loadedAssetSha256"})
+        observation.update(diagnostic=diagnostic, loadedAssetSha256=dict(result.get("loadedAssetSha256", {})),
+                           result={k: v for k, v in result.items() if k != "loadedAssetSha256"})
         evidence = directory / "observation.json"
         evidence.write_text(json.dumps(observation, ensure_ascii=False, indent=2), encoding="utf-8")
         paths.append(str(evidence))
@@ -1218,6 +1219,10 @@ def record_case(requirement_id: str, host: str, observed: Mapping[str, object], 
     if not binding_path:
         raise ValueError("Installed artifact binding is required for workflow evidence")
     binding = json.loads(Path(binding_path).read_text(encoding="utf-8"))
+    contract_hash = binding.get("sha256", {}).get("contract")
+    if observed.get("result") == "passed" and (not isinstance(contract_hash, str)
+            or re.fullmatch(r"[0-9a-f]{64}", contract_hash) is None):
+        raise ValueError("Passing workflow requires committed contract hash")
     run_id = os.environ.get("PIVOT_FLAGSHIP_RUN_ID")
     if not run_id or binding.get("runId") != run_id:
         raise ValueError("Workflow evidence run binding does not match")
@@ -1230,6 +1235,12 @@ def record_case(requirement_id: str, host: str, observed: Mapping[str, object], 
     browser = observed.get("browser", "unavailable")
     if result == "passed" and (not paths or not assets or browser == "unavailable"):
         raise ValueError("Passing workflow requires browser and loaded asset evidence")
+    if result == "passed":
+        observations = [json.loads(Path(path).read_text(encoding="utf-8"))
+                        for path in paths if Path(path).suffix == ".json"]
+        if not any(isinstance(item, dict) and item.get("loadedAssetSha256") == assets
+                   for item in observations):
+            raise ValueError("Passing workflow requires observation-level loaded asset digests")
     safe = {key: value for key, value in observed.items()
             if key in _SAFE_OBSERVATIONS and type(value) in (bool, int)}
     record = BoundCaseResult(
@@ -2070,7 +2081,8 @@ def qualify_hierarchy_navigation(host: str, requirement: str) -> None:
                 diagnostic += f"; evidence collection: {type(error).__name__}"
             finally:
                 driver.quit()
-        observation.update(diagnostic=diagnostic, result={k: v for k, v in result.items() if k != "loadedAssetSha256"})
+        observation.update(diagnostic=diagnostic, loadedAssetSha256=dict(result.get("loadedAssetSha256", {})),
+                           result={k: v for k, v in result.items() if k != "loadedAssetSha256"})
         evidence = directory / "observation.json"
         evidence.write_text(json.dumps(observation, ensure_ascii=False, indent=2), encoding="utf-8")
         paths.append(str(evidence))
