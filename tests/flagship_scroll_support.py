@@ -420,8 +420,11 @@ def qualify_custom_pivot_order(host: str) -> None:
             current, "button"
         ) if button.is_displayed() and button.text.strip() == "Save View"), False))
         save_button.click()
+        # Asset IDs from the first document are no longer valid after reload.
+        # The initial load was verified above; discard its pending DevTools
+        # events before collecting the new document's assets in finally.
+        driver.get_log("performance")
         driver.refresh()
-        _switch_to_workspace(driver, host)
         scroller = _wait_for_visible_workspace_element(driver, '[data-pivot-scroll-container]')
         restored = wait.until(lambda current: (
             candidate if (candidate := _wait_for_visible_workspace_element(
@@ -430,7 +433,7 @@ def qualify_custom_pivot_order(host: str) -> None:
         ))
         restored_width = driver.execute_script("return arguments[0].getBoundingClientRect().width", restored)
         assert abs(restored_width - width_after) <= 2
-        assert _cell(_visible_cells(driver), "R000", moved, "1")
+        wait.until(lambda current: _cell(_visible_cells(current), "R000", moved, "1"))
         observation["states"].append({"phase": "restored", "width": restored_width,
                                       "pinned": restored.get_attribute("data-pinned"),
                                       "cells": _visible_cells(driver)})
@@ -451,6 +454,7 @@ def qualify_custom_pivot_order(host: str) -> None:
                 driver.save_screenshot(str(directory / "final.png"))
                 paths.append(str(directory / "final.png"))
                 observation["trace"] = driver.execute_script("return window.__pivotScrollTrace || []")
+                observation["clientDebug"] = driver.execute_script("return window.__pivotScrollDebug || []")
                 observation["browserLog"] = [{"level": item.get("level"), "message": item.get("message", "")[:500]}
                                              for item in driver.get_log("browser")]
                 _network(driver)
