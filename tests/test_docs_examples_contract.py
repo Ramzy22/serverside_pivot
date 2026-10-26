@@ -274,6 +274,8 @@ def test_dev_extra_declares_direct_python_test_dependencies():
     for name in ("pytest", "pytest-asyncio", "httpx", "fakeredis[lua]", "selenium",
                  "openpyxl", "requests", "packaging", "flask", "werkzeug", "starlette", "tomli"):
         assert name in dependencies
+    ci = (REPO_ROOT / ".github" / "workflows" / "ci.yml").read_text(encoding="utf-8")
+    assert 'dash_tanstack_pivot[dev,api,redis,streamlit]' in ci
 
 
 def test_export_operations_documentation_names_formats_limits_and_release_command():
