@@ -311,6 +311,7 @@ def test_initial_workspace_oracle_requires_all_fixture_measures():
          "q1_variance": -8.25, "q2_variance": 1.5, "total_variance": -6.75},
     ]
     assert initial_workspace_rows_match(rows)
+    assert initial_workspace_rows_match([{"path": "__color_scale_stats__"}, *rows])
     assert not initial_workspace_rows_match([*rows, {**rows[0], "id": "São Paulo"}])
     assert not initial_workspace_rows_match([{**rows[2], "q2_variance": 1.0}, *rows[:2]])
 

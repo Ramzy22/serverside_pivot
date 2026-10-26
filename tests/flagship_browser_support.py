@@ -1901,6 +1901,7 @@ def _navigation_dom_matches(cells, expected_children, *, decimal_places=0):
 
 def initial_workspace_rows_match(rows) -> bool:
     """Match the literal included fixture, including all three measure totals."""
+    rows = [row for row in rows if row.get("path") != "__color_scale_stats__" or row.get("id")]
     fields = ("q1", "q2", "total", "q1_units", "q2_units", "total_units",
               "q1_variance", "q2_variance", "total_variance")
     expected = {
@@ -1983,7 +1984,8 @@ def qualify_initial_workspace(host: str) -> None:
             rowid = "__grand_total__" if row["id"] == "Grand Total" else row["id"]
             for period, prefix in (("Q1", "q1"), ("Q2", "q2"), ("__RowTotal__", "total")):
                 for measure, suffix in (("ventes_€", ""), ("unités", "_units"), ("écart", "_variance")):
-                    expected[(rowid, f"{period}_{measure}_sum")] = Decimal(str(row[prefix + suffix]))
+                    separator = "" if period == "__RowTotal__" else "_"
+                    expected[(rowid, f"{period}{separator}{measure}_sum")] = Decimal(str(row[prefix + suffix]))
         seen = {}
         deadline = time.monotonic() + 25
         while time.monotonic() < deadline and set(seen) != set(expected):
