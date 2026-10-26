@@ -1440,7 +1440,7 @@ if (!window.__pivotSupersession) {
     }
     if (typeof raw !== 'object') return null;
     if (raw.schemaVersion === 1 && raw.kind === 'data' && raw.requestId != null
-        && (phase === 'request' ? !raw.status : raw.status === 'data')) return raw;
+        && (phase === 'request' ? !raw.status : Boolean(raw.status))) return raw;
     for (const value of Object.values(raw)) {
       const found = findEnvelope(value, phase, depth + 1);
       if (found) return found;
@@ -1460,13 +1460,22 @@ if (!window.__pivotSupersession) {
     trace.push({phase:'request', requestId, term, at:performance.now(), total:null});
     const init = term === 'Éclair' ? {...args[1], signal:undefined} : args[1];
     return nativeFetch(args[0], init).then(async response => {
-      const returned = findEnvelope(await response.clone().text(), 'response');
+      const responseText = await response.clone().text();
+      const returned = findEnvelope(responseText, 'response');
+      let responseJson = null;
+      try { responseJson = JSON.parse(responseText); } catch (_) {}
       const total = totalOf(returned);
+      const details = {httpStatus:response.status, envelopeStatus:returned?.status || null,
+        payloadKeys:Object.keys(returned?.payload || {}).slice(0, 12),
+        payloadRef:Boolean(returned?.payload?.payloadRef),
+        errorCode:returned?.payload?.code || responseJson?.payload?.code || null,
+        errorMessage:typeof returned?.message === 'string' ? returned.message.slice(0, 160) : null,
+        httpDetail:typeof responseJson?.detail === 'string' ? responseJson.detail.slice(0, 160) : null};
       if (term === 'Éclair' && total !== null) {
-        trace.push({phase:'ready', requestId, term, at:performance.now(), total});
+        trace.push({phase:'ready', requestId, term, at:performance.now(), total, ...details});
         await new Promise(resolve => { releaseOld = resolve; });
       }
-      trace.push({phase:'response', requestId, term, at:performance.now(), total});
+      trace.push({phase:'response', requestId, term, at:performance.now(), total, ...details});
       return response;
     });
   };
@@ -1542,7 +1551,13 @@ def qualify_superseded_response(host: str) -> None:
         search.send_keys("Éclair")
         wait.until(lambda current: any(item["phase"] == "ready" and item["term"] == "Éclair"
                                        for item in current.execute_script("return window.__pivotSupersession.trace")))
-        search.clear()
+        from selenium.webdriver.common.keys import Keys
+        search.click()
+        search.send_keys(Keys.CONTROL, "a")
+        search.send_keys(Keys.BACKSPACE)
+        wait.until(lambda current: _wait_for_visible_workspace_element(
+            current, '[data-testid="pivot-global-search"]').get_attribute("value") == "")
+        search = _wait_for_visible_workspace_element(driver, '[data-testid="pivot-global-search"]')
         search.send_keys("München")
         wait.until(lambda current: any(item["phase"] == "response" and item["term"] == "München"
                                        and item["total"] == 79.75

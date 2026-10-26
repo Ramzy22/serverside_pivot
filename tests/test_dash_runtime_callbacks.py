@@ -279,6 +279,27 @@ def _post_runtime_request(app, component_id, envelope):
     return response.json["response"][component_id]["runtimeResponse"]
 
 
+def test_dash_layout_miss_preserves_retryable_status():
+    from pivot_engine.runtime import PivotServiceResponse
+
+    class Service:
+        async def process_async(self, state, context):
+            return PivotServiceResponse(status="layout_required", message="Layout manifest required")
+
+    app = Dash(__name__)
+    app.layout = html.Div([DashTanstackPivot(id="layout-miss", table="sales")])
+    register_dash_pivot_transport_callback(app, lambda: Service(), pivot_id="layout-miss")
+    body = _post_runtime_request(app, "layout-miss", {
+        "schemaVersion": 1, "kind": "data", "requestId": "layout-1", "table": "sales",
+        "sessionId": "session-a", "clientInstance": "tab-a", "stateEpoch": 3, "windowSeq": 7,
+        "payload": {"intent": "viewport", "start": 0, "end": 10, "layoutRevision": "a" * 64},
+    })
+    assert body["kind"] == "data"
+    assert body["status"] == "layout_required"
+    assert body["requestId"] == "layout-1"
+    assert body["message"] == "Layout manifest required"
+
+
 @pytest.mark.parametrize("retry_after_ms, expected_retry", [(1501, 1501), (0, 1), (90000, 60000)])
 @pytest.mark.parametrize("request_kind", ["data", "export", "filter_options"])
 def test_dash_overload_returns_safe_retryable_v1_error(retry_after_ms, expected_retry, request_kind):

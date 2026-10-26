@@ -1606,6 +1606,23 @@ def register_dash_pivot_transport_callback(
                 ),
             )
 
+        if result.status == "layout_required":
+            return _response_tuple(
+                _build_runtime_response(
+                    kind=request_kind,
+                    request_id=request_id,
+                    status="layout_required",
+                    payload={},
+                    table=resolved_table,
+                    session_id=context.session_id,
+                    client_instance=context.client_instance,
+                    state_epoch=context.state_epoch,
+                    window_seq=context.window_seq,
+                    message=result.message,
+                    profile=merged_profile,
+                ),
+            )
+
         if result.status == "drillthrough":
             return _response_tuple(
                 _build_runtime_response(
