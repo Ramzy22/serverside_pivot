@@ -1553,12 +1553,16 @@ def qualify_superseded_response(host: str) -> None:
                                        for item in current.execute_script("return window.__pivotSupersession.trace")))
         from selenium.webdriver.common.keys import Keys
         search.click()
-        search.send_keys(Keys.CONTROL, "a")
-        search.send_keys(Keys.BACKSPACE)
+        search.send_keys(Keys.CONTROL, "a", Keys.BACKSPACE)
         wait.until(lambda current: _wait_for_visible_workspace_element(
             current, '[data-testid="pivot-global-search"]').get_attribute("value") == "")
         search = _wait_for_visible_workspace_element(driver, '[data-testid="pivot-global-search"]')
         search.send_keys("München")
+        search_state = driver.execute_script("""
+            const input = arguments[0];
+            return {value: input.value, focused: input.getRootNode().activeElement === input,
+                    selectionStart: input.selectionStart, selectionEnd: input.selectionEnd};
+        """, search)
         wait.until(lambda current: any(item["phase"] == "response" and item["term"] == "München"
                                        and item["total"] == 79.75
                                        for item in current.execute_script("return window.__pivotSupersession.trace")))
@@ -1593,6 +1597,7 @@ def qualify_superseded_response(host: str) -> None:
                 driver.quit()
         evidence = directory / "observation.json"
         evidence.write_text(json.dumps({"diagnostic": diagnostic, "trace": trace,
+                                        "searchStateAfterReplacement": locals().get("search_state"),
                                         "postReleaseSamples": locals().get("samples", []),
                                         "newerVisibleCells": locals().get("newer_cells", []),
                                         "loadedAssetSha256": result.get("loadedAssetSha256", {}),
@@ -2003,7 +2008,9 @@ def qualify_global_filter(host: str) -> None:
 
         search = _wait_for_visible_workspace_element(driver, '[data-testid="pivot-global-search"]')
         cleared_at = driver.execute_script("return performance.now()")
-        search.clear()
+        from selenium.webdriver.common.keys import Keys
+        search.click()
+        search.send_keys(Keys.CONTROL, "a", Keys.BACKSPACE)
         wait.until(lambda current: _wait_for_visible_workspace_element(
             current, '[data-testid="pivot-global-search"]').get_attribute("value") == ""
                    and {label for _, label in _navigation_rows(current)} == {"Éclair", "München", "Grand Total"}
