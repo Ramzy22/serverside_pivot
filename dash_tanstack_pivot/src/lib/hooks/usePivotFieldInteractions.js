@@ -483,7 +483,13 @@ export function usePivotFieldInteractions() {
         const baseOrder = context.mergeColumnOrderWithIds(context.columnOrder, context.availableColumnOrderIds);
         const nextOrder = context.moveColumnIdByDelta(baseOrder, columnId, direction);
         const moved = !context.areStringArraysEqual(baseOrder, nextOrder);
-        if (moved) context.setColumnOrderWithHistory(nextOrder, 'layout:header-keyboard-reorder');
+        if (moved) context.setColumnOrderWithHistory(previousOrder => {
+            // A second key can arrive before this render's context ref has
+            // received the first move. Resolve against the setter's latest
+            // state so rapid keyboard moves compose in order.
+            const latestOrder = context.mergeColumnOrderWithIds(previousOrder, context.availableColumnOrderIds);
+            return context.moveColumnIdByDelta(latestOrder, columnId, direction);
+        }, 'layout:header-keyboard-reorder');
         if (moved && typeof context.setAnnouncement === 'function' && typeof context.getLocaleText === 'function') {
             context.setAnnouncement(context.getLocaleText('columnMovedByKeyboardAnnouncement', '{label} moved {direction}.', {
                 label: context.formatDisplayLabel(columnId),

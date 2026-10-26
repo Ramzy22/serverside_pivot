@@ -451,7 +451,17 @@ def _reorder_selection_column(driver, column, direction, first, second, observat
     order_before = _selection_column_order(driver)
     header = _wait_for_visible_workspace_element(driver, f'[role="columnheader"][data-header-column-id="{column}"]')
     # Element key input focuses this tabIndex=0 header without a sorting click.
+    driver.execute_script("""
+      const header = arguments[0];
+      window.__pivotHeaderMoveKeys = window.__pivotHeaderMoveKeys || [];
+      header.addEventListener('keydown', event => {
+        if (event.key === 'ArrowLeft' || event.key === 'ArrowRight')
+          window.__pivotHeaderMoveKeys.push({column: header.getAttribute('data-header-column-id'),
+            key: event.key, ctrl: event.ctrlKey, trusted: event.isTrusted, at: performance.now()});
+      }, true);
+    """, header)
     header.send_keys(Keys.CONTROL + direction + Keys.NULL)
+    observation["headerMoveKeys"] = driver.execute_script("return window.__pivotHeaderMoveKeys || []")
     WebDriverWait(driver, 8).until(lambda current: (
         (order := _selection_column_order(current)) != order_before
         and first in order and second in order and order.index(first) < order.index(second)
@@ -851,6 +861,7 @@ def qualify_selected_clipboard(host: str, requirement: str) -> None:
                 observation["loadedAssetSha256"] = dict(driver._pivot_loaded_assets)
                 observation["finalSelectedIds"] = _selection_ids(driver)
                 observation["finalVisibleRows"] = [cell.text for cell in _workspace_elements(driver, '[data-colid="hierarchy"]') if cell.is_displayed()]
+                observation["finalDisplayedColumnIds"] = _selection_column_order(driver)
                 screenshot = directory / "final.png"
                 driver.save_screenshot(str(screenshot))
                 paths.append(str(screenshot))
@@ -1145,11 +1156,12 @@ def qualify_column_geometry(host: str, requirement: str) -> None:
             _geometry_pin_submenu(driver, "left")
             _selection_menu(driver, "Unpin").click()
             observation["actions"].append("context menu Pin > Unpin")
-            wait.until(lambda current: _geometry_snapshot(current, sales)["pinnedLeft"] == [])
+            geometry_wait = WebDriverWait(driver, 12, ignored_exceptions=(AssertionError,))
+            geometry_wait.until(lambda current: _geometry_snapshot(current, sales)["pinnedLeft"] == [])
             ActionChains(driver).scroll_from_origin(ScrollOrigin.from_element(scroller), -10000, 0).perform()
             observation["actions"].append("trusted horizontal scroll back to the initial position")
             wait.until(lambda current: current.execute_script("return arguments[0].scrollLeft", scroller) <= 2)
-            wait.until(lambda current: _geometry_snapshot(current, sales)["order"] == before["order"])
+            geometry_wait.until(lambda current: _geometry_snapshot(current, sales)["order"] == before["order"])
             restored = _geometry_snapshot(driver, sales)
             observation["states"].append({"phase": "unpinned", **restored})
             assert_pin_round_trip(before, pinned, scrolled, end, restored, sales)
@@ -2332,7 +2344,8 @@ def qualify_hierarchy_navigation(host: str, requirement: str) -> None:
             rows = _navigation_rows(current)
             labels = [label for _, label in rows]
             trace = current.execute_script("return window.__pivotNavigationTrace || []")
-            return (all(child not in labels for child in expected_children)
+            return (labels.count("Éclair") == labels.count("München") == 1
+                    and all(child not in labels for child in expected_children)
                     and _navigation_response_after(trace, checkpoint, ())
                     and _totals(current, decimal_places=2))
 

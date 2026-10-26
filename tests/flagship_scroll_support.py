@@ -13,6 +13,19 @@ import traceback
 from tests.flagship_browser_support import _network, record_case
 
 
+def _payload_network_events(events):
+    return [
+        {"phase": entry.get("method"), "requestId": entry.get("params", {}).get("requestId"),
+         "status": entry.get("params", {}).get("response", {}).get("status"),
+         "error": entry.get("params", {}).get("errorText")}
+        for entry in events
+        if "/payload/" in (
+            entry.get("params", {}).get("request", {}).get("url")
+            or entry.get("params", {}).get("response", {}).get("url") or ""
+        )
+    ]
+
+
 _SCROLL_PROBE = r"""
 if (!window.__pivotScrollTrace) {
   const trace = window.__pivotScrollTrace = [];
@@ -240,7 +253,8 @@ def qualify_virtual_scroll(host: str, requirement: str) -> None:
                 observation["clientDebug"] = driver.execute_script("return window.__pivotScrollDebug || []")
                 observation["browserLog"] = [{"level": item.get("level"), "message": item.get("message", "")[:500]}
                                              for item in driver.get_log("browser")]
-                _network(driver)
+                network_events = _network(driver)
+                observation["payloadNetwork"] = _payload_network_events(network_events)
                 result["loadedAssetSha256"] = dict(driver._pivot_loaded_assets)
                 observation["loadedAssetSha256"] = dict(driver._pivot_loaded_assets)
             finally:
@@ -465,7 +479,8 @@ def qualify_custom_pivot_order(host: str) -> None:
                 observation["clientDebug"] = driver.execute_script("return window.__pivotScrollDebug || []")
                 observation["browserLog"] = [{"level": item.get("level"), "message": item.get("message", "")[:500]}
                                              for item in driver.get_log("browser")]
-                _network(driver)
+                network_events = _network(driver)
+                observation["payloadNetwork"] = _payload_network_events(network_events)
                 result["loadedAssetSha256"] = dict(driver._pivot_loaded_assets)
                 observation["loadedAssetSha256"] = dict(driver._pivot_loaded_assets)
             finally:

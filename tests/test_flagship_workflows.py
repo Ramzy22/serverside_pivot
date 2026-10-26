@@ -268,6 +268,23 @@ def test_supersession_ids_ignore_metadata_responses_without_rows():
     assert supersession_ids(trace) == ("old-rows", "new-rows")
 
 
+def test_payload_network_evidence_records_delivery_without_exposing_token():
+    from tests.flagship_scroll_support import _payload_network_events
+
+    events = [
+        {"method": "Network.requestWillBeSent", "params": {"requestId": "1",
+            "request": {"url": "http://host/_dash_tanstack_pivot/payload/private-token"}}},
+        {"method": "Network.responseReceived", "params": {"requestId": "1",
+            "response": {"url": "http://host/_dash_tanstack_pivot/payload/private-token", "status": 200}}},
+        {"method": "Network.responseReceived", "params": {"requestId": "2",
+            "response": {"url": "http://host/health", "status": 200}}},
+    ]
+    observed = _payload_network_events(events)
+    assert [entry["phase"] for entry in observed] == ["Network.requestWillBeSent", "Network.responseReceived"]
+    assert observed[1]["status"] == 200
+    assert "private-token" not in str(observed)
+
+
 def test_supersession_observation_rejects_non_sales_cell_rollback():
     from tests.flagship_browser_support import (assert_stable_visible_snapshots,
                                                 supersession_fixture_matches)
