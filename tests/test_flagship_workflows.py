@@ -297,7 +297,7 @@ def test_superseded_response_has_an_installed_browser_case_for_every_host():
 
 
 def test_initial_workspace_oracle_requires_all_fixture_measures():
-    from tests.flagship_browser_support import initial_workspace_rows_match
+    from tests.flagship_browser_support import initial_workspace_rows_match, initial_workspace_expected_cells
 
     rows = [
         {"id": "Éclair", "q1": 100.25, "q2": 20.0, "total": 120.25,
@@ -312,6 +312,7 @@ def test_initial_workspace_oracle_requires_all_fixture_measures():
     ]
     assert initial_workspace_rows_match(rows)
     assert initial_workspace_rows_match([{"path": "__color_scale_stats__"}, *rows])
+    assert len(initial_workspace_expected_cells([{"path": "__color_scale_stats__"}, *rows])) == 27
     assert not initial_workspace_rows_match([*rows, {**rows[0], "id": "São Paulo"}])
     assert not initial_workspace_rows_match([{**rows[2], "q2_variance": 1.0}, *rows[:2]])
 

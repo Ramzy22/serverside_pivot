@@ -1915,6 +1915,23 @@ def initial_workspace_rows_match(rows) -> bool:
                     for row in rows))
 
 
+def initial_workspace_expected_cells(rows):
+    from decimal import Decimal
+
+    if not initial_workspace_rows_match(rows):
+        raise AssertionError("Initial V1 rows differ from the parity fixture")
+    expected = {}
+    for row in rows:
+        if row.get("path") == "__color_scale_stats__" and not row.get("id"):
+            continue
+        rowid = "__grand_total__" if row["id"] == "Grand Total" else row["id"]
+        for period, prefix in (("Q1", "q1"), ("Q2", "q2"), ("__RowTotal__", "total")):
+            for measure, suffix in (("ventes_€", ""), ("unités", "_units"), ("écart", "_variance")):
+                separator = "" if period == "__RowTotal__" else "_"
+                expected[(rowid, f"{period}{separator}{measure}_sum")] = Decimal(str(row[prefix + suffix]))
+    return expected
+
+
 def qualify_initial_workspace(host: str) -> None:
     """Check the literal parity fixture through a fresh installed host."""
     import pytest
@@ -1979,13 +1996,7 @@ def qualify_initial_workspace(host: str) -> None:
         increase_button.click()
         increase_button.click()
         scroller = _wait_for_visible_workspace_element(driver, '[data-pivot-scroll-container]')
-        expected = {}
-        for row in response["rows"]:
-            rowid = "__grand_total__" if row["id"] == "Grand Total" else row["id"]
-            for period, prefix in (("Q1", "q1"), ("Q2", "q2"), ("__RowTotal__", "total")):
-                for measure, suffix in (("ventes_€", ""), ("unités", "_units"), ("écart", "_variance")):
-                    separator = "" if period == "__RowTotal__" else "_"
-                    expected[(rowid, f"{period}{separator}{measure}_sum")] = Decimal(str(row[prefix + suffix]))
+        expected = initial_workspace_expected_cells(response["rows"])
         seen = {}
         deadline = time.monotonic() + 25
         while time.monotonic() < deadline and set(seen) != set(expected):
