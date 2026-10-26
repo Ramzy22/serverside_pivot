@@ -658,8 +658,10 @@ def qualify_selected_clipboard(host: str, requirement: str) -> None:
         observation["clipboardLineSeparator"] = "\r\n" if str(driver.capabilities.get("platformName", "")).lower() == "windows" else "\n"
         wait = WebDriverWait(driver, 12)
         sales, units = "Q1_ventes_€_sum", "Q1_unités_sum"
-        rows = _selection_rows(driver)
-        assert len(rows) == 2 and {row["label"] for row in rows} == {"Éclair", "München"}, "Initial displayed fixture row set differs"
+        rows = wait.until(lambda current: (
+            candidate if len(candidate := _selection_rows(current)) == 2
+            and {row["label"] for row in candidate} == {"Éclair", "München"} else False
+        ))
         assert not any("São Paulo" in cell.text for cell in _workspace_elements(driver, '[data-colid="hierarchy"]'))
         observation["initialRows"] = rows
         initial_order = _selection_column_order(driver)
@@ -846,6 +848,7 @@ def qualify_selected_clipboard(host: str, requirement: str) -> None:
             try:
                 _verify_release_asset_batch(driver, require_assets=True)
                 result["loadedAssetSha256"] = dict(driver._pivot_loaded_assets)
+                observation["loadedAssetSha256"] = dict(driver._pivot_loaded_assets)
                 observation["finalSelectedIds"] = _selection_ids(driver)
                 observation["finalVisibleRows"] = [cell.text for cell in _workspace_elements(driver, '[data-colid="hierarchy"]') if cell.is_displayed()]
                 screenshot = directory / "final.png"

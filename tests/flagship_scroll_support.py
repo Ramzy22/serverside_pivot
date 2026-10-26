@@ -377,9 +377,16 @@ def qualify_custom_pivot_order(host: str) -> None:
         ))
         clipboard_rows = list(csv.reader(io.StringIO(copied), delimiter="\t"))
         observation["clipboard"] = {"rows": clipboard_rows[:6], "rawLength": len(copied)}
-        assert clipboard_rows[0][:4] == ["Unités (Sum)", "Ventes € (Sum)", "Écart (Sum)", "Ventes € (Sum)"]
-        assert clipboard_rows[1][:4] == ["1", "0", "0", "23"]
-        assert clipboard_rows[1][-1] == "R000"
+        copied_request = next(entry for entry in reversed(driver.execute_script(
+            "return window.__pivotScrollTrace || []"
+        )) if entry.get("kind") == "export" and entry.get("phase") == "request"
+            and entry.get("format") == "html")
+        assert copied_request["colIds"][:4] == [
+            "hierarchy", "P00_unités_sum", "P00_ventes_€_sum", "P00_écart_sum",
+        ]
+        assert len(clipboard_rows[0]) == len(copied_request["colIds"])
+        assert clipboard_rows[0][:4] == ["Region > Account", "Unités (Sum)", "Ventes € (Sum)", "Écart (Sum)"]
+        assert clipboard_rows[1][:4] == ["R000", "1", "0", "0"]
         assert all(len(row) == len(clipboard_rows[0]) for row in clipboard_rows)
 
         started_at = time.time()
