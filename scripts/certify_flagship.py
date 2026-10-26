@@ -953,6 +953,7 @@ EXPORT_JOB_REQUIREMENTS = frozenset({
 # committed contract decides which host/test combinations must be qualified.
 # A journey may produce multiple mapped records (runtime error and recovery).
 PRODUCT_BROWSER_JOURNEYS = {
+    "browser.initial-workspace.populated": "test_flagship_initial_workspace[{host}]",
     **{f"browser.{name}": "test_flagship_runtime_error_recovery[{host}]"
        for name in ("runtime-error.visible", "runtime-error.recovery")},
     "browser.runtime-error.superseded-response": "test_flagship_superseded_response[{host}]",

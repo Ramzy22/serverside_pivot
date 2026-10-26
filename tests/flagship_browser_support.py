@@ -1788,7 +1788,11 @@ if (!window.__pivotNavigationTrace) {
         schemaVersion: value.schemaVersion, status: value.status || null,
         rows: rows.map(row => ({id: row?._id, path: row?._path,
           total: row?.['__RowTotal__ventes_€_sum'],
-          q1: row?.['Q1_ventes_€_sum'], q2: row?.['Q2_ventes_€_sum']}))});
+          q1: row?.['Q1_ventes_€_sum'], q2: row?.['Q2_ventes_€_sum'],
+          total_units: row?.['__RowTotal__unités_sum'],
+          q1_units: row?.['Q1_unités_sum'], q2_units: row?.['Q2_unités_sum'],
+          total_variance: row?.['__RowTotal__écart_sum'],
+          q1_variance: row?.['Q1_écart_sum'], q2_variance: row?.['Q2_écart_sum']}))});
       return;
     }
     if (Array.isArray(value)) value.forEach(item => visit(item, phase));
@@ -1893,6 +1897,141 @@ def _navigation_dom_matches(cells, expected_children, *, decimal_places=0):
         return False
     return all((rowid, colid, value) in actual
                for rowid in keys for colid, value in zip(columns, expected[rowid]))
+
+
+def initial_workspace_rows_match(rows) -> bool:
+    """Match the literal included fixture, including all three measure totals."""
+    fields = ("q1", "q2", "total", "q1_units", "q2_units", "total_units",
+              "q1_variance", "q2_variance", "total_variance")
+    expected = {
+        "Éclair": (100.25, 20.0, 120.25, 2, 1, 3, -12.5, 2.5, -10.0),
+        "München": (49.75, 30.0, 79.75, 3, 4, 7, 4.25, -1.0, 3.25),
+        "Grand Total": (150.0, 50.0, 200.0, 5, 5, 10, -8.25, 1.5, -6.75),
+    }
+    return (len(rows) == len(expected)
+            and {row.get("id") for row in rows} == set(expected)
+            and all(tuple(row.get(field) for field in fields) == expected[row["id"]]
+                    for row in rows))
+
+
+def qualify_initial_workspace(host: str) -> None:
+    """Check the literal parity fixture through a fresh installed host."""
+    import pytest
+    from decimal import Decimal, InvalidOperation
+    from scripts.flagship_artifacts import load_artifact_binding
+    from tests.test_flagship_certification import (
+        _qualification_chrome_options, _switch_to_workspace,
+        _wait_for_visible_workspace_element, _verify_release_asset_batch, _workspace_elements,
+    )
+    from selenium import webdriver
+    from selenium.webdriver.support.ui import WebDriverWait
+
+    if os.environ.get("PIVOT_RUN_FLAGSHIP_BROWSER_TESTS") != "1":
+        pytest.skip("Enable installed flagship browser qualification explicitly")
+    if not os.environ.get("PIVOT_FLAGSHIP_ARTIFACT_BINDING"):
+        pytest.fail("Installed artifact binding is required")
+    run_id = os.environ["PIVOT_FLAGSHIP_RUN_ID"]
+    directory = Path(os.environ["PIVOT_FLAGSHIP_EVIDENCE_ROOT"]) / "initial-workspace" / host
+    assert ("runs", run_id) in tuple(zip(directory.parts, directory.parts[1:]))
+    directory.mkdir(parents=True, exist_ok=True)
+    downloads = directory / "downloads"
+    downloads.mkdir(exist_ok=True)
+    binding = load_artifact_binding(Path(os.environ["PIVOT_FLAGSHIP_ARTIFACT_BINDING"]))
+    result = {"result": "blocked", "browser": "unavailable", "infrastructureUnavailable": True}
+    observation = {"states": []}
+    paths = []
+    diagnostic = ""
+    driver = None
+    try:
+        driver = webdriver.Chrome(options=_qualification_chrome_options(downloads))
+        driver._pivot_artifact_binding, driver._pivot_artifact_host = binding, host
+        driver._pivot_loaded_assets = {}
+        driver.execute_cdp_cmd("Network.enable", {"maxTotalBufferSize": 50000000, "maxResourceBufferSize": 50000000})
+        driver.execute_cdp_cmd("Page.addScriptToEvaluateOnNewDocument", {"source": _NAVIGATION_PROBE_SCRIPT})
+        _switch_to_workspace(driver, host)
+        result.update(result="failed", browser=f"{driver.capabilities['browserName']} {driver.capabilities['browserVersion']}",
+                      infrastructureUnavailable=False)
+        wait = WebDriverWait(driver, 20)
+
+        def exact_response(current):
+            trace = current.execute_script("return window.__pivotNavigationTrace || []")
+            requests = {item["requestId"] for item in trace if item["phase"] == "request"}
+            return next((item for item in trace if item["phase"] == "response"
+                         and item["status"] == "data" and item["requestId"] in requests
+                         and initial_workspace_rows_match(item["rows"])), None)
+
+        response = wait.until(exact_response)
+        assert {label for _, label in _navigation_rows(driver)} == {"Éclair", "München", "Grand Total"}
+        assert _totals(driver), "The grand total is not displayed"
+        observation["responseRequestId"] = response["requestId"]
+        observation["rawRows"] = response["rows"]
+
+        # Read every rendered leaf through horizontal virtualization. The
+        # authoritative V1 response above supplies the exact unrounded values;
+        # visible text is checked after selecting two decimal places.
+        format_toggle = _wait_for_visible_workspace_element(driver, '[data-testid="pivot-toolbar-format"]')
+        increase = [item for item in _workspace_elements(driver, '[title="Increase decimal places"]')
+                    if item.is_displayed()]
+        if not increase:
+            format_toggle.click()
+        increase_button = _wait_for_visible_workspace_element(driver, '[title="Increase decimal places"]')
+        increase_button.click()
+        increase_button.click()
+        scroller = _wait_for_visible_workspace_element(driver, '[data-pivot-scroll-container]')
+        expected = {}
+        for row in response["rows"]:
+            rowid = "__grand_total__" if row["id"] == "Grand Total" else row["id"]
+            for period, prefix in (("Q1", "q1"), ("Q2", "q2"), ("__RowTotal__", "total")):
+                for measure, suffix in (("ventes_€", ""), ("unités", "_units"), ("écart", "_variance")):
+                    expected[(rowid, f"{period}_{measure}_sum")] = Decimal(str(row[prefix + suffix]))
+        seen = {}
+        deadline = time.monotonic() + 25
+        while time.monotonic() < deadline and set(seen) != set(expected):
+            for fraction in (0, 0.25, 0.5, 0.75, 1):
+                driver.execute_script("arguments[0].scrollLeft = Math.round((arguments[0].scrollWidth - arguments[0].clientWidth) * arguments[1])", scroller, fraction)
+                time.sleep(0.2)
+                for cell in _navigation_cells(driver):
+                    key = (cell["rowid"], cell["colid"])
+                    if key not in expected:
+                        continue
+                    try:
+                        number = Decimal(cell["text"].replace(",", ""))
+                    except InvalidOperation:
+                        continue
+                    if number == expected[key]:
+                        seen[key] = cell["text"]
+            if set(seen) == set(expected):
+                break
+        assert set(seen) == set(expected), f"Missing or incorrect rendered fixture cells: {sorted(set(expected) - set(seen))}"
+        observation["states"].append({"phase": "all-columns", "displayedCells": [
+            {"rowid": rowid, "colid": colid, "text": value}
+            for (rowid, colid), value in sorted(seen.items())]})
+        result.update(result="passed", fixtureTotalsVerified=True, v1RequestsCorrelated=True,
+                      actionCompleted=True)
+    except Exception as error:
+        frame = traceback.extract_tb(error.__traceback__)[-1]
+        diagnostic = f"{type(error).__name__} at {Path(frame.filename).name}:{frame.lineno}: {error}"
+    finally:
+        if driver is not None:
+            try:
+                _verify_release_asset_batch(driver, require_assets=True)
+                result["loadedAssetSha256"] = dict(driver._pivot_loaded_assets)
+                driver.save_screenshot(str(directory / "final.png"))
+                paths.append(str(directory / "final.png"))
+                observation["v1Trace"] = driver.execute_script("return window.__pivotNavigationTrace || []")
+            except Exception as error:
+                result["result"] = "blocked"
+                diagnostic += f"; evidence collection: {type(error).__name__}"
+            finally:
+                driver.quit()
+        observation.update(diagnostic=diagnostic, loadedAssetSha256=dict(result.get("loadedAssetSha256", {})),
+                           result={key: value for key, value in result.items() if key != "loadedAssetSha256"})
+        evidence = directory / "observation.json"
+        evidence.write_text(json.dumps(observation, ensure_ascii=False, indent=2), encoding="utf-8")
+        paths.append(str(evidence))
+        result["evidence_paths"] = paths
+        record_case("initial-workspace.populated", host, result, directory)
+    assert result["result"] == "passed", f"{host} initial workspace: {diagnostic}; evidence: {directory}"
 
 
 def _navigation_response_matches(entry, expected_children):

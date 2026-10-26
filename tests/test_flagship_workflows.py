@@ -296,6 +296,36 @@ def test_superseded_response_has_an_installed_browser_case_for_every_host():
         )
 
 
+def test_initial_workspace_oracle_requires_all_fixture_measures():
+    from tests.flagship_browser_support import initial_workspace_rows_match
+
+    rows = [
+        {"id": "Éclair", "q1": 100.25, "q2": 20.0, "total": 120.25,
+         "q1_units": 2, "q2_units": 1, "total_units": 3,
+         "q1_variance": -12.5, "q2_variance": 2.5, "total_variance": -10.0},
+        {"id": "München", "q1": 49.75, "q2": 30.0, "total": 79.75,
+         "q1_units": 3, "q2_units": 4, "total_units": 7,
+         "q1_variance": 4.25, "q2_variance": -1.0, "total_variance": 3.25},
+        {"id": "Grand Total", "q1": 150.0, "q2": 50.0, "total": 200.0,
+         "q1_units": 5, "q2_units": 5, "total_units": 10,
+         "q1_variance": -8.25, "q2_variance": 1.5, "total_variance": -6.75},
+    ]
+    assert initial_workspace_rows_match(rows)
+    assert not initial_workspace_rows_match([*rows, {**rows[0], "id": "São Paulo"}])
+    assert not initial_workspace_rows_match([{**rows[2], "q2_variance": 1.0}, *rows[:2]])
+
+
+def test_initial_workspace_has_an_installed_browser_case_for_every_host():
+    from scripts.certify_flagship import _product_browser_plan
+    from tests.flagship_contract import load_requirements
+
+    plan = _product_browser_plan(load_requirements(Path(__file__).parent / "flagship_requirements.json"))
+    for host in ("dash", "react", "streamlit"):
+        assert plan[("initial-workspace.populated", host, "browser.initial-workspace.populated")] == (
+            f"tests/test_flagship_workflows.py::test_flagship_initial_workspace[{host}]"
+        )
+
+
 def test_scroll_windows_have_dedicated_installed_browser_phase():
     from scripts.certify_flagship import _product_browser_plan, _product_phase
     from tests.flagship_contract import load_requirements
@@ -743,6 +773,14 @@ def test_record_case_cannot_pass_without_browser_asset_evidence(tmp_path):
 
     with pytest.raises((AssertionError, ValueError), match="evidence|binding"):
         record_case("runtime-error.visible", "dash", {"result": "passed", "browser": "chrome 1"}, tmp_path)
+
+
+@pytest.mark.flagship
+@pytest.mark.parametrize("host", ["dash", "react", "streamlit"])
+def test_flagship_initial_workspace(host, installed_workflow_hosts):
+    from tests.flagship_browser_support import qualify_initial_workspace
+
+    qualify_initial_workspace(host)
 
 
 @pytest.mark.flagship
