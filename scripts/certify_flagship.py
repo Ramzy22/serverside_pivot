@@ -954,6 +954,7 @@ EXPORT_JOB_REQUIREMENTS = frozenset({
 # A journey may produce multiple mapped records (runtime error and recovery).
 PRODUCT_BROWSER_JOURNEYS = {
     "browser.initial-workspace.populated": "test_flagship_initial_workspace[{host}]",
+    "browser.global-filter.apply-clear": "test_flagship_global_filter[{host}]",
     **{f"browser.{name}": "test_flagship_runtime_error_recovery[{host}]"
        for name in ("runtime-error.visible", "runtime-error.recovery")},
     "browser.runtime-error.superseded-response": "test_flagship_superseded_response[{host}]",

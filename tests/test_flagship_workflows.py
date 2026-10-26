@@ -328,6 +328,30 @@ def test_initial_workspace_has_an_installed_browser_case_for_every_host():
         )
 
 
+def test_global_filter_oracle_rejects_old_and_excluded_rows():
+    from tests.flagship_browser_support import global_filter_rows_match
+
+    rows = [
+        {"id": "München", "total": 79.75, "q1": 49.75, "q2": 30.0},
+        {"id": "Grand Total", "total": 79.75, "q1": 49.75, "q2": 30.0},
+    ]
+    assert global_filter_rows_match(rows)
+    assert global_filter_rows_match([{"path": "__color_scale_stats__"}, *rows])
+    assert not global_filter_rows_match([*rows, {"id": "Éclair", "total": 120.25}])
+    assert not global_filter_rows_match([{**rows[1], "total": 200.0}, rows[0]])
+
+
+def test_global_filter_has_an_installed_browser_case_for_every_host():
+    from scripts.certify_flagship import _product_browser_plan
+    from tests.flagship_contract import load_requirements
+
+    plan = _product_browser_plan(load_requirements(Path(__file__).parent / "flagship_requirements.json"))
+    for host in ("dash", "react", "streamlit"):
+        assert plan[("global-filter.apply-clear", host, "browser.global-filter.apply-clear")] == (
+            f"tests/test_flagship_workflows.py::test_flagship_global_filter[{host}]"
+        )
+
+
 def test_scroll_windows_have_dedicated_installed_browser_phase():
     from scripts.certify_flagship import _product_browser_plan, _product_phase
     from tests.flagship_contract import load_requirements
@@ -783,6 +807,14 @@ def test_flagship_initial_workspace(host, installed_workflow_hosts):
     from tests.flagship_browser_support import qualify_initial_workspace
 
     qualify_initial_workspace(host)
+
+
+@pytest.mark.flagship
+@pytest.mark.parametrize("host", ["dash", "react", "streamlit"])
+def test_flagship_global_filter(host, installed_workflow_hosts):
+    from tests.flagship_browser_support import qualify_global_filter
+
+    qualify_global_filter(host)
 
 
 @pytest.mark.flagship
