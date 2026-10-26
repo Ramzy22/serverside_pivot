@@ -1286,17 +1286,18 @@ class RuntimeExportService:
         if isinstance(col_ids, list) and col_ids:
             ordered: List[str] = []
             seen = set()
-            requested = {str(value) for value in col_ids if value is not None}
-            server_order = [
+            authorized_ids = {
                 str(column.get("id")) for column in columns
                 if isinstance(column, dict) and column.get("id") is not None
-                and str(column.get("id")) in requested
-            ]
-            fallback_ids = col_ids if not columns else [
-                value for value in col_ids
-                if value == "hierarchy" or str(value) in tabular_row_fields
-            ]
-            for column_id in [*server_order, *fallback_ids]:
+            }
+            # The client sends its resolved display order. The server catalog
+            # validates each leaf, but its own order must not undo browser
+            # reordering or pinning in copy/export output.
+            for column_id in col_ids:
+                if columns and str(column_id) not in authorized_ids and (
+                    column_id != "hierarchy" and str(column_id) not in tabular_row_fields
+                ):
+                    continue
                 field = _field_from_column_id(column_id)
                 # Older server-side clients can still send the hierarchy
                 # placeholder.  Expand it into tabular's real row columns.

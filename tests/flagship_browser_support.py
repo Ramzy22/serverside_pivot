@@ -432,7 +432,10 @@ def _selection_column_order(driver):
     """Read actual body geometry, excluding duplicate/group header containers."""
     from tests.test_flagship_certification import _workspace_elements
 
-    first_row = _selection_rows(driver)[0]["id"]
+    rows = _selection_rows(driver)
+    if not rows:
+        return []  # A structural request may briefly clear the rendered rows.
+    first_row = rows[0]["id"]
     cells = _workspace_elements(driver, f'[role="gridcell"][data-rowid="{first_row}"]')
     positions = [(driver.execute_script("return arguments[0].getBoundingClientRect().left", cell),
                   cell.get_attribute("data-colid")) for cell in cells if cell.is_displayed()]
@@ -451,7 +454,8 @@ def _reorder_selection_column(driver, column, direction, first, second, observat
     header.send_keys(Keys.CONTROL + direction + Keys.NULL)
     WebDriverWait(driver, 8).until(lambda current: (
         (order := _selection_column_order(current)) != order_before
-        and order.index(first) < order.index(second)))
+        and first in order and second in order and order.index(first) < order.index(second)
+        and _selection_rows(current) == rows_before))
     rows_after, order_after = _selection_rows(driver), _selection_column_order(driver)
     observation["actions"].append({"action": "header Ctrl+Arrow", "column": column,
         "direction": "left" if direction == Keys.ARROW_LEFT else "right",
@@ -694,14 +698,14 @@ def qualify_selected_clipboard(host: str, requirement: str) -> None:
         observation["selectedRows"] = rows
         if requirement == "copy-selection.pinned-columns":
             # Pin a later leaf without reordering the core columns. Its displayed
-            # neighbour is Q1 sales, but Q1 units/variance lie between
+            # neighbour is Q1 units, but Q1 sales/variance lie between
             # those endpoints in core order. A core-order rectangle includes
             # those unwanted cells even though the mouse crosses only two leaves.
             later = "Q2_ventes_€_sum"
             core_order = _selection_column_order(driver)
             assert core_order == initial_order, "Pinned qualification must not pre-reorder core columns"
-            assert core_order.index(later) > core_order.index(sales) + 1
-            assert core_order.index(sales) < core_order.index(units) < core_order.index(later)
+            assert core_order.index(later) > core_order.index(units) + 1
+            assert core_order.index(units) < core_order.index(sales) < core_order.index(later)
             header = _wait_for_visible_workspace_element(driver, f'[role="columnheader"][data-header-column-id="{later}"]')
             ActionChains(driver).context_click(header).perform()
             ActionChains(driver).move_to_element(_selection_menu(driver, "Pin")).perform()
@@ -717,15 +721,15 @@ def qualify_selected_clipboard(host: str, requirement: str) -> None:
                 ActionChains(driver).scroll_from_origin(ScrollOrigin.from_element(scroller), -int(offset) - 1, 0).perform()
                 wait.until(lambda current: current.execute_script("return arguments[0].scrollLeft", scroller) == 0)
             boundary_order = _selection_column_order(driver)
-            assert boundary_order.index(sales) == boundary_order.index(later) + 1, "Pinned and center endpoints are not visually adjacent"
+            assert boundary_order.index(units) == boundary_order.index(later) + 1, "Pinned and center endpoints are not visually adjacent"
             assert boundary_order != core_order, "Pinning did not distinguish displayed and core order"
             boundary = {"coreColumnIds": core_order, "displayedColumnIds": boundary_order,
-                        "columns": [later, sales], "clipboardLineSeparator": observation["clipboardLineSeparator"]}
+                        "columns": [later, units], "clipboardLineSeparator": observation["clipboardLineSeparator"]}
             observation["pinnedBoundarySelection"] = boundary
-            observation["actions"].append("physical drag across adjacent pinned Q2 sales and center Q1 sales, without core reorder")
-            boundary["selectedIds"] = _select_rectangle(driver, row_ids, [later, sales])
-            assert not any(column == units for _, column in boundary["selectedIds"]), "Intervening core-order Q1 units was selected"
-            literal_boundary = {"Éclair": ["20.00", "100.25"], "München": ["30.00", "49.75"]}
+            observation["actions"].append("physical drag across adjacent pinned Q2 sales and center Q1 units, without core reorder")
+            boundary["selectedIds"] = _select_rectangle(driver, row_ids, [later, units])
+            assert not any(column == sales for _, column in boundary["selectedIds"]), "Intervening core-order Q1 sales was selected"
+            literal_boundary = {"Éclair": ["20.00", "2.00"], "München": ["30.00", "3.00"]}
             boundary["expectedClipboardCells"] = [literal_boundary[row["label"]] for row in rows]
             _copy_selected(driver, _selection_cell(driver, row_ids[0], later),
                            boundary["expectedClipboardCells"], boundary)
@@ -1471,7 +1475,7 @@ if (!window.__pivotSupersession) {
         errorCode:returned?.payload?.code || responseJson?.payload?.code || null,
         errorMessage:typeof returned?.message === 'string' ? returned.message.slice(0, 160) : null,
         httpDetail:typeof responseJson?.detail === 'string' ? responseJson.detail.slice(0, 160) : null};
-      if (term === 'Éclair' && total !== null) {
+      if (term === 'Éclair' && total !== null && !releaseOld) {
         trace.push({phase:'ready', requestId, term, at:performance.now(), total, ...details});
         await new Promise(resolve => { releaseOld = resolve; });
       }

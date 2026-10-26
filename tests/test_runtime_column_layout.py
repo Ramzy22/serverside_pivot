@@ -207,10 +207,10 @@ def test_ambiguous_planner_cell_keys_fail_instead_of_merging_distinct_paths():
         )
 
 
-def test_copy_and_export_resolve_selected_fields_in_server_display_order():
+def test_copy_and_export_preserve_requested_display_order_with_authorized_columns():
     fields = RuntimeExportService._resolve_export_field_order(
         [{"A_sales": 1, "B_sales": 2}],
         [{"id": "B_sales"}, {"id": "A_sales"}],
-        ["A_sales", "B_sales"], PivotViewState(),
+        ["hierarchy", "A_sales", "B_sales", "A_sales", "forbidden"], PivotViewState(),
     )
-    assert fields == ["B_sales", "A_sales"]
+    assert fields == ["_id", "A_sales", "B_sales"]
