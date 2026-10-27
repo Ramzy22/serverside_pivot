@@ -75,11 +75,8 @@ export function useRuntimeDataCommit({
         const schemaRevision = committedPayload?.colSchema?.layoutRevision;
         if (layoutRevision && schemaRevision && layoutRevision !== schemaRevision) return false;
         if (layoutRevision) {
-            const currentManifest = pivotLayoutOrderRef.current.join('\u001f');
             if (latestLayoutSentManifestRef.current
                 && latestLayoutSentManifestRef.current !== pivotLayoutOrderRef.current) return false;
-            if (layoutRevision === layoutRevisionRef.current
-                && layoutAcknowledgedManifestRef.current !== currentManifest) return false;
         }
 
         return true;
