@@ -2114,8 +2114,8 @@ def qualify_initial_workspace(host: str) -> None:
                          and initial_workspace_rows_match(item["rows"])), None)
 
         response = wait.until(exact_response)
-        assert {label for _, label in _navigation_rows(driver)} == {"Éclair", "München", "Grand Total"}
-        assert _totals(driver), "The grand total is not displayed"
+        wait.until(lambda current: {label for _, label in _navigation_rows(current)}
+                   == {"Éclair", "München", "Grand Total"} and _totals(current))
         observation["responseRequestId"] = response["requestId"]
         observation["rawRows"] = response["rows"]
 
@@ -2275,11 +2275,15 @@ def qualify_hierarchy_navigation(host: str, requirement: str) -> None:
         result.update(result="failed", browser=f"{driver.capabilities['browserName']} {driver.capabilities['browserVersion']}",
                       infrastructureUnavailable=False)
         wait = WebDriverWait(driver, 15)
-        initial = _navigation_rows(driver)
-        assert [label for _, label in initial].count("Éclair") == 1
-        assert [label for _, label in initial].count("München") == 1
-        assert not any(label in ("東京", "القاهرة") for _, label in initial)
-        assert _totals(driver), "Initial fixture grand total is missing"
+        def initial_ready(current):
+            rows = _navigation_rows(current)
+            labels = [label for _, label in rows]
+            return rows if (labels.count("Éclair") == labels.count("München") == 1
+                            and "Grand Total" in labels
+                            and not any(label in ("東京", "القاهرة") for label in labels)
+                            and _totals(current)) else False
+
+        initial = wait.until(initial_ready)
         observation["displayPrecondition"] = _set_hierarchy_two_decimal_display(driver)
         initial_columns = _navigation_columns(driver)
         assert {"Q1_ventes_€_sum", "Q2_ventes_€_sum"}.issubset(initial_columns)
