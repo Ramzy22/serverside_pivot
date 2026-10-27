@@ -551,12 +551,17 @@ export const useServerSideRowModel = ({
                 const isCompleteBlock = absStart === blockStart && blockRows.length >= expectedRowsForBlock;
 
                 // Use dataVersion for stale response protection
-                const effectiveResponseColStart = responseColStart !== null && responseColStart !== undefined
-                    ? responseColStart
-                    : lastRequestedColStartRef.current;
-                const effectiveResponseColEnd = responseColEnd !== null && responseColEnd !== undefined
-                    ? responseColEnd
-                    : lastRequestedColEndRef.current;
+                // The retained schema can describe an older sparse window.
+                // A viewport response is bound to its own request version, so
+                // stamp cached rows with that request's actual column range.
+                const matchingInflight = inflightRequestRef.current?.version === dataVersion
+                    ? inflightRequestRef.current : null;
+                const effectiveResponseColStart = matchingInflight
+                    ? matchingInflight.colStart
+                    : (responseColStart ?? lastRequestedColStartRef.current);
+                const effectiveResponseColEnd = matchingInflight
+                    ? matchingInflight.colEnd
+                    : (responseColEnd ?? lastRequestedColEndRef.current);
                 setBlockLoaded(
                     b,
                     blockRows,
