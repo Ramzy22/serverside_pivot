@@ -421,37 +421,55 @@ def _selection_cell(driver, row_id, column_id):
 
 
 def _selection_rows(driver):
+    from selenium.common.exceptions import StaleElementReferenceException
     from tests.test_flagship_certification import _workspace_elements
 
-    return [{"id": cell.get_attribute("data-rowid"), "label": cell.text.strip()}
-            for cell in _workspace_elements(driver, '[role="gridcell"][data-colid="hierarchy"]')
-            if cell.is_displayed() and cell.text.strip() in ("Éclair", "München")]
+    for attempt in range(3):
+        try:
+            return [{"id": cell.get_attribute("data-rowid"), "label": cell.text.strip()}
+                    for cell in _workspace_elements(driver, '[role="gridcell"][data-colid="hierarchy"]')
+                    if cell.is_displayed() and cell.text.strip() in ("Éclair", "München")]
+        except StaleElementReferenceException:
+            if attempt == 2:
+                raise
 
 
 def _selection_column_order(driver):
     """Read actual body geometry, excluding duplicate/group header containers."""
-    from tests.test_flagship_certification import _workspace_elements
-
-    rows = _selection_rows(driver)
-    if not rows:
-        return []  # A structural request may briefly clear the rendered rows.
-    first_row = rows[0]["id"]
-    cells = _workspace_elements(driver, f'[role="gridcell"][data-rowid="{first_row}"]')
-    positions = [(driver.execute_script("return arguments[0].getBoundingClientRect().left", cell),
-                  cell.get_attribute("data-colid")) for cell in cells if cell.is_displayed()]
-    return [column for _, column in sorted(positions)]
+    return driver.execute_script("""
+      const collect=(root,selector,out)=>{
+        out.push(...root.querySelectorAll(selector));
+        for(const element of root.querySelectorAll('*'))
+          if(element.shadowRoot) collect(element.shadowRoot,selector,out);
+      };
+      const cells=[];
+      collect(document,'[role="gridcell"][data-rowid][data-colid]',cells);
+      const visible=element=>{
+        const rect=element.getBoundingClientRect();
+        return rect.width>0 && rect.height>0 && getComputedStyle(element).visibility!=='hidden';
+      };
+      const first=cells.find(cell=>cell.dataset.colid==='hierarchy' && visible(cell));
+      if(!first) return [];
+      return cells.filter(cell=>cell.dataset.rowid===first.dataset.rowid && visible(cell))
+        .map(cell=>[cell.getBoundingClientRect().left,cell.dataset.colid])
+        .sort((a,b)=>a[0]-b[0]).map(entry=>entry[1]);
+    """)
 
 
 def _reorder_selection_column(driver, column, direction, first, second, observation):
+    from selenium.common.exceptions import StaleElementReferenceException
     from selenium.webdriver.common.keys import Keys
     from selenium.webdriver.support.ui import WebDriverWait
     from tests.test_flagship_certification import _wait_for_visible_workspace_element
 
     rows_before = _selection_rows(driver)
     order_before = _selection_column_order(driver)
-    header = _wait_for_visible_workspace_element(driver, f'[role="columnheader"][data-header-column-id="{column}"]')
-    # Element key input focuses this tabIndex=0 header without a sorting click.
-    driver.execute_script("""
+    before_key_count = len(driver.execute_script("return window.__pivotHeaderMoveKeys || []"))
+    for attempt in range(3):
+        header = _wait_for_visible_workspace_element(driver, f'[role="columnheader"][data-header-column-id="{column}"]')
+        try:
+            # Element key input focuses this tabIndex=0 header without a sorting click.
+            driver.execute_script("""
       const header = arguments[0];
       window.__pivotHeaderMoveKeys = window.__pivotHeaderMoveKeys || [];
       header.addEventListener('keydown', event => {
@@ -459,8 +477,15 @@ def _reorder_selection_column(driver, column, direction, first, second, observat
           window.__pivotHeaderMoveKeys.push({column: header.getAttribute('data-header-column-id'),
             key: event.key, ctrl: event.ctrlKey, trusted: event.isTrusted, at: performance.now()});
       }, true);
-    """, header)
-    header.send_keys(Keys.CONTROL + direction + Keys.NULL)
+            """, header)
+            header.send_keys(Keys.CONTROL + direction + Keys.NULL)
+            break
+        except StaleElementReferenceException:
+            # The key may have reached the header just before replacement.
+            if len(driver.execute_script("return window.__pivotHeaderMoveKeys || []")) > before_key_count:
+                break
+            if attempt == 2:
+                raise
     observation["headerMoveKeys"] = driver.execute_script("return window.__pivotHeaderMoveKeys || []")
     WebDriverWait(driver, 8).until(lambda current: (
         (order := _selection_column_order(current)) != order_before
@@ -1080,9 +1105,15 @@ def qualify_native_input_copy(host: str) -> None:
         result.update(result="failed", browser=f"{driver.capabilities['browserName']} {driver.capabilities['browserVersion']}",
                       infrastructureUnavailable=False)
         wait = WebDriverWait(driver, 12)
-        rows = wait.until(lambda current: candidate if len(candidate := _selection_rows(current)) == 2 else False)
         columns = ["Q1_ventes_\u20ac_sum", "Q1_unit\u00e9s_sum"]
-        selected = _select_rectangle(driver, [row["id"] for row in rows], columns)
+        def select_ready_rectangle(current):
+            rows = _selection_rows(current)
+            if len(rows) != 2:
+                return False
+            selected = _select_rectangle(current, [row["id"] for row in rows], columns)
+            return selected if len(selected) == 4 else False
+        selected = WebDriverWait(driver, 12, ignored_exceptions=(StaleElementReferenceException,)).until(
+            select_ready_rectangle)
         assert len(selected) == 4
         observation["selectedGridCells"] = selected
 

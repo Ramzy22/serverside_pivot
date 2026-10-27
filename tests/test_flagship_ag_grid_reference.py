@@ -14,6 +14,7 @@ from selenium.webdriver.support.ui import WebDriverWait
 from selenium.webdriver.common.action_chains import ActionChains
 from selenium.webdriver.common.by import By
 from selenium.webdriver.common.keys import Keys
+from selenium.common.exceptions import StaleElementReferenceException
 from openpyxl import load_workbook
 
 from tests.flagship_reference_support import DEFAULT_EVIDENCE, load_case_results, reference_case, start_reference_run
@@ -946,11 +947,11 @@ def test_reference_filter_options_values_follow_active_scope_and_selection(refer
             """)
             button = driver.find_element(By.CSS_SELECTOR, '.ag-header-cell[col-id="ag-Grid-AutoColumn"] .ag-header-cell-filter-button')
             button.click()
-            menu = WebDriverWait(driver, 5).until(lambda browser: browser.find_element(By.CSS_SELECTOR, '.ag-filter-menu'))
-            options = WebDriverWait(driver, 5).until(lambda browser: (
-                items if len(items) == 3 else False
-            ) if (items := menu.find_elements(By.CSS_SELECTOR, '.ag-set-filter-item')) else False)
-            option_labels = [item.text for item in options]
+            option_labels = WebDriverWait(driver, 5).until(lambda browser: (
+                labels if len(labels) == 3 else False
+            ) if (labels := browser.execute_script(
+                "return [...document.querySelectorAll('.ag-filter-menu .ag-set-filter-item')].map(item=>item.innerText)"
+            )) else False)
             assert option_labels == ["(Select All)", "M\u00fcnchen", "\u00c9clair"]
             values_trace = driver.execute_async_script("""
               const done = arguments[arguments.length - 1];
@@ -965,7 +966,10 @@ def test_reference_filter_options_values_follow_active_scope_and_selection(refer
             assert latest["response"]["values"] == ["\u00c9clair", "M\u00fcnchen"]
             target = "\u00c9clair" if selected else "(Select All)"
             request_count = len(driver.execute_script("return window.referenceEvidence.trace()"))
-            next(item for item in options if item.text == target).find_element(By.CSS_SELECTOR, 'input[type="checkbox"]').click()
+            WebDriverWait(driver, 5, ignored_exceptions=(StaleElementReferenceException,)).until(
+                lambda browser: next((item.find_element(By.CSS_SELECTOR, 'input[type="checkbox"]').click() or True
+                    for item in browser.find_elements(By.CSS_SELECTOR, '.ag-filter-menu .ag-set-filter-item')
+                    if item.text == target), False))
             request = _wait_request(driver, request_count)
             ActionChains(driver).send_keys(Keys.ESCAPE).perform()
             rows = WebDriverWait(driver, 10).until(lambda browser: (

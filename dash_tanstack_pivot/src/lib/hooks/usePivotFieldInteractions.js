@@ -8,6 +8,7 @@ import { useCallback, useRef, useState } from 'react';
  */
 export function usePivotFieldInteractions() {
     const contextRef = useRef({});
+    const keyboardOrderRef = useRef(null);
     const dragItemRef = useRef(null);
     const [dragItem, setDragItem] = useState(null);
     const [dropLine, setDropLine] = useState(null);
@@ -485,16 +486,22 @@ export function usePivotFieldInteractions() {
         // cell order can temporarily lag it while a layout response settles.
         const displayedOrder = context.mergeColumnOrderWithIds(
             context.effectiveColumnOrder || context.columnOrder, context.availableColumnOrderIds);
-        const moved = !context.areStringArraysEqual(displayedOrder,
-            context.moveColumnIdByDelta(displayedOrder, columnId, direction));
-        if (moved) context.setColumnOrderWithHistory(previousOrder => {
-            const latestOrder = context.mergeColumnOrderWithIds(previousOrder, context.availableColumnOrderIds);
-            // A queued move changes previousOrder before this render's
-            // context updates. Otherwise use the displayed schema order.
-            const baseOrder = context.areStringArraysEqual(latestOrder, renderOrder)
-                ? displayedOrder : latestOrder;
-            return context.moveColumnIdByDelta(baseOrder, columnId, direction);
-        }, 'layout:header-keyboard-reorder');
+        const pending = keyboardOrderRef.current;
+        if (pending && (context.areStringArraysEqual(displayedOrder, pending.next)
+            || (!context.areStringArraysEqual(renderOrder, pending.base)
+                && !context.areStringArraysEqual(renderOrder, pending.next)))) {
+            keyboardOrderRef.current = null;
+        }
+        // The server may show a newer column order before React's saved-order
+        // state catches up. Consecutive keys before that render use our last
+        // issued order; every other move starts from what is displayed.
+        const baseOrder = keyboardOrderRef.current?.next || displayedOrder;
+        const nextOrder = context.moveColumnIdByDelta(baseOrder, columnId, direction);
+        const moved = !context.areStringArraysEqual(baseOrder, nextOrder);
+        if (moved) {
+            keyboardOrderRef.current = { base: baseOrder, next: nextOrder };
+            context.setColumnOrderWithHistory(nextOrder, 'layout:header-keyboard-reorder');
+        }
         if (moved && typeof context.setAnnouncement === 'function' && typeof context.getLocaleText === 'function') {
             context.setAnnouncement(context.getLocaleText('columnMovedByKeyboardAnnouncement', '{label} moved {direction}.', {
                 label: context.formatDisplayLabel(columnId),
