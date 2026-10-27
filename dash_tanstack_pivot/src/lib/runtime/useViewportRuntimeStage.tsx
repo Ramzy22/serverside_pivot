@@ -1143,11 +1143,31 @@ export function useViewportRuntimeStage(input, transport) {
     if (!stage.serverSide || stage.columnOrder.length === 0 || !stage.cachedColSchema) return;
     stage.setPivotLayoutOrder(previous => {
       const next = reconcilePivotLayoutOrder(previous, stage.columnOrder, stage.cachedColSchema);
+      if (typeof window !== 'undefined' && (window as any).__PIVOT_QUALIFY_KEYBOARD_MOVES__ === true) {
+        (window as any).__pivotLayoutStateTrace = (window as any).__pivotLayoutStateTrace || [];
+        (window as any).__pivotLayoutStateTrace.push({
+          at: performance.now(), phase: 'reconcile',
+          columnOrder: stage.columnOrder, previous, next,
+          schemaRevision: stage.cachedColSchema?.layoutRevision || null,
+          schemaColumns: (stage.cachedColSchema?.columns || []).filter(Boolean)
+            .map(column => [column.id, column.layoutId]),
+        });
+      }
       return areStringArraysEqual(previous, next) ? previous : next;
     });
     // A saved legacy cell-ID order can acquire stable IDs as sparse catalog
     // windows arrive. Only IDs named in that saved order enter the manifest.
   }, [stage.serverSide, stage.columnOrder, stage.cachedColSchema]);
+  useEffect(() => {
+    if (typeof window !== 'undefined' && (window as any).__PIVOT_QUALIFY_KEYBOARD_MOVES__ === true) {
+      (window as any).__pivotLayoutStateTrace = (window as any).__pivotLayoutStateTrace || [];
+      (window as any).__pivotLayoutStateTrace.push({
+        at: performance.now(), phase: 'rendered', columnOrder: stage.columnOrder,
+        pivotLayoutOrder: stage.pivotLayoutOrder,
+        schemaRevision: stage.cachedColSchema?.layoutRevision || null,
+      });
+    }
+  }, [stage.columnOrder, stage.pivotLayoutOrder, stage.cachedColSchema]);
 
   // Auto-size new columns to fit their header text on spawn
   useEffect(() => {

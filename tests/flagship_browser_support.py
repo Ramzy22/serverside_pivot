@@ -702,7 +702,8 @@ def qualify_selected_clipboard(host: str, requirement: str) -> None:
         ))
         assert not any("São Paulo" in cell.text for cell in _workspace_elements(driver, '[data-colid="hierarchy"]'))
         observation["initialRows"] = rows
-        initial_order = _selection_column_order(driver)
+        initial_order = wait.until(lambda current: (
+            order if units in (order := _selection_column_order(current)) and sales in order else False))
         observation["initialDisplayedColumnIds"] = initial_order
         columns = sorted([units, sales], key=initial_order.index)
         if requirement == "copy-selection.logical-cells":
@@ -733,7 +734,9 @@ def qualify_selected_clipboard(host: str, requirement: str) -> None:
             _selection_menu(driver, "Descending").click()
             observation["actions"].append("physical hierarchy Sort > Descending")
             _wait_selection_sort(driver, checkpoint, "hierarchy", observation)
-        rows = _selection_rows(driver)
+        rows = wait.until(lambda current: (
+            candidate if len(candidate := _selection_rows(current)) == 2
+            and {row["label"] for row in candidate} == {"Ã‰clair", "MÃ¼nchen"} else False))
         row_ids = [row["id"] for row in rows]
         observation["selectedRows"] = rows
         if requirement == "copy-selection.pinned-columns":
@@ -801,7 +804,9 @@ def qualify_selected_clipboard(host: str, requirement: str) -> None:
             observation["pinGeometry"] = {"pinnedBefore": pinned_before, "pinnedAfter": left(units),
                                           "centerBefore": center_before, "centerAfter": left(sales)}
             result["horizontalScrollVerified"] = True
-        order = _selection_column_order(driver)
+        order = wait.until(lambda current: (
+            current_order if all(column in current_order for column in columns)
+            else False) if (current_order := _selection_column_order(current)) else False)
         observation["displayedColumnIds"] = order
         assert order.index(columns[0]) < order.index(columns[1]), "Displayed columns are in the wrong order"
         observation["selectedIds"] = _select_rectangle(driver, row_ids, columns)
@@ -909,6 +914,7 @@ def qualify_selected_clipboard(host: str, requirement: str) -> None:
                 paths.append(str(screenshot))
                 observation["runtimeTrace"] = driver.execute_script("return window.__pivotRecoveryProbe || []")
                 observation["keyboardMoveTrace"] = driver.execute_script("return window.__pivotKeyboardMoveTrace || []")
+                observation["layoutStateTrace"] = driver.execute_script("return window.__pivotLayoutStateTrace || []")
             except Exception as error:
                 result["result"] = "blocked"
                 diagnostic += f"; evidence collection: {type(error).__name__}"
