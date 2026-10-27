@@ -685,6 +685,8 @@ def qualify_selected_clipboard(host: str, requirement: str) -> None:
         driver._pivot_loaded_assets = {}
         driver.execute_cdp_cmd("Network.enable", {"maxTotalBufferSize": 50000000, "maxResourceBufferSize": 50000000})
         driver.execute_cdp_cmd("Page.addScriptToEvaluateOnNewDocument", {"source": _PROBE_SCRIPT})
+        driver.execute_cdp_cmd("Page.addScriptToEvaluateOnNewDocument", {
+            "source": "window.__PIVOT_QUALIFY_KEYBOARD_MOVES__ = true;"})
         driver.execute_cdp_cmd("Browser.grantPermissions", {
             "origin": _origin(_host_url(host)), "permissions": ["clipboardReadWrite", "clipboardSanitizedWrite"]})
         _switch_to_workspace(driver, host)
@@ -906,6 +908,7 @@ def qualify_selected_clipboard(host: str, requirement: str) -> None:
                 driver.save_screenshot(str(screenshot))
                 paths.append(str(screenshot))
                 observation["runtimeTrace"] = driver.execute_script("return window.__pivotRecoveryProbe || []")
+                observation["keyboardMoveTrace"] = driver.execute_script("return window.__pivotKeyboardMoveTrace || []")
             except Exception as error:
                 result["result"] = "blocked"
                 diagnostic += f"; evidence collection: {type(error).__name__}"
@@ -1426,11 +1429,13 @@ def qualify_column_geometry(host: str, requirement: str) -> None:
             assert first["cells"] == second["cells"] == before["cells"]
             result.update(autoSizeFitVerified=True, autoSizeIdempotent=True, logicalValuesPreserved=True)
         elif requirement == "column-pinning.round-trip":
+            from selenium.common.exceptions import StaleElementReferenceException
+            geometry_wait = WebDriverWait(driver, 12, ignored_exceptions=(AssertionError, StaleElementReferenceException))
             ActionChains(driver).context_click(header).perform()
             _geometry_pin_submenu(driver, None)
             _selection_menu(driver, "Pin Left").click()
             observation["actions"].append("context menu Pin > Pin Left on Q2 sales")
-            wait.until(lambda current: _geometry_snapshot(current, sales)["pinnedLeft"] == [sales])
+            geometry_wait.until(lambda current: _geometry_snapshot(current, sales)["pinnedLeft"] == [sales])
             pinned = _geometry_snapshot(driver, sales)
             observation["states"].append({"phase": "pinned", **pinned})
             driver.save_screenshot(str(directory / "pinned.png"))
@@ -1468,7 +1473,6 @@ def qualify_column_geometry(host: str, requirement: str) -> None:
             _geometry_pin_submenu(driver, "left")
             _selection_menu(driver, "Unpin").click()
             observation["actions"].append("context menu Pin > Unpin")
-            geometry_wait = WebDriverWait(driver, 12, ignored_exceptions=(AssertionError,))
             geometry_wait.until(lambda current: _geometry_snapshot(current, sales)["pinnedLeft"] == [])
             ActionChains(driver).scroll_from_origin(ScrollOrigin.from_element(scroller), -10000, 0).perform()
             observation["actions"].append("trusted horizontal scroll back to the initial position")

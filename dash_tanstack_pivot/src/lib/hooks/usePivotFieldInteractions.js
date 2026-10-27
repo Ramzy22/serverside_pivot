@@ -498,6 +498,14 @@ export function usePivotFieldInteractions() {
         const baseOrder = keyboardOrderRef.current?.next || displayedOrder;
         const nextOrder = context.moveColumnIdByDelta(baseOrder, columnId, direction);
         const moved = !context.areStringArraysEqual(baseOrder, nextOrder);
+        if (typeof window !== 'undefined' && window.__PIVOT_QUALIFY_KEYBOARD_MOVES__ === true) {
+            window.__pivotKeyboardMoveTrace = window.__pivotKeyboardMoveTrace || [];
+            window.__pivotKeyboardMoveTrace.push({
+                at: performance.now(), columnId, direction, renderOrder, displayedOrder,
+                pendingOrder: pending?.next || null, baseOrder, nextOrder, moved,
+                availableColumnOrderIds: context.availableColumnOrderIds,
+            });
+        }
         if (moved) {
             keyboardOrderRef.current = { base: baseOrder, next: nextOrder };
             context.setColumnOrderWithHistory(nextOrder, 'layout:header-keyboard-reorder');
