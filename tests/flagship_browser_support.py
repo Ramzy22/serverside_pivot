@@ -616,6 +616,7 @@ def _selection_keyboard_copy(driver, observation):
     WebDriverWait(driver, SELECTION_COPY_TIMEOUT).until(lambda current:
         current.execute_script("return window.__pivotSelectionKeys.length") > before)
     events = driver.execute_script("return window.__pivotSelectionKeys")
+    assert len(events) == before + 1, "One copy shortcut produced multiple grid key events"
     assert events[-1]["trusted"] is True and events[-1]["targetRole"] == "grid", "Copy key missed the workspace grid"
     observation["nativeCopyKeys"] = events
 
@@ -802,6 +803,20 @@ def qualify_selected_clipboard(host: str, requirement: str) -> None:
         menu_label = "Copy Selection (Raw Values)" if requirement == "copy-selection.logical-cells" else "Copy Selection"
         _copy_selected(driver, _selection_cell(driver, row_ids[0], columns[0]), expected, observation,
                        menu_label=menu_label)
+        if requirement == "keyboard-copy.selection":
+            from tests.test_flagship_certification import _clipboard_text
+            menu_clipboard = observation["clipboardText"]
+            sentinel = "qualification keyboard copy checkpoint"
+            assert driver.execute_async_script(
+                "const done=arguments[arguments.length-1]; navigator.clipboard.writeText(arguments[0]).then(()=>done(true),()=>done(false));",
+                sentinel)
+            _selection_keyboard_copy(driver, observation)
+            copied = WebDriverWait(driver, SELECTION_COPY_TIMEOUT).until(lambda current: (
+                value if (value := _clipboard_text(current)) != sentinel else False))
+            observation["nativePositiveClipboard"] = copied
+            assert copied == menu_clipboard, "Keyboard copy differs from Copy Selection"
+            assert_selected_clipboard(copied, expected, line_separator=observation["clipboardLineSeparator"])
+            result["nativeKeyboardCopyVerified"] = True
         if requirement == "copy-selection.headers":
             selected_before_headers = set(observation["selectedIds"])
             assert set(_selection_ids(driver)) == selected_before_headers, "Body copy changed the selected rectangle"

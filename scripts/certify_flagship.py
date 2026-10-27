@@ -961,7 +961,8 @@ PRODUCT_BROWSER_JOURNEYS = {
     **{f"browser.{name}": f"test_flagship_selected_clipboard[{name}-{{host}}]"
        for name in ("cell-selection.range-clear", "copy-selection.logical-cells",
                     "copy-selection.display-order", "copy-selection.pinned-columns",
-                    "copy-selection.headers", "copy-selection.formatted-values")},
+                    "copy-selection.headers", "copy-selection.formatted-values",
+                    "keyboard-copy.selection")},
     **{f"browser.{name}": f"test_flagship_hierarchy_navigation[{name}-{{host}}]"
        for name in ("hierarchy-expand.round-trip", "hierarchy-expand-all.round-trip")},
     **{f"browser.{name}": f"test_flagship_virtual_scroll[{name}-{{host}}]"

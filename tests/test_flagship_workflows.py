@@ -1035,7 +1035,8 @@ def test_selection_copy_helper_chooses_raw_menu_action_in_real_browser(tmp_path)
 @pytest.mark.parametrize("host", ["dash", "react", "streamlit"])
 @pytest.mark.parametrize("requirement", ["cell-selection.range-clear", "copy-selection.logical-cells",
                                          "copy-selection.display-order", "copy-selection.pinned-columns",
-                                         "copy-selection.headers", "copy-selection.formatted-values"])
+                                         "copy-selection.headers", "copy-selection.formatted-values",
+                                         "keyboard-copy.selection"])
 def test_flagship_selected_clipboard(host, requirement, installed_workflow_hosts):
     from tests.flagship_browser_support import qualify_selected_clipboard
 
