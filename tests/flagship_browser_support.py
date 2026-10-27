@@ -1040,6 +1040,114 @@ def qualify_table_scope_clipboard(host: str, requirement: str) -> None:
     assert result["result"] == "passed", f"{host} {requirement}: {diagnostic}; evidence: {directory}"
 
 
+def qualify_native_input_copy(host: str) -> None:
+    """A focused input owns Ctrl+C even after a grid rectangle was selected."""
+    import pytest
+    if os.environ.get("PIVOT_RUN_FLAGSHIP_BROWSER_TESTS") != "1":
+        pytest.skip("Enable installed flagship browser qualification explicitly")
+    from selenium import webdriver
+    from selenium.webdriver.common.keys import Keys
+    from selenium.webdriver.support.ui import WebDriverWait
+    from scripts.flagship_artifacts import load_artifact_binding
+    from tests.test_flagship_certification import (
+        _clipboard_text, _host_url, _origin, _qualification_chrome_options,
+        _switch_to_workspace, _verify_release_asset_batch,
+        _wait_for_visible_workspace_element,
+    )
+
+    requirement = "keyboard-copy.native-input"
+    binding = load_artifact_binding(Path(os.environ["PIVOT_FLAGSHIP_ARTIFACT_BINDING"]))
+    run_id = os.environ["PIVOT_FLAGSHIP_RUN_ID"]
+    directory = Path(os.environ["PIVOT_FLAGSHIP_EVIDENCE_ROOT"]) / requirement / host
+    assert ("runs", run_id) in tuple(zip(directory.parts, directory.parts[1:]))
+    directory.mkdir(parents=True, exist_ok=True)
+    downloads = directory / "downloads"
+    downloads.mkdir(exist_ok=True)
+    driver = None
+    result = {"result": "blocked", "browser": "unavailable", "infrastructureUnavailable": True}
+    observation = {"requirement": requirement, "controls": []}
+    diagnostic, paths = "", []
+    try:
+        driver = webdriver.Chrome(options=_qualification_chrome_options(downloads))
+        driver._pivot_artifact_binding, driver._pivot_artifact_host = binding, host
+        driver._pivot_loaded_assets = {}
+        driver.execute_cdp_cmd("Network.enable", {"maxTotalBufferSize": 50000000, "maxResourceBufferSize": 50000000})
+        driver.execute_cdp_cmd("Browser.grantPermissions", {
+            "origin": _origin(_host_url(host)), "permissions": ["clipboardReadWrite", "clipboardSanitizedWrite"]})
+        _switch_to_workspace(driver, host)
+        result.update(result="failed", browser=f"{driver.capabilities['browserName']} {driver.capabilities['browserVersion']}",
+                      infrastructureUnavailable=False)
+        wait = WebDriverWait(driver, 12)
+        rows = wait.until(lambda current: candidate if len(candidate := _selection_rows(current)) == 2 else False)
+        columns = ["Q1_ventes_\u20ac_sum", "Q1_unit\u00e9s_sum"]
+        selected = _select_rectangle(driver, [row["id"] for row in rows], columns)
+        assert len(selected) == 4
+        observation["selectedGridCells"] = selected
+
+        def copy_focused_input(selector, expected, label):
+            element = _wait_for_visible_workspace_element(driver, selector)
+            element.click()
+            element.send_keys(Keys.CONTROL + "a" + Keys.NULL)
+            selected_text = driver.execute_script("""
+              const input=arguments[0];
+              if (input.getRootNode().activeElement!==input) return null;
+              // Chromium's number input does not expose selectionStart/End.
+              return input.type==='number' && input.selectionStart===null
+                ? input.value : input.value.slice(input.selectionStart,input.selectionEnd);
+            """, element)
+            observation["controls"].append({"control": label, "expected": expected,
+                                            "selectedTextBeforeCopy": selected_text,
+                                            "value": element.get_attribute("value"),
+                                            "activeTag": driver.execute_script(
+                                                "return arguments[0].getRootNode().activeElement?.tagName", element)})
+            assert selected_text == expected, f"{label} does not own the selected text"
+            sentinel = f"qualification native input {label}"
+            assert driver.execute_async_script(
+                "const done=arguments[arguments.length-1]; navigator.clipboard.writeText(arguments[0]).then(()=>done(true),()=>done(false));",
+                sentinel)
+            element.send_keys(Keys.CONTROL + "c" + Keys.NULL)
+            copied = WebDriverWait(driver, 8).until(lambda current:
+                value if (value := _clipboard_text(current)) != sentinel else False)
+            observation["controls"][-1]["clipboardText"] = copied
+            assert copied == expected, f"Ctrl+C in {label} copied grid contents or changed text"
+            observation["controls"][-1]["focused"] = True
+
+        search = _wait_for_visible_workspace_element(driver, '[data-testid="pivot-global-search"]')
+        search.click()
+        search.send_keys("M\u00fcnchen")
+        wait.until(lambda current: [row["label"] for row in _selection_rows(current)] == ["M\u00fcnchen"])
+        copy_focused_input('[data-testid="pivot-global-search"]', "M\u00fcnchen", "global search")
+        dialog = _open_selection_number_format(driver, observation)
+        number = _wait_for_visible_workspace_element(driver, dialog + ' input[type="number"]')
+        number.send_keys(Keys.CONTROL + "a" + Keys.NULL)
+        number.send_keys("4")
+        wait.until(lambda current: _wait_for_visible_workspace_element(
+            current, dialog + ' input[type="number"]').get_attribute("value") == "4")
+        copy_focused_input(dialog + ' input[type="number"]', "4", "format dialog number")
+        result.update(result="passed", clipboardBytesVerified=True, nativeKeyboardCopyVerified=True)
+    except Exception as error:
+        frame = traceback.extract_tb(error.__traceback__)[-1]
+        diagnostic = f"{type(error).__name__} at {Path(frame.filename).name}:{frame.lineno}: {error}"
+    finally:
+        if driver is not None:
+            try:
+                _verify_release_asset_batch(driver, require_assets=True)
+                result["loadedAssetSha256"] = dict(driver._pivot_loaded_assets)
+                observation["loadedAssetSha256"] = dict(driver._pivot_loaded_assets)
+                screenshot = directory / "final.png"
+                driver.save_screenshot(str(screenshot))
+                paths.append(str(screenshot))
+            finally:
+                driver.quit()
+        observation.update(diagnostic=diagnostic, result=result)
+        evidence = directory / "observation.json"
+        evidence.write_text(json.dumps(observation, ensure_ascii=False, indent=2), encoding="utf-8")
+        paths.append(str(evidence))
+        result["evidence_paths"] = paths
+        record_case(requirement, host, result, directory)
+    assert result["result"] == "passed", f"{host} {requirement}: {diagnostic}; evidence: {directory}"
+
+
 def _geometry_header(driver, column):
     from tests.test_flagship_certification import _workspace_elements
 

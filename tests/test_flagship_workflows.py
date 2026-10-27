@@ -1052,6 +1052,14 @@ def test_flagship_table_scope_clipboard(host, requirement, installed_workflow_ho
     qualify_table_scope_clipboard(host, requirement)
 
 
+@pytest.mark.flagship
+@pytest.mark.parametrize("host", ["dash", "react", "streamlit"])
+def test_flagship_native_input_copy(host, installed_workflow_hosts):
+    from tests.flagship_browser_support import qualify_native_input_copy
+
+    qualify_native_input_copy(host)
+
+
 def test_navigation_response_rejects_child_under_wrong_parent():
     from tests.flagship_browser_support import _navigation_response_matches
 

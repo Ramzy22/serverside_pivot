@@ -686,6 +686,12 @@ export const isEditableKeyboardTarget = (target) => {
     );
 };
 
+export const isEditableKeyboardEvent = (event) => {
+    if (isEditableKeyboardTarget(event?.target)) return true;
+    const path = typeof event?.composedPath === 'function' ? event.composedPath() : [];
+    return Array.isArray(path) && path.some(isEditableKeyboardTarget);
+};
+
 // ─── Tree Config Normalization ─────────────────────────────────────────────
 
 export const normalizeTreeConfigValue = (value) => {

@@ -1,6 +1,6 @@
 import { useEffect } from 'react';
 
-import { isEditableKeyboardTarget } from '../hooks/usePivotNormalization';
+import { isEditableKeyboardEvent } from '../hooks/usePivotNormalization';
 
 /** Owns spreadsheet-style paste from the window clipboard into selected cells. */
 export function useRuntimeClipboardPaste({
@@ -14,7 +14,7 @@ export function useRuntimeClipboardPaste({
       // Text controls own their clipboard behavior. Without this guard a
       // previously selected grid cell causes the window-level spreadsheet
       // paste handler to swallow paste in field search and other inputs.
-      if (isEditableKeyboardTarget(e.target)) return;
+      if (isEditableKeyboardEvent(e)) return;
       if (!lastSelected) return;
       e.preventDefault();
       const clipboardData = e.clipboardData.getData('text');

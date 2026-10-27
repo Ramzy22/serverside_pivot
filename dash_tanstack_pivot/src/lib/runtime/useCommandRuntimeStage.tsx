@@ -4,7 +4,7 @@ import React, { useMemo, useRef, useEffect, useCallback } from 'react';
 import { buildMeasureAxisRuntimeConfig } from '../utils/measureAxis';
 import { pivotLayoutRequestFields } from '../utils/columnOrder';
 import Icons from '../utils/Icons';
-import { DEFAULT_CHART_PANEL_ROW_LIMIT, DEFAULT_CHART_PANEL_COLUMN_LIMIT, VALID_CHART_SERVER_SCOPES, MAX_TRANSACTION_HISTORY_ENTRIES, normalizeCustomDimensionsValue, cloneSerializable, normalizeTransactionRefreshModeValue, isParentAggregatePropagationEdit, normalizeTransactionHistoryPayload, cellValuesMatch, hasAppliedTransactionWork, shouldShowTransactionLoading, isEditableKeyboardTarget, getRequestedChartSeriesColumnIds } from '../hooks/usePivotNormalization';
+import { DEFAULT_CHART_PANEL_ROW_LIMIT, DEFAULT_CHART_PANEL_COLUMN_LIMIT, VALID_CHART_SERVER_SCOPES, MAX_TRANSACTION_HISTORY_ENTRIES, normalizeCustomDimensionsValue, cloneSerializable, normalizeTransactionRefreshModeValue, isParentAggregatePropagationEdit, normalizeTransactionHistoryPayload, cellValuesMatch, hasAppliedTransactionWork, shouldShowTransactionLoading, isEditableKeyboardEvent, getRequestedChartSeriesColumnIds } from '../hooks/usePivotNormalization';
 const DEFAULT_SERVER_SIDE_BLOCK_SIZE = 48;
 const EXPAND_ALL_STATE_KEY = '__ALL__';
 const debugLog = (...args) => {
@@ -372,7 +372,7 @@ export function useCommandRuntimeStage(input, transportDomain) {
   for (const [key, value] of Object.entries(rowEditing)) stage[key] = value;
   useEffect(() => {
     const handleGlobalEditShortcut = event => {
-      if (event.defaultPrevented || isEditableKeyboardTarget(event.target)) return;
+      if (event.defaultPrevented || isEditableKeyboardEvent(event)) return;
       if (!(event.ctrlKey || event.metaKey) || event.altKey) return;
       const key = event.key.toLowerCase();
       if (key === 'z') {

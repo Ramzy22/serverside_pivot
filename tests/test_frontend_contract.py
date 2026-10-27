@@ -3625,7 +3625,8 @@ def test_grid_clipboard_shortcuts_preserve_native_editable_input_behavior():
         )
     ).read_text(encoding="utf-8")
 
-    assert component_source.count("if (isEditableKeyboardTarget(e.target)) return;") >= 3
+    assert component_source.count("isEditableKeyboardEvent(") >= 4
+    assert "event.composedPath()" in normalization_source
     assert "previously selected grid cell causes the window-level spreadsheet" in component_source
     assert "[contenteditable=\"plaintext-only\"]" in normalization_source
 

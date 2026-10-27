@@ -966,6 +966,7 @@ PRODUCT_BROWSER_JOURNEYS = {
                     "keyboard-copy.selection")},
     **{f"browser.{name}": f"test_flagship_table_scope_clipboard[{name}-{{host}}]"
        for name in ("copy-current-table.visible-scope", "copy-all-records.complete-scope")},
+    "browser.keyboard-copy.native-input": "test_flagship_native_input_copy[{host}]",
     **{f"browser.{name}": f"test_flagship_hierarchy_navigation[{name}-{{host}}]"
        for name in ("hierarchy-expand.round-trip", "hierarchy-expand-all.round-trip")},
     **{f"browser.{name}": f"test_flagship_virtual_scroll[{name}-{{host}}]"

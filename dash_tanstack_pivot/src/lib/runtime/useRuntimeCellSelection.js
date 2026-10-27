@@ -1,5 +1,5 @@
 import { useCallback, useEffect } from 'react';
-import { isEditableKeyboardTarget } from '../hooks/usePivotNormalization';
+import { isEditableKeyboardEvent } from '../hooks/usePivotNormalization';
 import { getDisplayOrderedLeafColumns, isSelectableDisplayColumn } from './displayColumnOrder';
 
 /**
@@ -60,7 +60,7 @@ export function useRuntimeCellSelection({
   const handleKeyDown = useCallback(e => {
     // Preserve native editing shortcuts whenever the event originated in a
     // text control.
-    if (isEditableKeyboardTarget(e.target)) return;
+    if (isEditableKeyboardEvent(e)) return;
     if ((e.ctrlKey || e.metaKey) && !e.altKey && e.key) {
       const shortcutKey = e.key.toLowerCase();
       if (shortcutKey === 'z') {
@@ -302,7 +302,7 @@ export function useRuntimeCellSelection({
 
   useEffect(() => {
     const handleGlobalCopy = e => {
-      if (isEditableKeyboardTarget(e.target)) return;
+      if (isEditableKeyboardEvent(e)) return;
       if ((e.ctrlKey || e.metaKey) && e.key === 'c') {
         const keys = Object.keys(selectedCells);
         if (keys.length === 0) return;
