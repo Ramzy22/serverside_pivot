@@ -1046,6 +1046,8 @@ def qualify_native_input_copy(host: str) -> None:
     if os.environ.get("PIVOT_RUN_FLAGSHIP_BROWSER_TESTS") != "1":
         pytest.skip("Enable installed flagship browser qualification explicitly")
     from selenium import webdriver
+    from selenium.common.exceptions import StaleElementReferenceException
+    from selenium.webdriver.common.action_chains import ActionChains
     from selenium.webdriver.common.keys import Keys
     from selenium.webdriver.support.ui import WebDriverWait
     from scripts.flagship_artifacts import load_artifact_binding
@@ -1105,16 +1107,27 @@ def qualify_native_input_copy(host: str) -> None:
             assert driver.execute_async_script(
                 "const done=arguments[arguments.length-1]; navigator.clipboard.writeText(arguments[0]).then(()=>done(true),()=>done(false));",
                 sentinel)
-            element.send_keys(Keys.CONTROL + "c" + Keys.NULL)
-            copied = WebDriverWait(driver, 8).until(lambda current:
-                value if (value := _clipboard_text(current)) != sentinel else False)
+            ActionChains(driver).key_down(Keys.CONTROL).send_keys("c").key_up(Keys.CONTROL).perform()
+            try:
+                copied = WebDriverWait(driver, 8).until(lambda current:
+                    value if (value := _clipboard_text(current)) != sentinel else False)
+            except Exception:
+                observation["controls"][-1]["clipboardAfterTimeout"] = _clipboard_text(driver)
+                raise
             observation["controls"][-1]["clipboardText"] = copied
             assert copied == expected, f"Ctrl+C in {label} copied grid contents or changed text"
             observation["controls"][-1]["focused"] = True
 
-        search = _wait_for_visible_workspace_element(driver, '[data-testid="pivot-global-search"]')
-        search.click()
-        search.send_keys("M\u00fcnchen")
+        for attempt in range(3):
+            search = _wait_for_visible_workspace_element(driver, '[data-testid="pivot-global-search"]')
+            try:
+                if search.get_attribute("value") != "M\u00fcnchen":
+                    search.click()
+                    search.send_keys("M\u00fcnchen")
+                break
+            except StaleElementReferenceException:
+                if attempt == 2:
+                    raise
         wait.until(lambda current: [row["label"] for row in _selection_rows(current)] == ["M\u00fcnchen"])
         copy_focused_input('[data-testid="pivot-global-search"]', "M\u00fcnchen", "global search")
         dialog = _open_selection_number_format(driver, observation)
