@@ -736,7 +736,7 @@ def qualify_selected_clipboard(host: str, requirement: str) -> None:
             _wait_selection_sort(driver, checkpoint, "hierarchy", observation)
         rows = wait.until(lambda current: (
             candidate if len(candidate := _selection_rows(current)) == 2
-            and {row["label"] for row in candidate} == {"Ã‰clair", "MÃ¼nchen"} else False))
+            and {row["label"] for row in candidate} == {row["label"] for row in observation["initialRows"]} else False))
         row_ids = [row["id"] for row in rows]
         observation["selectedRows"] = rows
         if requirement == "copy-selection.pinned-columns":

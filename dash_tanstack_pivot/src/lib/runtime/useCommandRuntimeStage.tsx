@@ -430,6 +430,12 @@ export function useCommandRuntimeStage(input, transportDomain) {
       : {};
     if (payload && runtimeRequest.kind === 'data') {
       stage.latestLayoutSentManifestRef.current = stage.pivotLayoutOrderRef.current;
+      // A newly sent manifest makes the previous revision/manifest pair
+      // provisional. If the user returns to the old order before the server
+      // acknowledges this request, that old order must still be sent.
+      if (layoutFields.layoutManifest !== undefined) {
+        stage.layoutAcknowledgedManifestRef.current = '__layout_pending__';
+      }
     }
     if (payload && !Object.prototype.hasOwnProperty.call(payload, 'state_override') && !Object.prototype.hasOwnProperty.call(payload, 'stateOverride')) {
       dispatchSetProps({
