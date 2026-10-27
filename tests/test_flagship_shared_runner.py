@@ -32,6 +32,17 @@ def test_mapped_cases_execute_parsed_exact_document_assertions():
         assert "tests/export_qualification_fixture.py" in assertions[0].sources
 
 
+def test_table_scope_mappings_execute_real_runtime_service_exports():
+    current = SHARED_ASSERTIONS["shared.copy-current-table.visible-scope"]
+    all_rows = SHARED_ASSERTIONS["shared.copy-all-records.complete-scope"]
+    assert len(current) == 1 and "collapsed_hierarchy_state" in current[0].node
+    assert len(all_rows) == 3
+    assert {assertion.node.rsplit("[", 1)[-1] for assertion in all_rows} == {
+        "hierarchy]", "outline]", "tabular]",
+    }
+    assert all("tests/test_runtime_service.py" in assertion.sources for assertion in (*current, *all_rows))
+
+
 def test_run_rejects_evidence_outside_current_run(tmp_path):
     class Binding:
         run_id = "current"

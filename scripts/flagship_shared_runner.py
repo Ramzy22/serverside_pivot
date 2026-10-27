@@ -31,6 +31,18 @@ class SharedAssertion:
 # Each mapped assertion checks a parsed, literal document against an independent
 # expected result, including order, totals, numeric values, and Unicode text.
 SHARED_ASSERTIONS: Mapping[str, tuple[SharedAssertion, ...]] = {
+    "shared.copy-current-table.visible-scope": (
+        SharedAssertion(
+            "tests/test_runtime_service.py::test_runtime_service_current_table_export_preserves_collapsed_hierarchy_state",
+            ("tests/__init__.py", "tests/test_runtime_service.py"),
+        ),
+    ),
+    "shared.copy-all-records.complete-scope": tuple(
+        SharedAssertion(
+            f"tests/test_runtime_service.py::test_runtime_service_all_rows_export_is_independent_of_viewport_and_collapsed_state[{layout}]",
+            ("tests/__init__.py", "tests/test_runtime_service.py"),
+        ) for layout in ("hierarchy", "outline", "tabular")
+    ),
     "shared.export-csv.exact-document": (
         SharedAssertion(
             "tests/test_export_qualification_runtime.py::test_runtime_exports_fixture_with_order_filter_totals_numeric_and_unicode[csv]",
