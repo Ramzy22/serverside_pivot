@@ -1296,6 +1296,11 @@ if (!window.__pivotRecoveryProbe) {
         ? value.payload.data.find(row => row?._id === 'Grand Total' && row?._isTotal === true) : null;
       trace.push({phase, requestId:value.requestId, kind:value.kind,
                   status:value.status || null, at:performance.now(),
+                  layoutRevision:value.payload?.layoutRevision || null,
+                  layoutManifest:Array.isArray(value.payload?.layoutManifest)
+                    ? value.payload.layoutManifest : null,
+                  columnIds:Array.isArray(value.payload?.colSchema?.columns)
+                    ? value.payload.colSchema.columns.map(column => column?.id) : null,
                   rawExpectedTotal: phase === 'response' && grand !== null
                     && grand['__RowTotal__ventes_€_sum'] === 200
                     && grand['__RowTotal__unités_sum'] === 10

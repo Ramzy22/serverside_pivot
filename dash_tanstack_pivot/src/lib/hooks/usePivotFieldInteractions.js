@@ -480,15 +480,20 @@ export function usePivotFieldInteractions() {
             || typeof context.areStringArraysEqual !== 'function'
             || typeof context.setColumnOrderWithHistory !== 'function') return false;
         const direction = delta < 0 ? -1 : 1;
-        const baseOrder = context.mergeColumnOrderWithIds(context.columnOrder, context.availableColumnOrderIds);
-        const nextOrder = context.moveColumnIdByDelta(baseOrder, columnId, direction);
-        const moved = !context.areStringArraysEqual(baseOrder, nextOrder);
+        const renderOrder = context.mergeColumnOrderWithIds(context.columnOrder, context.availableColumnOrderIds);
+        // Server-side schema order is the order the user can see. The saved
+        // cell order can temporarily lag it while a layout response settles.
+        const displayedOrder = context.mergeColumnOrderWithIds(
+            context.effectiveColumnOrder || context.columnOrder, context.availableColumnOrderIds);
+        const moved = !context.areStringArraysEqual(displayedOrder,
+            context.moveColumnIdByDelta(displayedOrder, columnId, direction));
         if (moved) context.setColumnOrderWithHistory(previousOrder => {
-            // A second key can arrive before this render's context ref has
-            // received the first move. Resolve against the setter's latest
-            // state so rapid keyboard moves compose in order.
             const latestOrder = context.mergeColumnOrderWithIds(previousOrder, context.availableColumnOrderIds);
-            return context.moveColumnIdByDelta(latestOrder, columnId, direction);
+            // A queued move changes previousOrder before this render's
+            // context updates. Otherwise use the displayed schema order.
+            const baseOrder = context.areStringArraysEqual(latestOrder, renderOrder)
+                ? displayedOrder : latestOrder;
+            return context.moveColumnIdByDelta(baseOrder, columnId, direction);
         }, 'layout:header-keyboard-reorder');
         if (moved && typeof context.setAnnouncement === 'function' && typeof context.getLocaleText === 'function') {
             context.setAnnouncement(context.getLocaleText('columnMovedByKeyboardAnnouncement', '{label} moved {direction}.', {

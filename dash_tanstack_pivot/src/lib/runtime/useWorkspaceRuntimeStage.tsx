@@ -310,6 +310,7 @@ export function useWorkspaceRuntimeStage(input) {
     parentRef: workspace.parentRef,
     getPinningState: workspace.getPinningState,
     availableColumnOrderIds: workspace.availableColumnOrderIds,
+    effectiveColumnOrder: workspace.effectiveColumnOrder,
     columnOrder: workspace.columnOrder,
     mergeColumnOrderWithIds,
     moveColumnIdInOrder,
