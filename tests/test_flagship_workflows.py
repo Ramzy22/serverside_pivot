@@ -1043,6 +1043,15 @@ def test_flagship_selected_clipboard(host, requirement, installed_workflow_hosts
     qualify_selected_clipboard(host, requirement)
 
 
+@pytest.mark.flagship
+@pytest.mark.parametrize("host", ["dash", "react", "streamlit"])
+@pytest.mark.parametrize("requirement", ["copy-current-table.visible-scope", "copy-all-records.complete-scope"])
+def test_flagship_table_scope_clipboard(host, requirement, installed_workflow_hosts):
+    from tests.flagship_browser_support import qualify_table_scope_clipboard
+
+    qualify_table_scope_clipboard(host, requirement)
+
+
 def test_navigation_response_rejects_child_under_wrong_parent():
     from tests.flagship_browser_support import _navigation_response_matches
 

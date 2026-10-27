@@ -80,6 +80,9 @@ dev = [
     "starlette>=0.27.0",
     "tomli>=2.0.0; python_version < '3.11'",
 ]
+qualification = [
+    "pytest>=7.0.0",
+]
 security = [
     "bandit[toml]==1.7.9",
     "cyclonedx-bom==4.5.0",

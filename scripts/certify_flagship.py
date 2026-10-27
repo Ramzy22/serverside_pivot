@@ -24,6 +24,7 @@ import urllib.error
 import urllib.request
 import xml.etree.ElementTree as ET
 from contextlib import ExitStack, contextmanager
+from dataclasses import asdict
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Callable, Iterator, Mapping
@@ -963,6 +964,8 @@ PRODUCT_BROWSER_JOURNEYS = {
                     "copy-selection.display-order", "copy-selection.pinned-columns",
                     "copy-selection.headers", "copy-selection.formatted-values",
                     "keyboard-copy.selection")},
+    **{f"browser.{name}": f"test_flagship_table_scope_clipboard[{name}-{{host}}]"
+       for name in ("copy-current-table.visible-scope", "copy-all-records.complete-scope")},
     **{f"browser.{name}": f"test_flagship_hierarchy_navigation[{name}-{{host}}]"
        for name in ("hierarchy-expand.round-trip", "hierarchy-expand-all.round-trip")},
     **{f"browser.{name}": f"test_flagship_virtual_scroll[{name}-{{host}}]"
@@ -1071,6 +1074,7 @@ def _certify_installed_release(artifact_dir: Path, started_at: datetime, *, buil
         load_case_envelope, publish_safe_manifest, read_committed_contract, load_committed_requirements,
     )
     from scripts.flagship_reference_runner import start_reference_server
+    from scripts.flagship_shared_runner import run_shared_qualification
     from tests.flagship_reference_support import load_case_results, write_reference_case_envelope
 
     result = "failed"
@@ -1158,6 +1162,30 @@ def _certify_installed_release(artifact_dir: Path, started_at: datetime, *, buil
                 # Even a failing parity journey cannot suppress export coverage.
                 if not product_requirements:
                     break
+            if not export_jobs and product_requirements:
+                try:
+                    shared_cases, unmapped_shared = run_shared_qualification(
+                        binding, artifacts.paths["python"], private, requirements=product_requirements)
+                    if unmapped_shared:
+                        print("Missing shared assertion mappings: " + ", ".join(unmapped_shared), flush=True)
+                    if shared_cases:
+                        envelope = json.loads(envelopes["product"].read_text(encoding="utf-8"))
+                        expected = {"schema_version": 1, "run_id": run_id,
+                                    "source_commit": binding.source_commit, "sha256": binding.sha256}
+                        if any(envelope.get(key) != value for key, value in expected.items()):
+                            raise ValueError("product case envelope differs from candidate")
+                        existing = {(case["requirement_id"], case["host"], case["test_id"])
+                                    for case in envelope["results"]}
+                        if any((case.requirement_id, case.host, case.test_id) in existing for case in shared_cases):
+                            raise ValueError("duplicate shared assertion case")
+                        envelope["results"].extend(asdict(case) for case in shared_cases)
+                        envelopes["product"].write_text(json.dumps(envelope, indent=2) + "\n", encoding="utf-8")
+                except Exception as error:
+                    product_issues.append("qualification_incomplete")
+                    code = code or 1
+                    (private / "shared-error.json").write_text(json.dumps({
+                        "type": type(error).__name__, "reason": str(error),
+                    }, indent=2) + "\n", encoding="utf-8")
         finally:
             try:
                 combined = ET.Element("testsuites")

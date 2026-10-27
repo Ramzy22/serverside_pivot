@@ -252,7 +252,7 @@ def _build_from_snapshot(commit: str, snapshot: Path, output: Path, *, build_whe
     private_record = json.loads(environment_record.read_text(encoding="utf-8"))
     private_record.update(sourceCommit=commit, wheelSha256=_digest(wheel.read_bytes()))
     environment_record.write_text(json.dumps(private_record, indent=2), encoding="utf-8")
-    _run([str(python), "-m", "pip", "--isolated", "install", "--force-reinstall", f"{wheel}[streamlit,api]"], output)
+    _run([str(python), "-m", "pip", "--isolated", "install", "--force-reinstall", f"{wheel}[streamlit,api,qualification]"], output)
 
     app = output / "installed-app"
     (app / "examples").mkdir(parents=True)

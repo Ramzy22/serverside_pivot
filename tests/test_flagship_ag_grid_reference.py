@@ -152,6 +152,98 @@ def test_reference_copy_display_order_after_sort_and_reorder(reference_run):
         case.observed = 'Column API reordered units before sales and requested descending region order; real selection/copy preserved exact visible row and field order'
 
 
+def test_reference_range_selection_clears_without_reusing_old_cells(reference_run):
+    """The four selected logical cells disappear when the range is cleared."""
+    with reference_case('cell-selection.range-clear', reference_run) as case:
+        driver = case.driver
+        selected = _select_rectangle(driver, 'Q1|ventes_\u20ac', 'Q1|unit\u00e9s')
+        _assert_cells(selected, {
+            ('0', 'Q1|ventes_\u20ac'): '100.25', ('0', 'Q1|unit\u00e9s'): '2.00',
+            ('1', 'Q1|ventes_\u20ac'): '49.75', ('1', 'Q1|unit\u00e9s'): '3.00',
+        })
+        driver.execute_script('window.referenceGrid.clearCellSelection()')
+        cleared = driver.execute_script("return [...document.querySelectorAll('[role=gridcell].ag-cell-range-selected')].map(e => e.getAttribute('col-id'))")
+        assert cleared == []
+        sentinel = 'no-cleared-range-content'
+        assert _clipboard(driver, sentinel=sentinel) == sentinel
+        driver.find_element(By.ID, 'copy').click()
+        assert _clipboard(driver) == sentinel
+        case.parsed_output = {'selected': selected, 'selected_after_clear': cleared, 'clipboard_after_clear': sentinel}
+        case.observed = 'Mouse-selected exact 2x2 Q1 rectangle; AG Grid clearCellSelection removed highlights and Copy Selection left the clipboard sentinel untouched'
+
+
+def test_reference_copy_logical_cells_exact_body(reference_run):
+    """A reordered two-row range copies only its selected logical cells."""
+    with reference_case('copy-selection.logical-cells', reference_run) as case:
+        driver = case.driver
+        driver.execute_script("window.referenceGrid.moveColumns(['Q1|ventes_\u20ac'], 1)")
+        order = driver.execute_script('return window.referenceGrid.getAllDisplayedColumns().map(c => c.getColId())')
+        assert order[:3] == ['ag-Grid-AutoColumn', 'Q1|ventes_\u20ac', 'Q1|unit\u00e9s']
+        labels = _wait_column(driver, 'ag-Grid-AutoColumn', ['\u00c9clair', 'M\u00fcnchen', 'Total'])
+        selected = _select_rectangle(driver, 'Q1|ventes_\u20ac', 'Q1|unit\u00e9s')
+        copied = _copy_selection(driver)
+        assert copied['rows'] == [['100.25', '2.00'], ['49.75', '3.00']]
+        assert copied['text'].replace('\r\n', '\n') == '100.25\t2.00\n49.75\t3.00'
+        case.parsed_output = {'order': order, 'labels': labels, 'selected': selected, 'clipboard': copied}
+        case.observed = 'Moved Q1 sales before units, mouse-selected the two displayed group rows, and verified the exact 2x2 clipboard body without extra rows or measures'
+
+
+def test_reference_hidden_column_is_absent_from_selected_clipboard(reference_run):
+    """Hiding variance does not introduce a hidden value or header placeholder."""
+    with reference_case('copy-selection.hidden-columns', reference_run) as case:
+        driver = case.driver
+        driver.execute_script("window.referenceGrid.setColumnsVisible(['Q1|\u00e9cart'], false)")
+        order = driver.execute_script('return window.referenceGrid.getAllDisplayedColumns().map(c => c.getColId())')
+        assert order[:3] == ['ag-Grid-AutoColumn', 'Q1|ventes_\u20ac', 'Q1|unit\u00e9s']
+        assert 'Q1|\u00e9cart' not in order
+        selected = _select_rectangle(driver, 'Q1|ventes_\u20ac', 'Q1|unit\u00e9s')
+        copied = _copy_selection(driver, headers=True)
+        assert copied['rows'] == [['Ventes_\u20ac', 'Unit\u00e9s'], ['100.25', '2.00'], ['49.75', '3.00']]
+        assert len(selected) == 4
+        case.parsed_output = {'displayed_order': order, 'selected': selected, 'clipboard': copied}
+        case.observed = 'Hid Q1 variance through the column API, selected visible Q1 sales and units, and verified exact two-column headers and values from the real clipboard'
+
+
+def test_reference_keyboard_copy_selected_range(reference_run):
+    """The grid keyboard shortcut copies the same selected body as the UI command."""
+    with reference_case('keyboard-copy.selection', reference_run) as case:
+        driver = case.driver
+        selected = _select_rectangle(driver, 'Q1|ventes_\u20ac', 'Q1|unit\u00e9s')
+        expected = _copy_selection(driver)
+        # The Copy button receives focus; make the range's own cell the active
+        # keyboard target again before testing AG Grid's native shortcut.
+        selected = _select_rectangle(driver, 'Q1|ventes_\u20ac', 'Q1|unit\u00e9s')
+        assert len(selected) == 4
+        sentinel = 'keyboard-copy-must-change'
+        assert _clipboard(driver, sentinel=sentinel) == sentinel
+        assert driver.execute_script("return document.activeElement?.closest('[role=gridcell]')?.getAttribute('col-id')") in {'Q1|ventes_\u20ac', 'Q1|unit\u00e9s'}
+        ActionChains(driver).key_down(Keys.CONTROL).send_keys('c').key_up(Keys.CONTROL).perform()
+        actual = WebDriverWait(driver, 5).until(lambda browser: text if (text := _clipboard(browser)) != sentinel else False)
+        assert actual == expected['text']
+        case.parsed_output = {'selected': selected, 'ui_copy': expected, 'keyboard_clipboard': actual, 'shortcut': 'Ctrl+C'}
+        case.observed = 'With the 2x2 range selected, physical Ctrl+C copied exactly the same clipboard bytes as the reference Copy Selection button'
+
+
+def test_reference_keyboard_copy_preserves_focused_search_input(reference_run):
+    """A focused search field owns native copy even while a grid range exists."""
+    with reference_case('keyboard-copy.native-input', reference_run) as case:
+        driver = case.driver
+        selected = _select_rectangle(driver, 'Q1|ventes_\u20ac', 'Q1|unit\u00e9s')
+        search = driver.find_element(By.ID, 'global-search')
+        search.click()
+        search.send_keys('M\u00fcnchen')
+        search.send_keys(Keys.CONTROL, 'a')
+        assert driver.execute_script('return document.activeElement?.id') == 'global-search'
+        assert driver.execute_script('return getSelection()?.toString() || document.activeElement.value.slice(document.activeElement.selectionStart, document.activeElement.selectionEnd)') == 'M\u00fcnchen'
+        sentinel = 'input-copy-must-change'
+        assert _clipboard(driver, sentinel=sentinel) == sentinel
+        ActionChains(driver).key_down(Keys.CONTROL).send_keys('c').key_up(Keys.CONTROL).perform()
+        copied = WebDriverWait(driver, 5).until(lambda browser: text if (text := _clipboard(browser)) != sentinel else False)
+        assert copied == 'M\u00fcnchen'
+        case.parsed_output = {'selected_grid_cells': selected, 'active_element': 'global-search', 'clipboard': copied, 'shortcut': 'Ctrl+C'}
+        case.observed = 'A 2x2 grid range remained selected, but Ctrl+C in the focused search input copied its selected Unicode text rather than grid cells'
+
+
 @pytest.mark.parametrize('requirement,fields,expected', [
     ('tabs', ['copyTab', 'rowId'], [['left\tright', 'q1-eclair'], ['', 'q2-eclair'], ['', 'q1-munchen'], ['', 'q2-munchen']]),
     ('newlines', ['copyLF', 'copyCRLF'], [['', ''], ['first\nsecond', ''], ['', 'first\r\nsecond'], ['', '']]),

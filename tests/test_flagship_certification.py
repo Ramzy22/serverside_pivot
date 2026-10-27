@@ -832,11 +832,10 @@ def test_product_coverage_rejects_incomplete_or_substituted_case_evidence(tmp_pa
 def test_full_product_plan_reports_missing_contract_ids_and_selects_all_authored_journeys(tmp_path):
     from scripts import certify_flagship as runner
     from tests.flagship_contract import load_requirements
-
     requirements = load_requirements(ROOT / "tests/flagship_requirements.json")
     report = runner._installed_browser_coverage(tmp_path / "absent.xml", requirements, ())
-    assert {"requirementId": "initial-workspace.populated", "host": "dash",
-            "testId": "browser.initial-workspace.populated"} in report["missingImplementations"]
+    assert {"requirementId": "saved-scroll.restore", "host": "dash",
+            "testId": "browser.saved-scroll.restore"} in report["missingImplementations"]
     assert "tests/test_flagship_workflows.py::test_flagship_runtime_error_recovery[react]" in report["selectedNodeIds"]
     assert "tests/test_flagship_workflows.py::test_flagship_export_jobs[large-delivery.progress-streamlit]" in report["selectedNodeIds"]
     assert not any("test_flagship_startup_navigation" in item for item in report["selectedNodeIds"])
@@ -1028,7 +1027,12 @@ def test_installed_qualifier_rejects_missing_product_map_even_with_valid_referen
     coverage = json.loads((private / "product-browser-coverage.json").read_text())
     assert coverage["scope"] == "complete-installed-release"
     assert coverage["missingImplementations"]
-    assert coverage["selectedCaseCount"] == 57
+    from scripts import certify_flagship as runner
+    from tests.flagship_contract import load_requirements
+    requirements = load_requirements(ROOT / "tests/flagship_requirements.json")
+    assert coverage["selectedCaseCount"] == len({
+        node for node in runner._product_browser_plan(requirements).values() if node
+    })
     if product_damage == "all-authored":
         assert coverage["missingJUnitCases"] == []
         assert coverage["unexpectedJUnitCases"] == []

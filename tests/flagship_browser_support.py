@@ -895,6 +895,151 @@ def qualify_selected_clipboard(host: str, requirement: str) -> None:
     assert result["result"] == "passed", f"{host} {requirement}: {diagnostic}; evidence: {directory}"
 
 
+_TABLE_COPY_PROBE = r"""
+if (!window.__pivotTableCopyTrace) {
+  const trace = window.__pivotTableCopyTrace = [];
+  const visit = (raw, phase) => {
+    let value = raw;
+    if (typeof value === 'string') { try { value = JSON.parse(value); } catch (_) { return; } }
+    if (!value || typeof value !== 'object') return;
+    if (value.schemaVersion === 1 && value.kind === 'export' && value.requestId) {
+      trace.push({phase, requestId:value.requestId, status:value.status || null,
+        format:value.payload?.format || null, allRows:value.payload?.allRows ?? null,
+        includeHeaders:value.payload?.includeHeaders ?? null,
+        colIds:value.payload?.colIds || null, rows:value.payload?.rows ?? null,
+        hasPayloadRef:Boolean(value.payload?.payloadRef)});
+      return;
+    }
+    if (Array.isArray(value)) value.forEach(item => visit(item, phase));
+    else Object.values(value).forEach(item => visit(item, phase));
+  };
+  const fetch = window.fetch.bind(window);
+  window.fetch = (...args) => {
+    if (args[1]?.body) visit(args[1].body, 'request');
+    return fetch(...args).then(response => {
+      response.clone().text().then(body => visit(body, 'response')).catch(() => {});
+      return response;
+    });
+  };
+  const send = XMLHttpRequest.prototype.send;
+  XMLHttpRequest.prototype.send = function(body) {
+    visit(body, 'request');
+    this.addEventListener('load', () => visit(this.responseText, 'response'));
+    return send.call(this, body);
+  };
+}
+"""
+
+
+def qualify_table_scope_clipboard(host: str, requirement: str) -> None:
+    """Copy collapsed display or full hierarchy through an installed host."""
+    import pytest
+    if os.environ.get("PIVOT_RUN_FLAGSHIP_BROWSER_TESTS") != "1":
+        pytest.skip("Enable installed flagship browser qualification explicitly")
+    from selenium import webdriver
+    from selenium.webdriver.common.action_chains import ActionChains
+    from selenium.webdriver.support.ui import WebDriverWait
+    from scripts.flagship_artifacts import load_artifact_binding
+    from tests.test_flagship_certification import (
+        _clipboard_text, _host_url, _origin, _qualification_chrome_options,
+        _switch_to_workspace, _verify_release_asset_batch, _workspace_elements,
+    )
+
+    assert requirement in {"copy-current-table.visible-scope", "copy-all-records.complete-scope"}
+    binding = load_artifact_binding(Path(os.environ["PIVOT_FLAGSHIP_ARTIFACT_BINDING"]))
+    run_id = os.environ["PIVOT_FLAGSHIP_RUN_ID"]
+    directory = Path(os.environ["PIVOT_FLAGSHIP_EVIDENCE_ROOT"]) / requirement / host
+    assert ("runs", run_id) in tuple(zip(directory.parts, directory.parts[1:]))
+    directory.mkdir(parents=True, exist_ok=True)
+    downloads = directory / "downloads"
+    downloads.mkdir(exist_ok=True)
+    driver = None
+    result = {"result": "blocked", "browser": "unavailable", "infrastructureUnavailable": True}
+    observation = {"requirement": requirement, "actions": []}
+    diagnostic, paths = "", []
+    try:
+        driver = webdriver.Chrome(options=_qualification_chrome_options(downloads))
+        driver._pivot_artifact_binding, driver._pivot_artifact_host = binding, host
+        driver._pivot_loaded_assets = {}
+        driver.execute_cdp_cmd("Network.enable", {"maxTotalBufferSize": 50000000, "maxResourceBufferSize": 50000000})
+        driver.execute_cdp_cmd("Page.addScriptToEvaluateOnNewDocument", {"source": _TABLE_COPY_PROBE})
+        driver.execute_cdp_cmd("Browser.grantPermissions", {
+            "origin": _origin(_host_url(host)), "permissions": ["clipboardReadWrite", "clipboardSanitizedWrite"]})
+        _switch_to_workspace(driver, host)
+        wait = WebDriverWait(driver, 15)
+        visible_rows = wait.until(lambda current: (
+            rows if len(rows := _selection_rows(current)) == 2
+            and {row["label"] for row in rows} == {"\u00c9clair", "M\u00fcnchen"} else False))
+        assert not any(cell.is_displayed() and cell.text.strip() in {"\u6771\u4eac", "\u0627\u0644\u0642\u0627\u0647\u0631\u0629"}
+                       for cell in _workspace_elements(driver, '[role="gridcell"][data-colid="hierarchy"]'))
+        result.update(result="failed", browser=f"{driver.capabilities['browserName']} {driver.capabilities['browserVersion']}",
+                      infrastructureUnavailable=False)
+        column_ids = _selection_column_order(driver)
+        observation["visibleRowsBeforeCopy"] = visible_rows
+        observation["displayedColumnIds"] = column_ids
+        sentinel = "qualification table copy checkpoint"
+        assert driver.execute_async_script(
+            "const done=arguments[arguments.length-1]; navigator.clipboard.writeText(arguments[0]).then(()=>done(true),()=>done(false));",
+            sentinel)
+        first_cell = _selection_cell(driver, visible_rows[0]["id"], "Q1_ventes_\u20ac_sum")
+        ActionChains(driver).context_click(first_cell).perform()
+        action = "Copy Current Table" if requirement == "copy-current-table.visible-scope" else "Copy All Records"
+        item = WebDriverWait(driver, 8).until(lambda current: next((
+            candidate for candidate in _workspace_elements(current, '[role="menuitem"]')
+            if candidate.is_displayed() and candidate.is_enabled() and candidate.text.strip() == action
+        ), False))
+        item.click()
+        observation["actions"].append(action)
+        copied = WebDriverWait(driver, 20).until(lambda current: (
+            value if (value := _clipboard_text(current)) != sentinel else False))
+        parsed = list(csv.reader(io.StringIO(copied), delimiter="\t"))
+        observation["clipboardText"] = copied
+        observation["parsedTSV"] = parsed
+        assert parsed and len(parsed[0]) == len(column_ids), "Clipboard headers do not match displayed columns"
+        assert any("Region" in cell for cell in parsed[0]), "Hierarchy header is missing"
+        labels = [row[0].strip() for row in parsed[1:]]
+        expected_labels = {"\u00c9clair", "M\u00fcnchen", "Grand Total"}
+        if requirement == "copy-all-records.complete-scope":
+            expected_labels |= {"\u6771\u4eac", "\u0627\u0644\u0642\u0627\u0647\u0631\u0629"}
+        assert set(labels) == expected_labels and len(labels) == len(expected_labels), (
+            "Clipboard hierarchy differs from the fixture scope")
+        assert "S\u00e3o Paulo" not in copied and "\u5317\u4eac" not in copied
+        if requirement == "copy-current-table.visible-scope":
+            assert "\u6771\u4eac" not in copied and "\u0627\u0644\u0642\u0627\u0647\u0631\u0629" not in copied
+        trace = driver.execute_script("return window.__pivotTableCopyTrace || []")
+        requests = [entry for entry in trace if entry["phase"] == "request" and entry["format"] == "html"]
+        assert len(requests) == 1, "Table copy did not issue exactly one HTML export request"
+        request = requests[0]
+        assert request["allRows"] is (requirement == "copy-all-records.complete-scope")
+        assert request["includeHeaders"] is True
+        assert request["colIds"] == column_ids, "Server copy request differs from displayed column order"
+        assert any(entry["phase"] == "response" and entry["requestId"] == request["requestId"]
+                   and entry["status"] == "ok" and entry["hasPayloadRef"] for entry in trace)
+        observation["runtimeTrace"] = trace
+        result.update(result="passed", actionCompleted=True, clipboardBytesVerified=True,
+                      clipboardOrderVerified=True, fixtureTotalsVerified=True, v1RequestsCorrelated=True)
+    except Exception as error:
+        frame = traceback.extract_tb(error.__traceback__)[-1]
+        diagnostic = f"{type(error).__name__} at {Path(frame.filename).name}:{frame.lineno}: {error}"
+    finally:
+        if driver is not None:
+            try:
+                _verify_release_asset_batch(driver, require_assets=True)
+                result["loadedAssetSha256"] = dict(driver._pivot_loaded_assets)
+                observation["loadedAssetSha256"] = dict(driver._pivot_loaded_assets)
+                observation["finalVisibleRows"] = [cell.text for cell in _workspace_elements(driver, '[data-colid="hierarchy"]') if cell.is_displayed()]
+                driver.save_screenshot(str(directory / "final.png"))
+                paths.append(str(directory / "final.png"))
+            finally:
+                driver.quit()
+        evidence = directory / "observation.json"
+        evidence.write_text(json.dumps({"diagnostic": diagnostic, **observation}, indent=2), encoding="utf-8")
+        paths.append(str(evidence))
+        result["evidence_paths"] = paths
+        record_case(requirement, host, result, directory)
+    assert result["result"] == "passed", f"{host} {requirement}: {diagnostic}; evidence: {directory}"
+
+
 def _geometry_header(driver, column):
     from tests.test_flagship_certification import _workspace_elements
 
