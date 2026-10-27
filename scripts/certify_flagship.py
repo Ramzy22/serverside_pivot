@@ -279,7 +279,7 @@ def _committed_reference_source(binding) -> Iterator[Path]:
 
 
 def _reference_junit_issues(path: Path, expected_ids: set[str]) -> list[str]:
-    """A green subset, duplicate identity, or unlabelled case cannot qualify."""
+    """Retain valid observed IDs while a missing reference still fails parity."""
     from scripts.flagship_manifest import apply_junit_result
 
     report = {"systemIssues": {"ag_grid": []}}
@@ -289,9 +289,11 @@ def _reference_junit_issues(path: Path, expected_ids: set[str]) -> list[str]:
         cases = list(ET.parse(path).getroot().iter("testcase"))
         identities = [case.findall("./properties/property[@name='ag_grid_test_id']") for case in cases]
         ids = [properties[0].get("value") for properties in identities if len(properties) == 1]
-        if (not expected_ids or len(ids) != len(cases) or len(ids) != len(expected_ids)
-                or set(ids) != expected_ids):
+        if (not expected_ids or len(ids) != len(cases) or len(set(ids)) != len(ids)
+                or not set(ids) <= expected_ids):
             issues.append("junit_invalid")
+        elif set(ids) != expected_ids:
+            issues.append("case_missing")
     except (OSError, ET.ParseError, LookupError):
         pass  # apply_junit_result already records the missing/malformed report.
     return sorted(set(issues))
@@ -1248,8 +1250,14 @@ def _certify_installed_release(artifact_dir: Path, started_at: datetime, *, buil
             if not set(reference_issues) & {"junit_missing", "junit_invalid", "junit_empty"}:
                 raw_cases = load_case_results(artifact_dir / "private", run_id)
                 actual_reference = [(case.requirement_id, case.test_id) for case in raw_cases]
-                if len(actual_reference) != len(expected_reference) or set(actual_reference) != expected_reference:
-                    raise ValueError("reference observations do not cover the exact committed map")
+                junit_cases = list(ET.parse(reference_junit_path).getroot().iter("testcase"))
+                junit_ids = {case.find("./properties/property[@name='ag_grid_test_id']").get("value")
+                             for case in junit_cases}
+                if (len(actual_reference) != len(set(actual_reference))
+                        or len(actual_reference) != len(junit_ids)
+                        or {test for _, test in actual_reference} != junit_ids
+                        or not set(actual_reference) <= expected_reference):
+                    raise ValueError("reference observations differ from the executed committed subset")
                 write_reference_case_envelope(artifact_dir / "private", envelopes["ag_grid"], binding)
         except Exception as error:
             reference_issues.append("qualification_incomplete")

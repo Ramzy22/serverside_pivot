@@ -970,7 +970,7 @@ def _managed_reference_qualification(tmp_path, monkeypatch, *, damage=None, prod
         suite = ET.Element("testsuite")
         records = []
         raw_status = {"nonzero": "failed", "skipped": "skipped", "failure": "failed"}.get(damage, "blocked")
-        for requirement in comparable:
+        for requirement in (comparable[:31] if damage == "partial-observed" else comparable):
             case = ET.SubElement(suite, "testcase", classname="tests.test_flagship_ag_grid_reference",
                                  name="test_" + requirement.id)
             properties = ET.SubElement(case, "properties")
@@ -1147,6 +1147,17 @@ def test_installed_qualifier_retains_complete_failed_reference_observations(tmp_
     assert report["parityResult"] == "failed"
     assert "case_envelope_invalid" not in report["systemIssues"]["ag_grid"]
     assert issue in report["systemIssues"]["ag_grid"]
+
+
+def test_installed_qualifier_retains_valid_reference_subset_but_fails_parity(tmp_path, monkeypatch):
+    events, report, private = _managed_reference_qualification(tmp_path, monkeypatch, damage="partial-observed")
+    envelope = json.loads((private / "ag_grid-case-results.json").read_text())
+    assert events == ["start", "browser", "stop"]
+    assert len(envelope["results"]) == 31
+    assert "case_envelope_invalid" not in report["systemIssues"]["ag_grid"]
+    assert "junit_invalid" not in report["systemIssues"]["ag_grid"]
+    assert "case_missing" in report["systemIssues"]["ag_grid"]
+    assert report["parityResult"] == "failed"
 
 
 @pytest.mark.parametrize("damage", ["missing-server", "bad-config", "incomplete-junit",
