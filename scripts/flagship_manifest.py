@@ -208,7 +208,9 @@ def _case_issues(case: CaseResult, binding: ArtifactBinding, requirement: Requir
                         and (config.get("rowModelType") == "serverSide" or isinstance(options, dict) and options.get("rowModelType") == "serverSide")
                         and isinstance(options, dict)
                         and _reference_options_match(config, requirement.ag_grid.get("options", {}))
-                        and _live_ssrm_trace(observation.get("trace"), options)
+                        and config.get("supplementalValueColumns", []) == requirement.ag_grid.get("supplementalValueColumns", [])
+                        and _live_ssrm_trace(observation.get("trace"), options,
+                                             requirement.ag_grid.get("supplementalValueColumns", []))
                         and isinstance(observation.get("observed"), str) and bool(observation["observed"].strip()))
             if not any(live(item) for item in observations):
                 issues.append("reference_unobserved")
@@ -230,7 +232,7 @@ def _reference_options_match(config: Mapping, required: Mapping) -> bool:
     return True
 
 
-def _live_ssrm_trace(trace: object, options: Mapping) -> bool:
+def _live_ssrm_trace(trace: object, options: Mapping, supplemental_value_columns: Sequence[Mapping] = ()) -> bool:
     """Require a datasource request and successful response for this config.
 
     Reference hooks retain the actual getRows payload and parsed HTTP result.
@@ -257,12 +259,24 @@ def _live_ssrm_trace(trace: object, options: Mapping) -> bool:
                 or request.get("pivotMode") is not options.get("pivotMode")):
             continue
         columns_match = True
-        for key, option in (("rowGroupCols", "rowGroupFields"), ("pivotCols", "pivotFields"), ("valueCols", "valueFields")):
+        for key, option in (("rowGroupCols", "rowGroupFields"), ("pivotCols", "pivotFields")):
             columns = request.get(key)
             if (not isinstance(columns, list) or not all(isinstance(column, dict) and isinstance(column.get("field"), str) for column in columns)
                     or [column["field"] for column in columns] != options.get(option)):
                 columns_match = False
                 break
+        values = request.get("valueCols")
+        if (not isinstance(values, list)
+                or not all(isinstance(column, dict) and isinstance(column.get("field"), str) for column in values)
+                or not isinstance(options.get("valueFields"), list)
+                or not isinstance(supplemental_value_columns, (list, tuple))):
+            columns_match = False
+        else:
+            actual = [{"field": column.get("field"), "aggFunc": column.get("aggFunc")} for column in values]
+            base = [{"field": field, "aggFunc": "sum"} for field in options["valueFields"]]
+            supplement = [dict(column) for column in supplemental_value_columns if isinstance(column, Mapping)]
+            columns_match = columns_match and len(supplement) == len(supplemental_value_columns) and (
+                actual == base or actual == base + supplement)
         if columns_match and len(request["groupKeys"]) <= len(request["rowGroupCols"]):
             return True
     return False

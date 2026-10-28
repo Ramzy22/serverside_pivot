@@ -16,6 +16,27 @@ def digest(value):
     return hashlib.sha256(value.encode()).hexdigest()
 
 
+def test_live_ssrm_trace_accepts_only_declared_supplemental_measure():
+    options = {"rowGroupFields": ["region"], "pivotFields": ["period"],
+               "valueFields": ["sales", "units"], "pivotMode": True}
+    def trace(extra):
+        return [{"request": {
+            "startRow": 0, "endRow": 50, "groupKeys": [], "filterModel": {},
+            "sortModel": [], "pivotMode": True,
+            "rowGroupCols": [{"field": "region"}], "pivotCols": [{"field": "period"}],
+            "valueCols": [{"field": "sales", "aggFunc": "sum"},
+                          {"field": "units", "aggFunc": "sum"}, *extra],
+        }, "response": {"rowData": [{"region": "North"}], "rowCount": 1}}]
+    supplement = [{"field": "extrema", "aggFunc": "min"}]
+    assert manifest._live_ssrm_trace(trace([]), options, supplement)
+    assert manifest._live_ssrm_trace(trace([{"field": "extrema", "aggFunc": "min"}]),
+                                     options, supplement)
+    assert not manifest._live_ssrm_trace(trace([{"field": "secret", "aggFunc": "min"}]),
+                                         options, supplement)
+    assert not manifest._live_ssrm_trace(trace([{"field": "extrema", "aggFunc": "sum"}]),
+                                         options, supplement)
+
+
 @pytest.fixture(scope="module")
 def source_contract(tmp_path_factory):
     """Commit a complete synthetic contract; evaluation must use these exact bytes."""
@@ -73,7 +94,8 @@ def qualification(tmp_path, source_contract):
                                  "pivotResultFields": ["Q1_sales"]},
                 }],
                 "config": {"version": "36.2.0", "edition": "Enterprise", "rowModelType": "serverSide",
-                           "fixtureSha256": binding.sha256["fixture"], "options": dict(requirement.ag_grid.get("options", {}))},
+                           "fixtureSha256": binding.sha256["fixture"], "options": dict(requirement.ag_grid.get("options", {})),
+                           "supplementalValueColumns": requirement.ag_grid.get("supplementalValueColumns", [])},
                 "loadedAssetSha256": {"/entry.js": digest(host)} if host else {},
             }))
             cases.append(manifest.BoundCaseResult(

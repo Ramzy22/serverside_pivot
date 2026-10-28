@@ -5,6 +5,7 @@
       "version": "36.2.0",
       "edition": "Enterprise",
       "row_model": "SSRM",
+      "supplementalValueColumns": [{"field": "extrema", "aggFunc": "min"}],
       "options": {
         "rowModelType": "serverSide",
         "pivotMode": true,

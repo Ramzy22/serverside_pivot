@@ -2,6 +2,7 @@
   "version": "36.2.0",
   "edition": "Enterprise",
   "rowModel": "SSRM",
+  "supplementalValueColumns": [{"field": "extrema", "aggFunc": "min"}],
   "filterValueFields": ["region", "account", "scope", "period"],
   "options": {
     "rowModelType": "serverSide",
