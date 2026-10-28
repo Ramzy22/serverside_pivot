@@ -21,7 +21,7 @@ def _runtime():
 
 
 def _response(service, expanded, sequence, *, filters=None, val_configs=None,
-              sorting=None, show_row_totals=False):
+              sorting=None, show_row_totals=False, show_col_totals=True):
     return service.process(
         PivotViewState(
             row_fields=FLAGSHIP_ROW_FIELDS,
@@ -31,6 +31,7 @@ def _response(service, expanded, sequence, *, filters=None, val_configs=None,
             expanded=expanded,
             sorting=sorting or [],
             show_row_totals=show_row_totals,
+            show_col_totals=show_col_totals,
         ),
         PivotRequestContext(
             table="flagship_shared",
@@ -201,3 +202,48 @@ def test_flagship_total_sales_sort_reverses_groups_but_keeps_grand_total_last():
         assert [rows[label][total_key] for label in (second, first, "Grand Total")] == [79.75, 120.25, 200.0]
         assert total_key in [column["id"] for column in response.columns]
         _assert_grand_totals(response)
+
+
+def test_flagship_totals_controls_remove_only_requested_totals_and_restore():
+    service = _runtime()
+    variants = [
+        _response(service, {}, 1, show_row_totals=True, show_col_totals=True),
+        _response(service, {}, 2, show_row_totals=False, show_col_totals=True),
+        _response(service, {}, 3, show_row_totals=True, show_col_totals=False),
+        _response(service, {}, 4, show_row_totals=False, show_col_totals=False),
+        _response(service, {}, 5, show_row_totals=True, show_col_totals=True),
+    ]
+    first, no_row_totals, no_grand, neither, restored = variants
+    expected_groups = {FLAGSHIP_QUALIFICATION_SOURCE_ROWS[index]["region"] for index in (0, 2)}
+    for response, has_row_totals, has_grand in zip(
+        variants, (True, False, True, False, True), (True, True, False, False, True)):
+        rows = _by_id(response)
+        assert set(rows) == expected_groups | ({"Grand Total"} if has_grand else set())
+        total_columns = [column["id"] for column in response.columns
+                         if column["id"].startswith("__RowTotal__")]
+        assert len(total_columns) == (3 if has_row_totals else 0)
+        assert len(total_columns) == len(set(total_columns))
+        assert [column["id"] for column in response.columns if column["id"].startswith("Q1_")]
+    assert _by_id(first)["Grand Total"][_measure("Q1", 0)] == 150.0
+    assert _by_id(first)["Grand Total"][_measure("Q2", 0)] == 50.0
+    assert _by_id(first)["Grand Total"][f"__RowTotal__{FLAGSHIP_VALUE_CONFIGS[0]['field']}_sum"] == 200.0
+    assert [column["id"] for column in first.columns] == [column["id"] for column in restored.columns]
+    assert _by_id(first)["Grand Total"] == _by_id(restored)["Grand Total"]
+
+
+def test_flagship_add_and_remove_units_measure_preserves_sales():
+    service = _runtime()
+    sales_only = [FLAGSHIP_VALUE_CONFIGS[0]]
+    with_units = FLAGSHIP_VALUE_CONFIGS[:2]
+    before = _response(service, {}, 1, val_configs=sales_only)
+    added = _response(service, {}, 2, val_configs=with_units)
+    restored = _response(service, {}, 3, val_configs=sales_only)
+    units_keys = [_measure(period, 1) for period in ("Q1", "Q2")]
+    for response in (before, restored):
+        assert all(key not in _by_id(response)["Grand Total"] for key in units_keys)
+        assert all(key not in [column["id"] for column in response.columns] for key in units_keys)
+        assert [response.data[-1][_measure(period, 0)] for period in ("Q1", "Q2")] == [150.0, 50.0]
+    assert [added.data[-1][key] for key in units_keys] == [5, 5]
+    assert sum(added.data[-1][key] for key in units_keys) == 10
+    assert [added.data[-1][_measure(period, 0)] for period in ("Q1", "Q2")] == [150.0, 50.0]
+    assert [column["id"] for column in before.columns] == [column["id"] for column in restored.columns]

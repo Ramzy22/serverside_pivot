@@ -47,6 +47,8 @@ SHARED_ASSERTIONS: Mapping[str, tuple[SharedAssertion, ...]] = {
             "shared.layout-values.aggregation": "test_flagship_sum_average_sum_round_trip_preserves_measure_position",
             "shared.totals.subtotals": "test_flagship_subtotals_do_not_double_count_expanded_children",
             "shared.sorting.direction-order": "test_flagship_total_sales_sort_reverses_groups_but_keeps_grand_total_last",
+            "shared.totals.controls": "test_flagship_totals_controls_remove_only_requested_totals_and_restore",
+            "shared.layout-values.add-remove": "test_flagship_add_and_remove_units_measure_preserves_sales",
         }.items()
     },
     "shared.copy-current-table.visible-scope": (
