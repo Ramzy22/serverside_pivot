@@ -57,6 +57,12 @@ SHARED_ASSERTIONS: Mapping[str, tuple[SharedAssertion, ...]] = {
             ("tests/__init__.py", "tests/test_runtime_service.py"),
         ),
     ),
+    "shared.runtime-error.superseded-response": (
+        SharedAssertion(
+            "tests/test_runtime_service.py::test_runtime_service_cancels_superseded_viewport_work",
+            ("tests/__init__.py", "tests/test_runtime_service.py"),
+        ),
+    ),
     "shared.copy-all-records.complete-scope": tuple(
         SharedAssertion(
             f"tests/test_runtime_service.py::test_runtime_service_all_rows_export_is_independent_of_viewport_and_collapsed_state[{layout}]",
