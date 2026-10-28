@@ -836,6 +836,14 @@ def test_flagship_global_filter(host, installed_workflow_hosts):
 
 @pytest.mark.flagship
 @pytest.mark.parametrize("host", ["dash", "react", "streamlit"])
+def test_flagship_sort_direction(host, installed_workflow_hosts):
+    from tests.flagship_browser_support import qualify_sort_direction
+
+    qualify_sort_direction(host)
+
+
+@pytest.mark.flagship
+@pytest.mark.parametrize("host", ["dash", "react", "streamlit"])
 def test_flagship_runtime_error_recovery(host, installed_workflow_hosts):
     from tests.flagship_browser_support import qualify_runtime_recovery
 

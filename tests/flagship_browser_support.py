@@ -2138,6 +2138,7 @@ if (!window.__pivotNavigationTrace) {
       trace.push({phase, at: performance.now(), requestId: value.requestId,
         schemaVersion: value.schemaVersion, status: value.status || null,
         globalFilter: value.state?.filters?.global ?? null,
+        sorting: Array.isArray(value.state?.sorting) ? value.state.sorting : null,
         rows: rows.map(row => ({id: row?._id, path: row?._path,
           total: row?.['__RowTotal__ventes_€_sum'],
           q1: row?.['Q1_ventes_€_sum'], q2: row?.['Q2_ventes_€_sum'],
@@ -2290,6 +2291,105 @@ def global_filter_rows_match(rows) -> bool:
     return (len(rows) == 2 and {row.get("id") for row in rows} == expected
             and all((row.get("q1"), row.get("q2"), row.get("total")) == (49.75, 30.0, 79.75)
                     for row in rows))
+
+
+def qualify_sort_direction(host: str) -> None:
+    """Sort the installed workspace by total sales in both directions."""
+    import pytest
+    from scripts.flagship_artifacts import load_artifact_binding
+    from tests.test_flagship_certification import (
+        _qualification_chrome_options, _switch_to_workspace,
+        _wait_for_visible_workspace_element, _verify_release_asset_batch,
+    )
+    from selenium import webdriver
+    from selenium.webdriver.common.action_chains import ActionChains
+    from selenium.webdriver.support.ui import WebDriverWait
+
+    if os.environ.get("PIVOT_RUN_FLAGSHIP_BROWSER_TESTS") != "1":
+        pytest.skip("Enable installed flagship browser qualification explicitly")
+    if not os.environ.get("PIVOT_FLAGSHIP_ARTIFACT_BINDING"):
+        pytest.fail("Installed artifact binding is required")
+    run_id = os.environ["PIVOT_FLAGSHIP_RUN_ID"]
+    directory = Path(os.environ["PIVOT_FLAGSHIP_EVIDENCE_ROOT"]) / "sort-direction" / host
+    assert ("runs", run_id) in tuple(zip(directory.parts, directory.parts[1:]))
+    directory.mkdir(parents=True, exist_ok=True)
+    downloads = directory / "downloads"
+    downloads.mkdir(exist_ok=True)
+    binding = load_artifact_binding(Path(os.environ["PIVOT_FLAGSHIP_ARTIFACT_BINDING"]))
+    result = {"result": "blocked", "browser": "unavailable", "infrastructureUnavailable": True}
+    observation = {"states": []}
+    paths = []
+    diagnostic = ""
+    driver = None
+    column = "__RowTotal__ventes_â‚¬_sum"
+    expected_values = {"MÃ¼nchen": 79.75, "Ã‰clair": 120.25, "Grand Total": 200.0}
+    try:
+        driver = webdriver.Chrome(options=_qualification_chrome_options(downloads))
+        driver._pivot_artifact_binding, driver._pivot_artifact_host = binding, host
+        driver._pivot_loaded_assets = {}
+        driver.execute_cdp_cmd("Network.enable", {"maxTotalBufferSize": 50000000, "maxResourceBufferSize": 50000000})
+        driver.execute_cdp_cmd("Page.addScriptToEvaluateOnNewDocument", {"source": _NAVIGATION_PROBE_SCRIPT})
+        _switch_to_workspace(driver, host)
+        result.update(result="failed", browser=f"{driver.capabilities['browserName']} {driver.capabilities['browserVersion']}",
+                      infrastructureUnavailable=False)
+        wait = WebDriverWait(driver, 25)
+        wait.until(lambda current: _totals(current) and
+                   [label for _, label in _navigation_rows(current)] == ["Ã‰clair", "MÃ¼nchen", "Grand Total"])
+        for direction, expected_order in (("Ascending", ["MÃ¼nchen", "Ã‰clair", "Grand Total"]),
+                                          ("Descending", ["Ã‰clair", "MÃ¼nchen", "Grand Total"])):
+            header = _wait_for_visible_workspace_element(
+                driver, f'[role="columnheader"][data-header-column-id="{column}"]')
+            checkpoint = driver.execute_script("return performance.now()")
+            ActionChains(driver).context_click(header).perform()
+            ActionChains(driver).move_to_element(_selection_menu(driver, "Sort")).perform()
+            _selection_menu(driver, direction).click()
+
+            def settled(current):
+                trace = current.execute_script("return window.__pivotNavigationTrace || []")
+                requests = {entry["requestId"] for entry in trace if entry["phase"] == "request"
+                            and entry["at"] > checkpoint and entry.get("sorting") ==
+                            [{"id": column, "desc": direction == "Descending"}]}
+                response = next((entry for entry in trace if entry["phase"] == "response"
+                                 and entry["requestId"] in requests and entry["status"] == "data"
+                                 and [row["id"] for row in entry["rows"]] == expected_order
+                                 and all(row["total"] == expected_values[row["id"]] for row in entry["rows"])), None)
+                if not response or [label for _, label in _navigation_rows(current)] != expected_order:
+                    return False
+                indicator = _wait_for_visible_workspace_element(
+                    current, f'[role="columnheader"][data-header-column-id="{column}"]').get_attribute("aria-sort")
+                if indicator != ("asc" if direction == "Ascending" else "desc"):
+                    return False
+                return {"direction": direction, "requestId": response["requestId"],
+                        "responseRows": response["rows"], "visibleRows": _navigation_rows(current),
+                        "indicator": indicator}
+
+            observation["states"].append(wait.until(settled))
+        result.update(result="passed", actionCompleted=True, fixtureTotalsVerified=True,
+                      v1RequestsCorrelated=True)
+    except Exception as error:
+        frame = traceback.extract_tb(error.__traceback__)[-1]
+        diagnostic = f"{type(error).__name__} at {Path(frame.filename).name}:{frame.lineno}: {error}"
+    finally:
+        if driver is not None:
+            try:
+                _verify_release_asset_batch(driver, require_assets=True)
+                result["loadedAssetSha256"] = dict(driver._pivot_loaded_assets)
+                driver.save_screenshot(str(directory / "final.png"))
+                paths.append(str(directory / "final.png"))
+                observation["v1Trace"] = driver.execute_script("return window.__pivotNavigationTrace || []")
+            except Exception as error:
+                result["result"] = "blocked"
+                diagnostic += f"; evidence collection: {type(error).__name__}"
+            finally:
+                driver.quit()
+        observation.update(diagnostic=diagnostic, loadedAssetSha256=dict(result.get("loadedAssetSha256", {})),
+                           result={key: value for key, value in result.items() if key != "loadedAssetSha256"})
+        evidence = directory / "observation.json"
+        evidence.write_text(json.dumps(observation, ensure_ascii=False, indent=2), encoding="utf-8")
+        paths.append(str(evidence))
+        result["evidence_paths"] = paths
+        record_case("sorting.direction-order", host, result, directory)
+    assert result["result"] == "passed", f"{host} sorting: {diagnostic}; evidence: {directory}"
 
 
 def qualify_global_filter(host: str) -> None:
