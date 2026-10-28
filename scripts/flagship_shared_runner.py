@@ -90,6 +90,14 @@ def unmapped_shared_ids(requirements: Sequence[Requirement]) -> tuple[str, ...]:
     return tuple(sorted(required - SHARED_ASSERTIONS.keys()))
 
 
+def _pytest_all_passed(exit_code: int, output: str, expected_count: int) -> bool:
+    """Accept only a complete pytest summary for the mapped node count."""
+    if exit_code != 0 or expected_count < 1:
+        return False
+    summary = re.search(r"(?m)^(\d+) passed(?:, \d+ warnings?)? in [\d.]+s\s*$", output)
+    return summary is not None and int(summary.group(1)) == expected_count
+
+
 def _committed_source(binding: QualificationBinding, relative: str) -> bytes:
     if not relative.startswith("tests/") or ".." in Path(relative).parts:
         raise ValueError("shared assertion source must be under tests/")
@@ -197,7 +205,7 @@ def run_shared_qualification(
         content = (json.dumps(observation, sort_keys=True, indent=2, ensure_ascii=False) + "\n").encode("utf-8")
         location.write_bytes(content)
         evidence = str(location)
-        passed = completed.returncode == 0 and re.search(r"\b[1-9][0-9]* passed\b", completed.stdout) is not None
+        passed = _pytest_all_passed(completed.returncode, completed.stdout, len(assertions))
         for host in required[test_id].hosts:
             results.append(BoundCaseResult(
                 requirement_id=required[test_id].id,

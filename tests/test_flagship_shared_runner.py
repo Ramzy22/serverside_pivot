@@ -7,7 +7,7 @@ from scripts.flagship_manifest import QualificationBinding
 
 import pytest
 
-from scripts.flagship_shared_runner import SHARED_ASSERTIONS, _committed_source, run_shared_qualification, unmapped_shared_ids
+from scripts.flagship_shared_runner import SHARED_ASSERTIONS, _committed_source, _pytest_all_passed, run_shared_qualification, unmapped_shared_ids
 from tests.flagship_contract import load_requirements
 
 
@@ -19,6 +19,18 @@ def test_shared_mapping_is_explicit_and_never_claims_all_requirements():
     assert "shared.copy-selection.headers" in unmapped_shared_ids(requirements)
     assert "shared.export-csv.exact-document" not in unmapped_shared_ids(requirements)
     assert "shared.export-xlsx.exact-workbook" not in unmapped_shared_ids(requirements)
+
+
+@pytest.mark.parametrize("exit_code,output,expected_count,accepted", [
+    (0, "... [100%]\n3 passed in 1.20s\n", 3, True),
+    (0, ". [100%]\n1 passed, 2 skipped in 1.20s\n", 3, False),
+    (0, ".. [100%]\n2 passed in 1.20s\n", 3, False),
+    (0, "... [100%]\n3 passed, 12 warnings in 1.20s\n", 3, True),
+    (1, "..F [100%]\n2 passed, 1 failed in 1.20s\n", 3, False),
+    (0, "... [100%]\n3 passed, 1 deselected in 1.20s\n", 3, False),
+])
+def test_shared_gate_requires_every_mapped_assertion_to_pass(exit_code, output, expected_count, accepted):
+    assert _pytest_all_passed(exit_code, output, expected_count) is accepted
 
 
 def test_mapped_cases_execute_parsed_exact_document_assertions():
