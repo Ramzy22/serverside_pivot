@@ -959,6 +959,7 @@ PRODUCT_BROWSER_JOURNEYS = {
     "browser.initial-workspace.populated": "test_flagship_initial_workspace[{host}]",
     "browser.global-filter.apply-clear": "test_flagship_global_filter[{host}]",
     "browser.sorting.direction-order": "test_flagship_sort_direction[{host}]",
+    "browser.header-filter.apply-clear": "test_flagship_header_filter[{host}]",
     **{f"browser.{name}": "test_flagship_runtime_error_recovery[{host}]"
        for name in ("runtime-error.visible", "runtime-error.recovery")},
     "browser.runtime-error.superseded-response": "test_flagship_superseded_response[{host}]",

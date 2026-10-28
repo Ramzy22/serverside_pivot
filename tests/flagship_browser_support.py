@@ -2138,6 +2138,7 @@ if (!window.__pivotNavigationTrace) {
       trace.push({phase, at: performance.now(), requestId: value.requestId,
         schemaVersion: value.schemaVersion, status: value.status || null,
         globalFilter: value.state?.filters?.global ?? null,
+        filters: value.state?.filters ?? null,
         sorting: Array.isArray(value.state?.sorting) ? value.state.sorting : null,
         rows: rows.map(row => ({id: row?._id, path: row?._path,
           total: row?.['__RowTotal__ventes_€_sum'],
@@ -2291,6 +2292,125 @@ def global_filter_rows_match(rows) -> bool:
     return (len(rows) == 2 and {row.get("id") for row in rows} == expected
             and all((row.get("q1"), row.get("q2"), row.get("total")) == (49.75, 30.0, 79.75)
                     for row in rows))
+
+
+def qualify_header_filter(host: str) -> None:
+    """Apply and clear a region equality filter from its grouped header."""
+    import pytest
+    from scripts.flagship_artifacts import load_artifact_binding
+    from tests.test_flagship_certification import (
+        _qualification_chrome_options, _switch_to_workspace,
+        _wait_for_visible_workspace_element, _verify_release_asset_batch,
+        _workspace_elements,
+    )
+    from selenium import webdriver
+    from selenium.webdriver.support.ui import Select, WebDriverWait
+
+    if os.environ.get("PIVOT_RUN_FLAGSHIP_BROWSER_TESTS") != "1":
+        pytest.skip("Enable installed flagship browser qualification explicitly")
+    if not os.environ.get("PIVOT_FLAGSHIP_ARTIFACT_BINDING"):
+        pytest.fail("Installed artifact binding is required")
+    run_id = os.environ["PIVOT_FLAGSHIP_RUN_ID"]
+    directory = Path(os.environ["PIVOT_FLAGSHIP_EVIDENCE_ROOT"]) / "header-filter" / host
+    assert ("runs", run_id) in tuple(zip(directory.parts, directory.parts[1:]))
+    directory.mkdir(parents=True, exist_ok=True)
+    downloads = directory / "downloads"
+    downloads.mkdir(exist_ok=True)
+    binding = load_artifact_binding(Path(os.environ["PIVOT_FLAGSHIP_ARTIFACT_BINDING"]))
+    result = {"result": "blocked", "browser": "unavailable", "infrastructureUnavailable": True}
+    observation = {"states": []}
+    paths = []
+    diagnostic = ""
+    driver = None
+    region = "\u00c9clair"
+    try:
+        driver = webdriver.Chrome(options=_qualification_chrome_options(downloads))
+        driver._pivot_artifact_binding, driver._pivot_artifact_host = binding, host
+        driver._pivot_loaded_assets = {}
+        driver.execute_cdp_cmd("Network.enable", {"maxTotalBufferSize": 50000000, "maxResourceBufferSize": 50000000})
+        driver.execute_cdp_cmd("Page.addScriptToEvaluateOnNewDocument", {"source": _NAVIGATION_PROBE_SCRIPT})
+        _switch_to_workspace(driver, host)
+        result.update(result="failed", browser=f"{driver.capabilities['browserName']} {driver.capabilities['browserVersion']}",
+                      infrastructureUnavailable=False)
+        wait = WebDriverWait(driver, 25)
+        wait.until(lambda current: {label for _, label in _navigation_rows(current)} ==
+                   {region, "M\u00fcnchen", "Grand Total"})
+
+        def click_filter():
+            header = _wait_for_visible_workspace_element(
+                driver, '[role="columnheader"][data-header-column-id="hierarchy"]')
+            button = header.find_element("css selector", '[role="button"][aria-label="Filter Column"]')
+            assert button.is_displayed(), "Grouped-region header filter button is hidden"
+            button.click()
+
+        def response_after(checkpoint, filtered):
+            trace = driver.execute_script("return window.__pivotNavigationTrace || []")
+            def matches_request(entry):
+                if entry["phase"] != "request" or entry["at"] <= checkpoint:
+                    return False
+                conditions = (entry.get("filters") or {}).get("region", {}).get("conditions", [])
+                return (len(conditions) == 1 and conditions[0].get("type") == "eq"
+                        and conditions[0].get("value") == region) if filtered else not conditions
+            requests = {entry["requestId"] for entry in trace if matches_request(entry)}
+            expected_ids = {region, "Grand Total"} if filtered else {region, "M\u00fcnchen", "Grand Total"}
+            expected_total = 120.25 if filtered else 200.0
+            return next((entry for entry in trace if entry["phase"] == "response"
+                         and entry["requestId"] in requests and entry["status"] == "data"
+                         and {row["id"] for row in entry["rows"] if row["id"]} == expected_ids
+                         and next((row["total"] for row in entry["rows"] if row["id"] == "Grand Total"), None)
+                         == expected_total), None)
+
+        click_filter()
+        value = _wait_for_visible_workspace_element(driver, 'input[placeholder="Value..."]')
+        condition = value.find_element("xpath", "../..")
+        Select(condition.find_element("css selector", "select")).select_by_value("eq")
+        value = _wait_for_visible_workspace_element(driver, 'input[placeholder="Value..."]')
+        value.send_keys(region)
+        checkpoint = driver.execute_script("return performance.now()")
+        next(button for button in _workspace_elements(driver, "button")
+             if button.is_displayed() and button.text.strip() == "Apply").click()
+        wait.until(lambda current: response_after(checkpoint, True)
+                   and {label for _, label in _navigation_rows(current)} == {region, "Grand Total"})
+        applied = response_after(checkpoint, True)
+        observation["states"].append({"phase": "applied", "requestId": applied["requestId"],
+                                      "rows": applied["rows"], "visibleRows": _navigation_rows(driver)})
+
+        click_filter()
+        clear_at = driver.execute_script("return performance.now()")
+        next(button for button in _workspace_elements(driver, "button")
+             if button.is_displayed() and button.text.strip() == "Clear & Close").click()
+        wait.until(lambda current: response_after(clear_at, False)
+                   and {label for _, label in _navigation_rows(current)} ==
+                   {region, "M\u00fcnchen", "Grand Total"})
+        restored = response_after(clear_at, False)
+        observation["states"].append({"phase": "restored", "requestId": restored["requestId"],
+                                      "rows": restored["rows"], "visibleRows": _navigation_rows(driver)})
+        result.update(result="passed", actionCompleted=True, fixtureTotalsVerified=True,
+                      v1RequestsCorrelated=True)
+    except Exception as error:
+        frame = traceback.extract_tb(error.__traceback__)[-1]
+        diagnostic = f"{type(error).__name__} at {Path(frame.filename).name}:{frame.lineno}: {error}"
+    finally:
+        if driver is not None:
+            try:
+                _verify_release_asset_batch(driver, require_assets=True)
+                result["loadedAssetSha256"] = dict(driver._pivot_loaded_assets)
+                driver.save_screenshot(str(directory / "final.png"))
+                paths.append(str(directory / "final.png"))
+                observation["v1Trace"] = driver.execute_script("return window.__pivotNavigationTrace || []")
+            except Exception as error:
+                result["result"] = "blocked"
+                diagnostic += f"; evidence collection: {type(error).__name__}"
+            finally:
+                driver.quit()
+        observation.update(diagnostic=diagnostic, loadedAssetSha256=dict(result.get("loadedAssetSha256", {})),
+                           result={key: value for key, value in result.items() if key != "loadedAssetSha256"})
+        evidence = directory / "observation.json"
+        evidence.write_text(json.dumps(observation, ensure_ascii=False, indent=2), encoding="utf-8")
+        paths.append(str(evidence))
+        result["evidence_paths"] = paths
+        record_case("header-filter.apply-clear", host, result, directory)
+    assert result["result"] == "passed", f"{host} header filter: {diagnostic}; evidence: {directory}"
 
 
 def qualify_sort_direction(host: str) -> None:

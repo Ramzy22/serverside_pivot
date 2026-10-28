@@ -345,6 +345,7 @@ export function useWorkspaceRuntimeStage(input) {
     getConditionalStyle: workspace.getConditionalStyle,
     // renderHeaderCell dependencies (synchronous / render-time reads)
     rowHeight: workspace.rowHeight,
+    rowFields: workspace.rowFields,
     tableRef: workspace.tableRef,
     leftCols: workspace.leftCols,
     centerCols: workspace.centerCols,

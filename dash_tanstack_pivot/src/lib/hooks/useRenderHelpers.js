@@ -55,6 +55,7 @@ export function useRenderHelpers({
     getConditionalStyle,
     // renderHeaderCell dependencies (all synchronous / render-time)
     rowHeight,
+    rowFields,
     tableRef,
     leftCols,
     centerCols,
@@ -715,6 +716,9 @@ export function useRenderHelpers({
         const isGroupHeader = header.column.columns && header.column.columns.length > 0;
         const isReportConfigGutter = Boolean(header.column.columnDef && header.column.columnDef.meta && header.column.columnDef.meta.reportConfigGutter);
         const isHierarchyHeader = header.column.id === 'hierarchy';
+        const filterColumnId = isHierarchyHeader
+            ? (Array.isArray(rowFields) && rowFields.length ? rowFields[0] : null)
+            : header.column.id;
         const isMeasureSubHeader = !isGroupHeader && !isHierarchyHeader && !isReportConfigGutter && header.column.id !== '__row_number__';
         const headerText = typeof header.column.columnDef.header === 'string' ? header.column.columnDef.header : '';
         const parentText = header.column.parent && typeof header.column.parent.columnDef?.header === 'string' ? header.column.parent.columnDef.header : '';
@@ -994,17 +998,17 @@ export function useRenderHelpers({
                         : flexRender(header.column.columnDef.header, header.getContext()))}
                 </span>
 
-                {!isGroupHeader && header.column.id !== 'hierarchy' && header.column.id !== '__row_number__' && !header.isPlaceholder && (
+                {!isGroupHeader && filterColumnId && header.column.id !== '__row_number__' && !header.isPlaceholder && (
                     <div
                         onClick={(e) => {
                             e.stopPropagation();
-                            handleFilterClick(e, header.column.id);
+                            handleFilterClick(e, filterColumnId);
                         }}
                         onKeyDown={(e) => {
                             if (e.key === 'Enter' || e.key === ' ') {
                                 e.preventDefault();
                                 e.stopPropagation();
-                                handleFilterClick(e, header.column.id);
+                                handleFilterClick(e, filterColumnId);
                             }
                         }}
                         role="button"
@@ -1014,8 +1018,8 @@ export function useRenderHelpers({
                             alignItems: 'center',
                             padding: '2px',
                             borderRadius: '4px',
-                            background: filters[header.column.id] ? theme.select : 'transparent',
-                            color: filters[header.column.id] ? theme.primary : 'inherit'
+                            background: filters[filterColumnId] ? theme.select : 'transparent',
+                            color: filters[filterColumnId] ? theme.primary : 'inherit'
                         }}
                         aria-label={localize('filterColumn', 'Filter Column')}
                         title={localize('filterColumn', 'Filter Column')}
@@ -1055,23 +1059,23 @@ export function useRenderHelpers({
                 </div>
                 </div>
 
-                {!isGroupHeader && activeFilterCol === header.column.id && (
+                {!isGroupHeader && activeFilterCol === filterColumnId && (
                     <FilterPopover
-                    column={header.column}
+                    column={isHierarchyHeader ? { id: filterColumnId, header: headerText } : header.column}
                     anchorEl={filterAnchorEl}
                     onClose={closeFilterPopover}
-                    onFilter={(type, val) => handleHeaderFilter(header.column.id, type, val)}
-                    currentFilter={filters[header.column.id]}
-                    options={activeFilterCol === header.column.id ? activeFilterOptions : []}
-                    optionMeta={activeFilterCol === header.column.id ? activeFilterOptionMeta : null}
-                    onSearchOptions={serverSide ? (search) => requestFilterOptions && requestFilterOptions(header.column.id, { search, offset: 0 }) : undefined}
-                    onLoadMoreOptions={serverSide ? (search, offset) => requestFilterOptions && requestFilterOptions(header.column.id, { search, offset }) : undefined}
+                    onFilter={(type, val) => handleHeaderFilter(filterColumnId, type, val)}
+                    currentFilter={filters[filterColumnId]}
+                    options={activeFilterCol === filterColumnId ? activeFilterOptions : []}
+                    optionMeta={activeFilterCol === filterColumnId ? activeFilterOptionMeta : null}
+                    onSearchOptions={serverSide ? (search) => requestFilterOptions && requestFilterOptions(filterColumnId, { search, offset: 0 }) : undefined}
+                    onLoadMoreOptions={serverSide ? (search, offset) => requestFilterOptions && requestFilterOptions(filterColumnId, { search, offset }) : undefined}
                     theme={theme}
                     />
                 )}
-                {!isGroupHeader && filters[header.column.id] && filters[header.column.id].conditions && (
+                {!isGroupHeader && filterColumnId && filters[filterColumnId] && filters[filterColumnId].conditions && (
                 <div style={{fontSize: '10px', color: theme.primary, paddingTop: '2px', textAlign: 'center'}}>
-                    {filters[header.column.id].conditions.map(c => `${c.type}: ${c.value}${c.caseSensitive ? ' (Match Case)' : ''}`).join(` ${filters[header.column.id].operator} `)}
+                    {filters[filterColumnId].conditions.map(c => `${c.type}: ${c.value}${c.caseSensitive ? ' (Match Case)' : ''}`).join(` ${filters[filterColumnId].operator} `)}
                 </div>
                 )}
 
@@ -1123,6 +1127,7 @@ export function useRenderHelpers({
         isDarkTheme,
         styles.headerCell,
         rowHeight,
+        rowFields,
         // tableRef, hoveredHeaderIdRef, focusedHeaderIdRef are stable refs —
         // read at call time, not listed as deps (identity never changes).
         selectedCols,
