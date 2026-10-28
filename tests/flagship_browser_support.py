@@ -2321,8 +2321,8 @@ def qualify_sort_direction(host: str) -> None:
     paths = []
     diagnostic = ""
     driver = None
-    column = "__RowTotal__ventes_â‚¬_sum"
-    expected_values = {"MÃ¼nchen": 79.75, "Ã‰clair": 120.25, "Grand Total": 200.0}
+    column = "__RowTotal__ventes_\u20ac_sum"
+    expected_values = {"M\u00fcnchen": 79.75, "\u00c9clair": 120.25, "Grand Total": 200.0}
     try:
         driver = webdriver.Chrome(options=_qualification_chrome_options(downloads))
         driver._pivot_artifact_binding, driver._pivot_artifact_host = binding, host
@@ -2335,9 +2335,9 @@ def qualify_sort_direction(host: str) -> None:
         wait = WebDriverWait(driver, 25)
         wait.until(lambda current: _totals(current) and
                    {label for _, label in _navigation_rows(current)} ==
-                   {"Ã‰clair", "MÃ¼nchen", "Grand Total"})
-        for direction, expected_order in (("Ascending", ["MÃ¼nchen", "Ã‰clair", "Grand Total"]),
-                                          ("Descending", ["Ã‰clair", "MÃ¼nchen", "Grand Total"])):
+                   {"\u00c9clair", "M\u00fcnchen", "Grand Total"})
+        for direction, expected_order in (("Ascending", ["M\u00fcnchen", "\u00c9clair", "Grand Total"]),
+                                          ("Descending", ["\u00c9clair", "M\u00fcnchen", "Grand Total"])):
             header = _wait_for_visible_workspace_element(
                 driver, f'[role="columnheader"][data-header-column-id="{column}"]')
             checkpoint = driver.execute_script("return performance.now()")
