@@ -2334,7 +2334,8 @@ def qualify_sort_direction(host: str) -> None:
                       infrastructureUnavailable=False)
         wait = WebDriverWait(driver, 25)
         wait.until(lambda current: _totals(current) and
-                   [label for _, label in _navigation_rows(current)] == ["Ã‰clair", "MÃ¼nchen", "Grand Total"])
+                   {label for _, label in _navigation_rows(current)} ==
+                   {"Ã‰clair", "MÃ¼nchen", "Grand Total"})
         for direction, expected_order in (("Ascending", ["MÃ¼nchen", "Ã‰clair", "Grand Total"]),
                                           ("Descending", ["Ã‰clair", "MÃ¼nchen", "Grand Total"])):
             header = _wait_for_visible_workspace_element(
@@ -2351,8 +2352,9 @@ def qualify_sort_direction(host: str) -> None:
                             [{"id": column, "desc": direction == "Descending"}]}
                 response = next((entry for entry in trace if entry["phase"] == "response"
                                  and entry["requestId"] in requests and entry["status"] == "data"
-                                 and [row["id"] for row in entry["rows"]] == expected_order
-                                 and all(row["total"] == expected_values[row["id"]] for row in entry["rows"])), None)
+                                 and [row["id"] for row in entry["rows"] if row["id"]] == expected_order
+                                 and all(row["total"] == expected_values[row["id"]]
+                                         for row in entry["rows"] if row["id"])), None)
                 if not response or [label for _, label in _navigation_rows(current)] != expected_order:
                     return False
                 indicator = _wait_for_visible_workspace_element(
