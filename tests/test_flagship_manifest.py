@@ -37,6 +37,21 @@ def test_live_ssrm_trace_accepts_only_declared_supplemental_measure():
                                          options, supplement)
 
 
+def test_wide_reference_cases_bind_the_scroll_fixture_and_reject_other_hashes():
+    requirements = load_requirements(Path(__file__).with_name("flagship_requirements.json"))
+    wide_ids = {"vertical-virtual-scroll.window", "horizontal-virtual-scroll.window",
+                "custom-pivot-order.sparse-window"}
+    for requirement in requirements:
+        expected = "scroll_fixture" if requirement.id in wide_ids else "fixture"
+        assert requirement.ag_grid.get("fixture_binding", "fixture") == expected
+        assert manifest._reference_fixture_matches(
+            {"fixtureSha256": "scroll-hash" if expected == "scroll_fixture" else "parity-hash"},
+            requirement.ag_grid, {"fixture": "parity-hash", "scroll_fixture": "scroll-hash"})
+        assert not manifest._reference_fixture_matches(
+            {"fixtureSha256": "parity-hash" if expected == "scroll_fixture" else "scroll-hash"},
+            requirement.ag_grid, {"fixture": "parity-hash", "scroll_fixture": "scroll-hash"})
+
+
 @pytest.fixture(scope="module")
 def source_contract(tmp_path_factory):
     """Commit a complete synthetic contract; evaluation must use these exact bytes."""
@@ -70,6 +85,7 @@ def qualification(tmp_path, source_contract):
         source_commit=commit, run_id="current-run", paths={"source_repository": repository},
         sha256={"source_commit": digest(commit), "contract": contract_hash, "wheel": digest("wheel"),
                 "npm_tarball": digest("npm"), "fixture": digest("fixture"),
+                "scroll_fixture": digest("scroll-fixture"),
                 **{f"{host}:/entry.js": digest(host) for host in ("dash", "react", "streamlit")}},
         expected_loaded_assets={host: {"/entry.js": digest(host)} for host in ("dash", "react", "streamlit")},
         versions={"python": "3.13", "node": "24", "dash": "3.2", "react": "19", "streamlit": "1.50"},
@@ -94,7 +110,8 @@ def qualification(tmp_path, source_contract):
                                  "pivotResultFields": ["Q1_sales"]},
                 }],
                 "config": {"version": "36.2.0", "edition": "Enterprise", "rowModelType": "serverSide",
-                           "fixtureSha256": binding.sha256["fixture"], "options": dict(requirement.ag_grid.get("options", {})),
+                           "fixtureSha256": binding.sha256[requirement.ag_grid.get("fixture_binding", "fixture")],
+                           "options": dict(requirement.ag_grid.get("options", {})),
                            "supplementalValueColumns": requirement.ag_grid.get("supplementalValueColumns", [])},
                 "loadedAssetSha256": {"/entry.js": digest(host)} if host else {},
             }))

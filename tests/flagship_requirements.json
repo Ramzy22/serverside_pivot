@@ -305,6 +305,7 @@
         ],
         "behavior": "Wide 120-group SSRM fixture: a later 50-row block is requested; R119 appears once and R000 returns after scrolling back. A release run must observe this against the pinned browser and bundle.",
         "test_id": "ag-grid.vertical-virtual-scroll.window",
+        "fixture_binding": "scroll_fixture",
         "result": "unverified"
       },
       "product_behavior": "Qualification target: Scrolling past the first loaded window requests the corresponding later logical row range and renders its oracle row IDs once, in order; scrolling back restores the first row without stale values.",
@@ -346,6 +347,7 @@
         ],
         "behavior": "Wide SSRM fixture exposes 75 pivot measure columns in one response; the last Total/variance and first P23/sales render at opposite scroll extremes. Product V1 may fetch sparse column windows instead.",
         "test_id": "ag-grid.horizontal-virtual-scroll.window",
+        "fixture_binding": "scroll_fixture",
         "result": "unverified"
       },
       "product_behavior": "Qualification target: Scroll to the last pivot measure, verify its header/value match the oracle and the correlated column window, then return to the first; row labels and totals remain aligned.",
@@ -389,6 +391,7 @@
         ],
         "behavior": "Observed on AG Grid Enterprise 36.2.0 with SSRM and the pinned wide fixture: moveColumns placed the P00 result group before P23; R000 retained the expected formatted value, and the datasource was not called again because all 75 result columns arrived initially.",
         "test_id": "ag-grid.custom-pivot-order.sparse-window",
+        "fixture_binding": "scroll_fixture",
         "result": "unverified"
       },
       "product_behavior": "The server resolves stable path-and-measure identities, keeps pivot groups contiguous, and maps the reordered display window to the correct sparse cells.",

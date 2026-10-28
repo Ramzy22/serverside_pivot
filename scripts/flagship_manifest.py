@@ -204,7 +204,7 @@ def _case_issues(case: CaseResult, binding: ArtifactBinding, requirement: Requir
                 options = config.get("options", {})
                 return (config.get("version") == requirement.ag_grid.get("version")
                         and config.get("edition") == requirement.ag_grid.get("edition")
-                        and config.get("fixtureSha256") == binding.sha256.get("fixture")
+                        and _reference_fixture_matches(config, requirement.ag_grid, binding.sha256)
                         and (config.get("rowModelType") == "serverSide" or isinstance(options, dict) and options.get("rowModelType") == "serverSide")
                         and isinstance(options, dict)
                         and _reference_options_match(config, requirement.ag_grid.get("options", {}))
@@ -230,6 +230,13 @@ def _reference_options_match(config: Mapping, required: Mapping) -> bool:
         elif options.get(key) != value:
             return False
     return True
+
+
+def _reference_fixture_matches(config: Mapping, reference: Mapping, hashes: Mapping) -> bool:
+    binding_key = reference.get("fixture_binding", "fixture")
+    return (binding_key in {"fixture", "scroll_fixture"}
+            and isinstance(config.get("fixtureSha256"), str)
+            and config["fixtureSha256"] == hashes.get(binding_key))
 
 
 def _live_ssrm_trace(trace: object, options: Mapping, supplemental_value_columns: Sequence[Mapping] = ()) -> bool:
