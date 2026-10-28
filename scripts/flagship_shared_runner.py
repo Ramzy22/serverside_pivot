@@ -42,6 +42,11 @@ SHARED_ASSERTIONS: Mapping[str, tuple[SharedAssertion, ...]] = {
             "shared.initial-workspace.populated": "test_flagship_initial_workspace_has_filtered_pivot_totals",
             "shared.hierarchy-expand.round-trip": "test_flagship_one_parent_expansion_round_trip_preserves_totals_and_columns",
             "shared.hierarchy-expand-all.round-trip": "test_flagship_expand_all_and_collapse_all_have_unique_logical_rows",
+            "shared.global-filter.apply-clear": "test_flagship_global_search_and_clear_preserve_base_scope_filter",
+            "shared.header-filter.apply-clear": "test_flagship_header_filter_and_clear_preserve_base_scope_filter",
+            "shared.layout-values.aggregation": "test_flagship_sum_average_sum_round_trip_preserves_measure_position",
+            "shared.totals.subtotals": "test_flagship_subtotals_do_not_double_count_expanded_children",
+            "shared.sorting.direction-order": "test_flagship_total_sales_sort_reverses_groups_but_keeps_grand_total_last",
         }.items()
     },
     "shared.copy-current-table.visible-scope": (
