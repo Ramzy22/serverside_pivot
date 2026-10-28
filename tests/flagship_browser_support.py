@@ -2133,6 +2133,14 @@ if (!window.__pivotNavigationTrace) {
     let value = raw;
     if (typeof value === 'string') { try { value = JSON.parse(value); } catch (_) { return; } }
     if (!value || typeof value !== 'object') return;
+    if (value.schemaVersion === 1 && value.kind === 'filter_options' && typeof value.requestId === 'string') {
+      trace.push({phase, at: performance.now(), requestId: value.requestId,
+        schemaVersion: value.schemaVersion, kind: value.kind, status: value.status || null,
+        columnId: value.payload?.columnId ?? null,
+        options: Array.isArray(value.payload?.options) ? value.payload.options : null,
+        scopeFilter: value.state?.filters?.scope ?? null});
+      return;
+    }
     if (value.schemaVersion === 1 && value.kind === 'data' && typeof value.requestId === 'string') {
       const rows = Array.isArray(value.payload?.data) ? value.payload.data : [];
       trace.push({phase, at: performance.now(), requestId: value.requestId,
@@ -2374,17 +2382,18 @@ def qualify_header_filter(host: str) -> None:
                 return False
             return wait.until(find)
 
-        def response_after(checkpoint, filtered):
+        def response_after(checkpoint, selected_region):
             trace = driver.execute_script("return window.__pivotNavigationTrace || []")
             def matches_request(entry):
                 if entry["phase"] != "request" or entry["at"] <= checkpoint:
                     return False
                 conditions = (entry.get("filters") or {}).get("region", {}).get("conditions", [])
                 return (len(conditions) == 1 and conditions[0].get("type") == "in"
-                        and conditions[0].get("value") == [region]) if filtered else not conditions
+                        and conditions[0].get("value") == [selected_region]) if selected_region else not conditions
             requests = {entry["requestId"] for entry in trace if matches_request(entry)}
-            expected_ids = {region, "Grand Total"} if filtered else {region, "M\u00fcnchen", "Grand Total"}
-            expected_total = 120.25 if filtered else 200.0
+            expected_ids = {selected_region, "Grand Total"} if selected_region else {region, "M\u00fcnchen", "Grand Total"}
+            expected_total = ({region: 120.25, "M\u00fcnchen": 79.75}.get(selected_region)
+                              if selected_region else 200.0)
             return next((entry for entry in trace if entry["phase"] == "response"
                          and entry["requestId"] in requests and entry["status"] == "data"
                          and {row["id"] for row in entry["rows"] if row["id"]} == expected_ids
@@ -2392,24 +2401,54 @@ def qualify_header_filter(host: str) -> None:
                          == expected_total), None)
 
         click_filter()
+        def option_response(current):
+            trace = current.execute_script("return window.__pivotNavigationTrace || []")
+            requests = {entry["requestId"] for entry in trace if entry.get("kind") == "filter_options"
+                        and entry["phase"] == "request" and entry.get("columnId") == "region"
+                        and (entry.get("scopeFilter") or {}).get("conditions") ==
+                        [{"type": "eq", "value": "Included", "caseSensitive": False}]}
+            return next((entry for entry in trace if entry.get("kind") == "filter_options"
+                         and entry["phase"] == "response" and entry["requestId"] in requests
+                         and entry["status"] == "ok" and set(entry.get("options") or []) ==
+                         {region, "M\u00fcnchen"} and len(entry["options"]) == 2), None)
+        options = wait.until(option_response)
+        observation["filterOptions"] = {"requestId": options["requestId"], "options": options["options"]}
         visible_popover_item("span", region, checkbox=True).click()
         checkpoint = driver.execute_script("return performance.now()")
         visible_popover_item("button", "Apply").click()
-        wait.until(lambda current: response_after(checkpoint, True)
+        wait.until(lambda current: response_after(checkpoint, region)
                    and {label for _, label in _navigation_rows(current)} == {region, "Grand Total"})
-        applied = response_after(checkpoint, True)
+        applied = response_after(checkpoint, region)
         observation["states"].append({"phase": "applied", "requestId": applied["requestId"],
                                       "rows": applied["rows"], "visibleRows": _navigation_rows(driver)})
 
         click_filter()
         clear_at = driver.execute_script("return performance.now()")
         visible_popover_item("button", "Clear & Close").click()
-        wait.until(lambda current: response_after(clear_at, False)
+        wait.until(lambda current: response_after(clear_at, None)
                    and {label for _, label in _navigation_rows(current)} ==
                    {region, "M\u00fcnchen", "Grand Total"})
-        restored = response_after(clear_at, False)
+        restored = response_after(clear_at, None)
         observation["states"].append({"phase": "restored", "requestId": restored["requestId"],
                                       "rows": restored["rows"], "visibleRows": _navigation_rows(driver)})
+        click_filter()
+        visible_popover_item("span", "M\u00fcnchen", checkbox=True).click()
+        munich_at = driver.execute_script("return performance.now()")
+        visible_popover_item("button", "Apply").click()
+        wait.until(lambda current: response_after(munich_at, "M\u00fcnchen")
+                   and {label for _, label in _navigation_rows(current)} == {"M\u00fcnchen", "Grand Total"})
+        munich = response_after(munich_at, "M\u00fcnchen")
+        observation["states"].append({"phase": "other-option", "requestId": munich["requestId"],
+                                      "rows": munich["rows"], "visibleRows": _navigation_rows(driver)})
+        click_filter()
+        reset_at = driver.execute_script("return performance.now()")
+        visible_popover_item("button", "Clear & Close").click()
+        wait.until(lambda current: response_after(reset_at, None)
+                   and {label for _, label in _navigation_rows(current)} ==
+                   {region, "M\u00fcnchen", "Grand Total"})
+        reset = response_after(reset_at, None)
+        observation["states"].append({"phase": "other-option-cleared", "requestId": reset["requestId"],
+                                      "rows": reset["rows"], "visibleRows": _navigation_rows(driver)})
         result.update(result="passed", actionCompleted=True, fixtureTotalsVerified=True,
                       v1RequestsCorrelated=True)
     except Exception as error:
@@ -2437,6 +2476,7 @@ def qualify_header_filter(host: str) -> None:
         paths.append(str(evidence))
         result["evidence_paths"] = paths
         record_case("header-filter.apply-clear", host, result, directory)
+        record_case("filter-options.values", host, result, directory)
     assert result["result"] == "passed", f"{host} header filter: {diagnostic}; evidence: {directory}"
 
 

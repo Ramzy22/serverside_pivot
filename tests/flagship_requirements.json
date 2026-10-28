@@ -754,7 +754,7 @@
       "id": "filter-options.values",
       "inventory_id": "filter-options",
       "task": "Load and select server filter options",
-      "expected": "The region filter lists Éclair and München as selectable options for the active scope; selecting München produces sales 79.75; clearing restores 200.",
+      "expected": "The grouped Region header requests distinct values under scope=Included and lists only Éclair and München; selecting München sends region IN [München] and produces grand sales 79.75; clearing restores 200.",
       "ag_grid": {
         "reference": "ssrm-read-only-v1",
         "docs": [
@@ -764,7 +764,7 @@
         "test_id": "ag-grid.filter-options.values",
         "result": "unverified"
       },
-      "product_behavior": "Qualification target: The region filter lists Éclair and München as selectable options for the active scope; selecting München produces sales 79.75; clearing restores 200.",
+      "product_behavior": "The grouped Region header lists server-provided Éclair and München for scope=Included; a singleton set filter for München displays grand sales 79.75, and clearing restores 200.",
       "difference": "unverified",
       "constraints": [
         "Options must be tied to the active filter context; no hard-coded UI-only option evidence.",

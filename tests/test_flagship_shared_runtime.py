@@ -1,8 +1,10 @@
 """Exact shared runtime assertions for the read-only flagship fixture."""
 
+import asyncio
 import pyarrow as pa
 
 from pivot_engine import create_tanstack_adapter
+from pivot_engine.tanstack_adapter import TanStackOperation, TanStackRequest
 from pivot_engine.runtime import PivotRequestContext, PivotRuntimeService, PivotViewState, SessionRequestGate
 from tests.export_qualification_fixture import (
     FLAGSHIP_COL_FIELDS,
@@ -154,6 +156,35 @@ def test_flagship_header_filter_and_clear_preserve_base_scope_filter():
     restored = _response(service, {}, 2)
     assert set(_by_id(restored)) == {matching, other, "Grand Total"}
     _assert_grand_totals(restored)
+
+
+def test_flagship_region_filter_options_follow_scope_and_exact_selection():
+    adapter = create_tanstack_adapter(backend_uri=":memory:")
+    adapter.controller.load_data_from_arrow(
+        "flagship_shared", pa.Table.from_pylist(FLAGSHIP_QUALIFICATION_SOURCE_ROWS))
+    request = TanStackRequest(
+        operation=TanStackOperation.GET_UNIQUE_VALUES,
+        table="flagship_shared",
+        columns=[], filters=FLAGSHIP_FILTER, sorting=[], grouping=[], aggregations=[],
+        pagination={"pageIndex": 0, "pageSize": 250, "offset": 0},
+        global_filter="region",
+    )
+    response = asyncio.run(adapter.handle_request(request))
+    first = FLAGSHIP_QUALIFICATION_SOURCE_ROWS[0]["region"]
+    second = FLAGSHIP_QUALIFICATION_SOURCE_ROWS[2]["region"]
+    excluded = FLAGSHIP_QUALIFICATION_SOURCE_ROWS[4]["region"]
+    values = [row["value"] for row in response.data]
+    assert len(values) == 2 and set(values) == {first, second}
+    assert excluded not in values
+    assert response.pagination["totalRows"] == 2
+
+    filtered = _response(_runtime(), {}, 1, filters={
+        "region": {"operator": "AND", "conditions": [
+            {"type": "in", "value": [second], "caseSensitive": False}]},
+    })
+    rows = _by_id(filtered)
+    assert set(rows) == {second, "Grand Total"}
+    assert sum(rows["Grand Total"][_measure(period, 0)] for period in ("Q1", "Q2")) == 79.75
 
 
 def test_flagship_sum_average_sum_round_trip_preserves_measure_position():
