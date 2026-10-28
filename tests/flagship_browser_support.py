@@ -2304,7 +2304,7 @@ def qualify_header_filter(host: str) -> None:
         _workspace_elements,
     )
     from selenium import webdriver
-    from selenium.webdriver.support.ui import Select, WebDriverWait
+    from selenium.webdriver.support.ui import WebDriverWait
 
     if os.environ.get("PIVOT_RUN_FLAGSHIP_BROWSER_TESTS") != "1":
         pytest.skip("Enable installed flagship browser qualification explicitly")
@@ -2337,11 +2337,42 @@ def qualify_header_filter(host: str) -> None:
                    {region, "M\u00fcnchen", "Grand Total"})
 
         def click_filter():
-            header = _wait_for_visible_workspace_element(
-                driver, '[role="columnheader"][data-header-column-id="hierarchy"]')
-            button = header.find_element("css selector", '[role="button"][aria-label="Filter Column"]')
-            assert button.is_displayed(), "Grouped-region header filter button is hidden"
+            button = wait.until(lambda current: next((button
+                for header in _workspace_elements(current,
+                    '[role="columnheader"][data-header-column-id="hierarchy"]')
+                if header.is_displayed() and "Region" in header.text
+                for button in header.find_elements("css selector", '[role="button"][aria-label="Filter Column"]')
+                if button.is_displayed()), False))
             button.click()
+
+        def topmost(element):
+            return driver.execute_script("""
+                const candidate = arguments[0], rect = candidate.getBoundingClientRect();
+                const x = rect.left + rect.width / 2, y = rect.top + rect.height / 2;
+                let hit = document.elementFromPoint(x, y);
+                while (hit && hit.shadowRoot) {
+                    const nested = hit.shadowRoot.elementFromPoint(x, y);
+                    if (!nested || nested === hit) break;
+                    hit = nested;
+                }
+                return candidate === hit || candidate.contains(hit);
+            """, element)
+
+        def visible_popover_item(selector, label, *, checkbox=False):
+            def find(current):
+                for item in _workspace_elements(current, selector):
+                    try:
+                        if item.text.strip() != label:
+                            continue
+                        target = item.find_element("xpath", "..") if checkbox else item
+                        if checkbox and not target.find_elements("css selector", 'input[type="checkbox"]'):
+                            continue
+                        if target.is_displayed() and topmost(target):
+                            return target
+                    except Exception:
+                        continue
+                return False
+            return wait.until(find)
 
         def response_after(checkpoint, filtered):
             trace = driver.execute_script("return window.__pivotNavigationTrace || []")
@@ -2349,8 +2380,8 @@ def qualify_header_filter(host: str) -> None:
                 if entry["phase"] != "request" or entry["at"] <= checkpoint:
                     return False
                 conditions = (entry.get("filters") or {}).get("region", {}).get("conditions", [])
-                return (len(conditions) == 1 and conditions[0].get("type") == "eq"
-                        and conditions[0].get("value") == region) if filtered else not conditions
+                return (len(conditions) == 1 and conditions[0].get("type") == "in"
+                        and conditions[0].get("value") == [region]) if filtered else not conditions
             requests = {entry["requestId"] for entry in trace if matches_request(entry)}
             expected_ids = {region, "Grand Total"} if filtered else {region, "M\u00fcnchen", "Grand Total"}
             expected_total = 120.25 if filtered else 200.0
@@ -2361,14 +2392,9 @@ def qualify_header_filter(host: str) -> None:
                          == expected_total), None)
 
         click_filter()
-        value = _wait_for_visible_workspace_element(driver, 'input[placeholder="Value..."]')
-        condition = value.find_element("xpath", "../..")
-        Select(condition.find_element("css selector", "select")).select_by_value("eq")
-        value = _wait_for_visible_workspace_element(driver, 'input[placeholder="Value..."]')
-        value.send_keys(region)
+        visible_popover_item("span", region, checkbox=True).click()
         checkpoint = driver.execute_script("return performance.now()")
-        next(button for button in _workspace_elements(driver, "button")
-             if button.is_displayed() and button.text.strip() == "Apply").click()
+        visible_popover_item("button", "Apply").click()
         wait.until(lambda current: response_after(checkpoint, True)
                    and {label for _, label in _navigation_rows(current)} == {region, "Grand Total"})
         applied = response_after(checkpoint, True)
@@ -2377,8 +2403,7 @@ def qualify_header_filter(host: str) -> None:
 
         click_filter()
         clear_at = driver.execute_script("return performance.now()")
-        next(button for button in _workspace_elements(driver, "button")
-             if button.is_displayed() and button.text.strip() == "Clear & Close").click()
+        visible_popover_item("button", "Clear & Close").click()
         wait.until(lambda current: response_after(clear_at, False)
                    and {label for _, label in _navigation_rows(current)} ==
                    {region, "M\u00fcnchen", "Grand Total"})
@@ -2388,7 +2413,9 @@ def qualify_header_filter(host: str) -> None:
         result.update(result="passed", actionCompleted=True, fixtureTotalsVerified=True,
                       v1RequestsCorrelated=True)
     except Exception as error:
-        frame = traceback.extract_tb(error.__traceback__)[-1]
+        frames = traceback.extract_tb(error.__traceback__)
+        frame = next((item for item in reversed(frames)
+                      if Path(item.filename).name == "flagship_browser_support.py"), frames[-1])
         diagnostic = f"{type(error).__name__} at {Path(frame.filename).name}:{frame.lineno}: {error}"
     finally:
         if driver is not None:

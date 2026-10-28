@@ -672,7 +672,7 @@
       "id": "header-filter.apply-clear",
       "inventory_id": "header-filter",
       "task": "Filter through a header menu",
-      "expected": "Set region=Éclair in the header filter: the correlated request names the exact field/value and grand sales becomes 120.25; clearing restores 200 while retaining the scope filter.",
+      "expected": "Select only Éclair in the grouped Region header list: the correlated request sends region IN [Éclair] and retains scope=Included; grand sales becomes 120.25; clearing restores 200.",
       "ag_grid": {
         "reference": "ssrm-read-only-v1",
         "docs": [
@@ -682,10 +682,10 @@
         "test_id": "ag-grid.header-filter.apply-clear",
         "result": "unverified"
       },
-      "product_behavior": "Qualification target: Set region=Éclair in the header filter: the correlated request names the exact field/value and grand sales becomes 120.25; clearing restores 200 while retaining the scope filter.",
+      "product_behavior": "The grouped Region header opens distinct values; selecting only Éclair sends a singleton region set filter, displays grand sales 120.25, and clearing restores the scoped workspace.",
       "difference": "unverified",
       "constraints": [
-        "Use equality rather than ambiguous text search; same fixture and locale.",
+        "A singleton set performs exact matching; same fixture and locale.",
         "Live reference and installed-host evidence are absent; this requirement is not a pass."
       ],
       "hosts": [
