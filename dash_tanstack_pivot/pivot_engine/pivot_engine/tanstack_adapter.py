@@ -13,7 +13,7 @@ import os
 import re
 import time
 import json
-from collections import OrderedDict
+from collections import Counter, OrderedDict
 from dataclasses import replace
 import hashlib
 from .adapter_viewport_cache import AdapterViewportCache, AdapterViewportKeyBuilder
@@ -1050,9 +1050,25 @@ class TanStackPivotAdapter(TransactionAdapterMixin, FormulaEngineMixin):
         request: "TanStackRequest", user: Optional[User],
     ):
         """Resolve current authorized catalog before interpreting display indices."""
+        measure_ids = self._dynamic_request_ids(request)
+        active = [column for column in (request.columns or [])
+                  if isinstance(column, dict) and column.get("id") in measure_ids
+                  and column.get("aggregationFn") and column.get("aggregationField")]
+        field_counts = Counter(str(column["aggregationField"]) for column in active)
+        # The generated cell ID changes with its aggregate function. The saved
+        # display slot represents a unique source measure and must survive that
+        # change. Keep the historic sum identity so existing sum layouts remain
+        # valid; aliases and duplicate source measures retain their own IDs.
+        layout_measure_keys = {
+            str(column["id"]): f"{column['aggregationField']}_sum"
+            for column in active
+            if field_counts[str(column["aggregationField"])] == 1
+            and str(column["id"]) == f"{column['aggregationField']}_{column['aggregationFn']}"
+        }
         catalog = list(catalog_from_pivot_values(
-            discovered_values, list(spec.columns), self._dynamic_request_ids(request),
+            discovered_values, list(spec.columns), measure_ids,
             row_totals=bool(request.row_totals),
+            layout_measure_keys=layout_measure_keys,
         ))
         for formula_id in self._column_formula_request_ids(request):
             catalog.append(PivotColumnIdentity(

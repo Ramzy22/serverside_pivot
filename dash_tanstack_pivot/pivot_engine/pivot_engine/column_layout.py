@@ -17,7 +17,7 @@ from datetime import date, datetime, time as datetime_time
 from decimal import Decimal
 from threading import RLock
 import time
-from typing import Any, Iterable, Sequence
+from typing import Any, Iterable, Mapping, Sequence
 
 
 MAX_LAYOUT_MANIFEST_IDS = 20_000
@@ -59,6 +59,7 @@ class PivotColumnIdentity:
     cell_id: str
     label: str = field(default="", compare=False)
     is_row_total: bool = False
+    layout_measure_key: str | None = field(default=None, compare=False)
 
     @property
     def group_id(self) -> str:
@@ -71,7 +72,7 @@ class PivotColumnIdentity:
     def layout_id(self) -> str:
         digest = hashlib.sha256(_canonical_json({
             "path": self.pivot_path,
-            "measure": self.measure_key,
+            "measure": self.layout_measure_key or self.measure_key,
             "rowTotal": self.is_row_total,
         })).hexdigest()
         return f"{'t' if self.is_row_total else 'p'}:{digest}"
@@ -80,6 +81,7 @@ class PivotColumnIdentity:
 def catalog_from_pivot_values(
     values: Iterable[dict[str, Any]], column_fields: Sequence[str],
     measure_keys: Sequence[str], *, row_totals: bool = False,
+    layout_measure_keys: Mapping[str, str] | None = None,
 ) -> tuple[PivotColumnIdentity, ...]:
     """Build stable identities from the actual typed planner values."""
     columns: list[PivotColumnIdentity] = []
@@ -92,10 +94,16 @@ def catalog_from_pivot_values(
         if previous != encoded_path:
             raise ValueError("ambiguous planner pivot cell key")
         for measure in measure_keys:
-            columns.append(PivotColumnIdentity(path, measure, f"{cell_key}_{measure}"))
+            columns.append(PivotColumnIdentity(
+                path, measure, f"{cell_key}_{measure}",
+                layout_measure_key=(layout_measure_keys or {}).get(measure),
+            ))
     if row_totals:
         for measure in measure_keys:
-            columns.append(PivotColumnIdentity((), measure, f"__RowTotal__{measure}", is_row_total=True))
+            columns.append(PivotColumnIdentity(
+                (), measure, f"__RowTotal__{measure}", is_row_total=True,
+                layout_measure_key=(layout_measure_keys or {}).get(measure),
+            ))
     return tuple(columns)
 
 

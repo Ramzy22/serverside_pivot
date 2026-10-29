@@ -95,7 +95,8 @@ def test_flagship_http_error_is_safe_and_next_request_recovers_exact_totals():
 
 
 def _response(service, expanded, sequence, *, filters=None, val_configs=None,
-              sorting=None, show_row_totals=False, show_col_totals=True):
+              sorting=None, show_row_totals=False, show_col_totals=True,
+              layout_manifest=None, needs_col_schema=False):
     return service.process(
         PivotViewState(
             row_fields=FLAGSHIP_ROW_FIELDS,
@@ -117,6 +118,8 @@ def _response(service, expanded, sequence, *, filters=None, val_configs=None,
             viewport_active=True,
             start_row=0,
             end_row=100,
+            layout_manifest=layout_manifest,
+            needs_col_schema=needs_col_schema,
         ),
     )
 
@@ -273,6 +276,40 @@ def test_flagship_sum_average_sum_round_trip_preserves_measure_position():
     assert [column["id"] for column in summed.columns].index(sum_key) == [
         column["id"] for column in averaged.columns].index(average_key)
     assert [column["id"] for column in summed.columns] == [column["id"] for column in restored.columns]
+
+
+def test_custom_measure_order_survives_aggregation_change():
+    service = _runtime()
+    initial = _response(service, {}, 1, show_row_totals=True, needs_col_schema=True)
+    assert initial.col_schema and initial.col_schema["columns"]
+    entries = {entry["id"]: entry["layoutId"] for entry in initial.col_schema["columns"] if entry}
+    sales = FLAGSHIP_VALUE_CONFIGS[0]["field"]
+    units = FLAGSHIP_VALUE_CONFIGS[1]["field"]
+    variance = FLAGSHIP_VALUE_CONFIGS[2]["field"]
+    preferred_ids = [f"{period}{'' if period == '__RowTotal__' else '_'}{field}_sum"
+                     for period in ("Q1", "Q2", "__RowTotal__")
+                     for field in (units, sales, variance)]
+    manifest = tuple(entries[column_id] for column_id in preferred_ids)
+    summed = _response(service, {}, 2, show_row_totals=True,
+                       layout_manifest=manifest, needs_col_schema=True)
+    average_configs = [{**FLAGSHIP_VALUE_CONFIGS[0], "agg": "avg"}, *FLAGSHIP_VALUE_CONFIGS[1:]]
+    averaged = _response(service, {}, 3, val_configs=average_configs,
+                         show_row_totals=True, layout_manifest=manifest,
+                         needs_col_schema=True)
+    summed_ids = [column["id"] for column in summed.columns]
+    averaged_ids = [column["id"] for column in averaged.columns]
+    assert summed_ids.index(f"Q1_{sales}_sum") == averaged_ids.index(f"Q1_{sales}_avg")
+    assert summed_ids.index(f"Q2_{sales}_sum") == averaged_ids.index(f"Q2_{sales}_avg")
+    assert next(row for row in averaged.data if row["_id"] == "Grand Total")[f"Q1_{sales}_avg"] == 75
+
+
+def test_duplicate_source_measures_keep_distinct_layout_identities():
+    service = _runtime()
+    sales = FLAGSHIP_VALUE_CONFIGS[0]["field"]
+    configs = [FLAGSHIP_VALUE_CONFIGS[0], {**FLAGSHIP_VALUE_CONFIGS[0], "agg": "avg"}]
+    response = _response(service, {}, 1, val_configs=configs, needs_col_schema=True)
+    entries = {entry["id"]: entry["layoutId"] for entry in response.col_schema["columns"] if entry}
+    assert entries[f"Q1_{sales}_sum"] != entries[f"Q1_{sales}_avg"]
 
 
 def test_flagship_subtotals_do_not_double_count_expanded_children():
