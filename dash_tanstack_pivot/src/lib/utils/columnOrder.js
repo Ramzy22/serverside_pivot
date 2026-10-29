@@ -64,14 +64,14 @@ export const reconcilePivotLayoutOrder = (savedIds, cellOrder, schema) => {
     return normalizeColumnOrderValue(next);
 };
 
-export const pivotLayoutRequestFields = (manifest, revision, acknowledgedManifest, pinnedCellIds, schema, forceManifest = false, savedPinMap = {}) => {
+export const pivotLayoutRequestFields = (manifest, revision, acknowledgedManifest, pinnedCellIds, schema, forceManifest = false, savedPinMap = {}, scopeChanged = false) => {
     const normalized = normalizeColumnOrderValue(manifest);
     const entries = Array.isArray(schema?.columns) ? schema.columns.filter(Boolean) : [];
     const byCell = new Map(entries.filter(entry => entry.layoutId).map(entry => [entry.id, entry.layoutId]));
     const pinnedColumnIds = normalizeColumnOrderValue(pinnedCellIds.map(id => byCell.get(id) || savedPinMap[id])).slice(0, 64);
     return {
-        layoutRevision: revision || undefined,
-        layoutManifest: forceManifest || !revision || acknowledgedManifest !== normalized.join('\u001f') ? normalized : undefined,
+        layoutRevision: scopeChanged ? undefined : revision || undefined,
+        layoutManifest: scopeChanged || forceManifest || !revision || acknowledgedManifest !== normalized.join('\u001f') ? normalized : undefined,
         pinnedColumnIds,
     };
 };

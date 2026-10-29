@@ -958,16 +958,24 @@ export function useViewportRuntimeStage(input, transport) {
     };
   }, [stage.serverSide]);
   stage.layoutRequestFields = useCallback((forceManifest = false, recordRequest = false) => {
-    if (recordRequest) stage.latestLayoutSentManifestRef.current = stage.pivotLayoutOrder;
-    return pivotLayoutRequestFields(
+    const scopeChanged = stage.layoutScopeCacheKeyRef.current !== stage.serverSideCacheKey;
+    const fields = pivotLayoutRequestFields(
     stage.pivotLayoutOrder,
     stage.layoutRevisionRef.current,
     stage.layoutAcknowledgedManifestRef.current,
     [...(stage.columnPinning?.left || []), ...(stage.columnPinning?.right || [])],
     stage.cachedColSchema,
     forceManifest,
-    stage.pivotPinnedLayoutIds
+    stage.pivotPinnedLayoutIds,
+    scopeChanged
   );
+    if (recordRequest) {
+      stage.latestLayoutSentManifestRef.current = stage.pivotLayoutOrder;
+      stage.layoutScopeCacheKeyRef.current = stage.serverSideCacheKey;
+      if (scopeChanged) stage.layoutRevisionRef.current = null;
+      if (fields.layoutManifest !== undefined) stage.layoutAcknowledgedManifestRef.current = '__layout_pending__';
+    }
+    return fields;
   }, [stage.pivotLayoutOrder, stage.columnPinning, stage.cachedColSchema, stage.pivotPinnedLayoutIds]);
   useEffect(() => {
     if (!stage.serverSide) return;

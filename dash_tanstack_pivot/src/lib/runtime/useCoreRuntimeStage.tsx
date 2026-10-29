@@ -504,6 +504,7 @@ export function useCoreRuntimeStage(props) {
   stage.pivotLayoutOrderRef.current = stage.pivotLayoutOrder;
   stage.layoutRevisionRef = useRef(null);
   stage.layoutAcknowledgedManifestRef = useRef('');
+  stage.layoutScopeCacheKeyRef = useRef(null);
   stage.latestLayoutSentManifestRef = useRef(null);
   [stage.columnSizing, stage.setColumnSizing] = useState(() => stage.loadPersistedState('columnSizing', {}));
   stage.externalColumnOrderKey = useMemo(() => JSON.stringify(normalizeColumnOrderValue(stage.externalColumnOrder)), [stage.externalColumnOrder]);

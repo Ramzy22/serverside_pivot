@@ -1803,7 +1803,11 @@ if (!window.__pivotSupersession) {
     const term = envelope?.state?.filters?.global;
     if (term !== 'Éclair' && term !== 'München') return nativeFetch(...args);
     const requestId = String(envelope.requestId);
-    trace.push({phase:'request', requestId, term, at:performance.now(), total:null});
+    trace.push({phase:'request', requestId, term, at:performance.now(), total:null,
+      layoutRevision:envelope.payload?.layoutRevision ?? envelope.payload?.layout_revision ?? null,
+      manifestCount:Array.isArray(envelope.payload?.layoutManifest) ? envelope.payload.layoutManifest.length :
+        Array.isArray(envelope.payload?.layout_manifest) ? envelope.payload.layout_manifest.length : null,
+      needsColSchema:envelope.payload?.needs_col_schema ?? envelope.payload?.needsColSchema ?? null});
     const init = term === 'Éclair' ? {...args[1], signal:undefined} : args[1];
     return nativeFetch(args[0], init).then(async response => {
       const responseText = await response.clone().text();

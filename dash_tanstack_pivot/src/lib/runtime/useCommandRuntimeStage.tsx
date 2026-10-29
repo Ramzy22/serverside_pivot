@@ -422,14 +422,17 @@ export function useCommandRuntimeStage(input, transportDomain) {
     const runtimeRequest = nextProps && typeof nextProps === 'object' ? nextProps.runtimeRequest : null;
     const payload = runtimeRequest && typeof runtimeRequest === 'object' && runtimeRequest.payload && typeof runtimeRequest.payload === 'object' ? runtimeRequest.payload : null;
     const exportStart = runtimeRequest?.kind === 'export' && (!payload?.action || payload.action === 'start');
+    const scopeChanged = stage.layoutScopeCacheKeyRef.current !== stage.serverSideCacheKey;
     const layoutFields = payload && (runtimeRequest.kind === 'data' || exportStart)
       ? pivotLayoutRequestFields(stage.pivotLayoutOrderRef.current, stage.layoutRevisionRef.current,
         stage.layoutAcknowledgedManifestRef.current,
         [...(stage.columnPinning?.left || []), ...(stage.columnPinning?.right || [])], stage.cachedColSchema,
-        exportStart, stage.pivotPinnedLayoutIds)
+        exportStart, stage.pivotPinnedLayoutIds, scopeChanged)
       : {};
     if (payload && runtimeRequest.kind === 'data') {
       stage.latestLayoutSentManifestRef.current = stage.pivotLayoutOrderRef.current;
+      stage.layoutScopeCacheKeyRef.current = stage.serverSideCacheKey;
+      if (scopeChanged) stage.layoutRevisionRef.current = null;
       // A newly sent manifest makes the previous revision/manifest pair
       // provisional. If the user returns to the old order before the server
       // acknowledges this request, that old order must still be sent.
