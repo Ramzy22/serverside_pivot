@@ -546,6 +546,31 @@ def test_reference_expand_all_preserves_parentage_totals_and_collapses_without_d
         case.observed = "expandAll loaded both SSRM account branches under correct parents; collapseAll retained exactly two region rows and grand sales 200"
 
 
+def test_reference_group_subtotals_do_not_double_count_expanded_children(reference_run):
+    """Visible SSRM parent values remain authoritative after children load."""
+    with reference_case("totals.subtotals", reference_run) as case:
+        driver = case.driver
+        _displayed_rows(driver)
+        driver.execute_script("window.referenceGrid.expandAll()")
+        expanded = WebDriverWait(driver, 10).until(lambda browser: (
+            rows if [row["label"] for row in rows] == [
+                "\u00c9clair", "\u6771\u4eac", "M\u00fcnchen", "\u0627\u0644\u0642\u0627\u0647\u0631\u0629", "Total"] else False
+        ) if (rows := _displayed_rows(browser)) else False)
+        values = [row["data"]["Total|ventes_\u20ac"] for row in expanded]
+        assert values == [120.25, 120.25, 79.75, 79.75, 200]
+        assert values[0] + values[2] == values[-1]
+        assert {tuple(entry["request"]["groupKeys"]) for entry in
+                driver.execute_script("return window.referenceEvidence.trace()") } >= {
+                    (), ("\u00c9clair",), ("M\u00fcnchen",)}
+        cells = _wait_column(driver, "Total|ventes_\u20ac",
+                             ["120.25", "120.25", "79.75", "79.75", "200.00"])
+        case.parsed_output = {"expanded": expanded, "total_cells": cells}
+        _assert_cells(cells, {("0", "Total|ventes_\u20ac"): "120.25",
+                              ("2", "Total|ventes_\u20ac"): "79.75",
+                              ("4", "Total|ventes_\u20ac"): "200.00"})
+        case.observed = "Expanded SSRM parent subtotals 120.25 and 79.75 while displayed grand total remained 200"
+
+
 
 
 def _open_scroll_reference(driver):
