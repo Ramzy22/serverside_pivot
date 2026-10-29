@@ -165,7 +165,7 @@ jobs:
           "$RUNNER_TEMP/serverside-pivot-wheel-smoke/bin/python" -m pip install --upgrade pip
           WHEEL="$(find "$GITHUB_WORKSPACE/dash_tanstack_pivot/dist" -maxdepth 1 -name '*.whl' -print -quit)"
           test -n "$WHEEL"
-          "$RUNNER_TEMP/serverside-pivot-wheel-smoke/bin/python" -m pip install "${WHEEL}[api]" httpx
+          "$RUNNER_TEMP/serverside-pivot-wheel-smoke/bin/python" -m pip install "${WHEEL}[api,qualification]" httpx
           cd "$RUNNER_TEMP/serverside-pivot-wheel-smoke"
           "$RUNNER_TEMP/serverside-pivot-wheel-smoke/bin/python" "$GITHUB_WORKSPACE/scripts/ci/smoke_installed_python_runtime.py"
 

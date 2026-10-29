@@ -499,6 +499,13 @@ def test_pyproject_toml_redis_extra():
     assert optional["redis"], "optional-dependencies.redis list is empty."
 
 
+def test_qualification_extra_includes_starlette_test_client_dependency():
+    """Fresh installed qualification must collect FastAPI TestClient tests."""
+    data = tomllib.loads((PKG_DIR / "pyproject.toml").read_text(encoding="utf-8"))
+    qualification = data["project"]["optional-dependencies"]["qualification"]
+    assert any(item.split(";", 1)[0].strip().startswith("httpx2") for item in qualification)
+
+
 def test_pyproject_declares_the_documented_pivot_engine_dependencies():
     """A clean install must be able to run the README quick start."""
     data = tomllib.loads((PKG_DIR / "pyproject.toml").read_text(encoding="utf-8"))
