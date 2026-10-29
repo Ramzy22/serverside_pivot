@@ -369,6 +369,33 @@ def test_global_filter_has_an_installed_browser_case_for_every_host():
         )
 
 
+def test_aggregation_round_trip_has_an_installed_browser_case_for_every_host():
+    from scripts.certify_flagship import _product_browser_plan
+    from tests.flagship_contract import load_requirements
+
+    plan = _product_browser_plan(load_requirements(Path(__file__).parent / "flagship_requirements.json"))
+    for host in ("dash", "react", "streamlit"):
+        assert plan[("layout-values.aggregation", host, "browser.layout-values.aggregation")] == (
+            f"tests/test_flagship_workflows.py::test_flagship_aggregation_round_trip[{host}]"
+        )
+
+
+def test_aggregation_round_trip_oracle_requires_correlated_raw_and_visible_values():
+    from tests.flagship_browser_support import aggregation_round_trip_matches
+
+    def state(agg, raw, visible, request_id, position=2):
+        return {"aggregation": agg, "rawQ1": raw, "visibleQ1": visible,
+                "requestId": request_id, "columnPosition": position}
+
+    initial = state("sum", 150, "150.00", "one")
+    average = state("avg", 75, "75.00", "two")
+    restored = state("sum", 150, "150.00", "three")
+    assert aggregation_round_trip_matches([initial, average, restored])
+    assert not aggregation_round_trip_matches([initial, average, {**restored, "requestId": "two"}])
+    assert not aggregation_round_trip_matches([initial, {**average, "visibleQ1": "150.00"}, restored])
+    assert not aggregation_round_trip_matches([initial, {**average, "columnPosition": 3}, restored])
+
+
 def test_scroll_windows_have_dedicated_installed_browser_phase():
     from scripts.certify_flagship import _product_browser_plan, _product_phase
     from tests.flagship_contract import load_requirements
@@ -832,6 +859,14 @@ def test_flagship_global_filter(host, installed_workflow_hosts):
     from tests.flagship_browser_support import qualify_global_filter
 
     qualify_global_filter(host)
+
+
+@pytest.mark.flagship
+@pytest.mark.parametrize("host", ["dash", "react", "streamlit"])
+def test_flagship_aggregation_round_trip(host, installed_workflow_hosts):
+    from tests.flagship_browser_support import qualify_aggregation_round_trip
+
+    qualify_aggregation_round_trip(host)
 
 
 @pytest.mark.flagship

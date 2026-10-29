@@ -2151,8 +2151,11 @@ if (!window.__pivotNavigationTrace) {
         schemaVersion: value.schemaVersion, status: value.status || null,
         globalFilter: value.state?.filters?.global ?? null,
         filters: value.state?.filters ?? null,
+        valueAggregations: Array.isArray(value.state?.valConfigs)
+          ? value.state.valConfigs.map(config => ({field:config?.field, agg:config?.agg})) : null,
         sorting: Array.isArray(value.state?.sorting) ? value.state.sorting : null,
         rows: rows.map(row => ({id: row?._id, path: row?._path,
+          q1_avg: row?.['Q1_ventes_\u20ac_avg'],
           total: row?.['__RowTotal__ventes_€_sum'],
           q1: row?.['Q1_ventes_€_sum'], q2: row?.['Q2_ventes_€_sum'],
           total_units: row?.['__RowTotal__unités_sum'],
@@ -2202,6 +2205,27 @@ def _navigation_rows(driver):
       visit(document);
       return rows;
     """)
+
+
+def aggregation_round_trip_matches(states):
+    """Require three distinct V1 deliveries and the same visible measure slot."""
+    from decimal import Decimal, InvalidOperation
+
+    if len(states) != 3 or [state.get("aggregation") for state in states] != ["sum", "avg", "sum"]:
+        return False
+    if len({state.get("requestId") for state in states}) != 3:
+        return False
+    positions = [state.get("columnPosition") for state in states]
+    if any(not isinstance(position, int) or position < 0 for position in positions) or len(set(positions)) != 1:
+        return False
+    try:
+        values = [(Decimal(str(state["rawQ1"])),
+                   Decimal(str(state["visibleQ1"]).replace(",", ""))) for state in states]
+    except (InvalidOperation, KeyError, TypeError, ValueError):
+        return False
+    return values == [(Decimal("150"), Decimal("150")),
+                      (Decimal("75"), Decimal("75")),
+                      (Decimal("150"), Decimal("150"))]
 
 
 def _navigation_columns(driver):
@@ -2589,6 +2613,122 @@ def qualify_sort_direction(host: str) -> None:
         result["evidence_paths"] = paths
         record_case("sorting.direction-order", host, result, directory)
     assert result["result"] == "passed", f"{host} sorting: {diagnostic}; evidence: {directory}"
+
+
+def qualify_aggregation_round_trip(host: str) -> None:
+    """Change sales Sum -> Avg -> Sum in a built host and check V1 plus cells."""
+    import pytest
+    from scripts.flagship_artifacts import load_artifact_binding
+    from tests.test_flagship_certification import (
+        _qualification_chrome_options, _switch_to_workspace,
+        _wait_for_visible_workspace_element, _verify_release_asset_batch,
+        _workspace_elements,
+    )
+    from selenium import webdriver
+    from selenium.webdriver.support.ui import Select, WebDriverWait
+
+    if os.environ.get("PIVOT_RUN_FLAGSHIP_BROWSER_TESTS") != "1":
+        pytest.skip("Enable installed flagship browser qualification explicitly")
+    if not os.environ.get("PIVOT_FLAGSHIP_ARTIFACT_BINDING"):
+        pytest.fail("Installed artifact binding is required")
+    run_id = os.environ["PIVOT_FLAGSHIP_RUN_ID"]
+    directory = Path(os.environ["PIVOT_FLAGSHIP_EVIDENCE_ROOT"]) / "aggregation-round-trip" / host
+    assert ("runs", run_id) in tuple(zip(directory.parts, directory.parts[1:]))
+    directory.mkdir(parents=True, exist_ok=True)
+    downloads = directory / "downloads"
+    downloads.mkdir(exist_ok=True)
+    binding = load_artifact_binding(Path(os.environ["PIVOT_FLAGSHIP_ARTIFACT_BINDING"]))
+    result = {"result": "blocked", "browser": "unavailable", "infrastructureUnavailable": True}
+    observation = {"states": []}
+    paths = []
+    diagnostic = ""
+    driver = None
+    sales = "ventes_\u20ac"
+
+    def aggregation_select():
+        return next((select for chip in _workspace_elements(driver, '[data-sidebar-field-chip="zone"]')
+                     if chip.is_displayed() and "ventes" in chip.text.lower()
+                     for select in chip.find_elements("css selector", 'select[title="Aggregation"]')
+                     if select.is_displayed()), None)
+
+    def observed_state(aggregation, checkpoint):
+        trace = driver.execute_script("return window.__pivotNavigationTrace || []")
+        requests = {entry["requestId"] for entry in trace
+                    if entry.get("phase") == "request" and entry.get("at", -1) > checkpoint
+                    and entry.get("status") is None
+                    and any(config.get("field") == sales and config.get("agg") == aggregation
+                            for config in entry.get("valueAggregations") or [])}
+        key = f"Q1_{sales}_{aggregation}"
+        cell = next((cell for cell in _navigation_cells(driver)
+                     if cell["rowid"] == "__grand_total__" and cell["colid"] == key), None)
+        columns = _navigation_columns(driver)
+        if cell is None or key not in columns:
+            return None
+        for entry in trace:
+            if entry.get("phase") != "response" or entry.get("status") != "data" \
+                    or entry.get("requestId") not in requests:
+                continue
+            grand = next((row for row in entry.get("rows") or [] if row.get("id") == "Grand Total"), None)
+            raw = grand.get("q1_avg" if aggregation == "avg" else "q1") if grand else None
+            if raw is not None:
+                return {"aggregation": aggregation, "rawQ1": raw, "visibleQ1": cell["text"],
+                        "columnPosition": columns.index(key), "requestId": entry["requestId"]}
+        return None
+
+    try:
+        driver = webdriver.Chrome(options=_qualification_chrome_options(downloads))
+        driver._pivot_artifact_binding, driver._pivot_artifact_host = binding, host
+        driver._pivot_loaded_assets = {}
+        driver.execute_cdp_cmd("Network.enable", {"maxTotalBufferSize": 50000000, "maxResourceBufferSize": 50000000})
+        driver.execute_cdp_cmd("Page.addScriptToEvaluateOnNewDocument", {"source": _NAVIGATION_PROBE_SCRIPT})
+        _switch_to_workspace(driver, host)
+        result.update(result="failed", browser=f"{driver.capabilities['browserName']} {driver.capabilities['browserVersion']}",
+                      infrastructureUnavailable=False)
+        wait = WebDriverWait(driver, 30)
+        if aggregation_select() is None:
+            _wait_for_visible_workspace_element(driver, '[data-testid="pivot-toggle-sidebar"]').click()
+        wait.until(lambda _: aggregation_select())
+        initial = wait.until(lambda _: observed_state("sum", -1))
+        observation["states"].append(initial)
+
+        checkpoint = driver.execute_script("return performance.now()")
+        Select(aggregation_select()).select_by_value("avg")
+        average = wait.until(lambda _: observed_state("avg", checkpoint))
+        observation["states"].append(average)
+        assert Select(aggregation_select()).first_selected_option.get_attribute("value") == "avg"
+
+        checkpoint = driver.execute_script("return performance.now()")
+        Select(aggregation_select()).select_by_value("sum")
+        restored = wait.until(lambda _: observed_state("sum", checkpoint))
+        observation["states"].append(restored)
+        assert Select(aggregation_select()).first_selected_option.get_attribute("value") == "sum"
+        assert aggregation_round_trip_matches(observation["states"]), observation["states"]
+        result.update(result="passed", actionCompleted=True, fixtureTotalsVerified=True,
+                      v1RequestsCorrelated=True)
+    except Exception as error:
+        frame = traceback.extract_tb(error.__traceback__)[-1]
+        diagnostic = f"{type(error).__name__} at {Path(frame.filename).name}:{frame.lineno}: {error}"
+    finally:
+        if driver is not None:
+            try:
+                _verify_release_asset_batch(driver, require_assets=True)
+                result["loadedAssetSha256"] = dict(driver._pivot_loaded_assets)
+                driver.save_screenshot(str(directory / "final.png"))
+                paths.append(str(directory / "final.png"))
+                observation["v1Trace"] = driver.execute_script("return window.__pivotNavigationTrace || []")
+            except Exception as error:
+                result["result"] = "blocked"
+                diagnostic += f"; evidence collection: {type(error).__name__}"
+            finally:
+                driver.quit()
+        observation.update(diagnostic=diagnostic, loadedAssetSha256=dict(result.get("loadedAssetSha256", {})),
+                           result={key: value for key, value in result.items() if key != "loadedAssetSha256"})
+        evidence = directory / "observation.json"
+        evidence.write_text(json.dumps(observation, ensure_ascii=False, indent=2), encoding="utf-8")
+        paths.append(str(evidence))
+        result["evidence_paths"] = paths
+        record_case("layout-values.aggregation", host, result, directory)
+    assert result["result"] == "passed", f"{host} aggregation: {diagnostic}; evidence: {directory}"
 
 
 def qualify_global_filter(host: str) -> None:
