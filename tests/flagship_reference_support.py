@@ -199,8 +199,15 @@ class LiveCase:
                         or bool(re.fullmatch(r"\*{10,}", text.strip()))
                     )
 
+                controlled_failure_case = self.requirement_id in {
+                    "runtime-error.visible", "runtime-error.recovery"
+                } and any(str(item.get("error", "")).endswith("SSRM request failed: 503")
+                          for item in snapshot.get("trace", []))
                 unexpected_console = [entry for entry in snapshot["console"]
-                                      if entry.get("level") == "SEVERE" and not expected_license(entry)]
+                                      if entry.get("level") == "SEVERE" and not expected_license(entry)
+                                      and not (controlled_failure_case
+                                               and "/api/rows" in entry.get("message", "")
+                                               and "503 (Service Unavailable)" in entry.get("message", ""))]
                 snapshot["unexpected_console"] = unexpected_console
             except Exception as error:  # Browser-specific log support is diagnostic only.
                 snapshot["console_log_error"] = type(error).__name__

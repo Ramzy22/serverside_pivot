@@ -102,6 +102,16 @@ export function createReferenceHandler(fallback: RequestListener = staticFallbac
           json(response, 400, { error: 'Invalid SSRM request' });
           return;
         }
+        if (request.headers['x-reference-test-fault'] === 'once') {
+          trace.push({ at: new Date().toISOString(), request: payload, error: 'SSRM request failed: 503' });
+          response.writeHead(503, {
+            'content-type': 'application/json; charset=utf-8',
+            'cache-control': 'no-store',
+            'x-reference-test-fault': 'once',
+          });
+          response.end(JSON.stringify({ error: 'Data request unavailable' }));
+          return;
+        }
         const result = queryRows(activeFixture.rows, payload, { descendingPivotKeys: scrollScenario });
         trace.push({ at: new Date().toISOString(), request: payload, response: result });
         json(response, 200, result);

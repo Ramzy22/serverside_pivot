@@ -38,6 +38,8 @@ if (!response.ok) throw new Error('Reference configuration unavailable');
 const config = await response.json() as ReferenceConfig;
 const options = config.options;
 let globalSearch = '';
+const runtimeError = document.querySelector<HTMLElement>('#reference-runtime-error');
+if (!runtimeError) throw new Error('Reference error alert is missing');
 
 const gridOptions: GridOptions = {
   rowModelType: options.rowModelType,
@@ -65,19 +67,23 @@ const gridOptions: GridOptions = {
         request,
       };
       datasourceTrace.push(entry);
+      let controlledFailure = false;
       try {
         const result = await fetch(`/api/rows${scenario}`, {
           method: 'POST',
           headers: { 'content-type': 'application/json' },
           body: JSON.stringify(request),
         });
+        controlledFailure = result.headers.get('x-reference-test-fault') === 'once';
         if (!result.ok) throw new Error(`SSRM request failed: ${result.status}`);
         const body = await result.json();
         entry.response = structuredClone(body);
+        runtimeError.hidden = true;
         params.success(body);
       } catch (error) {
         entry.error = String(error);
-        console.error(error);
+        runtimeError.hidden = false;
+        if (!controlledFailure) console.error(error);
         params.fail();
       }
     },
@@ -98,6 +104,10 @@ searchForm.addEventListener('submit', (event) => {
 document.querySelector('#search-clear')?.addEventListener('click', () => {
   searchInput.value = '';
   globalSearch = '';
+  api.refreshServerSide({ purge: true });
+});
+document.querySelector('#reference-retry-rows')?.addEventListener('click', () => {
+  runtimeError.hidden = true;
   api.refreshServerSide({ purge: true });
 });
 Object.assign(window, {

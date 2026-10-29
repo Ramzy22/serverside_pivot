@@ -16,6 +16,10 @@
         <button id="excel">Export Excel</button>
         <button id="save">Save grid state</button>
         <button id="restore">Restore grid state</button>
+        <div id="reference-runtime-error" role="alert" hidden>
+          <span>The data request failed. Retry to load this view.</span>
+          <button id="reference-retry-rows" type="button">Retry</button>
+        </div>
         <form id="global-search-form" aria-label="Application-level SSRM search">
           <label for="global-search">Search all records</label>
           <input id="global-search" type="search" aria-label="Global search" />

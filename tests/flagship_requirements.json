@@ -95,7 +95,7 @@
         "docs": [
           "https://www.ag-grid.com/javascript-data-grid/server-side-model-datasource/"
         ],
-        "behavior": "Unobserved: Observe datasource failure UI separately from product error presentation.",
+        "behavior": "AG Grid 36.2 SSRM calls params.fail() for a real local 503. The pinned reference application displays a safe error alert; this alert is application code, not a built-in AG Grid control.",
         "test_id": "ag-grid.runtime-error.visible",
         "result": "unverified"
       },
@@ -103,7 +103,7 @@
       "difference": "unverified",
       "constraints": [
         "Inject a deterministic failed V1 envelope; do not infer error visibility from console output.",
-        "Live reference and installed-host evidence are absent; this requirement is not a pass."
+        "The reference alert is an application-level presentation choice. Live, release-bound browser evidence is required for a pass."
       ],
       "hosts": [
         "dash",
@@ -136,7 +136,7 @@
         "docs": [
           "https://www.ag-grid.com/javascript-data-grid/server-side-model-datasource/"
         ],
-        "behavior": "Unobserved: Observe retry/purge behavior after a failed SSRM datasource response.",
+        "behavior": "The pinned reference application's Retry button calls AG Grid refreshServerSide({purge: true}) after params.fail(); a new SSRM request must restore exact filtered rows.",
         "test_id": "ag-grid.runtime-error.recovery",
         "result": "unverified"
       },
@@ -144,7 +144,7 @@
       "difference": "unverified",
       "constraints": [
         "Correlate the failed and post-click request IDs; use a fresh fixture for retry.",
-        "A terminal error cannot later return data; delayed-response supersession is tracked separately. Reference parity remains unverified."
+        "A terminal error cannot later return data; delayed-response supersession is tracked separately. The reference Retry button is application code around AG Grid SSRM."
       ],
       "hosts": [
         "dash",

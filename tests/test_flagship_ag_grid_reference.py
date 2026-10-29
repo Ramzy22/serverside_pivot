@@ -928,6 +928,63 @@ def test_reference_late_superseded_ssrm_success_cannot_restore_old_rows(referenc
         case.observed = 'Older real SSRM Éclair response delivered after newer München response; all displayed rows and measures persisted for 1.5 seconds'
 
 
+def _trigger_reference_controlled_error(driver):
+    """Mark only the next SSRM fetch; the local server returns a real 503."""
+    driver.execute_script("""
+      const nativeFetch = window.fetch.bind(window);
+      let armed = true;
+      window.fetch = (input, options) => {
+        if (armed && String(input).startsWith('/api/rows') && options?.body) {
+          armed = false;
+          return nativeFetch(input, {...options, headers: {
+            ...options.headers, 'x-reference-test-fault': 'once'
+          }});
+        }
+        return nativeFetch(input, options);
+      };
+    """)
+    search = driver.find_element(By.CSS_SELECTOR, 'input[type="search"][aria-label="Global search"]')
+    search.send_keys('M\u00fcnchen')
+    driver.find_element(By.ID, 'search-apply').click()
+    failure = WebDriverWait(driver, 10).until(lambda browser: next((entry
+        for entry in browser.execute_script('return window.referenceEvidence.trace()')
+        if entry.get('request', {}).get('globalSearch') == 'M\u00fcnchen'
+        and entry.get('error', '').endswith('SSRM request failed: 503')), False))
+    alert = driver.find_element(By.ID, 'reference-runtime-error')
+    assert alert.is_displayed()
+    assert alert.find_element(By.CSS_SELECTOR, 'span').text == 'The data request failed. Retry to load this view.'
+    assert 'PRIVATE' not in alert.text
+    return failure
+
+
+def test_reference_failed_ssrm_request_shows_safe_visible_error(reference_run):
+    with reference_case('runtime-error.visible', reference_run) as case:
+        failure = _trigger_reference_controlled_error(case.driver)
+        assert failure['request']['filterModel']['scope']['values'] == ['Included']
+        case.parsed_output = {'failure': failure, 'visibleError': True}
+        case.observed = 'A real local SSRM 503 reached params.fail; the reference app displayed one safe error alert and a Retry button'
+
+
+def test_reference_retry_after_failed_ssrm_request_restores_exact_rows(reference_run):
+    with reference_case('runtime-error.recovery', reference_run) as case:
+        failure = _trigger_reference_controlled_error(case.driver)
+        retry = case.driver.find_element(By.ID, 'reference-retry-rows')
+        assert retry.is_displayed() and retry.text == 'Retry'
+        retry.click()
+        rows = WebDriverWait(case.driver, 10).until(lambda browser: (
+            visible if [row['label'] for row in visible] == ['M\u00fcnchen', 'Total'] else False
+        ) if (visible := _displayed_rows(browser)) else False)
+        trace = case.driver.execute_script('return window.referenceEvidence.trace()')
+        recovered = next(entry for entry in trace if entry.get('request', {}).get('globalSearch') == 'M\u00fcnchen'
+                         and 'response' in entry)
+        assert recovered['request']['filterModel']['scope']['values'] == ['Included']
+        assert recovered['response']['rowCount'] == 1
+        assert [row['data']['Total|ventes_\u20ac'] for row in rows] == [79.75, 79.75]
+        assert not case.driver.find_element(By.ID, 'reference-runtime-error').is_displayed()
+        case.parsed_output = {'failure': failure, 'recovered': recovered, 'rows': rows}
+        case.observed = 'Clicked the reference app Retry button after params.fail; a second real SSRM request restored exact filtered rows and cleared the alert'
+
+
 def test_reference_filter_options_values_follow_active_scope_and_selection(reference_run):
     """A stale or hard-coded option list, or a selection without SSRM filtering, fails."""
     with reference_case("filter-options.values", reference_run) as case:
