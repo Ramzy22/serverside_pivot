@@ -3228,12 +3228,18 @@ def qualify_hierarchy_navigation(host: str, requirement: str) -> None:
         assert labels.count("Éclair") == labels.count("München") == 1
         assert labels.index("Éclair") < labels.index("東京")
         assert "München" not in labels[labels.index("Éclair") + 1:labels.index("東京")]
-        if requirement == "hierarchy-expand-all.round-trip":
+        if requirement in ("hierarchy-expand-all.round-trip", "totals.subtotals"):
             assert labels.index("München") < labels.index("القاهرة")
             assert "Éclair" not in labels[labels.index("München") + 1:labels.index("القاهرة")]
         response = _navigation_response_after(
             driver.execute_script("return window.__pivotNavigationTrace || []"), checkpoint, expected_children)
         assert response is not None
+        if requirement == "totals.subtotals":
+            by_id = {row["id"]: row for row in response["rows"] if row.get("id")}
+            assert by_id["\u00c9clair"]["total"] == by_id["\u6771\u4eac"]["total"] == 120.25
+            assert by_id["M\u00fcnchen"]["total"] == by_id["\u0627\u0644\u0642\u0627\u0647\u0631\u0629"]["total"] == 79.75
+            assert by_id["Grand Total"]["total"] == 200
+            assert by_id["\u00c9clair"]["total"] + by_id["M\u00fcnchen"]["total"] == by_id["Grand Total"]["total"]
         expanded_columns = _navigation_columns(driver)
         assert set(expanded_columns) == set(initial_columns)
         expanded_cells = _navigation_cells(driver)
@@ -3279,7 +3285,8 @@ def qualify_hierarchy_navigation(host: str, requirement: str) -> None:
                                       "salesCells": [cell for cell in collapsed_cells if "ventes_€_sum" in cell["colid"]]})
         result.update(result="passed", actionCompleted=True, fixtureTotalsVerified=True,
                       expandedChildrenVerified=True, collapsedChildrenVerified=True,
-                      v1RequestsCorrelated=True)
+                      v1RequestsCorrelated=True,
+                      subtotalNoDoubleCountVerified=requirement == "totals.subtotals")
     except Exception as error:
         frame = traceback.extract_tb(error.__traceback__)[-1]
         diagnostic = f"{type(error).__name__} at {Path(frame.filename).name}:{frame.lineno}: {error}"

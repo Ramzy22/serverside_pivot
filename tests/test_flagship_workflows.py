@@ -407,6 +407,17 @@ def test_totals_controls_have_an_installed_browser_case_for_every_host():
         )
 
 
+def test_subtotals_have_an_installed_browser_case_for_every_host():
+    from scripts.certify_flagship import _product_browser_plan
+    from tests.flagship_contract import load_requirements
+
+    plan = _product_browser_plan(load_requirements(Path(__file__).parent / "flagship_requirements.json"))
+    for host in ("dash", "react", "streamlit"):
+        assert plan[("totals.subtotals", host, "browser.totals.subtotals")] == (
+            f"tests/test_flagship_workflows.py::test_flagship_hierarchy_navigation[totals.subtotals-{host}]"
+        )
+
+
 def test_scroll_windows_have_dedicated_installed_browser_phase():
     from scripts.certify_flagship import _product_browser_plan, _product_phase
     from tests.flagship_contract import load_requirements
@@ -1308,7 +1319,7 @@ def test_geometry_copy_menu_chooses_exact_visible_label_not_description(tmp_path
 
 @pytest.mark.flagship
 @pytest.mark.parametrize("host", ["dash", "react", "streamlit"])
-@pytest.mark.parametrize("requirement", ["hierarchy-expand.round-trip", "hierarchy-expand-all.round-trip"])
+@pytest.mark.parametrize("requirement", ["hierarchy-expand.round-trip", "hierarchy-expand-all.round-trip", "totals.subtotals"])
 def test_flagship_hierarchy_navigation(host, requirement, installed_workflow_hosts):
     """A real installed grid must change rows and correlate V1 traffic after expansion."""
     from tests.flagship_browser_support import qualify_hierarchy_navigation

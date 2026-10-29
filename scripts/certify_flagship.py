@@ -975,7 +975,7 @@ PRODUCT_BROWSER_JOURNEYS = {
        for name in ("copy-current-table.visible-scope", "copy-all-records.complete-scope")},
     "browser.keyboard-copy.native-input": "test_flagship_native_input_copy[{host}]",
     **{f"browser.{name}": f"test_flagship_hierarchy_navigation[{name}-{{host}}]"
-       for name in ("hierarchy-expand.round-trip", "hierarchy-expand-all.round-trip")},
+       for name in ("hierarchy-expand.round-trip", "hierarchy-expand-all.round-trip", "totals.subtotals")},
     **{f"browser.{name}": f"test_flagship_virtual_scroll[{name}-{{host}}]"
        for name in ("vertical-virtual-scroll.window", "horizontal-virtual-scroll.window")},
     "browser.custom-pivot-order.sparse-window": "test_flagship_custom_pivot_order[{host}]",
