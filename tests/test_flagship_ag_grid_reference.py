@@ -562,6 +562,10 @@ def test_reference_group_subtotals_do_not_double_count_expanded_children(referen
         assert {tuple(entry["request"]["groupKeys"]) for entry in
                 driver.execute_script("return window.referenceEvidence.trace()") } >= {
                     (), ("\u00c9clair",), ("M\u00fcnchen",)}
+        driver.execute_script("""
+            const viewport = document.querySelector('.ag-body-horizontal-scroll-viewport');
+            viewport.scrollLeft = viewport.scrollWidth - viewport.clientWidth;
+        """)
         cells = _wait_column(driver, "Total|ventes_\u20ac",
                              ["120.25", "120.25", "79.75", "79.75", "200.00"])
         case.parsed_output = {"expanded": expanded, "total_cells": cells}
