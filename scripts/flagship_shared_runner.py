@@ -40,6 +40,8 @@ SHARED_ASSERTIONS: Mapping[str, tuple[SharedAssertion, ...]] = {
         )
         for test_id, node in {
             "shared.initial-workspace.populated": "test_flagship_initial_workspace_has_filtered_pivot_totals",
+            "shared.runtime-error.visible": "test_flagship_http_error_is_safe_and_next_request_recovers_exact_totals",
+            "shared.runtime-error.recovery": "test_flagship_http_error_is_safe_and_next_request_recovers_exact_totals",
             "shared.hierarchy-expand.round-trip": "test_flagship_one_parent_expansion_round_trip_preserves_totals_and_columns",
             "shared.hierarchy-expand-all.round-trip": "test_flagship_expand_all_and_collapse_all_have_unique_logical_rows",
             "shared.global-filter.apply-clear": "test_flagship_global_search_and_clear_preserve_base_scope_filter",

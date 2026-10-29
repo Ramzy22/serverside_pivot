@@ -1,11 +1,18 @@
 """Exact shared runtime assertions for the read-only flagship fixture."""
 
 import asyncio
+from dataclasses import dataclass, field
 import pyarrow as pa
+from fastapi import FastAPI
+from fastapi.testclient import TestClient
 
 from pivot_engine import create_tanstack_adapter
+from pivot_engine.backends.execution import DatabaseExecutionError
 from pivot_engine.tanstack_adapter import TanStackOperation, TanStackRequest
-from pivot_engine.runtime import PivotRequestContext, PivotRuntimeService, PivotViewState, SessionRequestGate
+from pivot_engine.runtime import (
+    PivotRequestContext, PivotRuntimeService, PivotViewState, SessionRequestGate,
+    RuntimeDatasetAuthorizer, register_runtime_http_transport,
+)
 from tests.export_qualification_fixture import (
     FLAGSHIP_COL_FIELDS,
     FLAGSHIP_FILTER,
@@ -20,6 +27,71 @@ def _runtime():
     adapter.controller.load_data_from_arrow(
         "flagship_shared", pa.Table.from_pylist(FLAGSHIP_QUALIFICATION_SOURCE_ROWS))
     return PivotRuntimeService(adapter_getter=lambda: adapter, session_gate=SessionRequestGate())
+
+
+def test_flagship_http_error_is_safe_and_next_request_recovers_exact_totals():
+    """An actual V1 request fails once, then a distinct retry returns fixture data."""
+    adapter = create_tanstack_adapter(backend_uri=":memory:")
+    adapter.controller.load_data_from_arrow(
+        "flagship_shared", pa.Table.from_pylist(FLAGSHIP_QUALIFICATION_SOURCE_ROWS))
+
+    class FailOnce:
+        def __init__(self):
+            self.failed = False
+
+        def __getattr__(self, name):
+            return getattr(adapter, name)
+
+        async def handle_virtual_scroll_request(self, *args, **kwargs):
+            if not self.failed:
+                self.failed = True
+                raise DatabaseExecutionError("PRIVATE_BACKEND_SENTINEL")
+            return await adapter.handle_virtual_scroll_request(*args, **kwargs)
+
+    @dataclass
+    class Viewer:
+        id: str = "flagship-shared"
+        role: str = "viewer"
+        attributes: dict = field(default_factory=dict)
+
+    wrapped_adapter = FailOnce()
+    service = PivotRuntimeService(adapter_getter=lambda: wrapped_adapter)
+    app = FastAPI()
+    register_runtime_http_transport(
+        app, lambda: service, current_user_dependency=lambda: Viewer(),
+        dataset_authorizer=RuntimeDatasetAuthorizer({
+            "flagship_shared": {"roles": {"viewer"}, "operations": {"read"},
+                                "rowSecurity": {"mode": "global"}},
+        }),
+        inline_payload_bytes=5_000_000,
+    )
+    state = {"rowFields": FLAGSHIP_ROW_FIELDS, "colFields": FLAGSHIP_COL_FIELDS,
+             "valConfigs": FLAGSHIP_VALUE_CONFIGS, "filters": FLAGSHIP_FILTER}
+
+    def request(request_id, sequence):
+        return {"schemaVersion": 1, "kind": "data", "requestId": request_id,
+                "table": "flagship_shared", "sessionId": "shared-error-retry",
+                "clientInstance": "shared-browser", "stateEpoch": sequence,
+                "windowSeq": sequence, "state": state,
+                "payload": {"intent": "viewport", "start": 0, "end": 20,
+                            "needsColSchema": True}}
+
+    with TestClient(app) as client:
+        failed = client.post("/v1/runtime", json=request("failed-window", 1))
+        assert failed.status_code == 200, failed.text
+        assert failed.json()["requestId"] == "failed-window"
+        assert failed.json()["status"] == "error"
+        assert "PRIVATE_BACKEND_SENTINEL" not in failed.text
+        recovered = client.post("/v1/runtime", json=request("recovered-window", 2))
+    assert recovered.status_code == 200
+    body = recovered.json()
+    assert body["requestId"] == "recovered-window"
+    assert body["status"] == "data"
+    rows = body["payload"]["data"]
+    grand = next(row for row in rows if row.get("_id") == "Grand Total")
+    assert [grand[f"{period}_{field}_sum"] for period, field in
+            (("Q1", "ventes_€"), ("Q2", "ventes_€"), ("Q1", "unités"), ("Q2", "unités"))] == [150, 50, 5, 5]
+    assert grand["Q1_écart_sum"] + grand["Q2_écart_sum"] == -6.75
 
 
 def _response(service, expanded, sequence, *, filters=None, val_configs=None,
