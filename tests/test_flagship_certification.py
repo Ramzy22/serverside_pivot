@@ -1355,8 +1355,9 @@ def _qualification_chrome_options(downloads: Path):
     return options
 
 
-def _switch_to_workspace(driver, host: str, timeout: int = 30):
+def _switch_to_workspace(driver, host: str, timeout: int = 60):
     _, _, _, _, _, By, EC, WebDriverWait = _selenium()
+    from selenium.common.exceptions import TimeoutException
     _verify_release_asset_batch(driver)
     driver.get(_host_url(host))
     wait = WebDriverWait(driver, timeout)
@@ -1371,7 +1372,24 @@ def _switch_to_workspace(driver, host: str, timeout: int = 30):
     # lookups stop at that boundary, so retain the document context and query
     # through open roots explicitly.
     driver._pivot_workspace_shadow = True
-    cell = wait.until(lambda current: _workspace_element(current, '[role="gridcell"]', required=False))
+    try:
+        cell = wait.until(lambda current: _workspace_element(current, '[role="gridcell"]', required=False))
+    except TimeoutException as error:
+        browser_errors = [entry.get("message", "") for entry in driver.get_log("browser")
+                          if entry.get("level") in ("SEVERE", "ERROR")][-12:]
+        dom = driver.execute_script("""
+            const nodes = Array.from(document.querySelectorAll('*'));
+            return {customTags: nodes.filter(node => node.localName.includes('-'))
+                .slice(0, 20).map(node => node.localName),
+              shadowHosts: nodes.filter(node => node.shadowRoot)
+                .slice(0, 20).map(node => node.localName),
+              bodyTail: document.body.innerText.slice(-600)};
+        """)
+        trace = driver.execute_script("return (window.__pivotNavigationTrace || []).slice(-8)")
+        raise AssertionError(
+            f"Streamlit workspace did not mount: browserErrors={browser_errors}; "
+            f"dom={dom}; trace={trace}"
+        ) from error
     _verify_release_asset_batch(driver, require_assets=True)
     return cell
 

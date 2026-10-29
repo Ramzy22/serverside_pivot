@@ -2164,8 +2164,14 @@ if (!window.__pivotNavigationTrace) {
   window.fetch = (...args) => {
     if (args[1]?.body) visit(args[1].body, 'request');
     return originalFetch(...args).then(response => {
+      if (!response.ok) trace.push({phase:'http-error', at:performance.now(),
+        httpStatus:response.status, url:String(args[0]?.url || args[0])});
       response.clone().text().then(body => visit(body, 'response')).catch(() => {});
       return response;
+    }).catch(error => {
+      trace.push({phase:'fetch-error', at:performance.now(),
+        message:String(error?.message || error)});
+      throw error;
     });
   };
   const originalSend = XMLHttpRequest.prototype.send;
