@@ -2153,6 +2153,8 @@ if (!window.__pivotNavigationTrace) {
         filters: value.state?.filters ?? null,
         valueAggregations: Array.isArray(value.state?.valConfigs)
           ? value.state.valConfigs.map(config => ({field:config?.field, agg:config?.agg})) : null,
+        showRowTotals: value.state?.showRowTotals ?? null,
+        showColTotals: value.state?.showColTotals ?? null,
         sorting: Array.isArray(value.state?.sorting) ? value.state.sorting : null,
         rows: rows.map(row => ({id: row?._id, path: row?._path,
           q1_avg: row?.['Q1_ventes_\u20ac_avg'],
@@ -2729,6 +2731,146 @@ def qualify_aggregation_round_trip(host: str) -> None:
         result["evidence_paths"] = paths
         record_case("layout-values.aggregation", host, result, directory)
     assert result["result"] == "passed", f"{host} aggregation: {diagnostic}; evidence: {directory}"
+
+
+def qualify_totals_controls(host: str) -> None:
+    """Observe row-total columns and the grand row through real View controls."""
+    import pytest
+    from scripts.flagship_artifacts import load_artifact_binding
+    from tests.test_flagship_certification import (
+        _qualification_chrome_options, _switch_to_workspace,
+        _wait_for_visible_workspace_element, _verify_release_asset_batch,
+        _workspace_elements,
+    )
+    from selenium import webdriver
+    from selenium.webdriver.support.ui import WebDriverWait
+
+    if os.environ.get("PIVOT_RUN_FLAGSHIP_BROWSER_TESTS") != "1":
+        pytest.skip("Enable installed flagship browser qualification explicitly")
+    if not os.environ.get("PIVOT_FLAGSHIP_ARTIFACT_BINDING"):
+        pytest.fail("Installed artifact binding is required")
+    run_id = os.environ["PIVOT_FLAGSHIP_RUN_ID"]
+    directory = Path(os.environ["PIVOT_FLAGSHIP_EVIDENCE_ROOT"]) / "totals-controls" / host
+    assert ("runs", run_id) in tuple(zip(directory.parts, directory.parts[1:]))
+    directory.mkdir(parents=True, exist_ok=True)
+    downloads = directory / "downloads"
+    downloads.mkdir(exist_ok=True)
+    binding = load_artifact_binding(Path(os.environ["PIVOT_FLAGSHIP_ARTIFACT_BINDING"]))
+    result = {"result": "blocked", "browser": "unavailable", "infrastructureUnavailable": True}
+    observation = {"states": []}
+    paths = []
+    diagnostic = ""
+    driver = None
+    row_total_key = "__RowTotal__ventes_\u20ac_sum"
+    q1_key, q2_key = "Q1_ventes_\u20ac_sum", "Q2_ventes_\u20ac_sum"
+
+    def visible_button(label):
+        return next((button for button in _workspace_elements(driver, "button")
+                     if button.is_displayed() and button.text.strip() == label), None)
+
+    def click_control(label):
+        button = visible_button(label)
+        assert button is not None, f"Missing visible {label} control"
+        driver.execute_script("arguments[0].scrollIntoView({block:'center',inline:'center'});", button)
+        button.click()
+
+    def observed_state(show_row, show_col, checkpoint):
+        trace = driver.execute_script("return window.__pivotNavigationTrace || []")
+        requests = {entry["requestId"] for entry in trace
+                    if entry.get("phase") == "request" and entry.get("at", -1) > checkpoint
+                    and entry.get("showRowTotals") is show_row
+                    and entry.get("showColTotals") is show_col}
+        columns = _navigation_columns(driver)
+        rows = _navigation_rows(driver)
+        cells = {(cell["rowid"], cell["colid"]): cell["text"] for cell in _navigation_cells(driver)}
+        grand_visible = any(label == "Grand Total" for _, label in rows)
+        if (row_total_key in columns) is not show_row or grand_visible is not show_col:
+            return None
+        if q1_key not in columns or q2_key not in columns:
+            return None
+        for entry in trace:
+            if entry.get("phase") != "response" or entry.get("status") != "data" \
+                    or entry.get("requestId") not in requests:
+                continue
+            data_rows = entry.get("rows") or []
+            groups = {row.get("id"): row for row in data_rows}
+            first, second = groups.get("\u00c9clair"), groups.get("M\u00fcnchen")
+            if first is None or second is None or (first.get("q1"), first.get("q2")) != (100.25, 20):
+                continue
+            if (second.get("q1"), second.get("q2")) != (49.75, 30):
+                continue
+            grand = next((row for row in data_rows if row.get("id") == "Grand Total"), None)
+            if (grand is not None) is not show_col:
+                continue
+            if show_col and (grand.get("q1"), grand.get("q2")) != (150, 50):
+                continue
+            if show_row and show_col and grand.get("total") != 200:
+                continue
+            if show_col and (("__grand_total__", q1_key) not in cells or
+                             ("__grand_total__", q2_key) not in cells):
+                continue
+            return {"showRowTotals": show_row, "showColTotals": show_col,
+                    "requestId": entry["requestId"], "columnIds": columns,
+                    "visibleRows": rows, "grandQ1": cells.get(("__grand_total__", q1_key)),
+                    "grandQ2": cells.get(("__grand_total__", q2_key)),
+                    "grandAll": cells.get(("__grand_total__", row_total_key)),
+                    "rawGrand": grand}
+        return None
+
+    try:
+        driver = webdriver.Chrome(options=_qualification_chrome_options(downloads))
+        driver._pivot_artifact_binding, driver._pivot_artifact_host = binding, host
+        driver._pivot_loaded_assets = {}
+        driver.execute_cdp_cmd("Network.enable", {"maxTotalBufferSize": 50000000, "maxResourceBufferSize": 50000000})
+        driver.execute_cdp_cmd("Page.addScriptToEvaluateOnNewDocument", {"source": _NAVIGATION_PROBE_SCRIPT})
+        _switch_to_workspace(driver, host)
+        result.update(result="failed", browser=f"{driver.capabilities['browserName']} {driver.capabilities['browserVersion']}",
+                      infrastructureUnavailable=False)
+        wait = WebDriverWait(driver, 30)
+        if visible_button("Row Total") is None:
+            _wait_for_visible_workspace_element(driver, '[data-testid="pivot-toolbar-view"]').click()
+        wait.until(lambda _: visible_button("Row Total") and visible_button("Col Total"))
+        observation["states"].append(wait.until(lambda _: observed_state(True, True, -1)))
+        for label, row_enabled, col_enabled in (
+            ("Row Total", False, True), ("Row Total", True, True),
+            ("Col Total", True, False), ("Col Total", True, True),
+        ):
+            checkpoint = driver.execute_script("return performance.now()")
+            click_control(label)
+            observation["states"].append(wait.until(
+                lambda _: observed_state(row_enabled, col_enabled, checkpoint)))
+        ids = [state["requestId"] for state in observation["states"]]
+        assert len(set(ids)) == 5, observation["states"]
+        from decimal import Decimal
+        for state in (observation["states"][0], observation["states"][-1]):
+            assert [Decimal(str(state[key]).replace(",", "")) for key in
+                    ("grandQ1", "grandQ2", "grandAll")] == [150, 50, 200]
+        result.update(result="passed", actionCompleted=True, fixtureTotalsVerified=True,
+                      v1RequestsCorrelated=True)
+    except Exception as error:
+        frame = traceback.extract_tb(error.__traceback__)[-1]
+        diagnostic = f"{type(error).__name__} at {Path(frame.filename).name}:{frame.lineno}: {error}"
+    finally:
+        if driver is not None:
+            try:
+                _verify_release_asset_batch(driver, require_assets=True)
+                result["loadedAssetSha256"] = dict(driver._pivot_loaded_assets)
+                driver.save_screenshot(str(directory / "final.png"))
+                paths.append(str(directory / "final.png"))
+                observation["v1Trace"] = driver.execute_script("return window.__pivotNavigationTrace || []")
+            except Exception as error:
+                result["result"] = "blocked"
+                diagnostic += f"; evidence collection: {type(error).__name__}"
+            finally:
+                driver.quit()
+        observation.update(diagnostic=diagnostic, loadedAssetSha256=dict(result.get("loadedAssetSha256", {})),
+                           result={key: value for key, value in result.items() if key != "loadedAssetSha256"})
+        evidence = directory / "observation.json"
+        evidence.write_text(json.dumps(observation, ensure_ascii=False, indent=2), encoding="utf-8")
+        paths.append(str(evidence))
+        result["evidence_paths"] = paths
+        record_case("totals.controls", host, result, directory)
+    assert result["result"] == "passed", f"{host} totals: {diagnostic}; evidence: {directory}"
 
 
 def qualify_global_filter(host: str) -> None:

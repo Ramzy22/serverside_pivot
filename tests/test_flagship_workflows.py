@@ -396,6 +396,17 @@ def test_aggregation_round_trip_oracle_requires_correlated_raw_and_visible_value
     assert not aggregation_round_trip_matches([initial, {**average, "columnPosition": 3}, restored])
 
 
+def test_totals_controls_have_an_installed_browser_case_for_every_host():
+    from scripts.certify_flagship import _product_browser_plan
+    from tests.flagship_contract import load_requirements
+
+    plan = _product_browser_plan(load_requirements(Path(__file__).parent / "flagship_requirements.json"))
+    for host in ("dash", "react", "streamlit"):
+        assert plan[("totals.controls", host, "browser.totals.controls")] == (
+            f"tests/test_flagship_workflows.py::test_flagship_totals_controls[{host}]"
+        )
+
+
 def test_scroll_windows_have_dedicated_installed_browser_phase():
     from scripts.certify_flagship import _product_browser_plan, _product_phase
     from tests.flagship_contract import load_requirements
@@ -867,6 +878,14 @@ def test_flagship_aggregation_round_trip(host, installed_workflow_hosts):
     from tests.flagship_browser_support import qualify_aggregation_round_trip
 
     qualify_aggregation_round_trip(host)
+
+
+@pytest.mark.flagship
+@pytest.mark.parametrize("host", ["dash", "react", "streamlit"])
+def test_flagship_totals_controls(host, installed_workflow_hosts):
+    from tests.flagship_browser_support import qualify_totals_controls
+
+    qualify_totals_controls(host)
 
 
 @pytest.mark.flagship
