@@ -13,9 +13,12 @@ function load(relativePath) {
     }]],
   }).code;
   const module = {exports: {}};
-  const localRequire = name => name === '../utils/helpers'
-    ? {formatDisplayLabel: value => value, formatAggLabel: value => value}
-    : require(name);
+  const localRequire = name => {
+    if (name === '../utils/helpers') return {formatDisplayLabel: value => value, formatAggLabel: value => value};
+    if (name === 'react') return {useCallback: callback => callback};
+    if (name === './usePivotNormalization') return load('src/lib/hooks/usePivotNormalization.js');
+    return require(name);
+  };
   new Function('module', 'exports', 'require', transformed)(module, module.exports, localRequire);
   return module.exports;
 }
@@ -45,5 +48,26 @@ const nextSchema = mergeSparseColSchema(oldSchema, {layoutRevision: 'b'.repeat(6
   total_center_cols: 3, columns: [{index: 0, id: 'C_sales'}]});
 assert.equal(nextSchema.columns[0].id, 'C_sales');
 assert.equal(nextSchema.columns[1], null);
+
+const {useRuntimeDataCommit} = load('src/lib/hooks/useRuntimeDataCommit.js');
+const savedManifest = ['p:A', 'p:B'];
+const currentManifest = {current: savedManifest};
+const latestSent = {current: savedManifest};
+const {runtimePayloadCommitIsCurrent} = useRuntimeDataCommit({
+  clientInstanceRef: {current: 'current-client'}, stateEpochRef: {current: 5},
+  requestVersionRef: {current: 9}, latestDataVersionRef: {current: 11},
+  layoutRevisionRef: {current: 'a'.repeat(64)}, layoutAcknowledgedManifestRef: {current: ''},
+  pivotLayoutOrderRef: currentManifest, latestLayoutSentManifestRef: latestSent,
+});
+const newestResponse = {kind: 'data', clientInstance: 'current-client', stateEpoch: 5, windowSeq: 9};
+const newestPayload = {dataVersion: 11, layoutRevision: 'b'.repeat(64),
+  colSchema: {layoutRevision: 'b'.repeat(64)}};
+assert.equal(runtimePayloadCommitIsCurrent(newestResponse, newestPayload), true);
+assert.equal(runtimePayloadCommitIsCurrent(newestResponse,
+  {...newestPayload, colSchema: {layoutRevision: 'a'.repeat(64)}}), false);
+assert.equal(runtimePayloadCommitIsCurrent({...newestResponse, windowSeq: 8}, newestPayload), false);
+assert.equal(runtimePayloadCommitIsCurrent({...newestResponse, stateEpoch: 4}, newestPayload), false);
+currentManifest.current = ['p:B', 'p:A'];
+assert.equal(runtimePayloadCommitIsCurrent(newestResponse, newestPayload), false);
 
 console.log('Pivot layout client contract passed');
