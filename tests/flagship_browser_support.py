@@ -1329,6 +1329,13 @@ def _geometry_copy_current_table(driver):
     item.click()
 
 
+def classify_visible_startup_error(driver, result):
+    """A rendered product error is observable even if no grid cells mounted."""
+    if _visible_error(driver):
+        result.update(result="failed", visibleError=True, infrastructureUnavailable=False,
+                      browser=f"{driver.capabilities['browserName']} {driver.capabilities['browserVersion']}")
+
+
 def qualify_column_geometry(host: str, requirement: str) -> None:
     """Use physical resize, double-click and pin/menu gestures on installed hosts."""
     import pytest
@@ -1363,6 +1370,7 @@ def qualify_column_geometry(host: str, requirement: str) -> None:
         driver._pivot_loaded_assets = {}
         driver.execute_cdp_cmd("Network.enable", {"maxTotalBufferSize": 50000000, "maxResourceBufferSize": 50000000})
         if requirement == "column-pinning.round-trip":
+            driver.execute_cdp_cmd("Page.addScriptToEvaluateOnNewDocument", {"source": _NAVIGATION_PROBE_SCRIPT})
             driver.execute_cdp_cmd("Page.addScriptToEvaluateOnNewDocument", {"source": """
               window.__pivotGeometryExports = [];
               const captureExport = raw => {
@@ -1501,6 +1509,8 @@ def qualify_column_geometry(host: str, requirement: str) -> None:
                 _verify_release_asset_batch(driver, require_assets=True)
                 result["loadedAssetSha256"] = dict(driver._pivot_loaded_assets)
                 screenshot = directory / "final.png"
+                classify_visible_startup_error(driver, result)
+                observation["v1Trace"] = driver.execute_script("return window.__pivotNavigationTrace || []")
                 driver.save_screenshot(str(screenshot))
                 paths.append(str(screenshot))
             except Exception as error:
@@ -2149,6 +2159,8 @@ if (!window.__pivotNavigationTrace) {
       const rows = Array.isArray(value.payload?.data) ? value.payload.data : [];
       trace.push({phase, at: performance.now(), requestId: value.requestId,
         schemaVersion: value.schemaVersion, status: value.status || null,
+        errorCode: value.payload?.errorCode || value.payload?.code || value.code || null,
+        message: value.status === 'error' ? value.message || null : null,
         globalFilter: value.state?.filters?.global ?? null,
         filters: value.state?.filters ?? null,
         valueAggregations: Array.isArray(value.state?.valConfigs)

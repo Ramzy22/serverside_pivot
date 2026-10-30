@@ -447,6 +447,22 @@ def test_measure_add_remove_oracle_rejects_stale_cells_headers_and_requests():
     assert not measure_add_remove_matches([before, {**added, "visibleUnits": ["5", "5", "9"]}, removed])
 
 
+def test_visible_startup_error_is_a_failed_product_case(monkeypatch):
+    import tests.flagship_browser_support as support
+
+    class Driver:
+        capabilities = {"browserName": "chrome", "browserVersion": "156"}
+
+    result = {"result": "blocked", "browser": "unavailable", "infrastructureUnavailable": True}
+    monkeypatch.setattr(support, "_visible_error", lambda driver: False)
+    support.classify_visible_startup_error(Driver(), result)
+    assert result["result"] == "blocked"
+    monkeypatch.setattr(support, "_visible_error", lambda driver: True)
+    support.classify_visible_startup_error(Driver(), result)
+    assert result == {"result": "failed", "browser": "chrome 156",
+                      "infrastructureUnavailable": False, "visibleError": True}
+
+
 def test_scroll_windows_have_dedicated_installed_browser_phase():
     from scripts.certify_flagship import _product_browser_plan, _product_phase
     from tests.flagship_contract import load_requirements
