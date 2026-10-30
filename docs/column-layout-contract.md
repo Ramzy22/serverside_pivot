@@ -18,20 +18,33 @@ preferences. Editing is outside this release contract.
 
 ## Observed installed candidate
 
-Candidate `2a3d998a314b6147d1be54200059061a3fc7bfa2`, run
-`8ee6b1ce8f774e42bf3bb86c29bf33bb`, passed the custom-order browser journey in
-Dash, React and Streamlit using Chrome `156.0.8078.73`. That journey checked a
+Candidate `6f5eada9bff2a7bcd99ac405c900799d9ddccf4b`, run
+`fde623775e194e78953ced322d1e41af`, passed the custom-order browser journey in
+Dash, React and Streamlit using Chrome `156.0.8078.76`. That journey checked a
 reordered wide sparse grid, an off-window pin, exact clipboard headers and
 values, XLSX ordering and merged headers, and saved width/order/pin restoration.
 Each observation includes loaded-asset hashes. The binding and observations
-are under `artifacts/qualification/candidate-2a3d998-full-2026-10-29/`.
+are under `artifacts/qualification/candidate-6f5eada-full-2026-10-31/`.
 
-All 87 mapped product browser tests and 34 pinned AG Grid reference tests passed
-in that candidate. The complete release manifest remains failed: 14 of 72
-requirement groups passed release qualification, 57 lacked complete evidence,
-and one was not applicable. The custom-order shared assertion was unmapped in
-that run. Its new mapping and the subtotal browser mapping require a fresh
-installed-candidate run; local passing tests do not amend historical evidence.
+The strict manifest passes the complete custom-order, subtotal and aggregation
+requirement groups for both release behavior and reference comparison. All 19
+mapped installed shared-assertion groups, nine scrolling tests, nine export
+tests and 34 pinned AG Grid reference tests passed.
+
+The main browser phase had 71 passes and four failures. One React startup
+failure displayed a grid load error and remains unresolved; it did not recur
+in 20 reloads and ten fresh-browser diagnostics. Three add/remove tests failed
+because their interactions assumed all columns were visible and counted a
+grouped total header twice; Streamlit also needed an explicit scroll before
+clicking a control. Corrected interactions passed separately in all three
+installed hosts. Those supplemental diagnostics never amend frozen case
+records and require a new frozen run for release credit.
+
+The complete manifest remains failed: 16 of 72 requirement groups passed
+release qualification, 13 passed reference comparison, and one was not
+applicable. The runner inventory still has 38 workflow groups without browser
+mappings and 52 required shared-test IDs without mappings. These counts describe
+missing executable qualification, rather than proving those features broken.
 
 ## Follow-up revision regression
 
@@ -40,8 +53,9 @@ secondary measure's aggregation: its saved layout ID stayed stable, but its
 cell key changed without a new revision. The resolver fingerprint now includes
 both the saved layout ID and the current cell key. Pure resolver and real
 runtime regressions cover this change, and the installed aggregation mapping
-requires the secondary-measure test. Fresh installed evidence is still required
-for this correction; the earlier candidate did not exercise it.
+requires the secondary-measure test. Candidate `6f5eada` ran both installed
+aggregation assertions successfully. The saved identity remains unchanged and
+the changed cell key now produces a new revision.
 
 This report verifies the layout contract and records current evidence. It does
 not qualify the complete release, deployment topology or operational controls.
