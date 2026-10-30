@@ -2805,6 +2805,7 @@ def qualify_measure_add_remove(host: str) -> None:
 
     def remove(label):
         element = wait.until(lambda _: chip(label))
+        driver.execute_script("arguments[0].scrollIntoView({block:'center',inline:'nearest'})", element)
         # The close icon is the chip's final span; clicking it exercises the
         # rendered remove action, without invoking internal React state.
         element.find_elements("css selector", "span")[-1].click()
@@ -2825,12 +2826,20 @@ def qualify_measure_add_remove(host: str) -> None:
         cells = _navigation_cells(driver)
         by_id = {cell["colid"]: cell["text"] for cell in cells if cell["rowid"] == "__grand_total__"}
         keys = lambda field: [f"Q1_{field}_sum", f"Q2_{field}_sum", f"__RowTotal__{field}_sum"]
+        observation["lastProbe"] = {"grandCellIds": list(by_id), "hasUnits": has_units}
         if any(key not in by_id for key in keys(sales)) or has_units and any(key not in by_id for key in keys(units)):
             return None
         headers = [header for header in _workspace_elements(driver, '[role="columnheader"][data-header-column-id]')
                    if header.is_displayed() and units in (header.get_attribute("data-header-column-id") or "")]
         unit_cell_count = sum(units in cell["colid"] for cell in cells)
-        if len(headers) != (3 if has_units else 0) or unit_cell_count != (9 if has_units else 0):
+        # The total leaf is also represented at the parent header level.
+        # Count logical column IDs, while retaining both DOM nodes in evidence.
+        unit_header_ids = [header.get_attribute("data-header-column-id") for header in headers]
+        unit_header_count = len(set(unit_header_ids))
+        observation["lastProbe"].update(
+            unitHeaderIds=unit_header_ids,
+            unitCellCount=unit_cell_count)
+        if unit_header_count != (3 if has_units else 0) or unit_cell_count != (9 if has_units else 0):
             return None
         raw_units = [grand.get(key) for key in ("q1_units", "q2_units", "total_units")]
         return {"requestId": response["requestId"], "hasUnits": has_units,
@@ -2838,7 +2847,7 @@ def qualify_measure_add_remove(host: str) -> None:
                 "visibleSales": [by_id[key] for key in keys(sales)],
                 "rawUnits": raw_units if has_units else [value for value in raw_units if value is not None],
                 "visibleUnits": [by_id[key] for key in keys(units)] if has_units else [],
-                "unitHeaderCount": len(headers),
+                "unitHeaderCount": unit_header_count,
                 "unitCellCount": unit_cell_count}
 
     try:
@@ -2861,10 +2870,12 @@ def qualify_measure_add_remove(host: str) -> None:
         checkpoint = driver.execute_script("return performance.now()")
         wait.until(lambda _: chip(units, "available")).send_keys(Keys.SPACE)
         _wait_for_visible_workspace_element(driver, '[data-sidebar-drop-zone="vals"]').send_keys(Keys.ENTER)
+        _wait_for_visible_workspace_element(driver, '[data-testid="pivot-toggle-sidebar"]').click()
         added = wait.until(lambda _: state(True, checkpoint))
         observation["states"].append(added)
         driver.save_screenshot(str(directory / "added.png"))
         paths.append(str(directory / "added.png"))
+        _wait_for_visible_workspace_element(driver, '[data-testid="pivot-toggle-sidebar"]').click()
         checkpoint = driver.execute_script("return performance.now()")
         remove(units)
         removed = wait.until(lambda _: state(False, checkpoint))
