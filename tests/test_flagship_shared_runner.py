@@ -64,6 +64,14 @@ def test_custom_pivot_order_mapping_executes_sparse_values_and_pin_assertions():
     assert "tests/export_qualification_fixture.py" in assertions[0].sources
 
 
+def test_aggregation_mapping_covers_secondary_measure_revision_changes():
+    assertions = SHARED_ASSERTIONS["shared.layout-values.aggregation"]
+    assert {assertion.node.split("::")[-1] for assertion in assertions} == {
+        "test_flagship_sum_average_sum_round_trip_preserves_measure_position",
+        "test_secondary_aggregation_changes_revision_without_moving_saved_identity",
+    }
+
+
 def test_run_rejects_evidence_outside_current_run(tmp_path):
     class Binding:
         run_id = "current"

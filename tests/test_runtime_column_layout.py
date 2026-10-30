@@ -1,6 +1,7 @@
 """The server's pivot display order is independent of labels and viewport indices."""
 
 import pytest
+from dataclasses import replace
 
 from pivot_engine.column_layout import (
     MAX_LAYOUT_MANIFEST_BYTES,
@@ -43,6 +44,17 @@ def test_identity_uses_typed_path_and_measure_instead_of_label_or_cell_index():
     assert a.layout_id != b.layout_id
     assert a.layout_id == c.layout_id
     assert d.layout_id != e.layout_id
+
+
+def test_revision_changes_with_cell_keys_while_saved_identity_remains_stable():
+    summed = PivotColumnIdentity((("period", "Q1"),), "sales_sum", "Q1_sales_sum",
+                                 layout_measure_key="sales")
+    averaged = replace(summed, measure_key="sales_avg", cell_id="Q1_sales_avg")
+    assert summed.layout_id == averaged.layout_id
+    before = resolve_column_layout([summed], [summed.layout_id], structural_key="same-query")
+    after = resolve_column_layout([averaged], [summed.layout_id], structural_key="same-query")
+    assert before.revision != after.revision
+    assert before.columns[0].layout_id == after.columns[0].layout_id
 
 
 def test_saved_group_and_leaf_order_reconciles_missing_and_new_columns():

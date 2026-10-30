@@ -317,6 +317,25 @@ def test_duplicate_source_measures_keep_distinct_layout_identities():
     assert entries[f"Q1_{sales}_sum"] != entries[f"Q1_{sales}_avg"]
 
 
+def test_secondary_aggregation_changes_revision_without_moving_saved_identity():
+    service = _runtime()
+    initial = _response(service, {}, 1, needs_col_schema=True)
+    manifest = tuple(entry["layoutId"] for entry in initial.col_schema["columns"] if entry)
+    baseline = _response(service, {}, 2, layout_manifest=manifest, needs_col_schema=True)
+    configs = [FLAGSHIP_VALUE_CONFIGS[0], {**FLAGSHIP_VALUE_CONFIGS[1], "agg": "avg"},
+               FLAGSHIP_VALUE_CONFIGS[2]]
+    averaged = _response(service, {}, 3, val_configs=configs, layout_manifest=manifest,
+                         needs_col_schema=True)
+    before = {entry["index"]: entry for entry in initial.col_schema["columns"] if entry}
+    after = {entry["index"]: entry for entry in averaged.col_schema["columns"] if entry}
+    unit_key = _measure("Q1", 1)
+    position = next(index for index, entry in before.items() if entry["id"] == unit_key)
+    assert after[position]["layoutId"] == before[position]["layoutId"]
+    assert after[position]["id"] == f"Q1_{FLAGSHIP_VALUE_CONFIGS[1]['field']}_avg"
+    assert baseline.layout_revision != averaged.layout_revision
+    assert averaged.col_schema["layoutRevision"] == averaged.layout_revision
+
+
 def test_flagship_custom_order_sparse_window_and_off_window_pin():
     service = _runtime()
     initial = _response(service, {}, 1, needs_col_schema=True)

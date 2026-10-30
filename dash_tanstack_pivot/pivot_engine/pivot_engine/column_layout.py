@@ -279,6 +279,9 @@ def resolve_column_layout(
         "contract": "pivot-layout-v1",
         "structural": structural_key,
         "saved": manifest,
-        "resolved": [column.layout_id for column in columns],
+        # Saved positions survive aggregation changes, but the corresponding
+        # cell keys can change. Bind both to prevent sparse schemas retaining
+        # keys from an earlier aggregation under an identical revision.
+        "resolved": [(column.layout_id, column.cell_id) for column in columns],
     })).hexdigest()
     return ResolvedColumnLayout(columns, revision)

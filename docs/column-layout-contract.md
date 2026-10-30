@@ -33,5 +33,15 @@ and one was not applicable. The custom-order shared assertion was unmapped in
 that run. Its new mapping and the subtotal browser mapping require a fresh
 installed-candidate run; local passing tests do not amend historical evidence.
 
+## Follow-up revision regression
+
+A same-manifest regression reproduced a revision collision when changing the
+secondary measure's aggregation: its saved layout ID stayed stable, but its
+cell key changed without a new revision. The resolver fingerprint now includes
+both the saved layout ID and the current cell key. Pure resolver and real
+runtime regressions cover this change, and the installed aggregation mapping
+requires the secondary-measure test. Fresh installed evidence is still required
+for this correction; the earlier candidate did not exercise it.
+
 This report verifies the layout contract and records current evidence. It does
 not qualify the complete release, deployment topology or operational controls.

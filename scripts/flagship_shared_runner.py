@@ -47,7 +47,6 @@ SHARED_ASSERTIONS: Mapping[str, tuple[SharedAssertion, ...]] = {
             "shared.global-filter.apply-clear": "test_flagship_global_search_and_clear_preserve_base_scope_filter",
             "shared.header-filter.apply-clear": "test_flagship_header_filter_and_clear_preserve_base_scope_filter",
             "shared.filter-options.values": "test_flagship_region_filter_options_follow_scope_and_exact_selection",
-            "shared.layout-values.aggregation": "test_flagship_sum_average_sum_round_trip_preserves_measure_position",
             "shared.totals.subtotals": "test_flagship_subtotals_do_not_double_count_expanded_children",
             "shared.sorting.direction-order": "test_flagship_total_sales_sort_reverses_groups_but_keeps_grand_total_last",
             "shared.totals.controls": "test_flagship_totals_controls_remove_only_requested_totals_and_restore",
@@ -55,6 +54,15 @@ SHARED_ASSERTIONS: Mapping[str, tuple[SharedAssertion, ...]] = {
             "shared.custom-pivot-order.sparse-window": "test_flagship_custom_order_sparse_window_and_off_window_pin",
         }.items()
     },
+    "shared.layout-values.aggregation": tuple(
+        SharedAssertion(
+            f"tests/test_flagship_shared_runtime.py::{node}",
+            ("tests/__init__.py", "tests/export_qualification_fixture.py", "tests/test_flagship_shared_runtime.py"),
+        ) for node in (
+            "test_flagship_sum_average_sum_round_trip_preserves_measure_position",
+            "test_secondary_aggregation_changes_revision_without_moving_saved_identity",
+        )
+    ),
     "shared.copy-current-table.visible-scope": (
         SharedAssertion(
             "tests/test_runtime_service.py::test_runtime_service_current_table_export_preserves_collapsed_hierarchy_state",
