@@ -96,7 +96,8 @@ def test_flagship_http_error_is_safe_and_next_request_recovers_exact_totals():
 
 def _response(service, expanded, sequence, *, filters=None, val_configs=None,
               sorting=None, show_row_totals=False, show_col_totals=True,
-              layout_manifest=None, needs_col_schema=False):
+              layout_manifest=None, layout_revision=None, needs_col_schema=False,
+              col_start=0, col_end=None, pinned_column_ids=()):
     return service.process(
         PivotViewState(
             row_fields=FLAGSHIP_ROW_FIELDS,
@@ -119,6 +120,10 @@ def _response(service, expanded, sequence, *, filters=None, val_configs=None,
             start_row=0,
             end_row=100,
             layout_manifest=layout_manifest,
+            layout_revision=layout_revision,
+            col_start=col_start,
+            col_end=col_end,
+            pinned_column_ids=pinned_column_ids,
             needs_col_schema=needs_col_schema,
         ),
     )
@@ -310,6 +315,32 @@ def test_duplicate_source_measures_keep_distinct_layout_identities():
     response = _response(service, {}, 1, val_configs=configs, needs_col_schema=True)
     entries = {entry["id"]: entry["layoutId"] for entry in response.col_schema["columns"] if entry}
     assert entries[f"Q1_{sales}_sum"] != entries[f"Q1_{sales}_avg"]
+
+
+def test_flagship_custom_order_sparse_window_and_off_window_pin():
+    service = _runtime()
+    initial = _response(service, {}, 1, needs_col_schema=True)
+    catalog = {entry["id"]: entry["layoutId"] for entry in initial.col_schema["columns"] if entry}
+    order = [_measure(period, measure) for period in ("Q2", "Q1") for measure in (1, 0, 2)]
+    manifest = tuple(catalog[column] for column in order)
+    pin = (catalog[_measure("Q1", 0)],)
+    moved = _response(service, {}, 2, needs_col_schema=True, layout_manifest=manifest,
+                      col_start=0, col_end=1, pinned_column_ids=pin)
+    token_only = _response(service, {}, 3, needs_col_schema=True,
+                           layout_revision=moved.layout_revision,
+                           col_start=0, col_end=1, pinned_column_ids=pin)
+    for response in (moved, token_only):
+        assert response.status == "data"
+        assert response.layout_revision == moved.layout_revision
+        assert response.col_schema["layoutRevision"] == response.layout_revision
+        entries = [entry for entry in response.col_schema["columns"] if entry]
+        assert [(entry["index"], entry["id"]) for entry in entries] == [
+            (0, _measure("Q2", 1)), (1, _measure("Q2", 0)), (4, _measure("Q1", 0))]
+        grand = next(row for row in response.data if row["_id"] == "Grand Total")
+        assert [grand[_measure(period, measure)] for period, measure in
+                (("Q2", 1), ("Q2", 0), ("Q1", 0))] == [5, 50, 150]
+        assert _measure("Q1", 1) not in grand
+        assert _measure("Q2", 2) not in grand
 
 
 def test_flagship_subtotals_do_not_double_count_expanded_children():

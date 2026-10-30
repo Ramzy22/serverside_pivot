@@ -55,6 +55,15 @@ def test_table_scope_mappings_execute_real_runtime_service_exports():
     assert all("tests/test_runtime_service.py" in assertion.sources for assertion in (*current, *all_rows))
 
 
+def test_custom_pivot_order_mapping_executes_sparse_values_and_pin_assertions():
+    assertions = SHARED_ASSERTIONS["shared.custom-pivot-order.sparse-window"]
+    assert len(assertions) == 1
+    assert assertions[0].node == (
+        "tests/test_flagship_shared_runtime.py::test_flagship_custom_order_sparse_window_and_off_window_pin"
+    )
+    assert "tests/export_qualification_fixture.py" in assertions[0].sources
+
+
 def test_run_rejects_evidence_outside_current_run(tmp_path):
     class Binding:
         run_id = "current"
