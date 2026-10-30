@@ -418,6 +418,35 @@ def test_subtotals_have_an_installed_browser_case_for_every_host():
         )
 
 
+def test_measure_add_remove_has_an_installed_browser_case_for_every_host():
+    from scripts.certify_flagship import _product_browser_plan
+    from tests.flagship_contract import load_requirements
+
+    plan = _product_browser_plan(load_requirements(Path(__file__).parent / "flagship_requirements.json"))
+    for host in ("dash", "react", "streamlit"):
+        assert plan[("layout-values.add-remove", host, "browser.layout-values.add-remove")] == (
+            f"tests/test_flagship_workflows.py::test_flagship_measure_add_remove[{host}]"
+        )
+
+
+def test_measure_add_remove_oracle_rejects_stale_cells_headers_and_requests():
+    from tests.flagship_browser_support import measure_add_remove_matches
+
+    def state(request_id, units):
+        return {"requestId": request_id, "hasUnits": units,
+                "rawSales": [150, 50, 200], "visibleSales": ["150", "50", "200"],
+                "rawUnits": [5, 5, 10] if units else [],
+                "visibleUnits": ["5", "5", "10"] if units else [],
+                "unitHeaderCount": 3 if units else 0, "unitCellCount": 9 if units else 0}
+
+    before, added, removed = state("before", False), state("added", True), state("removed", False)
+    assert measure_add_remove_matches([before, added, removed])
+    for broken in ({**removed, "unitHeaderCount": 1}, {**removed, "unitCellCount": 1},
+                   {**removed, "requestId": "added"}, {**removed, "rawSales": [150, 50, 400]}):
+        assert not measure_add_remove_matches([before, added, broken])
+    assert not measure_add_remove_matches([before, {**added, "visibleUnits": ["5", "5", "9"]}, removed])
+
+
 def test_scroll_windows_have_dedicated_installed_browser_phase():
     from scripts.certify_flagship import _product_browser_plan, _product_phase
     from tests.flagship_contract import load_requirements
@@ -889,6 +918,14 @@ def test_flagship_aggregation_round_trip(host, installed_workflow_hosts):
     from tests.flagship_browser_support import qualify_aggregation_round_trip
 
     qualify_aggregation_round_trip(host)
+
+
+@pytest.mark.flagship
+@pytest.mark.parametrize("host", ["dash", "react", "streamlit"])
+def test_flagship_measure_add_remove(host, installed_workflow_hosts):
+    from tests.flagship_browser_support import qualify_measure_add_remove
+
+    qualify_measure_add_remove(host)
 
 
 @pytest.mark.flagship

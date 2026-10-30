@@ -2733,6 +2733,159 @@ def qualify_aggregation_round_trip(host: str) -> None:
     assert result["result"] == "passed", f"{host} aggregation: {diagnostic}; evidence: {directory}"
 
 
+def measure_add_remove_matches(states):
+    """Require exact totals and complete removal of unit headers and cells."""
+    from decimal import Decimal, InvalidOperation
+
+    if len(states) != 3 or [state.get("hasUnits") for state in states] != [False, True, False]:
+        return False
+    if len({state.get("requestId") for state in states}) != 3 or not all(state.get("requestId") for state in states):
+        return False
+    try:
+        for state in states:
+            for key in ("rawSales", "visibleSales"):
+                if [Decimal(str(value).replace(",", "")) for value in state[key]] != [150, 50, 200]:
+                    return False
+            for key in ("rawUnits", "visibleUnits"):
+                expected = [5, 5, 10] if state["hasUnits"] else []
+                if [Decimal(str(value).replace(",", "")) for value in state[key]] != expected:
+                    return False
+            if state["unitHeaderCount"] != (3 if state["hasUnits"] else 0):
+                return False
+            if state["unitCellCount"] != (9 if state["hasUnits"] else 0):
+                return False
+    except (InvalidOperation, KeyError, TypeError, ValueError):
+        return False
+    return True
+
+
+def qualify_measure_add_remove(host: str) -> None:
+    """Use actual sidebar controls for sales-only -> sales/units -> sales-only."""
+    import pytest
+    from scripts.flagship_artifacts import load_artifact_binding
+    from tests.test_flagship_certification import (
+        _qualification_chrome_options, _switch_to_workspace,
+        _wait_for_visible_workspace_element, _verify_release_asset_batch, _workspace_elements,
+    )
+    from selenium import webdriver
+    from selenium.webdriver.common.keys import Keys
+    from selenium.webdriver.support.ui import WebDriverWait
+
+    if os.environ.get("PIVOT_RUN_FLAGSHIP_BROWSER_TESTS") != "1":
+        pytest.skip("Enable installed flagship browser qualification explicitly")
+    if not os.environ.get("PIVOT_FLAGSHIP_ARTIFACT_BINDING"):
+        pytest.fail("Installed artifact binding is required")
+    run_id = os.environ["PIVOT_FLAGSHIP_RUN_ID"]
+    directory = Path(os.environ["PIVOT_FLAGSHIP_EVIDENCE_ROOT"]) / "measure-add-remove" / host
+    assert ("runs", run_id) in tuple(zip(directory.parts, directory.parts[1:]))
+    directory.mkdir(parents=True, exist_ok=True)
+    downloads = directory / "downloads"
+    downloads.mkdir(exist_ok=True)
+    binding = load_artifact_binding(Path(os.environ["PIVOT_FLAGSHIP_ARTIFACT_BINDING"]))
+    result = {"result": "blocked", "browser": "unavailable", "infrastructureUnavailable": True}
+    observation = {"states": [], "setup": "Remove units and variance through sidebar close controls to obtain a sales-only pivot"}
+    paths, diagnostic, driver = [], "", None
+    sales, units = "ventes_\u20ac", "unit\u00e9s"
+
+    def chip(label, kind="zone"):
+        return next((item for item in _workspace_elements(driver, f'[data-sidebar-field-chip="{kind}"]')
+                     if item.is_displayed() and label.casefold() in item.text.casefold()), None)
+
+    def remove(label):
+        element = wait.until(lambda _: chip(label))
+        # The close icon is the chip's final span; clicking it exercises the
+        # rendered remove action, without invoking internal React state.
+        element.find_elements("css selector", "span")[-1].click()
+        wait.until(lambda _: chip(label) is None)
+
+    def state(has_units, checkpoint):
+        trace = driver.execute_script("return window.__pivotNavigationTrace || []")
+        fields = {sales, units} if has_units else {sales}
+        requests = {entry["requestId"] for entry in trace
+                    if entry.get("phase") == "request" and entry.get("at", -1) > checkpoint
+                    and {config.get("field") for config in entry.get("valueAggregations") or []} == fields
+                    and all(config.get("agg") == "sum" for config in entry.get("valueAggregations") or [])}
+        response = next((entry for entry in reversed(trace) if entry.get("phase") == "response"
+                         and entry.get("status") == "data" and entry.get("requestId") in requests), None)
+        grand = next((row for row in (response or {}).get("rows") or [] if row.get("id") == "Grand Total"), None)
+        if grand is None:
+            return None
+        cells = _navigation_cells(driver)
+        by_id = {cell["colid"]: cell["text"] for cell in cells if cell["rowid"] == "__grand_total__"}
+        keys = lambda field: [f"Q1_{field}_sum", f"Q2_{field}_sum", f"__RowTotal__{field}_sum"]
+        if any(key not in by_id for key in keys(sales)) or has_units and any(key not in by_id for key in keys(units)):
+            return None
+        headers = [header for header in _workspace_elements(driver, '[role="columnheader"][data-header-column-id]')
+                   if header.is_displayed() and units in (header.get_attribute("data-header-column-id") or "")]
+        unit_cell_count = sum(units in cell["colid"] for cell in cells)
+        if len(headers) != (3 if has_units else 0) or unit_cell_count != (9 if has_units else 0):
+            return None
+        raw_units = [grand.get(key) for key in ("q1_units", "q2_units", "total_units")]
+        return {"requestId": response["requestId"], "hasUnits": has_units,
+                "rawSales": [grand.get(key) for key in ("q1", "q2", "total")],
+                "visibleSales": [by_id[key] for key in keys(sales)],
+                "rawUnits": raw_units if has_units else [value for value in raw_units if value is not None],
+                "visibleUnits": [by_id[key] for key in keys(units)] if has_units else [],
+                "unitHeaderCount": len(headers),
+                "unitCellCount": unit_cell_count}
+
+    try:
+        driver = webdriver.Chrome(options=_qualification_chrome_options(downloads))
+        driver._pivot_artifact_binding, driver._pivot_artifact_host = binding, host
+        driver._pivot_loaded_assets = {}
+        driver.execute_cdp_cmd("Network.enable", {"maxTotalBufferSize": 50000000, "maxResourceBufferSize": 50000000})
+        driver.execute_cdp_cmd("Page.addScriptToEvaluateOnNewDocument", {"source": _NAVIGATION_PROBE_SCRIPT})
+        _switch_to_workspace(driver, host)
+        result.update(result="failed", browser=f"{driver.capabilities['browserName']} {driver.capabilities['browserVersion']}",
+                      infrastructureUnavailable=False)
+        wait = WebDriverWait(driver, 30)
+        if chip("ventes") is None:
+            _wait_for_visible_workspace_element(driver, '[data-testid="pivot-toggle-sidebar"]').click()
+        remove("\u00e9cart")
+        checkpoint = driver.execute_script("return performance.now()")
+        remove(units)
+        before = wait.until(lambda _: state(False, checkpoint))
+        observation["states"].append(before)
+        checkpoint = driver.execute_script("return performance.now()")
+        wait.until(lambda _: chip(units, "available")).send_keys(Keys.SPACE)
+        _wait_for_visible_workspace_element(driver, '[data-sidebar-drop-zone="vals"]').send_keys(Keys.ENTER)
+        added = wait.until(lambda _: state(True, checkpoint))
+        observation["states"].append(added)
+        driver.save_screenshot(str(directory / "added.png"))
+        paths.append(str(directory / "added.png"))
+        checkpoint = driver.execute_script("return performance.now()")
+        remove(units)
+        removed = wait.until(lambda _: state(False, checkpoint))
+        observation["states"].append(removed)
+        assert measure_add_remove_matches(observation["states"]), observation["states"]
+        result.update(result="passed", actionCompleted=True, fixtureTotalsVerified=True,
+                      v1RequestsCorrelated=True, staleCellsAbsent=True)
+    except Exception as error:
+        frame = traceback.extract_tb(error.__traceback__)[-1]
+        diagnostic = f"{type(error).__name__} at {Path(frame.filename).name}:{frame.lineno}: {error}"
+    finally:
+        if driver is not None:
+            try:
+                _verify_release_asset_batch(driver, require_assets=True)
+                result["loadedAssetSha256"] = dict(driver._pivot_loaded_assets)
+                driver.save_screenshot(str(directory / "final.png"))
+                paths.append(str(directory / "final.png"))
+                observation["v1Trace"] = driver.execute_script("return window.__pivotNavigationTrace || []")
+            except Exception as error:
+                result["result"] = "blocked"
+                diagnostic += f"; evidence collection: {type(error).__name__}"
+            finally:
+                driver.quit()
+        observation.update(diagnostic=diagnostic, loadedAssetSha256=dict(result.get("loadedAssetSha256", {})),
+                           result={key: value for key, value in result.items() if key != "loadedAssetSha256"})
+        evidence = directory / "observation.json"
+        evidence.write_text(json.dumps(observation, ensure_ascii=False, indent=2), encoding="utf-8")
+        paths.append(str(evidence))
+        result["evidence_paths"] = paths
+        record_case("layout-values.add-remove", host, result, directory)
+    assert result["result"] == "passed", f"{host} measure add/remove: {diagnostic}; evidence: {directory}"
+
+
 def qualify_totals_controls(host: str) -> None:
     """Observe row-total columns and the grand row through real View controls."""
     import pytest
