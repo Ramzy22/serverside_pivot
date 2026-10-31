@@ -429,6 +429,18 @@ def test_measure_add_remove_has_an_installed_browser_case_for_every_host():
         )
 
 
+def test_exact_downloads_have_installed_browser_mappings_for_every_host():
+    from scripts.certify_flagship import _product_browser_plan
+    from tests.flagship_contract import load_requirements
+
+    plan = _product_browser_plan(load_requirements(Path(__file__).parent / "flagship_requirements.json"))
+    for kind, requirement in (("csv", "export-csv.exact-document"), ("xlsx", "export-xlsx.exact-workbook")):
+        for host in ("dash", "react", "streamlit"):
+            assert plan[(requirement, host, f"browser.{requirement}")] == (
+                f"tests/test_flagship_workflows.py::test_flagship_exact_download[{kind}-{host}]"
+            )
+
+
 def test_measure_add_remove_oracle_rejects_stale_cells_headers_and_requests():
     from tests.flagship_browser_support import measure_add_remove_matches
 
@@ -942,6 +954,15 @@ def test_flagship_measure_add_remove(host, installed_workflow_hosts):
     from tests.flagship_browser_support import qualify_measure_add_remove
 
     qualify_measure_add_remove(host)
+
+
+@pytest.mark.flagship
+@pytest.mark.parametrize("host", ["dash", "react", "streamlit"])
+@pytest.mark.parametrize("export_format", ["csv", "xlsx"])
+def test_flagship_exact_download(host, export_format, installed_workflow_hosts):
+    from tests.flagship_browser_support import qualify_exact_download
+
+    qualify_exact_download(host, export_format)
 
 
 @pytest.mark.flagship

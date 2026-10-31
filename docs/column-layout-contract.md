@@ -91,3 +91,66 @@ The installed shared recovery mapping now requires a real exhausted-governor
 HTTP rejection, preserved freshness identity, release of capacity and an exact
 successful retry. The historical startup observation and full release status
 still require a fresh installed candidate with the updated assertions.
+
+## Frozen candidate `96973e4`
+
+Run `71e1031b940b4a5bb12855db8269b125` built and installed candidate
+`96973e480d5ca94ec4d3446047b3ef59068ab441` outside the source checkout.
+Its wheel SHA-256 is
+`91af46106d04dd85a7ae73affb82b1219e1efc6c931bfa2e92021c00382c9871`;
+its npm tarball SHA-256 is
+`7bf2406406215227df93e4cc4e95cd666616cbed34ec841cd99f5cc06dac9bf0`.
+The committed contract hash is
+`df277b525050b11e59ac3597295c6cc432b343daee1b1a1fc9ffb7b049e05750`.
+The binding and observation-level loaded asset digests are retained under
+`artifacts/qualification/candidate-96973e4-full-2026-10-31/`.
+
+All 75 ordinary workflow cases, nine scrolling/sparse-order cases, nine export
+job cases, 19 installed shared-assertion groups and 34 pinned AG Grid reference
+cases passed. No browser case failed or skipped. This includes the corrected
+measure add/remove interactions and stale data/error response checks across
+Dash, React and Streamlit. These observations qualify the covered behaviors;
+they do not establish the cause of the older startup failure.
+
+The strict manifest accepted the observed case bindings but rejected complete
+release qualification for missing cases. It reports 17 passed release groups,
+54 failed/incomplete groups and one not applicable; reference comparison reports
+14 passed, 57 failed/incomplete and one not applicable. There are no invalid,
+unsuccessful, duplicate or unexpected product browser records in its coverage
+report. The candidate has 99 of 207 required browser mappings, leaving 108 host
+cases across 38 workflows unmapped; 52 shared assertion IDs also remain unmapped.
+The complete release remains on hold.
+
+## Exact download qualification additions
+
+The next runner revision adds six executable cases for
+`export-csv.exact-document` and `export-xlsx.exact-workbook`: both formats in all
+three hosts. Each downloads the actual filtered hierarchy, compares all five
+rows and 45 measure cells with literal expected values, verifies column/header
+order and Unicode, and records the downloaded file hash and parsed document.
+XLSX also requires numeric cell types, the exact two-row header matrix and all
+six hierarchy, pivot and total header merge spans. The observed export request
+must retain the scope filter and request all rows. Unique request/response IDs,
+job completion, payload URL/status and payload/blob/file hashes must correlate;
+duplicate or partial downloads fail the case.
+
+All six passed against separately installed candidate `96973e4` hosts under
+`artifacts/exact-downloads-reviewed-2026-10-31/`. They are supplemental diagnostics
+with `qualificationEvidence: false`, using newer test code than the frozen
+candidate; its manifest and case envelope remain unchanged. An initial run's
+three CSV failures remain retained: the oracle incorrectly expected the Sum
+suffix on combined period/measure CSV headers. Source inspection confirmed
+that CSV deliberately flattens those header stacks without that suffix, while
+total headers retain it. The corrected oracle checks the exact flattened
+headers and rejects swapped periods; the XLSX expectation remains unchanged.
+
+Independent review found permissive workbook header assertions and incomplete
+request-to-file correlation in the initial test implementation. Negative
+controls reproduced both gaps before fixes; the final six live cases passed
+with the stricter header, correlation and duplicate-download assertions. The
+earlier diagnostic runs remain separate and do not prove those later checks.
+
+The workflow, oracle, manifest and runner unit suite passed 194 tests. The new
+runner has 105 of 207 required host cases mapped, leaving 36 browser workflow
+groups and the same 52 shared assertion IDs unmapped. These new browser cases
+require a future frozen run for release credit.

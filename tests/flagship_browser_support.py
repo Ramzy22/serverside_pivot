@@ -2779,6 +2779,211 @@ def qualify_aggregation_round_trip(host: str) -> None:
     assert result["result"] == "passed", f"{host} aggregation: {diagnostic}; evidence: {directory}"
 
 
+_EXACT_EXPORT_PROBE_SCRIPT = r"""
+if (!window.__pivotExactExports) {
+  const trace = [];
+  window.__pivotExactExportPending = 0;
+  const digest = (blob, entry) => {
+    window.__pivotExactExportPending++;
+    blob.arrayBuffer().then(bytes => crypto.subtle.digest('SHA-256', bytes)).then(hash => {
+      trace.push({...entry, bytes:blob.size,
+        sha256:Array.from(new Uint8Array(hash), byte => byte.toString(16).padStart(2,'0')).join('')});
+    }).catch(() => trace.push({...entry, digestFailed:true})).finally(() => window.__pivotExactExportPending--);
+  };
+  const capture = (raw, phase, base=location.href, depth=0) => {
+    if (depth > 8 || raw == null) return;
+    if (typeof raw === 'string') { try {capture(JSON.parse(raw), phase, base, depth+1)} catch (_) {} return; }
+    if (typeof raw !== 'object') return;
+    if (raw.schemaVersion === 1 && raw.kind === 'export' && raw.requestId) {
+      const payload = raw.payload || {};
+      trace.push({phase, at:performance.now(), requestId:raw.requestId,
+        schemaVersion:raw.schemaVersion, status:raw.status || null, format:payload.format || null,
+        action:payload.action || null, jobId:payload.jobId || null, jobPhase:payload.phase || null,
+        payloadUrl:payload.payloadRef?.url ? new URL(payload.payloadRef.url, base).href : null,
+        colIds:payload.colIds || null, allRows:payload.allRows === true,
+        colStart:payload.col_start ?? payload.colStart ?? null,
+        colEnd:payload.col_end ?? payload.colEnd ?? null,
+        scopeFilter:raw.state?.filters?.scope ?? null});
+      return;
+    }
+    Object.values(raw).forEach(value => capture(value, phase, base, depth+1));
+  };
+  const originalFetch = window.fetch.bind(window);
+  window.fetch = (...args) => {
+    capture(args[1]?.body, 'request');
+    return originalFetch(...args).then(response => {
+      if (new URL(response.url).pathname.includes('/payload/')) {
+        window.__pivotExactExportPending++;
+        response.clone().blob().then(blob => digest(blob, {phase:'delivery', at:performance.now(),
+          url:response.url, status:response.status})).finally(() => window.__pivotExactExportPending--);
+      } else {
+        window.__pivotExactExportPending++;
+        response.clone().text().then(body => capture(body, 'response', response.url)).catch(() => {})
+          .finally(() => window.__pivotExactExportPending--);
+      }
+      return response;
+    });
+  };
+  const originalSend = XMLHttpRequest.prototype.send;
+  XMLHttpRequest.prototype.send = function(body) {
+    capture(body, 'request');
+    this.addEventListener('load', () => capture(this.responseText, 'response', this.responseURL));
+    return originalSend.call(this, body);
+  };
+  const create = URL.createObjectURL.bind(URL);
+  URL.createObjectURL = blob => {
+    const url = create(blob);
+    if (blob instanceof Blob) digest(blob, {phase:'blob', at:performance.now(), url});
+    return url;
+  };
+  const click = HTMLAnchorElement.prototype.click;
+  HTMLAnchorElement.prototype.click = function(...args) {
+    if (this.download) trace.push({phase:'download', at:performance.now(), url:this.href, filename:this.download});
+    return click.apply(this,args);
+  };
+  window.__pivotExactExports = trace;
+}
+"""
+
+
+def assert_single_exact_download(directory, downloaded):
+    assert sorted(directory.iterdir()) == [downloaded], "Expected exactly one completed download and no partial files"
+
+
+def assert_exact_export_delivery(trace, export_format, checkpoint, sha256, filename, size):
+    """Bind one export lifecycle through payload bytes and blob to its real file."""
+    trace = [entry for entry in trace if entry["at"] > checkpoint]
+    requests = [entry for entry in trace if entry["phase"] == "request"]
+    starts = [entry for entry in requests if entry.get("action") == "start"]
+    assert len(starts) == 1 and starts[0].get("format") == export_format
+    by_id = {entry["requestId"]: entry for entry in requests}
+    assert len(by_id) == len(requests)
+    responses = [entry for entry in trace if entry["phase"] == "response"]
+    assert len(responses) == len(requests)
+    assert {entry["requestId"] for entry in responses} == set(by_id)
+    assert len({entry["requestId"] for entry in responses}) == len(responses)
+    jobs = {entry.get("jobId") for entry in responses}
+    assert len(jobs) == 1 and None not in jobs
+    job_id, = jobs
+    assert all(entry.get("status") == "export_job" and entry.get("jobPhase") in ("queued", "running", "completed") for entry in responses)
+    assert all(entry.get("action") == "start" or entry.get("action") == "status" and entry.get("jobId") == job_id for entry in requests)
+    completed = [entry for entry in responses if entry.get("jobPhase") == "completed"]
+    assert len(completed) == 1 and completed[0].get("payloadUrl")
+    assert all(not entry.get("payloadUrl") for entry in responses if entry not in completed)
+    deliveries = [entry for entry in trace if entry["phase"] == "delivery"]
+    assert len(deliveries) == 1
+    delivery, = deliveries
+    assert delivery.get("url") == completed[0]["payloadUrl"] and delivery.get("status") == 200
+    assert delivery.get("sha256") == sha256 and delivery.get("bytes") == size
+    downloads = [entry for entry in trace if entry["phase"] == "download"]
+    assert len(downloads) == 1 and downloads[0].get("filename") == filename
+    blobs = [entry for entry in trace if entry["phase"] == "blob" and entry.get("url") == downloads[0]["url"]]
+    assert len(blobs) == 1 and blobs[0].get("sha256") == sha256 and blobs[0].get("bytes") == size
+    return job_id
+
+
+def qualify_exact_download(host: str, export_format: str) -> None:
+    """Download the real included hierarchy and compare every cell and header."""
+    import hashlib
+    import time
+    import pytest
+    from scripts.flagship_artifacts import load_artifact_binding
+    from tests.export_qualification_fixture import assert_exact_flagship_download
+    from tests.test_flagship_certification import (
+        _qualification_chrome_options, _switch_to_workspace, _verify_release_asset_batch,
+        _apply_qualification_column_order, _click_export, _wait_for_download,
+    )
+    from selenium import webdriver
+    from selenium.webdriver.support.ui import WebDriverWait
+
+    if os.environ.get("PIVOT_RUN_FLAGSHIP_BROWSER_TESTS") != "1":
+        pytest.skip("Enable installed flagship browser qualification explicitly")
+    if not os.environ.get("PIVOT_FLAGSHIP_ARTIFACT_BINDING"):
+        pytest.fail("Installed artifact binding is required")
+    requirement = {"csv": "export-csv.exact-document", "xlsx": "export-xlsx.exact-workbook"}[export_format]
+    run_id = os.environ["PIVOT_FLAGSHIP_RUN_ID"]
+    directory = Path(os.environ["PIVOT_FLAGSHIP_EVIDENCE_ROOT"]) / "exact-download" / export_format / host
+    assert ("runs", run_id) in tuple(zip(directory.parts, directory.parts[1:]))
+    directory.mkdir(parents=True, exist_ok=True)
+    downloads = directory / "downloads"
+    downloads.mkdir(exist_ok=True)
+    binding = load_artifact_binding(Path(os.environ["PIVOT_FLAGSHIP_ARTIFACT_BINDING"]))
+    driver = None
+    result = {"result": "blocked", "browser": "unavailable", "infrastructureUnavailable": True}
+    observation, paths, diagnostic = {"format": export_format}, [], ""
+    try:
+        driver = webdriver.Chrome(options=_qualification_chrome_options(downloads))
+        driver._pivot_artifact_binding, driver._pivot_artifact_host = binding, host
+        driver._pivot_loaded_assets = {}
+        driver.execute_cdp_cmd("Network.enable", {"maxTotalBufferSize": 50000000, "maxResourceBufferSize": 50000000})
+        driver.execute_cdp_cmd("Page.addScriptToEvaluateOnNewDocument", {"source": _EXACT_EXPORT_PROBE_SCRIPT})
+        result.update(result="failed", browser=f"{driver.capabilities['browserName']} {driver.capabilities['browserVersion']}",
+                      infrastructureUnavailable=False)
+        _switch_to_workspace(driver, host)
+        wait = WebDriverWait(driver, 30)
+        wait.until(_totals)
+        _apply_qualification_column_order(driver)
+        checkpoint = driver.execute_script("return performance.now()")
+        started_at = time.time()
+        _click_export(driver, export_format)
+        downloaded = _wait_for_download(downloads, export_format, timeout=60, started_at=started_at)
+        time.sleep(1)
+        wait.until(lambda current: current.execute_script("return window.__pivotExactExportPending === 0"))
+        assert_single_exact_download(downloads, downloaded)
+        paths.append(str(downloaded))
+        observation["download"] = {"file": downloaded.name, "bytes": downloaded.stat().st_size,
+                                   "sha256": hashlib.sha256(downloaded.read_bytes()).hexdigest()}
+        parsed = assert_exact_flagship_download(downloaded, export_format)
+        parsed_path = directory / "parsed-document.json"
+        parsed_path.write_text(json.dumps(parsed, ensure_ascii=False, indent=2), encoding="utf-8")
+        paths.append(str(parsed_path))
+        trace = driver.execute_script("return window.__pivotExactExports || []")
+        observation["jobId"] = assert_exact_export_delivery(trace, export_format, checkpoint,
+            observation["download"]["sha256"], downloaded.name, downloaded.stat().st_size)
+        requests = [entry for entry in trace if entry["phase"] == "request" and entry["at"] > checkpoint
+                    and entry["format"] == export_format]
+        assert requests, "No V1 export request matched the downloaded format"
+        expected_ids = ["hierarchy"] + [f"{period}_{field}_sum"
+            for period in ("Q1", "Q2") for field in ("unit\u00e9s", "ventes_\u20ac", "\u00e9cart")] + [
+                f"__RowTotal__{field}_sum" for field in ("unit\u00e9s", "ventes_\u20ac", "\u00e9cart")]
+        for request in requests:
+            assert request["schemaVersion"] == 1 and request["allRows"] is True
+            if request["colIds"] is not None:
+                assert request["colIds"] == expected_ids
+            assert request["colStart"] in (None, 0)
+            assert request["colEnd"] is None or request["colEnd"] >= 8
+            assert any(condition.get("value") == "Included" for condition in
+                       (request["scopeFilter"] or {}).get("conditions", []))
+        observation["trace"] = trace
+        result.update(result="passed", actionCompleted=True, fixtureTotalsVerified=True,
+                      v1RequestsCorrelated=True, parsedCsvVerified=export_format == "csv",
+                      parsedXlsxVerified=export_format == "xlsx")
+    except Exception as error:
+        frame = traceback.extract_tb(error.__traceback__)[-1]
+        diagnostic = f"{type(error).__name__} at {Path(frame.filename).name}:{frame.lineno}: {error}"
+    finally:
+        if driver is not None:
+            try:
+                _verify_release_asset_batch(driver, require_assets=True)
+                result["loadedAssetSha256"] = dict(driver._pivot_loaded_assets)
+                driver.save_screenshot(str(directory / "final.png"))
+                paths.append(str(directory / "final.png"))
+                observation["trace"] = driver.execute_script("return window.__pivotExactExports || []")
+            except Exception as error:
+                result["result"] = "blocked"
+                diagnostic += f"; evidence collection: {type(error).__name__}"
+            finally:
+                driver.quit()
+        observation.update(diagnostic=diagnostic, loadedAssetSha256=dict(result.get("loadedAssetSha256", {})),
+                           result={key: value for key, value in result.items() if key != "loadedAssetSha256"})
+        evidence = directory / "observation.json"
+        evidence.write_text(json.dumps(observation, ensure_ascii=False, indent=2), encoding="utf-8")
+        paths.append(str(evidence))
+        result["evidence_paths"] = paths
+        record_case(requirement, host, result, directory)
+    assert result["result"] == "passed", f"{host} {export_format} exact download: {diagnostic}; evidence: {directory}"
+
+
 def measure_add_remove_matches(states):
     """Require exact totals and complete removal of unit headers and cells."""
     from decimal import Decimal, InvalidOperation

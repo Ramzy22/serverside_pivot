@@ -220,6 +220,76 @@ def _assert_qualification_membership(rows: list[list[str]], *, all_records: bool
     assert not any(value in joined for value in FLAGSHIP_EXCLUDED_TEXT)
 
 
+def assert_exact_flagship_download(path: str | Path, export_format: str) -> dict[str, object]:
+    """Compare every downloaded fixture cell with a literal independent oracle."""
+    expected_labels = ["M\u00fcnchen", "\u0627\u0644\u0642\u0627\u0647\u0631\u0629",
+                       "\u00c9clair", "\u6771\u4eac", "Grand Total"]
+    expected_numbers = [
+        (3, "49.75", "4.25", 4, 30, -1, 7, "79.75", "3.25"),
+        (3, "49.75", "4.25", 4, 30, -1, 7, "79.75", "3.25"),
+        (2, "100.25", "-12.5", 1, 20, "2.5", 3, "120.25", -10),
+        (2, "100.25", "-12.5", 1, 20, "2.5", 3, "120.25", -10),
+        (5, 150, "-8.25", 5, 50, "1.5", 10, 200, "-6.75"),
+    ]
+    merged_ranges = []
+    numeric_count = 0
+    if export_format == "csv":
+        document = read_csv_export(path)
+        assert len(document) == 6, "CSV must contain one header and five hierarchy rows"
+        headers, rows = document[0], document[1:]
+        expected_headers = ["Region > Account"] + [f"{period} {measure}"
+            for period in ("Q1", "Q2") for measure in ("Unit\u00e9s", "Ventes \u20ac", "\u00c9cart")]
+        expected_headers += [f"{measure} (Sum)" for measure in ("Unit\u00e9s", "Ventes \u20ac", "\u00c9cart")]
+        assert headers == expected_headers, "CSV headers must preserve displayed pivot paths and measure order"
+    elif export_format == "xlsx":
+        from openpyxl import load_workbook
+
+        workbook = load_workbook(path, data_only=False)
+        try:
+            sheet = workbook.active
+            assert sheet.max_row == 7 and sheet.max_column == 10
+            document = list(sheet.values)
+            measures = ["Unit\u00e9s (Sum)", "Ventes \u20ac (Sum)", "\u00c9cart (Sum)"]
+            assert document[:2] == [
+                ("Region > Account", "Q1", None, None, "Q2", None, None, *measures),
+                (None, *measures, *measures, None, None, None),
+            ], "XLSX must preserve the exact displayed two-row header matrix"
+            headers = [document[1][index] or document[0][index] for index in range(10)]
+            merged_ranges = sorted(str(item) for item in sheet.merged_cells.ranges)
+            assert set(merged_ranges) == {"A1:A2", "B1:D1", "E1:G1", "H1:H2", "I1:I2", "J1:J2"}, "Pivot, hierarchy and total header spans must match the table"
+            for row in sheet.iter_rows(min_row=3, max_row=7, min_col=2, max_col=10):
+                assert all(cell.data_type == "n" and isinstance(cell.value, (int, float)) for cell in row), "Numbers must remain numeric workbook cells"
+            rows = [list(row) for row in document[2:]]
+        finally:
+            workbook.close()
+    else:
+        raise AssertionError(f"Unsupported fixture download: {export_format}")
+
+    assert len(headers) == 10
+    assert "region" in str(headers[0]).casefold() and "account" in str(headers[0]).casefold()
+    for index, measure in enumerate(("unit\u00e9s", "ventes", "\u00e9cart") * 3, start=1):
+        label = str(headers[index]).casefold()
+        assert measure in label, f"Wrong measure header at column {index}"
+        if export_format == "xlsx" or index > 6:
+            assert "sum" in label
+        if measure == "ventes":
+            assert "\u20ac" in label
+    assert [str(row[0]).strip() for row in rows] == expected_labels, "Hierarchy rows, ordering or Unicode changed"
+    for row, expected in zip(rows, expected_numbers):
+        assert len(row) == 10
+        try:
+            values = [Decimal(str(value)) for value in row[1:]]
+        except InvalidOperation as error:
+            raise AssertionError("A raw numeric cell was not preserved") from error
+        assert all(value.is_finite() for value in values)
+        assert values == [Decimal(str(value)) for value in expected], f"Wrong numeric cells for {row[0]}"
+        numeric_count += len(values)
+    return {"format": export_format, "rows": 5, "columns": 10, "numericCellCount": numeric_count,
+            "mergedRanges": merged_ranges, "unicodeVerified": True, "filterVerified": True,
+            "columnOrderVerified": True, "totalsVerified": True, "allRowsVerified": True,
+            "parsedRows": rows, "headers": headers}
+
+
 def assert_flagship_download(path: str | Path, export_format: str) -> dict[str, object]:
     """Assert literal filtered/order/numeric/Unicode export behavior."""
     if export_format == "csv":
