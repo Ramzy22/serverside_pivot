@@ -14,7 +14,7 @@ import xml.etree.ElementTree as ET
 
 from tests import flagship_browser_support as support
 from tests.flagship_axis_swap import AXIS_PROBE
-from tests.flagship_remaining_1 import SALES, UNITS, ECLAIR, starting_state, _element, _raw_snapshot, cells, logical_values
+from tests.flagship_remaining_1 import SALES, UNITS, ECLAIR, starting_state, _element, _section, _raw_snapshot, cells, logical_values
 
 MUNCHEN = "M\u00fcnchen"
 REQUIREMENTS = ("range-chart.source", "range-chart.locked-source", "range-chart.live-source",
@@ -153,7 +153,7 @@ def _create(driver, wait, observation):
     rows = support._selection_rows(driver)
     assert [row["label"] for row in rows] == [ECLAIR, MUNCHEN]
     observation["selectedIds"] = support._select_rectangle(driver, [row["id"] for row in rows], COLUMNS)
-    _element(driver, '[data-add-chart-pane="true"]').click()
+    _section(driver, "charts", '[data-add-chart-pane="true"]').click()
     _button(driver, "Selection").click()
     # Explicit public orientation preserves measure identities as row count changes.
     _button(driver, "By Rows").click()
@@ -208,7 +208,7 @@ def _run(driver, host, requirement, state, wait, directory, observation):
         _element(driver, '[title="Close chart pane"]').click()
         wait.until(lambda current: _pane_count(current) == 0 and not _visible(current, '[data-chart-surface-main="true"]'))
         observation["selectionAfterClose"] = support._select_rectangle(driver, [row_ids[1]], COLUMNS)
-        copy_observation = {}
+        copy_observation = {"clipboardLineSeparator": "\r\n" if str(driver.capabilities.get("platformName", "")).lower() == "windows" else "\n"}
         support._copy_selected(driver, support._selection_cell(driver, row_ids[1], COLUMNS[0]),
                                [["49.75", "3.00"]], copy_observation)
         observation["copyAfterClose"] = copy_observation
