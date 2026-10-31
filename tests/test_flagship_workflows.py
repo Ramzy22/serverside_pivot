@@ -1582,3 +1582,12 @@ def test_flagship_presentation(host, requirement, installed_workflow_hosts):
 def test_flagship_derived_models(host, requirement, installed_workflow_hosts):
     from tests.flagship_remaining_2 import qualify_models
     qualify_models(host, requirement)
+
+
+@pytest.mark.flagship
+@pytest.mark.parametrize("host", ["dash", "react", "streamlit"])
+@pytest.mark.parametrize("requirement", ["range-chart.source", "range-chart.locked-source", "range-chart.live-source",
+                                         "chart-pane.lifecycle", "chart-export.artifact"])
+def test_flagship_charts(host, requirement, installed_workflow_hosts):
+    from tests.flagship_remaining_3 import qualify_charts
+    qualify_charts(host, requirement)

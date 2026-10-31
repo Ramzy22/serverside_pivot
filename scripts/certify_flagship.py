@@ -959,6 +959,9 @@ PRODUCT_BROWSER_JOURNEYS = {
     **{f"browser.{name}": f"test_flagship_derived_models[{name}-{{host}}]"
        for name in ("layout-field-zones.move", "formula-columns.add-remove",
                     "custom-dimensions.add-remove", "report-mode.restore-definition")},
+    **{f"browser.{name}": f"test_flagship_charts[{name}-{{host}}]"
+       for name in ("range-chart.source", "range-chart.locked-source", "range-chart.live-source",
+                    "chart-pane.lifecycle", "chart-export.artifact")},
     **{f"browser.{name}": f"test_flagship_presentation[{name}-{{host}}]"
        for name in ("row-numbers.toggle", "density.cycle", "number-format.decimals",
                     "cell-format.apply-close", "color-scales.scale", "color-scales.data-bars",
