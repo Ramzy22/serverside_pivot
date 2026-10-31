@@ -154,3 +154,25 @@ The workflow, oracle, manifest and runner unit suite passed 194 tests. The new
 runner has 105 of 207 required host cases mapped, leaving 36 browser workflow
 groups and the same 52 shared assertion IDs unmapped. These new browser cases
 require a future frozen run for release credit.
+
+## Shared scrolling and cached revisions
+
+Two previously unmapped shared scrolling requirements now run HTTP assertions
+against the committed 120-group, 24-period fixture. The vertical case checks
+rows 100 through 119, unique ordered identities, exact measure values and
+restoration. The horizontal case checks sparse P23, P00 and total columns,
+their server indices, absence of unrequested measure cells and exact totals.
+Both also require a full-block/subwindow regression.
+
+The stronger assertions exposed a production defect: cached response cloning
+and row-block reassembly dropped `layout_revision`, even when the cached schema
+still carried its revision. Both cache paths now preserve the original revision
+without rediscovering columns or issuing another query. All three HTTP
+regressions fail when the three preservation lines are removed and pass with
+the fix restored. The targeted HTTP/layout/cache/shared suite passed 110 tests.
+The red-run diagnostics are under `artifacts/shared-scroll-cache-2026-10-31/`.
+
+These additions reduce unmapped shared assertion IDs from 52 to 50. Browser
+mapping coverage remains 105 of 207 host cases, with 36 workflow groups still
+unmapped. The new shared mappings and production cache fix require installed
+candidate qualification; the earlier frozen manifest is unchanged.

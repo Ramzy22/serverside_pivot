@@ -64,6 +64,16 @@ def test_custom_pivot_order_mapping_executes_sparse_values_and_pin_assertions():
     assert "tests/export_qualification_fixture.py" in assertions[0].sources
 
 
+def test_scroll_mappings_execute_wide_fixture_http_round_trips():
+    for axis in ("vertical", "horizontal"):
+        assertions = SHARED_ASSERTIONS[f"shared.{axis}-virtual-scroll.window"]
+        assert {assertion.node for assertion in assertions} == {
+            f"tests/test_flagship_shared_scroll.py::test_{axis}_window_round_trip",
+            "tests/test_flagship_shared_scroll.py::test_cached_row_block_preserves_layout_revision",
+        }
+        assert all("tests/data/flagship_scroll_rows.json" in assertion.sources for assertion in assertions)
+
+
 def test_aggregation_mapping_covers_secondary_measure_revision_changes():
     assertions = SHARED_ASSERTIONS["shared.layout-values.aggregation"]
     assert {assertion.node.split("::")[-1] for assertion in assertions} == {

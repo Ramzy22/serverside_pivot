@@ -32,6 +32,14 @@ class SharedAssertion:
 # expected result, including order, totals, numeric values, and Unicode text.
 SHARED_ASSERTIONS: Mapping[str, tuple[SharedAssertion, ...]] = {
     **{
+        f"shared.{axis}-virtual-scroll.window": tuple(
+            SharedAssertion(
+                f"tests/test_flagship_shared_scroll.py::{node}",
+                ("tests/__init__.py", "tests/test_flagship_shared_scroll.py", "tests/data/flagship_scroll_rows.json"),
+            ) for node in (f"test_{axis}_window_round_trip", "test_cached_row_block_preserves_layout_revision")
+        ) for axis in ("vertical", "horizontal")
+    },
+    **{
         test_id: (
             SharedAssertion(
                 f"tests/test_flagship_shared_runtime.py::{node}",

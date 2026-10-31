@@ -288,6 +288,7 @@ class TanStackPivotAdapter(TransactionAdapterMixin, FormulaEngineMixin):
                 else response.grouping
             ),
             version=response.version,
+            layout_revision=response.layout_revision,
             col_schema=(
                 {
                     **response.col_schema,
@@ -462,6 +463,7 @@ class TanStackPivotAdapter(TransactionAdapterMixin, FormulaEngineMixin):
                     "rows": [dict(row) for row in block_rows[:expected_rows]],
                     "total_rows": response.total_rows,
                     "version": response.version,
+                    "layout_revision": response.layout_revision,
                     "pagination": (
                         dict(response.pagination)
                         if isinstance(response.pagination, dict)
@@ -600,6 +602,7 @@ class TanStackPivotAdapter(TransactionAdapterMixin, FormulaEngineMixin):
                 else metadata_source.get("grouping")
             ),
             version=metadata_source.get("version"),
+            layout_revision=metadata_source.get("layout_revision"),
             col_schema=None,
             color_scale_stats=None,
         )
