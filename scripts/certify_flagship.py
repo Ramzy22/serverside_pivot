@@ -966,6 +966,8 @@ PRODUCT_BROWSER_JOURNEYS = {
     "browser.totals.controls": "test_flagship_totals_controls[{host}]",
     "browser.export-csv.exact-document": "test_flagship_exact_download[csv-{host}]",
     "browser.export-xlsx.exact-workbook": "test_flagship_exact_download[xlsx-{host}]",
+    **{f"browser.copy-selection.{kind}": f"test_flagship_embedded_clipboard[{kind}-{{host}}]"
+       for kind in ("tabs", "newlines")},
     **{f"browser.{name}": "test_flagship_runtime_error_recovery[{host}]"
        for name in ("runtime-error.visible", "runtime-error.recovery")},
     "browser.runtime-error.superseded-response": "test_flagship_superseded_response[{host}]",

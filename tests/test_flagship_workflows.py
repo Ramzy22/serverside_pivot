@@ -975,6 +975,15 @@ def test_flagship_totals_controls(host, installed_workflow_hosts):
 
 @pytest.mark.flagship
 @pytest.mark.parametrize("host", ["dash", "react", "streamlit"])
+@pytest.mark.parametrize("kind", ["tabs", "newlines"])
+def test_flagship_embedded_clipboard(host, kind, installed_workflow_hosts):
+    from tests.flagship_embedded_clipboard import qualify_embedded_clipboard
+
+    qualify_embedded_clipboard(host, kind)
+
+
+@pytest.mark.flagship
+@pytest.mark.parametrize("host", ["dash", "react", "streamlit"])
 def test_flagship_sort_direction(host, installed_workflow_hosts):
     from tests.flagship_browser_support import qualify_sort_direction
 

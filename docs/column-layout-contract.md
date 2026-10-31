@@ -211,3 +211,27 @@ comparison reports 18 passed, 53 failed/incomplete and one not applicable. The
 remaining 36 unmapped browser workflows and 50 unmapped shared assertion IDs
 still block complete qualification. The totals driver correction needs a new
 frozen run for release credit.
+
+## Embedded-delimiter browser coverage
+
+Six new executable browser mappings cover selected cells containing tabs and
+newlines across Dash, React and Streamlit. Each selects exactly the depth-two
+hierarchy cell and its adjacent Q1 units cell, then checks the actual clipboard
+against literal quoted TSV, including indentation, the neighbor and the exact
+one-row/two-column geometry. The LF scenario also verifies a trailing empty
+neighbor. The newline journey requires both LF and CRLF source scenarios in
+fresh browsers; it permits only CRLF-to-LF normalization at the OS boundary.
+
+All six cases (nine source scenarios) passed against separately installed
+candidate `4055980` artifacts under
+`artifacts/embedded-clipboard-2026-10-31/`. Raw clipboard strings, parsed rows,
+screenshots and per-browser loaded asset digests are retained. These results
+are supplemental with `qualificationEvidence: false`; they never amend a
+frozen candidate's manifest. Independent review found no blockers. The tooling
+suite passed 175 tests; the expanded literal oracle suite passed 16 tests,
+including corrupted separators, prefixes, neighboring values and shapes.
+
+The runner now maps 111 of 207 required host cases, leaving 34 browser workflow
+groups unmapped. The 50 unmapped shared IDs are unchanged: these browser cases
+do not qualify byte-exact LF/CRLF serialization before the OS boundary. The new
+mappings require a fresh frozen run for release credit.
