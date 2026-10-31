@@ -310,7 +310,7 @@ def _run(driver, host, requirement, state, wait, observation):
             after = wait.until(formatted)
             observation["scopes"].append({"scope": scope, "selectedColumns": columns, "cells": after})
     elif requirement == "cell-format.apply-close":
-        keys = [target, (ECLAIR, f"Q2_{SALES}_sum")]
+        keys = [target, (ECLAIR, f"Q1_{UNITS}_sum")]
         _select(driver, keys)
         before = cells(driver)
         _section(driver, "format", '[title="Format selected cells"]').click()
@@ -324,10 +324,12 @@ def _run(driver, host, requirement, state, wait, observation):
         assert not any(el.is_displayed() for el in _workspace_elements(driver, '[data-cell-format-popover]'))
         focused = driver.execute_script("let el=document.activeElement;while(el?.shadowRoot?.activeElement)el=el.shadowRoot.activeElement;return !!el?.closest('[role=grid]');")
         assert focused, "Closing cell formatting did not restore grid focus"
-        observation.update(gridFocused=focused, clipboard=_copy_selected(driver, "100.25\t20.00"))
+        observation.update(gridFocused=focused, clipboard=_copy_selected(driver, "100.25\t2.00"))
         # The selected-cell overlay deliberately covers fill colors. Remove it
         # through the public clear control before sampling the applied fill.
-        _element(driver, '[data-pivot-status-action="clear-selection"]').click()
+        clear = _element(driver, '[data-pivot-status-action="clear-selection"]')
+        driver.execute_script("arguments[0].scrollIntoView({block:'center'})", clear)
+        clear.click()
         wait.until(lambda current: not support._selection_ids(current))
         after = cells(driver)
         observation["after"] = after
@@ -343,7 +345,9 @@ def _run(driver, host, requirement, state, wait, observation):
             Select(_section(driver, "format", 'select[title="Color scale"]')).select_by_value("col")
             palette = next(el for el in _workspace_elements(driver, "select") if el.is_displayed() and any(option.get_attribute("value") == "redGreen" for option in el.find_elements("css selector", "option")))
             Select(palette).select_by_value("redGreen")
-            _element(driver, '[data-pivot-status-action="clear-selection"]').click()
+            clear = _element(driver, '[data-pivot-status-action="clear-selection"]')
+            driver.execute_script("arguments[0].scrollIntoView({block:'center'})", clear)
+            clear.click()
             wait.until(lambda current: not support._selection_ids(current))
             wait.until(lambda current: any(cell["background"] == "rgba(99, 190, 123, 0.82)" for cell in cells(current)))
             after = cells(driver)
@@ -376,6 +380,7 @@ def _run(driver, host, requirement, state, wait, observation):
         # picker event. Use the real picker and keyboard instead: one upward
         # step from the dark theme's #0a0c10 yields #0a0c0f in Chrome.
         driver.execute_script("window.__pivotThemeColorInputs=[];arguments[0].addEventListener('input',e=>window.__pivotThemeColorInputs.push({value:e.target.value,trusted:e.isTrusted}),true)", field)
+        driver.execute_script("arguments[0].scrollIntoView({block:'center'})", field)
         field.click()
         ActionChains(driver).send_keys(Keys.ARROW_UP, Keys.ENTER).perform()
         wait.until(lambda current: appearance()["background"] == "rgb(10, 12, 15)")
@@ -464,6 +469,7 @@ def qualify_presentation(host, requirement):
             try:
                 observation["finalCells"] = cells(driver)
                 observation["trace"] = driver.execute_script("return window.__pivotAxisTrace || []")
+                observation["nativeColorInputs"] = driver.execute_script("return window.__pivotThemeColorInputs || []")
                 _verify_release_asset_batch(driver, require_assets=True)
                 result["loadedAssetSha256"] = dict(driver._pivot_loaded_assets)
                 screenshot = directory / "final.png"
