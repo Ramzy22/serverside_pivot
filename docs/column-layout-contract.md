@@ -235,3 +235,38 @@ The runner now maps 111 of 207 required host cases, leaving 34 browser workflow
 groups unmapped. The 50 unmapped shared IDs are unchanged: these browser cases
 do not qualify byte-exact LF/CRLF serialization before the OS boundary. The new
 mappings require a fresh frozen run for release credit.
+
+## Axis-swap qualification additions
+
+The runner now maps `layout-swap.transpose` to a real runtime round trip and
+three native browser journeys. Literal oracles check all 27 measure cells in
+each orientation, including units, variance and totals. Browser observations
+require current request axes and scope, exact displayed values, complete
+schema column identities/indices, matching cell/schema revisions, and revision
+sequence `[original, transposed, original]` with a changed middle revision.
+Swapping back also restores the displayed column identities.
+
+The runtime assertion passed against the separately installed `4055980` wheel,
+and Dash, React and Streamlit all passed under
+`artifacts/axis-swap-rerun-2026-10-31/`. The pinned AG Grid 36.2 SSRM comparator
+passed separately under `artifacts/axis-swap-reference-final-2026-10-31/`.
+That comparison uses AG Grid's public column-state API to reconfigure axes,
+scrolls the actual grid viewport, and checks displayed sales/totals, requested
+axes and restoration. Its pinned modules and configuration remain unchanged.
+
+Earlier diagnostic failures remain retained. Dash's first attempt exposed a
+defined color-statistics sidecar in its payload, which the oracle now validates
+and excludes from data-row counting; duplicate/unknown sidecars still fail.
+Review also reproduced acceptance of stale schema columns with matching
+revision strings, corrected by explicit schema identity checks. The first
+reference attempts assumed an off-screen column was rendered and then called
+an optional Scroll API absent from the pinned profile; the final test uses
+the existing browser scroller. These were qualification corrections, with no
+production implementation changes.
+
+The focused runtime/workflow/runner/manifest suite passed 196 tests; independent
+review found no remaining blockers. These live results are supplemental with
+`qualificationEvidence: false` and never replace frozen candidate records.
+Mapping coverage is now 114 of 207 host cases, with 33 browser workflow groups
+and 49 shared assertion IDs still unmapped. A new frozen run remains required
+for release credit.

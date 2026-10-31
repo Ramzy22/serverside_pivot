@@ -151,11 +151,11 @@ def test_flagship_busy_rejection_preserves_generation_and_recovers_exact_data():
 def _response(service, expanded, sequence, *, filters=None, val_configs=None,
               sorting=None, show_row_totals=False, show_col_totals=True,
               layout_manifest=None, layout_revision=None, needs_col_schema=False,
-              col_start=0, col_end=None, pinned_column_ids=()):
+              col_start=0, col_end=None, pinned_column_ids=(), row_fields=None, col_fields=None):
     return service.process(
         PivotViewState(
-            row_fields=FLAGSHIP_ROW_FIELDS,
-            col_fields=FLAGSHIP_COL_FIELDS,
+            row_fields=FLAGSHIP_ROW_FIELDS if row_fields is None else row_fields,
+            col_fields=FLAGSHIP_COL_FIELDS if col_fields is None else col_fields,
             val_configs=val_configs or FLAGSHIP_VALUE_CONFIGS,
             filters={**FLAGSHIP_FILTER, **(filters or {})},
             expanded=expanded,
@@ -216,6 +216,23 @@ def test_flagship_initial_workspace_has_filtered_pivot_totals():
     assert [rows[first][_measure(period, 0)] for period in ("Q1", "Q2")] == [100.25, 20.0]
     assert [rows[second][_measure(period, 0)] for period in ("Q1", "Q2")] == [49.75, 30.0]
     _assert_grand_totals(response)
+
+
+def test_flagship_axis_swap_round_trip_preserves_exact_values():
+    from tests.flagship_axis_swap import assert_axis_rows
+
+    service = _runtime()
+    before = _response(service, {}, 1, show_row_totals=True, needs_col_schema=True)
+    swapped = _response(service, {}, 2, show_row_totals=True, needs_col_schema=True,
+                        row_fields=["period"], col_fields=["region", "account"])
+    restored = _response(service, {}, 3, show_row_totals=True, needs_col_schema=True)
+    for response, transposed in ((before, False), (swapped, True), (restored, False)):
+        assert response.status == "data"
+        assert_axis_rows(response.data, transposed=transposed)
+        assert response.layout_revision == response.col_schema["layoutRevision"]
+    assert swapped.layout_revision != before.layout_revision
+    assert restored.layout_revision == before.layout_revision
+    assert restored.col_schema == before.col_schema
 
 
 def test_flagship_one_parent_expansion_round_trip_preserves_totals_and_columns():

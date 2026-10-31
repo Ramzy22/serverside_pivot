@@ -963,6 +963,7 @@ PRODUCT_BROWSER_JOURNEYS = {
     "browser.filter-options.values": "test_flagship_header_filter[{host}]",
     "browser.layout-values.aggregation": "test_flagship_aggregation_round_trip[{host}]",
     "browser.layout-values.add-remove": "test_flagship_measure_add_remove[{host}]",
+    "browser.layout-swap.transpose": "test_flagship_axis_swap[{host}]",
     "browser.totals.controls": "test_flagship_totals_controls[{host}]",
     "browser.export-csv.exact-document": "test_flagship_exact_download[csv-{host}]",
     "browser.export-xlsx.exact-workbook": "test_flagship_exact_download[xlsx-{host}]",

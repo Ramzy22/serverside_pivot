@@ -29,6 +29,53 @@ pytestmark = [
 ]
 
 
+def test_reference_transpose_axes_round_trip(reference_run):
+    with reference_case('layout-swap.transpose', reference_run) as case:
+        driver = case.driver
+
+        def column(column_id, values):
+            WebDriverWait(driver, 10).until(lambda browser: browser.execute_script("""
+              const column = window.referenceGrid.getColumn(arguments[0]);
+              const viewport = document.querySelector('.ag-body-horizontal-scroll-viewport');
+              if (!column || column.getLeft() == null || !viewport) return false;
+              viewport.scrollLeft = Math.min(viewport.scrollWidth - viewport.clientWidth, Math.max(0, column.getLeft()));
+              return true;
+            """, column_id))
+            return _wait_column(driver, column_id, values)
+
+        before = column('Q1|ventes_\u20ac', ['100.25', '49.75', '150.00'])
+        checkpoint = len(driver.execute_script('return window.referenceEvidence.trace()'))
+        assert driver.execute_script("""
+          return window.referenceGrid.applyColumnState({state:[
+            {colId:'period',rowGroup:true,rowGroupIndex:0,pivot:false,pivotIndex:null},
+            {colId:'region',rowGroup:false,rowGroupIndex:null,pivot:true,pivotIndex:0},
+            {colId:'account',rowGroup:false,rowGroupIndex:null,pivot:true,pivotIndex:1}]});
+        """)
+        first = column('\u00c9clair|\u6771\u4eac|ventes_\u20ac', ['100.25', '20.00', '120.25'])
+        second = column('M\u00fcnchen|\u0627\u0644\u0642\u0627\u0647\u0631\u0629|ventes_\u20ac', ['49.75', '30.00', '79.75'])
+        totals = column('Total|ventes_\u20ac', ['150.00', '50.00', '200.00'])
+        model = driver.execute_script("return {rows:window.referenceGrid.getRowGroupColumns().map(c=>c.getColId()),cols:window.referenceGrid.getPivotColumns().map(c=>c.getColId())}")
+        assert model == {'rows': ['period'], 'cols': ['region', 'account']}
+        trace = driver.execute_script('return window.referenceEvidence.trace()')[checkpoint:]
+        swapped = [entry for entry in trace if [column['field'] for column in entry['request']['rowGroupCols']] == ['period']
+                   and [column['field'] for column in entry['request']['pivotCols']] == ['region', 'account'] and entry.get('response')]
+        assert swapped
+        assert [row['period'] for row in swapped[-1]['response']['rowData']] == ['Q1', 'Q2']
+        assert driver.execute_script("""
+          return window.referenceGrid.applyColumnState({state:[
+            {colId:'region',rowGroup:true,rowGroupIndex:0,pivot:false,pivotIndex:null},
+            {colId:'account',rowGroup:true,rowGroupIndex:1,pivot:false,pivotIndex:null},
+            {colId:'period',rowGroup:false,rowGroupIndex:null,pivot:true,pivotIndex:0}]});
+        """)
+        restored = column('Q1|ventes_\u20ac', ['100.25', '49.75', '150.00'])
+        column('Total|ventes_\u20ac', ['120.25', '79.75', '200.00'])
+        restored_model = driver.execute_script("return {rows:window.referenceGrid.getRowGroupColumns().map(c=>c.getColId()),cols:window.referenceGrid.getPivotColumns().map(c=>c.getColId())}")
+        assert restored_model == {'rows': ['region', 'account'], 'cols': ['period']}
+        case.parsed_output = {'before': before, 'transposed': {'first': first, 'second': second, 'totals': totals, 'model': model},
+                              'restored': restored, 'restoredModel': restored_model, 'trace': driver.execute_script('return window.referenceEvidence.trace()')}
+        case.observed = 'Pinned SSRM public column-state API transposed period rows and region/account pivot columns; exact displayed sales and totals, server-request axes, and restored model/values verified'
+
+
 def _clipboard(driver, *, sentinel=None):
     result = driver.execute_async_script("""
       const done = arguments[arguments.length - 1], sentinel = arguments[0];
