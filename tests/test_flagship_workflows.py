@@ -1241,7 +1241,7 @@ def test_selection_copy_helper_chooses_raw_menu_action_in_real_browser(tmp_path)
 @pytest.mark.parametrize("host", ["dash", "react", "streamlit"])
 @pytest.mark.parametrize("requirement", ["cell-selection.range-clear", "copy-selection.logical-cells",
                                          "copy-selection.display-order", "copy-selection.pinned-columns",
-                                         "copy-selection.headers", "copy-selection.formatted-values",
+                                         "copy-selection.headers", "copy-selection.formatted-values", "copy-selection.hidden-columns",
                                          "keyboard-copy.selection"])
 def test_flagship_selected_clipboard(host, requirement, installed_workflow_hosts):
     from tests.flagship_browser_support import qualify_selected_clipboard
@@ -1549,3 +1549,13 @@ def test_unicode_empty_clipboard_has_executable_installed_mappings():
 def test_flagship_clipboard_values(host, installed_workflow_hosts):
     from tests.flagship_clipboard_values import qualify_clipboard_values
     qualify_clipboard_values(host)
+
+
+def test_hidden_column_copy_has_executable_installed_browser_mappings():
+    from scripts.certify_flagship import _product_browser_plan
+    from tests.flagship_contract import load_requirements
+
+    plan = _product_browser_plan(load_requirements(Path(__file__).with_name("flagship_requirements.json")))
+    for host in ("dash", "react", "streamlit"):
+        assert plan[("copy-selection.hidden-columns", host, "browser.copy-selection.hidden-columns")] == (
+            f"tests/test_flagship_workflows.py::test_flagship_selected_clipboard[copy-selection.hidden-columns-{host}]")

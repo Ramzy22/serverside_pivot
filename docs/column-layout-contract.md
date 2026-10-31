@@ -484,3 +484,60 @@ replace frozen release manifests. Coverage is now 132 of 207 required host
 cases, leaving 27 browser workflow groups and 43 shared assertion IDs unmapped.
 Full frozen-candidate qualification and the remaining release gates are still
 required before publishing.
+
+
+### Hidden-column selected clipboard qualification
+
+`copy-selection.hidden-columns` now maps to an executable installed-browser
+journey in Dash, React and Streamlit. The journey moves Q1 variance between
+Q1 units and sales using native header keyboard input, hides variance through
+the Columns sidebar, and drags the remaining visible 2?2 rectangle. It checks
+literal OS clipboard text both without and with headers, displayed cell values,
+exact four-cell selection and absence of a hidden-column placeholder. It uses
+observed server row order and an independent, literal fixture value oracle.
+
+The shared source serializer regression additionally retains a hidden field in
+an older selection map and verifies that it contributes neither values nor
+headers nor placeholders. This is a repository Node assertion; it is not an
+installed-Python shared assertion, so `shared.copy-selection.hidden-columns`
+remains unmapped. No server visibility policy or release coverage is inferred
+from that Node test. Independent code review found no blocker.
+
+The existing pinned AG Grid 36.2 SSRM hidden-column assertion passed freshly in
+`artifacts/hidden-column-reference-2026-10-31/`. Its default visible-column
+selection excludes hidden variance. Product header labels and initial row order
+remain product-defined; no identical AG Grid labels/order are promised.
+
+Repository checks: all 11 clipboard serializer assertions passed, the runner
+mapping assertion passed, and the selected contract/manifest/serializer suite
+passed 134 tests with six HTML browser cases deselected (no credit). Required
+browser mappings are now 135 of 207, leaving
+26 browser workflow groups and 43 shared IDs unmapped. These mappings are not
+passes, and full release qualification remains on hold.
+
+
+All three installed hosts passed the final fresh run under
+`artifacts/hidden-column-copy-2026-10-31/run-scrolled/`, using retained candidate
+`218ff4c3ff008a978559e51081cee47ffd17715e` (wheel SHA-256
+`3383106165bfa9a74a41f5e854cbb33167ae4eaa539d6eb7e43b3f5017623512`).
+Each observation records before/after visible column order, native move keys,
+four selected logical cells, two-column body TSV and three-row header TSV,
+exact clipboard text, screenshot and loaded-asset digests. The independent
+local audit checked literal values and headers, the source-test hash, hidden
+column absence and each observed asset digest against the candidate binding;
+three/four/five assets were observed for Dash/React/Streamlit respectively.
+
+The earlier probe is retained: Dash initially remained on its loading screen,
+while a fresh diagnostic mount and both later clean Dash runs succeeded.
+Streamlit initially rejected the offscreen hide click; the harness now scrolls
+that control into view before its native click. The probe recorder also lost
+its supplemental override on module reload; the clean client applies that
+override after import. None of these failed attempts count as a pass. The final
+three-host run uses one unchanged test-source hash and the same installed
+artifacts. Independent review accepted the test and mapping changes.
+
+This batch changes qualification tests only. Results are supplemental
+(`qualificationEvidence: false`), not a replacement for frozen release evidence.
+The shared installed assertion remains unmapped, and complete release
+qualification remains required before publishing. Owned local hosts and the
+qualification environment are stopped/cleaned after the run.

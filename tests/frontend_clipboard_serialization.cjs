@@ -170,6 +170,32 @@ test('clipboard source recovery does not change the accessors used by file expor
 });
 
 
+test('hidden leaves in an older selection do not add headers, values or placeholders', () => {
+    const visible = [{id:'sales',columnDef:{header:'Sales'}},{id:'units',columnDef:{header:'Units'}}];
+    const original = {sales:'100.25',variance:'SECRET-HIDDEN',units:'2.00'};
+    const row = {id:'r1',original,getValue:id=>original[id]};
+    let presentation;
+    function Harness() {
+        presentation = useRuntimeClipboardExportPresentation({
+            table:{getVisibleLeafColumns:()=>visible},getDisplayRows:()=>[row],
+            getDisplayHeaderTextForColumn:column=>column.columnDef.header,
+            getDisplayHeaderTextStackForColumn:column=>[column.columnDef.header],
+            selectedCells:{'r1:sales':'100.25','r1:variance':'SECRET-HIDDEN','r1:units':'2.00'},theme:{},
+        });
+        return null;
+    }
+    renderToStaticMarkup(React.createElement(Harness));
+    const body=presentation.buildSelectedClipboardPayload();
+    const headers=presentation.buildSelectedClipboardPayload(true);
+    assert.equal(body.text,'100.25\t2.00');
+    assert.equal(headers.text,'Sales\tUnits\n100.25\t2.00');
+    for(const payload of [body,headers]) {
+        assert.equal(payload.columnCount,2);
+        assert.equal(payload.rowCount,1);
+        assert.ok(!payload.html.includes('SECRET-HIDDEN'));
+    }
+});
+
 test('selected values preserve Unicode codepoints and interior/trailing empty cells before OS delivery', () => {
     for (const text of ['\u00c9clair M\u00fcnchen \u6771\u4eac \u0627\u0644\u0642\u0627\u0647\u0631\u0629 \u{1f680}', 'E\u0301clair Mu\u0308nchen \u6771\u4eac \u0627\u0644\u0642\u0627\u0647\u0631\u0629 \u{1f680}']) {
         const ids = ['copyUnicode_first', 'copyNull_first', 'rowId_first', 'copyEmpty_first'];

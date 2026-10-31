@@ -718,7 +718,7 @@ def qualify_selected_clipboard(host: str, requirement: str) -> None:
             wait.until(lambda current: [row["label"] for row in _selection_rows(current)] == ["Éclair", "München"])
             columns = [sales, units]
         elif requirement in ("copy-selection.display-order", "copy-selection.pinned-columns",
-                             "copy-selection.formatted-values"):
+                             "copy-selection.formatted-values", "copy-selection.hidden-columns"):
             _selection_number_format(driver, observation)
             observation["actions"].append("set displayed numeric precision to 2dp")
         if requirement == "copy-selection.display-order":
@@ -734,6 +734,41 @@ def qualify_selected_clipboard(host: str, requirement: str) -> None:
             _selection_menu(driver, "Descending").click()
             observation["actions"].append("physical hierarchy Sort > Descending")
             _wait_selection_sort(driver, checkpoint, "hierarchy", observation)
+        if requirement == "copy-selection.hidden-columns":
+            variance = "Q1_écart_sum"
+            assert variance in initial_order, "The column to hide was not initially displayed"
+            # Move variance between the endpoints so a hidden-position placeholder
+            # would make the two-column clipboard assertion fail.
+            for _ in range(3):
+                current_order = _selection_column_order(driver)
+                left, right = sorted([units, sales], key=current_order.index)
+                if current_order.index(left) < current_order.index(variance) < current_order.index(right):
+                    break
+                assert current_order.index(variance) > current_order.index(right)
+                _reorder_selection_column(driver, variance, Keys.ARROW_LEFT, variance, right, observation)
+            else:
+                raise AssertionError("Could not place variance between selection endpoints")
+            observation["beforeHideColumnIds"] = _selection_column_order(driver)
+            toggle = _wait_for_visible_workspace_element(driver, '[data-testid="pivot-toggle-sidebar"]')
+            if not any(item.is_displayed() for item in _workspace_elements(driver, '[data-sidebar-drop-zone="vals"]')):
+                toggle.click()
+            tab = wait.until(lambda current: next((element for element in _workspace_elements(current, 'div[style*="cursor: pointer"]')
+                if element.is_displayed() and element.text == "Columns"
+                and element.value_of_css_property("cursor") == "pointer"), None))
+            tab.click()
+            search = _wait_for_visible_workspace_element(driver, 'input[placeholder="Search columns..."]')
+            search.send_keys("écart")
+            hide = wait.until(lambda current: next((element for element in _workspace_elements(current, '[role="treeitem"][draggable="true"] [aria-label="Hide Column"]')
+                if element.is_displayed()), None))
+            # Native Chrome element clicking does not reliably scroll an open
+            # shadow-root control through Streamlit's outer page scroller.
+            driver.execute_script("arguments[0].scrollIntoView({block:'center',inline:'nearest'})", hide)
+            hide.click()
+            wait.until(lambda current: variance not in _selection_column_order(current))
+            _wait_for_visible_workspace_element(driver, '[data-testid="pivot-toggle-sidebar"]').click()
+            columns = sorted([units, sales], key=_selection_column_order(driver).index)
+            observation["hiddenColumnId"] = variance
+            observation["actions"].append("native Columns sidebar search and Hide Column click for Q1 variance between endpoints")
         rows = wait.until(lambda current: (
             candidate if len(candidate := _selection_rows(current)) == 2
             and {row["label"] for row in candidate} == {row["label"] for row in observation["initialRows"]} else False))
@@ -821,7 +856,7 @@ def qualify_selected_clipboard(host: str, requirement: str) -> None:
         elif requirement == "copy-selection.pinned-columns":
             literal = {"Éclair": ["2.00", "100.25"], "München": ["3.00", "49.75"]}
             expected = [literal[row["label"]] for row in rows]
-        elif requirement == "copy-selection.formatted-values":
+        elif requirement in ("copy-selection.formatted-values", "copy-selection.hidden-columns"):
             expected = formatted_selection_oracle(rows, columns)
             for row, values in zip(rows, expected):
                 for column, value in zip(columns, values):
@@ -849,7 +884,7 @@ def qualify_selected_clipboard(host: str, requirement: str) -> None:
             assert copied == menu_clipboard, "Keyboard copy differs from Copy Selection"
             assert_selected_clipboard(copied, expected, line_separator=observation["clipboardLineSeparator"])
             result["nativeKeyboardCopyVerified"] = True
-        if requirement == "copy-selection.headers":
+        if requirement in ("copy-selection.headers", "copy-selection.hidden-columns"):
             selected_before_headers = set(observation["selectedIds"])
             assert set(_selection_ids(driver)) == selected_before_headers, "Body copy changed the selected rectangle"
             observation["withoutHeaders"] = {
@@ -868,6 +903,11 @@ def qualify_selected_clipboard(host: str, requirement: str) -> None:
                 "parsedTSV": observation["parsedTSV"],
             }
             result["headerOptInVerified"] = True
+            if requirement == "copy-selection.hidden-columns":
+                assert variance not in _selection_column_order(driver)
+                assert all(column != variance for _, column in _selection_ids(driver))
+                assert all(len(row) == 2 for row in observation["parsedTSV"])
+                result["hiddenColumnExcluded"] = True
         if requirement == "copy-selection.pinned-columns":
             observation["scrollLeftAfterCopy"] = driver.execute_script("return arguments[0].scrollLeft", scroller)
             assert abs(observation["scrollLeftAfterCopy"] - observation["scrollLeft"]) <= 1, "Copying the scrolled range reset horizontal scroll"

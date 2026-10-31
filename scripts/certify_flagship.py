@@ -981,7 +981,7 @@ PRODUCT_BROWSER_JOURNEYS = {
     **{f"browser.{name}": f"test_flagship_selected_clipboard[{name}-{{host}}]"
        for name in ("cell-selection.range-clear", "copy-selection.logical-cells",
                     "copy-selection.display-order", "copy-selection.pinned-columns",
-                    "copy-selection.headers", "copy-selection.formatted-values",
+                    "copy-selection.headers", "copy-selection.formatted-values", "copy-selection.hidden-columns",
                     "keyboard-copy.selection")},
     **{f"browser.{name}": f"test_flagship_table_scope_clipboard[{name}-{{host}}]"
        for name in ("copy-current-table.visible-scope", "copy-all-records.complete-scope")},
