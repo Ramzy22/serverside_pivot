@@ -1571,3 +1571,14 @@ def test_hidden_column_copy_has_executable_installed_browser_mappings():
 def test_flagship_presentation(host, requirement, installed_workflow_hosts):
     from tests.flagship_remaining_1 import qualify_presentation
     qualify_presentation(host, requirement)
+
+
+@pytest.mark.flagship
+@pytest.mark.parametrize("host", ["dash", "react", "streamlit"])
+@pytest.mark.parametrize("requirement", [
+    "layout-field-zones.move", "formula-columns.add-remove",
+    "custom-dimensions.add-remove", "report-mode.restore-definition",
+])
+def test_flagship_derived_models(host, requirement, installed_workflow_hosts):
+    from tests.flagship_remaining_2 import qualify_models
+    qualify_models(host, requirement)

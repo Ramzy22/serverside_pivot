@@ -956,6 +956,9 @@ EXPORT_JOB_REQUIREMENTS = frozenset({
 # committed contract decides which host/test combinations must be qualified.
 # A journey may produce multiple mapped records (runtime error and recovery).
 PRODUCT_BROWSER_JOURNEYS = {
+    **{f"browser.{name}": f"test_flagship_derived_models[{name}-{{host}}]"
+       for name in ("layout-field-zones.move", "formula-columns.add-remove",
+                    "custom-dimensions.add-remove", "report-mode.restore-definition")},
     **{f"browser.{name}": f"test_flagship_presentation[{name}-{{host}}]"
        for name in ("row-numbers.toggle", "density.cycle", "number-format.decimals",
                     "cell-format.apply-close", "color-scales.scale", "color-scales.data-bars",
