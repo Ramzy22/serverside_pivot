@@ -101,6 +101,7 @@ export function PivotWorkspaceShell({ workspace }) {
         showFloatingFilters, showRowNumbers, showRowTotals, showSubtotals, sidebarOpen,
         sparklineDataModal, srOnly, stickyHeaders, style, styles, table, theme, uiConfig,
         updateChartCanvasPane, viewMode, visibleLeafColumns, zoomLevel,
+        setColFields, setValConfigs,
     } = model;
 
 return (
@@ -117,6 +118,7 @@ return (
                 filters={filters} setFilters={setFilters}
                 pivotMode={pivotMode} setPivotMode={handleSetPivotMode}
                 reportDef={reportDef} setReportDef={setReportDef}
+                setColFields={setColFields} setValConfigs={setValConfigs}
                 savedReports={savedReports} setSavedReports={setSavedReports}
                 activeReportId={activeReportId} setActiveReportId={setActiveReportId}
                 customDimensions={customDimensions} setCustomDimensions={setCustomDimensions}

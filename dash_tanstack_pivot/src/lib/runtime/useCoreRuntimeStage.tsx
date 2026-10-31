@@ -917,7 +917,6 @@ export function useCoreRuntimeStage(props) {
       const levelFields = collectReportFields(stage.reportDef);
       if (levelFields.length > 0) {
         stage.setRowFields(levelFields);
-        stage.setColFields([]);
       }
       stage.setExpanded({});
     } else if (leavingReport) {
@@ -991,7 +990,6 @@ export function useCoreRuntimeStage(props) {
     const levelFields = collectReportFields(stage.reportDef);
     if (levelFields.length > 0 && JSON.stringify(levelFields) !== JSON.stringify(stage.rowFields)) {
       stage.setRowFields(levelFields);
-      stage.setColFields([]);
       stage.setExpanded({});
     }
   }, [stage.reportDef, stage.rowFields, stage.viewMode]); // eslint-disable-line react-hooks/exhaustive-deps

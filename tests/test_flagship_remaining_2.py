@@ -20,16 +20,18 @@ def _service():
     return PivotRuntimeService(adapter_getter=lambda: adapter, session_gate=SessionRequestGate())
 
 
-def _response(service, sequence, **changes):
+def _response(service, sequence, *, context_changes=None, **changes):
     kwargs = {"row_fields": ["region", "account"], "col_fields": ["period"],
               "val_configs": [{"field": SALES, "agg": "sum", "label": "Sales"}],
               "filters": copy.deepcopy(FLAGSHIP_FILTER), "show_row_totals": True,
               "show_col_totals": True, "expanded": {}}
     kwargs.update(changes)
-    response = service.process(PivotViewState(**kwargs), PivotRequestContext(
+    context = dict(
         table="derived_models", trigger_prop="derived.viewport", session_id="derived-models",
         client_instance="derived-runtime", state_epoch=sequence, window_seq=sequence,
-        viewport_active=True, start_row=0, end_row=100, needs_col_schema=True))
+        viewport_active=True, start_row=0, end_row=100, needs_col_schema=True, include_grand_total=True)
+    context.update(context_changes or {})
+    response = service.process(PivotViewState(**kwargs), PivotRequestContext(**context))
     assert response.status == "data", response.error
     return response
 
@@ -85,22 +87,67 @@ def test_shared_custom_category_add_remove_preserves_source_data():
     assert FLAGSHIP_QUALIFICATION_SOURCE_ROWS == source
 
 
-def test_report_runtime_definition_round_trip_preserves_group_totals():
-    """Supporting report calculation only; not mapped as period-column coverage."""
+def test_shared_report_definition_round_trip_preserves_period_sales():
     service = _service()
     report = {"root": {"field": "region", "label": "Region", "branches": []}}
     before = _response(service, 1, view_mode="report", report_def=report)
     changed = _response(service, 2, view_mode="report", report_def={"root": {"field": "account", "label": "Account", "branches": []}})
     restored = _response(service, 3, view_mode="report", report_def=copy.deepcopy(report))
-    for response in (before, restored):
-        rows = {row["_id"]: row for row in response.data}
-        assert set(rows) == {ECLAIR, MUNICH}
-        assert rows[ECLAIR][f"{SALES}_sum"] == 120.25
-        assert rows[MUNICH][f"{SALES}_sum"] == 79.75
-        assert sum(row[f"{SALES}_sum"] for row in rows.values()) == 200
+    assert_model_values(before.data, expected_sales())
+    assert_model_values(restored.data, expected_sales())
+    assert before.layout_revision == before.col_schema["layoutRevision"]
     assert before.data == restored.data and before.col_schema == restored.col_schema
     assert {row.get("_id") for row in changed.data if "_id" in row} != {row.get("_id") for row in restored.data if "_id" in row}
     assert_model_values(_response(service, 4).data, expected_sales())
+
+
+def test_report_period_schema_sparse_children_other_and_grand_respect_row_scope():
+    from types import SimpleNamespace
+    from pivot_engine.runtime import RuntimeDatasetAuthorizer
+    adapter = create_tanstack_adapter(backend_uri=":memory:")
+    adapter.controller.load_data_from_arrow("derived_models", pa.Table.from_pylist([
+        {"tenant": "A", "scope": "Included", "region": "North", "account": "First", "period": "Q1", SALES: 10},
+        {"tenant": "A", "scope": "Included", "region": "North", "account": "Second", "period": "Q2", SALES: 30},
+        {"tenant": "B", "scope": "Included", "region": "North", "account": "PRIVATE", "period": "PRIVATE", SALES: 999},
+    ]))
+    calls = []
+    class ObservedAdapter:
+        def __getattr__(self, name): return getattr(adapter, name)
+        async def handle_request(self, request, **kwargs):
+            calls.append(("aggregate", request, kwargs))
+            return await adapter.handle_request(request, **kwargs)
+        async def handle_virtual_scroll_request(self, request, *args, **kwargs):
+            calls.append(("pivot", request, kwargs))
+            return await adapter.handle_virtual_scroll_request(request, *args, **kwargs)
+    user = SimpleNamespace(id="viewer-A", role="viewer", attributes={"tenant": "A"})
+    scope = RuntimeDatasetAuthorizer({"derived_models": {"roles": {"viewer"}, "operations": {"read"},
+        "rowSecurity": {"mode": "claims", "claims": {"tenant": "tenant"}}}}).authorize(
+            principal=user, table="derived_models", operation="read")
+    response = _response(PivotRuntimeService(adapter_getter=lambda: ObservedAdapter()), 1,
+        context_changes={"principal": user, "row_scope": scope}, view_mode="report", expanded=True,
+        report_def={"root": {"field": "region", "defaultChild": {"field": "account", "topN": 1,
+            "sortBy": f"__RowTotal__{SALES}_sum", "sortDir": "desc"}}})
+    expected = {(row, f"{prefix}{SALES}_sum"): value
+                for row, values in {"North": (10, 30, 40), "North|||Second": (None, 30, 30),
+                                    "North|||__other__": (10, None, 10), "__grand_total__": (10, 30, 40)}.items()
+                for prefix, value in zip(("Q1_", "Q2_", "__RowTotal__"), values)}
+    assert_model_values(response.data, expected)
+    assert {column["id"] for column in response.col_schema["columns"]} == {column for _, column in expected}
+    assert {kind for kind, _, _ in calls} == {"aggregate", "pivot"}
+    assert len(calls) == 4  # root, child, Other, grand; every one is scoped.
+    assert all(kwargs["user"] is user and kwargs["row_scope"] is scope for _, _, kwargs in calls)
+    assert all("PRIVATE" not in str(row) for row in response.data)
+
+
+def test_saved_report_layout_runtime_and_frontend_modules_compile():
+    import shutil
+    import subprocess
+    node = shutil.which("node")
+    assert node, "Node is required to exercise actual saved report runtime"
+    result = subprocess.run([node, str(Path(__file__).with_name("frontend_flagship_reports.cjs"))],
+                            capture_output=True, text=True, timeout=60)
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert "saved report runtime passed" in result.stdout
 
 
 @pytest.mark.parametrize("damage", ["value", "missing", "extra", "duplicate", "null", "group"])
@@ -133,6 +180,21 @@ def test_field_zone_oracle_rejects_duplicate_or_misplaced_fields():
     for zone, label in (("rows", "Account"), ("cols", "Scope"), ("filter", "Scope")):
         bad = copy.deepcopy(zones); bad[zone].append(label)
         with pytest.raises(AssertionError): assert_zones(bad, moved=True)
+
+
+def test_report_gear_metadata_cannot_hide_extra_or_duplicate_cells():
+    expected = expected_sales()
+    cells = [{"rowid": row, "colid": column, "text": f"{value:.2f}"}
+             for (row, column), value in expected.items()]
+    gears = [{"rowid": row, "colid": "__report_config__", "text": ""}
+             for row in dict.fromkeys(row for row, _ in expected)]
+    assert_model_dom(cells + gears, expected)
+    for damage in ("value", "duplicate", "missing"):
+        bad = copy.deepcopy(gears)
+        if damage == "value": bad[0]["text"] = "999"
+        elif damage == "duplicate": bad.append(dict(bad[0]))
+        else: bad.pop()
+        with pytest.raises(AssertionError): assert_model_dom(cells + bad, expected)
 
 
 def test_startup_configuration_has_no_authored_formula_category_or_report():

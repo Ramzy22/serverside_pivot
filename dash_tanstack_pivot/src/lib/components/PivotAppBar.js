@@ -7,6 +7,7 @@ import { EDITED_CELL_FORMAT_KEY } from '../utils/formatting';
 import { usePivotTheme } from '../contexts/PivotThemeContext';
 import { usePivotConfig } from '../contexts/PivotConfigContext';
 import { usePivotRenderCounter } from '../hooks/usePivotRenderCounter';
+import { applySavedReport } from '../utils/savedReports';
 
 const SHOW_PIVOT_MODE_TOGGLE = true;
 
@@ -1105,6 +1106,7 @@ export const PivotAppBar = React.memo(function PivotAppBar({
         filters, setFilters,
         pivotMode, setPivotMode,
         reportDef, setReportDef,
+        setColFields, setValConfigs,
         savedReports, setSavedReports,
         activeReportId, setActiveReportId,
         showFloatingFilters, setShowFloatingFilters,
@@ -1759,8 +1761,7 @@ export const PivotAppBar = React.memo(function PivotAppBar({
                             if (!id) return;
                             const report = savedReports.find(r => r.id === id);
                             if (report && report.reportDef && setReportDef) {
-                                setReportDef(JSON.parse(JSON.stringify(report.reportDef)));
-                                setActiveReportId(id);
+                                applySavedReport(report, { setReportDef, setActiveReportId, setColFields, setValConfigs });
                             }
                         }}
                         style={{

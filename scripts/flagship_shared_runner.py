@@ -40,6 +40,7 @@ SHARED_ASSERTIONS: Mapping[str, tuple[SharedAssertion, ...]] = {
         "layout-field-zones.move": "test_shared_field_zone_move_restores_exact_sparse_intersections",
         "formula-columns.add-remove": "test_shared_formula_add_remove_uses_post_sum_totals",
         "custom-dimensions.add-remove": "test_shared_custom_category_add_remove_preserves_source_data",
+        "report-mode.restore-definition": "test_shared_report_definition_round_trip_preserves_period_sales",
     }.items()},
     **{"shared.copy-selection." + kind: tuple(
         SharedAssertion(f"tests/test_flagship_clipboard_values_runtime.py::test_shared_clipboard_source_values[{aggregation}]",

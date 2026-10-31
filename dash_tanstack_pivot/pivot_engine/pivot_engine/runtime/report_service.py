@@ -496,6 +496,20 @@ class RuntimeReportService:
         emitted_stats: Optional[Dict[str, Any]] = None
         base_filters = dict(base_request.filters or {})
 
+        async def execute_report_query(request: TanStackRequest) -> TanStackResponse:
+            # Branching reports retain the same pivot axes as the public view.
+            # The existing adapter owns the column catalog and aggregate-first
+            # execution; reports only annotate and arrange the resulting rows.
+            if state.col_fields and request.grouping:
+                return await adapter.handle_virtual_scroll_request(
+                    request, 0, 100000, needs_col_schema=True,
+                    include_grand_total=False, user=context.principal,
+                    row_scope=context.row_scope,
+                )
+            return await adapter.handle_request(
+                request, user=context.principal, row_scope=context.row_scope,
+            )
+
         async def fetch_node_rows(
             node: Dict[str, Any],
             active_filters: Dict[str, Any],
@@ -518,7 +532,7 @@ class RuntimeReportService:
                 operation=TanStackOperation.GET_DATA,
                 table=base_request.table,
                 columns=RuntimeRequestFactory.build_columns(
-                    [node_field], [], state.val_configs
+                    [node_field], state.col_fields, state.val_configs
                 ),
                 filters=active_filters,
                 custom_dimensions=base_request.custom_dimensions or [],
@@ -536,11 +550,11 @@ class RuntimeReportService:
                 },
                 global_filter=base_request.global_filter,
                 totals=False,
-                row_totals=False,
+                row_totals=bool(state.col_fields and state.show_row_totals),
                 version=base_request.version,
                 column_sort_options=base_request.column_sort_options,
             )
-            branch_response = await adapter.handle_request(branch_request)
+            branch_response = await execute_report_query(branch_request)
             if emitted_columns is None:
                 emitted_columns = [
                     c
@@ -603,6 +617,9 @@ class RuntimeReportService:
                 ) or row_path in expanded_set
 
                 row_out = dict(row)
+                if state.col_fields:
+                    for column in (emitted_schema or {}).get("columns", []):
+                        row_out.setdefault(column["id"], None)
                 row_out["_id"] = path_token or str(row.get("_id") or "")
                 if (
                     isinstance(branch_match, dict)
@@ -669,7 +686,7 @@ class RuntimeReportService:
                         operation=TanStackOperation.GET_DATA,
                         table=base_request.table,
                         columns=RuntimeRequestFactory.build_columns(
-                            [], [], state.val_configs
+                            [], state.col_fields, state.val_configs
                         ),
                         filters=self._merge_in_report_filter(
                             active_filters, node_field, other_values
@@ -685,11 +702,11 @@ class RuntimeReportService:
                         },
                         global_filter=base_request.global_filter,
                         totals=False,
-                        row_totals=False,
+                        row_totals=bool(state.col_fields and state.show_row_totals),
                         version=base_request.version,
                         column_sort_options=base_request.column_sort_options,
                     )
-                    other_response = await adapter.handle_request(other_request)
+                    other_response = await execute_report_query(other_request)
                     other_aggregate_row = next(
                         (
                             candidate
@@ -713,6 +730,9 @@ class RuntimeReportService:
                     level_label=node.get("label") or node_field,
                     source_count=len(other_rows),
                 )
+                if state.col_fields:
+                    for column in (emitted_schema or {}).get("columns", []):
+                        other_out.setdefault(column["id"], None)
                 self._decorate_report_row_metadata(
                     other_out,
                     node=node,
@@ -735,7 +755,7 @@ class RuntimeReportService:
             grand_total_request = TanStackRequest(
                 operation=TanStackOperation.GET_DATA,
                 table=base_request.table,
-                columns=RuntimeRequestFactory.build_columns([], [], state.val_configs),
+                columns=RuntimeRequestFactory.build_columns([], state.col_fields, state.val_configs),
                 filters=base_filters,
                 custom_dimensions=base_request.custom_dimensions or [],
                 measure_axis=base_request.measure_axis or None,
@@ -745,11 +765,11 @@ class RuntimeReportService:
                 pagination={"pageIndex": 0, "pageSize": 1},
                 global_filter=base_request.global_filter,
                 totals=False,
-                row_totals=False,
+                row_totals=bool(state.col_fields and state.show_row_totals),
                 version=base_request.version,
                 column_sort_options=base_request.column_sort_options,
             )
-            grand_total_response = await adapter.handle_request(grand_total_request)
+            grand_total_response = await execute_report_query(grand_total_request)
             if emitted_columns is None:
                 emitted_columns = list(grand_total_response.columns or [])
                 emitted_schema = grand_total_response.col_schema
@@ -787,6 +807,7 @@ class RuntimeReportService:
             version=base_request.version,
             col_schema=emitted_schema,
             color_scale_stats=emitted_stats,
+            layout_revision=(emitted_schema or {}).get("layoutRevision"),
         )
 
     @staticmethod

@@ -58,6 +58,9 @@ def expected_sales(kind="base", formula_field=None):
               "__grand_total__": (150, 50, 200)}
     if kind == "custom":
         values = {"Included cities": (150, 50, 200), "__grand_total__": (150, 50, 200)}
+    if kind == "accounts":
+        values = {TOKYO: (100.25, 20, 120.25), CAIRO: (49.75, 30, 79.75),
+                  "__grand_total__": (150, 50, 200)}
     result = {}
     for row, numbers in values.items():
         for prefix, value in zip(("Q1_", "Q2_", "__RowTotal__"), numbers):
@@ -93,7 +96,12 @@ def assert_model_values(rows, expected):
 
 
 def assert_model_dom(cells, expected):
-    actual = [(cell["rowid"], cell["colid"], cell["text"]) for cell in cells if cell["colid"] != "hierarchy"]
+    gears = [cell for cell in cells if cell["colid"] == "__report_config__"]
+    if gears:
+        assert len(gears) == len({row for row, _ in expected})
+        assert {cell["rowid"] for cell in gears} == {row for row, _ in expected}
+        assert all(cell["text"] == "" for cell in gears), "Report gear metadata contains unexpected values"
+    actual = [(cell["rowid"], cell["colid"], cell["text"]) for cell in cells if cell["colid"] not in ("hierarchy", "__report_config__")]
     assert len(actual) == len(expected) and len({(row, col) for row, col, _ in actual}) == len(expected), "Missing or duplicate visible cells"
     wanted = {key: "" if value is None else f"{value:.2f}" for key, value in expected.items()}
     assert {(row, col): text for row, col, text in actual} == wanted, "Displayed cells differ from independent oracle"
@@ -231,12 +239,12 @@ def _formula(driver, wait, observation):
     assert config["formula"] == f"2 * [{SALES}]" and config.get("formulaScope", "measures") == "measures"
     observation["formulaConfig"] = config
     observation["created"] = wait.until(lambda current: snapshot(current, checkpoint, expected_sales(formula_field=config["field"]), formula=config))
-    assert any("double_sales" in el.text for el in _elements(driver, '[role="columnheader"]'))
+    assert any("double sales" in el.text.casefold().replace("_", " ") for el in _elements(driver, '[role="columnheader"]'))
     checkpoint = driver.execute_script("return performance.now()")
     chip = _element(driver, '[data-sidebar-drop-zone="vals"] [data-sidebar-field-chip="zone"][aria-label="Move double_sales"]')
     chip.find_element("css selector", '[title="Select formula"] > div:nth-child(2) > span:last-child').click()
     observation["removed"] = wait.until(lambda current: snapshot(current, checkpoint, expected_sales(), formula=False))
-    assert not any("double_sales" in el.text for el in _elements(driver, '[role="columnheader"]'))
+    assert not any("double sales" in el.text.casefold().replace("_", " ") for el in _elements(driver, '[role="columnheader"]'))
     assert not _elements(driver, '[aria-label="Move double_sales"]')
     observation["aggregationStage"] = "Value formula evaluates 2 * [sales] after sum aggregation; Q1=300,Q2=100,total=400"
 
@@ -250,9 +258,15 @@ def _custom(driver, wait, observation):
     selects = dialog.find_elements("css selector", "select")
     field = next(element for element in selects if any(option.get_attribute("value") == "region" for option in element.find_elements("css selector", "option")))
     Select(field).select_by_value("region")
-    operator = next(element for element in selects if any(option.get_attribute("value") == "in" for option in element.find_elements("css selector", "option")))
-    Select(operator).select_by_value("in")
-    _type(dialog.find_element("css selector", 'input[placeholder="A, B, C"]'), f"{ECLAIR}, {MUNICH}")
+    # Two native Equals clauses avoid the list editor's immediate delimiter
+    # normalization swallowing a comma while WebDriver types one key at a time.
+    condition = next(element for element in selects if {option.get_attribute("value") for option in element.find_elements("css selector", "option")} == {"AND", "OR"})
+    Select(condition).select_by_value("OR")
+    _type(dialog.find_element("css selector", 'input[placeholder="Value"]'), ECLAIR)
+    _button(driver, "+ Condition", dialog).click()
+    fields = [element for element in dialog.find_elements("css selector", "select") if any(option.get_attribute("value") == "region" for option in element.find_elements("css selector", "option"))]
+    Select(fields[1]).select_by_value("region")
+    _type(dialog.find_elements("css selector", 'input[placeholder="Value"]')[1], MUNICH)
     _button(driver, "Apply Category", dialog).click()
     wait.until(lambda current: not _elements(current, '[role="dialog"][aria-label="Add custom category"]'))
     checkpoint = driver.execute_script("return performance.now()")
@@ -267,8 +281,10 @@ def _custom(driver, wait, observation):
     dimension = dimensions[0]
     assert dimension["name"] == "IncludedGroup"
     assert dimension["rules"][0]["label"] == "Included cities"
-    clause = dimension["rules"][0]["condition"]["clauses"][0]
-    assert clause["field"] == "region" and clause["operator"] == "in" and set(clause["values"]) == {ECLAIR, MUNICH}
+    condition = dimension["rules"][0]["condition"]
+    assert condition["op"] == "OR" and len(condition["clauses"]) == 2
+    assert {(clause["field"], clause["operator"], clause["value"]) for clause in condition["clauses"]} == {
+        ("region", "eq", ECLAIR), ("region", "eq", MUNICH)}
     assert observation["created"]["request"]["state"]["rowFields"] == [dimension["field"]]
     # The category card's native delete button is the second card button.
     edit = _button(driver, "Edit")
@@ -297,6 +313,7 @@ def _report(driver, host, wait, observation):
     reports = wait.until(lambda current: current.execute_script("return JSON.parse(localStorage.getItem(arguments[0]))", storage_key))
     saved = next(report for report in reports if report["name"] == "Complete207 Sales")
     assert saved["reportDef"]["root"]["field"] == "region" and saved["id"] and saved["createdAt"]
+    assert saved["layout"] == {"colFields": ["period"], "valConfigs": [{"field": SALES, "agg": "sum", "label": "Sales"}]}
     observation["storedReport"] = saved
     # Change the active definition through the selected-level inspector.
     levels = _element(driver, '[data-report-section="report-levels"]')
@@ -304,15 +321,19 @@ def _report(driver, host, wait, observation):
     inspector = _element(driver, '[data-report-section="selected-level"]')
     inspector.find_element("css selector", '[data-report-level-collapsible] > button').click()
     field = next(element for element in inspector.find_elements("css selector", "select") if any(option.get_attribute("value") == "account" for option in element.find_elements("css selector", "option")))
+    checkpoint = driver.execute_script("return performance.now()")
     Select(field).select_by_value("account")
     _button(driver, "Apply", inspector).click()
+    observation["changed"] = wait.until(lambda current: snapshot(current, checkpoint, expected_sales("accounts"),
+        col_fields=["period"], view_mode="report", report_root="account"))
     checkpoint = driver.execute_script("return performance.now()")
-    # Require evidence that the changed report really reached the server.
-    wait.until(lambda current: any(item["phase"] == "request" and (item.get("state", {}).get("reportDef") or {}).get("root", {}).get("field") == "account" for item in current.execute_script("return window.__pivotModelTrace || []")))
-    candidates = _elements(driver, 'div')
-    title = next(element for element in candidates if element.text.strip() == "Complete207 Sales")
+    editor = _element(driver, '[data-report-section="save-report"]').find_element("xpath", "..")
+    title = next(element for element in editor.find_elements("css selector", "div")
+                 if element.text.strip() == "Complete207 Sales" and not element.find_elements("css selector", "div"))
     title.click()
-    observation["restored"] = wait.until(lambda current: snapshot(current, checkpoint, expected_sales(), col_fields=["period"], view_mode="report", report_root="region"))
+    observation["restored"] = wait.until(lambda current: snapshot(current, checkpoint, expected_sales(),
+        col_fields=["period"], formula=False, view_mode="report", report_root="region"))
+    assert observation["restored"]["request"]["state"]["reportDef"] == saved["reportDef"]
     assert current_reports(driver, storage_key) == reports
     assert any("Q1" in el.text for el in _elements(driver, '[role="columnheader"]'))
     assert any("Q2" in el.text for el in _elements(driver, '[role="columnheader"]'))
