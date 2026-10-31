@@ -1070,197 +1070,6 @@ export function useCoreRuntimeStage(props) {
       refresh: Date.now()
     });
   };
-  const appliedViewStateRef = useRef(null);
-  useEffect(() => {
-    if (stage.viewState === appliedViewStateRef.current) return;
-    appliedViewStateRef.current = stage.viewState;
-    if (!stage.viewState || typeof stage.viewState !== 'object') return;
-    const restored = stage.viewState.state && typeof stage.viewState.state === 'object' ? stage.viewState.state : stage.viewState;
-    const restoredChartDefinitions = Array.isArray(restored.chartDefinitions) ? sanitizeChartDefinitions(restored.chartDefinitions, stage.initialChartDefinition) : null;
-    const restoredActiveChartDefinitionId = typeof restored.activeChartDefinitionId === 'string' ? restored.activeChartDefinitionId : null;
-    const restoredChartDefinition = Array.isArray(restoredChartDefinitions) ? restoredChartDefinitions.find(definition => definition.id === restoredActiveChartDefinitionId) || restoredChartDefinitions[0] || null : null;
-    const sanitizedFilters = restored.filters && typeof restored.filters === 'object' ? {
-      ...restored.filters
-    } : null;
-    if (restored.viewMode === 'pivot' || restored.viewMode === 'report' || restored.viewMode === 'tree' || restored.viewMode === 'table') {
-      stage.setViewMode(restored.viewMode);
-    } else if (restored.pivotMode === 'pivot' || restored.pivotMode === 'report') {
-      stage.setViewMode(restored.pivotMode);
-    }
-    if (restored.detailMode === 'none' || restored.detailMode === 'inline' || restored.detailMode === 'sidepanel' || restored.detailMode === 'drawer') stage.setDetailMode(restored.detailMode);
-    if (restored.treeConfig && typeof restored.treeConfig === 'object') stage.setTreeConfig(normalizeTreeConfigValue(restored.treeConfig));
-    if (restored.detailConfig && typeof restored.detailConfig === 'object') stage.setDetailConfig(normalizeDetailConfigValue(restored.detailConfig));
-    if (Object.prototype.hasOwnProperty.call(restored, 'reportDef')) {
-      stage.setReportDef(normalizeReportDefValue(restored.reportDef));
-    }
-    if (Object.prototype.hasOwnProperty.call(restored, 'savedReports')) {
-      stage.setSavedReports(normalizeSavedReportsValue(restored.savedReports));
-    }
-    if (Object.prototype.hasOwnProperty.call(restored, 'activeReportId')) {
-      stage.setActiveReportId(normalizeActiveReportIdValue(restored.activeReportId));
-    }
-    if (Object.prototype.hasOwnProperty.call(restored, 'frozenPivotConfig')) {
-      stage.setFrozenPivotConfig(restored.frozenPivotConfig && typeof restored.frozenPivotConfig === 'object' ? restored.frozenPivotConfig : null);
-    }
-    if (Object.prototype.hasOwnProperty.call(restored, 'customDimensions')) {
-      stage.setCustomDimensions(normalizeCustomDimensionsValue(restored.customDimensions));
-    }
-    if (Array.isArray(restored.rowFields)) stage.setRowFields(restored.rowFields);
-    if (Array.isArray(restored.colFields)) stage.setColFields(restored.colFields);
-    if (Array.isArray(restored.valConfigs)) stage.setValConfigs(normalizeSparklineValConfigsForView(restored.valConfigs, stage.normalizedInitialValConfigs));
-    if (sanitizedFilters) stage.setFilters(sanitizedFilters);
-    if (Array.isArray(restored.sorting)) stage.setSorting(restored.sorting);
-    if (restored.expanded === true || restored.expanded === false || restored.expanded && typeof restored.expanded === 'object') {
-      stage.setExpanded(restored.expanded);
-    }
-    if (typeof restored.immersiveMode === 'boolean') stage.setImmersiveMode(restored.immersiveMode);
-    if (typeof restored.showRowTotals === 'boolean') stage.setShowRowTotals(restored.showRowTotals);
-    if (typeof restored.showColTotals === 'boolean') stage.setShowColTotals(restored.showColTotals);
-    if (typeof restored.showSubtotals === 'boolean') stage.setShowSubtotals(restored.showSubtotals);
-    if (typeof restored.showRowNumbers === 'boolean') stage.setShowRowNumbers(restored.showRowNumbers);
-    if (typeof restored.showReportConfigColumn === 'boolean') stage.setShowReportConfigColumn(restored.showReportConfigColumn);
-    if (typeof restored.sidebarOpen === 'boolean') stage.setSidebarOpen(restored.sidebarOpen);
-    if (typeof restored.sidebarWidth === 'number') stage.setSidebarWidth(clampSidebarWidth(restored.sidebarWidth, 288));
-    if (typeof restored.sidebarTab === 'string') stage.setSidebarTab(restored.sidebarTab);
-    if (restored.fieldPanelSizes && typeof restored.fieldPanelSizes === 'object') {
-      stage.setFieldPanelSizes(sanitizeFieldPanelSizes(restored.fieldPanelSizes));
-    }
-    if (typeof restored.showFloatingFilters === 'boolean') stage.setShowFloatingFilters(restored.showFloatingFilters);
-    if (typeof restored.stickyHeaders === 'boolean') stage.setStickyHeaders(restored.stickyHeaders);
-    if (typeof restored.colSearch === 'string') stage.setColSearch(restored.colSearch);
-    if (typeof restored.colTypeFilter === 'string') stage.setColTypeFilter(restored.colTypeFilter);
-    if (typeof restored.themeName === 'string' && themes[restored.themeName]) stage.setThemeName(restored.themeName);
-    if (restored.themeOverrides && typeof restored.themeOverrides === 'object') stage.setThemeOverrides(restored.themeOverrides);
-    if (restored.editValueDisplayMode === 'original' || restored.editValueDisplayMode === 'edited') {
-      stage.setEditValueDisplayMode(restored.editValueDisplayMode);
-    }
-    if (typeof restored.layoutMode === 'string') stage.setLayoutMode(normalizeLayoutModeValue(restored.layoutMode));
-    if (typeof restored.colorScaleMode === 'string') stage.setColorScaleMode(restored.colorScaleMode);
-    if (typeof restored.colorPalette === 'string') stage.setColorPalette(restored.colorPalette);
-    if (typeof restored.spacingMode === 'number') stage.setSpacingMode(restored.spacingMode);
-    if (Array.isArray(restored.dataBarsColumns)) stage.setDataBarsColumns(new Set(restored.dataBarsColumns));
-    if (restored.pivotColumnSorting && typeof restored.pivotColumnSorting === 'object') stage.setPivotColumnSorting(restored.pivotColumnSorting);
-    if (restored.columnPinning && typeof restored.columnPinning === 'object') stage.setColumnPinning(restored.columnPinning);
-    const restoredRowPinning = restored.rowPinning && typeof restored.rowPinning === 'object' ? restored.rowPinning : null;
-    if (restoredRowPinning) stage.setRowPinning(restoredRowPinning);
-    if (Object.prototype.hasOwnProperty.call(restored, 'grandTotalPinOverride')) {
-      stage.setGrandTotalPinOverride(sanitizeGrandTotalPinOverride(restored.grandTotalPinOverride));
-    } else {
-      stage.setGrandTotalPinOverride(getPinnedSideForRow(restoredRowPinning, GRAND_TOTAL_ROW_ID));
-    }
-    if (restored.columnVisibility && typeof restored.columnVisibility === 'object') stage.setColumnVisibility(restored.columnVisibility);
-    if (Array.isArray(restored.columnOrder)) stage.setColumnOrder(normalizeColumnOrderValue(restored.columnOrder));
-    if (Array.isArray(restored.pivotLayoutOrder)) {
-      stage.setPivotLayoutOrder(normalizeColumnOrderValue(restored.pivotLayoutOrder));
-      stage.layoutRevisionRef.current = null;
-    }
-    if (restored.pivotPinnedLayoutIds && typeof restored.pivotPinnedLayoutIds === 'object') {
-      stage.setPivotPinnedLayoutIds(restored.pivotPinnedLayoutIds);
-    }
-    if (restored.columnSizing && typeof restored.columnSizing === 'object') stage.setColumnSizing(restored.columnSizing);
-    if (restored.colExpanded && typeof restored.colExpanded === 'object') stage.setColExpanded(restored.colExpanded);
-    if (typeof restored.decimalPlaces === 'number') stage.setDecimalPlaces(restored.decimalPlaces);
-    if (typeof restored.defaultValueFormat === 'string') {
-      stage.setDefaultValueFormat(normalizeDefaultValueFormat(restored.defaultValueFormat));
-    }
-    if (typeof restored.numberGroupSeparator === 'string') {
-      stage.setNumberGroupSeparator(normalizeNumberGroupSeparator(restored.numberGroupSeparator));
-    }
-    if (typeof restored.zoomLevel === 'number') stage.setZoomLevel(Math.max(60, Math.min(160, restored.zoomLevel)));
-    stage.setColumnDecimalOverrides(restored.columnDecimalOverrides && typeof restored.columnDecimalOverrides === 'object' ? restored.columnDecimalOverrides : {});
-    stage.setColumnFormatOverrides(restored.columnFormatOverrides && typeof restored.columnFormatOverrides === 'object' ? restored.columnFormatOverrides : {});
-    stage.setColumnGroupSeparatorOverrides(restored.columnGroupSeparatorOverrides && typeof restored.columnGroupSeparatorOverrides === 'object' ? restored.columnGroupSeparatorOverrides : {});
-    if (restored.cellFormatRules && typeof restored.cellFormatRules === 'object') stage.setCellFormatRules(restored.cellFormatRules);
-    if (restoredChartDefinitions) {
-      stage.setManagedChartDefinitions(restoredChartDefinitions);
-      stage.setActiveChartDefinitionId(restoredChartDefinition ? restoredChartDefinition.id : restoredChartDefinitions[0].id);
-    }
-    const restoredChartSource = restored.chartPanelSource !== undefined ? restored.chartPanelSource : restoredChartDefinition && restoredChartDefinition.source;
-    if (restoredChartSource === 'pivot' || restoredChartSource === 'selection') stage.setChartPanelSource(restoredChartSource);
-    const restoredChartType = restored.chartPanelType !== undefined ? restored.chartPanelType : restoredChartDefinition && restoredChartDefinition.chartType;
-    if (VALID_CHART_TYPES.has(restoredChartType)) stage.setChartPanelType(restoredChartType);
-    const restoredBarLayout = restored.chartPanelBarLayout !== undefined ? restored.chartPanelBarLayout : restoredChartDefinition && restoredChartDefinition.barLayout;
-    if (restoredBarLayout === 'grouped' || restoredBarLayout === 'stacked') stage.setChartPanelBarLayout(restoredBarLayout);
-    const restoredAxisMode = restored.chartPanelAxisMode !== undefined ? restored.chartPanelAxisMode : restoredChartDefinition && restoredChartDefinition.axisMode;
-    if (restoredAxisMode === 'vertical' || restoredAxisMode === 'horizontal') stage.setChartPanelAxisMode(restoredAxisMode);
-    if (restored.chartPanelOrientation === 'rows' || restored.chartPanelOrientation === 'columns') {
-      stage.chartPanelOrientationAutoRef.current = false;
-      stage.setChartPanelOrientation(restored.chartPanelOrientation);
-    } else if (restoredChartDefinition && (restoredChartDefinition.orientation === 'rows' || restoredChartDefinition.orientation === 'columns')) {
-      stage.chartPanelOrientationAutoRef.current = false;
-      stage.setChartPanelOrientation(restoredChartDefinition.orientation);
-    } else {
-      stage.chartPanelOrientationAutoRef.current = true;
-      stage.setChartPanelOrientation(getPreferredChartOrientation(restored.colFields || stage.colFields));
-    }
-    const restoredHierarchyLevel = restored.chartPanelHierarchyLevel !== undefined ? restored.chartPanelHierarchyLevel : restoredChartDefinition && restoredChartDefinition.hierarchyLevel;
-    if (restoredHierarchyLevel === 'all' || typeof restoredHierarchyLevel === 'number' && restoredHierarchyLevel >= 1) {
-      stage.setChartPanelHierarchyLevel(restoredHierarchyLevel);
-    }
-    const restoredChartTitle = restored.chartPanelTitle !== undefined ? restored.chartPanelTitle : restoredChartDefinition && restoredChartDefinition.chartTitle;
-    if (typeof restoredChartTitle === 'string') {
-      stage.setChartPanelTitle(restoredChartTitle);
-    }
-    const restoredChartLayers = Array.isArray(restored.chartPanelLayers) ? restored.chartPanelLayers : restoredChartDefinition && Array.isArray(restoredChartDefinition.chartLayers) ? restoredChartDefinition.chartLayers : null;
-    if (Array.isArray(restoredChartLayers)) {
-      stage.setChartPanelLayers(restoredChartLayers);
-    }
-    const restoredRowLimit = restored.chartPanelRowLimit !== undefined ? restored.chartPanelRowLimit : restoredChartDefinition && restoredChartDefinition.rowLimit;
-    if (typeof restoredRowLimit === 'number') {
-      stage.setChartPanelRowLimit(Math.max(1, Math.floor(restoredRowLimit)));
-    }
-    const restoredColumnLimit = restored.chartPanelColumnLimit !== undefined ? restored.chartPanelColumnLimit : restoredChartDefinition && restoredChartDefinition.columnLimit;
-    if (typeof restoredColumnLimit === 'number') {
-      stage.setChartPanelColumnLimit(Math.max(1, Math.floor(restoredColumnLimit)));
-    }
-    const restoredChartWidth = restored.chartPanelWidth !== undefined ? restored.chartPanelWidth : restoredChartDefinition && restoredChartDefinition.width;
-    if (typeof restoredChartWidth === 'number') {
-      stage.setChartPanelWidth(Math.max(320, Math.min(960, restoredChartWidth)));
-    }
-    const restoredChartGraphHeight = restored.chartPanelGraphHeight !== undefined ? restored.chartPanelGraphHeight : restoredChartDefinition && restoredChartDefinition.chartHeight;
-    if (typeof restoredChartGraphHeight === 'number') {
-      stage.setChartPanelGraphHeight(Math.max(180, Math.floor(restoredChartGraphHeight)));
-    }
-    const restoredChartSortMode = restored.chartPanelSortMode !== undefined ? restored.chartPanelSortMode : restoredChartDefinition && restoredChartDefinition.sortMode;
-    if (VALID_CHART_SORT_MODES.has(restoredChartSortMode)) {
-      stage.setChartPanelSortMode(restoredChartSortMode);
-    }
-    const restoredChartInteractionMode = restored.chartPanelInteractionMode !== undefined ? restored.chartPanelInteractionMode : restoredChartDefinition && restoredChartDefinition.interactionMode;
-    if (VALID_CHART_INTERACTION_MODES.has(restoredChartInteractionMode)) {
-      stage.setChartPanelInteractionMode(restoredChartInteractionMode);
-    }
-    const restoredChartServerScope = restored.chartPanelServerScope !== undefined ? restored.chartPanelServerScope : restoredChartDefinition && restoredChartDefinition.serverScope;
-    if (VALID_CHART_SERVER_SCOPES.has(restoredChartServerScope)) {
-      stage.setChartPanelServerScope(restoredChartServerScope);
-    }
-    if (typeof restored.chartPanelFloating === 'boolean') {
-      stage.setChartPanelFloating(restored.chartPanelFloating);
-    }
-    if (restored.chartPanelFloatingRect && typeof restored.chartPanelFloatingRect === 'object') {
-      stage.setChartPanelFloatingRect(clampFloatingChartRect(restored.chartPanelFloatingRect, null));
-    }
-    if (typeof restored.chartPanelLocked === 'boolean') {
-      stage.setChartPanelLocked(restored.chartPanelLocked);
-    }
-    if (Object.prototype.hasOwnProperty.call(restored, 'chartPanelLockedModel')) {
-      stage.setChartPanelLockedModel(restored.chartPanelLockedModel && typeof restored.chartPanelLockedModel === 'object' ? restored.chartPanelLockedModel : null);
-    }
-    if (Object.prototype.hasOwnProperty.call(restored, 'chartPanelLockedRequest')) {
-      stage.setChartPanelLockedRequest(normalizeLockedChartRequest(restored.chartPanelLockedRequest));
-    }
-    if (Array.isArray(restored.chartCanvasPanes)) {
-      stage.setChartCanvasPanes(sanitizeChartCanvasPanes(restored.chartCanvasPanes, stage.initialChartDefinition));
-    }
-    if (typeof restored.tableCanvasSize === 'number' && Number.isFinite(restored.tableCanvasSize) && restored.tableCanvasSize > 0) {
-      stage.setTableCanvasSize(restored.tableCanvasSize);
-    }
-    if (stage.viewState.viewport && typeof stage.viewState.viewport === 'object') {
-      stage.latestViewportRef.current = {
-        ...stage.latestViewportRef.current,
-        ...stage.viewState.viewport
-      };
-    }
-  }, [stage.viewState, stage.initialChartDefinition, stage.normalizedInitialValConfigs]);
   useEffect(() => {
     if (themes[stage.defaultTheme]) {
       stage.setThemeName(stage.defaultTheme);
@@ -1507,6 +1316,198 @@ export function useCoreRuntimeStage(props) {
       numberGroupSeparator: stage.numberGroupSeparator
     });
   }, [stage.numberGroupSeparator]);
+  // Restore after initial prop synchronization so saved formatting and values win.
+  const appliedViewStateRef = useRef(null);
+  useEffect(() => {
+    if (stage.viewState === appliedViewStateRef.current) return;
+    appliedViewStateRef.current = stage.viewState;
+    if (!stage.viewState || typeof stage.viewState !== 'object') return;
+    const restored = stage.viewState.state && typeof stage.viewState.state === 'object' ? stage.viewState.state : stage.viewState;
+    const restoredChartDefinitions = Array.isArray(restored.chartDefinitions) ? sanitizeChartDefinitions(restored.chartDefinitions, stage.initialChartDefinition) : null;
+    const restoredActiveChartDefinitionId = typeof restored.activeChartDefinitionId === 'string' ? restored.activeChartDefinitionId : null;
+    const restoredChartDefinition = Array.isArray(restoredChartDefinitions) ? restoredChartDefinitions.find(definition => definition.id === restoredActiveChartDefinitionId) || restoredChartDefinitions[0] || null : null;
+    const sanitizedFilters = restored.filters && typeof restored.filters === 'object' ? {
+      ...restored.filters
+    } : null;
+    if (restored.viewMode === 'pivot' || restored.viewMode === 'report' || restored.viewMode === 'tree' || restored.viewMode === 'table') {
+      stage.setViewMode(restored.viewMode);
+    } else if (restored.pivotMode === 'pivot' || restored.pivotMode === 'report') {
+      stage.setViewMode(restored.pivotMode);
+    }
+    if (restored.detailMode === 'none' || restored.detailMode === 'inline' || restored.detailMode === 'sidepanel' || restored.detailMode === 'drawer') stage.setDetailMode(restored.detailMode);
+    if (restored.treeConfig && typeof restored.treeConfig === 'object') stage.setTreeConfig(normalizeTreeConfigValue(restored.treeConfig));
+    if (restored.detailConfig && typeof restored.detailConfig === 'object') stage.setDetailConfig(normalizeDetailConfigValue(restored.detailConfig));
+    if (Object.prototype.hasOwnProperty.call(restored, 'reportDef')) {
+      stage.setReportDef(normalizeReportDefValue(restored.reportDef));
+    }
+    if (Object.prototype.hasOwnProperty.call(restored, 'savedReports')) {
+      stage.setSavedReports(normalizeSavedReportsValue(restored.savedReports));
+    }
+    if (Object.prototype.hasOwnProperty.call(restored, 'activeReportId')) {
+      stage.setActiveReportId(normalizeActiveReportIdValue(restored.activeReportId));
+    }
+    if (Object.prototype.hasOwnProperty.call(restored, 'frozenPivotConfig')) {
+      stage.setFrozenPivotConfig(restored.frozenPivotConfig && typeof restored.frozenPivotConfig === 'object' ? restored.frozenPivotConfig : null);
+    }
+    if (Object.prototype.hasOwnProperty.call(restored, 'customDimensions')) {
+      stage.setCustomDimensions(normalizeCustomDimensionsValue(restored.customDimensions));
+    }
+    if (Array.isArray(restored.rowFields)) stage.setRowFields(restored.rowFields);
+    if (Array.isArray(restored.colFields)) stage.setColFields(restored.colFields);
+    if (Array.isArray(restored.valConfigs)) stage.setValConfigs(normalizeSparklineValConfigsForView(restored.valConfigs, stage.normalizedInitialValConfigs));
+    if (sanitizedFilters) stage.setFilters(sanitizedFilters);
+    if (Array.isArray(restored.sorting)) stage.setSorting(restored.sorting);
+    if (restored.expanded === true || restored.expanded === false || restored.expanded && typeof restored.expanded === 'object') {
+      stage.setExpanded(restored.expanded);
+    }
+    if (typeof restored.immersiveMode === 'boolean') stage.setImmersiveMode(restored.immersiveMode);
+    if (typeof restored.showRowTotals === 'boolean') stage.setShowRowTotals(restored.showRowTotals);
+    if (typeof restored.showColTotals === 'boolean') stage.setShowColTotals(restored.showColTotals);
+    if (typeof restored.showSubtotals === 'boolean') stage.setShowSubtotals(restored.showSubtotals);
+    if (typeof restored.showRowNumbers === 'boolean') stage.setShowRowNumbers(restored.showRowNumbers);
+    if (typeof restored.showReportConfigColumn === 'boolean') stage.setShowReportConfigColumn(restored.showReportConfigColumn);
+    if (typeof restored.sidebarOpen === 'boolean') stage.setSidebarOpen(restored.sidebarOpen);
+    if (typeof restored.sidebarWidth === 'number') stage.setSidebarWidth(clampSidebarWidth(restored.sidebarWidth, 288));
+    if (typeof restored.sidebarTab === 'string') stage.setSidebarTab(restored.sidebarTab);
+    if (restored.fieldPanelSizes && typeof restored.fieldPanelSizes === 'object') {
+      stage.setFieldPanelSizes(sanitizeFieldPanelSizes(restored.fieldPanelSizes));
+    }
+    if (typeof restored.showFloatingFilters === 'boolean') stage.setShowFloatingFilters(restored.showFloatingFilters);
+    if (typeof restored.stickyHeaders === 'boolean') stage.setStickyHeaders(restored.stickyHeaders);
+    if (typeof restored.colSearch === 'string') stage.setColSearch(restored.colSearch);
+    if (typeof restored.colTypeFilter === 'string') stage.setColTypeFilter(restored.colTypeFilter);
+    if (typeof restored.themeName === 'string' && themes[restored.themeName]) stage.setThemeName(restored.themeName);
+    if (restored.themeOverrides && typeof restored.themeOverrides === 'object') stage.setThemeOverrides(restored.themeOverrides);
+    if (restored.editValueDisplayMode === 'original' || restored.editValueDisplayMode === 'edited') {
+      stage.setEditValueDisplayMode(restored.editValueDisplayMode);
+    }
+    if (typeof restored.layoutMode === 'string') stage.setLayoutMode(normalizeLayoutModeValue(restored.layoutMode));
+    if (typeof restored.colorScaleMode === 'string') stage.setColorScaleMode(restored.colorScaleMode);
+    if (typeof restored.colorPalette === 'string') stage.setColorPalette(restored.colorPalette);
+    if (typeof restored.spacingMode === 'number') stage.setSpacingMode(restored.spacingMode);
+    if (Array.isArray(restored.dataBarsColumns)) stage.setDataBarsColumns(new Set(restored.dataBarsColumns));
+    if (restored.pivotColumnSorting && typeof restored.pivotColumnSorting === 'object') stage.setPivotColumnSorting(restored.pivotColumnSorting);
+    if (restored.columnPinning && typeof restored.columnPinning === 'object') stage.setColumnPinning(restored.columnPinning);
+    const restoredRowPinning = restored.rowPinning && typeof restored.rowPinning === 'object' ? restored.rowPinning : null;
+    if (restoredRowPinning) stage.setRowPinning(restoredRowPinning);
+    if (Object.prototype.hasOwnProperty.call(restored, 'grandTotalPinOverride')) {
+      stage.setGrandTotalPinOverride(sanitizeGrandTotalPinOverride(restored.grandTotalPinOverride));
+    } else {
+      stage.setGrandTotalPinOverride(getPinnedSideForRow(restoredRowPinning, GRAND_TOTAL_ROW_ID));
+    }
+    if (restored.columnVisibility && typeof restored.columnVisibility === 'object') stage.setColumnVisibility(restored.columnVisibility);
+    if (Array.isArray(restored.columnOrder)) stage.setColumnOrder(normalizeColumnOrderValue(restored.columnOrder));
+    if (Array.isArray(restored.pivotLayoutOrder)) {
+      stage.setPivotLayoutOrder(normalizeColumnOrderValue(restored.pivotLayoutOrder));
+      stage.layoutRevisionRef.current = null;
+    }
+    if (restored.pivotPinnedLayoutIds && typeof restored.pivotPinnedLayoutIds === 'object') {
+      stage.setPivotPinnedLayoutIds(restored.pivotPinnedLayoutIds);
+    }
+    if (restored.columnSizing && typeof restored.columnSizing === 'object') stage.setColumnSizing(restored.columnSizing);
+    if (restored.colExpanded && typeof restored.colExpanded === 'object') stage.setColExpanded(restored.colExpanded);
+    if (typeof restored.decimalPlaces === 'number') stage.setDecimalPlaces(restored.decimalPlaces);
+    if (typeof restored.defaultValueFormat === 'string') {
+      stage.setDefaultValueFormat(normalizeDefaultValueFormat(restored.defaultValueFormat));
+    }
+    if (typeof restored.numberGroupSeparator === 'string') {
+      stage.setNumberGroupSeparator(normalizeNumberGroupSeparator(restored.numberGroupSeparator));
+    }
+    if (typeof restored.zoomLevel === 'number') stage.setZoomLevel(Math.max(60, Math.min(160, restored.zoomLevel)));
+    stage.setColumnDecimalOverrides(restored.columnDecimalOverrides && typeof restored.columnDecimalOverrides === 'object' ? restored.columnDecimalOverrides : {});
+    stage.setColumnFormatOverrides(restored.columnFormatOverrides && typeof restored.columnFormatOverrides === 'object' ? restored.columnFormatOverrides : {});
+    stage.setColumnGroupSeparatorOverrides(restored.columnGroupSeparatorOverrides && typeof restored.columnGroupSeparatorOverrides === 'object' ? restored.columnGroupSeparatorOverrides : {});
+    if (restored.cellFormatRules && typeof restored.cellFormatRules === 'object') stage.setCellFormatRules(restored.cellFormatRules);
+    if (restoredChartDefinitions) {
+      stage.setManagedChartDefinitions(restoredChartDefinitions);
+      stage.setActiveChartDefinitionId(restoredChartDefinition ? restoredChartDefinition.id : restoredChartDefinitions[0].id);
+    }
+    const restoredChartSource = restored.chartPanelSource !== undefined ? restored.chartPanelSource : restoredChartDefinition && restoredChartDefinition.source;
+    if (restoredChartSource === 'pivot' || restoredChartSource === 'selection') stage.setChartPanelSource(restoredChartSource);
+    const restoredChartType = restored.chartPanelType !== undefined ? restored.chartPanelType : restoredChartDefinition && restoredChartDefinition.chartType;
+    if (VALID_CHART_TYPES.has(restoredChartType)) stage.setChartPanelType(restoredChartType);
+    const restoredBarLayout = restored.chartPanelBarLayout !== undefined ? restored.chartPanelBarLayout : restoredChartDefinition && restoredChartDefinition.barLayout;
+    if (restoredBarLayout === 'grouped' || restoredBarLayout === 'stacked') stage.setChartPanelBarLayout(restoredBarLayout);
+    const restoredAxisMode = restored.chartPanelAxisMode !== undefined ? restored.chartPanelAxisMode : restoredChartDefinition && restoredChartDefinition.axisMode;
+    if (restoredAxisMode === 'vertical' || restoredAxisMode === 'horizontal') stage.setChartPanelAxisMode(restoredAxisMode);
+    if (restored.chartPanelOrientation === 'rows' || restored.chartPanelOrientation === 'columns') {
+      stage.chartPanelOrientationAutoRef.current = false;
+      stage.setChartPanelOrientation(restored.chartPanelOrientation);
+    } else if (restoredChartDefinition && (restoredChartDefinition.orientation === 'rows' || restoredChartDefinition.orientation === 'columns')) {
+      stage.chartPanelOrientationAutoRef.current = false;
+      stage.setChartPanelOrientation(restoredChartDefinition.orientation);
+    } else {
+      stage.chartPanelOrientationAutoRef.current = true;
+      stage.setChartPanelOrientation(getPreferredChartOrientation(restored.colFields || stage.colFields));
+    }
+    const restoredHierarchyLevel = restored.chartPanelHierarchyLevel !== undefined ? restored.chartPanelHierarchyLevel : restoredChartDefinition && restoredChartDefinition.hierarchyLevel;
+    if (restoredHierarchyLevel === 'all' || typeof restoredHierarchyLevel === 'number' && restoredHierarchyLevel >= 1) {
+      stage.setChartPanelHierarchyLevel(restoredHierarchyLevel);
+    }
+    const restoredChartTitle = restored.chartPanelTitle !== undefined ? restored.chartPanelTitle : restoredChartDefinition && restoredChartDefinition.chartTitle;
+    if (typeof restoredChartTitle === 'string') {
+      stage.setChartPanelTitle(restoredChartTitle);
+    }
+    const restoredChartLayers = Array.isArray(restored.chartPanelLayers) ? restored.chartPanelLayers : restoredChartDefinition && Array.isArray(restoredChartDefinition.chartLayers) ? restoredChartDefinition.chartLayers : null;
+    if (Array.isArray(restoredChartLayers)) {
+      stage.setChartPanelLayers(restoredChartLayers);
+    }
+    const restoredRowLimit = restored.chartPanelRowLimit !== undefined ? restored.chartPanelRowLimit : restoredChartDefinition && restoredChartDefinition.rowLimit;
+    if (typeof restoredRowLimit === 'number') {
+      stage.setChartPanelRowLimit(Math.max(1, Math.floor(restoredRowLimit)));
+    }
+    const restoredColumnLimit = restored.chartPanelColumnLimit !== undefined ? restored.chartPanelColumnLimit : restoredChartDefinition && restoredChartDefinition.columnLimit;
+    if (typeof restoredColumnLimit === 'number') {
+      stage.setChartPanelColumnLimit(Math.max(1, Math.floor(restoredColumnLimit)));
+    }
+    const restoredChartWidth = restored.chartPanelWidth !== undefined ? restored.chartPanelWidth : restoredChartDefinition && restoredChartDefinition.width;
+    if (typeof restoredChartWidth === 'number') {
+      stage.setChartPanelWidth(Math.max(320, Math.min(960, restoredChartWidth)));
+    }
+    const restoredChartGraphHeight = restored.chartPanelGraphHeight !== undefined ? restored.chartPanelGraphHeight : restoredChartDefinition && restoredChartDefinition.chartHeight;
+    if (typeof restoredChartGraphHeight === 'number') {
+      stage.setChartPanelGraphHeight(Math.max(180, Math.floor(restoredChartGraphHeight)));
+    }
+    const restoredChartSortMode = restored.chartPanelSortMode !== undefined ? restored.chartPanelSortMode : restoredChartDefinition && restoredChartDefinition.sortMode;
+    if (VALID_CHART_SORT_MODES.has(restoredChartSortMode)) {
+      stage.setChartPanelSortMode(restoredChartSortMode);
+    }
+    const restoredChartInteractionMode = restored.chartPanelInteractionMode !== undefined ? restored.chartPanelInteractionMode : restoredChartDefinition && restoredChartDefinition.interactionMode;
+    if (VALID_CHART_INTERACTION_MODES.has(restoredChartInteractionMode)) {
+      stage.setChartPanelInteractionMode(restoredChartInteractionMode);
+    }
+    const restoredChartServerScope = restored.chartPanelServerScope !== undefined ? restored.chartPanelServerScope : restoredChartDefinition && restoredChartDefinition.serverScope;
+    if (VALID_CHART_SERVER_SCOPES.has(restoredChartServerScope)) {
+      stage.setChartPanelServerScope(restoredChartServerScope);
+    }
+    if (typeof restored.chartPanelFloating === 'boolean') {
+      stage.setChartPanelFloating(restored.chartPanelFloating);
+    }
+    if (restored.chartPanelFloatingRect && typeof restored.chartPanelFloatingRect === 'object') {
+      stage.setChartPanelFloatingRect(clampFloatingChartRect(restored.chartPanelFloatingRect, null));
+    }
+    if (typeof restored.chartPanelLocked === 'boolean') {
+      stage.setChartPanelLocked(restored.chartPanelLocked);
+    }
+    if (Object.prototype.hasOwnProperty.call(restored, 'chartPanelLockedModel')) {
+      stage.setChartPanelLockedModel(restored.chartPanelLockedModel && typeof restored.chartPanelLockedModel === 'object' ? restored.chartPanelLockedModel : null);
+    }
+    if (Object.prototype.hasOwnProperty.call(restored, 'chartPanelLockedRequest')) {
+      stage.setChartPanelLockedRequest(normalizeLockedChartRequest(restored.chartPanelLockedRequest));
+    }
+    if (Array.isArray(restored.chartCanvasPanes)) {
+      stage.setChartCanvasPanes(sanitizeChartCanvasPanes(restored.chartCanvasPanes, stage.initialChartDefinition));
+    }
+    if (typeof restored.tableCanvasSize === 'number' && Number.isFinite(restored.tableCanvasSize) && restored.tableCanvasSize > 0) {
+      stage.setTableCanvasSize(restored.tableCanvasSize);
+    }
+    if (stage.viewState.viewport && typeof stage.viewState.viewport === 'object') {
+      stage.latestViewportRef.current = {
+        ...stage.latestViewportRef.current,
+        ...stage.viewState.viewport
+      };
+    }
+  }, [stage.viewState, stage.initialChartDefinition, stage.normalizedInitialValConfigs]);
   const chartDefinitionCommands = useRuntimeChartDefinitionCommands({
     activeChartDefinitionId: stage.activeChartDefinitionId,
     currentChartDefinition: stage.currentChartDefinition,

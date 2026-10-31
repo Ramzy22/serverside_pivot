@@ -22,13 +22,14 @@ def persistence_geometry(driver, column):
         return None
     cells = [cell for cell in _workspace_elements(driver, f'[role="gridcell"][data-colid="{column}"]') if cell.is_displayed()]
     assert len(cells) == 3
-    bounds = [driver.execute_script("return arguments[0].getBoundingClientRect().toJSON()", cell) for cell in cells]
+    bounds = [driver.execute_script("const cell=arguments[0];return {...cell.getBoundingClientRect().toJSON(),rowHeight:cell.closest('[role=row]').getBoundingClientRect().height}", cell) for cell in cells]
     width = driver.execute_script("return arguments[0].getBoundingClientRect().width", header)
     assert all(abs(bound["width"] - width) <= 1 for bound in bounds)
-    assert max(bound["height"] for bound in bounds) - min(bound["height"] for bound in bounds) <= 1
+    assert max(bound["rowHeight"] for bound in bounds) - min(bound["rowHeight"] for bound in bounds) <= 1
+    assert all(abs(bound["height"] - bound["rowHeight"]) <= 1 for bound in bounds)
     density = _workspace_elements(driver, '[title="Cycle row density"]')
     assert len(density) == 1
-    return {"width": width, "height": bounds[0]["height"], "density": density[0].text.strip(), "bounds": bounds}
+    return {"width": width, "height": bounds[0]["rowHeight"], "density": density[0].text.strip(), "bounds": bounds}
 
 
 def geometry_if_restored(driver, column, saved):
@@ -85,6 +86,7 @@ def qualify_saved_view_persistence(host):
         wait.until(lambda current: axis_snapshot(current, -1, transposed=True))
         column = "\u00c9clair|\u6771\u4eac_ventes_\u20ac_sum"
         before = persistence_geometry(driver, column)
+        observation["before"] = before
         assert before["height"] == 44
         header = support._geometry_header(driver, column)
         handle = header.find_element("css selector", 'div[style*="cursor: col-resize"]')
@@ -99,6 +101,8 @@ def qualify_saved_view_persistence(host):
         assert saved_geometry["density"] == "Compact"
         key = f"flagship-{host}-pivot-savedView"
         assert driver.execute_script("return localStorage.getItem(arguments[0])", key) is None
+        if support._totals_control_button(driver, "Save View") is None:
+            support._click_totals_control(driver, "Theme")
         support._click_totals_control(driver, "Save View")
         snapshot = wait.until(lambda current: current.execute_script("return JSON.parse(localStorage.getItem(arguments[0]))", key))
         assert_saved_snapshot(snapshot, column, saved_geometry["width"])
@@ -121,6 +125,8 @@ def qualify_saved_view_persistence(host):
         trace = driver.execute_script("return window.__pivotAxisTrace || []")
         assert not any(entry.get("status") == "error" for entry in trace)
         assert not any(element.is_displayed() for element in _workspace_elements(driver, '[role="alert"]'))
+        if support._totals_control_button(driver, "Transpose") is None:
+            support._click_totals_control(driver, "View")
         checkpoint = driver.execute_script("return performance.now()")
         support._click_totals_control(driver, "Transpose")
         changed = wait.until(lambda current: axis_snapshot(current, checkpoint, transposed=False))

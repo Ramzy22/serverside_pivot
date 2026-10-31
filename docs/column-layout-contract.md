@@ -373,7 +373,21 @@ assertion checks restored-model equivalence, while the real-hook Node test and
 installed browsers own storage, lifecycle and geometry verification.
 
 The AG Grid comparator uses application-owned local storage with public
-`getState`/`setState`; row-height preference is stored alongside Grid State.
+`getState`/`setState`; row-height and resized pivot-width preferences are stored
+alongside Grid State. The width is applied through public Column State after
+the matching result column exists.
 This is an application wrapper comparison, not a claim that AG Grid owns
 local-storage persistence. Live qualification is pending a fresh artifact build;
 the new runner mappings alone provide no release credit.
+
+The first `3c9c126` installed reload run exposed a real effect-ordering defect:
+the snapshot restored two decimal places, then initial prop synchronization
+overwrote it with zero. All three hosts reproduced this, with correct raw data
+and visibly rounded values. The guarded snapshot restore now runs after initial
+prop synchronization. A source-effect execution regression reproduced `0`
+instead of `2` before the move and passes afterwards. This runtime change needs
+a new artifact build; prior failed observations are retained. Earlier harness
+failures distinguished 43 px cells from their 44 px bordered row containers and
+required opening Theme before the real Save View action. The tests now measure
+row containers and retain cell-border checks. The AG wrapper serializes its
+snapshot before comparing it and discloses deferred pivot-width restoration.

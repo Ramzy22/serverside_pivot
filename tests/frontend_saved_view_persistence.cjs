@@ -49,7 +49,7 @@ storage.clear();
 useRuntimeViewSnapshot({...opts,savePersistedState:usePersistence('first',false,'local').save}).handleSaveView();
 assert.equal(storage.size,0,'persistence opt-out must not write the snapshot');
 
-const core = fs.readFileSync(path.join(root,'src/lib/runtime/useCoreRuntimeStage.tsx'),'utf8');
+const core = fs.readFileSync(path.join(root,'src/lib/runtime/useCoreRuntimeStage.tsx'),'utf8').replace(/\r\n/g,'\n');
 const resetCode = core.slice(core.indexOf('  // Reset Effect'),core.indexOf('  // Save Persistence'));
 persistence.save('savedView',saved);
 const resetStage = new Proxy({reset:true,valConfigsRef:{current:[]},setPropsRef:{current:null},layoutRevisionRef:{current:null},
@@ -77,5 +77,23 @@ assert.equal(restoredRows.length,1,'prop echoes after live layout changes must n
 viewStage.viewState={state:{rowFields:['account']}};
 apply();
 assert.deepEqual(restoredRows,[['period'],['account']],'a fresh external viewState must still restore');
+
+
+const decimalStart = core.indexOf('  useEffect(() => {\n    const normalizedExternal = clampDecimalPlaces(stage.externalDecimalPlaces, 0);');
+assert(decimalStart > 0, 'real decimal sync effect must be found');
+const decimalEndToken = '  }, [stage.externalDecimalPlaces]);';
+const decimalEffect = core.slice(decimalStart, core.indexOf(decimalEndToken, decimalStart)+decimalEndToken.length);
+let displayedDecimals = 0;
+viewStage.viewState={...saved,state:{...saved.state,decimalPlaces:2}};
+viewStage.externalDecimalPlaces=0;
+viewStage.lastDecimalPlacesPropRef={current:null};
+viewStage.setDecimalPlaces=value=>displayedDecimals=value;
+const mountEffects=[{offset:restoreStart,code:restoreCode},{offset:decimalStart,code:decimalEffect}].sort((a,b)=>a.offset-b.offset);
+for(const effect of mountEffects) {
+ new Function('stage','appliedViewStateRef','useEffect','VALID_CHART_TYPES','VALID_CHART_SORT_MODES',
+ 'VALID_CHART_INTERACTION_MODES','VALID_CHART_SERVER_SCOPES','getPinnedSideForRow','GRAND_TOTAL_ROW_ID',
+ 'getPreferredChartOrientation','clampDecimalPlaces',effect.code)(viewStage,{current:null},fn=>fn(),new Set(),new Set(),new Set(),new Set(),()=>null,'Grand Total',()=>"vertical",value=>value);
+}
+assert.equal(displayedDecimals,2,'initial prop sync must not overwrite restored snapshot formatting');
 
 console.log('saved view persistence passed');
