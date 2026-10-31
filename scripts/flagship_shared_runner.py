@@ -40,8 +40,6 @@ SHARED_ASSERTIONS: Mapping[str, tuple[SharedAssertion, ...]] = {
         )
         for test_id, node in {
             "shared.initial-workspace.populated": "test_flagship_initial_workspace_has_filtered_pivot_totals",
-            "shared.runtime-error.visible": "test_flagship_http_error_is_safe_and_next_request_recovers_exact_totals",
-            "shared.runtime-error.recovery": "test_flagship_http_error_is_safe_and_next_request_recovers_exact_totals",
             "shared.hierarchy-expand.round-trip": "test_flagship_one_parent_expansion_round_trip_preserves_totals_and_columns",
             "shared.hierarchy-expand-all.round-trip": "test_flagship_expand_all_and_collapse_all_have_unique_logical_rows",
             "shared.global-filter.apply-clear": "test_flagship_global_search_and_clear_preserve_base_scope_filter",
@@ -53,6 +51,15 @@ SHARED_ASSERTIONS: Mapping[str, tuple[SharedAssertion, ...]] = {
             "shared.layout-values.add-remove": "test_flagship_add_and_remove_units_measure_preserves_sales",
             "shared.custom-pivot-order.sparse-window": "test_flagship_custom_order_sparse_window_and_off_window_pin",
         }.items()
+    },
+    **{
+        test_id: tuple(SharedAssertion(
+            f"tests/test_flagship_shared_runtime.py::{node}",
+            ("tests/__init__.py", "tests/export_qualification_fixture.py", "tests/test_flagship_shared_runtime.py"),
+        ) for node in (
+            "test_flagship_http_error_is_safe_and_next_request_recovers_exact_totals",
+            "test_flagship_busy_rejection_preserves_generation_and_recovers_exact_data",
+        )) for test_id in ("shared.runtime-error.visible", "shared.runtime-error.recovery")
     },
     "shared.layout-values.aggregation": tuple(
         SharedAssertion(

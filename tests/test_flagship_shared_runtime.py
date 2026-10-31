@@ -94,6 +94,60 @@ def test_flagship_http_error_is_safe_and_next_request_recovers_exact_totals():
     assert grand["Q1_écart_sum"] + grand["Q2_écart_sum"] == -6.75
 
 
+def test_flagship_busy_rejection_preserves_generation_and_recovers_exact_data():
+    from pivot_engine import ScalablePivotController
+    from pivot_engine.tanstack_adapter import TanStackPivotAdapter
+    from pivot_engine.resource_governor import ResourceGovernor, ResourceKind, ResourceLimits
+
+    governor = ResourceGovernor(ResourceLimits(max_queries=1, query_bytes=16 * 1024 * 1024),
+                                rss_bytes_getter=lambda: 0)
+    controller = ScalablePivotController(backend_uri=":memory:", resource_governor=governor)
+    controller.load_data_from_arrow("flagship_shared", pa.Table.from_pylist(FLAGSHIP_QUALIFICATION_SOURCE_ROWS))
+    adapter = TanStackPivotAdapter(controller)
+    service = PivotRuntimeService(lambda: adapter, resource_governor=governor,
+                                  session_gate=SessionRequestGate())
+
+    @dataclass
+    class Viewer:
+        id: str = "flagship-busy-test"
+        role: str = "viewer"
+        attributes: dict = field(default_factory=dict)
+
+    app = FastAPI()
+    register_runtime_http_transport(
+        app, lambda: service, current_user_dependency=lambda: Viewer(),
+        dataset_authorizer=RuntimeDatasetAuthorizer({
+            "flagship_shared": {"roles": {"viewer"}, "operations": {"read"},
+                                "rowSecurity": {"mode": "global"}},
+        }), inline_payload_bytes=5_000_000,
+    )
+    def request(sequence):
+        return {"schemaVersion": 1, "kind": "data", "requestId": f"busy-window-{sequence}",
+                "table": "flagship_shared", "clientInstance": "busy-client", "stateEpoch": 3,
+                "windowSeq": sequence, "state": {"rowFields": FLAGSHIP_ROW_FIELDS,
+                    "colFields": FLAGSHIP_COL_FIELDS, "valConfigs": FLAGSHIP_VALUE_CONFIGS,
+                    "filters": FLAGSHIP_FILTER},
+                "payload": {"intent": "viewport", "start": 0, "end": 20, "needsColSchema": True}}
+
+    with TestClient(app) as client:
+        with governor.reserve(ResourceKind.QUERY, 1):
+            rejected = client.post("/v1/runtime", json=request(7))
+        assert rejected.status_code == 503
+        assert rejected.headers["Retry-After"] == "1"
+        busy = rejected.json()
+        assert (busy["requestId"], busy["clientInstance"], busy["stateEpoch"], busy["windowSeq"]) == (
+            "busy-window-7", "busy-client", 3, 7)
+        assert busy["payload"] == {"code": "resource_exhausted", "resourceKind": "query", "retryAfterMs": 1000}
+        recovered = client.post("/v1/runtime", json=request(8))
+    assert recovered.status_code == 200
+    body = recovered.json()
+    assert body["status"] == "data" and body["windowSeq"] == 8
+    grand = next(row for row in body["payload"]["data"] if row["_id"] == "Grand Total")
+    assert [grand[_measure(period, 0)] for period in ("Q1", "Q2")] == [150, 50]
+    assert [grand[_measure(period, 1)] for period in ("Q1", "Q2")] == [5, 5]
+    assert governor.snapshot()["active_slots"]["query"] == 0
+
+
 def _response(service, expanded, sequence, *, filters=None, val_configs=None,
               sorting=None, show_row_totals=False, show_col_totals=True,
               layout_manifest=None, layout_revision=None, needs_col_schema=False,

@@ -59,3 +59,35 @@ the changed cell key now produces a new revision.
 
 This report verifies the layout contract and records current evidence. It does
 not qualify the complete release, deployment topology or operational controls.
+
+## Startup and error freshness follow-up
+
+The original runtime log contains HTTP 503 responses around startup. Its failed
+browser observation did not retain the response body. Forty supplemental fresh
+starts (normal, added network latency, CPU slowdown and resize during loading)
+passed; they do not clear that historical failure.
+
+A separate regression reproduced a concrete cross-layer defect: an actual HTTP
+admission rejection omitted client, epoch and window metadata. The shared React
+lifecycle then attached window 7's busy error to window 8. HTTP rejection
+responses now preserve those fields. The direct transport also fills missing
+optional identity from its originating request, preserving explicit server
+identity for mismatch rejection. Current busy rejections retain the existing
+Retry behavior and server resource limits.
+
+Broader checks also reproduced acceptance of an old layout revision after an
+order change. The commit guard now rejects it while allowing an unchanged-order
+manifest retry on another worker.
+
+The production browser regression compared the old packed React client with the
+corrected client. Both received real filtered data followed by a deliberately
+late, metadata-free V1 busy response simulating an older peer. The old client
+showed an error after the newer result; the corrected client kept the new cells
+and showed no error. Asset digests, traces and screenshots are retained under
+`artifacts/startup-fix-browser-2026-10-31/`. These are supplemental diagnostics,
+using a source backend and packed clients, not a clean installed-release run.
+
+The installed shared recovery mapping now requires a real exhausted-governor
+HTTP rejection, preserved freshness identity, release of capacity and an exact
+successful retry. The historical startup observation and full release status
+still require a fresh installed candidate with the updated assertions.

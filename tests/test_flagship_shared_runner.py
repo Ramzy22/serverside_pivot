@@ -72,6 +72,12 @@ def test_aggregation_mapping_covers_secondary_measure_revision_changes():
     }
 
 
+def test_recovery_mappings_require_real_busy_admission_and_generation_checks():
+    for test_id in ("shared.runtime-error.visible", "shared.runtime-error.recovery"):
+        assert any(assertion.node.endswith("::test_flagship_busy_rejection_preserves_generation_and_recovers_exact_data")
+                   for assertion in SHARED_ASSERTIONS[test_id])
+
+
 def test_run_rejects_evidence_outside_current_run(tmp_path):
     class Binding:
         run_id = "current"
