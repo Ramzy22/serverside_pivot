@@ -83,9 +83,27 @@ def _visible(driver, selector):
 
 
 def _button(driver, text, prefix=False):
+    from selenium.common.exceptions import StaleElementReferenceException
     from selenium.webdriver.support.ui import WebDriverWait
-    return WebDriverWait(driver, 12).until(lambda current: next((element for element in _visible(current, 'button')
-        if element.is_enabled() and (element.text.strip().startswith(text) if prefix else element.text.strip() == text)), False))
+    def find(current):
+        # One synchronous observation avoids keeping hundreds of remote button
+        # handles across the preview's asynchronous renderer mount. The caller
+        # still performs the real Selenium click on the returned DOM element.
+        return current.execute_script("""
+          const text=arguments[0], prefix=arguments[1];
+          const visit=root=>{
+            for(const el of root.querySelectorAll('button')) {
+              const value=el.innerText.trim(), style=getComputedStyle(el);
+              if(!el.disabled && el.getClientRects().length && style.visibility!=='hidden'
+                && (prefix ? value.startsWith(text) : value===text)) return el;
+            }
+            for(const el of root.querySelectorAll('*')) if(el.shadowRoot) {
+              const found=visit(el.shadowRoot); if(found) return found;
+            }
+            return null;
+          };return visit(document);
+        """, text, prefix)
+    return WebDriverWait(driver, 12, ignored_exceptions=(StaleElementReferenceException,)).until(find)
 
 
 def _pane_count(driver):
