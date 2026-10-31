@@ -29,6 +29,78 @@ pytestmark = [
 ]
 
 
+@pytest.mark.parametrize('requirement', ['persistence.reload', 'journey-persistence.resize-density-reload'])
+def test_reference_saved_state_reload_restores_model_and_geometry(reference_run, requirement):
+    from tests.flagship_axis_swap import MEASURES, axis_expected_cells
+
+    with reference_case(requirement, reference_run) as case:
+        driver = case.driver
+        driver.execute_script("""
+          window.referenceGrid.applyColumnState({state:[
+            {colId:'period',rowGroup:true,rowGroupIndex:0,pivot:false,pivotIndex:null},
+            {colId:'region',rowGroup:false,rowGroupIndex:null,pivot:true,pivotIndex:0},
+            {colId:'account',rowGroup:false,rowGroupIndex:null,pivot:true,pivotIndex:1},
+            {colId:'extrema',aggFunc:null}]});
+        """)
+        column = '\u00c9clair|\u6771\u4eac|ventes_\u20ac'
+        _wait_column(driver, column, ['100.25', '20.00', '120.25'])
+
+        def geometry():
+            return driver.execute_script("""
+              const h=document.querySelector('.ag-header-cell[col-id="'+arguments[0]+'"]');
+              const cells=[...document.querySelectorAll('[role="gridcell"][col-id="'+arguments[0]+'"]')];
+              return {width:h?.getBoundingClientRect().width,
+                heights:cells.map(c=>c.getBoundingClientRect().height)};
+            """, column)
+
+        before = geometry()
+        header = driver.find_element(By.CSS_SELECTOR, f'.ag-header-cell[col-id="{column}"]')
+        handle = header.find_element(By.CSS_SELECTOR, '.ag-header-cell-resize')
+        ActionChains(driver).move_to_element(handle).click_and_hold().move_by_offset(40, 0).release().perform()
+        WebDriverWait(driver, 10).until(lambda _: abs(geometry()['width'] - before['width'] - 40) <= 2)
+        driver.execute_script("window.referenceGrid.setGridOption('rowHeight',36);window.referenceGrid.resetRowHeights()")
+        WebDriverWait(driver, 10).until(lambda _: geometry()['heights'] == [36, 36, 36])
+        saved_geometry = geometry()
+        assert driver.execute_script("return localStorage.getItem('qualified-grid-state')") is None
+        snapshot = driver.execute_script("""
+          const snapshot={gridState:window.referenceGrid.getState(),rowHeight:36};
+          localStorage.setItem('qualified-grid-state',JSON.stringify(snapshot));return snapshot;
+        """)
+        origin = driver.execute_script('return performance.timeOrigin')
+        driver.refresh()
+        WebDriverWait(driver, 15).until(lambda browser: browser.execute_script('return window.referenceEvidence?.ready===true'))
+        assert driver.execute_script('return performance.timeOrigin') > origin
+        assert driver.execute_script("return JSON.parse(localStorage.getItem('qualified-grid-state'))") == snapshot
+        driver.execute_script("""
+          const s=JSON.parse(localStorage.getItem('qualified-grid-state'));
+          window.referenceGrid.setState(s.gridState);
+          window.referenceGrid.setGridOption('rowHeight',s.rowHeight);
+          window.referenceGrid.resetRowHeights();
+        """)
+        _wait_column(driver, column, ['100.25', '20.00', '120.25'])
+        WebDriverWait(driver, 10).until(lambda _: abs(geometry()['width'] - saved_geometry['width']) <= 2 and geometry()['heights'] == [36, 36, 36])
+        model = driver.execute_script("return {rows:window.referenceGrid.getRowGroupColumns().map(c=>c.getColId()),cols:window.referenceGrid.getPivotColumns().map(c=>c.getColId()),values:window.referenceGrid.getValueColumns().map(c=>c.getColId())}")
+        assert model == {'rows': ['period'], 'cols': ['region', 'account'], 'values': list(MEASURES)}
+        restored_geometry = geometry()
+        expected_columns = {}
+        for (owner, product_column), value in axis_expected_cells(True).items():
+            field = next(field for field in MEASURES if product_column.endswith(f'_{field}_sum'))
+            prefix = product_column[:-len(f'_{field}_sum')]
+            key = ('Total' if product_column.startswith('__RowTotal__') else prefix) + '|' + field
+            expected_columns.setdefault(key, {})['Total' if owner == 'Grand Total' else owner] = value
+        rows = _displayed_rows(driver)
+        assert [row['label'] for row in rows] == ['Q1', 'Q2', 'Total']
+        visible = {}
+        for key, values in expected_columns.items():
+            assert [row['data'][key] for row in rows] == [values[label] for label in ('Q1', 'Q2', 'Total')]
+            driver.execute_script("const c=window.referenceGrid.getColumn(arguments[0]),v=document.querySelector('.ag-body-horizontal-scroll-viewport');v.scrollLeft=Math.min(v.scrollWidth-v.clientWidth,Math.max(0,c.getLeft()))", key)
+            visible[key] = _wait_column(driver, key, [f'{values[label]:.2f}' for label in ('Q1', 'Q2', 'Total')])
+        case.parsed_output = {'scope': 'Application-managed localStorage with public getState/setState and explicit rowHeight',
+                              'before': before, 'saved': saved_geometry, 'restored': restored_geometry,
+                              'snapshot': snapshot, 'model': model, 'rows': rows, 'visibleColumns': visible}
+        case.observed = 'App-owned local storage survived an actual page reload; public Grid State restoration recovered period rows, region/account pivots, all 27 raw/visible values and totals, +40px sales width within 2px and 36px row heights. Row-height preference is stored by the wrapper alongside Grid State.'
+
+
 def test_reference_application_managed_layout_history(reference_run):
     """App-owned snapshots restored through public APIs, not cell-edit undo."""
     from tests.flagship_axis_swap import MEASURES, axis_expected_cells

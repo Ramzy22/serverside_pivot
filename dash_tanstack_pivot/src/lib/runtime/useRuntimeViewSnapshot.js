@@ -76,6 +76,7 @@ export function useRuntimeViewSnapshot({
   rowPinning,
   runtimeMeasureAxis,
   saveViewTrigger,
+  savePersistedState,
   savedReports,
   serializedEditComparisonState,
   setPropsRef,
@@ -210,11 +211,12 @@ export function useRuntimeViewSnapshot({
 
   const handleSaveView = useCallback(() => {
     const snapshot = buildCurrentViewState();
+    savePersistedState('savedView', snapshot);
     if (setPropsRef.current) {
       setPropsRef.current({ savedView: snapshot });
     }
     showNotification('View snapshot saved', 'success');
-  }, [buildCurrentViewState, setPropsRef, showNotification]);
+  }, [buildCurrentViewState, savePersistedState, setPropsRef, showNotification]);
 
   const saveViewTriggerRef = useRef(saveViewTrigger);
   useEffect(() => {

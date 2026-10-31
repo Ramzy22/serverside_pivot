@@ -1,5 +1,13 @@
 import { useCallback } from 'react';
 
+export function resolvePersistedViewState(explicitView, savedView, tableName) {
+  if (explicitView !== null && explicitView !== undefined) return explicitView;
+  if (!savedView || Array.isArray(savedView) || savedView.version !== 1 ||
+      savedView.table !== (tableName || null) || !savedView.state ||
+      typeof savedView.state !== 'object' || Array.isArray(savedView.state)) return null;
+  return savedView;
+}
+
 export function usePersistence(id, persistence, persistence_type) {
   const getStorage = useCallback(() => {
     if (persistence_type === 'local') return window.localStorage;

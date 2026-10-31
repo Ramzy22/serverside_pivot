@@ -331,7 +331,8 @@ def workspace_config(host: str) -> dict[str, Any]:
             "showSubtotals": True,
             "grandTotalPosition": "bottom",
             "defaultTheme": "dark",
-            "persistence": False,
+            "persistence": True,
+            "persistence_type": "local",
             "performanceConfig": {
                 "serverSideBlockSize": 50,
                 "rowOverscan": 4,

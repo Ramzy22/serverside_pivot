@@ -31,6 +31,11 @@ class SharedAssertion:
 # Each mapped assertion checks a parsed, literal document against an independent
 # expected result, including order, totals, numeric values, and Unicode text.
 SHARED_ASSERTIONS: Mapping[str, tuple[SharedAssertion, ...]] = {
+    **{"shared." + name: (
+        SharedAssertion("tests/test_flagship_shared_runtime.py::test_flagship_saved_model_round_trip_preserves_exact_values",
+                        ("tests/__init__.py", "tests/test_flagship_shared_runtime.py", "tests/export_qualification_fixture.py",
+                         "tests/flagship_axis_swap.py")),
+    ) for name in ("persistence.reload", "journey-persistence.resize-density-reload")},
     "shared.undo-redo.layout": (
         SharedAssertion("tests/test_flagship_shared_runtime.py::test_flagship_layout_history_models_preserve_exact_values",
                         ("tests/__init__.py", "tests/test_flagship_shared_runtime.py", "tests/export_qualification_fixture.py",

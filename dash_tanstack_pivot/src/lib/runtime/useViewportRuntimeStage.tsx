@@ -871,6 +871,7 @@ export function useViewportRuntimeStage(input, transport) {
     rowPinning: stage.rowPinning,
     runtimeMeasureAxis: stage.runtimeMeasureAxis,
     saveViewTrigger: stage.saveViewTrigger,
+    savePersistedState: stage.savePersistedState,
     savedReports: stage.savedReports,
     serializedEditComparisonState: stage.serializedEditComparisonState,
     setPropsRef: stage.setPropsRef,

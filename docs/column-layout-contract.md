@@ -349,3 +349,31 @@ never amend the frozen candidate. A fresh frozen candidate run is required for
 release credit. Mapping coverage is now 120 of 207 required host cases, with 31
 browser workflow groups and 47 shared assertion IDs still unmapped. Full release
 qualification remains on hold.
+
+## Local saved-view persistence correction and qualification scope
+
+The previous Save View action emitted a complete snapshot to the host but local
+persistence stored only selected settings. The shared runtime now stores the
+explicitly saved version-1 snapshot when persistence is enabled and restores it
+for the same component ID, storage type and table. An external `viewState`
+takes precedence. Snapshot restoration is consumed once per object identity,
+so subsequent axis/measure changes cannot be rolled back by a prop echo; a new
+external snapshot still restores. Explicit reset clears the local snapshot.
+Persistence opt-out continues to emit host snapshots without writing storage.
+No new public props or host-specific storage implementations are introduced.
+
+Qualification targets are `persistence.reload` and the combined
+`journey-persistence.resize-density-reload`: transpose, physically widen sales
+by 40 CSS px, choose compact rows, save, reload and compare exact values/model,
+column identities, width within 2 px and height within 1 px. A further live
+transpose checks that the consumed snapshot does not override new interaction.
+Fresh browser profiles isolate each workflow; the parity fixture enables local
+persistence to exercise the same opt-in as the normal demo. The shared backend
+assertion checks restored-model equivalence, while the real-hook Node test and
+installed browsers own storage, lifecycle and geometry verification.
+
+The AG Grid comparator uses application-owned local storage with public
+`getState`/`setState`; row-height preference is stored alongside Grid State.
+This is an application wrapper comparison, not a claim that AG Grid owns
+local-storage persistence. Live qualification is pending a fresh artifact build;
+the new runner mappings alone provide no release credit.

@@ -1508,3 +1508,22 @@ def test_layout_history_has_executable_installed_mappings():
 def test_flagship_layout_history(host, installed_workflow_hosts):
     from tests.flagship_layout_history import qualify_layout_history
     qualify_layout_history(host)
+
+
+def test_persistence_workflows_have_executable_installed_mappings():
+    from scripts.certify_flagship import _product_browser_plan
+    from scripts.flagship_shared_runner import SHARED_ASSERTIONS
+    from tests.flagship_contract import load_requirements
+    plan = _product_browser_plan(load_requirements(Path(__file__).with_name("flagship_requirements.json")))
+    for requirement in ("persistence.reload", "journey-persistence.resize-density-reload"):
+        for host in ("dash", "react", "streamlit"):
+            assert plan[(requirement, host, "browser." + requirement)] == (
+                f"tests/test_flagship_workflows.py::test_flagship_saved_view_persistence[{host}]")
+        assert SHARED_ASSERTIONS["shared." + requirement][0].node.endswith("::test_flagship_saved_model_round_trip_preserves_exact_values")
+
+
+@pytest.mark.flagship
+@pytest.mark.parametrize("host", ["dash", "react", "streamlit"])
+def test_flagship_saved_view_persistence(host, installed_workflow_hosts):
+    from tests.flagship_persistence import qualify_saved_view_persistence
+    qualify_saved_view_persistence(host)

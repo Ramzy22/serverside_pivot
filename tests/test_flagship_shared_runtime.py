@@ -548,3 +548,24 @@ def test_flagship_layout_history_models_preserve_exact_values():
         assert all(observations[index].data == first.data and observations[index].col_schema == first.col_schema
                    and observations[index].layout_revision == first.layout_revision for index in indices)
     assert len({response.layout_revision for response in observations}) == 4
+
+
+def test_flagship_saved_model_round_trip_preserves_exact_values():
+    """Backend restored-model equivalence; browser owns storage and geometry."""
+    import json
+    from tests.flagship_axis_swap import assert_axis_rows
+    model = {"rows": ["period"], "cols": ["region", "account"], "values": FLAGSHIP_VALUE_CONFIGS,
+             "filters": FLAGSHIP_FILTER, "columnSizing": {"sales": 170}, "spacingMode": 0}
+    restored = json.loads(json.dumps(model))
+    service = _runtime()
+    responses = [_response(service, {}, index, show_row_totals=True, needs_col_schema=True,
+                           row_fields=state["rows"], col_fields=state["cols"],
+                           val_configs=state["values"], filters=state["filters"])
+                 for index, state in enumerate((model, restored), start=1)]
+    for response in responses:
+        assert response.status == "data"
+        assert_axis_rows(response.data, transposed=True)
+        assert response.layout_revision == response.col_schema["layoutRevision"]
+    assert responses[0].data == responses[1].data
+    assert responses[0].col_schema == responses[1].col_schema
+    assert responses[0].layout_revision == responses[1].layout_revision

@@ -29,7 +29,7 @@ const debugLog = (...args) => {
 import { useServerSideViewportController } from '../hooks/useServerSideViewportController';
 import { DEFAULT_NUMBER_GROUP_SEPARATOR, getKey, normalizeNumberGroupSeparator } from '../utils/helpers';
 import { normalizeEditingConfig, resolveColumnEditSpec, resolveEditorOptionsSource } from '../utils/editing';
-import { usePersistence } from '../hooks/usePersistence';
+import { usePersistence, resolvePersistedViewState } from '../hooks/usePersistence';
 import { useFilteredData } from '../hooks/useFilteredData';
 import { useChartState } from '../hooks/useChartState';
 import { useFormatState } from '../hooks/useFormatState';
@@ -314,6 +314,9 @@ export function useCoreRuntimeStage(props) {
     load: stage.loadPersistedState,
     save: stage.savePersistedState
   } = usePersistence(stage.id, stage.persistence, stage.persistence_type));
+  stage.viewState = useMemo(() => resolvePersistedViewState(
+    stage.viewState, stage.loadPersistedState('savedView', null), stage.tableName
+  ), [stage.viewState, stage.loadPersistedState, stage.tableName]);
   [stage.formulaErrors, stage.setFormulaErrors] = useState({});
   [stage.transportDataState, stage.setTransportDataState] = useState(() => normalizeRuntimeDataEnvelope({
     data: Array.isArray(stage.inputData) ? stage.inputData : [],
@@ -623,6 +626,7 @@ export function useCoreRuntimeStage(props) {
   // Reset Effect
   useEffect(() => {
     if (stage.reset) {
+      stage.savePersistedState('savedView', null);
       const resetReportDef = stage.hasExternalReportDef ? stage.normalizedInitialReportDef : {
         levels: []
       };
@@ -1066,7 +1070,10 @@ export function useCoreRuntimeStage(props) {
       refresh: Date.now()
     });
   };
+  const appliedViewStateRef = useRef(null);
   useEffect(() => {
+    if (stage.viewState === appliedViewStateRef.current) return;
+    appliedViewStateRef.current = stage.viewState;
     if (!stage.viewState || typeof stage.viewState !== 'object') return;
     const restored = stage.viewState.state && typeof stage.viewState.state === 'object' ? stage.viewState.state : stage.viewState;
     const restoredChartDefinitions = Array.isArray(restored.chartDefinitions) ? sanitizeChartDefinitions(restored.chartDefinitions, stage.initialChartDefinition) : null;
