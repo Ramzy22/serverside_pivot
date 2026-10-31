@@ -377,7 +377,8 @@ The AG Grid comparator uses application-owned local storage with public
 alongside Grid State. The width is applied through public Column State after
 the matching result column exists.
 This is an application wrapper comparison, not a claim that AG Grid owns
-local-storage persistence. Live qualification is pending a fresh artifact build;
+local-storage persistence. At the implementation commit, live qualification
+was pending a fresh artifact build;
 the new runner mappings alone provide no release credit.
 
 The first `3c9c126` installed reload run exposed a real effect-ordering defect:
@@ -391,3 +392,30 @@ failures distinguished 43 px cells from their 44 px bordered row containers and
 required opening Theme before the real Save View action. The tests now measure
 row containers and retain cell-border checks. The AG wrapper serializes its
 snapshot before comparing it and discloses deferred pivot-width restoration.
+
+### Targeted installed results
+
+Candidate `cf81ed7b19842cad4a23a04dc613acfa1745863f` built fresh Dash, React and
+Streamlit bundles plus the wheel and npm package. Both package-contract checks
+passed, and the restored-model assertion passed against the installed wheel.
+Dash, React and Streamlit all passed the complete browser journey under
+`artifacts/saved-view-cf81-validation-2026-10-31/run-final/`. Every host restored
+the widened 180 px column (140 + 40), 36 px compact rows, exact saved axes,
+column identities/revision and all 27 numeric cells, then kept a subsequent
+live transpose stable. Observations retain snapshots, three model/value states,
+geometry, screenshots and loaded-asset SHA-256 digests. The initial `cf81ed7`
+attempt reached correct restored values but its harness needed to reopen View
+before reading the density control; those failed records remain retained.
+
+Both pinned AG Grid comparator cases passed under
+`artifacts/saved-view-candidate-final-2026-10-31/reference/`. The explicit
+application-wrapper scope above applies, including deferred width restoration.
+Independent review found no remaining blockers. The effect-order fix passed
+202 frontend/ownership/persistence tests plus TypeScript and checked-JavaScript
+gates; the literal geometry/snapshot suite passed 14 tests.
+
+These targeted runs are supplemental (`qualificationEvidence: false`), not a
+complete release qualification, and never amend earlier frozen manifests.
+Runner coverage is 126 of 207 required host cases, with 29 browser workflow
+groups and 45 shared assertion IDs still unmapped. A complete frozen-candidate
+run and the remaining release checks are still required before publishing.

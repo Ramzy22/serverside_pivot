@@ -114,6 +114,8 @@ def qualify_saved_view_persistence(host):
         _verify_release_asset_batch(driver, require_assets=True)
         driver.refresh()
         restored_state = wait.until(lambda current: axis_snapshot(current, -1, transposed=True))
+        if support._totals_control_button(driver, "Transpose") is None:
+            support._click_totals_control(driver, "View")
         restored_geometry = wait.until(lambda current: geometry_if_restored(current, column, saved_geometry))
         assert driver.execute_script("return performance.timeOrigin") > first_origin
         assert driver.execute_script("return JSON.parse(localStorage.getItem(arguments[0]))", key) == snapshot
