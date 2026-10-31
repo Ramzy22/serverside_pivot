@@ -642,6 +642,9 @@ def test_http_overload_is_safe_retryable_v1_error():
     assert response.headers["Retry-After"] == "2"
     assert response.json()["status"] == "error"
     assert response.json()["requestId"] == "window-1"
+    assert response.json()["clientInstance"] == "browser-tab-a"
+    assert response.json()["stateEpoch"] == 3
+    assert response.json()["windowSeq"] == 7
     assert response.json()["payload"] == {
         "code": "resource_exhausted", "resourceKind": "query", "retryAfterMs": 1501,
     }

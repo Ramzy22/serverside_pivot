@@ -77,6 +77,12 @@ export function useRuntimeDataCommit({
         if (layoutRevision) {
             if (latestLayoutSentManifestRef.current
                 && latestLayoutSentManifestRef.current !== pivotLayoutOrderRef.current) return false;
+            const acknowledgedManifest = layoutAcknowledgedManifestRef.current;
+            // A changed saved order needs a new revision. A worker cache miss
+            // can legitimately return the old revision for the same manifest.
+            if (layoutRevision === layoutRevisionRef.current
+                && acknowledgedManifest !== '__layout_retry__'
+                && acknowledgedManifest !== pivotLayoutOrderRef.current.join('\u001f')) return false;
         }
 
         return true;

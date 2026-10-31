@@ -119,6 +119,25 @@ const success = (windowSeq, value = 'current') => ({...failure, status: 'data',
     payload: {data: [{id: value, amount: 42}], dataVersion: windowSeq, rowCount: 1},
 });
 
+test('an admission response cannot attach to a newer window', () => {
+    // The Python integration test supplies a real TestClient response; the
+    // standalone Node suite runs the same acceptance check with a literal case.
+    const response = process.env.PIVOT_HTTP_ADMISSION_RESPONSE
+        ? JSON.parse(fs.readFileSync(process.env.PIVOT_HTTP_ADMISSION_RESPONSE, 'utf8'))
+        : {...failure, clientInstance: 'browser-tab-a'};
+    const newer = lifecycle();
+    newer.args.clientInstanceRef.current = 'browser-tab-a';
+    newer.args.requestVersionRef.current = 8;
+    newer.render(response);
+    assert.equal(newer.error, null, 'a rejected window 7 must not show an alert for window 8');
+    newer.cleanup();
+    const current = lifecycle();
+    current.args.clientInstanceRef.current = 'browser-tab-a';
+    current.render(response);
+    assert.equal(current.error.failedRequest.windowSeq, 7);
+    current.cleanup();
+});
+
 test('current generic and structured data failures expose safe inline recovery and resolve pending', () => {
     for (const payload of [{}, failure.payload]) {
         const run = lifecycle();
@@ -155,6 +174,21 @@ test('a self-consistent response for the previous column order cannot commit', (
         colSchema: {layoutRevision: oldRevision, columns: []},
     }});
     assert.equal(run.committed.length, 0);
+});
+
+test('an unchanged-order worker retry can return the same layout revision', () => {
+    const run = lifecycle();
+    const revision = 'a'.repeat(64);
+    run.args.requestVersionRef.current = 8;
+    run.args.layoutRevisionRef.current = revision;
+    run.args.layoutAcknowledgedManifestRef.current = '__layout_retry__';
+    run.args.pivotLayoutOrderRef.current = ['p:current'];
+    run.args.latestLayoutSentManifestRef.current = run.args.pivotLayoutOrderRef.current;
+    run.render({...success(8), payload: {
+        ...success(8).payload, layoutRevision: revision,
+        colSchema: {layoutRevision: revision, columns: []},
+    }});
+    assert.equal(run.committed.length, 1);
 });
 
 test('stale, superseded, foreign-client and old-epoch failures stay silent', () => {

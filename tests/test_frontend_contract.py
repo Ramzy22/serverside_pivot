@@ -197,6 +197,38 @@ def test_sparkline_detail_calculations_are_standalone():
     assert "sparkline detail modularization passed" in result.stdout
 
 
+def test_http_admission_response_cannot_publish_a_superseded_grid_error(tmp_path):
+    from fastapi import FastAPI
+    from fastapi.testclient import TestClient
+    from pivot_engine.resource_governor import ResourceExhaustedError, ResourceKind
+    from pivot_engine.runtime import register_runtime_http_transport
+    from tests.test_runtime_http_transport import _Service, _User, _dataset_policy, _runtime_request
+
+    node = shutil.which("node")
+    if not node:
+        pytest.skip("Node.js is required for the frontend source regression")
+
+    class ExhaustedService(_Service):
+        async def process_async(self, state, context):
+            raise ResourceExhaustedError(ResourceKind.QUERY, reason="worker capacity")
+
+    app = FastAPI()
+    register_runtime_http_transport(
+        app, lambda: ExhaustedService(), current_user_dependency=lambda: _User("alice"),
+        dataset_authorizer=_dataset_policy("read"),
+    )
+    response = TestClient(app).post("/v1/runtime", json=_runtime_request())
+    assert response.status_code == 503
+    fixture = tmp_path / "admission-response.json"
+    fixture.write_text(response.text, encoding="utf-8")
+    result = subprocess.run(
+        [node, "--test", "--test-name-pattern=an admission response cannot attach", str(Path(__file__).with_name("frontend_runtime_recovery.cjs"))],
+        cwd=Path(__file__).resolve().parents[1], capture_output=True, text=True, timeout=90,
+        env={**os.environ, "PIVOT_HTTP_ADMISSION_RESPONSE": str(fixture)},
+    )
+    assert result.returncode == 0, result.stderr or result.stdout
+
+
 def test_pivot_layout_utilities_are_standalone():
     node = shutil.which("node")
     if not node:

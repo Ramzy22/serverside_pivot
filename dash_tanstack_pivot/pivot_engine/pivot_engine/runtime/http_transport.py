@@ -561,6 +561,9 @@ class RuntimeHttpGateway:
             # admitted backend operation or payload retention is attempted.
             return validate_runtime_response_v1(build_resource_exhausted_response(
                 exc, kind=envelope["kind"], request_id=envelope["requestId"],
+                client_instance=envelope.get("clientInstance"),
+                state_epoch=envelope.get("stateEpoch"),
+                window_seq=envelope.get("windowSeq"),
             ))
         except DistributedRuntimeUnavailable:
             return validate_runtime_response_v1(build_runtime_response(

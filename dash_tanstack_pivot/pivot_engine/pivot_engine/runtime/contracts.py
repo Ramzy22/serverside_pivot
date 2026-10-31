@@ -316,11 +316,17 @@ def build_resource_exhausted_response(
     *,
     kind: str,
     request_id: Optional[str] = None,
+    client_instance: Optional[str] = None,
+    state_epoch: Optional[int] = None,
+    window_seq: Optional[int] = None,
 ) -> Dict[str, Any]:
     """Expose only stable, retryable admission metadata, never internal reasons."""
     return build_runtime_response(
         kind=kind,
         request_id=request_id,
+        client_instance=client_instance,
+        state_epoch=state_epoch,
+        window_seq=window_seq,
         status="error",
         payload={
             "code": error.code,

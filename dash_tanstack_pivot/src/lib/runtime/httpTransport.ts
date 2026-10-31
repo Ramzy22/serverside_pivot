@@ -114,6 +114,22 @@ export class HttpPivotTransport implements PivotTransport {
         };
     }
 
+    private bindRequestIdentity(response: RuntimeResponseV1, request: RuntimeRequestV1): RuntimeResponseV1 {
+        // Optional wire metadata must fall back to this HTTP request, never
+        // the grid generation active when a delayed response is received.
+        // Preserve explicit server metadata so consumers can reject a mismatch.
+        return {
+            ...response,
+            ...(response.requestId === undefined ? {requestId: request.requestId} : {}),
+            ...(response.clientInstance === undefined && request.clientInstance !== undefined
+                ? {clientInstance: request.clientInstance} : {}),
+            ...(response.stateEpoch === undefined && request.stateEpoch !== undefined
+                ? {stateEpoch: request.stateEpoch} : {}),
+            ...(response.windowSeq === undefined && request.windowSeq !== undefined
+                ? {windowSeq: request.windowSeq} : {}),
+        };
+    }
+
     async request(
         request: RuntimeRequestV1,
         options: RuntimeTransportRequestOptions = {},
@@ -135,7 +151,7 @@ export class HttpPivotTransport implements PivotTransport {
             // opaque gateways and malformed bodies must not expose raw text.
             try {
                 const body = await readJson(response);
-                if (isRuntimeResponseV1(body) && body.status === 'error') return body;
+                if (isRuntimeResponseV1(body) && body.status === 'error') return this.bindRequestIdentity(body, request);
             } catch (error) {
                 if (error instanceof Error && error.name === 'AbortError') throw error;
             }
@@ -145,7 +161,7 @@ export class HttpPivotTransport implements PivotTransport {
         if (!isRuntimeResponseV1(body)) {
             throw new Error('Runtime server returned an invalid V1 response.');
         }
-        return this.resolvePayloadReference(body);
+        return this.resolvePayloadReference(this.bindRequestIdentity(body, request));
     }
 
     async fetchPayload(

@@ -1787,7 +1787,8 @@ _SUPERSESSION_PROBE_SCRIPT = r"""
 if (!window.__pivotSupersession) {
   const nativeFetch = window.fetch.bind(window);
   const trace = [];
-  let armed = false, releaseOld = null;
+  let armed = false, releaseOld = null, responseMode = 'data';
+  const alerts = [];
   const findEnvelope = (raw, phase, depth = 0) => {
     if (depth > 8 || raw == null) return null;
     if (typeof raw === 'string') {
@@ -1835,11 +1836,25 @@ if (!window.__pivotSupersession) {
         trace.push({phase:'ready', requestId, term, at:performance.now(), total, ...details});
         await new Promise(resolve => { releaseOld = resolve; });
       }
+      let delivered = response;
+      if (responseMode === 'busy' && term === '\u00c9clair') {
+        // Model an older V1 peer whose optional freshness metadata is absent.
+        // The source query is real; only this deliberately late error is injected.
+        delivered = new Response(JSON.stringify({schemaVersion:1, kind:'data',
+          requestId, status:'error', payload:{code:'resource_exhausted',
+            resourceKind:'query', retryAfterMs:1000}}), {
+          status:503, headers:{'Content-Type':'application/json'},
+        });
+        Object.assign(details, {httpStatus:503, envelopeStatus:'error',
+          errorCode:'resource_exhausted', simulatedOlderPeer:true});
+      }
       trace.push({phase:'response', requestId, term, at:performance.now(), total, ...details});
-      return response;
+      return delivered;
     });
   };
-  window.__pivotSupersession = {trace, arm:() => {armed = true}, release:() => releaseOld?.()};
+  window.__pivotSupersession = {trace, alerts, arm:(mode='data') => {
+    armed = true; responseMode = mode; releaseOld = null; trace.length = 0; alerts.length = 0;
+  }, release:() => releaseOld?.()};
 }
 """
 
@@ -1849,6 +1864,9 @@ const done = arguments[arguments.length - 1];
 const capture = () => {
   const cells = [];
   const visit = root => {
+    for (const alert of root.querySelectorAll('[role="alert"]')) {
+      if (alert.getClientRects().length) window.__pivotSupersession.alerts.push(alert.innerText);
+    }
     for (const cell of root.querySelectorAll('[role="gridcell"][data-colid][data-rowid]')) {
       if (cell.getClientRects().length) cells.push({
         rowid: cell.getAttribute('data-rowid'),
@@ -1906,39 +1924,54 @@ def qualify_superseded_response(host: str) -> None:
         wait.until(_totals)
         result.update(result="failed", browser=f"{driver.capabilities['browserName']} {driver.capabilities['browserVersion']}",
                       infrastructureUnavailable=False)
-        driver.execute_script("window.__pivotSupersession.arm()")
-        search = _wait_for_visible_workspace_element(driver, '[data-testid="pivot-global-search"]')
-        search.send_keys("Éclair")
-        wait.until(lambda current: any(item["phase"] == "ready" and item["term"] == "Éclair"
-                                       for item in current.execute_script("return window.__pivotSupersession.trace")))
         from selenium.webdriver.common.keys import Keys
-        search.click()
-        search.send_keys(Keys.CONTROL, "a", Keys.BACKSPACE)
-        wait.until(lambda current: _wait_for_visible_workspace_element(
-            current, '[data-testid="pivot-global-search"]').get_attribute("value") == "")
-        search = _wait_for_visible_workspace_element(driver, '[data-testid="pivot-global-search"]')
-        search.send_keys("München")
-        search_state = driver.execute_script("""
-            const input = arguments[0];
-            return {value: input.value, focused: input.getRootNode().activeElement === input,
-                    selectionStart: input.selectionStart, selectionEnd: input.selectionEnd};
-        """, search)
-        wait.until(lambda current: any(item["phase"] == "response" and item["term"] == "München"
-                                       and item["total"] == 79.75
-                                       for item in current.execute_script("return window.__pivotSupersession.trace")))
-        def visible_new(current):
-            return supersession_fixture_matches(_navigation_cells(current))
-        wait.until(visible_new)
-        newer_cells = _navigation_cells(driver)
-        samples = driver.execute_async_script(_SUPERSESSION_OBSERVE_SCRIPT)
-        wait.until(lambda current: any(item["phase"] == "response" and item["term"] == "Éclair"
-                                       for item in current.execute_script("return window.__pivotSupersession.trace")))
-        trace = driver.execute_script("return window.__pivotSupersession.trace")
-        old_id, new_id = supersession_ids(trace)
-        assert assert_superseded_response(trace, old_id, new_id, 79.75)
-        assert assert_stable_visible_snapshots(newer_cells, samples)
-        assert visible_new(driver), "The late old response restored its rows"
-        assert not _visible_error(driver), "The late old response exposed an error"
+        journeys = []
+        for response_mode in (("data",) if host == "dash" else ("data", "busy")):
+            search = _wait_for_visible_workspace_element(driver, '[data-testid="pivot-global-search"]')
+            if search.get_attribute("value"):
+                search.click()
+                search.send_keys(Keys.CONTROL, "a", Keys.BACKSPACE)
+                wait.until(lambda current: _wait_for_visible_workspace_element(
+                    current, '[data-testid="pivot-global-search"]').get_attribute("value") == "")
+            driver.execute_script("window.__pivotSupersession.arm(arguments[0])", response_mode)
+            search = _wait_for_visible_workspace_element(driver, '[data-testid="pivot-global-search"]')
+            search.send_keys("Éclair")
+            wait.until(lambda current: any(item["phase"] == "ready" and item["term"] == "Éclair"
+                                           for item in current.execute_script("return window.__pivotSupersession.trace")))
+            search.click()
+            search.send_keys(Keys.CONTROL, "a", Keys.BACKSPACE)
+            wait.until(lambda current: _wait_for_visible_workspace_element(
+                current, '[data-testid="pivot-global-search"]').get_attribute("value") == "")
+            search = _wait_for_visible_workspace_element(driver, '[data-testid="pivot-global-search"]')
+            search.send_keys("München")
+            search_state = driver.execute_script("""
+                const input = arguments[0];
+                return {value: input.value, focused: input.getRootNode().activeElement === input,
+                        selectionStart: input.selectionStart, selectionEnd: input.selectionEnd};
+            """, search)
+            wait.until(lambda current: any(item["phase"] == "response" and item["term"] == "München"
+                                           and item["total"] == 79.75
+                                           for item in current.execute_script("return window.__pivotSupersession.trace")))
+            def visible_new(current):
+                return supersession_fixture_matches(_navigation_cells(current))
+            wait.until(visible_new)
+            newer_cells = _navigation_cells(driver)
+            samples = driver.execute_async_script(_SUPERSESSION_OBSERVE_SCRIPT)
+            wait.until(lambda current: any(item["phase"] == "response" and item["term"] == "Éclair"
+                                           for item in current.execute_script("return window.__pivotSupersession.trace")))
+            trace = driver.execute_script("return window.__pivotSupersession.trace")
+            old_id, new_id = supersession_ids(trace)
+            assert assert_superseded_response(trace, old_id, new_id, 79.75)
+            assert assert_stable_visible_snapshots(newer_cells, samples)
+            assert visible_new(driver), "The late old response restored its rows"
+            assert not _visible_error(driver), "The late old response exposed an error"
+            assert not driver.execute_script("return window.__pivotSupersession.alerts"), "A late response exposed a transient error"
+            if response_mode == "busy":
+                old = next(item for item in trace if item["phase"] == "response" and item["requestId"] == old_id)
+                assert old["httpStatus"] == 503 and old["errorCode"] == "resource_exhausted"
+                assert old["simulatedOlderPeer"] is True
+            journeys.append({"responseMode": response_mode, "trace": trace,
+                             "postReleaseSamples": samples, "newerVisibleCells": newer_cells})
         result.update(result="passed", actionCompleted=True, staleCellsAbsent=True,
                       v1RequestsCorrelated=True, fixtureTotalsVerified=True)
     except Exception as error:
@@ -1957,6 +1990,7 @@ def qualify_superseded_response(host: str) -> None:
                 driver.quit()
         evidence = directory / "observation.json"
         evidence.write_text(json.dumps({"diagnostic": diagnostic, "trace": trace,
+                                        "journeys": locals().get("journeys", []),
                                         "searchStateAfterReplacement": locals().get("search_state"),
                                         "postReleaseSamples": locals().get("samples", []),
                                         "newerVisibleCells": locals().get("newer_cells", []),

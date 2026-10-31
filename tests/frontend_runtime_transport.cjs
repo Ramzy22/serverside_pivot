@@ -52,6 +52,24 @@ test('HTTP preserves V1 structured non-2xx errors for the shared consumer', asyn
     assert.deepEqual(await transport.request(request), exhausted);
 });
 
+test('HTTP binds missing freshness metadata to its originating request', async () => {
+    const {HttpPivotTransport} = loadRuntime()('runtime/httpTransport.ts');
+    const origin = {...request, clientInstance: 'browser-tab-a', stateEpoch: 3, windowSeq: 7};
+    for (const [status, body] of [[503, exhausted], [403, exhausted],
+        [200, {...exhausted, status: 'data'}], [200, {...exhausted, status: 'stale'}]]) {
+        const transport = new HttpPivotTransport({fetchImpl: async () => jsonResponse(body, status)});
+        assert.deepEqual(await transport.request(origin), {
+            ...body, clientInstance: origin.clientInstance, stateEpoch: 3, windowSeq: 7,
+        });
+    }
+    const {requestId, ...unkeyed} = exhausted;
+    const transport = new HttpPivotTransport({fetchImpl: async () => jsonResponse(unkeyed, 503)});
+    assert.equal((await transport.request(origin)).requestId, origin.requestId);
+    const explicit = {...exhausted, clientInstance: 'other-client', stateEpoch: 0, windowSeq: 0};
+    const foreign = new HttpPivotTransport({fetchImpl: async () => jsonResponse(explicit, 503)});
+    assert.deepEqual(await foreign.request(origin), explicit, 'explicit server identity must remain available for rejection');
+});
+
 test('HTTP rejects malformed or non-V1 failures with safe errors', async () => {
     const {HttpPivotTransport} = loadRuntime()('runtime/httpTransport.ts');
     for (const response of [
