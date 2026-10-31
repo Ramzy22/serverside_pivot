@@ -302,7 +302,7 @@ export function useRuntimeCellSelection({
 
   useEffect(() => {
     const handleGlobalCopy = e => {
-      if (isEditableKeyboardEvent(e)) return;
+      if (e.defaultPrevented || isEditableKeyboardEvent(e)) return;
       if ((e.ctrlKey || e.metaKey) && e.key === 'c') {
         const keys = Object.keys(selectedCells);
         if (keys.length === 0) return;
