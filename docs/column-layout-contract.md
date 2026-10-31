@@ -311,3 +311,41 @@ amend the frozen candidate's records, and require a fresh frozen run for release
 credit. Coverage is now 117 of 207 required host cases; 32 browser workflow groups
 and 48 shared assertion IDs remain unmapped. Full release qualification remains
 on hold.
+
+## Read-only layout-history qualification additions
+
+`undo-redo.layout` now has executable installed-host mappings. Starting from a
+sales-only pivot prepared through sidebar controls, the browser adds units,
+transposes axes, undoes both changes, redoes both changes, undoes transposition,
+then adds variance as a new branch. All nine states require exact logical rows,
+measure columns, displayed values and authoritative raw values/totals, current
+request axes/aggregations/scope, and matching schema/data revisions. The restored
+states must recover their original column identities, row order and revision;
+the new branch must disable redo. This checks 153 numeric values across the nine
+states per host. It qualifies layout history only, with no cell-edit history
+claim.
+
+Dash, React and Streamlit all passed against separately installed `4055980`
+artifacts under `artifacts/layout-history-2026-10-31/`. Each observation retains
+nine screenshots/states, request traces, raw/displayed cells and loaded asset
+digests. The installed shared assertion also passed: it verifies authoritative
+responses for the restored models, while browser tests exercise actual history
+controls. The selected tooling/runtime suite passed 302 tests, with 122 live
+cases deselected; independent review found no actionable issues.
+
+The pinned AG Grid 36.2 SSRM comparator passed under
+`artifacts/layout-history-reference-rerun-2026-10-31/`. This comparison explicitly
+uses application-managed undo/redo stacks and primary axis/value column-state
+snapshots restored through public APIs. It checks all nine models, raw and
+visible values, totals, exact displayed column identities and branch clearing.
+It does not claim built-in AG Grid layout history. The initial failed reference
+run is retained in the product-run directory: full column-state snapshots
+included generated pivot-result columns unavailable after transposition. The
+wrapper now persists primary layout fields and lets SSRM regenerate result
+columns; no production code was changed.
+
+These observations remain supplemental (`qualificationEvidence: false`) and
+never amend the frozen candidate. A fresh frozen candidate run is required for
+release credit. Mapping coverage is now 120 of 207 required host cases, with 31
+browser workflow groups and 47 shared assertion IDs still unmapped. Full release
+qualification remains on hold.

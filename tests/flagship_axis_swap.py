@@ -11,7 +11,7 @@ GROUPS = (
 TOTALS = ((150, 5, -8.25), (50, 5, 1.5), (200, 10, -6.75))
 
 
-def axis_expected_cells(transposed):
+def axis_expected_cells(transposed, *, measures=MEASURES):
     result = {}
     if transposed:
         for index, row in enumerate(("Q1", "Q2", "Grand Total")):
@@ -25,11 +25,12 @@ def axis_expected_cells(transposed):
             for period, numbers in zip(("Q1_", "Q2_", "__RowTotal__"), values):
                 result.update({(label, f"{period}{measure}_sum"): value
                                for measure, value in zip(MEASURES, numbers)})
-    return result
+    return {key: value for key, value in result.items()
+            if any(key[1].endswith(f"_{measure}_sum") for measure in measures)}
 
 
-def assert_axis_rows(rows, *, transposed):
-    expected = axis_expected_cells(transposed)
+def assert_axis_rows(rows, *, transposed, measures=MEASURES):
+    expected = axis_expected_cells(transposed, measures=measures)
     metadata = [row for row in rows if "_id" not in row]
     assert len(metadata) <= 1
     assert all(set(row) == {"_path", "_colorScaleStats"} and row["_path"] == "__color_scale_stats__"
@@ -47,9 +48,9 @@ def assert_axis_rows(rows, *, transposed):
     return expected
 
 
-def axis_dom_matches(cells, *, transposed):
+def axis_dom_matches(cells, *, transposed, measures=MEASURES):
     expected = {(row if row != "Grand Total" else "__grand_total__", column): f"{value:.2f}"
-                for (row, column), value in axis_expected_cells(transposed).items()}
+                for (row, column), value in axis_expected_cells(transposed, measures=measures).items()}
     actual = [(cell["rowid"], cell["colid"], cell["text"]) for cell in cells if cell["colid"].endswith("_sum")]
     return (len(actual) == len(expected)
             and len({(row, column) for row, column, _ in actual}) == len(expected)
@@ -66,6 +67,7 @@ if (!window.__pivotAxisTrace) {
       trace.push({phase, at:performance.now(), requestId:value.requestId, status:value.status,
         layoutMode:phase==='request' ? (value.payload?.layoutMode ?? value.payload?.layout_mode ?? value.state?.viewState?.layoutMode ?? 'hierarchy') : null,
         rowFields:value.state?.rowFields, colFields:value.state?.colFields, filters:value.state?.filters,
+        valueAggregations:Array.isArray(value.state?.valConfigs) ? value.state.valConfigs.map(config=>({field:config?.field,agg:config?.agg})) : null,
         rows:value.payload?.data, layoutRevision:value.payload?.layoutRevision, colSchema:value.payload?.colSchema});
       return;
     }
@@ -88,7 +90,7 @@ if (!window.__pivotAxisTrace) {
 """
 
 
-def axis_snapshot(driver, checkpoint, *, transposed):
+def axis_snapshot(driver, checkpoint, *, transposed, measures=MEASURES):
     from tests import flagship_browser_support as support
 
     trace = driver.execute_script("return window.__pivotAxisTrace || []")
@@ -96,7 +98,7 @@ def axis_snapshot(driver, checkpoint, *, transposed):
     requests = {entry["requestId"]: entry for entry in trace if entry["phase"] == "request" and entry["at"] > checkpoint
                 and entry.get("rowFields") == row_fields and entry.get("colFields") == col_fields}
     cells = support._navigation_cells(driver)
-    if not axis_dom_matches(cells, transposed=transposed):
+    if not axis_dom_matches(cells, transposed=transposed, measures=measures):
         return False
     labels = support._navigation_rows(driver)
     expected_labels = {"Q1", "Q2", "Grand Total"} if transposed else {"\u00c9clair", "M\u00fcnchen", "Grand Total"}
@@ -113,7 +115,7 @@ def axis_snapshot(driver, checkpoint, *, transposed):
         if not reply.get("layoutRevision") or reply["layoutRevision"] != (reply.get("colSchema") or {}).get("layoutRevision"):
             continue
         schema_columns = (reply.get("colSchema") or {}).get("columns") or []
-        expected_columns = {column for _, column in axis_expected_cells(transposed)}
+        expected_columns = {column for _, column in axis_expected_cells(transposed, measures=measures)}
         if (len(schema_columns) != len(expected_columns)
                 or {column.get("id") for column in schema_columns} != expected_columns
                 or {column.get("index") for column in schema_columns} != set(range(len(expected_columns)))
@@ -121,7 +123,7 @@ def axis_snapshot(driver, checkpoint, *, transposed):
                 or any(not column.get("layoutId") for column in schema_columns)):
             continue
         try:
-            assert_axis_rows(reply.get("rows") or [], transposed=transposed)
+            assert_axis_rows(reply.get("rows") or [], transposed=transposed, measures=measures)
         except AssertionError:
             continue
         return {"requestId": reply["requestId"], "rowFields": row_fields, "colFields": col_fields,

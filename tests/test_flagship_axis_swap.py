@@ -81,3 +81,23 @@ def test_axis_snapshot_requires_fresh_correlated_response_and_visible_values(mon
     monkeypatch.setattr(support, "_navigation_columns", lambda _: [cell["colid"] for cell in cells[:9]])
     observed = axis_snapshot(Driver(), 1, transposed=True)
     assert bool(observed) is (damage is None)
+
+
+@pytest.mark.parametrize("transposed", [False, True])
+@pytest.mark.parametrize("count", [1, 2])
+def test_axis_oracles_reject_extra_or_missing_measures_in_history_states(transposed, count):
+    from tests.flagship_axis_swap import MEASURES
+    measures = MEASURES[:count]
+    complete_rows, complete_cells = rows_and_cells(transposed)
+    expected = {key: value for key, value in axis_expected_cells(transposed).items()
+                if any(key[1].endswith(f"_{measure}_sum") for measure in measures)}
+    rows = [{key: value for key, value in row.items() if key == "_id" or any(key.endswith(f"_{measure}_sum") for measure in measures)}
+            for row in complete_rows]
+    cells = [cell for cell in complete_cells if any(cell["colid"].endswith(f"_{measure}_sum") for measure in measures)]
+    assert axis_expected_cells(transposed, measures=measures) == expected
+    assert_axis_rows(rows, transposed=transposed, measures=measures)
+    assert axis_dom_matches(cells, transposed=transposed, measures=measures)
+    with pytest.raises(AssertionError):
+        assert_axis_rows(complete_rows, transposed=transposed, measures=measures)
+    assert not axis_dom_matches(complete_cells, transposed=transposed, measures=measures)
+    assert not axis_dom_matches(cells[:-1], transposed=transposed, measures=measures)

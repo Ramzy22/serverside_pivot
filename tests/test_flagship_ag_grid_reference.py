@@ -29,6 +29,95 @@ pytestmark = [
 ]
 
 
+def test_reference_application_managed_layout_history(reference_run):
+    """App-owned snapshots restored through public APIs, not cell-edit undo."""
+    from tests.flagship_axis_swap import MEASURES, axis_expected_cells
+    from tests.flagship_layout_history import HISTORY_STATES
+
+    with reference_case('undo-redo.layout', reference_run) as case:
+        driver = case.driver
+        past, future, states = [], [], []
+
+        def current():
+            # Pivot-result columns are generated from the current axes and may
+            # not exist while restoring another layout. Persist primary layout
+            # fields; let SSRM regenerate the result-column catalog.
+            return driver.execute_script('return window.referenceGrid.getColumnState().filter(state=>arguments[0].includes(state.colId))',
+                                         ['region', 'account', 'period', *MEASURES, 'extrema'])
+
+        def restore(state):
+            assert driver.execute_script('return window.referenceGrid.applyColumnState({state:arguments[0],applyOrder:true})', state)
+
+        def change(transposed, count):
+            state = []
+            for field in ('region', 'account', 'period'):
+                rows = ['period'] if transposed else ['region', 'account']
+                cols = ['region', 'account'] if transposed else ['period']
+                state.append({'colId': field, 'rowGroup': field in rows,
+                              'rowGroupIndex': rows.index(field) if field in rows else None,
+                              'pivot': field in cols, 'pivotIndex': cols.index(field) if field in cols else None})
+            state.extend({'colId': field, 'aggFunc': 'sum' if field in MEASURES[:count] else None}
+                         for field in (*MEASURES, 'extrema'))
+            assert driver.execute_script('return window.referenceGrid.applyColumnState({state:arguments[0]})', state)
+
+        change(False, 1)
+        for index, (transposed, count, redo_enabled) in enumerate(HISTORY_STATES):
+            if index in (1, 2, 8):
+                past.append(current())
+                future.clear()
+                change(transposed, count)
+            elif index in (3, 4, 7):
+                future.append(current())
+                restore(past.pop())
+            elif index in (5, 6):
+                past.append(current())
+                restore(future.pop())
+            labels = ['Q1', 'Q2', 'Total'] if transposed else ['\u00c9clair', 'M\u00fcnchen', 'Total']
+            model = driver.execute_script("return {rows:window.referenceGrid.getRowGroupColumns().map(c=>c.getColId()),cols:window.referenceGrid.getPivotColumns().map(c=>c.getColId()),values:window.referenceGrid.getValueColumns().map(c=>({field:c.getColId(),agg:c.getAggFunc()}))}")
+            assert model == {'rows': ['period'] if transposed else ['region', 'account'],
+                             'cols': ['region', 'account'] if transposed else ['period'],
+                             'values': [{'field': field, 'agg': 'sum'} for field in MEASURES[:count]]}
+            assert bool(future) == redo_enabled
+            expected = axis_expected_cells(transposed, measures=MEASURES[:count])
+            columns = {}
+            for (owner, column), value in expected.items():
+                field = next(field for field in MEASURES if column.endswith(f'_{field}_sum'))
+                prefix = column[:-len(f'_{field}_sum')]
+                column_id = prefix + '|' + field
+                if column.startswith('__RowTotal__'):
+                    column_id = 'Total|' + field
+                columns.setdefault(column_id, {})['Total' if owner == 'Grand Total' else owner] = f'{value:.2f}'
+            def matching_rows(browser):
+                result = _displayed_rows(browser)
+                if [row['label'] for row in result] != labels:
+                    return False
+                for row in result:
+                    numeric_keys = {key for key in row['data'] if any(key.endswith('|' + field) for field in (*MEASURES, 'extrema'))}
+                    if numeric_keys != set(columns):
+                        return False
+                return result
+            rows = WebDriverWait(driver, 10).until(matching_rows)
+            rendered_columns = driver.execute_script("return window.referenceGrid.getAllDisplayedColumns().map(c=>c.getColId()).filter(id=>!id.startsWith('ag-Grid-AutoColumn'))")
+            assert len(rendered_columns) == len(columns) and set(rendered_columns) == set(columns)
+            for row in rows:
+                for column_id, by_owner in columns.items():
+                    assert row['data'][column_id] == float(by_owner[row['label']])
+            displayed = {}
+            for column_id, by_owner in columns.items():
+                driver.execute_script("const c=window.referenceGrid.getColumn(arguments[0]),v=document.querySelector('.ag-body-horizontal-scroll-viewport');v.scrollLeft=Math.min(v.scrollWidth-v.clientWidth,Math.max(0,c.getLeft()))", column_id)
+                displayed[column_id] = _wait_column(driver, column_id, [by_owner[label] for label in labels])
+            states.append({'index': index, 'model': model, 'rows': rows, 'columnIds': rendered_columns,
+                           'visibleColumns': displayed, 'redoEnabled': bool(future)})
+            case.parsed_output = {'scope': 'Application-managed primary axis/value column-state snapshots; SSRM regenerates pivot-result columns. Not built-in AG Grid layout history.', 'states': states}
+        assert states[0]['model'] == states[4]['model']
+        assert states[1]['model'] == states[3]['model'] == states[5]['model'] == states[7]['model']
+        assert states[2]['model'] == states[6]['model']
+        trace = driver.execute_script('return window.referenceEvidence.trace()')
+        assert all(entry['request']['filterModel']['scope']['values'] == ['Included'] for entry in trace)
+        case.parsed_output['trace'] = trace
+        case.observed = 'Application-managed snapshots and undo/redo stacks restored the pinned SSRM public column state through nine models; exact visible/raw values, axes, measures, totals and redo branch clearing verified. This is an application wrapper comparison, not AG Grid built-in layout undo.'
+
+
 def test_reference_group_display_types_preserve_keys_and_totals(reference_run):
     with reference_case('layout-modes.switch', reference_run) as case:
         driver = case.driver

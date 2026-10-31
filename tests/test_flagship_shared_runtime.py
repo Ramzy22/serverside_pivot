@@ -525,3 +525,26 @@ def test_flagship_add_and_remove_units_measure_preserves_sales():
     assert sum(added.data[-1][key] for key in units_keys) == 10
     assert [added.data[-1][_measure(period, 0)] for period in ("Q1", "Q2")] == [150.0, 50.0]
     assert [column["id"] for column in before.columns] == [column["id"] for column in restored.columns]
+
+
+def test_flagship_layout_history_models_preserve_exact_values():
+    """Authoritative restored models; browser tests own actual history controls."""
+    from tests.flagship_axis_swap import MEASURES, assert_axis_rows
+    service = _runtime()
+    models = ((False, 1), (False, 2), (True, 2), (False, 2), (False, 1),
+              (False, 2), (True, 2), (False, 2), (False, 3))
+    observations = []
+    for sequence, (transposed, count) in enumerate(models, start=1):
+        response = _response(service, {}, sequence, show_row_totals=True, needs_col_schema=True,
+                             val_configs=FLAGSHIP_VALUE_CONFIGS[:count],
+                             row_fields=["period"] if transposed else None,
+                             col_fields=["region", "account"] if transposed else None)
+        assert response.status == "data"
+        assert_axis_rows(response.data, transposed=transposed, measures=MEASURES[:count])
+        assert response.layout_revision == response.col_schema["layoutRevision"]
+        observations.append(response)
+    for indices in ((0, 4), (1, 3, 5, 7), (2, 6)):
+        first = observations[indices[0]]
+        assert all(observations[index].data == first.data and observations[index].col_schema == first.col_schema
+                   and observations[index].layout_revision == first.layout_revision for index in indices)
+    assert len({response.layout_revision for response in observations}) == 4
