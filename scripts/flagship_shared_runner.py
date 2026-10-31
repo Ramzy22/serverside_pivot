@@ -31,6 +31,11 @@ class SharedAssertion:
 # Each mapped assertion checks a parsed, literal document against an independent
 # expected result, including order, totals, numeric values, and Unicode text.
 SHARED_ASSERTIONS: Mapping[str, tuple[SharedAssertion, ...]] = {
+    "shared.layout-modes.switch": (
+        SharedAssertion("tests/test_flagship_shared_runtime.py::test_flagship_layout_modes_preserve_exact_keys_and_totals",
+                        ("tests/__init__.py", "tests/test_flagship_shared_runtime.py", "tests/export_qualification_fixture.py",
+                         "tests/flagship_axis_swap.py", "tests/flagship_layout_modes.py")),
+    ),
     "shared.layout-swap.transpose": (
         SharedAssertion("tests/test_flagship_shared_runtime.py::test_flagship_axis_swap_round_trip_preserves_exact_values",
                         ("tests/__init__.py", "tests/test_flagship_shared_runtime.py", "tests/export_qualification_fixture.py",

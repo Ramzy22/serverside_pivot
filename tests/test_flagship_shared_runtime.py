@@ -151,7 +151,7 @@ def test_flagship_busy_rejection_preserves_generation_and_recovers_exact_data():
 def _response(service, expanded, sequence, *, filters=None, val_configs=None,
               sorting=None, show_row_totals=False, show_col_totals=True,
               layout_manifest=None, layout_revision=None, needs_col_schema=False,
-              col_start=0, col_end=None, pinned_column_ids=(), row_fields=None, col_fields=None):
+              col_start=0, col_end=None, pinned_column_ids=(), row_fields=None, col_fields=None, layout_mode=None):
     return service.process(
         PivotViewState(
             row_fields=FLAGSHIP_ROW_FIELDS if row_fields is None else row_fields,
@@ -162,6 +162,7 @@ def _response(service, expanded, sequence, *, filters=None, val_configs=None,
             sorting=sorting or [],
             show_row_totals=show_row_totals,
             show_col_totals=show_col_totals,
+            layout_mode=layout_mode,
         ),
         PivotRequestContext(
             table="flagship_shared",
@@ -233,6 +234,22 @@ def test_flagship_axis_swap_round_trip_preserves_exact_values():
     assert swapped.layout_revision != before.layout_revision
     assert restored.layout_revision == before.layout_revision
     assert restored.col_schema == before.col_schema
+
+
+def test_flagship_layout_modes_preserve_exact_keys_and_totals():
+    from tests.flagship_layout_modes import assert_layout_rows
+
+    service = _runtime()
+    observations = []
+    for sequence, mode in enumerate(("hierarchy", "outline", "tabular", "hierarchy"), start=1):
+        response = _response(service, {"__ALL__": True}, sequence, show_row_totals=True,
+                             needs_col_schema=True, layout_mode=mode)
+        assert response.status == "data"
+        assert_layout_rows(response.data, mode)
+        assert response.layout_revision == response.col_schema["layoutRevision"]
+        observations.append(response)
+    assert [row["_path"] for row in observations[0].data] == [row["_path"] for row in observations[-1].data]
+    assert observations[0].col_schema == observations[-1].col_schema
 
 
 def test_flagship_one_parent_expansion_round_trip_preserves_totals_and_columns():

@@ -64,6 +64,7 @@ if (!window.__pivotAxisTrace) {
     if (!value || typeof value !== 'object') return;
     if (value.schemaVersion === 1 && value.kind === 'data' && value.requestId) {
       trace.push({phase, at:performance.now(), requestId:value.requestId, status:value.status,
+        layoutMode:phase==='request' ? (value.payload?.layoutMode ?? value.payload?.layout_mode ?? value.state?.viewState?.layoutMode ?? 'hierarchy') : null,
         rowFields:value.state?.rowFields, colFields:value.state?.colFields, filters:value.state?.filters,
         rows:value.payload?.data, layoutRevision:value.payload?.layoutRevision, colSchema:value.payload?.colSchema});
       return;

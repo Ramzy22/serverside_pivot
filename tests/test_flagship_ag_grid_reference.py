@@ -29,6 +29,44 @@ pytestmark = [
 ]
 
 
+def test_reference_group_display_types_preserve_keys_and_totals(reference_run):
+    with reference_case('layout-modes.switch', reference_run) as case:
+        driver = case.driver
+        observations = []
+        labels = ['\u00c9clair', '\u6771\u4eac', 'M\u00fcnchen', '\u0627\u0644\u0642\u0627\u0647\u0631\u0629', 'Total']
+        for mode in ('singleColumn', 'multipleColumns', 'singleColumn'):
+            # Regenerate SSRM row nodes for the new auto-column identities.
+            # Existing nodes retain groupData keyed by the previous columns.
+            driver.execute_script("window.referenceGrid.setGridOption('groupDisplayType',arguments[0]);window.referenceGrid.refreshServerSide({purge:true})", mode)
+            WebDriverWait(driver, 10).until(lambda browser: [row['label'] for row in _displayed_rows(browser)] == [labels[0], labels[2], 'Total'])
+            driver.execute_script("window.referenceGrid.expandAll()")
+            rows = WebDriverWait(driver, 10).until(lambda browser: (
+                entries if [entry['label'] for entry in entries] == labels else False
+            ) if (entries := _displayed_rows(browser)) else False)
+            assert [row['data']['Total|ventes_\u20ac'] for row in rows] == [120.25, 120.25, 79.75, 79.75, 200]
+            assert [(row['parentKey'], row['level']) for row in rows[:-1]] == [
+                (None, 0), ('\u00c9clair', 1), (None, 0), ('M\u00fcnchen', 1)]
+            expected_columns = ['ag-Grid-AutoColumn'] if mode == 'singleColumn' else [
+                'ag-Grid-AutoColumn-region', 'ag-Grid-AutoColumn-account']
+            columns = WebDriverWait(driver, 10).until(lambda browser: (
+                values if values == expected_columns else False
+            ) if (values := browser.execute_script("return window.referenceGrid.getAllDisplayedColumns().map(c=>c.getColId()).filter(id=>id.startsWith('ag-Grid-AutoColumn'))")) else False)
+            assert driver.execute_script("return window.referenceGrid.getGridOption('groupDisplayType')") == mode
+            if mode == 'singleColumn':
+                dimensions = _wait_column(driver, columns[0], labels)
+            else:
+                dimensions = _wait_column(driver, columns[0], ['\u00c9clair', '', 'M\u00fcnchen', '', 'Total'])
+                _wait_column(driver, columns[1], ['', '\u6771\u4eac', '', '\u0627\u0644\u0642\u0627\u0647\u0631\u0629', ''])
+            driver.execute_script("const v=document.querySelector('.ag-body-horizontal-scroll-viewport');v.scrollLeft=v.scrollWidth-v.clientWidth")
+            sales = _wait_column(driver, 'Total|ventes_\u20ac', ['120.25', '120.25', '79.75', '79.75', '200.00'])
+            observations.append({'mode': mode, 'columns': columns, 'rows': rows, 'dimensions': dimensions, 'sales': sales})
+            case.parsed_output = {'states': observations, 'scope': 'singleColumn/multipleColumns only; no direct product tabular equivalence claimed'}
+        trace = driver.execute_script('return window.referenceEvidence.trace()')
+        assert all(entry['request']['filterModel']['scope']['values'] == ['Included'] for entry in trace)
+        case.parsed_output['trace'] = trace
+        case.observed = 'Pinned SSRM public groupDisplayType singleColumn/multipleColumns/singleColumn with purge/reload and re-expansion retained both region/account paths and exact sales/subtotals/grand total; actual one-column vs stepped two-column display verified. Product tabular mode has no equivalence claimed in this comparison.'
+
+
 def test_reference_transpose_axes_round_trip(reference_run):
     with reference_case('layout-swap.transpose', reference_run) as case:
         driver = case.driver

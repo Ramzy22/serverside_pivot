@@ -454,6 +454,19 @@ def test_axis_swap_has_executable_installed_browser_and_shared_mappings():
         "tests/test_flagship_shared_runtime.py::test_flagship_axis_swap_round_trip_preserves_exact_values")
 
 
+def test_layout_modes_have_executable_installed_browser_and_shared_mappings():
+    from scripts.certify_flagship import _product_browser_plan
+    from scripts.flagship_shared_runner import SHARED_ASSERTIONS
+    from tests.flagship_contract import load_requirements
+
+    plan = _product_browser_plan(load_requirements(Path(__file__).with_name("flagship_requirements.json")))
+    for host in ("dash", "react", "streamlit"):
+        assert plan[("layout-modes.switch", host, "browser.layout-modes.switch")] == (
+            f"tests/test_flagship_workflows.py::test_flagship_layout_modes[{host}]")
+    assert SHARED_ASSERTIONS["shared.layout-modes.switch"][0].node == (
+        "tests/test_flagship_shared_runtime.py::test_flagship_layout_modes_preserve_exact_keys_and_totals")
+
+
 def test_measure_add_remove_oracle_rejects_stale_cells_headers_and_requests():
     from tests.flagship_browser_support import measure_add_remove_matches
 
@@ -992,6 +1005,14 @@ def test_flagship_axis_swap(host, installed_workflow_hosts):
     from tests.flagship_axis_swap import qualify_axis_swap
 
     qualify_axis_swap(host)
+
+
+@pytest.mark.flagship
+@pytest.mark.parametrize("host", ["dash", "react", "streamlit"])
+def test_flagship_layout_modes(host, installed_workflow_hosts):
+    from tests.flagship_layout_modes import qualify_layout_modes
+
+    qualify_layout_modes(host)
 
 
 @pytest.mark.flagship

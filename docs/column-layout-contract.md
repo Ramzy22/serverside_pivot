@@ -270,3 +270,44 @@ review found no remaining blockers. These live results are supplemental with
 Mapping coverage is now 114 of 207 host cases, with 33 browser workflow groups
 and 49 shared assertion IDs still unmapped. A new frozen run remains required
 for release credit.
+
+## Layout-mode qualification additions
+
+`layout-modes.switch` now maps to an installed runtime assertion and native
+browser journeys for Dash, React and Streamlit. The expanded, subtotal-enabled
+fixture cycles Hierarchy → Outline → Tabular → Hierarchy. Each state checks
+five exact region/account paths, all 45 numeric cells, scope-filtered request
+correlation, schema identities and matching schema/data layout revisions.
+Hierarchy requires indented labels; Outline requires stepped dimensions;
+Tabular repeats the region on account rows and places each subtotal after its
+child. Row bounds must align without overlap, each group must remain contiguous,
+and physical row order must match the response. Returning restores the original
+column identities and group order. This qualifies that fixture and subtotal
+configuration, rather than every possible layout combination.
+
+The separately installed `4055980` wheel assertion and all three Chrome
+156.0.8078.76 browser journeys passed under
+`artifacts/layout-modes-rerun-2026-10-31/`. Each browser observation retains four
+states, raw rows, cell bounds, screenshots and loaded-asset SHA-256 digests.
+The pinned AG Grid 36.2 SSRM comparison also passed there: its public
+`groupDisplayType` cycles singleColumn/multipleColumns/singleColumn with an
+explicit server-side purge/reload and re-expansion, checking actual dimension
+labels, ancestry, sales and totals. No direct AG Grid analogue for the product's
+Tabular mode is claimed.
+
+Initial failures remain under `artifacts/layout-modes-2026-10-31/`. Streamlit's
+Expand All control needed scrolling into view before its native click. AG Grid's
+existing row nodes retained group labels under the previous auto-column IDs;
+the comparator now reloads those nodes before checking the new presentation.
+Neither correction changes the production implementation. Review additionally
+exposed false acceptance of overlapping or interleaved rows; six negative cases
+failed before the oracle fix and now pass. Independent final review found no
+blocking findings.
+
+The selected tooling/runtime suite passed 396 tests, with two opt-in checks
+skipped and 119 flagship cases deselected. These skips provide no release credit.
+All live results above are supplemental (`qualificationEvidence: false`), never
+amend the frozen candidate's records, and require a fresh frozen run for release
+credit. Coverage is now 117 of 207 required host cases; 32 browser workflow groups
+and 48 shared assertion IDs remain unmapped. Full release qualification remains
+on hold.
