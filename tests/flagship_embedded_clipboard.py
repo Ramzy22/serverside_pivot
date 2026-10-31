@@ -8,6 +8,7 @@ from pathlib import Path
 import traceback
 
 from tests import flagship_browser_support as support
+from tests.flagship_clipboard_observer import CLIPBOARD_BOUNDARY_OBSERVER, assert_pre_delivery_rectangle
 
 
 SCENARIOS = {
@@ -82,6 +83,7 @@ def qualify_embedded_clipboard(host, kind):
                 driver._pivot_artifact_binding, driver._pivot_artifact_host = binding, host
                 driver._pivot_loaded_assets = {}
                 driver.execute_cdp_cmd("Network.enable", {"maxTotalBufferSize": 50000000, "maxResourceBufferSize": 50000000})
+                driver.execute_cdp_cmd("Page.addScriptToEvaluateOnNewDocument", {"source": CLIPBOARD_BOUNDARY_OBSERVER})
                 driver.execute_cdp_cmd("Browser.grantPermissions", {
                     "origin": _origin(_host_url(host)), "permissions": ["clipboardReadWrite", "clipboardSanitizedWrite"]})
                 _switch_to_workspace(driver, host)
@@ -104,6 +106,7 @@ def qualify_embedded_clipboard(host, kind):
                 sentinel = f"before {host} {field} exact selected copy"
                 assert driver.execute_async_script(
                     "const done=arguments[arguments.length-1]; navigator.clipboard.writeText(arguments[0]).then(()=>done(true),()=>done(false));", sentinel)
+                write_checkpoint = driver.execute_script("return window.__pivotClipboardBoundary.length")
                 ActionChains(driver).context_click(_cell(driver, row_id, "hierarchy")).perform()
                 menu = support._selection_menu(driver, "Copy Selection")
                 assert menu.get_attribute("title") == "Copy Selection"
@@ -111,6 +114,14 @@ def qualify_embedded_clipboard(host, kind):
                 copied = wait.until(lambda current: value if (value := _clipboard_text(current)) != sentinel else False)
                 scenario["clipboardText"] = copied
                 scenario["parsedTSV"] = assert_embedded_clipboard(copied, source, neighbor)
+                def captured(current):
+                    events = current.execute_script("return window.__pivotClipboardBoundary.slice(arguments[0])", write_checkpoint)
+                    return events if len(events) == 1 and events[0].get("success") is True and "text/plain" in events[0].get("payloads", {}) else False
+                deliveries = wait.until(captured)
+                payload = deliveries[0]["payloads"]["text/plain"]
+                assert payload["utf8"] == list(payload["text"].encode("utf-8"))
+                assert_pre_delivery_rectangle(payload["text"], source, neighbor)
+                scenario["preDeliveryWrites"] = deliveries
             finally:
                 try:
                     _verify_release_asset_batch(driver, require_assets=True)
@@ -121,7 +132,8 @@ def qualify_embedded_clipboard(host, kind):
                     paths.append(str(screenshot))
                 finally:
                     driver.quit()
-        result.update(result="passed", logicalCellsVerified=True, clipboardBytesVerified=True, actionCompleted=True)
+        result.update(result="passed", logicalCellsVerified=True, clipboardBytesVerified=True,
+                      actionCompleted=True, preDeliveryBytesVerified=True)
         observation["diagnostic"] = ""
     except Exception:
         observation["diagnostic"] = traceback.format_exc()

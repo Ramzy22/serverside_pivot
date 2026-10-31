@@ -17,6 +17,7 @@ import tempfile
 from typing import Mapping, Sequence
 
 from scripts.flagship_manifest import BoundCaseResult, QualificationBinding, load_committed_requirements
+from scripts.flagship_shared_client import SHARED_CLIENT_ASSERTIONS
 from tests.flagship_contract import Requirement
 
 
@@ -151,7 +152,7 @@ SHARED_ASSERTIONS: Mapping[str, tuple[SharedAssertion, ...]] = {
 def unmapped_shared_ids(requirements: Sequence[Requirement]) -> tuple[str, ...]:
     """Return every required shared ID lacking a concrete installed assertion."""
     required = {test_id for requirement in requirements if requirement.required for test_id in requirement.shared_tests}
-    return tuple(sorted(required - SHARED_ASSERTIONS.keys()))
+    return tuple(sorted(required - (SHARED_ASSERTIONS.keys() | SHARED_CLIENT_ASSERTIONS.keys())))
 
 
 def _pytest_all_passed(exit_code: int, output: str, expected_count: int) -> bool:

@@ -65,7 +65,10 @@ def source_contract(tmp_path_factory):
         Requirement("dash.transport", "dash-callback-transport", "Callback", "Callback response", {
             "result": "not_applicable", "reason": "Dash integration only"}, "Response", "not_comparable",
             ("Dash only",), ("dash",), True, ("unit.transport",), {"dash": ("browser.transport",)}),
-        *(item for item in original if item.inventory_id not in {"copy-selection", "dash-callback-transport"}),
+        # Generic schema/evaluator fixtures do not impersonate the new browser
+        # shared integration category, which requires an actual reuse receipt.
+        *(replace(item, shared_tests=tuple("unit.synthetic." + test for test in item.shared_tests))
+          for item in original if item.inventory_id not in {"copy-selection", "dash-callback-transport"}),
     )
     contract = repository / "tests" / "flagship_requirements.json"
     contract.parent.mkdir()

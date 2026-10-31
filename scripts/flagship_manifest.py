@@ -20,6 +20,7 @@ from typing import Mapping, Sequence
 import xml.etree.ElementTree as ET
 
 from scripts.flagship_artifacts import ArtifactBinding, resolve_loaded_asset
+from scripts.flagship_shared_client import SHARED_CLIENT_ASSERTIONS, validate_shared_reuse
 from tests.flagship_capabilities import CAPABILITIES
 from tests.flagship_contract import CaseResult, DIFFERENCES, HOSTS, Requirement, RESULTS, load_requirements, validate_requirements
 
@@ -160,7 +161,9 @@ def _case_issues(case: CaseResult, binding: ArtifactBinding, requirement: Requir
     if case.result not in RESULTS or case.result == "not_applicable":
         issues.append("case_invalid")
     if case.result == "passed":
-        browser_case = case.system == "ag_grid" or case.test_id in requirement.browser_tests.get(case.host, ())
+        shared_client = case.system == "product" and case.test_id in SHARED_CLIENT_ASSERTIONS
+        browser_case = (case.system == "ag_grid" or case.test_id in requirement.browser_tests.get(case.host, ())
+                        or shared_client)
         if browser_case and (not isinstance(case.browser, str) or not case.browser.strip() or case.browser.lower() in {"unavailable", "unknown"}):
             issues.append("browser_unavailable")
         if not isinstance(case.observed, str) or not case.observed.strip():
@@ -194,6 +197,11 @@ def _case_issues(case: CaseResult, binding: ArtifactBinding, requirement: Requir
                     raise ValueError("browser observations do not match the claimed assets")
             except (ValueError, TypeError):
                 issues.append("asset_mismatch")
+            if shared_client:
+                try:
+                    validate_shared_reuse(case, binding, requirement, observations)
+                except (OSError, ValueError, TypeError, KeyError, LookupError, ET.ParseError, subprocess.CalledProcessError):
+                    issues.append("evidence_invalid")
         elif case.system == "ag_grid":
             def live(observation):
                 if not isinstance(observation, dict):

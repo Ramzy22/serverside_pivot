@@ -649,10 +649,11 @@ def _selection_keyboard_copy(driver, observation):
 def qualify_selected_clipboard(host: str, requirement: str) -> None:
     """Physical selection/menu/keyboard actions against fresh installed hosts.
 
-    A clipboard read is an OS/browser read. No copy event, clipboard method,
-    React state, runtime payload, or product handler is replaced by this case.
+    A clipboard read is an OS/browser read. The boundary observer synchronously
+    forwards identical native writes; product handlers and payloads stay intact.
     """
     import pytest
+    from tests.flagship_clipboard_observer import CLIPBOARD_BOUNDARY_OBSERVER, monitor_single_clipboard_write
 
     if os.environ.get("PIVOT_RUN_FLAGSHIP_BROWSER_TESTS") != "1":
         pytest.skip("Enable installed flagship browser qualification explicitly")
@@ -685,6 +686,7 @@ def qualify_selected_clipboard(host: str, requirement: str) -> None:
         driver._pivot_loaded_assets = {}
         driver.execute_cdp_cmd("Network.enable", {"maxTotalBufferSize": 50000000, "maxResourceBufferSize": 50000000})
         driver.execute_cdp_cmd("Page.addScriptToEvaluateOnNewDocument", {"source": _PROBE_SCRIPT})
+        driver.execute_cdp_cmd("Page.addScriptToEvaluateOnNewDocument", {"source": CLIPBOARD_BOUNDARY_OBSERVER})
         driver.execute_cdp_cmd("Page.addScriptToEvaluateOnNewDocument", {
             "source": "window.__PIVOT_QUALIFY_KEYBOARD_MOVES__ = true;"})
         driver.execute_cdp_cmd("Browser.grantPermissions", {
@@ -877,12 +879,16 @@ def qualify_selected_clipboard(host: str, requirement: str) -> None:
             assert driver.execute_async_script(
                 "const done=arguments[arguments.length-1]; navigator.clipboard.writeText(arguments[0]).then(()=>done(true),()=>done(false));",
                 sentinel)
+            write_checkpoint = driver.execute_script("return window.__pivotClipboardBoundary.length")
             _selection_keyboard_copy(driver, observation)
             copied = WebDriverWait(driver, SELECTION_COPY_TIMEOUT).until(lambda current: (
                 value if (value := _clipboard_text(current)) != sentinel else False))
             observation["nativePositiveClipboard"] = copied
             assert copied == menu_clipboard, "Keyboard copy differs from Copy Selection"
             assert_selected_clipboard(copied, expected, line_separator=observation["clipboardLineSeparator"])
+            observation["shortcutWriteMonitor"] = monitor_single_clipboard_write(
+                driver, write_checkpoint, seconds=SELECTION_COPY_TIMEOUT)
+            result["singleWritePerKeypressVerified"] = True
             result["nativeKeyboardCopyVerified"] = True
         if requirement in ("copy-selection.headers", "copy-selection.hidden-columns"):
             selected_before_headers = set(observation["selectedIds"])
@@ -1116,6 +1122,7 @@ def qualify_table_scope_clipboard(host: str, requirement: str) -> None:
 
 def qualify_native_input_copy(host: str) -> None:
     """A focused input owns Ctrl+C even after a grid rectangle was selected."""
+    from tests.flagship_clipboard_observer import CLIPBOARD_BOUNDARY_OBSERVER
     import pytest
     if os.environ.get("PIVOT_RUN_FLAGSHIP_BROWSER_TESTS") != "1":
         pytest.skip("Enable installed flagship browser qualification explicitly")
@@ -1128,7 +1135,7 @@ def qualify_native_input_copy(host: str) -> None:
     from tests.test_flagship_certification import (
         _clipboard_text, _host_url, _origin, _qualification_chrome_options,
         _switch_to_workspace, _verify_release_asset_batch,
-        _wait_for_visible_workspace_element,
+        _wait_for_visible_workspace_element, _workspace_elements,
     )
 
     requirement = "keyboard-copy.native-input"
@@ -1148,6 +1155,7 @@ def qualify_native_input_copy(host: str) -> None:
         driver._pivot_artifact_binding, driver._pivot_artifact_host = binding, host
         driver._pivot_loaded_assets = {}
         driver.execute_cdp_cmd("Network.enable", {"maxTotalBufferSize": 50000000, "maxResourceBufferSize": 50000000})
+        driver.execute_cdp_cmd("Page.addScriptToEvaluateOnNewDocument", {"source": CLIPBOARD_BOUNDARY_OBSERVER})
         driver.execute_cdp_cmd("Browser.grantPermissions", {
             "origin": _origin(_host_url(host)), "permissions": ["clipboardReadWrite", "clipboardSanitizedWrite"]})
         _switch_to_workspace(driver, host)
@@ -1187,6 +1195,7 @@ def qualify_native_input_copy(host: str) -> None:
             assert driver.execute_async_script(
                 "const done=arguments[arguments.length-1]; navigator.clipboard.writeText(arguments[0]).then(()=>done(true),()=>done(false));",
                 sentinel)
+            write_checkpoint = driver.execute_script("return window.__pivotClipboardBoundary.length")
             ActionChains(driver).key_down(Keys.CONTROL).send_keys("c").key_up(Keys.CONTROL).perform()
             try:
                 copied = WebDriverWait(driver, 8).until(lambda current:
@@ -1196,6 +1205,11 @@ def qualify_native_input_copy(host: str) -> None:
                 raise
             observation["controls"][-1]["clipboardText"] = copied
             assert copied == expected, f"Ctrl+C in {label} copied grid contents or changed text"
+            observation["controls"][-1]["nativeCopyMonitor"] = assert_clipboard_stable(
+                lambda: _clipboard_text(driver), expected, timeout=SELECTION_COPY_TIMEOUT)
+            writes = driver.execute_script("return window.__pivotClipboardBoundary.slice(arguments[0])", write_checkpoint)
+            observation["controls"][-1]["productClipboardWrites"] = writes
+            assert writes == [], f"Grid clipboard handler intercepted native copy in {label}"
             observation["controls"][-1]["focused"] = True
 
         for attempt in range(3):
@@ -1210,6 +1224,19 @@ def qualify_native_input_copy(host: str) -> None:
                     raise
         wait.until(lambda current: [row["label"] for row in _selection_rows(current)] == ["M\u00fcnchen"])
         copy_focused_input('[data-testid="pivot-global-search"]', "M\u00fcnchen", "global search")
+        filter_button = wait.until(lambda current: next((button for button in _workspace_elements(current,
+            '[role="columnheader"][data-header-column-id="hierarchy"] [aria-label="Filter Column"]')
+            if button.is_displayed()), False))
+        filter_button.click()
+        filter_selector = 'input[placeholder="Search values..."], input[placeholder="Search loaded values..."]'
+        filter_input = _wait_for_visible_workspace_element(driver, filter_selector)
+        filter_input.send_keys("M\u00fcnchen")
+        wait.until(lambda current: _wait_for_visible_workspace_element(current, filter_selector).get_attribute("value") == "M\u00fcnchen")
+        copy_focused_input(filter_selector, "M\u00fcnchen", "filter search")
+        result["filterInputNativeCopyVerified"] = True
+        close_filter = wait.until(lambda current: next((button for button in _workspace_elements(current, "button")
+            if button.is_displayed() and button.text.strip() == "Clear & Close"), False))
+        close_filter.click()
         dialog = _open_selection_number_format(driver, observation)
         number = _wait_for_visible_workspace_element(driver, dialog + ' input[type="number"]')
         number.send_keys(Keys.CONTROL + "a" + Keys.NULL)
