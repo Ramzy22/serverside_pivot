@@ -453,3 +453,34 @@ serializer suite now also checks selected values with precomposed and decomposed
 Unicode, emoji and both empty positions before the OS boundary. Independent
 review found no blocker. Fresh installed artifact execution is still pending;
 runner mappings and repository unit checks alone provide no release credit.
+
+### Targeted Unicode/empty clipboard results
+
+Candidate `218ff4c3ff008a978559e51081cee47ffd17715e` built all three supported
+hosts from committed source. Wheel and npm package-contract checks passed.
+Both `first` and `last` source-value assertions passed against the separately
+installed wheel, using the committed six-file source closure outside checkout.
+The selected repository suite passed 113 tests; six opt-in HTML browser checks
+were skipped and provide no credit, while 127 flagship cases were deselected.
+The targeted Bandit scan of the changed expression builder passed.
+
+Dash, React and Streamlit all passed on the first installed browser run under
+`artifacts/clipboard-values-2026-10-31/run-final/`. Each observation records the
+real request/response, all four source rows, exact distinct raw null/empty
+values, four selected logical cells, literal clipboard text and parsed 1×4 TSV,
+screenshot and loaded-asset digests (three/four/five assets respectively).
+The trailing tab remains present in every host. Only the starting view
+configuration is seeded through the existing persistence API.
+
+Both existing pinned AG Grid Unicode/empty-value cases passed freshly under
+`artifacts/clipboard-values-reference-2026-10-31/`; these are reused executable
+assertions, while the product journeys and authoritative source checks were
+newly authored. The Node serializer regression separately checks precomposed
+and decomposed Unicode before OS delivery; browser observations qualify the
+literal multilingual/emoji fixture, not every Unicode input combination.
+
+All results above are supplemental (`qualificationEvidence: false`) and do not
+replace frozen release manifests. Coverage is now 132 of 207 required host
+cases, leaving 27 browser workflow groups and 43 shared assertion IDs unmapped.
+Full frozen-candidate qualification and the remaining release gates are still
+required before publishing.
