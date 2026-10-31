@@ -31,6 +31,12 @@ class SharedAssertion:
 # Each mapped assertion checks a parsed, literal document against an independent
 # expected result, including order, totals, numeric values, and Unicode text.
 SHARED_ASSERTIONS: Mapping[str, tuple[SharedAssertion, ...]] = {
+    **{"shared.copy-selection." + kind: tuple(
+        SharedAssertion(f"tests/test_flagship_clipboard_values_runtime.py::test_shared_clipboard_source_values[{aggregation}]",
+                        ("tests/__init__.py", "tests/test_flagship_clipboard_values_runtime.py",
+                         "tests/flagship_clipboard_values.py", "tests/test_flagship_shared_runtime.py",
+                         "tests/export_qualification_fixture.py", "tests/data/flagship_parity_rows.json"))
+        for aggregation in ("first", "last")) for kind in ("unicode", "empty-values")},
     **{"shared." + name: (
         SharedAssertion("tests/test_flagship_shared_runtime.py::test_flagship_saved_model_round_trip_preserves_exact_values",
                         ("tests/__init__.py", "tests/test_flagship_shared_runtime.py", "tests/export_qualification_fixture.py",

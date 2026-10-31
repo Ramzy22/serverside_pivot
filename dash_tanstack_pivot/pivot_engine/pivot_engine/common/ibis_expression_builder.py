@@ -4,10 +4,15 @@ between IbisPlanner, ProgressiveDataLoader, and HierarchicalVirtualScrollManager
 """
 from typing import List, Dict, Any, Optional, Union
 import re
+import inspect
 import ibis
 from ibis import BaseBackend as IbisBaseBackend
 from ibis.expr.api import Table as IbisTable, Expr as IbisExpr, Column as IbisColumn
 from pivot_engine.types.pivot_spec import PivotSpec, Measure
+
+# Older Ibis exposes first/last reductions through arbitrary(how=...).
+# Modern first()/last() are reductions; older names were window operations.
+_ARBITRARY_SUPPORTS_HOW = 'how' in inspect.signature(IbisColumn.arbitrary).parameters
 
 
 class IbisExpressionBuilder:
@@ -742,7 +747,8 @@ class IbisExpressionBuilder:
             return col.collect().name(measure.alias)
         elif agg_type in {"first", "last"}:
             method = 'first' if agg_type == 'first' else 'last'
-            return col.arbitrary(how=method).name(measure.alias)
+            reduction = col.arbitrary(how=method) if _ARBITRARY_SUPPORTS_HOW else getattr(col, method)()
+            return reduction.name(measure.alias)
         else:
             raise ValueError(f"Unsupported aggregation type: {agg_type}")
 

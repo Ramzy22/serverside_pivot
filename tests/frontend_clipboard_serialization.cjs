@@ -168,3 +168,29 @@ test('clipboard source recovery does not change the accessors used by file expor
     assert.equal(presentation.getExportCellDisplayValue(row, columns[0], 0), '  Left Right');
     assert.equal(presentation.getExportRawCellValue(row, columns[0], 0, 'Custom label'), 'Custom label');
 });
+
+
+test('selected values preserve Unicode codepoints and interior/trailing empty cells before OS delivery', () => {
+    for (const text of ['\u00c9clair M\u00fcnchen \u6771\u4eac \u0627\u0644\u0642\u0627\u0647\u0631\u0629 \u{1f680}', 'E\u0301clair Mu\u0308nchen \u6771\u4eac \u0627\u0644\u0642\u0627\u0647\u0631\u0629 \u{1f680}']) {
+        const ids = ['copyUnicode_first', 'copyNull_first', 'rowId_first', 'copyEmpty_first'];
+        const values = [text, null, 'q2-munchen', ''];
+        const original = Object.fromEntries(ids.map((id, index) => [id, values[index]]));
+        const row = {id: 'q2-munchen', original, getValue: id => original[id]};
+        const columns = ids.map(id => ({id, columnDef:{header:id}}));
+        let presentation;
+        function Harness() {
+            presentation = useRuntimeClipboardExportPresentation({
+                table:{getVisibleLeafColumns:()=>columns}, getDisplayRows:()=>[row],
+                getDisplayHeaderTextForColumn: column=>column.id,
+                getDisplayHeaderTextStackForColumn: column=>[column.id],
+                selectedCells:Object.fromEntries(ids.map((id,index)=>['q2-munchen:'+id,values[index]])), theme:{},
+            });
+            return null;
+        }
+        renderToStaticMarkup(React.createElement(Harness));
+        const payload = presentation.buildSelectedClipboardPayload();
+        assert.equal(payload.text, text+'\t\tq2-munchen\t');
+        assert.equal(payload.rowCount,1);
+        assert.equal(payload.columnCount,4);
+    }
+});

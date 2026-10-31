@@ -1527,3 +1527,25 @@ def test_persistence_workflows_have_executable_installed_mappings():
 def test_flagship_saved_view_persistence(host, installed_workflow_hosts):
     from tests.flagship_persistence import qualify_saved_view_persistence
     qualify_saved_view_persistence(host)
+
+
+def test_unicode_empty_clipboard_has_executable_installed_mappings():
+    from scripts.certify_flagship import _product_browser_plan
+    from scripts.flagship_shared_runner import SHARED_ASSERTIONS
+    from tests.flagship_contract import load_requirements
+    plan = _product_browser_plan(load_requirements(Path(__file__).with_name("flagship_requirements.json")))
+    for kind in ("unicode", "empty-values"):
+        requirement = "copy-selection." + kind
+        for host in ("dash", "react", "streamlit"):
+            assert plan[(requirement, host, "browser." + requirement)] == (
+                f"tests/test_flagship_workflows.py::test_flagship_clipboard_values[{host}]")
+        assert len(SHARED_ASSERTIONS["shared." + requirement]) == 2
+        assert all(assertion.node.startswith("tests/test_flagship_clipboard_values_runtime.py::test_shared_clipboard_source_values[")
+                   for assertion in SHARED_ASSERTIONS["shared." + requirement])
+
+
+@pytest.mark.flagship
+@pytest.mark.parametrize("host", ["dash", "react", "streamlit"])
+def test_flagship_clipboard_values(host, installed_workflow_hosts):
+    from tests.flagship_clipboard_values import qualify_clipboard_values
+    qualify_clipboard_values(host)

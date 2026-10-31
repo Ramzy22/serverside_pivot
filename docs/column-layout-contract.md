@@ -419,3 +419,37 @@ complete release qualification, and never amend earlier frozen manifests.
 Runner coverage is 126 of 207 required host cases, with 29 browser workflow
 groups and 45 shared assertion IDs still unmapped. A complete frozen-candidate
 run and the remaining release checks are still required before publishing.
+
+## Unicode and empty selected-cell qualification scope
+
+`copy-selection.unicode` and `copy-selection.empty-values` now map to one
+concrete browser journey per host. A known saved-view configuration groups the
+unchanged edge fixture by row ID and requests `first` for four string fields.
+Only configuration is seeded; rows, responses, selection and clipboard are
+never injected. The V1 response must retain all four Included rows and the
+distinct raw null and empty-string values. A native drag selects exactly four
+cells on `q2-munchen`, then the real Copy Selection action must produce literal
+TSV containing `Éclair München 東京 القاهرة 🚀`, an interior empty field, the
+row-ID anchor and a trailing empty field. Exact codepoints, bytes and 1×4 shape
+are checked independently of the returned clipboard. Existing AG Grid special
+text cases are reused for the pinned comparison rather than replaced by new
+placeholder mappings.
+
+The source setup uncovered a shipped Ibis compatibility defect: Ibis 12 rejects
+`arbitrary(how=...)`. The expression builder now detects that API capability once
+at import, retaining the legacy reduction call where supported and using modern
+`first`/`last` reductions otherwise. This preserves the older distinction from
+window methods documented in the [Ibis 4 source](https://github.com/ibis-project/ibis/blob/4.0.0/ibis/expr/types/generic.py).
+The [current Column API](https://ibis-project.org/reference/expression-generic#ibis.expr.types.generic.Column.first)
+describes modern reductions and their backend-dependent ordering without an
+ordering key. These tests use singleton groups and make no ordered multirow
+first/last claim. Real runtime tests failed before the fix and now preserve
+Unicode, null and empty values for both aggregations. Legacy API-shape tests
+retain that branch; a complete historical Ibis-version matrix is not claimed.
+
+The shared installed assertions verify authoritative source values and schema;
+browser tests own actual selection and clipboard delivery. The existing Node
+serializer suite now also checks selected values with precomposed and decomposed
+Unicode, emoji and both empty positions before the OS boundary. Independent
+review found no blocker. Fresh installed artifact execution is still pending;
+runner mappings and repository unit checks alone provide no release credit.

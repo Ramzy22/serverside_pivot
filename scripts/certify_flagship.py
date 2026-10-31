@@ -964,6 +964,8 @@ PRODUCT_BROWSER_JOURNEYS = {
     "browser.layout-values.aggregation": "test_flagship_aggregation_round_trip[{host}]",
     "browser.layout-values.add-remove": "test_flagship_measure_add_remove[{host}]",
     "browser.layout-swap.transpose": "test_flagship_axis_swap[{host}]",
+    **{"browser.copy-selection." + kind: "test_flagship_clipboard_values[{host}]"
+       for kind in ("unicode", "empty-values")},
     **{"browser." + name: "test_flagship_saved_view_persistence[{host}]"
        for name in ("persistence.reload", "journey-persistence.resize-density-reload")},
     "browser.undo-redo.layout": "test_flagship_layout_history[{host}]",
