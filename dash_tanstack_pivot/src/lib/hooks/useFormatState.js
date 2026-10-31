@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useCallback, useState } from 'react';
 
 /**
  * useFormatState — extracts formatting/display state from DashTanstackPivot.
@@ -11,7 +11,15 @@ export function useFormatState({
     normalizedInitialDefaultValueFormat,
     normalizedInitialNumberGroupSeparator,
 }) {
-    const [colorScaleMode, setColorScaleMode] = useState('off');
+    const [colorScaleMode, updateColorScaleMode] = useState('off');
+    // null preserves the global scope of older saved views. A selection is
+    // captured when the user applies a scale, not read from later selections.
+    const [colorScaleColumns, setColorScaleColumns] = useState(null);
+    const setColorScaleMode = useCallback((mode, columns = null) => {
+        updateColorScaleMode(mode);
+        setColorScaleColumns(Array.isArray(columns) && columns.length > 0
+            ? [...new Set(columns.filter(column => typeof column === 'string'))] : null);
+    }, []);
     const [colorPalette, setColorPalette] = useState('redGreen');
     const [dataBarsColumns, setDataBarsColumns] = useState(new Set());
 
@@ -30,6 +38,7 @@ export function useFormatState({
 
     return {
         colorScaleMode, setColorScaleMode,
+        colorScaleColumns, setColorScaleColumns,
         colorPalette, setColorPalette,
         dataBarsColumns, setDataBarsColumns,
         fontFamily, setFontFamily,

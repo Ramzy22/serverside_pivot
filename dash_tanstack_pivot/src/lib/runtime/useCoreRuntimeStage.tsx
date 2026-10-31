@@ -868,6 +868,8 @@ export function useCoreRuntimeStage(props) {
   ({
     colorScaleMode: stage.colorScaleMode,
     setColorScaleMode: stage.setColorScaleMode,
+    colorScaleColumns: stage.colorScaleColumns,
+    setColorScaleColumns: stage.setColorScaleColumns,
     colorPalette: stage.colorPalette,
     setColorPalette: stage.setColorPalette,
     dataBarsColumns: stage.dataBarsColumns,
@@ -1383,6 +1385,8 @@ export function useCoreRuntimeStage(props) {
     }
     if (typeof restored.layoutMode === 'string') stage.setLayoutMode(normalizeLayoutModeValue(restored.layoutMode));
     if (typeof restored.colorScaleMode === 'string') stage.setColorScaleMode(restored.colorScaleMode);
+    stage.setColorScaleColumns(Array.isArray(restored.colorScaleColumns)
+      ? restored.colorScaleColumns.filter(column => typeof column === 'string') : null);
     if (typeof restored.colorPalette === 'string') stage.setColorPalette(restored.colorPalette);
     if (typeof restored.spacingMode === 'number') stage.setSpacingMode(restored.spacingMode);
     if (Array.isArray(restored.dataBarsColumns)) stage.setDataBarsColumns(new Set(restored.dataBarsColumns));

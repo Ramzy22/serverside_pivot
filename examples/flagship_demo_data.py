@@ -310,7 +310,7 @@ def workspace_config(host: str) -> dict[str, Any]:
             ],
             "availableFieldList": [
                 "region", "account", "scope", "period", "ventes_€", "unités", "écart",
-                *(["rowId", "extrema", "copyTab", "copyLF", "copyCRLF", "copyUnicode", "copyNull", "copyEmpty"] if _parity_data_enabled() else []),
+                *(["rowId", "extrema", "copyTab", "copyLF", "copyCRLF", "copyUnicode", "copyNull", "copyEmpty", "format_edge", "scale_value", "scale_control"] if _parity_data_enabled() else []),
             ],
             "filters": {
                 "scope": {

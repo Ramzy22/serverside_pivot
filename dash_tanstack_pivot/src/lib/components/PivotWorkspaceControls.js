@@ -33,6 +33,7 @@ export function PivotWorkspaceToolbar({ toolbar }) {
     handleAddChartCanvasPane,
     handleAutoSizeToolbarClick,
     handleRedo,
+    parentRef,
     handleSaveView,
     handleTransposePivot,
     handleUndo,
@@ -89,6 +90,7 @@ export function PivotWorkspaceToolbar({ toolbar }) {
     onTransposePivot={handleTransposePivot}
     canTranspose={rowFields.length > 0 || colFields.length > 0}
     colorScaleMode={colorScaleMode} setColorScaleMode={setColorScaleMode}
+    onReturnFocusToGrid={() => parentRef?.current?.focus({preventScroll: true})}
     colorPalette={colorPalette} setColorPalette={setColorPalette}
     rowCount={rowCount} exportPivot={exportPivot} isExporting={isExporting}
     onSaveView={handleSaveView}

@@ -1065,6 +1065,7 @@ export const PivotAppBar = React.memo(function PivotAppBar({
     onAutoSizeColumns,
     autoSizeIncludesHeaderNext,
     colorScaleMode, setColorScaleMode,
+    onReturnFocusToGrid,
     colorPalette, setColorPalette,
     rowCount, exportPivot, isExporting,
     onTransposePivot,
@@ -1482,7 +1483,7 @@ export const PivotAppBar = React.memo(function PivotAppBar({
                         cellFormatRules={cellFormatRules}
                         setCellFormatRules={setCellFormatRules}
                         selectedCellKeys={selectedCellKeys}
-                        onClose={() => setCellFormatOpen(false)}
+                        onClose={() => { setCellFormatOpen(false); onReturnFocusToGrid?.(); }}
                         anchorRef={cellFormatBtnRef}
                     />
                 )}
@@ -1533,7 +1534,7 @@ export const PivotAppBar = React.memo(function PivotAppBar({
             </button>
             <select
                 value={colorScaleMode}
-                onChange={e => setColorScaleMode(e.target.value)}
+                onChange={e => setColorScaleMode(e.target.value, Array.from(selectedCellColIds))}
                 title="Color scale"
                 style={{...compactSelectStyle, ...(colorScaleMode !== 'off' ? {background: theme.select, border:`1px solid ${theme.primary}`, color: theme.primary} : {})}}
             >

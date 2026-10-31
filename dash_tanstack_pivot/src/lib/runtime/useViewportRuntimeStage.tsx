@@ -837,6 +837,7 @@ export function useViewportRuntimeStage(input, transport) {
     colTypeFilter: stage.colTypeFilter,
     colorPalette: stage.colorPalette,
     colorScaleMode: stage.colorScaleMode,
+    colorScaleColumns: stage.colorScaleColumns,
     columnDecimalOverrides: stage.columnDecimalOverrides,
     columnFormatOverrides: stage.columnFormatOverrides,
     columnGroupSeparatorOverrides: stage.columnGroupSeparatorOverrides,
@@ -1272,6 +1273,7 @@ export function useViewportRuntimeStage(input, transport) {
   const colorScalePresentation = useRuntimeColorScalePresentation({
     colorPalette: stage.colorPalette,
     colorScaleMode: stage.colorScaleMode,
+    colorScaleColumns: stage.colorScaleColumns,
     colFields: stage.colFields,
     filteredData: stage.filteredData,
     getRuleBasedStyle: stage.getRuleBasedStyle,

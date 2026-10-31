@@ -1559,3 +1559,15 @@ def test_hidden_column_copy_has_executable_installed_browser_mappings():
     for host in ("dash", "react", "streamlit"):
         assert plan[("copy-selection.hidden-columns", host, "browser.copy-selection.hidden-columns")] == (
             f"tests/test_flagship_workflows.py::test_flagship_selected_clipboard[copy-selection.hidden-columns-{host}]")
+
+
+@pytest.mark.flagship
+@pytest.mark.parametrize("host", ["dash", "react", "streamlit"])
+@pytest.mark.parametrize("requirement", [
+    "row-numbers.toggle", "density.cycle", "number-format.decimals",
+    "cell-format.apply-close", "color-scales.scale", "color-scales.data-bars",
+    "themes.select-override", "zoom-immersive.round-trip",
+])
+def test_flagship_presentation(host, requirement, installed_workflow_hosts):
+    from tests.flagship_remaining_1 import qualify_presentation
+    qualify_presentation(host, requirement)

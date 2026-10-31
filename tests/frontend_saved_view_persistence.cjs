@@ -23,7 +23,7 @@ global.window = {localStorage:{getItem:key=>storage.get(key)??null,setItem:(key,
 const {usePersistence,resolvePersistedViewState} = load('hooks/usePersistence.js');
 const {useRuntimeViewSnapshot} = load('runtime/useRuntimeViewSnapshot.js');
 const persistence = usePersistence('first',true,'local');
-const state={rowFields:['period'],colFields:['region','account'],columnSizing:{sales:173},spacingMode:0};
+const state={rowFields:['period'],colFields:['region','account'],columnSizing:{sales:173},spacingMode:0,colorScaleMode:'col',colorScaleColumns:['sales']};
 const saved={version:1,table:'revenue',state};
 persistence.save('savedView',saved);
 assert.deepEqual(resolvePersistedViewState(null,persistence.load('savedView',null),'revenue'),saved);
@@ -43,6 +43,7 @@ useRuntimeViewSnapshot(opts).handleSaveView();
 assert.deepEqual(persistence.load('savedView',null),JSON.parse(JSON.stringify(emitted.savedView)),'Save View must persist the emitted complete snapshot');
 assert.deepEqual(emitted.savedView.state.columnSizing,{sales:173});
 assert.equal(emitted.savedView.state.spacingMode,0);
+assert.deepEqual(emitted.savedView.state.colorScaleColumns,['sales']);
 assert.deepEqual(emitted.savedView.state.rowFields,['period']);
 assert.deepEqual(resolvePersistedViewState(null,persistence.load('savedView',null),'revenue'),JSON.parse(JSON.stringify(emitted.savedView)));
 storage.clear();
@@ -64,19 +65,21 @@ assert.equal(persistence.load('savedView',null),null,'explicit reset must clear 
 const restoreStart = core.indexOf('  const appliedViewStateRef');
 const restoreEndToken = '  }, [stage.viewState, stage.initialChartDefinition, stage.normalizedInitialValConfigs]);';
 const restoreCode = core.slice(core.indexOf('  useEffect', restoreStart),core.indexOf(restoreEndToken,restoreStart)+restoreEndToken.length);
-const applied = {current:null}, restoredRows=[];
-const viewStage = new Proxy({viewState:saved,initialChartDefinition:{},chartPanelOrientationAutoRef:{current:false},setRowFields:value=>restoredRows.push(value)},
+const applied = {current:null}, restoredRows=[], restoredScopes=[];
+const viewStage = new Proxy({viewState:saved,initialChartDefinition:{},chartPanelOrientationAutoRef:{current:false},setRowFields:value=>restoredRows.push(value),setColorScaleColumns:value=>restoredScopes.push(value)},
  {get:(target,key)=>key in target?target[key]:String(key).startsWith('set')?()=>{}:undefined});
 const applyRestore = new Function('stage','appliedViewStateRef','useEffect','VALID_CHART_TYPES','VALID_CHART_SORT_MODES',
  'VALID_CHART_INTERACTION_MODES','VALID_CHART_SERVER_SCOPES','getPinnedSideForRow','GRAND_TOTAL_ROW_ID','getPreferredChartOrientation',restoreCode);
 const apply = ()=>applyRestore(viewStage,applied,fn=>fn(),new Set(),new Set(),new Set(),new Set(),()=>null,'Grand Total',()=>"vertical");
 apply();
+assert.deepEqual(restoredScopes,[['sales']],'restore applies saved selection scope');
 viewStage.initialChartDefinition={changed:true};
 apply();
 assert.equal(restoredRows.length,1,'prop echoes after live layout changes must not reapply a consumed snapshot');
 viewStage.viewState={state:{rowFields:['account']}};
 apply();
 assert.deepEqual(restoredRows,[['period'],['account']],'a fresh external viewState must still restore');
+assert.deepEqual(restoredScopes,[['sales'],null],'legacy views restore global color scope');
 
 
 const decimalStart = core.indexOf('  useEffect(() => {\n    const normalizedExternal = clampDecimalPlaces(stage.externalDecimalPlaces, 0);');

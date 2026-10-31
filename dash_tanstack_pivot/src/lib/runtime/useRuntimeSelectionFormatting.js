@@ -137,7 +137,7 @@ export function useRuntimeSelectionFormatting({
       showNotification('Data bars disabled.', 'info');
       return;
     }
-    setColorScaleMode(mode);
+    setColorScaleMode(mode, selectedColumnIds);
     setDataBarsColumns(previous => {
       const next = new Set(previous || []);
       selectedColumnIds.forEach(columnId => next.add(columnId));
