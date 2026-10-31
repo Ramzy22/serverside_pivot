@@ -176,3 +176,38 @@ These additions reduce unmapped shared assertion IDs from 52 to 50. Browser
 mapping coverage remains 105 of 207 host cases, with 36 workflow groups still
 unmapped. The new shared mappings and production cache fix require installed
 candidate qualification; the earlier frozen manifest is unchanged.
+
+## Frozen candidate `4055980` and totals driver follow-up
+
+Run `75694f67f9134e8caedbf0351c32fa2b` tested candidate
+`40559802dfca46f5f2449c838c83d76fbf4046f4`. Its wheel SHA-256 is
+`5e73bf8e2e9b4f8e5041fe812b218d17679dea319e097a0da74a57233321ec98`;
+the npm tarball and contract hashes match candidate `96973e4` above.
+Evidence is retained under
+`artifacts/qualification/candidate-4055980-full-2026-10-31/`.
+
+All six exact download cases passed with current loaded asset observations.
+Both new shared scrolling groups passed their two installed HTTP assertions,
+including cached revision preservation. The strict manifest passes the complete
+CSV, XLSX, vertical-scroll and horizontal-scroll requirements for both release
+behavior and reference comparison. All 21 mapped shared groups and all 34 AG
+Grid reference tests passed. Product browsers reported 98 passes, one failure
+and zero skips across 99 selected tests.
+
+React's totals driver encountered a detached element during the initial render,
+before any totals action or state observation. Its button enumeration held
+references across several Selenium calls. The driver now looks up each control atomically across shadow
+roots, then uses a native click with bounded reacquisition only for stale
+references. A successful click ends the retry immediately; interception errors,
+missing controls and failed value assertions remain failures. Three focused
+driver tests and the 64-test driver/workflow suite passed, and the corrected
+totals journey passed separately in Dash, React and Streamlit under
+`artifacts/totals-controls-rerun-2026-10-31/`.
+
+Those three reruns are supplemental with `qualificationEvidence: false` and
+never replace the frozen failure. Candidate `4055980` remains failed, with 20
+passed release groups, 51 failed/incomplete and one not applicable; reference
+comparison reports 18 passed, 53 failed/incomplete and one not applicable. The
+remaining 36 unmapped browser workflows and 50 unmapped shared assertion IDs
+still block complete qualification. The totals driver correction needs a new
+frozen run for release credit.

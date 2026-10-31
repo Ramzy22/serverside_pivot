@@ -3148,6 +3148,40 @@ def qualify_measure_add_remove(host: str) -> None:
     assert result["result"] == "passed", f"{host} measure add/remove: {diagnostic}; evidence: {directory}"
 
 
+def _totals_control_button(driver, label):
+    return driver.execute_script("""
+      const visit = root => {
+        for (const button of root.querySelectorAll('button')) {
+          if (button.textContent.trim() === arguments[0] && !button.disabled &&
+              button.getClientRects().length && getComputedStyle(button).visibility !== 'hidden') return button;
+        }
+        for (const element of root.querySelectorAll('*')) {
+          if (element.shadowRoot) { const found = visit(element.shadowRoot); if (found) return found; }
+        }
+        return null;
+      };
+      return visit(document);
+    """, label)
+
+
+def _click_totals_control(driver, label, *, timeout=10):
+    from selenium.common.exceptions import StaleElementReferenceException
+    from selenium.webdriver.support.ui import WebDriverWait
+
+    def click(current):
+        try:
+            button = _totals_control_button(current, label)
+            if button is None:
+                return False
+            current.execute_script("arguments[0].scrollIntoView({block:'center',inline:'center'});", button)
+            button.click()
+            return True
+        except StaleElementReferenceException:
+            return False
+
+    WebDriverWait(driver, timeout, poll_frequency=.1).until(click, f"Unable to click {label}")
+
+
 def qualify_totals_controls(host: str) -> None:
     """Observe row-total columns and the grand row through real View controls."""
     import pytest
@@ -3180,14 +3214,10 @@ def qualify_totals_controls(host: str) -> None:
     q1_key, q2_key = "Q1_ventes_\u20ac_sum", "Q2_ventes_\u20ac_sum"
 
     def visible_button(label):
-        return next((button for button in _workspace_elements(driver, "button")
-                     if button.is_displayed() and button.text.strip() == label), None)
+        return _totals_control_button(driver, label)
 
     def click_control(label):
-        button = visible_button(label)
-        assert button is not None, f"Missing visible {label} control"
-        driver.execute_script("arguments[0].scrollIntoView({block:'center',inline:'center'});", button)
-        button.click()
+        _click_totals_control(driver, label)
 
     def observed_state(show_row, show_col, checkpoint):
         trace = driver.execute_script("return window.__pivotNavigationTrace || []")
@@ -3243,7 +3273,7 @@ def qualify_totals_controls(host: str) -> None:
                       infrastructureUnavailable=False)
         wait = WebDriverWait(driver, 30)
         if visible_button("Row Total") is None:
-            _wait_for_visible_workspace_element(driver, '[data-testid="pivot-toolbar-view"]').click()
+            _click_totals_control(driver, "View")
         wait.until(lambda _: visible_button("Row Total") and visible_button("Col Total"))
         observation["states"].append(wait.until(lambda _: observed_state(True, True, -1)))
         for label, row_enabled, col_enabled in (
