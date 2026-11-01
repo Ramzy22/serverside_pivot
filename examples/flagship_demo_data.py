@@ -262,6 +262,25 @@ class _OneShotFaultAdapter:
         if not evidence_root or not marker_path:
             return await self._adapter.handle_virtual_scroll_request(*args, **kwargs)
         root = Path(evidence_root).resolve()
+        # A private server-owned marker delays one real query for lifecycle
+        # qualification. No HTTP input can select a path or arm the delay.
+        delay = root / "delay-next-data-request"
+        if (Path(marker_path).resolve() == root / "fail-next-data-request"
+                and Path(marker_path).name == "fail-next-data-request"):
+            try:
+                armed_delay = delay.read_bytes() == b"one-shot"
+            except FileNotFoundError:
+                armed_delay = False
+            if armed_delay:
+                claimed_delay = delay.with_name(f"{delay.name}.claimed-{os.getpid()}-{threading.get_ident()}")
+                try:
+                    delay.rename(claimed_delay)
+                except FileNotFoundError:
+                    pass
+                else:
+                    claimed_delay.unlink()
+                    import asyncio
+                    await asyncio.sleep(2)
         marker = Path(marker_path)
         if marker.name != "fail-next-data-request" or marker.resolve() != root / "fail-next-data-request":
             return await self._adapter.handle_virtual_scroll_request(*args, **kwargs)

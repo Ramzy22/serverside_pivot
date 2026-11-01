@@ -968,6 +968,8 @@ PRODUCT_BROWSER_JOURNEYS = {
     **{f"browser.{name}": f"test_flagship_charts[{name}-{{host}}]"
        for name in ("range-chart.source", "range-chart.locked-source", "range-chart.live-source",
                     "chart-pane.lifecycle", "chart-export.artifact")},
+    **{f"browser.{name}": f"test_flagship_host_integration[{{host}}-{name}]"
+       for name in ("dash-callback-transport.v1", "react-direct-transport.v1", "streamlit-no-rerun.local-interactions")},
     **{f"browser.{name}": f"test_flagship_presentation[{name}-{{host}}]"
        for name in ("row-numbers.toggle", "density.cycle", "number-format.decimals",
                     "cell-format.apply-close", "color-scales.scale", "color-scales.data-bars",

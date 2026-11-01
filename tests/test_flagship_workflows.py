@@ -1591,3 +1591,14 @@ def test_flagship_derived_models(host, requirement, installed_workflow_hosts):
 def test_flagship_charts(host, requirement, installed_workflow_hosts):
     from tests.flagship_remaining_3 import qualify_charts
     qualify_charts(host, requirement)
+
+
+@pytest.mark.flagship
+@pytest.mark.parametrize("host,requirement", [
+    ("dash", "dash-callback-transport.v1"),
+    ("react", "react-direct-transport.v1"),
+    ("streamlit", "streamlit-no-rerun.local-interactions"),
+])
+def test_flagship_host_integration(host, requirement, installed_workflow_hosts):
+    from tests.flagship_remaining_5 import qualify_hosts
+    qualify_hosts(host, requirement)
