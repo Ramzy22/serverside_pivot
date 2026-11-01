@@ -970,6 +970,10 @@ PRODUCT_BROWSER_JOURNEYS = {
                     "chart-pane.lifecycle", "chart-export.artifact")},
     **{f"browser.{name}": f"test_flagship_host_integration[{{host}}-{name}]"
        for name in ("dash-callback-transport.v1", "react-direct-transport.v1", "streamlit-no-rerun.local-interactions")},
+    **{f"browser.{name}": f"test_flagship_combined_journeys[{name}-{{host}}]"
+       for name in ("saved-scroll.restore", "copy-selection.merged-headers", "copy-selection.unloaded-rows",
+                    "large-delivery.selected-part", "journey-selection.filter-pin-scroll-copy",
+                    "journey-analysis.aggregate-expand-swap-export")},
     **{f"browser.{name}": f"test_flagship_presentation[{name}-{{host}}]"
        for name in ("row-numbers.toggle", "density.cycle", "number-format.decimals",
                     "cell-format.apply-close", "color-scales.scale", "color-scales.data-bars",
@@ -1017,6 +1021,11 @@ PRODUCT_BROWSER_JOURNEYS = {
 
 
 def _product_phase(node: str) -> str:
+    if "::test_flagship_combined_journeys[large-delivery.selected-part-" in node:
+        return "parts"
+    if any(f"::test_flagship_combined_journeys[{name}-" in node
+           for name in ("saved-scroll.restore", "copy-selection.unloaded-rows")):
+        return "scroll"
     if "::test_flagship_export_jobs[" in node:
         return "exports"
     if "::test_flagship_virtual_scroll[" in node or "::test_flagship_custom_pivot_order[" in node:
@@ -1172,13 +1181,14 @@ def _certify_installed_release(artifact_dir: Path, started_at: datetime, *, buil
         environment.pop("PIVOT_FLAGSHIP_EXPORT_JOB_DATA", None)
         environment.pop("PIVOT_FLAGSHIP_EXPORT_QUALIFICATION_DATA", None)
         environment.pop("PIVOT_FLAGSHIP_SCROLL_DATA", None)
+        environment.pop("PIVOT_FLAGSHIP_PARTS_DATA", None)
         phase_reports = []
         code = 0
         try:
             executed_nodes, junit_reports = {}, {}
             with committed_browser_harness(binding, private) as harness:
                 environment["PIVOT_FLAGSHIP_HARNESS_ROOT"] = str(harness.root)
-                for phase in (("exports",) if export_jobs else ("parity", "scroll", "exports")):
+                for phase in (("exports",) if export_jobs else ("parity", "scroll", "parts", "exports")):
                     phase_nodes = [node for node in selected if _product_phase(node) == phase]
                     if not phase_nodes and product_requirements:
                         continue
@@ -1187,6 +1197,8 @@ def _certify_installed_release(artifact_dir: Path, started_at: datetime, *, buil
                         phase_environment["PIVOT_FLAGSHIP_EXPORT_JOB_DATA"] = "1"
                     elif phase == "scroll":
                         phase_environment["PIVOT_FLAGSHIP_SCROLL_DATA"] = "1"
+                    elif phase == "parts":
+                        phase_environment["PIVOT_FLAGSHIP_PARTS_DATA"] = "1"
                     phase_junit = private / f"product-{phase}.junit.xml"
                     phase_reports.append(phase_junit)
                     executed_nodes[phase] = tuple(phase_nodes)

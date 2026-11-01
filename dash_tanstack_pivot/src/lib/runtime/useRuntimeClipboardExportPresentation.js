@@ -301,13 +301,22 @@ export function useRuntimeClipboardExportPresentation({
     return buildTableClipboardPayload({ withHeaders, mergedHeaders, rows });
   }, [buildTableClipboardPayload, table]);
 
-  const buildSelectedClipboardPayload = useCallback((withHeaders = false, selectionMap = selectedCells, { rawValues = false } = {}) => {
+  const buildSelectedClipboardPayload = useCallback((withHeaders = false, selectionMap = selectedCells, { rawValues = false, mergedHeaders = false } = {}) => {
     const keys = Object.keys(selectionMap || {});
     if (keys.length === 0) return null;
     const visibleRows = getDisplayRows();
     const orderedCols = getDisplayOrderedLeafColumns();
     const rowIdMap = {}; visibleRows.forEach((row, index) => { rowIdMap[row.id] = index; });
     const colIdMap = {}; orderedCols.forEach((column, index) => { colIdMap[column.id] = index; });
+    const unavailable = () => {
+      if (typeof showNotification === 'function') showNotification('Selected range unavailable: some rows are not loaded. Load the complete range before copying.', 'warning');
+      return null;
+    };
+    if (serverSide && keys.some(key => {
+      const separator = key.lastIndexOf(':');
+      return separator > 0 && colIdMap[key.slice(separator + 1)] !== undefined
+        && rowIdMap[key.slice(0, separator)] === undefined;
+    })) return unavailable();
     let minR = Infinity; let maxR = -1; let minC = Infinity; let maxC = -1;
     const selectedGrid = {};
     keys.forEach(key => {
@@ -319,11 +328,16 @@ export function useRuntimeClipboardExportPresentation({
     });
     if (minR === Infinity) return null;
     const exportRows = visibleRows.slice(minR, maxR + 1);
+    if (serverSide) {
+      const indices = exportRows.map(row => (row.original || row).__virtualIndex).filter(Number.isFinite);
+      if (indices.length > 1 && indices.some((index, offset) => offset > 0 && index !== indices[offset - 1] + 1)) return unavailable();
+    }
     const exportColumns = orderedCols.slice(minC, maxC + 1).filter(column => isExportableColumnId(column.id));
     if (exportRows.length === 0 || exportColumns.length === 0) return null;
     return buildStyledHtmlTableExport({
       rows: exportRows, columns: exportColumns, includeHeaders: withHeaders,
       getHeaderLabel: column => getExportHeaderLabel(column, false, mergedHeaderSeparator), getHeaderStyle: getExportHeaderStyle,
+      getHeaderStack: mergedHeaders ? getDisplayHeaderTextStackForColumn : null,
       getCellValue: (rowLike, column, rowIndex) => {
         const absoluteRowIndex = minR + rowIndex; const absoluteColIndex = colIdMap[column.id];
         if (!selectedGrid[absoluteRowIndex] || !Object.prototype.hasOwnProperty.call(selectedGrid[absoluteRowIndex], absoluteColIndex)) return '';
@@ -337,7 +351,7 @@ export function useRuntimeClipboardExportPresentation({
       },
       tableStyle: { fontFamily: fontFamily || "'Inter', ui-sans-serif, system-ui, sans-serif", fontSize: fontSize || '13px' },
     });
-  }, [fontFamily, fontSize, getDisplayOrderedLeafColumns, getDisplayRows, getClipboardCellDisplayValue, getExportCellStyle, getExportHeaderLabel, getExportHeaderStyle, isExportableColumnId, mergedHeaderSeparator, selectedCells]);
+  }, [fontFamily, fontSize, getDisplayOrderedLeafColumns, getDisplayRows, getClipboardCellDisplayValue, getExportCellStyle, getExportHeaderLabel, getExportHeaderStyle, getDisplayHeaderTextStackForColumn, isExportableColumnId, mergedHeaderSeparator, selectedCells, serverSide, showNotification]);
 
   const buildExportStyleProfile = useCallback((colIds, { withHeaders = true, mergedHeaders = false } = {}) => {
     const columnsById = new Map();

@@ -835,7 +835,8 @@ def test_full_product_plan_reports_missing_contract_ids_and_selects_all_authored
     requirements = load_requirements(ROOT / "tests/flagship_requirements.json")
     report = runner._installed_browser_coverage(tmp_path / "absent.xml", requirements, ())
     assert {"requirementId": "saved-scroll.restore", "host": "dash",
-            "testId": "browser.saved-scroll.restore"} in report["missingImplementations"]
+            "testId": "browser.saved-scroll.restore"} not in report["missingImplementations"]
+    assert "tests/test_flagship_workflows.py::test_flagship_combined_journeys[saved-scroll.restore-dash]" in report["selectedNodeIds"]
     assert "tests/test_flagship_workflows.py::test_flagship_runtime_error_recovery[react]" in report["selectedNodeIds"]
     assert "tests/test_flagship_workflows.py::test_flagship_export_jobs[large-delivery.progress-streamlit]" in report["selectedNodeIds"]
     assert not any("test_flagship_startup_navigation" in item for item in report["selectedNodeIds"])

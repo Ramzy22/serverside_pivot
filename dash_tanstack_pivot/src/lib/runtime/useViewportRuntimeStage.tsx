@@ -615,6 +615,20 @@ export function useViewportRuntimeStage(input, transport) {
         }
       });
       actions.push({
+        label: 'Copy Selection with Headers (Raw Values)',
+        onClick: () => {
+          const payload = stage.buildSelectedClipboardPayload(true, selectionForMenu, { rawValues: true });
+          if (payload) stage.copyRichToClipboard(payload);
+        }
+      });
+      actions.push({
+        label: 'Copy Selection with Merged Headers (Raw Values)',
+        onClick: () => {
+          const payload = stage.buildSelectedClipboardPayload(true, selectionForMenu, { mergedHeaders: true, rawValues: true });
+          if (payload) stage.copyRichToClipboard(payload);
+        }
+      });
+      actions.push({
         label: 'Create Range Chart',
         icon: <Icons.Chart />,
         onClick: () => stage.openSelectionChart(selectionForMenu)

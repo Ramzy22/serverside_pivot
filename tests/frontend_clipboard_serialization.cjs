@@ -220,3 +220,59 @@ test('selected values preserve Unicode codepoints and interior/trailing empty ce
         assert.equal(payload.columnCount,4);
     }
 });
+
+test('selected merged headers clip ancestry to a partial two-period selection', () => {
+    const columns = ['Q1_units','Q1_sales','Q1_variance','Q2_units'].map(id=>({id,columnDef:{header:id.split('_')[1]}}));
+    const row={id:'r',original:{},getValue:id=>({Q1_units:2,Q1_sales:100.25,Q1_variance:-12.5,Q2_units:1})[id]};
+    let presentation;
+    function Harness(){presentation=useRuntimeClipboardExportPresentation({
+        table:{getVisibleLeafColumns:()=>columns},getDisplayRows:()=>[row],theme:{},
+        getDisplayHeaderTextForColumn:c=>c.columnDef.header,
+        getDisplayHeaderTextStackForColumn:c=>[c.id.split('_')[0],c.columnDef.header],
+        selectedCells:{'r:Q1_sales':100.25,'r:Q1_variance':-12.5,'r:Q2_units':1},
+    });return null;}
+    renderToStaticMarkup(React.createElement(Harness));
+    const result=presentation.buildSelectedClipboardPayload(true,undefined,{mergedHeaders:true,rawValues:true});
+    assert.match(result.html, /colspan="2"[^>]*>Q1<\/th>/);
+    assert.match(result.html, />Q2<\/th>/);
+    assert.equal((result.html.match(/>units<\/th>/g)||[]).length,1);
+    assert.equal(result.columnCount,3);
+    assert.equal(result.text.split('\n').at(-1),'100.25\t-12.5\t1');
+    assert.deepEqual([...result.html.matchAll(/<th\b[^>]*>(.*?)<\/th>/g)].map(match=>match[1]),
+        ['Q1','Q2','sales','variance','units']);
+    assert.ok(!presentation.buildSelectedClipboardPayload(true).html.includes('colspan="2"'));
+});
+
+test('complete consecutive server selections still produce all logical cells with raw headers',()=>{
+    const notices=[];
+    const rows=[10,11,12].map(index=>({id:`r${index}`,original:{__virtualIndex:index},getValue:()=>index+.25}));
+    let presentation;
+    function Harness(){presentation=useRuntimeClipboardExportPresentation({
+        table:{getVisibleLeafColumns:()=>[{id:'sales',columnDef:{header:'Sales'}}]},getDisplayRows:()=>rows,
+        serverSide:true,theme:{},decimalPlaces:0,getDisplayHeaderTextForColumn:c=>c.columnDef.header,
+        showNotification:(...args)=>notices.push(args),
+        selectedCells:Object.fromEntries(rows.map(row=>[`${row.id}:sales`,row.getValue()])),
+    });return null;}
+    renderToStaticMarkup(React.createElement(Harness));
+    assert.equal(presentation.buildSelectedClipboardPayload(true,undefined,{rawValues:true}).text,
+        'Sales\n10.25\n11.25\n12.25');
+    assert.equal(notices.length,0);
+});
+
+test('selected copy rejects missing row IDs and virtual holes without producing a clipboard payload',()=>{
+    for(const missing of [true,false]) {
+        const notices=[];
+        const rows=[{id:'a',original:{__virtualIndex:0},getValue:()=>1},
+            {id:'c',original:{__virtualIndex:100},getValue:()=>3}];
+        let presentation;
+        function Harness(){presentation=useRuntimeClipboardExportPresentation({
+            table:{getVisibleLeafColumns:()=>[{id:'sales'}]},getDisplayRows:()=>missing?rows.slice(0,1):rows,
+            serverSide:true,theme:{},showNotification:(...args)=>notices.push(args),
+            selectedCells:{'a:sales':1,'c:sales':3},
+        });return null;}
+        renderToStaticMarkup(React.createElement(Harness));
+        assert.equal(presentation.buildSelectedClipboardPayload(),null);
+        assert.match(notices[0][0],/unavailable.*loaded/i);
+        assert.equal(notices[0][1],'warning');
+    }
+});

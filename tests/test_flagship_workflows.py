@@ -1602,3 +1602,15 @@ def test_flagship_charts(host, requirement, installed_workflow_hosts):
 def test_flagship_host_integration(host, requirement, installed_workflow_hosts):
     from tests.flagship_remaining_5 import qualify_hosts
     qualify_hosts(host, requirement)
+
+
+@pytest.mark.flagship
+@pytest.mark.parametrize("host", ["dash", "react", "streamlit"])
+@pytest.mark.parametrize("requirement", [
+    "saved-scroll.restore", "copy-selection.merged-headers", "copy-selection.unloaded-rows",
+    "large-delivery.selected-part", "journey-selection.filter-pin-scroll-copy",
+    "journey-analysis.aggregate-expand-swap-export",
+])
+def test_flagship_combined_journeys(host, requirement, installed_workflow_hosts):
+    from tests.flagship_remaining_4 import qualify_journeys
+    qualify_journeys(host, requirement)

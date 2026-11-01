@@ -73,6 +73,10 @@ def _parity_rows() -> list[dict[str, Any]]:
 
 def build_demo_table(row_count: int = DEMO_ROW_COUNT) -> pa.Table:
     """Build a stable analytics dataset with useful categorical cardinality."""
+    if os.environ.get("PIVOT_FLAGSHIP_PARTS_DATA") == "1":
+        return pa.table({"region": [f"R{i:05d}" for i in range(12001)] + ["Excluded sentinel"],
+                         "sales": [i + .25 for i in range(12001)] + [999999.5],
+                         "scope": ["Included"] * 12001 + ["Excluded"]})
     if os.environ.get("PIVOT_FLAGSHIP_EXPORT_JOB_DATA") == "1":
         return pa.table({"region": [f"R{i:04d} \u6771\u4eac" for i in range(512)],
                          "sales": [i + .25 for i in range(512)]})
@@ -303,15 +307,21 @@ class _OneShotFaultAdapter:
 
 def workspace_config(host: str) -> dict[str, Any]:
     """Return public workspace props shared by all three flagship hosts."""
-    if os.environ.get("PIVOT_FLAGSHIP_EXPORT_JOB_DATA") == "1":
+    if (os.environ.get("PIVOT_FLAGSHIP_EXPORT_JOB_DATA") == "1"
+            or os.environ.get("PIVOT_FLAGSHIP_PARTS_DATA") == "1"):
         return {
             "id": f"flagship-{host}-pivot", "table": TABLE_NAME,
             "pivotTitle": "Bounded export qualification", "serverSide": True,
             "rowFields": ["region"], "colFields": [],
             "valConfigs": [{"field": "sales", "agg": "sum", "label": "Sales"}],
-            "availableFieldList": ["region", "sales"], "filters": {}, "sorting": [],
+            "availableFieldList": ["region", "sales", *(["scope"] if os.environ.get("PIVOT_FLAGSHIP_PARTS_DATA") == "1" else [])],
+            "filters": ({"scope": {"operator": "AND", "conditions": [
+                {"type": "eq", "value": "Included", "caseSensitive": False}]}}
+                if os.environ.get("PIVOT_FLAGSHIP_PARTS_DATA") == "1" else {}), "sorting": [],
             "expanded": {}, "viewState": {"layoutMode": "tabular"}, "showSubtotals": False,
             "showRowTotals": False, "showColTotals": False, "persistence": False,
+            **({"decimalPlaces": 2, "numberGroupSeparator": "none"}
+               if os.environ.get("PIVOT_FLAGSHIP_PARTS_DATA") == "1" else {}),
             "style": {"height": "760px", "width": "100%"},
         }
     if _qualification_data_enabled() or _parity_data_enabled() or _scroll_data_enabled():
