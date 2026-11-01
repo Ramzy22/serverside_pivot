@@ -91,7 +91,6 @@ SHARED_CLIENT_ASSERTIONS: Mapping[str, SharedClientAssertion] = {
         ("copy-selection.merged-headers", "Actual rich HTML selected Q1/Q2 group labels/spans sum to selected width"),
         ("copy-selection.unloaded-rows", "Actual unloaded range explicitly completes or unavailable leaves clipboard sentinel unchanged"),
         ("large-delivery.selected-part", "At least3 parts; real part2 download exact headers/row boundaries and immutable filtered bounds"),
-        ("report-mode.restore-definition", "Save/change/select report definition; exact restored period/sales model and total200; usable pivot"),
         ("journey-selection.filter-pin-scroll-copy", "Single filter Munchen/pin units/scroll/copy headers journey exact [3,49.75]"),
         ("journey-analysis.aggregate-expand-swap-export", "Single average/expand/swap/parsed export journey; Q1grand75 and exact matrix"),
         ("streamlit-no-rerun.local-interactions", "Real Streamlit session script counter unchanged after physical scroll and chart resize"),

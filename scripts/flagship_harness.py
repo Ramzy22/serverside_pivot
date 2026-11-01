@@ -69,13 +69,13 @@ def committed_browser_harness(binding, evidence_root, *, coordinator_root=None):
     evidence_root = Path(evidence_root).resolve()
     if evidence_root.name != binding.run_id or evidence_root.parent.name != "runs":
         raise ValueError("harness evidence must belong to current run")
+    # A failed preflight must invalidate an earlier successful attempt too.
+    record = evidence_root / "browser-harness.json"
+    record.unlink(missing_ok=True)
     repository = Path(binding.paths["source_repository"]).resolve()
     coordinator = Path(coordinator_root or Path(__file__).resolve().parents[1]).resolve()
     files = committed_harness_files(str(repository), binding.source_commit)
     _check_files(coordinator, files, coordinator=True)
-    record = evidence_root / "browser-harness.json"
-    # Remove a previous completion before attempting another run.
-    record.unlink(missing_ok=True)
     with tempfile.TemporaryDirectory(prefix="pf-browser-harness-") as directory:
         source = Path(directory)
         for name, content in files.items():

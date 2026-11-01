@@ -75,13 +75,12 @@ def test_client_inventory_composes_with_task2_python_assertions_for_43_baseline_
     requirements = load_requirements(Path(__file__).with_name("flagship_requirements.json"))
     required = {test for item in requirements if item.required for test in item.shared_tests}
     task2_python = {"shared.layout-field-zones.move", "shared.formula-columns.add-remove",
-                    "shared.custom-dimensions.add-remove"}
-    assert len(SHARED_CLIENT_ASSERTIONS) == 40
+                    "shared.custom-dimensions.add-remove", "shared.report-mode.restore-definition"}
+    assert len(SHARED_CLIENT_ASSERTIONS) == 39
     assert not set(SHARED_CLIENT_ASSERTIONS) & SHARED_ASSERTIONS.keys()
-    assert set(SHARED_CLIENT_ASSERTIONS) == required - SHARED_ASSERTIONS.keys() - task2_python
-    # Task2 owns the three installed Python assertions. Before integration they
-    # remain missing; after its commit merges the union is complete.
-    assert set(unmapped_shared_ids(requirements)) <= task2_python
+    assert task2_python <= SHARED_ASSERTIONS.keys()
+    assert set(SHARED_CLIENT_ASSERTIONS) == required - SHARED_ASSERTIONS.keys()
+    assert not unmapped_shared_ids(requirements)
 
 
 def test_reuse_is_per_host_exact_node_and_explicitly_not_independent(reuse):
@@ -135,6 +134,7 @@ def test_mutable_transitive_helpers_cannot_acquire_committed_provenance(reuse, w
         with committed_browser_harness(binding, root, coordinator_root=repository) as harness:
             if when == "after":
                 (helper if where == "coordinator" else harness.root / "tests" / "helper.py").write_text("VALUE = 2\n")
+    assert not (root / "browser-harness.json").exists(), "Failed rerun retained an earlier completion receipt"
 
 
 def test_manifest_shared_browser_checks_assets_and_reuse_receipt(reuse):
