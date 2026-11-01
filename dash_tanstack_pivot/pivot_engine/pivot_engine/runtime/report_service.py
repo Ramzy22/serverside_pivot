@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from dataclasses import replace
 from decimal import Decimal
 from typing import Any, Dict, List, Optional
 
@@ -496,11 +497,13 @@ class RuntimeReportService:
         emitted_stats: Optional[Dict[str, Any]] = None
         base_filters = dict(base_request.filters or {})
 
-        async def execute_report_query(request: TanStackRequest) -> TanStackResponse:
+        async def execute_report_query(
+            request: TanStackRequest, *, pivoted: bool = True
+        ) -> TanStackResponse:
             # Branching reports retain the same pivot axes as the public view.
             # The existing adapter owns the column catalog and aggregate-first
             # execution; reports only annotate and arrange the resulting rows.
-            if state.col_fields and request.grouping:
+            if pivoted and state.col_fields and request.grouping:
                 return await adapter.handle_virtual_scroll_request(
                     request, 0, 100000, needs_col_schema=True,
                     include_grand_total=False, user=context.principal,
@@ -569,10 +572,65 @@ class RuntimeReportService:
                 for row in (branch_response.data or [])
                 if isinstance(row, dict) and not self._is_report_summary_row(row)
             ]
+            ranking_values: Optional[Dict[Any, Any]] = None
+            if (
+                state.col_fields and sort_by and sort_by != node_field and visible_rows
+                and not all(sort_by in row for row in visible_rows)
+            ):
+                # ReportEditor offers unprefixed metric IDs. Pivot cells have
+                # period prefixes, and row totals may be hidden. Rank using an
+                # independent overall aggregate, never sums/means of period
+                # cells (which are incorrect for AVG and nonlinear formulas).
+                metric = next(
+                    (
+                        measure
+                        for measure in state.val_configs
+                        if isinstance(measure, dict) and measure.get("field") and measure.get("agg")
+                        if sort_by in {
+                            measure.get("alias") or f"{measure['field']}_{measure['agg']}",
+                            measure["field"] if measure["agg"] == "formula"
+                            else f"{measure['field']}_{measure['agg']}",
+                        }
+                    ),
+                    None,
+                )
+                if metric:
+                    metric_id = (
+                        metric["field"] if metric["agg"] == "formula"
+                        else metric.get("alias") or f"{metric['field']}_{metric['agg']}"
+                    )
+                    total_id = f"__RowTotal__{metric_id}"
+                    if (
+                        metric["agg"] != "formula" and not metric.get("windowFn")
+                        and all(total_id in row for row in visible_rows)
+                    ):
+                        # Base-measure row totals are aggregated from source rows.
+                        # Formula row totals can instead sum period formula cells.
+                        ranking_values = {row.get(node_field): row[total_id] for row in visible_rows}
+                    else:
+                        ranking_response = await execute_report_query(
+                            replace(
+                                branch_request,
+                                columns=RuntimeRequestFactory.build_columns(
+                                    [node_field], [], state.val_configs
+                                ),
+                                sorting=[], row_totals=False,
+                            ),
+                            pivoted=False,
+                        )
+                        ranking_values = {
+                            row.get(node_field): row.get(metric_id)
+                            for row in (ranking_response.data or [])
+                            if isinstance(row, dict) and not self._is_report_summary_row(row)
+                        }
             if sort_by:
                 visible_rows = sorted(
                     visible_rows,
-                    key=lambda row: self._report_sort_key(row.get(sort_by), sort_abs),
+                    key=lambda row: self._report_sort_key(
+                        ranking_values.get(row.get(node_field))
+                        if ranking_values is not None else row.get(sort_by),
+                        sort_abs,
+                    ),
                     reverse=(sort_dir != "asc"),
                 )
 
