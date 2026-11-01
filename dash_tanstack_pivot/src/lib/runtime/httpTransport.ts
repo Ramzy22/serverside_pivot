@@ -199,6 +199,7 @@ export class HttpPivotTransport implements PivotTransport {
 
 interface QueuedViewportRequest {
     readonly request: RuntimeRequestV1;
+    readonly options: RuntimeTransportRequestOptions;
     readonly resolve: (response: RuntimeResponseV1) => void;
     readonly reject: (reason: unknown) => void;
 }
@@ -226,10 +227,10 @@ export class LatestViewportScheduler implements PivotTransport {
         if (this.active) this.active.abort();
         if (this.queued) this.queued.reject(abortError());
         return new Promise<RuntimeResponseV1>((resolve, reject) => {
-            this.queued = { request, resolve, reject };
+            this.queued = { request, options, resolve, reject };
             if (!this.flushScheduled) {
                 this.flushScheduled = true;
-                Promise.resolve().then(() => this.flush(options));
+                Promise.resolve().then(() => this.flush());
             }
         });
     }
@@ -250,11 +251,12 @@ export class LatestViewportScheduler implements PivotTransport {
             : Promise.reject(new Error('The configured transport does not support export payload delivery.'));
     }
 
-    private async flush(options: RuntimeTransportRequestOptions): Promise<void> {
+    private async flush(): Promise<void> {
         this.flushScheduled = false;
         const queued = this.queued;
         this.queued = null;
         if (!queued) return;
+        const { options } = queued;
         const controller = new AbortController();
         this.active = controller;
         const abortFromCaller = () => controller.abort();
