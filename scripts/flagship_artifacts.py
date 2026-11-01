@@ -202,6 +202,21 @@ def _installed_module_paths(python: Path, cwd: Path) -> dict[str, str]:
     return json.loads(_run([str(python), "-c", probe], cwd))
 
 
+def _copy_flagship_fixtures(snapshot: Path, app: Path) -> dict[str, str]:
+    """Stage and hash qualification oracles from the frozen snapshot."""
+    names = {"fixture": "flagship_parity_rows.json", "scroll_fixture": "flagship_scroll_rows.json",
+             "parts_fixture": "flagship_parts_manifest.json"}
+    files = {key: snapshot / "tests" / "data" / name for key, name in names.items()}
+    for path in files.values():
+        if not path.is_file():
+            raise FileNotFoundError(f"Required flagship fixture missing: {path}")
+    target = app / "tests" / "data"
+    target.mkdir(parents=True)
+    for path in files.values():
+        shutil.copy2(path, target / path.name)
+    return {key: _digest(path.read_bytes()) for key, path in files.items()}
+
+
 def build_artifacts(source: Path, output: Path, *, build_wheelhouse: Path | None = None) -> ArtifactBinding:
     """Build and install every host from one committed, isolated source snapshot."""
     source = source.resolve(strict=True)
@@ -260,14 +275,7 @@ def _build_from_snapshot(commit: str, snapshot: Path, output: Path, *, build_whe
         candidate = snapshot / "examples" / name
         if candidate.is_file():
             shutil.copy2(candidate, app / "examples" / name)
-    fixture = snapshot / "tests" / "data" / "flagship_parity_rows.json"
-    scroll_fixture = snapshot / "tests" / "data" / "flagship_scroll_rows.json"
-    for required_fixture in (fixture, scroll_fixture):
-        if not required_fixture.is_file():
-            raise FileNotFoundError(f"Required flagship fixture missing: {required_fixture}")
-    (app / "tests" / "data").mkdir(parents=True)
-    for required_fixture in (fixture, scroll_fixture):
-        shutil.copy2(required_fixture, app / "tests" / "data" / required_fixture.name)
+    fixture_hashes = _copy_flagship_fixtures(snapshot, app)
     react_app = app / "examples" / "flagship_react"
     shutil.copytree(snapshot / "examples" / "flagship_react", react_app, ignore=shutil.ignore_patterns("node_modules", "dist", "release-package.tgz"))
     shutil.copy2(npm_tarball, react_app / "release-package.tgz")
@@ -302,8 +310,7 @@ def _build_from_snapshot(commit: str, snapshot: Path, output: Path, *, build_whe
         "source_commit": _digest(commit.encode()),
         "wheel": _digest(wheel.read_bytes()),
         "npm_tarball": _digest(npm_tarball.read_bytes()),
-        "fixture": _digest(fixture.read_bytes()),
-        "scroll_fixture": _digest(scroll_fixture.read_bytes()),
+        **fixture_hashes,
         "export_job_fixture": _digest((app / "examples" / "flagship_demo_data.py").read_bytes()),
         **{f"react:{name}": digest for name, digest in assets["react"].items()},
         **{f"dash:{name}": digest for name, digest in assets["dash"].items()},

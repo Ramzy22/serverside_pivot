@@ -182,3 +182,42 @@ def test_all_journeys_have_exact_installed_nodes_and_fixture_phases():
             node = f'tests/test_flagship_workflows.py::test_flagship_combined_journeys[{requirement}-{host}]'
             assert plan[(requirement, host, 'browser.' + requirement)] == node
             assert _product_phase(node) == phase
+
+
+@pytest.mark.parametrize('missing', [False, True])
+def test_frozen_parts_oracle_is_required_copied_and_hashed(tmp_path, missing):
+    import hashlib
+    from scripts.flagship_artifacts import _copy_flagship_fixtures
+    snapshot, app = tmp_path / 'snapshot', tmp_path / 'installed-app'
+    source = snapshot / 'tests' / 'data'
+    source.mkdir(parents=True)
+    for name in ('flagship_parity_rows.json', 'flagship_scroll_rows.json', 'flagship_parts_manifest.json'):
+        (source / name).write_bytes(Path(__file__).with_name('data').joinpath(name).read_bytes())
+    manifest = source / 'flagship_parts_manifest.json'
+    if missing:
+        manifest.unlink()
+        with pytest.raises(FileNotFoundError, match='flagship_parts_manifest.json'):
+            _copy_flagship_fixtures(snapshot, app)
+        assert not app.exists()
+    else:
+        hashes = _copy_flagship_fixtures(snapshot, app)
+        staged = app / 'tests' / 'data' / manifest.name
+        assert staged.read_bytes() == manifest.read_bytes()
+        assert hashes['parts_fixture'] == hashlib.sha256(staged.read_bytes()).hexdigest()
+        staged.write_bytes(b'altered')
+        assert hashes['parts_fixture'] != hashlib.sha256(staged.read_bytes()).hexdigest()
+
+
+@pytest.mark.parametrize('damage', [None, 'missing', 'altered'])
+def test_part_browser_preflight_rejects_missing_or_altered_frozen_oracle(damage):
+    import hashlib
+    from tests.flagship_remaining_4 import assert_part_manifest_binding
+    digest = hashlib.sha256(Path(__file__).with_name('data').joinpath('flagship_parts_manifest.json').read_bytes()).hexdigest()
+    hashes = {'parts_fixture': digest}
+    if damage == 'missing': hashes.clear()
+    if damage == 'altered': hashes['parts_fixture'] = 'f' * 64
+    if damage:
+        with pytest.raises(AssertionError, match='Part oracle differs'):
+            assert_part_manifest_binding(hashes)
+    else:
+        assert assert_part_manifest_binding(hashes) == digest

@@ -114,6 +114,12 @@ def assert_part_rows(rows, request):
     assert 'R10000' not in [row[0] for row in rows]
 
 
+def assert_part_manifest_binding(sha256):
+    digest = hashlib.sha256(Path(__file__).with_name('data').joinpath('flagship_parts_manifest.json').read_bytes()).hexdigest()
+    assert sha256.get('parts_fixture') == digest, 'Part oracle differs from frozen installed fixture'
+    return digest
+
+
 def _trace(driver):
     return driver.execute_script('return window.__pivotJourneyTrace || []')
 
@@ -463,13 +469,14 @@ def qualify_journeys(host, requirement):
         pytest.skip('Enable installed flagship browser qualification explicitly')
     assert requirement in HANDLERS
     binding = load_artifact_binding(Path(os.environ['PIVOT_FLAGSHIP_ARTIFACT_BINDING']))
+    part_manifest_digest = assert_part_manifest_binding(binding.sha256) if requirement == 'large-delivery.selected-part' else None
     directory = Path(os.environ['PIVOT_FLAGSHIP_EVIDENCE_ROOT']) / requirement / host
     assert ('runs', os.environ['PIVOT_FLAGSHIP_RUN_ID']) in tuple(zip(directory.parts, directory.parts[1:]))
     directory.mkdir(parents=True, exist_ok=True)
     downloads = directory / 'downloads'
     downloads.mkdir(exist_ok=True)
     result = {'result': 'blocked', 'browser': 'unavailable', 'infrastructureUnavailable': True}
-    observation, driver, paths = {'requirement': requirement}, None, []
+    observation, driver, paths = {'requirement': requirement, 'partManifestSha256': part_manifest_digest}, None, []
     try:
         driver = webdriver.Chrome(options=_qualification_chrome_options(downloads))
         driver._pivot_artifact_binding, driver._pivot_artifact_host = binding, host
