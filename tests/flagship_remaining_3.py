@@ -7,8 +7,10 @@ import csv
 import hashlib
 import io
 import json
+import math
 import os
 from pathlib import Path
+import re
 import traceback
 import xml.etree.ElementTree as ET
 
@@ -21,6 +23,94 @@ REQUIREMENTS = ("range-chart.source", "range-chart.locked-source", "range-chart.
                 "chart-pane.lifecycle", "chart-export.artifact")
 COLUMNS = (f"Q1_{SALES}_sum", f"Q1_{UNITS}_sum")
 INITIAL_ROWS = [[ECLAIR, 100.25, 2], [MUNCHEN, 49.75, 3]]
+SVG = "{http://www.w3.org/2000/svg}"
+
+
+def _svg_number(value):
+    value = str(value).strip()
+    assert re.fullmatch(r"[-+]?(?:\d+(?:\.\d*)?|\.\d+)(?:[eE][-+]?\d+)?(?:px)?", value), f"Unsupported SVG number: {value}"
+    number = float(value.removesuffix("px"))
+    assert math.isfinite(number), "Nonfinite SVG geometry/paint"
+    return number
+
+
+def _svg_painted(node, parents):
+    """Fail closed outside this selected chart's simple, solid-fill SVG subset.
+
+    Inline declarations override presentation attributes. Display and opacity
+    affect the complete ancestor subtree; visibility/fill/font-size inherit.
+    Complex CSS, paint servers and clipping are rejected, never ignored.
+    """
+    chain = [node]
+    while chain[-1] in parents:
+        chain.append(parents[chain[-1]])
+    inherited = {"visibility": "visible", "fill": "black", "fill-opacity": "1", "font-size": "16"}
+    matrix = (1, 0, 0, 1, 0, 0)
+    for current in reversed(chain):
+        assert current.tag in (SVG + "svg", SVG + "g", SVG + "text", SVG + "rect"), "Required content is in a nonpainted/unsupported container"
+        properties = dict(current.attrib)
+        for declaration in current.get("style", "").split(";"):
+            if declaration.strip():
+                name, separator, value = declaration.partition(":")
+                assert separator and "!" not in value, "Unsupported SVG inline CSS"
+                name, value = name.strip().lower(), value.strip()
+                assert name in {"display", "visibility", "opacity", "fill", "fill-opacity", "font-size", "font-weight", "font-family",
+                                "width", "height", "max-width", "pointer-events", "cursor", "transition", "overflow"}, f"Unsupported SVG style: {name}"
+                properties[name] = value
+        assert properties.get("display", "inline") in ("inline", "block"), "Required SVG content has display:none/unsupported display"
+        assert _svg_number(properties.get("opacity", "1")) > 0, "Required SVG content has zero opacity"
+        for key in ("clip-path", "mask", "filter"):
+            assert properties.get(key, "none") == "none", f"Cannot establish visible SVG content with {key}"
+        for key in inherited:
+            value = properties.get(key, "inherit")
+            if value != "inherit":
+                inherited[key] = value
+        # These are the only transforms emitted for this native bar case. A
+        # separate decoded-document observation below checks actual bounds.
+        transform = properties.get("transform", "").strip()
+        parts = re.findall(r"(translate|rotate)\(([^()]*)\)", transform)
+        assert re.sub(r"(?:translate|rotate)\([^()]*\)", "", transform).strip() == "", "Unsupported/nonpositive SVG transform"
+        for name, arguments in parts:
+            values = [_svg_number(value) for value in re.split(r"[\s,]+", arguments.strip())]
+            assert len(values) in ((1, 2) if name == "translate" else (1, 3)), "Malformed SVG transform"
+            if name == "translate":
+                matrix = _svg_matrix_product(matrix, (1, 0, 0, 1, values[0], values[1] if len(values) > 1 else 0))
+            else:
+                angle = math.radians(values[0])
+                cx, cy = values[1:] if len(values) == 3 else (0, 0)
+                c, s = math.cos(angle), math.sin(angle)
+                matrix = _svg_matrix_product(matrix, (c, s, -s, c, cx - c * cx + s * cy, cy - s * cx - c * cy))
+    assert inherited["visibility"] == "visible", "Required SVG content is hidden"
+    assert _svg_number(inherited["fill-opacity"]) > 0 and _svg_number(inherited["font-size"]) > 0, "Required SVG content has no visible paint/font"
+    fill = inherited["fill"].strip().lower()
+    assert fill not in ("none", "transparent"), "Required SVG content has no fill"
+    if fill.startswith("#"):
+        assert re.fullmatch(r"#[0-9a-f]{3}(?:[0-9a-f]{1}|[0-9a-f]{3}|[0-9a-f]{5})?", fill), "Invalid SVG solid fill"
+        if len(fill) in (5, 9):
+            assert int(fill[-(1 if len(fill) == 5 else 2):], 16) > 0, "Required SVG fill is transparent"
+    elif fill.startswith(("rgb(", "rgba(")):
+        components = fill[fill.index("(") + 1:-1].replace("/", ",")
+        components = [item for item in re.split(r"[\s,]+", components) if item]
+        assert fill.endswith(")") and len(components) in (3, 4), "Unsupported SVG solid fill"
+        for component in components:
+            assert _svg_number(component.removesuffix("%")) >= 0
+        assert len(components) == 3 or _svg_number(components[3].removesuffix("%")) > 0, "Required SVG fill is transparent"
+    else:
+        assert fill in ("black", "white", "red", "green", "blue", "gray", "grey"), "Unsupported SVG paint; requires independent decoding"
+    return matrix
+
+
+def _svg_matrix_product(left, right):
+    a, b, c, d, e, f = left
+    g, h, i, j, k, l = right
+    return (a*g+c*h, b*g+d*h, a*i+c*j, b*i+d*j, a*k+c*l+e, b*k+d*l+f)
+
+
+def _svg_text(node):
+    # Native category labels carry a nested <title>; it is tooltip metadata,
+    # never painted text. Do not credit its content as an exported label.
+    assert all(child.tag in (SVG + "title", SVG + "desc") for child in node), "Unsupported nested SVG text"
+    return (node.text or "") + "".join(child.tail or "" for child in node)
 
 
 def parse_chart_csv(content):
@@ -45,10 +135,12 @@ def assert_chart_source(source, expected, original_header=None):
 
 
 def assert_svg_image(content, live, source):
-    assert b"<!DOCTYPE" not in content and b"<!ENTITY" not in content
+    assert b"<!DOCTYPE" not in content and b"<!ENTITY" not in content and b"<?xml-stylesheet" not in content
     root = ET.fromstring(content)
     assert root.tag == "{http://www.w3.org/2000/svg}svg", "Download is not an SVG image"
-    width, height = float(root.attrib["width"]), float(root.attrib["height"])
+    assert not any(node.tag in (SVG + name for name in ("style", "link", "script", "image", "foreignObject", "animate", "set", "animateTransform")) for node in root.iter()), "Image depends on unsupported CSS/external/executable content"
+    parents = {child: parent for parent in root.iter() for child in parent}
+    width, height = _svg_number(root.attrib["width"]), _svg_number(root.attrib["height"])
     viewbox = [float(value) for value in root.attrib["viewBox"].replace(",", " ").split()]
     assert viewbox == [0, 0, width, height] and width > 0 and height > 0
     assert width == live["viewBox"][2], "Export width differs from declared chart width"
@@ -64,7 +156,14 @@ def assert_svg_image(content, live, source):
         rows += 1
     expected_height = live["viewBox"][3] + (42 if live["title"] else 0) + (rows * 22 + 14 if rows else 0)
     assert height == expected_height, "Export height differs from declared plot/title/legend dimensions"
-    text = ["".join(node.itertext()) for node in root.iter("{http://www.w3.org/2000/svg}text")]
+    text = []
+    for node in root.iter(SVG + "text"):
+        label = _svg_text(node)
+        if label in {live["title"], *source["header"][1:], *(row[0] for row in source["rows"])}:
+            a, b, c, d, e, f = _svg_painted(node, parents)
+            x, y = (_svg_number(node.get(key, "0")) for key in ("x", "y"))
+            assert 0 <= a*x+c*y+e <= width and 0 <= b*x+d*y+f <= height, "Required SVG label lies outside image"
+            text.append(label)
     assert all(row[0] in text for row in source["rows"]), "Image omits selected category labels"
     assert all(label in text for label in source["header"][1:]), "Image omits selected series legend"
     assert live["title"] in text, "Image omits chart title"
@@ -72,9 +171,70 @@ def assert_svg_image(content, live, source):
     expected_marks = {(row[0], label) for row in source["rows"] for label in source["header"][1:]}
     assert len(marks) == len(expected_marks) and {(node.attrib["data-tip-cat"], node.attrib["data-tip-ser"]) for node in marks} == expected_marks
     assert all(node.tag == "{http://www.w3.org/2000/svg}rect" for node in marks), "Chosen chart is not rendered as bars"
+    for node in marks:
+        assert _svg_number(node.get("width", "0")) > 0 and _svg_number(node.get("height", "0")) > 0, "Selected bar has nonpositive geometry"
+        assert all(math.isfinite(_svg_number(node.get(key, "0"))) for key in ("x", "y")), "Selected bar has invalid position"
+        a, b, c, d, e, f = _svg_painted(node, parents)
+        x, y, w, h = (_svg_number(node.get(key, "0")) for key in ("x", "y", "width", "height"))
+        points = [(a*px+c*py+e, b*px+d*py+f) for px, py in ((x, y), (x+w, y), (x, y+h), (x+w, y+h))]
+        assert min(px for px, _ in points) < width and max(px for px, _ in points) > 0 and min(py for _, py in points) < height and max(py for _, py in points) > 0, "Selected bar lies outside image"
     assert not any(node.tag.endswith("script") or node.tag.endswith("image") for node in root.iter()), "Image unexpectedly depends on executable/external content"
     return {"format": "svg", "width": width, "height": height, "viewBox": viewbox,
             "labels": text, "marks": [dict(node.attrib) for node in marks], "sha256": hashlib.sha256(content).hexdigest(), "bytes": len(content)}
+
+
+def _decode_svg_image(driver, path, directory, observation, source, title):
+    """Observe the downloaded bytes as their own SVG document, never app DOM."""
+    from selenium.webdriver.support.ui import WebDriverWait
+    workspace = driver.current_window_handle
+    decoded_tab = None
+    try:
+        driver.switch_to.new_window("tab")
+        decoded_tab = driver.current_window_handle
+        driver.get(path.resolve().as_uri())
+        WebDriverWait(driver, 10).until(lambda current: current.execute_script(
+            "return document.readyState==='complete' && document.documentElement.localName==='svg'"))
+        decoded = driver.execute_script("""
+          const svg=document.documentElement, viewport=svg.getBoundingClientRect();
+          const inspect=el=>{
+            const style=getComputedStyle(el), bounds=el.getBoundingClientRect(), bbox=el.getBBox();
+            let opacity=1;const problems=[];
+            for(let current=el;current;current=current.parentElement){
+              const computed=getComputedStyle(current);
+              opacity*=Number(computed.opacity);
+              if(computed.display==='none')problems.push('display:none');
+              for(const name of ['clip-path','mask-image','filter'])
+                if(computed.getPropertyValue(name)!=='none')problems.push(name);
+            }
+            if(style.visibility!=='visible')problems.push('visibility');
+            if(!(opacity>0 && Number(style.fillOpacity)>0))problems.push('opacity');
+            if(!(bbox.width>0 && bbox.height>0 && bounds.width>0 && bounds.height>0))problems.push('empty bounds');
+            const coords=[bounds.left,bounds.top,bounds.right,bounds.bottom,bbox.width,bbox.height];
+            if(!coords.every(Number.isFinite))problems.push('nonfinite bounds');
+            if(bounds.left<viewport.left-0.5 || bounds.top<viewport.top-0.5 || bounds.right>viewport.right+0.5 || bounds.bottom>viewport.bottom+0.5)
+              problems.push('clipped/outside image viewport');
+            return {tag:el.localName,category:el.getAttribute('data-tip-cat'),series:el.getAttribute('data-tip-ser'),
+              text:[...el.childNodes].filter(node=>node.nodeType===Node.TEXT_NODE).map(node=>node.textContent).join(''),
+              fill:style.fill,opacity,bounds:{x:bounds.x,y:bounds.y,width:bounds.width,height:bounds.height},problems};
+          };
+          return {url:location.href,root:svg.localName,marks:[...svg.querySelectorAll('[data-tip-cat]')].map(inspect),
+            labels:[...svg.querySelectorAll('text')].map(inspect)};
+        """)
+        observation["decodedImage"] = decoded
+        screenshot = directory / "decoded-image.png"
+        assert driver.save_screenshot(str(screenshot)), "Could not retain decoded SVG screenshot"
+        observation["decodedImageScreenshot"] = str(screenshot)
+        expected_marks = {(row[0], label) for row in source["rows"] for label in source["header"][1:]}
+        assert len(decoded["marks"]) == len(expected_marks)
+        assert {(mark["category"], mark["series"]) for mark in decoded["marks"]} == expected_marks
+        assert all(mark["tag"] == "rect" and not mark["problems"] for mark in decoded["marks"]), "Decoded selected bars are not visible"
+        required = {title, *source["header"][1:], *(row[0] for row in source["rows"])}
+        visible = {label["text"] for label in decoded["labels"] if not label["problems"]}
+        assert required <= visible, f"Decoded image omits visible labels: {required - visible}"
+    finally:
+        if decoded_tab is not None:
+            driver.close()
+        driver.switch_to.window(workspace)
 
 
 def _visible(driver, selector):
@@ -246,6 +406,7 @@ def _run(driver, host, requirement, state, wait, directory, observation):
         live["title"] = next(row[1] for row in initial["metadata"] if row and row[0] == "Title")
         path = _download(driver, downloads, "svg", observation, "selected-image")
         observation["image"] = assert_svg_image(path.read_bytes(), live, initial)
+        _decode_svg_image(driver, path, directory, observation, initial, live["title"])
         observation["image"]["deviceScale"] = live["deviceScale"]
         assert live["deviceScale"] == 1
         assert _pane_count(driver) == 1
@@ -318,6 +479,8 @@ def qualify_charts(host, requirement):
             finally:
                 driver.quit()
         paths.extend(str(path) for path in downloads.iterdir() if path.is_file())
+        if observation.get("decodedImageScreenshot"):
+            paths.append(observation["decodedImageScreenshot"])
         observation.update(result={key: value for key, value in result.items() if key != "loadedAssetSha256"}, loadedAssetSha256=result.get("loadedAssetSha256", {}))
         path = directory / "observation.json"
         path.write_text(json.dumps(observation, ensure_ascii=False, indent=2), encoding="utf-8")
