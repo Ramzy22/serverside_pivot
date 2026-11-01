@@ -15,6 +15,7 @@ import {
     normalizeHeaderStyle,
 } from '../presentation/headerFormatting';
 import { CellErrorBoundary, SafeCellContent } from '../presentation/safeCellContent';
+import { resolveDataBarMaximum } from '../utils/dataBars';
 
 const HEADER_FORMATTING_RESERVED_KEYS = new Set([
     'default', 'defaultStyle', 'all', '*', 'columns', 'byColumn', 'columnStyles', 'rules', 'headerRules',
@@ -89,6 +90,7 @@ export function useRenderHelpers({
     selectedCols,
     getHeaderStickyStyle,
     dataBarsColumns,
+    dataBarMaximums,
     colorScaleStats,
     cellFormatRules,
     resolveEditedCellMarker,
@@ -367,8 +369,8 @@ export function useRenderHelpers({
         let dataBarEl = null;
         if (isDataBar) {
             const stats = colorScaleStats && colorScaleStats.byCol && colorScaleStats.byCol[col.id];
-            if (stats) {
-                const absMax = Math.max(Math.abs(stats.max), Math.abs(stats.min), 1e-9);
+            const absMax = resolveDataBarMaximum(dataBarMaximums && dataBarMaximums[col.id], stats);
+            if (absMax !== null) {
                 const pct = Math.min(1, Math.abs(rawNumValue) / absMax);
                 const isNeg = rawNumValue < 0;
                 const barColor = isNeg
@@ -474,6 +476,7 @@ export function useRenderHelpers({
         lastSelected,
         getConditionalStyle,
         dataBarsColumns,
+        dataBarMaximums,
         colorScaleStats,
         cellFormatRules,
         resolveEditedCellMarker,

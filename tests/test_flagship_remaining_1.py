@@ -5,7 +5,7 @@ from pathlib import Path
 import pytest
 
 from tests.flagship_remaining_1 import (
-    REQUIREMENTS, SCALE_IDS, SALES, assert_data_bars, assert_decimal_cells,
+    REQUIREMENTS, SCALE_IDS, DATA_BAR_IDS, SALES, assert_data_bars, assert_decimal_cells,
     assert_density, assert_number_column, assert_scale, assert_zoom, starting_state,
 )
 
@@ -94,20 +94,36 @@ def test_scale_requires_exact_colors_and_unselected_control_preservation(damage)
     with pytest.raises((AssertionError, StopIteration)): assert_scale(before, after)
 
 
-@pytest.mark.parametrize("damage", ["geometry", "zero", "hidden-text", "control"])
+def data_bar_cells():
+    result = scale_cells()
+    for row, value, percent in zip(DATA_BAR_IDS[3:], (300, -100), (100, 50)):
+        result.append({**result[0], "rowid": row, "text": str(value), "barWidth": percent, "barPercent": percent})
+        result.append({**result[1], "rowid": row})
+    for cell in result:
+        if cell["colid"] == "scale_value_sum":
+            cell["barColor"] = "rgba(220, 38, 38, 0.12)" if cell["text"].startswith("-") else "rgba(37, 99, 235, 0.13)"
+    return result
+
+
+@pytest.mark.parametrize("damage", ["geometry", "zero", "hidden-text", "control", "upper-clamp", "negative", "negative-tint", "control-style", "missing-outlier"])
 def test_data_bars_use_measured_width_including_zero_and_unselected_columns(damage):
-    before = scale_cells(); after = copy.deepcopy(before)
+    before = data_bar_cells(); after = copy.deepcopy(before)
     assert_data_bars(before, after)
     if damage == "geometry": after[2]["barWidth"] = 53
     elif damage == "zero": after[0]["barWidth"] = 2
     elif damage == "hidden-text": after[2]["barBehindText"] = False
-    else: after[1]["barWidth"] = 10
+    elif damage == "control": after[1]["barWidth"] = 10
+    elif damage == "upper-clamp": after[6]["barWidth"] = 150
+    elif damage == "negative": after[8]["barWidth"] = 0
+    elif damage == "negative-tint": after[8]["barColor"] = "rgba(37, 99, 235, 0.13)"
+    elif damage == "control-style": after[1]["background"] = "red"
+    else: after.pop(8)
     with pytest.raises(AssertionError): assert_data_bars(before, after)
 
 
-@pytest.mark.parametrize("damage", [None, "zoom", "width", "row", "scroll", "window"])
+@pytest.mark.parametrize("damage", [None, "zoom", "width", "row", "scroll", "window", "origin-before", "origin-zoomed"])
 def test_zoom_round_trip_requires_real_geometry_and_restored_viewport(damage):
-    before = {"zoom": 1.15, "cellWidth": 115, "rowHeight": 50.6}
+    before = {"zoom": 1.15, "cellWidth": 115, "rowHeight": 50.6, "scrollLeft": 30, "scrollTop": 8}
     zoomed = {"zoom": 1.25, "cellWidth": 125, "rowHeight": 55, "scrollLeft": 30, "scrollTop": 8, "windowX": 0, "windowY": 100}
     restored = dict(zoomed)
     if damage == "zoom": restored["zoom"] = 1.15
@@ -115,6 +131,10 @@ def test_zoom_round_trip_requires_real_geometry_and_restored_viewport(damage):
     elif damage == "row": restored["rowHeight"] = 44
     elif damage == "scroll": restored["scrollLeft"] = 0
     elif damage == "window": restored["windowY"] = 0
+    elif damage == "origin-before": before.update(scrollLeft=0, scrollTop=0)
+    elif damage == "origin-zoomed":
+        zoomed.update(scrollLeft=0, scrollTop=0)
+        restored.update(scrollLeft=0, scrollTop=0)
     if damage is None: assert_zoom(before, zoomed, restored)
     else:
         with pytest.raises(AssertionError): assert_zoom(before, zoomed, restored)
@@ -133,23 +153,34 @@ def test_presentation_fixture_preserves_five_sales_rows_and_adds_read_only_edges
 def test_presentation_seed_is_executable_against_real_runtime_values():
     import pyarrow as pa
     from pivot_engine import create_tanstack_adapter
-    from pivot_engine.runtime import PivotRuntimeService, SessionRequestGate
-    from tests.test_flagship_shared_runtime import _response
+    from pivot_engine.runtime import PivotRuntimeService, SessionRequestGate, PivotRequestContext, PivotViewState
     rows = json.loads(Path(__file__).with_name("data").joinpath("flagship_parity_rows.json").read_text(encoding="utf-8"))["rows"]
     adapter = create_tanstack_adapter(backend_uri=":memory:")
     adapter.controller.load_data_from_arrow("flagship_shared", pa.Table.from_pylist(rows))
     service = PivotRuntimeService(adapter_getter=lambda: adapter, session_gate=SessionRequestGate())
-    for index, requirement in enumerate(("number-format.decimals", "color-scales.scale"), 1):
+    for index, requirement in enumerate(("number-format.decimals", "color-scales.scale", "color-scales.data-bars"), 1):
         state = starting_state(requirement)
-        reply = _response(service, {}, index, row_fields=state["rowFields"], col_fields=state["colFields"],
-                          val_configs=state["valConfigs"], filters=state["filters"],
-                          show_row_totals=state["showRowTotals"], show_col_totals=state["showColTotals"], needs_col_schema=True)
+        # Execute the exact public state without the generic helper's implicit
+        # Included filter, which would silently drop the negative source row.
+        reply = service.process(PivotViewState(
+            row_fields=state["rowFields"], col_fields=state["colFields"],
+            val_configs=state["valConfigs"], filters=state["filters"], expanded={}, sorting=[],
+            show_row_totals=state["showRowTotals"], show_col_totals=state["showColTotals"]),
+            PivotRequestContext(table="flagship_shared", trigger_prop="pivot.viewport",
+                                session_id="presentation-fixture", client_instance="presentation-client",
+                                state_epoch=index, window_seq=index, viewport_active=True,
+                                start_row=0, end_row=100, needs_col_schema=True))
         assert reply.status == "data", reply.message
         data = {row["_path"]: row for row in reply.data if "_id" in row}
         if requirement == "number-format.decimals":
             assert data["__grand_total__"][f"__RowTotal__{SALES}_sum"] == 200
             assert data["\u00c9clair"]["Q1_format_edge_sum"] == -100.25
-        else:
+        elif requirement == "color-scales.scale":
             assert set(data) == set(SCALE_IDS)
             assert [data[row]["scale_value_sum"] for row in SCALE_IDS] == [0, 100, 200]
             assert [data[row]["scale_control_sum"] for row in SCALE_IDS] == [10, 20, 30]
+        else:
+            assert not state["filters"], "Data-bar bounds must include the real Excluded outlier"
+            assert set(data) == set(DATA_BAR_IDS)
+            assert [data[row]["scale_value_sum"] for row in DATA_BAR_IDS] == [0, 100, 200, 300, -100]
+            assert [data[row]["scale_control_sum"] for row in DATA_BAR_IDS] == [10, 20, 30, 40, 50]

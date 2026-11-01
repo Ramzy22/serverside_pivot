@@ -849,6 +849,7 @@ export function useViewportRuntimeStage(input, transport) {
     columnVisibility: stage.columnVisibility,
     customDimensions: stage.customDimensions,
     dataBarsColumns: stage.dataBarsColumns,
+    dataBarMaximums: stage.dataBarMaximums,
     decimalPlaces: stage.decimalPlaces,
     defaultValueFormat: stage.defaultValueFormat,
     detailConfig: stage.detailConfig,

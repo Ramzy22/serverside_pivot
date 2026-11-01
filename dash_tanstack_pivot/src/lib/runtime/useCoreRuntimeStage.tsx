@@ -873,7 +873,9 @@ export function useCoreRuntimeStage(props) {
     colorPalette: stage.colorPalette,
     setColorPalette: stage.setColorPalette,
     dataBarsColumns: stage.dataBarsColumns,
+    dataBarMaximums: stage.dataBarMaximums,
     setDataBarsColumns: stage.setDataBarsColumns,
+    setDataBarMaximums: stage.setDataBarMaximums,
     fontFamily: stage.fontFamily,
     setFontFamily: stage.setFontFamily,
     fontSize: stage.fontSize,
@@ -1388,6 +1390,7 @@ export function useCoreRuntimeStage(props) {
     if (typeof restored.colorPalette === 'string') stage.setColorPalette(restored.colorPalette);
     if (typeof restored.spacingMode === 'number') stage.setSpacingMode(restored.spacingMode);
     if (Array.isArray(restored.dataBarsColumns)) stage.setDataBarsColumns(new Set(restored.dataBarsColumns));
+    stage.setDataBarMaximums(restored.dataBarMaximums);
     if (restored.pivotColumnSorting && typeof restored.pivotColumnSorting === 'object') stage.setPivotColumnSorting(restored.pivotColumnSorting);
     if (restored.columnPinning && typeof restored.columnPinning === 'object') stage.setColumnPinning(restored.columnPinning);
     const restoredRowPinning = restored.rowPinning && typeof restored.rowPinning === 'object' ? restored.rowPinning : null;

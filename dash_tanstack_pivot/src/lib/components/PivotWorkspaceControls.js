@@ -24,6 +24,7 @@ export function PivotWorkspaceToolbar({ toolbar }) {
     columnFormatOverrides,
     columnGroupSeparatorOverrides,
     dataBarsColumns,
+    dataBarMaximums,
     decimalPlaces,
     defaultValueFormat,
     editValueDisplayMode,
@@ -54,6 +55,7 @@ export function PivotWorkspaceToolbar({ toolbar }) {
     setColumnFormatOverrides,
     setColumnGroupSeparatorOverrides,
     setDataBarsColumns,
+    setDataBarMaximums,
     setDecimalPlaces,
     setDefaultValueFormat,
     setEditValueDisplayMode,
@@ -109,6 +111,7 @@ export function PivotWorkspaceToolbar({ toolbar }) {
     canApplySelectionValueFormat={canApplySelectionValueFormat}
     onApplySelectionValueFormat={applySelectionValueFormat}
     dataBarsColumns={dataBarsColumns} setDataBarsColumns={setDataBarsColumns}
+    dataBarMaximums={dataBarMaximums} setDataBarMaximums={setDataBarMaximums}
     canUndoTransactions={transactionHistoryState.undoCount > 0}
     canRedoTransactions={transactionHistoryState.redoCount > 0}
     transactionHistoryPending={transactionHistoryState.pending}

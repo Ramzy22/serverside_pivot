@@ -379,6 +379,7 @@ export function useWorkspaceRuntimeStage(input) {
     selectedCols: workspace.selectedCols,
     getHeaderStickyStyle: workspace.getHeaderStickyStyle,
     dataBarsColumns: workspace.dataBarsColumns,
+    dataBarMaximums: workspace.dataBarMaximums,
     colorScaleStats: workspace.colorScaleStats,
     cellFormatRules: workspace.cellFormatRules,
     resolveEditedCellMarker: workspace.resolveEditedCellMarker,

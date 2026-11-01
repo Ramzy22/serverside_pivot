@@ -332,6 +332,7 @@ export interface WorkspacePresentation {
     readonly customAwareData: WorkspaceCollection;
     readonly customDimensions: WorkspaceCollection;
     readonly dataBarsColumns: readonly string[];
+    readonly dataBarMaximums: WorkspaceRecord;
     readonly decimalPlaces: number;
     readonly defaultValueFormat: string;
     readonly detailConfig: WorkspaceRecord | null;
@@ -468,6 +469,7 @@ export interface WorkspacePresentation {
     readonly setContextMenu: RuntimeCommand;
     readonly setCustomDimensions: RuntimeCommand;
     readonly setDataBarsColumns: RuntimeCommand;
+    readonly setDataBarMaximums: RuntimeCommand;
     readonly setDecimalPlaces: RuntimeCommand;
     readonly setDefaultValueFormat: RuntimeCommand;
     readonly setDetailSurface: RuntimeCommand;

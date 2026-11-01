@@ -1,4 +1,5 @@
 import { useCallback, useState } from 'react';
+import { normalizeDataBarMaximums } from '../utils/dataBars';
 
 /**
  * useFormatState — extracts formatting/display state from DashTanstackPivot.
@@ -22,6 +23,12 @@ export function useFormatState({
     }, []);
     const [colorPalette, setColorPalette] = useState('redGreen');
     const [dataBarsColumns, setDataBarsColumns] = useState(new Set());
+    const [dataBarMaximums, updateDataBarMaximums] = useState({});
+    const setDataBarMaximums = useCallback(value => {
+        updateDataBarMaximums(previous => normalizeDataBarMaximums(
+            typeof value === 'function' ? value(previous) : value
+        ));
+    }, []);
 
     // Font / display controls
     const [fontFamily, setFontFamily] = useState("'Inter', system-ui, sans-serif");
@@ -41,6 +48,7 @@ export function useFormatState({
         colorScaleColumns, setColorScaleColumns,
         colorPalette, setColorPalette,
         dataBarsColumns, setDataBarsColumns,
+        dataBarMaximums, setDataBarMaximums,
         fontFamily, setFontFamily,
         fontSize, setFontSize,
         decimalPlaces, setDecimalPlaces,

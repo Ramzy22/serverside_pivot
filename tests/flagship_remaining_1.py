@@ -23,6 +23,7 @@ SALES = "ventes_\u20ac"
 UNITS = "unit\u00e9s"
 ECLAIR = "\u00c9clair"
 SCALE_IDS = ("q1-eclair", "q2-eclair", "q1-munchen")
+DATA_BAR_IDS = (*SCALE_IDS, "q2-munchen", "q1-sao-paulo")
 
 
 def starting_state(requirement):
@@ -48,8 +49,18 @@ def starting_state(requirement):
                                  {"field": "scale_control", "agg": "sum", "label": "Control"}])
         state["filters"]["rowId"] = {"operator": "OR", "conditions": [{"type": "eq", "value": row} for row in SCALE_IDS]}
         state["decimalPlaces"] = 0
+        if requirement == "color-scales.data-bars":
+            # Include the original positive and Excluded negative outliers.
+            # Fixed bounds are applied later with the real Bar Bounds control.
+            state["filters"] = {}
     if requirement == "zoom-immersive.round-trip":
         state["zoomLevel"] = 115  # Native toolbar advances by 10 percentage points.
+        # Public saved widths make horizontal overflow deterministic even in
+        # immersive mode; the physical scroll itself uses WebDriver wheel input.
+        state["columnSizing"] = {f"{period}_{field}_sum": 180
+                                 for period in ("Q1", "Q2")
+                                 for field in (SALES, UNITS, "\u00e9cart")}
+        state["columnSizing"].update({f"__RowTotal__{field}_sum": 180 for field in (SALES, UNITS, "\u00e9cart")})
     return state
 
 
@@ -123,15 +134,23 @@ def assert_scale(before, after):
 
 def assert_data_bars(before, after):
     assert logical_values(before) == logical_values(after)
-    for row, target in zip(SCALE_IDS, (0, .5, 1)):
-        cell = next(cell for cell in after if cell["rowid"] == row and cell["colid"] == "scale_value_sum")
+    for row, value, target in zip(DATA_BAR_IDS, (0, 100, 200, 300, -100), (0, .5, 1, 1, .5)):
+        matches = [cell for cell in after if cell["rowid"] == row and cell["colid"] == "scale_value_sum"]
+        assert len(matches) == 1, f"Missing or duplicated data-bar source cell {row}"
+        cell = matches[0]
         assert cell["barPercent"] is not None and abs(cell["barPercent"] / 100 - target) <= .01
+        assert cell["usableWidth"] > 0
         assert abs(cell["barWidth"] / cell["usableWidth"] - target) <= .01, "Actual data-bar width misses target"
-        assert cell["barBehindText"] and cell["text"] == str(int(target * 200))
+        assert cell["barBehindText"] and cell["text"] == str(value)
+        assert cell["barColor"] == ("rgba(220, 38, 38, 0.12)" if value < 0 else "rgba(37, 99, 235, 0.13)")
     assert not any(cell["barWidth"] for cell in after if cell["colid"] != "scale_value_sum"), "Unselected column received bars"
+    controls = lambda snapshot: {(cell["rowid"], cell["colid"]): (cell["background"], cell["color"]) for cell in snapshot if cell["colid"] != "scale_value_sum"}
+    assert controls(before) and controls(after) == controls(before), "Data-bar bounds changed unselected styles"
 
 
 def assert_zoom(before, zoomed, restored):
+    for snapshot in (before, zoomed, restored):
+        assert max(abs(snapshot["scrollLeft"]), abs(snapshot["scrollTop"])) > 2, "Viewport restoration was exercised only at the origin"
     for key in ("cellWidth", "rowHeight"):
         assert abs(zoomed[key] - before[key] * 125 / 115) <= 2, f"125% zoom did not scale {key}"
         assert abs(restored[key] - zoomed[key]) <= 2, f"Exit changed zoomed {key}"
@@ -195,8 +214,9 @@ def _raw_snapshot(driver, state):
             continue
         rows = [row for row in reply.get("rows") or [] if "_id" in row]
         if state["rowFields"] == ["rowId"]:
-            expected = {row: (value, control) for row, value, control in zip(SCALE_IDS, (0, 100, 200), (10, 20, 30))}
-            assert len(rows) == 3 and {row["_path"] for row in rows} == set(expected)
+            ids = SCALE_IDS if state["filters"] else DATA_BAR_IDS
+            expected = {row: (value, control) for row, value, control in zip(ids, (0, 100, 200, 300, -100), (10, 20, 30, 40, 50))}
+            assert len(rows) == len(ids) and {row["_path"] for row in rows} == set(expected)
             for row in rows:
                 assert (row["scale_value_sum"], row["scale_control_sum"]) == expected[row["_path"]]
         elif any(value["field"] == "format_edge" for value in state["valConfigs"]):
@@ -339,7 +359,8 @@ def _run(driver, host, requirement, state, wait, observation):
         controls = lambda snapshot: {(cell["rowid"], cell["colid"]): (cell["color"], cell["background"]) for cell in snapshot if (cell["rowid"], cell["colid"]) not in keys}
         assert controls(before) and controls(before) == controls(after), "Formatting escaped selected range"
     elif requirement.startswith("color-scales."):
-        _select(driver, [(row, "scale_value_sum") for row in SCALE_IDS])
+        ids = SCALE_IDS if requirement == "color-scales.scale" else DATA_BAR_IDS
+        _select(driver, [(row, "scale_value_sum") for row in ids])
         before = cells(driver)
         if requirement == "color-scales.scale":
             Select(_section(driver, "format", 'select[title="Color scale"]')).select_by_value("col")
@@ -354,12 +375,27 @@ def _run(driver, host, requirement, state, wait, observation):
             observation["after"] = after  # Preserve evidence even when control-column isolation fails.
             assert_scale(before, after)
         else:
+            _section(driver, "format", '[title="Set data bar bounds for selected columns"]').click()
+            dialog = _element(driver, '[role="dialog"][aria-label="Data Bar Bounds"]')
+            field = dialog.find_element("css selector", 'input[aria-label="Maximum bar magnitude"]')
+            field.send_keys(Keys.CONTROL, "a")
+            field.send_keys("200", Keys.TAB)
+            next(button for button in dialog.find_elements("css selector", "button") if button.text == "Apply bounds").click()
+            wait.until(lambda current: not _workspace_elements(current, '[role="dialog"][aria-label="Data Bar Bounds"]'))
             _section(driver, "format", '[title="Toggle data bars for selected columns"]').click()
-            wait.until(lambda current: any(cell["barWidth"] > 0 for cell in cells(current)))
-            after = cells(driver)
+            def bars_ready(current):
+                snapshot = cells(current)
+                observation["after"] = snapshot
+                try:
+                    assert_data_bars(before, snapshot)
+                    return snapshot
+                except AssertionError:
+                    return False
+            after = wait.until(bars_ready)
             observation["after"] = after
             assert_data_bars(before, after)
-            observation.update(bounds=[0, 200], negativePolicy="Absolute value uses negative tint; runtime derives bounds from column statistics", clampingPolicy="Absolute value / max(abs(min),abs(max)), clamped to 100%; no public fixed-bound control")
+            observation.update(bounds=[0, 200], boundsControl="Bar Bounds / Maximum bar magnitude / Apply bounds",
+                               negativePolicy="Absolute value uses red tint: -100 fills 50%", clampingPolicy="Magnitude / explicit maximum 200, clamped to 100%; 300 fills 100%")
     elif requirement == "themes.select-override":
         _section(driver, "theme", '[title="Edit theme colors"]')
         theme_select = next(el for el in _workspace_elements(driver, "select") if el.is_displayed() and any(option.get_attribute("value") == "dark" for option in el.find_elements("css selector", "option")))
@@ -400,10 +436,20 @@ def _run(driver, host, requirement, state, wait, observation):
         # White text over the chosen dark background exceeds WCAG normal-text contrast.
         assert appearance()["color"] == "rgb(248, 250, 252)"
     else:
+        from selenium.webdriver.common.actions.wheel_input import ScrollOrigin
+        grid = _element(driver, '[data-pivot-scroll-container]')
+        driver.execute_script("window.__pivotZoomWheels=[];arguments[0].addEventListener('wheel',e=>window.__pivotZoomWheels.push({deltaX:e.deltaX,deltaY:e.deltaY,trusted:e.isTrusted}),{passive:true})", grid)
+        ActionChains(driver).scroll_from_origin(ScrollOrigin.from_element(grid), 80, 0).perform()
+        wait.until(lambda current: _geometry(current)["scrollLeft"] > 2)
+        wheel_events = driver.execute_script("return window.__pivotZoomWheels")
+        assert any(event["trusted"] and event["deltaX"] > 0 for event in wheel_events), "Missing trusted physical scroll input"
         before_geometry = _geometry(driver)
+        observation.update(nativeScroll={"source": "WebDriver wheel", "events": wheel_events}, beforeGeometry=before_geometry)
         _element(driver, '[title="Zoom in"]').click()
         wait.until(lambda current: _geometry(current)["zoom"] == 1.25)
         zoomed = _geometry(driver)
+        assert zoomed["scrollLeft"] > 2, "Zoom reset the physically scrolled viewport to the origin"
+        observation["zoomed"] = zoomed
         _element(driver, '[title="Immersive Mode — hide all controls and show only the table"]').click()
         wait.until(lambda current: bool(_workspace_elements(current, '[data-immersive-exit-overlay]')))
         immersive = _geometry(driver)
@@ -413,8 +459,16 @@ def _run(driver, host, requirement, state, wait, observation):
         overlay = _element(driver, '[data-immersive-exit-overlay]')
         ActionChains(driver).move_to_element(overlay).pause(.25).click().perform()
         wait.until(lambda current: not _workspace_elements(current, '[data-immersive-exit-overlay]'))
-        restored = _geometry(driver)
-        assert_zoom(before_geometry, zoomed, restored)
+        observation.update(immersive=immersive, clipboard=copied)
+        def restored_viewport(current):
+            geometry = _geometry(current)
+            observation["restored"] = geometry
+            try:
+                assert_zoom(before_geometry, zoomed, geometry)
+                return geometry
+            except AssertionError:
+                return False
+        restored = wait.until(restored_viewport)
         assert logical_values(before) == logical_values(cells(driver))
         observation.update(beforeGeometry=before_geometry, zoomed=zoomed, immersive=immersive, restored=restored, clipboard=copied)
     final_raw = _raw_snapshot(driver, state)
@@ -470,6 +524,7 @@ def qualify_presentation(host, requirement):
                 observation["finalCells"] = cells(driver)
                 observation["trace"] = driver.execute_script("return window.__pivotAxisTrace || []")
                 observation["nativeColorInputs"] = driver.execute_script("return window.__pivotThemeColorInputs || []")
+                observation["nativeZoomWheels"] = driver.execute_script("return window.__pivotZoomWheels || []")
                 _verify_release_asset_batch(driver, require_assets=True)
                 result["loadedAssetSha256"] = dict(driver._pivot_loaded_assets)
                 screenshot = directory / "final.png"
