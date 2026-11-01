@@ -315,7 +315,23 @@ def test_installed_release_rejects_flags_that_bypass_its_fresh_build(tmp_path: P
     assert not (tmp_path / "evidence").exists()
 
 
-def test_installed_release_binds_browser_environment_and_preserves_failure(tmp_path: Path, monkeypatch) -> None:
+@pytest.fixture
+def mocked_browser_harness(tmp_path, monkeypatch):
+    """Isolate orchestration tests whose artifact build and browser are mocked.
+
+    Committed archive verification is exercised with real repositories in
+    test_flagship_shared_client; fake build bindings cannot satisfy that check.
+    """
+    from scripts import flagship_harness
+
+    @contextmanager
+    def harness(binding, evidence_root):
+        yield flagship_harness.BrowserHarness(tmp_path, evidence_root / "browser-harness.json")
+
+    monkeypatch.setattr(flagship_harness, "committed_browser_harness", harness)
+
+
+def test_installed_release_binds_browser_environment_and_preserves_failure(tmp_path: Path, monkeypatch, mocked_browser_harness) -> None:
     from scripts import certify_flagship
     from scripts import flagship_artifacts
 
@@ -348,7 +364,7 @@ def test_installed_release_binds_browser_environment_and_preserves_failure(tmp_p
 
 
 @pytest.mark.parametrize("report", [None, '<testsuite><testcase name="browser"><skipped/></testcase></testsuite>', '<testsuite/>'])
-def test_installed_release_rejects_zero_exit_with_skipped_missing_or_empty_browser_report(tmp_path, monkeypatch, report):
+def test_installed_release_rejects_zero_exit_with_skipped_missing_or_empty_browser_report(tmp_path, monkeypatch, report, mocked_browser_harness):
     from scripts import certify_flagship, flagship_artifacts
 
     monkeypatch.setattr(flagship_artifacts, "build_artifacts", lambda source, output: ArtifactBinding())
@@ -367,7 +383,7 @@ def test_installed_release_rejects_zero_exit_with_skipped_missing_or_empty_brows
 
 
 @pytest.mark.parametrize("browser_code", [0, 7])
-def test_installed_release_records_cleanup_failure_as_failed(tmp_path, monkeypatch, browser_code):
+def test_installed_release_records_cleanup_failure_as_failed(tmp_path, monkeypatch, browser_code, mocked_browser_harness):
     from scripts import certify_flagship, flagship_artifacts
     binding = ArtifactBinding(paths={"environment": tmp_path / "owned-env",
                                     "environment_record": tmp_path / "owned-env.location.json"})
@@ -394,7 +410,7 @@ def test_installed_release_records_cleanup_failure_as_failed(tmp_path, monkeypat
 @pytest.mark.parametrize("browser_code", [0, 7])
 @pytest.mark.parametrize("evidence_error", ["unknown-encoding", "unsupported-encoding", "aggregate-write", "cleanup-diagnostic-write"])
 def test_installed_release_always_cleans_owned_environment_when_reporting_fails(
-    tmp_path, monkeypatch, browser_code, evidence_error,
+    tmp_path, monkeypatch, browser_code, evidence_error, mocked_browser_harness,
 ):
     import xml.etree.ElementTree as ET
     from scripts import certify_flagship, flagship_artifacts
