@@ -78,8 +78,14 @@ def assert_svg_image(content, live, source):
 
 
 def _visible(driver, selector):
-    from tests.test_flagship_certification import _workspace_elements
-    return [element for element in _workspace_elements(driver, selector) if element.is_displayed()]
+    # Read one DOM snapshot while lazy preview/pane mounts can replace nodes.
+    return driver.execute_script("""
+      const result=[];const visit=root=>{
+        for(const el of root.querySelectorAll(arguments[0]))
+          if(el.getClientRects().length && getComputedStyle(el).visibility!=='hidden')result.push(el);
+        for(const el of root.querySelectorAll('*'))if(el.shadowRoot)visit(el.shadowRoot);
+      };visit(document);return result;
+    """, selector)
 
 
 def _button(driver, text, prefix=False):
@@ -179,7 +185,11 @@ def _create(driver, wait, observation):
     _button(driver, "Open in Panel").click()
     wait.until(lambda current: _pane_count(current) == 1)
     # Settings can widen panes and hide grid cells; close through the actual UI.
-    _element(driver, '[title="Close settings"]').click()
+    # New docked panes normally start with settings closed. Close only an
+    # actually open settings pane, rather than waiting for a nonexistent control.
+    wait.until(lambda current: _visible(current, '[title="Close settings"], [title="Show chart settings"]'))
+    if _visible(driver, '[title="Close settings"]'):
+        _element(driver, '[title="Close settings"]').click()
     assert len(_visible(driver, '[aria-label="Lock chart to the current data selection"]')) == 1
     return [row["id"] for row in rows]
 
