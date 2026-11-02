@@ -233,3 +233,66 @@ def test_part_browser_preflight_rejects_missing_or_altered_frozen_oracle(damage)
             assert_part_manifest_binding(hashes)
     else:
         assert assert_part_manifest_binding(hashes) == digest
+
+class _AnalysisWait:
+    def __init__(self, driver): self.driver = driver
+    def until(self, predicate):
+        for _ in range(12):
+            result = predicate(self.driver)
+            if result: return result
+        raise AssertionError('display did not settle')
+
+
+def test_analysis_precision_uses_native_global_controls_before_asserting(monkeypatch):
+    from tests import flagship_remaining_4 as journey
+    from tests import test_flagship_certification as certification
+    state = {'decimals': 0, 'format_open': False, 'clicks': []}
+    class Button:
+        def __init__(self, name): self.name = name
+        def is_displayed(self): return state['format_open']
+        def click(self):
+            state['clicks'].append(self.name)
+            if self.name == 'format': state['format_open'] = True
+            else: state['decimals'] += 1
+    def element(driver, selector):
+        return Button('increase' if 'Increase decimal' in selector else 'format')
+    monkeypatch.setattr(certification, '_wait_for_visible_workspace_element', element)
+    monkeypatch.setattr(certification, '_workspace_elements', lambda d, selector: [Button('increase')])
+    monkeypatch.setattr(journey, '_analysis_format', lambda d: f"Number | {state['decimals']} dp | Thin Space")
+    result = journey._analysis_two_decimal_display(object(), _AnalysisWait(object()))
+    assert state['clicks'] == ['format', 'increase', 'increase']
+    assert result['decimalPlaces'] == 2
+    assert '2 dp' in result['displayFormat']
+
+
+@pytest.mark.parametrize('damage', [None, 'rounded', 'stale', 'wrong-coordinate', 'missing-total'])
+def test_analysis_native_column_walk_checks_separate_virtualized_views(monkeypatch, damage):
+    from tests import flagship_remaining_4 as journey
+    state = {'left': 900, 'wheels': []}
+    leaves = {('Q1', 'leaf_a'): '100.25', ('Q1', 'leaf_b'): '49.75'}
+    totals = {('Q1', 'total'): '75.00', ('__grand_total__', 'total'): '50.00'}
+    def cells(driver):
+        expected = {0: {('Q1', 'leaf_a'): '100.25'}, 400: {('Q1', 'leaf_b'): '49.75'}, 800: totals}.get(state['left'], {})
+        result = [dict(rowid=r, colid=c, text=t) for (r, c), t in expected.items()]
+        if state['left'] == 800:
+            if damage == 'rounded': result[0]['text'] = '75'
+            if damage == 'stale': result[0]['text'] = '150.00'
+            if damage == 'wrong-coordinate': result[0]['rowid'] = 'Q2'
+            if damage == 'missing-total': result.pop()
+        return result
+    def wheel(driver, dx, dy):
+        state['wheels'].append((dx, dy))
+        state['left'] = max(0, min(800, state['left'] + dx))
+    monkeypatch.setattr(journey, '_analysis_cells', cells)
+    monkeypatch.setattr(journey, '_wheel', wheel)
+    monkeypatch.setattr(journey, '_analysis_scroll', lambda d: {'left': state['left'], 'maxLeft': 800})
+    observation = {}
+    if damage:
+        with pytest.raises(AssertionError, match='display did not settle'):
+            journey._analysis_display_columns(object(), _AnalysisWait(object()), {**leaves, **totals}, observation)
+    else:
+        journey._analysis_display_columns(object(), _AnalysisWait(object()), {**leaves, **totals}, observation)
+        assert len(observation['columnViews']) == 3
+        assert observation['columnViews'][-1]['cells'] == cells(None)
+    assert state['wheels'][0][0] < 0
+    assert (400, 0) in state['wheels']

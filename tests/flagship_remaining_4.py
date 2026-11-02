@@ -377,6 +377,69 @@ def analysis_cells_match(cells, expected):
                for key, value in expected.items())
 
 
+def _analysis_format(driver):
+    from tests.test_flagship_certification import _workspace_elements
+    return ' | '.join(e.text for e in _workspace_elements(driver, '[title="Open number format options"]') if e.is_displayed())
+
+
+def _analysis_two_decimal_display(driver, wait):
+    from tests.test_flagship_certification import _workspace_elements, _wait_for_visible_workspace_element as element
+    if not any(e.is_displayed() for e in _workspace_elements(driver, '[title="Increase decimal places"]')):
+        element(driver, '[data-testid="pivot-toolbar-format"]').click()
+    initial = _analysis_format(driver)
+    assert '0 dp' in initial, ('Fresh analysis fixture must start at zero decimals', initial)
+    # This fresh fixture starts at zero decimals and has no selected cells.
+    # The global title also guards against accidentally formatting a selection.
+    for _ in range(2):
+        element(driver, '[title="Increase decimal places"]').click()
+    display = wait.until(lambda d: (v if '2 dp' in (v := _analysis_format(d)) else False))
+    return {'control': 'Format > Increase decimal places', 'clicks': 2,
+            'decimalPlaces': 2, 'selectionScoped': False, 'initialDisplayFormat': initial, 'displayFormat': display}
+
+
+def _analysis_cells(driver):
+    """Read rendered cells whose centers are inside the actual grid viewport."""
+    from tests.test_flagship_certification import _wait_for_visible_workspace_element as element
+    scroller = element(driver, '[data-pivot-scroll-container]')
+    return driver.execute_script(r"""
+      const s=arguments[0],b=s.getBoundingClientRect();
+      const top=Math.max(b.top,...[...s.querySelectorAll('[role=columnheader]')].map(e=>e.getBoundingClientRect().bottom));
+      const hierarchy=[...s.querySelectorAll('[role=gridcell][data-colid="hierarchy"]')];
+      const left=Math.max(b.left,...hierarchy.map(e=>e.getBoundingClientRect().right));
+      return [...s.querySelectorAll('[role=gridcell][data-rowid][data-colid]')].filter(c=>{
+        const r=c.getBoundingClientRect(),x=(r.left+r.right)/2,y=(r.top+r.bottom)/2;
+        return r.width>0&&r.height>0&&y>top&&y<b.bottom&&x>(c.dataset.colid==='hierarchy'?b.left:left)&&x<b.right;
+      }).map(c=>({rowid:c.dataset.rowid,colid:c.dataset.colid,text:c.innerText.trim(),
+        bounds:{x:c.getBoundingClientRect().x,y:c.getBoundingClientRect().y,width:c.getBoundingClientRect().width,height:c.getBoundingClientRect().height}}));
+    """, scroller)
+
+
+def _analysis_scroll(driver):
+    from tests.test_flagship_certification import _wait_for_visible_workspace_element as element
+    return driver.execute_script('const s=arguments[0];return {left:s.scrollLeft,maxLeft:s.scrollWidth-s.clientWidth}',
+                                 element(driver, '[data-pivot-scroll-container]'))
+
+
+def _analysis_display_columns(driver, wait, expected, observation):
+    """Assert each logical column in a separate native-scrolled viewport."""
+    _wheel(driver, -100000, 0)
+    wait.until(lambda d: _analysis_scroll(d)['left'] == 0)
+    observation['columnViews'] = []
+    for column in dict.fromkeys(col for row, col in expected):
+        wanted = {key: value for key, value in expected.items() if key[1] == column}
+        def visible(d):
+            cells = _analysis_cells(d)
+            if analysis_cells_match(cells, wanted):
+                return {'column': column, 'cells': cells, 'scroll': _analysis_scroll(d)}
+            # Wrong text/row coordinates in a rendered column must time out;
+            # scrolling cannot turn stale or rounded values into a pass.
+            scroll = _analysis_scroll(d)
+            if not any(c['colid'] == column for c in cells) and scroll['left'] < scroll['maxLeft']:
+                _wheel(d, 400, 0)
+            return False
+        observation['columnViews'].append(wait.until(visible))
+
+
 def _analysis(driver, host, wait, observation, downloads):
     from selenium.webdriver.common.action_chains import ActionChains
     from selenium.webdriver.support.ui import Select
@@ -386,15 +449,16 @@ def _analysis(driver, host, wait, observation, downloads):
         return next((select for chip in _workspace_elements(driver, '[data-sidebar-field-chip="zone"]')
                      if chip.is_displayed() and 'ventes' in chip.text.lower()
                      for select in chip.find_elements('css selector', 'select[title="Aggregation"]') if select.is_displayed()), None)
+    observation['displayPrecondition'] = _analysis_two_decimal_display(driver, wait)
     if agg_select() is None:
         element(driver, '[data-testid="pivot-toggle-sidebar"]').click()
     checkpoint = driver.execute_script('return performance.now()')
     Select(wait.until(lambda _: agg_select())).select_by_value('avg')
     wait.until(lambda d: any(any(r.get('_id') == 'Grand Total' and r.get('Q1_ventes_€_avg') == 75 for r in reply['payload'].get('data', []))
         for req, reply in _responses(d, checkpoint)))
-    wait.until(lambda d: analysis_cells_match(s._navigation_cells(d), {
+    wait.until(lambda d: analysis_cells_match(_analysis_cells(d), {
         ('__grand_total__', 'Q1_ventes_€_avg'): '75.00'}))
-    observation['averageCells'] = s._navigation_cells(driver)
+    observation['averageCells'] = _analysis_cells(driver)
     header = element(driver, '[role="columnheader"][data-header-column-id="hierarchy"]')
     checkpoint = driver.execute_script('return performance.now()')
     ActionChains(driver).context_click(header).perform()
@@ -409,11 +473,15 @@ def _analysis(driver, host, wait, observation, downloads):
                 return {'request': req, 'response': reply}
         return False
     observation['expandedResponse'] = wait.until(expanded)
-    wait.until(lambda d: analysis_cells_match(s._navigation_cells(d), {
+    _analysis_display_columns(driver, wait, {
         ('Éclair|||東京', 'Q1_ventes_€_avg'): '100.25',
         ('München|||القاهرة', 'Q1_ventes_€_avg'): '49.75',
-        ('__grand_total__', 'Q1_ventes_€_avg'): '75.00'}))
-    observation['expandedCells'] = s._navigation_cells(driver)
+        ('__grand_total__', 'Q1_ventes_€_avg'): '75.00',
+        ('Éclair|||東京', 'Q2_ventes_€_avg'): '20.00',
+        ('München|||القاهرة', 'Q2_ventes_€_avg'): '30.00',
+        ('__grand_total__', '__RowTotal__ventes_€_avg'): '50.00'},
+        observation.setdefault('expandedDisplay', {}))
+    observation['expandedCells'] = _analysis_cells(driver)
     observation['expandedRows'] = s._navigation_rows(driver)
     if any(e.is_displayed() for e in _workspace_elements(driver, '[data-sidebar-drop-zone="rows"]')):
         element(driver, '[data-testid="pivot-toggle-sidebar"]').click()
@@ -430,15 +498,16 @@ def _analysis(driver, host, wait, observation, downloads):
                 continue
             q1 = rows['Q1']
             if [q1.get(c) for c in ['Éclair|東京_ventes_€_avg', 'München|القاهرة_ventes_€_avg', '__RowTotal__ventes_€_avg']] == [100.25, 49.75, 75]:
-                cells = s._navigation_cells(d)
-                if analysis_cells_match(cells, {
-                    ('Q1', 'Éclair|東京_ventes_€_avg'): '100.25',
-                    ('Q1', 'München|القاهرة_ventes_€_avg'): '49.75',
-                    ('Q1', '__RowTotal__ventes_€_avg'): '75.00',
-                    ('__grand_total__', '__RowTotal__ventes_€_avg'): '50.00'}):
-                    return {'request': req, 'response': reply, 'cells': cells}
+                return {'request': req, 'response': reply}
         return False
     observation['transposed'] = wait.until(transposed)
+    _analysis_display_columns(driver, wait, {
+        ('Q1', 'Éclair|東京_ventes_€_avg'): '100.25',
+        ('Q2', 'Éclair|東京_ventes_€_avg'): '20.00',
+        ('Q1', 'München|القاهرة_ventes_€_avg'): '49.75',
+        ('Q2', 'München|القاهرة_ventes_€_avg'): '30.00',
+        ('Q1', '__RowTotal__ventes_€_avg'): '75.00',
+        ('__grand_total__', '__RowTotal__ventes_€_avg'): '50.00'}, observation['transposed'])
     checkpoint = driver.execute_script('return performance.now()')
     started = time.time()
     _click_export(driver, 'csv')
@@ -529,6 +598,13 @@ def qualify_journeys(host, requirement):
                 _verify_release_asset_batch(driver, require_assets=True)
                 result['loadedAssetSha256'] = dict(driver._pivot_loaded_assets)
                 observation['trace'] = _trace(driver)
+                if requirement == 'journey-analysis.aggregate-expand-swap-export':
+                    try:
+                        observation['finalCells'] = _analysis_cells(driver)
+                        observation['finalDisplayFormat'] = _analysis_format(driver)
+                        observation['finalScroll'] = _analysis_scroll(driver)
+                    except Exception:
+                        observation['analysisSnapshotDiagnostic'] = traceback.format_exc()
                 observation['exportDeliveryTrace'] = driver.execute_script('return window.__pivotExactExports || []')
                 screenshot = directory / 'final.png'
                 driver.save_screenshot(str(screenshot)); paths.append(str(screenshot))
