@@ -147,3 +147,75 @@ def test_rendered_totals_require_exact_logical_grand_total_cells(monkeypatch):
     assert not helper.fixture_visible(None)
     shown[-1]['text'] = '-6.75'; shown[-1]['rowid'] = 'wrong-row'
     assert not helper.fixture_visible(None)
+
+@pytest.mark.parametrize('case', ['pending', 'unfinished', 'same-id', 'missing-id', 'wrong-kind', 'mixed-same-id', 'empty', 'error', 'stale', 'wrong-ui', 'alert', 'old-response', 'success'])
+def test_dash_recovery_wait_requires_new_completed_data_and_correct_ui(monkeypatch, case):
+    # Catch accepting the old correct grid before the observed retry completes.
+    from tests import flagship_remaining_5 as helper
+    record = wire('dash')[0]
+    response = record['response']['response']['pivot']['runtimeResponse']
+    response['requestId'] = 'retry-new'
+    record['body']['inputs'][0]['value']['requestId'] = 'retry-new'
+    records = [wire('dash')[0], record]
+    if case == 'pending': record.pop('response')
+    elif case == 'unfinished': record['finished'] = False
+    elif case == 'same-id': response['requestId'] = 'failed-id'
+    elif case == 'missing-id': response.pop('requestId')
+    elif case == 'wrong-kind': response['kind'] = 'chart'
+    elif case == 'mixed-same-id':
+        duplicate = copy.deepcopy(record)
+        duplicate['response']['response']['pivot']['runtimeResponse']['requestId'] = 'failed-id'
+        records.append(duplicate)
+    elif case == 'empty': record['response'] = {}
+    elif case in ('error', 'stale'): response['status'] = case
+    elif case == 'old-response': records = records[:1]
+    monkeypatch.setattr(helper, '_records', lambda _: records)
+    monkeypatch.setattr(helper, 'fixture_visible', lambda _: case != 'wrong-ui')
+    monkeypatch.setattr(helper.support, '_visible_error', lambda _: case == 'alert')
+    result = helper._dash_recovery_ready(None, 1, 'failed-id')
+    assert bool(result) == (case == 'success')
+    if result:
+        assert [item['requestId'] for item in result] == ['retry-new']
+
+
+def test_dash_recovery_caller_waits_past_old_ui_until_retry_wire_finishes(monkeypatch, tmp_path):
+    from tests import flagship_remaining_5 as helper
+    from tests import test_flagship_certification as certification
+    marker = tmp_path / 'fault'
+    failed = wire('dash')[0]
+    failed['response']['response']['pivot']['runtimeResponse'].update(status='error', requestId='failed-id')
+    retry = wire('dash')[0]
+    retry['body']['inputs'][0]['value']['requestId'] = 'retry-new'
+    retry['response']['response']['pivot']['runtimeResponse']['requestId'] = 'retry-new'
+    pending = copy.deepcopy(retry); pending.pop('response'); pending['finished'] = False
+    phase = {'value': 'initial'}
+    class Button:
+        text = 'Retry'
+        def click(self): phase['value'] = 'pending'
+    class Wait:
+        polled_pending = False
+        def until(self, predicate):
+            if phase['value'] == 'failed':
+                assert predicate(None)
+                return True
+            self.polled_pending = True
+            assert not predicate(None), 'Old correct UI must not finish recovery while retry wire is pending'
+            phase['value'] = 'done'
+            result = predicate(None)
+            assert result
+            return result
+    def refresh(*_):
+        marker.unlink(); phase['value'] = 'failed'
+    monkeypatch.setattr(helper, '_show_status', lambda _: None)
+    monkeypatch.setattr(helper, '_fault_marker', lambda _: marker)
+    monkeypatch.setattr(helper, '_click', refresh)
+    monkeypatch.setattr(helper, '_element', lambda *_: Button())
+    monkeypatch.setattr(helper, '_records', lambda _: [] if phase['value'] == 'initial' else [failed] + ([pending] if phase['value'] == 'pending' else [retry] if phase['value'] == 'done' else []))
+    monkeypatch.setattr(helper, 'fixture_visible', lambda _: True)
+    monkeypatch.setattr(helper.support, '_visible_error', lambda _: phase['value'] == 'failed')
+    monkeypatch.setattr(helper.support, '_visible_workspace_text', lambda _: 'Safe failure')
+    monkeypatch.setattr(certification, '_workspace_elements', lambda *_: [])
+    observation = {}; wait = Wait()
+    helper._dash_recovery(None, wait, observation)
+    assert wait.polled_pending
+    assert observation['recovery']['retryIds'] == ['retry-new']

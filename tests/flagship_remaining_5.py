@@ -234,6 +234,17 @@ def _show_status(driver):
         _click(driver, '[data-pivot-status-action="toggle-details"]')
 
 
+def _dash_recovery_ready(driver, checkpoint, failed_id):
+    """Require observed retry completion and final UI in the same bounded poll."""
+    recovered = [item for record in _records(driver)[checkpoint:]
+                 if record.get('finished')
+                 for item in envelopes(record.get('response'))
+                 if item.get('kind') == 'data' and item.get('status') == 'data']
+    if not recovered or any(not item.get('requestId') or item['requestId'] == failed_id for item in recovered):
+        return False
+    return recovered if fixture_visible(driver) and not support._visible_error(driver) else False
+
+
 def _dash_recovery(driver, wait, observation):
     _show_status(driver)
     before = len(_records(driver))
@@ -251,8 +262,7 @@ def _dash_recovery(driver, wait, observation):
         retry = _element(driver, '[role="alert"] button')
         assert retry.text == 'Retry'
         retry.click()
-        wait.until(lambda current: fixture_visible(current) and not support._visible_error(current))
-        recovered = [item for record in _records(driver)[checkpoint:] for item in envelopes(record.get('response')) if item.get('status') == 'data']
+        recovered = wait.until(lambda current: _dash_recovery_ready(current, checkpoint, failed[-1]['requestId']))
         assert recovered and all(item['requestId'] != failed[-1]['requestId'] for item in recovered)
         observation['recovery'] = {'failedId': failed[-1]['requestId'], 'retryIds': [item['requestId'] for item in recovered], 'privateExceptionHidden': True, 'loadingCleared': True}
     finally:
