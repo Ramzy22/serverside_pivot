@@ -2,7 +2,7 @@ import React from 'react';
 import Icons from '../utils/Icons';
 
 const Notification = ({ message, type, onClose }) => (
-    <div style={{
+    <div role="status" aria-live="polite" style={{
         position: 'fixed', // Changed from absolute
         bottom: '20px',
         left: '50%',
@@ -20,17 +20,24 @@ const Notification = ({ message, type, onClose }) => (
         gap: '12px',
         maxWidth: '400px',
         minWidth: '200px',
-        pointerEvents: 'auto'
+        // Feedback can overlap a cell near the viewport bottom. Keep that
+        // cell usable while the notification is visible; only dismiss targets input.
+        pointerEvents: 'none'
     }}>
         <span style={{flex: 1}}>{message}</span>
-        <span onClick={onClose} style={{
+        <button type="button" aria-label="Dismiss notification" onClick={onClose} style={{
+            pointerEvents: 'auto',
+            border: 0,
+            margin: 0,
+            color: 'inherit',
+            font: 'inherit',
             cursor:'pointer',
             opacity: 0.7,
             display: 'flex',
             padding: '2px',
             borderRadius: '4px',
             background: 'rgba(255,255,255,0.1)'
-        }}><Icons.Close/></span>
+        }}><Icons.Close/></button>
     </div>
 );
 

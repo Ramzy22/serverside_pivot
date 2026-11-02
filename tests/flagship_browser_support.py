@@ -564,8 +564,8 @@ def _selection_context_probe(driver, cell, phase):
               x:event.clientX,y:event.clientY,target:describe(event.target),
               path:event.composedPath().slice(0,8).map(describe)};
             append(entry);
-            queueMicrotask(()=>append({kind:'after-event',type,
-              prevented:event.defaultPrevented,active:active(),menus:menus()}));
+            setTimeout(()=>append({kind:'after-event',type,
+              prevented:event.defaultPrevented,active:active(),menus:menus()}),0);
           },true);
         let previous=JSON.stringify(menus());
         const observer=new MutationObserver(()=>{
