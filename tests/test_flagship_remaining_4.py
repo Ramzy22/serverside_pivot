@@ -140,22 +140,23 @@ def test_scroll_oracle_requires_nonzero_both_axes_exact_logical_cells_and_tolera
 
 
 def _analysis_case():
-    ids = ['hierarchy'] + [f'{prefix}_{field}_{agg}' for prefix in ('Éclair|東京', 'München|القاهرة', '__RowTotal_')
+    ids = ['hierarchy'] + [f'{prefix}_{field}_{agg}' for prefix in ('Éclair|東京', 'München|القاهرة')
                           for field, agg in (('ventes_€', 'avg'), ('unités', 'sum'), ('écart', 'sum'))]
+    ids += ['__RowTotal__unités_sum', '__RowTotal__ventes_€_avg', '__RowTotal__écart_sum']
     request = {'state': {'rowFields': ['period'], 'colFields': ['region', 'account'],
                          'valConfigs': [{'field': f, 'agg': a} for f, a in
                             (('ventes_€', 'avg'), ('unités', 'sum'), ('écart', 'sum'))], 'filters': _part_manifest()['filters']},
                'payload': {'colIds': ids, 'style': {'headerLabels': {c: c for c in ids}}}}
-    rows = [list(ids), ['Q1', '100.25', '2', '-12.5', '49.75', '3', '4.25', '75', '5', '-8.25'],
-            ['Q2', '20', '1', '2.5', '30', '4', '-1', '25', '5', '1.5'],
-            ['Grand Total', '60.125', '3', '-10', '39.875', '7', '3.25', '50', '10', '-6.75']]
+    rows = [list(ids), ['Q1', '100.25', '2', '-12.5', '49.75', '3', '4.25', '5', '75', '-8.25'],
+            ['Q2', '20', '1', '2.5', '30', '4', '-1', '5', '25', '1.5'],
+            ['Grand Total', '60.125', '3', '-10', '39.875', '7', '3.25', '10', '50', '-6.75']]
     return rows, request
 
 
-@pytest.mark.parametrize('damage', [None, 'average', 'axis', 'filter', 'row-order', 'header', 'column-order'])
+@pytest.mark.parametrize('damage', [None, 'average', 'axis', 'filter', 'row-order', 'header', 'column-order', 'total-order'])
 def test_analysis_export_oracle_rejects_wrong_average_axis_order_headers_filter(damage):
     rows, request = _analysis_case()
-    if damage == 'average': rows[1][7] = '150'
+    if damage == 'average': rows[1][8] = '150'
     if damage == 'axis': request['state']['rowFields'] = ['region']
     if damage == 'filter': request['state']['filters']['scope']['conditions'][0]['value'] = 'Excluded'
     if damage == 'row-order': rows[1], rows[2] = rows[2], rows[1]
@@ -163,6 +164,9 @@ def test_analysis_export_oracle_rejects_wrong_average_axis_order_headers_filter(
     if damage == 'column-order':
         request['payload']['colIds'][1], request['payload']['colIds'][2] = request['payload']['colIds'][2], request['payload']['colIds'][1]
         for row in rows: row[1], row[2] = row[2], row[1]
+    if damage == 'total-order':
+        request['payload']['colIds'][7], request['payload']['colIds'][8] = request['payload']['colIds'][8], request['payload']['colIds'][7]
+        for row in rows: row[7], row[8] = row[8], row[7]
     if damage:
         with pytest.raises(AssertionError): assert_analysis_csv(rows, request)
     else:

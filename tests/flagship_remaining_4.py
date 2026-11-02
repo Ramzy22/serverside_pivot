@@ -619,8 +619,11 @@ def assert_analysis_csv(rows, request):
     assert [(c['field'], c['agg']) for c in state['valConfigs']] == measures
     assert state['filters']['scope']['conditions'][0]['value'] == 'Included'
     ids = payload['colIds']
+    # Transpose creates new pivot groups; the existing total group retains its
+    # saved leaf order across the sum-to-average change (stable measure identity).
     assert ids == ['hierarchy'] + [f'{prefix}_{field}_{agg}'
-        for prefix in ('Éclair|東京', 'München|القاهرة', '__RowTotal_') for field, agg in measures]
+        for prefix in ('Éclair|東京', 'München|القاهرة') for field, agg in measures] + [
+            '__RowTotal__unités_sum', '__RowTotal__ventes_€_avg', '__RowTotal__écart_sum']
     assert len(rows) == 4 and [r[0] for r in rows[1:]] == ['Q1', 'Q2', 'Grand Total']
     assert rows[0] == [payload['style']['headerLabels'].get(c, c) for c in ids]
     source = [r for r in FLAGSHIP_QUALIFICATION_SOURCE_ROWS if r['scope'] == 'Included']
