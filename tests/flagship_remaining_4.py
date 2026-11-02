@@ -201,15 +201,60 @@ def _wheel(driver, dx, dy):
     ActionChains(driver).scroll_from_origin(ScrollOrigin.from_element(scroller), dx, dy).perform()
 
 
+def scroll_window_response(trace, row_id, checkpoint=-1):
+    """Correlate an aligned nonzero window with its observed logical row."""
+    if not row_id.startswith('R') or not row_id[1:].isdigit():
+        return False
+    index = int(row_id[1:])
+    pairs = correlated_responses(trace)
+    initial_sizes = [req['payload']['end'] + 1 for req, _ in pairs
+                     if req['payload'].get('start') == 0 and req['payload'].get('end', -1) >= 0]
+    if not initial_sizes:
+        return False
+    block = min(initial_sizes)
+    recent = {e['envelope']['requestId'] for e in trace if e['phase'] == 'request' and e['at'] > checkpoint}
+    for request, response in reversed(pairs):
+        payload = request['payload']
+        start, end = payload.get('start', 0), payload.get('end', -1)
+        if request['requestId'] not in recent or start <= 0 or start % block or not start <= index <= end:
+            continue
+        if (end-start+1) % block or payload.get('count', end-start+1) != end-start+1:
+            continue
+        ids = [r.get('_id') for r in response['payload'].get('data', []) if r.get('_id') != 'Grand Total']
+        offset = index-start
+        if ids.count(row_id) == 1 and offset < len(ids) and ids[offset] == row_id:
+            return {'request': request, 'response': response, 'blockSize': block}
+    return False
+
+
+def unloaded_range_evidence(loaded_before, loaded_after, endpoint):
+    """Prove a real missing interior, with both endpoints loaded and under cap."""
+    assert endpoint.startswith('R') and len(endpoint) == 6 and endpoint[1:].isdigit(), 'Parts fixture row ID required'
+    end = int(endpoint[1:])
+    assert 0 < end < 10000, 'Selection must fit the 10000-row copy cap'
+    assert 'R00000' in loaded_before and 'R00000' in loaded_after
+    assert endpoint not in loaded_before and endpoint in loaded_after
+    missing = [f'R{i:05d}' for i in range(1, end) if f'R{i:05d}' not in loaded_after]
+    assert missing, 'Fixture selection did not cross a genuinely unloaded block'
+    return {'endpointIds': ['R00000', endpoint], 'logicalRowCount': end+1, 'unloadedRowIds': missing}
+
+
+def assert_journey_fixture_binding(requirement, sha256):
+    if requirement in ('large-delivery.selected-part', 'copy-selection.unloaded-rows'):
+        return assert_part_manifest_binding(sha256)
+    return None
+
+
 def _save_scroll(driver, host, wait, observation, downloads):
     from tests import flagship_browser_support as s
     from tests.test_flagship_certification import _verify_release_asset_batch
     assert os.environ.get('PIVOT_FLAGSHIP_SCROLL_DATA') == '1', 'Wide fixture required'
+    checkpoint = driver.execute_script('return performance.now()')
     _wheel(driver, 850, 2500)
     wait.until(lambda d: _scroll_snapshot(d)['top'] > 0 and _scroll_snapshot(d)['left'] > 0)
     saved = _stable_scroll(driver, wait)
     assert saved['firstRow'] != 'R000' and saved['firstColumn'] != 'P23_unités_sum'
-    assert any(pair[0]['payload'].get('start', 0) >= 50 for pair in _responses(driver))
+    observation['savedWindow'] = wait.until(lambda d: scroll_window_response(_trace(d), saved['firstRow'], checkpoint))
     if s._totals_control_button(driver, 'Save View') is None:
         s._click_totals_control(driver, 'Theme')
     s._click_totals_control(driver, 'Save View')
@@ -301,35 +346,44 @@ def _unloaded(driver, host, wait, observation, downloads):
     from selenium.webdriver.common.keys import Keys
     from tests import flagship_browser_support as s
     from tests.test_flagship_certification import _clipboard_text, _workspace_elements
-    assert os.environ.get('PIVOT_FLAGSHIP_SCROLL_DATA') == '1', 'Wide fixture required'
-    column = 'P23_unités_sum'
-    first = s._selection_cell(driver, 'R000', column)
+    assert os.environ.get('PIVOT_FLAGSHIP_PARTS_DATA') == '1', 'Dedicated 12001-row profile required'
+    column = 'sales_sum'
+    first = s._selection_cell(driver, 'R00000', column)
     first.click()
-    assert s._selection_ids(driver) == [('R000', column)]
+    assert s._selection_ids(driver) == [('R00000', column)]
     before = _trace(driver)
     loaded_before = {r['_id'] for _, reply in _responses(driver) for r in reply['payload'].get('data', []) if '_id' in r}
-    assert 'R000' in loaded_before and 'R119' not in loaded_before
-    _wheel(driver, 0, 10000)
-    last = wait.until(lambda d: next((c for c in _workspace_elements(d, f'[role="gridcell"][data-rowid="R119"][data-colid="{column}"]') if c.is_displayed()), False))
-    wait.until(lambda d: any(req['payload'].get('start', 0) >= 50 for req, _ in _responses(d)))
+    assert 'R00000' in loaded_before
+    checkpoint = driver.execute_script('return performance.now()')
+    _wheel(driver, 0, 40000)
+    def far_endpoint(d):
+        ids = [c['rowid'] for c in _analysis_cells(d) if c['colid'] == column
+               and c['rowid'].startswith('R') and len(c['rowid']) == 6 and c['rowid'][1:].isdigit()
+               and 0 < int(c['rowid'][1:]) < 10000 and c['rowid'] not in loaded_before]
+        if not ids:
+            return False
+        endpoint = max(ids, key=lambda row: int(row[1:]))
+        window = scroll_window_response(_trace(d), endpoint, checkpoint)
+        return {'id': endpoint, 'window': window} if window else False
+    endpoint = wait.until(far_endpoint)
+    last = s._selection_cell(driver, endpoint['id'], column)
     ActionChains(driver).key_down(Keys.SHIFT).click(last).key_up(Keys.SHIFT).perform()
     selected = s._selection_ids(driver)
-    assert ('R119', column) in selected
+    assert (endpoint['id'], column) in selected
     loaded = {r['_id'] for _, reply in _responses(driver) for r in reply['payload'].get('data', []) if '_id' in r}
-    missing = [f'R{i:03d}' for i in range(120) if f'R{i:03d}' not in loaded]
-    assert missing, 'Fixture selection did not cross a genuinely unloaded block'
+    gap = unloaded_range_evidence(loaded_before, loaded, endpoint['id'])
+    observation.update(loadedBefore=sorted(loaded_before), loadedAfter=sorted(loaded), **gap,
+                       farWindow=endpoint['window'], visibleSelection=selected, initialTrace=before)
     sentinel = 'unavailable selection must preserve this OS clipboard'
     assert driver.execute_async_script("const done=arguments[1];navigator.clipboard.writeText(arguments[0]).then(()=>done(true),()=>done(false))", sentinel)
     ActionChains(driver).context_click(last).perform()
     s._selection_menu(driver, 'Copy Selection').click()
     notice = wait.until(lambda d: next((e.text for e in _workspace_elements(d, '*') if e.is_displayed()
-        and 'Selected range unavailable:' in e.text and len(e.text) < 250), False))
+        and e.text.strip() == 'Selected range unavailable: some rows are not loaded. Load the complete range before copying.'), False))
     s.assert_clipboard_stable(driver, sentinel, 1.5)
     assert _clipboard_text(driver) == sentinel
     observation.update(acceptedBranch='explicit unavailable range, clipboard preserved', difference='Copy requires all logical rows loaded',
-                       loadedBefore=sorted(loaded_before), loadedAfter=sorted(loaded), unloadedRowIds=missing,
-                       endpointIds=['R000', 'R119'], visibleSelection=selected, notification=notice,
-                       initialTrace=before)
+                       notification=notice)
 
 
 def _part(driver, host, wait, observation, downloads):
@@ -566,7 +620,7 @@ def qualify_journeys(host, requirement):
         pytest.skip('Enable installed flagship browser qualification explicitly')
     assert requirement in HANDLERS
     binding = load_artifact_binding(Path(os.environ['PIVOT_FLAGSHIP_ARTIFACT_BINDING']))
-    part_manifest_digest = assert_part_manifest_binding(binding.sha256) if requirement == 'large-delivery.selected-part' else None
+    part_manifest_digest = assert_journey_fixture_binding(requirement, binding.sha256)
     directory = Path(os.environ['PIVOT_FLAGSHIP_EVIDENCE_ROOT']) / requirement / host
     assert ('runs', os.environ['PIVOT_FLAGSHIP_RUN_ID']) in tuple(zip(directory.parts, directory.parts[1:]))
     directory.mkdir(parents=True, exist_ok=True)

@@ -88,7 +88,7 @@ SHARED_CLIENT_ASSERTIONS: Mapping[str, SharedClientAssertion] = {
        for name, check, phase, semantics in (
         ("saved-scroll.restore", "savedScrollRestored", "scroll", "Save/reload both nonzero axes; logical first row/column and offsets within2px"),
         ("copy-selection.merged-headers", "mergedSelectionHeadersVerified", "parity", "Actual rich HTML selected Q1/Q2 group labels/spans sum to selected width"),
-        ("copy-selection.unloaded-rows", "unloadedSelectionRejectedWithoutWrite", "scroll", "Actual unloaded range explicitly unavailable; native clipboard sentinel remains unchanged"),
+        ("copy-selection.unloaded-rows", "unloadedSelectionRejectedWithoutWrite", "parts", "Actual unloaded range explicitly unavailable; native clipboard sentinel remains unchanged"),
         ("large-delivery.selected-part", "selectedPartRowsVerified", "parts", "At least3 parts; real part2 download exact5000 rows, headers/boundaries and filtered bounds"),
         ("journey-selection.filter-pin-scroll-copy", "combinedSelectionClipboardVerified", "parity", "Single filter Munchen/pin units/scroll/copy headers journey exact [3,49.75]"),
         ("journey-analysis.aggregate-expand-swap-export", "analysisDisplayAndExportVerified", "parity", "Single average/expand/swap/parsed export journey; displayed Q1grand75 and exact raw-source matrix"),

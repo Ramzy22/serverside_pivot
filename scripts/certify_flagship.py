@@ -1021,10 +1021,10 @@ PRODUCT_BROWSER_JOURNEYS = {
 
 
 def _product_phase(node: str) -> str:
-    if "::test_flagship_combined_journeys[large-delivery.selected-part-" in node:
-        return "parts"
     if any(f"::test_flagship_combined_journeys[{name}-" in node
-           for name in ("saved-scroll.restore", "copy-selection.unloaded-rows")):
+           for name in ("large-delivery.selected-part", "copy-selection.unloaded-rows")):
+        return "parts"
+    if "::test_flagship_combined_journeys[saved-scroll.restore-" in node:
         return "scroll"
     if "::test_flagship_export_jobs[" in node:
         return "exports"

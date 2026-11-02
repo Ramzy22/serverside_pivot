@@ -225,3 +225,14 @@ def test_runner_uses_committed_archive_as_cwd_and_import_root(tmp_path, monkeypa
     assert calls[0][1]["cwd"] == tmp_path.resolve()
     assert calls[0][1]["env"]["PYTHONPATH"] == str(tmp_path.resolve())
     assert calls[0][1]["env"]["PYTHONNOUSERSITE"] == "1"
+
+@pytest.mark.parametrize('host', ['dash', 'react', 'streamlit'])
+def test_only_unloaded_journey_moves_from_scroll_to_existing_parts_phase(host):
+    from scripts.certify_flagship import _product_phase
+    unloaded = f'tests/test_flagship_workflows.py::test_flagship_combined_journeys[copy-selection.unloaded-rows-{host}]'
+    saved = f'tests/test_flagship_workflows.py::test_flagship_combined_journeys[saved-scroll.restore-{host}]'
+    part = f'tests/test_flagship_workflows.py::test_flagship_combined_journeys[large-delivery.selected-part-{host}]'
+    assert _product_phase(unloaded) == 'parts'
+    assert SHARED_CLIENT_ASSERTIONS['shared.copy-selection.unloaded-rows'].phase == 'parts'
+    assert _product_phase(saved) == 'scroll'
+    assert _product_phase(part) == 'parts'

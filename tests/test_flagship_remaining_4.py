@@ -188,8 +188,8 @@ def test_all_journeys_have_exact_installed_nodes_and_fixture_phases():
     from tests.flagship_contract import load_requirements
     plan = _product_browser_plan(load_requirements(Path(__file__).with_name('flagship_requirements.json')))
     for requirement in REQUIREMENTS:
-        phase = 'parts' if requirement == 'large-delivery.selected-part' else ('scroll' if requirement in
-                 ('saved-scroll.restore', 'copy-selection.unloaded-rows') else 'parity')
+        phase = 'parts' if requirement in ('large-delivery.selected-part', 'copy-selection.unloaded-rows') else ('scroll' if
+                 requirement == 'saved-scroll.restore' else 'parity')
         for host in ('dash', 'react', 'streamlit'):
             node = f'tests/test_flagship_workflows.py::test_flagship_combined_journeys[{requirement}-{host}]'
             assert plan[(requirement, host, 'browser.' + requirement)] == node
@@ -296,3 +296,60 @@ def test_analysis_native_column_walk_checks_separate_virtualized_views(monkeypat
         assert observation['columnViews'][-1]['cells'] == cells(None)
     assert state['wheels'][0][0] < 0
     assert (400, 0) in state['wheels']
+
+@pytest.mark.parametrize('damage', [None, 'origin', 'unaligned', 'wrong-request', 'outside-window', 'missing-row', 'duplicate-row', 'stale-request', 'count'])
+def test_scroll_window_requires_correlated_aligned_nonzero_request_covering_visible_row(damage):
+    from tests.flagship_remaining_4 import scroll_window_response
+    def request(identifier, start, end):
+        return {'schemaVersion': 1, 'requestId': identifier, 'kind': 'data',
+                'payload': {'start': start, 'end': end, 'count': end-start+1}}
+    initial, moved = request('initial', 0, 47), request('moved', 48, 143)
+    reply = {**moved, 'status': 'data', 'payload': {'data': [{'_id': f'R{i:03d}'} for i in range(48, 120)]}}
+    if damage == 'origin': moved['payload'].update(start=0, end=95, count=96)
+    if damage == 'unaligned': moved['payload'].update(start=49, end=144)
+    if damage == 'wrong-request': reply['requestId'] = 'orphan'
+    if damage == 'outside-window': moved['payload'].update(start=96, end=191)
+    if damage == 'missing-row': reply['payload']['data'] = [{'_id': 'R048'}]
+    if damage == 'duplicate-row': reply['payload']['data'].append({'_id': 'R056'})
+    if damage == 'count': moved['payload']['count'] = 48
+    trace = [dict(phase='request', at=1, envelope=initial),
+             dict(phase='response', at=2, envelope={**initial, 'status':'data', 'payload':{'data':[]}}),
+             dict(phase='request', at=3, envelope=moved), dict(phase='response', at=4, envelope=reply)]
+    assert bool(scroll_window_response(trace, 'R056', checkpoint=4 if damage == 'stale-request' else -1)) is (damage is None)
+
+
+@pytest.mark.parametrize('damage', [None, 'no-gap', 'endpoint-not-loaded', 'endpoint-already-loaded', 'over-limit', 'foreign-id', 'first-missing'])
+def test_unloaded_parts_range_requires_real_middle_gap_loaded_endpoints_and_safe_size(damage):
+    from tests.flagship_remaining_4 import unloaded_range_evidence
+    before = {f'R{i:05d}' for i in range(96)}
+    after = before | {f'R{i:05d}' for i in range(864, 960)}
+    endpoint = 'R00900'
+    if damage == 'no-gap': after = {f'R{i:05d}' for i in range(960)}
+    if damage == 'endpoint-not-loaded': after.remove(endpoint)
+    if damage == 'endpoint-already-loaded': before.add(endpoint)
+    if damage == 'over-limit': endpoint = 'R10000'; after.add(endpoint)
+    if damage == 'foreign-id': endpoint = 'Grand Total'; after.add(endpoint)
+    if damage == 'first-missing': before.remove('R00000')
+    if damage:
+        with pytest.raises(AssertionError): unloaded_range_evidence(before, after, endpoint)
+    else:
+        evidence = unloaded_range_evidence(before, after, endpoint)
+        assert evidence['endpointIds'] == ['R00000', 'R00900']
+        assert evidence['logicalRowCount'] == 901
+        assert evidence['unloadedRowIds'] == [f'R{i:05d}' for i in range(96, 864)]
+
+@pytest.mark.parametrize('requirement', ['large-delivery.selected-part', 'copy-selection.unloaded-rows'])
+@pytest.mark.parametrize('damage', [None, 'missing', 'changed'])
+def test_both_parts_journeys_require_existing_frozen_manifest_binding(requirement, damage):
+    import hashlib
+    from tests.flagship_remaining_4 import assert_journey_fixture_binding
+    digest = hashlib.sha256(Path(__file__).with_name('data').joinpath('flagship_parts_manifest.json').read_bytes()).hexdigest()
+    binding = {'parts_fixture': digest}
+    if damage == 'missing': binding.clear()
+    if damage == 'changed': binding['parts_fixture'] = '0' * 64
+    if damage:
+        with pytest.raises(AssertionError, match='Part oracle differs'):
+            assert_journey_fixture_binding(requirement, binding)
+    else:
+        assert assert_journey_fixture_binding(requirement, binding) == digest
+    assert assert_journey_fixture_binding('saved-scroll.restore', {}) is None
