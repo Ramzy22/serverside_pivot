@@ -46,7 +46,6 @@ import { useRuntimeChartPanelSizing } from '../runtime/useRuntimeChartPanelSizin
 import { useRuntimeChartCanvasResize } from '../runtime/useRuntimeChartCanvasResize';
 import { useRuntimeChartCanvasVerticalResize } from '../runtime/useRuntimeChartCanvasVerticalResize';
 import { useRuntimeChartDefinitionCommands } from '../runtime/useRuntimeChartDefinitionCommands';
-import { useRuntimeChartFloatingInteractions } from '../runtime/useRuntimeChartFloatingInteractions';
 import { createRuntimeCellPresentation } from '../runtime/createRuntimeCellPresentation';
 import { useRuntimeOptimisticCellState } from '../runtime/useRuntimeOptimisticCellState';
 import { useRuntimeRequestSession } from '../runtime/useRuntimeRequestSession';
@@ -1553,27 +1552,6 @@ export function useCoreRuntimeStage(props) {
     setChartCanvasPanes: stage.setChartCanvasPanes,
   });
   for (const [key, value] of Object.entries(chartCanvasVerticalResize)) stage[key] = value;
-  const chartFloatingInteractions = useRuntimeChartFloatingInteractions({
-    chartCanvasFloatingDragRef: stage.chartCanvasFloatingDragRef,
-    chartCanvasFloatingResizeRef: stage.chartCanvasFloatingResizeRef,
-    chartCanvasLayoutRef: stage.chartCanvasLayoutRef,
-    chartCanvasPanes: stage.chartCanvasPanes,
-    chartLayoutRef: stage.chartLayoutRef,
-    chartPanelFloating: stage.chartPanelFloating,
-    chartPanelFloatingDragRef: stage.chartPanelFloatingDragRef,
-    chartPanelFloatingRect: stage.chartPanelFloatingRect,
-    chartPanelFloatingResizeRef: stage.chartPanelFloatingResizeRef,
-    chartPanelGraphHeight: stage.chartPanelGraphHeight,
-    chartPanelWidth: stage.chartPanelWidth,
-    clampChartPanelWidth: stage.clampChartPanelWidth,
-    setChartCanvasPanes: stage.setChartCanvasPanes,
-    setChartPanelFloating: stage.setChartPanelFloating,
-    setChartPanelFloatingRect: stage.setChartPanelFloatingRect,
-    setChartPanelGraphHeight: stage.setChartPanelGraphHeight,
-    setChartPanelWidth: stage.setChartPanelWidth,
-    updateChartCanvasPane: stage.updateChartCanvasPane,
-  });
-  for (const [key, value] of Object.entries(chartFloatingInteractions)) stage[key] = value;
   const cellPresentation = createRuntimeCellPresentation({
     conditionalFormatting: stage.conditionalFormatting,
   });

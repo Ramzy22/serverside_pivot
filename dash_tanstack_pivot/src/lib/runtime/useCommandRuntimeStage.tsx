@@ -23,6 +23,7 @@ const debugLog = (...args) => {
 import { resolveEditorOptionsSource, validateEditorValue } from '../utils/editing';
 import { useDetailDrillThrough } from '../hooks/useDetailDrillThrough';
 import { useRuntimeChartCanvasCommands } from '../runtime/useRuntimeChartCanvasCommands';
+import { useRuntimeChartFloatingInteractions } from '../runtime/useRuntimeChartFloatingInteractions';
 import { useRuntimeEditChangeTracking } from '../runtime/useRuntimeEditChangeTracking';
 import { useRuntimeEditDispatch } from '../runtime/useRuntimeEditDispatch';
 import { useRuntimeEditStatePersistence } from '../runtime/useRuntimeEditStatePersistence';
@@ -523,6 +524,28 @@ export function useCommandRuntimeStage(input, transportDomain) {
     setTableCanvasSize: stage.setTableCanvasSize,
   });
   for (const [key, value] of Object.entries(chartCanvasCommands)) stage[key] = value;
+  // Floating gestures depend on the pane commands materialized above.
+  const chartFloatingInteractions = useRuntimeChartFloatingInteractions({
+    chartCanvasFloatingDragRef: stage.chartCanvasFloatingDragRef,
+    chartCanvasFloatingResizeRef: stage.chartCanvasFloatingResizeRef,
+    chartCanvasLayoutRef: stage.chartCanvasLayoutRef,
+    chartCanvasPanes: stage.chartCanvasPanes,
+    chartLayoutRef: stage.chartLayoutRef,
+    chartPanelFloating: stage.chartPanelFloating,
+    chartPanelFloatingDragRef: stage.chartPanelFloatingDragRef,
+    chartPanelFloatingRect: stage.chartPanelFloatingRect,
+    chartPanelFloatingResizeRef: stage.chartPanelFloatingResizeRef,
+    chartPanelGraphHeight: stage.chartPanelGraphHeight,
+    chartPanelWidth: stage.chartPanelWidth,
+    clampChartPanelWidth: stage.clampChartPanelWidth,
+    setChartCanvasPanes: stage.setChartCanvasPanes,
+    setChartPanelFloating: stage.setChartPanelFloating,
+    setChartPanelFloatingRect: stage.setChartPanelFloatingRect,
+    setChartPanelGraphHeight: stage.setChartPanelGraphHeight,
+    setChartPanelWidth: stage.setChartPanelWidth,
+    updateChartCanvasPane: stage.updateChartCanvasPane,
+  });
+  for (const [key, value] of Object.entries(chartFloatingInteractions)) stage[key] = value;
   useEffect(() => {
     const handleClick = () => stage.setContextMenu(null);
     document.addEventListener('click', handleClick);
