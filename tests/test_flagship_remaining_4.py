@@ -280,11 +280,13 @@ def test_analysis_native_column_walk_checks_separate_virtualized_views(monkeypat
             if damage == 'wrong-coordinate': result[0]['rowid'] = 'Q2'
             if damage == 'missing-total': result.pop()
         return result
-    def wheel(driver, dx, dy):
-        state['wheels'].append((dx, dy))
-        state['left'] = max(0, min(800, state['left'] + dx))
+    def step(driver, direction):
+        before = state['left']
+        state['wheels'].append(direction)
+        state['left'] = 0 if direction < 0 else min(800, state['left'] + 400)
+        return {'direction': direction, 'before': {'left': before, 'maxLeft': 800}, 'scroll': {'left': state['left'], 'maxLeft': 800}}
     monkeypatch.setattr(journey, '_analysis_cells', cells)
-    monkeypatch.setattr(journey, '_wheel', wheel)
+    monkeypatch.setattr(journey, '_analysis_column_step', step)
     monkeypatch.setattr(journey, '_analysis_scroll', lambda d: {'left': state['left'], 'maxLeft': 800})
     observation = {}
     if damage:
@@ -294,8 +296,8 @@ def test_analysis_native_column_walk_checks_separate_virtualized_views(monkeypat
         journey._analysis_display_columns(object(), _AnalysisWait(object()), {**leaves, **totals}, observation)
         assert len(observation['columnViews']) == 3
         assert observation['columnViews'][-1]['cells'] == cells(None)
-    assert state['wheels'][0][0] < 0
-    assert (400, 0) in state['wheels']
+    assert state['wheels'][0] == -1
+    assert 1 in state['wheels']
 
 @pytest.mark.parametrize('damage', [None, 'origin', 'unaligned', 'wrong-request', 'outside-window', 'missing-row', 'duplicate-row', 'stale-request', 'count'])
 def test_scroll_window_requires_correlated_aligned_nonzero_request_covering_visible_row(damage):
@@ -353,3 +355,50 @@ def test_both_parts_journeys_require_existing_frozen_manifest_binding(requiremen
     else:
         assert assert_journey_fixture_binding(requirement, binding) == digest
     assert assert_journey_fixture_binding('saved-scroll.restore', {}) is None
+
+@pytest.mark.parametrize('direction', [-1, 1])
+@pytest.mark.parametrize('damage', [None, 'stalled', 'jumped', 'wrong-row'])
+def test_analysis_column_step_uses_real_visible_anchor_and_single_right_key(monkeypatch, direction, damage):
+    from selenium.webdriver.common.keys import Keys
+    from tests import flagship_remaining_4 as journey, flagship_browser_support as support
+    from tests import test_flagship_certification as certification
+    cells = [dict(rowid='Q1', colid=c, text='1.00', bounds={'x': x, 'y': 100})
+             for c, x in [('middle', 600), ('left', 400), ('right', 800)]]
+    events = []
+    class Cell:
+        def click(self): events.append('click')
+    class Grid:
+        def send_keys(self, *keys): events.append(keys)
+    def anchor(driver, row, column):
+        events.append((row, column))
+        return Cell()
+    monkeypatch.setattr(journey, '_analysis_cells', lambda d: cells)
+    monkeypatch.setattr(journey, '_analysis_scroll', lambda d: {'left': 0 if direction < 0 else 400, 'maxLeft': 800})
+    monkeypatch.setattr(support, '_selection_cell', anchor)
+    selected = [('Q1', 'first' if direction < 0 else 'next')]
+    if damage == 'stalled': selected = [('Q1', 'left' if direction < 0 else 'right')]
+    if damage == 'jumped': selected = [('Q1', 'distant-total')]
+    if damage == 'wrong-row': selected = [('Q2', selected[0][1])]
+    monkeypatch.setattr(support, '_selection_ids', lambda d: selected)
+    monkeypatch.setattr(support, '_selection_column_order', lambda d:
+        ['hierarchy', 'first', 'middle', 'right'] if direction < 0 else ['hierarchy', 'left', 'middle', 'right', 'next'])
+    monkeypatch.setattr(certification, '_wait_for_visible_workspace_element', lambda d, selector: Grid())
+    if damage:
+        with pytest.raises(AssertionError, match='stalled or skipped'):
+            journey._analysis_column_step(object(), direction)
+        return
+    result = journey._analysis_column_step(object(), direction)
+    assert events[:2] == [('Q1', 'left' if direction < 0 else 'right'), 'click']
+    assert events[2] == ((Keys.CONTROL, Keys.ARROW_LEFT) if direction < 0 else (Keys.ARROW_RIGHT,))
+    assert result['selected'] == [('Q1', 'first' if direction < 0 else 'next')]
+
+def test_analysis_column_walk_rejects_keyboard_selection_without_scroll_progress(monkeypatch):
+    from tests import flagship_remaining_4 as journey
+    monkeypatch.setattr(journey, '_analysis_scroll', lambda d: {'left': 0, 'maxLeft': 800})
+    monkeypatch.setattr(journey, '_analysis_cells', lambda d: [])
+    monkeypatch.setattr(journey, '_analysis_column_step', lambda d, direction:
+        {'before': {'left': 0}, 'scroll': {'left': 0}, 'selected': [('Q1', 'other')]})
+    observation = {}
+    with pytest.raises(AssertionError, match='did not advance'):
+        journey._analysis_display_columns(object(), _AnalysisWait(object()), {('Q1', 'total'): '75.00'}, observation)
+    assert observation['navigation'][0]['selected'] == [('Q1', 'other')]

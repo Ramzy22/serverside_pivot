@@ -462,7 +462,8 @@ def _analysis_cells(driver):
       const left=Math.max(b.left,...hierarchy.map(e=>e.getBoundingClientRect().right));
       return [...s.querySelectorAll('[role=gridcell][data-rowid][data-colid]')].filter(c=>{
         const r=c.getBoundingClientRect(),x=(r.left+r.right)/2,y=(r.top+r.bottom)/2;
-        return r.width>0&&r.height>0&&y>top&&y<b.bottom&&x>(c.dataset.colid==='hierarchy'?b.left:left)&&x<b.right;
+        return r.width>0&&r.height>0&&y>Math.max(0,top)&&y<Math.min(innerHeight,b.bottom)
+          &&x>Math.max(0,c.dataset.colid==='hierarchy'?b.left:left)&&x<Math.min(innerWidth,b.right);
       }).map(c=>({rowid:c.dataset.rowid,colid:c.dataset.colid,text:c.innerText.trim(),
         bounds:{x:c.getBoundingClientRect().x,y:c.getBoundingClientRect().y,width:c.getBoundingClientRect().width,height:c.getBoundingClientRect().height}}));
     """, scroller)
@@ -474,9 +475,38 @@ def _analysis_scroll(driver):
                                  element(driver, '[data-pivot-scroll-container]'))
 
 
+def _analysis_column_step(driver, direction):
+    """Use the grid's real keyboard navigation from an on-screen data cell."""
+    from selenium.webdriver.common.keys import Keys
+    from tests import flagship_browser_support as s
+    from tests.test_flagship_certification import _wait_for_visible_workspace_element as element
+    cells = [c for c in _analysis_cells(driver) if c['colid'] != 'hierarchy' and c['rowid'] != '__grand_total__']
+    assert cells, 'No visible data cell available for native column navigation'
+    anchor = (max if direction > 0 else min)(cells, key=lambda c: (c['bounds']['x'], c['bounds']['y']))
+    order = [c for c in s._selection_column_order(driver) if c != 'hierarchy']
+    if direction > 0:
+        index = order.index(anchor['colid'])
+        assert index+1 < len(order), 'No adjacent rendered column for native navigation'
+        expected_column = order[index+1]
+    before = _analysis_scroll(driver)
+    s._selection_cell(driver, anchor['rowid'], anchor['colid']).click()
+    grid = element(driver, '[data-pivot-scroll-container]')
+    if direction > 0:
+        grid.send_keys(Keys.ARROW_RIGHT)
+    else:
+        grid.send_keys(Keys.CONTROL, Keys.ARROW_LEFT)
+        expected_column = next(c for c in s._selection_column_order(driver) if c != 'hierarchy')
+    selected = s._selection_ids(driver)
+    assert selected == [(anchor['rowid'], expected_column)], 'Native navigation stalled or skipped a logical column'
+    return {'direction': direction, 'anchor': anchor, 'selected': selected,
+            'before': before, 'scroll': _analysis_scroll(driver)}
+
+
 def _analysis_display_columns(driver, wait, expected, observation):
-    """Assert each logical column in a separate native-scrolled viewport."""
-    _wheel(driver, -100000, 0)
+    """Assert each logical column through bounded native keyboard navigation."""
+    observation['navigation'] = []
+    if _analysis_scroll(driver)['left'] > 0:
+        observation['navigation'].append(_analysis_column_step(driver, -1))
     wait.until(lambda d: _analysis_scroll(d)['left'] == 0)
     observation['columnViews'] = []
     for column in dict.fromkeys(col for row, col in expected):
@@ -489,7 +519,9 @@ def _analysis_display_columns(driver, wait, expected, observation):
             # scrolling cannot turn stale or rounded values into a pass.
             scroll = _analysis_scroll(d)
             if not any(c['colid'] == column for c in cells) and scroll['left'] < scroll['maxLeft']:
-                _wheel(d, 400, 0)
+                step = _analysis_column_step(d, 1)
+                observation['navigation'].append(step)
+                assert step['scroll']['left'] > step['before']['left'], 'Native column navigation did not advance the viewport'
             return False
         observation['columnViews'].append(wait.until(visible))
 
