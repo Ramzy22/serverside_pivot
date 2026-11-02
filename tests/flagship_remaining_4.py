@@ -22,6 +22,15 @@ REQUIREMENTS = (
     'journey-analysis.aggregate-expand-swap-export',
 )
 
+ACCEPTANCE_CHECKS = {
+    'saved-scroll.restore': 'savedScrollRestored',
+    'copy-selection.merged-headers': 'mergedSelectionHeadersVerified',
+    'copy-selection.unloaded-rows': 'unloadedSelectionRejectedWithoutWrite',
+    'large-delivery.selected-part': 'selectedPartRowsVerified',
+    'journey-selection.filter-pin-scroll-copy': 'combinedSelectionClipboardVerified',
+    'journey-analysis.aggregate-expand-swap-export': 'analysisDisplayAndExportVerified',
+}
+
 # Retain complete public V1 envelopes rather than a projection which might hide
 # a wrong axis, aggregation, filter or an omitted boundary row.
 PROBE = r"""
@@ -361,6 +370,13 @@ def _part(driver, host, wait, observation, downloads):
     (downloads / 'part-2-clipboard.html').write_text(html, encoding='utf-8')
 
 
+def analysis_cells_match(cells, expected):
+    """Compare settled displayed text at exact logical coordinates, uniquely."""
+    return all([cell['text'] for cell in cells
+                if (cell['rowid'], cell['colid']) == key] == [value]
+               for key, value in expected.items())
+
+
 def _analysis(driver, host, wait, observation, downloads):
     from selenium.webdriver.common.action_chains import ActionChains
     from selenium.webdriver.support.ui import Select
@@ -376,6 +392,9 @@ def _analysis(driver, host, wait, observation, downloads):
     Select(wait.until(lambda _: agg_select())).select_by_value('avg')
     wait.until(lambda d: any(any(r.get('_id') == 'Grand Total' and r.get('Q1_ventes_€_avg') == 75 for r in reply['payload'].get('data', []))
         for req, reply in _responses(d, checkpoint)))
+    wait.until(lambda d: analysis_cells_match(s._navigation_cells(d), {
+        ('__grand_total__', 'Q1_ventes_€_avg'): '75.00'}))
+    observation['averageCells'] = s._navigation_cells(driver)
     header = element(driver, '[role="columnheader"][data-header-column-id="hierarchy"]')
     checkpoint = driver.execute_script('return performance.now()')
     ActionChains(driver).context_click(header).perform()
@@ -390,6 +409,11 @@ def _analysis(driver, host, wait, observation, downloads):
                 return {'request': req, 'response': reply}
         return False
     observation['expandedResponse'] = wait.until(expanded)
+    wait.until(lambda d: analysis_cells_match(s._navigation_cells(d), {
+        ('Éclair|||東京', 'Q1_ventes_€_avg'): '100.25',
+        ('München|||القاهرة', 'Q1_ventes_€_avg'): '49.75',
+        ('__grand_total__', 'Q1_ventes_€_avg'): '75.00'}))
+    observation['expandedCells'] = s._navigation_cells(driver)
     observation['expandedRows'] = s._navigation_rows(driver)
     if any(e.is_displayed() for e in _workspace_elements(driver, '[data-sidebar-drop-zone="rows"]')):
         element(driver, '[data-testid="pivot-toggle-sidebar"]').click()
@@ -407,7 +431,11 @@ def _analysis(driver, host, wait, observation, downloads):
             q1 = rows['Q1']
             if [q1.get(c) for c in ['Éclair|東京_ventes_€_avg', 'München|القاهرة_ventes_€_avg', '__RowTotal__ventes_€_avg']] == [100.25, 49.75, 75]:
                 cells = s._navigation_cells(d)
-                if all(any(c['rowid'] == 'Q1' and c['colid'] == col for c in cells) for col in q1 if col.endswith('_avg')):
+                if analysis_cells_match(cells, {
+                    ('Q1', 'Éclair|東京_ventes_€_avg'): '100.25',
+                    ('Q1', 'München|القاهرة_ventes_€_avg'): '49.75',
+                    ('Q1', '__RowTotal__ventes_€_avg'): '75.00',
+                    ('__grand_total__', '__RowTotal__ventes_€_avg'): '50.00'}):
                     return {'request': req, 'response': reply, 'cells': cells}
         return False
     observation['transposed'] = wait.until(transposed)
@@ -491,6 +519,7 @@ def qualify_journeys(host, requirement):
         HANDLERS[requirement](driver, host, wait, observation, downloads)
         assert not any(e.is_displayed() for e in _workspace_elements(driver, '[role="alert"]'))
         result.update(result='passed', actionCompleted=True, v1RequestsCorrelated=True)
+        result[ACCEPTANCE_CHECKS[requirement]] = True
         observation['diagnostic'] = ''
     except Exception:
         observation['diagnostic'] = traceback.format_exc()

@@ -148,6 +148,13 @@ def assert_wire(records, host):
             continue
         grand = next((row for row in response['payload'].get('data', []) if row.get('_isTotal') and row.get('_id') == 'Grand Total'), None)
         if grand and [grand.get('__RowTotal__' + field + '_sum') for field in ('ventes_\u20ac', 'unit\u00e9s', '\u00e9cart')] == [200, 10, -6.75]:
+            # General V1 metadata is optional; the installed fixture explicitly
+            # qualifies the richer correlated identity/freshness contract.
+            for value in (request, response):
+                for key in ('table', 'clientInstance'):
+                    assert isinstance(value.get(key), str) and value[key], f'Missing typed fixture {key}'
+                for key in ('stateEpoch', 'windowSeq'):
+                    assert type(value.get(key)) is int and value[key] >= 0, f'Missing typed fixture {key}'
             fixture.append(response['requestId'])
     assert fixture, 'No semantic Included layout with authoritative 200/10/-6.75 totals'
     payloads = [record for record in records if '/v1/runtime/payload/' in record['url']]

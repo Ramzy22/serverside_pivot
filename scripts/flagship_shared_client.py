@@ -83,19 +83,22 @@ SHARED_CLIENT_ASSERTIONS: Mapping[str, SharedClientAssertion] = {
         ("chart-pane.lifecycle", "Physical40px resize, dock/float/redock retain exact source, close then fresh exact grid copy"),
         ("chart-export.artifact", "Real SVG download decoded; declared dimensions/title/legend/marks and scale; grid/pane preserved"),
     )},
-    # These require newly authored browser scenarios and a semantic registry review.
-    **{"shared." + name: _entry(name, f"test_flagship_shared_contract[{name}-{{host}}]",
-        ("sharedContractVerified",), semantics, reviewed=False)
-       for name, semantics in (
-        ("saved-scroll.restore", "Save/reload both nonzero axes; logical first row/column and offsets within2px"),
-        ("copy-selection.merged-headers", "Actual rich HTML selected Q1/Q2 group labels/spans sum to selected width"),
-        ("copy-selection.unloaded-rows", "Actual unloaded range explicitly completes or unavailable leaves clipboard sentinel unchanged"),
-        ("large-delivery.selected-part", "At least3 parts; real part2 download exact headers/row boundaries and immutable filtered bounds"),
-        ("journey-selection.filter-pin-scroll-copy", "Single filter Munchen/pin units/scroll/copy headers journey exact [3,49.75]"),
-        ("journey-analysis.aggregate-expand-swap-export", "Single average/expand/swap/parsed export journey; Q1grand75 and exact matrix"),
-        ("streamlit-no-rerun.local-interactions", "Real Streamlit session script counter unchanged after physical scroll and chart resize"),
-        ("react-direct-transport.v1", "Public installed React mount/direct V1 payloads, totals200/10/-6.75, cleanup and stale rejection"),
-        ("dash-callback-transport.v1", "Live installed Dash V1 callbacks exact totals, stale callback rejection and error recovery"),
+    **{"shared." + name: _entry(name, f"test_flagship_combined_journeys[{name}-{{host}}]",
+        ("actionCompleted", "v1RequestsCorrelated", check), semantics, phase=phase)
+       for name, check, phase, semantics in (
+        ("saved-scroll.restore", "savedScrollRestored", "scroll", "Save/reload both nonzero axes; logical first row/column and offsets within2px"),
+        ("copy-selection.merged-headers", "mergedSelectionHeadersVerified", "parity", "Actual rich HTML selected Q1/Q2 group labels/spans sum to selected width"),
+        ("copy-selection.unloaded-rows", "unloadedSelectionRejectedWithoutWrite", "scroll", "Actual unloaded range explicitly unavailable; native clipboard sentinel remains unchanged"),
+        ("large-delivery.selected-part", "selectedPartRowsVerified", "parts", "At least3 parts; real part2 download exact5000 rows, headers/boundaries and filtered bounds"),
+        ("journey-selection.filter-pin-scroll-copy", "combinedSelectionClipboardVerified", "parity", "Single filter Munchen/pin units/scroll/copy headers journey exact [3,49.75]"),
+        ("journey-analysis.aggregate-expand-swap-export", "analysisDisplayAndExportVerified", "parity", "Single average/expand/swap/parsed export journey; displayed Q1grand75 and exact raw-source matrix"),
+    )},
+    **{"shared." + name: _entry(name, f"test_flagship_host_integration[{{host}}-{name}]",
+        ("actionCompleted", "fixtureTotalsVerified", *checks), semantics)
+       for name, checks, semantics in (
+        ("streamlit-no-rerun.local-interactions", ("scriptRunCounterUnchanged", "nativeScrollVerified", "nativeResizeVerified", "gridStatePreserved", "sizingPermissionErrorsAbsent"), "Real Streamlit session script counter unchanged after physical scroll and chart resize"),
+        ("react-direct-transport.v1", ("allRequestsV1", "dashCallbacksAbsent", "consumerUnmountAbortedRequests", "componentListenersReleased"), "Public installed React mount/direct V1 payloads, typed freshness, totals200/10/-6.75, cleanup and stale rejection"),
+        ("dash-callback-transport.v1", ("callbackWrappersVerified", "errorRecoveryVerified", "staleCallbackRejected"), "Live installed Dash V1 callbacks, typed freshness, exact totals, stale callback rejection and error recovery"),
     )},
 }
 

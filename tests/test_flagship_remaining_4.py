@@ -11,6 +11,18 @@ from tests.flagship_remaining_4 import (
 )
 
 
+@pytest.mark.parametrize('damage', [None, 'blank', 'stale', 'wrong-row', 'duplicate'])
+def test_analysis_dom_oracle_requires_exact_visible_averages(damage):
+    from tests.flagship_remaining_4 import analysis_cells_match
+    expected = {('Q1', 'sales_avg'): '75.00', ('__grand_total__', 'sales_avg'): '50.00'}
+    cells = [dict(rowid=row, colid=col, text=value) for (row, col), value in expected.items()]
+    if damage == 'blank': cells[0]['text'] = ''
+    elif damage == 'stale': cells[0]['text'] = '150.00'
+    elif damage == 'wrong-row': cells[0]['rowid'] = 'Q2'
+    elif damage == 'duplicate': cells.append(dict(cells[0]))
+    assert analysis_cells_match(cells, expected) is (damage is None)
+
+
 def _part_manifest():
     return json.loads(Path(__file__).with_name('data').joinpath('flagship_parts_manifest.json').read_text(encoding='utf-8'))
 

@@ -83,6 +83,30 @@ def test_client_inventory_composes_with_task2_python_assertions_for_43_baseline_
     assert not unmapped_shared_ids(requirements)
 
 
+def test_every_shared_client_mapping_is_reviewed_and_matches_executable_host_plan():
+    from scripts.certify_flagship import _product_browser_plan, _product_phase
+    from tests.flagship_remaining_4 import ACCEPTANCE_CHECKS
+    requirements = load_requirements(Path(__file__).with_name('flagship_requirements.json'))
+    plan = _product_browser_plan(requirements)
+    observed = set()
+    for requirement in requirements:
+        if not requirement.required:
+            continue
+        for test_id in requirement.shared_tests:
+            assertion = SHARED_CLIENT_ASSERTIONS.get(test_id)
+            if assertion is None:
+                continue
+            assert assertion.reviewed
+            for host in requirement.hosts:
+                node = plan[(requirement.id, host, assertion.browser_test_id)]
+                assert node == assertion.node_template.format(host=host)
+                assert _product_phase(node) == assertion.phase
+            if requirement.id in ACCEPTANCE_CHECKS:
+                assert ACCEPTANCE_CHECKS[requirement.id] in assertion.checks
+            observed.add(test_id)
+    assert observed == SHARED_CLIENT_ASSERTIONS.keys()
+
+
 def test_reuse_is_per_host_exact_node_and_explicitly_not_independent(reuse):
     result, = project(reuse)
     assert result.result == "passed" and result.host == "react"

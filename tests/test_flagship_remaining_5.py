@@ -52,6 +52,19 @@ def test_exhaustive_inventory_does_not_hide_non_v1_or_callback_calls():
     with pytest.raises(AssertionError, match='runtimeResponse'): assert_wire(bad, 'dash')
 
 
+@pytest.mark.parametrize('host', ['dash', 'react'])
+@pytest.mark.parametrize('key', ['table', 'clientInstance', 'stateEpoch', 'windowSeq'])
+@pytest.mark.parametrize('damage', ['missing', 'wrong-type'])
+def test_fixture_wire_requires_typed_freshness_metadata(host, key, damage):
+    bad = wire(host)
+    request = bad[0]['body'] if host == 'react' else bad[0]['body']['inputs'][0]['value']
+    response = bad[0]['response'] if host == 'react' else bad[0]['response']['response']['pivot']['runtimeResponse']
+    for value in (request, response):
+        if damage == 'missing': value.pop(key)
+        else: value[key] = True
+    with pytest.raises(AssertionError): assert_wire(bad, host)
+
+
 def test_lifecycle_requires_real_pending_signal_abort_finally_and_listener_unsubscribe():
     pending = [{'at': 12, 'signalPresent': True, 'finished': False}]
     done = [{'at': 12, 'aborted': True, 'finished': True, 'error': 'AbortError'}]
