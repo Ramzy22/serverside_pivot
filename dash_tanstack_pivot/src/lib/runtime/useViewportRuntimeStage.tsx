@@ -39,6 +39,7 @@ import { useRuntimeDataRetry } from './useRuntimeDataRetry';
 import { useRuntimeFilterPopover } from '../runtime/useRuntimeFilterPopover';
 import { useRuntimeColorScalePresentation } from '../runtime/useRuntimeColorScalePresentation';
 import { useRuntimeViewportTableData } from '../runtime/useRuntimeViewportTableData';
+import { cellSelectionScopeKey } from './cellSelectionAnchor';
 import { useRuntimeCellSelection } from '../runtime/useRuntimeCellSelection';
 import { useRuntimeClipboardPaste } from '../runtime/useRuntimeClipboardPaste';
 import { useRuntimeClipboardExportPresentation } from '../runtime/useRuntimeClipboardExportPresentation';
@@ -1832,7 +1833,13 @@ export function useViewportRuntimeStage(input, transport) {
   });
   for (const [key, value] of Object.entries(columnCommands)) stage[key] = value;
 
+  // Semantic selection scope deliberately excludes viewport buffers and response versions.
+  const selectionScopeKey = cellSelectionScopeKey(
+    stage.serverSide, stage.tableName, stage.serverSideCacheKey, stage.expanded,
+    [stage.viewMode, stage.detailMode, stage.treeConfig, stage.detailConfig, stage.reportDef],
+  );
   const cellSelection = useRuntimeCellSelection({
+    selectionScopeKey,
     buildSelectedClipboardPayload: stage.buildSelectedClipboardPayload,
     copyRichToClipboard: stage.copyRichToClipboard,
     copyCurrentTableToClipboard: stage.copyCurrentTableToClipboard,

@@ -1,4 +1,5 @@
 import { useCallback, useEffect } from 'react';
+import { captureCellAnchor, resolveAnchorRow, resolveAnchorColumn } from './cellSelectionAnchor';
 import { isEditableKeyboardEvent } from '../hooks/usePivotNormalization';
 import { getDisplayOrderedLeafColumns, isSelectableDisplayColumn } from './displayColumnOrder';
 
@@ -26,6 +27,7 @@ export function useRuntimeCellSelection({
   scrollToDisplayRow,
   selectedCells,
   serverSide,
+  selectionScopeKey = '',
   setDragStart,
   setFillRange,
   setHoveredRowPath,
@@ -37,25 +39,61 @@ export function useRuntimeCellSelection({
   table,
   tableRef,
 }) {
+  const captureAnchor = useCallback((rowIndex, colIndex) => captureCellAnchor(
+    getDisplayRows(), getDisplayOrderedLeafColumns(table), rowIndex, colIndex, selectionScopeKey
+  ), [getDisplayRows, table, selectionScopeKey]);
+
   const selectRange = useCallback((start, end) => {
-    const rStart = Math.min(start.rowIndex, end.rowIndex);
-    const rEnd = Math.max(start.rowIndex, end.rowIndex);
-    const cStart = Math.min(start.colIndex, end.colIndex);
-    const cEnd = Math.max(start.colIndex, end.colIndex);
     const visibleRows = getDisplayRows();
     const visibleCols = getDisplayOrderedLeafColumns(table);
+    if (start.scopeKey !== undefined && start.scopeKey !== selectionScopeKey) start = end;
+    const startRow = resolveAnchorRow(start, visibleRows);
+    const endRow = resolveAnchorRow(end, visibleRows);
+    const startCol = resolveAnchorColumn(start, visibleCols);
+    const endCol = resolveAnchorColumn(end, visibleCols);
+    if (startCol < 0 || endCol < 0) return {};
+    const cStart = Math.min(startCol, endCol);
+    const cEnd = Math.max(startCol, endCol);
     const newSelection = {};
-    for (let r = rStart; r <= rEnd; r++) {
+    const addRow = (rowId, row) => {
       for (let c = cStart; c <= cEnd; c++) {
-        const row = visibleRows[r];
         const col = visibleCols[c];
-        if (row && isSelectableDisplayColumn(col)) {
-          newSelection[`${row.id}:${col.id}`] = row.getValue(col.id);
-        }
+        if (isSelectableDisplayColumn(col)) newSelection[`${rowId}:${col.id}`] = row?.getValue(col.id);
+      }
+    };
+    if (startRow >= 0 && endRow >= 0) {
+      for (let r = Math.min(startRow, endRow); r <= Math.max(startRow, endRow); r++) {
+        const row = visibleRows[r];
+        if (row) addRow(row.id, row);
+      }
+    } else {
+      // Preserve missing endpoint IDs so clipboard delivery refuses the range.
+      // Iterate only loaded rows, even when endpoints are trillions apart.
+      const endPosition = end.virtualIndex ?? visibleRows[endRow]?.original?.__virtualIndex;
+      if (Number.isFinite(start.virtualIndex) && Number.isFinite(endPosition)) {
+        const low = Math.min(start.virtualIndex, endPosition);
+        const high = Math.max(start.virtualIndex, endPosition);
+        visibleRows.forEach(row => {
+          const position = row.original?.__virtualIndex;
+          if (Number.isFinite(position) && position >= low && position <= high) addRow(row.id, row);
+        });
+      }
+      for (const [anchor, index] of [[start, startRow], [end, endRow]]) {
+        const row = visibleRows[index];
+        if (row) addRow(row.id, row);
+        else if (anchor.rowId !== undefined) addRow(anchor.rowId, null);
       }
     }
     return newSelection;
-  }, [getDisplayRows, table]);
+  }, [getDisplayRows, table, selectionScopeKey]);
+
+  useEffect(() => {
+    setSelectedCells({});
+    setLastSelected(null);
+    setDragStart(null);
+    setIsDragging(false);
+    isSelectAllServerRef.current = false;
+  }, [selectionScopeKey, setSelectedCells, setLastSelected, setDragStart, setIsDragging, isSelectAllServerRef]);
 
   const handleKeyDown = useCallback(e => {
     // Preserve native editing shortcuts whenever the event originated in a
@@ -90,8 +128,8 @@ export function useRuntimeCellSelection({
       isSelectAllServerRef.current = serverSide;
       if (visibleRowsAll.length > 0 && visibleLeafColumnsAll.length > 0) {
         const firstDisplayIndex = displayColumns.indexOf(visibleLeafColumnsAll[0]);
-        setLastSelected({ rowIndex: 0, colIndex: firstDisplayIndex });
-        setDragStart({ rowIndex: 0, colIndex: firstDisplayIndex });
+        setLastSelected(captureAnchor(0, firstDisplayIndex));
+        setDragStart(captureAnchor(0, firstDisplayIndex));
       }
       return;
     }
@@ -112,10 +150,12 @@ export function useRuntimeCellSelection({
       return;
     }
     if (!lastSelected) return;
-    const { rowIndex } = lastSelected;
+    if (lastSelected.scopeKey !== undefined && lastSelected.scopeKey !== selectionScopeKey) return;
+    const rowIndex = resolveAnchorRow(lastSelected, visibleRowsAll);
+    if (rowIndex < 0) return;
     // Navigate the data columns, then map back onto the rendered positional
     // axis so gutters never shift mouse, scroll, and keyboard anchors apart.
-    const colIndex = visibleLeafColumnsAll.indexOf(displayColumns[lastSelected.colIndex]);
+    const colIndex = visibleLeafColumnsAll.indexOf(displayColumns[resolveAnchorColumn(lastSelected, displayColumns)]);
     if (colIndex < 0) return;
     let nextRow = rowIndex;
     let nextCol = colIndex;
@@ -199,24 +239,26 @@ export function useRuntimeCellSelection({
       const key = `${nextRowObj.id}:${nextColObj.id}`;
       const value = nextRowObj.getValue(nextColObj.id);
       if (e.shiftKey && e.key.startsWith('Arrow')) {
-        setSelectedCells(selectRange(dragStart || lastSelected, { rowIndex: nextRow, colIndex: nextDisplayCol }));
+        setSelectedCells(selectRange(dragStart || lastSelected, captureAnchor(nextRow, nextDisplayCol)));
       } else {
         setSelectedCells({ [key]: value });
-        setDragStart({ rowIndex: nextRow, colIndex: nextDisplayCol });
+        setDragStart(captureAnchor(nextRow, nextDisplayCol));
       }
-      setLastSelected({ rowIndex: nextRow, colIndex: nextDisplayCol });
+      setLastSelected(captureAnchor(nextRow, nextDisplayCol));
       scrollToDisplayRow(nextRow);
       scrollToDisplayColumn(nextDisplayCol);
     }
-  }, [buildSelectedClipboardPayload, copyCurrentTableToClipboard, copyRichToClipboard, dragStart, getDisplayRows, handleRedo, handleUndo, isSelectAllServerRef, lastSelected, scrollToDisplayColumn, scrollToDisplayRow, selectedCells, selectRange, serverSide, setDragStart, setLastSelected, setSelectedCells, tableRef]);
+  }, [captureAnchor, selectionScopeKey, buildSelectedClipboardPayload, copyCurrentTableToClipboard, copyRichToClipboard, dragStart, getDisplayRows, handleRedo, handleUndo, isSelectAllServerRef, lastSelected, scrollToDisplayColumn, scrollToDisplayRow, selectedCells, selectRange, serverSide, setDragStart, setLastSelected, setSelectedCells, tableRef]);
 
   const handleCellMouseDown = useCallback((event, rowIndex, colIndex, rowId, colId, value) => {
     if (!isSelectableDisplayColumn({ id: colId })) return;
     if (event.button === 2) return;
     if (event.shiftKey) {
+      isSelectAllServerRef.current = false;
       event.preventDefault();
-      const start = lastSelected || { rowIndex, colIndex };
-      const newSelection = selectRange(start, { rowIndex, colIndex });
+      const end = captureAnchor(rowIndex, colIndex);
+      const start = lastSelected || end;
+      const newSelection = selectRange(start, end);
       if (event.ctrlKey || event.metaKey) {
         setSelectedCells(previous => ({ ...previous, ...newSelection }));
       } else {
@@ -226,8 +268,8 @@ export function useRuntimeCellSelection({
     }
     isSelectAllServerRef.current = false;
     setIsDragging(true);
-    setDragStart({ rowIndex, colIndex });
-    setLastSelected({ rowIndex, colIndex });
+    setDragStart(captureAnchor(rowIndex, colIndex));
+    setLastSelected(captureAnchor(rowIndex, colIndex));
     let clickedRow = null;
     if (tableRef.current && typeof tableRef.current.getRow === 'function') {
       try {
@@ -248,11 +290,11 @@ export function useRuntimeCellSelection({
     } else {
       setSelectedCells({ [key]: value });
     }
-  }, [getDisplayRows, isSelectAllServerRef, lastSelected, selectRange, selectedCells, setDragStart, setHoveredRowPath, setIsDragging, setLastSelected, setSelectedCells, tableRef]);
+  }, [captureAnchor, getDisplayRows, isSelectAllServerRef, lastSelected, selectRange, selectedCells, setDragStart, setHoveredRowPath, setIsDragging, setLastSelected, setSelectedCells, tableRef]);
 
   const handleCellMouseEnter = useCallback((rowIndex, colIndex) => {
     if (isDragging && dragStart) {
-      setSelectedCells(selectRange(dragStart, { rowIndex, colIndex }));
+      setSelectedCells(selectRange(dragStart, captureAnchor(rowIndex, colIndex)));
     }
     if (isFilling && dragStart) {
       setFillRange({
@@ -262,7 +304,7 @@ export function useRuntimeCellSelection({
         cEnd: Math.max(dragStart.colIndex, colIndex),
       });
     }
-  }, [dragStart, isDragging, isFilling, selectRange, setFillRange, setSelectedCells]);
+  }, [captureAnchor, dragStart, isDragging, isFilling, selectRange, setFillRange, setSelectedCells]);
 
   const handleFillMouseDown = useCallback(event => {
     event.stopPropagation();

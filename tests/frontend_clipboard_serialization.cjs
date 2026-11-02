@@ -276,3 +276,106 @@ test('selected copy rejects missing row IDs and virtual holes without producing 
         assert.equal(notices[0][1],'warning');
     }
 });
+const {useRuntimeCellSelection} = loadSource(path.join(frontend, 'src/lib/runtime/useRuntimeCellSelection.js'));
+function movingWindowSelection(initialIndices) {
+    const row = index => ({id: `東京:row-${index}`, original: {__virtualIndex:index}, getValue: () => index});
+    let rows = initialIndices.map(row);
+    const state = {selected: {}, anchor:null, drag:null, scope:'dataset-A', writes:[], notices:[]};
+    const columns = [{id:'sales',columnDef:{header:'Sales'}}];
+    const table = {getVisibleLeafColumns:()=>columns, getRowModel:()=>({rows})};
+    function render() {
+        let selection, presentation;
+        function Harness() {
+            presentation = useRuntimeClipboardExportPresentation({
+                table,getDisplayRows:()=>rows,serverSide:true,theme:{},selectedCells:state.selected,
+                getDisplayHeaderTextForColumn:c=>c.columnDef.header,
+                showNotification:(...args)=>state.notices.push(args),
+            });
+            selection = useRuntimeCellSelection({
+                table,tableRef:{current:table},getDisplayRows:()=>rows,serverSide:true,selectionScopeKey:state.scope,
+                lastSelected:state.anchor,dragStart:state.drag,selectedCells:state.selected,
+                isSelectAllServerRef:{current:false},isDragging:true,
+                setSelectedCells:value=>{state.selected=typeof value==='function'?value(state.selected):value;},
+                setLastSelected:value=>{state.anchor=value;},setDragStart:value=>{state.drag=value;},
+                setIsDragging:()=>{},setHoveredRowPath:()=>{},
+                scrollToDisplayRow:()=>{},scrollToDisplayColumn:()=>{},
+                buildSelectedClipboardPayload:presentation.buildSelectedClipboardPayload,
+                copyRichToClipboard:payload=>state.writes.push(payload),
+            });
+            return null;
+        }
+        renderToStaticMarkup(React.createElement(Harness));
+        return {selection,presentation};
+    }
+    const click = (index,shiftKey=false)=>render().selection.handleCellMouseDown(
+        {button:0,shiftKey,preventDefault(){}},index,0,rows[index].id,'sales',rows[index].getValue());
+    const copy = ()=>render().selection.handleKeyDown({key:'c',ctrlKey:true,preventDefault(){},target:{tagName:'TD',closest:()=>null}});
+    return {state,render,click,copy,move:indices=>{rows=indices.map(row);}};
+}
+
+test('actual mouse anchor survives replacement cache window and copy refuses absent endpoint',()=>{
+    const f=movingWindowSelection([0,1,2]); f.click(0); f.move([900,901,902]); f.click(2,true);
+    assert.ok(Object.hasOwn(f.state.selected,'東京:row-0:sales'));
+    f.copy(); assert.equal(f.state.writes.length,0);
+    assert.equal(f.state.notices[0][0],'Selected range unavailable: some rows are not loaded. Load the complete range before copying.');
+});
+
+test('retained anchor resolves by ID after cache prefix shifts; missing middle refuses',()=>{
+    const f=movingWindowSelection([0,1,2]);f.click(2);f.move([2,900,901]);f.click(2,true);
+    assert.ok(Object.hasOwn(f.state.selected,'東京:row-2:sales'));
+    f.copy();assert.equal(f.state.writes.length,0);
+    assert.equal(f.state.notices.length,1);
+});
+
+test('fully loaded shifted window selects exact stable endpoints and headers',()=>{
+    const f=movingWindowSelection([0,1,2]);f.click(2);f.move([1,2,3,4]);f.click(3,true);
+    assert.deepEqual(Object.keys(f.state.selected),['東京:row-2:sales','東京:row-3:sales','東京:row-4:sales']);
+    assert.equal(f.render().presentation.buildSelectedClipboardPayload(true,undefined,{rawValues:true}).text,'Sales\n2\n3\n4');
+});
+
+test('drag across a huge missing window retains anchor without materializing the gap',()=>{
+    const f=movingWindowSelection([0]);f.click(0);f.move([1e12,1e12+1]);
+    f.render().selection.handleCellMouseEnter(1,0);
+    assert.ok(Object.hasOwn(f.state.selected,'東京:row-0:sales'));
+    assert.ok(Object.keys(f.state.selected).length<=3);
+    f.copy();assert.equal(f.state.writes.length,0);
+});
+
+test('changed selection scope does not extend an old logical anchor',()=>{
+    const f=movingWindowSelection([0,1,2]);f.click(0);f.state.scope='dataset-B';f.click(2,true);
+    assert.deepEqual(Object.keys(f.state.selected),['東京:row-2:sales']);
+});
+
+test('keyboard resolves stable row ID after window shift and never rebinds an unloaded anchor',()=>{
+    const f=movingWindowSelection([0,1,2]);f.click(2);f.move([1,2,3,4]);
+    const key={key:'ArrowDown',preventDefault(){},target:{tagName:'TD',closest:()=>null}};
+    f.render().selection.handleKeyDown(key);
+    assert.deepEqual(Object.keys(f.state.selected),['東京:row-3:sales']);
+    f.move([100,101]);f.render().selection.handleKeyDown(key);
+    assert.deepEqual(Object.keys(f.state.selected),['東京:row-3:sales']);
+    f.copy();assert.equal(f.state.writes.length,0);
+});
+
+test('sort, filter, expansion and dataset scope changes reject the old mouse anchor',()=>{
+    const {cellSelectionScopeKey}=loadSource(path.join(frontend,'src/lib/runtime/cellSelectionAnchor.js'));
+    const scope=(dataset='A',sorting=[],filters={},expanded={})=>cellSelectionScopeKey(true,dataset,JSON.stringify({sorting,filters}),expanded,['pivot']);
+    const original=scope();
+    for(const next of [scope('B'),scope('A',[{id:'sales',desc:true}]),scope('A',[],{sales:1}),scope('A',[],{}, {'東京':true})]) {
+        const f=movingWindowSelection([0,1,2]);f.state.scope=original;f.click(0);
+        f.state.scope=next;f.click(2,true);
+        assert.deepEqual(Object.keys(f.state.selected),['東京:row-2:sales']);
+    }
+});
+
+test('refused shifted-window copy leaves the delivery port untouched for 1.5 seconds',async()=>{
+    const f=movingWindowSelection([0,1]);f.click(0);f.move([900,901]);f.click(1,true);
+    const sentinel={text:'clipboard-sentinel'};
+    f.state.writes.push(sentinel);f.copy();
+    const deadline=Date.now()+1500;
+    do {
+        assert.deepEqual(f.state.writes,[sentinel]);
+        await new Promise(resolve=>setTimeout(resolve,25));
+    } while(Date.now()<deadline);
+    assert.deepEqual(f.state.writes,[sentinel]);
+    assert.equal(f.state.notices.length,1);
+});

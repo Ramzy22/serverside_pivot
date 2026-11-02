@@ -72,7 +72,7 @@ test('Shift+Arrow extends from the rendered left column through the center', () 
     state.anchor = {rowIndex: 0, colIndex: 0};
     selection().handleKeyDown(key('ArrowRight', {shiftKey: true}));
     assert.deepEqual(state.selected, {'0:C': 30, '0:A': 10});
-    assert.deepEqual(state.anchor, {rowIndex: 0, colIndex: 1});
+    assert.deepEqual(state.anchor, {rowIndex: 0, colIndex: 1, rowId:'0', colId:'A', virtualIndex:undefined, scopeKey:''});
 });
 
 test('Tab and Shift+Tab cross pinned boundaries using rendered indices with the gutter', () => {
@@ -80,7 +80,7 @@ test('Tab and Shift+Tab cross pinned boundaries using rendered indices with the 
     state.anchor = {rowIndex: 0, colIndex: 3}; // D -> B at the right boundary
     selection().handleKeyDown(key('Tab'));
     assert.deepEqual(state.selected, {'0:B': 20});
-    assert.deepEqual(state.anchor, {rowIndex: 0, colIndex: 4});
+    assert.deepEqual(state.anchor, {rowIndex: 0, colIndex: 4, rowId:'0', colId:'B', virtualIndex:undefined, scopeKey:''});
     selection().handleKeyDown(key('Tab', {shiftKey: true}));
     assert.deepEqual(state.selected, {'0:D': 40});
     assert.deepEqual(state.columnsScrolled, [4, 3]);
@@ -92,14 +92,14 @@ test('ArrowLeft, Shift+Tab and Ctrl+ArrowLeft stop at first data column after gu
         state.anchor = {rowIndex: 0, colIndex: 1};
         selection().handleKeyDown(event);
         assert.deepEqual(state.selected, {'0:C': 30});
-        assert.deepEqual(state.anchor, {rowIndex: 0, colIndex: 1});
+        assert.deepEqual(state.anchor, {rowIndex: 0, colIndex: 1, rowId:'0', colId:'C', virtualIndex:undefined, scopeKey:''});
     }
 });
 
 test('select all anchors first displayed data column without collapsing gutter position', () => {
     const {selection, state} = fixture(true);
     selection().handleKeyDown(key('a', {ctrlKey: true}));
-    assert.deepEqual(state.anchor, {rowIndex: 0, colIndex: 1});
+    assert.deepEqual(state.anchor, {rowIndex: 0, colIndex: 1, rowId:'0', colId:'C', virtualIndex:undefined, scopeKey:''});
     assert.deepEqual(state.dragStart, state.anchor);
     assert.deepEqual(Object.keys(state.selected), ['0:C', '0:A', '0:D', '0:B', '1:C', '1:A', '1:D', '1:B']);
 });
@@ -125,4 +125,31 @@ test('chart category navigation publishes and scrolls rendered indices including
     assert.deepEqual(charts.visibleLeafColumns.map(column => column.id), ['__report_config__', 'C', 'A', 'D', 'B']);
     charts.activateChartCategory('pivot', 'select', {kind: 'column', columnId: 'D'});
     assert.deepEqual(scrolled, [3]);
+});
+
+test('semantic scope effect clears cells, anchors, drag and server select-all',()=>{
+    const effects=[];
+    const previous=hooks.useEffect;
+    hooks.useEffect=(callback,deps)=>effects.push({callback,deps});
+    try {
+        const {selection,state}=fixture();
+        state.selected={'0:C':30};state.anchor={rowIndex:0,colIndex:0};state.dragStart=state.anchor;
+        const selectAll={current:true};
+        selection({selectionScopeKey:'new-semantic-scope',isSelectAllServerRef:selectAll});
+        const reset=effects.find(effect=>effect.deps[0]==='new-semantic-scope');
+        assert.ok(reset);reset.callback();
+        assert.deepEqual(state.selected,{});assert.equal(state.anchor,null);assert.equal(state.dragStart,null);
+        assert.equal(selectAll.current,false);
+    } finally {hooks.useEffect=previous;}
+});
+
+test('stable column anchor follows reordered pinned columns and hidden anchor is not reinterpreted',()=>{
+    const {selection,state,table}=fixture();
+    selection().handleCellMouseDown({button:0},0,0,'0','C',30);
+    table.setOptions(previous=>({...previous,state:{...previous.state,columnPinning:{left:['A'],right:['B']}}}));
+    selection().handleCellMouseDown({button:0,shiftKey:true,preventDefault(){}},1,2,'1','D',41);
+    assert.deepEqual(state.selected,{'0:C':30,'0:D':40,'1:C':31,'1:D':41});
+    table.setOptions(previous=>({...previous,state:{...previous.state,columnVisibility:{C:false}}}));
+    selection().handleCellMouseDown({button:0,shiftKey:true,preventDefault(){}},1,1,'1','D',41);
+    assert.deepEqual(state.selected,{});
 });

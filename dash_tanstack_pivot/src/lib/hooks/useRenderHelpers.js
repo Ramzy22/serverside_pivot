@@ -225,7 +225,7 @@ export function useRenderHelpers({
             selectedCells || {},
             `${row.id}:${col.id}`
         );
-        const isLastSelected = lastSelected && lastSelected.rowIndex === virtualRowIndex && lastSelected.colIndex === colIndex;
+        const isLastSelected = lastSelected && (lastSelected.rowId === undefined ? lastSelected.rowIndex === virtualRowIndex : lastSelected.rowId === row.id) && (lastSelected.colId === undefined ? lastSelected.colIndex === colIndex : lastSelected.colId === col.id);
         let isFillSelected = false;
         if (fillRange && dragStart) {
              if (virtualRowIndex >= fillRange.rStart && virtualRowIndex <= fillRange.rEnd && colIndex >= fillRange.cStart && colIndex <= fillRange.cEnd) {
