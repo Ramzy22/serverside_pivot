@@ -533,17 +533,83 @@ def _select_rectangle(driver, row_ids, column_ids):
     return ids
 
 
+def _selection_context_probe(driver, cell, phase):
+    """Observe native interaction across shadow roots without changing event handling."""
+    return driver.execute_script("""
+      const target=arguments[0], phase=arguments[1];
+      const describe=el=>el?.getAttribute ? {tag:el.tagName,role:el.getAttribute('role'),
+        title:el.getAttribute('title'),row:el.getAttribute('data-rowid'),
+        column:el.getAttribute('data-colid')} : {tag:el?.nodeName};
+      const roots=[], collect=root=>{
+        roots.push(root);
+        for(const el of root.querySelectorAll('*')) if(el.shadowRoot) collect(el.shadowRoot);
+      };
+      collect(document);
+      const rect=el=>{const r=el.getBoundingClientRect();
+        return {x:r.x,y:r.y,width:r.width,height:r.height};};
+      const menus=()=>roots.flatMap(root=>[...root.querySelectorAll('[role="menu"]')])
+        .map(el=>({rect:rect(el),items:[...el.querySelectorAll('[role="menuitem"]')]
+          .map(describe)}));
+      const active=()=>{let el=document.activeElement;
+        while(el?.shadowRoot?.activeElement) el=el.shadowRoot.activeElement;
+        return describe(el);};
+      if(!window.__pivotSelectionContextProbe){
+        const trace=[];
+        const append=entry=>{trace.push({at:performance.now(),...entry});
+          if(trace.length>160) trace.shift();};
+        window.__pivotSelectionContextProbe={trace,append};
+        for(const type of ['pointerdown','mousedown','mouseup','contextmenu','click','focusin'])
+          document.addEventListener(type,event=>{
+            const entry={kind:'event',type,trusted:event.isTrusted,button:event.button,
+              x:event.clientX,y:event.clientY,target:describe(event.target),
+              path:event.composedPath().slice(0,8).map(describe)};
+            append(entry);
+            queueMicrotask(()=>append({kind:'after-event',type,
+              prevented:event.defaultPrevented,active:active(),menus:menus()}));
+          },true);
+        let previous=JSON.stringify(menus());
+        const observer=new MutationObserver(()=>{
+          const current=JSON.stringify(menus());
+          if(current!==previous){previous=current;
+            append({kind:'menu-change',active:active(),menus:JSON.parse(current)});}
+        });
+        for(const root of roots) observer.observe(root,{childList:true,subtree:true,
+          attributes:true,attributeFilter:['style']});
+      }
+      let hit=null;
+      if(target){
+        const r=target.getBoundingClientRect();
+        const x=(Math.max(0,r.left)+Math.min(innerWidth,r.right))/2;
+        const y=(Math.max(0,r.top)+Math.min(innerHeight,r.bottom))/2;
+        let el=document.elementFromPoint(x,y);
+        const path=[];
+        while(el){path.push(describe(el));const next=el.shadowRoot?.elementFromPoint(x,y);
+          if(!next||next===el) break;el=next;}
+        hit={x,y,path};
+      }
+      window.__pivotSelectionContextProbe.append({kind:'checkpoint',phase,
+        target:describe(target),rect:target?rect(target):null,hit,active:active(),
+        viewport:{width:innerWidth,height:innerHeight,scrollX,scrollY},menus:menus()});
+      return window.__pivotSelectionContextProbe.trace;
+    """, cell, phase)
+
+
 def _copy_selected(driver, cell, expected, observation, *, menu_label="Copy Selection"):
     from selenium.webdriver.common.action_chains import ActionChains
     from selenium.webdriver.support.ui import WebDriverWait
     from tests.test_flagship_certification import _clipboard_text
 
+    observation["selectionContextTrace"] = _selection_context_probe(driver, cell, f"{menu_label}:before")
     sentinel = "qualification clipboard checkpoint"
     assert driver.execute_async_script(
         "const done=arguments[arguments.length-1]; navigator.clipboard.writeText(arguments[0]).then(()=>done(true),()=>done(false));",
         sentinel)
-    ActionChains(driver).context_click(cell).perform()
-    menu_item = _selection_menu(driver, menu_label)
+    try:
+        ActionChains(driver).context_click(cell).perform()
+        observation["selectionContextTrace"] = _selection_context_probe(driver, cell, f"{menu_label}:after-native-context")
+        menu_item = _selection_menu(driver, menu_label)
+    finally:
+        observation["selectionContextTrace"] = _selection_context_probe(driver, cell, f"{menu_label}:after-menu-wait")
     clicked_title = menu_item.get_attribute("title")
     assert clicked_title == menu_label, "Selection copy menu action differs from the requested action"
     menu_item.click()
