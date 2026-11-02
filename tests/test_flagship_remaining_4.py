@@ -544,3 +544,26 @@ def test_pinned_boundary_waits_for_complete_rendered_columns(monkeypatch):
     rendered = ['hierarchy', 'later', 'units', 'sales']
     monkeypatch.setattr(support, '_selection_column_order', lambda driver: rendered)
     assert support._pinned_boundary_order(None, expected) == rendered
+
+@pytest.mark.parametrize('labels', [
+    ['Part 1  (rows 1\u20135,000)', 'Part 2  (rows 5,001\u201310,000)', 'Part 3  (rows 10,001\u201312,001)'],
+    ['Part 1  (rows 1\u20135 000)', 'Part 2  (rows 5 001\u201310 000)', 'Part 3  (rows 10 001\u201312 001)'],
+    ['Part 1  (rows 1\u20135\u00a0000)', 'Part 2  (rows 5\u00a0001\u201310\u00a0000)', 'Part 3  (rows 10\u00a0001\u201312\u00a0001)'],
+    ['Part 1  (rows 1\u20135\u202f000)', 'Part 2  (rows 5\u202f001\u201310\u202f000)', 'Part 3  (rows 10\u202f001\u201312\u202f001)'],
+])
+def test_part_intervals_accept_literal_english_and_french_grouping(labels):
+    from tests.flagship_remaining_4 import part_configuration_ready
+    assert part_configuration_ready('5000', labels)
+
+
+@pytest.mark.parametrize('labels', [
+    ['Part 1  (rows 1\u20135 000)', 'Part 2  (rows 5 002\u201310 000)', 'Part 3  (rows 10 001\u201312 001)'],
+    ['Part 1  (rows 1\u20135 000)', 'Part 2  (rows 5 001\u201310 001)', 'Part 3  (rows 10 001\u201312 001)'],
+    ['Part 2  (rows 5 001\u201310 000)', 'Part 1  (rows 1\u20135 000)', 'Part 3  (rows 10 001\u201312 001)'],
+    ['Part 1  (rows 1\u20135 000)', 'Part 2  (rows 50 01\u201310 000)', 'Part 3  (rows 10 001\u201312 001)'],
+    ['Part 1  (rows 1\u20135 000)', 'Part 2  (rows 5 001\u20131 0 000)', 'Part 3  (rows 10 001\u201312 001)'],
+    ['Part 1  (rows 1\u20135 000)', 'Part 2  (rows 5 001\u201310 000)'],
+])
+def test_part_intervals_reject_wrong_boundary_order_grouping_and_count(labels):
+    from tests.flagship_remaining_4 import part_configuration_ready
+    assert not part_configuration_ready('5000', labels)

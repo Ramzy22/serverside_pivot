@@ -399,9 +399,22 @@ def _unloaded(driver, host, wait, observation, downloads):
 
 
 def part_configuration_ready(value, labels):
-    expected = [f'Part {i} (rows {start}\u2013{end})' for i, start, end in
-                [(1, '1', '5,000'), (2, '5,001', '10,000'), (3, '10,001', '12,001')]]
-    return value == '5000' and [' '.join(label.split()) for label in labels] == expected
+    import re
+    def integer(text):
+        if re.fullmatch(r'[1-9][0-9]*', text):
+            return int(text)
+        # toLocaleString may use comma, space, NBSP or narrow NBSP. Validate
+        # groups before removing separators so malformed digits cannot pass.
+        if re.fullmatch(r'[1-9][0-9]{0,2}([, \u00a0\u202f])[0-9]{3}(?:\1[0-9]{3})*', text):
+            return int(re.sub(r'[, \u00a0\u202f]', '', text))
+        return None
+    intervals = []
+    for label in labels:
+        match = re.fullmatch(r'Part ([1-9][0-9]*)\s+\(rows ([0-9, \u00a0\u202f]+)\u2013([0-9, \u00a0\u202f]+)\)', label.strip())
+        if not match:
+            return False
+        intervals.append(tuple(integer(number) for number in match.groups()))
+    return value == '5000' and intervals == [(1, 1, 5000), (2, 5001, 10000), (3, 10001, 12001)]
 
 
 def _enter_part_size(driver, number):
@@ -431,7 +444,7 @@ def _part(driver, host, wait, observation, downloads):
         return buttons if part_configuration_ready(number.get_attribute('value'), [b.text for b in buttons]) else False
     parts = wait.until(configured)
     labels = [b.text for b in parts]
-    assert '5,001' in labels[1] and '10,000' in labels[1]
+    assert part_configuration_ready(number.get_attribute('value'), labels)
     checkpoint = driver.execute_script('return performance.now()')
     text, html = None, None
     from tests.test_flagship_certification import _clipboard_text, _clipboard_html
