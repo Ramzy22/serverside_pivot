@@ -26,6 +26,24 @@ SCALE_IDS = ("q1-eclair", "q2-eclair", "q1-munchen")
 DATA_BAR_IDS = (*SCALE_IDS, "q2-munchen", "q1-sao-paulo")
 
 
+def _choose_native_theme_override(driver, field, wait):
+    """Use Chrome's real RGB picker, preserving trusted browser input events."""
+    from selenium.webdriver.common.action_chains import ActionChains
+    from selenium.webdriver.common.keys import Keys
+    driver.execute_script("arguments[0].scrollIntoView({block:'center'})", field)
+    field.click()
+    wait.until(lambda current: current.execute_script("return arguments[0].matches(':open')", field))
+    # Opening and laying out the popup are asynchronous. Allow its initial
+    # focus to settle before navigating its native controls with keyboard input.
+    driver.execute_async_script("const done=arguments[0];requestAnimationFrame(()=>requestAnimationFrame(done))")
+    # Chrome's RGB popup tabs through color well, eyedropper, hue, R, G, B.
+    # Editing Blue explicitly avoids the geometry-dependent color-well arrows.
+    (ActionChains(driver).send_keys(*([Keys.TAB] * 5))
+     .key_down(Keys.CONTROL).send_keys("a").key_up(Keys.CONTROL)
+     .send_keys("15", Keys.ENTER).perform())
+    wait.until(lambda current: not current.execute_script("return arguments[0].matches(':open')", field))
+
+
 def starting_state(requirement):
     """Public v1 saved-view setup, consumed by the real restore implementation."""
     state = {
@@ -413,12 +431,9 @@ def _run(driver, host, requirement, state, wait, observation):
         """)
         assert field is not None
         # WebDriver's color send_keys changes the DOM value without a trusted
-        # picker event. Use the real picker and keyboard instead: one upward
-        # step from the dark theme's #0a0c10 yields #0a0c0f in Chrome.
+        # picker event. Edit Blue from 16 to 15 in the real native RGB picker.
         driver.execute_script("window.__pivotThemeColorInputs=[];arguments[0].addEventListener('input',e=>window.__pivotThemeColorInputs.push({value:e.target.value,trusted:e.isTrusted}),true)", field)
-        driver.execute_script("arguments[0].scrollIntoView({block:'center'})", field)
-        field.click()
-        ActionChains(driver).send_keys(Keys.ARROW_UP, Keys.ENTER).perform()
+        _choose_native_theme_override(driver, field, wait)
         wait.until(lambda current: appearance()["background"] == "rgb(10, 12, 15)")
         events = driver.execute_script("return window.__pivotThemeColorInputs")
         assert events and events[-1] == {"value": "#0a0c0f", "trusted": True}

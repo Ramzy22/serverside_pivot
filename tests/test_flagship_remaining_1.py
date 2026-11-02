@@ -10,6 +10,40 @@ from tests.flagship_remaining_1 import (
 )
 
 
+def test_native_theme_picker_edits_blue_with_trusted_input_on_local_fixture():
+    """Opt-in, isolated picker regression; never contacts application hosts."""
+    import os
+    from urllib.parse import quote
+    if os.environ.get("PIVOT_RUN_NATIVE_COLOR_FIXTURE") != "1":
+        pytest.skip("Enable the isolated native color fixture explicitly")
+    from selenium import webdriver
+    from selenium.webdriver.support.ui import WebDriverWait
+    from tests.flagship_remaining_1 import _choose_native_theme_override
+
+    options = webdriver.ChromeOptions()
+    options.add_argument("--headless=new")
+    options.add_argument("--window-size=1680,1200")
+    driver = webdriver.Chrome(options=options)
+    try:
+        for top in (8, 400, 800, 1100):
+            driver.get("data:text/html," + quote(f"""
+              <div style="height:1500px"><input id="color" type="color"
+                value="#0a0c10" style="position:absolute;top:{top}px"></div>
+              <script>
+                window.inputs=[];
+                document.querySelector('input').addEventListener('input',event=>
+                  inputs.push({{value:event.target.value,trusted:event.isTrusted}}));
+              </script>
+            """))
+            field = driver.find_element("id", "color")
+            _choose_native_theme_override(driver, field, WebDriverWait(driver, 5))
+            assert field.get_attribute("value") == "#0a0c0f", f"Picker position {top}"
+            events = driver.execute_script("return window.inputs")
+            assert events and events[-1] == {"value": "#0a0c0f", "trusted": True}
+    finally:
+        driver.quit()
+
+
 def test_actual_frontend_format_scale_and_data_bar_runtime():
     import shutil
     import subprocess
