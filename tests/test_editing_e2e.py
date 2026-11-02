@@ -10,7 +10,7 @@ import pytest
 import requests
 from dash import Dash, html
 from selenium import webdriver
-from selenium.common.exceptions import TimeoutException, WebDriverException
+from selenium.common.exceptions import StaleElementReferenceException, TimeoutException, WebDriverException
 from selenium.webdriver import ActionChains
 from selenium.webdriver.chrome.options import Options as ChromeOptions
 from selenium.webdriver.common.by import By
@@ -701,10 +701,19 @@ def _click_cell(driver, row_id, col_id):
 
 def _toggle_hierarchy_row(driver, row_id):
     button_selector = f'{_cell_selector(row_id, "hierarchy")} button'
-    button = WebDriverWait(driver, 20).until(
-        EC.element_to_be_clickable((By.CSS_SELECTOR, button_selector))
-    )
-    button.click()
+
+    def click_current_toggle(current_driver):
+        try:
+            button = EC.element_to_be_clickable((By.CSS_SELECTOR, button_selector))(current_driver)
+            if not button:
+                return False
+            button.click()
+            return True
+        except StaleElementReferenceException:
+            # Dash may replace the row between lookup, readiness checks, and click.
+            return False
+
+    WebDriverWait(driver, 20).until(click_current_toggle)
 
 
 def _click_row_edit_action(driver, row_id, action, timeout=20):
