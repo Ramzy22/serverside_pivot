@@ -539,7 +539,7 @@ def _selection_context_probe(driver, cell, phase):
       const target=arguments[0], phase=arguments[1];
       const describe=el=>el?.getAttribute ? {tag:el.tagName,role:el.getAttribute('role'),
         title:el.getAttribute('title'),row:el.getAttribute('data-rowid'),
-        column:el.getAttribute('data-colid')} : {tag:el?.nodeName};
+        column:el.getAttribute('data-colid'),text:el.textContent?.trim().slice(0,80)} : {tag:el?.nodeName};
       const roots=[], collect=root=>{
         roots.push(root);
         for(const el of root.querySelectorAll('*')) if(el.shadowRoot) collect(el.shadowRoot);
