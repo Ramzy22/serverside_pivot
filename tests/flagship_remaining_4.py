@@ -341,6 +341,19 @@ def _selection_journey(driver, host, wait, observation, downloads):
     observation.update(clipboardText=text, clipboardHtml=html, parsedHtml=parsed, scroll=_scroll_snapshot(driver))
 
 
+def _unloaded_notice(driver):
+    from selenium.common.exceptions import StaleElementReferenceException
+    from tests.test_flagship_certification import _workspace_elements
+    expected = 'Selected range unavailable: some rows are not loaded. Load the complete range before copying.'
+    try:
+        return next((e.text for e in _workspace_elements(driver, '[role="status"] > span')
+                     if e.is_displayed() and e.text.strip() == expected), False)
+    except StaleElementReferenceException:
+        # Notifications and virtual rows can rerender while WebDriver observes.
+        # Reacquire only the notification on the next bounded wait poll.
+        return False
+
+
 def _unloaded(driver, host, wait, observation, downloads):
     from selenium.webdriver.common.action_chains import ActionChains
     from selenium.webdriver.common.keys import Keys
@@ -378,12 +391,28 @@ def _unloaded(driver, host, wait, observation, downloads):
     assert driver.execute_async_script("const done=arguments[1];navigator.clipboard.writeText(arguments[0]).then(()=>done(true),()=>done(false))", sentinel)
     ActionChains(driver).context_click(last).perform()
     s._selection_menu(driver, 'Copy Selection').click()
-    notice = wait.until(lambda d: next((e.text for e in _workspace_elements(d, '*') if e.is_displayed()
-        and e.text.strip() == 'Selected range unavailable: some rows are not loaded. Load the complete range before copying.'), False))
+    notice = wait.until(_unloaded_notice)
     s.assert_clipboard_stable(driver, sentinel, 1.5)
     assert _clipboard_text(driver) == sentinel
     observation.update(acceptedBranch='explicit unavailable range, clipboard preserved', difference='Copy requires all logical rows loaded',
                        notification=notice)
+
+
+def part_configuration_ready(value, labels):
+    expected = [f'Part {i} (rows {start}\u2013{end})' for i, start, end in
+                [(1, '1', '5,000'), (2, '5,001', '10,000'), (3, '10,001', '12,001')]]
+    return value == '5000' and [' '.join(label.split()) for label in labels] == expected
+
+
+def _enter_part_size(driver, number):
+    from selenium.webdriver.common.keys import Keys
+    # A native paste produces one input event. Typing digits independently into
+    # this controlled/clamped number field turns the first '5' into 100.
+    assert driver.execute_async_script("const done=arguments[1];navigator.clipboard.writeText(arguments[0]).then(()=>done(true),()=>done(false))", '5000')
+    number.click()
+    number.send_keys(Keys.CONTROL, 'a')
+    number.send_keys(Keys.CONTROL, 'v')
+    number.send_keys(Keys.TAB)
 
 
 def _part(driver, host, wait, observation, downloads):
@@ -396,10 +425,11 @@ def _part(driver, host, wait, observation, downloads):
     ActionChains(driver).context_click(cell).perform()
     s._geometry_copy_current_table(driver)
     number = wait.until(lambda d: next((e for e in _workspace_elements(d, 'input[type="number"][min="100"]') if e.is_displayed()), False))
-    number.send_keys(Keys.CONTROL, 'a')
-    number.send_keys('5000', Keys.TAB)
-    parts = wait.until(lambda d: [b for b in _workspace_elements(d, 'button') if b.is_displayed() and b.text.strip().startswith('Part ')] or False)
-    assert len(parts) == 3
+    _enter_part_size(driver, number)
+    def configured(d):
+        buttons = [b for b in _workspace_elements(d, 'button') if b.is_displayed() and b.text.strip().startswith('Part ')]
+        return buttons if part_configuration_ready(number.get_attribute('value'), [b.text for b in buttons]) else False
+    parts = wait.until(configured)
     labels = [b.text for b in parts]
     assert '5,001' in labels[1] and '10,000' in labels[1]
     checkpoint = driver.execute_script('return performance.now()')

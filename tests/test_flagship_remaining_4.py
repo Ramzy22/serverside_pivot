@@ -406,3 +406,56 @@ def test_analysis_column_walk_rejects_keyboard_selection_without_scroll_progress
     with pytest.raises(AssertionError, match='did not advance'):
         journey._analysis_display_columns(object(), _AnalysisWait(object()), {('Q1', 'total'): '75.00'}, observation)
     assert observation['navigation'][0]['selected'] == [('Q1', 'other')]
+
+@pytest.mark.parametrize('value,labels,ready', [
+    ('5000', ['Part 1  (rows 1\u20135,000)', 'Part 2  (rows 5,001\u201310,000)', 'Part 3  (rows 10,001\u201312,001)'], True),
+    ('12001', ['Part 1  (rows 1\u201312,001)'], False),
+    ('5000', ['Part 1  (rows 1\u201312,001)'], False),
+    ('5000', ['Part 1  (rows 1\u20135,000)', 'Part 2  (rows 5,000\u201310,000)', 'Part 3  (rows 10,001\u201312,001)'], False),
+    ('10000', ['Part 1  (rows 1\u20135,000)', 'Part 2  (rows 5,001\u201310,000)', 'Part 3  (rows 10,001\u201312,001)'], False),
+])
+def test_selected_part_readiness_requires_settled_input_and_exact_intervals(value, labels, ready):
+    from tests.flagship_remaining_4 import part_configuration_ready
+    assert part_configuration_ready(value, labels) is ready
+
+
+def test_unloaded_notice_retries_stale_status_and_requires_exact_text(monkeypatch):
+    from selenium.common.exceptions import StaleElementReferenceException
+    from tests import flagship_remaining_4 as journey
+    from tests import test_flagship_certification as certification
+    message = 'Selected range unavailable: some rows are not loaded. Load the complete range before copying.'
+    class Status:
+        def __init__(self, text): self._text = text
+        def is_displayed(self): return True
+        @property
+        def text(self):
+            if self._text is None: raise StaleElementReferenceException()
+            return self._text
+    entries = [Status(None)]
+    def elements(driver, selector):
+        assert selector == '[role="status"] > span'
+        return entries
+    monkeypatch.setattr(certification, '_workspace_elements', elements)
+    assert journey._unloaded_notice(object()) is False
+    entries[:] = [Status('Copied'), Status(message + ' wrong')]
+    assert journey._unloaded_notice(object()) is False
+    entries[:] = [Status(message)]
+    assert journey._unloaded_notice(object()) == message
+
+
+def test_part_size_entry_pastes_whole_value_through_native_keyboard():
+    from selenium.webdriver.common.keys import Keys
+    from tests.flagship_remaining_4 import _enter_part_size
+    events = []
+    class Driver:
+        def execute_async_script(self, script, value):
+            assert 'navigator.clipboard.writeText' in script
+            events.append(('clipboard', value))
+            return True
+    class Number:
+        def click(self): events.append(('focus',))
+        def send_keys(self, *keys): events.append(('keys', keys))
+    _enter_part_size(Driver(), Number())
+    assert events == [('clipboard', '5000'), ('focus',),
+                      ('keys', (Keys.CONTROL, 'a')), ('keys', (Keys.CONTROL, 'v')),
+                      ('keys', (Keys.TAB,))]
