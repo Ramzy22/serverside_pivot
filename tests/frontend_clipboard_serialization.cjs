@@ -310,7 +310,19 @@ function movingWindowSelection(initialIndices) {
     const click = (index,shiftKey=false)=>render().selection.handleCellMouseDown(
         {button:0,shiftKey,preventDefault(){}},index,0,rows[index].id,'sales',rows[index].getValue());
     const copy = ()=>render().selection.handleKeyDown({key:'c',ctrlKey:true,preventDefault(){},target:{tagName:'TD',closest:()=>null}});
-    return {state,render,click,copy,move:indices=>{rows=indices.map(row);}};
+    const contextClick = index => {
+        const stage = {...render().selection, table, selectedCells:state.selected,
+            hasSelectionKey:(cells,key)=>Object.hasOwn(cells,key),
+            setSelectedCells:value=>{state.selected=value;},setLastSelected:value=>{state.anchor=value;},
+            resolveDisplayRowIndex:id=>rows.findIndex(row=>row.id===id)};
+        // Execute the real viewport context-menu promotion branch, before menu assembly.
+        const source=fs.readFileSync(path.join(frontend,'src/lib/runtime/useViewportRuntimeStage.tsx'),'utf8');
+        const body=source.split('stage.handleContextMenu = (e, value, colId, row) => {')[1].split('    const hasSelection =')[0];
+        const {getDisplayOrderedLeafColumns}=loadSource(path.join(frontend,'src/lib/runtime/displayColumnOrder.js'));
+        new Function('stage','getDisplayOrderedLeafColumns','e','value','colId','row',body)(
+            stage,getDisplayOrderedLeafColumns,{preventDefault(){}},rows[index].getValue(),'sales',rows[index]);
+    };
+    return {state,render,click,copy,contextClick,move:indices=>{rows=indices.map(row);}};
 }
 
 test('actual mouse anchor survives replacement cache window and copy refuses absent endpoint',()=>{
@@ -378,4 +390,14 @@ test('refused shifted-window copy leaves the delivery port untouched for 1.5 sec
     } while(Date.now()<deadline);
     assert.deepEqual(f.state.writes,[sentinel]);
     assert.equal(f.state.notices.length,1);
+});
+
+test('actual context-menu promotion survives shifted and missing endpoint windows',()=>{
+    for (const indices of [[1,2,3,4],[900,901,902]]) {
+        const f=movingWindowSelection([0,1,2]);f.contextClick(2);const anchorKey=Object.keys(f.state.selected)[0];
+        f.move(indices);f.click(indices.length-1,true);
+        assert.ok(Object.hasOwn(f.state.selected,anchorKey));
+        if(indices[0]===900){f.copy();assert.equal(f.state.writes.length,0);assert.equal(f.state.notices.length,1);}
+        else assert.deepEqual(Object.values(f.state.selected),[2,3,4]);
+    }
 });

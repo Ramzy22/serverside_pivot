@@ -506,10 +506,7 @@ export function useViewportRuntimeStage(input, transport) {
       const colIndex = visibleCols.findIndex(c => c.id === colId);
       const displayRowIndex = row ? stage.resolveDisplayRowIndex(row.id, row.index) : -1;
       if (row && displayRowIndex >= 0 && colIndex >= 0) {
-        stage.setLastSelected({
-          rowIndex: displayRowIndex,
-          colIndex
-        });
+        stage.setLastSelected(stage.captureAnchor(displayRowIndex, colIndex));
       }
     }
     const hasSelection = Object.keys(selectionForMenu).length > 0;

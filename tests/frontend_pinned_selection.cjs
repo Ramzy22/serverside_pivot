@@ -48,7 +48,7 @@ function fixture(withGutter = false) {
         setSelectedCells: value => {state.selected = typeof value === 'function' ? value(state.selected) : value;},
         setLastSelected: value => {state.anchor = value;},
         setDragStart: value => {state.dragStart = value;},
-        setIsDragging: () => {}, setHoveredRowPath: () => {},
+        setIsDragging: () => {}, setHoveredRowPath: () => {}, setIsFilling:()=>{}, setFillRange:()=>{},
         scrollToDisplayRow: () => {}, scrollToDisplayColumn: index => state.columnsScrolled.push(index),
         ...overrides,
     });
@@ -152,4 +152,22 @@ test('stable column anchor follows reordered pinned columns and hidden anchor is
     table.setOptions(previous=>({...previous,state:{...previous.state,columnVisibility:{C:false}}}));
     selection().handleCellMouseDown({button:0,shiftKey:true,preventDefault(){}},1,1,'1','D',41);
     assert.deepEqual(state.selected,{});
+});
+
+test('scope invalidation cancels active fill and refuses stale fill completion',()=>{
+    const effects=[];const previous=hooks.useEffect;hooks.useEffect=(callback,deps)=>effects.push({callback,deps});
+    try {
+        const {selection,state}=fixture();const updates=[];
+        state.dragStart={rowIndex:0,colIndex:0,rowId:'0',colId:'C',scopeKey:'old'};
+        let filling=true,range={rStart:0,rEnd:1,cStart:0,cEnd:0};
+        const render=()=>selection({selectionScopeKey:'new',isFilling:filling,fillRange:range,setProps:()=>{},
+            setIsFilling:value=>{filling=value;},setFillRange:value=>{range=value;},
+            dispatchBatchUpdateRequest:(...args)=>updates.push(args)});
+        const stale=render();effects.find(effect=>effect.deps[0]==='new').callback();
+        assert.equal(filling,false);assert.equal(range,null);assert.equal(state.dragStart,null);
+        assert.doesNotThrow(()=>stale.handleFillMouseUp());
+        assert.doesNotThrow(()=>render().handleFillMouseUp());assert.deepEqual(updates,[]);
+        filling=true;range={rStart:0,rEnd:1,cStart:0,cEnd:0};
+        assert.doesNotThrow(()=>render().handleFillMouseUp());assert.deepEqual(updates,[]);
+    } finally {hooks.useEffect=previous;}
 });

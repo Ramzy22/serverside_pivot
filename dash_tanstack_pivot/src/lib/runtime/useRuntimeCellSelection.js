@@ -92,8 +92,10 @@ export function useRuntimeCellSelection({
     setLastSelected(null);
     setDragStart(null);
     setIsDragging(false);
+    setIsFilling(false);
+    setFillRange(null);
     isSelectAllServerRef.current = false;
-  }, [selectionScopeKey, setSelectedCells, setLastSelected, setDragStart, setIsDragging, isSelectAllServerRef]);
+  }, [selectionScopeKey, setSelectedCells, setLastSelected, setDragStart, setIsDragging, setIsFilling, setFillRange, isSelectAllServerRef]);
 
   const handleKeyDown = useCallback(e => {
     // Preserve native editing shortcuts whenever the event originated in a
@@ -313,7 +315,8 @@ export function useRuntimeCellSelection({
   }, [setIsFilling]);
 
   const handleFillMouseUp = useCallback(() => {
-    if (isFilling && fillRange && setProps) {
+    if (isFilling && fillRange && setProps && dragStart
+      && (dragStart.scopeKey === undefined || dragStart.scopeKey === selectionScopeKey)) {
       const displayRows = getDisplayRows();
       const startRow = displayRows[dragStart.rowIndex];
       const startValue = startRow ? startRow.getVisibleCells()[dragStart.colIndex].getValue() : undefined;
@@ -330,7 +333,7 @@ export function useRuntimeCellSelection({
     }
     setIsFilling(false);
     setFillRange(null);
-  }, [dispatchBatchUpdateRequest, dragStart, fillRange, getDisplayRows, isFilling, setFillRange, setIsFilling, setProps, table]);
+  }, [selectionScopeKey, dispatchBatchUpdateRequest, dragStart, fillRange, getDisplayRows, isFilling, setFillRange, setIsFilling, setProps, table]);
 
   useEffect(() => {
     const handleMouseUp = () => {
@@ -362,6 +365,7 @@ export function useRuntimeCellSelection({
   }, [buildSelectedClipboardPayload, copyCurrentTableToClipboard, copyRichToClipboard, isSelectAllServerRef, loadedRows, selectedCells, serverSide]);
 
   return {
+    captureAnchor,
     handleCellMouseDown,
     handleCellMouseEnter,
     handleFillMouseDown,

@@ -32,3 +32,21 @@ An initial direct Node command used the package directory with a root-relative t
 Product files: useRuntimeCellSelection.js, new cellSelectionAnchor.js, useViewportRuntimeStage.tsx, useCellInteraction.js and useRenderHelpers.js. Test files: frontend_clipboard_serialization.cjs and frontend_pinned_selection.cjs. Clipboard serialization/delivery product and historical artifacts/source archive remain untouched. Fill/edit behavior was not expanded.
 
 Root must review, freshly build/install this source and rerun serial native unloaded-range qualification in Dash/React/Streamlit, including exact refusal and unchanged OS clipboard for 1.5 seconds. Source regressions and the simulated sentinel are not native acceptance evidence. qualificationEvidence remains false until that run.
+
+
+## Independent review corrections after 5b39367
+
+Addressed both findings from unloaded-range-product-review.md. Context-menu promotion now calls the same scoped stable capture callback used by mouse/keyboard selection. That callback is an internal hook-to-stage port; public component props are unchanged. Audited concrete setLastSelected/setDragStart producers in the existing scoped product files: mouse, keyboard and select-all use captureAnchor; viewport right-click now does too; other setters clear anchors. useCellInteraction initializes typed null state; useRenderHelpers only reads anchors. The separate row-selection domain remains outside this correction.
+
+Semantic scope invalidation now clears isFilling and fillRange with dragStart. Fill completion also requires a present anchor whose captured scope matches the current scope, preventing a new-scope event from completing an old operation before reset effects run and preventing null-anchor dereference. Editing exclusions and existing fill semantics remain unchanged.
+
+Regression evidence: the actual viewport context-menu promotion source branch is executed up to menu assembly, then fed into the actual selection and clipboard hooks. It checks shifted loaded endpoints and missing-endpoint refusal. On HEAD 5b39367 this test fails because the original endpoint is lost; after correction it passes. The fill regression executes the actual scope reset effect and completion callbacks, checking cleared fill state, no exception and no stale batch update, including null-anchor completion. Both added cases failed before product edits (31 pass, 2 fail); all pass after correction.
+
+Commands/results:
+- node --test tests/frontend_clipboard_serialization.cjs tests/frontend_pinned_selection.cjs: 33 passed (23 clipboard including prior 22; 10 pinned including prior 9), 0 failed.
+- node --test --test-name-pattern="actual context-menu promotion" tests/frontend_clipboard_serialization.cjs with only viewport source temporarily restored from HEAD inside a try/finally: expected RED exit 1, missing original endpoint assertion. Fixed bytes restored immediately.
+- C:/Users/ramzy/AppData/Local/Temp/pf-sec207/Scripts/python.exe -m pytest tests/test_clipboard_serialization.py -q -k shared_clipboard: 1 passed, 6 deselected; existing pytest-asyncio/Dash deprecation warnings.
+- npm run typecheck in dash_tanstack_pivot: exit 0; TypeScript and checked-JS gate passed.
+- git diff --check: exit 0.
+
+Only the existing two product files, two focused regression files and this report changed. No browsers, native clipboard, broad suite, root source edits or subagents. qualificationEvidence remains false; root fresh review/build/install/native qualification remains required.
