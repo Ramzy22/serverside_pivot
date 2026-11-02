@@ -107,9 +107,78 @@ def assert_model_dom(cells, expected):
     assert {(row, col): text for row, col, text in actual} == wanted, "Displayed cells differ from independent oracle"
 
 
+# Read-only DOM queries keep matching and visibility checks in one browser turn.
+# Returning every button and inspecting remote handles races host rerenders.
+_MODEL_ELEMENTS = r"""
+const [selector, root, label] = arguments;
+const matches = [];
+const visible = element => {
+  const style = getComputedStyle(element), rect = element.getBoundingClientRect();
+  return element.isConnected && rect.width > 0 && rect.height > 0 &&
+    style.display !== 'none' && style.visibility !== 'hidden' &&
+    style.visibility !== 'collapse' && element.getClientRects().length > 0;
+};
+const normalize = value => value.replace(/\s+/g, ' ').trim();
+const visit = scope => {
+  for (const element of scope.querySelectorAll(selector)) {
+    if (visible(element) && (label === null ||
+        normalize(element.textContent) === label) &&
+        (label === null || !element.disabled)) matches.push(element);
+  }
+  for (const element of scope.querySelectorAll('*')) {
+    if (element.shadowRoot) visit(element.shadowRoot);
+  }
+};
+visit(root || document);
+return label === null ? matches : (matches[0] || null);
+"""
+
+# Geometry and hit testing only: scrolling is performed by W3C wheel actions.
+_MODEL_CLICK_GEOMETRY = r"""
+const element = arguments[0], r = element.getBoundingClientRect();
+if (!element.isConnected || !r.width || !r.height) return {ready:false};
+const ancestors = [];
+for (let node = element.parentElement || element.getRootNode().host; node;
+     node = node.parentElement || node.getRootNode().host) ancestors.push(node);
+if (!ancestors.includes(document.scrollingElement)) ancestors.push(document.scrollingElement);
+const operations = [];
+let clipped = false;
+for (const node of ancestors) {
+  const root = node === document.scrollingElement;
+  const style = getComputedStyle(node), b = root ?
+    {left:0, top:0, right:innerWidth, bottom:innerHeight} : node.getBoundingClientRect();
+  const clipsX = root || /auto|scroll|hidden|clip/.test(style.overflowX);
+  const clipsY = root || /auto|scroll|hidden|clip/.test(style.overflowY);
+  const outsideX = clipsX && (r.left < b.left + 2 || r.right > b.right - 2);
+  const outsideY = clipsY && (r.top < b.top + 2 || r.bottom > b.bottom - 2);
+  clipped ||= outsideX || outsideY;
+  const dx = outsideX ? Math.round((r.left+r.right-b.left-b.right)/2) : 0;
+  const dy = outsideY ? Math.round((r.top+r.bottom-b.top-b.bottom)/2) : 0;
+  const canX = (root || /auto|scroll/.test(style.overflowX)) &&
+    (dx < 0 ? node.scrollLeft > 0 : dx > 0 && node.scrollLeft + node.clientWidth < node.scrollWidth);
+  const canY = (root || /auto|scroll/.test(style.overflowY)) &&
+    (dy < 0 ? node.scrollTop > 0 : dy > 0 && node.scrollTop + node.clientHeight < node.scrollHeight);
+  const left = Math.max(1,b.left), right = Math.min(innerWidth-1,b.right);
+  const top = Math.max(1,b.top), bottom = Math.min(innerHeight-1,b.bottom);
+  if ((canX || canY) && right > left && bottom > top) operations.push({
+    x:Math.round((left+right)/2), y:Math.round((top+bottom)/2),
+    dx:canX ? dx : 0, dy:canY ? dy : 0});
+}
+// Reveal outer containers before aiming a wheel at a nested sidebar.
+if (operations.length) return {ready:false, wheel:operations.at(-1)};
+const x = (r.left+r.right)/2, y = (r.top+r.bottom)/2;
+let hit = document.elementFromPoint(x,y);
+while (hit?.shadowRoot) {
+  const child = hit.shadowRoot.elementFromPoint(x,y);
+  if (!child || child === hit) break;
+  hit = child;
+}
+return {ready:!clipped && !!hit && (hit === element || element.contains(hit))};
+"""
+
+
 def _elements(driver, selector):
-    from tests.test_flagship_certification import _workspace_elements
-    return [element for element in _workspace_elements(driver, selector) if element.is_displayed()]
+    return driver.execute_script(_MODEL_ELEMENTS, selector, None, None)
 
 
 def _element(driver, selector):
@@ -118,8 +187,43 @@ def _element(driver, selector):
 
 
 def _button(driver, text, root=None):
-    candidates = root.find_elements("css selector", "button") if root else _elements(driver, "button")
-    return next(button for button in candidates if button.is_displayed() and button.text.strip() == text)
+    from selenium.webdriver.support.ui import WebDriverWait
+    return WebDriverWait(driver, 10).until(
+        lambda current: current.execute_script(_MODEL_ELEMENTS, "button", root, " ".join(text.split())))
+
+
+def _click_button(driver, text, root=None):
+    from selenium.common.exceptions import StaleElementReferenceException, ElementClickInterceptedException
+    from selenium.webdriver import ActionChains
+    from selenium.webdriver.common.actions.wheel_input import ScrollOrigin
+    from selenium.webdriver.support.ui import WebDriverWait
+
+    scrolled = False
+
+    def attempt(current):
+        nonlocal scrolled
+        try:
+            button = current.execute_script(_MODEL_ELEMENTS, "button", root, " ".join(text.split()))
+            if not button:
+                return False
+            if not scrolled:
+                ActionChains(current).scroll_to_element(button).perform()
+                scrolled = True
+            geometry = current.execute_script(_MODEL_CLICK_GEOMETRY, button)
+            if wheel := geometry.get("wheel"):
+                ActionChains(current).scroll_from_origin(
+                    ScrollOrigin.from_viewport(wheel["x"], wheel["y"]), wheel["dx"], wheel["dy"]).perform()
+                return False
+            if not geometry["ready"]:
+                return False
+            button.click()
+            return True
+        except (StaleElementReferenceException, ElementClickInterceptedException):
+            # Reacquire only the intended control after a host rerender.
+            scrolled = False
+            return False
+
+    WebDriverWait(driver, 10).until(attempt, f"Native button not reachable: {text}")
 
 
 def _type(element, text):
@@ -221,13 +325,13 @@ def _layout(driver, wait, observation):
 
 
 def _formula(driver, wait, observation):
-    _button(driver, "+ Add Formula").click()
+    _click_button(driver, "+ Add Formula")
     label = _element(driver, 'input[placeholder="Formula label"]')
     _type(label, "double_sales")
     _type(_element(driver, 'input[placeholder="formula1"]'), "double_sales")
     _type(_element(driver, "textarea"), f"2 * [{SALES}]")
     checkpoint = driver.execute_script("return performance.now()")
-    _button(driver, "Apply").click()
+    _click_button(driver, "Apply")
     wait.until(lambda current: not _elements(current, 'input[placeholder="Formula label"]'))
     # The generated internal field is observed from the actual native edit.
     def authored(current):
@@ -251,7 +355,7 @@ def _formula(driver, wait, observation):
 
 def _custom(driver, wait, observation):
     from selenium.webdriver.support.ui import Select
-    _button(driver, "+ Category").click()
+    _click_button(driver, "+ Category")
     dialog = _element(driver, '[role="dialog"][aria-label="Add custom category"]')
     _type(dialog.find_element("css selector", 'input[placeholder="Example: Priority Segment"]'), "IncludedGroup")
     _type(dialog.find_element("css selector", 'input[placeholder="Category value"]'), "Included cities")
@@ -263,11 +367,11 @@ def _custom(driver, wait, observation):
     condition = next(element for element in selects if {option.get_attribute("value") for option in element.find_elements("css selector", "option")} == {"AND", "OR"})
     Select(condition).select_by_value("OR")
     _type(dialog.find_element("css selector", 'input[placeholder="Value"]'), ECLAIR)
-    _button(driver, "+ Condition", dialog).click()
+    _click_button(driver, "+ Condition", dialog)
     fields = [element for element in dialog.find_elements("css selector", "select") if any(option.get_attribute("value") == "region" for option in element.find_elements("css selector", "option"))]
     Select(fields[1]).select_by_value("region")
     _type(dialog.find_elements("css selector", 'input[placeholder="Value"]')[1], MUNICH)
-    _button(driver, "Apply Category", dialog).click()
+    _click_button(driver, "Apply Category", dialog)
     wait.until(lambda current: not _elements(current, '[role="dialog"][aria-label="Add custom category"]'))
     checkpoint = driver.execute_script("return performance.now()")
     # Remove the two original row fields with their native close controls.
@@ -308,7 +412,7 @@ def _report(driver, host, wait, observation):
         Select(choices[0]).select_by_value("region")
     wait.until(lambda current: snapshot(current, -1, expected_sales(), col_fields=["period"], view_mode="report", report_root="region"))
     _type(_element(driver, 'input[placeholder="Report name..."]'), "Complete207 Sales")
-    _button(driver, "Save", _element(driver, '[data-report-section="save-report"]')).click()
+    _click_button(driver, "Save", _element(driver, '[data-report-section="save-report"]'))
     storage_key = f"flagship-{host}-pivot-savedReports"
     reports = wait.until(lambda current: current.execute_script("return JSON.parse(localStorage.getItem(arguments[0]))", storage_key))
     saved = next(report for report in reports if report["name"] == "Complete207 Sales")
@@ -323,7 +427,7 @@ def _report(driver, host, wait, observation):
     field = next(element for element in inspector.find_elements("css selector", "select") if any(option.get_attribute("value") == "account" for option in element.find_elements("css selector", "option")))
     checkpoint = driver.execute_script("return performance.now()")
     Select(field).select_by_value("account")
-    _button(driver, "Apply", inspector).click()
+    _click_button(driver, "Apply", inspector)
     observation["changed"] = wait.until(lambda current: snapshot(current, checkpoint, expected_sales("accounts"),
         col_fields=["period"], view_mode="report", report_root="account"))
     checkpoint = driver.execute_script("return performance.now()")

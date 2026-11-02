@@ -203,3 +203,128 @@ def test_startup_configuration_has_no_authored_formula_category_or_report():
         assert state["customDimensions"] == state["savedReports"] == []
         assert state["reportDef"] == {"levels": []}
         assert state["valConfigs"] == [{"field": SALES, "agg": "sum", "label": "Sales"}]
+
+
+def test_model_button_selector_and_nested_scroll_geometry_without_browser():
+    """Execute the actual read-only JS against DOM doubles, including shadow roots."""
+    import shutil
+    import subprocess
+    from tests.flagship_remaining_2 import _MODEL_ELEMENTS, _MODEL_CLICK_GEOMETRY
+    script = r'''
+const assert = require('node:assert/strict');
+const query = new Function(process.argv[1]), geometry = new Function(process.argv[2]);
+const rect = (top=100,bottom=130) => ({left:20,right:120,top,bottom,width:100,height:bottom-top});
+const node = (text, bounds=rect(), options={}) => ({
+ textContent:text, isConnected:true, disabled:false, bounds,
+ style:{display:'block',visibility:'visible',overflowX:'visible',overflowY:'visible'},
+ getBoundingClientRect(){return this.bounds}, getClientRects(){return [this.bounds]},
+ getRootNode(){return {}}, contains(hit){return hit === this}, ...options
+});
+const scope = (buttons, children=buttons) => ({querySelectorAll(selector){
+ return selector === '*' ? children : selector === 'button' ? buttons : [];
+}});
+global.getComputedStyle = value => value.style;
+global.innerWidth=800; global.innerHeight=600;
+const wrong=node('+ Category extra'), hidden=node('+ Category',{...rect(),width:0});
+const disabled=node('+ Category',rect(),{disabled:true});
+const target=node('  +\n Category  ');
+const host=node('host',rect(),{shadowRoot:scope([target])});
+global.document={...scope([wrong,hidden,disabled],[wrong,hidden,disabled,host])};
+assert.equal(query('button',null,'+ Category'),target);
+assert.equal(query('button',null,'Missing'),null);
+assert.equal(query('button',scope([wrong]),'+ Category'),null,'root scope must not escape');
+assert.deepEqual(query('button',null,null),[wrong,disabled,target]);
+target.disabled=true;
+assert.equal(query('button',null,'+ Category'),null,'disabled target cannot be clicked');
+target.disabled=false;
+const page=node('',rect(0,600),{scrollTop:0,scrollLeft:0,clientHeight:600,scrollHeight:1600,
+ clientWidth:800,scrollWidth:800});
+page.bounds={left:0,right:800,top:0,bottom:600,width:800,height:600};
+document.scrollingElement=page;
+document.elementFromPoint=()=>host;
+host.shadowRoot.elementFromPoint=()=>target;
+target.parentElement=page;
+assert.deepEqual(geometry(target),{ready:true});
+target.bounds=rect(1060,1090);
+assert.deepEqual(geometry(target),{ready:false,wheel:{x:400,y:300,dx:0,dy:775}});
+const sidebar=node('',rect(100,400),{parentElement:page,scrollTop:0,scrollLeft:0,
+ clientHeight:300,scrollHeight:1000,clientWidth:100,scrollWidth:100});
+sidebar.style.overflowY='auto'; target.parentElement=sidebar; target.bounds=rect(450,480);
+assert.deepEqual(geometry(target),{ready:false,wheel:{x:70,y:250,dx:0,dy:215}});
+// A clipped, non-scrollable target and an overlay must never become click-ready.
+sidebar.style.overflowY='hidden';
+assert.equal(geometry(target).ready,false);
+target.parentElement=page; target.bounds=rect(); document.elementFromPoint=()=>wrong;
+assert.equal(geometry(target).ready,false);
+target.isConnected=false;
+assert.equal(geometry(target).ready,false);
+console.log('atomic selector and native scroll geometry passed');
+'''
+    result = subprocess.run([shutil.which('node'), '-e', script, _MODEL_ELEMENTS, _MODEL_CLICK_GEOMETRY],
+                            capture_output=True, text=True, timeout=20)
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert 'atomic selector and native scroll geometry passed' in result.stdout
+
+
+def test_model_native_click_reacquires_after_scroll_and_stale_target(monkeypatch):
+    from selenium.common.exceptions import StaleElementReferenceException
+    from tests import flagship_remaining_2 as models
+    events = []
+
+    class Button:
+        def __init__(self, stale=False): self.stale = stale
+        def click(self):
+            events.append('click')
+            if self.stale: raise StaleElementReferenceException('host rerender')
+
+    buttons = iter([Button(), Button(stale=True), Button()])
+    geometries = iter([{'ready': False, 'wheel': {'x': 70, 'y': 250, 'dx': 0, 'dy': 215}},
+                       {'ready': True}, {'ready': True}])
+
+    class Driver:
+        def execute_script(self, script, *args):
+            assert script in (models._MODEL_ELEMENTS, models._MODEL_CLICK_GEOMETRY)
+            if script == models._MODEL_ELEMENTS:
+                assert args == ('button', None, '+ Category')
+                events.append('lookup')
+                return next(buttons)
+            return next(geometries)
+
+    class Actions:
+        def __init__(self, driver): pass
+        def scroll_to_element(self, element): events.append('scroll_to'); return self
+        def scroll_from_origin(self, origin, dx, dy):
+            assert origin.x_offset == 70 and origin.y_offset == 250
+            assert (dx, dy) == (0, 215)
+            events.append('wheel'); return self
+        def perform(self): return self
+
+    monkeypatch.setattr('selenium.webdriver.ActionChains', Actions)
+    models._click_button(Driver(), '+ Category')
+    assert events == ['lookup', 'scroll_to', 'wheel', 'lookup', 'click',
+                      'lookup', 'scroll_to', 'click']
+
+
+def test_model_native_click_rejects_obscured_control(monkeypatch):
+    from selenium.common.exceptions import TimeoutException
+    from tests import flagship_remaining_2 as models
+
+    class Button:
+        def click(self): pytest.fail('obscured control must never be clicked')
+    class Driver:
+        def execute_script(self, script, *args):
+            return Button() if script == models._MODEL_ELEMENTS else {'ready': False}
+    class Actions:
+        def __init__(self, driver): pass
+        def scroll_to_element(self, element): return self
+        def perform(self): return self
+    class Wait:
+        def __init__(self, driver, timeout): self.driver = driver
+        def until(self, attempt, message):
+            assert attempt(self.driver) is False
+            raise TimeoutException(message)
+
+    monkeypatch.setattr('selenium.webdriver.ActionChains', Actions)
+    monkeypatch.setattr('selenium.webdriver.support.ui.WebDriverWait', Wait)
+    with pytest.raises(TimeoutException, match='Native button not reachable'):
+        models._click_button(Driver(), '+ Category')
