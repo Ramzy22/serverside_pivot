@@ -1735,13 +1735,32 @@ def _network(driver):
     return [json.loads(entry["message"])["message"] for entry in entries]
 
 
-def _visible_error(driver):
-    from tests.test_flagship_certification import _workspace_elements
+_VISIBLE_ERROR_QUERY = r"""
+const matches = [];
+const visible = element => {
+  const r = element.getBoundingClientRect(), style = getComputedStyle(element);
+  return element.isConnected && r.width > 0 && r.height > 0 &&
+    style.display !== 'none' && style.visibility !== 'hidden' &&
+    style.visibility !== 'collapse' &&
+    (!element.checkVisibility || element.checkVisibility({checkOpacity:true, checkVisibilityCSS:true}));
+};
+const visit = root => {
+  for (const alert of root.querySelectorAll('[role="alert"]')) {
+    if (visible(alert) && alert.innerText.includes('We could not load the grid data') &&
+        [...alert.querySelectorAll('button')].some(button => visible(button) && button.innerText === 'Retry')) {
+      matches.push(alert);
+    }
+  }
+  for (const element of root.querySelectorAll('*')) if (element.shadowRoot) visit(element.shadowRoot);
+};
+visit(document);
+return matches;
+"""
 
-    return [element for element in _workspace_elements(driver, '[role="alert"]')
-            if element.is_displayed() and "We could not load the grid data" in element.text
-            and any(button.is_displayed() and button.text == "Retry"
-                    for button in element.find_elements("css selector", "button"))]
+
+def _visible_error(driver):
+    # Alert dismissal may unmount it between remote visibility/text reads.
+    return driver.execute_script(_VISIBLE_ERROR_QUERY)
 
 
 def _totals(driver, *, decimal_places=0):
@@ -3656,6 +3675,102 @@ def _set_hierarchy_two_decimal_display(driver):
             "decimalPlaces": 2, "selectionScoped": False}
 
 
+_HIERARCHY_TOGGLE_QUERY = r"""
+const rowId = arguments[0], matches = [];
+const visit = root => {
+  for (const cell of root.querySelectorAll('[role="gridcell"][data-colid="hierarchy"]')) {
+    if (cell.getAttribute('data-rowid') !== rowId) continue;
+    for (const button of cell.querySelectorAll('button')) {
+      const r = button.getBoundingClientRect(), style = getComputedStyle(button);
+      if (button.isConnected && !button.disabled && r.width > 0 && r.height > 0 &&
+          style.display !== 'none' && style.visibility !== 'hidden' &&
+          style.visibility !== 'collapse') matches.push(button);
+    }
+  }
+  for (const element of root.querySelectorAll('*')) if (element.shadowRoot) visit(element.shadowRoot);
+};
+visit(document);
+return matches.length === 1 ? matches[0] : null;
+"""
+
+
+_HIERARCHY_CLICK_GEOMETRY = r"""
+const element = arguments[0], r = element.getBoundingClientRect();
+if (!element.isConnected || !r.width || !r.height) return {ready:false};
+const ancestors = [];
+for (let node = element.parentElement || element.getRootNode().host; node;
+     node = node.parentElement || node.getRootNode().host) ancestors.push(node);
+if (!ancestors.includes(document.scrollingElement)) ancestors.push(document.scrollingElement);
+const operations = [];
+let clipped = false;
+for (const node of ancestors) {
+  const root = node === document.scrollingElement;
+  const style = getComputedStyle(node), b = root ?
+    {left:0, top:0, right:innerWidth, bottom:innerHeight} : node.getBoundingClientRect();
+  const clipsX = root || /auto|scroll|hidden|clip/.test(style.overflowX);
+  const clipsY = root || /auto|scroll|hidden|clip/.test(style.overflowY);
+  const outsideX = clipsX && (r.left < b.left + 2 || r.right > b.right - 2);
+  const outsideY = clipsY && (r.top < b.top + 2 || r.bottom > b.bottom - 2);
+  clipped ||= outsideX || outsideY;
+  const dx = outsideX ? Math.round((r.left+r.right-b.left-b.right)/2) : 0;
+  const dy = outsideY ? Math.round((r.top+r.bottom-b.top-b.bottom)/2) : 0;
+  const canX = (root || /auto|scroll/.test(style.overflowX)) &&
+    (dx < 0 ? node.scrollLeft > 0 : dx > 0 && node.scrollLeft + node.clientWidth < node.scrollWidth);
+  const canY = (root || /auto|scroll/.test(style.overflowY)) &&
+    (dy < 0 ? node.scrollTop > 0 : dy > 0 && node.scrollTop + node.clientHeight < node.scrollHeight);
+  const left = Math.max(1,b.left), right = Math.min(innerWidth-1,b.right);
+  const top = Math.max(1,b.top), bottom = Math.min(innerHeight-1,b.bottom);
+  if ((canX || canY) && right > left && bottom > top) operations.push({
+    x:Math.round((left+right)/2), y:Math.round((top+bottom)/2),
+    dx:canX ? dx : 0, dy:canY ? dy : 0});
+}
+// Reveal outer containers before aiming a wheel at a nested sidebar.
+if (operations.length) return {ready:false, wheel:operations.at(-1)};
+const x = (r.left+r.right)/2, y = (r.top+r.bottom)/2;
+let hit = document.elementFromPoint(x,y);
+while (hit?.shadowRoot) {
+  const child = hit.shadowRoot.elementFromPoint(x,y);
+  if (!child || child === hit) break;
+  hit = child;
+}
+return {ready:!clipped && !!hit && (hit === element || element.contains(hit))};
+"""
+
+
+def _click_hierarchy_toggle(driver, row_id):
+    """Reveal a fresh logical row toggle using native scroll and click actions."""
+    from selenium.common.exceptions import StaleElementReferenceException, ElementClickInterceptedException
+    from selenium.webdriver import ActionChains
+    from selenium.webdriver.common.actions.wheel_input import ScrollOrigin
+    from selenium.webdriver.support.ui import WebDriverWait
+
+    scrolled = False
+
+    def attempt(current):
+        nonlocal scrolled
+        try:
+            toggle = current.execute_script(_HIERARCHY_TOGGLE_QUERY, row_id)
+            if not toggle:
+                return False
+            if not scrolled:
+                ActionChains(current).scroll_to_element(toggle).perform()
+                scrolled = True
+            geometry = current.execute_script(_HIERARCHY_CLICK_GEOMETRY, toggle)
+            if wheel := geometry.get("wheel"):
+                ActionChains(current).scroll_from_origin(
+                    ScrollOrigin.from_viewport(wheel["x"], wheel["y"]), wheel["dx"], wheel["dy"]).perform()
+                return False
+            if not geometry["ready"]:
+                return False
+            toggle.click()
+            return True
+        except (StaleElementReferenceException, ElementClickInterceptedException):
+            scrolled = False
+            return False
+
+    WebDriverWait(driver, 10).until(attempt, f"Native hierarchy toggle not reachable: {row_id}")
+
+
 def qualify_hierarchy_navigation(host: str, requirement: str) -> None:
     """Exercise hierarchy controls on installed artifacts and record exact V1/DOM evidence."""
     import pytest
@@ -3714,9 +3829,8 @@ def qualify_hierarchy_navigation(host: str, requirement: str) -> None:
 
         if requirement == "hierarchy-expand.round-trip":
             parent_id = next(row_id for row_id, label in initial if label == "Éclair")
-            parent = _selection_cell(driver, parent_id, "hierarchy")
             checkpoint = driver.execute_script("return performance.now()")
-            parent.find_element("css selector", "button").click()
+            _click_hierarchy_toggle(driver, parent_id)
             expected_children = ("東京",)
         else:
             from tests.test_flagship_certification import _wait_for_visible_workspace_element
@@ -3764,7 +3878,7 @@ def qualify_hierarchy_navigation(host: str, requirement: str) -> None:
 
         checkpoint = driver.execute_script("return performance.now()")
         if requirement == "hierarchy-expand.round-trip":
-            _selection_cell(driver, parent_id, "hierarchy").find_element("css selector", "button").click()
+            _click_hierarchy_toggle(driver, parent_id)
         else:
             header = _wait_for_visible_workspace_element(driver, '[role="columnheader"][data-header-column-id="hierarchy"]')
             ActionChains(driver).context_click(header).perform()
