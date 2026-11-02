@@ -459,3 +459,65 @@ def test_part_size_entry_pastes_whole_value_through_native_keyboard():
     assert events == [('clipboard', '5000'), ('focus',),
                       ('keys', (Keys.CONTROL, 'a')), ('keys', (Keys.CONTROL, 'v')),
                       ('keys', (Keys.TAB,))]
+
+
+@pytest.mark.parametrize('late_write', [False, True])
+def test_unloaded_workflow_runs_real_clipboard_stability_monitor(monkeypatch, tmp_path, late_write):
+    import time
+    from selenium.webdriver import common
+    from tests import flagship_remaining_4 as journey
+    from tests import flagship_browser_support as support
+    from tests import test_flagship_certification as certification
+    sentinel = 'unavailable selection must preserve this OS clipboard'
+    endpoint = 'R00914'
+    monkeypatch.setenv('PIVOT_FLAGSHIP_PARTS_DATA', '1')
+    class Cell:
+        def click(self): pass
+    class Actions:
+        def __init__(self, driver): pass
+        def key_down(self, *args): return self
+        def key_up(self, *args): return self
+        def click(self, *args): return self
+        def context_click(self, *args): return self
+        def perform(self): pass
+    class Driver:
+        def execute_script(self, script): return 1
+        def execute_async_script(self, script, value):
+            assert value == sentinel
+            return True
+    class Wait:
+        def until(self, predicate):
+            result = predicate(driver)
+            assert result
+            return result
+    driver = Driver()
+    monkeypatch.setattr(common.action_chains, 'ActionChains', Actions)
+    monkeypatch.setattr(support, '_selection_cell', lambda *args: Cell())
+    selections = iter([[('R00000', 'sales_sum')], [(endpoint, 'sales_sum')]])
+    monkeypatch.setattr(support, '_selection_ids', lambda _: next(selections))
+    monkeypatch.setattr(support, '_selection_menu', lambda *args: Cell())
+    responses = iter([[(None, {'payload': {'data': [{'_id': 'R00000'}]}})],
+                      [(None, {'payload': {'data': [{'_id': 'R00000'}, {'_id': endpoint}]}})]])
+    monkeypatch.setattr(journey, '_responses', lambda _: next(responses))
+    monkeypatch.setattr(journey, '_trace', lambda _: [])
+    monkeypatch.setattr(journey, '_wheel', lambda *args: None)
+    monkeypatch.setattr(journey, '_analysis_cells', lambda _: [{'rowid': endpoint, 'colid': 'sales_sum'}])
+    monkeypatch.setattr(journey, 'scroll_window_response', lambda *args: {'observed': True})
+    monkeypatch.setattr(journey, '_unloaded_notice', lambda _: 'Selected range unavailable: some rows are not loaded. Load the complete range before copying.')
+    samples = []
+    def clipboard_read(current):
+        assert current is driver
+        now = time.monotonic()
+        samples.append(now)
+        return 'late clipboard corruption' if late_write and now - samples[0] >= .75 else sentinel
+    monkeypatch.setattr(certification, '_clipboard_text', clipboard_read)
+    observation = {}
+    if late_write:
+        with pytest.raises(AssertionError, match='Clipboard changed'):
+            journey._unloaded(driver, 'dash', Wait(), observation, tmp_path)
+        assert 'acceptedBranch' not in observation
+    else:
+        journey._unloaded(driver, 'dash', Wait(), observation, tmp_path)
+        assert samples[-1] - samples[0] >= 1.5
+        assert len(samples) >= 2
+        assert observation['acceptedBranch'] == 'explicit unavailable range, clipboard preserved'

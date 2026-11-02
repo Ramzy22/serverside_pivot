@@ -392,7 +392,7 @@ def _unloaded(driver, host, wait, observation, downloads):
     ActionChains(driver).context_click(last).perform()
     s._selection_menu(driver, 'Copy Selection').click()
     notice = wait.until(_unloaded_notice)
-    s.assert_clipboard_stable(driver, sentinel, 1.5)
+    s.assert_clipboard_stable(lambda: _clipboard_text(driver), sentinel, timeout=1.5)
     assert _clipboard_text(driver) == sentinel
     observation.update(acceptedBranch='explicit unavailable range, clipboard preserved', difference='Copy requires all logical rows loaded',
                        notification=notice)
