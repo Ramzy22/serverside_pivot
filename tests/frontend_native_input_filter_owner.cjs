@@ -92,4 +92,18 @@ filterButton.props.onKeyDown({...event,key:'Enter'});
 filterButton.props.onKeyDown({...event,key:' '});
 assert.deepEqual(events,[[anchor,'Region'],[anchor,'Region'],[anchor,'Region']],
   'Mouse and keyboard opens retain the clicked anchor and logical hierarchy filter');
+// Context-menu Filter uses a virtual rectangle, without DOM Element methods.
+const virtualAnchor={getBoundingClientRect:()=>({left:20,right:20,top:30,bottom:30,width:0,height:0})};
+for(const field of ['Region','sales']) {
+  const renderVirtual=useRenderHelpers({...base,table,tableRef:{current:table},
+    activeFilterCol:field,filterAnchorEl:virtualAnchor}).renderHeaderCell;
+  const trees=['left','center','right'].flatMap(section=>{
+    const getter={left:'getLeftHeaderGroups',center:'getCenterHeaderGroups',right:'getRightHeaderGroups'}[section];
+    return table[getter]().flatMap((group,level)=>group.headers.map(h=>renderVirtual(h,level,section)));
+  });
+  const popups=descendants(trees,FilterPopover);
+  assert.equal(popups.length,1,'A virtual context-menu anchor must open exactly one eligible leaf popup');
+  assert.equal(popups[0].props.anchorEl,virtualAnchor);
+  assert.equal(popups[0].props.column.id,field);
+}
 console.log('native-input filter ownership runtime passed');

@@ -710,6 +710,26 @@ export function useRenderHelpers({
         return style;
     }, [normalizedHeaderFormatting]);
 
+    // A context-menu anchor is a virtual rectangle, not a DOM filter button.
+    // Give it one canonical real leaf owner across the split header groups.
+    const activeFilterOwner = useMemo(() => {
+        if (!activeFilterCol || !filterAnchorEl) return null;
+        const clickedOwner = filterAnchorEl.getAttribute?.('data-pivot-filter-owner');
+        if (clickedOwner) return clickedOwner;
+        const currentTable = tableRef?.current || table;
+        for (const [section, getter] of [['left', 'getLeftHeaderGroups'],
+            ['center', 'getCenterHeaderGroups'], ['right', 'getRightHeaderGroups']]) {
+            for (const group of currentTable?.[getter]?.() || []) {
+                for (const candidate of group.headers) {
+                    if (candidate.isPlaceholder || candidate.column.columns?.length) continue;
+                    const field = candidate.column.id === 'hierarchy' ? rowFields?.[0] : candidate.column.id;
+                    if (field === activeFilterCol) return `${section}:${candidate.id}`;
+                }
+            }
+        }
+        return null;
+    }, [activeFilterCol, filterAnchorEl, tableRef, table, rowFields, leftCols, centerCols, rightCols]);
+
     // Render Header Cell for Split Sections
     // overrideWidth: when set, replaces the computed section width (used for partially-visible
     // group headers during center-column virtualization so the width matches only the visible leaves).
@@ -1067,7 +1087,7 @@ export function useRenderHelpers({
                 </div>
 
                 {!isGroupHeader && !header.isPlaceholder && activeFilterCol === filterColumnId
-                    && filterAnchorEl?.getAttribute('data-pivot-filter-owner') === filterOwner && (
+                    && activeFilterOwner === filterOwner && (
                     <FilterPopover
                     column={isHierarchyHeader ? { id: filterColumnId, header: headerText } : header.column}
                     anchorEl={filterAnchorEl}
@@ -1141,6 +1161,7 @@ export function useRenderHelpers({
         selectedCols,
         filters,
         activeFilterCol,
+        activeFilterOwner,
         filterAnchorEl,
         activeFilterOptions,
         activeFilterOptionMeta,
