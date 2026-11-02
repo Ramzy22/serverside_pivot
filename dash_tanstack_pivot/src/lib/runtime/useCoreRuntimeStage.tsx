@@ -3,7 +3,7 @@
 import React, { useMemo, useState, useRef, useEffect, useCallback } from 'react';
 import { themes, getStyles, isDarkTheme, gridDimensionTokens, deriveEditedCellThemeTokens, deriveStructuralThemeTokens } from '../utils/styles';
 import { DEFAULT_FIELD_PANEL_SIZES, sanitizeFieldPanelSizes } from '../utils/fieldPanelLayout';
-import { normalizeColumnOrderValue } from '../utils/columnOrder';
+import { normalizeColumnOrderValue, areStringArraysEqual } from '../utils/columnOrder';
 import { buildMeasureAxisRuntimeConfig, normalizeMeasureAxisValue } from '../utils/measureAxis';
 import { buildClientFilterOptionMap, collectDataFieldIds, isAutoDataFieldId } from '../utils/filterOptions';
 import { buildReportEditorSelectionFromRow } from '../utils/reportEditorSelection';
@@ -1403,7 +1403,10 @@ export function useCoreRuntimeStage(props) {
     if (restored.columnVisibility && typeof restored.columnVisibility === 'object') stage.setColumnVisibility(restored.columnVisibility);
     if (Array.isArray(restored.columnOrder)) stage.setColumnOrder(normalizeColumnOrderValue(restored.columnOrder));
     if (Array.isArray(restored.pivotLayoutOrder)) {
-      stage.setPivotLayoutOrder(normalizeColumnOrderValue(restored.pivotLayoutOrder));
+      const restoredOrder = normalizeColumnOrderValue(restored.pivotLayoutOrder);
+      // Requests retain this immutable manifest as their layout token. A full
+      // view restore can repeat the per-key persisted state during mounting.
+      stage.setPivotLayoutOrder(previous => areStringArraysEqual(previous, restoredOrder) ? previous : restoredOrder);
       stage.layoutRevisionRef.current = null;
     }
     if (restored.pivotPinnedLayoutIds && typeof restored.pivotPinnedLayoutIds === 'object') {

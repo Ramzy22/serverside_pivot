@@ -8,11 +8,12 @@ const babel = req('@babel/core');
 function load(relative) {
   const filename = path.join(root, 'src/lib', relative);
   const code = babel.transformSync(fs.readFileSync(filename, 'utf8'), {filename,
-    presets:[[req('@babel/preset-env'),{targets:{node:'current'},modules:'commonjs'}]]}).code;
+    presets:[[req('@babel/preset-env'),{targets:{node:'current'},modules:'commonjs'}],req('@babel/preset-react')]}).code;
   const module = {exports:{}};
   new Function('module','exports','require',code)(module,module.exports,name=> {
     if(name==='react') return {useCallback:fn=>fn,useMemo:fn=>fn(),useRef:value=>({current:value}),useEffect:()=>{}};
     if(name.includes('sparklines')) return {normalizeSparklineValConfigsForView:value=>value};
+    if(name.startsWith('.')) return load(path.relative(path.join(root,'src/lib'),path.resolve(path.dirname(filename),name))+'.js');
     return req(name);
   });
   return module.exports;
@@ -102,5 +103,42 @@ for(const effect of mountEffects) {
  'getPreferredChartOrientation','clampDecimalPlaces',effect.code)(viewStage,{current:null},fn=>fn(),new Set(),new Set(),new Set(),new Set(),()=>null,'Grand Total',()=>"vertical",value=>value);
 }
 assert.equal(displayedDecimals,2,'initial prop sync must not overwrite restored snapshot formatting');
+
+// A full saved view is applied after the persisted manifest initialized state.
+// Reapplying identical content must not invalidate the in-flight request token.
+const {normalizeColumnOrderValue,areStringArraysEqual}=load('utils/columnOrder.js');
+const {useRuntimeDataCommit}=load('hooks/useRuntimeDataCommit.js');
+const initialManifest=['p:A','p:B'], manifest={current:initialManifest}, sent={current:initialManifest};
+let pins, widths;
+const layoutStage=new Proxy({viewState:{state:{pivotLayoutOrder:['p:A','p:B'],
+ columnPinning:{left:['A_sales'],right:[]},columnSizing:{A_sales:173}}},initialChartDefinition:{},
+ chartPanelOrientationAutoRef:{current:false},layoutRevisionRef:{current:null},
+ setPivotLayoutOrder:value=>{manifest.current=typeof value==='function'?value(manifest.current):value;},
+ setColumnPinning:value=>{pins=value;},setColumnSizing:value=>{widths=value;}},
+ {get:(target,key)=>key in target?target[key]:String(key).startsWith('set')?()=>{}:undefined});
+const restoreLayout=new Function('stage','appliedViewStateRef','useEffect','VALID_CHART_TYPES','VALID_CHART_SORT_MODES',
+ 'VALID_CHART_INTERACTION_MODES','VALID_CHART_SERVER_SCOPES','getPinnedSideForRow','GRAND_TOTAL_ROW_ID',
+ 'getPreferredChartOrientation','normalizeColumnOrderValue','areStringArraysEqual',restoreCode);
+const restore=()=>restoreLayout(layoutStage,{current:null},fn=>fn(),new Set(),new Set(),new Set(),new Set(),
+ ()=>null,'Grand Total',()=>"vertical",normalizeColumnOrderValue,areStringArraysEqual);
+const {runtimePayloadCommitIsCurrent}=useRuntimeDataCommit({
+ clientInstanceRef:{current:'restored-client'},stateEpochRef:{current:5},requestVersionRef:{current:9},
+ latestDataVersionRef:{current:11},layoutRevisionRef:layoutStage.layoutRevisionRef,
+ layoutAcknowledgedManifestRef:{current:''},pivotLayoutOrderRef:manifest,latestLayoutSentManifestRef:sent});
+const reply={kind:'data',clientInstance:'restored-client',stateEpoch:5,windowSeq:9};
+const payload={dataVersion:11,layoutRevision:'b'.repeat(64),colSchema:{layoutRevision:'b'.repeat(64)}};
+assert(runtimePayloadCommitIsCurrent(reply,payload));
+restore();
+assert(runtimePayloadCommitIsCurrent(reply,payload),'Equal saved layout restore must accept the matching response instead of leaving an empty grid');
+assert.equal(manifest.current,initialManifest,'Keep the immutable manifest token when restored contents are equal');
+assert.deepEqual(pins,{left:['A_sales'],right:[]});
+assert.deepEqual(widths,{A_sales:173});
+assert(!runtimePayloadCommitIsCurrent({...reply,stateEpoch:4},payload),'Old epoch remains rejected');
+assert(!runtimePayloadCommitIsCurrent({...reply,windowSeq:8},payload),'Old window remains rejected');
+layoutStage.viewState={state:{pivotLayoutOrder:['p:B','p:A']}};
+restore();
+assert.notEqual(manifest.current,initialManifest,'A genuinely changed layout receives a new token');
+assert.deepEqual(manifest.current,['p:B','p:A']);
+assert(!runtimePayloadCommitIsCurrent(reply,payload),'Old-order response remains rejected after a real layout change');
 
 console.log('saved view persistence passed');
