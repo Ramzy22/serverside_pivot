@@ -11,10 +11,31 @@ const presetEnv = dependencies('@babel/preset-env');
 const presetReact = dependencies('@babel/preset-react');
 
 function harness({serverAll = false} = {}) {
-    const effects = [], writes = [], cleanups = [], cache = new Map();
+    const writes = [], cache = new Map(), slots = [];
+    const previousWindow = Object.getOwnPropertyDescriptor(global, 'window');
+    let cursor = 0, pending = [], dirty = false, selection;
+    const sameDeps = (a, b) => a && b && a.length === b.length && a.every((value, i) => Object.is(value, b[i]));
     const windowTarget = new EventTarget();
     global.window = windowTarget;
-    const hooks = {useCallback: fn => fn, useEffect: fn => effects.push(fn)};
+    // One shared hook cursor models React's ordered callback/effect slots.
+    // Commit changed effects only, running their previous cleanup first.
+    const hooks = {
+        useCallback(fn, deps) {
+            const index = cursor++, previous = slots[index];
+            if (previous && sameDeps(previous.deps, deps)) return previous.fn;
+            slots[index] = {fn, deps};
+            return fn;
+        },
+        useEffect(fn, deps) {
+            const index = cursor++, previous = slots[index];
+            if (!previous || !sameDeps(previous.deps, deps)) {
+                pending.push(() => {
+                    previous?.cleanup?.();
+                    slots[index] = {deps, cleanup: fn()};
+                });
+            }
+        },
+    };
     function load(filename) {
         if (cache.has(filename)) return cache.get(filename);
         const module = {exports: {}};
@@ -30,17 +51,71 @@ function harness({serverAll = false} = {}) {
         return module.exports;
     }
     const {useRuntimeCellSelection} = load(path.join(frontend, 'src/lib/runtime/useRuntimeCellSelection.js'));
-    const table = {getVisibleLeafColumns: () => [{id:'A'}]};
-    const selection = useRuntimeCellSelection({
-        table, tableRef:{current:table}, getDisplayRows:() => [], selectedCells:{'0:A':42},
-        isSelectAllServerRef:{current:serverAll}, serverSide:serverAll,
-        buildSelectedClipboardPayload:() => ({text:'42',html:'<table><tr><td>42</td></tr></table>'}),
+    const row = {id:'0', original:{__virtualIndex:0}, getValue:() => 42};
+    const table = {getVisibleLeafColumns:() => [{id:'A'}], getRow:() => row};
+    const state = {
+        selectedCells:{'stale:A':99}, lastSelected:{rowId:'stale'}, dragStart:{rowId:'stale'},
+        isDragging:true, isFilling:true, fillRange:{rStart:99}, hoveredRowPath:'stale',
+    };
+    const ports = {};
+    for (const name of Object.keys(state)) {
+        ports[`set${name[0].toUpperCase()}${name.slice(1)}`] = value => {
+            const next = typeof value === 'function' ? value(state[name]) : value;
+            if (!Object.is(next, state[name])) { state[name] = next; dirty = true; }
+        };
+    }
+    const payload = {text:'42',html:'<table><tr><td>42</td></tr></table>'};
+    const isSelectAllServerRef = {current:true};
+    const props = {
+        ...ports, table, tableRef:{current:table}, getDisplayRows:() => [row],
+        isSelectAllServerRef, serverSide:serverAll, selectionScopeKey:'ownership-scope',
+        buildSelectedClipboardPayload:(includeHeaders, cells) => {
+            assert.equal(includeHeaders, false);
+            assert.deepEqual(cells, {'0:A':42});
+            return payload;
+        },
         copyRichToClipboard:payload => writes.push({kind:'selection',payload}),
         copyCurrentTableToClipboard:(...args) => writes.push({kind:'table',args}),
-    });
-    for (const effect of effects) cleanups.push(effect());
+    };
     const grid = new EventTarget();
-    grid.addEventListener('keydown', selection.handleKeyDown);
+    let gridListener;
+    function render() {
+        do {
+            dirty = false;
+            cursor = 0;
+            pending = [];
+            selection = useRuntimeCellSelection({...props, ...state});
+            if (gridListener) grid.removeEventListener('keydown', gridListener);
+            gridListener = selection.handleKeyDown;
+            grid.addEventListener('keydown', gridListener);
+            for (const commit of pending) commit();
+        } while (dirty);
+    }
+    render();
+    // Execute the real scope effect, then render its cleared state before
+    // making any selection. A pre-mount stale closure must never provide it.
+    assert.deepEqual(state.selectedCells, {});
+    assert.equal(state.lastSelected, null);
+    assert.equal(state.dragStart, null);
+    assert.equal(state.isDragging, false);
+    assert.equal(state.isFilling, false);
+    assert.equal(state.fillRange, null);
+    assert.equal(isSelectAllServerRef.current, false);
+    if (serverAll) {
+        const selectAll = new Event('keydown', {cancelable:true});
+        Object.assign(selectAll, {key:'a', ctrlKey:true});
+        grid.dispatchEvent(selectAll);
+        assert.equal(selectAll.defaultPrevented, true);
+    } else {
+        selection.handleCellMouseDown({button:0}, 0, 0, '0', 'A', 42);
+    }
+    render();
+    assert.deepEqual(state.selectedCells, {'0:A':42});
+    assert.equal(isSelectAllServerRef.current, serverAll);
+    const selected = state.selectedCells;
+    render(); // Same scope must preserve the actual post-mount interaction.
+    assert.equal(state.selectedCells, selected);
+    assert.equal(isSelectAllServerRef.current, serverAll);
     function key({meta=false, editable=null, prevented=false} = {}) {
         const event = new Event('keydown', {cancelable:true, bubbles:true});
         Object.assign(event, {key:'c',ctrlKey:!meta,metaKey:meta});
@@ -48,7 +123,12 @@ function harness({serverAll = false} = {}) {
         if (prevented) event.preventDefault();
         return event;
     }
-    return {writes,grid,windowTarget,key,cleanup:() => cleanups.forEach(fn => fn?.())};
+    return {writes,grid,windowTarget,key,payload,cleanup:() => {
+        grid.removeEventListener('keydown', gridListener);
+        for (const slot of slots) slot?.cleanup?.();
+        if (previousWindow) Object.defineProperty(global, 'window', previousWindow);
+        else delete global.window;
+    }};
 }
 
 for (const meta of [false,true]) for (const serverAll of [false,true]) {
@@ -65,6 +145,8 @@ for (const meta of [false,true]) for (const serverAll of [false,true]) {
                 assert.equal(h.writes.length,count,'One keypress was copied by both grid and global listeners');
             }
             assert.equal(h.writes[0].kind,serverAll?'table':'selection');
+            assert.deepEqual(h.writes, Array.from({length:2}, () => serverAll
+                ? {kind:'table',args:[true,false]} : {kind:'selection',payload:h.payload}));
         } finally {h.cleanup();}
     });
 }
