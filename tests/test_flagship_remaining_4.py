@@ -40,6 +40,8 @@ def test_parts_fixture_is_opt_in_and_has_three_real_intervals(monkeypatch):
     config = workspace_config('react')
     assert config['rowFields'] == ['region'] and config['showColTotals'] is False
     assert config['filters'] == _part_manifest()['filters']
+    assert config['viewState']['layoutMode'] == 'tabular'
+    assert config['valConfigs'] == [{'field': 'sales', 'agg': 'sum', 'label': 'Sales'}]
     monkeypatch.delenv('PIVOT_FLAGSHIP_PARTS_DATA')
     monkeypatch.setenv('PIVOT_FLAGSHIP_EXPORT_JOB_DATA', '1')
     assert len(build_demo_table()) == 512
@@ -53,14 +55,14 @@ def test_parts_fixture_is_opt_in_and_has_three_real_intervals(monkeypatch):
 def _part_case():
     return ([['Region', 'Sales (Sum)']] + [[f'R{i:05d}', str(i + .25)] for i in range(5000, 10000)], {
         'payload': {'partId': 'r1_c0', 'rowStart': 5000, 'rowEnd': 10000, 'includeHeaders': True,
-                    'allRows': False, 'colIds': ['hierarchy', 'sales_sum'], 'style': {
-                        'headerLabels': {'hierarchy': 'Region', 'sales_sum': 'Sales (Sum)'},
+                    'allRows': False, 'layout_mode': 'tabular', 'colIds': ['region', 'sales_sum'], 'style': {
+                        'headerLabels': {'region': 'Region', 'sales_sum': 'Sales (Sum)'},
                         'decimalPlaces': 2, 'numberGroupSeparator': 'none'}},
         'state': {'rowFields': ['region'], 'colFields': [], 'filters': _part_manifest()['filters']},
     })
 
 
-@pytest.mark.parametrize('damage', [None, 'header', 'duplicate-boundary', 'adjacent-part', 'missing-row', 'wrong-order', 'filter', 'interval'])
+@pytest.mark.parametrize('damage', [None, 'header', 'duplicate-boundary', 'adjacent-part', 'missing-row', 'wrong-order', 'filter', 'interval', 'start', 'part', 'ids', 'column-order', 'layout', 'profile-header', 'numeric', 'unicode', 'headers-disabled', 'all-rows'])
 def test_part_oracle_checks_exact_values_order_boundaries_headers_and_filter(damage):
     rows, request = _part_case()
     if damage == 'header': rows[0][1] = 'Wrong'
@@ -70,6 +72,16 @@ def test_part_oracle_checks_exact_values_order_boundaries_headers_and_filter(dam
     if damage == 'wrong-order': rows[1], rows[2] = rows[2], rows[1]
     if damage == 'filter': request['state']['filters'] = {}
     if damage == 'interval': request['payload']['rowEnd'] += 1
+    if damage == 'start': request['payload']['rowStart'] -= 1
+    if damage == 'part': request['payload']['partId'] = 'r0_c0'
+    if damage == 'ids': request['payload']['colIds'][0] = 'hierarchy'
+    if damage == 'column-order': request['payload']['colIds'].reverse()
+    if damage == 'layout': request['payload']['layout_mode'] = 'hierarchy'
+    if damage == 'profile-header': request['payload']['style']['headerLabels']['region'] = 'Wrong'
+    if damage == 'numeric': rows[2500][1] = '7499.26'
+    if damage == 'unicode': rows[2500][0] = 'R\uff107499'
+    if damage == 'headers-disabled': request['payload']['includeHeaders'] = False
+    if damage == 'all-rows': request['payload']['allRows'] = True
     if damage:
         with pytest.raises(AssertionError): assert_part_rows(rows, request)
     else:

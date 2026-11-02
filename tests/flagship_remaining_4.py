@@ -111,7 +111,10 @@ def assert_part_rows(rows, request):
     payload, state = request['payload'], request['state']
     assert (payload['partId'], payload['rowStart'], payload['rowEnd']) == ('r1_c0', 5000, 10000)
     assert payload['includeHeaders'] is True and payload['allRows'] is False
-    assert payload['colIds'] == ['hierarchy', 'sales_sum']
+    # Bound fixture declares tabular: row-field IDs precede measure IDs.
+    assert payload['colIds'] == ['region', 'sales_sum']
+    assert payload['layout_mode'] == 'tabular'
+    assert payload['style']['headerLabels'] == {'region': 'Region', 'sales_sum': 'Sales (Sum)'}
     assert state['rowFields'] == ['region'] and state['colFields'] == []
     manifest = json.loads(Path(__file__).with_name('data').joinpath('flagship_parts_manifest.json').read_text(encoding='utf-8'))
     assert state['filters'] == manifest['filters']
