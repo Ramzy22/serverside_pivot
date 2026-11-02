@@ -154,20 +154,32 @@ def _create_python_environment(environment: Path) -> Path:
     private_record = {**ownership, "python": str(_python_in(root)), "state": "created"}
     record.write_text(json.dumps(private_record, indent=2), encoding="utf-8")
     venv.EnvBuilder(with_pip=True, system_site_packages=False).create(root)
-    with urllib.request.urlopen(_RELEASE_PIP_URL, timeout=60) as response:
-        installer = response.read()
-    if _digest(installer) != _RELEASE_PIP_SHA256:
-        raise ValueError("Release pip bootstrap wheel hash mismatch")
-    with tempfile.TemporaryDirectory(prefix="pf-pip-") as download:
-        wheel = Path(download) / f"pip-{_RELEASE_PIP_VERSION}-py3-none-any.whl"
-        wheel.write_bytes(installer)
-        _run([str(_python_in(root)), "-m", "pip", "--isolated", "install", "--no-index", "--no-deps", "--upgrade", str(wheel)], root)
-    installed_pip = _run([str(_python_in(root)), "-c", "import importlib.metadata; print(importlib.metadata.version('pip'))"], root)
-    if installed_pip != _RELEASE_PIP_VERSION:
-        raise RuntimeError("Release pip bootstrap version mismatch")
-    private_record["pipBootstrap"] = {"version": installed_pip, "url": _RELEASE_PIP_URL, "sha256": _RELEASE_PIP_SHA256}
-    private_record["state"] = "ready"
-    record.write_text(json.dumps(private_record, indent=2), encoding="utf-8")
+    try:
+        with urllib.request.urlopen(_RELEASE_PIP_URL, timeout=60) as response:
+            installer = response.read()
+        if _digest(installer) != _RELEASE_PIP_SHA256:
+            raise ValueError("Release pip bootstrap wheel hash mismatch")
+        with tempfile.TemporaryDirectory(prefix="pf-pip-") as download:
+            wheel = Path(download) / f"pip-{_RELEASE_PIP_VERSION}-py3-none-any.whl"
+            wheel.write_bytes(installer)
+            _run([str(_python_in(root)), "-m", "pip", "--isolated", "install", "--no-index", "--no-deps", "--upgrade", str(wheel)], root)
+        installed_pip = _run([str(_python_in(root)), "-c", "import importlib.metadata; print(importlib.metadata.version('pip'))"], root)
+        if installed_pip != _RELEASE_PIP_VERSION:
+            raise RuntimeError("Release pip bootstrap version mismatch")
+        private_record["pipBootstrap"] = {"version": installed_pip, "url": _RELEASE_PIP_URL, "sha256": _RELEASE_PIP_SHA256}
+        private_record["state"] = "ready"
+        record.write_text(json.dumps(private_record, indent=2), encoding="utf-8")
+    except Exception as error:
+        # No binding reaches the caller when bootstrap fails. Clean up through
+        # the same marker/token/path guard used by normal release teardown.
+        try:
+            cleanup_python_environment(ArtifactBinding(paths={
+                "python": _python_in(root), "environment": root,
+                "environment_record": record,
+            }))
+        except Exception as cleanup_error:
+            raise error from cleanup_error
+        raise
     return _python_in(root)
 
 

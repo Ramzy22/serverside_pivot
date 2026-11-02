@@ -612,6 +612,47 @@ def test_environment_cleanup_rejects_unowned_directory(tmp_path):
     assert (unrelated / "keep.txt").read_text() == "preserve unrelated data"
 
 
+@pytest.mark.parametrize("failure", ["download", "hash", "install", "version", "record"])
+def test_release_bootstrap_failure_cleans_only_allocated_environment(tmp_path, monkeypatch, failure):
+    import io
+    from types import SimpleNamespace
+    from scripts import flagship_artifacts
+
+    # Exercise real allocation, ownership records, and guarded cleanup. Only
+    # the slow interpreter seed and external downloader/installer are replaced.
+    monkeypatch.setattr(flagship_artifacts.venv, "EnvBuilder", lambda **kwargs: SimpleNamespace(create=lambda root: None))
+    wheel_bytes = b"test installer download"
+    if failure != "hash":
+        monkeypatch.setattr(flagship_artifacts, "_RELEASE_PIP_SHA256", hashlib.sha256(wheel_bytes).hexdigest())
+    def download(*args, **kwargs):
+        if failure == "download":
+            raise urllib.error.URLError("bootstrap unavailable")
+        return io.BytesIO(wheel_bytes)
+    def install(command, cwd, **kwargs):
+        if "install" in command and failure == "install":
+            raise subprocess.CalledProcessError(1, command)
+        return "unexpected-version" if failure == "version" else "26.2"
+    original_write = Path.write_text
+    def write_record(path, text, *args, **kwargs):
+        if failure == "record" and path.name == "failed-env.location.json" and json.loads(text)["state"] == "ready":
+            raise OSError("bootstrap provenance unavailable")
+        return original_write(path, text, *args, **kwargs)
+    monkeypatch.setattr(flagship_artifacts.urllib.request, "urlopen", download)
+    monkeypatch.setattr(flagship_artifacts, "_run", install)
+    monkeypatch.setattr(Path, "write_text", write_record)
+    expected = {"download": urllib.error.URLError, "hash": ValueError,
+                "install": subprocess.CalledProcessError, "version": RuntimeError, "record": OSError}[failure]
+    unrelated = tmp_path / "keep.txt"
+    unrelated.write_text("unrelated user data")
+    with pytest.raises(expected):
+        flagship_artifacts._create_python_environment(tmp_path / "failed-env")
+    record = json.loads((tmp_path / "failed-env.location.json").read_text())
+    assert record["state"] == "cleaned"
+    assert not Path(record["environment"]).exists()
+    assert Path(record["environment"]) not in flagship_artifacts._OWNED_ENVIRONMENTS
+    assert unrelated.read_text() == "unrelated user data"
+
+
 @pytest.mark.parametrize("url", ["http://127.0.0.1:39002/assets/index.js", "http://127.0.0.1:39003/assets/index.js", "https://foreign.example/assets/index.js"])
 def test_loaded_asset_requires_bound_host_origin_even_when_bytes_match(url):
     body = b"exact release bytes"
