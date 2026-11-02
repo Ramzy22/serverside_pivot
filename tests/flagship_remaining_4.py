@@ -220,7 +220,7 @@ def scroll_window_response(trace, row_id, checkpoint=-1):
             continue
         if (end-start+1) % block or payload.get('count', end-start+1) != end-start+1:
             continue
-        ids = [r.get('_id') for r in response['payload'].get('data', []) if r.get('_id') != 'Grand Total']
+        ids = [r.get('_id') for r in response['payload'].get('data', []) if r.get('_id') not in (None, 'Grand Total')]
         offset = index-start
         if ids.count(row_id) == 1 and offset < len(ids) and ids[offset] == row_id:
             return {'request': request, 'response': response, 'blockSize': block}

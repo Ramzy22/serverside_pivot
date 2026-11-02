@@ -434,6 +434,12 @@ def _selection_rows(driver):
                 raise
 
 
+def _pinned_boundary_order(driver, expected):
+    """Pin metadata can commit before React replaces the virtualized body."""
+    order = _selection_column_order(driver)
+    return order if len(order) == len(expected) and set(order) == set(expected) else False
+
+
 def _selection_column_order(driver):
     """Read actual body geometry, excluding duplicate/group header containers."""
     return driver.execute_script("""
@@ -866,7 +872,7 @@ def qualify_selected_clipboard(host: str, requirement: str) -> None:
                 from selenium.webdriver.common.actions.wheel_input import ScrollOrigin
                 ActionChains(driver).scroll_from_origin(ScrollOrigin.from_element(scroller), -int(offset) - 1, 0).perform()
                 wait.until(lambda current: current.execute_script("return arguments[0].scrollLeft", scroller) == 0)
-            boundary_order = _selection_column_order(driver)
+            boundary_order = wait.until(lambda current: _pinned_boundary_order(current, core_order))
             assert boundary_order.index(units) == boundary_order.index(later) + 1, "Pinned and center endpoints are not visually adjacent"
             assert boundary_order != core_order, "Pinning did not distinguish displayed and core order"
             boundary = {"coreColumnIds": core_order, "displayedColumnIds": boundary_order,

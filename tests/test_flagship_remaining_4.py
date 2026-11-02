@@ -521,3 +521,26 @@ def test_unloaded_workflow_runs_real_clipboard_stability_monitor(monkeypatch, tm
         assert samples[-1] - samples[0] >= 1.5
         assert len(samples) >= 2
         assert observation['acceptedBranch'] == 'explicit unavailable range, clipboard preserved'
+
+def test_scroll_window_metadata_is_not_a_logical_row():
+    from tests.flagship_remaining_4 import scroll_window_response
+    def request(identifier, start, end):
+        return {'requestId': identifier, 'kind': 'data', 'payload': {'start': start, 'end': end}}
+    initial, moved = request('initial', 0, 47), request('moved', 48, 143)
+    rows = [{'_colorScaleStats': {}, '_path': []}] + [{'_id': f'R{i:03d}'} for i in range(48, 120)]
+    trace = [dict(phase='request', at=1, envelope=initial),
+             dict(phase='response', at=2, envelope={**initial, 'status':'data', 'payload':{'data':[]}}),
+             dict(phase='request', at=3, envelope=moved),
+             dict(phase='response', at=4, envelope={**moved, 'status':'data', 'payload':{'data':rows}})]
+    assert scroll_window_response(trace, 'R056', checkpoint=2)
+
+
+def test_pinned_boundary_waits_for_complete_rendered_columns(monkeypatch):
+    from tests import flagship_browser_support as support
+    expected = ['hierarchy', 'units', 'sales', 'later']
+    for transient in ([], ['hierarchy', 'later', 'sales']):
+        monkeypatch.setattr(support, '_selection_column_order', lambda driver: transient)
+        assert support._pinned_boundary_order(None, expected) is False
+    rendered = ['hierarchy', 'later', 'units', 'sales']
+    monkeypatch.setattr(support, '_selection_column_order', lambda driver: rendered)
+    assert support._pinned_boundary_order(None, expected) == rendered

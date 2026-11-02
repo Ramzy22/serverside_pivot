@@ -11,6 +11,7 @@ function load(relative) {
     presets:[[req('@babel/preset-env'),{targets:{node:'current'},modules:'commonjs'}],req('@babel/preset-react')]}).code;
   const module = {exports:{}};
   new Function('module','exports','require',code)(module,module.exports,name=> {
+    if(name==='react' && relative==='runtime/useRuntimeViewRestoreScroll.js') return {useEffect:fn=>{global.restoreCleanup=fn();}};
     if(name==='react') return {useCallback:fn=>fn,useMemo:fn=>fn(),useRef:value=>({current:value}),useEffect:()=>{}};
     if(name.includes('sparklines')) return {normalizeSparklineValConfigsForView:value=>value};
     if(name.startsWith('.')) return load(path.relative(path.join(root,'src/lib'),path.resolve(path.dirname(filename),name))+'.js');
@@ -141,4 +142,28 @@ assert.notEqual(manifest.current,initialManifest,'A genuinely changed layout rec
 assert.deepEqual(manifest.current,['p:B','p:A']);
 assert(!runtimePayloadCommitIsCurrent(reply,payload),'Old-order response remains rejected after a real layout change');
 
+
+// A saved offset must survive initial browser clamping before async extents arrive.
+const frames=new Map();let frameId=0;
+global.requestAnimationFrame=fn=>{frames.set(++frameId,fn);return frameId;};
+global.cancelAnimationFrame=id=>frames.delete(id);
+let top=0,left=0,maxTop=0,maxLeft=0;
+const parent={get scrollTop(){return top;},set scrollTop(v){top=Math.min(v,maxTop);},
+ get scrollLeft(){return left;},set scrollLeft(v){left=Math.min(v,maxLeft);}};
+const tick=()=>{const queued=[...frames.values()];frames.clear();queued.forEach(fn=>fn());};
+load('runtime/useRuntimeViewRestoreScroll.js').useRuntimeViewRestoreScroll({parentRef:{current:parent},viewState:{state:{scroll:{top:2500,left:850}}}});
+tick();assert.equal(top,0);
+maxTop=10000;maxLeft=4000;tick();tick();
+assert.equal(top,2500,'retry clamped restoration after row extent arrives');
+assert.equal(left,850,'retry clamped restoration after column extent arrives');
+restoreCleanup();assert.equal(frames.size,0,'unmount cancels pending restoration');
+
+// A user wheel supersedes a still-clamped restore; it must never snap back.
+const listeners=new Map();maxTop=0;maxLeft=0;top=0;left=0;
+parent.addEventListener=(name,fn)=>listeners.set(name,fn);
+parent.removeEventListener=name=>listeners.delete(name);
+load('runtime/useRuntimeViewRestoreScroll.js').useRuntimeViewRestoreScroll({parentRef:{current:parent},viewState:{state:{scroll:{top:2500,left:850}}}});
+tick();listeners.get('wheel')();maxTop=10000;maxLeft=4000;top=100;left=50;tick();
+assert.equal(top,100);assert.equal(left,50);assert.equal(frames.size,0);
+restoreCleanup();assert.equal(listeners.size,0);
 console.log('saved view persistence passed');
