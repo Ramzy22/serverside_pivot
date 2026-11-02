@@ -1121,6 +1121,35 @@ def qualify_table_scope_clipboard(host: str, requirement: str) -> None:
     assert result["result"] == "passed", f"{host} {requirement}: {diagnostic}; evidence: {directory}"
 
 
+def _native_copy_input_target(driver, selector):
+    """Return an input a native pointer can reach, never a covered DOM match."""
+    from selenium.common.exceptions import StaleElementReferenceException
+    from tests.test_flagship_certification import _workspace_elements
+
+    for candidate in _workspace_elements(driver, selector):
+        try:
+            if not candidate.is_displayed() or not candidate.is_enabled():
+                continue
+            if driver.execute_script("""
+                const input = arguments[0], rect = input.getBoundingClientRect();
+                const left = Math.max(0, rect.left), right = Math.min(innerWidth, rect.right);
+                const top = Math.max(0, rect.top), bottom = Math.min(innerHeight, rect.bottom);
+                if (left >= right || top >= bottom) return false;
+                const x = (left + right) / 2, y = (top + bottom) / 2;
+                let hit = document.elementFromPoint(x, y);
+                while (hit && hit.shadowRoot) {
+                    const nested = hit.shadowRoot.elementFromPoint(x, y);
+                    if (!nested || nested === hit) break;
+                    hit = nested;
+                }
+                return hit === input;
+            """, candidate):
+                return candidate
+        except StaleElementReferenceException:
+            continue
+    return False
+
+
 def qualify_native_input_copy(host: str) -> None:
     """A focused input owns Ctrl+C even after a grid rectangle was selected."""
     from tests.flagship_clipboard_observer import CLIPBOARD_BOUNDARY_OBSERVER
@@ -1136,7 +1165,7 @@ def qualify_native_input_copy(host: str) -> None:
     from tests.test_flagship_certification import (
         _clipboard_text, _host_url, _origin, _qualification_chrome_options,
         _switch_to_workspace, _verify_release_asset_batch,
-        _wait_for_visible_workspace_element, _workspace_elements,
+        _workspace_elements,
     )
 
     requirement = "keyboard-copy.native-input"
@@ -1175,8 +1204,7 @@ def qualify_native_input_copy(host: str) -> None:
         assert len(selected) == 4
         observation["selectedGridCells"] = selected
 
-        def copy_focused_input(selector, expected, label):
-            element = _wait_for_visible_workspace_element(driver, selector)
+        def copy_focused_input(element, expected, label):
             element.click()
             element.send_keys(Keys.CONTROL + "a" + Keys.NULL)
             selected_text = driver.execute_script("""
@@ -1214,7 +1242,7 @@ def qualify_native_input_copy(host: str) -> None:
             observation["controls"][-1]["focused"] = True
 
         for attempt in range(3):
-            search = _wait_for_visible_workspace_element(driver, '[data-testid="pivot-global-search"]')
+            search = wait.until(lambda current: _native_copy_input_target(current, '[data-testid="pivot-global-search"]'))
             try:
                 if search.get_attribute("value") != "M\u00fcnchen":
                     search.click()
@@ -1224,27 +1252,29 @@ def qualify_native_input_copy(host: str) -> None:
                 if attempt == 2:
                     raise
         wait.until(lambda current: [row["label"] for row in _selection_rows(current)] == ["M\u00fcnchen"])
-        copy_focused_input('[data-testid="pivot-global-search"]', "M\u00fcnchen", "global search")
+        search = wait.until(lambda current: _native_copy_input_target(current, '[data-testid="pivot-global-search"]'))
+        copy_focused_input(search, "M\u00fcnchen", "global search")
         filter_button = wait.until(lambda current: next((button for button in _workspace_elements(current,
             '[role="columnheader"][data-header-column-id="hierarchy"] [aria-label="Filter Column"]')
             if button.is_displayed()), False))
         filter_button.click()
         filter_selector = 'input[placeholder="Search values..."], input[placeholder="Search loaded values..."]'
-        filter_input = _wait_for_visible_workspace_element(driver, filter_selector)
+        filter_input = wait.until(lambda current: _native_copy_input_target(current, filter_selector))
+        filter_input.click()
         filter_input.send_keys("M\u00fcnchen")
-        wait.until(lambda current: _wait_for_visible_workspace_element(current, filter_selector).get_attribute("value") == "M\u00fcnchen")
-        copy_focused_input(filter_selector, "M\u00fcnchen", "filter search")
+        wait.until(lambda current: filter_input.get_attribute("value") == "M\u00fcnchen")
+        copy_focused_input(filter_input, "M\u00fcnchen", "filter search")
         result["filterInputNativeCopyVerified"] = True
         close_filter = wait.until(lambda current: next((button for button in _workspace_elements(current, "button")
             if button.is_displayed() and button.text.strip() == "Clear & Close"), False))
         close_filter.click()
         dialog = _open_selection_number_format(driver, observation)
-        number = _wait_for_visible_workspace_element(driver, dialog + ' input[type="number"]')
+        number = wait.until(lambda current: _native_copy_input_target(current, dialog + ' input[type="number"]'))
+        number.click()
         number.send_keys(Keys.CONTROL + "a" + Keys.NULL)
         number.send_keys("4")
-        wait.until(lambda current: _wait_for_visible_workspace_element(
-            current, dialog + ' input[type="number"]').get_attribute("value") == "4")
-        copy_focused_input(dialog + ' input[type="number"]', "4", "format dialog number")
+        wait.until(lambda current: number.get_attribute("value") == "4")
+        copy_focused_input(number, "4", "format dialog number")
         result.update(result="passed", clipboardBytesVerified=True, nativeKeyboardCopyVerified=True)
     except Exception as error:
         frame = traceback.extract_tb(error.__traceback__)[-1]

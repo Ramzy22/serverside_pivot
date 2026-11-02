@@ -716,6 +716,9 @@ export function useRenderHelpers({
     // Wrapped in useCallback so PivotTableBody's React.memo can skip re-renders
     // when only unrelated parent state (sidebar, charts, context menus) changes.
     const renderHeaderCell = useCallback((header, level, renderSection = 'center', overrideWidth = null, disableSticky = false) => {
+        // A leaf column also occurs in placeholder groups and pinned sections.
+        // Only the header whose filter button opened the popover owns its state.
+        const filterOwner = `${renderSection}:${header.id}`;
         const isGroupHeader = header.column.columns && header.column.columns.length > 0;
         const isReportConfigGutter = Boolean(header.column.columnDef && header.column.columnDef.meta && header.column.columnDef.meta.reportConfigGutter);
         const isHierarchyHeader = header.column.id === 'hierarchy';
@@ -1016,6 +1019,7 @@ export function useRenderHelpers({
                         }}
                         role="button"
                         tabIndex={0}
+                        data-pivot-filter-owner={filterOwner}
                         style={{
                             display:'flex',
                             alignItems: 'center',
@@ -1062,7 +1066,8 @@ export function useRenderHelpers({
                 </div>
                 </div>
 
-                {!isGroupHeader && activeFilterCol === filterColumnId && (
+                {!isGroupHeader && !header.isPlaceholder && activeFilterCol === filterColumnId
+                    && filterAnchorEl?.getAttribute('data-pivot-filter-owner') === filterOwner && (
                     <FilterPopover
                     column={isHierarchyHeader ? { id: filterColumnId, header: headerText } : header.column}
                     anchorEl={filterAnchorEl}
