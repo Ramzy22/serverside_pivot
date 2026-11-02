@@ -256,6 +256,18 @@ sidebar.style.overflowY='hidden';
 assert.equal(geometry(target).ready,false);
 target.parentElement=page; target.bounds=rect(); document.elementFromPoint=()=>wrong;
 assert.equal(geometry(target).ready,false);
+document.elementFromPoint=()=>host;
+// A centered fixed overlay escapes the sidebar's off-screen overflow clip.
+const overlay=node('',rect(0,600),{parentElement:sidebar});
+overlay.style.position='fixed'; target.parentElement=overlay; target.bounds=rect(100,130);
+sidebar.bounds=rect(400,500); sidebar.style.overflowY='auto';
+assert.equal(geometry(target).ready,true);
+// A transformed ancestor establishes the fixed containing block and still clips.
+sidebar.style.transform='translateZ(0)';
+assert.equal(geometry(target).ready,false);
+sidebar.style.transform='none';
+target.bounds=rect(700,730);
+assert.equal(geometry(target).ready,false,'fixed controls outside viewport must still be rejected');
 target.isConnected=false;
 assert.equal(geometry(target).ready,false);
 console.log('atomic selector and native scroll geometry passed');
@@ -277,8 +289,9 @@ def test_model_native_click_reacquires_after_scroll_and_stale_target(monkeypatch
             events.append('click')
             if self.stale: raise StaleElementReferenceException('host rerender')
 
-    buttons = iter([Button(), Button(stale=True), Button()])
+    buttons = iter([Button(), Button(), Button(stale=True), Button()])
     geometries = iter([{'ready': False, 'wheel': {'x': 70, 'y': 250, 'dx': 0, 'dy': 215}},
+                       {'ready': False, 'wheel': {'x': 70, 'y': 250, 'dx': 0, 'dy': 215}},
                        {'ready': True}, {'ready': True}])
 
     class Driver:
@@ -301,8 +314,8 @@ def test_model_native_click_reacquires_after_scroll_and_stale_target(monkeypatch
 
     monkeypatch.setattr('selenium.webdriver.ActionChains', Actions)
     models._click_button(Driver(), '+ Category')
-    assert events == ['lookup', 'scroll_to', 'wheel', 'lookup', 'click',
-                      'lookup', 'scroll_to', 'click']
+    assert events == ['lookup', 'scroll_to', 'lookup', 'wheel', 'lookup', 'click',
+                      'lookup', 'click']
 
 
 def test_model_native_click_rejects_obscured_control(monkeypatch):
@@ -320,7 +333,7 @@ def test_model_native_click_rejects_obscured_control(monkeypatch):
         def perform(self): return self
     class Wait:
         def __init__(self, driver, timeout): self.driver = driver
-        def until(self, attempt, message):
+        def until(self, attempt, message=""):
             assert attempt(self.driver) is False
             raise TimeoutException(message)
 
@@ -328,3 +341,22 @@ def test_model_native_click_rejects_obscured_control(monkeypatch):
     monkeypatch.setattr('selenium.webdriver.support.ui.WebDriverWait', Wait)
     with pytest.raises(TimeoutException, match='Native button not reachable'):
         models._click_button(Driver(), '+ Category')
+
+
+@pytest.mark.parametrize("actual", ["double_sales", "Formula 1double_sales"])
+def test_native_model_type_replaces_defaults_and_rejects_appended_text(actual):
+    from selenium.webdriver.common.keys import Keys
+    from tests.flagship_remaining_2 import _type
+    class Editor:
+        def send_keys(self, *keys):
+            assert keys == (Keys.CONTROL, Keys.HOME, Keys.NULL,
+                            Keys.CONTROL, Keys.SHIFT, Keys.END, Keys.NULL,
+                            "double_sales", Keys.TAB)
+        def get_attribute(self, name):
+            assert name == "value"
+            return actual
+    if actual == "double_sales":
+        _type(Editor(), "double_sales")
+    else:
+        with pytest.raises(AssertionError, match="did not replace"):
+            _type(Editor(), "double_sales")

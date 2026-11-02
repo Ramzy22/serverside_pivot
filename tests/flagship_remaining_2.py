@@ -141,9 +141,26 @@ const ancestors = [];
 for (let node = element.parentElement || element.getRootNode().host; node;
      node = node.parentElement || node.getRootNode().host) ancestors.push(node);
 if (!ancestors.includes(document.scrollingElement)) ancestors.push(document.scrollingElement);
+// A viewport-fixed dialog escapes overflow clipping from its DOM sidebar.
+// A transformed/paint-containing ancestor instead establishes its fixed block.
+const chain = [element, ...ancestors];
+const fixedIndex = chain.findIndex(node => getComputedStyle(node).position === 'fixed');
+const establishesFixedBlock = node => {
+  const style = getComputedStyle(node);
+  return ['transform','perspective','filter','backdropFilter'].some(key =>
+    style[key] && style[key] !== 'none') ||
+    /layout|paint|strict|content/.test(style.contain || '') ||
+    /transform|perspective|filter/.test(style.willChange || '') ||
+    style.contentVisibility === 'auto';
+};
+const blockIndex = fixedIndex < 0 ? -1 : chain.findIndex((node,index) =>
+  index > fixedIndex && establishesFixedBlock(node));
 const operations = [];
 let clipped = false;
 for (const node of ancestors) {
+  const index = chain.indexOf(node);
+  if (fixedIndex >= 0 && index > fixedIndex && node !== document.scrollingElement &&
+      (blockIndex < 0 || index < blockIndex)) continue;
   const root = node === document.scrollingElement;
   const style = getComputedStyle(node), b = root ?
     {left:0, top:0, right:innerWidth, bottom:innerHeight} : node.getBoundingClientRect();
@@ -193,43 +210,51 @@ def _button(driver, text, root=None):
 
 
 def _click_button(driver, text, root=None):
-    from selenium.common.exceptions import StaleElementReferenceException, ElementClickInterceptedException
+    from selenium.common.exceptions import StaleElementReferenceException, ElementClickInterceptedException, TimeoutException
     from selenium.webdriver import ActionChains
     from selenium.webdriver.common.actions.wheel_input import ScrollOrigin
     from selenium.webdriver.support.ui import WebDriverWait
 
-    scrolled = False
+    scrolled, last_geometry = False, None
 
     def attempt(current):
-        nonlocal scrolled
+        nonlocal scrolled, last_geometry
         try:
             button = current.execute_script(_MODEL_ELEMENTS, "button", root, " ".join(text.split()))
             if not button:
                 return False
-            if not scrolled:
-                ActionChains(current).scroll_to_element(button).perform()
-                scrolled = True
-            geometry = current.execute_script(_MODEL_CLICK_GEOMETRY, button)
-            if wheel := geometry.get("wheel"):
-                ActionChains(current).scroll_from_origin(
-                    ScrollOrigin.from_viewport(wheel["x"], wheel["y"]), wheel["dx"], wheel["dy"]).perform()
+            last_geometry = current.execute_script(_MODEL_CLICK_GEOMETRY, button)
+            if last_geometry["ready"]:
+                button.click()
+                return True
+            if wheel := last_geometry.get("wheel"):
+                if not scrolled:
+                    ActionChains(current).scroll_to_element(button).perform()
+                    scrolled = True
+                else:
+                    ActionChains(current).scroll_from_origin(
+                        ScrollOrigin.from_viewport(wheel["x"], wheel["y"]), wheel["dx"], wheel["dy"]).perform()
                 return False
-            if not geometry["ready"]:
-                return False
-            button.click()
-            return True
+            return False
         except (StaleElementReferenceException, ElementClickInterceptedException):
             # Reacquire only the intended control after a host rerender.
             scrolled = False
             return False
 
-    WebDriverWait(driver, 10).until(attempt, f"Native button not reachable: {text}")
+    try:
+        WebDriverWait(driver, 10).until(attempt)
+    except TimeoutException as error:
+        raise TimeoutException(f"Native button not reachable: {text}; geometry={last_geometry}") from error
 
 
 def _type(element, text):
     from selenium.webdriver.common.keys import Keys
-    element.send_keys(Keys.CONTROL, "a")
-    element.send_keys(text, Keys.TAB)
+    # Ctrl+A is intercepted by the grid's document listener in a shadow host.
+    # Home/End selection stays a native editing action for inputs and textareas.
+    element.send_keys(Keys.CONTROL, Keys.HOME, Keys.NULL,
+                      Keys.CONTROL, Keys.SHIFT, Keys.END, Keys.NULL,
+                      text, Keys.TAB)
+    assert element.get_attribute("value") == text, "Native model editor did not replace its default text"
 
 
 def _move(driver, label, source, target):
