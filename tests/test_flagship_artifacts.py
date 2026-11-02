@@ -554,6 +554,11 @@ def test_release_environment_does_not_inherit_global_distribution_metadata(tmp_p
     environment = tmp_path / "isolated-env"
     python = flagship_artifacts._create_python_environment(environment)
     try:
+        installed_pip = subprocess.check_output([str(python), "-c", "import importlib.metadata; print(importlib.metadata.version('pip'))"], text=True).strip()
+        assert installed_pip == "26.2"
+        provenance = json.loads((tmp_path / "isolated-env.location.json").read_text())
+        assert provenance["pipBootstrap"]["version"] == installed_pip
+        assert provenance["pipBootstrap"]["sha256"] == "931c303696af6fa3417112103b1cad26890e5a07eccb5b99783700e33f2b8aad"
         paths = json.loads(subprocess.check_output([str(python), "-c", "import json,sys; print(json.dumps(sys.path))"], text=True))
         import sysconfig
         assert str(Path(sysconfig.get_path("purelib")).resolve()) not in {str(Path(path).resolve()) for path in paths if path}

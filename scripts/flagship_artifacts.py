@@ -38,6 +38,12 @@ class ArtifactBinding:
 
 _OWNED_ENVIRONMENTS: dict[Path, tuple[str, Path]] = {}
 
+# Do not retain the interpreter's old ensurepip seed in installed release hosts.
+# Review this exact wheel and hash when advancing the release installer.
+_RELEASE_PIP_VERSION = "26.2"
+_RELEASE_PIP_URL = "https://files.pythonhosted.org/packages/62/36/a3aed958d60531cb442b7ab4596cda7b3621cfb916f8ae1d6769795c7dc1/pip-26.2-py3-none-any.whl"
+_RELEASE_PIP_SHA256 = "931c303696af6fa3417112103b1cad26890e5a07eccb5b99783700e33f2b8aad"
+
 
 def _digest(data: bytes) -> str:
     return hashlib.sha256(data).hexdigest()
@@ -148,6 +154,18 @@ def _create_python_environment(environment: Path) -> Path:
     private_record = {**ownership, "python": str(_python_in(root)), "state": "created"}
     record.write_text(json.dumps(private_record, indent=2), encoding="utf-8")
     venv.EnvBuilder(with_pip=True, system_site_packages=False).create(root)
+    with urllib.request.urlopen(_RELEASE_PIP_URL, timeout=60) as response:
+        installer = response.read()
+    if _digest(installer) != _RELEASE_PIP_SHA256:
+        raise ValueError("Release pip bootstrap wheel hash mismatch")
+    with tempfile.TemporaryDirectory(prefix="pf-pip-") as download:
+        wheel = Path(download) / f"pip-{_RELEASE_PIP_VERSION}-py3-none-any.whl"
+        wheel.write_bytes(installer)
+        _run([str(_python_in(root)), "-m", "pip", "--isolated", "install", "--no-index", "--no-deps", "--upgrade", str(wheel)], root)
+    installed_pip = _run([str(_python_in(root)), "-c", "import importlib.metadata; print(importlib.metadata.version('pip'))"], root)
+    if installed_pip != _RELEASE_PIP_VERSION:
+        raise RuntimeError("Release pip bootstrap version mismatch")
+    private_record["pipBootstrap"] = {"version": installed_pip, "url": _RELEASE_PIP_URL, "sha256": _RELEASE_PIP_SHA256}
     private_record["state"] = "ready"
     record.write_text(json.dumps(private_record, indent=2), encoding="utf-8")
     return _python_in(root)
