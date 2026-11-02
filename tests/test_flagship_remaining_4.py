@@ -579,3 +579,76 @@ def test_part_intervals_accept_literal_english_and_french_grouping(labels):
 def test_part_intervals_reject_wrong_boundary_order_grouping_and_count(labels):
     from tests.flagship_remaining_4 import part_configuration_ready
     assert not part_configuration_ready('5000', labels)
+
+@pytest.mark.parametrize('warm_viewport', [False, True])
+def test_parts_http_export_preserves_exact_filtered_interval(monkeypatch, warm_viewport):
+    from dataclasses import dataclass, field
+    from fastapi import FastAPI
+    from fastapi.testclient import TestClient
+    from examples.flagship_demo_data import build_demo_table, workspace_config
+    from pivot_engine import create_tanstack_adapter
+    from pivot_engine.runtime import PivotRuntimeService, RuntimeDatasetAuthorizer, register_runtime_http_transport
+    monkeypatch.setenv('PIVOT_FLAGSHIP_PARTS_DATA', '1')
+    adapter = create_tanstack_adapter(backend_uri=':memory:')
+    adapter.controller.load_data_from_arrow('parts_fixture', build_demo_table())
+    service = PivotRuntimeService(adapter_getter=lambda: adapter)
+    query_calls = []
+    database_calls = []
+    execute_database = adapter.controller._execute_ibis_expr_async
+    async def observed_database(*args, **kwargs):
+        database_calls.append(1)
+        return await execute_database(*args, **kwargs)
+    monkeypatch.setattr(adapter.controller, '_execute_ibis_expr_async', observed_database)
+    execute_query = adapter.controller.run_pivot_async
+    async def observed_query(spec, *args, **kwargs):
+        call = {'limit': spec.limit, 'offset': spec.offset, 'refresh': kwargs.get('force_refresh')}
+        result = await execute_query(spec, *args, **kwargs)
+        call['rows'] = result.num_rows
+        query_calls.append(call)
+        return result
+    monkeypatch.setattr(adapter.controller, 'run_pivot_async', observed_query)
+    @dataclass
+    class Viewer:
+        id: str = 'parts-viewer'
+        role: str = 'viewer'
+        attributes: dict = field(default_factory=dict)
+    app = FastAPI()
+    register_runtime_http_transport(app, lambda: service, current_user_dependency=lambda: Viewer(),
+        dataset_authorizer=RuntimeDatasetAuthorizer({'parts_fixture': {
+            'roles': {'viewer'}, 'operations': {'read', 'export'}, 'rowSecurity': {'mode': 'global'}}}))
+    _, case = _part_case()
+    request = {'schemaVersion': 1, 'kind': 'export', 'requestId': 'part-two',
+               'table': 'parts_fixture', 'sessionId': 'parts-session', 'clientInstance': 'parts-browser',
+               'stateEpoch': 0, 'windowSeq': 0,
+               'state': {key: workspace_config('react')[key] for key in (
+                   'rowFields', 'colFields', 'valConfigs', 'filters', 'sorting', 'expanded',
+                   'showSubtotals', 'showRowTotals', 'showColTotals')},
+               'payload': {**case['payload'], 'format': 'html'}}
+    with TestClient(app) as client:
+        if warm_viewport:
+            viewport = {**request, 'kind': 'data', 'requestId': 'initial-viewport',
+                        'payload': {'start': 0, 'end': 47, 'count': 48,
+                                    'needs_col_schema': True, 'layout_mode': 'tabular',
+                                    'intent': 'structural'}}
+            initial = client.post('/v1/runtime', json=viewport)
+            assert initial.status_code == 200, initial.text
+            assert initial.json()['status'] == 'data', initial.text
+        response = client.post('/v1/runtime', json=request)
+        assert response.status_code == 200, response.text
+        result = response.json()
+        assert result['status'] == 'ok', result
+        payload = result['payload']
+        assert payload['rows'] == 5000, query_calls
+        delivered = client.get(payload['payloadRef']['url'])
+        assert delivered.status_code == 200, delivered.text
+        rows = [[cell['text'] for cell in row] for row in ClipboardTable(delivered.text).rows]
+        assert_part_rows(rows, request)
+        assert payload['rows'] == payload['payloadRef']['rowCount'] == 5000
+        executed = len(database_calls)
+        repeat = client.post('/v1/runtime', json={**request, 'requestId': 'part-two-repeat'})
+        assert repeat.status_code == 200 and repeat.json()['status'] == 'ok', repeat.text
+        assert repeat.json()['payload']['rows'] == 5000
+        repeated = client.get(repeat.json()['payload']['payloadRef']['url'])
+        assert repeated.status_code == 200, repeated.text
+        assert [[cell['text'] for cell in row] for row in ClipboardTable(repeated.text).rows] == rows
+        assert len(database_calls) == executed, 'Identical complete export must retain query/window caching'
