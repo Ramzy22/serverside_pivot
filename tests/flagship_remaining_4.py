@@ -394,7 +394,7 @@ def _part(driver, host, wait, observation, downloads):
     assert os.environ.get('PIVOT_FLAGSHIP_PARTS_DATA') == '1', 'Dedicated 12001-row profile required'
     cell = wait.until(lambda d: next((c for c in _workspace_elements(d, '[role="gridcell"][data-colid="sales_sum"]') if c.is_displayed()), False))
     ActionChains(driver).context_click(cell).perform()
-    s._selection_menu(driver, 'Copy Current Table').click()
+    s._geometry_copy_current_table(driver)
     number = wait.until(lambda d: next((e for e in _workspace_elements(d, 'input[type="number"][min="100"]') if e.is_displayed()), False))
     number.send_keys(Keys.CONTROL, 'a')
     number.send_keys('5000', Keys.TAB)
