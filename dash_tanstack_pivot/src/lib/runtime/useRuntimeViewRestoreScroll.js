@@ -16,33 +16,53 @@ export function useRuntimeViewRestoreScroll({ parentRef, viewState }) {
     const savedScroll = restored?.scroll && typeof restored.scroll === 'object' ? restored.scroll : null;
     if (!savedScroll || !parentRef.current) return undefined;
 
-    // The first frame can precede async server rows and column measurements.
-    // Browser assignments clamp to the current extent, so retry until both
-    // offsets have survived a complete frame. Native navigation cancels restore.
-    let animationFrame;
-    let cancelled = false;
-    let matched = false;
-    const cancel = () => {
-      cancelled = true;
-      cancelAnimationFrame(animationFrame);
-    };
+    const top = Number.isFinite(savedScroll.top) ? Math.max(0, savedScroll.top) : null;
+    const left = Number.isFinite(savedScroll.left) ? Math.max(0, savedScroll.left) : null;
+    if (top === null && left === null) return undefined;
+
+    // Browser assignments clamp before async rows/column measurements arrive.
+    // Try once per extent change, then stay idle while an offset is unreachable.
+    // Observers allow even slow server responses without an animation-frame loop.
     const parent = parentRef.current;
+    let animationFrame;
+    let stopped = false;
+    let mutationObserver;
+    let resizeObserver;
     const events = ['wheel', 'pointerdown', 'keydown'];
-    events.forEach(event => parent.addEventListener?.(event, cancel, { passive: true }));
+    const stop = () => {
+      stopped = true;
+      cancelAnimationFrame(animationFrame);
+      mutationObserver?.disconnect();
+      resizeObserver?.disconnect();
+      events.forEach(event => parent.removeEventListener(event, stop));
+    };
+    const matches = () => (top === null || Math.abs(parent.scrollTop - top) <= 1)
+      && (left === null || Math.abs(parent.scrollLeft - left) <= 1);
     const apply = () => {
-      if (cancelled || parentRef.current !== parent) return;
-      const topMatches = typeof savedScroll.top !== 'number' || Math.abs(parent.scrollTop - savedScroll.top) <= 1;
-      const leftMatches = typeof savedScroll.left !== 'number' || Math.abs(parent.scrollLeft - savedScroll.left) <= 1;
-      if (matched && topMatches && leftMatches) return;
-      matched = topMatches && leftMatches;
-      if (typeof savedScroll.top === 'number') parent.scrollTop = savedScroll.top;
-      if (typeof savedScroll.left === 'number') parent.scrollLeft = savedScroll.left;
+      if (stopped || parentRef.current !== parent) { stop(); return; }
+      if (top !== null) parent.scrollTop = top;
+      if (left !== null) parent.scrollLeft = left;
+      animationFrame = requestAnimationFrame(() => {
+        if (stopped || parentRef.current !== parent || matches()) stop();
+        // Otherwise remain dormant until the measured extent actually changes.
+      });
+    };
+    const extent = () => [parent.scrollHeight, parent.scrollWidth, parent.clientHeight, parent.clientWidth].join(':');
+    let previousExtent = extent();
+    const onExtentChange = () => {
+      if (stopped) return;
+      const nextExtent = extent();
+      if (nextExtent === previousExtent) return;
+      previousExtent = nextExtent;
+      cancelAnimationFrame(animationFrame);
       animationFrame = requestAnimationFrame(apply);
     };
+    mutationObserver = new MutationObserver(onExtentChange);
+    mutationObserver.observe(parent, { childList: true, subtree: true, attributes: true });
+    resizeObserver = new ResizeObserver(onExtentChange);
+    resizeObserver.observe(parent);
+    events.forEach(event => parent.addEventListener(event, stop, { passive: true }));
     animationFrame = requestAnimationFrame(apply);
-    return () => {
-      cancel();
-      events.forEach(event => parent.removeEventListener?.(event, cancel));
-    };
+    return stop;
   }, [parentRef, viewState]);
 }

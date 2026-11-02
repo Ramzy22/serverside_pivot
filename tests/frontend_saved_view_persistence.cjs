@@ -143,27 +143,53 @@ assert.deepEqual(manifest.current,['p:B','p:A']);
 assert(!runtimePayloadCommitIsCurrent(reply,payload),'Old-order response remains rejected after a real layout change');
 
 
-// A saved offset must survive initial browser clamping before async extents arrive.
+// Execute the real hook with browser-like extent clamping and observer delivery.
 const frames=new Map();let frameId=0;
 global.requestAnimationFrame=fn=>{frames.set(++frameId,fn);return frameId;};
 global.cancelAnimationFrame=id=>frames.delete(id);
-let top=0,left=0,maxTop=0,maxLeft=0;
-const parent={get scrollTop(){return top;},set scrollTop(v){top=Math.min(v,maxTop);},
- get scrollLeft(){return left;},set scrollLeft(v){left=Math.min(v,maxLeft);}};
+const observers=new Set();
+class Observer {
+ constructor(callback){this.callback=callback;observers.add(this);}
+ observe(){} disconnect(){observers.delete(this);}
+}
+global.MutationObserver=Observer;global.ResizeObserver=Observer;
+let top=0,left=0,maxTop=0,maxLeft=0,writes=0;
+const listeners=new Map();
+const parent={get scrollTop(){return top;},set scrollTop(v){writes++;top=Math.min(v,maxTop);},
+ get scrollLeft(){return left;},set scrollLeft(v){writes++;left=Math.min(v,maxLeft);},
+ get scrollHeight(){return maxTop+100;},get scrollWidth(){return maxLeft+100;},clientHeight:100,clientWidth:100,
+ addEventListener:(name,fn)=>listeners.set(name,fn),removeEventListener:name=>listeners.delete(name)};
 const tick=()=>{const queued=[...frames.values()];frames.clear();queued.forEach(fn=>fn());};
-load('runtime/useRuntimeViewRestoreScroll.js').useRuntimeViewRestoreScroll({parentRef:{current:parent},viewState:{state:{scroll:{top:2500,left:850}}}});
-tick();assert.equal(top,0);
-maxTop=10000;maxLeft=4000;tick();tick();
-assert.equal(top,2500,'retry clamped restoration after row extent arrives');
-assert.equal(left,850,'retry clamped restoration after column extent arrives');
-restoreCleanup();assert.equal(frames.size,0,'unmount cancels pending restoration');
-
-// A user wheel supersedes a still-clamped restore; it must never snap back.
-const listeners=new Map();maxTop=0;maxLeft=0;top=0;left=0;
-parent.addEventListener=(name,fn)=>listeners.set(name,fn);
-parent.removeEventListener=name=>listeners.delete(name);
-load('runtime/useRuntimeViewRestoreScroll.js').useRuntimeViewRestoreScroll({parentRef:{current:parent},viewState:{state:{scroll:{top:2500,left:850}}}});
-tick();listeners.get('wheel')();maxTop=10000;maxLeft=4000;top=100;left=50;tick();
-assert.equal(top,100);assert.equal(left,50);assert.equal(frames.size,0);
+const notify=()=>[...observers].forEach(observer=>observer.callback());
+const restoreScroll=(scroll)=>load('runtime/useRuntimeViewRestoreScroll.js').useRuntimeViewRestoreScroll({parentRef:{current:parent},viewState:{state:{scroll}}});
+restoreScroll({top:2500,left:850});tick();tick();
+assert.equal(frames.size,0,'insufficient extent must become idle instead of polling forever');
+const idleWrites=writes;for(let i=0;i<1000;i++){notify();tick();}
+assert.equal(writes,idleWrites,'unchanged extents must not cause scroll writes');
+assert.equal(frames.size,0);
+maxTop=10000;notify();tick();tick();
+assert.equal(top,2500);assert.equal(left,0);assert.equal(frames.size,0,'one unavailable axis stays idle');
+maxLeft=4000;notify();tick();tick();
+assert.equal(top,2500,'slow async row extent must restore exact saved offset');
+assert.equal(left,850,'slow async column extent must restore exact saved offset');
+assert.equal(frames.size,0);assert.equal(observers.size,0,'completed restore disconnects observers');
 restoreCleanup();assert.equal(listeners.size,0);
+for(const scroll of [{top:NaN,left:Infinity},{top:-Infinity,left:NaN}]){
+ const before=writes;restoreScroll(scroll);for(let i=0;i<10;i++)tick();
+ assert.equal(writes,before,'nonfinite axes must never reach DOM setters');
+ assert.equal(frames.size,0);assert.equal(observers.size,0);assert.equal(listeners.size,0);
+ if(restoreCleanup)restoreCleanup();
+}
+for(const event of ['wheel','pointerdown','keydown']){
+ maxTop=100;maxLeft=50;top=0;left=0;restoreScroll({top:2500,left:850});tick();tick();
+ assert.equal(frames.size,0,'smaller final dataset has no pending frame');
+ listeners.get(event)();maxTop=10000;maxLeft=4000;top=75;left=25;notify();tick();
+ assert.equal(top,75);assert.equal(left,25);assert.equal(frames.size,0);assert.equal(observers.size,0);
+ restoreCleanup();assert.equal(listeners.size,0);
+}
+maxTop=0;maxLeft=0;restoreScroll({top:2500,left:850});tick();tick();
+restoreCleanup();assert.equal(frames.size,0);assert.equal(observers.size,0);assert.equal(listeners.size,0);
+maxTop=1000;maxLeft=1000;top=0;left=0;restoreScroll({top:NaN,left:350});tick();tick();
+assert.equal(top,0);assert.equal(left,350);assert.equal(frames.size,0);assert.equal(observers.size,0);
+restoreCleanup();
 console.log('saved view persistence passed');
