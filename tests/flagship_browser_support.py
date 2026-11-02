@@ -944,6 +944,7 @@ def qualify_selected_clipboard(host: str, requirement: str) -> None:
         result.update(result="passed", displayOrderVerified=True,
                       pinnedNoDuplicates=requirement == "copy-selection.pinned-columns")
     except Exception as error:
+        observation["failureTraceback"] = traceback.format_exc()
         frame = traceback.extract_tb(error.__traceback__)[-1]
         diagnostic = f"{type(error).__name__} at {Path(frame.filename).name}:{frame.lineno}: {error}"
     finally:

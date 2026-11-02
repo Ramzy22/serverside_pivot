@@ -473,6 +473,7 @@ def qualify_hosts(host, requirement):
             finally:
                 driver.quit()
         observation['result'] = result.copy()
+        observation['loadedAssetSha256'] = dict(result.get('loadedAssetSha256', {}))
         path = directory / 'observation.json'
         path.write_text(json.dumps(observation, ensure_ascii=False, indent=2), encoding='utf-8')
         paths.append(str(path)); result['evidence_paths'] = paths
