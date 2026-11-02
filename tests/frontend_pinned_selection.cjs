@@ -17,8 +17,9 @@ function loadRuntime(name) {
     const mod = {exports: {}};
     const localRequire = request => {
         if (request === 'react') return hooks;
-        // These tests exercise callbacks for noneditable cells and inactive charts.
-        if (request === '../hooks/usePivotNormalization') return {isEditableKeyboardTarget: () => false};
+        // Run the real keyboard ownership helpers for noneditable table cells.
+        if (request === '../hooks/usePivotNormalization') return loadRuntime('../hooks/usePivotNormalization');
+        // Formatting helpers and chart builders are outside these inactive-chart fixtures.
         if (request === '../utils/helpers' || request === '../utils/sparklines' || request === '../utils/chartModelBuilders') return {};
         if (request.startsWith('./')) return loadRuntime(request.slice(2));
         return require(request);
@@ -55,7 +56,8 @@ function fixture(withGutter = false) {
 }
 
 function key(key, extras = {}) {
-    return {key, preventDefault() {}, ...extras};
+    const target = {tagName: 'TD', closest: () => null};
+    return {key, target, composedPath: () => [target], preventDefault() {}, ...extras};
 }
 
 test('mouse rectangle follows pinned display order and excludes the positional report gutter', () => {
