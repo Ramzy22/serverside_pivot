@@ -464,7 +464,7 @@ def test_part_size_entry_pastes_whole_value_through_native_keyboard():
 @pytest.mark.parametrize('late_write', [False, True])
 def test_unloaded_workflow_runs_real_clipboard_stability_monitor(monkeypatch, tmp_path, late_write):
     import time
-    from selenium.webdriver import common
+    import selenium.webdriver.common.action_chains as action_chains
     from tests import flagship_remaining_4 as journey
     from tests import flagship_browser_support as support
     from tests import test_flagship_certification as certification
@@ -491,7 +491,7 @@ def test_unloaded_workflow_runs_real_clipboard_stability_monitor(monkeypatch, tm
             assert result
             return result
     driver = Driver()
-    monkeypatch.setattr(common.action_chains, 'ActionChains', Actions)
+    monkeypatch.setattr(action_chains, 'ActionChains', Actions)
     monkeypatch.setattr(support, '_selection_cell', lambda *args: Cell())
     selections = iter([[('R00000', 'sales_sum')], [(endpoint, 'sales_sum')]])
     monkeypatch.setattr(support, '_selection_ids', lambda _: next(selections))
