@@ -92,14 +92,14 @@ def test_http_transport_binds_the_browser_fetch_receiver_for_embedded_hosts():
 
 
 def test_http_transport_resolves_runtime_payload_urls_for_cross_origin_hosts():
-    source = (
-        PACKAGE_DIR / "src" / "lib" / "runtime" / "httpTransport.ts"
-    ).read_text(encoding="utf-8")
+    import subprocess
 
-    assert "private resolvePayloadUrl(url: string): string" in source
-    assert "new URL(url, endpointUrl).toString()" in source
-    assert "return this.resolvePayloadReference(body);" in source
-    assert "this.fetchImpl(this.resolvePayloadUrl(reference.url)" in source
+    completed = subprocess.run([
+        "node", "--test", "--test-name-pattern=HTTP cross-origin payload references",
+        str(ROOT / "tests" / "frontend_runtime_transport.cjs"),
+    ], cwd=ROOT, text=True, capture_output=True, timeout=60, check=False)
+    assert completed.returncode == 0, completed.stdout + completed.stderr
+    assert "# pass 1" in completed.stdout, "Cross-origin transport regression did not execute"
 
 
 def test_runtime_export_fetches_payload_before_reporting_download_success():

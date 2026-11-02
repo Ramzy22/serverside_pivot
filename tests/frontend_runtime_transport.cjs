@@ -126,6 +126,58 @@ test('HTTP still validates successful V1 envelopes and resolves payload referenc
     await assert.rejects(new HttpPivotTransport({fetchImpl: async () => jsonResponse({}, 200)}).request(request), /invalid V1/);
 });
 
+test('HTTP cross-origin payload references resolve against the endpoint through actual delivery', async () => {
+    const {HttpPivotTransport} = loadRuntime()('runtime/httpTransport.ts');
+    const previousWindow = Object.getOwnPropertyDescriptor(globalThis, 'window');
+    Object.defineProperty(globalThis, 'window', {configurable: true, value: {
+        location: {href: 'https://embedded.example/app/frame'},
+    }});
+    try {
+        // Literal expectations distinguish root-relative, endpoint-relative,
+        // and absolute references from the embedding page's origin/path.
+        for (const [url, expected] of [
+            ['/v1/runtime/payload/blob', 'https://runtime.example/v1/runtime/payload/blob'],
+            ['payload/blob?token=retained', 'https://runtime.example/gateway/payload/blob?token=retained'],
+            ['https://cdn.example/blob', 'https://cdn.example/blob'],
+        ]) {
+            const calls = [];
+            const controller = new AbortController();
+            const origin = {...request, clientInstance: 'embedded-tab', stateEpoch: 3, windowSeq: 7};
+            const reference = {id: 'blob', url, bytes: 128, contentType: 'application/json'};
+            const body = {schemaVersion: 1, kind: 'data', status: 'data', payload: {payloadRef: reference}};
+            const payload = {data: [{id: 'cross-origin-row', amount: 12}], rowCount: 1, dataVersion: 7};
+            const transport = new HttpPivotTransport({
+                endpoint: 'https://runtime.example/gateway/runtime', headers: {Authorization: 'Bearer test'},
+                fetchImpl: async (target, options) => {
+                    calls.push({target, options});
+                    return jsonResponse(options.method === 'POST' ? body : payload, 200);
+                },
+            });
+            const response = await transport.request(origin, {signal: controller.signal});
+            assert.deepEqual(response, {...body, requestId: 'window-1', clientInstance: 'embedded-tab',
+                stateEpoch: 3, windowSeq: 7, payload: {payloadRef: {...reference, url: expected}}});
+            assert.deepEqual(await transport.fetchPayload(response.payload.payloadRef, {signal: controller.signal}), payload);
+            // Also accept the original wire reference: callers may retain it
+            // independently of the normalized response returned by request().
+            assert.deepEqual(await transport.fetchPayload(reference, {signal: controller.signal}), payload);
+            assert.deepEqual(calls.map(call => [call.options.method, call.target]), [
+                ['POST', 'https://runtime.example/gateway/runtime'], ['GET', expected], ['GET', expected],
+            ]);
+            assert.deepEqual(JSON.parse(calls[0].options.body), origin);
+            for (const {options} of calls) {
+                assert.equal(options.signal, controller.signal);
+                assert.equal(options.credentials, 'same-origin');
+                assert.equal(options.headers.Authorization, 'Bearer test');
+            }
+            controller.abort();
+            assert.ok(calls.every(call => call.options.signal.aborted), 'caller retains cancellation of both phases');
+        }
+    } finally {
+        if (previousWindow) Object.defineProperty(globalThis, 'window', previousWindow);
+        else delete globalThis.window;
+    }
+});
+
 test('HTTP body cancellation remains AbortError instead of becoming a runtime failure', async () => {
     const {HttpPivotTransport} = loadRuntime()('runtime/httpTransport.ts');
     const cancellation = new DOMException('Request superseded', 'AbortError');
