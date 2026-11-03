@@ -217,5 +217,5 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Run B2B SaaS Metrics Pivot Showcase")
     parser.add_argument("--port", type=int, default=8053, help="Port to run on (default: 8053)")
     args = parser.parse_args()
-    print(f"\n⚡ B2B SaaS Demo running at: http://127.0.0.1:{args.port}\n")
+    print(f"\nB2B SaaS Demo running at: http://127.0.0.1:{args.port}\n")
     app.run(debug=False, use_reloader=False, port=args.port)

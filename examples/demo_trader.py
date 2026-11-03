@@ -217,5 +217,5 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Run Trading Desk Pivot Showcase")
     parser.add_argument("--port", type=int, default=8051, help="Port to run on (default: 8051)")
     args = parser.parse_args()
-    print(f"\n⚡ Trading Desk Demo running at: http://127.0.0.1:{args.port}\n")
+    print(f"\nTrading Desk Demo running at: http://127.0.0.1:{args.port}\n")
     app.run(debug=False, use_reloader=False, port=args.port)

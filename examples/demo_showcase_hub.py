@@ -109,7 +109,7 @@ app.layout = html.Div(
                             children=[
                                 html.Div(
                                     children=[
-                                        html.Span("⚡ SERVERSIDE-PIVOT V1.0", style={"fontSize": "11px", "fontWeight": 800, "padding": "4px 10px", "borderRadius": "999px", "background": "rgba(56, 189, 248, 0.15)", "color": "#38BDF8", "border": "1px solid rgba(56, 189, 248, 0.3)"}),
+                                        html.Span("SERVERSIDE-PIVOT V1.0", style={"fontSize": "11px", "fontWeight": 800, "padding": "4px 10px", "borderRadius": "999px", "background": "rgba(56, 189, 248, 0.15)", "color": "#38BDF8", "border": "1px solid rgba(56, 189, 248, 0.3)"}),
                                         html.Span("ENTERPRISE SHOWCASES", style={"fontSize": "11px", "fontWeight": 800, "padding": "4px 10px", "borderRadius": "999px", "background": "rgba(168, 85, 247, 0.15)", "color": "#C084FC", "border": "1px solid rgba(168, 85, 247, 0.3)"}),
                                     ],
                                     style={"display": "flex", "gap": "8px", "marginBottom": "12px"},
@@ -311,5 +311,5 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Run Unified Multi-Industry Pivot Showcase")
     parser.add_argument("--port", type=int, default=8054, help="Port to run on (default: 8054)")
     args = parser.parse_args()
-    print(f"\n⚡ Unified Showcase Hub running at: http://127.0.0.1:{args.port}\n")
+    print(f"\nUnified Showcase Hub running at: http://127.0.0.1:{args.port}\n")
     app.run(debug=False, use_reloader=False, port=args.port)
