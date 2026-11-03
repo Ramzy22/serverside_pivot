@@ -191,8 +191,8 @@ async def test_duckdb_repeated_cancel_requests_interrupt_one_statement_once():
 
 
 @pytest.mark.asyncio
-async def test_duckdb_cleanup_acknowledgement_has_a_bounded_failure_path(monkeypatch):
-    """An unbounded cleanup wait would make a request deadline hang forever."""
+async def test_duckdb_cleanup_timeout_reports_failure_only_after_worker_exits(monkeypatch):
+    """A cleanup deadline cannot acknowledge a still-running worker."""
     backend = DuckDBBackend(":memory:")
     worker = asyncio.get_running_loop().create_future()
     monkeypatch.setattr(
@@ -202,10 +202,15 @@ async def test_duckdb_cleanup_acknowledgement_has_a_bounded_failure_path(monkeyp
         raising=False,
     )
     try:
+        cleanup = asyncio.create_task(backend._await_execution_cleanup(worker))
+        await asyncio.sleep(0.03)
+        assert not cleanup.done()
+        worker.set_result(None)
         with pytest.raises(DatabaseExecutionError, match="database_execution_failed"):
-            await asyncio.wait_for(backend._await_execution_cleanup(worker), timeout=0.05)
+            await asyncio.wait_for(cleanup, timeout=0.5)
     finally:
-        worker.cancel()
+        if not worker.done():
+            worker.cancel()
         backend.close()
 
 

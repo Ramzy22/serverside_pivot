@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import threading
+import asyncio
 import os
 from typing import Any, Literal, Optional
 
@@ -171,3 +172,26 @@ class DatabaseExecution:
                     self._cancel_succeeded = True
         finally:
             self._cancel_complete.set()
+
+
+async def await_native_cleanup(worker: Any, timeout: float) -> None:
+    """Keep the caller's reservation until the physical worker has exited."""
+    loop = asyncio.get_running_loop()
+    deadline = loop.time() + timeout
+    timed_out = False
+    while not worker.done():
+        try:
+            remaining = None if timed_out else max(0, deadline - loop.time())
+            await asyncio.wait_for(asyncio.shield(worker), timeout=remaining)
+        except asyncio.CancelledError:
+            # Repeated caller cancellations cannot interrupt physical cleanup.
+            continue
+        except asyncio.TimeoutError:
+            timed_out = True
+        except DatabaseExecutionError:
+            break
+    error = None if worker.cancelled() else worker.exception()
+    if timed_out:
+        raise DatabaseExecutionError("database cleanup acknowledgement timed out")
+    if error is not None and not isinstance(error, DatabaseExecutionError):
+        raise error

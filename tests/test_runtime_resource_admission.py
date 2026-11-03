@@ -372,3 +372,66 @@ async def test_native_cursor_checkin_finishes_before_runtime_releases_capacity(m
             assert governor.snapshot()["reserved_bytes"] == 0
         finally:
             backend.close()
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("backend_kind", ["duckdb", "ibis"])
+@pytest.mark.parametrize("native_timeout", [False, True])
+async def test_cleanup_timeout_keeps_runtime_capacity_until_native_worker_exits(monkeypatch, backend_kind, native_timeout):
+    import pivot_engine.backends.duckdb_backend as duckdb_module
+    import pivot_engine.backends.ibis_backend as ibis_module
+    from pivot_engine.backends.execution import DatabaseExecution, DatabaseExecutionError
+
+    module = duckdb_module if backend_kind == "duckdb" else ibis_module
+    monkeypatch.setattr(module, "_CANCELLATION_CLEANUP_TIMEOUT_SECONDS", 0.01)
+    governor = _governor(max_queries=1, query_bytes=64)
+    lifecycle = RuntimeRequestLifecycle(resource_governor=governor)
+    backend = DuckDBBackend(":memory:", max_connections=1) if backend_kind == "duckdb" else IbisBackend(connection_uri=":memory:")
+    selected, release = threading.Event(), threading.Event()
+    original_attach, original_invoke = DatabaseExecution.attach_lease, DatabaseExecution._invoke_native_cancel
+    executions, cancel_threads = [], []
+    def delayed(self, *args):
+        selected.set()
+        assert release.wait(5)
+        original_invoke(self, *args)
+    def attach(self, lease):
+        original_attach(self, lease)
+        executions.append(self)
+        thread = threading.Thread(target=lambda: self.request_cancel("client_cancelled"))
+        cancel_threads.append(thread)
+        thread.start()
+        assert selected.wait(5)
+    monkeypatch.setattr(DatabaseExecution, "_invoke_native_cancel", delayed)
+    monkeypatch.setattr(DatabaseExecution, "attach_lease", attach)
+    context = PivotRequestContext(table="sales")
+    task = asyncio.create_task(lifecycle.run_backend_operation(
+        context, "data", lambda: backend.execute_async({"sql": "SELECT 1"}, timeout_seconds=0.02 if native_timeout else 30),
+        resource_kind=ResourceKind.QUERY, reservation_bytes=64))
+    try:
+        for _ in range(200):
+            if selected.is_set():
+                break
+            await asyncio.sleep(0.005)
+        assert selected.is_set()
+        if not native_timeout:
+            task.cancel()
+        await asyncio.sleep(0.08)
+        task.cancel()
+        await asyncio.sleep(0.02)
+        snapshot = governor.snapshot()
+        assert not executions[0].finished
+        assert snapshot["reserved_bytes"] == 64
+        assert snapshot["active_slots"]["query"] == 1
+        with pytest.raises(ResourceExhaustedError):
+            await lifecycle.run_backend_operation(context, "data", lambda: None)
+    finally:
+        release.set()
+        for thread in cancel_threads:
+            await asyncio.to_thread(thread.join, 2)
+        try:
+            await asyncio.wait_for(task, 3)
+        except (DatabaseExecutionError, asyncio.CancelledError, PivotRequestTimeout):
+            pass
+        backend.close()
+    assert executions[0].finished
+    assert governor.snapshot()["reserved_bytes"] == 0
+    assert governor.snapshot()["active_slots"]["query"] == 0

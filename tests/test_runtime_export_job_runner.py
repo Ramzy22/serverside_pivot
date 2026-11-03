@@ -70,6 +70,8 @@ def test_success_hands_off_one_lease_and_authenticated_file(tmp_path):
 
 
 def test_native_cancel_keeps_slot_until_cursor_checkin_then_retry(tmp_path, monkeypatch):
+    import pivot_engine.backends.duckdb_backend as duckdb_module
+    monkeypatch.setattr(duckdb_module, "_CANCELLATION_CLEANUP_TIMEOUT_SECONDS", 0.01)
     backend = DuckDBBackend(":memory:", max_connections=1)
     cleaning, release = threading.Event(), threading.Event()
     original = backend.pool.checkin
@@ -89,6 +91,8 @@ def test_native_cancel_keeps_slot_until_cursor_checkin_then_retry(tmp_path, monk
         wait_for(lambda: backend.execution_metrics()["running"])
         store.request_cancel(job.job_id)  # cancellation can arrive on another worker
         assert cleaning.wait(3)
+        # Outlast the native cleanup acknowledgement deadline.
+        assert not release.wait(0.1)
         assert snapshot(store).phase == "cancelling"
         assert governor.snapshot()["active_slots"]["export"] == 1
         with pytest.raises(ResourceExhaustedError):
