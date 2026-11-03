@@ -71,13 +71,23 @@ export function useWorkspaceRuntimeStage(input) {
     workspace.setChartPanelBarLayout('grouped');
   }, [workspace.activeChartPanelModel, workspace.chartPanelBarLayout, workspace.chartPanelType]);
   workspace.openSelectionChart = useCallback((selectionMap = workspace.selectedCells) => {
-    const hasSelection = Object.keys(selectionMap || {}).length > 0;
+    const resolvedSelectionMap = selectionMap && typeof selectionMap === 'object' && !('nativeEvent' in selectionMap) && typeof selectionMap.preventDefault !== 'function'
+      ? selectionMap
+      : workspace.selectedCells;
+    const hasSelection = Object.keys(resolvedSelectionMap || {}).length > 0;
     if (!hasSelection) {
       workspace.showNotification('Select a range of value cells first.', 'warning');
       return;
     }
+    const visibleRows = Array.isArray(workspace.chartDisplayRows) && workspace.chartDisplayRows.length > 0
+      ? workspace.chartDisplayRows
+      : [
+        ...(workspace.effectiveTopRows || []),
+        ...(workspace.effectiveCenterRows || []),
+        ...(workspace.effectiveBottomRows || []),
+      ];
     const modalChartType = workspace.chartPanelType === 'icicle' || workspace.chartPanelType === 'sunburst' || workspace.chartPanelType === 'sankey' ? 'bar' : workspace.chartPanelType;
-    const buildModel = (orientationValue, hierarchyValue) => modalChartType === 'combo' ? buildComboSelectionChartModel(selectionMap, workspace.chartDisplayRows, workspace.visibleLeafColumns, {
+    const buildModel = (orientationValue, hierarchyValue) => modalChartType === 'combo' ? buildComboSelectionChartModel(resolvedSelectionMap, visibleRows, workspace.visibleLeafColumns, {
       hierarchyLevel: hierarchyValue,
       maxHierarchyLevel: workspace.rowFields.length,
       maxRows: workspace.chartPanelRowLimit,
@@ -86,7 +96,7 @@ export function useWorkspaceRuntimeStage(input) {
       colFields: workspace.colFields,
       sortMode: workspace.chartPanelSortMode,
       layers: workspace.chartPanelLayers
-    }) : buildSelectionChartModel(selectionMap, workspace.chartDisplayRows, workspace.visibleLeafColumns, {
+    }) : buildSelectionChartModel(resolvedSelectionMap, visibleRows, workspace.visibleLeafColumns, {
       orientation: orientationValue,
       hierarchyLevel: hierarchyValue,
       maxHierarchyLevel: workspace.rowFields.length,
@@ -122,9 +132,9 @@ export function useWorkspaceRuntimeStage(input) {
       defaultOrientation,
       defaultHierarchyLevel,
       selectionMap: {
-        ...(selectionMap || {})
+        ...(resolvedSelectionMap || {})
       },
-      visibleRows: workspace.chartDisplayRows,
+      visibleRows,
       visibleCols: workspace.visibleLeafColumns,
       maxHierarchyLevel: workspace.rowFields.length,
       rowLimit: workspace.chartPanelRowLimit,
@@ -133,7 +143,10 @@ export function useWorkspaceRuntimeStage(input) {
       colFields: workspace.colFields,
       sortMode: workspace.chartPanelSortMode
     });
-  }, [workspace.selectedCells, workspace.chartDisplayRows, workspace.visibleLeafColumns, workspace.chartPanelType, workspace.chartPanelLayers, workspace.chartPanelBarLayout, workspace.chartPanelAxisMode, workspace.chartPanelOrientation, workspace.chartPanelHierarchyLevel, workspace.rowFields.length, workspace.chartPanelRowLimit, workspace.chartPanelColumnLimit, workspace.rowFields, workspace.colFields, workspace.chartPanelSortMode, workspace.showNotification]);
+  }, [workspace.selectedCells, workspace.chartDisplayRows, workspace.effectiveTopRows, workspace.effectiveCenterRows, workspace.effectiveBottomRows, workspace.visibleLeafColumns, workspace.chartPanelType, workspace.chartPanelLayers, workspace.chartPanelBarLayout, workspace.chartPanelAxisMode, workspace.chartPanelOrientation, workspace.chartPanelHierarchyLevel, workspace.rowFields.length, workspace.chartPanelRowLimit, workspace.chartPanelColumnLimit, workspace.rowFields, workspace.colFields, workspace.chartPanelSortMode, workspace.showNotification]);
+  workspace.onCreateSelectionChart = useCallback(() => {
+    workspace.openSelectionChart();
+  }, [workspace.openSelectionChart]);
   workspace.virtualRows = workspace.activeRowVirtualizer.getVirtualItems();
   workspace.activeColumnSkeletonCount = Math.max(workspace.pendingColumnSkeletonCount, workspace.pendingHorizontalColumnCount);
   workspace.showColumnLoadingSkeletons = workspace.serverSide && (workspace.structuralInFlight && workspace.pendingColumnSkeletonCount > 0 || workspace.isHorizontalColumnRequestPending && workspace.pendingHorizontalColumnCount > 0);

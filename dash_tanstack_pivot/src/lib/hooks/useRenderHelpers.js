@@ -932,7 +932,6 @@ export function useRenderHelpers({
                     background: isDarkTheme(theme) ? theme.headerBg : (theme.headerSubtleBg || '#F9FAFB'),
                 } : {}),
                 ...(isMeasureSubHeader ? {
-                    fontSize: '11px',
                     fontWeight: isUnderTotalGroup ? 700 : 500,
                     textTransform: 'uppercase',
                     letterSpacing: '0.04em',

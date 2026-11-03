@@ -829,6 +829,7 @@ export const getStyles = (theme) => {
         whiteSpace: 'nowrap',
         lineHeight: 1.5,
         transition: 'background 120ms ease, border-color 120ms ease, box-shadow 120ms ease',
+        boxSizing: 'border-box',
         userSelect: 'none',
     },
     dropLine: {

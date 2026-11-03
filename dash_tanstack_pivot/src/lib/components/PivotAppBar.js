@@ -1035,7 +1035,7 @@ function PivotExportControl({ exportPivot, isExporting, buttonStyle, theme }) {
             >
                 <Icons.Export/> {isExporting ? 'Exporting...' : 'Export XLSX'}
             </button>
-            <details ref={menuRef} style={{ position: 'relative' }}>
+            <details ref={menuRef} style={{ position: 'relative', display: 'flex' }}>
                 <summary
                     aria-label="Choose export format"
                     aria-disabled={isExporting}
@@ -1046,6 +1046,7 @@ function PivotExportControl({ exportPivot, isExporting, buttonStyle, theme }) {
                         borderTopLeftRadius: 0,
                         borderBottomLeftRadius: 0,
                         borderLeft: `1px solid ${theme.border}`,
+                        boxSizing: 'border-box',
                         cursor: isExporting ? 'not-allowed' : 'pointer',
                         display: 'inline-flex',
                         height: '100%',

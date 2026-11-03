@@ -1,6 +1,6 @@
-import { j as e, z as E, Z as ge, _ as _t, $ as Tt, a0 as yr, a1 as qe, a2 as Wt, a3 as Bt, a4 as It, a5 as ze, a6 as er, a7 as rr, F as Lt, a8 as Pt, a9 as Ot, aa as Ht, ab as Pe, ac as et, ad as Ut, ae as Or, af as Vt, ag as Zt, ah as Yt, ai as Kt, aj as Gt, ak as Nt } from "./index-DMKf03Q6.js";
+import { j as e, z as E, _ as ge, $ as _t, a0 as Tt, a1 as yr, a2 as qe, a3 as Wt, a4 as Bt, a5 as It, a6 as ze, a7 as er, a8 as rr, G as Lt, a9 as Pt, aa as Ot, ab as Ht, ac as Pe, ad as et, ae as Ut, af as Or, ag as Vt, ah as Yt, ai as Zt, aj as Kt, ak as Gt, al as Nt } from "./index-CXA2NrOO.js";
 import { a as ae, R as f } from "./charts-DthW1Q8W.js";
-const Xt = ({ column: r, theme: n, styles: s, onFilter: o, currentFilter: l, options: g, optionMeta: p, onSearchOptions: v, onLoadMoreOptions: u, onOpen: F }) => {
+const Xt = ({ column: r, theme: n, styles: s, onFilter: o, currentFilter: l, options: g, optionMeta: c, onSearchOptions: v, onLoadMoreOptions: u, onOpen: F }) => {
   const [i, y] = ae.useState(!1), T = l && (l.conditions || l.value), L = () => y(!1), _ = () => {
     const A = !i;
     y(A), A && typeof F == "function" && F(r.id);
@@ -32,7 +32,7 @@ const Xt = ({ column: r, theme: n, styles: s, onFilter: o, currentFilter: l, opt
         onFilter: o,
         currentFilter: l,
         options: g,
-        optionMeta: p,
+        optionMeta: c,
         onSearchOptions: v,
         onLoadMoreOptions: u,
         theme: n,
@@ -40,8 +40,8 @@ const Xt = ({ column: r, theme: n, styles: s, onFilter: o, currentFilter: l, opt
       }
     ) })
   ] });
-}, gr = ({ title: r, children: n, items: s, renderItem: o, theme: l, styles: g, initialExpanded: p = !0, count: v, onDrop: u, sectionId: F }) => {
-  const [i, y] = ae.useState(p), [T, L] = ae.useState(p ? 200 : 0), [_, A] = ae.useState(!1), h = ae.useRef(null);
+}, gr = ({ title: r, children: n, items: s, renderItem: o, theme: l, styles: g, initialExpanded: c = !0, count: v, onDrop: u, sectionId: F }) => {
+  const [i, y] = ae.useState(c), [T, L] = ae.useState(c ? 200 : 0), [_, A] = ae.useState(!1), h = ae.useRef(null);
   ae.useRef(null), ae.useEffect(() => {
     if (i && h.current) {
       const C = h.current.scrollHeight;
@@ -118,11 +118,11 @@ const Xt = ({ column: r, theme: n, styles: s, onFilter: o, currentFilter: l, opt
       ]
     }
   );
-}, rt = ({ column: r, level: n, theme: s, styles: o, handlePinColumn: l, colSearch: g, selectedCols: p, setSelectedCols: v, onDrop: u, sectionId: F }) => {
+}, rt = ({ column: r, level: n, theme: s, styles: o, handlePinColumn: l, colSearch: g, selectedCols: c, setSelectedCols: v, onDrop: u, sectionId: F }) => {
   const [i, y] = ae.useState(n < 1), [T, L] = ae.useState(!1), [_, A] = ae.useState(!1), h = ae.useRef(null), k = r.columns && r.columns.length > 0, R = r.columnDef.header;
   let W = typeof R == "string" ? R : r.id;
   typeof W == "string" && W.startsWith("group_") && (W = r.id.replace("group_", "").split("|||").pop() || W), r.headerVal && (W = r.headerVal), W = ge(W);
-  const O = r.getIsPinned(), C = r.getIsVisible(), P = k ? yr(r) : [r.id], a = P.length > 0 && P.every((S) => p.has(S)), $ = !a && P.some((S) => p.has(S));
+  const O = r.getIsPinned(), C = r.getIsVisible(), P = k ? yr(r) : [r.id], a = P.length > 0 && P.every((S) => c.has(S)), $ = !a && P.some((S) => c.has(S));
   if (ae.useEffect(() => {
     h.current && (h.current.indeterminate = $);
   }, [$]), g && !W.toLowerCase().includes(g.toLowerCase()))
@@ -136,12 +136,12 @@ const Xt = ({ column: r, theme: n, styles: s, onFilter: o, currentFilter: l, opt
       return null;
   const D = (S) => {
     S.stopPropagation();
-    const U = new Set(p), ee = k ? yr(r) : [r.id];
+    const U = new Set(c), ee = k ? yr(r) : [r.id];
     ee.every((re) => U.has(re)) ? ee.forEach((re) => U.delete(re)) : ee.forEach((re) => U.add(re)), v(U);
   }, B = (S) => {
     if (S.stopPropagation(), k) {
-      const U = Wt(r), ee = U.some((Z) => !Z.getIsVisible());
-      U.forEach((Z) => Z.toggleVisibility(ee));
+      const U = Wt(r), ee = U.some((Y) => !Y.getIsVisible());
+      U.forEach((Y) => Y.toggleVisibility(ee));
     } else
       r.toggleVisibility();
   }, M = (S, U) => {
@@ -269,7 +269,7 @@ const Xt = ({ column: r, theme: n, styles: s, onFilter: o, currentFilter: l, opt
             styles: o,
             handlePinColumn: l,
             colSearch: g,
-            selectedCols: p,
+            selectedCols: c,
             setSelectedCols: v,
             onDrop: u,
             sectionId: F
@@ -361,11 +361,11 @@ function rn(r, n) {
       if (typeof g == "number" && Number.isFinite(g)) return "number";
       if (g instanceof Date && !Number.isNaN(g.getTime())) return "date";
       if (typeof g == "string") {
-        const p = g.trim();
-        if (!p) continue;
-        if (Number.isFinite(Number(p))) return "number";
-        const v = Date.parse(p);
-        return !Number.isNaN(v) && /[-/T:]/.test(p) ? "date" : "string";
+        const c = g.trim();
+        if (!c) continue;
+        if (Number.isFinite(Number(c))) return "number";
+        const v = Date.parse(c);
+        return !Number.isNaN(v) && /[-/T:]/.test(c) ? "date" : "string";
       }
     }
   }
@@ -402,14 +402,14 @@ function nn(r, n) {
     __isNew: !0
   };
 }
-const Vr = (r) => String(r || "").split(",").map((n) => n.trim()).filter(Boolean), Zr = (r) => String(r || "").trim().replace(/\s+/g, " ").toLowerCase(), it = (r) => r && (r.__editingField || r.field) ? r.__editingField || r.field : "";
+const Vr = (r) => String(r || "").split(",").map((n) => n.trim()).filter(Boolean), Yr = (r) => String(r || "").trim().replace(/\s+/g, " ").toLowerCase(), it = (r) => r && (r.__editingField || r.field) ? r.__editingField || r.field : "";
 function ln(r, n) {
   const s = Array.isArray(r) ? r : [], o = it(n);
   if (!o) return s;
   const l = s.findIndex((g) => g && g.field === o);
   return l >= 0 ? s.slice(0, l) : s;
 }
-function Yr(r) {
+function Zr(r) {
   const n = [];
   return (r && Array.isArray(r.rules) ? r.rules : []).forEach((s) => {
     (s && s.condition && Array.isArray(s.condition.clauses) ? s.condition.clauses : []).forEach((l) => {
@@ -429,7 +429,7 @@ const sn = (r, n) => (n && Array.isArray(n.rules) ? n.rules : []).map((s) => ({
   count: r.reduce((o, l) => It(l, s.condition) ? o + 1 : o, 0)
 })), dn = f.lazy(() => import(
   /* webpackChunkName: "pivot-report-editor" */
-  "./ReportEditor--m1x6KSQ.js"
+  "./ReportEditor-Cow7CWMR.js"
 ).then((r) => ({
   default: r.ReportEditor
 }))), cn = (r) => /* @__PURE__ */ e.jsx(f.Suspense, { fallback: /* @__PURE__ */ e.jsx("div", { role: "status", style: { padding: "16px" }, children: "Loading report builder…" }), children: /* @__PURE__ */ e.jsx(dn, { ...r }) });
@@ -440,7 +440,7 @@ function Kr({
   data: o,
   theme: l,
   showNotification: g,
-  getFieldLabel: p,
+  getFieldLabel: c,
   onDeleteField: v
 }) {
   const u = f.useMemo(
@@ -528,18 +528,18 @@ function Kr({
       g && g("Choose the source field to group.", "warning");
       return;
     }
-    const $ = it(i), D = Zr(a.name);
-    if (F.some((M) => M && M.field !== $ && Zr(M.name) === D)) {
+    const $ = it(i), D = Yr(a.name);
+    if (F.some((M) => M && M.field !== $ && Yr(M.name) === D)) {
       g && g(`A category named "${a.name}" already exists.`, "warning");
       return;
     }
     if (a.kind === "category") {
       const M = new Set(L);
-      if (Yr(a).find((b) => !M.has(b))) {
+      if (Zr(a).find((b) => !M.has(b))) {
         g && g("A category can only use base fields or categories defined before it.", "warning");
         return;
       }
-      const G = Yr(a);
+      const G = Zr(a);
       if (an(h, G)) {
         const b = sn(h, a).find((z) => z.count === 0);
         if (b) {
@@ -623,7 +623,7 @@ function Kr({
       )
     ] }),
     F.length > 0 && /* @__PURE__ */ e.jsx("div", { style: { display: "flex", flexDirection: "column", gap: "6px" }, children: F.map((a) => {
-      const $ = a.kind || "category", D = $ === "date_group" ? `${p(a.sourceField)} by ${a.granularity}` : $ === "number_group" ? `${p(a.sourceField)} every ${a.binSize}` : `${a.rules.length} rule${a.rules.length === 1 ? "" : "s"} | fallback: ${a.fallbackLabel}`;
+      const $ = a.kind || "category", D = $ === "date_group" ? `${c(a.sourceField)} by ${a.granularity}` : $ === "number_group" ? `${c(a.sourceField)} every ${a.binSize}` : `${a.rules.length} rule${a.rules.length === 1 ? "" : "s"} | fallback: ${a.fallbackLabel}`;
       return /* @__PURE__ */ e.jsxs(
         "div",
         {
@@ -775,10 +775,10 @@ function Kr({
                         onChange: (a) => y({
                           ...i,
                           sourceField: a.target.value,
-                          name: i.__isNew ? `${p(a.target.value)} ${ge(i.granularity || "month")}` : i.name
+                          name: i.__isNew ? `${c(a.target.value)} ${ge(i.granularity || "month")}` : i.name
                         }),
                         style: k,
-                        children: _.map((a) => /* @__PURE__ */ e.jsx("option", { value: a, children: p(a) }, a))
+                        children: _.map((a) => /* @__PURE__ */ e.jsx("option", { value: a, children: c(a) }, a))
                       }
                     )
                   ] }),
@@ -790,7 +790,7 @@ function Kr({
                         value: i.granularity || "month",
                         onChange: (a) => y({ ...i, granularity: a.target.value }),
                         style: k,
-                        children: Array.from(Zt).map((a) => /* @__PURE__ */ e.jsx("option", { value: a, children: ge(a) }, a))
+                        children: Array.from(Yt).map((a) => /* @__PURE__ */ e.jsx("option", { value: a, children: ge(a) }, a))
                       }
                     )
                   ] }),
@@ -825,10 +825,10 @@ function Kr({
                         onChange: (a) => y({
                           ...i,
                           sourceField: a.target.value,
-                          name: i.__isNew ? `${p(a.target.value)} Bins` : i.name
+                          name: i.__isNew ? `${c(a.target.value)} Bins` : i.name
                         }),
                         style: k,
-                        children: A.map((a) => /* @__PURE__ */ e.jsx("option", { value: a, children: p(a) }, a))
+                        children: A.map((a) => /* @__PURE__ */ e.jsx("option", { value: a, children: c(a) }, a))
                       }
                     )
                   ] }),
@@ -936,7 +936,7 @@ function Kr({
                             value: M.field || "",
                             onChange: (z) => O($, H, { field: z.target.value }),
                             style: k,
-                            children: L.map((z) => /* @__PURE__ */ e.jsx("option", { value: z, children: p(z) }, z))
+                            children: L.map((z) => /* @__PURE__ */ e.jsx("option", { value: z, children: c(z) }, z))
                           }
                         ),
                         /* @__PURE__ */ e.jsx(
@@ -1035,12 +1035,12 @@ function Gr(r, n = []) {
     !F || l.has(F) || (o.push(F), l.add(F));
   };
   st(s).forEach(g);
-  let p = s.replace(tr, " ");
+  let c = s.replace(tr, " ");
   return (Array.isArray(n) ? n : Array.from(n || [])).map((u) => String(u || "").trim()).filter((u) => u && !nt.test(u)).sort((u, F) => F.length - u.length).forEach((u) => {
     const F = new RegExp(`(^|[^A-Za-z0-9_])${lt(u)}(?=$|[^A-Za-z0-9_])`, "g");
-    p = p.replace(F, (i, y) => (g(u), `${y} `));
-  }), p.replace(tt, (u, F) => {
-    const i = p.slice(F + u.length).trimStart();
+    c = c.replace(F, (i, y) => (g(u), `${y} `));
+  }), c.replace(tt, (u, F) => {
+    const i = c.slice(F + u.length).trimStart();
     return qt.has(u) || Jt.has(u) && i.startsWith("(") || g(u), u;
   }), o;
 }
@@ -1057,18 +1057,18 @@ function pn(r, n, s = "formula") {
     (Array.isArray(n) ? n : []).map((v) => v ? v.agg === "formula" ? X(v) : v.field : null).filter(Boolean).map((v) => String(v).toLowerCase())
   );
   if (!l.has(o)) return o;
-  let g = 2, p = `${o}${g}`;
-  for (; l.has(p); )
-    g += 1, p = `${o}${g}`;
-  return p;
+  let g = 2, c = `${o}${g}`;
+  for (; l.has(c); )
+    g += 1, c = `${o}${g}`;
+  return c;
 }
 function un(r, n, s) {
   if (!r || !n || n === s) return r;
   const o = me(s), l = [];
-  let p = String(r).replace(tr, (v, u) => String(u || "").trim() === n ? o : (l.push(v), `@@${l.length - 1}@@`)).replace(new RegExp(`\\b${lt(n)}\\b`, "g"), o);
+  let c = String(r).replace(tr, (v, u) => String(u || "").trim() === n ? o : (l.push(v), `@@${l.length - 1}@@`)).replace(new RegExp(`\\b${lt(n)}\\b`, "g"), o);
   return l.forEach((v, u) => {
-    p = p.replace(`@@${u}@@`, v);
-  }), p;
+    c = c.replace(`@@${u}@@`, v);
+  }), c;
 }
 function br(r, n, s) {
   r((o) => {
@@ -1151,7 +1151,7 @@ function gn(r) {
   for (; n.has(`formula_${s}`); ) s += 1;
   return `formula_${s}`;
 }
-function yn(r, n, s = null, o = null, l = "measures", g = [], p = []) {
+function yn(r, n, s = null, o = null, l = "measures", g = [], c = []) {
   const v = String(r || "").trim(), u = he(l);
   if (!v)
     return {
@@ -1206,7 +1206,7 @@ function yn(r, n, s = null, o = null, l = "measures", g = [], p = []) {
     const P = C.field === s ? Se(o || X(C), C.field) : X(C);
     P && (T.set(P, P), T.set(P.toLowerCase(), P));
   });
-  const L = i.filter((C) => C.agg !== "formula").map((C) => C.field).filter(Boolean), _ = new Set(L), A = /* @__PURE__ */ new Set([...L, ...y.map((C) => C.field === s ? Se(o || X(C), C.field) : X(C)).filter(Boolean), ...Array.isArray(p) ? p : []]), h = Array.from(A), k = Gr(v, h), R = k.map((C) => T.get(C) || T.get(C.toLowerCase()) || C), W = R.filter((C) => !A.has(C) && !_.has(C));
+  const L = i.filter((C) => C.agg !== "formula").map((C) => C.field).filter(Boolean), _ = new Set(L), A = /* @__PURE__ */ new Set([...L, ...y.map((C) => C.field === s ? Se(o || X(C), C.field) : X(C)).filter(Boolean), ...Array.isArray(c) ? c : []]), h = Array.from(A), k = Gr(v, h), R = k.map((C) => T.get(C) || T.get(C.toLowerCase()) || C), W = R.filter((C) => !A.has(C) && !_.has(C));
   if (W.length > 0)
     return {
       tone: "warning",
@@ -1294,7 +1294,7 @@ function mn(r, n) {
   return s[n] || s.muted;
 }
 function vn({ item: r, idx: n, setValConfigs: s, theme: o, colFields: l = [], onClose: g }) {
-  const p = f.useMemo(
+  const c = f.useMemo(
     () => hr(r && r.sparkline) || { ...ve },
     // eslint-disable-next-line react-hooks/exhaustive-deps
     [r && r.sparkline]
@@ -1304,7 +1304,7 @@ function vn({ item: r, idx: n, setValConfigs: s, theme: o, colFields: l = [], on
   ), u = f.useMemo(() => {
     const h = [];
     return v.canUsePivotSeries && h.push({ value: "pivot", label: "Linked pivot" }), v.canUseFieldSeries && h.push({ value: "field", label: "Series field" }), h;
-  }, [v]), F = vr(p.source || "pivot", v) ? p.source || "pivot" : v.defaultSource, i = f.useCallback((h) => {
+  }, [v]), F = vr(c.source || "pivot", v) ? c.source || "pivot" : v.defaultSource, i = f.useCallback((h) => {
     br(s, n, (k) => {
       const R = hr(k.sparkline) || { ...ve }, W = ct({ ...R, ...h }, v);
       return W ? {
@@ -1430,15 +1430,15 @@ function vn({ item: r, idx: n, setValConfigs: s, theme: o, colFields: l = [], on
                     fontWeight: 600,
                     borderRadius: "6px",
                     cursor: "pointer",
-                    border: `1px solid ${(p.displayMode || "trend") === h ? o.primary : o.border}`,
-                    background: (p.displayMode || "trend") === h ? `${o.primary}18` : o.headerSubtleBg || o.background,
-                    color: (p.displayMode || "trend") === h ? o.primary : o.textSec
+                    border: `1px solid ${(c.displayMode || "trend") === h ? o.primary : o.border}`,
+                    background: (c.displayMode || "trend") === h ? `${o.primary}18` : o.headerSubtleBg || o.background,
+                    color: (c.displayMode || "trend") === h ? o.primary : o.textSec
                   },
                   children: k
                 },
                 h
               )) }),
-              /* @__PURE__ */ e.jsx("div", { style: { marginTop: "5px", fontSize: "10px", color: o.textSec, lineHeight: 1.4 }, children: (p.displayMode || "trend") === "value" ? "Show the selected summary metric from the series." : "Draw the series in the cell." })
+              /* @__PURE__ */ e.jsx("div", { style: { marginTop: "5px", fontSize: "10px", color: o.textSec, lineHeight: 1.4 }, children: (c.displayMode || "trend") === "value" ? "Show the selected summary metric from the series." : "Draw the series in the cell." })
             ] }),
             /* @__PURE__ */ e.jsxs("div", { style: A, children: [
               /* @__PURE__ */ e.jsx("span", { style: _, children: "Chart type" }),
@@ -1454,9 +1454,9 @@ function vn({ item: r, idx: n, setValConfigs: s, theme: o, colFields: l = [], on
                     fontWeight: 600,
                     borderRadius: "6px",
                     cursor: "pointer",
-                    border: `1px solid ${p.type === h ? o.primary : o.border}`,
-                    background: p.type === h ? `${o.primary}18` : o.headerSubtleBg || o.background,
-                    color: p.type === h ? o.primary : o.textSec
+                    border: `1px solid ${c.type === h ? o.primary : o.border}`,
+                    background: c.type === h ? `${o.primary}18` : o.headerSubtleBg || o.background,
+                    color: c.type === h ? o.primary : o.textSec
                   },
                   children: k
                 },
@@ -1468,7 +1468,7 @@ function vn({ item: r, idx: n, setValConfigs: s, theme: o, colFields: l = [], on
               /* @__PURE__ */ e.jsxs(
                 "select",
                 {
-                  value: p.metric,
+                  value: c.metric,
                   onChange: (h) => i({ metric: h.target.value }),
                   style: { ...L, cursor: "pointer" },
                   children: [
@@ -1495,15 +1495,15 @@ function vn({ item: r, idx: n, setValConfigs: s, theme: o, colFields: l = [], on
                   "input",
                   {
                     type: "checkbox",
-                    checked: !!p[h],
+                    checked: !!c[h],
                     onChange: (R) => i({ [h]: R.target.checked }),
                     style: { accentColor: o.primary, width: "13px", height: "13px", cursor: "pointer" }
                   }
                 ),
                 k
               ] }, h)) }),
-              p.hideColumns && /* @__PURE__ */ e.jsx("div", { style: { marginTop: "6px", fontSize: "10px", color: o.textSec, background: `${o.primary}10`, border: `1px solid ${o.primary}30`, borderRadius: "6px", padding: "5px 8px", lineHeight: 1.4 }, children: "Source value columns are hidden; the trend column remains." }),
-              !p.hideColumns && F === "pivot" && /* @__PURE__ */ e.jsx("div", { style: { marginTop: "6px", fontSize: "10px", color: o.textSec, background: o.headerSubtleBg || o.background, border: `1px solid ${o.border}`, borderRadius: "6px", padding: "5px 8px", lineHeight: 1.4 }, children: "Source value columns stay numeric; the trend column is added beside them." })
+              c.hideColumns && /* @__PURE__ */ e.jsx("div", { style: { marginTop: "6px", fontSize: "10px", color: o.textSec, background: `${o.primary}10`, border: `1px solid ${o.primary}30`, borderRadius: "6px", padding: "5px 8px", lineHeight: 1.4 }, children: "Source value columns are hidden; the trend column remains." }),
+              !c.hideColumns && F === "pivot" && /* @__PURE__ */ e.jsx("div", { style: { marginTop: "6px", fontSize: "10px", color: o.textSec, background: o.headerSubtleBg || o.background, border: `1px solid ${o.border}`, borderRadius: "6px", padding: "5px 8px", lineHeight: 1.4 }, children: "Source value columns stay numeric; the trend column is added beside them." })
             ] }),
             F === "pivot" && /* @__PURE__ */ e.jsxs("div", { style: A, children: [
               /* @__PURE__ */ e.jsx("span", { style: _, children: "Position" }),
@@ -1515,14 +1515,14 @@ function vn({ item: r, idx: n, setValConfigs: s, theme: o, colFields: l = [], on
                 { key: "color", label: "Line / fill color", always: !0 },
                 { key: "positiveColor", label: "Positive bar color", always: !1 },
                 { key: "negativeColor", label: "Negative bar color", always: !1 }
-              ].filter(({ always: h }) => h || p.type === "column" || p.type === "bar").map(({ key: h, label: k }) => /* @__PURE__ */ e.jsxs("div", { children: [
+              ].filter(({ always: h }) => h || c.type === "column" || c.type === "bar").map(({ key: h, label: k }) => /* @__PURE__ */ e.jsxs("div", { children: [
                 /* @__PURE__ */ e.jsx("span", { style: { fontSize: "10px", color: o.textSec, marginBottom: "3px", display: "block" }, children: k }),
                 /* @__PURE__ */ e.jsxs("div", { style: { display: "flex", gap: "5px", alignItems: "center" }, children: [
                   /* @__PURE__ */ e.jsx(
                     "input",
                     {
                       type: "color",
-                      value: p[h] || (h === "negativeColor" ? "#B91C1C" : h === "positiveColor" ? "#2F855A" : "#2563EB"),
+                      value: c[h] || (h === "negativeColor" ? "#B91C1C" : h === "positiveColor" ? "#2F855A" : "#2563EB"),
                       onChange: (R) => i({ [h]: R.target.value }),
                       style: { width: "28px", height: "26px", padding: "1px 2px", border: `1px solid ${o.border}`, borderRadius: "4px", cursor: "pointer", background: "none" }
                     }
@@ -1531,13 +1531,13 @@ function vn({ item: r, idx: n, setValConfigs: s, theme: o, colFields: l = [], on
                     "input",
                     {
                       type: "text",
-                      value: p[h] || "",
+                      value: c[h] || "",
                       onChange: (R) => i({ [h]: R.target.value }),
                       placeholder: "Auto",
                       style: { ...L, flex: 1 }
                     }
                   ),
-                  p[h] && /* @__PURE__ */ e.jsx(
+                  c[h] && /* @__PURE__ */ e.jsx(
                     "button",
                     {
                       type: "button",
@@ -1550,7 +1550,7 @@ function vn({ item: r, idx: n, setValConfigs: s, theme: o, colFields: l = [], on
                 ] })
               ] }, h)) })
             ] }),
-            p.type === "area" && /* @__PURE__ */ e.jsxs("div", { style: A, children: [
+            c.type === "area" && /* @__PURE__ */ e.jsxs("div", { style: A, children: [
               /* @__PURE__ */ e.jsx("span", { style: _, children: "Area fill opacity" }),
               /* @__PURE__ */ e.jsxs("div", { style: { display: "flex", alignItems: "center", gap: "8px" }, children: [
                 /* @__PURE__ */ e.jsx(
@@ -1560,13 +1560,13 @@ function vn({ item: r, idx: n, setValConfigs: s, theme: o, colFields: l = [], on
                     min: "0.02",
                     max: "0.45",
                     step: "0.01",
-                    value: p.areaOpacity != null ? p.areaOpacity : 0.14,
+                    value: c.areaOpacity != null ? c.areaOpacity : 0.14,
                     onChange: (h) => i({ areaOpacity: Number(h.target.value) }),
                     style: { flex: 1, accentColor: o.primary }
                   }
                 ),
                 /* @__PURE__ */ e.jsxs("span", { style: { fontSize: "11px", color: o.textSec, minWidth: "32px", textAlign: "right" }, children: [
-                  Math.round((p.areaOpacity != null ? p.areaOpacity : 0.14) * 100),
+                  Math.round((c.areaOpacity != null ? c.areaOpacity : 0.14) * 100),
                   "%"
                 ] })
               ] })
@@ -1577,7 +1577,7 @@ function vn({ item: r, idx: n, setValConfigs: s, theme: o, colFields: l = [], on
                 "input",
                 {
                   type: "text",
-                  value: p.header || "",
+                  value: c.header || "",
                   onChange: (h) => i({ header: h.target.value }),
                   placeholder: "Auto (e.g. Sales Trend)",
                   style: L
@@ -1608,7 +1608,7 @@ function vn({ item: r, idx: n, setValConfigs: s, theme: o, colFields: l = [], on
     }
   );
 }
-function pt({ item: r, idx: n, setValConfigs: s, theme: o, colFields: l = [], fixedSparklineValueKeySet: g = /* @__PURE__ */ new Set(), showNotification: p }) {
+function pt({ item: r, idx: n, setValConfigs: s, theme: o, colFields: l = [], fixedSparklineValueKeySet: g = /* @__PURE__ */ new Set(), showNotification: c }) {
   const [v, u] = f.useState(!1), F = hr(r && r.sparkline), i = xn(r), y = !!(i && g && g.has(i)), T = f.useMemo(
     () => dt(r, l),
     [l, r]
@@ -1624,18 +1624,18 @@ function pt({ item: r, idx: n, setValConfigs: s, theme: o, colFields: l = [], fi
   }, [T, n, s]), k = f.useCallback((W) => {
     if (W.stopPropagation(), L) {
       if (y) {
-        p && p("This trend is defined by the app. You can adjust its settings, but not remove it here.", "info");
+        c && c("This trend is defined by the app. You can adjust its settings, but not remove it here.", "info");
         return;
       }
-      br(s, n, (O) => ({ ...O, sparkline: !1 })), p && p("Removed trend column.", "info");
-    } else T.canUseAny && h() ? (u(!0), p && p("Trend column enabled.", "success")) : p && p("Trend needs a column field, or a Series aggregation for field data.", "warning");
-  }, [T.canUseAny, L, h, n, y, s, p]), R = f.useCallback((W) => {
+      br(s, n, (O) => ({ ...O, sparkline: !1 })), c && c("Removed trend column.", "info");
+    } else T.canUseAny && h() ? (u(!0), c && c("Trend column enabled.", "success")) : c && c("Trend needs a column field, or a Series aggregation for field data.", "warning");
+  }, [T.canUseAny, L, h, n, y, s, c]), R = f.useCallback((W) => {
     if (W.stopPropagation(), !T.canUseAny) {
-      p && p("Trend settings are not available for this value selection.", "warning");
+      c && c("Trend settings are not available for this value selection.", "warning");
       return;
     }
     h(), u(!0);
-  }, [T.canUseAny, h, p]);
+  }, [T.canUseAny, h, c]);
   return L ? /* @__PURE__ */ e.jsxs(
     "div",
     {
@@ -1721,8 +1721,8 @@ function pt({ item: r, idx: n, setValConfigs: s, theme: o, colFields: l = [], fi
     }
   ) : null;
 }
-function Jr({ item: r, idx: n, selected: s, onSelect: o, onRemove: l, setValConfigs: g, theme: p, styles: v, dropLine: u, zoneId: F, valueSelectStyle: i, colFields: y = [], fixedSparklineValueKeySet: T = /* @__PURE__ */ new Set(), showNotification: L, serverError: _ = null }) {
-  const A = s ? `${p.primary}77` : _ ? "#F59E0B88" : p.border, h = s ? p.headerBg || `${p.primary}0f` : p.background || "transparent", k = String(r.formula || "").trim() || "Empty formula";
+function Jr({ item: r, idx: n, selected: s, onSelect: o, onRemove: l, setValConfigs: g, theme: c, styles: v, dropLine: u, zoneId: F, valueSelectStyle: i, colFields: y = [], fixedSparklineValueKeySet: T = /* @__PURE__ */ new Set(), showNotification: L, serverError: _ = null }) {
+  const A = s ? `${c.primary}77` : _ ? "#F59E0B88" : c.border, h = s ? c.headerBg || `${c.primary}0f` : c.background || "transparent", k = String(r.formula || "").trim() || "Empty formula";
   return /* @__PURE__ */ e.jsxs(
     "div",
     {
@@ -1731,7 +1731,7 @@ function Jr({ item: r, idx: n, selected: s, onSelect: o, onRemove: l, setValConf
         ...v.chip,
         border: `1px solid ${A}`,
         background: h,
-        borderLeft: s ? `3px solid ${p.primary}` : "3px solid transparent",
+        borderLeft: s ? `3px solid ${c.primary}` : "3px solid transparent",
         boxShadow: "none",
         cursor: "pointer",
         flexWrap: "wrap",
@@ -1745,8 +1745,8 @@ function Jr({ item: r, idx: n, selected: s, onSelect: o, onRemove: l, setValConf
           /* @__PURE__ */ e.jsx("span", { style: {
             fontSize: "10px",
             fontWeight: 700,
-            color: p.primary,
-            background: `${p.primary}18`,
+            color: c.primary,
+            background: `${c.primary}18`,
             borderRadius: "999px",
             padding: "3px 7px",
             letterSpacing: "0.5px",
@@ -1755,14 +1755,14 @@ function Jr({ item: r, idx: n, selected: s, onSelect: o, onRemove: l, setValConf
           /* @__PURE__ */ e.jsxs("div", { style: { minWidth: 0, flex: 1 }, children: [
             /* @__PURE__ */ e.jsxs("div", { style: { display: "flex", alignItems: "center", gap: "8px", minWidth: 0 }, children: [
               /* @__PURE__ */ e.jsx("b", { style: { fontWeight: 600, display: "block", minWidth: 0, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }, children: r.label || "Formula" }),
-              /* @__PURE__ */ e.jsx("span", { style: { fontSize: "10px", color: p.textSec, fontFamily: "monospace", flexShrink: 0 }, children: X(r) }),
-              /* @__PURE__ */ e.jsx("span", { style: { fontSize: "9px", color: p.textSec, border: `1px solid ${p.border}`, borderRadius: "999px", padding: "1px 6px", flexShrink: 0 }, children: he(r.formulaScope) ? "columns" : "values" })
+              /* @__PURE__ */ e.jsx("span", { style: { fontSize: "10px", color: c.textSec, fontFamily: "monospace", flexShrink: 0 }, children: X(r) }),
+              /* @__PURE__ */ e.jsx("span", { style: { fontSize: "9px", color: c.textSec, border: `1px solid ${c.border}`, borderRadius: "999px", padding: "1px 6px", flexShrink: 0 }, children: he(r.formulaScope) ? "columns" : "values" })
             ] }),
             /* @__PURE__ */ e.jsxs("div", { style: {
               marginTop: "2px",
               fontSize: "10px",
               lineHeight: 1.35,
-              color: p.textSec,
+              color: c.textSec,
               fontFamily: "monospace",
               whiteSpace: "nowrap",
               overflow: "hidden",
@@ -1780,8 +1780,8 @@ function Jr({ item: r, idx: n, selected: s, onSelect: o, onRemove: l, setValConf
         /* @__PURE__ */ e.jsxs("div", { style: { display: "flex", gap: "4px", marginLeft: "8px", alignItems: "center", flexShrink: 0 }, children: [
           s && /* @__PURE__ */ e.jsx("span", { style: {
             fontSize: "9px",
-            color: p.primary,
-            background: `${p.primary}14`,
+            color: c.primary,
+            background: `${c.primary}14`,
             borderRadius: "999px",
             padding: "2px 6px",
             flexShrink: 0
@@ -1803,7 +1803,7 @@ function Jr({ item: r, idx: n, selected: s, onSelect: o, onRemove: l, setValConf
             item: r,
             idx: n,
             setValConfigs: g,
-            theme: p,
+            theme: c,
             valueSelectStyle: i,
             colFields: y,
             fixedSparklineValueKeySet: T,
@@ -1821,7 +1821,7 @@ const Sn = {
   expression_error: "Expression could not be evaluated (server)",
   missing_reference: "Unknown field reference (server)"
 };
-function jn({ item: r, idx: n, valConfigs: s, setValConfigs: o, theme: l, onClose: g, onRemove: p, displayedColumnOptions: v = [], availableRawFields: u = [], serverError: F = null }) {
+function jn({ item: r, idx: n, valConfigs: s, setValConfigs: o, theme: l, onClose: g, onRemove: c, displayedColumnOptions: v = [], availableRawFields: u = [], serverError: F = null }) {
   const i = f.useRef(null), [y, T] = f.useState({
     label: r.label || "",
     formula: r.formula || "",
@@ -1886,29 +1886,29 @@ function jn({ item: r, idx: n, valConfigs: s, setValConfigs: o, theme: l, onClos
       const S = [...z], U = S[n];
       if (!U) return z;
       const ee = X(U);
-      let Z = b;
+      let Y = b;
       const re = new Set(
-        S.filter((Y, te) => Y && te !== n).map((Y) => Y.agg === "formula" ? X(Y) : Y.field).filter(Boolean).map((Y) => String(Y).toLowerCase())
+        S.filter((Z, te) => Z && te !== n).map((Z) => Z.agg === "formula" ? X(Z) : Z.field).filter(Boolean).map((Z) => String(Z).toLowerCase())
       );
-      if (re.has(Z.toLowerCase())) {
-        let Y = 2, te = `${Z}${Y}`;
+      if (re.has(Y.toLowerCase())) {
+        let Z = 2, te = `${Y}${Z}`;
         for (; re.has(te.toLowerCase()); )
-          Y += 1, te = `${Z}${Y}`;
-        Z = te;
+          Z += 1, te = `${Y}${Z}`;
+        Y = te;
       }
       if (S[n] = {
         ...U,
         label: y.label,
         formula: y.formula,
-        formulaRef: Z,
+        formulaRef: Y,
         formulaScope: y.formulaScope
-      }, ee && ee !== Z)
-        for (let Y = 0; Y < S.length; Y += 1) {
-          if (Y === n) continue;
-          const te = S[Y];
-          !te || te.agg !== "formula" || !te.formula || (S[Y] = {
+      }, ee && ee !== Y)
+        for (let Z = 0; Z < S.length; Z += 1) {
+          if (Z === n) continue;
+          const te = S[Z];
+          !te || te.agg !== "formula" || !te.formula || (S[Z] = {
             ...te,
-            formula: un(te.formula, ee, Z)
+            formula: un(te.formula, ee, Y)
           });
         }
       return S;
@@ -1923,8 +1923,8 @@ function jn({ item: r, idx: n, valConfigs: s, setValConfigs: o, theme: l, onClos
   }, [r.field, r.formula, r.formulaRef, r.formulaScope, r.label, g]), B = f.useCallback((b) => {
     const z = i.current;
     if (!z) return;
-    const S = y.formula || "", U = z.selectionStart ?? S.length, ee = z.selectionEnd ?? S.length, Z = `${S.slice(0, U)}${b}${S.slice(ee)}`;
-    T((Y) => ({ ...Y, formula: Z }));
+    const S = y.formula || "", U = z.selectionStart ?? S.length, ee = z.selectionEnd ?? S.length, Y = `${S.slice(0, U)}${b}${S.slice(ee)}`;
+    T((Z) => ({ ...Z, formula: Y }));
     const re = U + b.length;
     setTimeout(() => {
       i.current && (i.current.focus(), i.current.setSelectionRange(re, re));
@@ -2213,7 +2213,7 @@ function jn({ item: r, idx: n, valConfigs: s, setValConfigs: o, theme: l, onClos
                 {
                   type: "button",
                   onClick: () => {
-                    p(n), g();
+                    c(n), g();
                   },
                   style: {
                     border: `1px solid ${l.border}`,
@@ -2282,10 +2282,10 @@ function qr({
   onSizeChange: o,
   theme: l,
   outerStyle: g = {},
-  contentStyle: p = {},
+  contentStyle: c = {},
   children: v
 }) {
-  const u = f.useRef(null), F = f.useRef(null), i = f.useMemo(() => Yt(r), [r]), y = f.useMemo(
+  const u = f.useRef(null), F = f.useRef(null), i = f.useMemo(() => Zt(r), [r]), y = f.useMemo(
     () => Kt(r, s),
     [r, s]
   ), T = f.useCallback(() => {
@@ -2348,7 +2348,7 @@ function qr({
               height: "100%",
               overflow: "auto",
               boxSizing: "border-box",
-              ...p
+              ...c
             },
             children: v
           }
@@ -2424,7 +2424,7 @@ function qr({
   );
 }
 function Qr({ measureAxis: r, setMeasureAxis: n, theme: s, valueSelectStyle: o, regularValueCount: l }) {
-  const g = f.useMemo(() => Pe(r), [r]), p = f.useCallback((u) => {
+  const g = f.useMemo(() => Pe(r), [r]), c = f.useCallback((u) => {
     typeof n == "function" && n((F) => ({
       ...Pe(F),
       ...typeof u == "function" ? u(Pe(F)) : u
@@ -2450,7 +2450,7 @@ function Qr({ measureAxis: r, setMeasureAxis: n, theme: s, valueSelectStyle: o, 
       "select",
       {
         value: g.placement,
-        onChange: (u) => p({ placement: u.target.value }),
+        onChange: (u) => c({ placement: u.target.value }),
         style: { ...o, width: "98px" },
         title: "Values placement",
         children: [
@@ -2465,7 +2465,7 @@ function Qr({ measureAxis: r, setMeasureAxis: n, theme: s, valueSelectStyle: o, 
         "input",
         {
           value: g.labelField,
-          onChange: (u) => p({ labelField: u.target.value }),
+          onChange: (u) => c({ labelField: u.target.value }),
           style: v,
           title: "Measure label field"
         }
@@ -2474,7 +2474,7 @@ function Qr({ measureAxis: r, setMeasureAxis: n, theme: s, valueSelectStyle: o, 
         "input",
         {
           value: g.valueField,
-          onChange: (u) => p({ valueField: u.target.value }),
+          onChange: (u) => c({ valueField: u.target.value }),
           style: { ...v, width: "82px" },
           title: "Measure value field"
         }
@@ -2485,7 +2485,7 @@ function Qr({ measureAxis: r, setMeasureAxis: n, theme: s, valueSelectStyle: o, 
           {
             type: "checkbox",
             checked: g.suppressEmptyMembers,
-            onChange: (u) => p({ suppressEmptyMembers: u.target.checked })
+            onChange: (u) => c({ suppressEmptyMembers: u.target.checked })
           }
         ),
         "Empty"
@@ -2496,7 +2496,7 @@ function Qr({ measureAxis: r, setMeasureAxis: n, theme: s, valueSelectStyle: o, 
           {
             type: "checkbox",
             checked: g.suppressZeroMembers,
-            onChange: (u) => p({ suppressZeroMembers: u.target.checked })
+            onChange: (u) => c({ suppressZeroMembers: u.target.checked })
           }
         ),
         "Zero"
@@ -2514,7 +2514,7 @@ const $n = f.memo(function({
   rowFields: o,
   setRowFields: l,
   colFields: g,
-  setColFields: p,
+  setColFields: c,
   valConfigs: v,
   setValConfigs: u,
   measureAxis: F = {},
@@ -2543,9 +2543,9 @@ const $n = f.memo(function({
   onKeyboardFieldDrop: S,
   handleHeaderFilter: U,
   handleFilterClick: ee,
-  requestFilterOptions: Z,
+  requestFilterOptions: Y,
   handleExpandAllRows: re,
-  handlePinColumn: Y,
+  handlePinColumn: Z,
   toggleAllColumnsPinned: te,
   activeFilterCol: kn,
   closeFilterPopover: Cn,
@@ -2579,7 +2579,7 @@ const $n = f.memo(function({
     setActiveReportId: jt,
     customDimensions: _e,
     setCustomDimensions: jr
-  } = Ot(), [Ze, kr] = f.useState({ columnId: null, anchorEl: null }), [Ce, we] = f.useState(null), [ce, ye] = f.useState(null), [Re, kt] = f.useState("report"), Ye = f.useRef(null), [Ct, Ke] = f.useState(null), xe = f.useRef(null), Cr = f.useRef(0), Ge = f.useRef(null), pe = f.useRef(null), [N, ir] = f.useState(null), [sr, wr] = f.useState(""), dr = f.useMemo(
+  } = Ot(), [Ye, kr] = f.useState({ columnId: null, anchorEl: null }), [Ce, we] = f.useState(null), [ce, ye] = f.useState(null), [Re, kt] = f.useState("report"), Ze = f.useRef(null), [Ct, Ke] = f.useState(null), xe = f.useRef(null), Cr = f.useRef(0), Ge = f.useRef(null), pe = f.useRef(null), [N, ir] = f.useState(null), [sr, wr] = f.useState(""), dr = f.useMemo(
     () => new Set(Array.isArray(or) ? or : []),
     [or]
   ), J = f.useCallback(
@@ -2608,17 +2608,17 @@ const $n = f.memo(function({
     () => q.length > 8 ? q.filter(Ne) : q,
     [q, Ne]
   ), Dr = f.useCallback((t) => {
-    l((x) => (x || []).filter((c) => c !== t)), p((x) => (x || []).filter((c) => c !== t)), u((x) => (x || []).filter((c) => !(c && c.field === t))), ar((x) => {
+    l((x) => (x || []).filter((p) => p !== t)), c((x) => (x || []).filter((p) => p !== t)), u((x) => (x || []).filter((p) => !(p && p.field === t))), ar((x) => {
       if (!x || !Object.prototype.hasOwnProperty.call(x, t)) return x;
-      const c = { ...x };
-      return delete c[t], c;
+      const p = { ...x };
+      return delete p[t], p;
     });
-  }, [p, ar, l, u]), wt = f.useCallback((t) => {
+  }, [c, ar, l, u]), wt = f.useCallback((t) => {
     const x = xe.current;
     if (!x) return;
-    const c = 60, m = 12, j = x.getBoundingClientRect(), I = t.clientY, Q = I - j.top, w = j.bottom - I;
+    const p = 60, m = 12, j = x.getBoundingClientRect(), I = t.clientY, Q = I - j.top, w = j.bottom - I;
     let V = 0;
-    if (Q < c && Q >= 0 ? V = -1 : w < c && w >= 0 && (V = 1), V === 0) {
+    if (Q < p && Q >= 0 ? V = -1 : w < p && w >= 0 && (V = 1), V === 0) {
       pe.current && (cancelAnimationFrame(pe.current), pe.current = null);
       return;
     }
@@ -2649,12 +2649,12 @@ const $n = f.memo(function({
     vals: v || []
   }), [g, ie, o, v]), Xe = f.useCallback(() => {
     N && R && R("Keyboard move cancelled.", "info"), ir(null);
-  }, [N, R]), $r = f.useCallback((t, x, c, m) => {
+  }, [N, R]), $r = f.useCallback((t, x, p, m) => {
     if (typeof S != "function") return;
-    ir({ field: t, zone: x, idx: c, label: m }), R && R(`Picked up ${m}. Focus a target field or zone and press Enter.`, "info");
+    ir({ field: t, zone: x, idx: p, label: m }), R && R(`Picked up ${m}. Focus a target field or zone and press Enter.`, "info");
   }, [S, R]), Je = f.useCallback((t, x = null) => {
     if (!N || typeof S != "function") return !1;
-    const c = Be[t] || [], m = Number(x), j = Number.isFinite(m) ? Math.max(0, Math.min(Math.floor(m), c.length)) : c.length, I = S({
+    const p = Be[t] || [], m = Number(x), j = Number.isFinite(m) ? Math.max(0, Math.min(Math.floor(m), p.length)) : p.length, I = S({
       field: N.field,
       srcZone: N.zone,
       srcIdx: N.idx,
@@ -2663,13 +2663,13 @@ const $n = f.memo(function({
       source: "layout:keyboard-drop"
     });
     return I !== !1 && (R && R(`Moved ${N.label}.`, "success"), ir(null)), I !== !1;
-  }, [N, S, R, Be]), Fr = f.useCallback((t, x, c, m, j) => {
+  }, [N, S, R, Be]), Fr = f.useCallback((t, x, p, m, j) => {
     if (!Nr(t.target)) {
       if (t.key === "Escape") {
         t.preventDefault(), t.stopPropagation(), Xe();
         return;
       }
-      t.key !== "Enter" && t.key !== " " || (t.preventDefault(), t.stopPropagation(), N ? Je(c, m) : $r(x, c, m, j));
+      t.key !== "Enter" && t.key !== " " || (t.preventDefault(), t.stopPropagation(), N ? Je(p, m) : $r(x, p, m, j));
     }
   }, [Xe, Je, N, $r]), Dt = f.useCallback((t, x) => {
     if (!Nr(t.target)) {
@@ -2681,8 +2681,8 @@ const $n = f.memo(function({
     }
   }, [Xe, Je, N, Be]), At = f.useCallback((t) => {
     t.preventDefault();
-    const x = t.clientX, c = nr || 288;
-    Ge.current = { startX: x, startWidth: c };
+    const x = t.clientX, p = nr || 288;
+    Ge.current = { startX: x, startWidth: p };
     const m = (I) => {
       const Q = I.clientX - Ge.current.startX, w = Math.max(200, Math.min(520, Ge.current.startWidth + Q));
       Sr(w);
@@ -2691,9 +2691,9 @@ const $n = f.memo(function({
     };
     window.addEventListener("mousemove", m), window.addEventListener("mouseup", j);
   }, [nr, Sr]), zr = f.useCallback((t, x) => {
-    typeof lr == "function" && lr((c) => {
-      const m = Ut(c, t, x), j = c && c[t] ? c[t] : null, I = m[t];
-      return j && j.width === I.width && j.height === I.height ? c : m;
+    typeof lr == "function" && lr((p) => {
+      const m = Ut(p, t, x), j = p && p[t] ? p[t] : null, I = m[t];
+      return j && j.width === I.width && j.height === I.height ? p : m;
     });
   }, [lr]), Er = K.dropZone && K.dropZone.padding || "8px", Mr = f.useMemo(() => {
     const t = { ...K.dropZone || {} };
@@ -2703,11 +2703,11 @@ const $n = f.memo(function({
     if (He && He[t]) return He[t];
     if (!h || !h.getColumn) return [];
     if (!h.getColumn(t)) return [];
-    const c = /* @__PURE__ */ new Set();
+    const p = /* @__PURE__ */ new Set();
     return (h.getCoreRowModel ? h.getCoreRowModel().rows : []).forEach((j) => {
       const I = j.getValue(t);
-      I != null && I !== "" && c.add(I);
-    }), Array.from(c).sort((j, I) => String(j).localeCompare(String(I), void 0, { numeric: !0, sensitivity: "base" }));
+      I != null && I !== "" && p.add(I);
+    }), Array.from(p).sort((j, I) => String(j).localeCompare(String(I), void 0, { numeric: !0, sensitivity: "base" }));
   }, [He, Me, h]), ue = f.useMemo(() => ({
     border: `1px solid ${d.border}`,
     background: d.headerSubtleBg || d.surfaceInset || d.background,
@@ -2720,15 +2720,15 @@ const $n = f.memo(function({
     minHeight: "20px",
     outline: "none"
   }), [d.background, d.border, d.headerSubtleBg, d.radiusSm, d.surfaceInset, d.text]), Tr = f.useCallback((t, x) => {
-    u((c) => {
-      const m = [...c], j = m[t];
-      if (!j) return c;
+    u((p) => {
+      const m = [...p], j = m[t];
+      if (!j) return p;
       if (Or(x) && !j.weightField) {
         const I = Array.isArray(q) && q.length > 0 ? q.find((V) => V !== j.field) || q[0] : "", Q = typeof window < "u" ? window.prompt(
           `Weight field for weighted average of ${ge(j.field)}`,
           j.weightField || I || ""
         ) : j.weightField || I || "", w = typeof Q == "string" ? Q.trim() : "";
-        return w ? Array.isArray(q) && q.length > 0 && !q.includes(w) ? (R && R(`Unknown weight field: ${w}`, "warning"), c) : (m[t] = { ...j, agg: x, weightField: w }, m) : (R && R("Weighted average requires a weight field.", "warning"), c);
+        return w ? Array.isArray(q) && q.length > 0 && !q.includes(w) ? (R && R(`Unknown weight field: ${w}`, "warning"), p) : (m[t] = { ...j, agg: x, weightField: w }, m) : (R && R("Weighted average requires a weight field.", "warning"), p);
       }
       return m[t] = { ...j, agg: x }, m;
     });
@@ -2737,37 +2737,37 @@ const $n = f.memo(function({
       R && R("Weighted average requires a weight field.", "warning");
       return;
     }
-    u((c) => {
-      const m = [...c], j = m[t];
-      return j ? (m[t] = { ...j, weightField: x }, m) : c;
+    u((p) => {
+      const m = [...p], j = m[t];
+      return j ? (m[t] = { ...j, weightField: x }, m) : p;
     });
   }, [u, R]), Ft = f.useCallback((t, x) => {
-    u((c) => {
-      const m = [...c], j = m[t];
+    u((p) => {
+      const m = [...p], j = m[t];
       return j ? (m[t] = {
         ...j,
         windowFn: x === "none" ? null : x
-      }, m) : c;
+      }, m) : p;
     });
   }, [u]), Wr = f.useCallback(() => {
-    const t = gn(v), x = v.filter((I) => I && I.agg !== "formula"), c = `Formula ${be + 1}`, m = mr(x), j = pn(c, v, t);
+    const t = gn(v), x = v.filter((I) => I && I.agg !== "formula"), p = `Formula ${be + 1}`, m = mr(x), j = pn(p, v, t);
     we(t), ye(t), u((I) => [
       ...I,
       {
         field: t,
         agg: "formula",
-        label: c,
+        label: p,
         formula: m,
         formulaRef: j,
         formulaScope: "measures"
       }
-    ]), R && (x.length === 0 ? R("Added a formula column. Add at least one regular value measure to reference in it.", "warning") : R(`Added ${c}.`, "success"));
+    ]), R && (x.length === 0 ? R("Added a formula column. Add at least one regular value measure to reference in it.", "warning") : R(`Added ${p}.`, "success"));
   }, [be, ye, u, we, R, v]), zt = (t, x) => {
-    t.stopPropagation(), xe.current && (Cr.current = xe.current.scrollTop), kr((c) => c.columnId === x ? { columnId: null, anchorEl: null } : { columnId: x, anchorEl: t.currentTarget }), Z && Z(x);
+    t.stopPropagation(), xe.current && (Cr.current = xe.current.scrollTop), kr((p) => p.columnId === x ? { columnId: null, anchorEl: null } : { columnId: x, anchorEl: t.currentTarget }), Y && Y(x);
   }, Et = () => kr({ columnId: null, anchorEl: null });
   f.useEffect(() => {
-    xe.current && Ze.columnId && (xe.current.scrollTop = Cr.current);
-  }, [Me, Ze.columnId]), f.useEffect(() => {
+    xe.current && Ye.columnId && (xe.current.scrollTop = Cr.current);
+  }, [Me, Ye.columnId]), f.useEffect(() => {
     if (se.length === 0) {
       Ce !== null && we(null), ce !== null && ye(null);
       return;
@@ -2781,14 +2781,14 @@ const $n = f.memo(function({
     we(t), ye(t);
   }, []), Ie = f.useCallback((t) => {
     const x = v[t] && v[t].agg === "formula" ? v[t].field : null;
-    if (u((c) => c.filter((m, j) => j !== t)), x && x === Ce) {
-      const c = se.find((m) => m.field !== x);
-      we(c ? c.field : null);
+    if (u((p) => p.filter((m, j) => j !== t)), x && x === Ce) {
+      const p = se.find((m) => m.field !== x);
+      we(p ? p.field : null);
     }
     x && x === ce && ye(null);
   }, [Ce, se, ce, u, v]), Fe = yt === "report", Ir = Math.max(nr || 288, Fe ? 380 : 0), Lr = (t, x) => {
     if (t <= 8) return null;
-    const c = sr.trim().length > 0;
+    const p = sr.trim().length > 0;
     return /* @__PURE__ */ e.jsxs("div", { style: {
       display: "flex",
       alignItems: "center",
@@ -2819,7 +2819,7 @@ const $n = f.memo(function({
           }
         }
       ),
-      c && /* @__PURE__ */ e.jsx(
+      p && /* @__PURE__ */ e.jsx(
         "button",
         {
           type: "button",
@@ -2838,7 +2838,7 @@ const $n = f.memo(function({
           children: /* @__PURE__ */ e.jsx(E.Close, {})
         }
       ),
-      c && /* @__PURE__ */ e.jsxs("span", { style: { fontSize: "10px", color: d.textSec, whiteSpace: "nowrap" }, children: [
+      p && /* @__PURE__ */ e.jsxs("span", { style: { fontSize: "10px", color: d.textSec, whiteSpace: "nowrap" }, children: [
         x,
         "/",
         t
@@ -2941,6 +2941,9 @@ const $n = f.memo(function({
           styles: K,
           data: je,
           valConfigs: v,
+          colFields: g,
+          setColFields: c,
+          setValConfigs: u,
           savedReports: mt,
           setSavedReports: vt,
           activeReportId: St,
@@ -2971,12 +2974,12 @@ const $n = f.memo(function({
         Lr(q.length, pr.length),
         /* @__PURE__ */ e.jsxs("div", { style: { display: "flex", flexWrap: "wrap", gap: "4px", marginBottom: "14px" }, children: [
           pr.map((t) => {
-            const x = v.some((c) => c && c.field === t && c.agg !== "formula");
+            const x = v.some((p) => p && p.field === t && p.agg !== "formula");
             return /* @__PURE__ */ e.jsxs(
               "div",
               {
                 onClick: () => {
-                  x || u((c) => [...c, { field: t, agg: "sum", label: J(t) }]);
+                  x || u((p) => [...p, { field: t, agg: "sum", label: J(t) }]);
                 },
                 style: {
                   padding: "3px 9px",
@@ -3027,7 +3030,7 @@ const $n = f.memo(function({
           )
         ] }),
         v.map((t, x) => {
-          const c = t && t.agg === "formula";
+          const p = t && t.agg === "formula";
           if (!t) return null;
           const m = Ct === x;
           return /* @__PURE__ */ e.jsx(
@@ -3035,7 +3038,7 @@ const $n = f.memo(function({
             {
               draggable: !0,
               onDragStart: () => {
-                Ye.current = x;
+                Ze.current = x;
               },
               onDragOver: (j) => {
                 j.preventDefault(), Ke(x);
@@ -3043,17 +3046,17 @@ const $n = f.memo(function({
               onDragLeave: () => Ke(null),
               onDrop: (j) => {
                 j.preventDefault();
-                const I = Ye.current;
-                Ke(null), Ye.current = null, !(I === null || I === x) && u((Q) => {
+                const I = Ze.current;
+                Ke(null), Ze.current = null, !(I === null || I === x) && u((Q) => {
                   const w = [...Q], [V] = w.splice(I, 1);
                   return w.splice(x, 0, V), w;
                 });
               },
               onDragEnd: () => {
-                Ye.current = null, Ke(null);
+                Ze.current = null, Ke(null);
               },
               style: { marginBottom: "6px", borderTop: m ? `2px solid ${d.primary}` : "2px solid transparent", cursor: "grab" },
-              children: c ? /* @__PURE__ */ e.jsx(Jr, { item: t, idx: x, selected: t.field === ce, onSelect: Br, onRemove: Ie, setValConfigs: u, theme: d, styles: K, dropLine: null, zoneId: "vals", valueSelectStyle: ue, colFields: g, fixedSparklineValueKeySet: dr, showNotification: R, serverError: ke && ke[t.field] || null }) : /* @__PURE__ */ e.jsxs("div", { style: { ...K.chip, flexWrap: "wrap", alignItems: "flex-start" }, children: [
+              children: p ? /* @__PURE__ */ e.jsx(Jr, { item: t, idx: x, selected: t.field === ce, onSelect: Br, onRemove: Ie, setValConfigs: u, theme: d, styles: K, dropLine: null, zoneId: "vals", valueSelectStyle: ue, colFields: g, fixedSparklineValueKeySet: dr, showNotification: R, serverError: ke && ke[t.field] || null }) : /* @__PURE__ */ e.jsxs("div", { style: { ...K.chip, flexWrap: "wrap", alignItems: "flex-start" }, children: [
                 /* @__PURE__ */ e.jsxs("div", { style: { display: "flex", alignItems: "center", gap: "8px", minWidth: 0, flex: 1 }, children: [
                   /* @__PURE__ */ e.jsx(E.DragIndicator, { style: { flexShrink: 0, opacity: 0.4 } }),
                   /* @__PURE__ */ e.jsx("b", { style: { fontWeight: 500, minWidth: 0, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }, children: J(t.field) })
@@ -3089,14 +3092,14 @@ const $n = f.memo(function({
           )
         ] }),
         (() => {
-          const c = A.map((m) => {
+          const p = A.map((m) => {
             const j = h.getColumn(m);
             return j || { id: m, header: J(m), columnDef: { header: J(m) } };
           }).filter((m) => {
             const j = m.columnDef && typeof m.columnDef.header == "string" ? m.columnDef.header : typeof m.header == "string" ? m.header : m.id;
             return String(j).toLowerCase().includes(C.toLowerCase()) || m.id.toLowerCase().includes(C.toLowerCase());
           });
-          return /* @__PURE__ */ e.jsx("div", { style: { display: "flex", flexDirection: "column" }, children: c.map((m) => /* @__PURE__ */ e.jsx(
+          return /* @__PURE__ */ e.jsx("div", { style: { display: "flex", flexDirection: "column" }, children: p.map((m) => /* @__PURE__ */ e.jsx(
             Xt,
             {
               column: m,
@@ -3106,9 +3109,9 @@ const $n = f.memo(function({
               currentFilter: ie[m.id],
               options: _r(m.id),
               optionMeta: Oe && Oe[m.id],
-              onSearchOptions: Ve ? (j) => Z && Z(m.id, { search: j, offset: 0 }) : void 0,
-              onLoadMoreOptions: Ve ? (j, I) => Z && Z(m.id, { search: j, offset: I }) : void 0,
-              onOpen: Z
+              onSearchOptions: Ve ? (j) => Y && Y(m.id, { search: j, offset: 0 }) : void 0,
+              onLoadMoreOptions: Ve ? (j, I) => Y && Y(m.id, { search: j, offset: I }) : void 0,
+              onOpen: Y
             },
             m.id
           )) });
@@ -3151,7 +3154,7 @@ const $n = f.memo(function({
               },
               children: [
                 cr.map((t) => {
-                  const x = Te && t === fe, c = x ? "Measure Names" : J(t), m = x ? "measureAxis" : "pool";
+                  const x = Te && t === fe, p = x ? "Measure Names" : J(t), m = x ? "measureAxis" : "pool";
                   return /* @__PURE__ */ e.jsxs(
                     "div",
                     {
@@ -3161,10 +3164,10 @@ const $n = f.memo(function({
                       tabIndex: 0,
                       "aria-describedby": "pivot-sidebar-keyboard-dnd-help",
                       "aria-grabbed": N && N.zone === m && N.field === t ? "true" : "false",
-                      "aria-label": `Move ${c}`,
+                      "aria-label": `Move ${p}`,
                       onDragStart: (j) => H(j, t, m),
                       onDragEnd: z,
-                      onKeyDown: (j) => Fr(j, t, m, -1, c),
+                      onKeyDown: (j) => Fr(j, t, m, -1, p),
                       title: x ? "Drag to Rows or Columns to show measure names" : `Move ${J(t)}`,
                       style: {
                         padding: "4px 8px",
@@ -3186,7 +3189,7 @@ const $n = f.memo(function({
                       },
                       children: [
                         x && /* @__PURE__ */ e.jsx(E.Sigma, {}),
-                        c
+                        p
                       ]
                     },
                     x ? `__measure_axis__${t}` : t
@@ -3283,14 +3286,14 @@ const $n = f.memo(function({
                     tabIndex: 0,
                     "aria-label": `${t.label} drop zone`,
                     "aria-describedby": "pivot-sidebar-keyboard-dnd-help",
-                    onKeyDown: (c) => Dt(c, t.id),
-                    onDragOver: (c) => {
-                      c.target === c.currentTarget ? G(c, t.id, x.length) : (c.preventDefault(), c.dataTransfer && (c.dataTransfer.dropEffect = "move"));
+                    onKeyDown: (p) => Dt(p, t.id),
+                    onDragOver: (p) => {
+                      p.target === p.currentTarget ? G(p, t.id, x.length) : (p.preventDefault(), p.dataTransfer && (p.dataTransfer.dropEffect = "move"));
                     },
-                    onDrop: (c) => b(c, t.id),
+                    onDrop: (p) => b(p, t.id),
                     children: [
-                      x.map((c, m) => {
-                        const j = t.id === "vals" ? c.field : c, I = t.id === "vals" ? c.agg === "formula" ? c.label || "Formula" : J(c.field) : J(c), Q = (t.id === "rows" || t.id === "cols") && j === fe && Rr.placement !== "none";
+                      x.map((p, m) => {
+                        const j = t.id === "vals" ? p.field : p, I = t.id === "vals" ? p.agg === "formula" ? p.label || "Formula" : J(p.field) : J(p), Q = (t.id === "rows" || t.id === "cols") && j === fe && Rr.placement !== "none";
                         return /* @__PURE__ */ e.jsxs(
                           "div",
                           {
@@ -3301,17 +3304,17 @@ const $n = f.memo(function({
                             "aria-describedby": "pivot-sidebar-keyboard-dnd-help",
                             "aria-grabbed": N && N.zone === t.id && N.idx === m ? "true" : "false",
                             "aria-label": `Move ${I}`,
-                            onKeyDown: (w) => Fr(w, c, t.id, m, I),
-                            onDragStart: (w) => H(w, c, t.id, m),
+                            onKeyDown: (w) => Fr(w, p, t.id, m, I),
+                            onDragStart: (w) => H(w, p, t.id, m),
                             onDragOver: (w) => G(w, t.id, m),
                             onDragEnd: z,
                             children: [
-                              t.id === "vals" && c.agg === "formula" ? /* @__PURE__ */ e.jsx(
+                              t.id === "vals" && p.agg === "formula" ? /* @__PURE__ */ e.jsx(
                                 Jr,
                                 {
-                                  item: c,
+                                  item: p,
                                   idx: m,
-                                  selected: c.field === Ce,
+                                  selected: p.field === Ce,
                                   onSelect: Br,
                                   onRemove: Ie,
                                   setValConfigs: u,
@@ -3323,7 +3326,7 @@ const $n = f.memo(function({
                                   colFields: g,
                                   fixedSparklineValueKeySet: dr,
                                   showNotification: R,
-                                  serverError: ke && ke[c.field] || null
+                                  serverError: ke && ke[p.field] || null
                                 }
                               ) : /* @__PURE__ */ e.jsxs("div", { style: {
                                 ...K.chip,
@@ -3335,7 +3338,7 @@ const $n = f.memo(function({
                                   /* @__PURE__ */ e.jsx("b", { style: { fontWeight: 500, display: "block", minWidth: 0, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }, children: I })
                                 ] }),
                                 t.id === "vals" && /* @__PURE__ */ e.jsxs("div", { style: { display: "flex", alignItems: "center", gap: "4px", marginLeft: "8px", flexWrap: "nowrap", flexShrink: 0 }, children: [
-                                  /* @__PURE__ */ e.jsxs("select", { value: c.agg, onChange: (w) => Tr(m, w.target.value), style: { ...ue, width: "74px" }, title: "Aggregation", children: [
+                                  /* @__PURE__ */ e.jsxs("select", { value: p.agg, onChange: (w) => Tr(m, w.target.value), style: { ...ue, width: "74px" }, title: "Aggregation", children: [
                                     /* @__PURE__ */ e.jsx("option", { value: "sum", children: "Sum" }),
                                     /* @__PURE__ */ e.jsx("option", { value: "avg", children: "Avg" }),
                                     /* @__PURE__ */ e.jsx("option", { value: "count", children: "Cnt" }),
@@ -3344,11 +3347,11 @@ const $n = f.memo(function({
                                     /* @__PURE__ */ e.jsx("option", { value: "weighted_avg", children: "WAvg" }),
                                     /* @__PURE__ */ e.jsx("option", { value: "array_agg", children: "Series" })
                                   ] }),
-                                  Or(c.agg) && /* @__PURE__ */ e.jsxs("select", { value: c.weightField || "", onChange: (w) => $t(m, w.target.value), style: { ...ue, width: "92px" }, title: "Weight field", children: [
+                                  Or(p.agg) && /* @__PURE__ */ e.jsxs("select", { value: p.weightField || "", onChange: (w) => $t(m, w.target.value), style: { ...ue, width: "92px" }, title: "Weight field", children: [
                                     /* @__PURE__ */ e.jsx("option", { value: "", disabled: !0, children: "Weight" }),
                                     q.map((w) => /* @__PURE__ */ e.jsx("option", { value: w, children: J(w) }, w))
                                   ] }),
-                                  /* @__PURE__ */ e.jsxs("select", { value: c.windowFn || "none", onChange: (w) => Ft(m, w.target.value), style: { ...ue, width: "56px" }, children: [
+                                  /* @__PURE__ */ e.jsxs("select", { value: p.windowFn || "none", onChange: (w) => Ft(m, w.target.value), style: { ...ue, width: "56px" }, children: [
                                     /* @__PURE__ */ e.jsx("option", { value: "none", children: "Norm" }),
                                     /* @__PURE__ */ e.jsx("option", { value: "percent_of_row", children: "%Row" }),
                                     /* @__PURE__ */ e.jsx("option", { value: "percent_of_col", children: "%Col" }),
@@ -3369,28 +3372,28 @@ const $n = f.memo(function({
                                       const w = { ...ie };
                                       delete w[j], ar(w);
                                     }
-                                    t.id === "rows" && l((w) => w.filter((V) => V !== j)), t.id === "cols" && p((w) => w.filter((V) => V !== j)), t.id === "vals" && Ie(m);
+                                    t.id === "rows" && l((w) => w.filter((V) => V !== j)), t.id === "cols" && c((w) => w.filter((V) => V !== j)), t.id === "vals" && Ie(m);
                                   }, style: { cursor: "pointer", color: "#9CA3AF", display: "flex", alignItems: "center" }, children: /* @__PURE__ */ e.jsx(E.Close, {}) })
                                 ] }),
-                                t.id === "filter" && Ze.columnId === j && /* @__PURE__ */ e.jsx(
+                                t.id === "filter" && Ye.columnId === j && /* @__PURE__ */ e.jsx(
                                   Vt,
                                   {
                                     column: { header: I, id: j },
-                                    anchorEl: Ze.anchorEl,
+                                    anchorEl: Ye.anchorEl,
                                     onClose: Et,
                                     onFilter: (w) => U(j, w),
                                     currentFilter: ie[j],
                                     options: _r(j),
                                     optionMeta: Oe && Oe[j],
-                                    onSearchOptions: Ve ? (w) => Z && Z(j, { search: w, offset: 0 }) : void 0,
-                                    onLoadMoreOptions: Ve ? (w, V) => Z && Z(j, { search: w, offset: V }) : void 0,
+                                    onSearchOptions: Ve ? (w) => Y && Y(j, { search: w, offset: 0 }) : void 0,
+                                    onLoadMoreOptions: Ve ? (w, V) => Y && Y(j, { search: w, offset: V }) : void 0,
                                     theme: d
                                   }
                                 ),
                                 t.id === "vals" && /* @__PURE__ */ e.jsx(
                                   pt,
                                   {
-                                    item: c,
+                                    item: p,
                                     idx: m,
                                     setValConfigs: u,
                                     theme: d,
@@ -3409,7 +3412,7 @@ const $n = f.memo(function({
                         );
                       }),
                       x.length === 0 && /* @__PURE__ */ e.jsx("div", { style: { opacity: 0.5, fontSize: "11px", padding: "8px", textAlign: "center", pointerEvents: "none" }, children: "Drag fields here" }),
-                      /* @__PURE__ */ e.jsx("div", { style: { height: 20 }, onDragOver: (c) => G(c, t.id, x.length), onDrop: (c) => b(c, t.id) })
+                      /* @__PURE__ */ e.jsx("div", { style: { height: 20 }, onDragOver: (p) => G(p, t.id, x.length), onDrop: (p) => b(p, t.id) })
                     ]
                   }
                 )
@@ -3617,7 +3620,7 @@ const $n = f.memo(function({
               "button",
               {
                 onClick: () => {
-                  Array.from(D).forEach((t) => Y(t, "left")), B(/* @__PURE__ */ new Set());
+                  Array.from(D).forEach((t) => Z(t, "left")), B(/* @__PURE__ */ new Set());
                 },
                 style: {
                   ...K.btn,
@@ -3642,7 +3645,7 @@ const $n = f.memo(function({
               "button",
               {
                 onClick: () => {
-                  Array.from(D).forEach((t) => Y(t, !1)), B(/* @__PURE__ */ new Set());
+                  Array.from(D).forEach((t) => Z(t, !1)), B(/* @__PURE__ */ new Set());
                 },
                 style: {
                   ...K.btn,
@@ -3667,7 +3670,7 @@ const $n = f.memo(function({
               "button",
               {
                 onClick: () => {
-                  Array.from(D).forEach((t) => Y(t, "right")), B(/* @__PURE__ */ new Set());
+                  Array.from(D).forEach((t) => Z(t, "right")), B(/* @__PURE__ */ new Set());
                 },
                 style: {
                   ...K.btn,
@@ -3707,14 +3710,14 @@ const $n = f.memo(function({
               typeof le == "number" ? V = "number" : le instanceof Date ? V = "date" : typeof le == "string" && (!isNaN(Number(le)) && le.trim() !== "" ? V = "number" : !isNaN(Date.parse(le)) && le.includes("-") && (V = "date"));
             }
             return V === a;
-          }), c = x.filter((w) => qe(w, "left")), m = x.filter((w) => qe(w, "right")), j = x.filter((w) => qe(w, "unpinned")), I = (w, V) => w.map((de) => /* @__PURE__ */ e.jsx(
+          }), p = x.filter((w) => qe(w, "left")), m = x.filter((w) => qe(w, "right")), j = x.filter((w) => qe(w, "unpinned")), I = (w, V) => w.map((de) => /* @__PURE__ */ e.jsx(
             rt,
             {
               column: de,
               level: 0,
               theme: d,
               styles: K,
-              handlePinColumn: Y,
+              handlePinColumn: Z,
               colSearch: C,
               selectedCols: D,
               setSelectedCols: B,
@@ -3738,19 +3741,19 @@ const $n = f.memo(function({
                 ne === -1 && (ne = void 0);
               }
             }
-            V === "left" ? Y(w, "left", ne) : V === "right" ? Y(w, "right", ne) : Y(w, !1);
+            V === "left" ? Z(w, "left", ne) : V === "right" ? Z(w, "right", ne) : Z(w, !1);
           };
           return /* @__PURE__ */ e.jsxs(e.Fragment, { children: [
-            c.length > 0 && /* @__PURE__ */ e.jsx(
+            p.length > 0 && /* @__PURE__ */ e.jsx(
               gr,
               {
                 title: "Pinned Left",
-                count: c.length,
+                count: p.length,
                 theme: d,
                 styles: K,
                 sectionId: "left",
                 onDrop: Q,
-                children: I(c, "left")
+                children: I(p, "left")
               }
             ),
             m.length > 0 && /* @__PURE__ */ e.jsx(

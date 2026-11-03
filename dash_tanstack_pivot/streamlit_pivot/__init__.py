@@ -71,6 +71,38 @@ def _get_component() -> Any:
                 "The Streamlit host requires Streamlit >=1.51. "
                 "Install serverside-pivot[streamlit]."
             )
+        try:
+            from streamlit.components.v2.get_bidi_component_manager import (
+                get_bidi_component_manager,
+            )
+            from streamlit.components.v2.manifest_scanner import (
+                ComponentConfig,
+                ComponentManifest,
+            )
+
+            manager = get_bidi_component_manager()
+            package_root = Path(__file__).resolve().parent
+            expected_asset_root = (package_root / "frontend" / "build").resolve()
+            current_asset_root = manager.get_component_asset_root(_COMPONENT_NAME)
+            if (
+                current_asset_root is None
+                or current_asset_root.resolve() != expected_asset_root
+            ):
+                manager.register_from_manifest(
+                    ComponentManifest(
+                        name="serverside-pivot",
+                        version="0.0.88",
+                        components=[
+                            ComponentConfig(
+                                name="pivot_workspace",
+                                asset_dir="frontend/build",
+                            )
+                        ],
+                    ),
+                    package_root,
+                )
+        except Exception:  # pragma: no cover - mocked streamlit in unit tests
+            pass
         _component = component_api.component(
             _COMPONENT_NAME,
             js=_component_script(),

@@ -38,7 +38,7 @@ Keyword arguments:
     Deprecated compatibility input. Editing is unsupported and this
     value is ignored.
 
-- chartCanvasPanes (list of dicts; default PropTypes.arrayOf(PropTypes.shape({    id: PropTypes.string,    name: PropTypes.string,    chartTitle: PropTypes.string,    source: PropTypes.oneOf(['pivot', 'selection']),    chartType: PropTypes.string,    barLayout: PropTypes.oneOf(['grouped', 'stacked']),    axisMode: PropTypes.oneOf(['vertical', 'horizontal']),    orientation: PropTypes.oneOf(['rows', 'columns']),    hierarchyLevel: PropTypes.oneOfType([PropTypes.number, PropTypes.oneOf(['all'])]),    rowLimit: PropTypes.number,    columnLimit: PropTypes.number,    width: PropTypes.number,    chartHeight: PropTypes.number,    sortMode: PropTypes.string,    interactionMode: PropTypes.string,    serverScope: PropTypes.oneOf(['viewport', 'root']),    size: PropTypes.number,    floating: PropTypes.bool,    settingsPanelWidth: PropTypes.number,    chartSettings: PropTypes.shape({      chartSubtitle: PropTypes.string,      yAxisTitle: PropTypes.string,      yAxisMin: PropTypes.number,      yAxisMax: PropTypes.number,      yAxisMinRight: PropTypes.number,      yAxisMaxRight: PropTypes.number,      tickCount: PropTypes.number,      labelAngle: PropTypes.number,      colorPalette: PropTypes.string,      valueFormat: PropTypes.string,      showDataLabels: PropTypes.bool,      decimalPlaces: PropTypes.number,      labelPosition: PropTypes.string,      legendPosition: PropTypes.string,      markerShape: PropTypes.string,      markerSize: PropTypes.number,      showGradient: PropTypes.bool,      gradientDirection: PropTypes.string,      gradientOpacity: PropTypes.number,      showAnimations: PropTypes.bool,      showCalloutLabels: PropTypes.bool,      showTrendline: PropTypes.bool,      trendlineMode: PropTypes.string,      trendlinePeriod: PropTypes.number,      trendlineColor: PropTypes.string,      trendlineWidth: PropTypes.number,      seriesSort: PropTypes.string,      seriesColors: PropTypes.object,      customPaletteColors: PropTypes.arrayOf(PropTypes.string),      lineDashStyles: PropTypes.object,      referenceLines: PropTypes.arrayOf(PropTypes.object)    })  })))
+- chartCanvasPanes (list of dicts; default PropTypes.arrayOf(PropTypes.shape({    id: PropTypes.string,    name: PropTypes.string,    chartTitle: PropTypes.string,    source: PropTypes.oneOf(['pivot', 'selection']),    chartType: PropTypes.string,    barLayout: PropTypes.oneOf(['grouped', 'stacked']),    axisMode: PropTypes.oneOf(['vertical', 'horizontal']),    orientation: PropTypes.oneOf(['rows', 'columns']),    hierarchyLevel: PropTypes.oneOfType([PropTypes.number, PropTypes.oneOf(['all'])]),    rowLimit: PropTypes.number,    columnLimit: PropTypes.number,    width: PropTypes.number,    chartHeight: PropTypes.number,    sortMode: PropTypes.string,    interactionMode: PropTypes.string,    serverScope: PropTypes.oneOf(['viewport', 'root']),    size: PropTypes.number,    floating: PropTypes.bool,    settingsPanelWidth: PropTypes.number,    chartSettings: PropTypes.shape({      chartSubtitle: PropTypes.string,      yAxisTitle: PropTypes.string,      yAxisMin: PropTypes.number,      yAxisMax: PropTypes.number,      yAxisMinRight: PropTypes.number,      yAxisMaxRight: PropTypes.number,      tickCount: PropTypes.number,      labelAngle: PropTypes.number,      colorPalette: PropTypes.string,      valueFormat: PropTypes.string,      showDataLabels: PropTypes.bool,      decimalPlaces: PropTypes.number,      labelPosition: PropTypes.string,      legendPosition: PropTypes.string,      markerShape: PropTypes.string,      markerSize: PropTypes.number,      showGradient: PropTypes.bool,      gradientDirection: PropTypes.string,      gradientOpacity: PropTypes.number,      showAnimations: PropTypes.bool,      showCalloutLabels: PropTypes.bool,      showTrendline: PropTypes.bool,      trendlineMode: PropTypes.string,      trendlinePeriod: PropTypes.number,      trendlineColor: PropTypes.string,      trendlineWidth: PropTypes.number,      seriesSort: PropTypes.string,      seriesColors: PropTypes.object,      customPaletteColors: PropTypes.arrayOf(PropTypes.string),      lineDashStyles: PropTypes.object,      referenceLines: PropTypes.arrayOf(PropTypes.object)    })  })))
 
     `chartCanvasPanes` is a list of dicts with keys:
 
@@ -224,7 +224,7 @@ Keyword arguments:
 
 - chartEvent (dict; default PropTypes.object)
 
-- chartServerWindow (dict; default PropTypes.shape({    enabled: PropTypes.bool,    rows: PropTypes.number,    columns: PropTypes.number,    scope: PropTypes.oneOf(['viewport', 'root'])  }))
+- chartServerWindow (dict; default PropTypes.shape({    enabled: PropTypes.bool,    rows: PropTypes.number,    columns: PropTypes.number,    scope: PropTypes.oneOf(['viewport', 'root'])  }))
 
 - colFields (list of dicts; default PropTypes.array)
 
@@ -235,7 +235,7 @@ Keyword arguments:
 
 - columnPinned (dict; default PropTypes.object)
 
-- columnPinning (dict; default PropTypes.shape({    left: PropTypes.arrayOf(PropTypes.string),    right: PropTypes.arrayOf(PropTypes.string)  }))
+- columnPinning (dict; default PropTypes.shape({    left: PropTypes.arrayOf(PropTypes.string),    right: PropTypes.arrayOf(PropTypes.string)  }))
 
 - columnSizing (dict; default PropTypes.object)
 
@@ -305,7 +305,7 @@ Keyword arguments:
 
 - localeText (dict; default PropTypes.object)
 
-- measureAxis (dict; default PropTypes.shape({    placement: PropTypes.oneOf(['none', 'rows', 'columns']),    labelField: PropTypes.string,    valueField: PropTypes.string,    members: PropTypes.arrayOf(PropTypes.object),    suppressEmptyMembers: PropTypes.bool,    suppressZeroMembers: PropTypes.bool,    totalsPolicy: PropTypes.string  }))
+- measureAxis (dict; default PropTypes.shape({    placement: PropTypes.oneOf(['none', 'rows', 'columns']),    labelField: PropTypes.string,    valueField: PropTypes.string,    members: PropTypes.arrayOf(PropTypes.object),    suppressEmptyMembers: PropTypes.bool,    suppressZeroMembers: PropTypes.bool,    totalsPolicy: PropTypes.string  }))
 
 - mergedHeaderSeparator (string; default PropTypes.string)
 
@@ -313,7 +313,7 @@ Keyword arguments:
 
 - paginationConfig (dict; default PropTypes.object)
 
-- performanceConfig (dict; default PropTypes.shape({    cacheBlockSize: PropTypes.number,    maxBlocksInCache: PropTypes.number,    blockLoadDebounceMs: PropTypes.number,    rowOverscan: PropTypes.number,    columnOverscan: PropTypes.number,    prefetchColumns: PropTypes.number  }))
+- performanceConfig (dict; default PropTypes.shape({    cacheBlockSize: PropTypes.number,    maxBlocksInCache: PropTypes.number,    blockLoadDebounceMs: PropTypes.number,    rowOverscan: PropTypes.number,    columnOverscan: PropTypes.number,    prefetchColumns: PropTypes.number  }))
 
 - persistence (dict; default PropTypes.oneOfType([PropTypes.bool, PropTypes.string, PropTypes.number]))
 
@@ -329,9 +329,9 @@ Keyword arguments:
 
 - persistence_type (string; default PropTypes.oneOf(['local', 'session', 'memory']))
 
-- pinningOptions (dict; default PropTypes.shape({    maxPinnedLeft: PropTypes.number,    maxPinnedRight: PropTypes.number,    suppressMovable: PropTypes.bool,    lockPinned: PropTypes.bool  }))
+- pinningOptions (dict; default PropTypes.shape({    maxPinnedLeft: PropTypes.number,    maxPinnedRight: PropTypes.number,    suppressMovable: PropTypes.bool,    lockPinned: PropTypes.bool  }))
 
-- pinningPresets (list of dicts; default PropTypes.arrayOf(PropTypes.shape({    name: PropTypes.string,    config: PropTypes.object  })))
+- pinningPresets (list of dicts; default PropTypes.arrayOf(PropTypes.shape({    name: PropTypes.string,    config: PropTypes.object  })))
 
 - pivotTitle (string; default PropTypes.string)
 
@@ -348,7 +348,7 @@ Keyword arguments:
 
 - rowPinned (dict; default PropTypes.object)
 
-- rowPinning (dict; default PropTypes.shape({    top: PropTypes.arrayOf(PropTypes.string),    bottom: PropTypes.arrayOf(PropTypes.string)  }))
+- rowPinning (dict; default PropTypes.shape({    top: PropTypes.arrayOf(PropTypes.string),    bottom: PropTypes.arrayOf(PropTypes.string)  }))
 
 - rowSelection (dict; default PropTypes.oneOfType([PropTypes.oneOf(['single', 'multiple']), PropTypes.bool]))
 
@@ -438,7 +438,7 @@ Keyword arguments:
     - valueOf (optional):
         Returns the primitive value of the specified object.
 
-- sortOptions (dict; default PropTypes.shape({    naturalSort: PropTypes.bool,    caseSensitive: PropTypes.bool,    columnOptions: PropTypes.object  }))
+- sortOptions (dict; default PropTypes.shape({    naturalSort: PropTypes.bool,    caseSensitive: PropTypes.bool,    columnOptions: PropTypes.object  }))
 
 - sorting (list of dicts; default PropTypes.array)
 
@@ -455,7 +455,7 @@ Keyword arguments:
 
 - uiConfig (dict; default PropTypes.object)
 
-- valConfigs (list of dicts; default PropTypes.arrayOf(PropTypes.shape({    field: PropTypes.string,    agg: PropTypes.oneOf(['sum', 'avg', 'count', 'min', 'max', 'weighted_avg', 'wavg', 'weighted_mean', 'array_agg', 'formula']),    weightField: PropTypes.string,    windowFn: PropTypes.oneOf(['percent_of_row', 'percent_of_col', 'percent_of_grand_total']),    format: PropTypes.string,    percentile: PropTypes.number,    separator: PropTypes.string,    formula: PropTypes.string,    label: PropTypes.string,    formulaRef: PropTypes.string,    formulaScope: PropTypes.oneOf(['measures', 'columns']),    headerStyle: PropTypes.object,    headerBg: PropTypes.string,    headerColor: PropTypes.string,    headerTextColor: PropTypes.string,    sparkline: PropTypes.oneOfType([PropTypes.bool, PropTypes.object])  })))
+- valConfigs (list of dicts; default PropTypes.arrayOf(PropTypes.shape({    field: PropTypes.string,    agg: PropTypes.oneOf(['sum', 'avg', 'count', 'min', 'max', 'weighted_avg', 'wavg', 'weighted_mean', 'array_agg', 'formula']),    weightField: PropTypes.string,    windowFn: PropTypes.oneOf(['percent_of_row', 'percent_of_col', 'percent_of_grand_total']),    format: PropTypes.string,    percentile: PropTypes.number,    separator: PropTypes.string,    formula: PropTypes.string,    label: PropTypes.string,    formulaRef: PropTypes.string,    formulaScope: PropTypes.oneOf(['measures', 'columns']),    headerStyle: PropTypes.object,    headerBg: PropTypes.string,    headerColor: PropTypes.string,    headerTextColor: PropTypes.string,    sparkline: PropTypes.oneOfType([PropTypes.bool, PropTypes.object])  })))
 
     `valConfigs` is a list of dicts with keys:
 

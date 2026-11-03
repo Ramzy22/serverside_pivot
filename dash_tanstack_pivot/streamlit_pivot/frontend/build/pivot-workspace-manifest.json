@@ -1,33 +1,33 @@
 {
   "../../src/lib/components/Charts/ECharts2dRenderer.js": {
-    "file": "chunks/ECharts2dRenderer-O_KtruFg.js",
+    "file": "chunks/ECharts2dRenderer-BHBY8awV.js",
     "name": "ECharts2dRenderer",
     "src": "../../src/lib/components/Charts/ECharts2dRenderer.js",
     "isDynamicEntry": true,
     "imports": [
-      "_index-DMKf03Q6.js",
+      "_index-CXA2NrOO.js",
       "_charts-DthW1Q8W.js",
       "_installCanvasRenderer-ui7Bv_08.js"
     ]
   },
   "../../src/lib/components/Charts/ECharts3dRenderer.js": {
-    "file": "chunks/ECharts3dRenderer-Fv5vhme9.js",
+    "file": "chunks/ECharts3dRenderer-DQt8VQBg.js",
     "name": "ECharts3dRenderer",
     "src": "../../src/lib/components/Charts/ECharts3dRenderer.js",
     "isDynamicEntry": true,
     "imports": [
-      "_index-DMKf03Q6.js",
+      "_index-CXA2NrOO.js",
       "_charts-DthW1Q8W.js",
       "_installCanvasRenderer-ui7Bv_08.js"
     ]
   },
   "../../src/lib/components/Charts/PivotCharts.js": {
-    "file": "chunks/PivotCharts-oX_Ezb8D.js",
+    "file": "chunks/PivotCharts-CQGx57sN.js",
     "name": "PivotCharts",
     "src": "../../src/lib/components/Charts/PivotCharts.js",
     "isDynamicEntry": true,
     "imports": [
-      "_index-DMKf03Q6.js",
+      "_index-CXA2NrOO.js",
       "_charts-DthW1Q8W.js"
     ],
     "dynamicImports": [
@@ -36,22 +36,22 @@
     ]
   },
   "../../src/lib/components/Sidebar/ReportEditor.js": {
-    "file": "chunks/ReportEditor--m1x6KSQ.js",
+    "file": "chunks/ReportEditor-Cow7CWMR.js",
     "name": "ReportEditor",
     "src": "../../src/lib/components/Sidebar/ReportEditor.js",
     "isDynamicEntry": true,
     "imports": [
-      "_index-DMKf03Q6.js",
+      "_index-CXA2NrOO.js",
       "_charts-DthW1Q8W.js"
     ]
   },
   "../../src/lib/components/Sidebar/SidebarPanel.js": {
-    "file": "chunks/SidebarPanel-BtvNLryY.js",
+    "file": "chunks/SidebarPanel-UMirK98W.js",
     "name": "SidebarPanel",
     "src": "../../src/lib/components/Sidebar/SidebarPanel.js",
     "isDynamicEntry": true,
     "imports": [
-      "_index-DMKf03Q6.js",
+      "_index-CXA2NrOO.js",
       "_charts-DthW1Q8W.js"
     ],
     "dynamicImports": [
@@ -59,73 +59,73 @@
     ]
   },
   "../../src/lib/components/Table/ContextMenu.js": {
-    "file": "chunks/ContextMenu-9NAlVFUt.js",
+    "file": "chunks/ContextMenu-jZG86V7e.js",
     "name": "ContextMenu",
     "src": "../../src/lib/components/Table/ContextMenu.js",
     "isDynamicEntry": true,
     "imports": [
-      "_index-DMKf03Q6.js",
+      "_index-CXA2NrOO.js",
       "_charts-DthW1Q8W.js"
     ]
   },
   "../../src/lib/components/Table/DetailDrawer.js": {
-    "file": "chunks/DetailDrawer-Cefh5Xi6.js",
+    "file": "chunks/DetailDrawer-Bb6H9wcy.js",
     "name": "DetailDrawer",
     "src": "../../src/lib/components/Table/DetailDrawer.js",
     "isDynamicEntry": true,
     "imports": [
-      "_index-DMKf03Q6.js",
+      "_index-CXA2NrOO.js",
       "_charts-DthW1Q8W.js",
-      "_DetailSurfaceContent-CGenUUqP.js"
+      "_DetailSurfaceContent-5Rg4yKpR.js"
     ]
   },
   "../../src/lib/components/Table/DetailSidePanel.js": {
-    "file": "chunks/DetailSidePanel-Km_oafiz.js",
+    "file": "chunks/DetailSidePanel-4_UKVt0O.js",
     "name": "DetailSidePanel",
     "src": "../../src/lib/components/Table/DetailSidePanel.js",
     "isDynamicEntry": true,
     "imports": [
-      "_index-DMKf03Q6.js",
+      "_index-CXA2NrOO.js",
       "_charts-DthW1Q8W.js",
-      "_DetailSurfaceContent-CGenUUqP.js"
+      "_DetailSurfaceContent-5Rg4yKpR.js"
     ]
   },
   "../../src/lib/components/Table/EditSidePanel.js": {
-    "file": "chunks/EditSidePanel-uMb9TAR4.js",
+    "file": "chunks/EditSidePanel-DeLT9uaL.js",
     "name": "EditSidePanel",
     "src": "../../src/lib/components/Table/EditSidePanel.js",
     "isDynamicEntry": true,
     "imports": [
-      "_index-DMKf03Q6.js",
+      "_index-CXA2NrOO.js",
       "_charts-DthW1Q8W.js"
     ]
   },
   "../../src/lib/components/Table/InlineDetailPanel.js": {
-    "file": "chunks/InlineDetailPanel-Bjz19Dwj.js",
+    "file": "chunks/InlineDetailPanel-lx_HPCTi.js",
     "name": "InlineDetailPanel",
     "src": "../../src/lib/components/Table/InlineDetailPanel.js",
     "isDynamicEntry": true,
     "imports": [
-      "_index-DMKf03Q6.js",
+      "_index-CXA2NrOO.js",
       "_charts-DthW1Q8W.js",
-      "_DetailSurfaceContent-CGenUUqP.js"
+      "_DetailSurfaceContent-5Rg4yKpR.js"
     ]
   },
   "../../src/lib/components/Table/SparklineDetailGraph.js": {
-    "file": "chunks/SparklineDetailGraph-C-maUgme.js",
+    "file": "chunks/SparklineDetailGraph-CF1mz8VL.js",
     "name": "SparklineDetailGraph",
     "src": "../../src/lib/components/Table/SparklineDetailGraph.js",
     "isDynamicEntry": true,
     "imports": [
-      "_index-DMKf03Q6.js",
+      "_index-CXA2NrOO.js",
       "_charts-DthW1Q8W.js"
     ]
   },
-  "_DetailSurfaceContent-CGenUUqP.js": {
-    "file": "chunks/DetailSurfaceContent-CGenUUqP.js",
+  "_DetailSurfaceContent-5Rg4yKpR.js": {
+    "file": "chunks/DetailSurfaceContent-5Rg4yKpR.js",
     "name": "DetailSurfaceContent",
     "imports": [
-      "_index-DMKf03Q6.js",
+      "_index-CXA2NrOO.js",
       "_charts-DthW1Q8W.js"
     ]
   },
@@ -133,8 +133,8 @@
     "file": "chunks/charts-DthW1Q8W.js",
     "name": "charts"
   },
-  "_index-DMKf03Q6.js": {
-    "file": "chunks/index-DMKf03Q6.js",
+  "_index-CXA2NrOO.js": {
+    "file": "chunks/index-CXA2NrOO.js",
     "name": "index",
     "imports": [
       "_charts-DthW1Q8W.js"
@@ -180,12 +180,12 @@
     ]
   },
   "src/index.tsx": {
-    "file": "pivot-workspace-C7NhFl8C.js",
+    "file": "pivot-workspace-DUfPz-ZE.js",
     "name": "index",
     "src": "src/index.tsx",
     "isEntry": true,
     "imports": [
-      "_index-DMKf03Q6.js",
+      "_index-CXA2NrOO.js",
       "_charts-DthW1Q8W.js"
     ]
   }
