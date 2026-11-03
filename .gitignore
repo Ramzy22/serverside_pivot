@@ -136,19 +136,46 @@ dmypy.json
 # Pyre:
 .pyre/
 
-# IDEs
+# IDEs & Editors
 .vscode/
 .idea/
 *.swp
 *.swo
 *~
 
+# ==============================================================================
+# AI Assistants, Agent Scratchpads & LLM Tooling
+# ==============================================================================
+.claude/
+.qwen/
+.planning/
+.superpowers/
+.gemini/
+.cursor/
+.aider*
+*.prompt.md
+
+# ==============================================================================
+# Browser Harness & Qualification Run Artifacts
+# ==============================================================================
+artifacts/
+.selenium-cache/
+.tmp*
+.tmp_*
+.tmp-*
+/.runlogs/
+/.worktrees/
+chrome-prof-*
+edge-prof-*
+*.pid
+materialized_registry.json
+dash_presentation/data/
+dash_presentation/materialized_registry.json
+
 # OS generated files
 .DS_Store
 .DS_Store?
-/.runlogs/
 /examples/flagship_react/dist/
-/.worktrees/
 ._*
 .Spotlight-V100
 .Trashes

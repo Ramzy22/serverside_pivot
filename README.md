@@ -1,12 +1,16 @@
 # serverside-pivot
 
-Build a real server-side pivot table in Dash in about 10 lines of Python.
+A high-performance, contract-governed server-side analytical pivot engine and virtualized grid for **Dash**, **React**, and **Streamlit**.
 
-`serverside-pivot` is built for analytical apps that need fast aggregations, large datasets, and a serious pivot UI without building a separate frontend. It is designed to handle millions of rows with sub-second aggregations, while keeping the interaction model people expect: drag-and-drop fields, row and column grouping, totals, formulas, sorting, filtering, formatting, and virtual scrolling.
+serverside-pivot connects analytical applications directly to massive data sources (via **DuckDB**, **PyArrow**, and **Ibis** backends) with sub-second aggregation over millions of rows. It delivers an enterprise-grade virtualized table with $\\mathcal{O}(D)$ level-based hierarchical batching, server-owned pivot column order resolution, native statement-level query interruption, and dual-mode exports.
 
-Strong point : It works with `pandas`, `polars`, `pyarrow`, and any SQL backends through Ibis, so the same component can start on a local dataframe and scale to a production database without changing the user experience.
+### Core Capabilities
 
-On the Dash side, one runtime callback handles data windows, filter option requests, chart requests, and drill-through.
+- **Host-Neutral Architecture**: Unified runtime engine (PivotRuntimeRoot) shared identically across **Dash**, standalone **React** (PivotWorkspace), and **Streamlit** (zero-rerun iframe component).
+- **Warehouse-Scale Analytics**: Powered by DuckDB + Ibis federation (querying Pandas, Polars, Arrow, DuckDB, Postgres, Snowflake, BigQuery, or ClickHouse).
+- **Server-Owned Layout & Slicing**: Dynamic pivot column layout resolver with SHA-256 stable identities, deterministic revision handshakes, and pinned off-window slicing.
+- **Fail-Closed Assurance**: Evaluated against [AG Grid Enterprise 36.2.0 (SSRM)](docs/flagship-functionality-certification.md) with 207 mapped browser qualification cases and cryptographic artifact bindings.
+- **Enterprise Governance**: Byte-bounded LRU caches, tenant memory accounting, and cancellable large exports with native DuckDB cursor.interrupt().
 
 ## Install
 
