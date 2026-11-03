@@ -349,6 +349,8 @@ class IbisBackend:
         finally:
             try:
                 if lease is not None:
+                    execution.release_lease()
+                    discard = discard or execution.cancel_error is not None
                     retained = self._duckdb_pool.checkin(lease, discard=discard)
                     self._record_lease_disposition(execution, retained)
             finally:

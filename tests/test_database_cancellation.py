@@ -322,3 +322,163 @@ def test_ibis_backend_reports_unavailable_cancellation_without_hard_deadline():
         "backend": "unsupported",
         "code": "cancellation_unavailable",
     }
+
+@pytest.mark.parametrize("backend_kind", ["duckdb", "ibis"])
+def test_selected_cancel_drains_before_lease_becomes_borrowable(backend_kind, monkeypatch):
+    import threading
+    from pivot_engine.backends.execution import DatabaseExecution
+
+    backend = DuckDBBackend(":memory:", max_connections=1) if backend_kind == "duckdb" else IbisBackend(connection_uri=":memory:")
+    pool = backend.pool if backend_kind == "duckdb" else backend._duckdb_pool
+    execution = DatabaseExecution("old")
+    selected, release, checked_in = threading.Event(), threading.Event(), threading.Event()
+    original_invoke = execution._invoke_native_cancel
+    original_checkin = pool.checkin
+    def delayed_cancel(*args):
+        selected.set()
+        assert release.wait(5)
+        original_invoke(*args)
+    def checkin(*args, **kwargs):
+        result = original_checkin(*args, **kwargs)
+        checked_in.set()
+        return result
+    monkeypatch.setattr(execution, "_invoke_native_cancel", delayed_cancel)
+    monkeypatch.setattr(pool, "checkin", checkin)
+    original_attach = execution.attach_lease
+    def attach(lease):
+        original_attach(lease)
+        cancel.start()
+        assert selected.wait(5)
+    monkeypatch.setattr(execution, "attach_lease", attach)
+    cancel = threading.Thread(target=lambda: execution.request_cancel("client_cancelled"))
+    errors = []
+    def run():
+        try:
+            if backend_kind == "duckdb":
+                backend._execute_with_lease({"sql": "SELECT 1"}, execution)
+            else:
+                backend._execute_duckdb_ibis_with_lease({"sql": "SELECT 1"}, None, True, execution)
+        except QueryCancelledError:
+            pass
+        except BaseException as exc:
+            errors.append(exc)
+    worker = threading.Thread(target=run)
+    worker.start()
+    try:
+        assert selected.wait(5)
+        assert not checked_in.wait(0.3), "lease returned while selected cancellation can still interrupt it"
+        assert not execution.wait_for_completion(0), "cleanup acknowledged before callback drained"
+    finally:
+        release.set()
+        worker.join(5)
+        cancel.join(5)
+        backend.close()
+    assert not worker.is_alive() and not cancel.is_alive()
+    assert not errors
+
+
+@pytest.mark.parametrize("backend_kind", ["duckdb", "ibis"])
+def test_old_cancel_cannot_interrupt_new_borrower_after_checkin(backend_kind, monkeypatch):
+    import threading
+    from pivot_engine.backends.execution import DatabaseExecution
+
+    backend = DuckDBBackend(":memory:", max_connections=1) if backend_kind == "duckdb" else IbisBackend(connection_uri=":memory:")
+    pool = backend.pool if backend_kind == "duckdb" else backend._duckdb_pool
+    execution = DatabaseExecution("old")
+    returned, proceed = threading.Event(), threading.Event()
+    original_checkin = pool.checkin
+    returned_lease = []
+    def paused_checkin(lease, **kwargs):
+        retained = original_checkin(lease, **kwargs)
+        returned_lease.append(lease)
+        returned.set()
+        assert proceed.wait(5)
+        return retained
+    monkeypatch.setattr(pool, "checkin", paused_checkin)
+    errors = []
+    def run():
+        try:
+            if backend_kind == "duckdb":
+                backend._execute_with_lease({"sql": "SELECT 1"}, execution)
+            else:
+                backend._execute_duckdb_ibis_with_lease({"sql": "SELECT 1"}, None, True, execution)
+        except BaseException as exc:
+            errors.append(exc)
+    worker = threading.Thread(target=run)
+    worker.start()
+    lease = None
+    try:
+        assert returned.wait(5)
+        lease = pool.checkout()
+        # Ibis's FIFO pool has other leases; drain it to obtain A's exact lease.
+        borrowed = [lease]
+        while lease is not returned_lease[0]:
+            lease = pool.checkout()
+            borrowed.append(lease)
+        assert execution.request_cancel("client_cancelled") is False
+        assert lease.execute("SELECT 42").fetchone() == (42,)
+    finally:
+        proceed.set()
+        worker.join(5)
+        for item in locals().get("borrowed", []):
+            original_checkin(item)
+        backend.close()
+    assert not worker.is_alive()
+    assert not errors
+
+def test_late_cancel_does_not_interrupt_running_native_borrower(monkeypatch):
+    import threading
+    from pivot_engine.backends.execution import DatabaseExecution
+
+    backend = DuckDBBackend(":memory:", max_connections=1)
+    execution = DatabaseExecution("old")
+    returned, finish_checkin = threading.Event(), threading.Event()
+    entered, finish_query = threading.Event(), threading.Event()
+    original_checkin = backend.pool.checkin
+    def checkin(lease, **kwargs):
+        retained = original_checkin(lease, **kwargs)
+        returned.set()
+        assert finish_checkin.wait(5)
+        return retained
+    monkeypatch.setattr(backend.pool, "checkin", checkin)
+    errors, results = [], []
+    def old_query():
+        try:
+            backend._execute_with_lease({"sql": "SELECT 1"}, execution)
+        except BaseException as exc:
+            errors.append(exc)
+    worker = threading.Thread(target=old_query)
+    worker.start()
+    borrower = None
+    def guarded_value():
+        entered.set()
+        assert finish_query.wait(5)
+        return 42
+    try:
+        assert returned.wait(5)
+        lease = backend.pool.checkout()
+        lease.create_function("handoff_value", guarded_value, return_type="INTEGER")
+        def query_b():
+            try:
+                results.append(lease.execute("SELECT handoff_value()").fetchone())
+            except BaseException as exc:
+                errors.append(exc)
+        borrower = threading.Thread(target=query_b)
+        borrower.start()
+        assert entered.wait(5)
+        requested = execution.request_cancel("client_cancelled")
+        finish_query.set()
+        borrower.join(5)
+        assert results == [(42,)], f"borrower failed: {errors!r}"
+        assert requested is False
+        assert not errors
+    finally:
+        finish_query.set()
+        finish_checkin.set()
+        if borrower is not None:
+            borrower.join(5)
+        worker.join(5)
+        if 'lease' in locals():
+            original_checkin(lease)
+        backend.close()
+    assert not worker.is_alive() and not borrower.is_alive()
