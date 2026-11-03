@@ -1,74 +1,102 @@
 # 🎬 `serverside-pivot` Launch Video & Showcase Storyboard (`/brag` Dossier)
 
-This dossier prepares the exact storyboards, script, and visual capture beats for launching `serverside-pivot` using the `/brag` video workflow (or any product demo recording tool).
+This dossier defines the canonical narrative sequence, storyboard beats, and social copy for presenting and launching `serverside-pivot`.
 
 ---
 
-## ⚡ The Angle: The "Uncrashable" Big Data Pivot Table
+## 🎯 The Core Narrative Sequence: "2 Lines $\rightarrow$ Any DB $\rightarrow$ Live Web UI"
 
-* **The Problem:** AG Grid Enterprise charges \$1,000–\$2,500/seat and leaves you with an empty backend shell. FINOS Perspective crashes the browser tab with a WebAssembly Out-Of-Memory error as soon as you feed it real-world datasets.
-* **The Solution:** `serverside-pivot` gives you a **turnkey, low-code ($\le$ 3 lines of Python)** pivot workspace with infinite scrolling, inline SVG sparklines, live docked charts, heatmaps, and zero client RAM explosion—powered by DuckDB and Ibis.
+The core value proposition must always be shown in this precise 3-step sequence:
+
+```
+┌───────────────────────────────┐     ┌───────────────────────────────┐     ┌───────────────────────────────┐
+│  STEP 1: THE 2-LINE CODE      │     │  STEP 2: ANY SCALE OR SOURCE  │     │  STEP 3: THE RICH WEB UI      │
+│  "This is all you write"      │ ──> │  Small file or 100M+ row DB   │ ──> │  Sub-second virtual pivot,    │
+│  Minimal, elegant boilerplate │     │  DuckDB, Snowflake, Postgres  │     │  sparklines, charts & heatmap │
+└───────────────────────────────┘     └───────────────────────────────┘     └───────────────────────────────┘
+```
+
+1. **Step 1 — Low-Code Hook:** Start on a clean code editor with literally 2 lines of Python.
+2. **Step 2 — Any Data Source:** Show that the adapter points to a small local `.parquet`/`.csv` file OR a massive 100M+ row enterprise warehouse (Snowflake, BigQuery, DuckDB, Postgres) with zero custom SQL backend needed.
+3. **Step 3 — The Web Reveal:** Cut directly to the browser running the interactive UI (Dash, React, or Streamlit) with sub-second virtual scrolling, inline sparklines, live charts, heatmaps, and zero client RAM explosion.
 
 ---
 
 ## ⏱️ 20-Second Video Storyboard (Launch Cut)
 
-### Scene 1: The Hook (0:00 – 0:04)
-* **Visual:** Open **[http://127.0.0.1:8051](http://127.0.0.1:8051)** (Institutional Trading Desk).
-* **Action:** Rapid scroll through 50,000 multi-asset positions with `Asset Class > Desk > Ticker`.
-* **Overlay Text:** *“50,000 multi-asset rows. 12ms latency. Zero client RAM crash.”*
-* **Sound/Beat:** Fast, energetic synth drop.
+### Scene 1: The 2-Line Code Hook (0:00 – 0:04)
+* **Visual:** Close-up on a dark VS Code / Terminal window typing 2 lines:
+  ```python
+  adapter = create_tanstack_adapter("duckdb://sales.db")
+  app.layout = DashTanstackPivot(table="trades", serverSide=True)
+  ```
+* **Overlay Text:** *“This is all the code you write.”*
+* **Sound/Beat:** Fast, crisp mechanical keyboard clicks $\rightarrow$ sharp synth drop.
 
-### Scene 2: Visual Superpowers (0:04 – 0:09)
-* **Visual:** Zoom into the **Inline SVG Area Sparklines** and **Data Bars** on Notional USD and PnL.
-* **Action:** Show the docked **Bar Chart Pane** updating in real time as the hierarchy unfolds.
-* **Overlay Text:** *“Inline sparkline cells + real-time docked chart canvas.”*
+### Scene 2: Any Database or File (0:04 – 0:07)
+* **Visual:** Quick graphic / terminal split showing universal connectivity:
+  * `sales.parquet` (Local 10 KB file)
+  * `snowflake://analytics/dw` (100M+ rows)
+  * `duckdb://` / `postgres://`
+* **Overlay Text:** *“Small local file or 100M+ row warehouse. Zero backend to build.”*
+* **Sound/Beat:** Rising riser sweep.
 
-### Scene 3: Multi-Industry Versatility (0:09 – 0:14)
-* **Visual:** Fast transition to **[http://127.0.0.1:8052](http://127.0.0.1:8052)** (HR People Analytics, clean light theme with Donut chart & Heatmap) then **[http://127.0.0.1:8053](http://127.0.0.1:8053)** (B2B SaaS Immersive Mode with Area cohort growth).
-* **Overlay Text:** *“Finance · People Analytics · SaaS Cohorts. Pre-built themes & Heatmaps.”*
+### Scene 3: The Web Reveal & Infinite Virtual Scroll (0:07 – 0:12)
+* **Visual:** Cut to browser running **[http://127.0.0.1:8051](http://127.0.0.1:8051)** (Institutional Trading Desk).
+* **Action:** Rapid scroll through 50,000 multi-asset positions with `Asset Class > Desk > Ticker` already expanded 3 levels deep.
+* **Overlay Text:** *“50,000 positions. 12ms latency. Constant 70MB browser RAM.”*
+* **Sound/Beat:** Heavy bass groove drops.
 
-### Scene 4: The 3-Line Low-Code Punchline (0:14 – 0:17)
-* **Visual:** Split screen: Left = 3 lines of Python code connecting to DuckDB/Snowflake; Right = The interactive pivot.
-* **Overlay Text:** *“3 lines of code. Connects to DuckDB, Snowflake, BigQuery, or Postgres via Ibis.”*
+### Scene 4: Visual Superpowers (0:12 – 0:16)
+* **Visual:** Zoom into **Inline SVG Area Sparklines** inside table cells, **Data Bars**, and the docked **Live Chart Pane** updating on the right.
+* **Quick Cuts:**
+  * HR Analytics (`:8052`): Donut chart + corporate heatmap.
+  * SaaS Cohorts (`:8053`): Immersive mode + NRR area chart.
+* **Overlay Text:** *“Inline sparklines · Docked charts · Heatmaps · Immersive mode.”*
 
-### Scene 5: Call to Action (0:17 – 0:20)
-* **Visual:** GitHub repository header, badges (207/207 tests passed, 100% open source MIT).
-* **Overlay Text:** *“pip install serverside-pivot · 100% Free & Open Source”*
-* **URL:** `github.com/Ramzy22/serverside_pivot`
+### Scene 5: The Unfair Comparison & Call to Action (0:16 – 0:20)
+* **Visual:** Side-by-side comparison badge:
+  * Perspective: *Browser WASM Crash (OOM)* ❌
+  * AG Grid Enterprise: *\$2,500/dev + Build your own backend* ❌
+  * `serverside-pivot`: *Turnkey · 100% Free & Open Source (MIT)* ✅
+* **Overlay Text:** *“pip install serverside-pivot · github.com/Ramzy22/serverside_pivot”*
+* **Sound/Beat:** Punchy final outro hit.
 
 ---
 
-## 📱 Launch Share Copy
+## 📱 Social Copy (Optimized for Engagement)
 
 ### X (Twitter) / Threads
-> Most data grids either crash your browser (looking at you, WASM) or make you spend 3 months building a backend groupby engine.
+> Building pivot tables for big data is usually painful:
+> 1. Client-side tools (like Perspective) crash the browser with WASM OOM on large files.
+> 2. AG Grid Enterprise charges \$2,500/seat and leaves you with NO backend engine.
 >
-> We just open-sourced `serverside-pivot` ⚡
+> So we built `serverside-pivot`:
 >
-> 🚀 3 lines of Python to pivot 100M+ rows
-> 📊 Inline sparkline cells & docked chart canvas
+> 💻 2 lines of Python
+> 🗄️ Connects to any Parquet file, DuckDB, Snowflake, or Postgres
+> 📈 Inline sparkline cells & live docked chart canvas
 > 🌡️ Built-in heatmaps & data bars
-> 🏎️ O(D) DuckDB batching + virtual scrolling
-> 🔌 Works with Dash, React & Streamlit
+> 🏎️ Virtualized windowing (< 80MB RAM)
 >
-> 100% MIT. Check out the live showcases:
+> 100% Open Source (MIT) for Dash, React & Streamlit:
 > https://github.com/Ramzy22/serverside_pivot
 
 ---
 
 ### LinkedIn
-> Excited to release `serverside-pivot` v1.0 — a turnkey, open-source server-side pivot engine for Python, React, Dash, and Streamlit.
+> When data analysts or business users ask for an interactive pivot table, engineering teams usually face a painful tradeoff:
 >
-> If you have ever tried building pivot tables over large datasets:
-> 1. Client-side tools like FINOS Perspective crash tab memory beyond a few million records.
-> 2. AG Grid Enterprise provides frontend virtualization, but leaves the entire SQL backend and aggregation pipeline as an exercise for the developer.
+> - Use a client-side grid $\rightarrow$ The browser tab crashes as soon as the dataset hits millions of rows.
+> - Buy an enterprise grid $\rightarrow$ You pay thousands per seat and still have to spend 3 months writing SQL GROUP BY endpoints and hierarchical tree resolvers.
 >
-> `serverside-pivot` closes the loop:
-> - **Low-Code:** Connects to DuckDB, Snowflake, BigQuery, or Postgres in 3 lines via Ibis.
-> - **Visual Analysis:** Pre-configured inline SVG sparklines, heatmaps, interactive data bars, and docked multi-pane charts.
-> - **Scale:** Constant client RAM footprint (< 80 MB) using virtual windowing and O(D) level-based batching.
+> We just released **`serverside-pivot` v1.0**:
+>
+> 1️⃣ **2 Lines of Code:** You configure the adapter and drop the component in Dash, React, or Streamlit.
+> 2️⃣ **Any Scale:** From a 10 KB local Parquet file to a 100M+ row Snowflake or BigQuery warehouse via Ibis.
+> 3️⃣ **Full Visual Suite:** Real-time docked chart canvas, inline SVG sparklines in table cells, heatmaps, interactive data bars, and RFC-compliant Excel XLSX exports.
 >
 > Tested with 207 mapped browser qualification journeys.
 >
-> GitHub: https://github.com/Ramzy22/serverside_pivot
+> Check out the repo and live demos:
+> https://github.com/Ramzy22/serverside_pivot

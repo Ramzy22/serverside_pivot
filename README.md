@@ -23,25 +23,32 @@
 
 </div>
 
-## 🔌 Low-Code: Connect Any Database in 3 Lines
+## 🚀 The 3-Step Flow: 2 Lines of Code → Any Database → Interactive Web UI
+
+```
+┌─────────────────────────────────┐     ┌─────────────────────────────────┐     ┌─────────────────────────────────┐
+│  1. THE 2-LINE CODE             │     │  2. ANY SCALE OR DATABASE       │     │  3. THE INTERACTIVE WEB UI      │
+│  Minimal, elegant boilerplate   │ ──> │  Small local file or 100M+ rows │ ──> │  Virtual scrolling, sparklines, │
+│  No backend to build            │     │  DuckDB, Snowflake, BigQuery    │     │  docked charts & zero RAM crash │
+└─────────────────────────────────┘     └─────────────────────────────────┘     └─────────────────────────────────┘
+```
 
 Building enterprise pivot tables used to take months of backend engineering. With `serverside-pivot`, **you don't write SQL, grouping algorithms, or pagination logic**. 
 
-Connect any SQL database, data warehouse, or local file in **3 lines of Python**:
+Connect any SQL database, cloud warehouse, or local file in **2–3 lines of Python**:
 
 ```python
 from pivot_engine import create_tanstack_adapter, register_pivot_app
 
-# 1. Point to DuckDB, Snowflake, BigQuery, ClickHouse, Postgres, or Parquet files
+# 1. Point to a small local Parquet/CSV file OR a 100M+ row warehouse (Snowflake, BigQuery, DuckDB, Postgres)
 adapter = create_tanstack_adapter("duckdb:///analytics.db")  # or "snowflake://...", "postgres://..."
 adapter.load_table("billion_row_sales")
 
-# 2. Attach to your Dash or Streamlit app — zero custom backend needed!
+# 2. Attach to your Dash, Streamlit, or React app — zero custom backend needed!
 register_pivot_app(app, adapter_getter=lambda: adapter, pivot_id="pivot")
 ```
 
 Whether your dataset has **10,000 rows** or **1,000,000,000+ rows**, the engine automatically compiles UI drags, group expansions, and filters into sub-second vector queries. The browser **never uses more than 80 MB of RAM**.
-
 ---
 
 ## 📌 The Problem with Existing Solutions
