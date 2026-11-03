@@ -121,10 +121,11 @@ def test_reference_saved_state_reload_restores_model_and_geometry(reference_run,
         rows = _displayed_rows(driver)
         assert [row['label'] for row in rows] == ['Q1', 'Q2', 'Total']
         visible = {}
-        for key, values in expected_columns.items():
-            assert [row['data'][key] for row in rows] == [values[label] for label in ('Q1', 'Q2', 'Total')]
-            driver.execute_script("const c=window.referenceGrid.getColumn(arguments[0]),v=document.querySelector('.ag-body-horizontal-scroll-viewport');v.scrollLeft=Math.min(v.scrollWidth-v.clientWidth,Math.max(0,c.getLeft()))", key)
-            visible[key] = _wait_column(driver, key, [f'{values[label]:.2f}' for label in ('Q1', 'Q2', 'Total')])
+        case.parsed_output = {'before': before, 'saved': saved_geometry,
+                              'restored': restored_geometry, 'snapshot': snapshot,
+                              'model': model, 'rows': rows, 'visibleColumns': visible}
+        _inspect_persistence_columns(driver, rows, expected_columns, visible,
+                                     lambda observation: case.parsed_output.update(currentInspection=observation))
         case.parsed_output = {'scope': 'Application-managed localStorage with public getState/setState, explicit rowHeight and deferred pivot widths applied after result columns exist',
                               'before': before, 'saved': saved_geometry, 'restored': restored_geometry,
                               'snapshot': snapshot, 'model': model, 'rows': rows, 'visibleColumns': visible}
@@ -602,6 +603,44 @@ def _displayed_rows(driver):
         "Reference must expose displayed SSRM row ancestry and totals for observation"
     )
     return driver.execute_script("return window.referenceEvidence.displayedRows()")
+
+
+def _inspect_persistence_columns(driver, rows, expected_columns, visible, record):
+    for key, values in expected_columns.items():
+        assert [row['data'][key] for row in rows] == [values[label] for label in ('Q1', 'Q2', 'Total')]
+        visible[key] = _wait_persistence_column(
+            driver, key, [f'{values[label]:.2f}' for label in ('Q1', 'Q2', 'Total')], record)
+
+
+def _wait_persistence_column(driver, column, values, record):
+    """Navigate on every readiness poll; never modify the restored model."""
+    expected = [(str(index), value) for index, value in enumerate(values)]
+
+    def inspect(browser):
+        observation = browser.execute_script("""
+          const id=arguments[0], api=window.referenceGrid, column=api.getColumn(id);
+          const viewport=document.querySelector('.ag-center-cols-viewport');
+          const scroll=document.querySelector('.ag-body-horizontal-scroll-viewport');
+          if (column) api.ensureColumnVisible(column, 'auto');
+          const bounds=viewport?.getBoundingClientRect();
+          const elements=[...document.querySelectorAll('[role="gridcell"]')]
+            .filter(cell=>cell.getAttribute('col-id')===id);
+          const geometry=elements.map(cell=>{
+            const rect=cell.getBoundingClientRect();
+            return {left:rect.left,right:rect.right,width:rect.width};
+          });
+          return {field:id,columnExists:!!column,scrollLeft:scroll?.scrollLeft,
+            viewport:bounds?{left:bounds.left,right:bounds.right}:null,geometry,
+            fullyVisible:!!column && !!bounds && geometry.length===3 && geometry.every(
+              rect=>rect.width>0 && rect.left>=bounds.left-1 && rect.right<=bounds.right+1),
+            cells:window.referenceEvidence.visibleCells().filter(cell=>cell.colId===id)};
+        """, column)
+        record(observation)
+        cells = observation['cells']
+        actual = sorted((cell['rowIndex'], cell['text']) for cell in cells)
+        return cells if observation['fullyVisible'] and actual == expected else False
+
+    return WebDriverWait(driver, 10).until(inspect)
 
 
 def _wait_column(driver, column, values):
