@@ -239,7 +239,7 @@ Host file downloads support **CSV and XLSX** across Dash, React, and Streamlit. 
 
 Start with the focused Dash examples to learn the integration patterns:
 
-- [Basic pivot](examples/example_dash_basic.py): a minimal Dash app with row and column grouping.
+- [Basic pivot](examples/example_dash_basic.py): a minimal Dash app with row grouping and aggregated measures.
 - [Hierarchical pivot](examples/example_dash_hierarchical.py): expandable groups with server-side queries.
 - [SQL multi-instance workspace](examples/example_dash_sql_multi_instance.py): multiple pivot instances in one Dash app.
 
