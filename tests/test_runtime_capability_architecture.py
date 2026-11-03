@@ -71,10 +71,11 @@ def test_runtime_capabilities_stay_below_god_object_limit():
 
 def test_capability_architecture_and_cleanup_decisions_are_recorded():
     repository_root = Path(__file__).resolve().parents[1]
-    architecture = (repository_root / "CAPABILITY_ARCHITECTURE.md").read_text(
+    archived_docs = repository_root / "archive" / "docs"
+    architecture = (archived_docs / "CAPABILITY_ARCHITECTURE.md").read_text(
         encoding="utf-8"
     )
-    cleanup = (repository_root / "REFACTOR_CLEANUP_LEDGER.md").read_text(
+    cleanup = (archived_docs / "REFACTOR_CLEANUP_LEDGER.md").read_text(
         encoding="utf-8"
     )
     assert "Compatibility boundary" in architecture

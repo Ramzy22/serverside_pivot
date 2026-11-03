@@ -32,7 +32,7 @@ def test_runtime_request_coordinator_centralizes_session_gate_checks():
 
 
 def test_runtime_request_lifecycle_spec_documents_profile_contract():
-    spec = Path("RUNTIME_REQUEST_LIFECYCLE.md").read_text(encoding="utf-8")
+    spec = Path("docs/RUNTIME_REQUEST_LIFECYCLE.md").read_text(encoding="utf-8")
 
     for required in (
         "requestId",
