@@ -200,3 +200,4 @@ dash_tanstack_pivot/dist/*.tar.gz
 # Video render intermediate frames
 brag-output/work/
 brag-output/*.png
+brag-output/*.mp4
