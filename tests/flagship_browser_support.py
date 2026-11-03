@@ -434,6 +434,12 @@ def _selection_rows(driver):
                 raise
 
 
+def _pinned_boundary_order(driver, expected):
+    """Pin metadata can commit before React replaces the virtualized body."""
+    order = _selection_column_order(driver)
+    return order if len(order) == len(expected) and set(order) == set(expected) else False
+
+
 def _selection_column_order(driver):
     """Read actual body geometry, excluding duplicate/group header containers."""
     return driver.execute_script("""
@@ -533,17 +539,83 @@ def _select_rectangle(driver, row_ids, column_ids):
     return ids
 
 
+def _selection_context_probe(driver, cell, phase):
+    """Observe native interaction across shadow roots without changing event handling."""
+    return driver.execute_script("""
+      const target=arguments[0], phase=arguments[1];
+      const describe=el=>el?.getAttribute ? {tag:el.tagName,role:el.getAttribute('role'),
+        title:el.getAttribute('title'),row:el.getAttribute('data-rowid'),
+        column:el.getAttribute('data-colid'),text:el.textContent?.trim().slice(0,80)} : {tag:el?.nodeName};
+      const roots=[], collect=root=>{
+        roots.push(root);
+        for(const el of root.querySelectorAll('*')) if(el.shadowRoot) collect(el.shadowRoot);
+      };
+      collect(document);
+      const rect=el=>{const r=el.getBoundingClientRect();
+        return {x:r.x,y:r.y,width:r.width,height:r.height};};
+      const menus=()=>roots.flatMap(root=>[...root.querySelectorAll('[role="menu"]')])
+        .map(el=>({rect:rect(el),items:[...el.querySelectorAll('[role="menuitem"]')]
+          .map(describe)}));
+      const active=()=>{let el=document.activeElement;
+        while(el?.shadowRoot?.activeElement) el=el.shadowRoot.activeElement;
+        return describe(el);};
+      if(!window.__pivotSelectionContextProbe){
+        const trace=[];
+        const append=entry=>{trace.push({at:performance.now(),...entry});
+          if(trace.length>160) trace.shift();};
+        window.__pivotSelectionContextProbe={trace,append};
+        for(const type of ['pointerdown','mousedown','mouseup','contextmenu','click','focusin'])
+          document.addEventListener(type,event=>{
+            const entry={kind:'event',type,trusted:event.isTrusted,button:event.button,
+              x:event.clientX,y:event.clientY,target:describe(event.target),
+              path:event.composedPath().slice(0,8).map(describe)};
+            append(entry);
+            setTimeout(()=>append({kind:'after-event',type,
+              prevented:event.defaultPrevented,active:active(),menus:menus()}),0);
+          },true);
+        let previous=JSON.stringify(menus());
+        const observer=new MutationObserver(()=>{
+          const current=JSON.stringify(menus());
+          if(current!==previous){previous=current;
+            append({kind:'menu-change',active:active(),menus:JSON.parse(current)});}
+        });
+        for(const root of roots) observer.observe(root,{childList:true,subtree:true,
+          attributes:true,attributeFilter:['style']});
+      }
+      let hit=null;
+      if(target){
+        const r=target.getBoundingClientRect();
+        const x=(Math.max(0,r.left)+Math.min(innerWidth,r.right))/2;
+        const y=(Math.max(0,r.top)+Math.min(innerHeight,r.bottom))/2;
+        let el=document.elementFromPoint(x,y);
+        const path=[];
+        while(el){path.push(describe(el));const next=el.shadowRoot?.elementFromPoint(x,y);
+          if(!next||next===el) break;el=next;}
+        hit={x,y,path};
+      }
+      window.__pivotSelectionContextProbe.append({kind:'checkpoint',phase,
+        target:describe(target),rect:target?rect(target):null,hit,active:active(),
+        viewport:{width:innerWidth,height:innerHeight,scrollX,scrollY},menus:menus()});
+      return window.__pivotSelectionContextProbe.trace;
+    """, cell, phase)
+
+
 def _copy_selected(driver, cell, expected, observation, *, menu_label="Copy Selection"):
     from selenium.webdriver.common.action_chains import ActionChains
     from selenium.webdriver.support.ui import WebDriverWait
     from tests.test_flagship_certification import _clipboard_text
 
+    observation["selectionContextTrace"] = _selection_context_probe(driver, cell, f"{menu_label}:before")
     sentinel = "qualification clipboard checkpoint"
     assert driver.execute_async_script(
         "const done=arguments[arguments.length-1]; navigator.clipboard.writeText(arguments[0]).then(()=>done(true),()=>done(false));",
         sentinel)
-    ActionChains(driver).context_click(cell).perform()
-    menu_item = _selection_menu(driver, menu_label)
+    try:
+        ActionChains(driver).context_click(cell).perform()
+        observation["selectionContextTrace"] = _selection_context_probe(driver, cell, f"{menu_label}:after-native-context")
+        menu_item = _selection_menu(driver, menu_label)
+    finally:
+        observation["selectionContextTrace"] = _selection_context_probe(driver, cell, f"{menu_label}:after-menu-wait")
     clicked_title = menu_item.get_attribute("title")
     assert clicked_title == menu_label, "Selection copy menu action differs from the requested action"
     menu_item.click()
@@ -649,10 +721,11 @@ def _selection_keyboard_copy(driver, observation):
 def qualify_selected_clipboard(host: str, requirement: str) -> None:
     """Physical selection/menu/keyboard actions against fresh installed hosts.
 
-    A clipboard read is an OS/browser read. No copy event, clipboard method,
-    React state, runtime payload, or product handler is replaced by this case.
+    A clipboard read is an OS/browser read. The boundary observer synchronously
+    forwards identical native writes; product handlers and payloads stay intact.
     """
     import pytest
+    from tests.flagship_clipboard_observer import CLIPBOARD_BOUNDARY_OBSERVER, monitor_single_clipboard_write
 
     if os.environ.get("PIVOT_RUN_FLAGSHIP_BROWSER_TESTS") != "1":
         pytest.skip("Enable installed flagship browser qualification explicitly")
@@ -685,6 +758,7 @@ def qualify_selected_clipboard(host: str, requirement: str) -> None:
         driver._pivot_loaded_assets = {}
         driver.execute_cdp_cmd("Network.enable", {"maxTotalBufferSize": 50000000, "maxResourceBufferSize": 50000000})
         driver.execute_cdp_cmd("Page.addScriptToEvaluateOnNewDocument", {"source": _PROBE_SCRIPT})
+        driver.execute_cdp_cmd("Page.addScriptToEvaluateOnNewDocument", {"source": CLIPBOARD_BOUNDARY_OBSERVER})
         driver.execute_cdp_cmd("Page.addScriptToEvaluateOnNewDocument", {
             "source": "window.__PIVOT_QUALIFY_KEYBOARD_MOVES__ = true;"})
         driver.execute_cdp_cmd("Browser.grantPermissions", {
@@ -798,7 +872,7 @@ def qualify_selected_clipboard(host: str, requirement: str) -> None:
                 from selenium.webdriver.common.actions.wheel_input import ScrollOrigin
                 ActionChains(driver).scroll_from_origin(ScrollOrigin.from_element(scroller), -int(offset) - 1, 0).perform()
                 wait.until(lambda current: current.execute_script("return arguments[0].scrollLeft", scroller) == 0)
-            boundary_order = _selection_column_order(driver)
+            boundary_order = wait.until(lambda current: _pinned_boundary_order(current, core_order))
             assert boundary_order.index(units) == boundary_order.index(later) + 1, "Pinned and center endpoints are not visually adjacent"
             assert boundary_order != core_order, "Pinning did not distinguish displayed and core order"
             boundary = {"coreColumnIds": core_order, "displayedColumnIds": boundary_order,
@@ -877,12 +951,16 @@ def qualify_selected_clipboard(host: str, requirement: str) -> None:
             assert driver.execute_async_script(
                 "const done=arguments[arguments.length-1]; navigator.clipboard.writeText(arguments[0]).then(()=>done(true),()=>done(false));",
                 sentinel)
+            write_checkpoint = driver.execute_script("return window.__pivotClipboardBoundary.length")
             _selection_keyboard_copy(driver, observation)
             copied = WebDriverWait(driver, SELECTION_COPY_TIMEOUT).until(lambda current: (
                 value if (value := _clipboard_text(current)) != sentinel else False))
             observation["nativePositiveClipboard"] = copied
             assert copied == menu_clipboard, "Keyboard copy differs from Copy Selection"
             assert_selected_clipboard(copied, expected, line_separator=observation["clipboardLineSeparator"])
+            observation["shortcutWriteMonitor"] = monitor_single_clipboard_write(
+                driver, write_checkpoint, seconds=SELECTION_COPY_TIMEOUT)
+            result["singleWritePerKeypressVerified"] = True
             result["nativeKeyboardCopyVerified"] = True
         if requirement in ("copy-selection.headers", "copy-selection.hidden-columns"):
             selected_before_headers = set(observation["selectedIds"])
@@ -938,6 +1016,7 @@ def qualify_selected_clipboard(host: str, requirement: str) -> None:
         result.update(result="passed", displayOrderVerified=True,
                       pinnedNoDuplicates=requirement == "copy-selection.pinned-columns")
     except Exception as error:
+        observation["failureTraceback"] = traceback.format_exc()
         frame = traceback.extract_tb(error.__traceback__)[-1]
         diagnostic = f"{type(error).__name__} at {Path(frame.filename).name}:{frame.lineno}: {error}"
     finally:
@@ -1114,8 +1193,38 @@ def qualify_table_scope_clipboard(host: str, requirement: str) -> None:
     assert result["result"] == "passed", f"{host} {requirement}: {diagnostic}; evidence: {directory}"
 
 
+def _native_copy_input_target(driver, selector):
+    """Return an input a native pointer can reach, never a covered DOM match."""
+    from selenium.common.exceptions import StaleElementReferenceException
+    from tests.test_flagship_certification import _workspace_elements
+
+    for candidate in _workspace_elements(driver, selector):
+        try:
+            if not candidate.is_displayed() or not candidate.is_enabled():
+                continue
+            if driver.execute_script("""
+                const input = arguments[0], rect = input.getBoundingClientRect();
+                const left = Math.max(0, rect.left), right = Math.min(innerWidth, rect.right);
+                const top = Math.max(0, rect.top), bottom = Math.min(innerHeight, rect.bottom);
+                if (left >= right || top >= bottom) return false;
+                const x = (left + right) / 2, y = (top + bottom) / 2;
+                let hit = document.elementFromPoint(x, y);
+                while (hit && hit.shadowRoot) {
+                    const nested = hit.shadowRoot.elementFromPoint(x, y);
+                    if (!nested || nested === hit) break;
+                    hit = nested;
+                }
+                return hit === input;
+            """, candidate):
+                return candidate
+        except StaleElementReferenceException:
+            continue
+    return False
+
+
 def qualify_native_input_copy(host: str) -> None:
     """A focused input owns Ctrl+C even after a grid rectangle was selected."""
+    from tests.flagship_clipboard_observer import CLIPBOARD_BOUNDARY_OBSERVER
     import pytest
     if os.environ.get("PIVOT_RUN_FLAGSHIP_BROWSER_TESTS") != "1":
         pytest.skip("Enable installed flagship browser qualification explicitly")
@@ -1128,7 +1237,7 @@ def qualify_native_input_copy(host: str) -> None:
     from tests.test_flagship_certification import (
         _clipboard_text, _host_url, _origin, _qualification_chrome_options,
         _switch_to_workspace, _verify_release_asset_batch,
-        _wait_for_visible_workspace_element,
+        _workspace_elements,
     )
 
     requirement = "keyboard-copy.native-input"
@@ -1148,6 +1257,7 @@ def qualify_native_input_copy(host: str) -> None:
         driver._pivot_artifact_binding, driver._pivot_artifact_host = binding, host
         driver._pivot_loaded_assets = {}
         driver.execute_cdp_cmd("Network.enable", {"maxTotalBufferSize": 50000000, "maxResourceBufferSize": 50000000})
+        driver.execute_cdp_cmd("Page.addScriptToEvaluateOnNewDocument", {"source": CLIPBOARD_BOUNDARY_OBSERVER})
         driver.execute_cdp_cmd("Browser.grantPermissions", {
             "origin": _origin(_host_url(host)), "permissions": ["clipboardReadWrite", "clipboardSanitizedWrite"]})
         _switch_to_workspace(driver, host)
@@ -1166,8 +1276,7 @@ def qualify_native_input_copy(host: str) -> None:
         assert len(selected) == 4
         observation["selectedGridCells"] = selected
 
-        def copy_focused_input(selector, expected, label):
-            element = _wait_for_visible_workspace_element(driver, selector)
+        def copy_focused_input(element, expected, label):
             element.click()
             element.send_keys(Keys.CONTROL + "a" + Keys.NULL)
             selected_text = driver.execute_script("""
@@ -1187,6 +1296,7 @@ def qualify_native_input_copy(host: str) -> None:
             assert driver.execute_async_script(
                 "const done=arguments[arguments.length-1]; navigator.clipboard.writeText(arguments[0]).then(()=>done(true),()=>done(false));",
                 sentinel)
+            write_checkpoint = driver.execute_script("return window.__pivotClipboardBoundary.length")
             ActionChains(driver).key_down(Keys.CONTROL).send_keys("c").key_up(Keys.CONTROL).perform()
             try:
                 copied = WebDriverWait(driver, 8).until(lambda current:
@@ -1196,10 +1306,15 @@ def qualify_native_input_copy(host: str) -> None:
                 raise
             observation["controls"][-1]["clipboardText"] = copied
             assert copied == expected, f"Ctrl+C in {label} copied grid contents or changed text"
+            observation["controls"][-1]["nativeCopyMonitor"] = assert_clipboard_stable(
+                lambda: _clipboard_text(driver), expected, timeout=SELECTION_COPY_TIMEOUT)
+            writes = driver.execute_script("return window.__pivotClipboardBoundary.slice(arguments[0])", write_checkpoint)
+            observation["controls"][-1]["productClipboardWrites"] = writes
+            assert writes == [], f"Grid clipboard handler intercepted native copy in {label}"
             observation["controls"][-1]["focused"] = True
 
         for attempt in range(3):
-            search = _wait_for_visible_workspace_element(driver, '[data-testid="pivot-global-search"]')
+            search = wait.until(lambda current: _native_copy_input_target(current, '[data-testid="pivot-global-search"]'))
             try:
                 if search.get_attribute("value") != "M\u00fcnchen":
                     search.click()
@@ -1209,14 +1324,29 @@ def qualify_native_input_copy(host: str) -> None:
                 if attempt == 2:
                     raise
         wait.until(lambda current: [row["label"] for row in _selection_rows(current)] == ["M\u00fcnchen"])
-        copy_focused_input('[data-testid="pivot-global-search"]', "M\u00fcnchen", "global search")
+        search = wait.until(lambda current: _native_copy_input_target(current, '[data-testid="pivot-global-search"]'))
+        copy_focused_input(search, "M\u00fcnchen", "global search")
+        filter_button = wait.until(lambda current: next((button for button in _workspace_elements(current,
+            '[role="columnheader"][data-header-column-id="hierarchy"] [aria-label="Filter Column"]')
+            if button.is_displayed()), False))
+        filter_button.click()
+        filter_selector = 'input[placeholder="Search values..."], input[placeholder="Search loaded values..."]'
+        filter_input = wait.until(lambda current: _native_copy_input_target(current, filter_selector))
+        filter_input.click()
+        filter_input.send_keys("M\u00fcnchen")
+        wait.until(lambda current: filter_input.get_attribute("value") == "M\u00fcnchen")
+        copy_focused_input(filter_input, "M\u00fcnchen", "filter search")
+        result["filterInputNativeCopyVerified"] = True
+        close_filter = wait.until(lambda current: next((button for button in _workspace_elements(current, "button")
+            if button.is_displayed() and button.text.strip() == "Clear & Close"), False))
+        close_filter.click()
         dialog = _open_selection_number_format(driver, observation)
-        number = _wait_for_visible_workspace_element(driver, dialog + ' input[type="number"]')
+        number = wait.until(lambda current: _native_copy_input_target(current, dialog + ' input[type="number"]'))
+        number.click()
         number.send_keys(Keys.CONTROL + "a" + Keys.NULL)
         number.send_keys("4")
-        wait.until(lambda current: _wait_for_visible_workspace_element(
-            current, dialog + ' input[type="number"]').get_attribute("value") == "4")
-        copy_focused_input(dialog + ' input[type="number"]', "4", "format dialog number")
+        wait.until(lambda current: number.get_attribute("value") == "4")
+        copy_focused_input(number, "4", "format dialog number")
         result.update(result="passed", clipboardBytesVerified=True, nativeKeyboardCopyVerified=True)
     except Exception as error:
         frame = traceback.extract_tb(error.__traceback__)[-1]
@@ -1708,13 +1838,32 @@ def _network(driver):
     return [json.loads(entry["message"])["message"] for entry in entries]
 
 
-def _visible_error(driver):
-    from tests.test_flagship_certification import _workspace_elements
+_VISIBLE_ERROR_QUERY = r"""
+const matches = [];
+const visible = element => {
+  const r = element.getBoundingClientRect(), style = getComputedStyle(element);
+  return element.isConnected && r.width > 0 && r.height > 0 &&
+    style.display !== 'none' && style.visibility !== 'hidden' &&
+    style.visibility !== 'collapse' &&
+    (!element.checkVisibility || element.checkVisibility({checkOpacity:true, checkVisibilityCSS:true}));
+};
+const visit = root => {
+  for (const alert of root.querySelectorAll('[role="alert"]')) {
+    if (visible(alert) && alert.innerText.includes('We could not load the grid data') &&
+        [...alert.querySelectorAll('button')].some(button => visible(button) && button.innerText === 'Retry')) {
+      matches.push(alert);
+    }
+  }
+  for (const element of root.querySelectorAll('*')) if (element.shadowRoot) visit(element.shadowRoot);
+};
+visit(document);
+return matches;
+"""
 
-    return [element for element in _workspace_elements(driver, '[role="alert"]')
-            if element.is_displayed() and "We could not load the grid data" in element.text
-            and any(button.is_displayed() and button.text == "Retry"
-                    for button in element.find_elements("css selector", "button"))]
+
+def _visible_error(driver):
+    # Alert dismissal may unmount it between remote visibility/text reads.
+    return driver.execute_script(_VISIBLE_ERROR_QUERY)
 
 
 def _totals(driver, *, decimal_places=0):
@@ -3629,6 +3778,102 @@ def _set_hierarchy_two_decimal_display(driver):
             "decimalPlaces": 2, "selectionScoped": False}
 
 
+_HIERARCHY_TOGGLE_QUERY = r"""
+const rowId = arguments[0], matches = [];
+const visit = root => {
+  for (const cell of root.querySelectorAll('[role="gridcell"][data-colid="hierarchy"]')) {
+    if (cell.getAttribute('data-rowid') !== rowId) continue;
+    for (const button of cell.querySelectorAll('button')) {
+      const r = button.getBoundingClientRect(), style = getComputedStyle(button);
+      if (button.isConnected && !button.disabled && r.width > 0 && r.height > 0 &&
+          style.display !== 'none' && style.visibility !== 'hidden' &&
+          style.visibility !== 'collapse') matches.push(button);
+    }
+  }
+  for (const element of root.querySelectorAll('*')) if (element.shadowRoot) visit(element.shadowRoot);
+};
+visit(document);
+return matches.length === 1 ? matches[0] : null;
+"""
+
+
+_HIERARCHY_CLICK_GEOMETRY = r"""
+const element = arguments[0], r = element.getBoundingClientRect();
+if (!element.isConnected || !r.width || !r.height) return {ready:false};
+const ancestors = [];
+for (let node = element.parentElement || element.getRootNode().host; node;
+     node = node.parentElement || node.getRootNode().host) ancestors.push(node);
+if (!ancestors.includes(document.scrollingElement)) ancestors.push(document.scrollingElement);
+const operations = [];
+let clipped = false;
+for (const node of ancestors) {
+  const root = node === document.scrollingElement;
+  const style = getComputedStyle(node), b = root ?
+    {left:0, top:0, right:innerWidth, bottom:innerHeight} : node.getBoundingClientRect();
+  const clipsX = root || /auto|scroll|hidden|clip/.test(style.overflowX);
+  const clipsY = root || /auto|scroll|hidden|clip/.test(style.overflowY);
+  const outsideX = clipsX && (r.left < b.left + 2 || r.right > b.right - 2);
+  const outsideY = clipsY && (r.top < b.top + 2 || r.bottom > b.bottom - 2);
+  clipped ||= outsideX || outsideY;
+  const dx = outsideX ? Math.round((r.left+r.right-b.left-b.right)/2) : 0;
+  const dy = outsideY ? Math.round((r.top+r.bottom-b.top-b.bottom)/2) : 0;
+  const canX = (root || /auto|scroll/.test(style.overflowX)) &&
+    (dx < 0 ? node.scrollLeft > 0 : dx > 0 && node.scrollLeft + node.clientWidth < node.scrollWidth);
+  const canY = (root || /auto|scroll/.test(style.overflowY)) &&
+    (dy < 0 ? node.scrollTop > 0 : dy > 0 && node.scrollTop + node.clientHeight < node.scrollHeight);
+  const left = Math.max(1,b.left), right = Math.min(innerWidth-1,b.right);
+  const top = Math.max(1,b.top), bottom = Math.min(innerHeight-1,b.bottom);
+  if ((canX || canY) && right > left && bottom > top) operations.push({
+    x:Math.round((left+right)/2), y:Math.round((top+bottom)/2),
+    dx:canX ? dx : 0, dy:canY ? dy : 0});
+}
+// Reveal outer containers before aiming a wheel at a nested sidebar.
+if (operations.length) return {ready:false, wheel:operations.at(-1)};
+const x = (r.left+r.right)/2, y = (r.top+r.bottom)/2;
+let hit = document.elementFromPoint(x,y);
+while (hit?.shadowRoot) {
+  const child = hit.shadowRoot.elementFromPoint(x,y);
+  if (!child || child === hit) break;
+  hit = child;
+}
+return {ready:!clipped && !!hit && (hit === element || element.contains(hit))};
+"""
+
+
+def _click_hierarchy_toggle(driver, row_id):
+    """Reveal a fresh logical row toggle using native scroll and click actions."""
+    from selenium.common.exceptions import StaleElementReferenceException, ElementClickInterceptedException
+    from selenium.webdriver import ActionChains
+    from selenium.webdriver.common.actions.wheel_input import ScrollOrigin
+    from selenium.webdriver.support.ui import WebDriverWait
+
+    scrolled = False
+
+    def attempt(current):
+        nonlocal scrolled
+        try:
+            toggle = current.execute_script(_HIERARCHY_TOGGLE_QUERY, row_id)
+            if not toggle:
+                return False
+            if not scrolled:
+                ActionChains(current).scroll_to_element(toggle).perform()
+                scrolled = True
+            geometry = current.execute_script(_HIERARCHY_CLICK_GEOMETRY, toggle)
+            if wheel := geometry.get("wheel"):
+                ActionChains(current).scroll_from_origin(
+                    ScrollOrigin.from_viewport(wheel["x"], wheel["y"]), wheel["dx"], wheel["dy"]).perform()
+                return False
+            if not geometry["ready"]:
+                return False
+            toggle.click()
+            return True
+        except (StaleElementReferenceException, ElementClickInterceptedException):
+            scrolled = False
+            return False
+
+    WebDriverWait(driver, 10).until(attempt, f"Native hierarchy toggle not reachable: {row_id}")
+
+
 def qualify_hierarchy_navigation(host: str, requirement: str) -> None:
     """Exercise hierarchy controls on installed artifacts and record exact V1/DOM evidence."""
     import pytest
@@ -3687,9 +3932,8 @@ def qualify_hierarchy_navigation(host: str, requirement: str) -> None:
 
         if requirement == "hierarchy-expand.round-trip":
             parent_id = next(row_id for row_id, label in initial if label == "Éclair")
-            parent = _selection_cell(driver, parent_id, "hierarchy")
             checkpoint = driver.execute_script("return performance.now()")
-            parent.find_element("css selector", "button").click()
+            _click_hierarchy_toggle(driver, parent_id)
             expected_children = ("東京",)
         else:
             from tests.test_flagship_certification import _wait_for_visible_workspace_element
@@ -3737,7 +3981,7 @@ def qualify_hierarchy_navigation(host: str, requirement: str) -> None:
 
         checkpoint = driver.execute_script("return performance.now()")
         if requirement == "hierarchy-expand.round-trip":
-            _selection_cell(driver, parent_id, "hierarchy").find_element("css selector", "button").click()
+            _click_hierarchy_toggle(driver, parent_id)
         else:
             header = _wait_for_visible_workspace_element(driver, '[role="columnheader"][data-header-column-id="hierarchy"]')
             ActionChains(driver).context_click(header).perform()

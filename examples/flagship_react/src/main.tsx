@@ -51,6 +51,8 @@ function CapabilityCard({ number, title, copy }: (typeof capabilities)[number]) 
 }
 
 function App() {
+    const qualification = new URLSearchParams(window.location.search).get('qualification') === '1';
+    const [workspaceMounted, setWorkspaceMounted] = useState(true);
     const [workspaceConfig, setWorkspaceConfig] = useState<WorkspaceConfig | null>(null);
     const [workspaceConfigError, setWorkspaceConfigError] = useState<string | null>(null);
 
@@ -101,7 +103,10 @@ function App() {
                 </div>
                 <code>POST /v1/runtime</code>
             </div>
-            {workspaceConfig ? <PivotWorkspace {...workspaceConfig} transport={transport} /> : (
+            {qualification && <button data-qualification-workspace-toggle onClick={() => setWorkspaceMounted(value => !value)}>
+                {workspaceMounted ? 'Unmount workspace' : 'Mount workspace'}
+            </button>}
+            {workspaceConfig && workspaceMounted ? <PivotWorkspace {...workspaceConfig} transport={transport} /> : workspaceConfig ? null : (
                 <p role="status">{workspaceConfigError || 'Loading workspace configuration…'}</p>
             )}
         </section>

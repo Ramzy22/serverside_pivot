@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from dataclasses import replace
 from decimal import Decimal
 from typing import Any, Dict, List, Optional
 
@@ -496,6 +497,22 @@ class RuntimeReportService:
         emitted_stats: Optional[Dict[str, Any]] = None
         base_filters = dict(base_request.filters or {})
 
+        async def execute_report_query(
+            request: TanStackRequest, *, pivoted: bool = True
+        ) -> TanStackResponse:
+            # Branching reports retain the same pivot axes as the public view.
+            # The existing adapter owns the column catalog and aggregate-first
+            # execution; reports only annotate and arrange the resulting rows.
+            if pivoted and state.col_fields and request.grouping:
+                return await adapter.handle_virtual_scroll_request(
+                    request, 0, 100000, needs_col_schema=True,
+                    include_grand_total=False, user=context.principal,
+                    row_scope=context.row_scope,
+                )
+            return await adapter.handle_request(
+                request, user=context.principal, row_scope=context.row_scope,
+            )
+
         async def fetch_node_rows(
             node: Dict[str, Any],
             active_filters: Dict[str, Any],
@@ -518,7 +535,7 @@ class RuntimeReportService:
                 operation=TanStackOperation.GET_DATA,
                 table=base_request.table,
                 columns=RuntimeRequestFactory.build_columns(
-                    [node_field], [], state.val_configs
+                    [node_field], state.col_fields, state.val_configs
                 ),
                 filters=active_filters,
                 custom_dimensions=base_request.custom_dimensions or [],
@@ -536,11 +553,11 @@ class RuntimeReportService:
                 },
                 global_filter=base_request.global_filter,
                 totals=False,
-                row_totals=False,
+                row_totals=bool(state.col_fields and state.show_row_totals),
                 version=base_request.version,
                 column_sort_options=base_request.column_sort_options,
             )
-            branch_response = await adapter.handle_request(branch_request)
+            branch_response = await execute_report_query(branch_request)
             if emitted_columns is None:
                 emitted_columns = [
                     c
@@ -555,10 +572,65 @@ class RuntimeReportService:
                 for row in (branch_response.data or [])
                 if isinstance(row, dict) and not self._is_report_summary_row(row)
             ]
+            ranking_values: Optional[Dict[Any, Any]] = None
+            if (
+                state.col_fields and sort_by and sort_by != node_field and visible_rows
+                and not all(sort_by in row for row in visible_rows)
+            ):
+                # ReportEditor offers unprefixed metric IDs. Pivot cells have
+                # period prefixes, and row totals may be hidden. Rank using an
+                # independent overall aggregate, never sums/means of period
+                # cells (which are incorrect for AVG and nonlinear formulas).
+                metric = next(
+                    (
+                        measure
+                        for measure in state.val_configs
+                        if isinstance(measure, dict) and measure.get("field") and measure.get("agg")
+                        if sort_by in {
+                            measure.get("alias") or f"{measure['field']}_{measure['agg']}",
+                            measure["field"] if measure["agg"] == "formula"
+                            else f"{measure['field']}_{measure['agg']}",
+                        }
+                    ),
+                    None,
+                )
+                if metric:
+                    metric_id = (
+                        metric["field"] if metric["agg"] == "formula"
+                        else metric.get("alias") or f"{metric['field']}_{metric['agg']}"
+                    )
+                    total_id = f"__RowTotal__{metric_id}"
+                    if (
+                        metric["agg"] != "formula" and not metric.get("windowFn")
+                        and all(total_id in row for row in visible_rows)
+                    ):
+                        # Base-measure row totals are aggregated from source rows.
+                        # Formula row totals can instead sum period formula cells.
+                        ranking_values = {row.get(node_field): row[total_id] for row in visible_rows}
+                    else:
+                        ranking_response = await execute_report_query(
+                            replace(
+                                branch_request,
+                                columns=RuntimeRequestFactory.build_columns(
+                                    [node_field], [], state.val_configs
+                                ),
+                                sorting=[], row_totals=False,
+                            ),
+                            pivoted=False,
+                        )
+                        ranking_values = {
+                            row.get(node_field): row.get(metric_id)
+                            for row in (ranking_response.data or [])
+                            if isinstance(row, dict) and not self._is_report_summary_row(row)
+                        }
             if sort_by:
                 visible_rows = sorted(
                     visible_rows,
-                    key=lambda row: self._report_sort_key(row.get(sort_by), sort_abs),
+                    key=lambda row: self._report_sort_key(
+                        ranking_values.get(row.get(node_field))
+                        if ranking_values is not None else row.get(sort_by),
+                        sort_abs,
+                    ),
                     reverse=(sort_dir != "asc"),
                 )
 
@@ -603,6 +675,9 @@ class RuntimeReportService:
                 ) or row_path in expanded_set
 
                 row_out = dict(row)
+                if state.col_fields:
+                    for column in (emitted_schema or {}).get("columns", []):
+                        row_out.setdefault(column["id"], None)
                 row_out["_id"] = path_token or str(row.get("_id") or "")
                 if (
                     isinstance(branch_match, dict)
@@ -669,7 +744,7 @@ class RuntimeReportService:
                         operation=TanStackOperation.GET_DATA,
                         table=base_request.table,
                         columns=RuntimeRequestFactory.build_columns(
-                            [], [], state.val_configs
+                            [], state.col_fields, state.val_configs
                         ),
                         filters=self._merge_in_report_filter(
                             active_filters, node_field, other_values
@@ -685,11 +760,11 @@ class RuntimeReportService:
                         },
                         global_filter=base_request.global_filter,
                         totals=False,
-                        row_totals=False,
+                        row_totals=bool(state.col_fields and state.show_row_totals),
                         version=base_request.version,
                         column_sort_options=base_request.column_sort_options,
                     )
-                    other_response = await adapter.handle_request(other_request)
+                    other_response = await execute_report_query(other_request)
                     other_aggregate_row = next(
                         (
                             candidate
@@ -713,6 +788,9 @@ class RuntimeReportService:
                     level_label=node.get("label") or node_field,
                     source_count=len(other_rows),
                 )
+                if state.col_fields:
+                    for column in (emitted_schema or {}).get("columns", []):
+                        other_out.setdefault(column["id"], None)
                 self._decorate_report_row_metadata(
                     other_out,
                     node=node,
@@ -735,7 +813,7 @@ class RuntimeReportService:
             grand_total_request = TanStackRequest(
                 operation=TanStackOperation.GET_DATA,
                 table=base_request.table,
-                columns=RuntimeRequestFactory.build_columns([], [], state.val_configs),
+                columns=RuntimeRequestFactory.build_columns([], state.col_fields, state.val_configs),
                 filters=base_filters,
                 custom_dimensions=base_request.custom_dimensions or [],
                 measure_axis=base_request.measure_axis or None,
@@ -745,11 +823,11 @@ class RuntimeReportService:
                 pagination={"pageIndex": 0, "pageSize": 1},
                 global_filter=base_request.global_filter,
                 totals=False,
-                row_totals=False,
+                row_totals=bool(state.col_fields and state.show_row_totals),
                 version=base_request.version,
                 column_sort_options=base_request.column_sort_options,
             )
-            grand_total_response = await adapter.handle_request(grand_total_request)
+            grand_total_response = await execute_report_query(grand_total_request)
             if emitted_columns is None:
                 emitted_columns = list(grand_total_response.columns or [])
                 emitted_schema = grand_total_response.col_schema
@@ -787,6 +865,7 @@ class RuntimeReportService:
             version=base_request.version,
             col_schema=emitted_schema,
             color_scale_stats=emitted_stats,
+            layout_revision=(emitted_schema or {}).get("layoutRevision"),
         )
 
     @staticmethod

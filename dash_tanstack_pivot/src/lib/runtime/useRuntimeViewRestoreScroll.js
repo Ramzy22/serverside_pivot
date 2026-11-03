@@ -16,12 +16,53 @@ export function useRuntimeViewRestoreScroll({ parentRef, viewState }) {
     const savedScroll = restored?.scroll && typeof restored.scroll === 'object' ? restored.scroll : null;
     if (!savedScroll || !parentRef.current) return undefined;
 
-    const animationFrame = requestAnimationFrame(() => {
-      const parent = parentRef.current;
-      if (!parent) return;
-      if (typeof savedScroll.top === 'number') parent.scrollTop = savedScroll.top;
-      if (typeof savedScroll.left === 'number') parent.scrollLeft = savedScroll.left;
-    });
-    return () => cancelAnimationFrame(animationFrame);
+    const top = Number.isFinite(savedScroll.top) ? Math.max(0, savedScroll.top) : null;
+    const left = Number.isFinite(savedScroll.left) ? Math.max(0, savedScroll.left) : null;
+    if (top === null && left === null) return undefined;
+
+    // Browser assignments clamp before async rows/column measurements arrive.
+    // Try once per extent change, then stay idle while an offset is unreachable.
+    // Observers allow even slow server responses without an animation-frame loop.
+    const parent = parentRef.current;
+    let animationFrame;
+    let stopped = false;
+    let mutationObserver;
+    let resizeObserver;
+    const events = ['wheel', 'pointerdown', 'keydown'];
+    const stop = () => {
+      stopped = true;
+      cancelAnimationFrame(animationFrame);
+      mutationObserver?.disconnect();
+      resizeObserver?.disconnect();
+      events.forEach(event => parent.removeEventListener(event, stop));
+    };
+    const matches = () => (top === null || Math.abs(parent.scrollTop - top) <= 1)
+      && (left === null || Math.abs(parent.scrollLeft - left) <= 1);
+    const apply = () => {
+      if (stopped || parentRef.current !== parent) { stop(); return; }
+      if (top !== null) parent.scrollTop = top;
+      if (left !== null) parent.scrollLeft = left;
+      animationFrame = requestAnimationFrame(() => {
+        if (stopped || parentRef.current !== parent || matches()) stop();
+        // Otherwise remain dormant until the measured extent actually changes.
+      });
+    };
+    const extent = () => [parent.scrollHeight, parent.scrollWidth, parent.clientHeight, parent.clientWidth].join(':');
+    let previousExtent = extent();
+    const onExtentChange = () => {
+      if (stopped) return;
+      const nextExtent = extent();
+      if (nextExtent === previousExtent) return;
+      previousExtent = nextExtent;
+      cancelAnimationFrame(animationFrame);
+      animationFrame = requestAnimationFrame(apply);
+    };
+    mutationObserver = new MutationObserver(onExtentChange);
+    mutationObserver.observe(parent, { childList: true, subtree: true, attributes: true });
+    resizeObserver = new ResizeObserver(onExtentChange);
+    resizeObserver.observe(parent);
+    events.forEach(event => parent.addEventListener(event, stop, { passive: true }));
+    animationFrame = requestAnimationFrame(apply);
+    return stop;
   }, [parentRef, viewState]);
 }

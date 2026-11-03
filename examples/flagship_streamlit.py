@@ -26,6 +26,12 @@ from examples.flagship_demo_data import DEMO_ROW_COUNT, workspace_config
 
 st.set_page_config(page_title="serverside-pivot · Streamlit", page_icon="◆", layout="wide", initial_sidebar_state="collapsed")
 
+# This counts actual script invocations, including host-triggered reruns.
+# Qualification observations read the server-produced value in the outer page.
+if os.environ.get("PIVOT_FLAGSHIP_PARITY_DATA") == "1" or os.environ.get("PIVOT_FLAGSHIP_QUALIFICATION") == "1":
+    st.session_state["_pivot_qualification_script_runs"] = st.session_state.get("_pivot_qualification_script_runs", 0) + 1
+    st.markdown(f'<output data-pivot-script-runs="{st.session_state["_pivot_qualification_script_runs"]}">Script runs: {st.session_state["_pivot_qualification_script_runs"]}</output>', unsafe_allow_html=True)
+
 st.markdown(
     """
     <style>

@@ -1559,3 +1559,58 @@ def test_hidden_column_copy_has_executable_installed_browser_mappings():
     for host in ("dash", "react", "streamlit"):
         assert plan[("copy-selection.hidden-columns", host, "browser.copy-selection.hidden-columns")] == (
             f"tests/test_flagship_workflows.py::test_flagship_selected_clipboard[copy-selection.hidden-columns-{host}]")
+
+
+@pytest.mark.flagship
+@pytest.mark.parametrize("host", ["dash", "react", "streamlit"])
+@pytest.mark.parametrize("requirement", [
+    "row-numbers.toggle", "density.cycle", "number-format.decimals",
+    "cell-format.apply-close", "color-scales.scale", "color-scales.data-bars",
+    "themes.select-override", "zoom-immersive.round-trip",
+])
+def test_flagship_presentation(host, requirement, installed_workflow_hosts):
+    from tests.flagship_remaining_1 import qualify_presentation
+    qualify_presentation(host, requirement)
+
+
+@pytest.mark.flagship
+@pytest.mark.parametrize("host", ["dash", "react", "streamlit"])
+@pytest.mark.parametrize("requirement", [
+    "layout-field-zones.move", "formula-columns.add-remove",
+    "custom-dimensions.add-remove", "report-mode.restore-definition",
+])
+def test_flagship_derived_models(host, requirement, installed_workflow_hosts):
+    from tests.flagship_remaining_2 import qualify_models
+    qualify_models(host, requirement)
+
+
+@pytest.mark.flagship
+@pytest.mark.parametrize("host", ["dash", "react", "streamlit"])
+@pytest.mark.parametrize("requirement", ["range-chart.source", "range-chart.locked-source", "range-chart.live-source",
+                                         "chart-pane.lifecycle", "chart-export.artifact"])
+def test_flagship_charts(host, requirement, installed_workflow_hosts):
+    from tests.flagship_remaining_3 import qualify_charts
+    qualify_charts(host, requirement)
+
+
+@pytest.mark.flagship
+@pytest.mark.parametrize("host,requirement", [
+    ("dash", "dash-callback-transport.v1"),
+    ("react", "react-direct-transport.v1"),
+    ("streamlit", "streamlit-no-rerun.local-interactions"),
+])
+def test_flagship_host_integration(host, requirement, installed_workflow_hosts):
+    from tests.flagship_remaining_5 import qualify_hosts
+    qualify_hosts(host, requirement)
+
+
+@pytest.mark.flagship
+@pytest.mark.parametrize("host", ["dash", "react", "streamlit"])
+@pytest.mark.parametrize("requirement", [
+    "saved-scroll.restore", "copy-selection.merged-headers", "copy-selection.unloaded-rows",
+    "large-delivery.selected-part", "journey-selection.filter-pin-scroll-copy",
+    "journey-analysis.aggregate-expand-swap-export",
+])
+def test_flagship_combined_journeys(host, requirement, installed_workflow_hosts):
+    from tests.flagship_remaining_4 import qualify_journeys
+    qualify_journeys(host, requirement)

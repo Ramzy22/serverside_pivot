@@ -1086,7 +1086,7 @@ export const buildSelectionChartModel = (selectionMap, visibleRows, visibleCols,
         };
     }
 
-    if (filteredRowIndexes.length === 1) {
+    if (filteredRowIndexes.length === 1 && orientation !== 'rows') {
         const rowIndex = filteredRowIndexes[0];
         const row = visibleRows[rowIndex];
         const resolveColumnLabel = buildColumnLabelResolver(

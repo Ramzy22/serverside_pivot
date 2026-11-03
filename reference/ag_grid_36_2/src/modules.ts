@@ -1,6 +1,6 @@
 import {
   ColumnApiModule, ColumnAutoSizeModule, CsvExportModule, GridStateModule, ModuleRegistry,
-  NumberFilterModule, TextFilterModule,
+  NumberFilterModule, TextFilterModule, CellStyleModule, ScrollApiModule,
 } from 'ag-grid-community';
 import {
   CellSelectionModule, ClipboardModule, ColumnMenuModule, ColumnsToolPanelModule,
@@ -16,7 +16,7 @@ const referenceModules = [
   IntegratedChartsModule.with(AgChartsEnterpriseModule), GridStateModule,
   ColumnMenuModule, ContextMenuModule, ColumnsToolPanelModule, FiltersToolPanelModule,
   RowGroupingPanelModule, SetFilterModule, GroupFilterModule, TextFilterModule, NumberFilterModule,
-  ColumnApiModule, ColumnAutoSizeModule,
+  ColumnApiModule, ColumnAutoSizeModule, CellStyleModule, ScrollApiModule,
 ];
 
 export function registerReferenceModules() {

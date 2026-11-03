@@ -315,7 +315,23 @@ def test_installed_release_rejects_flags_that_bypass_its_fresh_build(tmp_path: P
     assert not (tmp_path / "evidence").exists()
 
 
-def test_installed_release_binds_browser_environment_and_preserves_failure(tmp_path: Path, monkeypatch) -> None:
+@pytest.fixture
+def mocked_browser_harness(tmp_path, monkeypatch):
+    """Isolate orchestration tests whose artifact build and browser are mocked.
+
+    Committed archive verification is exercised with real repositories in
+    test_flagship_shared_client; fake build bindings cannot satisfy that check.
+    """
+    from scripts import flagship_harness
+
+    @contextmanager
+    def harness(binding, evidence_root):
+        yield flagship_harness.BrowserHarness(tmp_path, evidence_root / "browser-harness.json")
+
+    monkeypatch.setattr(flagship_harness, "committed_browser_harness", harness)
+
+
+def test_installed_release_binds_browser_environment_and_preserves_failure(tmp_path: Path, monkeypatch, mocked_browser_harness) -> None:
     from scripts import certify_flagship
     from scripts import flagship_artifacts
 
@@ -348,7 +364,7 @@ def test_installed_release_binds_browser_environment_and_preserves_failure(tmp_p
 
 
 @pytest.mark.parametrize("report", [None, '<testsuite><testcase name="browser"><skipped/></testcase></testsuite>', '<testsuite/>'])
-def test_installed_release_rejects_zero_exit_with_skipped_missing_or_empty_browser_report(tmp_path, monkeypatch, report):
+def test_installed_release_rejects_zero_exit_with_skipped_missing_or_empty_browser_report(tmp_path, monkeypatch, report, mocked_browser_harness):
     from scripts import certify_flagship, flagship_artifacts
 
     monkeypatch.setattr(flagship_artifacts, "build_artifacts", lambda source, output: ArtifactBinding())
@@ -367,7 +383,7 @@ def test_installed_release_rejects_zero_exit_with_skipped_missing_or_empty_brows
 
 
 @pytest.mark.parametrize("browser_code", [0, 7])
-def test_installed_release_records_cleanup_failure_as_failed(tmp_path, monkeypatch, browser_code):
+def test_installed_release_records_cleanup_failure_as_failed(tmp_path, monkeypatch, browser_code, mocked_browser_harness):
     from scripts import certify_flagship, flagship_artifacts
     binding = ArtifactBinding(paths={"environment": tmp_path / "owned-env",
                                     "environment_record": tmp_path / "owned-env.location.json"})
@@ -394,7 +410,7 @@ def test_installed_release_records_cleanup_failure_as_failed(tmp_path, monkeypat
 @pytest.mark.parametrize("browser_code", [0, 7])
 @pytest.mark.parametrize("evidence_error", ["unknown-encoding", "unsupported-encoding", "aggregate-write", "cleanup-diagnostic-write"])
 def test_installed_release_always_cleans_owned_environment_when_reporting_fails(
-    tmp_path, monkeypatch, browser_code, evidence_error,
+    tmp_path, monkeypatch, browser_code, evidence_error, mocked_browser_harness,
 ):
     import xml.etree.ElementTree as ET
     from scripts import certify_flagship, flagship_artifacts
@@ -538,6 +554,11 @@ def test_release_environment_does_not_inherit_global_distribution_metadata(tmp_p
     environment = tmp_path / "isolated-env"
     python = flagship_artifacts._create_python_environment(environment)
     try:
+        installed_pip = subprocess.check_output([str(python), "-c", "import importlib.metadata; print(importlib.metadata.version('pip'))"], text=True).strip()
+        assert installed_pip == "26.2"
+        provenance = json.loads((tmp_path / "isolated-env.location.json").read_text())
+        assert provenance["pipBootstrap"]["version"] == installed_pip
+        assert provenance["pipBootstrap"]["sha256"] == "931c303696af6fa3417112103b1cad26890e5a07eccb5b99783700e33f2b8aad"
         paths = json.loads(subprocess.check_output([str(python), "-c", "import json,sys; print(json.dumps(sys.path))"], text=True))
         import sysconfig
         assert str(Path(sysconfig.get_path("purelib")).resolve()) not in {str(Path(path).resolve()) for path in paths if path}
@@ -589,6 +610,47 @@ def test_environment_cleanup_rejects_unowned_directory(tmp_path):
     with pytest.raises(ValueError, match="owned"):
         flagship_artifacts.cleanup_python_environment(binding)
     assert (unrelated / "keep.txt").read_text() == "preserve unrelated data"
+
+
+@pytest.mark.parametrize("failure", ["download", "hash", "install", "version", "record"])
+def test_release_bootstrap_failure_cleans_only_allocated_environment(tmp_path, monkeypatch, failure):
+    import io
+    from types import SimpleNamespace
+    from scripts import flagship_artifacts
+
+    # Exercise real allocation, ownership records, and guarded cleanup. Only
+    # the slow interpreter seed and external downloader/installer are replaced.
+    monkeypatch.setattr(flagship_artifacts.venv, "EnvBuilder", lambda **kwargs: SimpleNamespace(create=lambda root: None))
+    wheel_bytes = b"test installer download"
+    if failure != "hash":
+        monkeypatch.setattr(flagship_artifacts, "_RELEASE_PIP_SHA256", hashlib.sha256(wheel_bytes).hexdigest())
+    def download(*args, **kwargs):
+        if failure == "download":
+            raise urllib.error.URLError("bootstrap unavailable")
+        return io.BytesIO(wheel_bytes)
+    def install(command, cwd, **kwargs):
+        if "install" in command and failure == "install":
+            raise subprocess.CalledProcessError(1, command)
+        return "unexpected-version" if failure == "version" else "26.2"
+    original_write = Path.write_text
+    def write_record(path, text, *args, **kwargs):
+        if failure == "record" and path.name == "failed-env.location.json" and json.loads(text)["state"] == "ready":
+            raise OSError("bootstrap provenance unavailable")
+        return original_write(path, text, *args, **kwargs)
+    monkeypatch.setattr(flagship_artifacts.urllib.request, "urlopen", download)
+    monkeypatch.setattr(flagship_artifacts, "_run", install)
+    monkeypatch.setattr(Path, "write_text", write_record)
+    expected = {"download": urllib.error.URLError, "hash": ValueError,
+                "install": subprocess.CalledProcessError, "version": RuntimeError, "record": OSError}[failure]
+    unrelated = tmp_path / "keep.txt"
+    unrelated.write_text("unrelated user data")
+    with pytest.raises(expected):
+        flagship_artifacts._create_python_environment(tmp_path / "failed-env")
+    record = json.loads((tmp_path / "failed-env.location.json").read_text())
+    assert record["state"] == "cleaned"
+    assert not Path(record["environment"]).exists()
+    assert Path(record["environment"]) not in flagship_artifacts._OWNED_ENVIRONMENTS
+    assert unrelated.read_text() == "unrelated user data"
 
 
 @pytest.mark.parametrize("url", ["http://127.0.0.1:39002/assets/index.js", "http://127.0.0.1:39003/assets/index.js", "https://foreign.example/assets/index.js"])

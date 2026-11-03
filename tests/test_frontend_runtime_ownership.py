@@ -729,10 +729,12 @@ def test_chart_definition_commands_have_an_explicit_runtime_owner():
 
 def test_chart_floating_interactions_have_an_explicit_runtime_owner():
     setup_source = _source("runtime/useCoreRuntimeStage.tsx")
+    command_source = _source("runtime/useCommandRuntimeStage.tsx")
     interactions_source = _source("runtime/useRuntimeChartFloatingInteractions.js")
 
-    assert "useRuntimeChartFloatingInteractions({" in setup_source
-    assert "useRuntimeChartFloatingInteractions(env" not in setup_source
+    assert "useRuntimeChartFloatingInteractions({" not in setup_source
+    assert "useRuntimeChartFloatingInteractions({" in command_source
+    assert "useRuntimeChartFloatingInteractions(env" not in command_source
     assert "export function useRuntimeChartFloatingInteractions({" in interactions_source
     assert "handleToggleChartPanelFloating" in interactions_source
     assert "handleToggleChartCanvasPaneFloating" in interactions_source

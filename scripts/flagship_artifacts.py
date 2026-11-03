@@ -38,6 +38,12 @@ class ArtifactBinding:
 
 _OWNED_ENVIRONMENTS: dict[Path, tuple[str, Path]] = {}
 
+# Do not retain the interpreter's old ensurepip seed in installed release hosts.
+# Review this exact wheel and hash when advancing the release installer.
+_RELEASE_PIP_VERSION = "26.2"
+_RELEASE_PIP_URL = "https://files.pythonhosted.org/packages/62/36/a3aed958d60531cb442b7ab4596cda7b3621cfb916f8ae1d6769795c7dc1/pip-26.2-py3-none-any.whl"
+_RELEASE_PIP_SHA256 = "931c303696af6fa3417112103b1cad26890e5a07eccb5b99783700e33f2b8aad"
+
 
 def _digest(data: bytes) -> str:
     return hashlib.sha256(data).hexdigest()
@@ -148,8 +154,32 @@ def _create_python_environment(environment: Path) -> Path:
     private_record = {**ownership, "python": str(_python_in(root)), "state": "created"}
     record.write_text(json.dumps(private_record, indent=2), encoding="utf-8")
     venv.EnvBuilder(with_pip=True, system_site_packages=False).create(root)
-    private_record["state"] = "ready"
-    record.write_text(json.dumps(private_record, indent=2), encoding="utf-8")
+    try:
+        with urllib.request.urlopen(_RELEASE_PIP_URL, timeout=60) as response:
+            installer = response.read()
+        if _digest(installer) != _RELEASE_PIP_SHA256:
+            raise ValueError("Release pip bootstrap wheel hash mismatch")
+        with tempfile.TemporaryDirectory(prefix="pf-pip-") as download:
+            wheel = Path(download) / f"pip-{_RELEASE_PIP_VERSION}-py3-none-any.whl"
+            wheel.write_bytes(installer)
+            _run([str(_python_in(root)), "-m", "pip", "--isolated", "install", "--no-index", "--no-deps", "--upgrade", str(wheel)], root)
+        installed_pip = _run([str(_python_in(root)), "-c", "import importlib.metadata; print(importlib.metadata.version('pip'))"], root)
+        if installed_pip != _RELEASE_PIP_VERSION:
+            raise RuntimeError("Release pip bootstrap version mismatch")
+        private_record["pipBootstrap"] = {"version": installed_pip, "url": _RELEASE_PIP_URL, "sha256": _RELEASE_PIP_SHA256}
+        private_record["state"] = "ready"
+        record.write_text(json.dumps(private_record, indent=2), encoding="utf-8")
+    except Exception as error:
+        # No binding reaches the caller when bootstrap fails. Clean up through
+        # the same marker/token/path guard used by normal release teardown.
+        try:
+            cleanup_python_environment(ArtifactBinding(paths={
+                "python": _python_in(root), "environment": root,
+                "environment_record": record,
+            }))
+        except Exception as cleanup_error:
+            raise error from cleanup_error
+        raise
     return _python_in(root)
 
 
@@ -200,6 +230,21 @@ def _installed_module_paths(python: Path, cwd: Path) -> dict[str, str]:
         "'streamlit':streamlit_pivot.__file__,'engine':pivot_engine.__file__}))"
     )
     return json.loads(_run([str(python), "-c", probe], cwd))
+
+
+def _copy_flagship_fixtures(snapshot: Path, app: Path) -> dict[str, str]:
+    """Stage and hash qualification oracles from the frozen snapshot."""
+    names = {"fixture": "flagship_parity_rows.json", "scroll_fixture": "flagship_scroll_rows.json",
+             "parts_fixture": "flagship_parts_manifest.json"}
+    files = {key: snapshot / "tests" / "data" / name for key, name in names.items()}
+    for path in files.values():
+        if not path.is_file():
+            raise FileNotFoundError(f"Required flagship fixture missing: {path}")
+    target = app / "tests" / "data"
+    target.mkdir(parents=True)
+    for path in files.values():
+        shutil.copy2(path, target / path.name)
+    return {key: _digest(path.read_bytes()) for key, path in files.items()}
 
 
 def build_artifacts(source: Path, output: Path, *, build_wheelhouse: Path | None = None) -> ArtifactBinding:
@@ -260,14 +305,7 @@ def _build_from_snapshot(commit: str, snapshot: Path, output: Path, *, build_whe
         candidate = snapshot / "examples" / name
         if candidate.is_file():
             shutil.copy2(candidate, app / "examples" / name)
-    fixture = snapshot / "tests" / "data" / "flagship_parity_rows.json"
-    scroll_fixture = snapshot / "tests" / "data" / "flagship_scroll_rows.json"
-    for required_fixture in (fixture, scroll_fixture):
-        if not required_fixture.is_file():
-            raise FileNotFoundError(f"Required flagship fixture missing: {required_fixture}")
-    (app / "tests" / "data").mkdir(parents=True)
-    for required_fixture in (fixture, scroll_fixture):
-        shutil.copy2(required_fixture, app / "tests" / "data" / required_fixture.name)
+    fixture_hashes = _copy_flagship_fixtures(snapshot, app)
     react_app = app / "examples" / "flagship_react"
     shutil.copytree(snapshot / "examples" / "flagship_react", react_app, ignore=shutil.ignore_patterns("node_modules", "dist", "release-package.tgz"))
     shutil.copy2(npm_tarball, react_app / "release-package.tgz")
@@ -302,8 +340,7 @@ def _build_from_snapshot(commit: str, snapshot: Path, output: Path, *, build_whe
         "source_commit": _digest(commit.encode()),
         "wheel": _digest(wheel.read_bytes()),
         "npm_tarball": _digest(npm_tarball.read_bytes()),
-        "fixture": _digest(fixture.read_bytes()),
-        "scroll_fixture": _digest(scroll_fixture.read_bytes()),
+        **fixture_hashes,
         "export_job_fixture": _digest((app / "examples" / "flagship_demo_data.py").read_bytes()),
         **{f"react:{name}": digest for name, digest in assets["react"].items()},
         **{f"dash:{name}": digest for name, digest in assets["dash"].items()},

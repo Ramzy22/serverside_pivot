@@ -1,4 +1,4 @@
-import { useVirtualizer } from '@tanstack/react-virtual';
+import { observeElementRect, useVirtualizer } from '@tanstack/react-virtual';
 import {
     useCallback,
     useEffect,
@@ -116,6 +116,28 @@ export const useColumnVirtualizer = ({
     );
     /* eslint-enable react-hooks/exhaustive-deps */
 
+    const pinnedWidth = [...leftCols, ...rightCols].reduce((sum, column) => sum + column.getSize(), 0);
+    const pinnedWidthRef = useRef(pinnedWidth);
+    pinnedWidthRef.current = pinnedWidth;
+    const publishCenterRectRef = useRef(null);
+    const observeCenterRect = useCallback((instance, notify) => {
+        let lastRect = null;
+        const publish = () => {
+            if (!lastRect) return;
+            const width = instance.scrollElement?.clientWidth ?? lastRect.width;
+            notify({ ...lastRect, width: Math.max(0, width - pinnedWidthRef.current) });
+        };
+        publishCenterRectRef.current = publish;
+        const cleanup = observeElementRect(instance, rect => {
+            lastRect = rect;
+            publish();
+        });
+        return () => {
+            if (publishCenterRectRef.current === publish) publishCenterRectRef.current = null;
+            cleanup?.();
+        };
+    }, []);
+
     const horizontalOverscan = (
         columnOverscan !== null
         && columnOverscan !== undefined
@@ -133,10 +155,21 @@ export const useColumnVirtualizer = ({
         count: centerCols.length,
         getScrollElement: () => parentRef.current,
         estimateSize: (index) => centerCols[index].getSize(),
+        // Center measurements start at zero; sticky pins occupy viewport space,
+        // not measurement space. Auto alignment and its maximum offset must use
+        // the unobstructed center width without shifting any render spacers.
+        observeElementRect: observeCenterRect,
         // Small overscan to avoid blank flashes during fast horizontal scroll.
         // Extremely wide column sets benefit from a tighter overscan window.
         overscan: horizontalOverscan
     });
+
+    // The core keeps its observer when the scroll element is unchanged. Pin or
+    // pin-size changes therefore need to publish a fresh rect independently of
+    // a physical element resize, using the same mounted virtualizer instance.
+    useLayoutEffect(() => {
+        publishCenterRectRef.current?.();
+    }, [pinnedWidth, columnVirtualizer]);
 
     const rawVirtualCenterCols = columnVirtualizer.getVirtualItems();
     // TanStack can briefly report stale indices after a fast center-column count shrink

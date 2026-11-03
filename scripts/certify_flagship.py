@@ -193,7 +193,13 @@ def _run_browser_suite(
         command.extend(["-k", selection])
     if junit_path is not None:
         command.append(f"--junitxml={junit_path}")
-    completed = subprocess.run(command, cwd=ROOT, env=child_environment)
+    source = Path(environment.get("PIVOT_FLAGSHIP_HARNESS_ROOT", ROOT)).resolve()
+    # An installed-release caller supplies a committed archive, so checkout
+    # helpers (including conftest and transitive imports) cannot enter this run.
+    if environment.get("PIVOT_FLAGSHIP_HARNESS_ROOT"):
+        child_environment["PYTHONPATH"] = str(source)
+        child_environment["PYTHONNOUSERSITE"] = "1"
+    completed = subprocess.run(command, cwd=source, env=child_environment)
     return completed.returncode
 
 
@@ -956,6 +962,22 @@ EXPORT_JOB_REQUIREMENTS = frozenset({
 # committed contract decides which host/test combinations must be qualified.
 # A journey may produce multiple mapped records (runtime error and recovery).
 PRODUCT_BROWSER_JOURNEYS = {
+    **{f"browser.{name}": f"test_flagship_derived_models[{name}-{{host}}]"
+       for name in ("layout-field-zones.move", "formula-columns.add-remove",
+                    "custom-dimensions.add-remove", "report-mode.restore-definition")},
+    **{f"browser.{name}": f"test_flagship_charts[{name}-{{host}}]"
+       for name in ("range-chart.source", "range-chart.locked-source", "range-chart.live-source",
+                    "chart-pane.lifecycle", "chart-export.artifact")},
+    **{f"browser.{name}": f"test_flagship_host_integration[{{host}}-{name}]"
+       for name in ("dash-callback-transport.v1", "react-direct-transport.v1", "streamlit-no-rerun.local-interactions")},
+    **{f"browser.{name}": f"test_flagship_combined_journeys[{name}-{{host}}]"
+       for name in ("saved-scroll.restore", "copy-selection.merged-headers", "copy-selection.unloaded-rows",
+                    "large-delivery.selected-part", "journey-selection.filter-pin-scroll-copy",
+                    "journey-analysis.aggregate-expand-swap-export")},
+    **{f"browser.{name}": f"test_flagship_presentation[{name}-{{host}}]"
+       for name in ("row-numbers.toggle", "density.cycle", "number-format.decimals",
+                    "cell-format.apply-close", "color-scales.scale", "color-scales.data-bars",
+                    "themes.select-override", "zoom-immersive.round-trip")},
     "browser.initial-workspace.populated": "test_flagship_initial_workspace[{host}]",
     "browser.global-filter.apply-clear": "test_flagship_global_filter[{host}]",
     "browser.sorting.direction-order": "test_flagship_sort_direction[{host}]",
@@ -999,6 +1021,11 @@ PRODUCT_BROWSER_JOURNEYS = {
 
 
 def _product_phase(node: str) -> str:
+    if any(f"::test_flagship_combined_journeys[{name}-" in node
+           for name in ("large-delivery.selected-part", "copy-selection.unloaded-rows")):
+        return "parts"
+    if "::test_flagship_combined_journeys[saved-scroll.restore-" in node:
+        return "scroll"
     if "::test_flagship_export_jobs[" in node:
         return "exports"
     if "::test_flagship_virtual_scroll[" in node or "::test_flagship_custom_pivot_order[" in node:
@@ -1095,6 +1122,8 @@ def _certify_installed_release(artifact_dir: Path, started_at: datetime, *, buil
     )
     from scripts.flagship_reference_runner import start_reference_server
     from scripts.flagship_shared_runner import run_shared_qualification
+    from scripts.flagship_shared_client import shared_client_cases
+    from scripts.flagship_harness import committed_browser_harness
     from tests.flagship_reference_support import load_case_results, write_reference_case_envelope
 
     result = "failed"
@@ -1152,40 +1181,51 @@ def _certify_installed_release(artifact_dir: Path, started_at: datetime, *, buil
         environment.pop("PIVOT_FLAGSHIP_EXPORT_JOB_DATA", None)
         environment.pop("PIVOT_FLAGSHIP_EXPORT_QUALIFICATION_DATA", None)
         environment.pop("PIVOT_FLAGSHIP_SCROLL_DATA", None)
+        environment.pop("PIVOT_FLAGSHIP_PARTS_DATA", None)
         phase_reports = []
         code = 0
         try:
-            for phase in (("exports",) if export_jobs else ("parity", "scroll", "exports")):
-                phase_nodes = [node for node in selected if _product_phase(node) == phase]
-                if not phase_nodes and product_requirements:
-                    continue
-                phase_environment = dict(environment)
-                if phase == "exports":
-                    phase_environment["PIVOT_FLAGSHIP_EXPORT_JOB_DATA"] = "1"
-                elif phase == "scroll":
-                    phase_environment["PIVOT_FLAGSHIP_SCROLL_DATA"] = "1"
-                phase_junit = private / f"product-{phase}.junit.xml"
-                phase_reports.append(phase_junit)
-                with start_installed_hosts(artifacts, artifact_dir / f"installed-hosts-{phase}", environment=phase_environment) as urls:
-                    binding.host_origins.update(urls)
-                    binding_path.write_text(json.dumps({
-                        "runId": run_id, "sourceCommit": binding.source_commit,
-                        "sha256": binding.sha256, "versions": binding.versions,
-                        "expectedLoadedAssets": binding.expected_loaded_assets,
-                        "hostOrigins": binding.host_origins,
-                    }, indent=2) + "\n", encoding="utf-8")
-                    for host, url in urls.items():
-                        phase_environment[f"PIVOT_FLAGSHIP_{host.upper()}_URL"] = url
-                    phase_code = _run_browser_suite(artifact_dir, phase_environment, junit_path=phase_junit, node_ids=phase_nodes)
-                    if phase_code and not code:
-                        code = phase_code
-                # Even a failing parity journey cannot suppress export coverage.
-                if not product_requirements:
-                    break
+            executed_nodes, junit_reports = {}, {}
+            with committed_browser_harness(binding, private) as harness:
+                environment["PIVOT_FLAGSHIP_HARNESS_ROOT"] = str(harness.root)
+                for phase in (("exports",) if export_jobs else ("parity", "scroll", "parts", "exports")):
+                    phase_nodes = [node for node in selected if _product_phase(node) == phase]
+                    if not phase_nodes and product_requirements:
+                        continue
+                    phase_environment = dict(environment)
+                    if phase == "exports":
+                        phase_environment["PIVOT_FLAGSHIP_EXPORT_JOB_DATA"] = "1"
+                    elif phase == "scroll":
+                        phase_environment["PIVOT_FLAGSHIP_SCROLL_DATA"] = "1"
+                    elif phase == "parts":
+                        phase_environment["PIVOT_FLAGSHIP_PARTS_DATA"] = "1"
+                    phase_junit = private / f"product-{phase}.junit.xml"
+                    phase_reports.append(phase_junit)
+                    executed_nodes[phase] = tuple(phase_nodes)
+                    junit_reports[phase] = phase_junit
+                    with start_installed_hosts(artifacts, artifact_dir / f"installed-hosts-{phase}", environment=phase_environment) as urls:
+                        binding.host_origins.update(urls)
+                        binding_path.write_text(json.dumps({
+                            "runId": run_id, "sourceCommit": binding.source_commit,
+                            "sha256": binding.sha256, "versions": binding.versions,
+                            "expectedLoadedAssets": binding.expected_loaded_assets,
+                            "hostOrigins": binding.host_origins,
+                        }, indent=2) + "\n", encoding="utf-8")
+                        for host, url in urls.items():
+                            phase_environment[f"PIVOT_FLAGSHIP_{host.upper()}_URL"] = url
+                        phase_code = _run_browser_suite(artifact_dir, phase_environment, junit_path=phase_junit, node_ids=phase_nodes)
+                        if phase_code and not code:
+                            code = phase_code
+                    # Even a failing parity journey cannot suppress export coverage.
+                    if not product_requirements:
+                        break
             if not export_jobs and product_requirements:
                 try:
                     shared_cases, unmapped_shared = run_shared_qualification(
                         binding, artifacts.paths["python"], private, requirements=product_requirements)
+                    browser_cases = load_case_envelope(envelopes["product"], binding)
+                    shared_cases += shared_client_cases(
+                        binding, product_requirements, browser_cases, executed_nodes, junit_reports, private)
                     if unmapped_shared:
                         print("Missing shared assertion mappings: " + ", ".join(unmapped_shared), flush=True)
                     if shared_cases:
@@ -1206,6 +1246,12 @@ def _certify_installed_release(artifact_dir: Path, started_at: datetime, *, buil
                     (private / "shared-error.json").write_text(json.dumps({
                         "type": type(error).__name__, "reason": str(error),
                     }, indent=2) + "\n", encoding="utf-8")
+        except (OSError, ValueError, TypeError, subprocess.CalledProcessError) as error:
+            product_issues.append("qualification_incomplete")
+            code = code or 1
+            (private / "browser-harness-error.json").write_text(json.dumps({
+                "qualificationEvidence": False, "type": type(error).__name__, "reason": str(error),
+            }, indent=2) + "\n", encoding="utf-8")
         finally:
             try:
                 combined = ET.Element("testsuites")

@@ -73,6 +73,10 @@ def _parity_rows() -> list[dict[str, Any]]:
 
 def build_demo_table(row_count: int = DEMO_ROW_COUNT) -> pa.Table:
     """Build a stable analytics dataset with useful categorical cardinality."""
+    if os.environ.get("PIVOT_FLAGSHIP_PARTS_DATA") == "1":
+        return pa.table({"region": [f"R{i:05d}" for i in range(12001)] + ["Excluded sentinel"],
+                         "sales": [i + .25 for i in range(12001)] + [999999.5],
+                         "scope": ["Included"] * 12001 + ["Excluded"]})
     if os.environ.get("PIVOT_FLAGSHIP_EXPORT_JOB_DATA") == "1":
         return pa.table({"region": [f"R{i:04d} \u6771\u4eac" for i in range(512)],
                          "sales": [i + .25 for i in range(512)]})
@@ -262,6 +266,25 @@ class _OneShotFaultAdapter:
         if not evidence_root or not marker_path:
             return await self._adapter.handle_virtual_scroll_request(*args, **kwargs)
         root = Path(evidence_root).resolve()
+        # A private server-owned marker delays one real query for lifecycle
+        # qualification. No HTTP input can select a path or arm the delay.
+        delay = root / "delay-next-data-request"
+        if (Path(marker_path).resolve() == root / "fail-next-data-request"
+                and Path(marker_path).name == "fail-next-data-request"):
+            try:
+                armed_delay = delay.read_bytes() == b"one-shot"
+            except FileNotFoundError:
+                armed_delay = False
+            if armed_delay:
+                claimed_delay = delay.with_name(f"{delay.name}.claimed-{os.getpid()}-{threading.get_ident()}")
+                try:
+                    delay.rename(claimed_delay)
+                except FileNotFoundError:
+                    pass
+                else:
+                    claimed_delay.unlink()
+                    import asyncio
+                    await asyncio.sleep(2)
         marker = Path(marker_path)
         if marker.name != "fail-next-data-request" or marker.resolve() != root / "fail-next-data-request":
             return await self._adapter.handle_virtual_scroll_request(*args, **kwargs)
@@ -284,15 +307,21 @@ class _OneShotFaultAdapter:
 
 def workspace_config(host: str) -> dict[str, Any]:
     """Return public workspace props shared by all three flagship hosts."""
-    if os.environ.get("PIVOT_FLAGSHIP_EXPORT_JOB_DATA") == "1":
+    if (os.environ.get("PIVOT_FLAGSHIP_EXPORT_JOB_DATA") == "1"
+            or os.environ.get("PIVOT_FLAGSHIP_PARTS_DATA") == "1"):
         return {
             "id": f"flagship-{host}-pivot", "table": TABLE_NAME,
             "pivotTitle": "Bounded export qualification", "serverSide": True,
             "rowFields": ["region"], "colFields": [],
             "valConfigs": [{"field": "sales", "agg": "sum", "label": "Sales"}],
-            "availableFieldList": ["region", "sales"], "filters": {}, "sorting": [],
+            "availableFieldList": ["region", "sales", *(["scope"] if os.environ.get("PIVOT_FLAGSHIP_PARTS_DATA") == "1" else [])],
+            "filters": ({"scope": {"operator": "AND", "conditions": [
+                {"type": "eq", "value": "Included", "caseSensitive": False}]}}
+                if os.environ.get("PIVOT_FLAGSHIP_PARTS_DATA") == "1" else {}), "sorting": [],
             "expanded": {}, "viewState": {"layoutMode": "tabular"}, "showSubtotals": False,
             "showRowTotals": False, "showColTotals": False, "persistence": False,
+            **({"decimalPlaces": 2, "numberGroupSeparator": "none"}
+               if os.environ.get("PIVOT_FLAGSHIP_PARTS_DATA") == "1" else {}),
             "style": {"height": "760px", "width": "100%"},
         }
     if _qualification_data_enabled() or _parity_data_enabled() or _scroll_data_enabled():
@@ -310,7 +339,7 @@ def workspace_config(host: str) -> dict[str, Any]:
             ],
             "availableFieldList": [
                 "region", "account", "scope", "period", "ventes_€", "unités", "écart",
-                *(["rowId", "extrema", "copyTab", "copyLF", "copyCRLF", "copyUnicode", "copyNull", "copyEmpty"] if _parity_data_enabled() else []),
+                *(["rowId", "extrema", "copyTab", "copyLF", "copyCRLF", "copyUnicode", "copyNull", "copyEmpty", "format_edge", "scale_value", "scale_control"] if _parity_data_enabled() else []),
             ],
             "filters": {
                 "scope": {

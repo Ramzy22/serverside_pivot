@@ -12,6 +12,7 @@ const COLOR_PALETTES = {
 export function useRuntimeColorScalePresentation({
   colorPalette,
   colorScaleMode,
+  colorScaleColumns = null,
   colFields,
   filteredData,
   getRuleBasedStyle,
@@ -19,6 +20,7 @@ export function useRuntimeColorScalePresentation({
   rowFields,
   serverColorScaleStats,
 }) {
+  const scopedColumns = useMemo(() => Array.isArray(colorScaleColumns) ? new Set(colorScaleColumns) : null, [colorScaleColumns]);
   const clientColorScaleStats = useMemo(() => {
     const metaKeys = new Set(['_id', '_path', '_isTotal', 'depth', '_depth', '_level', '_expanded', '_parentPath', '_has_children', '_is_expanded', 'subRows', 'uuid', '__virtualIndex', '__colPending', '__isGrandTotal__']);
     rowFields.forEach(field => metaKeys.add(field));
@@ -66,6 +68,7 @@ export function useRuntimeColorScalePresentation({
   const getConditionalStyle = useCallback((colId, value, rowData, rowId) => {
     const ruleStyle = getRuleBasedStyle(colId, value);
     if (colorScaleMode === 'off' || typeof value !== 'number' || Number.isNaN(value)) return ruleStyle;
+    if (scopedColumns && !scopedColumns.has(colId)) return ruleStyle;
     if (rowData && (rowData._isTotal || rowData._path === '__grand_total__' || rowData._id === 'Grand Total')) return ruleStyle;
     let stats = null;
     if (colorScaleMode === 'col') stats = colorScaleStats.byCol && colorScaleStats.byCol[colId] || null;
@@ -85,7 +88,7 @@ export function useRuntimeColorScalePresentation({
       color: alpha > 0.5 ? luminance > 0.45 ? '#111827' : '#ffffff' : undefined,
       ...ruleStyle,
     };
-  }, [colorPalette, colorScaleMode, colorScaleStats, getRuleBasedStyle]);
+  }, [colorPalette, colorScaleMode, colorScaleStats, getRuleBasedStyle, scopedColumns]);
 
   return { COLOR_PALETTES, clientColorScaleStats, colorScaleStats, getConditionalStyle };
 }

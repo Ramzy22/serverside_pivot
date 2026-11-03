@@ -97,6 +97,7 @@ export function PivotWorkspace({ transport, onStateChange, ...initialProps }: Pi
     const [runtimeProps, setRuntimeProps] = useState<PivotRuntimeProps>(() => initialProps);
     const transportRef = useRef(transport);
     const mountedRef = useRef(true);
+    const pendingRequestsRef = useRef(new Set<AbortController>());
     // The public host props are JSON-shaped.  A stable serialization lets a
     // host update controlled configuration without feeding local runtime
     // mutations back into this effect after every response.
@@ -114,6 +115,9 @@ export function PivotWorkspace({ transport, onStateChange, ...initialProps }: Pi
         mountedRef.current = true;
         return () => {
             mountedRef.current = false;
+            // The host owns transport; cancel only work dispatched by this consumer.
+            pendingRequestsRef.current.forEach(controller => controller.abort());
+            pendingRequestsRef.current.clear();
         };
     }, []);
 
@@ -135,7 +139,10 @@ export function PivotWorkspace({ transport, onStateChange, ...initialProps }: Pi
             colFields: request.state?.colFields,
             measureCount: request.state?.valConfigs?.length,
         });
-        transportRef.current.request(request).then(response => {
+        const controller = new AbortController();
+        pendingRequestsRef.current.add(controller);
+        transportRef.current.request(request, { signal: controller.signal }).then(response => {
+            if (controller.signal.aborted) return;
             if (!mountedRef.current) return;
             runtimeDebug('runtime response', {
                 requestId: response.requestId,
@@ -150,6 +157,7 @@ export function PivotWorkspace({ transport, onStateChange, ...initialProps }: Pi
         }).catch(error => {
             // A superseded viewport request is expected and must not replace a
             // fresher response with an error state.
+            if (controller.signal.aborted) return;
             if (error && typeof error === 'object' && (error as { name?: string }).name === 'AbortError') return;
             if (!mountedRef.current) return;
             runtimeDebug('runtime error', {
@@ -158,6 +166,8 @@ export function PivotWorkspace({ transport, onStateChange, ...initialProps }: Pi
                 message: error instanceof Error ? error.message : String(error),
             });
             setRuntimeProps(previous => ({ ...previous, runtimeResponse: runtimeError(request, error) }));
+        }).finally(() => {
+            pendingRequestsRef.current.delete(controller);
         });
     }, [runtimeProps.table]);
 

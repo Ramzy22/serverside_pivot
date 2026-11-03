@@ -39,6 +39,7 @@ import { useRuntimeDataRetry } from './useRuntimeDataRetry';
 import { useRuntimeFilterPopover } from '../runtime/useRuntimeFilterPopover';
 import { useRuntimeColorScalePresentation } from '../runtime/useRuntimeColorScalePresentation';
 import { useRuntimeViewportTableData } from '../runtime/useRuntimeViewportTableData';
+import { cellSelectionScopeKey } from './cellSelectionAnchor';
 import { useRuntimeCellSelection } from '../runtime/useRuntimeCellSelection';
 import { useRuntimeClipboardPaste } from '../runtime/useRuntimeClipboardPaste';
 import { useRuntimeClipboardExportPresentation } from '../runtime/useRuntimeClipboardExportPresentation';
@@ -505,10 +506,7 @@ export function useViewportRuntimeStage(input, transport) {
       const colIndex = visibleCols.findIndex(c => c.id === colId);
       const displayRowIndex = row ? stage.resolveDisplayRowIndex(row.id, row.index) : -1;
       if (row && displayRowIndex >= 0 && colIndex >= 0) {
-        stage.setLastSelected({
-          rowIndex: displayRowIndex,
-          colIndex
-        });
+        stage.setLastSelected(stage.captureAnchor(displayRowIndex, colIndex));
       }
     }
     const hasSelection = Object.keys(selectionForMenu).length > 0;
@@ -611,6 +609,20 @@ export function useViewportRuntimeStage(input, transport) {
         label: 'Copy Selection with Headers',
         onClick: () => {
           const payload = stage.buildSelectedClipboardPayload(true, selectionForMenu);
+          if (payload) stage.copyRichToClipboard(payload);
+        }
+      });
+      actions.push({
+        label: 'Copy Selection with Headers (Raw Values)',
+        onClick: () => {
+          const payload = stage.buildSelectedClipboardPayload(true, selectionForMenu, { rawValues: true });
+          if (payload) stage.copyRichToClipboard(payload);
+        }
+      });
+      actions.push({
+        label: 'Copy Selection with Merged Headers (Raw Values)',
+        onClick: () => {
+          const payload = stage.buildSelectedClipboardPayload(true, selectionForMenu, { mergedHeaders: true, rawValues: true });
           if (payload) stage.copyRichToClipboard(payload);
         }
       });
@@ -837,6 +849,7 @@ export function useViewportRuntimeStage(input, transport) {
     colTypeFilter: stage.colTypeFilter,
     colorPalette: stage.colorPalette,
     colorScaleMode: stage.colorScaleMode,
+    colorScaleColumns: stage.colorScaleColumns,
     columnDecimalOverrides: stage.columnDecimalOverrides,
     columnFormatOverrides: stage.columnFormatOverrides,
     columnGroupSeparatorOverrides: stage.columnGroupSeparatorOverrides,
@@ -848,6 +861,7 @@ export function useViewportRuntimeStage(input, transport) {
     columnVisibility: stage.columnVisibility,
     customDimensions: stage.customDimensions,
     dataBarsColumns: stage.dataBarsColumns,
+    dataBarMaximums: stage.dataBarMaximums,
     decimalPlaces: stage.decimalPlaces,
     defaultValueFormat: stage.defaultValueFormat,
     detailConfig: stage.detailConfig,
@@ -1272,6 +1286,7 @@ export function useViewportRuntimeStage(input, transport) {
   const colorScalePresentation = useRuntimeColorScalePresentation({
     colorPalette: stage.colorPalette,
     colorScaleMode: stage.colorScaleMode,
+    colorScaleColumns: stage.colorScaleColumns,
     colFields: stage.colFields,
     filteredData: stage.filteredData,
     getRuleBasedStyle: stage.getRuleBasedStyle,
@@ -1815,7 +1830,13 @@ export function useViewportRuntimeStage(input, transport) {
   });
   for (const [key, value] of Object.entries(columnCommands)) stage[key] = value;
 
+  // Semantic selection scope deliberately excludes viewport buffers and response versions.
+  const selectionScopeKey = cellSelectionScopeKey(
+    stage.serverSide, stage.tableName, stage.serverSideCacheKey, stage.expanded,
+    [stage.viewMode, stage.detailMode, stage.treeConfig, stage.detailConfig, stage.reportDef],
+  );
   const cellSelection = useRuntimeCellSelection({
+    selectionScopeKey,
     buildSelectedClipboardPayload: stage.buildSelectedClipboardPayload,
     copyRichToClipboard: stage.copyRichToClipboard,
     copyCurrentTableToClipboard: stage.copyCurrentTableToClipboard,

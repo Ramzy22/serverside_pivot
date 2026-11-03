@@ -220,3 +220,184 @@ test('selected values preserve Unicode codepoints and interior/trailing empty ce
         assert.equal(payload.columnCount,4);
     }
 });
+
+test('selected merged headers clip ancestry to a partial two-period selection', () => {
+    const columns = ['Q1_units','Q1_sales','Q1_variance','Q2_units'].map(id=>({id,columnDef:{header:id.split('_')[1]}}));
+    const row={id:'r',original:{},getValue:id=>({Q1_units:2,Q1_sales:100.25,Q1_variance:-12.5,Q2_units:1})[id]};
+    let presentation;
+    function Harness(){presentation=useRuntimeClipboardExportPresentation({
+        table:{getVisibleLeafColumns:()=>columns},getDisplayRows:()=>[row],theme:{},
+        getDisplayHeaderTextForColumn:c=>c.columnDef.header,
+        getDisplayHeaderTextStackForColumn:c=>[c.id.split('_')[0],c.columnDef.header],
+        selectedCells:{'r:Q1_sales':100.25,'r:Q1_variance':-12.5,'r:Q2_units':1},
+    });return null;}
+    renderToStaticMarkup(React.createElement(Harness));
+    const result=presentation.buildSelectedClipboardPayload(true,undefined,{mergedHeaders:true,rawValues:true});
+    assert.match(result.html, /colspan="2"[^>]*>Q1<\/th>/);
+    assert.match(result.html, />Q2<\/th>/);
+    assert.equal((result.html.match(/>units<\/th>/g)||[]).length,1);
+    assert.equal(result.columnCount,3);
+    assert.equal(result.text.split('\n').at(-1),'100.25\t-12.5\t1');
+    assert.deepEqual([...result.html.matchAll(/<th\b[^>]*>(.*?)<\/th>/g)].map(match=>match[1]),
+        ['Q1','Q2','sales','variance','units']);
+    assert.ok(!presentation.buildSelectedClipboardPayload(true).html.includes('colspan="2"'));
+});
+
+test('complete consecutive server selections still produce all logical cells with raw headers',()=>{
+    const notices=[];
+    const rows=[10,11,12].map(index=>({id:`r${index}`,original:{__virtualIndex:index},getValue:()=>index+.25}));
+    let presentation;
+    function Harness(){presentation=useRuntimeClipboardExportPresentation({
+        table:{getVisibleLeafColumns:()=>[{id:'sales',columnDef:{header:'Sales'}}]},getDisplayRows:()=>rows,
+        serverSide:true,theme:{},decimalPlaces:0,getDisplayHeaderTextForColumn:c=>c.columnDef.header,
+        showNotification:(...args)=>notices.push(args),
+        selectedCells:Object.fromEntries(rows.map(row=>[`${row.id}:sales`,row.getValue()])),
+    });return null;}
+    renderToStaticMarkup(React.createElement(Harness));
+    assert.equal(presentation.buildSelectedClipboardPayload(true,undefined,{rawValues:true}).text,
+        'Sales\n10.25\n11.25\n12.25');
+    assert.equal(notices.length,0);
+});
+
+test('selected copy rejects missing row IDs and virtual holes without producing a clipboard payload',()=>{
+    for(const missing of [true,false]) {
+        const notices=[];
+        const rows=[{id:'a',original:{__virtualIndex:0},getValue:()=>1},
+            {id:'c',original:{__virtualIndex:100},getValue:()=>3}];
+        let presentation;
+        function Harness(){presentation=useRuntimeClipboardExportPresentation({
+            table:{getVisibleLeafColumns:()=>[{id:'sales'}]},getDisplayRows:()=>missing?rows.slice(0,1):rows,
+            serverSide:true,theme:{},showNotification:(...args)=>notices.push(args),
+            selectedCells:{'a:sales':1,'c:sales':3},
+        });return null;}
+        renderToStaticMarkup(React.createElement(Harness));
+        assert.equal(presentation.buildSelectedClipboardPayload(),null);
+        assert.match(notices[0][0],/unavailable.*loaded/i);
+        assert.equal(notices[0][1],'warning');
+    }
+});
+const {useRuntimeCellSelection} = loadSource(path.join(frontend, 'src/lib/runtime/useRuntimeCellSelection.js'));
+function movingWindowSelection(initialIndices) {
+    const row = index => ({id: `東京:row-${index}`, original: {__virtualIndex:index}, getValue: () => index});
+    let rows = initialIndices.map(row);
+    const state = {selected: {}, anchor:null, drag:null, scope:'dataset-A', writes:[], notices:[]};
+    const columns = [{id:'sales',columnDef:{header:'Sales'}}];
+    const table = {getVisibleLeafColumns:()=>columns, getRowModel:()=>({rows})};
+    function render() {
+        let selection, presentation;
+        function Harness() {
+            presentation = useRuntimeClipboardExportPresentation({
+                table,getDisplayRows:()=>rows,serverSide:true,theme:{},selectedCells:state.selected,
+                getDisplayHeaderTextForColumn:c=>c.columnDef.header,
+                showNotification:(...args)=>state.notices.push(args),
+            });
+            selection = useRuntimeCellSelection({
+                table,tableRef:{current:table},getDisplayRows:()=>rows,serverSide:true,selectionScopeKey:state.scope,
+                lastSelected:state.anchor,dragStart:state.drag,selectedCells:state.selected,
+                isSelectAllServerRef:{current:false},isDragging:true,
+                setSelectedCells:value=>{state.selected=typeof value==='function'?value(state.selected):value;},
+                setLastSelected:value=>{state.anchor=value;},setDragStart:value=>{state.drag=value;},
+                setIsDragging:()=>{},setHoveredRowPath:()=>{},
+                scrollToDisplayRow:()=>{},scrollToDisplayColumn:()=>{},
+                buildSelectedClipboardPayload:presentation.buildSelectedClipboardPayload,
+                copyRichToClipboard:payload=>state.writes.push(payload),
+            });
+            return null;
+        }
+        renderToStaticMarkup(React.createElement(Harness));
+        return {selection,presentation};
+    }
+    const click = (index,shiftKey=false)=>render().selection.handleCellMouseDown(
+        {button:0,shiftKey,preventDefault(){}},index,0,rows[index].id,'sales',rows[index].getValue());
+    const copy = ()=>render().selection.handleKeyDown({key:'c',ctrlKey:true,preventDefault(){},target:{tagName:'TD',closest:()=>null}});
+    const contextClick = index => {
+        const stage = {...render().selection, table, selectedCells:state.selected,
+            hasSelectionKey:(cells,key)=>Object.hasOwn(cells,key),
+            setSelectedCells:value=>{state.selected=value;},setLastSelected:value=>{state.anchor=value;},
+            resolveDisplayRowIndex:id=>rows.findIndex(row=>row.id===id)};
+        // Execute the real viewport context-menu promotion branch, before menu assembly.
+        const source=fs.readFileSync(path.join(frontend,'src/lib/runtime/useViewportRuntimeStage.tsx'),'utf8');
+        const body=source.split('stage.handleContextMenu = (e, value, colId, row) => {')[1].split('    const hasSelection =')[0];
+        const {getDisplayOrderedLeafColumns}=loadSource(path.join(frontend,'src/lib/runtime/displayColumnOrder.js'));
+        new Function('stage','getDisplayOrderedLeafColumns','e','value','colId','row',body)(
+            stage,getDisplayOrderedLeafColumns,{preventDefault(){}},rows[index].getValue(),'sales',rows[index]);
+    };
+    return {state,render,click,copy,contextClick,move:indices=>{rows=indices.map(row);}};
+}
+
+test('actual mouse anchor survives replacement cache window and copy refuses absent endpoint',()=>{
+    const f=movingWindowSelection([0,1,2]); f.click(0); f.move([900,901,902]); f.click(2,true);
+    assert.ok(Object.hasOwn(f.state.selected,'東京:row-0:sales'));
+    f.copy(); assert.equal(f.state.writes.length,0);
+    assert.equal(f.state.notices[0][0],'Selected range unavailable: some rows are not loaded. Load the complete range before copying.');
+});
+
+test('retained anchor resolves by ID after cache prefix shifts; missing middle refuses',()=>{
+    const f=movingWindowSelection([0,1,2]);f.click(2);f.move([2,900,901]);f.click(2,true);
+    assert.ok(Object.hasOwn(f.state.selected,'東京:row-2:sales'));
+    f.copy();assert.equal(f.state.writes.length,0);
+    assert.equal(f.state.notices.length,1);
+});
+
+test('fully loaded shifted window selects exact stable endpoints and headers',()=>{
+    const f=movingWindowSelection([0,1,2]);f.click(2);f.move([1,2,3,4]);f.click(3,true);
+    assert.deepEqual(Object.keys(f.state.selected),['東京:row-2:sales','東京:row-3:sales','東京:row-4:sales']);
+    assert.equal(f.render().presentation.buildSelectedClipboardPayload(true,undefined,{rawValues:true}).text,'Sales\n2\n3\n4');
+});
+
+test('drag across a huge missing window retains anchor without materializing the gap',()=>{
+    const f=movingWindowSelection([0]);f.click(0);f.move([1e12,1e12+1]);
+    f.render().selection.handleCellMouseEnter(1,0);
+    assert.ok(Object.hasOwn(f.state.selected,'東京:row-0:sales'));
+    assert.ok(Object.keys(f.state.selected).length<=3);
+    f.copy();assert.equal(f.state.writes.length,0);
+});
+
+test('changed selection scope does not extend an old logical anchor',()=>{
+    const f=movingWindowSelection([0,1,2]);f.click(0);f.state.scope='dataset-B';f.click(2,true);
+    assert.deepEqual(Object.keys(f.state.selected),['東京:row-2:sales']);
+});
+
+test('keyboard resolves stable row ID after window shift and never rebinds an unloaded anchor',()=>{
+    const f=movingWindowSelection([0,1,2]);f.click(2);f.move([1,2,3,4]);
+    const key={key:'ArrowDown',preventDefault(){},target:{tagName:'TD',closest:()=>null}};
+    f.render().selection.handleKeyDown(key);
+    assert.deepEqual(Object.keys(f.state.selected),['東京:row-3:sales']);
+    f.move([100,101]);f.render().selection.handleKeyDown(key);
+    assert.deepEqual(Object.keys(f.state.selected),['東京:row-3:sales']);
+    f.copy();assert.equal(f.state.writes.length,0);
+});
+
+test('sort, filter, expansion and dataset scope changes reject the old mouse anchor',()=>{
+    const {cellSelectionScopeKey}=loadSource(path.join(frontend,'src/lib/runtime/cellSelectionAnchor.js'));
+    const scope=(dataset='A',sorting=[],filters={},expanded={})=>cellSelectionScopeKey(true,dataset,JSON.stringify({sorting,filters}),expanded,['pivot']);
+    const original=scope();
+    for(const next of [scope('B'),scope('A',[{id:'sales',desc:true}]),scope('A',[],{sales:1}),scope('A',[],{}, {'東京':true})]) {
+        const f=movingWindowSelection([0,1,2]);f.state.scope=original;f.click(0);
+        f.state.scope=next;f.click(2,true);
+        assert.deepEqual(Object.keys(f.state.selected),['東京:row-2:sales']);
+    }
+});
+
+test('refused shifted-window copy leaves the delivery port untouched for 1.5 seconds',async()=>{
+    const f=movingWindowSelection([0,1]);f.click(0);f.move([900,901]);f.click(1,true);
+    const sentinel={text:'clipboard-sentinel'};
+    f.state.writes.push(sentinel);f.copy();
+    const deadline=Date.now()+1500;
+    do {
+        assert.deepEqual(f.state.writes,[sentinel]);
+        await new Promise(resolve=>setTimeout(resolve,25));
+    } while(Date.now()<deadline);
+    assert.deepEqual(f.state.writes,[sentinel]);
+    assert.equal(f.state.notices.length,1);
+});
+
+test('actual context-menu promotion survives shifted and missing endpoint windows',()=>{
+    for (const indices of [[1,2,3,4],[900,901,902]]) {
+        const f=movingWindowSelection([0,1,2]);f.contextClick(2);const anchorKey=Object.keys(f.state.selected)[0];
+        f.move(indices);f.click(indices.length-1,true);
+        assert.ok(Object.hasOwn(f.state.selected,anchorKey));
+        if(indices[0]===900){f.copy();assert.equal(f.state.writes.length,0);assert.equal(f.state.notices.length,1);}
+        else assert.deepEqual(Object.values(f.state.selected),[2,3,4]);
+    }
+});

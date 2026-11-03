@@ -7,6 +7,9 @@ import { EDITED_CELL_FORMAT_KEY } from '../utils/formatting';
 import { usePivotTheme } from '../contexts/PivotThemeContext';
 import { usePivotConfig } from '../contexts/PivotConfigContext';
 import { usePivotRenderCounter } from '../hooks/usePivotRenderCounter';
+import { applySavedReport } from '../utils/savedReports';
+import { isEventInsideElement } from '../utils/domEvents';
+import { updateDataBarMaximums } from '../utils/dataBars';
 
 const SHOW_PIVOT_MODE_TOGGLE = true;
 
@@ -508,8 +511,8 @@ function CellFormatPopover({ theme, styles, cellFormatRules, setCellFormatRules,
     // Close on outside click
     useEffect(() => {
         const handleOutside = (e) => {
-            if (popoverRef.current && !popoverRef.current.contains(e.target) &&
-                anchorRef.current && !anchorRef.current.contains(e.target)) {
+            if (popoverRef.current && anchorRef.current &&
+                !isEventInsideElement(e, popoverRef.current) && !isEventInsideElement(e, anchorRef.current)) {
                 onClose();
             }
         };
@@ -698,6 +701,39 @@ function CellFormatPopover({ theme, styles, cellFormatRules, setCellFormatRules,
         : popover;
 }
 
+function DataBarBoundsDialog({ columns, maximums, onApply, onClose, theme, styles }) {
+    const values = columns.map(column => maximums && maximums[column]);
+    const commonMaximum = values.every(value => value === values[0]) ? values[0] : undefined;
+    const [maximum, setMaximum] = useState(commonMaximum === undefined ? '' : String(commonMaximum));
+    const parsedMaximum = maximum.trim() === '' ? null : Number(maximum);
+    const valid = parsedMaximum === null || (Number.isFinite(parsedMaximum) && parsedMaximum > 0);
+
+    useEffect(() => {
+        const handleKey = event => { if (event.key === 'Escape') onClose(); };
+        document.addEventListener('keydown', handleKey);
+        return () => document.removeEventListener('keydown', handleKey);
+    }, [onClose]);
+
+    return (
+        <div role="presentation" onClick={onClose} style={{ position: 'fixed', inset: 0, zIndex: 10020, background: 'rgba(15,23,42,0.34)', display: 'flex', alignItems: 'center', justifyContent: 'center', padding: '24px' }}>
+            <div role="dialog" aria-modal="true" aria-label="Data Bar Bounds" onClick={event => event.stopPropagation()} style={{ width: 'min(380px, 90vw)', padding: '18px', borderRadius: '10px', border: `1px solid ${theme.border}`, background: theme.surfaceBg || theme.background, color: theme.text, boxShadow: theme.shadowMd }}>
+                <div style={{ fontWeight: 700, marginBottom: '10px' }}>Data Bar Bounds</div>
+                <p style={{ fontSize: '12px', lineHeight: 1.5 }}>Bars start at zero. Negative values use their magnitude and a red tint. Values above the maximum fill the cell.</p>
+                <label style={{ display: 'flex', flexDirection: 'column', gap: '6px', fontSize: '12px' }}>
+                    Maximum bar magnitude
+                    <input autoFocus aria-label="Maximum bar magnitude" type="number" min="0" step="any" placeholder="Auto" value={maximum} onChange={event => setMaximum(event.target.value)} style={{ padding: '8px', borderRadius: '6px', border: `1px solid ${theme.border}`, color: theme.text, background: theme.background }} />
+                </label>
+                <p style={{ fontSize: '11px', color: theme.textSec }}>Leave blank to use automatic column bounds. Applies to {columns.length} selected column{columns.length === 1 ? '' : 's'}.</p>
+                {!valid && <div role="alert" style={{ fontSize: '12px' }}>Enter a positive finite maximum, or leave blank for Auto.</div>}
+                <div style={{ display: 'flex', gap: '8px', justifyContent: 'flex-end', marginTop: '14px' }}>
+                    <button type="button" onClick={onClose} style={styles.btn}>Cancel</button>
+                    <button type="button" disabled={!valid} onClick={() => onApply(parsedMaximum)} style={{ ...styles.btn, background: theme.primary, color: '#fff' }}>Apply bounds</button>
+                </div>
+            </div>
+        </div>
+    );
+}
+
 const THEME_CORE_COLOR_FIELDS = [
     { key: 'primary', label: 'Primary' },
     { key: 'pageBg', label: 'Page Bg' },
@@ -736,8 +772,8 @@ function ThemeEditorPopover({ theme, themeName, themeOverrides, setThemeOverride
 
     useEffect(() => {
         const handleOutside = (e) => {
-            if (popoverRef.current && !popoverRef.current.contains(e.target) &&
-                anchorRef.current && !anchorRef.current.contains(e.target)) {
+            if (popoverRef.current && anchorRef.current &&
+                !isEventInsideElement(e, popoverRef.current) && !isEventInsideElement(e, anchorRef.current)) {
                 onClose();
             }
         };
@@ -1065,6 +1101,7 @@ export const PivotAppBar = React.memo(function PivotAppBar({
     onAutoSizeColumns,
     autoSizeIncludesHeaderNext,
     colorScaleMode, setColorScaleMode,
+    onReturnFocusToGrid,
     colorPalette, setColorPalette,
     rowCount, exportPivot, isExporting,
     onTransposePivot,
@@ -1085,6 +1122,7 @@ export const PivotAppBar = React.memo(function PivotAppBar({
     canApplySelectionValueFormat,
     onApplySelectionValueFormat,
     dataBarsColumns, setDataBarsColumns,
+    dataBarMaximums, setDataBarMaximums,
     canUndoTransactions,
     canRedoTransactions,
     transactionHistoryPending,
@@ -1104,6 +1142,7 @@ export const PivotAppBar = React.memo(function PivotAppBar({
         filters, setFilters,
         pivotMode, setPivotMode,
         reportDef, setReportDef,
+        setColFields, setValConfigs,
         savedReports, setSavedReports,
         activeReportId, setActiveReportId,
         showFloatingFilters, setShowFloatingFilters,
@@ -1167,6 +1206,9 @@ export const PivotAppBar = React.memo(function PivotAppBar({
         return columnDecimalOverrides[colId] !== undefined ? columnDecimalOverrides[colId] : decimalPlaces;
     }, [selectedCells, columnDecimalOverrides, decimalPlaces]);
     const activeSelectionColumnIds = useMemo(() => Array.from(selectedCellColIds || []), [selectedCellColIds]);
+    const selectedNumericColumnIds = useMemo(() => [...new Set(Object.entries(selectedCells || {})
+        .filter(([, value]) => typeof value === 'number' && Number.isFinite(value))
+        .map(([key]) => key.slice(key.lastIndexOf(':') + 1)))] , [selectedCells]);
     const displayedNumberGroupSeparator = useMemo(() => {
         const fallback = normalizeNumberGroupSeparator(numberGroupSeparator);
         if (activeSelectionColumnIds.length === 0) return fallback;
@@ -1196,6 +1238,8 @@ export const PivotAppBar = React.memo(function PivotAppBar({
     const [cellFormatOpen, setCellFormatOpen] = useState(false);
     const cellFormatBtnRef = useRef(null);
     const [numberFormatDialogOpen, setNumberFormatDialogOpen] = useState(false);
+    // Capture scope when opening, so later selection changes cannot retarget Apply.
+    const [dataBarBoundsColumns, setDataBarBoundsColumns] = useState(null);
     const [themeEditorOpen, setThemeEditorOpen] = useState(false);
     const themeEditorBtnRef = useRef(null);
     const [openToolbarSections, setOpenToolbarSections] = useState({
@@ -1482,7 +1526,7 @@ export const PivotAppBar = React.memo(function PivotAppBar({
                         cellFormatRules={cellFormatRules}
                         setCellFormatRules={setCellFormatRules}
                         selectedCellKeys={selectedCellKeys}
-                        onClose={() => setCellFormatOpen(false)}
+                        onClose={() => { setCellFormatOpen(false); onReturnFocusToGrid?.(); }}
                         anchorRef={cellFormatBtnRef}
                     />
                 )}
@@ -1533,7 +1577,7 @@ export const PivotAppBar = React.memo(function PivotAppBar({
             </button>
             <select
                 value={colorScaleMode}
-                onChange={e => setColorScaleMode(e.target.value)}
+                onChange={e => setColorScaleMode(e.target.value, Array.from(selectedCellColIds))}
                 title="Color scale"
                 style={{...compactSelectStyle, ...(colorScaleMode !== 'off' ? {background: theme.select, border:`1px solid ${theme.primary}`, color: theme.primary} : {})}}
             >
@@ -1580,6 +1624,13 @@ export const PivotAppBar = React.memo(function PivotAppBar({
                     </button>
                 );
             })()}
+            <button
+                type="button"
+                title={selectedNumericColumnIds.length ? 'Set data bar bounds for selected columns' : 'Select numeric cells to set data bar bounds'}
+                disabled={selectedNumericColumnIds.length === 0}
+                onClick={() => setDataBarBoundsColumns([...selectedNumericColumnIds])}
+                style={{ ...btnSubtle, opacity: selectedNumericColumnIds.length ? 1 : 0.45 }}
+            >Bar Bounds</button>
             <select value={fontFamily} onChange={e => setFontFamily(e.target.value)} title="Font family"
                 style={{...compactSelectStyle, fontFamily}}>
                 {FONT_FAMILY_OPTIONS.map(opt => (
@@ -1758,8 +1809,7 @@ export const PivotAppBar = React.memo(function PivotAppBar({
                             if (!id) return;
                             const report = savedReports.find(r => r.id === id);
                             if (report && report.reportDef && setReportDef) {
-                                setReportDef(JSON.parse(JSON.stringify(report.reportDef)));
-                                setActiveReportId(id);
+                                applySavedReport(report, { setReportDef, setActiveReportId, setColFields, setValConfigs });
                             }
                         }}
                         style={{
@@ -1881,6 +1931,18 @@ export const PivotAppBar = React.memo(function PivotAppBar({
                 </div>
             ) : null}
         </div>
+        {dataBarBoundsColumns && <DataBarBoundsDialog
+            columns={dataBarBoundsColumns}
+            maximums={dataBarMaximums}
+            theme={theme}
+            styles={styles}
+            onClose={() => setDataBarBoundsColumns(null)}
+            onApply={maximum => {
+                setDataBarMaximums(previous => updateDataBarMaximums(previous, dataBarBoundsColumns, maximum));
+                setDataBarBoundsColumns(null);
+                if (onReturnFocusToGrid) onReturnFocusToGrid();
+            }}
+        />}
         <NumberFormatDialog
             open={numberFormatDialogOpen}
             theme={theme}

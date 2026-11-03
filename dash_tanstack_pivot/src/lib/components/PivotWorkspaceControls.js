@@ -24,6 +24,7 @@ export function PivotWorkspaceToolbar({ toolbar }) {
     columnFormatOverrides,
     columnGroupSeparatorOverrides,
     dataBarsColumns,
+    dataBarMaximums,
     decimalPlaces,
     defaultValueFormat,
     editValueDisplayMode,
@@ -33,6 +34,7 @@ export function PivotWorkspaceToolbar({ toolbar }) {
     handleAddChartCanvasPane,
     handleAutoSizeToolbarClick,
     handleRedo,
+    parentRef,
     handleSaveView,
     handleTransposePivot,
     handleUndo,
@@ -53,6 +55,7 @@ export function PivotWorkspaceToolbar({ toolbar }) {
     setColumnFormatOverrides,
     setColumnGroupSeparatorOverrides,
     setDataBarsColumns,
+    setDataBarMaximums,
     setDecimalPlaces,
     setDefaultValueFormat,
     setEditValueDisplayMode,
@@ -89,6 +92,7 @@ export function PivotWorkspaceToolbar({ toolbar }) {
     onTransposePivot={handleTransposePivot}
     canTranspose={rowFields.length > 0 || colFields.length > 0}
     colorScaleMode={colorScaleMode} setColorScaleMode={setColorScaleMode}
+    onReturnFocusToGrid={() => parentRef?.current?.focus({preventScroll: true})}
     colorPalette={colorPalette} setColorPalette={setColorPalette}
     rowCount={rowCount} exportPivot={exportPivot} isExporting={isExporting}
     onSaveView={handleSaveView}
@@ -107,6 +111,7 @@ export function PivotWorkspaceToolbar({ toolbar }) {
     canApplySelectionValueFormat={canApplySelectionValueFormat}
     onApplySelectionValueFormat={applySelectionValueFormat}
     dataBarsColumns={dataBarsColumns} setDataBarsColumns={setDataBarsColumns}
+    dataBarMaximums={dataBarMaximums} setDataBarMaximums={setDataBarMaximums}
     canUndoTransactions={transactionHistoryState.undoCount > 0}
     canRedoTransactions={transactionHistoryState.redoCount > 0}
     transactionHistoryPending={transactionHistoryState.pending}

@@ -8,11 +8,13 @@ const babel = req('@babel/core');
 function load(relative) {
   const filename = path.join(root, 'src/lib', relative);
   const code = babel.transformSync(fs.readFileSync(filename, 'utf8'), {filename,
-    presets:[[req('@babel/preset-env'),{targets:{node:'current'},modules:'commonjs'}]]}).code;
+    presets:[[req('@babel/preset-env'),{targets:{node:'current'},modules:'commonjs'}],req('@babel/preset-react')]}).code;
   const module = {exports:{}};
   new Function('module','exports','require',code)(module,module.exports,name=> {
+    if(name==='react' && relative==='runtime/useRuntimeViewRestoreScroll.js') return {useEffect:fn=>{global.restoreCleanup=fn();}};
     if(name==='react') return {useCallback:fn=>fn,useMemo:fn=>fn(),useRef:value=>({current:value}),useEffect:()=>{}};
     if(name.includes('sparklines')) return {normalizeSparklineValConfigsForView:value=>value};
+    if(name.startsWith('.')) return load(path.relative(path.join(root,'src/lib'),path.resolve(path.dirname(filename),name))+'.js');
     return req(name);
   });
   return module.exports;
@@ -23,7 +25,7 @@ global.window = {localStorage:{getItem:key=>storage.get(key)??null,setItem:(key,
 const {usePersistence,resolvePersistedViewState} = load('hooks/usePersistence.js');
 const {useRuntimeViewSnapshot} = load('runtime/useRuntimeViewSnapshot.js');
 const persistence = usePersistence('first',true,'local');
-const state={rowFields:['period'],colFields:['region','account'],columnSizing:{sales:173},spacingMode:0};
+const state={rowFields:['period'],colFields:['region','account'],columnSizing:{sales:173},spacingMode:0,colorScaleMode:'col',colorScaleColumns:['sales'],dataBarMaximums:{sales:200}};
 const saved={version:1,table:'revenue',state};
 persistence.save('savedView',saved);
 assert.deepEqual(resolvePersistedViewState(null,persistence.load('savedView',null),'revenue'),saved);
@@ -43,6 +45,9 @@ useRuntimeViewSnapshot(opts).handleSaveView();
 assert.deepEqual(persistence.load('savedView',null),JSON.parse(JSON.stringify(emitted.savedView)),'Save View must persist the emitted complete snapshot');
 assert.deepEqual(emitted.savedView.state.columnSizing,{sales:173});
 assert.equal(emitted.savedView.state.spacingMode,0);
+assert.deepEqual(emitted.savedView.state.colorScaleColumns,['sales']);
+assert.deepEqual(emitted.savedView.state.dataBarMaximums,{sales:200});
+assert.notEqual(emitted.savedView.state.dataBarMaximums,state.dataBarMaximums,'snapshot copies bounds');
 assert.deepEqual(emitted.savedView.state.rowFields,['period']);
 assert.deepEqual(resolvePersistedViewState(null,persistence.load('savedView',null),'revenue'),JSON.parse(JSON.stringify(emitted.savedView)));
 storage.clear();
@@ -64,19 +69,23 @@ assert.equal(persistence.load('savedView',null),null,'explicit reset must clear 
 const restoreStart = core.indexOf('  const appliedViewStateRef');
 const restoreEndToken = '  }, [stage.viewState, stage.initialChartDefinition, stage.normalizedInitialValConfigs]);';
 const restoreCode = core.slice(core.indexOf('  useEffect', restoreStart),core.indexOf(restoreEndToken,restoreStart)+restoreEndToken.length);
-const applied = {current:null}, restoredRows=[];
-const viewStage = new Proxy({viewState:saved,initialChartDefinition:{},chartPanelOrientationAutoRef:{current:false},setRowFields:value=>restoredRows.push(value)},
+const applied = {current:null}, restoredRows=[], restoredScopes=[], restoredMaximums=[];
+const viewStage = new Proxy({viewState:saved,initialChartDefinition:{},chartPanelOrientationAutoRef:{current:false},setRowFields:value=>restoredRows.push(value),setColorScaleColumns:value=>restoredScopes.push(value),setDataBarMaximums:value=>restoredMaximums.push(value)},
  {get:(target,key)=>key in target?target[key]:String(key).startsWith('set')?()=>{}:undefined});
 const applyRestore = new Function('stage','appliedViewStateRef','useEffect','VALID_CHART_TYPES','VALID_CHART_SORT_MODES',
  'VALID_CHART_INTERACTION_MODES','VALID_CHART_SERVER_SCOPES','getPinnedSideForRow','GRAND_TOTAL_ROW_ID','getPreferredChartOrientation',restoreCode);
 const apply = ()=>applyRestore(viewStage,applied,fn=>fn(),new Set(),new Set(),new Set(),new Set(),()=>null,'Grand Total',()=>"vertical");
 apply();
+assert.deepEqual(restoredScopes,[['sales']],'restore applies saved selection scope');
+assert.deepEqual(restoredMaximums,[{sales:200}],'restore applies saved data bar bounds');
 viewStage.initialChartDefinition={changed:true};
 apply();
 assert.equal(restoredRows.length,1,'prop echoes after live layout changes must not reapply a consumed snapshot');
 viewStage.viewState={state:{rowFields:['account']}};
 apply();
 assert.deepEqual(restoredRows,[['period'],['account']],'a fresh external viewState must still restore');
+assert.deepEqual(restoredScopes,[['sales'],null],'legacy views restore global color scope');
+assert.deepEqual(restoredMaximums,[{sales:200},undefined],'legacy view clears previous fixed bounds');
 
 
 const decimalStart = core.indexOf('  useEffect(() => {\n    const normalizedExternal = clampDecimalPlaces(stage.externalDecimalPlaces, 0);');
@@ -96,4 +105,91 @@ for(const effect of mountEffects) {
 }
 assert.equal(displayedDecimals,2,'initial prop sync must not overwrite restored snapshot formatting');
 
+// A full saved view is applied after the persisted manifest initialized state.
+// Reapplying identical content must not invalidate the in-flight request token.
+const {normalizeColumnOrderValue,areStringArraysEqual}=load('utils/columnOrder.js');
+const {useRuntimeDataCommit}=load('hooks/useRuntimeDataCommit.js');
+const initialManifest=['p:A','p:B'], manifest={current:initialManifest}, sent={current:initialManifest};
+let pins, widths;
+const layoutStage=new Proxy({viewState:{state:{pivotLayoutOrder:['p:A','p:B'],
+ columnPinning:{left:['A_sales'],right:[]},columnSizing:{A_sales:173}}},initialChartDefinition:{},
+ chartPanelOrientationAutoRef:{current:false},layoutRevisionRef:{current:null},
+ setPivotLayoutOrder:value=>{manifest.current=typeof value==='function'?value(manifest.current):value;},
+ setColumnPinning:value=>{pins=value;},setColumnSizing:value=>{widths=value;}},
+ {get:(target,key)=>key in target?target[key]:String(key).startsWith('set')?()=>{}:undefined});
+const restoreLayout=new Function('stage','appliedViewStateRef','useEffect','VALID_CHART_TYPES','VALID_CHART_SORT_MODES',
+ 'VALID_CHART_INTERACTION_MODES','VALID_CHART_SERVER_SCOPES','getPinnedSideForRow','GRAND_TOTAL_ROW_ID',
+ 'getPreferredChartOrientation','normalizeColumnOrderValue','areStringArraysEqual',restoreCode);
+const restore=()=>restoreLayout(layoutStage,{current:null},fn=>fn(),new Set(),new Set(),new Set(),new Set(),
+ ()=>null,'Grand Total',()=>"vertical",normalizeColumnOrderValue,areStringArraysEqual);
+const {runtimePayloadCommitIsCurrent}=useRuntimeDataCommit({
+ clientInstanceRef:{current:'restored-client'},stateEpochRef:{current:5},requestVersionRef:{current:9},
+ latestDataVersionRef:{current:11},layoutRevisionRef:layoutStage.layoutRevisionRef,
+ layoutAcknowledgedManifestRef:{current:''},pivotLayoutOrderRef:manifest,latestLayoutSentManifestRef:sent});
+const reply={kind:'data',clientInstance:'restored-client',stateEpoch:5,windowSeq:9};
+const payload={dataVersion:11,layoutRevision:'b'.repeat(64),colSchema:{layoutRevision:'b'.repeat(64)}};
+assert(runtimePayloadCommitIsCurrent(reply,payload));
+restore();
+assert(runtimePayloadCommitIsCurrent(reply,payload),'Equal saved layout restore must accept the matching response instead of leaving an empty grid');
+assert.equal(manifest.current,initialManifest,'Keep the immutable manifest token when restored contents are equal');
+assert.deepEqual(pins,{left:['A_sales'],right:[]});
+assert.deepEqual(widths,{A_sales:173});
+assert(!runtimePayloadCommitIsCurrent({...reply,stateEpoch:4},payload),'Old epoch remains rejected');
+assert(!runtimePayloadCommitIsCurrent({...reply,windowSeq:8},payload),'Old window remains rejected');
+layoutStage.viewState={state:{pivotLayoutOrder:['p:B','p:A']}};
+restore();
+assert.notEqual(manifest.current,initialManifest,'A genuinely changed layout receives a new token');
+assert.deepEqual(manifest.current,['p:B','p:A']);
+assert(!runtimePayloadCommitIsCurrent(reply,payload),'Old-order response remains rejected after a real layout change');
+
+
+// Execute the real hook with browser-like extent clamping and observer delivery.
+const frames=new Map();let frameId=0;
+global.requestAnimationFrame=fn=>{frames.set(++frameId,fn);return frameId;};
+global.cancelAnimationFrame=id=>frames.delete(id);
+const observers=new Set();
+class Observer {
+ constructor(callback){this.callback=callback;observers.add(this);}
+ observe(){} disconnect(){observers.delete(this);}
+}
+global.MutationObserver=Observer;global.ResizeObserver=Observer;
+let top=0,left=0,maxTop=0,maxLeft=0,writes=0;
+const listeners=new Map();
+const parent={get scrollTop(){return top;},set scrollTop(v){writes++;top=Math.min(v,maxTop);},
+ get scrollLeft(){return left;},set scrollLeft(v){writes++;left=Math.min(v,maxLeft);},
+ get scrollHeight(){return maxTop+100;},get scrollWidth(){return maxLeft+100;},clientHeight:100,clientWidth:100,
+ addEventListener:(name,fn)=>listeners.set(name,fn),removeEventListener:name=>listeners.delete(name)};
+const tick=()=>{const queued=[...frames.values()];frames.clear();queued.forEach(fn=>fn());};
+const notify=()=>[...observers].forEach(observer=>observer.callback());
+const restoreScroll=(scroll)=>load('runtime/useRuntimeViewRestoreScroll.js').useRuntimeViewRestoreScroll({parentRef:{current:parent},viewState:{state:{scroll}}});
+restoreScroll({top:2500,left:850});tick();tick();
+assert.equal(frames.size,0,'insufficient extent must become idle instead of polling forever');
+const idleWrites=writes;for(let i=0;i<1000;i++){notify();tick();}
+assert.equal(writes,idleWrites,'unchanged extents must not cause scroll writes');
+assert.equal(frames.size,0);
+maxTop=10000;notify();tick();tick();
+assert.equal(top,2500);assert.equal(left,0);assert.equal(frames.size,0,'one unavailable axis stays idle');
+maxLeft=4000;notify();tick();tick();
+assert.equal(top,2500,'slow async row extent must restore exact saved offset');
+assert.equal(left,850,'slow async column extent must restore exact saved offset');
+assert.equal(frames.size,0);assert.equal(observers.size,0,'completed restore disconnects observers');
+restoreCleanup();assert.equal(listeners.size,0);
+for(const scroll of [{top:NaN,left:Infinity},{top:-Infinity,left:NaN}]){
+ const before=writes;restoreScroll(scroll);for(let i=0;i<10;i++)tick();
+ assert.equal(writes,before,'nonfinite axes must never reach DOM setters');
+ assert.equal(frames.size,0);assert.equal(observers.size,0);assert.equal(listeners.size,0);
+ if(restoreCleanup)restoreCleanup();
+}
+for(const event of ['wheel','pointerdown','keydown']){
+ maxTop=100;maxLeft=50;top=0;left=0;restoreScroll({top:2500,left:850});tick();tick();
+ assert.equal(frames.size,0,'smaller final dataset has no pending frame');
+ listeners.get(event)();maxTop=10000;maxLeft=4000;top=75;left=25;notify();tick();
+ assert.equal(top,75);assert.equal(left,25);assert.equal(frames.size,0);assert.equal(observers.size,0);
+ restoreCleanup();assert.equal(listeners.size,0);
+}
+maxTop=0;maxLeft=0;restoreScroll({top:2500,left:850});tick();tick();
+restoreCleanup();assert.equal(frames.size,0);assert.equal(observers.size,0);assert.equal(listeners.size,0);
+maxTop=1000;maxLeft=1000;top=0;left=0;restoreScroll({top:NaN,left:350});tick();tick();
+assert.equal(top,0);assert.equal(left,350);assert.equal(frames.size,0);assert.equal(observers.size,0);
+restoreCleanup();
 console.log('saved view persistence passed');

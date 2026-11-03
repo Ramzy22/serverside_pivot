@@ -22,6 +22,99 @@ def _restore_security_module():
     _reload_security()
 
 
+def test_api_jwt_dependency_uses_maintained_crypto_backend():
+    import tomllib
+    from packaging.requirements import Requirement
+
+    config = tomllib.loads((ROOT / "dash_tanstack_pivot/pyproject.toml").read_text())
+    requirements = [Requirement(value) for value in config["project"]["optional-dependencies"]["api"]]
+    assert not any(value.name.lower() in {"python-jose", "ecdsa"} for value in requirements)
+    assert any(value.name.lower() == "pyjwt" and "crypto" in value.extras for value in requirements)
+
+
+@pytest.mark.parametrize("algorithm", ["RS256", "ES256"])
+@pytest.mark.parametrize("certificate", [False, True])
+def test_jwt_backend_accepts_production_asymmetric_keys_and_certificates(monkeypatch, algorithm, certificate):
+    from datetime import datetime, timedelta, timezone
+    from cryptography import x509
+    from cryptography.hazmat.primitives import hashes, serialization
+    from cryptography.hazmat.primitives.asymmetric import ec, rsa
+    from cryptography.x509.oid import NameOID
+
+    private = rsa.generate_private_key(public_exponent=65537, key_size=2048) if algorithm == "RS256" else ec.generate_private_key(ec.SECP256R1())
+    if certificate:
+        name = x509.Name([x509.NameAttribute(NameOID.COMMON_NAME, "jwt-test")])
+        now = datetime.now(timezone.utc)
+        cert = (x509.CertificateBuilder().subject_name(name).issuer_name(name).public_key(private.public_key())
+                .serial_number(1).not_valid_before(now - timedelta(days=1)).not_valid_after(now + timedelta(days=1)).sign(private, hashes.SHA256()))
+        public = cert.public_bytes(serialization.Encoding.PEM)
+    else:
+        public = private.public_key().public_bytes(serialization.Encoding.PEM, serialization.PublicFormat.SubjectPublicKeyInfo)
+    with monkeypatch.context() as env:
+        env.setenv("ENV", "production")
+        env.delenv("JWT_SECRET_KEY", raising=False)
+        env.setenv("PIVOT_JWT_KEYS_JSON", json.dumps({"current": public.decode()}))
+        env.setenv("PIVOT_JWT_ACTIVE_KID", "current")
+        env.setenv("JWT_ALGORITHM", algorithm)
+        env.setenv("JWT_ISSUER", "https://issuer.example.test")
+        env.setenv("JWT_AUDIENCE", "pivot-api")
+        security = _reload_security()
+        claims = {"sub": "viewer", "iss": security.JWT_ISSUER, "aud": "pivot-api", "exp": int(time.time()) + 60}
+        token = security.jwt.encode(claims, private, algorithm=algorithm, headers={"kid": "current"})
+        assert asyncio.run(security.authenticate_user_credentials(token=token)).username == "viewer"
+        # Public-key bytes must never become a permitted HMAC credential.
+        der = private.public_key().public_bytes(serialization.Encoding.DER, serialization.PublicFormat.SubjectPublicKeyInfo)
+        import base64
+        import hashlib
+        import hmac
+        def segment(value):
+            return base64.urlsafe_b64encode(json.dumps(value).encode()).rstrip(b"=")
+        signing_input = segment({"alg": "HS256", "kid": "current"}) + b"." + segment(claims)
+        forged = (signing_input + b"." + base64.urlsafe_b64encode(hmac.new(der, signing_input, hashlib.sha256).digest()).rstrip(b"=")).decode()
+        with pytest.raises(security.HTTPException) as error:
+            asyncio.run(security.authenticate_user_credentials(token=forged))
+        assert error.value.status_code == 401
+    _restore_security_module()
+
+
+@pytest.mark.parametrize("change", [
+    {"exp": None}, {"iss": None}, {"aud": None},
+    {"exp": 1}, {"iss": "https://attacker.example"}, {"aud": "other-api"},
+    {"nbf": 9999999999}, {"sub": None},
+])
+def test_jwt_backend_preserves_required_claims_and_validation(monkeypatch, change):
+    with monkeypatch.context() as env:
+        env.setenv("ENV", "local")
+        env.setenv("JWT_SECRET_KEY", "a-test-secret-with-at-least-thirty-two-bytes")
+        env.setenv("JWT_ISSUER", "https://issuer.example.test")
+        env.setenv("JWT_AUDIENCE", "pivot-api")
+        security = _reload_security()
+        claims = {"sub": "viewer", "iss": "https://issuer.example.test", "aud": "pivot-api", "exp": int(time.time()) + 60}
+        claims.update(change)
+        claims = {key: value for key, value in claims.items() if value is not None}
+        token = security.jwt.encode(claims, security.JWT_SECRET_KEY, algorithm="HS256")
+        with pytest.raises(security.HTTPException) as error:
+            asyncio.run(security.authenticate_user_credentials(token=token))
+        assert error.value.status_code == 401
+    _restore_security_module()
+
+
+@pytest.mark.parametrize("algorithm", ["HS512", "none"])
+def test_jwt_backend_rejects_algorithm_outside_server_allowlist(monkeypatch, algorithm):
+    with monkeypatch.context() as env:
+        env.setenv("ENV", "local")
+        env.setenv("JWT_SECRET_KEY", "a-test-secret-with-at-least-sixty-four-bytes-for-the-hs512-test-only")
+        env.setenv("JWT_ISSUER", "https://issuer.example.test")
+        env.setenv("JWT_ALGORITHM", "HS256")
+        security = _reload_security()
+        token = security.jwt.encode({"sub": "viewer", "iss": security.JWT_ISSUER, "exp": int(time.time()) + 60},
+                                    None if algorithm == "none" else security.JWT_SECRET_KEY, algorithm=algorithm)
+        with pytest.raises(security.HTTPException) as error:
+            asyncio.run(security.authenticate_user_credentials(token=token))
+        assert error.value.status_code == 401
+    _restore_security_module()
+
+
 def test_security_rejects_missing_jwt_secret_in_production(monkeypatch):
     with monkeypatch.context() as env:
         env.setenv("ENV", "production")
@@ -208,8 +301,8 @@ def test_security_rejects_public_default_secret_forgery_without_local_opt_in(mon
         for name in ("ENV", "APP_ENV", "FLASK_ENV", "DASH_ENV", "JWT_SECRET_KEY", "ALLOW_DEV_AUTH"):
             env.delenv(name, raising=False)
         security = _reload_security()
-        if not security._jose_available:
-            pytest.skip("python-jose is not installed")
+        if not security._jwt_available:
+            pytest.skip("PyJWT is not installed")
         forged_token = security.jwt.encode(
             {"sub": "attacker", "role": "admin", "scopes": ["*"]},
             "dev-jwt-secret",
@@ -231,8 +324,8 @@ def test_security_rejects_a_jwt_without_an_expiration_claim(monkeypatch):
         env.setenv("JWT_ISSUER", "https://issuer.example.test")
         env.delenv("ALLOW_DEV_AUTH", raising=False)
         security = _reload_security()
-        if not security._jose_available:
-            pytest.skip("python-jose is not installed")
+        if not security._jwt_available:
+            pytest.skip("PyJWT is not installed")
 
         token_without_expiry = security.jwt.encode(
             {"sub": "viewer", "role": "viewer", "iss": "https://issuer.example.test"},
@@ -277,8 +370,8 @@ def test_security_validates_jwt_issuer_claim(monkeypatch):
         env.setenv("JWT_SECRET_KEY", "test-jwt-issuer-secret")
         env.setenv("JWT_ISSUER", "https://issuer.example.test")
         security = _reload_security()
-        if not security._jose_available:
-            pytest.skip("python-jose is not installed")
+        if not security._jwt_available:
+            pytest.skip("PyJWT is not installed")
 
         def token(issuer):
             claims = {
@@ -330,8 +423,8 @@ def test_jwt_key_ring_accepts_active_and_previous_keys_but_rejects_unknown_kid(m
             ),
         )
         security = _reload_security()
-        if not security._jose_available:
-            pytest.skip("python-jose is not installed")
+        if not security._jwt_available:
+            pytest.skip("PyJWT is not installed")
 
         def token(secret, kid):
             return security.jwt.encode(

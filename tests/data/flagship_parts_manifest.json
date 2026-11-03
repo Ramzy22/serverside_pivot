@@ -1,0 +1,12 @@
+{
+  "qualificationEvidence": false,
+  "profile": "PIVOT_FLAGSHIP_PARTS_DATA=1",
+  "rowCount": 12001,
+  "sourceRowCount": 12002,
+  "excludedSourceRow": {"region":"Excluded sentinel","sales":999999.5,"scope":"Excluded"},
+  "rowId": "R + zero-padded 5-digit source index",
+  "sales": "source index + 0.25",
+  "filters": {"scope":{"operator":"AND","conditions":[{"type":"eq","value":"Included","caseSensitive":false}]}},
+  "rowsPerPart": 5000,
+  "parts": [{"part":1,"start":0,"end":5000},{"part":2,"start":5000,"end":10000},{"part":3,"start":10000,"end":12001}]
+}

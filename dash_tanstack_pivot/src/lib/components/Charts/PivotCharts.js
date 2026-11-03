@@ -1,4 +1,6 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { createPortal } from 'react-dom';
+import { useChartExportMenu } from './useChartExportMenu';
 import Icons from '../../utils/Icons';
 import { usePivotRenderCounter } from '../../hooks/usePivotRenderCounter';
 import { formatDisplayLabel } from '../../utils/helpers';
@@ -1083,7 +1085,7 @@ const ChartSurface = ({
     const immersiveContainerRef = useRef(null);
     const [chartCopyStatus, setChartCopyStatus] = useState(null);
     const [exportMenuOpen, setExportMenuOpen] = useState(false);
-    const exportMenuRef = useRef(null);
+    const { anchorRef: exportButtonRef, menuRef: exportMenuRef, position: exportMenuPosition, portalTarget: exportMenuTarget } = useChartExportMenu(exportMenuOpen, setExportMenuOpen);
     const [immersiveAutoHeight, setImmersiveAutoHeight] = useState(null);
     const [uncontrolledSettingsPanelWidth, setUncontrolledSettingsPanelWidth] = useState(348);
     const settingsPanelWidth = Number.isFinite(Number(controlledSettingsPanelWidth))
@@ -1184,24 +1186,6 @@ const ChartSurface = ({
         const timer = setTimeout(() => setChartCopyStatus(null), 2500);
         return () => clearTimeout(timer);
     }, [chartCopyStatus]);
-
-    useEffect(() => {
-        if (!exportMenuOpen) return undefined;
-        const closeOnOutsideClick = (event) => {
-            if (exportMenuRef.current && !exportMenuRef.current.contains(event.target)) {
-                setExportMenuOpen(false);
-            }
-        };
-        const closeOnEscape = (event) => {
-            if (event.key === 'Escape') setExportMenuOpen(false);
-        };
-        document.addEventListener('mousedown', closeOnOutsideClick);
-        document.addEventListener('keydown', closeOnEscape);
-        return () => {
-            document.removeEventListener('mousedown', closeOnOutsideClick);
-            document.removeEventListener('keydown', closeOnEscape);
-        };
-    }, [exportMenuOpen]);
 
     const getChartPresentation = useCallback(() => readChartPresentation(
         chartSurfaceMainRef.current,
@@ -1380,10 +1364,17 @@ const ChartSurface = ({
                         theme={theme}
                     />
                     <div style={{ display: 'flex', alignItems: 'center', gap: '6px', flexWrap: 'wrap', justifyContent: 'flex-end' }}>
-                        <div ref={exportMenuRef} style={{ position: 'relative' }}>
+                        <div style={{ position: 'relative' }}>
                             <button
                                 type="button"
+                                ref={exportButtonRef}
                                 onClick={() => setExportMenuOpen((isOpen) => !isOpen)}
+                                onKeyDown={(event) => {
+                                    if (event.key === 'ArrowDown' || event.key === 'ArrowUp') {
+                                        event.preventDefault();
+                                        setExportMenuOpen(true);
+                                    }
+                                }}
                                 style={exportButtonStyle}
                                 title="Export chart"
                                 aria-haspopup="menu"
@@ -1393,16 +1384,20 @@ const ChartSurface = ({
                                     Export <Icons.ChevronDown />
                                 </span>
                             </button>
-                            {exportMenuOpen ? (
+                            {exportMenuOpen && exportMenuTarget ? createPortal(
                                 <div
+                                    ref={exportMenuRef}
                                     role="menu"
                                     aria-label="Chart export formats"
                                     style={{
-                                        position: 'absolute',
-                                        top: 'calc(100% + 6px)',
-                                        right: 0,
-                                        zIndex: 80,
-                                        minWidth: '176px',
+                                        position: 'fixed',
+                                        ...exportMenuPosition,
+                                        visibility: exportMenuPosition ? 'visible' : 'hidden',
+                                        zIndex: 10060,
+                                        width: '190px',
+                                        boxSizing: 'border-box',
+                                        overflowY: 'auto',
+                                        fontFamily: 'inherit',
                                         padding: '6px',
                                         border: `1px solid ${theme.border}`,
                                         borderRadius: theme.radiusSm || '8px',
@@ -1420,7 +1415,7 @@ const ChartSurface = ({
                                             type="button"
                                             role="menuitem"
                                             disabled={item.disabled}
-                                            onClick={() => handleChartExport(item.format)}
+                                            onClick={() => { exportButtonRef.current?.focus(); handleChartExport(item.format); }}
                                             title={item.disabled ? 'SVG export is unavailable for this chart type' : undefined}
                                             style={{
                                                 width: '100%',
@@ -1444,7 +1439,7 @@ const ChartSurface = ({
                                             <span style={{ fontSize: '10px', color: theme.textSec }}>{item.hint}</span>
                                         </button>
                                     ))}
-                                </div>
+                                </div>, exportMenuTarget
                             ) : null}
                         </div>
                         <button

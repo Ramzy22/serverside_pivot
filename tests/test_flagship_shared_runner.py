@@ -4,6 +4,7 @@ from pathlib import Path
 import json
 
 from scripts.flagship_manifest import QualificationBinding
+from scripts.flagship_shared_client import SHARED_CLIENT_ASSERTIONS
 
 import pytest
 
@@ -11,12 +12,13 @@ from scripts.flagship_shared_runner import SHARED_ASSERTIONS, _committed_source,
 from tests.flagship_contract import load_requirements
 
 
-def test_shared_mapping_is_explicit_and_never_claims_all_requirements():
+def test_shared_mapping_is_explicit_and_declared_coverage_does_not_claim_execution():
     requirements = load_requirements(Path(__file__).with_name("flagship_requirements.json"))
     required = {test_id for requirement in requirements if requirement.required for test_id in requirement.shared_tests}
     assert set(SHARED_ASSERTIONS) <= required
-    assert set(unmapped_shared_ids(requirements)) == required - set(SHARED_ASSERTIONS)
-    assert "shared.copy-selection.headers" in unmapped_shared_ids(requirements)
+    assert set(unmapped_shared_ids(requirements)) == required - (SHARED_ASSERTIONS.keys() | SHARED_CLIENT_ASSERTIONS.keys())
+    assert "shared.copy-selection.headers" in SHARED_CLIENT_ASSERTIONS
+    assert "shared.copy-selection.headers" not in SHARED_ASSERTIONS
     assert "shared.export-csv.exact-document" not in unmapped_shared_ids(requirements)
     assert "shared.export-xlsx.exact-workbook" not in unmapped_shared_ids(requirements)
 

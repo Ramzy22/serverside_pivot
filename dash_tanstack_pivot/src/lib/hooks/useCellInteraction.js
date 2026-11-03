@@ -10,9 +10,9 @@ import { useState } from 'react';
 export function useCellInteraction() {
     const [contextMenu, setContextMenu] = useState(null);
     const [selectedCells, setSelectedCells] = useState({});
-    const [lastSelected, setLastSelected] = useState(null);
+    const [lastSelected, setLastSelected] = useState(/** @type {import('../runtime/cellSelectionAnchor').CellSelectionAnchor | null} */ (null));
     const [isDragging, setIsDragging] = useState(false);
-    const [dragStart, setDragStart] = useState(null);
+    const [dragStart, setDragStart] = useState(/** @type {import('../runtime/cellSelectionAnchor').CellSelectionAnchor | null} */ (null));
     const [isFilling, setIsFilling] = useState(false);
     const [fillRange, setFillRange] = useState(null);
     const [history, setHistory] = useState([]);

@@ -19,6 +19,31 @@ from openpyxl import load_workbook
 
 from tests.flagship_reference_support import DEFAULT_EVIDENCE, load_case_results, reference_case, start_reference_run
 
+# Collect every observation in this fixture-owning module. Separate module
+# fixtures would reset the shared result envelope and lose earlier evidence.
+from tests.flagship_reference_display import (
+    test_reference_display_density_configuration,
+    test_reference_display_report_restore,
+    test_reference_display_saved_scroll_ssrm,
+    test_reference_display_field_zone_native_move,
+    test_reference_display_application_callbacks,
+    test_reference_display_configured_limitations,
+)
+from tests.flagship_reference_clipboard import (
+    test_reference_clipboard_default_pivot_headers_across_groups,
+    test_reference_clipboard_collapsed_table_scope,
+    test_reference_clipboard_selection_crosses_unloaded_ssrm_blocks,
+    test_reference_selection_journey_filter_pin_scroll_copy,
+    test_reference_analysis_journey_average_expand_swap_export,
+)
+from tests.flagship_reference_charts_jobs import (
+    test_reference_range_chart_native_source,
+    test_reference_chart_native_link_and_reselection,
+    test_reference_chart_native_dialog_lifecycle,
+    test_reference_chart_native_image_download,
+    test_reference_delivery_loaded_export_observation,
+)
+
 
 pytestmark = [
     pytest.mark.flagship,
@@ -96,10 +121,11 @@ def test_reference_saved_state_reload_restores_model_and_geometry(reference_run,
         rows = _displayed_rows(driver)
         assert [row['label'] for row in rows] == ['Q1', 'Q2', 'Total']
         visible = {}
-        for key, values in expected_columns.items():
-            assert [row['data'][key] for row in rows] == [values[label] for label in ('Q1', 'Q2', 'Total')]
-            driver.execute_script("const c=window.referenceGrid.getColumn(arguments[0]),v=document.querySelector('.ag-body-horizontal-scroll-viewport');v.scrollLeft=Math.min(v.scrollWidth-v.clientWidth,Math.max(0,c.getLeft()))", key)
-            visible[key] = _wait_column(driver, key, [f'{values[label]:.2f}' for label in ('Q1', 'Q2', 'Total')])
+        case.parsed_output = {'before': before, 'saved': saved_geometry,
+                              'restored': restored_geometry, 'snapshot': snapshot,
+                              'model': model, 'rows': rows, 'visibleColumns': visible}
+        _inspect_persistence_columns(driver, rows, expected_columns, visible,
+                                     lambda observation: case.parsed_output.update(currentInspection=observation))
         case.parsed_output = {'scope': 'Application-managed localStorage with public getState/setState, explicit rowHeight and deferred pivot widths applied after result columns exist',
                               'before': before, 'saved': saved_geometry, 'restored': restored_geometry,
                               'snapshot': snapshot, 'model': model, 'rows': rows, 'visibleColumns': visible}
@@ -577,6 +603,48 @@ def _displayed_rows(driver):
         "Reference must expose displayed SSRM row ancestry and totals for observation"
     )
     return driver.execute_script("return window.referenceEvidence.displayedRows()")
+
+
+def _inspect_persistence_columns(driver, rows, expected_columns, visible, record):
+    for key, values in expected_columns.items():
+        assert [row['data'][key] for row in rows] == [values[label] for label in ('Q1', 'Q2', 'Total')]
+        visible[key] = _wait_persistence_column(
+            driver, key, [f'{values[label]:.2f}' for label in ('Q1', 'Q2', 'Total')], record)
+
+
+def _wait_persistence_column(driver, column, values, record):
+    """Navigate on every readiness poll; never modify the restored model."""
+    expected = [(str(index), value) for index, value in enumerate(values)]
+
+    def inspect(browser):
+        observation = browser.execute_script("""
+          const id=arguments[0], api=window.referenceGrid, column=api.getColumn(id);
+          const viewport=document.querySelector('.ag-grid-viewport');
+          const scroll=document.querySelector('.ag-body-horizontal-scroll-viewport');
+          if (column) api.ensureColumnVisible(column, 'auto');
+          const outerBounds=viewport?.getBoundingClientRect();
+          const pinnedLeft=api.getDisplayedLeftColumns().reduce((width,c)=>width+c.getActualWidth(),0);
+          const pinnedRight=api.getDisplayedRightColumns().reduce((width,c)=>width+c.getActualWidth(),0);
+          const bounds=outerBounds?{left:outerBounds.left+pinnedLeft,
+            right:outerBounds.right-pinnedRight}:null;
+          const elements=[...document.querySelectorAll('[role="gridcell"]')]
+            .filter(cell=>cell.getAttribute('col-id')===id);
+          const geometry=elements.map(cell=>{
+            const rect=cell.getBoundingClientRect();
+            return {left:rect.left,right:rect.right,width:rect.width};
+          });
+          return {field:id,columnExists:!!column,scrollLeft:scroll?.scrollLeft,
+            viewport:bounds,pinnedLeft,pinnedRight,geometry,
+            fullyVisible:!!column && !!bounds && geometry.length===3 && geometry.every(
+              rect=>rect.width>0 && rect.left>=bounds.left-1 && rect.right<=bounds.right+1),
+            cells:window.referenceEvidence.visibleCells().filter(cell=>cell.colId===id)};
+        """, column)
+        record(observation)
+        cells = observation['cells']
+        actual = sorted((cell['rowIndex'], cell['text']) for cell in cells)
+        return cells if observation['fullyVisible'] and actual == expected else False
+
+    return WebDriverWait(driver, 10).until(inspect)
 
 
 def _wait_column(driver, column, values):

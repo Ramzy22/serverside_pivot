@@ -33,10 +33,11 @@ except ImportError:
     BaseModel = object
 
 try:
-    from jose import jwt, JWTError
-    _jose_available = True
+    import jwt
+    from jwt.exceptions import PyJWTError as JWTError
+    _jwt_available = True
 except ImportError:
-    _jose_available = False
+    _jwt_available = False
     jwt = JWTError = None
 
 # Local-development fallback only; production rejects it in JwtKeyRing.from_env.
@@ -137,7 +138,18 @@ class JwtKeyRing:
             kid = self.active_kid
         if not kid or kid not in self.verification_keys:
             raise JWTError("Unknown JWT signing key.")
-        return self.verification_keys[kid]
+        key = self.verification_keys[kid]
+        if self.algorithm.startswith(("RS", "ES")) and "-----BEGIN CERTIFICATE-----" in key:
+            # Certificates are an existing key-ring input; PyJWT expects the
+            # embedded public key, rather than the X.509 envelope.
+            from cryptography import x509
+            from cryptography.hazmat.primitives import serialization
+            try:
+                public_key = x509.load_pem_x509_certificate(key.encode("utf-8")).public_key()
+                return public_key.public_bytes(serialization.Encoding.PEM, serialization.PublicFormat.SubjectPublicKeyInfo).decode("ascii")
+            except ValueError as exc:
+                raise JWTError("Invalid JWT verification certificate.") from exc
+        return key
 
 
 def _is_production_environment() -> bool:
@@ -257,7 +269,7 @@ async def authenticate_user_credentials(
             
     # 2. JWT Authentication (Human User / OIDC)
     if token:
-        if not _jose_available:
+        if not _jwt_available:
             raise HTTPException(
                 status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
                 detail="JWT authentication support is unavailable",
@@ -291,9 +303,7 @@ async def authenticate_user_credentials(
                 issuer=key_ring.issuer,
                 audience=key_ring.audience,
                 options={
-                    "require_exp": True,
-                    "require_iss": True,
-                    "require_aud": bool(key_ring.audience),
+                    "require": ["exp", "iss"] + (["aud"] if key_ring.audience else []),
                 },
             )
             username: str = payload.get("sub")
@@ -312,7 +322,7 @@ async def authenticate_user_credentials(
                 scopes=payload.get("scopes", []),
                 attributes=attributes
             )
-        except JWTError:
+        except (JWTError, ValueError):
             raise HTTPException(
                 status_code=status.HTTP_401_UNAUTHORIZED,
                 detail="Could not validate credentials",

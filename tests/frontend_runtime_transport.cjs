@@ -126,6 +126,58 @@ test('HTTP still validates successful V1 envelopes and resolves payload referenc
     await assert.rejects(new HttpPivotTransport({fetchImpl: async () => jsonResponse({}, 200)}).request(request), /invalid V1/);
 });
 
+test('HTTP cross-origin payload references resolve against the endpoint through actual delivery', async () => {
+    const {HttpPivotTransport} = loadRuntime()('runtime/httpTransport.ts');
+    const previousWindow = Object.getOwnPropertyDescriptor(globalThis, 'window');
+    Object.defineProperty(globalThis, 'window', {configurable: true, value: {
+        location: {href: 'https://embedded.example/app/frame'},
+    }});
+    try {
+        // Literal expectations distinguish root-relative, endpoint-relative,
+        // and absolute references from the embedding page's origin/path.
+        for (const [url, expected] of [
+            ['/v1/runtime/payload/blob', 'https://runtime.example/v1/runtime/payload/blob'],
+            ['payload/blob?token=retained', 'https://runtime.example/gateway/payload/blob?token=retained'],
+            ['https://cdn.example/blob', 'https://cdn.example/blob'],
+        ]) {
+            const calls = [];
+            const controller = new AbortController();
+            const origin = {...request, clientInstance: 'embedded-tab', stateEpoch: 3, windowSeq: 7};
+            const reference = {id: 'blob', url, bytes: 128, contentType: 'application/json'};
+            const body = {schemaVersion: 1, kind: 'data', status: 'data', payload: {payloadRef: reference}};
+            const payload = {data: [{id: 'cross-origin-row', amount: 12}], rowCount: 1, dataVersion: 7};
+            const transport = new HttpPivotTransport({
+                endpoint: 'https://runtime.example/gateway/runtime', headers: {Authorization: 'Bearer test'},
+                fetchImpl: async (target, options) => {
+                    calls.push({target, options});
+                    return jsonResponse(options.method === 'POST' ? body : payload, 200);
+                },
+            });
+            const response = await transport.request(origin, {signal: controller.signal});
+            assert.deepEqual(response, {...body, requestId: 'window-1', clientInstance: 'embedded-tab',
+                stateEpoch: 3, windowSeq: 7, payload: {payloadRef: {...reference, url: expected}}});
+            assert.deepEqual(await transport.fetchPayload(response.payload.payloadRef, {signal: controller.signal}), payload);
+            // Also accept the original wire reference: callers may retain it
+            // independently of the normalized response returned by request().
+            assert.deepEqual(await transport.fetchPayload(reference, {signal: controller.signal}), payload);
+            assert.deepEqual(calls.map(call => [call.options.method, call.target]), [
+                ['POST', 'https://runtime.example/gateway/runtime'], ['GET', expected], ['GET', expected],
+            ]);
+            assert.deepEqual(JSON.parse(calls[0].options.body), origin);
+            for (const {options} of calls) {
+                assert.equal(options.signal, controller.signal);
+                assert.equal(options.credentials, 'same-origin');
+                assert.equal(options.headers.Authorization, 'Bearer test');
+            }
+            controller.abort();
+            assert.ok(calls.every(call => call.options.signal.aborted), 'caller retains cancellation of both phases');
+        }
+    } finally {
+        if (previousWindow) Object.defineProperty(globalThis, 'window', previousWindow);
+        else delete globalThis.window;
+    }
+});
+
 test('HTTP body cancellation remains AbortError instead of becoming a runtime failure', async () => {
     const {HttpPivotTransport} = loadRuntime()('runtime/httpTransport.ts');
     const cancellation = new DOMException('Request superseded', 'AbortError');
@@ -329,4 +381,86 @@ test('configured payload failures never fall back to bare fetch and abort is sil
         }
         assert.equal(bareCalls, 0);
     } finally {global.fetch = originalFetch; console.error = originalError;}
+});
+
+test('workspace aborts all owned dispatches on unmount without disposing a shared transport', async () => {
+    const effects = [], updates = [], calls = [];
+    let disposed = false;
+    const react = {
+        useState: initializer => [initializer(), update => updates.push(update)],
+        useRef: current => ({current}), useEffect: fn => effects.push(fn), useCallback: fn => fn,
+        createElement: (type, props) => ({type, props}),
+    };
+    const {PivotWorkspace} = loadRuntime(react)('components/PivotWorkspace.tsx');
+    const transport = {request: (envelope, options) => {
+        calls.push({envelope, options});
+        return new Promise((resolve, reject) => options?.signal?.addEventListener('abort', () => reject(new DOMException('Unmounted', 'AbortError')), {once:true}));
+    }, dispose: () => {disposed = true;}};
+    const root = PivotWorkspace({transport, table:'sales'});
+    const cleanups = effects.map(fn => fn()).filter(Boolean);
+    root.props.setProps({runtimeRequest:request});
+    root.props.setProps({runtimeRequest:{...request, requestId:'window-2'}});
+    assert.equal(calls.length, 2);
+    for (const call of calls) assert.ok(call.options?.signal instanceof AbortSignal, 'dispatch must own an actual AbortSignal');
+    const before = updates.length;
+    cleanups.forEach(fn => fn());
+    assert.ok(calls.every(call => call.options.signal.aborted));
+    await settle();
+    assert.equal(updates.length, before, 'abort must not publish a runtime error after cleanup');
+    assert.equal(disposed, false, 'caller owns the shared transport');
+});
+
+test('scheduler coalescing retains the latest caller signal and releases its abort listener', async () => {
+    const {LatestViewportScheduler} = loadRuntime()('runtime/httpTransport.ts');
+    const first = new AbortController(), latest = new AbortController();
+    let seen, released = 0;
+    const remove = latest.signal.removeEventListener.bind(latest.signal);
+    latest.signal.removeEventListener = (...args) => {released++; return remove(...args);};
+    const scheduler = new LatestViewportScheduler({request:(envelope, options) => {
+        seen = {envelope, options};
+        return new Promise((resolve, reject) => options.signal.addEventListener('abort', () => reject(new DOMException('Aborted', 'AbortError')), {once:true}));
+    }});
+    const a = scheduler.request(request, {signal:first.signal}).catch(error => error);
+    const b = scheduler.request({...request, requestId:'window-2'}, {signal:latest.signal}).catch(error => error);
+    await Promise.resolve();
+    first.abort();
+    assert.equal(seen.envelope.requestId, 'window-2');
+    assert.equal(seen.options.signal.aborted, false, 'superseded caller must not abort latest request');
+    latest.abort();
+    assert.equal(seen.options.signal.aborted, true, 'latest caller must cancel actual underlying request');
+    assert.equal((await a).name, 'AbortError');
+    assert.equal((await b).name, 'AbortError');
+    assert.equal(released, 1);
+});
+
+test('workspace keeps local viewport and chart pane telemetry out of the durable host channel', async () => {
+    const published=[];
+    const react={useState: initializer=>[initializer(),()=>{}],useRef:current=>({current}),
+        useEffect:()=>{},useCallback:fn=>fn,createElement:(type,props)=>({type,props})};
+    const {PivotWorkspace}=loadRuntime(react)('components/PivotWorkspace.tsx');
+    const root=PivotWorkspace({table:'sales',transport:{request:async()=>exhausted},onStateChange:value=>published.push(value)});
+    root.props.setProps({runtimeRequest:request});
+    root.props.setProps({chartCanvasPanes:[{id:'pane',width:450}],tableCanvasSize:3});
+    assert.deepEqual(published,[], 'scroll/resize must stay local to the consumer');
+    root.props.setProps({filters:{global:'real'},runtimeRequest:{...request,requestId:'window-3'}});
+    assert.deepEqual(published,[{filters:{global:'real'}}], 'durable model changes publish once without viewport traffic');
+    await settle();
+});
+
+test('workspace ignores a cancelled dispatch even when effects mount again before an uncooperative transport settles', async () => {
+    const effects=[],updates=[];
+    let resolve;
+    const react={useState:initializer=>[initializer(),update=>updates.push(update)],useRef:current=>({current}),
+        useEffect:fn=>effects.push(fn),useCallback:fn=>fn,createElement:(type,props)=>({type,props})};
+    const {PivotWorkspace}=loadRuntime(react)('components/PivotWorkspace.tsx');
+    const root=PivotWorkspace({table:'sales',transport:{request:()=>new Promise(done=>{resolve=done;})}});
+    const cleanup=effects.map(fn=>fn()).filter(Boolean);
+    root.props.setProps({runtimeRequest:request});
+    cleanup.forEach(fn=>fn());
+    // StrictMode can set mountedRef true again while old promises still exist.
+    effects.forEach(fn=>fn());
+    const before=updates.length;
+    resolve({...exhausted,status:'data'});
+    await settle();
+    assert.equal(updates.length,before,'cancelled generation must not publish after effects remount');
 });

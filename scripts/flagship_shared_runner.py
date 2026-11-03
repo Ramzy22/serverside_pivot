@@ -17,6 +17,7 @@ import tempfile
 from typing import Mapping, Sequence
 
 from scripts.flagship_manifest import BoundCaseResult, QualificationBinding, load_committed_requirements
+from scripts.flagship_shared_client import SHARED_CLIENT_ASSERTIONS
 from tests.flagship_contract import Requirement
 
 
@@ -31,6 +32,17 @@ class SharedAssertion:
 # Each mapped assertion checks a parsed, literal document against an independent
 # expected result, including order, totals, numeric values, and Unicode text.
 SHARED_ASSERTIONS: Mapping[str, tuple[SharedAssertion, ...]] = {
+    **{"shared." + name: (
+        SharedAssertion(f"tests/test_flagship_remaining_2.py::{node}",
+                        ("tests/__init__.py", "tests/test_flagship_remaining_2.py", "tests/flagship_remaining_2.py",
+                         "tests/flagship_remaining_1.py", "tests/flagship_axis_swap.py", "tests/flagship_browser_support.py",
+                         "tests/flagship_contract.py", "tests/export_qualification_fixture.py")),
+    ) for name, node in {
+        "layout-field-zones.move": "test_shared_field_zone_move_restores_exact_sparse_intersections",
+        "formula-columns.add-remove": "test_shared_formula_add_remove_uses_post_sum_totals",
+        "custom-dimensions.add-remove": "test_shared_custom_category_add_remove_preserves_source_data",
+        "report-mode.restore-definition": "test_shared_report_definition_round_trip_preserves_period_sales",
+    }.items()},
     **{"shared.copy-selection." + kind: tuple(
         SharedAssertion(f"tests/test_flagship_clipboard_values_runtime.py::test_shared_clipboard_source_values[{aggregation}]",
                         ("tests/__init__.py", "tests/test_flagship_clipboard_values_runtime.py",
@@ -140,7 +152,7 @@ SHARED_ASSERTIONS: Mapping[str, tuple[SharedAssertion, ...]] = {
 def unmapped_shared_ids(requirements: Sequence[Requirement]) -> tuple[str, ...]:
     """Return every required shared ID lacking a concrete installed assertion."""
     required = {test_id for requirement in requirements if requirement.required for test_id in requirement.shared_tests}
-    return tuple(sorted(required - SHARED_ASSERTIONS.keys()))
+    return tuple(sorted(required - (SHARED_ASSERTIONS.keys() | SHARED_CLIENT_ASSERTIONS.keys())))
 
 
 def _pytest_all_passed(exit_code: int, output: str, expected_count: int) -> bool:

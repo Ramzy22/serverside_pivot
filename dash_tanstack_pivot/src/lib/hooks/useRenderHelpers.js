@@ -15,6 +15,7 @@ import {
     normalizeHeaderStyle,
 } from '../presentation/headerFormatting';
 import { CellErrorBoundary, SafeCellContent } from '../presentation/safeCellContent';
+import { resolveDataBarMaximum } from '../utils/dataBars';
 
 const HEADER_FORMATTING_RESERVED_KEYS = new Set([
     'default', 'defaultStyle', 'all', '*', 'columns', 'byColumn', 'columnStyles', 'rules', 'headerRules',
@@ -89,6 +90,7 @@ export function useRenderHelpers({
     selectedCols,
     getHeaderStickyStyle,
     dataBarsColumns,
+    dataBarMaximums,
     colorScaleStats,
     cellFormatRules,
     resolveEditedCellMarker,
@@ -223,7 +225,7 @@ export function useRenderHelpers({
             selectedCells || {},
             `${row.id}:${col.id}`
         );
-        const isLastSelected = lastSelected && lastSelected.rowIndex === virtualRowIndex && lastSelected.colIndex === colIndex;
+        const isLastSelected = lastSelected && (lastSelected.rowId === undefined ? lastSelected.rowIndex === virtualRowIndex : lastSelected.rowId === row.id) && (lastSelected.colId === undefined ? lastSelected.colIndex === colIndex : lastSelected.colId === col.id);
         let isFillSelected = false;
         if (fillRange && dragStart) {
              if (virtualRowIndex >= fillRange.rStart && virtualRowIndex <= fillRange.rEnd && colIndex >= fillRange.cStart && colIndex <= fillRange.cEnd) {
@@ -367,8 +369,8 @@ export function useRenderHelpers({
         let dataBarEl = null;
         if (isDataBar) {
             const stats = colorScaleStats && colorScaleStats.byCol && colorScaleStats.byCol[col.id];
-            if (stats) {
-                const absMax = Math.max(Math.abs(stats.max), Math.abs(stats.min), 1e-9);
+            const absMax = resolveDataBarMaximum(dataBarMaximums && dataBarMaximums[col.id], stats);
+            if (absMax !== null) {
                 const pct = Math.min(1, Math.abs(rawNumValue) / absMax);
                 const isNeg = rawNumValue < 0;
                 const barColor = isNeg
@@ -474,6 +476,7 @@ export function useRenderHelpers({
         lastSelected,
         getConditionalStyle,
         dataBarsColumns,
+        dataBarMaximums,
         colorScaleStats,
         cellFormatRules,
         resolveEditedCellMarker,
@@ -707,12 +710,35 @@ export function useRenderHelpers({
         return style;
     }, [normalizedHeaderFormatting]);
 
+    // A context-menu anchor is a virtual rectangle, not a DOM filter button.
+    // Give it one canonical real leaf owner across the split header groups.
+    const activeFilterOwner = useMemo(() => {
+        if (!activeFilterCol || !filterAnchorEl) return null;
+        const clickedOwner = filterAnchorEl.getAttribute?.('data-pivot-filter-owner');
+        if (clickedOwner) return clickedOwner;
+        const currentTable = tableRef?.current || table;
+        for (const [section, getter] of [['left', 'getLeftHeaderGroups'],
+            ['center', 'getCenterHeaderGroups'], ['right', 'getRightHeaderGroups']]) {
+            for (const group of currentTable?.[getter]?.() || []) {
+                for (const candidate of group.headers) {
+                    if (candidate.isPlaceholder || candidate.column.columns?.length) continue;
+                    const field = candidate.column.id === 'hierarchy' ? rowFields?.[0] : candidate.column.id;
+                    if (field === activeFilterCol) return `${section}:${candidate.id}`;
+                }
+            }
+        }
+        return null;
+    }, [activeFilterCol, filterAnchorEl, tableRef, table, rowFields, leftCols, centerCols, rightCols]);
+
     // Render Header Cell for Split Sections
     // overrideWidth: when set, replaces the computed section width (used for partially-visible
     // group headers during center-column virtualization so the width matches only the visible leaves).
     // Wrapped in useCallback so PivotTableBody's React.memo can skip re-renders
     // when only unrelated parent state (sidebar, charts, context menus) changes.
     const renderHeaderCell = useCallback((header, level, renderSection = 'center', overrideWidth = null, disableSticky = false) => {
+        // A leaf column also occurs in placeholder groups and pinned sections.
+        // Only the header whose filter button opened the popover owns its state.
+        const filterOwner = `${renderSection}:${header.id}`;
         const isGroupHeader = header.column.columns && header.column.columns.length > 0;
         const isReportConfigGutter = Boolean(header.column.columnDef && header.column.columnDef.meta && header.column.columnDef.meta.reportConfigGutter);
         const isHierarchyHeader = header.column.id === 'hierarchy';
@@ -1013,6 +1039,7 @@ export function useRenderHelpers({
                         }}
                         role="button"
                         tabIndex={0}
+                        data-pivot-filter-owner={filterOwner}
                         style={{
                             display:'flex',
                             alignItems: 'center',
@@ -1059,7 +1086,8 @@ export function useRenderHelpers({
                 </div>
                 </div>
 
-                {!isGroupHeader && activeFilterCol === filterColumnId && (
+                {!isGroupHeader && !header.isPlaceholder && activeFilterCol === filterColumnId
+                    && activeFilterOwner === filterOwner && (
                     <FilterPopover
                     column={isHierarchyHeader ? { id: filterColumnId, header: headerText } : header.column}
                     anchorEl={filterAnchorEl}
@@ -1133,6 +1161,7 @@ export function useRenderHelpers({
         selectedCols,
         filters,
         activeFilterCol,
+        activeFilterOwner,
         filterAnchorEl,
         activeFilterOptions,
         activeFilterOptionMeta,

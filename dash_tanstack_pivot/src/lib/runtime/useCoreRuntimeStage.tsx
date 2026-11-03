@@ -3,7 +3,7 @@
 import React, { useMemo, useState, useRef, useEffect, useCallback } from 'react';
 import { themes, getStyles, isDarkTheme, gridDimensionTokens, deriveEditedCellThemeTokens, deriveStructuralThemeTokens } from '../utils/styles';
 import { DEFAULT_FIELD_PANEL_SIZES, sanitizeFieldPanelSizes } from '../utils/fieldPanelLayout';
-import { normalizeColumnOrderValue } from '../utils/columnOrder';
+import { normalizeColumnOrderValue, areStringArraysEqual } from '../utils/columnOrder';
 import { buildMeasureAxisRuntimeConfig, normalizeMeasureAxisValue } from '../utils/measureAxis';
 import { buildClientFilterOptionMap, collectDataFieldIds, isAutoDataFieldId } from '../utils/filterOptions';
 import { buildReportEditorSelectionFromRow } from '../utils/reportEditorSelection';
@@ -46,7 +46,6 @@ import { useRuntimeChartPanelSizing } from '../runtime/useRuntimeChartPanelSizin
 import { useRuntimeChartCanvasResize } from '../runtime/useRuntimeChartCanvasResize';
 import { useRuntimeChartCanvasVerticalResize } from '../runtime/useRuntimeChartCanvasVerticalResize';
 import { useRuntimeChartDefinitionCommands } from '../runtime/useRuntimeChartDefinitionCommands';
-import { useRuntimeChartFloatingInteractions } from '../runtime/useRuntimeChartFloatingInteractions';
 import { createRuntimeCellPresentation } from '../runtime/createRuntimeCellPresentation';
 import { useRuntimeOptimisticCellState } from '../runtime/useRuntimeOptimisticCellState';
 import { useRuntimeRequestSession } from '../runtime/useRuntimeRequestSession';
@@ -868,10 +867,14 @@ export function useCoreRuntimeStage(props) {
   ({
     colorScaleMode: stage.colorScaleMode,
     setColorScaleMode: stage.setColorScaleMode,
+    colorScaleColumns: stage.colorScaleColumns,
+    setColorScaleColumns: stage.setColorScaleColumns,
     colorPalette: stage.colorPalette,
     setColorPalette: stage.setColorPalette,
     dataBarsColumns: stage.dataBarsColumns,
+    dataBarMaximums: stage.dataBarMaximums,
     setDataBarsColumns: stage.setDataBarsColumns,
+    setDataBarMaximums: stage.setDataBarMaximums,
     fontFamily: stage.fontFamily,
     setFontFamily: stage.setFontFamily,
     fontSize: stage.fontSize,
@@ -915,7 +918,6 @@ export function useCoreRuntimeStage(props) {
       const levelFields = collectReportFields(stage.reportDef);
       if (levelFields.length > 0) {
         stage.setRowFields(levelFields);
-        stage.setColFields([]);
       }
       stage.setExpanded({});
     } else if (leavingReport) {
@@ -989,7 +991,6 @@ export function useCoreRuntimeStage(props) {
     const levelFields = collectReportFields(stage.reportDef);
     if (levelFields.length > 0 && JSON.stringify(levelFields) !== JSON.stringify(stage.rowFields)) {
       stage.setRowFields(levelFields);
-      stage.setColFields([]);
       stage.setExpanded({});
     }
   }, [stage.reportDef, stage.rowFields, stage.viewMode]); // eslint-disable-line react-hooks/exhaustive-deps
@@ -1383,9 +1384,12 @@ export function useCoreRuntimeStage(props) {
     }
     if (typeof restored.layoutMode === 'string') stage.setLayoutMode(normalizeLayoutModeValue(restored.layoutMode));
     if (typeof restored.colorScaleMode === 'string') stage.setColorScaleMode(restored.colorScaleMode);
+    stage.setColorScaleColumns(Array.isArray(restored.colorScaleColumns)
+      ? restored.colorScaleColumns.filter(column => typeof column === 'string') : null);
     if (typeof restored.colorPalette === 'string') stage.setColorPalette(restored.colorPalette);
     if (typeof restored.spacingMode === 'number') stage.setSpacingMode(restored.spacingMode);
     if (Array.isArray(restored.dataBarsColumns)) stage.setDataBarsColumns(new Set(restored.dataBarsColumns));
+    stage.setDataBarMaximums(restored.dataBarMaximums);
     if (restored.pivotColumnSorting && typeof restored.pivotColumnSorting === 'object') stage.setPivotColumnSorting(restored.pivotColumnSorting);
     if (restored.columnPinning && typeof restored.columnPinning === 'object') stage.setColumnPinning(restored.columnPinning);
     const restoredRowPinning = restored.rowPinning && typeof restored.rowPinning === 'object' ? restored.rowPinning : null;
@@ -1398,7 +1402,10 @@ export function useCoreRuntimeStage(props) {
     if (restored.columnVisibility && typeof restored.columnVisibility === 'object') stage.setColumnVisibility(restored.columnVisibility);
     if (Array.isArray(restored.columnOrder)) stage.setColumnOrder(normalizeColumnOrderValue(restored.columnOrder));
     if (Array.isArray(restored.pivotLayoutOrder)) {
-      stage.setPivotLayoutOrder(normalizeColumnOrderValue(restored.pivotLayoutOrder));
+      const restoredOrder = normalizeColumnOrderValue(restored.pivotLayoutOrder);
+      // Requests retain this immutable manifest as their layout token. A full
+      // view restore can repeat the per-key persisted state during mounting.
+      stage.setPivotLayoutOrder(previous => areStringArraysEqual(previous, restoredOrder) ? previous : restoredOrder);
       stage.layoutRevisionRef.current = null;
     }
     if (restored.pivotPinnedLayoutIds && typeof restored.pivotPinnedLayoutIds === 'object') {
@@ -1545,27 +1552,6 @@ export function useCoreRuntimeStage(props) {
     setChartCanvasPanes: stage.setChartCanvasPanes,
   });
   for (const [key, value] of Object.entries(chartCanvasVerticalResize)) stage[key] = value;
-  const chartFloatingInteractions = useRuntimeChartFloatingInteractions({
-    chartCanvasFloatingDragRef: stage.chartCanvasFloatingDragRef,
-    chartCanvasFloatingResizeRef: stage.chartCanvasFloatingResizeRef,
-    chartCanvasLayoutRef: stage.chartCanvasLayoutRef,
-    chartCanvasPanes: stage.chartCanvasPanes,
-    chartLayoutRef: stage.chartLayoutRef,
-    chartPanelFloating: stage.chartPanelFloating,
-    chartPanelFloatingDragRef: stage.chartPanelFloatingDragRef,
-    chartPanelFloatingRect: stage.chartPanelFloatingRect,
-    chartPanelFloatingResizeRef: stage.chartPanelFloatingResizeRef,
-    chartPanelGraphHeight: stage.chartPanelGraphHeight,
-    chartPanelWidth: stage.chartPanelWidth,
-    clampChartPanelWidth: stage.clampChartPanelWidth,
-    setChartCanvasPanes: stage.setChartCanvasPanes,
-    setChartPanelFloating: stage.setChartPanelFloating,
-    setChartPanelFloatingRect: stage.setChartPanelFloatingRect,
-    setChartPanelGraphHeight: stage.setChartPanelGraphHeight,
-    setChartPanelWidth: stage.setChartPanelWidth,
-    updateChartCanvasPane: stage.updateChartCanvasPane,
-  });
-  for (const [key, value] of Object.entries(chartFloatingInteractions)) stage[key] = value;
   const cellPresentation = createRuntimeCellPresentation({
     conditionalFormatting: stage.conditionalFormatting,
   });

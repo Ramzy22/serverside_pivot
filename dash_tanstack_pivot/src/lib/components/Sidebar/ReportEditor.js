@@ -2,6 +2,7 @@ import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import Icons from '../../utils/Icons';
 import { formatAggLabel, formatDisplayLabel } from '../../utils/helpers';
 import { formatCustomAwareFieldLabel, isCustomCategoryField } from '../../hooks/usePivotNormalization';
+import { applySavedReport, captureReportLayout } from '../../utils/savedReports';
 
 const uid = () => `r${Date.now().toString(36)}${Math.random().toString(36).slice(2, 6)}`;
 
@@ -2008,6 +2009,9 @@ export function ReportEditor({
     theme,
     data = [],
     valConfigs,
+    colFields,
+    setColFields,
+    setValConfigs,
     savedReports,
     setSavedReports,
     activeReportId,
@@ -2373,13 +2377,14 @@ export function ReportEditor({
                 id,
                 name,
                 reportDef: JSON.parse(JSON.stringify(reportDef)),
+                layout: captureReportLayout(colFields, valConfigs),
                 createdAt: new Date().toISOString(),
             },
         ]);
         setActiveReportId(id);
         setReportName('');
         if (showNotification) showNotification(`Report "${name}" saved`, 'info');
-    }, [reportDef, reportName, reportValidation, root, savedReports, setActiveReportId, setSavedReports, showNotification]);
+    }, [colFields, valConfigs, reportDef, reportName, reportValidation, root, savedReports, setActiveReportId, setSavedReports, showNotification]);
 
     return (
         <div style={{ display: 'flex', flexDirection: 'column', gap: '18px', padding: '2px 0 8px' }}>
@@ -2391,8 +2396,7 @@ export function ReportEditor({
                             <div
                                 key={report.id}
                                 onClick={() => {
-                                    setReportDef(JSON.parse(JSON.stringify(report.reportDef)));
-                                    setActiveReportId(report.id);
+                                    applySavedReport(report, { setReportDef, setActiveReportId, setColFields, setValConfigs });
                                     setRowOverrideDraft(null);
                                     setSelection({ type: 'node', path: [] });
                                 }}

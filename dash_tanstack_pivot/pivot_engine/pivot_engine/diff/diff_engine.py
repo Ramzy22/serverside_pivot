@@ -320,8 +320,14 @@ class QueryDiffEngine:
                 return [], execution_strategy
             # Fall through to execute missing queries
 
-        # Use tile-aware strategy only for virtual scrolling (page/offset-based), not cursor-based pagination
-        if change_type == SpecChangeType.PAGE_ONLY and self.enable_tiles and spec_dict.get("cursor") is None:
+        # The legacy page contract supplies an unpaged tile base. Canonical
+        # PivotSpec queries already contain their top-level limit/offset;
+        # re-tiling those expressions both double-applies pagination and falls
+        # back to a 100-row window when no legacy page is present. Preserve the
+        # compiled window and its ordinary query cache for canonical requests.
+        if (change_type == SpecChangeType.PAGE_ONLY and self.enable_tiles
+                and spec_dict.get("cursor") is None
+                and isinstance(spec_dict.get("page"), dict) and spec_dict["page"]):
             # _plan_tile_aware now returns Ibis expressions
             return self._plan_tile_aware(queries, spec_dict, plan_result, execution_strategy)
 
