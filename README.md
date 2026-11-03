@@ -231,9 +231,17 @@ Even with thousands of expanded tree nodes over hundreds of millions of raw reco
 - **Cancellable Large Exports**: Formal async export state machine (`queued → running → cancelling → cancelled/completed`) streaming multi-gigabyte CSV and XLSX files without leaking partial files.
 - **Fail-Closed Verification**: Validated with **207 / 207 mapped browser tests** against AG Grid Enterprise 36.2.0 SSRM.
 
+Host file downloads support **CSV and XLSX** across Dash, React, and Streamlit. Clipboard actions provide **TSV and HTML**. See the [operations guide](docs/OPERATIONS.md#export-contract-and-release-qualification) for export limits and the release qualification command, and the [certification contract](docs/flagship-functionality-certification.md#export-qualification-contract) for required evidence.
+
 ---
 
 ## 💻 Live Showcases & Demos
+
+Start with the focused Dash examples to learn the integration patterns:
+
+- [Basic pivot](examples/example_dash_basic.py): a minimal Dash app with row and column grouping.
+- [Hierarchical pivot](examples/example_dash_hierarchical.py): expandable groups with server-side queries.
+- [SQL multi-instance workspace](examples/example_dash_sql_multi_instance.py): multiple pivot instances in one Dash app.
 
 ### 🌟 1. Industry-Specific Showcases (Ready in 1 Command)
 
