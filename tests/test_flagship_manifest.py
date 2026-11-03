@@ -40,7 +40,8 @@ def test_live_ssrm_trace_accepts_only_declared_supplemental_measure():
 def test_wide_reference_cases_bind_the_scroll_fixture_and_reject_other_hashes():
     requirements = load_requirements(Path(__file__).with_name("flagship_requirements.json"))
     wide_ids = {"vertical-virtual-scroll.window", "horizontal-virtual-scroll.window",
-                "custom-pivot-order.sparse-window"}
+                "custom-pivot-order.sparse-window", "saved-scroll.restore",
+                "copy-selection.unloaded-rows"}
     for requirement in requirements:
         expected = "scroll_fixture" if requirement.id in wide_ids else "fixture"
         assert requirement.ag_grid.get("fixture_binding", "fixture") == expected

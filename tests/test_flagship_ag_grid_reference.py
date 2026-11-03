@@ -19,6 +19,31 @@ from openpyxl import load_workbook
 
 from tests.flagship_reference_support import DEFAULT_EVIDENCE, load_case_results, reference_case, start_reference_run
 
+# Collect every observation in this fixture-owning module. Separate module
+# fixtures would reset the shared result envelope and lose earlier evidence.
+from tests.flagship_reference_display import (
+    test_reference_display_density_configuration,
+    test_reference_display_report_restore,
+    test_reference_display_saved_scroll_ssrm,
+    test_reference_display_field_zone_native_move,
+    test_reference_display_application_callbacks,
+    test_reference_display_configured_limitations,
+)
+from tests.flagship_reference_clipboard import (
+    test_reference_clipboard_default_pivot_headers_across_groups,
+    test_reference_clipboard_collapsed_table_scope,
+    test_reference_clipboard_selection_crosses_unloaded_ssrm_blocks,
+    test_reference_selection_journey_filter_pin_scroll_copy,
+    test_reference_analysis_journey_average_expand_swap_export,
+)
+from tests.flagship_reference_charts_jobs import (
+    test_reference_range_chart_native_source,
+    test_reference_chart_native_link_and_reselection,
+    test_reference_chart_native_dialog_lifecycle,
+    test_reference_chart_native_image_download,
+    test_reference_delivery_loaded_export_observation,
+)
+
 
 pytestmark = [
     pytest.mark.flagship,

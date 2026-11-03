@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { ColumnAutoSizeModule, ModuleRegistry } from 'ag-grid-community';
+import { CellStyleModule, ColumnAutoSizeModule, ModuleRegistry, ScrollApiModule } from 'ag-grid-community';
 import { FiltersToolPanelModule, GroupFilterModule } from 'ag-grid-enterprise';
 import { registerReferenceModules } from '../src/modules.ts';
 
@@ -20,4 +20,6 @@ test('the configured Filters side panel module is passed to the real AG Grid reg
   assert.ok(passed.some((module) => module.moduleName === FiltersToolPanelModule.moduleName));
   assert.ok(passed.includes(GroupFilterModule), 'Grouped hidden fields must have a real header-filter UI');
   assert.ok(passed.includes(ColumnAutoSizeModule), 'Header-edge double-click auto-size requires its real sizing module');
+  assert.ok(passed.includes(CellStyleModule), 'Application-provided conditional styles require the real cell-style module');
+  assert.ok(passed.includes(ScrollApiModule), 'Derived-column visibility uses the registered public scroll API');
 });

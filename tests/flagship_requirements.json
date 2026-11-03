@@ -434,6 +434,7 @@
         ],
         "behavior": "Unobserved: Observe grid state scroll restoration under SSRM; unsupported restore combinations remain differences.",
         "test_id": "ag-grid.saved-scroll.restore",
+        "fixture_binding": "scroll_fixture",
         "result": "unverified"
       },
       "product_behavior": "Qualification target: Save after vertical/horizontal scrolling; reload and restore the same logical first visible row and column, with scroller offsets within 2 CSS px at the same viewport.",
@@ -1678,6 +1679,7 @@
         ],
         "behavior": "Unobserved: Observe actual AG Grid SSRM selection/copy behavior across unloaded cache blocks; do not substitute Client-Side Row Model evidence.",
         "test_id": "ag-grid.copy-selection.unloaded-rows",
+        "fixture_binding": "scroll_fixture",
         "result": "unverified"
       },
       "product_behavior": "Qualification target: Copy either returns every selected logical cell after explicit loading or reports the unavailable range without overwriting the clipboard; silently truncating to loaded rows fails.",
