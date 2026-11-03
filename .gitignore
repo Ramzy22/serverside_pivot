@@ -183,3 +183,12 @@ ehthumbs.db
 Thumbs.db
 desktop.ini
 security/release-evidence.json
+
+# ==============================================================================
+# Historical Audits, Local Sandbox & Investigation Dumps
+# ==============================================================================
+investigation_2026_09_14/
+security/reports/
+release-package.tgz
+*.tgz
+*.whl
