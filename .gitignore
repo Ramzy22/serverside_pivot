@@ -196,3 +196,7 @@ release-package.tgz
 # Ignore built python distributions in package subfolder
 dash_tanstack_pivot/dist/*.whl
 dash_tanstack_pivot/dist/*.tar.gz
+
+# Video render intermediate frames
+brag-output/work/
+brag-output/*.png

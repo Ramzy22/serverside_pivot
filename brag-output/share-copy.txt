@@ -1,0 +1,33 @@
+# Launch Share Copy for serverside-pivot
+
+## X (Twitter)
+Most data grids either crash your browser tab (looking at you, WASM) or make you spend 3 months writing SQL GROUP BY endpoints.
+
+We just open-sourced serverside-pivot ⚡
+
+🚀 2 lines of Python to connect any DB
+🗄️ Parquet, DuckDB, Snowflake, BigQuery, Postgres
+📊 Inline sparkline cells & real-time docked charts
+🌡️ Built-in heatmaps & interactive data bars
+🏎️ Virtualized windowing (< 80MB RAM)
+
+100% Free & Open Source (MIT) for Dash, React & Streamlit:
+https://github.com/Ramzy22/serverside_pivot
+
+---
+
+## LinkedIn
+Excited to release serverside-pivot v1.0 — a turnkey, open-source server-side pivot engine for Python, React, Dash, and Streamlit.
+
+If you have ever tried building pivot tables over large datasets:
+1. Client-side tools like FINOS Perspective crash tab memory beyond a few million records.
+2. AG Grid Enterprise provides frontend virtualization, but leaves the entire SQL backend and aggregation pipeline as an exercise for the developer.
+
+serverside-pivot closes the loop:
+- Low-Code: Connects to DuckDB, Snowflake, BigQuery, or Postgres in 2 lines via Ibis.
+- Visual Analysis: Pre-configured inline SVG sparklines, heatmaps, interactive data bars, and docked multi-pane charts.
+- Scale: Constant client RAM footprint (< 80 MB) using virtual windowing and O(D) level-based batching.
+
+Tested with 207 mapped browser qualification journeys.
+
+GitHub: https://github.com/Ramzy22/serverside_pivot
