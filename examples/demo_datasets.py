@@ -4,6 +4,16 @@ Provides high-cardinality, realistic synthetic datasets generated deterministica
 1. Trading & Risk Portfolio (Equities, Rates, FX, Commodities, Crypto, VaR, DV01, PnL)
 2. People Analytics & Workforce (Headcount, Salary Bands, Rating, Location, Tenure, Attrition Risk)
 3. B2B SaaS Intelligence (ARR, MRR, Cohorts, NRR, CAC, LTV, Net Retention)
+
+Pre-configured with advanced visual superpowers:
+- Inline Chart Cells (Area & Trend Sparklines in table cells)
+- Real-time Docked Chart Canvas Panes (Bar, Donut, Area charts)
+- Deeply Expanded Tree Hierarchies for immediate virtual scrolling
+- Data Bars on key volumetric columns
+- Heatmap Color Scales & Conditional Formatting
+- Pinned Hierarchy Columns
+- Pre-applied Multi-condition Filters
+- Immersive High-Density View Mode
 """
 
 from __future__ import annotations
@@ -175,7 +185,7 @@ def trader_workspace_config(host: str = "dash") -> dict[str, Any]:
     return {
         "id": f"trader-{host}-pivot",
         "table": TRADER_TABLE_NAME,
-        "pivotTitle": "Global Trading Desk · Portfolio Risk & PnL Engine",
+        "pivotTitle": "Institutional Trading Desk · Portfolio Risk & Real-Time PnL",
         "serverSide": True,
         "rowFields": ["asset_class", "desk", "ticker"],
         "colFields": ["tenor"],
@@ -185,6 +195,16 @@ def trader_workspace_config(host: str = "dash") -> dict[str, Any]:
                 "agg": "sum",
                 "label": "Daily PnL",
                 "format": "currency",
+                "sparkline": {
+                    "enabled": True,
+                    "type": "area",
+                    "color": "#10B981",
+                    "positiveColor": "#10B981",
+                    "negativeColor": "#EF4444",
+                    "showCurrentValue": True,
+                    "showDelta": True,
+                    "displayMode": "trend",
+                },
             },
             {
                 "field": "notional_usd",
@@ -212,9 +232,27 @@ def trader_workspace_config(host: str = "dash") -> dict[str, Any]:
             },
         ],
         "availableFieldList": TRADER_FIELDS,
-        "filters": {},
+        # Pre-applied multi-condition filter showing filter badge
+        "filters": {
+            "risk_tier": {
+                "operator": "AND",
+                "conditions": [
+                    {"type": "neq", "value": "Tier 3 (Tactical Vol)", "caseSensitive": False}
+                ],
+            }
+        },
         "sorting": [],
-        "expanded": {},
+        # Multi-level pre-expanded hierarchy for instant virtual scroll exploration
+        "expanded": {
+            "Equities": True,
+            "Equities|||Global Macro": True,
+            "Fixed Income": True,
+            "Fixed Income|||Delta One": True,
+        },
+        "columnPinning": {
+            "left": ["hierarchy"],
+            "right": [],
+        },
         "showRowTotals": True,
         "showColTotals": True,
         "showSubtotals": True,
@@ -227,12 +265,48 @@ def trader_workspace_config(host: str = "dash") -> dict[str, Any]:
             "rowOverscan": 16,
             "columnOverscan": 6,
         },
+        # Docked Live Chart Pane in Workspace
+        "chartCanvasPanes": [
+            {
+                "id": "pane-trader-risk",
+                "name": "Daily PnL by Asset Class",
+                "chartTitle": "Daily PnL Distribution ($)",
+                "source": "pivot",
+                "chartType": "bar",
+                "barLayout": "grouped",
+                "orientation": "vertical",
+                "dockPosition": "right",
+                "width": 460,
+                "chartHeight": 340,
+                "floating": False,
+                "chartSettings": {
+                    "showDataLabels": True,
+                    "showGradient": True,
+                    "showAnimations": True,
+                },
+            }
+        ],
+        # Pre-configured viewState with Heatmap & Data Bars
+        "viewState": {
+            "colorScaleMode": "columns",
+            "colorPalette": "greenRed",
+            "dataBarsColumns": [
+                "Spot / Cash_notional_usd_sum",
+                "1M_notional_usd_sum",
+                "__RowTotal__notional_usd_sum",
+            ],
+            "chartPanelOpen": True,
+        },
+        "conditionalFormatting": [
+            {"condition": ">", "value": 0, "style": {"color": "#10B981", "fontWeight": "700"}},
+            {"condition": "<", "value": 0, "style": {"color": "#F43F5E", "fontWeight": "700"}},
+        ],
         "uiConfig": {
             "showToolbar": True,
             "showSidebar": True,
             "showCharts": True,
         },
-        "style": {"height": "760px", "width": "100%"},
+        "style": {"height": "780px", "width": "100%"},
     }
 
 
@@ -384,7 +458,7 @@ def hr_workspace_config(host: str = "dash") -> dict[str, Any]:
     return {
         "id": f"hr-{host}-pivot",
         "table": HR_TABLE_NAME,
-        "pivotTitle": "Workforce Planning & People Analytics Intelligence",
+        "pivotTitle": "Global Workforce Planning & Executive Compensation Intelligence",
         "serverSide": True,
         "rowFields": ["department", "sub_team", "seniority_level"],
         "colFields": ["quarter"],
@@ -394,6 +468,14 @@ def hr_workspace_config(host: str = "dash") -> dict[str, Any]:
                 "agg": "sum",
                 "label": "Headcount",
                 "format": "fixed:0",
+                "sparkline": {
+                    "enabled": True,
+                    "type": "column",
+                    "color": "#4F46E5",
+                    "showCurrentValue": True,
+                    "showDelta": True,
+                    "displayMode": "trend",
+                },
             },
             {
                 "field": "base_salary",
@@ -427,9 +509,27 @@ def hr_workspace_config(host: str = "dash") -> dict[str, Any]:
             },
         ],
         "availableFieldList": HR_FIELDS,
-        "filters": {},
+        # Active filter excluding contractors/needs coaching
+        "filters": {
+            "performance_rating": {
+                "operator": "AND",
+                "conditions": [
+                    {"type": "neq", "value": "Needs Coaching", "caseSensitive": False}
+                ],
+            }
+        },
         "sorting": [],
-        "expanded": {},
+        # Multi-level pre-expanded hierarchy
+        "expanded": {
+            "Engineering & AI": True,
+            "Engineering & AI|||Core Infrastructure": True,
+            "Product & Design": True,
+            "Product & Design|||Design Systems": True,
+        },
+        "columnPinning": {
+            "left": ["hierarchy"],
+            "right": [],
+        },
         "showRowTotals": True,
         "showColTotals": True,
         "showSubtotals": True,
@@ -442,12 +542,43 @@ def hr_workspace_config(host: str = "dash") -> dict[str, Any]:
             "rowOverscan": 16,
             "columnOverscan": 6,
         },
+        # Docked Donut Chart Pane in Workspace
+        "chartCanvasPanes": [
+            {
+                "id": "pane-hr-headcount",
+                "name": "Headcount by Department",
+                "chartTitle": "Workforce Distribution by Department",
+                "source": "pivot",
+                "chartType": "donut",
+                "dockPosition": "right",
+                "width": 440,
+                "chartHeight": 340,
+                "floating": False,
+                "chartSettings": {
+                    "showDataLabels": True,
+                    "showGradient": True,
+                },
+            }
+        ],
+        # Pre-configured viewState with Heatmap & Data Bars
+        "viewState": {
+            "colorScaleMode": "all",
+            "colorPalette": "blueOrange",
+            "dataBarsColumns": [
+                "Q1_headcount_sum",
+                "Q2_headcount_sum",
+                "Q3_headcount_sum",
+                "Q4_headcount_sum",
+                "__RowTotal__headcount_sum",
+            ],
+            "chartPanelOpen": True,
+        },
         "uiConfig": {
             "showToolbar": True,
             "showSidebar": True,
             "showCharts": True,
         },
-        "style": {"height": "760px", "width": "100%"},
+        "style": {"height": "780px", "width": "100%"},
     }
 
 
@@ -594,12 +725,14 @@ def get_saas_adapter():
 
 
 def saas_workspace_config(host: str = "dash") -> dict[str, Any]:
-    """Public workspace configuration for SaaS Demo."""
+    """Public workspace configuration for SaaS Demo with IMMERSIVE MODE."""
     return {
         "id": f"saas-{host}-pivot",
         "table": SAAS_TABLE_NAME,
-        "pivotTitle": "B2B SaaS Revenue Intelligence · MRR, ARR & Cohort Retention",
+        "pivotTitle": "B2B SaaS Revenue Intelligence · Cohorts, Retention & Net ARR",
         "serverSide": True,
+        # IMMERSIVE MODE ENABLED!
+        "immersiveMode": True,
         "rowFields": ["customer_segment", "subscription_tier", "acquisition_channel"],
         "colFields": ["cohort_quarter"],
         "valConfigs": [
@@ -608,6 +741,16 @@ def saas_workspace_config(host: str = "dash") -> dict[str, Any]:
                 "agg": "sum",
                 "label": "Annual Run-rate (ARR)",
                 "format": "currency",
+                "sparkline": {
+                    "enabled": True,
+                    "type": "area",
+                    "color": "#8B5CF6",
+                    "positiveColor": "#34D399",
+                    "negativeColor": "#F43F5E",
+                    "showCurrentValue": True,
+                    "showDelta": True,
+                    "displayMode": "trend",
+                },
             },
             {
                 "field": "mrr",
@@ -641,9 +784,27 @@ def saas_workspace_config(host: str = "dash") -> dict[str, Any]:
             },
         ],
         "availableFieldList": SAAS_FIELDS,
-        "filters": {},
+        # Active filter excluding churn risk
+        "filters": {
+            "account_health": {
+                "operator": "AND",
+                "conditions": [
+                    {"type": "neq", "value": "At Risk (Red)", "caseSensitive": False}
+                ],
+            }
+        },
         "sorting": [],
-        "expanded": {},
+        # Multi-level pre-expanded hierarchy
+        "expanded": {
+            "Enterprise ($100k+)": True,
+            "Enterprise ($100k+)|||Enterprise Dedicated": True,
+            "Upper Mid-Market": True,
+            "Upper Mid-Market|||Scale Plus": True,
+        },
+        "columnPinning": {
+            "left": ["hierarchy"],
+            "right": [],
+        },
         "showRowTotals": True,
         "showColTotals": True,
         "showSubtotals": True,
@@ -656,10 +817,41 @@ def saas_workspace_config(host: str = "dash") -> dict[str, Any]:
             "rowOverscan": 16,
             "columnOverscan": 6,
         },
+        # Docked Live Cohort Growth Area Chart
+        "chartCanvasPanes": [
+            {
+                "id": "pane-saas-arr",
+                "name": "Cohort ARR Expansion",
+                "chartTitle": "ARR Growth Trend Across Cohort Quarters ($)",
+                "source": "pivot",
+                "chartType": "area",
+                "dockPosition": "right",
+                "width": 480,
+                "chartHeight": 350,
+                "floating": False,
+                "chartSettings": {
+                    "showDataLabels": False,
+                    "showGradient": True,
+                    "showAnimations": True,
+                },
+            }
+        ],
+        # Pre-configured viewState with Heatmap & Data Bars
+        "viewState": {
+            "colorScaleMode": "all",
+            "colorPalette": "greenRed",
+            "dataBarsColumns": [
+                "__RowTotal__active_seats_sum",
+                "Q1_active_seats_sum",
+                "Q2_active_seats_sum",
+                "Q3_active_seats_sum",
+            ],
+            "chartPanelOpen": True,
+        },
         "uiConfig": {
             "showToolbar": True,
             "showSidebar": True,
             "showCharts": True,
         },
-        "style": {"height": "760px", "width": "100%"},
+        "style": {"height": "820px", "width": "100%"},
     }
