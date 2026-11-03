@@ -73,17 +73,83 @@ if (!window.__pivotAxisTrace) {
     }
     Object.values(value).forEach(child=>visit(child,phase));
   };
+  // Network records are diagnostic only; request/response entries above remain
+  // the sole oracle input. Never retain URL credentials, headers or raw bodies.
+  const record = (phase, details) => trace.push({phase, at:performance.now(), ...details});
+  const runtimeEndpoint = input => {
+    try {
+      const path = new URL(input?.url ?? input, window.location.href).pathname;
+      return path.replace(/\/$/, '') === '/v1/runtime' ? '/v1/runtime' : null;
+    } catch (_) { return null; }
+  };
+  const scalar = value => typeof value === 'string' ? value.slice(0, 1000) : undefined;
+  const requestMetadata = body => {
+    try {
+      const value = typeof body === 'string' ? JSON.parse(body) : null;
+      return value?.schemaVersion === 1 ? {requestId:scalar(value.requestId), kind:scalar(value.kind)} : {};
+    } catch (_) { return {}; }
+  };
+  const errorName = error => ['AbortError','TypeError','Error','InvalidStateError'].includes(error?.name) ? error.name : 'Error';
+  const observeEnvelope = (body, details) => {
+    let value;
+    try { value = typeof body === 'string' ? JSON.parse(body) : body; } catch (_) { return; }
+    if (!value || typeof value !== 'object') return;
+    if (value.schemaVersion === 1 && value.status === 'error') {
+      record('network-envelope-error', {...details, requestId:scalar(value.requestId) ?? details.requestId,
+        kind:scalar(value.kind), status:'error', code:scalar(value.payload?.code),
+        message:scalar(value.message ?? value.payload?.message), resourceKind:scalar(value.payload?.resourceKind),
+        retryAfterMs:Number.isFinite(value.payload?.retryAfterMs) ? value.payload.retryAfterMs : undefined});
+      return;
+    }
+    Object.values(value).forEach(child=>observeEnvelope(child, details));
+  };
   const fetch = window.fetch.bind(window);
   window.fetch = (...args) => {
     visit(args[1]?.body,'request');
+    const endpoint = runtimeEndpoint(args[0]);
+    const details = {source:'fetch', endpoint, ...requestMetadata(args[1]?.body)};
     return fetch(...args).then(response=>{
-      response.clone().text().then(text=>visit(text,'response')).catch(()=>{});
+      if (endpoint) record('network-http', {...details, httpStatus:response.status});
+      try {
+        response.clone().text().then(text=>{
+          visit(text,'response');
+          if (endpoint) observeEnvelope(text, {...details, httpStatus:response.status});
+        }).catch(error=>{
+          if (endpoint) record('network-clone-error', {...details, httpStatus:response.status, name:errorName(error)});
+        });
+      } catch (error) {
+        if (endpoint) record('network-clone-error', {...details, httpStatus:response.status, name:errorName(error)});
+      }
       return response;
+    }, error=>{
+      if (endpoint) record('network-fetch-rejection', {...details, name:errorName(error)});
+      throw error;
     });
+  };
+  const endpoints = new WeakMap();
+  const open=XMLHttpRequest.prototype.open;
+  XMLHttpRequest.prototype.open=function(method,url,...rest) {
+    const result = open.call(this,method,url,...rest);
+    endpoints.set(this,runtimeEndpoint(url));
+    return result;
   };
   const send=XMLHttpRequest.prototype.send;
   XMLHttpRequest.prototype.send=function(body) {
     visit(body,'request'); this.addEventListener('load',()=>visit(this.responseText,'response'));
+    const endpoint = endpoints.get(this);
+    if (endpoint) {
+      const details = {source:'xhr', endpoint, ...requestMetadata(body)};
+      const events = ['load','error','abort','timeout'];
+      const observe = event => {
+        events.forEach(name=>this.removeEventListener(name,observe));
+        record('network-xhr-'+event.type, {...details, httpStatus:this.status});
+        if (event.type === 'load') {
+          try { observeEnvelope(this.responseType === 'json' ? this.response : this.responseText,
+            {...details, httpStatus:this.status}); } catch (_) {}
+        }
+      };
+      events.forEach(name=>this.addEventListener(name,observe));
+    }
     return send.call(this,body);
   };
 }
