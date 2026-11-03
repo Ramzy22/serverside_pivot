@@ -2,8 +2,8 @@
 
 # ⚡ serverside-pivot
 
-### **The Turnkey Server-Side Pivot Table Engine for Python, React, Dash & Streamlit.**
-#### *Billion-row analytics powered by DuckDB & Ibis. Zero browser memory limits. 100% Open Source.*
+### **Turnkey, Low-Code Server-Side Pivot Table for Python, React, Dash & Streamlit.**
+#### *Connect any database in 3 lines of code. Billion-row analytics powered by DuckDB & Ibis. Zero browser memory limits.*
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 [![Python Version](https://img.shields.io/badge/python-3.10%20%7C%203.11%20%7C%203.12-blue)](https://www.python.org/)
@@ -13,15 +13,36 @@
 [![AG Grid Parity](https://img.shields.io/badge/Certified%20Parity-AG%20Grid%2036.2%20SSRM-green)](docs/flagship-functionality-certification.md)
 [![Tested Cases](https://img.shields.io/badge/Browser%20Cases-207%20%2F%20207%20Mapped-brightgreen)](tests/flagship_requirements.json)
 
+[**Low-Code in 3 Lines**](#-low-code-connect-any-database-in-3-lines) •
 [**The Core Problem**](#-the-problem-with-existing-solutions) •
 [**Quickstart (Dash / React / Streamlit)**](#-quickstart) •
-[**Benchmark vs. Perspective & AG Grid**](#-head-to-head-breakdown) •
-[**The $\mathcal{O}(D)$ Engine**](#-the-od-hierarchical-engine-advantage) •
+[**Head-to-Head vs. Perspective & AG Grid**](#-head-to-head-breakdown) •
 [**Live Demos**](#-live-showcases-revenue-operations)
 
 ---
 
 </div>
+
+## 🔌 Low-Code: Connect Any Database in 3 Lines
+
+Building enterprise pivot tables used to take months of backend engineering. With `serverside-pivot`, **you don't write SQL, grouping algorithms, or pagination logic**. 
+
+Connect any SQL database, data warehouse, or local file in **3 lines of Python**:
+
+```python
+from pivot_engine import create_tanstack_adapter, register_pivot_app
+
+# 1. Point to DuckDB, Snowflake, BigQuery, ClickHouse, Postgres, or Parquet files
+adapter = create_tanstack_adapter("duckdb:///analytics.db")  # or "snowflake://...", "postgres://..."
+adapter.load_table("billion_row_sales")
+
+# 2. Attach to your Dash or Streamlit app — zero custom backend needed!
+register_pivot_app(app, adapter_getter=lambda: adapter, pivot_id="pivot")
+```
+
+Whether your dataset has **10,000 rows** or **1,000,000,000+ rows**, the engine automatically compiles UI drags, group expansions, and filters into sub-second vector queries. The browser **never uses more than 80 MB of RAM**.
+
+---
 
 ## 📌 The Problem with Existing Solutions
 
@@ -43,9 +64,9 @@ When developers build analytical dashboards with large enterprise datasets, they
 
 ### The Solution: `serverside-pivot`
 
-`serverside-pivot` provides the **complete full-stack engine**:
-1. **No Client Memory Limit**: Data stays in your warehouse or embedded engine (**DuckDB**, **Snowflake**, **BigQuery**, **ClickHouse**, or **Postgres**). The browser only receives thin, 50-row virtualized slices on demand. Whether you have 1 million, 100 million, or **1 billion rows**, your browser uses less than 80 MB of RAM.
-2. **Turnkey Backend Included**: You don't write a single line of SQL or grouping logic. DuckDB and Ibis compile your pivot layout into sub-second vector queries automatically.
+`serverside-pivot` gives you the **complete full-stack engine out-of-the-box**:
+1. **Low-Code Universal Connectors**: Built on **Ibis** and **DuckDB**, it connects natively to **Snowflake**, **BigQuery**, **ClickHouse**, **PostgreSQL**, **Polars**, **PyArrow**, or **Parquet** with zero SQL boilerplate.
+2. **Zero Client Memory Limits**: Data is aggregated inside your database engine. The browser only requests lightweight 50-row virtualized slices. **Scale to Billions of rows with zero UI stutter.**
 3. **Tri-Host Universal Runtime**: The identical 4-stage runtime (`PivotRuntimeRoot`) runs natively inside **Plotly Dash**, **Streamlit** (zero-rerun iframe component), and standalone **React**.
 
 ```
@@ -64,11 +85,12 @@ When developers build analytical dashboards with large enterprise datasets, they
 
 | Dimension | `serverside-pivot` | FINOS Perspective | AG Grid Enterprise 36.2 (SSRM) |
 | :--- | :--- | :--- | :--- |
+| **Effort to Implement** | **LOW-CODE (3 lines of Python)**<br>*(Turnkey engine included)* | **Medium**<br>*(Must extract/feed Arrow buffers)* | **HIGH (Months of backend dev)**<br>*(You must build the server engine)* |
+| **Universal Database Connectors** | **YES (via Ibis)**<br>*(Snowflake, BigQuery, DuckDB, Postgres)* | **NO**<br>*(In-memory WASM buffer only)* | **NO**<br>*(You write custom SQL connectors)* |
 | **Max Dataset Size** | **UNLIMITED (Billion+ rows)**<br>*(Bounded only by your database/disk)* | **~1M–5M rows**<br>*(Hard browser RAM / WASM memory crash)* | **Unlimited**<br>*(...but ONLY if you build the backend)* |
-| **Client Memory Footprint** | **Constant (< 80 MB)**<br>*(Virtualized windowing)* | **Grows with data**<br>*(10M rows = 2GB–4GB = Tab Crash)* | **Constant (< 100 MB)**<br>*(Virtualized DOM)* |
+| **Client Memory Footprint** | **Constant (< 80 MB)**<br>*(Virtualized windowing)* | **Explodes with data**<br>*(10M rows = 2GB–4GB = Tab Crash)* | **Constant (< 100 MB)**<br>*(Virtualized DOM)* |
 | **Backend Query Engine** | **INCLUDED (Turnkey)**<br>*(DuckDB + PyArrow + Ibis)* | **None**<br>*(All data must be shipped to client)* | **NONE (You must build it)**<br>*(You write the SQL/groupby backend)* |
 | **License Cost** | **FREE & Open Source (MIT)** | FREE & Open Source (Apache 2.0) | **$1,000 – $2,500+ / dev / year** |
-| **Direct Warehouse Pushdown** | **YES** (Snowflake, BigQuery, DuckDB, Postgres) | **NO** (Must extract raw data to Arrow) | Depends on your custom code |
 | **Supported Hosts** | **Dash, React, Streamlit** | Web Component, Jupyter | React, Angular, Vue (No Dash/Streamlit) |
 | **Hierarchical Queries** | **$\mathcal{O}(D)$ Level-Based Batching** | In-memory tree walk | $\mathcal{O}(N)$ Individual Group Waterfall |
 | **Query Cancellation** | **Native `cursor.interrupt()`** | Thread termination | Custom abort controller wiring |
