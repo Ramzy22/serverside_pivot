@@ -619,10 +619,14 @@ def _wait_persistence_column(driver, column, values, record):
     def inspect(browser):
         observation = browser.execute_script("""
           const id=arguments[0], api=window.referenceGrid, column=api.getColumn(id);
-          const viewport=document.querySelector('.ag-center-cols-viewport');
+          const viewport=document.querySelector('.ag-grid-viewport');
           const scroll=document.querySelector('.ag-body-horizontal-scroll-viewport');
           if (column) api.ensureColumnVisible(column, 'auto');
-          const bounds=viewport?.getBoundingClientRect();
+          const outerBounds=viewport?.getBoundingClientRect();
+          const pinnedLeft=api.getDisplayedLeftColumns().reduce((width,c)=>width+c.getActualWidth(),0);
+          const pinnedRight=api.getDisplayedRightColumns().reduce((width,c)=>width+c.getActualWidth(),0);
+          const bounds=outerBounds?{left:outerBounds.left+pinnedLeft,
+            right:outerBounds.right-pinnedRight}:null;
           const elements=[...document.querySelectorAll('[role="gridcell"]')]
             .filter(cell=>cell.getAttribute('col-id')===id);
           const geometry=elements.map(cell=>{
@@ -630,7 +634,7 @@ def _wait_persistence_column(driver, column, values, record):
             return {left:rect.left,right:rect.right,width:rect.width};
           });
           return {field:id,columnExists:!!column,scrollLeft:scroll?.scrollLeft,
-            viewport:bounds?{left:bounds.left,right:bounds.right}:null,geometry,
+            viewport:bounds,pinnedLeft,pinnedRight,geometry,
             fullyVisible:!!column && !!bounds && geometry.length===3 && geometry.every(
               rect=>rect.width>0 && rect.left>=bounds.left-1 && rect.right<=bounds.right+1),
             cells:window.referenceEvidence.visibleCells().filter(cell=>cell.colId===id)};

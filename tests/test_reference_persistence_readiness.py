@@ -10,23 +10,28 @@ from tests import test_flagship_ag_grid_reference as reference
 HARNESS = r'''
 const input=JSON.parse(require('fs').readFileSync(0,'utf8'));
 let left=0, calls=0;
-const rect=()=>({left:left===200?20:220,right:left===200?120:320,width:100});
+const rect=()=>input.rect || ({left:left===200?20:220,right:left===200?120:320,width:100});
 const cell={getAttribute:()=>input.field,getBoundingClientRect:rect};
-global.document={querySelector:s=>s.includes('horizontal')?{get scrollLeft(){return left}}:{getBoundingClientRect:()=>({left:0,right:200})},querySelectorAll:()=>[cell,cell,cell]};
-global.window={referenceGrid:{getColumn:id=>input.mode==='missing'?null:{id},ensureColumnVisible:()=>{calls++; left=input.mode==='reset' || (input.mode==='late' && input.poll===0)?0:200}},referenceEvidence:{visibleCells:()=>input.values.map((text,i)=>({rowIndex:String(i),colId:input.field,text:input.mode==='wrong'?'wrong':text}))}};
+global.document={querySelector:s=>{
+  if(s==='.ag-body-horizontal-scroll-viewport') return {get scrollLeft(){return left}};
+  if(s==='.ag-grid-viewport') return {getBoundingClientRect:()=>({left:0,right:200})};
+  return null;
+},querySelectorAll:()=>[cell,cell,cell]};
+global.window={referenceGrid:{getDisplayedLeftColumns:()=>input.pinnedLeft?[{getActualWidth:()=>input.pinnedLeft}]:[],getDisplayedRightColumns:()=>input.pinnedRight?[{getActualWidth:()=>input.pinnedRight}]:[],getColumn:id=>input.mode==='missing'?null:{id},ensureColumnVisible:()=>{calls++; left=input.mode==='reset' || (input.mode==='late' && input.poll===0)?0:200}},referenceEvidence:{visibleCells:()=>input.values.map((text,i)=>({rowIndex:String(i),colId:input.field,text:input.mode==='wrong'?'wrong':text}))}};
 const result=new Function(input.script).apply(null,[input.field]);
 process.stdout.write(JSON.stringify({result,calls}));
 '''
 
 
 class Driver:
-    def __init__(self, mode):
+    def __init__(self, mode, **layout):
         self.mode, self.poll, self.calls = mode, 0, 0
+        self.layout = layout
 
     def execute_script(self, script, field):
         result = subprocess.run(['node', '-e', HARNESS], input=json.dumps({
             'script': script, 'field': field, 'mode': self.mode, 'poll': self.poll,
-            'values': ['100.25', '20.00', '120.25']}), text=True,
+            'values': ['100.25', '20.00', '120.25'], **self.layout}), text=True,
             capture_output=True, encoding='utf-8', check=True)
         output = json.loads(result.stdout)
         self.calls += output['calls']
@@ -92,3 +97,26 @@ def test_persistence_inspection_caller_preserves_raw_and_rendered_oracles(monkey
         assert [cell['text'] for cell in visible[field]] == ['100.25', '20.00', '120.25']
         assert driver.calls == 2
         assert len(observations) == 2
+
+
+@pytest.mark.parametrize('left,right,rect,visible', [
+    (40, 0, {'left':20,'right':120,'width':100}, False),
+    (0, 90, {'left':20,'right':120,'width':100}, False),
+    (40, 30, {'left':40,'right':170,'width':130}, True),
+    (40, 30, {'left':39,'right':171,'width':132}, True),
+    (40, 30, {'left':38,'right':170,'width':132}, False),
+])
+def test_persistence_observer_excludes_pinned_widths(monkeypatch, left, right, rect, visible):
+    monkeypatch.setattr(reference, 'WebDriverWait', PollThreeTimes)
+    driver = Driver('visible', pinnedLeft=left, pinnedRight=right, rect=rect)
+    observations = []
+    if visible:
+        assert reference._wait_persistence_column(driver, 'field',
+            ['100.25', '20.00', '120.25'], observations.append)
+    else:
+        with pytest.raises(TimeoutException):
+            reference._wait_persistence_column(driver, 'field',
+                ['100.25', '20.00', '120.25'], observations.append)
+    assert observations[-1]['viewport'] == {'left':left, 'right':200-right}
+    assert observations[-1]['pinnedLeft'] == left
+    assert observations[-1]['pinnedRight'] == right
