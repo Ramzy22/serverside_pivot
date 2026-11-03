@@ -18,4 +18,3 @@ major-version compatibility decision.
 | Editing implementation guarded by a disabled flag | Preserve current user-visible behavior | Enable as a separately tested feature decision |
 | Historical aliases and alternate payload spellings | Continue normalizing at boundaries | Deprecate and remove in a major release |
 | Screenshots, temporary logs, and debug scripts | Exclude from refactor commits | Keep local or move deliberate fixtures into test assets |
-
