@@ -19,7 +19,7 @@ dash_tanstack_pivot/streamlit_pivot/frontend/node_modules/
 .setuptools-build/
 develop-eggs/
 dist/
-!dash_tanstack_pivot/dist/
+dash_tanstack_pivot/dist/*
 !dash_tanstack_pivot/dist/react/
 !dash_tanstack_pivot/dist/react/**
 downloads/
@@ -192,3 +192,7 @@ security/reports/
 release-package.tgz
 *.tgz
 *.whl
+
+# Ignore built python distributions in package subfolder
+dash_tanstack_pivot/dist/*.whl
+dash_tanstack_pivot/dist/*.tar.gz

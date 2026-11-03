@@ -233,11 +233,33 @@ Even with thousands of expanded tree nodes over hundreds of millions of raw reco
 
 ---
 
-## 💻 Live Showcases (Revenue Operations)
+## 💻 Live Showcases & Demos
 
-To run the complete flagship showcase locally across Dash, React, and Streamlit:
+### 🌟 1. Industry-Specific Showcases (Ready in 1 Command)
 
-```powershell
+Run full-featured, interactive dashboards pre-configured with industry KPIs, customized color palettes, and realistic DuckDB datasets:
+
+`powershell
+# 📈 Trading Desk & Risk Portfolio (50,000 positions, VaR, DV01, PnL - Port 8051)
+python examples/demo_trader.py
+
+# 👥 People Analytics & Compensation (35,000 employees, retention, bonus - Port 8052)
+python examples/demo_hr.py
+
+# 🚀 B2B SaaS Growth & Cohorts (40,000 accounts, ARR, MRR, NRR, LTV/CAC - Port 8053)
+python examples/demo_saas.py
+
+# 🎛️ Unified Showcase Hub (Interactive tabbed multi-industry launcher - Port 8054)
+python examples/demo_showcase_hub.py
+`
+
+---
+
+### 🌐 2. Multi-Framework Host Architecture
+
+To run the flagship Revenue Operations workspace (12,000 rows) across Dash, React, and Streamlit:
+
+`powershell
 # 1. Start shared V1 Runtime Service (port 8765)
 python -m uvicorn examples.flagship_runtime_server:app --port 8765
 
@@ -249,8 +271,7 @@ cd examples/flagship_react && npm run dev
 
 # 4. Launch Streamlit showcase (port 8502)
 streamlit run examples/flagship_streamlit.py --server.port 8502
-```
-
+`
 ---
 
 ## 📄 License
