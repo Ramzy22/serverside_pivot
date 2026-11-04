@@ -151,20 +151,21 @@ jobs:
 
       - name: Stage qualified distribution
         run: |
-          mkdir -p dash_tanstack_pivot/dist
-          cp "$PIVOT_RELEASE_QUALIFICATION_DIR"/release-artifacts/wheels/*.whl dash_tanstack_pivot/dist/
+          PIVOT_PYPI_DIST="$(mktemp -d .pypi-release.XXXXXX)"
+          echo "PIVOT_PYPI_DIST=$PIVOT_PYPI_DIST" >> "$GITHUB_ENV"
+          cp "$PIVOT_RELEASE_QUALIFICATION_DIR"/release-artifacts/wheels/*.whl "$PIVOT_PYPI_DIST/"
 
       - name: Validate artifacts with twine check
-        run: twine check dash_tanstack_pivot/dist/*
+        run: twine check "$PIVOT_PYPI_DIST"/*.whl
 
       - name: Verify wheel package contract
-        run: python scripts/ci/verify_wheel_contract.py dash_tanstack_pivot/dist/*.whl
+        run: python scripts/ci/verify_wheel_contract.py "$PIVOT_PYPI_DIST"/*.whl
 
       - name: Install wheel in an isolated environment and execute runtime smoke
         run: |
           python -m venv "$RUNNER_TEMP/serverside-pivot-wheel-smoke"
           "$RUNNER_TEMP/serverside-pivot-wheel-smoke/bin/python" -m pip install --upgrade pip
-          WHEEL="$(find "$GITHUB_WORKSPACE/dash_tanstack_pivot/dist" -maxdepth 1 -name '*.whl' -print -quit)"
+          WHEEL="$(find "$PIVOT_PYPI_DIST" -maxdepth 1 -name '*.whl' -print -quit)"
           test -n "$WHEEL"
           "$RUNNER_TEMP/serverside-pivot-wheel-smoke/bin/python" -m pip install "${WHEEL}[api,qualification]" httpx
           cd "$RUNNER_TEMP/serverside-pivot-wheel-smoke"
@@ -183,4 +184,4 @@ jobs:
       - name: Publish to PyPI
         uses: pypa/gh-action-pypi-publish@release/v1
         with:
-          packages-dir: dash_tanstack_pivot/dist/
+          packages-dir: ${{ env.PIVOT_PYPI_DIST }}/
