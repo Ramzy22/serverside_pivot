@@ -2,8 +2,9 @@
 
 # ⚡ serverside-pivot
 
-### **Turnkey, Low-Code Server-Side Pivot Table for Python, React, Dash & Streamlit.**
-#### *Connect any database in 3 lines of code. Billion-row analytics powered by DuckDB & Ibis. Zero browser memory limits.*
+### **Turnkey, Low-Code Server-Side Pivot Table for Python, Dash, Streamlit & React.**
+#### *Universal database connectivity via Ibis & DuckDB. Billion-row analytical hierarchy with zero client RAM limits.*
+
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 [![Python Version](https://img.shields.io/badge/python-3.10%20%7C%203.11%20%7C%203.12-blue)](https://www.python.org/)
@@ -62,7 +63,7 @@ When developers build analytical dashboards with large enterprise datasets, they
 │ 1. In-Memory / Streaming Focused       │ 2. The Commercial "Empty Shell" Trap                    │
 │    (FINOS Perspective, TanStack Table) │    (AG Grid Enterprise SSRM)                            │
 ├────────────────────────────────────────┼─────────────────────────────────────────────────────────┤
-│ • Engineered for in-memory streaming   │ • Extraordinary frontend, but ZERO backend included.   │
+│ • Engineered for in-memory streaming   │ • Extraordinary frontend, but ZERO backend included.    │
 │   tables and Arrow WebSocket feeds.    │ • Developer must spend months building SQL generators,  │
 │ • Requires shipping full tables or     │   pivot aggregations, and windowing from scratch.       │
 │   custom Python server hosting.        │ • Costs $1,000 to $2,500+ / developer / year.           │
