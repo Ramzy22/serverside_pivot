@@ -267,7 +267,10 @@ def test_release_gates_publish_on_complete_installed_qualification_and_uploads_e
 
 
 def test_dev_extra_declares_direct_python_test_dependencies():
-    import tomllib
+    try:
+        import tomllib
+    except ModuleNotFoundError:  # Python 3.10
+        import tomli as tomllib
 
     project = tomllib.loads((REPO_ROOT / "dash_tanstack_pivot" / "pyproject.toml").read_text(encoding="utf-8"))
     dependencies = "\n".join(project["project"]["optional-dependencies"]["dev"]).lower()

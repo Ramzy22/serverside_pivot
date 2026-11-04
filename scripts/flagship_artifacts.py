@@ -65,7 +65,10 @@ def _run(command: list[str], cwd: Path, *, env: dict[str, str] | None = None) ->
 
 def _prepare_build_wheelhouse(wheelhouse: Path, package: Path, output: Path) -> dict[str, str]:
     """Validate hash-pinned wheels and stage only these build-time inputs."""
-    import tomllib
+    try:
+        import tomllib
+    except ModuleNotFoundError:  # Python 3.10
+        import tomli as tomllib
     from packaging.requirements import Requirement
     from packaging.tags import sys_tags
     from packaging.utils import canonicalize_name, parse_wheel_filename

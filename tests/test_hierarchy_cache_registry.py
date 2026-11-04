@@ -1,11 +1,27 @@
 from collections import OrderedDict
 import time
+from types import SimpleNamespace
 
 import pytest
 
 from pivot_engine.cache_coordinator import CacheCoordinator, CacheNamespaces
 from pivot_engine.hierarchy_cache_registry import BoundedHierarchyCache, HierarchyCacheRegistry
 from pivot_engine.resource_governor import ResourceGovernor, ResourceLimits
+
+
+@pytest.fixture
+def advancing_clock(monkeypatch):
+    clock = SimpleNamespace(now=1000.0)
+
+    def tick():
+        now = clock.now
+        clock.now += 0.125
+        return now
+
+    clock.time = tick
+    monkeypatch.setattr("pivot_engine.hierarchy_cache_registry.time", clock)
+    monkeypatch.setattr("pivot_engine.cache.memory_cache.time", clock)
+    return clock
 
 
 def test_hierarchy_alias_writes_are_bounded_and_invalidation_releases():
@@ -88,10 +104,10 @@ def test_hierarchy_fromkeys_preserves_ordered_dict_factory_semantics():
 
 
 @pytest.mark.parametrize("reverse", [False, True])
-def test_hierarchy_union_is_detached_and_readmission_is_bounded(reverse):
+def test_hierarchy_union_is_detached_and_readmission_is_bounded(reverse, advancing_clock):
     governor = ResourceGovernor(ResourceLimits.for_testing(), rss_bytes_getter=lambda: 0)
     registry = HierarchyCacheRegistry(CacheCoordinator(), ttl_seconds=60, max_bytes=5, governor=governor)
-    expiry = time.time() + 60
+    expiry = advancing_clock.time() + 60
     registry.view.update({"a": (b"abc", expiry), "b": (b"de", expiry)})
     before = list(registry.view.items())
     other = {"b": (b"z", expiry), "huge": (b"oversized", expiry)}
@@ -116,3 +132,28 @@ def test_hierarchy_union_is_detached_and_readmission_is_bounded(reverse):
     alias.clear()
     assert len(merged) == 3
     assert governor.snapshot()["reserved_bytes"] == 0
+
+
+def test_hierarchy_readmission_preserves_absolute_deadline_and_atomic_charges(advancing_clock):
+    governor = ResourceGovernor(ResourceLimits.for_testing(), rss_bytes_getter=lambda: 0)
+    registry = HierarchyCacheRegistry(CacheCoordinator(), ttl_seconds=60, max_bytes=5, governor=governor)
+    expiry = advancing_clock.time() + 60
+    entry = (b"abc", expiry)
+    assert registry.view.set_entry("a", entry)
+    assert registry.view["a"] == entry
+    assert registry.view.storage._cache["a"][1] == expiry
+    assert governor.snapshot()["reserved_bytes"] == 3
+
+    snapshot = registry.view.copy()
+    registry.view |= snapshot
+    assert registry.view["a"] == entry
+    assert governor.snapshot()["reserved_bytes"] == 3
+    assert not registry.view.set_entry("a", (b"oversized", expiry + 100))
+    assert registry.view["a"] == entry
+    assert governor.snapshot()["reserved_bytes"] == 3
+
+    advancing_clock.now = expiry
+    assert registry.view.get("a") is None
+    assert registry.view.size_snapshot() == {"entries": 0, "bytes": 0}
+    assert governor.snapshot()["reserved_bytes"] == 0
+    assert snapshot == OrderedDict([("a", entry)])

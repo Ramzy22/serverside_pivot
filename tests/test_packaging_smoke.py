@@ -506,6 +506,17 @@ def test_qualification_extra_includes_starlette_test_client_dependency():
     assert any(item.split(";", 1)[0].strip().startswith("httpx2") for item in qualification)
 
 
+def test_dev_extra_supports_nonisolated_wheel_smoke_builds():
+    from packaging.requirements import Requirement
+
+    data = tomllib.loads((PKG_DIR / "pyproject.toml").read_text(encoding="utf-8"))
+    dev_requirements = {
+        Requirement(value).name
+        for value in data["project"]["optional-dependencies"]["dev"]
+    }
+    assert {"build", "wheel"} <= dev_requirements
+
+
 def test_pyproject_declares_the_documented_pivot_engine_dependencies():
     """A clean install must be able to run the README quick start."""
     data = tomllib.loads((PKG_DIR / "pyproject.toml").read_text(encoding="utf-8"))

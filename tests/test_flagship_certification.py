@@ -1020,6 +1020,18 @@ def _managed_reference_qualification(tmp_path, monkeypatch, *, damage=None, prod
 
 @pytest.mark.parametrize("product_damage", ["green-subset", "all-authored"])
 def test_installed_qualifier_rejects_missing_product_map_even_with_valid_reference_envelope(tmp_path, monkeypatch, product_damage):
+    from contextlib import nullcontext
+    from scripts import certify_flagship as runner, flagship_harness
+
+    # The authored registry is complete now; deliberately remove an implementation
+    # so this regression keeps exercising an incomplete product map.
+    monkeypatch.delitem(runner.PRODUCT_BROWSER_JOURNEYS, "browser.runtime-error.visible")
+    # Browser processes are stubbed below; skip their committed-source preflight
+    # so local edits cannot stop the fixture before it emits its mocked JUnit.
+    monkeypatch.setattr(
+        flagship_harness, "committed_browser_harness",
+        lambda binding, evidence: nullcontext(flagship_harness.BrowserHarness(ROOT, evidence / "browser-harness.json")),
+    )
     events, report, private = _managed_reference_qualification(tmp_path, monkeypatch, product_damage=product_damage)
     assert events == ["start", "browser", "stop"]
     assert "case_envelope_invalid" not in report["systemIssues"]["ag_grid"]
@@ -1027,8 +1039,11 @@ def test_installed_qualifier_rejects_missing_product_map_even_with_valid_referen
     assert "case_missing" in report["systemIssues"]["product"]
     coverage = json.loads((private / "product-browser-coverage.json").read_text())
     assert coverage["scope"] == "complete-installed-release"
-    assert coverage["missingImplementations"]
-    from scripts import certify_flagship as runner
+    assert coverage["missingImplementations"] == [
+        {"requirementId": "runtime-error.visible", "host": host,
+         "testId": "browser.runtime-error.visible"}
+        for host in HOSTS
+    ]
     from tests.flagship_contract import load_requirements
     requirements = load_requirements(ROOT / "tests/flagship_requirements.json")
     assert coverage["selectedCaseCount"] == len({
