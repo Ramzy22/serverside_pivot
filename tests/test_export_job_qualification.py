@@ -1,11 +1,80 @@
 """Real process death and other-worker cancellation; never substitute fakeredis."""
 import asyncio
+from contextlib import contextmanager
 import multiprocessing
+from multiprocessing.connection import wait
 import os
 import time
 from uuid import uuid4
 
 import pytest
+
+
+@contextmanager
+def _worker(context, target, *args):
+    # Each owner gets a fresh synchronous channel. A killed producer cannot
+    # leave a Queue feeder or shared writer lock blocking its replacement.
+    observations, sender = context.Pipe(duplex=False)
+    process = context.Process(target=target, args=(*args, sender))
+    try:
+        process.start()
+        sender.close()
+        yield process, observations
+    finally:
+        sender.close()
+        if process.pid is not None:
+            if process.is_alive():
+                process.kill()
+            process.join(5)
+        observations.close()
+
+
+def _receive_observation(process, observations, phase, timeout=15):
+    deadline = time.monotonic() + timeout
+    ready = wait([observations, process.sentinel], timeout=timeout)
+    if observations in ready:
+        try:
+            return observations.recv()
+        except EOFError:
+            # EOF may arrive just before the child sentinel. Reap it within
+            # the original budget so startup failures include the exit code.
+            wait([process.sentinel], timeout=max(0, deadline - time.monotonic()))
+            process.join(0)
+            raise AssertionError(
+                f"Export owner pid={process.pid} exitcode={process.exitcode} closed observations before {phase}"
+            ) from None
+    if process.sentinel in ready:
+        process.join(0)
+        raise AssertionError(f"Export owner pid={process.pid} exitcode={process.exitcode} before {phase}")
+    raise AssertionError(f"Export owner pid={process.pid} exitcode={process.exitcode} timed out waiting for {phase}")
+
+
+def _exit_before_observation(observations):
+    os._exit(23)
+
+
+def _announce_and_wait(observations):
+    observations.send({"phase": "native-running"})
+    time.sleep(15)
+
+
+def test_observation_wait_reports_early_worker_exit():
+    context = multiprocessing.get_context("spawn")
+    with _worker(context, _exit_before_observation) as (process, observations):
+        with pytest.raises(AssertionError, match="exitcode=23.*native-running"):
+            _receive_observation(process, observations, "native-running")
+
+
+def test_restarted_worker_has_fresh_observations_after_owner_kill():
+    context = multiprocessing.get_context("spawn")
+    with _worker(context, _announce_and_wait) as (first, observations):
+        assert _receive_observation(first, observations, "native-running") == {"phase": "native-running"}
+        first.kill()
+        first.join(5)
+        assert not first.is_alive()
+        observations.close()
+        with _worker(context, _announce_and_wait) as (second, restarted_observations):
+            assert _receive_observation(second, restarted_observations, "native-running") == {"phase": "native-running"}
 
 
 def _store(url, prefix):
@@ -48,10 +117,10 @@ def _owner(url, prefix, job_id, directory, observations):
         while time.monotonic() < deadline:
             current = store.get(job_id, "alice", "sales")
             if backend.execution_metrics()["running"] and not announced:
-                observations.put({"phase": "native-running", "slots": governor.snapshot()["active_slots"]["export"]})
+                observations.send({"phase": "native-running", "slots": governor.snapshot()["active_slots"]["export"]})
                 announced = True
             if current.phase == "cancelled":
-                observations.put({"phase": "cancelled", "native": backend.execution_metrics(),
+                observations.send({"phase": "cancelled", "native": backend.execution_metrics(),
                                   "slots": governor.snapshot()["active_slots"]["export"],
                                   "reserved": governor.snapshot()["reserved_bytes"],
                                   "payload": current.payload_ref,
@@ -71,15 +140,12 @@ def test_export_owner_kill_restart_and_other_worker_native_cancel(tmp_path):
     prefix = f"pivot-export-qualification-{uuid4().hex}"
     store = _store(url, prefix)
     context = multiprocessing.get_context("spawn")
-    observations = context.Queue()
-    owner = context.Process(target=_owner, args=(url, prefix, "killed", str(tmp_path / "first"), observations))
-    owner.start()
-    restarted = None
     try:
-        assert observations.get(timeout=15) == {"phase": "native-running", "slots": 1}
-        owner.kill()
-        owner.join(5)
-        assert not owner.is_alive()
+        with _worker(context, _owner, url, prefix, "killed", str(tmp_path / "first")) as (owner, observations):
+            assert _receive_observation(owner, observations, "native-running") == {"phase": "native-running", "slots": 1}
+            owner.kill()
+            owner.join(5)
+            assert not owner.is_alive()
         deadline = time.monotonic() + 5
         while time.monotonic() < deadline:
             interrupted = store.get("killed", "alice", "sales")
@@ -88,23 +154,18 @@ def test_export_owner_kill_restart_and_other_worker_native_cancel(tmp_path):
             time.sleep(.05)
         assert interrupted.phase == "interrupted" and interrupted.payload_ref is None
         assert store.advance("killed", interrupted.owner_epoch - 1, {"phase": "completed", "payload_ref": {"id": "late"}}) is None
-        restarted = context.Process(target=_owner, args=(url, prefix, "fresh-retry", str(tmp_path / "second"), observations))
-        restarted.start()
-        assert observations.get(timeout=15) == {"phase": "native-running", "slots": 1}
-        assert store.request_cancel("fresh-retry").phase == "cancelling"
-        result = observations.get(timeout=15)
-        assert result["phase"] == "cancelled" and result["payload"] is None
-        assert result["slots"] == result["reserved"] == result["native"]["running"] == 0
-        assert result["native"]["cancellation_attempts"] > 0
-        assert result["connectionReusable"] == [{"healthy": 7}]
-        restarted.join(5)
-        assert restarted.exitcode == 0
-        assert not list(tmp_path.rglob("pivot_export_*"))
+        with _worker(context, _owner, url, prefix, "fresh-retry", str(tmp_path / "second")) as (restarted, observations):
+            assert _receive_observation(restarted, observations, "native-running") == {"phase": "native-running", "slots": 1}
+            assert store.request_cancel("fresh-retry").phase == "cancelling"
+            result = _receive_observation(restarted, observations, "cancelled")
+            assert result["phase"] == "cancelled" and result["payload"] is None
+            assert result["slots"] == result["reserved"] == result["native"]["running"] == 0
+            assert result["native"]["cancellation_attempts"] > 0
+            assert result["connectionReusable"] == [{"healthy": 7}]
+            restarted.join(5)
+            assert restarted.exitcode == 0
+            assert not list(tmp_path.rglob("pivot_export_*"))
     finally:
-        for process in (owner, restarted):
-            if process is not None and process.is_alive():
-                process.kill()
-                process.join(5)
         # Unique test-owned namespace only; no database-wide flush.
         for key in store._runtime_state.client.scan_iter(match=f"{prefix}:*"):
             store._runtime_state.client.delete(key)
