@@ -10,7 +10,6 @@ from __future__ import annotations
 from collections import Counter
 from contextvars import ContextVar
 from dataclasses import dataclass, fields
-from enum import StrEnum
 from numbers import Real
 import os
 from threading import RLock
@@ -19,6 +18,17 @@ from typing import Any, Callable, Mapping
 import psutil
 
 from .export_limits import positive_env_int
+
+try:
+    from enum import StrEnum
+except ImportError:  # Python 3.10
+    from enum import Enum
+
+    class StrEnum(str, Enum):
+        """String-valued enum with the Python 3.11 string display behavior."""
+
+        __str__ = str.__str__
+        __format__ = str.__format__
 
 
 _MIB = 1024 * 1024

@@ -23,16 +23,16 @@ jobs:
           node-version: "20"
       - name: Install application and pinned security tools
         run: |
-          python -m pip install --upgrade pip "setuptools<71"
+          python -m pip install --upgrade pip "setuptools>=84.1.0"
           python -m pip install -r security/requirements-security.txt
-          python -m pip install -e "dash_tanstack_pivot[api,redis]"
-          python -m pip install pytest pytest-asyncio httpx httpx2
+          python -m pip install -e "dash_tanstack_pivot[dev,api,redis]"
       - name: Create reports directory
         run: mkdir -p security/reports
       - name: Dependency audit
         run: |
+          python scripts/ci/create_dependency_audit_inventory.py --project-root dash_tanstack_pivot --requirements security/reports/third-party-requirements.txt --provenance security/reports/first-party-provenance.json
           set +e
-          pip-audit --format json --output security/reports/pip-audit.json
+          pip-audit -r security/reports/third-party-requirements.txt --no-deps --disable-pip --strict --format json --output security/reports/pip-audit.json
           status=$?
           set -e
           test -s security/reports/pip-audit.json

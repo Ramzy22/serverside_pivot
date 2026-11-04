@@ -1,5 +1,6 @@
 # Security-tooling-only dependencies for .github/workflows/security.yml.
 # Version pins make the generated findings and SBOM reproducible per revision.
 bandit[toml]==1.7.9
-cyclonedx-bom==4.5.0
-pip-audit==2.8.0
+cyclonedx-bom==8.0.1
+pip-audit==2.10.1
+lxml==6.1.3

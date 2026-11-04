@@ -29,7 +29,7 @@ jobs:
 
       - name: Install dependencies
         run: |
-          python -m pip install --upgrade pip "setuptools<71" build twine
+          python -m pip install --upgrade pip "setuptools>=84.1.0" build twine
 
       - name: Add pivot-engine to PYTHONPATH
         run: echo "PYTHONPATH=$PYTHONPATH:${{ github.workspace }}/dash_tanstack_pivot/pivot_engine" >> $GITHUB_ENV
@@ -82,8 +82,9 @@ jobs:
 
       - name: Create dependency audit report
         run: |
+          python scripts/ci/create_dependency_audit_inventory.py --project-root dash_tanstack_pivot --requirements security/reports/third-party-requirements.txt --provenance security/reports/first-party-provenance.json
           set +e
-          pip-audit --format json --output security/reports/pip-audit.json
+          pip-audit -r security/reports/third-party-requirements.txt --no-deps --disable-pip --strict --format json --output security/reports/pip-audit.json
           status=$?
           set -e
           test -s security/reports/pip-audit.json
