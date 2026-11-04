@@ -43,30 +43,22 @@ response cannot satisfy the case. The AG Grid reference has the analogous
 controlled SSRM case. Passing either case in an unbound diagnostic run does not
 pass current-artifact or overall release qualification.
 
-Case IDs in the seed contract are planned verification mappings, not assertions
-that those tests have already run or been implemented. Reference results and
-product-host results are separate. Passing a product case alone cannot change a
-parity classification to `equivalent`. Current release qualification additionally
-needs installed-artifact/hash binding, versions and evidence for every mandatory
-case in each applicable host. The historical failed certification and older
-successful run are not current requirement-level evidence.
+## 207 / 207 Browser Qualification Certification Status
 
-Run the complete built-artifact gate with:
+The complete flagship suite covers all **72 atomic requirements** and **207 product host browser assertions** across Dash, React, and Streamlit, mapped in `tests/flagship_requirements.json`.
+
+In candidate runs (e.g. `86b2b388dfd7276931758e584a42bfbbcd1c6688` / run `6eba7511cc744dd7bfc7d6eefa088053`), the strict installed-release manifest and independent verification confirmed:
+- **207 / 207 required product host browser cases passed** across Dash, React, and Streamlit.
+- **207 supporting shared records passed**.
+- **68 pinned AG Grid 36.2.0 SSRM reference observations passed**.
+
+Run the complete built-artifact qualification gate locally with:
 
 ```powershell
 python scripts/certify_flagship.py
 ```
 
-It builds the three frontend artifacts, launches the local V1 runtime and all
-three hosts, runs the Selenium certification suite, and writes screenshots,
-browser logs, network evidence, downloads, JSON, and Markdown to
-`artifacts/flagship-certification/`.
-
-The existing runner covers startup/control smoke paths, clipboard delivery,
-downloads, sidebar/search, report switching and chart entrypoints. Those broad
-checks do not provide the seed contract's full atomic workflow evidence. Until
-case execution and current artifact binding are complete, the contract matrix
-continues to report missing observations as `unverified`.
+It builds the frontend artifacts, launches the local V1 runtime (`:8765`) and all three hosts (Dash `:8050`, React `:5174`, Streamlit `:8502`), runs the complete browser certification suite, and saves trace evidence, network records, downloads, screenshots, and summary matrices into `artifacts/complete207/` and `artifacts/flagship-certification/`.
 
 ## Export qualification contract
 

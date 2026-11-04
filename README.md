@@ -42,7 +42,7 @@ from pivot_engine import create_tanstack_adapter, register_pivot_app
 
 # 1. Point to local Parquet/CSV files or warehouse (Snowflake, BigQuery, DuckDB, Postgres)
 adapter = create_tanstack_adapter(backend_uri="duckdb:///analytics.db")  # or ":memory:", "snowflake://..."
-adapter.load_data("s3://warehouse/100m_sales.parquet", "billion_row_sales")
+adapter.load_data("sales.parquet", "sales")  # or pass pandas DataFrame / PyArrow Table
 
 # 2. Attach to your Dash, Streamlit, or React app — zero custom backend needed!
 register_pivot_app(app, adapter_getter=lambda: adapter, pivot_id="pivot")
@@ -59,13 +59,14 @@ When developers build analytical dashboards with large enterprise datasets, they
 ┌──────────────────────────────────────────────────────────────────────────────────────────────────┐
 │                                       The Analytical Dilemma                                     │
 ├────────────────────────────────────────┬─────────────────────────────────────────────────────────┤
-│ 1. The Client Memory Wall              │ 2. The Commercial "Empty Shell" Trap                    │
+│ 1. In-Memory / Streaming Focused       │ 2. The Commercial "Empty Shell" Trap                    │
 │    (FINOS Perspective, TanStack Table) │    (AG Grid Enterprise SSRM)                            │
 ├────────────────────────────────────────┼─────────────────────────────────────────────────────────┤
-│ • Data MUST fit in browser RAM (WASM). │ • Extraordinary frontend, but ZERO backend included.   │
-│ • Loading 10M–50M rows freezes the UI   │ • Developer must spend months building SQL generators,  │
-│   or crashes the browser tab (OOM).    │   pivot aggregations, and windowing from scratch.       │
-│ • Cannot query cloud data warehouses.  │ • Costs $1,000 to $2,500+ / developer / year.           │
+│ • Engineered for in-memory streaming   │ • Extraordinary frontend, but ZERO backend included.   │
+│   tables and Arrow WebSocket feeds.    │ • Developer must spend months building SQL generators,  │
+│ • Requires shipping full tables or     │   pivot aggregations, and windowing from scratch.       │
+│   custom Python server hosting.        │ • Costs $1,000 to $2,500+ / developer / year.           │
+│ • No turnkey pushdown to SQL/warehouse.│ • No native Python Dash or Streamlit adapters.          │
 └────────────────────────────────────────┴─────────────────────────────────────────────────────────┘
 ```
 
@@ -92,17 +93,18 @@ When developers build analytical dashboards with large enterprise datasets, they
 
 | Dimension | `serverside-pivot` | FINOS Perspective | AG Grid Enterprise 36.2 (SSRM) |
 | :--- | :--- | :--- | :--- |
-| **Effort to Implement** | **LOW-CODE (3 lines of Python)**<br>*(Turnkey engine included)* | **Medium**<br>*(Must extract/feed Arrow buffers)* | **HIGH (Months of backend dev)**<br>*(You must build the server engine)* |
-| **Universal Database Connectors** | **YES (via Ibis)**<br>*(Snowflake, BigQuery, DuckDB, Postgres)* | **NO**<br>*(In-memory WASM buffer only)* | **NO**<br>*(You write custom SQL connectors)* |
-| **Max Dataset Size** | **UNLIMITED (Billion+ rows)**<br>*(Bounded only by your database/disk)* | **~1M–5M rows**<br>*(Hard browser RAM / WASM memory crash)* | **Unlimited**<br>*(...but ONLY if you build the backend)* |
-| **Client Memory Footprint** | **Constant (< 80 MB)**<br>*(Virtualized windowing)* | **Explodes with data**<br>*(10M rows = 2GB–4GB = Tab Crash)* | **Constant (< 100 MB)**<br>*(Virtualized DOM)* |
-| **Backend Query Engine** | **INCLUDED (Turnkey)**<br>*(DuckDB + PyArrow + Ibis)* | **None**<br>*(All data must be shipped to client)* | **NONE (You must build it)**<br>*(You write the SQL/groupby backend)* |
+| **Primary Architecture** | **Pushdown SQL / Warehouse Engine**<br>*(DuckDB, Ibis, Parquet, Snowflake)* | **In-Memory C++ / WASM Streaming**<br>*(High-frequency Arrow tick stream)* | **Client-Side Shell / SSRM Protocol**<br>*(Frontend only, BYO backend)* |
+| **Effort to Implement** | **LOW-CODE (3 lines of Python)**<br>*(Turnkey engine included)* | **Medium**<br>*(Feed Arrow buffers / host C++ table)* | **HIGH (Months of backend dev)**<br>*(You must build the server engine)* |
+| **Pushdown Database Connectors** | **YES (via Ibis & DuckDB)**<br>*(Snowflake, BigQuery, DuckDB, Postgres)* | **External / By Design**<br>*(Expects pre-ingested Arrow tables)* | **NO**<br>*(You write custom SQL connectors)* |
+| **Scale / Dataset Scope** | **Billion+ rows in-database**<br>*(Bounded only by DB disk/cluster)* | **In-Memory Bounded**<br>*(Best for RAM-sized streaming feeds)* | **Unlimited**<br>*(...but ONLY if you build the backend)* |
+| **Client Memory Footprint** | **Constant (< 80 MB)**<br>*(50-row virtualized windowing)* | **Dependent on mode**<br>*(Light in Server/WS mode, heavy in WASM)* | **Constant (< 100 MB)**<br>*(Virtualized DOM)* |
+| **Backend Query Engine** | **INCLUDED (Turnkey)**<br>*(DuckDB + PyArrow + Ibis)* | **In-Memory C++ Hypercube**<br>*(Excellent live streaming rollups)* | **NONE (You must build it)**<br>*(You write the SQL/groupby backend)* |
 | **License Cost** | **FREE & Open Source (MIT)** | FREE & Open Source (Apache 2.0) | **$1,000 – $2,500+ / dev / year** |
-| **Supported Hosts** | **Dash, React, Streamlit** | Web Component, Jupyter | React, Angular, Vue (No Dash/Streamlit) |
-| **Hierarchical Queries** | **$\mathcal{O}(D)$ Level-Based Batching** | In-memory tree walk | $\mathcal{O}(N)$ Individual Group Waterfall |
-| **Query Cancellation** | **Native `cursor.interrupt()`** | Thread termination | Custom abort controller wiring |
-| **Clipboard TSV Fidelity** | **RFC-compliant (retains quotes/CRLF)** | Basic TSV | Fails delimiter round-trip in SSRM |
-| **Export Governance** | **Cancellable Async State Machine** | In-browser dump (Crashes tab on large data) | Client/Server custom plugins |
+| **Supported Hosts** | **Dash, React, Streamlit** | Web Component, Jupyter, Python | React, Angular, Vue (No Dash/Streamlit) |
+| **Hierarchical Queries** | **$\mathcal{O}(D)$ Level-Based Batching** | In-memory hypercube rollup | $\mathcal{O}(N)$ Individual Group Waterfall |
+| **Query Cancellation** | **Native `cursor.interrupt()`** | Client abort | Custom abort controller wiring |
+| **Clipboard TSV Fidelity** | **RFC-compliant (retains quotes/CRLF)** | Standard TSV export | Fails delimiter round-trip in SSRM |
+| **Export Governance** | **Cancellable Async State Machine** | Client / Server Arrow slice | Client/Server custom plugins |
 
 ---
 
@@ -136,7 +138,7 @@ from pivot_engine import create_tanstack_adapter, register_pivot_app
 
 # Point to local Parquet files, in-memory DuckDB, or remote Snowflake/Postgres
 adapter = create_tanstack_adapter(backend_uri=":memory:")
-adapter.load_data("s3://warehouse/100m_sales.parquet", "sales")
+adapter.load_data("sales.parquet", "sales")  # or pass pandas DataFrame / PyArrow Table
 
 app = Dash(__name__)
 app.layout = html.Div([
@@ -202,12 +204,12 @@ Pivoting, scrolling, and expanding tree nodes happen without triggering Streamli
 
 ```python
 import streamlit as st
-from streamlit_pivot import streamlit_pivot
+from streamlit_pivot import pivot_workspace
 
 st.set_page_config(layout="wide")
 st.title("Billion-Row Transaction Intelligence")
 
-streamlit_pivot(
+pivot_workspace(
     table="multi_billion_transactions",
     runtime_endpoint="http://127.0.0.1:8765/v1/runtime",
     row_fields=["market", "sector"],

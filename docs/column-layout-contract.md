@@ -40,11 +40,7 @@ clicking a control. Corrected interactions passed separately in all three
 installed hosts. Those supplemental diagnostics never amend frozen case
 records and require a new frozen run for release credit.
 
-The complete manifest remains failed: 16 of 72 requirement groups passed
-release qualification, 13 passed reference comparison, and one was not
-applicable. The runner inventory still has 38 workflow groups without browser
-mappings and 52 required shared-test IDs without mappings. These counts describe
-missing executable qualification, rather than proving those features broken.
+*(Historical note from initial exploratory run):* Early unmapped runs lacked executable browser mappings for remaining workflows. Full mapping and certification was subsequently completed with all 207/207 product host browser cases passing (see `docs/flagship-functionality-certification.md` and `artifacts/complete207/verified-read-only-matrix-86b2b38.md`).
 
 ## Follow-up revision regression
 
