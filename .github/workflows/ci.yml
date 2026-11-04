@@ -182,7 +182,7 @@ jobs:
         run: python -m build dash_tanstack_pivot/
 
       - name: Check distribution metadata
-        run: twine check dash_tanstack_pivot/dist/*
+        run: twine check dash_tanstack_pivot/dist/*.whl dash_tanstack_pivot/dist/*.tar.gz
 
       - name: Verify wheel package contract
         run: python scripts/ci/verify_wheel_contract.py dash_tanstack_pivot/dist/*.whl
