@@ -18,7 +18,11 @@ function render(initial) {
     let config, result, actual, notifyOffset;
     const frames = [], layouts = [], slots = [];
     let cursor = 0, subscriptions = 0, resizeNotify;
-    const element = {offsetHeight: 555, scrollLeft: initial.offset || 0,
+    // Real elements expose client geometry and scroll extents independently of
+    // their border box. Core reads clientHeight and uses scrollHeight to tell an
+    // Element from a Window when computing even a horizontal scroll limit.
+    const element = {clientHeight: 555, offsetHeight: 570, scrollHeight: 555,
+        scrollLeft: initial.offset || 0,
         ownerDocument: {defaultView: {ResizeObserver: class {constructor(cb){resizeNotify=cb;}observe(){}disconnect(){}}, requestAnimationFrame: cb => {frames.push(cb); return frames.length;}, cancelAnimationFrame() {}}}};
     const memo = (factory, deps) => {
         const i=cursor++, previous=slots[i];
@@ -60,6 +64,14 @@ function render(initial) {
 }
 
 const recorded = [189, 140, 185, 189, 140, 185, 189, 234, 185];
+
+test('actual core reads client geometry and the physical element scroll limit', () => {
+    const model = render({sizes: recorded, borderWidth: 1236});
+    assert.deepEqual(model.actual.scrollRect, {width: 901, height: 555});
+    assert.equal(model.actual.getMaxScrollOffset(), 735);
+    assert.notEqual(model.actual.scrollRect.height, model.element.offsetHeight);
+});
+
 function assertPhysicalVisibility(model, index, left, right) {
     model.actual.scrollToIndex(index);
     model.flush();
