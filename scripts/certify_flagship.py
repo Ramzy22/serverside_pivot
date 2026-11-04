@@ -25,12 +25,13 @@ import urllib.request
 import xml.etree.ElementTree as ET
 from contextlib import ExitStack, contextmanager
 from dataclasses import asdict
-from datetime import UTC, datetime
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Callable, Iterator, Mapping
 from uuid import uuid4
 
 
+UTC = timezone.utc
 ROOT = Path(__file__).resolve().parents[1]
 PACKAGE = ROOT / "dash_tanstack_pivot"
 DEFAULT_ARTIFACT_DIR = ROOT / "artifacts" / "flagship-certification"
