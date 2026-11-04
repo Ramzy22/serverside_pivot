@@ -35,7 +35,12 @@ module.exports = {
                     loader: 'babel-loader',
                     options: {
                         presets: [
-                            '@babel/preset-env',
+                            // Match the modern-browser baseline of the shared
+                            // Vite 6 React build; avoid unused ES5 async helpers.
+                            ['@babel/preset-env', {
+                                targets: { chrome: '87', edge: '88', firefox: '78', safari: '14' },
+                                bugfixes: true,
+                            }],
                             '@babel/preset-react',
                             '@babel/preset-typescript'
                         ],

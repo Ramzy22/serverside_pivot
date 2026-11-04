@@ -1,7 +1,7 @@
 {
   "name": "serverside-pivot-flagship-react",
   "private": true,
-  "version": "0.0.88",
+  "version": "0.0.89",
   "type": "module",
   "scripts": {
     "dev": "vite --config vite.config.ts",
@@ -9,7 +9,7 @@
     "preview": "vite preview --config vite.config.ts --host 127.0.0.1 --port 5174 --strictPort"
   },
   "dependencies": {
-    "dash_tanstack_pivot": "file:./release-package.tgz",
+    "dash_tanstack_pivot": "file:release-package.tgz",
     "react": "^18.3.1",
     "react-dom": "^18.3.1",
     "styled-components": "^6.1.17"

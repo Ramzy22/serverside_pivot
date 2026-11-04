@@ -1,6 +1,6 @@
-import { j as t } from "./index-CXA2NrOO.js";
+import { j as t } from "./index-CVsYjN62.js";
 import "./charts-DthW1Q8W.js";
-import { D as u } from "./DetailSurfaceContent-5Rg4yKpR.js";
+import { D as u } from "./DetailSurfaceContent-BdRXI_l_.js";
 function l({
   detailState: o,
   onClose: i,

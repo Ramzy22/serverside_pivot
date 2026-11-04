@@ -1,4 +1,4 @@
-import { j as e, C as nr, r as Xr, c as on, a as Ar, n as It, e as At, t as he, l as an, g as Ce, b as ln, d as Dr, f as cn, p as ar, h as Nr, i as Pr, k as xr, m as Ir, o as Ct, M as Hr, q as Fr, s as Cr, u as dn, I as un, v as xn, w as pn, x as Gr, y as Tr, z as rr, A as fn, B as hn, D as gn, V as yn, E as Ur, F as Kr, G as bn, H as pr, J as vn, K as mn, L as jn, N as kn, O as Or, P as wn, Q as Sn, R as Mn, S as Yr, T as An } from "./index-CXA2NrOO.js";
+import { j as e, C as nr, r as Xr, c as on, a as Ar, n as It, e as At, t as he, l as an, g as Ce, b as ln, d as Dr, f as cn, p as ar, h as Nr, i as Pr, k as xr, m as Ir, o as Ct, M as Hr, q as Fr, s as Cr, u as dn, I as un, v as xn, w as pn, x as Gr, y as Tr, z as rr, A as fn, B as hn, D as gn, V as yn, E as Ur, F as Kr, G as bn, H as pr, J as vn, K as mn, L as jn, N as kn, O as Or, P as wn, Q as Sn, R as Mn, S as Yr, T as An } from "./index-CVsYjN62.js";
 import { a as v, R as xt } from "./charts-DthW1Q8W.js";
 function Cn(t, n, i) {
   const f = Math.min(n.width, Math.max(0, i.width - 16)), m = Math.max(0, i.height - 8 - t.bottom - 6), M = Math.max(0, t.top - 6 - 8), W = n.height > m && M > m, R = W ? M : m, $ = Math.min(n.height, R);
@@ -403,10 +403,10 @@ const Wr = [
 `)}`], { type: "text/csv;charset=utf-8" }), `${n}.csv`);
 }, es = /* @__PURE__ */ new Set(["bar3d", "line3d", "scatter3d", "range", "boxplot", "nightingale"]), ts = /* @__PURE__ */ new Set(["bar3d", "line3d", "scatter3d"]), rs = xt.lazy(() => import(
   /* webpackChunkName: "pivot-echarts-2d" */
-  "./ECharts2dRenderer-BHBY8awV.js"
+  "./ECharts2dRenderer-DB1VaBAJ.js"
 )), ns = xt.lazy(() => import(
   /* webpackChunkName: "pivot-echarts-3d" */
-  "./ECharts3dRenderer-DQt8VQBg.js"
+  "./ECharts3dRenderer-DCkX0AIG.js"
 )), er = ({ chartType: t, echartsRef: n, option: i }) => {
   const a = ts.has(t) ? ns : rs;
   return /* @__PURE__ */ e.jsx(xt.Suspense, { fallback: /* @__PURE__ */ e.jsx("div", { "aria-label": "Loading chart", style: { width: "100%", height: "100%" } }), children: /* @__PURE__ */ e.jsx(a, { echartsRef: n, option: i }) });
