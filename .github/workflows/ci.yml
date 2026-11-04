@@ -77,7 +77,7 @@ jobs:
           python-version: "3.11"
 
       - name: Install setuptools for build:py
-        run: pip install "setuptools>=84.1.0" dash
+        run: pip install "setuptools>=84.1.0" dash "PyYAML>=6.0.1"
 
       - name: Build Dash, React, and Streamlit hosts
         run: npm run build
@@ -147,7 +147,7 @@ jobs:
           node-version: "20"
 
       - name: Install build tools
-        run: python -m pip install --upgrade pip "setuptools>=84.1.0" build twine dash
+        run: python -m pip install --upgrade pip "setuptools>=84.1.0" build twine dash "PyYAML>=6.0.1"
 
       - name: Install frontend dependencies from clean checkout
         run: npm ci

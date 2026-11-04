@@ -66,6 +66,8 @@ api = [
     "structlog>=23.1.0",
 ]
 dev = [
+    # Dash component metadata generation imports yaml outside runtime dependencies.
+    "PyYAML>=6.0.1",
     "pytest>=7.0.0",
     "pytest-asyncio>=0.20.0",
     "httpx>=0.24.0",
