@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import threading
+import asyncio
 import os
 from typing import Any, Literal, Optional
 
@@ -66,6 +67,9 @@ class DatabaseExecution:
         self.query_id = str(query_id)
         self._lock = threading.RLock()
         self._completion = threading.Event()
+        self._cancel_complete = threading.Event()
+        self._cancel_complete.set()
+        self._lease_released = False
         self._lease: Optional[Any] = None
         self._reason: Optional[CancellationReason] = None
         self._finished = False
@@ -112,13 +116,21 @@ class DatabaseExecution:
         if reason not in {"client_cancelled", "query_timeout"}:
             raise ValueError("Unsupported database cancellation reason.")
         with self._lock:
-            if self._finished or self._reason is not None:
+            if self._finished or self._lease_released or self._reason is not None:
                 return False
             self._reason = reason
             cancellation = self._take_pending_cancellation_locked()
         if cancellation is not None:
             self._invoke_native_cancel(*cancellation)
         return True
+
+    def release_lease(self) -> None:
+        """Revoke cancellation and drain any selected callback before pool handoff."""
+        with self._lock:
+            self._lease_released = True
+        self._cancel_complete.wait()
+        with self._lock:
+            self._lease = None
 
     def finish(self) -> None:
         """Acknowledge worker cleanup after it returned or retired its lease."""
@@ -138,21 +150,48 @@ class DatabaseExecution:
         ):
             return None
         self._cancel_invoked = True
+        self._cancel_complete.clear()
         cancel = getattr(self._lease, "interrupt", None)
         if not callable(cancel):
             cancel = getattr(self._lease, "cancel", None)
         return self._lease, cancel
 
     def _invoke_native_cancel(self, _lease: Any, cancel: Any) -> None:
-        if not callable(cancel):
-            with self._lock:
-                self._cancel_error = CancellationUnavailableError()
-            return
         try:
-            cancel()
-        except BaseException as exc:  # The worker owns safe lease retirement.
-            with self._lock:
-                self._cancel_error = exc
-        else:
-            with self._lock:
-                self._cancel_succeeded = True
+            if not callable(cancel):
+                with self._lock:
+                    self._cancel_error = CancellationUnavailableError()
+                return
+            try:
+                cancel()
+            except BaseException as exc:  # The worker owns safe lease retirement.
+                with self._lock:
+                    self._cancel_error = exc
+            else:
+                with self._lock:
+                    self._cancel_succeeded = True
+        finally:
+            self._cancel_complete.set()
+
+
+async def await_native_cleanup(worker: Any, timeout: float) -> None:
+    """Keep the caller's reservation until the physical worker has exited."""
+    loop = asyncio.get_running_loop()
+    deadline = loop.time() + timeout
+    timed_out = False
+    while not worker.done():
+        try:
+            remaining = None if timed_out else max(0, deadline - loop.time())
+            await asyncio.wait_for(asyncio.shield(worker), timeout=remaining)
+        except asyncio.CancelledError:
+            # Repeated caller cancellations cannot interrupt physical cleanup.
+            continue
+        except asyncio.TimeoutError:
+            timed_out = True
+        except DatabaseExecutionError:
+            break
+    error = None if worker.cancelled() else worker.exception()
+    if timed_out:
+        raise DatabaseExecutionError("database cleanup acknowledgement timed out")
+    if error is not None and not isinstance(error, DatabaseExecutionError):
+        raise error

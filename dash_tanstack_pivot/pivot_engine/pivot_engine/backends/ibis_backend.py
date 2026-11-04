@@ -349,21 +349,17 @@ class IbisBackend:
         finally:
             try:
                 if lease is not None:
+                    execution.release_lease()
+                    discard = discard or execution.cancel_error is not None
                     retained = self._duckdb_pool.checkin(lease, discard=discard)
                     self._record_lease_disposition(execution, retained)
             finally:
                 execution.finish()
 
     async def _await_execution_cleanup(self, worker: Any) -> None:
-        try:
-            await asyncio.wait_for(
-                asyncio.shield(worker),
-                timeout=_CANCELLATION_CLEANUP_TIMEOUT_SECONDS,
-            )
-        except asyncio.TimeoutError as exc:
-            raise DatabaseExecutionError("database cleanup acknowledgement timed out") from exc
-        except DatabaseExecutionError:
-            pass
+        from .execution import await_native_cleanup
+
+        await await_native_cleanup(worker, _CANCELLATION_CLEANUP_TIMEOUT_SECONDS)
 
     async def _execute_async_without_cancellation(
         self,

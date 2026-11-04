@@ -1112,12 +1112,40 @@ def test_parent_aggregate_edit_prompt_accepts_proportional_formula(editing_e2e_s
 def test_chart_settings_open_immediately_and_table_refills_after_close(chart_e2e_server, chrome_driver):
     chrome_driver.get(chart_e2e_server)
 
-    WebDriverWait(chrome_driver, 20).until(
-        EC.presence_of_element_located((By.CSS_SELECTOR, '[data-docked-chart-pane]'))
+    # The pane shell precedes the lazy chart module. Measure only after its
+    # surface has rendered and all three baseline widths have settled.
+    previous_geometry = None
+    stable_samples = 0
+
+    def stable_chart_geometry(driver):
+        nonlocal previous_geometry, stable_samples
+        geometry = driver.execute_script(
+            """
+            return arguments[0].map(selector => {
+                const node = document.querySelector(selector);
+                if (!node || !node.getClientRects().length) return null;
+                const rect = node.getBoundingClientRect();
+                const style = getComputedStyle(node);
+                return rect.width > 0 && rect.height > 0 && style.visibility === 'visible'
+                    ? [rect.width, rect.height] : null;
+            });
+            """,
+            ['[data-docked-table-canvas]', '[data-docked-chart-pane]', '[data-chart-surface-main="true"]'],
+        )
+        if any(rect is None for rect in geometry):
+            previous_geometry = None
+            stable_samples = 0
+            return False
+        stable_samples = stable_samples + 1 if geometry == previous_geometry else 1
+        previous_geometry = geometry
+        return [rect[0] for rect in geometry] if stable_samples >= 3 else False
+
+    initial_table_width, initial_chart_pane_width, initial_chart_surface_width = WebDriverWait(
+        chrome_driver, 20, poll_frequency=0.2
+    ).until(
+        stable_chart_geometry,
+        message="Chart surface and table did not reach positive, stable baseline geometry",
     )
-    initial_table_width = _element_width(chrome_driver, '[data-docked-table-canvas]')
-    initial_chart_pane_width = _element_width(chrome_driver, '[data-docked-chart-pane]')
-    initial_chart_surface_width = _element_width(chrome_driver, '[data-chart-surface-main="true"]')
     assert initial_table_width is not None
     assert initial_chart_pane_width is not None
     assert initial_chart_surface_width is not None
