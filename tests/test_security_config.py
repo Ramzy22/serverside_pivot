@@ -23,7 +23,10 @@ def _restore_security_module():
 
 
 def test_api_jwt_dependency_uses_maintained_crypto_backend():
-    import tomllib
+    try:
+        import tomllib
+    except ModuleNotFoundError:  # Python 3.10
+        import tomli as tomllib
     from packaging.requirements import Requirement
 
     config = tomllib.loads((ROOT / "dash_tanstack_pivot/pyproject.toml").read_text())

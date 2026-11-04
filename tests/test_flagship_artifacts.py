@@ -33,7 +33,10 @@ ROOT = Path(__file__).resolve().parents[1]
 
 @pytest.mark.parametrize("requirement", ["psutil>=5.9", "sqlglot<30"])
 def test_wheel_metadata_declares_engine_runtime_dependencies(tmp_path, requirement):
-    import tomllib
+    try:
+        import tomllib
+    except ModuleNotFoundError:  # Python 3.10
+        import tomli as tomllib
     from packaging.requirements import Requirement
     # Generate actual backend metadata from the production project config,
     # without npm/bundles or importing the engine into the test runner.

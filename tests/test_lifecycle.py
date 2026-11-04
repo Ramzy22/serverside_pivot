@@ -26,11 +26,8 @@ async def test_create_task_returns_cancelled_task_during_shutdown():
     assert isinstance(task, asyncio.Task)
     assert task.get_name() == "late-task"
     assert task not in manager.active_tasks
-    assert task.cancelling() > 0 or task.cancelled()
-    assert task.done() in {True, False}
-
-    task.cancel()
-    await asyncio.sleep(0)
+    with pytest.raises(asyncio.CancelledError):
+        await task
 
     assert task.cancelled()
     assert started is False
@@ -67,13 +64,17 @@ async def test_cancel_task_defaults_to_one_matching_name():
     await asyncio.sleep(0)
 
     assert manager.cancel_task("shared-name")
-    assert sum(1 for task in (first, second) if task.cancelling() > 0 or task.cancelled()) == 1
-    assert unrelated.cancelling() == 0
+    await asyncio.sleep(0)
+    assert sum(task.cancelled() for task in (first, second)) == 1
+    assert not unrelated.done()
 
     release.set()
-    await asyncio.gather(first, second, unrelated, return_exceptions=True)
+    results = await asyncio.gather(first, second, unrelated, return_exceptions=True)
     await asyncio.sleep(0)
 
+    assert sum(isinstance(result, asyncio.CancelledError) for result in results[:2]) == 1
+    assert results[:2].count("ok") == 1
+    assert results[2] == "ok"
     assert not manager.active_tasks
 
 
@@ -92,8 +93,9 @@ async def test_cancel_task_can_cancel_all_matching_names_explicitly():
     await asyncio.sleep(0)
 
     assert manager.cancel_task("shared-name", cancel_all=True)
-    assert all(task.cancelling() > 0 or task.cancelled() for task in (first, second))
-    assert unrelated.cancelling() == 0
+    await asyncio.sleep(0)
+    assert all(task.cancelled() for task in (first, second))
+    assert not unrelated.done()
 
     release.set()
     results = await asyncio.gather(first, second, unrelated, return_exceptions=True)

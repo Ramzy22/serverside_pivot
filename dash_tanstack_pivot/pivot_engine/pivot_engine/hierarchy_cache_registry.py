@@ -77,6 +77,12 @@ class BoundedHierarchyCache(OrderedDict):
             return False
         with self.storage._lock:
             accepted = self.storage.set(key, _SizedValue(value, charge), ttl=expiry - time.time())
+            if accepted:
+                # MemoryCache converts a relative TTL with its own clock read.
+                # Preserve the mapping's absolute deadline after admission,
+                # before any reader can observe a shifted expiry.
+                retained, _ = self.storage._cache[key]
+                self.storage._cache[key] = (retained, expiry)
             self._sync()
             return accepted
 

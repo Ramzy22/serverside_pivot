@@ -75,6 +75,8 @@ dev = [
     "fakeredis[lua]>=2.0",
     "selenium>=4.0.0",
     "build>=0.10.0",
+    # The packaging smoke builds with --no-isolation, so wheel must be installed.
+    "wheel>=0.38",
     "openpyxl>=3.1.0",
     "requests>=2.28.0",
     "packaging>=23.0",
