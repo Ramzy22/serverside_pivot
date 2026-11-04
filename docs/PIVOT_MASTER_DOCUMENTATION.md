@@ -1,39 +1,41 @@
-# DashTanstackPivot: Advanced Capabilities & Technical Reference
+# serverside-pivot: Architecture & Technical Reference
 
-This document provides a comprehensive and verified technical reference for the `DashTanstackPivot` component. Unlike earlier design documents, this reflects the **actual implemented state** of the codebase as of April 2026.
+This document provides a comprehensive technical reference for the `serverside-pivot` package across its tri-host presentation targets (**Plotly Dash**, **Standalone React**, and **Streamlit**).
 
-## 1. Core Analytical Engine (The "Pivot" Mode)
+## 1. Core Analytical Engine (The Pivot Architecture)
 The component operates as a high-performance, server-side data processing engine powered by DuckDB and Ibis.
 
-*   **Pivoting & Hierarchy:** Supports multidimensional pivoting with unlimited Row and Column fields.
-*   **Four Distinct View Modes:**
+*   **Pivoting & Hierarchy:** Supports multidimensional pivoting with unlimited Row and Column fields with level-based $\mathcal{O}(D)$ query batching.
+*   **Three First-Class View Modes & Report Layout:**
     *   `pivot`: Standard multidimensional analysis with grouping and column pivoting.
-    *   `tree`: Optimized hierarchical view for balanced or unbalanced tree data.
-    *   `table`: Flat tabular mode (equivalent to "Tabular" or "Outline" modes in other tools).
-    *   `report`: High-fidelity reporting mode with specific layout constraints.
-*   **Virtualization & Performance:**
-    *   **Server-Side Cached Row Model:** Implementation of a robust block-based caching system with LRU eviction.
-    *   **Concurrent Execution:** DuckDB connection pooling allows for non-blocking concurrent queries.
+    *   `tree`: Optimized hierarchical record view for balanced or unbalanced tree structures.
+    *   `table`: Flat tabular record mode.
+    *   *Report Mode*: Configurable report layout state (`layoutMode: 'report'`) with specialized totals and layout constraints.
+*   **Virtualization & Windowing:**
+    *   **Server-Side Cached Row Model:** Block-based caching system with deep byte-bounded LRU eviction and request epoch freshness gates.
+    *   **Column Virtualization & Sparse Windows:** Active column virtualizer (`useColumnVirtualizer.ts`) delivering sparse horizontal windows (`col_start`/`col_end`) for wide pivots exceeding hundreds of columns.
+    *   **Concurrent Execution:** DuckDB connection pooling allows for non-blocking concurrent queries without global locks.
     *   **Intelligent Prefetching:** Velocity-based scroll analysis predicts user movement and pre-loads data blocks.
 
 ## 2. Advanced Visualizations
-Integrated visualization capabilities beyond standard grid display.
+Integrated visualization capabilities decoupled from DOM cell selections.
 
-*   **Pivot Charts (ECharts Powered):**
+*   **Pivot Charts (ECharts 6 Powered):**
     *   **Standard Types:** Bar (Stacked/Grouped), Line, Area, Pie, Donut, Scatter, Heatmap, Bubble, Radar.
-    *   **Specialized Types:** Waterfall, Combo Charts (Multi-layer), Range Charts.
-    *   **3D Visualizations:** 3D Bar, 3D Line, 3D Scatter.
-    *   **Hierarchy Charts:** Sankey, Sunburst, Icicle, Treemap (fully integrated with the pivot hierarchy).
+    *   **Specialized Types:** Waterfall, Combo Charts (Multi-layer), Range Charts (Toolbar & context selection driven).
+    *   **3D Visualizations:** 3D Bar, 3D Line, 3D Scatter (via `echarts-gl`).
+    *   **Hierarchy Charts:** Sankey, Sunburst, Icicle, Treemap (integrated with the active pivot tree).
     *   **Trend Analysis:** Built-in compute engines for Moving Averages and Linear Trendlines.
+    *   **Docked / Floating Panes:** Flexible chart positioning (`Left`, `Right`, `Top`, `Bottom`, or floating overlay).
 *   **In-Cell Sparklines:** 
-    *   Rendered directly in the grid using `array_agg` data.
+    *   Rendered directly in grid cells using `array_agg` data buffers.
     *   Supports multiple types (Line, Bar, Area) and display modes (Trend vs. Value).
 
 ## 3. Data Interaction & Editing
 Enterprise-grade interaction patterns for operational and analytical workflows.
 
 *   **Full CRUD Editing:**
-    *   Server-side cell updates with comprehensive transaction management.
+    *   Server-side cell updates with comprehensive transaction management and reversible CDC checkpoints.
     *   **Validation:** Native support for type-checking and numeric range rules.
     *   **Edit Side Panel:** Dedicated UI for complex multi-field edits and property updates.
 *   **Advanced Filtering UI:**
@@ -45,20 +47,20 @@ Enterprise-grade interaction patterns for operational and analytical workflows.
     *   **Contextual UI:** `DetailSidePanel`, `DetailDrawer`, and `InlineDetailPanel` for inspecting cell-level metadata.
 
 ## 4. Calculated Logic (Formula Engine)
-Powerful server-side calculation engine using Excel-like syntax.
+Server-side calculation engine using Excel-like syntax.
 
 *   **Formula Columns:** Create new metrics using the `[Column Name]` syntax.
 *   **Pivot Window Functions:**
     *   `percent_of_row`, `percent_of_col`, `percent_of_grand_total`.
 *   **Visual Totals:** Optional recalculation of parent groups based on post-filter child values, ensuring data integrity during analysis.
 
-## 5. Known Implementation Quirks & Bugs
-*   **Column Virtualization:** Currently disabled due to layout synchronization issues. Performance may degrade with >200 visible columns.
-*   **Drag-to-Pin UI:** UI handles for pinning columns via drag-and-drop are missing; pinning must be performed via the context menu or sidebar.
-*   **Header Sync:** Minimal misalignment (1-2px) can occur in pinned regions during rapid horizontal scrolling or extreme resizing.
-*   **Natural Sort Edge Case:** Default sorting on financial tenors (e.g., 1M, 3M, 1Y) may occasionally revert to lexicographical order if the `sortKeyField` is not explicitly mapped in the `sortOptions`.
+## 5. UI/UX Interaction Notes & Design Scope
+*   **Column Pinning:** Pinning can be performed via the header context menu, column options popover, or the field sidebar panel.
+*   **Header Sync:** Pinned and unpinned columns maintain synchronized scroll and header row heights across all three host adapters.
+*   **Natural Sorting:** Supports natural and financial tenor sorting (e.g. 1M, 3M, 1Y) when mapped in `sortOptions`.
 
 ## 6. Real-time & Connectivity
-*   **CDC Integration:** Native `PivotCDCManager` for incremental data updates.
+*   **Tri-Host Support:** Identical `PivotWorkspace` core runs in Dash (`DashTanstackPivot`), React (`PivotWorkspace` with `HttpPivotTransport`), and Streamlit (`streamlit_pivot` zero-rerun iframe component).
+*   **CDC Integration:** Native `PivotCDCManager` for incremental data updates and reversible state.
 *   **Streaming Processor:** Support for live-updating aggregations via `StreamAggregationProcessor`.
-*   **Export:** High-speed XLSX and CSV export using SheetJS, preserving basic data types and hierarchical structure.
+*   **Export Governance:** High-speed, cancellable XLSX and CSV exports streaming from backend/worker with SheetJS client fallback.

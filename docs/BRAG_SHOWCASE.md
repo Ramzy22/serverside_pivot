@@ -27,7 +27,7 @@ The core value proposition must always be shown in this precise 3-step sequence:
 ### Scene 1: The 2-Line Code Hook (0:00 – 0:04)
 * **Visual:** Close-up on a dark VS Code / Terminal window typing 2 lines:
   ```python
-  adapter = create_tanstack_adapter("duckdb://sales.db")
+  adapter = create_tanstack_adapter(backend_uri="duckdb://sales.db")
   app.layout = DashTanstackPivot(table="trades", serverSide=True)
   ```
 * **Overlay Text:** *“This is all the code you write.”*
@@ -42,7 +42,7 @@ The core value proposition must always be shown in this precise 3-step sequence:
 * **Sound/Beat:** Rising riser sweep.
 
 ### Scene 3: The Web Reveal & Infinite Virtual Scroll (0:07 – 0:12)
-* **Visual:** Cut to browser running **[http://127.0.0.1:8051](http://127.0.0.1:8051)** (Institutional Trading Desk).
+* **Visual:** Cut to browser running **[http://127.0.0.1:8050](http://127.0.0.1:8050)** (Institutional Trading Desk).
 * **Action:** Rapid scroll through 50,000 multi-asset positions with `Asset Class > Desk > Ticker` already expanded 3 levels deep.
 * **Overlay Text:** *“50,000 positions. 12ms latency. Constant 70MB browser RAM.”*
 * **Sound/Beat:** Heavy bass groove drops.

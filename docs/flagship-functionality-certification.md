@@ -1,7 +1,7 @@
 # Flagship functionality certification
 
 The read-only parity source of truth is the versioned workflow contract in
-`tests/flagship_requirements.json`. Its 71 atomic requirements cover all 44
+`tests/flagship_requirements.json`. Its 72 atomic requirements (spanning 207 host browser test assertions) cover all 44
 supported entries in `tests/flagship_capabilities.py`, including selection-copy
 edge cases and four combined journeys. Editing has one explicitly excluded
 entry. A supported inventory entry, wired control, or passing validator is not

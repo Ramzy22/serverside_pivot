@@ -58,14 +58,14 @@ def build_trader_table(row_count: int = TRADER_DEFAULT_ROWS) -> pa.Table:
     WITH raw AS (
         SELECT 
             range as id,
-            (range % 5) as asset_class_id,
-            (range % 7) as desk_id,
-            (range % 12) as book_id,
-            (range % 8) as trader_id,
-            (range % 16) as ticker_id,
-            (range % 5) as currency_id,
-            (range % 3) as tier_id,
-            (range % 6) as tenor_id,
+            (abs(hash(range, 11)) % 5) as asset_class_id,
+            (abs(hash(range, 22)) % 7) as desk_id,
+            (abs(hash(range, 33)) % 12) as book_id,
+            (abs(hash(range, 44)) % 8) as trader_id,
+            (abs(hash(range, 55)) % 16) as ticker_id,
+            (abs(hash(range, 66)) % 5) as currency_id,
+            (abs(hash(range, 77)) % 3) as tier_id,
+            (abs(hash(range, 88)) % 6) as tenor_id,
             (sin(range * 0.17) * 0.5 + 0.5) as r1,
             (cos(range * 0.31) * 0.5 + 0.5) as r2,
             (sin(range * 0.43 + 1.2) * 0.5 + 0.5) as r3
@@ -150,20 +150,31 @@ def build_trader_table(row_count: int = TRADER_DEFAULT_ROWS) -> pa.Table:
         END AS risk_tier,
 
         CASE tenor_id
-            WHEN 0 THEN 'Spot / Cash'
-            WHEN 1 THEN '1M'
-            WHEN 2 THEN '3M'
-            WHEN 3 THEN '6M'
-            WHEN 4 THEN '1Y'
-            ELSE '5Y+'
+            WHEN 0 THEN '1M'
+            WHEN 1 THEN '3M'
+            WHEN 2 THEN '6M'
+            WHEN 3 THEN '1Y'
+            WHEN 4 THEN '5Y+'
+            ELSE 'Spot'
         END AS tenor,
 
-        ROUND((r1 * 8500000 + 150000), 2) AS notional_usd,
-        ROUND(((r2 - 0.46) * 1250000), 2) AS daily_pnl,
+        ROUND((
+            (1800000 + asset_class_id * 950000 + desk_id * 420000 + tenor_id * 310000)
+            * (0.65 + r1 * 0.85)
+        ), 2) AS notional_usd,
+        ROUND((
+            (sin(asset_class_id * 1.3 + desk_id * 0.9 + tenor_id * 0.85 + ticker_id * 0.4) * 95000)
+            + ((asset_class_id - 1.6) * 28000)
+            + ((tenor_id - 2.0) * (desk_id - 2.5) * 14000)
+            + ((r2 - 0.48) * 45000)
+        ), 2) AS daily_pnl,
         ROUND(((r3 - 0.44) * 3800000), 2) AS unrealized_pnl,
-        ROUND((r1 * 320000 + 25000), 2) AS var_95,
-        ROUND((r2 * 14500 + 850), 2) AS dv01,
-        CAST(ROUND(r3 * 180 + 12) AS INTEGER) AS trade_count,
+        ROUND((
+            (65000 + asset_class_id * 48000 + desk_id * 22000 + tenor_id * 15000)
+            * (0.7 + r1 * 0.6)
+        ), 2) AS var_95,
+        ROUND((r2 * 14500 + 850 + asset_class_id * 2400), 2) AS dv01,
+        CAST(ROUND(r3 * 180 + 12 + desk_id * 15) AS INTEGER) AS trade_count,
         ROUND((r1 * 2.8 - 0.4), 2) AS sharpe_ratio
     FROM raw;
     """
@@ -209,26 +220,14 @@ def trader_workspace_config(host: str = "dash") -> dict[str, Any]:
             {
                 "field": "notional_usd",
                 "agg": "sum",
-                "label": "Notional USD",
+                "label": "Notional",
                 "format": "currency",
             },
             {
                 "field": "var_95",
                 "agg": "sum",
-                "label": "VaR (95%)",
+                "label": "VaR 95%",
                 "format": "currency",
-            },
-            {
-                "field": "dv01",
-                "agg": "sum",
-                "label": "DV01 ($/bp)",
-                "format": "currency",
-            },
-            {
-                "field": "trade_count",
-                "agg": "sum",
-                "label": "Trades",
-                "format": "fixed:0",
             },
         ],
         "availableFieldList": TRADER_FIELDS,
@@ -258,10 +257,9 @@ def trader_workspace_config(host: str = "dash") -> dict[str, Any]:
         "showSubtotals": True,
         "grandTotalPosition": "bottom",
         "defaultTheme": "dark",
-        "persistence": True,
-        "persistence_type": "local",
+        "persistence": False,
         "performanceConfig": {
-            "serverSideBlockSize": 150,
+            "cacheBlockSize": 150,
             "rowOverscan": 16,
             "columnOverscan": 6,
         },
@@ -270,32 +268,34 @@ def trader_workspace_config(host: str = "dash") -> dict[str, Any]:
             {
                 "id": "pane-trader-risk",
                 "name": "Daily PnL by Asset Class",
-                "chartTitle": "Daily PnL Distribution ($)",
+                "chartTitle": "Daily PnL & Exposure by Asset Class ($)",
                 "source": "pivot",
                 "chartType": "bar",
                 "barLayout": "grouped",
-                "orientation": "vertical",
-                "dockPosition": "right",
-                "width": 460,
-                "chartHeight": 340,
+                "axisMode": "vertical",
+                "orientation": "rows",
+                "hierarchyLevel": 1,
+                "width": 440,
+                "chartHeight": 360,
                 "floating": False,
                 "chartSettings": {
                     "showDataLabels": True,
                     "showGradient": True,
-                    "showAnimations": True,
+                    "showAnimations": False,
                 },
             }
         ],
-        # Pre-configured viewState with Heatmap & Data Bars
+        # Pre-configured viewState with Heatmap ("col") & Data Bars
         "viewState": {
-            "colorScaleMode": "columns",
-            "colorPalette": "greenRed",
+            "colorScaleMode": "col",
+            "colorPalette": "redGreen",
             "dataBarsColumns": [
-                "Spot / Cash_notional_usd_sum",
                 "1M_notional_usd_sum",
+                "3M_notional_usd_sum",
                 "__RowTotal__notional_usd_sum",
             ],
             "chartPanelOpen": True,
+            "sidebarOpen": True,
         },
         "conditionalFormatting": [
             {"condition": ">", "value": 0, "style": {"color": "#10B981", "fontWeight": "700"}},
@@ -343,14 +343,14 @@ def build_hr_table(row_count: int = HR_DEFAULT_ROWS) -> pa.Table:
     WITH raw AS (
         SELECT 
             range as id,
-            (range % 6) as dept_id,
-            (range % 12) as team_id,
-            (range % 8) as location_id,
-            (range % 5) as level_id,
-            (range % 4) as rating_id,
-            (range % 3) as emp_id,
-            (range % 3) as year_id,
-            (range % 4) as quarter_id,
+            (abs(hash(concat(range, '_d'))) % 6) as dept_id,
+            (abs(hash(concat(range, '_t'))) % 12) as team_id,
+            (abs(hash(concat(range, '_loc'))) % 8) as location_id,
+            (abs(hash(concat(range, '_lvl'))) % 5) as level_id,
+            (abs(hash(concat(range, '_rat'))) % 4) as rating_id,
+            (abs(hash(concat(range, '_emp'))) % 3) as emp_id,
+            (abs(hash(concat(range, '_yr'))) % 3) as year_id,
+            (abs(hash(concat(range, '_qtr'))) % 4) as quarter_id,
             (sin(range * 0.23) * 0.5 + 0.5) as r1,
             (cos(range * 0.37) * 0.5 + 0.5) as r2,
             (sin(range * 0.49 + 2.1) * 0.5 + 0.5) as r3
@@ -426,18 +426,18 @@ def build_hr_table(row_count: int = HR_DEFAULT_ROWS) -> pa.Table:
             ELSE 'Q4'
         END AS quarter,
 
-        1 AS headcount,
-        ROUND((85000 + (level_id * 38000) + (r1 * 32000)), 2) AS base_salary,
-        ROUND(((12000 + (level_id * 15000)) * (0.8 + r2 * 0.4)), 2) AS annual_bonus,
-        ROUND(((20000 + (level_id * 45000)) * (0.75 + r3 * 0.5)), 2) AS equity_grant,
+        CAST(ROUND(1 + (dept_id * 0.4) + (quarter_id * 0.55) + (sin(dept_id * 1.4 + team_id * 0.8 + quarter_id * 1.1) * 0.7 + 0.7)) AS INTEGER) AS headcount,
+        ROUND((92000 + (level_id * 34000) + (dept_id * 6500) + (quarter_id * 3200) + (r1 * 28000)), 2) AS base_salary,
+        ROUND(((14000 + (level_id * 14000) + (dept_id * 2200)) * (0.8 + r2 * 0.45)), 2) AS annual_bonus,
+        ROUND(((22000 + (level_id * 42000)) * (0.75 + r3 * 0.5)), 2) AS equity_grant,
         ROUND((
-            (85000 + (level_id * 38000) + (r1 * 32000)) +
-            ((12000 + (level_id * 15000)) * (0.8 + r2 * 0.4)) +
-            ((20000 + (level_id * 45000)) * (0.75 + r3 * 0.5))
+            (92000 + (level_id * 34000) + (dept_id * 6500) + (quarter_id * 3200) + (r1 * 28000)) +
+            ((14000 + (level_id * 14000) + (dept_id * 2200)) * (0.8 + r2 * 0.45)) +
+            ((22000 + (level_id * 42000)) * (0.75 + r3 * 0.5))
         ), 2) AS total_compensation,
         ROUND((r1 * 8.5 + 0.5), 1) AS tenure_years,
-        ROUND((62.0 + (r2 * 36.0)), 1) AS engagement_score,
-        ROUND((0.03 + (r3 * 0.18)), 4) AS attrition_risk_pct
+        ROUND((68.0 + (dept_id * 2.4) + (quarter_id * 1.8) + (r2 * 18.0)), 1) AS engagement_score,
+        ROUND((0.03 + (r3 * 0.14)), 4) AS attrition_risk_pct
     FROM raw;
     """
     tbl = con.execute(query).arrow().read_all()
@@ -480,32 +480,14 @@ def hr_workspace_config(host: str = "dash") -> dict[str, Any]:
             {
                 "field": "base_salary",
                 "agg": "avg",
-                "label": "Avg Base Salary",
+                "label": "Avg Salary",
                 "format": "currency",
             },
             {
                 "field": "total_compensation",
                 "agg": "avg",
-                "label": "Avg Total Comp",
+                "label": "Total Comp",
                 "format": "currency",
-            },
-            {
-                "field": "annual_bonus",
-                "agg": "sum",
-                "label": "Total Bonus Pool",
-                "format": "currency",
-            },
-            {
-                "field": "engagement_score",
-                "agg": "avg",
-                "label": "Engagement (0-100)",
-                "format": "fixed:1",
-            },
-            {
-                "field": "attrition_risk_pct",
-                "agg": "avg",
-                "label": "Attrition Risk %",
-                "format": "percent",
             },
         ],
         "availableFieldList": HR_FIELDS,
@@ -535,10 +517,9 @@ def hr_workspace_config(host: str = "dash") -> dict[str, Any]:
         "showSubtotals": True,
         "grandTotalPosition": "bottom",
         "defaultTheme": "flash",
-        "persistence": True,
-        "persistence_type": "local",
+        "persistence": False,
         "performanceConfig": {
-            "serverSideBlockSize": 150,
+            "cacheBlockSize": 150,
             "rowOverscan": 16,
             "columnOverscan": 6,
         },
@@ -550,20 +531,22 @@ def hr_workspace_config(host: str = "dash") -> dict[str, Any]:
                 "chartTitle": "Workforce Distribution by Department",
                 "source": "pivot",
                 "chartType": "donut",
-                "dockPosition": "right",
-                "width": 440,
-                "chartHeight": 340,
+                "orientation": "rows",
+                "hierarchyLevel": 1,
+                "width": 430,
+                "chartHeight": 360,
                 "floating": False,
                 "chartSettings": {
                     "showDataLabels": True,
                     "showGradient": True,
+                    "showAnimations": False,
                 },
             }
         ],
-        # Pre-configured viewState with Heatmap & Data Bars
+        # Pre-configured viewState with Heatmap ("table") & Data Bars
         "viewState": {
-            "colorScaleMode": "all",
-            "colorPalette": "blueOrange",
+            "colorScaleMode": "table",
+            "colorPalette": "yellowBlue",
             "dataBarsColumns": [
                 "Q1_headcount_sum",
                 "Q2_headcount_sum",
@@ -572,6 +555,7 @@ def hr_workspace_config(host: str = "dash") -> dict[str, Any]:
                 "__RowTotal__headcount_sum",
             ],
             "chartPanelOpen": True,
+            "sidebarOpen": True,
         },
         "uiConfig": {
             "showToolbar": True,
@@ -600,8 +584,8 @@ SAAS_FIELDS = [
     "account_health",
     "mrr",
     "arr",
-    "expansion_mrr",
-    "churn_mrr",
+    "net_expansion",
+    "churn_amount",
     "net_revenue_retention",
     "cac",
     "ltv",
@@ -616,14 +600,14 @@ def build_saas_table(row_count: int = SAAS_DEFAULT_ROWS) -> pa.Table:
     WITH raw AS (
         SELECT 
             range as id,
-            (range % 4) as segment_id,
-            (range % 4) as tier_id,
-            (range % 5) as region_id,
-            (range % 4) as channel_id,
-            (range % 3) as cycle_id,
-            (range % 3) as cohort_y_id,
-            (range % 4) as cohort_q_id,
-            (range % 3) as health_id,
+            (abs(hash(concat(range, '_seg'))) % 4) as segment_id,
+            (abs(hash(concat(range, '_tier'))) % 4) as tier_id,
+            (abs(hash(concat(range, '_reg'))) % 5) as region_id,
+            (abs(hash(concat(range, '_ch'))) % 4) as channel_id,
+            (abs(hash(concat(range, '_cyc'))) % 3) as cycle_id,
+            (abs(hash(concat(range, '_cy'))) % 3) as cohort_y_id,
+            (abs(hash(concat(range, '_cq'))) % 4) as cohort_q_id,
+            (abs(hash(concat(range, '_hlth'))) % 3) as health_id,
             (sin(range * 0.19) * 0.5 + 0.5) as r1,
             (cos(range * 0.29) * 0.5 + 0.5) as r2,
             (sin(range * 0.41 + 1.7) * 0.5 + 0.5) as r3
@@ -685,30 +669,35 @@ def build_saas_table(row_count: int = SAAS_DEFAULT_ROWS) -> pa.Table:
         END AS account_health,
 
         ROUND((
-            CASE segment_id
-                WHEN 0 THEN (8500 + (r1 * 14500))
-                WHEN 1 THEN (3200 + (r1 * 4800))
-                WHEN 2 THEN (950 + (r1 * 1650))
-                ELSE (180 + (r1 * 320))
-            END
+            (CASE segment_id
+                WHEN 0 THEN 9500
+                WHEN 1 THEN 4200
+                WHEN 2 THEN 1450
+                ELSE 380
+            END)
+            * (1.0 + cohort_q_id * 0.16 + tier_id * 0.08 + sin(segment_id * 1.2 + tier_id * 0.9 + cohort_q_id * 0.7) * 0.22)
+            * (0.75 + r1 * 0.5)
         ), 2) AS mrr,
 
         ROUND((
-            CASE segment_id
-                WHEN 0 THEN (8500 + (r1 * 14500)) * 12
-                WHEN 1 THEN (3200 + (r1 * 4800)) * 12
-                WHEN 2 THEN (950 + (r1 * 1650)) * 12
-                ELSE (180 + (r1 * 320)) * 12
-            END
+            (CASE segment_id
+                WHEN 0 THEN 9500
+                WHEN 1 THEN 4200
+                WHEN 2 THEN 1450
+                ELSE 380
+            END)
+            * 12.0
+            * (1.0 + cohort_q_id * 0.16 + tier_id * 0.08 + sin(segment_id * 1.2 + tier_id * 0.9 + cohort_q_id * 0.7) * 0.22)
+            * (0.75 + r1 * 0.5)
         ), 2) AS arr,
 
-        ROUND((r2 * 1850), 2) AS expansion_mrr,
-        ROUND((r3 * 450), 2) AS churn_mrr,
-        ROUND((1.05 + ((r1 - 0.35) * 0.38)), 4) AS net_revenue_retention,
-        ROUND((1500 + (segment_id * 6500) + (r2 * 3500)), 2) AS cac,
-        ROUND((18000 + (segment_id * 75000) + (r1 * 42000)), 2) AS ltv,
-        ROUND((4.2 + (r3 * 8.6)), 1) AS ltv_cac_ratio,
-        CAST(ROUND(15 + (segment_id * 180) + (r1 * 120)) AS INTEGER) AS active_seats
+        ROUND((r2 * 1850 + cohort_q_id * 420 + (3 - segment_id) * 650), 2) AS net_expansion,
+        ROUND((r3 * 450), 2) AS churn_amount,
+        ROUND((1.08 + (3 - segment_id) * 0.05 + cohort_q_id * 0.03 + ((r1 - 0.35) * 0.24)), 4) AS net_revenue_retention,
+        ROUND((1500 + ((3 - segment_id) * 4500) + (r2 * 3500)), 2) AS cac,
+        ROUND((18000 + ((3 - segment_id) * 65000) + (r1 * 42000)), 2) AS ltv,
+        ROUND((4.8 + (3 - segment_id) * 1.4 + cohort_q_id * 0.6 + (r3 * 4.2)), 1) AS ltv_cac_ratio,
+        CAST(ROUND(18 + ((3 - segment_id) * 95) + (cohort_q_id * 28) + (r1 * 80)) AS INTEGER) AS active_seats
     FROM raw;
     """
     tbl = con.execute(query).arrow().read_all()
@@ -731,15 +720,14 @@ def saas_workspace_config(host: str = "dash") -> dict[str, Any]:
         "table": SAAS_TABLE_NAME,
         "pivotTitle": "B2B SaaS Revenue Intelligence · Cohorts, Retention & Net ARR",
         "serverSide": True,
-        # IMMERSIVE MODE ENABLED!
-        "immersiveMode": True,
+        "immersiveMode": False,
         "rowFields": ["customer_segment", "subscription_tier", "acquisition_channel"],
         "colFields": ["cohort_quarter"],
         "valConfigs": [
             {
                 "field": "arr",
                 "agg": "sum",
-                "label": "Annual Run-rate (ARR)",
+                "label": "Annual ARR",
                 "format": "currency",
                 "sparkline": {
                     "enabled": True,
@@ -753,28 +741,10 @@ def saas_workspace_config(host: str = "dash") -> dict[str, Any]:
                 },
             },
             {
-                "field": "mrr",
-                "agg": "sum",
-                "label": "Monthly Revenue (MRR)",
-                "format": "currency",
-            },
-            {
                 "field": "net_revenue_retention",
                 "agg": "avg",
-                "label": "NRR (Retention)",
+                "label": "Net NRR %",
                 "format": "percent",
-            },
-            {
-                "field": "expansion_mrr",
-                "agg": "sum",
-                "label": "Expansion MRR",
-                "format": "currency",
-            },
-            {
-                "field": "ltv_cac_ratio",
-                "agg": "avg",
-                "label": "LTV / CAC",
-                "format": "fixed:1",
             },
             {
                 "field": "active_seats",
@@ -810,10 +780,9 @@ def saas_workspace_config(host: str = "dash") -> dict[str, Any]:
         "showSubtotals": True,
         "grandTotalPosition": "bottom",
         "defaultTheme": "dark",
-        "persistence": True,
-        "persistence_type": "local",
+        "persistence": False,
         "performanceConfig": {
-            "serverSideBlockSize": 150,
+            "cacheBlockSize": 150,
             "rowOverscan": 16,
             "columnOverscan": 6,
         },
@@ -822,23 +791,24 @@ def saas_workspace_config(host: str = "dash") -> dict[str, Any]:
             {
                 "id": "pane-saas-arr",
                 "name": "Cohort ARR Expansion",
-                "chartTitle": "ARR Growth Trend Across Cohort Quarters ($)",
+                "chartTitle": "ARR Growth Across Cohort Quarters ($)",
                 "source": "pivot",
                 "chartType": "area",
-                "dockPosition": "right",
-                "width": 480,
-                "chartHeight": 350,
+                "orientation": "rows",
+                "hierarchyLevel": 1,
+                "width": 440,
+                "chartHeight": 360,
                 "floating": False,
                 "chartSettings": {
                     "showDataLabels": False,
                     "showGradient": True,
-                    "showAnimations": True,
+                    "showAnimations": False,
                 },
             }
         ],
-        # Pre-configured viewState with Heatmap & Data Bars
+        # Pre-configured viewState with Heatmap ("table") & Data Bars + Collapsed Sidebar (Immersive-like clean canvas)
         "viewState": {
-            "colorScaleMode": "all",
+            "colorScaleMode": "table",
             "colorPalette": "greenRed",
             "dataBarsColumns": [
                 "__RowTotal__active_seats_sum",
@@ -847,11 +817,12 @@ def saas_workspace_config(host: str = "dash") -> dict[str, Any]:
                 "Q3_active_seats_sum",
             ],
             "chartPanelOpen": True,
+            "sidebarOpen": False,
         },
         "uiConfig": {
             "showToolbar": True,
             "showSidebar": True,
             "showCharts": True,
         },
-        "style": {"height": "820px", "width": "100%"},
+        "style": {"height": "800px", "width": "100%"},
     }

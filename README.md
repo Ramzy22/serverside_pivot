@@ -40,9 +40,9 @@ Connect any SQL database, cloud warehouse, or local file in **2–3 lines of Pyt
 ```python
 from pivot_engine import create_tanstack_adapter, register_pivot_app
 
-# 1. Point to a small local Parquet/CSV file OR a 100M+ row warehouse (Snowflake, BigQuery, DuckDB, Postgres)
-adapter = create_tanstack_adapter("duckdb:///analytics.db")  # or "snowflake://...", "postgres://..."
-adapter.load_table("billion_row_sales")
+# 1. Point to local Parquet/CSV files or warehouse (Snowflake, BigQuery, DuckDB, Postgres)
+adapter = create_tanstack_adapter(backend_uri="duckdb:///analytics.db")  # or ":memory:", "snowflake://..."
+adapter.load_data("s3://warehouse/100m_sales.parquet", "billion_row_sales")
 
 # 2. Attach to your Dash, Streamlit, or React app — zero custom backend needed!
 register_pivot_app(app, adapter_getter=lambda: adapter, pivot_id="pivot")
