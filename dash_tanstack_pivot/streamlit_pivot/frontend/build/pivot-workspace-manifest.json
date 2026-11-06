@@ -1,33 +1,33 @@
 {
   "../../src/lib/components/Charts/ECharts2dRenderer.js": {
-    "file": "chunks/ECharts2dRenderer-DB1VaBAJ.js",
+    "file": "chunks/ECharts2dRenderer-BC8-OAjG.js",
     "name": "ECharts2dRenderer",
     "src": "../../src/lib/components/Charts/ECharts2dRenderer.js",
     "isDynamicEntry": true,
     "imports": [
-      "_index-CVsYjN62.js",
+      "_index-Cb5MqBOd.js",
       "_charts-DthW1Q8W.js",
-      "_installCanvasRenderer-BcXIqKQm.js"
+      "_installCanvasRenderer-ui7Bv_08.js"
     ]
   },
   "../../src/lib/components/Charts/ECharts3dRenderer.js": {
-    "file": "chunks/ECharts3dRenderer-DCkX0AIG.js",
+    "file": "chunks/ECharts3dRenderer-D6mydIfb.js",
     "name": "ECharts3dRenderer",
     "src": "../../src/lib/components/Charts/ECharts3dRenderer.js",
     "isDynamicEntry": true,
     "imports": [
-      "_index-CVsYjN62.js",
+      "_index-Cb5MqBOd.js",
       "_charts-DthW1Q8W.js",
-      "_installCanvasRenderer-BcXIqKQm.js"
+      "_installCanvasRenderer-ui7Bv_08.js"
     ]
   },
   "../../src/lib/components/Charts/PivotCharts.js": {
-    "file": "chunks/PivotCharts-D76m0CEa.js",
+    "file": "chunks/PivotCharts-BSMjnrvx.js",
     "name": "PivotCharts",
     "src": "../../src/lib/components/Charts/PivotCharts.js",
     "isDynamicEntry": true,
     "imports": [
-      "_index-CVsYjN62.js",
+      "_index-Cb5MqBOd.js",
       "_charts-DthW1Q8W.js"
     ],
     "dynamicImports": [
@@ -36,22 +36,22 @@
     ]
   },
   "../../src/lib/components/Sidebar/ReportEditor.js": {
-    "file": "chunks/ReportEditor-CKghiKsh.js",
+    "file": "chunks/ReportEditor-Cmh3YpD2.js",
     "name": "ReportEditor",
     "src": "../../src/lib/components/Sidebar/ReportEditor.js",
     "isDynamicEntry": true,
     "imports": [
-      "_index-CVsYjN62.js",
+      "_index-Cb5MqBOd.js",
       "_charts-DthW1Q8W.js"
     ]
   },
   "../../src/lib/components/Sidebar/SidebarPanel.js": {
-    "file": "chunks/SidebarPanel-DVdKxx1G.js",
+    "file": "chunks/SidebarPanel-d2ePiGPc.js",
     "name": "SidebarPanel",
     "src": "../../src/lib/components/Sidebar/SidebarPanel.js",
     "isDynamicEntry": true,
     "imports": [
-      "_index-CVsYjN62.js",
+      "_index-Cb5MqBOd.js",
       "_charts-DthW1Q8W.js"
     ],
     "dynamicImports": [
@@ -59,73 +59,73 @@
     ]
   },
   "../../src/lib/components/Table/ContextMenu.js": {
-    "file": "chunks/ContextMenu-BthcVv3e.js",
+    "file": "chunks/ContextMenu-BdDdSsNN.js",
     "name": "ContextMenu",
     "src": "../../src/lib/components/Table/ContextMenu.js",
     "isDynamicEntry": true,
     "imports": [
-      "_index-CVsYjN62.js",
+      "_index-Cb5MqBOd.js",
       "_charts-DthW1Q8W.js"
     ]
   },
   "../../src/lib/components/Table/DetailDrawer.js": {
-    "file": "chunks/DetailDrawer-CnZvsvtu.js",
+    "file": "chunks/DetailDrawer-3W3wTkOb.js",
     "name": "DetailDrawer",
     "src": "../../src/lib/components/Table/DetailDrawer.js",
     "isDynamicEntry": true,
     "imports": [
-      "_index-CVsYjN62.js",
+      "_index-Cb5MqBOd.js",
       "_charts-DthW1Q8W.js",
-      "_DetailSurfaceContent-BdRXI_l_.js"
+      "_DetailSurfaceContent-BUA3A6rx.js"
     ]
   },
   "../../src/lib/components/Table/DetailSidePanel.js": {
-    "file": "chunks/DetailSidePanel-8CwcoSup.js",
+    "file": "chunks/DetailSidePanel-moWVg51k.js",
     "name": "DetailSidePanel",
     "src": "../../src/lib/components/Table/DetailSidePanel.js",
     "isDynamicEntry": true,
     "imports": [
-      "_index-CVsYjN62.js",
+      "_index-Cb5MqBOd.js",
       "_charts-DthW1Q8W.js",
-      "_DetailSurfaceContent-BdRXI_l_.js"
+      "_DetailSurfaceContent-BUA3A6rx.js"
     ]
   },
   "../../src/lib/components/Table/EditSidePanel.js": {
-    "file": "chunks/EditSidePanel-ZWSE3O5T.js",
+    "file": "chunks/EditSidePanel-DtJUHd3P.js",
     "name": "EditSidePanel",
     "src": "../../src/lib/components/Table/EditSidePanel.js",
     "isDynamicEntry": true,
     "imports": [
-      "_index-CVsYjN62.js",
+      "_index-Cb5MqBOd.js",
       "_charts-DthW1Q8W.js"
     ]
   },
   "../../src/lib/components/Table/InlineDetailPanel.js": {
-    "file": "chunks/InlineDetailPanel-CUPGljTn.js",
+    "file": "chunks/InlineDetailPanel-C3V-HOMb.js",
     "name": "InlineDetailPanel",
     "src": "../../src/lib/components/Table/InlineDetailPanel.js",
     "isDynamicEntry": true,
     "imports": [
-      "_index-CVsYjN62.js",
+      "_index-Cb5MqBOd.js",
       "_charts-DthW1Q8W.js",
-      "_DetailSurfaceContent-BdRXI_l_.js"
+      "_DetailSurfaceContent-BUA3A6rx.js"
     ]
   },
   "../../src/lib/components/Table/SparklineDetailGraph.js": {
-    "file": "chunks/SparklineDetailGraph-CruFXQ0m.js",
+    "file": "chunks/SparklineDetailGraph-B3VICE0v.js",
     "name": "SparklineDetailGraph",
     "src": "../../src/lib/components/Table/SparklineDetailGraph.js",
     "isDynamicEntry": true,
     "imports": [
-      "_index-CVsYjN62.js",
+      "_index-Cb5MqBOd.js",
       "_charts-DthW1Q8W.js"
     ]
   },
-  "_DetailSurfaceContent-BdRXI_l_.js": {
-    "file": "chunks/DetailSurfaceContent-BdRXI_l_.js",
+  "_DetailSurfaceContent-BUA3A6rx.js": {
+    "file": "chunks/DetailSurfaceContent-BUA3A6rx.js",
     "name": "DetailSurfaceContent",
     "imports": [
-      "_index-CVsYjN62.js",
+      "_index-Cb5MqBOd.js",
       "_charts-DthW1Q8W.js"
     ]
   },
@@ -133,8 +133,8 @@
     "file": "chunks/charts-DthW1Q8W.js",
     "name": "charts"
   },
-  "_index-CVsYjN62.js": {
-    "file": "chunks/index-CVsYjN62.js",
+  "_index-Cb5MqBOd.js": {
+    "file": "chunks/index-Cb5MqBOd.js",
     "name": "index",
     "imports": [
       "_charts-DthW1Q8W.js"
@@ -160,8 +160,8 @@
       "../../src/lib/components/Charts/PivotCharts.js"
     ]
   },
-  "_installCanvasRenderer-BcXIqKQm.js": {
-    "file": "chunks/installCanvasRenderer-BcXIqKQm.js",
+  "_installCanvasRenderer-ui7Bv_08.js": {
+    "file": "chunks/installCanvasRenderer-ui7Bv_08.js",
     "name": "installCanvasRenderer",
     "imports": [
       "_charts-DthW1Q8W.js"
@@ -180,12 +180,12 @@
     ]
   },
   "src/index.tsx": {
-    "file": "pivot-workspace-D-uCJa27.js",
+    "file": "pivot-workspace-nF7Lq44j.js",
     "name": "index",
     "src": "src/index.tsx",
     "isEntry": true,
     "imports": [
-      "_index-CVsYjN62.js",
+      "_index-Cb5MqBOd.js",
       "_charts-DthW1Q8W.js"
     ]
   }

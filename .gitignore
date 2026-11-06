@@ -163,6 +163,9 @@ artifacts/
 .tmp*
 .tmp_*
 .tmp-*
+_tmp*
+__tmp*
+tmp_*
 /.runlogs/
 /.worktrees/
 chrome-prof-*

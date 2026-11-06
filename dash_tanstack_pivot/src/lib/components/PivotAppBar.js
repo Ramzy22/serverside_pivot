@@ -58,12 +58,12 @@ const NUMBER_FORMAT_CATEGORY_OPTIONS = [
     { value: 'percentage', label: 'Percentage' },
     { value: 'scientific', label: 'Scientific' },
 ];
-const THEME_ORDER = ['flash', 'dark', 'bloomblerg_black', 'blooomberg'];
+const THEME_ORDER = ['flash', 'dark', 'bloomberg_black', 'bloomberg'];
 const THEME_LABELS = {
     flash: 'Flash',
     dark: 'Dark',
-    bloomblerg_black: 'Bloomblerg Black',
-    blooomberg: 'Blooomberg',
+    bloomberg_black: 'Bloomberg Black',
+    bloomberg: 'Bloomberg',
     light: 'Light',
     material: 'Material',
     balham: 'Balham',

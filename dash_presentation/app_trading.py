@@ -387,7 +387,7 @@ def book_pnl_pivot():
         showRowTotals=True,
         showColTotals=False,
         availableFieldList=_ALL_FIELDS,
-        defaultTheme="blooomberg",
+        defaultTheme="bloomberg",
         data=[],
     )
 
@@ -415,7 +415,7 @@ def position_monitor_pivot():
         showRowTotals=False,
         showColTotals=False,
         availableFieldList=_ALL_FIELDS,
-        defaultTheme="blooomberg",
+        defaultTheme="bloomberg",
         data=[],
     )
 

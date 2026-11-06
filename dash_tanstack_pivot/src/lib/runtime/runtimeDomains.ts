@@ -13,10 +13,10 @@ export interface PivotRuntimeProps {
     serverSide?: boolean;
     rowFields?: readonly string[];
     colFields?: readonly string[];
-    valConfigs?: readonly PivotValueConfig[];
+    valConfigs?: readonly (ValConfig | PivotValueConfig)[];
     measureAxis?: PivotObject;
-    filters?: PivotObject;
-    sorting?: readonly PivotObject[];
+    filters?: PivotFiltersMap | PivotObject;
+    sorting?: readonly (SortConfig | PivotObject)[];
     expanded?: boolean | PivotObject;
     immersiveMode?: boolean;
     showRowTotals?: boolean;
@@ -30,7 +30,7 @@ export interface PivotRuntimeProps {
     treeConfig?: PivotObject;
     detailConfig?: PivotObject;
     chartEvent?: PivotObject;
-    chartDefinitions?: readonly PivotObject[];
+    chartDefinitions?: readonly (ChartDefinition | PivotObject)[];
     chartDefaults?: PivotObject;
     chartCanvasPanes?: readonly PivotObject[];
     tableCanvasSize?: number;
@@ -66,7 +66,8 @@ export interface PivotRuntimeProps {
     pinningPresets?: readonly PivotObject[];
     sortOptions?: PivotObject;
     sortLock?: boolean;
-    defaultTheme?: string;
+    defaultTheme?: PivotThemeName;
+    theme?: PivotThemeName;
     sortEvent?: PivotObject;
     availableFieldList?: readonly string[];
     sparklineFields?: PivotObject;
@@ -84,15 +85,97 @@ export interface PivotRuntimeRow {
     readonly [field: string]: unknown;
 }
 
-export interface PivotValueConfig {
-    readonly field?: string;
-    readonly agg?: string;
-    readonly weightField?: string;
-    readonly windowFn?: string;
-    readonly format?: string;
-    readonly formula?: string;
-    readonly label?: string;
-    readonly [field: string]: unknown;
+export type PivotThemeName =
+    | 'flash'
+    | 'dark'
+    | 'bloomberg_black'
+    | 'bloomberg'
+    | 'light'
+    | 'material'
+    | 'balham'
+    | 'strata'
+    | 'crystal'
+    | 'alabaster'
+    | 'satin'
+    | (string & {});
+
+export interface ValConfig {
+    field?: string;
+    agg?: 'sum' | 'avg' | 'count' | 'min' | 'max' | 'weighted_avg' | 'wavg' | 'weighted_mean' | 'array_agg' | 'formula' | (string & {});
+    weightField?: string;
+    windowFn?: 'percent_of_row' | 'percent_of_col' | 'percent_of_grand_total' | (string & {});
+    format?: string;
+    percentile?: number;
+    separator?: string;
+    formula?: string;
+    label?: string;
+    formulaRef?: string;
+    formulaScope?: 'measures' | 'columns';
+    headerStyle?: React.CSSProperties | PivotObject;
+    headerBg?: string;
+    headerColor?: string;
+    headerTextColor?: string;
+    sparkline?: boolean | PivotObject;
+    [key: string]: unknown;
+}
+
+export type PivotValueConfig = ValConfig;
+
+export interface FilterCondition {
+    type?: string;
+    value?: unknown;
+    value2?: unknown;
+    values?: unknown[];
+    operator?: 'AND' | 'OR';
+    [key: string]: unknown;
+}
+
+export interface FilterConfig {
+    operator?: 'AND' | 'OR';
+    conditions?: FilterCondition[];
+    type?: string;
+    value?: unknown;
+    value2?: unknown;
+    values?: unknown[];
+    [key: string]: unknown;
+}
+
+export interface PivotFiltersMap {
+    readonly [field: string]: FilterConfig | unknown;
+}
+
+export interface SortConfig {
+    id: string;
+    desc?: boolean;
+    absoluteSort?: boolean;
+    sortType?: string;
+    sortMode?: string;
+    sortKeyField?: string;
+    semanticType?: string;
+    sortSemantic?: string;
+    nulls?: 'first' | 'last';
+    [key: string]: unknown;
+}
+
+export interface ChartDefinition {
+    id?: string;
+    name?: string;
+    chartTitle?: string;
+    source?: 'pivot' | 'selection' | (string & {});
+    chartType?: string;
+    barLayout?: 'grouped' | 'stacked' | (string & {});
+    axisMode?: 'vertical' | 'horizontal' | (string & {});
+    orientation?: 'rows' | 'columns' | (string & {});
+    hierarchyLevel?: number | 'all' | (string & {});
+    rowLimit?: number;
+    columnLimit?: number;
+    width?: number;
+    chartHeight?: number;
+    sortMode?: string;
+    interactionMode?: string;
+    serverScope?: 'viewport' | 'root' | (string & {});
+    chartLayers?: unknown[];
+    [key: string]: unknown;
 }
 
 /** JSON-compatible object passed through the public Dash API. */

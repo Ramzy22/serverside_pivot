@@ -6,7 +6,18 @@ export {
     type PayloadReference,
     type PivotTransport,
 } from './runtime/httpTransport';
+export { themes, injectThemeCssVars } from './utils/styles';
 export type { PivotWorkspaceProps } from './components/PivotWorkspace';
+export type {
+    PivotRuntimeProps,
+    PivotThemeName,
+    PivotValueConfig,
+    ValConfig,
+    FilterCondition,
+    FilterConfig,
+    SortConfig,
+    ChartDefinition,
+} from './runtime/runtimeDomains';
 export type {
     RuntimeRequestV1,
     RuntimeResponseV1,

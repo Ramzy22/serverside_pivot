@@ -299,7 +299,7 @@ app.layout = html.Div(
                             showRowTotals=True,
                             showColTotals=False,
                             availableFieldList=_ALL_DIMS,
-                            defaultTheme="blooomberg",
+                            defaultTheme="bloomberg",
                             data=[],
                         ),
                     ],

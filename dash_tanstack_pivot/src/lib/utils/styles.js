@@ -155,8 +155,8 @@ export const themes = {
         radius: '16px',
         radiusSm: '10px',
     },
-    blooomberg: {
-        name: 'blooomberg',
+    bloomberg: {
+        name: 'bloomberg',
         isDark: true,
         primary: '#F59E0B',
         border: 'rgba(255,255,255,0.10)',
@@ -193,8 +193,8 @@ export const themes = {
         radius: '12px',
         radiusSm: '8px',
     },
-    bloomblerg_black: {
-        name: 'bloomblerg_black',
+    bloomberg_black: {
+        name: 'bloomberg_black',
         isDark: true,
         primary: '#F59E0B',
         border: 'rgba(255,255,255,0.18)',

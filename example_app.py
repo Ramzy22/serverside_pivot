@@ -111,7 +111,7 @@ app.layout = html.Div(
                     expanded={},
                     showRowTotals=True,
                     showColTotals=True,
-                    defaultTheme="blooomberg",
+                    defaultTheme="bloomberg",
                     data=[],
                     style={"height": "calc(100vh - 120px)", "width": "100%"},
                 ),

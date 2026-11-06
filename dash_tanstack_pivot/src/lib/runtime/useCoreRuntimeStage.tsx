@@ -157,7 +157,8 @@ export function useCoreRuntimeStage(props) {
     measureAxis: stage.externalMeasureAxis = null,
     reset: stage.reset,
     sortLock: stage.sortLock = false,
-    defaultTheme: stage.defaultTheme = 'flash',
+    defaultTheme: stage.externalDefaultTheme,
+    theme: stage.externalTheme,
     availableFieldList: stage.availableFieldList,
     sparklineFields: stage.sparklineFields = null,
     table: stage.tableName,
@@ -184,6 +185,7 @@ export function useCoreRuntimeStage(props) {
   // Deliberately do not hydrate legacy editing props. The component accepts
   // them for backward-compatible Dash layouts, but they cannot enable or
   // restore an unsupported editing workflow.
+  stage.defaultTheme = stage.externalTheme || stage.externalDefaultTheme || 'flash';
   stage.externalEditingConfig = null;
   stage.externalEditState = null;
   // Setup effects publish before the transport domain is composed. Seed this

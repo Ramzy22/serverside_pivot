@@ -53,8 +53,8 @@ const ICON = {
   Spacing: () => <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor"><path d="M3 13h2v-2H3v2zm0 4h2v-2H3v2zm0-8h2V7H3v2zm4 4h14v-2H7v2zm0 4h14v-2H7v2zM7 7v2h14V7H7z"/></svg>,
 };
 
-const THEME_ORDER = ['flash','dark','bloomblerg_black','blooomberg','strata','crystal','light','material','balham','alabaster','satin'];
-const THEME_LABELS = { flash:'Flash', dark:'Dark', bloomblerg_black:'Bloomblerg Black', blooomberg:'Blooomberg', strata:'Strata', crystal:'Crystal', light:'Light', material:'Material', balham:'Balham', alabaster:'Alabaster', satin:'Satin' };
+const THEME_ORDER = ['flash','dark','bloomberg_black','bloomberg','strata','crystal','light','material','balham','alabaster','satin'];
+const THEME_LABELS = { flash:'Flash', dark:'Dark', bloomberg_black:'Bloomberg Black', bloomberg:'Bloomberg', strata:'Strata', crystal:'Crystal', light:'Light', material:'Material', balham:'Balham', alabaster:'Alabaster', satin:'Satin' };
 const DENSITY_LABELS = ['Compact','Normal','Loose'];
 
 function ThemeDropdown({ theme, themeName, setThemeName, themes }) {

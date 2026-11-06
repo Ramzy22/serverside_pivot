@@ -583,7 +583,7 @@ app.layout = html.Div(
                         showColTotals=False,
                         availableFieldList=_TRADER_AVAILABLE_FIELDS,
                         sparklineFields=_TRADER_SPARKLINE_FIELDS,
-                        defaultTheme="blooomberg",
+                        defaultTheme="bloomberg",
                         data=[],
                     ),
                 ),
@@ -875,7 +875,7 @@ def mount_perf_baseline_demo(_clicks):
         showRowTotals=True,
         showColTotals=True,
         availableFieldList=_TRADER_AVAILABLE_FIELDS,
-        defaultTheme="blooomberg",
+        defaultTheme="bloomberg",
         data=[],
     )
 
@@ -941,7 +941,7 @@ def mount_sparkline_demo(_clicks):
         showRowTotals=False,
         showColTotals=False,
         availableFieldList=_TRADER_AVAILABLE_FIELDS,
-        defaultTheme="blooomberg",
+        defaultTheme="bloomberg",
         data=[],
     )
 
@@ -1032,7 +1032,7 @@ def mount_field_sparkline_demo(_clicks):
             "desk", "sector", "asset_class", "symbol", "instrument",
             "price_20d", "day_pnl_20d", "volume_20d", "pnl_20d",
         ],
-        defaultTheme="blooomberg",
+        defaultTheme="bloomberg",
         data=[],
     )
 
@@ -1067,7 +1067,7 @@ def mount_curve_demo(_clicks):
         showRowTotals=False,
         showColTotals=False,
         availableFieldList=["desk", "Curve Pillar", "pv01", "dv01"],
-        defaultTheme="blooomberg",
+        defaultTheme="bloomberg",
         data=[],
     )
 
@@ -1100,7 +1100,7 @@ def mount_tenor_demo(_clicks):
         showRowTotals=False,
         showColTotals=False,
         availableFieldList=["book", "tenor", "rate", "notional"],
-        defaultTheme="blooomberg",
+        defaultTheme="bloomberg",
         data=[],
     )
 

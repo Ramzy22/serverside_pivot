@@ -124,7 +124,7 @@ These are already defined as `gridDimensionTokens` in `styles.js` — no changes
 | Theme(s) | `radius` | `radiusSm` |
 |---|---|---|
 | `flash`, `dark` | `16px` | `10px` |
-| `blooomberg`, `bloomblerg_black` | `12px` | `8px` |
+| `bloomberg`, `bloomberg_black` | `12px` | `8px` |
 | `alabaster`, `strata`, `crystal`, `satin` | `8px` | `6–8px` |
 | `light`, `material`, `balham` | `4px` | `8px` |
 

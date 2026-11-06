@@ -285,13 +285,17 @@ def trader_workspace_config(host: str = "dash") -> dict[str, Any]:
                 },
             }
         ],
-        # Pre-configured viewState with Heatmap ("col") & Data Bars
+        # Pre-configured viewState with Data Bars on Notional columns (no heatmap)
         "viewState": {
-            "colorScaleMode": "col",
+            "colorScaleMode": "none",
             "colorPalette": "redGreen",
             "dataBarsColumns": [
                 "1M_notional_usd_sum",
                 "3M_notional_usd_sum",
+                "6M_notional_usd_sum",
+                "1Y_notional_usd_sum",
+                "2Y_notional_usd_sum",
+                "5Y_notional_usd_sum",
                 "__RowTotal__notional_usd_sum",
             ],
             "chartPanelOpen": True,

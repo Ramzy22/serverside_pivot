@@ -26,6 +26,52 @@ def test_react_package_export_has_esm_and_types():
     assert "styled-components" in package["peerDependencies"]
 
 
+def test_react_package_exports_themes_and_typescript_interfaces():
+    source = (PACKAGE_DIR / "src" / "lib" / "react.ts").read_text(encoding="utf-8")
+    d_ts = (PACKAGE_DIR / "dist" / "react" / "react.d.ts").read_text(encoding="utf-8")
+    domains_d_ts = (PACKAGE_DIR / "dist" / "react" / "runtime" / "runtimeDomains.d.ts").read_text(encoding="utf-8")
+    styles_d_ts = (PACKAGE_DIR / "dist" / "react" / "utils" / "styles.d.ts").read_text(encoding="utf-8")
+    styles_js = (PACKAGE_DIR / "src" / "lib" / "utils" / "styles.js").read_text(encoding="utf-8")
+    appbar_js = (PACKAGE_DIR / "src" / "lib" / "components" / "PivotAppBar.js").read_text(encoding="utf-8")
+
+    for symbol in (
+        "themes",
+        "injectThemeCssVars",
+        "PivotRuntimeProps",
+        "PivotThemeName",
+        "ValConfig",
+        "FilterConfig",
+        "SortConfig",
+        "ChartDefinition",
+    ):
+        assert symbol in source
+        assert symbol in d_ts
+
+    assert "export { themes, injectThemeCssVars }" in d_ts
+    assert "export interface ValConfig" in domains_d_ts
+    assert "export interface FilterConfig" in domains_d_ts
+    assert "export interface SortConfig" in domains_d_ts
+    assert "export interface ChartDefinition" in domains_d_ts
+    assert "valConfigs?: readonly (ValConfig | PivotValueConfig)[];" in domains_d_ts
+    assert "filters?: PivotFiltersMap | PivotObject;" in domains_d_ts
+    assert "sorting?: readonly (SortConfig | PivotObject)[];" in domains_d_ts
+    assert "chartDefinitions?: readonly (ChartDefinition | PivotObject)[];" in domains_d_ts
+    assert "defaultTheme?: PivotThemeName;" in domains_d_ts
+    assert "theme?: PivotThemeName;" in domains_d_ts
+
+    # Canonical theme names must be spelled properly in source, UI, and declarations
+    assert "bloomberg:" in styles_js
+    assert "bloomberg_black:" in styles_js
+    assert "blooomberg" not in styles_js
+    assert "bloomblerg" not in styles_js
+    assert "bloomberg_black: 'Bloomberg Black'" in appbar_js
+    assert "bloomberg: 'Bloomberg'" in appbar_js
+    assert "blooomberg" not in appbar_js
+    assert "bloomblerg" not in appbar_js
+    assert "namespace bloomberg {" in styles_d_ts
+    assert "namespace bloomberg_black {" in styles_d_ts
+
+
 def test_streamlit_mounts_the_shared_react_entry_not_a_second_workspace():
     source = (
         PACKAGE_DIR / "streamlit_pivot" / "frontend" / "src" / "index.tsx"

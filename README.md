@@ -14,7 +14,9 @@
 [![AG Grid Parity](https://img.shields.io/badge/Certified%20Parity-AG%20Grid%2036.2%20SSRM-green)](docs/flagship-functionality-certification.md)
 [![Tested Cases](https://img.shields.io/badge/Browser%20Cases-207%20%2F%20207%20Mapped-brightgreen)](tests/flagship_requirements.json)
 
-[**Low-Code in 3 Lines**](#-low-code-connect-any-database-in-3-lines) •
+[**Low-Code in 3 Lines**](#-the-3-step-flow-2-lines-of-code--any-database--interactive-web-ui) •
+[**Enterprise Feature Matrix**](#-enterprise-feature-matrix) •
+[**Interactive Dashboard Showcase**](#-interactive-dashboard-showcase) •
 [**The Core Problem**](#-the-problem-with-existing-solutions) •
 [**Quickstart (Dash / React / Streamlit)**](#-quickstart) •
 [**Head-to-Head vs. Perspective & AG Grid**](#-head-to-head-breakdown) •
@@ -50,6 +52,48 @@ register_pivot_app(app, adapter_getter=lambda: adapter, pivot_id="pivot")
 ```
 
 Whether your dataset has **10,000 rows** or **1,000,000,000+ rows**, the engine automatically compiles UI drags, group expansions, and filters into sub-second vector queries. The browser **never uses more than 80 MB of RAM**.
+
+---
+
+## 🖥️ Interactive Dashboard Showcase
+
+Live interactive recordings from our showcase applications ([demo_trader.py](examples/demo_trader.py), [demo_saas.py](examples/demo_saas.py), [demo_hr.py](examples/demo_hr.py)) demonstrating fluid client interactions, zero RAM bloat, and theme versatility:
+
+### 1. Bloomberg Black Theme — $\\mathcal{O}(D)$ Hierarchical Expand & Collapse with Column Data Bars
+Expand and collapse multi-level hierarchies across asset classes, trading desks, and individual instruments with instant server-side aggregation pushdown, zero client RAM pressure, and live proportional column data bars ([demo_trader.py](examples/demo_trader.py)):
+
+![Hierarchical Expand and Collapse with Column Data Bars](docs/assets/demo_expand_collapse.gif)
+
+### 2. Dark Theme — Interactive Graph Creation & Docked Visualizations
+Launch the chart builder directly from the toolbar, preview trend, composition, and comparison presets in real time, and dock resizable chart panes side-by-side with your live pivot table ([demo_saas.py](examples/demo_saas.py)):
+
+![Interactive Graph Creation](docs/assets/demo_graph_creation.gif)
+
+### 3. Light Theme — Inline Cell Charts & Sparkline Drilldown
+Embed high-performance inline SVG sparklines (column, area, line) directly inside table cells. Double-click any sparkline cell to open the interactive crosshair detail graph with zoom controls, or adjust chart styles dynamically via the field settings modal ([demo_hr.py](examples/demo_hr.py)):
+
+![Inline Cell Charts and Sparkline Drilldown](docs/assets/demo_inline_cell_chart.gif)
+
+---
+
+## ✨ Enterprise Feature Matrix
+
+Comprehensive analytical suite surfaced from [`docs/PIVOT_MASTER_DOCUMENTATION.md`](docs/PIVOT_MASTER_DOCUMENTATION.md):
+
+| Capability Area | Feature Highlights | Specification / Supported APIs |
+| :--- | :--- | :--- |
+| **4 View & Layout Modes** | Multidimensional Pivot (`pivot`), Hierarchical Parent-Child Tree (`tree` balanced or unbalanced), Flat Tabular Record Grid (`table`), and Specialized Financial/Executive Report Mode (`report`) with custom period axes and per-level totals. | `viewMode`: `'pivot'` \| `'tree'` \| `'table'` \| `'report'` |
+| **2D Virtualization (Row + Col)** | Server-side block-cached row model with deep byte-bounded LRU memory eviction. Active horizontal column virtualization (`col_start` / `col_end`) scaling smoothly to 1,000+ pivoted columns. Velocity prefetching & latest-wins request cancellation (`LatestViewportScheduler`). | Sub-second viewport, constant < 80 MB RAM |
+| **Visual Analytics & Charting Suite** | Integrated **ECharts 6** & **ECharts-GL 3D**: 23+ chart types across 11 families (Stacked/Grouped Bar, Line, Area, Pie/Donut, Scatter, Bubble, Combo, Waterfall, Radar, Heatmap, 3D Bar / Line / Scatter, Sankey, Sunburst, Icicle, Treemap) with moving averages, linear trendlines, and element-click interactive editing. | Dockable (Left, Right, Top, Bottom) or Floating Panes |
+| **In-Cell Visualizations** | Server-aggregated (`array_agg`) inline SVG sparklines (Line, Area, Bar) with hover detail graphs. Color scale heatmaps and interactive cell data bars with custom range thresholds. | In-cell data rendering with zero DOM bloat |
+| **Formulas & Window Functions** | Excel-like calculated measures using `[Column Name]` syntax evaluated safely via AST parser. Built-in pivot window functions (`percent_of_row`, `percent_of_col`, `percent_of_grand_total`). Dynamic visual totals recalculating parent groups based on post-filter child rows. | Safe AST sandbox, dynamic server pushdown |
+| **Sorting, Pinning & Spanning** | Multi-column sort, absolute value sort (`abs`), pivot column sorting (by labels A-Z or measure totals), financial tenor / natural sorting (`1M, 3M, 1Y`). Left/Right column & Top/Bottom row pinning, synchronized sticky headers, row spanning. | Full context menu + drag-and-drop toolbar |
+| **Filtering & Drill-Through Surfaces** | Native `DateRangeFilter`, slider/input `NumericRangeFilter`, and searchable `MultiSelectFilter`. Drill-through raw record inspection via `DrillThroughModal`, `DetailSidePanel`, `DetailDrawer`, and `InlineDetailPanel`. | `detailMode`: `'none'` \| `'inline'` \| `'sidepanel'` \| `'drawer'` |
+| **11 Built-in Themes** | Enterprise dark & light designs: `light`, `dark`, `flash`, `material`, `balham`, `bloomberg`, `bloomberg_black`, `strata`, `crystal`, `alabaster`, `satin` with complete `--sp-*` CSS custom properties and CSS variable injection. | Real-time theme switcher + CSS token overrides |
+| **Tri-Host Universal Architecture** | Zero-compromise universal runtime for **Plotly Dash** (`DashTanstackPivot`), **Standalone React** (`PivotWorkspace` + `HttpPivotTransport`), and **Streamlit** (zero-rerun iframe component). | Unified Protocol V1 (`schemaVersion: 1`) |
+| **Enterprise Persistence & CDC** | Real-time Change Data Capture (`PivotCDCManager`), push/poll CDC sync, durable view/report saving & restoring across reloads, L1 in-memory + L2 Redis caching, and Row-Level Security (RLS). | Multi-tenant production-ready |
+| **Cancellable Large Exports** | Streaming multi-gigabyte CSV and XLSX downloads with progress counters, query cancellation cleanup (`cursor.interrupt()`), and RFC-compliant TSV/HTML clipboard copy. | Client SheetJS fallback & server streaming |
+
 ---
 
 ## 📌 The Problem with Existing Solutions
@@ -175,7 +219,18 @@ No Python backend required inside the frontend container. Communicates with any 
 
 ```tsx
 import React from 'react';
-import { PivotWorkspace, HttpPivotTransport, LatestViewportScheduler } from 'dash_tanstack_pivot/react';
+import {
+  PivotWorkspace,
+  HttpPivotTransport,
+  LatestViewportScheduler,
+  themes,
+  injectThemeCssVars,
+  type PivotRuntimeProps,
+  type ValConfig,
+  type FilterConfig,
+  type SortConfig,
+  type ChartDefinition,
+} from 'dash_tanstack_pivot/react';
 
 const transport = new LatestViewportScheduler(
   new HttpPivotTransport({ endpoint: 'http://localhost:8765/v1/runtime' })
@@ -189,8 +244,8 @@ export function EnterpriseAnalytics() {
         transport={transport}
         rowFields={['market', 'sector', 'ticker']}
         colFields={['year', 'quarter']}
-        valConfigs={[{ field: 'volume', agg: 'sum', label: 'Trading Volume' }]}
-        theme="dark"
+        valConfigs={[{ field: 'volume', agg: 'sum', label: 'Trading Volume' } satisfies ValConfig]}
+        defaultTheme="bloomberg"
       />
     </div>
   );

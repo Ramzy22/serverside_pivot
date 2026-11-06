@@ -119,7 +119,7 @@
 }
 
 /* ─── BLOOMBERG BLACK THEME ──────────────────────────────────────────── */
-[data-theme="bloomblerg_black"] {
+[data-theme="bloomberg_black"] {
   --color-primary:              #F59E0B;
   --color-primary-soft:         rgba(245, 158, 11, 0.20);
   --color-primary-muted:        rgba(245, 158, 11, 0.22);
