@@ -91,7 +91,7 @@ def _get_component() -> Any:
                 manager.register_from_manifest(
                     ComponentManifest(
                         name="serverside-pivot",
-                        version="0.0.89",
+                        version="0.0.90",
                         components=[
                             ComponentConfig(
                                 name="pivot_workspace",
