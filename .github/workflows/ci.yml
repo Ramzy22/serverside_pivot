@@ -50,7 +50,9 @@ jobs:
           node-version: "20"
 
       - name: Install shared frontend test dependencies
-        run: npm ci --prefix dash_tanstack_pivot
+        run: |
+          npm ci --prefix dash_tanstack_pivot
+          npm run build:react --prefix dash_tanstack_pivot
 
       - name: Run complete Python and browser-capability suite
         run: |

@@ -28,9 +28,7 @@ def test_react_package_export_has_esm_and_types():
 
 def test_react_package_exports_themes_and_typescript_interfaces():
     source = (PACKAGE_DIR / "src" / "lib" / "react.ts").read_text(encoding="utf-8")
-    d_ts = (PACKAGE_DIR / "dist" / "react" / "react.d.ts").read_text(encoding="utf-8")
-    domains_d_ts = (PACKAGE_DIR / "dist" / "react" / "runtime" / "runtimeDomains.d.ts").read_text(encoding="utf-8")
-    styles_d_ts = (PACKAGE_DIR / "dist" / "react" / "utils" / "styles.d.ts").read_text(encoding="utf-8")
+    domains_source = (PACKAGE_DIR / "src" / "lib" / "runtime" / "runtimeDomains.ts").read_text(encoding="utf-8")
     styles_js = (PACKAGE_DIR / "src" / "lib" / "utils" / "styles.js").read_text(encoding="utf-8")
     appbar_js = (PACKAGE_DIR / "src" / "lib" / "components" / "PivotAppBar.js").read_text(encoding="utf-8")
 
@@ -45,19 +43,17 @@ def test_react_package_exports_themes_and_typescript_interfaces():
         "ChartDefinition",
     ):
         assert symbol in source
-        assert symbol in d_ts
 
-    assert "export { themes, injectThemeCssVars }" in d_ts
-    assert "export interface ValConfig" in domains_d_ts
-    assert "export interface FilterConfig" in domains_d_ts
-    assert "export interface SortConfig" in domains_d_ts
-    assert "export interface ChartDefinition" in domains_d_ts
-    assert "valConfigs?: readonly (ValConfig | PivotValueConfig)[];" in domains_d_ts
-    assert "filters?: PivotFiltersMap | PivotObject;" in domains_d_ts
-    assert "sorting?: readonly (SortConfig | PivotObject)[];" in domains_d_ts
-    assert "chartDefinitions?: readonly (ChartDefinition | PivotObject)[];" in domains_d_ts
-    assert "defaultTheme?: PivotThemeName;" in domains_d_ts
-    assert "theme?: PivotThemeName;" in domains_d_ts
+    assert "export interface ValConfig" in domains_source
+    assert "export interface FilterConfig" in domains_source
+    assert "export interface SortConfig" in domains_source
+    assert "export interface ChartDefinition" in domains_source
+    assert "valConfigs?: readonly (ValConfig | PivotValueConfig)[];" in domains_source
+    assert "filters?: PivotFiltersMap | PivotObject;" in domains_source
+    assert "sorting?: readonly (SortConfig | PivotObject)[];" in domains_source
+    assert "chartDefinitions?: readonly (ChartDefinition | PivotObject)[];" in domains_source
+    assert "defaultTheme?: PivotThemeName;" in domains_source
+    assert "theme?: PivotThemeName;" in domains_source
 
     # Canonical theme names must be spelled properly in source, UI, and declarations
     assert "bloomberg:" in styles_js
@@ -68,8 +64,38 @@ def test_react_package_exports_themes_and_typescript_interfaces():
     assert "bloomberg: 'Bloomberg'" in appbar_js
     assert "blooomberg" not in appbar_js
     assert "bloomblerg" not in appbar_js
-    assert "namespace bloomberg {" in styles_d_ts
-    assert "namespace bloomberg_black {" in styles_d_ts
+
+    d_ts_path = PACKAGE_DIR / "dist" / "react" / "react.d.ts"
+    if d_ts_path.exists():
+        d_ts = d_ts_path.read_text(encoding="utf-8")
+        domains_d_ts = (PACKAGE_DIR / "dist" / "react" / "runtime" / "runtimeDomains.d.ts").read_text(encoding="utf-8")
+        styles_d_ts = (PACKAGE_DIR / "dist" / "react" / "utils" / "styles.d.ts").read_text(encoding="utf-8")
+
+        for symbol in (
+            "themes",
+            "injectThemeCssVars",
+            "PivotRuntimeProps",
+            "PivotThemeName",
+            "ValConfig",
+            "FilterConfig",
+            "SortConfig",
+            "ChartDefinition",
+        ):
+            assert symbol in d_ts
+
+        assert "export { themes, injectThemeCssVars }" in d_ts
+        assert "export interface ValConfig" in domains_d_ts
+        assert "export interface FilterConfig" in domains_d_ts
+        assert "export interface SortConfig" in domains_d_ts
+        assert "export interface ChartDefinition" in domains_d_ts
+        assert "valConfigs?: readonly (ValConfig | PivotValueConfig)[];" in domains_d_ts
+        assert "filters?: PivotFiltersMap | PivotObject;" in domains_d_ts
+        assert "sorting?: readonly (SortConfig | PivotObject)[];" in domains_d_ts
+        assert "chartDefinitions?: readonly (ChartDefinition | PivotObject)[];" in domains_d_ts
+        assert "defaultTheme?: PivotThemeName;" in domains_d_ts
+        assert "theme?: PivotThemeName;" in domains_d_ts
+        assert "namespace bloomberg {" in styles_d_ts
+        assert "namespace bloomberg_black {" in styles_d_ts
 
 
 def test_streamlit_mounts_the_shared_react_entry_not_a_second_workspace():
