@@ -2,8 +2,8 @@
 
 ## Setup
 
-**Script:** `benchmark_vs_aggrid.py`  
-**Run:** `python benchmark_vs_aggrid.py --sizes 10000,100000,500000,1000000 --runs 7`
+**Script:** `scripts/benchmark_vs_aggrid.py`
+**Run:** `python scripts/benchmark_vs_aggrid.py --sizes 10000,100000,500000,1000000 --runs 7`
 
 ### What we measure
 
@@ -37,8 +37,8 @@ with 5 measures (`sales`, `revenue`, `cost`, `profit`, `quantity`).
 | Flat groupby (3 dims, no pivot) | Deep grouping without column pivoting |
 | Large page (500 rows, 1 dim) | Wide page fetch with single grouping field |
 
-All times are **server-side only** — no network, no browser rendering.  
-Measurement runs per scenario: 7 (plus 1 warmup discarded).  
+All times are **server-side only** — no network, no browser rendering.
+Measurement runs per scenario: 7 (plus 1 warmup discarded).
 Times reported: median and p95 in milliseconds.
 
 ---
@@ -121,7 +121,7 @@ windowed requests.
 
 **Command:**
 ```
-python benchmark_vs_aggrid.py --sizes 10000,100000,500000,1000000 --runs 7
+python scripts/benchmark_vs_aggrid.py --sizes 10000,100000,500000,1000000 --runs 7
 ```
 
 ### 10,000 rows — cache hits: 57/64 (89%)

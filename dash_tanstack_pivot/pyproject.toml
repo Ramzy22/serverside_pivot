@@ -100,7 +100,6 @@ security = [
 include-package-data = false
 packages = [
     "dash_tanstack_pivot",
-    "dash_tanstack_pivot.dash_tanstack_pivot",
     "streamlit_pivot",
     "pivot_engine",
     "pivot_engine.cache",

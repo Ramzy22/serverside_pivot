@@ -1,4 +1,3 @@
-import os
 import sys
 from pathlib import Path
 
@@ -7,16 +6,15 @@ _ENGINE_PATH = _ROOT / "dash_tanstack_pivot" / "pivot_engine"
 if str(_ENGINE_PATH) not in sys.path:
     sys.path.insert(0, str(_ENGINE_PATH))
 
-
-_LEGACY_IMPORT_TESTS = {
-    "test_advanced_planning.py",
-    "test_config_main.py",
-    "test_microservices.py",
-}
-
-_RUN_LEGACY_TESTS = os.environ.get("RUN_LEGACY_TESTS", "").lower() in {"1", "true", "yes"}
-
-collect_ignore = [] if _RUN_LEGACY_TESTS else [
-    str(Path(__file__).resolve().parent / name)
-    for name in sorted(_LEGACY_IMPORT_TESTS)
+collect_ignore_glob = [
+    "dash_tanstack_pivot/pytest-cache-files-*",
 ]
+
+
+def pytest_ignore_collect(collection_path=None, path=None, config=None):
+    """Ignore temporary pytest cache directories if present."""
+    raw_path = collection_path if collection_path is not None else path
+    if raw_path is None:
+        return False
+    candidate = Path(str(raw_path))
+    return candidate.name.startswith("pytest-cache-files-")

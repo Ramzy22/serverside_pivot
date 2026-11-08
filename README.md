@@ -20,7 +20,7 @@
 [**The Core Problem**](#-the-problem-with-existing-solutions) •
 [**Quickstart (Dash / React / Streamlit)**](#-quickstart) •
 [**Head-to-Head vs. Perspective & AG Grid**](#-head-to-head-breakdown) •
-[**Live Demos**](#-live-showcases-revenue-operations)
+[**Live Demos**](#-live-showcases--demos)
 
 ---
 
@@ -36,7 +36,7 @@
 └─────────────────────────────────┘     └─────────────────────────────────┘     └─────────────────────────────────┘
 ```
 
-Building enterprise pivot tables used to take months of backend engineering. With `serverside-pivot`, **you don't write SQL, grouping algorithms, or pagination logic**. 
+Building enterprise pivot tables used to take months of backend engineering. With `serverside-pivot`, **you don't write SQL, grouping algorithms, or pagination logic**.
 
 Connect any SQL database, cloud warehouse, or local file in **2–3 lines of Python**:
 
@@ -59,7 +59,7 @@ Whether your dataset has **10,000 rows** or **1,000,000,000+ rows**, the engine 
 
 Live interactive recordings from our showcase applications ([demo_trader.py](examples/demo_trader.py), [demo_saas.py](examples/demo_saas.py), [demo_hr.py](examples/demo_hr.py)) demonstrating fluid client interactions, zero RAM bloat, and theme versatility:
 
-### 1. Bloomberg Black Theme — $\\mathcal{O}(D)$ Hierarchical Expand & Collapse with Column Data Bars
+### 1. Bloomberg Black Theme — $\mathcal{O}(D)$ Hierarchical Expand & Collapse with Column Data Bars
 Expand and collapse multi-level hierarchies across asset classes, trading desks, and individual instruments with instant server-side aggregation pushdown, zero client RAM pressure, and live proportional column data bars ([demo_trader.py](examples/demo_trader.py)):
 
 ![Hierarchical Expand and Collapse with Column Data Bars](docs/assets/demo_expand_collapse.gif)
@@ -312,7 +312,7 @@ Start with the focused Dash examples to learn the integration patterns:
 
 Run full-featured, interactive dashboards pre-configured with industry KPIs, customized color palettes, and realistic DuckDB datasets:
 
-`powershell
+```powershell
 # 📈 Trading Desk & Risk Portfolio (50,000 positions, VaR, DV01, PnL - Port 8051)
 python examples/demo_trader.py
 
@@ -324,7 +324,7 @@ python examples/demo_saas.py
 
 # 🎛️ Unified Showcase Hub (Interactive tabbed multi-industry launcher - Port 8054)
 python examples/demo_showcase_hub.py
-`
+```
 
 ---
 
@@ -332,7 +332,7 @@ python examples/demo_showcase_hub.py
 
 To run the flagship Revenue Operations workspace (12,000 rows) across Dash, React, and Streamlit:
 
-`powershell
+```powershell
 # 1. Start shared V1 Runtime Service (port 8765)
 python -m uvicorn examples.flagship_runtime_server:app --port 8765
 
@@ -344,7 +344,7 @@ cd examples/flagship_react && npm run dev
 
 # 4. Launch Streamlit showcase (port 8502)
 streamlit run examples/flagship_streamlit.py --server.port 8502
-`
+```
 ---
 
 ## 📄 License

@@ -146,10 +146,12 @@ dmypy.json
 # ==============================================================================
 # AI Assistants, Agent Scratchpads & LLM Tooling
 # ==============================================================================
+.agents/
 .claude/
 .qwen/
 .planning/
 .superpowers/
+docs/superpowers/
 .gemini/
 .cursor/
 .aider*
@@ -172,6 +174,7 @@ chrome-prof-*
 edge-prof-*
 *.pid
 materialized_registry.json
+**/materialized_registry.json
 dash_presentation/data/
 dash_presentation/materialized_registry.json
 
@@ -200,7 +203,6 @@ release-package.tgz
 dash_tanstack_pivot/dist/*.whl
 dash_tanstack_pivot/dist/*.tar.gz
 
-# Video render intermediate frames
-brag-output/work/
-brag-output/*.png
-brag-output/*.mp4
+# Video render & marketing scratch outputs
+brag-output/
+brag-output-*/
