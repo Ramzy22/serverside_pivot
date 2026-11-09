@@ -16,7 +16,7 @@ It offers a **dual-engine architecture**:
 ## 📑 Comprehensive Index
 
 1. [Dual Execution Architecture: Server-Side vs. Client-Side](#1-dual-execution-architecture-server-side-vs-client-side)
-2. [Client-Side In-Memory Mode (`serverSide=False`)](#2-client-side-in-memory-mode-serversidefalse)
+2. [Client-Side Execution Modes (In-Memory & DuckDB-Wasm)](#2-client-side-execution-modes-in-memory--duckdb-wasm)
 3. [Architecture & One-Way Dependency Flow](#3-architecture--one-way-dependency-flow)
 4. [Runtime Wire Protocol V1 & Request Lifecycle](#4-runtime-wire-protocol-v1--request-lifecycle)
 5. [Cache Coordinator & 12 Cache Namespaces](#5-cache-coordinator--12-cache-namespaces)
@@ -60,19 +60,66 @@ It offers a **dual-engine architecture**:
 
 ---
 
-## 2. Client-Side In-Memory Mode (`serverSide=False`)
+## 2. Client-Side Execution Modes (In-Memory & DuckDB-Wasm)
 
-Client-side mode is the fastest way to embed an interactive, feature-rich analytical pivot table when your dataset already fits in memory or is fetched from a REST endpoint.
+`serverside-pivot` provides state-of-the-art client-side execution capabilities, ranging from lightweight in-memory filtering and Excel-style pagination up to full in-browser SQL execution via **DuckDB-Wasm**. This eliminates server roundtrips, callback latency, and backend database infrastructure for datasets up to 50,000+ rows.
 
-### When to Use Client-Side Mode
-* Dataset has **under 50,000 records** (e.g., CSV upload, DataFrame output, REST API response).
-* You want **zero backend boilerplate**: no DuckDB instance, no database server, no callback registration.
-* You need **Excel-style pagination** (`paginationConfig`) with explicit page controls rather than infinite virtual scrolling.
-* Instant sub-millisecond filtering and sorting with zero network latency.
+### 2.1 Hybrid Execution Mode Resolution (`executionMode`)
 
-### Core Client-Side Capabilities
+The pivot component automatically resolves the execution environment or allows explicit overrides via `performanceConfig` or the `configure_pivot_execution()` helper:
 
-#### 1. In-Memory Multi-Condition Filtering (`useFilteredData`)
+```python
+from pivot_engine import configure_pivot_execution
+
+exec_config = configure_pivot_execution(
+    data=records,                 # In-memory JSON records (list of dicts)
+    table="saas_revenue",         # Registered table name (optional in pure client mode)
+    adapter=adapter,              # Server-side TanStackPivotAdapter (optional)
+    execution_mode="auto",        # "auto" | "client" | "server"
+    client_engine="auto",         # "auto" | "duckdb-wasm" | "memory"
+    client_row_threshold=50_000,  # Automatic rollover threshold (default: 50,000)
+    duckdb_wasm_threshold=1_000,  # Threshold to activate DuckDB-Wasm (default: 1,000)
+)
+```
+
+| `executionMode` | Trigger / Behavior | Active Transport | Roundtrips |
+| :--- | :--- | :--- | :--- |
+| **`"auto"`** *(Default)* | If records $\le$ `clientRowThreshold` or `dataUrl` is provided without a server table $\rightarrow$ **Client**. If records $>$ `clientRowThreshold` or backed solely by warehouse $\rightarrow$ **Server**. | Smart hybrid delegation | **0** (Client) or 1/action (Server) |
+| **`"client"`** | Explicitly forces client execution in browser memory or WebAssembly worker regardless of table definition. | `ClientPivotTransport` | **0 (Zero)** |
+| **`"server"`** | Explicitly forces server-side execution via Python `TanStackPivotAdapter` and Ibis/DuckDB physical planner. | `HttpPivotTransport` / Dash callback | 1 per viewport/action |
+
+---
+
+### 2.2 Tiered Client Execution Engines (`clientEngine`)
+
+When running on the client, the component supports tiered engines tailored to dataset scale:
+
+* **`"auto"`** *(Default)*: Automatically selects `"duckdb-wasm"` when dataset has $\ge$ `duckdb_wasm_threshold` (default: 1,000 rows); falls back to `"memory"` for smaller collections (< 1,000 rows).
+* **`"duckdb-wasm"`**: Launches in-browser DuckDB compiled to WebAssembly inside a dedicated Web Worker thread.
+* **`"memory"`**: Pure JavaScript in-memory grouping, filtering, and TanStack tree recursion.
+
+---
+
+### 2.3 Browser-Side DuckDB-Wasm Architecture (`ClientPivotTransport`)
+
+For commercial-grade client execution with zero network latency, the browser runtime includes:
+1. **`DuckDbWasmExecutor`**: Instantiates DuckDB-Wasm in a background Web Worker, registering the raw dataset as an in-memory Arrow/Parquet virtual table.
+2. **`ClientSqlPlanner`**: Replicates the exact SQL generation pipeline of the server-side `IbisPlanner` directly in the browser (grouping sets, rollups, window functions, sorting, multi-condition filters).
+3. **`ClientResponsePostProcessor`**: Packages query outputs into the exact same V1 wire contract envelope (`{ rows, totalRows, schema, meta }`), providing **100% mathematical and schema parity** with the Python backend.
+
+#### Operations Performed With Zero Server Roundtrips:
+* Multi-level hierarchy expansion & collapse ($\mathcal{O}(D)$ level-batched SQL in WASM).
+* Multi-column sorting with tenor regex and null preservation.
+* Multi-field column pivoting (`colFields`) with dynamic column generation.
+* Window functions (`percent_of_total`, running sums, rank).
+* Calculated AST formulas and custom dimension bucket rules.
+* Linked visual analytics (ECharts rendered directly from WASM query results).
+* Master-detail inspection and drill-through.
+* Client-side SheetJS XLSX & CSV exports.
+
+---
+
+### 2.4 In-Memory Multi-Condition Filtering (`useFilteredData`)
 Evaluates conditions entirely inside the browser across text, numeric, and set operators:
 * **Text**: `contains`, `startsWith`, `endsWith`, `eq` / `equals`, `ne` / `notEquals` (with optional `caseSensitive: true/false`).
 * **Numeric**: `gt` ($>$), `lt` ($<$), `gte` ($\ge$), `lte` ($\le$), `between` (inclusive range `value` and `value2`).
@@ -80,19 +127,25 @@ Evaluates conditions entirely inside the browser across text, numeric, and set o
 * **Combinators**: Multi-condition filters combined via `AND` or `OR`.
 * **Dynamic Filter Checklists**: Filter popover checklists auto-extract unique values and frequencies from `data` in memory (`buildClientFilterOptionMap`).
 
-#### 2. Built-in Excel-Style Pagination (`paginationConfig`)
+---
+
+### 2.5 Built-in Excel-Style Pagination (`paginationConfig`)
 When `serverSide=False` and `paginationConfig={"enabled": True, "pageSize": 25}`:
 * Mounts the native `<PaginationBar />` component at the bottom of the grid.
 * Provides a rows-per-page dropdown: `[10, 25, 50, 100, 200]`.
 * Displays current record range: `Showing 1-25 of 1,420 rows`.
 * First, Previous, Next, and Last navigation buttons with direct page number selection.
 
-#### 3. Client-Side SheetJS Exports
+---
+
+### 2.6 Client-Side SheetJS Exports
 * Full Excel XLSX and CSV export generated **100% in browser memory** using SheetJS and FileSaver (`exportUtils.js`).
 * No server roundtrip or temporary file generation required.
 * Numerical types, dates, currency labels, and merged column headers are preserved.
 
-#### 4. Client-Side Custom Dimensions (`applyCustomDimensionsToRows`)
+---
+
+### 2.7 Client-Side Custom Dimensions (`applyCustomDimensionsToRows`)
 Transform rows on-the-fly in browser memory without modifying the original Python data:
 ```python
 customDimensions = [
