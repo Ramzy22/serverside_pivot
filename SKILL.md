@@ -581,6 +581,68 @@ if __name__ == "__main__":
     app.run(debug=True, port=8051)
 ```
 
+### Example C: Client-Side DuckDB-Wasm & Hybrid Auto-Detection Mode
+*Showcases dynamic auto-detection between browser-local DuckDB-Wasm and server-side Ibis execution using `configure_pivot_execution()`.*
+
+```python
+from dash import Dash, html
+from dash_tanstack_pivot import DashTanstackPivot
+from pivot_engine import (
+    create_tanstack_adapter,
+    configure_pivot_execution,
+    register_pivot_app,
+)
+
+records = [
+    {"region": "North", "rep": "Alice", "quarter": "Q1", "revenue": 150000, "margin": 0.28},
+    {"region": "North", "rep": "Bob", "quarter": "Q1", "revenue": 95000, "margin": 0.22},
+    {"region": "South", "rep": "Charlie", "quarter": "Q1", "revenue": 180000, "margin": 0.31},
+    # ... up to 50k+ rows
+]
+
+adapter = create_tanstack_adapter(backend_uri=":memory:")
+
+# Automatic hybrid configuration:
+# <= 50,000 rows resolves to browser-local DuckDB-Wasm (0 server callbacks)
+# > 50,000 rows automatically shifts to server-side physical Ibis execution
+exec_cfg = configure_pivot_execution(
+    data=records,
+    table="saas_sales",
+    adapter=adapter,
+    execution_mode="auto",         # "auto" | "client" | "server"
+    client_engine="auto",          # "auto" | "duckdb-wasm" | "memory"
+    client_row_threshold=50_000,
+    duckdb_wasm_threshold=1_000,
+)
+
+app = Dash(__name__)
+app.layout = html.Div([
+    DashTanstackPivot(
+        id="hybrid-pivot",
+        table="saas_sales",
+        data=exec_cfg["data"],
+        serverSide=exec_cfg["serverSide"],
+        performanceConfig=exec_cfg["performanceConfig"],
+        rowFields=["region", "rep"],
+        colFields=["quarter"],
+        valConfigs=[
+            {"field": "revenue", "agg": "sum", "format": "currency", "label": "Revenue ($)"},
+            {"field": "margin", "agg": "avg", "format": "percent", "label": "Avg Margin"},
+        ],
+        showRowTotals=True,
+        showColTotals=True,
+        defaultTheme="flash",
+        style={"height": "750px", "width": "100%"},
+    )
+])
+
+# Register fallback server adapter in case dataset grows beyond client_row_threshold
+register_pivot_app(app, adapter_getter=lambda: adapter, pivot_id="hybrid-pivot")
+
+if __name__ == "__main__":
+    app.run(debug=True, port=8056)
+```
+
 ---
 
 ## 20. Host 2: Standalone React Host (Server-Side & Client-Side)
@@ -745,7 +807,10 @@ python examples/demo_saas.py
 # 🎛️ 4. Unified Showcase Hub (Port 8054)
 python examples/demo_showcase_hub.py
 
-# ☁️ 5. Cloud Data Warehouse & Ibis Pushdown (Snowflake, BigQuery, Postgres)
+# ⚡ 5. Client-Side DuckDB-Wasm & Hybrid Auto-Detection Showcase (Port 8056)
+python examples/demo_clientside_version.py
+
+# ☁️ 6. Cloud Data Warehouse & Ibis Pushdown (Snowflake, BigQuery, Postgres)
 python examples/demo_cloud_warehouse.py
 
 # Run backend pytest suite
@@ -761,13 +826,24 @@ python scripts/benchmark_vs_aggrid.py
 python scripts/certify_flagship.py
 ```
 
+### Flagship Demo 5: Client-Side DuckDB-Wasm & Hybrid Showcase (`examples/demo_clientside_version.py`)
+Run: `python examples/demo_clientside_version.py --port 8056 --rows 2500`
+
+Demonstrates commercial-grade execution mode resolution with zero server roundtrips in client mode:
+* **Dynamic Execution Mode Switcher**: Live dropdown to toggle between `auto` (auto-resolution), `client` (force DuckDB-Wasm/in-memory), and `server` (force Python Ibis/DuckDB backend).
+* **Tiered Engine Selector**: Switch between `auto` (>=1,000 rows activates WASM), `duckdb-wasm`, and `memory`.
+* **Configurable Auto Threshold**: Test dataset threshold boundary (e.g. 50k rows vs 1k rows) to observe seamless client-to-server rollover.
+* **Live Telemetry Strip**: Displays real-time status of configured mode, resolved execution engine, active transport (`ClientPivotTransport` vs `TanStackPivotAdapter`), dataset row count, network roundtrips (**0 in client mode** vs 1 per action in server mode), and 100% mathematical parity guarantee.
+
 ---
 
 ## 24. Troubleshooting & AI Agent Playbook
 
 ### 1. Client-Side Mode vs. Server-Side Mode Confusion
-* **Mistake**: Calling `register_pivot_app()` when using `serverSide=False`.
-* **Fix**: In client-side mode, you supply `data=[...]` directly to `DashTanstackPivot` and set `serverSide=False`. You do **not** create a `tanstack_adapter` or call `register_pivot_app()`.
+* **Mistake**: Calling `register_pivot_app()` when using `serverSide=False`, or leaving `table` unregistered when `serverSide=True`.
+* **Fix**:
+  - In pure client-side mode: supply `data=[...]` directly to `DashTanstackPivot` and set `serverSide=False`. No `tanstack_adapter` or `register_pivot_app()` call is required.
+  - In hybrid mode: use `configure_pivot_execution(data=..., table=..., adapter=...)` with `execution_mode="auto"`. Register the adapter via `register_pivot_app()` so that if the dataset scales beyond `client_row_threshold`, server execution activates seamlessly.
 
 ### 2. Client-Side Pagination Not Showing
 * **Mistake**: Setting `paginationConfig={"enabled": True}` in server-side mode.
