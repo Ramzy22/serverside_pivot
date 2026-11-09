@@ -297,7 +297,14 @@ DashTanstackPivot.propTypes = {
     blockLoadDebounceMs: PropTypes.number,
     rowOverscan: PropTypes.number,
     columnOverscan: PropTypes.number,
-    prefetchColumns: PropTypes.number
+    prefetchColumns: PropTypes.number,
+    executionMode: PropTypes.oneOf(['auto', 'client', 'server']),
+    clientEngine: PropTypes.oneOf(['auto', 'duckdb-wasm', 'memory']),
+    duckdbWasmThreshold: PropTypes.number,
+    clientRowThreshold: PropTypes.number,
+    dataUrl: PropTypes.string,
+    duckdbWasmCdnUrl: PropTypes.string,
+    legacyClientTable: PropTypes.bool
   }),
   chartServerWindow: PropTypes.shape({
     enabled: PropTypes.bool,

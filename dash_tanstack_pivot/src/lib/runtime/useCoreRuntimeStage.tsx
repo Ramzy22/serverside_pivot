@@ -54,6 +54,7 @@ import { usePivotTransactions } from '../hooks/usePivotTransactions';
 import { usePivotFieldInteractions } from '../hooks/usePivotFieldInteractions';
 import { getSparklineValueConfigIdentity, normalizeSparklineValConfigsForView } from '../utils/sparklines';
 import { formatLocaleTextTemplate } from '../utils/pivotLayoutUtils';
+import { ClientPivotTransport, resolveExecutionMode } from './client/index';
 // Editing and transaction mutation are deliberately outside the public
 // component contract. Legacy edit inputs remain accepted by Dash metadata but
 // are ignored so an existing layout can upgrade without a prop-validation
@@ -278,6 +279,35 @@ export function useCoreRuntimeStage(props) {
     };
   }, [stage.externalPagination, stage.serverSide]);
   stage.normalizedPerformanceConfig = useMemo(() => normalizePerformanceConfigValue(stage.externalPerformanceConfig), [stage.externalPerformanceConfig]);
+  stage.executionMode = useMemo(() => resolveExecutionMode(stage.props, {
+    performanceConfig: stage.normalizedPerformanceConfig
+  }), [stage.props, stage.normalizedPerformanceConfig]);
+  stage.clientRuntimeActive = Boolean(
+    stage.executionMode === 'client'
+    && !stage.normalizedPerformanceConfig.legacyClientTable
+    && (
+      stage.normalizedPerformanceConfig.executionMode === 'client'
+      || stage.normalizedPerformanceConfig.executionMode === 'auto'
+      || stage.normalizedPerformanceConfig.clientEngine
+      || stage.normalizedPerformanceConfig.dataUrl
+      || stage.props.serverSide === undefined
+    )
+  );
+  if (stage.clientRuntimeActive) {
+    stage.serverSide = true;
+  }
+  stage.clientTransportRef = useRef(null);
+  if (stage.clientRuntimeActive && !stage.clientTransportRef.current) {
+    stage.clientTransportRef.current = new ClientPivotTransport({
+      ...stage.normalizedPerformanceConfig,
+      data: Array.isArray(stage.inputData) ? stage.inputData : [],
+      tableName: stage.tableName || 'client_data'
+    });
+  }
+  [stage.localRuntimeResponse, stage.setLocalRuntimeResponse] = useState(null);
+  if (stage.clientRuntimeActive && stage.localRuntimeResponse) {
+    stage.runtimeResponse = stage.localRuntimeResponse;
+  }
   stage.hasExternalViewMode = normalizeViewModeValue(stage.externalViewMode) !== null;
   stage.hasExternalDetailMode = normalizeDetailModeValue(stage.externalDetailMode) !== null;
   stage.hasExternalTreeConfig = stage.externalTreeConfig !== undefined;
@@ -1600,6 +1630,14 @@ export function useCoreRuntimeStage(props) {
     id: stage.id,
   });
   for (const [key, value] of Object.entries(runtimeRequestSession)) stage[key] = value;
+  useEffect(() => {
+    if (!stage.clientRuntimeActive || !stage.clientTransportRef.current) return;
+    stage.clientTransportRef.current.updateConfig({
+      ...stage.normalizedPerformanceConfig,
+      tableName: stage.tableName || 'client_data'
+    });
+    stage.clientTransportRef.current.setData(Array.isArray(stage.inputData) ? stage.inputData : []);
+  }, [stage.clientRuntimeActive, stage.inputData, stage.normalizedPerformanceConfig, stage.tableName]);
   // Extract color scale stats sentinel injected by the server, strip it from rows.
   ({
     cleanData: stage.cleanData,

@@ -206,3 +206,4 @@ dash_tanstack_pivot/dist/*.tar.gz
 # Video render & marketing scratch outputs
 brag-output/
 brag-output-*/
+scratch/

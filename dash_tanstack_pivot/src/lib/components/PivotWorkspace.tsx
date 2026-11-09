@@ -8,6 +8,7 @@ import {
     type RuntimeResponseV1,
 } from '../runtime/runtimeContract';
 import type { PivotTransport } from '../runtime/httpTransport';
+import { ClientPivotTransport, resolveExecutionMode } from '../runtime/client/index';
 import type { PivotRuntimeProps } from '../runtime/runtimeDomains';
 
 /**
@@ -18,7 +19,7 @@ export interface PivotWorkspaceProps extends Omit<
     PivotRuntimeProps,
     'setProps' | 'runtimeRequest' | 'runtimeResponse'
 > {
-    readonly transport: PivotTransport;
+    readonly transport?: PivotTransport;
     readonly onStateChange?: (state: Readonly<Partial<PivotRuntimeProps>>) => void;
 }
 
@@ -95,7 +96,23 @@ const runtimeDebug = (event: string, detail: Record<string, unknown>): void => {
  */
 export function PivotWorkspace({ transport, onStateChange, ...initialProps }: PivotWorkspaceProps) {
     const [runtimeProps, setRuntimeProps] = useState<PivotRuntimeProps>(() => initialProps);
-    const transportRef = useRef(transport);
+    const clientTransportRef = useRef<ClientPivotTransport | null>(null);
+    const resolvedMode = resolveExecutionMode(runtimeProps, {
+        hasExternalServerTransport: Boolean(transport),
+        performanceConfig: runtimeProps.performanceConfig as Record<string, unknown> | null | undefined,
+    });
+    const useClientTransport = !transport || resolvedMode === 'client';
+    if (useClientTransport && !clientTransportRef.current) {
+        clientTransportRef.current = new ClientPivotTransport({
+            ...(runtimeProps.performanceConfig && typeof runtimeProps.performanceConfig === 'object' ? runtimeProps.performanceConfig : {}),
+            data: Array.isArray(runtimeProps.data) ? runtimeProps.data as Array<Record<string, unknown>> : [],
+            tableName: runtimeProps.table || 'client_data',
+        });
+    }
+    const activeTransport = (useClientTransport && clientTransportRef.current)
+        ? clientTransportRef.current
+        : (transport as PivotTransport);
+    const transportRef = useRef(activeTransport);
     const mountedRef = useRef(true);
     const pendingRequestsRef = useRef(new Set<AbortController>());
     // The public host props are JSON-shaped.  A stable serialization lets a
@@ -108,7 +125,7 @@ export function PivotWorkspace({ transport, onStateChange, ...initialProps }: Pi
     }, [initialPropsSignature]); // eslint-disable-line react-hooks/exhaustive-deps
 
     useEffect(() => {
-        transportRef.current = transport;
+        transportRef.current = activeTransport;
     }, [transport]);
 
     useEffect(() => {
@@ -186,5 +203,5 @@ export function PivotWorkspace({ transport, onStateChange, ...initialProps }: Pi
         if (nextProps.runtimeRequest) dispatch(nextProps.runtimeRequest);
     }, [dispatch, onStateChange]);
 
-    return <PivotRuntimeRoot {...runtimeProps} setProps={publish} payloadTransport={transport} />;
+    return <PivotRuntimeRoot {...runtimeProps} setProps={publish} payloadTransport={activeTransport} />;
 }

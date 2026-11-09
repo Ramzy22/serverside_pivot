@@ -894,7 +894,7 @@ class RuntimeRequestRouter:
 
     async def _execute_bounded_pivot_export(self, adapter, request, state, context, lease):
         """Page a grouped pivot into the disk-backed export writer."""
-        if (not adapter.controller._uses_duckdb_ibis()
+        if (not (getattr(getattr(adapter.controller, 'backend_capabilities', None), 'supports_arrow_batches', False) or adapter.controller._uses_duckdb_ibis())
                 or (state.measure_axis and state.measure_axis.get("placement", "none") != "none")
                 or any(config.get("agg") == "formula" or config.get("showAs") or config.get("show_as")
                        for config in state.val_configs if isinstance(config, dict))
@@ -982,7 +982,7 @@ class RuntimeRequestRouter:
                 # response mapper, including canonical windowFn and aliases.
                 or any(adapter._normalize_window_fn(column.get("windowFn")) or column.get("isFormula")
                        for column in request.columns if isinstance(column, dict))
-                or not adapter.controller._uses_duckdb_ibis()):
+                or not (getattr(getattr(adapter.controller, 'backend_capabilities', None), 'supports_arrow_batches', False) or adapter.controller._uses_duckdb_ibis())):
             raise ResourceExhaustedError(ResourceKind.EXPORT, reason="bounded_export_layout_unavailable")
         scoped = adapter._request_with_row_scope(request, context.row_scope)
         spec = adapter.convert_tanstack_request_to_pivot_spec(scoped)

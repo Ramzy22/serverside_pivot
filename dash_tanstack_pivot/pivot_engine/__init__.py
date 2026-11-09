@@ -21,12 +21,19 @@ from .tanstack_adapter import (
     create_tanstack_adapter,
 )
 from .dash_integration import register_pivot_app
+from .client_mode import (
+    configure_pivot_execution,
+    resolve_client_engine_kind,
+    resolve_execution_mode,
+)
 from .runtime import (
     DashPivotInstanceConfig,
     PivotRequestContext,
     PivotRuntimeService,
     PivotServiceResponse,
     PivotViewState,
+    RuntimeDatasetAuthorizer,
+    RuntimeDatasetAuthorizationError,
     RuntimeMutationAuthorizer,
     RuntimeHttpGateway,
     SessionRequestGate,
@@ -48,6 +55,8 @@ __all__ = [
     "PivotRuntimeService",
     "PivotServiceResponse",
     "PivotViewState",
+    "RuntimeDatasetAuthorizer",
+    "RuntimeDatasetAuthorizationError",
     "RuntimeMutationAuthorizer",
     "RuntimeHttpGateway",
     "SessionRequestGate",
@@ -56,4 +65,7 @@ __all__ = [
     "register_dash_drill_modal_callback",
     "register_dash_callbacks_for_instances",
     "register_runtime_http_transport",
+    "resolve_execution_mode",
+    "resolve_client_engine_kind",
+    "configure_pivot_execution",
 ]

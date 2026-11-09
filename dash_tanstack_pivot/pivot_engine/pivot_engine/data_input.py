@@ -9,6 +9,7 @@ API:
 """
 from __future__ import annotations
 
+from typing import Any, Tuple
 import pyarrow as pa
 
 
@@ -60,6 +61,43 @@ def _ibis_to_arrow(expr) -> pa.Table:
     return expr.to_pyarrow()
 
 
+def _create_backend_for_connection_dict(data: dict) -> Tuple[Any, Any]:
+    """Create an IbisBackend and resolve the target Ibis table expression from connection dict."""
+    connection_string = data["connection_string"]
+    table_name = data["table"]
+    database = data.get("database")
+    schema = data.get("schema")
+    connect_kwargs = dict(data.get("connect_args") or data.get("kwargs") or {})
+    try:
+        from .backends.ibis_backend import IbisBackend  # noqa: PLC0415
+        from .backends.table_catalog import IbisTableCatalog  # noqa: PLC0415
+    except ImportError as exc:
+        raise DataInputError(
+            f"Could not import IbisBackend to handle connection_string input: {exc}. "
+            f"Ensure ibis-framework is installed: pip install ibis-framework"
+        ) from exc
+    try:
+        backend = IbisBackend(connection_uri=connection_string, **connect_kwargs)
+    except ModuleNotFoundError as exc:
+        # e.g. "No module named 'psycopg2'" when postgres driver missing
+        scheme = connection_string.split("://")[0] if "://" in connection_string else "unknown"
+        raise DataInputError(
+            f"Missing database driver for connection scheme '{scheme}': {exc}.\n"
+            f"Install the required ibis backend: pip install ibis-framework[{scheme}]"
+        ) from exc
+
+    catalog = IbisTableCatalog(backend.con)
+    if database or schema:
+        qualified = ".".join(part for part in (database, schema, table_name) if part)
+        try:
+            table_expr = catalog.resolve_table(qualified)
+        except Exception:
+            table_expr = backend.con.table(table_name)
+    else:
+        table_expr = catalog.resolve_table(table_name)
+    return backend, table_expr
+
+
 def _connection_dict_to_arrow(data: dict) -> pa.Table:
     """
     Load a table from an external database via connection string.
@@ -68,26 +106,24 @@ def _connection_dict_to_arrow(data: dict) -> pa.Table:
       - "connection_string": ibis-compatible URI (e.g. "duckdb://path.db", "postgres://...")
       - "table": table name in the target database
     """
-    connection_string = data["connection_string"]
-    table_name = data["table"]
-    try:
-        from .backends.ibis_backend import IbisBackend  # noqa: PLC0415
-    except ImportError as exc:
-        raise DataInputError(
-            f"Could not import IbisBackend to handle connection_string input: {exc}. "
-            f"Ensure ibis-framework is installed: pip install ibis-framework"
-        ) from exc
-    try:
-        backend = IbisBackend(connection_uri=connection_string)
-    except ModuleNotFoundError as exc:
-        # e.g. "No module named 'psycopg2'" when postgres driver missing
-        scheme = connection_string.split("://")[0] if "://" in connection_string else "unknown"
-        raise DataInputError(
-            f"Missing database driver for connection scheme '{scheme}': {exc}.\n"
-            f"Install the required ibis backend: pip install ibis-framework[{scheme}]"
-        ) from exc
+    backend, table_expr = _create_backend_for_connection_dict(data)
     with backend:
-        return backend.con.table(table_name).to_pyarrow()
+        return table_expr.to_pyarrow()
+
+
+def _should_register_connection_dict_lazily(data: dict, controller: Any) -> bool:
+    """Return True when a connection dict should be registered lazily without materializing to Arrow."""
+    if not hasattr(controller, "register_ibis_table"):
+        return False
+    if data.get("materialize") is True or data.get("lazy") is False:
+        return False
+    if data.get("lazy") is True:
+        return True
+    uri = str(data.get("connection_string") or "").strip().lower()
+    # Local duckdb:// file paths are materialized by default so file locks are released immediately
+    if uri.startswith("duckdb://") and not uri.startswith("duckdb://md:"):
+        return False
+    return True
 
 
 def _unsupported_type_error(data) -> DataInputError:
@@ -105,7 +141,8 @@ def _unsupported_type_error(data) -> DataInputError:
 
 def normalize_data_input(data, table_name: str, controller) -> None:
     """
-    Detect the type of *data*, convert it to a PyArrow Table, and load it into
+    Detect the type of *data*, convert it to a PyArrow Table (or register lazily
+    for Ibis/cloud table sources when supported by *controller*), and load it into
     *controller* under *table_name*.
 
     Parameters
@@ -130,8 +167,15 @@ def normalize_data_input(data, table_name: str, controller) -> None:
     elif _is_polars_dataframe(data):
         arrow_table = _polars_to_arrow(data)
     elif _is_ibis_table(data):
+        if hasattr(controller, "register_ibis_table"):
+            controller.register_ibis_table(table_name, data)
+            return
         arrow_table = _ibis_to_arrow(data)
     elif _is_connection_dict(data):
+        if _should_register_connection_dict_lazily(data, controller):
+            backend, table_expr = _create_backend_for_connection_dict(data)
+            controller.register_ibis_table(table_name, table_expr, backend=backend)
+            return
         arrow_table = _connection_dict_to_arrow(data)
     else:
         raise _unsupported_type_error(data)

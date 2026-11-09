@@ -11,20 +11,35 @@ import ibis
 from ibis import BaseBackend as IbisBaseBackend
 from pivot_engine.types.pivot_spec import PivotSpec
 from pivot_engine.util.sql_builder import quote_ident
+from pivot_engine.backends.capabilities import resolve_backend_capabilities
 
 
 class MaterializedHierarchyManager:
-    def __init__(self, backend: IbisBaseBackend, cache, registry_path: str = "materialized_registry.json", lock: Optional[threading.Lock] = None):
+    def __init__(
+        self,
+        backend: IbisBaseBackend,
+        cache,
+        registry_path: str = "materialized_registry.json",
+        lock: Optional[threading.Lock] = None,
+        persist_registry: Optional[bool] = None,
+    ):
         self.backend = backend # Expects an Ibis connection
         self.cache = cache
         self.registry_path = registry_path
+        if persist_registry is None:
+            persist_registry = os.environ.get("PIVOT_PERSIST_MATERIALIZED_REGISTRY", "").strip().lower() in {"1", "true", "yes"}
+        self.persist_registry = bool(persist_registry)
         self.rollup_tables = self._load_registry()
         self.jobs = {}  # job_id -> {status, progress, error, result}
         self.lock = lock if lock is not None else threading.Lock()
 
+    def _supports_ddl(self) -> bool:
+        caps = resolve_backend_capabilities(self.backend)
+        return bool(caps.supports_ddl_materialization)
+
     def _load_registry(self) -> Dict[str, str]:
-        """Load rollup registry from disk."""
-        if os.path.exists(self.registry_path):
+        """Load rollup registry from disk when persistence is enabled."""
+        if self.persist_registry and self.registry_path and os.path.exists(self.registry_path):
             try:
                 with open(self.registry_path, 'r') as f:
                     return json.load(f)
@@ -33,7 +48,9 @@ class MaterializedHierarchyManager:
         return {}
 
     def _save_registry(self):
-        """Save rollup registry to disk."""
+        """Save rollup registry to disk when persistence is enabled."""
+        if not self.persist_registry or not self.registry_path:
+            return
         try:
             with open(self.registry_path, 'w') as f:
                 json.dump(self.rollup_tables, f)
@@ -107,6 +124,10 @@ class MaterializedHierarchyManager:
         """Internal synchronous worker to create materialized hierarchy."""
         with self.lock:
             try:
+                if not self._supports_ddl():
+                    if job_id:
+                        self.jobs[job_id]["status"] = "skipped"
+                    return
                 if job_id:
                     self.jobs[job_id]["status"] = "running"
                 

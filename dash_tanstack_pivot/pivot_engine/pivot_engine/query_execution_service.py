@@ -122,9 +122,13 @@ class PivotQueryExecutor:
             time.time() - started_wall_time,
         ):
             return
-        # Shared DuckDB/Ibis connections cannot safely execute the background
-        # materializer alongside viewport queries.
-        if controller._uses_duckdb_ibis():
+        # Shared DuckDB/Ibis connections or read-only cloud backends without DDL
+        # materialization enabled must not run background materialization.
+        caps = getattr(controller, "backend_capabilities", None)
+        if caps is not None:
+            if getattr(caps, "shared_connection_requires_lock", False) or not getattr(caps, "supports_ddl_materialization", False):
+                return
+        elif controller._uses_duckdb_ibis():
             return
         controller.task_manager.create_task(
             controller._trigger_materialization(spec),

@@ -9,6 +9,8 @@ import ibis
 from ibis import BaseBackend as IbisBaseBackend
 from ibis.expr.api import Table as IbisTable, Expr as IbisExpr, Column as IbisColumn
 from pivot_engine.types.pivot_spec import PivotSpec, Measure
+from pivot_engine.backends.capabilities import BackendCapabilities, resolve_backend_capabilities
+from pivot_engine.backends.table_catalog import IbisTableCatalog
 
 # Older Ibis exposes first/last reductions through arbitrary(how=...).
 # Modern first()/last() are reductions; older names were window operations.
@@ -20,8 +22,17 @@ class IbisExpressionBuilder:
     Unified class for building Ibis expressions across all components
     """
     
-    def __init__(self, backend: IbisBaseBackend):
+    def __init__(self, backend: IbisBaseBackend, catalog: Optional[IbisTableCatalog] = None):
         self.backend = backend
+        self.catalog = catalog if catalog is not None else IbisTableCatalog(backend)
+        self.capabilities: BackendCapabilities = resolve_backend_capabilities(backend)
+
+    def resolve_table(self, table_name: str) -> IbisTable:
+        """Resolve an Ibis table from the catalog or underlying backend."""
+        if self.catalog is not None:
+            self.catalog.set_backend(self.backend)
+            return self.catalog.resolve_table(table_name)
+        return self.backend.table(table_name)
 
     @staticmethod
     def _custom_category_field_id(dimension: Dict[str, Any]) -> str:
@@ -420,21 +431,29 @@ class IbisExpressionBuilder:
         
         # All subsequent operations require casting to string
         str_col = col.cast('string')
+
+        def _case_insensitive_like(col_expr: IbisColumn, pat_val: Any) -> IbisExpr:
+            if self.capabilities.supports_ilike:
+                try:
+                    return col_expr.ilike(pat_val)
+                except (AttributeError, NotImplementedError):
+                    pass
+            return col_expr.lower().like(str(pat_val).lower())
         
         if op == "like":
-            return str_col.like(value) if case_sensitive else str_col.ilike(value)
+            return str_col.like(value) if case_sensitive else _case_insensitive_like(str_col, value)
         if op == "ilike":
-            return str_col.ilike(value) # Always insensitive
+            return _case_insensitive_like(str_col, value) # Always insensitive
         
         if op == "starts_with":
             pat = f"{value}%"
-            return str_col.like(pat) if case_sensitive else str_col.ilike(pat)
+            return str_col.like(pat) if case_sensitive else _case_insensitive_like(str_col, pat)
         if op == "ends_with":
             pat = f"%{value}"
-            return str_col.like(pat) if case_sensitive else str_col.ilike(pat)
+            return str_col.like(pat) if case_sensitive else _case_insensitive_like(str_col, pat)
         if op == "contains":
             pat = f"%{value}%"
-            return str_col.like(pat) if case_sensitive else str_col.ilike(pat)
+            return str_col.like(pat) if case_sensitive else _case_insensitive_like(str_col, pat)
         
         # Null/empty checks. The custom category UI labels these operators as
         # "empty" and the client evaluator treats whitespace-only strings as
@@ -514,6 +533,9 @@ class IbisExpressionBuilder:
                 # Supports: tenor notation (1D, 2W, 6M, 1Y), ISO dates (2025-04-01),
                 # and month-year strings (Jun 2025, June 2025).
                 tenor_text = col.cast("string")
+                if not self.capabilities.supports_regex_extract:
+                    ibis_sorts.append(tenor_text.asc() if order == "asc" else tenor_text.desc())
+                    continue
 
                 # --- Tenor: 1D / 2W / 6M / 1Y ---
                 tenor_pat = r"^\s*([0-9]+(?:\.[0-9]+)?)\s*([A-Za-z])\s*$"
@@ -796,7 +818,7 @@ class IbisExpressionBuilder:
         """
         Builds a base table with filters applied
         """
-        base_table = self.backend.table(spec.table)
+        base_table = self.resolve_table(spec.table)
         base_table = self.apply_custom_dimensions(base_table, getattr(spec, "custom_dimensions", []))
 
         # Apply filters

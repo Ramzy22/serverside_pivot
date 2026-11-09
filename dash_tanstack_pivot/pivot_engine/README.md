@@ -17,8 +17,12 @@ A high-performance, database-agnostic pivot engine designed to handle **millions
 - **Universal RLS**: Enforce Row-Level Security across all endpoints (Grid, Export, Hierarchical) using user attributes.
 - **Safe Expressions**: AST-based parser for calculated measures, preventing code injection.
 
-### 🌐 Backend Agnostic
-- **Powered by Ibis**: Support for 20+ backends including **DuckDB, Clickhouse, PostgreSQL, BigQuery, Snowflake, and MySQL**.
+### 🌐 Backend Agnostic & Cloud Data Warehouses
+- **Powered by Ibis**: Zero-copy lazy analytical pushdown across 20+ backends including **Snowflake, Google BigQuery, PostgreSQL, MotherDuck, ClickHouse, Databricks, Trino, SQLite, and DuckDB**.
+- **Dynamic Capabilities Detection**: `BackendCapabilities` dynamically introspects backend capabilities (concurrency locking, cancellation, case-insensitive `ILIKE` vs `LOWER() LIKE` fallback, parameter styling `%s` vs `?`, and physical `rowid` independence).
+- **Lazy Table Catalog & TTL Caching**: `IbisTableCatalog` manages lazy `ibis.Table` references and qualified `database.schema.table` resolution, caching schemas for `PIVOT_SCHEMA_CACHE_TTL_SECONDS` to eliminate expensive network metadata queries.
+- **Bounded Arrow Batch Streaming**: Stream multi-gigabyte exports from cloud warehouses with bounded `.limit(offset=...)` pagination if native batch cursors are unavailable.
+- **Fail-Closed Cloud Governance**: Remote cloud warehouses are read-only by default. Mutations (`PIVOT_ALLOW_REMOTE_MUTATIONS=1`) and background DDL rollup creation (`PIVOT_ALLOW_REMOTE_DDL=1`) are strictly opt-in.
 - **CDC Support**: Support for both polling-based and push-based (webhook) Change Data Capture.
 
 ---
@@ -28,9 +32,16 @@ A high-performance, database-agnostic pivot engine designed to handle **millions
 Create a `.env` file in the root directory:
 
 ```env
-# Database
-BACKEND_URI=duckdb://data.db
+# Database & Cloud Warehouse
+BACKEND_URI=duckdb://data.db  # or snowflake://..., bigquery://..., postgresql://..., md:...
 BACKEND_TYPE=duckdb
+BACKEND_DATABASE=your_database  # optional default database/catalog
+BACKEND_SCHEMA=your_schema      # optional default schema
+BACKEND_READ_ONLY=0             # 1 to enforce read-only analytical mode
+PIVOT_ALLOW_REMOTE_DDL=0        # 1 to permit background rollup table creation on remote DW
+PIVOT_ALLOW_REMOTE_MUTATIONS=0  # 1 to permit SQL write-back mutations on remote DW
+PIVOT_SCHEMA_CACHE_TTL_SECONDS=300 # TTL in seconds for table schema metadata cache
+PIVOT_ESTIMATE_ROW_COUNT_QUERY=0   # 1 to run live COUNT(*) during planning cost estimation
 
 # Security
 PIVOT_API_KEY=your-secret-key-here

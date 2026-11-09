@@ -7,6 +7,21 @@ export {
     type PivotTransport,
 } from './runtime/httpTransport';
 export { themes, injectThemeCssVars } from './utils/styles';
+export {
+    ClientPivotTransport,
+    DuckDbWasmExecutor,
+    ClientSqlPlanner,
+    ClientResponsePostProcessor,
+    resolveExecutionMode,
+    resolveClientEngineKind,
+    normalizeExecutionMode,
+    normalizeClientEngineKind,
+    type ExecutionMode,
+    type ClientEngineKind,
+    type ClientRuntimeConfig,
+    type ClientEngineTelemetry,
+    type LogicalPivotPlan,
+} from './runtime/client/index';
 export type { PivotWorkspaceProps } from './components/PivotWorkspace';
 export type {
     PivotRuntimeProps,

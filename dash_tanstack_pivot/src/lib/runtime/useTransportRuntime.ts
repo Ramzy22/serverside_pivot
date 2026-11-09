@@ -3,11 +3,11 @@ import { useRuntimeDataCommit } from '../hooks/useRuntimeDataCommit';
 import { useRuntimeTransport } from '../hooks/useRuntimeTransport';
 
 import type { RuntimeRequestV1 } from './runtimeContract';
-import type { CoreRuntimeDomain, ExportJobController, PivotObject, TransportRuntimeDomain, ViewportRuntimeDomain, WorkspaceRuntimeDomain } from './runtimeDomains';
+import type { CoreRuntimeDomain, ExportJobController, PivotObject, PivotRuntimeProps, TransportRuntimeDomain, ViewportRuntimeDomain, WorkspaceRuntimeDomain } from './runtimeDomains';
 import { useRuntimeChartRequestDispatch } from './useRuntimeChartRequestDispatch';
 import { useRuntimeResponseLifecycle } from './useRuntimeResponseLifecycle';
 import { useRuntimeResponsePostCommit } from './useRuntimeResponsePostCommit';
-import type { RuntimePayloadTransport } from './httpTransport';
+import type { PivotTransport, RuntimePayloadTransport } from './httpTransport';
 
 const asObject = (value: unknown): PivotObject => value && typeof value === 'object' && !Array.isArray(value)
     ? value as PivotObject
@@ -39,6 +39,9 @@ interface CoreTransportState extends CoreRuntimeDomain {
     readonly runtimeRequest?: PivotObject;
     readonly runtimeResponse?: TransportRuntimeDomain['response']['current'];
     readonly isRequestPending?: boolean;
+    readonly clientRuntimeActive?: boolean;
+    readonly clientTransportRef?: RuntimeRef<PivotTransport | null>;
+    readonly setLocalRuntimeResponse?: RuntimeCallback;
 }
 
 interface TransportResponseState extends CoreTransportState {
@@ -108,7 +111,44 @@ export function useTransportRuntime(
     const tableName = core.configuration.tableName ?? runtime.tableName;
     const viewMode = core.configuration.viewMode ?? runtime.viewMode;
     const detailMode = core.configuration.detailMode ?? runtime.detailMode;
-    const setProps = core.refs.setProps.current ?? runtime.setProps;
+    const rawSetProps = core.refs.setProps.current ?? runtime.setProps;
+    const setProps = runtime.clientRuntimeActive && runtime.clientTransportRef
+        ? (nextProps: unknown) => {
+            const candidate = asObject(nextProps);
+            if (candidate.runtimeRequest && runtime.clientTransportRef?.current) {
+                const reqObj = asObject(candidate.runtimeRequest);
+                const stateObj = asObject(reqObj.state);
+                const mergedRequest = {
+                    ...reqObj,
+                    state: {
+                        rowFields: core.state.rowFields,
+                        colFields: core.state.colFields,
+                        valConfigs: core.state.valConfigs,
+                        filters: core.state.filters,
+                        sorting: core.state.sorting,
+                        expanded: core.state.expanded,
+                        viewMode,
+                        detailMode,
+                        ...stateObj,
+                    },
+                } as unknown as RuntimeRequestV1;
+                void runtime.clientTransportRef.current.request(mergedRequest).then(response => {
+                    if (typeof runtime.setLocalRuntimeResponse === 'function') {
+                        runtime.setLocalRuntimeResponse(response);
+                    }
+                });
+                const rest = { ...candidate };
+                delete rest.runtimeRequest;
+                if (Object.keys(rest).length > 0 && typeof rawSetProps === 'function') {
+                    rawSetProps(rest);
+                }
+                return;
+            }
+            if (typeof rawSetProps === 'function') {
+                (rawSetProps as (...args: unknown[]) => unknown)(nextProps);
+            }
+        }
+        : rawSetProps;
     const profiling = useRuntimeProfiling({
         detailMode,
         pivotProfilerRef: runtime.pivotProfilerRef,
@@ -195,7 +235,7 @@ export function useTransportResponseRuntime(
         latestLayoutSentManifestRef: runtime.latestLayoutSentManifestRef,
     });
     useRuntimeResponseLifecycle({
-        payloadTransport,
+        payloadTransport: payloadTransport ?? (runtime.clientRuntimeActive ? runtime.clientTransportRef?.current ?? undefined : undefined),
         activeChartRequestRef: response.activeChartRequestRef,
         activeExportRequestIdRef: response.activeExportRequestIdRef,
         exportJobControllerRef: response.exportJobControllerRef,

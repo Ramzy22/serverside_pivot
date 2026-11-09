@@ -21,6 +21,7 @@ except ImportError:
 from pivot_engine.types.pivot_spec import PivotSpec, Measure, GroupingConfig, PivotConfig, DrillPath, MeasureAxisConfig
 from pivot_engine.common.ibis_expression_builder import IbisExpressionBuilder
 from pivot_engine.planner.expression_parser import SafeExpressionParser
+from pivot_engine.backends.capabilities import BackendCapabilities, resolve_backend_capabilities
 # Import MaterializedHierarchyManager type for type hinting if needed (avoid circular import if possible)
 # from pivot_engine.materialized_hierarchy_manager import MaterializedHierarchyManager 
 
@@ -120,11 +121,28 @@ class IbisPlanner:
         self._row_count_cache: Dict[str, Tuple[int, float]] = {}
         self._row_count_cache_ttl = 300.0
 
-        # Detect the backend database type for feature compatibility
+        # Detect the backend database type and capability flags
+        self.capabilities: BackendCapabilities = resolve_backend_capabilities(con)
         self._database_type = self._detect_database_type()
         self._supports_quantile = self._check_feature_support('quantile')
         self._supports_filter_clause = self._check_feature_support('filter_clause')
         self._supports_grouping_sets = self._check_feature_support('grouping_sets')
+
+    def resolve_table(self, table_name: str) -> IbisTable:
+        """Resolve a table expression via the catalog or underlying connection."""
+        if self.builder is not None and hasattr(self.builder, "resolve_table"):
+            self.builder.backend = self.con
+            return self.builder.resolve_table(table_name)
+        return self.con.table(table_name)
+
+    def get_table_schema_and_columns(self, table_name: str, *, force_refresh: bool = False):
+        """Return cached (schema_dict, column_names) for table_name."""
+        if self.builder is not None and getattr(self.builder, "catalog", None) is not None:
+            self.builder.catalog.set_backend(self.con)
+            return self.builder.catalog.get_schema_and_columns(table_name, force_refresh=force_refresh)
+        tbl = self.resolve_table(table_name)
+        schema = tbl.schema()
+        return {str(name): str(dtype) for name, dtype in schema.items()}, list(schema.names)
 
     def _detect_database_type(self) -> str:
         """Detect the backend database type."""
@@ -326,8 +344,13 @@ class IbisPlanner:
         cached = self._row_count_cache.get(table_name)
         if cached and cached[1] > now:
             return max(1, int(cached[0] or 1))
+        import os
+        # Skip live network COUNT(*) during cost estimation on remote/cloud backends unless explicitly requested
+        if getattr(self.capabilities, "is_cloud_or_remote", False) and os.environ.get("PIVOT_ESTIMATE_ROW_COUNT_QUERY", "").strip().lower() not in {"1", "true", "yes"}:
+            self._row_count_cache[table_name] = (100000, now + self._row_count_cache_ttl)
+            return 100000
         try:
-            row_count = int(self.con.table(table_name).count().execute())
+            row_count = int(self.resolve_table(table_name).count().execute())
         except Exception:
             row_count = 100000
         self._row_count_cache[table_name] = (row_count, now + self._row_count_cache_ttl)
@@ -712,7 +735,7 @@ class IbisPlanner:
         return table.filter(keep_expr) if keep_expr is not None else table
 
     def _table_for_spec(self, spec: PivotSpec) -> IbisTable:
-        table = self.con.table(spec.table)
+        table = self.resolve_table(spec.table)
         table = self.builder.apply_custom_dimensions(table, getattr(spec, "custom_dimensions", []))
         return self._apply_measure_axis_table(table, spec)
 
@@ -2008,7 +2031,7 @@ class IbisPlanner:
             if measures:
                 order_measure = measures[0]
         else:
-            base_table = self.con.table(table_name)
+            base_table = self.resolve_table(table_name)
             base_table = self.builder.apply_custom_dimensions(base_table, custom_dimensions or [])
         
         filtered_table = base_table

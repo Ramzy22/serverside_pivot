@@ -149,7 +149,7 @@ class ProgressiveDataLoader:
         # Exception: Partition filters if we can detect them (future optimization)
         
         ibis_table = self.builder.apply_custom_dimensions(
-            self.backend.table(spec.table),
+            self.builder.resolve_table(spec.table),
             getattr(spec, "custom_dimensions", []),
         )
         
@@ -196,7 +196,7 @@ class ProgressiveDataLoader:
     def _build_chunk_ibis_expression(self, spec: PivotSpec, offset: Optional[int], chunk_size: int, cursor: Optional[Dict[str, Any]] = None) -> IbisTable:
         """Build Ibis expression for a specific chunk."""
         base_table = self.builder.apply_custom_dimensions(
-            self.backend.table(spec.table),
+            self.builder.resolve_table(spec.table),
             getattr(spec, "custom_dimensions", []),
         )
 
@@ -260,7 +260,7 @@ class ProgressiveDataLoader:
             return None
             
         base_table = self.builder.apply_custom_dimensions(
-            self.backend.table(base_spec.table),
+            self.builder.resolve_table(base_spec.table),
             getattr(base_spec, "custom_dimensions", []),
         )
 

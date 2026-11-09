@@ -13,6 +13,7 @@ from .planner.ibis_planner import IbisPlanner
 from .diff.diff_engine import QueryDiffEngine
 from .backends.duckdb_backend import DuckDBBackend
 from .backends.ibis_backend import IbisBackend
+from .backends.capabilities import BackendCapabilities, resolve_backend_capabilities
 from .backends.execution import CancellationUnavailableError
 from .cache.memory_cache import MemoryCache
 from .resource_governor import ResourceGovernor, get_worker_resource_governor
@@ -75,6 +76,7 @@ class PivotController:
         # Initialize Backend and Planner
         self.backend = None
         self.planner = planner
+        allow_memory_fallback = bool(cache_options.pop("allow_memory_fallback", False))
 
         if not self.planner:
             # Always default to IbisPlanner
@@ -84,6 +86,9 @@ class PivotController:
                 # Create IbisPlanner with the connection from the backend
                 self.planner = IbisPlanner(con=self.backend.con)
             except Exception as e:
+                is_default_memory = str(backend_uri).startswith(":memory:") or str(backend_uri) == "duckdb://:memory:"
+                if not is_default_memory and not allow_memory_fallback:
+                    raise
                 print(f"Could not connect to database backend via Ibis: {e}")
                 # Fallback to default in-memory DuckDB via IbisBackend
                 self.backend = IbisBackend(connection_uri="duckdb://:memory:")
@@ -92,7 +97,17 @@ class PivotController:
             # If planner is provided, try to infer backend or create a default one
             # This path assumes the caller manages the backend/planner relationship
             if not self.backend:
-                self.backend = DuckDBBackend(uri=backend_uri)
+                planner_con = getattr(self.planner, "con", None)
+                if planner_con is not None:
+                    self.backend = IbisBackend(connection=planner_con)
+                else:
+                    self.backend = DuckDBBackend(uri=backend_uri)
+
+        self.backend_capabilities: BackendCapabilities = (
+            getattr(self.backend, "capabilities", None)
+            or getattr(self.planner, "capabilities", None)
+            or resolve_backend_capabilities(getattr(self.planner, "con", None), connection_uri=backend_uri)
+        )
 
         # The diff_engine expects an Ibis connection for _compute_true_total
         # If we are using IbisBackend, we pass its connection
@@ -695,6 +710,62 @@ class PivotController:
             # If for some reason it's not an Arrow table, convert it
             raise ValueError(f"Expected PyArrow Table but got {type(result)}")
 
+    def resolve_table(self, table_name: str) -> Any:
+        """Resolve a table expression by name via the planner catalog or connection."""
+        if self.planner is not None and hasattr(self.planner, "resolve_table"):
+            return self.planner.resolve_table(table_name)
+        return self.planner.con.table(table_name)
+
+    def register_ibis_table(
+        self,
+        table_name: str,
+        table_expr: Any,
+        *,
+        backend: Optional[Any] = None,
+        register_checkpoint: bool = True,
+    ) -> Any:
+        """Register a lazy Ibis table expression in the controller without materializing to Arrow."""
+        if backend is not None:
+            self.backend = backend
+            if hasattr(backend, "con") and self.planner is not None:
+                self.planner.con = backend.con
+                if getattr(self.planner, "builder", None) is not None:
+                    self.planner.builder.backend = backend.con
+                    self.planner.builder.capabilities = resolve_backend_capabilities(backend.con)
+                self.planner.capabilities = resolve_backend_capabilities(backend.con)
+                if getattr(self, "diff_engine", None) is not None:
+                    self.diff_engine.backend = backend.con
+            self.backend_capabilities = getattr(backend, "capabilities", None) or resolve_backend_capabilities(
+                getattr(backend, "con", None)
+            )
+        else:
+            # Try to infer Ibis backend from the table expression if our current backend is default memory
+            try:
+                expr_backend = table_expr._find_backend(use_default=False)
+            except Exception:
+                expr_backend = None
+            if expr_backend is not None and self.planner is not None:
+                self.planner.con = expr_backend
+                if getattr(self.planner, "builder", None) is not None:
+                    self.planner.builder.backend = expr_backend
+                    self.planner.builder.capabilities = resolve_backend_capabilities(expr_backend)
+                self.planner.capabilities = resolve_backend_capabilities(expr_backend)
+                self.backend = IbisBackend(connection=expr_backend)
+                self.backend_capabilities = self.backend.capabilities
+                if getattr(self, "diff_engine", None) is not None:
+                    self.diff_engine.backend = expr_backend
+
+        catalog = getattr(getattr(self.planner, "builder", None), "catalog", None)
+        if catalog is not None:
+            catalog.set_backend(getattr(self.planner, "con", None))
+            catalog.register_table(table_name, table_expr)
+
+        if register_checkpoint and hasattr(self.diff_engine, "register_delta_checkpoint"):
+            self.diff_engine.register_delta_checkpoint(table_name, timestamp=time.time())
+        if hasattr(self, "cache") and hasattr(self.cache, "clear"):
+            self.cache.clear()
+        return table_expr
+
     def load_data_from_arrow(
         self,
         table_name: str,
@@ -718,6 +789,9 @@ class PivotController:
                     f"CREATE TABLE {quoted_table_name} AS SELECT * FROM arrow_table"  # nosec B608
                 )
 
+        catalog = getattr(getattr(self.planner, "builder", None), "catalog", None)
+        if catalog is not None:
+            catalog.invalidate(table_name)
         if register_checkpoint:
             # Just call the diff_engine method if it exists, otherwise skip
             if hasattr(self.diff_engine, 'register_delta_checkpoint'):

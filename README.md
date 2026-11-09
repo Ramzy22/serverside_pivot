@@ -19,6 +19,8 @@
 [**Interactive Dashboard Showcase**](#-interactive-dashboard-showcase) •
 [**The Core Problem**](#-the-problem-with-existing-solutions) •
 [**Quickstart (Dash / React / Streamlit)**](#-quickstart) •
+[**Cloud Warehouses (Ibis Pushdown)**](#-cloud-data-warehouses--multi-backend-ibis-pushdown) •
+[**Client-Side DuckDB-WASM**](#-client-side-duckdb-wasm--hybrid-execution-mode) •
 [**Head-to-Head vs. Perspective & AG Grid**](#-head-to-head-breakdown) •
 [**Live Demos**](#-live-showcases--demos)
 
@@ -92,6 +94,8 @@ Comprehensive analytical suite surfaced from [`docs/PIVOT_MASTER_DOCUMENTATION.m
 | **11 Built-in Themes** | Enterprise dark & light designs: `light`, `dark`, `flash`, `material`, `balham`, `bloomberg`, `bloomberg_black`, `strata`, `crystal`, `alabaster`, `satin` with complete `--sp-*` CSS custom properties and CSS variable injection. | Real-time theme switcher + CSS token overrides |
 | **Tri-Host Universal Architecture** | Zero-compromise universal runtime for **Plotly Dash** (`DashTanstackPivot`), **Standalone React** (`PivotWorkspace` + `HttpPivotTransport`), and **Streamlit** (zero-rerun iframe component). | Unified Protocol V1 (`schemaVersion: 1`) |
 | **Enterprise Persistence & CDC** | Real-time Change Data Capture (`PivotCDCManager`), push/poll CDC sync, durable view/report saving & restoring across reloads, L1 in-memory + L2 Redis caching, and Row-Level Security (RLS). | Multi-tenant production-ready |
+| **Client-Side DuckDB-WASM & Hybrid Mode** | Zero-network in-browser analytical execution powered by **DuckDB-WASM** and AST SQL planner. Auto-detection (`execution_mode="auto"`) seamlessly switching between browser (<= 50,000 rows) and server warehouse pushdown. Full $\mathcal{O}(D)$ hierarchy, formula, and chart parity with 0 server roundtrips. | `execution_mode`: `'auto'` \| `'client'` \| `'server'`<br>`client_engine`: `'auto'` \| `'duckdb-wasm'` \| `'memory'` |
+| **Cloud Warehouses & Ibis Pushdown** | Zero-copy lazy `ibis.Table` registration across **Snowflake, BigQuery, PostgreSQL, MotherDuck, ClickHouse, Databricks, Trino, SQLite, and DuckDB**. Dynamic `BackendCapabilities` introspection, dialect-portable pushdown (`ILIKE` fallback, regex tenor sort fallback), bounded paged batch export streaming, and TTL schema metadata caching. | `ibis.Table` \| `snowflake://` \| `bigquery://` \| `postgresql://` \| `md:` \| `duckdb://` |
 | **Cancellable Large Exports** | Streaming multi-gigabyte CSV and XLSX downloads with progress counters, query cancellation cleanup (`cursor.interrupt()`), and RFC-compliant TSV/HTML clipboard copy. | Client SheetJS fallback & server streaming |
 
 ---
@@ -213,7 +217,68 @@ if __name__ == "__main__":
 
 ---
 
-### 3. Standalone React (Direct HTTP Transport)
+### 3. Enterprise Cloud Warehouses (Zero-Copy Lazy Ibis Pushdown)
+
+Connect directly to **Snowflake, BigQuery, PostgreSQL, ClickHouse, MotherDuck, or Databricks** with **zero memory materialization** (`to_pyarrow()` or `to_pandas()` is never called on the base table). Pass a lazy `ibis.Table` expression or connection config directly:
+
+```python
+import ibis
+from dash import Dash, html
+from dash_tanstack_pivot import DashTanstackPivot
+from pivot_engine import create_tanstack_adapter, register_pivot_app
+from pivot_engine.data_input import normalize_data_input
+
+# 1. Connect to Snowflake (or BigQuery, PostgreSQL, MotherDuck, Databricks, ClickHouse)
+# All aggregations, filtering, and expansions are pushed down into the remote warehouse!
+con = ibis.snowflake.connect(
+    user="analytics_svc",
+    password="***",
+    account="acme-us-east-1",
+    database="FINOPS_PROD/PUBLIC",
+    warehouse="COMPUTE_WH",
+)
+
+# 2. Reference the remote table lazily (zero client/server RAM overhead)
+lazy_table = con.table("cloud_warehouse_metrics")
+
+# 3. Create adapter and register the lazy Ibis table expression
+adapter = create_tanstack_adapter(backend_uri=":memory:")
+normalize_data_input(lazy_table, "cloud_warehouse_metrics", adapter.controller)
+
+# Alternatively, pass a lazy connection dictionary:
+# adapter.load_data({
+#     "connection_string": "snowflake://analytics_svc:***@acme-us-east-1/FINOPS_PROD/PUBLIC?warehouse=COMPUTE_WH",
+#     "table": "cloud_warehouse_metrics",
+#     "lazy": True,
+# }, "cloud_warehouse_metrics")
+
+app = Dash(__name__)
+app.layout = html.Div([
+    DashTanstackPivot(
+        id="cloud-pivot",
+        table="cloud_warehouse_metrics",
+        serverSide=True,
+        rowFields=["cloud_provider", "region", "service_name"],
+        colFields=["billing_quarter"],
+        valConfigs=[
+            {"field": "compute_cost", "agg": "sum", "format": "currency", "label": "Cost ($)"},
+            {"field": "workload_count", "agg": "sum", "format": "number", "label": "Workloads"},
+        ],
+        showRowTotals=True,
+        showColTotals=True,
+        style={"height": "750px", "width": "100%"},
+    )
+])
+
+register_pivot_app(app, adapter_getter=lambda: adapter, pivot_id="cloud-pivot")
+
+if __name__ == "__main__":
+    app.run(debug=True)
+```
+
+---
+
+### 4. Standalone React (Direct HTTP Transport)
 
 No Python backend required inside the frontend container. Communicates with any V1 HTTP runtime service:
 
@@ -254,7 +319,7 @@ export function EnterpriseAnalytics() {
 
 ---
 
-### 4. Streamlit (Zero-Rerun V2 Component)
+### 5. Streamlit (Zero-Rerun V2 Component)
 
 Pivoting, scrolling, and expanding tree nodes happen without triggering Streamlit's full Python script rerun:
 
@@ -286,6 +351,201 @@ Traditional tree tables suffer from the **$N$-Query Waterfall Problem**: expandi
 $$\text{Traditional Grids: } \mathcal{O}(N) \text{ queries} \quad \longrightarrow \quad \text{\textbf{serverside-pivot: }} \mathcal{O}(D) \text{ queries (typically 3 to 5 queries total)}$$
 
 Even with thousands of expanded tree nodes over hundreds of millions of raw records, data returns in sub-second time.
+
+---
+
+## ☁️ Cloud Data Warehouses & Multi-Backend Ibis Pushdown
+
+`serverside-pivot` provides enterprise-grade compatibility with cloud data warehouses and distributed SQL engines powered by **[Ibis](https://ibis-project.org/)**. Unlike conventional pivot tools that pull raw tables into server memory (`to_pyarrow()` / `to_pandas()`), `serverside-pivot` executes **zero-copy lazy pushdown**: your data stays entirely within the remote warehouse, and only lightweight 50-row virtualized slices travel across the wire.
+
+```
+┌────────────────────────────────────────────────────────────────────────────────────────┐
+│                        Zero-Copy Cloud Analytical Architecture                         │
+└────────────────────────────────────────────────────────────────────────────────────────┘
+  [ Snowflake / BigQuery / PostgreSQL / MotherDuck / ClickHouse / Databricks / Trino ]
+                                        │
+             (1) Zero-Copy Lazy `ibis.Table` Registration (Zero RAM Download)
+                                        ▼
+                  ┌──────────────────────────────────────────┐
+                  │          `IbisTableCatalog`              │
+                  │  • Qualified `database.schema.table`     │
+                  │  • TTL Schema Cache (Bounded 300s TTL)   │
+                  │  • Dialect & Capabilities Inspection     │
+                  └──────────────────────────────────────────┘
+                                        │
+             (2) O(D) Level-Based Grouping & Dialect-Portable AST Compilation
+                                        ▼
+                  ┌──────────────────────────────────────────┐
+                  │          `IbisPlanner` Engine            │
+                  │  • Native ILIKE / LOWER() LIKE Fallback  │
+                  │  • Regex Tenor Sort Fallback             │
+                  │  • Dialect Placeholder Adaptation (?/%s) │
+                  │  • Non-blocking Cost Estimation          │
+                  └──────────────────────────────────────────┘
+                                        │
+             (3) Sub-Second Pushdown Query Execution & Bounded Arrow Paging
+                                        ▼
+                  ┌──────────────────────────────────────────┐
+                  │         Browser Client Viewport          │
+                  │    Virtualized 50-Row Window (<80 MB)    │
+                  └──────────────────────────────────────────┘
+```
+
+### 1. Zero-Copy Lazy Table Registration
+
+Pass an existing lazy `ibis.Table` expression directly to `normalize_data_input` without triggering eager evaluation or memory materialization:
+
+```python
+import ibis
+from pivot_engine import create_tanstack_adapter, register_pivot_app
+from pivot_engine.data_input import normalize_data_input
+
+# Connect to your cloud warehouse via Ibis
+con = ibis.snowflake.connect(
+    user="analytics_svc",
+    password="***",
+    account="acme-us-east-1",
+    database="FINOPS_PROD/PUBLIC",
+    warehouse="COMPUTE_WH",
+)
+lazy_table = con.table("cloud_warehouse_metrics")
+
+# Registers table lazily — ZERO rows are materialized into Python memory!
+adapter = create_tanstack_adapter(backend_uri=":memory:")
+normalize_data_input(lazy_table, "cloud_warehouse_metrics", adapter.controller)
+```
+
+Alternatively, register via a connection dictionary:
+
+```python
+adapter.load_data({
+    "connection_string": "bigquery://my-gcp-project/analytics_dw",
+    "table": "workload_costs",
+    "lazy": True,  # Enables zero-copy lazy catalog registration
+}, "workload_costs")
+```
+
+---
+
+### 2. Supported Cloud Dialects & Capabilities Matrix
+
+The engine inspects dialect capabilities dynamically through `BackendCapabilities` rather than hardcoding driver checks, guaranteeing deterministic execution across heterogeneous warehouse engines:
+
+| Warehouse / Dialect | Connection URI Scheme | Concurrency Model | Text Search (`ILIKE`) | Param Style | Rollup DDL Materialization | Write-Back Mutations |
+| :--- | :--- | :--- | :--- | :--- | :--- | :--- |
+| ❄️ **Snowflake** | `snowflake://user:pass@acct/db/schema` | Concurrent pool | Native `ILIKE` | `pyformat` (`%s`) | Disabled (Fail-closed) | Disabled (Opt-in) |
+| 🔍 **Google BigQuery** | `bigquery://project-id/dataset-id` | Concurrent pool | `LOWER(col) LIKE` fallback | `qmark` (`?`) | Disabled (Fail-closed) | Disabled (Opt-in) |
+| 🐘 **PostgreSQL / Supabase** | `postgresql://user:pass@host:5432/db` | Concurrent pool | Native `ILIKE` | `pyformat` (`%s`) | Disabled (Fail-closed) | Disabled (Opt-in) |
+| 🦆 **MotherDuck** | `md:database_name` | Shared connection lock | Native `ILIKE` | `qmark` (`?`) | Disabled (Fail-closed) | Disabled (Opt-in) |
+| ⚡ **ClickHouse** | `clickhouse://user:pass@host:8123/db` | Concurrent pool | Native `ILIKE` | `pyformat` (`%s`) | Disabled (Fail-closed) | Disabled (Opt-in) |
+| 🧱 **Databricks / Spark** | `databricks://user:token@host/db` | Concurrent pool | Native `ILIKE` | `qmark` (`?`) | Disabled (Fail-closed) | Disabled (Opt-in) |
+| 🌊 **Trino / Presto** | `trino://user@host:8080/catalog/schema`| Concurrent pool | Native `ILIKE` | `qmark` (`?`) | Disabled (Fail-closed) | Disabled (Opt-in) |
+| 🪶 **SQLite** | `sqlite:///path/to/db.sqlite` | Shared connection lock | `LOWER(col) LIKE` fallback | `qmark` (`?`) | Enabled | Enabled |
+| 🦆 **DuckDB (Embedded)** | `:memory:` or `duckdb:///file.db` | Shared connection lock | Native `ILIKE` | `qmark` (`?`) | Enabled | Enabled |
+
+---
+
+### 3. Dialect Portability & Resilience
+
+- **Case-Insensitive Filtering**: On dialects that do not support native `ILIKE` (e.g. Google BigQuery, SQLite), expressions automatically fall back to `LOWER(column) LIKE LOWER(pattern)` without syntax errors.
+- **Tenor & Natural Sorting Fallback**: If a database lacks regex substring extraction (`re_extract`), tenor columns (`1D`, `2W`, `6M`, `1Y`) fall back gracefully to standard lexical ordering.
+- **Bounded Paged Batch Streaming**: Cloud warehouses without cursor-level Arrow batch readers export safely using bounded pagination (`.limit(chunk_rows, offset=offset).to_pyarrow()`), preventing OOM failures during multi-gigabyte exports.
+- **TTL Schema Caching**: Column names, data types, and nullability are cached in `IbisTableCatalog` with a configurable TTL (`PIVOT_SCHEMA_CACHE_TTL_SECONDS=300`) to eliminate redundant `INFORMATION_SCHEMA` network round-trips.
+- **Non-Blocking Cost Estimation**: Query planners bypass expensive live `COUNT(*)` network queries against cloud warehouses during optimization, defaulting to cost constants unless explicitly enabled.
+
+---
+
+### 4. Cloud Governance & Security Controls
+
+Analytical cloud warehouses are configured **fail-closed** by default to protect production systems:
+
+- **Read-Only Analytical Pushdown**: Remote warehouses reject write-back operations unless explicitly authorized via `PIVOT_ALLOW_REMOTE_MUTATIONS=1` or `allow_remote_mutations=True`.
+- **DDL Protection**: Background rollup pre-computation (`MaterializedHierarchyManager`) never executes `CREATE TABLE` on remote warehouses without explicit opt-in (`PIVOT_ALLOW_REMOTE_DDL=1`).
+- **Row-ID Independence**: Cloud warehouses do not support DuckDB/SQLite internal `rowid` pseudo-columns. Aggregate edits automatically use key-column aggregate fallbacks.
+- **Parameter Placeholder Adaptation**: Parameterized mutations translate dynamically between `?` (`qmark`) and `%s` (`pyformat`) depending on the target warehouse driver.
+
+#### Cloud Environment Configuration Reference
+
+| Environment Variable | Default | Purpose |
+| :--- | :--- | :--- |
+| `BACKEND_URI` | `:memory:` | Target connection URI (`snowflake://`, `bigquery://`, `postgresql://`, `md:`, `duckdb://`). |
+| `BACKEND_DATABASE` | `None` | Default database or catalog identifier for qualified table resolution. |
+| `BACKEND_SCHEMA` | `None` | Default schema identifier (e.g. `PUBLIC`, `analytics`). |
+| `BACKEND_READ_ONLY` | `False` | Forces all controller operations into strict read-only analytical mode. |
+| `PIVOT_ALLOW_REMOTE_DDL` | `0` | Set `1` to allow background rollup table creation on remote warehouses. |
+| `PIVOT_ALLOW_REMOTE_MUTATIONS` | `0` | Set `1` to allow SQL cell edits and row transaction write-backs to remote warehouses. |
+| `PIVOT_SCHEMA_CACHE_TTL_SECONDS` | `300` | TTL in seconds for `IbisTableCatalog` schema and column metadata caching. |
+| `PIVOT_ESTIMATE_ROW_COUNT_QUERY` | `0` | Set `1` to execute live network `COUNT(*)` during query planning cost estimation. |
+
+---
+
+## ⚡ Client-Side DuckDB-WASM & Hybrid Execution Mode
+
+While enterprise warehouses handle billions of rows on the backend, small-to-medium analytical views (up to 50,000 rows) or offline datasets do not need server query latency. `serverside-pivot` introduces a **Zero-Network Client-Side Analytical Engine** powered by **DuckDB-WASM** and an in-browser vectorized SQL planner, providing complete bidirectional parity between browser-local and server-side execution.
+
+```
+┌────────────────────────────────────────────────────────────────────────────────────────┐
+│                        Universal Hybrid Execution Architecture                         │
+└────────────────────────────────────────────────────────────────────────────────────────┘
+                    Input Tabular Data / DataFrame / Parquet / URL
+                                         │
+                                         ▼
+                     ┌───────────────────────────────────────┐
+                     │    `resolve_execution_mode(...)`      │
+                     │  • `execution_mode="auto"` (Default)  │
+                     └───────────────────────────────────────┘
+                                         │
+               ┌─────────────────────────┴─────────────────────────┐
+               ▼ (<= 50,000 Rows / In-Memory Data)                  ▼ (> 50,000 Rows or Warehouse Table)
+ ┌───────────────────────────────────────────┐       ┌───────────────────────────────────────────┐
+ │   CLIENT MODE: Browser DuckDB-WASM        │       │   SERVER MODE: Ibis Pushdown / DuckDB     │
+ │ • Zero network latency (0 roundtrips)     │       │ • Unlimited dataset scale (1B+ rows)      │
+ │ • In-browser SQL & Arrow AST compilation  │       │ • Remote Snowflake / BigQuery / Postgres  │
+ │ • Offline & static client export ready    │       │ • Multi-worker Redis caching & RLS        │
+ │ • Constant < 80 MB client RAM             │       │ • Bounded 50-row virtual viewport slices  │
+ └───────────────────────────────────────────┘       └───────────────────────────────────────────┘
+```
+
+### 1. Zero-Boilerplate Hybrid Execution (`execution_mode="auto"`)
+
+Use the `configure_pivot_execution` helper in Python to automatically configure your `DashTanstackPivot` component. The engine transparently decides whether to compute pivots inside the browser or delegate to the server:
+
+```python
+import pandas as pd
+from dash import Dash, html
+from dash_tanstack_pivot import DashTanstackPivot
+from pivot_engine import configure_pivot_execution
+
+df = pd.read_parquet("quarterly_sales.parquet")  # e.g. 15,000 records
+
+# Generates normalized Dash props with auto-resolved execution mode
+execution_props = configure_pivot_execution(
+    data=df,                      # Pandas / Polars DataFrame, PyArrow Table, or dict list
+    execution_mode="auto",        # 'auto' (default), 'client', or 'server'
+    client_row_threshold=50_000,  # Runs in-browser if <= 50,000 rows
+    client_engine="auto",         # 'auto', 'duckdb-wasm', or 'memory'
+)
+
+app = Dash(__name__)
+app.layout = html.Div([
+    DashTanstackPivot(
+        id="pivot",
+        rowFields=["region", "country", "store"],
+        colFields=["quarter"],
+        valConfigs=[{"field": "revenue", "agg": "sum", "format": "currency"}],
+        **execution_props,
+    )
+])
+```
+
+### 2. Full Architectural Parity in Browser
+
+When running in client mode, `ClientPivotTransport` executes the identical Pivot Runtime Protocol V1 (`schemaVersion: 1`) entirely within WebAssembly:
+- **$\mathcal{O}(D)$ Hierarchy Expansions**: Multi-level drilldowns expand instantaneously without network requests.
+- **Dynamic Pivot Columns**: Column pivoting across multiple dimensions (`colFields`) with automatic row and column grand totals.
+- **Calculated Measures & Formulas**: In-browser AST evaluation for calculated measures (`[revenue] - [cost]`) and window functions (`percent_of_grand_total`).
+- **Interactive Visualizations & Charts**: Live 2D/3D ECharts docking directly fed from the client DuckDB instance.
+- **Local TSV / Excel Exports**: Client-side SheetJS streaming exports generated without server roundtrips.
 
 ---
 
@@ -324,6 +584,12 @@ python examples/demo_saas.py
 
 # 🎛️ Unified Showcase Hub (Interactive tabbed multi-industry launcher - Port 8054)
 python examples/demo_showcase_hub.py
+
+# ☁️ Enterprise Cloud Warehouse & Ibis Pushdown (40,000 workloads, Snowflake/BigQuery/Postgres - Port 8055)
+python examples/demo_cloud_warehouse.py
+
+# ⚡ Client-Side DuckDB-WASM & Hybrid Auto-Detection (2,500 - 50,000 rows, zero server lag - Port 8056)
+python examples/demo_clientside_version.py
 ```
 
 ---

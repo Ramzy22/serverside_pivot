@@ -22,6 +22,22 @@ The complete quick-start guide, security guidance, and examples live in the
 For a publishing-ready comparison of the Dash, React, and Streamlit hosts,
 see the [flagship host demos](https://github.com/Ramzy22/serverside_pivot/blob/main/examples/FLAGSHIP_DEMOS.md).
 
+## Cloud Data Warehouses & Ibis Backend Pushdown
+
+`serverside-pivot` connects directly to enterprise cloud data warehouses and distributed SQL engines using **Ibis**:
+- **Supported Dialects**: Snowflake (`snowflake://`), Google BigQuery (`bigquery://`), PostgreSQL/Supabase (`postgresql://`), MotherDuck (`md:`), ClickHouse (`clickhouse://`), Databricks (`databricks://`), Trino (`trino://`), SQLite (`sqlite://`), and DuckDB.
+- **Zero-Copy Pushdown**: Pass a lazy `ibis.Table` expression directly to `normalize_data_input(lazy_table, table_name, controller)`—the base table is never materialized to Arrow or Pandas in memory. All groupings, expansions, aggregations, and filters compile directly to the warehouse's native SQL dialect.
+- **Dialect Portability**: `BackendCapabilities` introspection automatically handles dialect differences (e.g., automatic `LOWER(col) LIKE` fallback for engines without native `ILIKE`, regex tenor sort fallback, parameter placeholder adaptation `%s` vs `?`, and bounded paged batch streaming for large exports).
+- **Enterprise Cloud Governance**: Analytical warehouses are read-only by default. Remote DDL (`PIVOT_ALLOW_REMOTE_DDL=1`) and write-back mutations (`PIVOT_ALLOW_REMOTE_MUTATIONS=1`) are strictly opt-in, with TTL schema metadata caching (`PIVOT_SCHEMA_CACHE_TTL_SECONDS=300`).
+
+## Client-Side DuckDB-WASM & Hybrid Execution Mode
+
+Small-to-medium analytical views (up to 50,000 rows) or offline datasets run **100% in-browser** with zero server roundtrips:
+- **Auto-Detection (`execution_mode="auto"`)**: Automatically executes queries inside the browser via `DuckDB-WASM` when records are within `client_row_threshold` (default 50,000) or when a `data_url` is provided without a server table. Automatically routes to server-side pushdown when datasets exceed the threshold or connect to remote warehouses.
+- **Explicit Modes**: Force 100% browser execution with `execution_mode="client"`, or server execution with `execution_mode="server"`.
+- **Python Configuration Helper**: `configure_pivot_execution(data=df, execution_mode="auto")` builds normalized component props for `DashTanstackPivot`.
+- **Full Analytical Parity**: Client-side execution supports O(D) hierarchical group expansions, multi-column sorting, column pivots (`colFields`), Excel formulas, window functions (`percent_of_grand_total`), custom dimensions, live ECharts charting, and client SheetJS exports.
+
 Cell editing and edit transactions are not a supported public capability in
 this release. Legacy edit-related Dash inputs are accepted as no-ops only for
 layout compatibility.

@@ -1576,6 +1576,14 @@ export const normalizePerformanceConfigValue = (value) => {
         rowOverscan: clampOptionalInteger(source.rowOverscan, 0, 64),
         columnOverscan: clampOptionalInteger(source.columnOverscan, 0, 16),
         prefetchColumns: clampOptionalInteger(source.prefetchColumns, 0, 32),
+        executionMode: typeof source.executionMode === 'string' && ['auto', 'client', 'server'].includes(source.executionMode.trim().toLowerCase()) ? source.executionMode.trim().toLowerCase() : undefined,
+        clientEngine: typeof source.clientEngine === 'string' && ['auto', 'duckdb-wasm', 'memory'].includes(source.clientEngine.trim().toLowerCase()) ? source.clientEngine.trim().toLowerCase() : undefined,
+        duckdbWasmThreshold: clampOptionalInteger(source.duckdbWasmThreshold, 0, 10000000),
+        clientRowThreshold: clampOptionalInteger(source.clientRowThreshold, 1, 10000000),
+        dataUrl: typeof source.dataUrl === 'string' && source.dataUrl.trim() ? source.dataUrl.trim() : undefined,
+        duckdbWasmCdnUrl: typeof source.duckdbWasmCdnUrl === 'string' && source.duckdbWasmCdnUrl.trim() ? source.duckdbWasmCdnUrl.trim() : undefined,
+        duckdbWasmInstance: source.duckdbWasmInstance || undefined,
+        legacyClientTable: Boolean(source.legacyClientTable),
     };
 };
 

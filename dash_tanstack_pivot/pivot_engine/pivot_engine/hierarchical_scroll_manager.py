@@ -93,7 +93,15 @@ class HierarchicalVirtualScrollManager:
         }
 
     def _uses_duckdb(self) -> bool:
+        caps = getattr(self.planner, "capabilities", None)
+        if caps is not None:
+            return bool(getattr(caps, "shared_connection_requires_lock", False))
         return getattr(self.planner.con, "name", "").lower() == "duckdb"
+
+    def _resolve_table(self, table_name: str):
+        if hasattr(self.planner, "resolve_table"):
+            return self.planner.resolve_table(table_name)
+        return self.planner.con.table(table_name)
 
     def _table_for_spec(self, spec: PivotSpec):
         # Cache per spec object identity to avoid rebuilding the ibis expression
@@ -106,7 +114,7 @@ class HierarchicalVirtualScrollManager:
         key = id(spec)
         if key not in cache:
             cache[key] = self.planner.builder.apply_custom_dimensions(
-                self.planner.con.table(spec.table),
+                self._resolve_table(spec.table),
                 getattr(spec, "custom_dimensions", []),
             )
         return cache[key]
@@ -555,7 +563,7 @@ class HierarchicalVirtualScrollManager:
             # evaluate those filters accurately.
             if level_1_table_name and self.backend is not None and not post_filters:
                 try:
-                     level_1_table = self.planner.con.table(level_1_table_name)
+                     level_1_table = self._resolve_table(level_1_table_name)
                      if pre_filters:
                          f_expr = self.planner.builder.build_filter_expression(level_1_table, pre_filters)
                          if f_expr is not None: level_1_table = level_1_table.filter(f_expr)
@@ -597,7 +605,7 @@ class HierarchicalVirtualScrollManager:
                      rollup_table_name = self.materialized_hierarchy_manager.get_rollup_table_name(spec, lv)
                      try:
                          if rollup_table_name:
-                             rollup_table = self.planner.con.table(rollup_table_name)
+                             rollup_table = self._resolve_table(rollup_table_name)
                              if pre_filters:
                                  f_expr = self.planner.builder.build_filter_expression(rollup_table, pre_filters)
                                  if f_expr is not None: rollup_table = rollup_table.filter(f_expr)
@@ -626,7 +634,7 @@ class HierarchicalVirtualScrollManager:
                      rollup_success = False
                      if rollup_table_name:
                          try:
-                             table_to_query = self.planner.con.table(rollup_table_name)
+                             table_to_query = self._resolve_table(rollup_table_name)
                              if pre_filters:
                                  f_expr = self.planner.builder.build_filter_expression(table_to_query, pre_filters)
                                  if f_expr is not None: table_to_query = table_to_query.filter(f_expr)
@@ -724,7 +732,7 @@ class HierarchicalVirtualScrollManager:
             if not is_pivot:
                 rollup_name = self.materialized_hierarchy_manager.get_rollup_table_name(spec, level)
                 if rollup_name:
-                    source_table = con.table(rollup_name)
+                    source_table = self._resolve_table(rollup_name)
             
             is_using_base = False
             if source_table is None:

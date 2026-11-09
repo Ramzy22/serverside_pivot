@@ -16,6 +16,12 @@ class ScalablePivotConfig:
     # Database configuration
     backend_uri: str = ":memory:"
     backend_type: str = "duckdb"
+    backend_database: Optional[str] = None
+    backend_schema: Optional[str] = None
+    backend_read_only: bool = True
+    allow_remote_ddl: bool = False
+    allow_remote_mutations: bool = False
+    schema_cache_ttl: int = 300
     
     # Caching configuration
     cache_type: str = "memory"  # memory or redis
@@ -70,6 +76,12 @@ class ScalablePivotConfig:
         # Database settings
         self.backend_uri = os.getenv('BACKEND_URI', self.backend_uri)
         self.backend_type = os.getenv('BACKEND_TYPE', self.backend_type)
+        self.backend_database = os.getenv('BACKEND_DATABASE', self.backend_database)
+        self.backend_schema = os.getenv('BACKEND_SCHEMA', self.backend_schema)
+        self.backend_read_only = os.getenv('BACKEND_READ_ONLY', str(self.backend_read_only)).strip().lower() in {'1', 'true', 'yes', 'on'}
+        self.allow_remote_ddl = os.getenv('PIVOT_ALLOW_REMOTE_DDL', str(self.allow_remote_ddl)).strip().lower() in {'1', 'true', 'yes', 'on'}
+        self.allow_remote_mutations = os.getenv('PIVOT_ALLOW_REMOTE_MUTATIONS', str(self.allow_remote_mutations)).strip().lower() in {'1', 'true', 'yes', 'on'}
+        self.schema_cache_ttl = int(os.getenv('PIVOT_SCHEMA_CACHE_TTL_SECONDS', str(self.schema_cache_ttl)))
         
         # Cache settings
         self.cache_type = os.getenv('CACHE_TYPE', self.cache_type)

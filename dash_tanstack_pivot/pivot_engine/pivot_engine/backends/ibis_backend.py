@@ -7,12 +7,13 @@ Features:
 - Connection pooling
 - Query timeout and cancellation
 - Performance metrics
-- Database-agnostic operations
+- Database-agnostic operations and cloud capability descriptors
 """
 
 from typing import Any, List, Dict, Optional, Union
 import asyncio
 import itertools
+import os
 import threading
 import time
 from contextlib import contextmanager
@@ -28,6 +29,10 @@ except ImportError:
     pa = None
 
 from pivot_engine.util.sql_builder import quote_ident
+from pivot_engine.backends.capabilities import (
+    BackendCapabilities,
+    resolve_backend_capabilities,
+)
 from pivot_engine.backends.duckdb_backend import (
     ConnectionPool,
     _fetch_arrow_table,
@@ -48,6 +53,126 @@ from pivot_engine.backends.execution import (
 _CANCELLATION_CLEANUP_TIMEOUT_SECONDS = 5.0
 
 
+def _connect_ibis_uri(connection_uri: str, **connection_kwargs) -> Any:
+    """Connect to any Ibis-supported local or cloud database from a URI."""
+    from urllib.parse import urlparse, parse_qs
+
+    uri = str(connection_uri).strip()
+    lower = uri.lower()
+
+    if lower.startswith(("postgres://", "postgresql://")):
+        parsed = urlparse(uri)
+        query_params = {k: v[-1] for k, v in parse_qs(parsed.query).items() if v}
+        merged_kwargs = {**query_params, **connection_kwargs}
+        return ibis.postgres.connect(
+            host=parsed.hostname,
+            port=parsed.port,
+            user=parsed.username,
+            password=parsed.password,
+            database=parsed.path.lstrip("/") or merged_kwargs.pop("database", None),
+            **merged_kwargs,
+        )
+    if lower.startswith(("mysql://", "mariadb://")):
+        parsed = urlparse(uri)
+        return ibis.mysql.connect(
+            host=parsed.hostname,
+            port=parsed.port or 3306,
+            user=parsed.username,
+            password=parsed.password,
+            database=parsed.path.lstrip("/"),
+            **connection_kwargs,
+        )
+    if lower.startswith("bigquery://"):
+        parsed = urlparse(uri)
+        kwargs = dict(connection_kwargs)
+        if parsed.hostname and "project_id" not in kwargs:
+            kwargs["project_id"] = parsed.hostname
+        if parsed.path.lstrip("/") and "dataset_id" not in kwargs:
+            kwargs["dataset_id"] = parsed.path.lstrip("/")
+        return ibis.bigquery.connect(**kwargs)
+    if lower.startswith("snowflake://"):
+        parsed = urlparse(uri)
+        kwargs = dict(connection_kwargs)
+        path_parts = [p for p in parsed.path.lstrip("/").split("/") if p]
+        if path_parts and "database" not in kwargs:
+            kwargs["database"] = "/".join(path_parts[:2]) if len(path_parts) >= 2 else path_parts[0]
+        return ibis.snowflake.connect(
+            user=parsed.username,
+            password=parsed.password,
+            account=parsed.hostname,
+            **kwargs,
+        )
+    if lower.startswith("clickhouse://"):
+        parsed = urlparse(uri)
+        return ibis.clickhouse.connect(
+            host=parsed.hostname,
+            port=parsed.port or 8123,
+            user=parsed.username,
+            password=parsed.password,
+            database=parsed.path.lstrip("/") if parsed.path else "default",
+            **connection_kwargs,
+        )
+    if lower.startswith("databricks://"):
+        parsed = urlparse(uri)
+        kwargs = dict(connection_kwargs)
+        if parsed.hostname and "server_hostname" not in kwargs:
+            kwargs["server_hostname"] = parsed.hostname
+        return ibis.databricks.connect(**kwargs)
+    if lower.startswith("trino://"):
+        parsed = urlparse(uri)
+        path_parts = [p for p in parsed.path.lstrip("/").split("/") if p]
+        kwargs = dict(connection_kwargs)
+        if len(path_parts) >= 1 and "database" not in kwargs:
+            kwargs["database"] = path_parts[0]
+        if len(path_parts) >= 2 and "schema" not in kwargs:
+            kwargs["schema"] = path_parts[1]
+        return ibis.trino.connect(
+            host=parsed.hostname or "localhost",
+            port=parsed.port or 8080,
+            user=parsed.username or kwargs.pop("user", "trino"),
+            password=parsed.password,
+            **kwargs,
+        )
+    if lower.startswith("mssql://"):
+        parsed = urlparse(uri)
+        return ibis.mssql.connect(
+            host=parsed.hostname,
+            port=parsed.port or 1433,
+            user=parsed.username,
+            password=parsed.password,
+            database=parsed.path.lstrip("/") or None,
+            **connection_kwargs,
+        )
+    if lower.startswith("oracle://"):
+        parsed = urlparse(uri)
+        return ibis.oracle.connect(
+            host=parsed.hostname,
+            port=parsed.port or 1521,
+            user=parsed.username,
+            password=parsed.password,
+            database=parsed.path.lstrip("/") or None,
+            **connection_kwargs,
+        )
+    if lower.startswith("sqlite://"):
+        db_path = uri[len("sqlite://"):]
+        return ibis.sqlite.connect(db_path, **connection_kwargs)
+    if lower.startswith(("md://", "md:", "motherduck://", "motherduck:")):
+        normalized_md = uri
+        if lower.startswith("motherduck://"):
+            normalized_md = "md:" + uri[len("motherduck://"):]
+        elif lower.startswith("md://"):
+            normalized_md = "md:" + uri[len("md://"):]
+        return ibis.duckdb.connect(normalized_md, **connection_kwargs)
+    if lower.startswith("duckdb://") or uri == ":memory:":
+        target = uri[len("duckdb://"):] if lower.startswith("duckdb://") else uri
+        return ibis.duckdb.connect(target, **connection_kwargs)
+
+    if "://" in uri and hasattr(ibis, "connect"):
+        return ibis.connect(uri, **connection_kwargs)
+
+    return ibis.duckdb.connect(uri, **connection_kwargs)
+
+
 class IbisBackend:
     """
     Database-agnostic backend that works with any Ibis-supported database.
@@ -60,6 +185,10 @@ class IbisBackend:
         query_timeout_seconds: Optional[float] = None,
         memory_limit: Optional[str] = None,
         resource_limits: Optional[ResourceLimits] = None,
+        allow_remote_ddl: Optional[bool] = None,
+        allow_remote_mutations: Optional[bool] = None,
+        read_only: Optional[bool] = None,
+        allow_soft_timeout: Optional[bool] = None,
         **connection_kwargs
     ):
         """
@@ -72,63 +201,15 @@ class IbisBackend:
         """
         if ibis is None:
             raise ImportError("ibis package required. Install: pip install ibis-framework")
-        
+
         self.con = connection
+        self.connection_uri = connection_uri
         self.resource_limits = resource_limits or ResourceLimits.from_environment()
         resolved_memory_limit = _resolve_duckdb_memory_limit(memory_limit, self.resource_limits)
-        
+
         # Support for different database backends based on URI
         if connection_uri:
-            if connection_uri.startswith("postgres://"):
-                from urllib.parse import urlparse
-                parsed = urlparse(connection_uri)
-                self.con = ibis.postgres.connect(
-                    host=parsed.hostname,
-                    port=parsed.port,
-                    user=parsed.username,
-                    password=parsed.password,
-                    database=parsed.path[1:]  # Remove leading slash
-                )
-            elif connection_uri.startswith("mysql://"):
-                from urllib.parse import urlparse
-                parsed = urlparse(connection_uri)
-                self.con = ibis.mysql.connect(
-                    host=parsed.hostname,
-                    port=parsed.port or 3306,
-                    user=parsed.username,
-                    password=parsed.password,
-                    database=parsed.path[1:]
-                )
-            elif connection_uri.startswith("bigquery://"):
-                self.con = ibis.bigquery.connect(**connection_kwargs)
-            elif connection_uri.startswith("snowflake://"):
-                from urllib.parse import urlparse
-                parsed = urlparse(connection_uri)
-                self.con = ibis.snowflake.connect(
-                    user=parsed.username,
-                    password=parsed.password,
-                    account=parsed.hostname,
-                    **connection_kwargs
-                )
-            elif connection_uri.startswith("clickhouse://"):
-                from urllib.parse import urlparse
-                parsed = urlparse(connection_uri)
-                self.con = ibis.clickhouse.connect(
-                    host=parsed.hostname,
-                    port=parsed.port or 8123,
-                    user=parsed.username,
-                    password=parsed.password,
-                    database=parsed.path[1:] if parsed.path else 'default',
-                    **connection_kwargs
-                )
-            elif connection_uri.startswith("sqlite://"):
-                db_path = connection_uri.replace("sqlite://", "")
-                self.con = ibis.sqlite.connect(db_path)
-            elif connection_uri.startswith("duckdb://") or connection_uri == ":memory:":
-                self.con = ibis.duckdb.connect(connection_uri.replace("duckdb://", "") if connection_uri.startswith("duckdb://") else connection_uri)
-            else:
-                # Default to DuckDB
-                self.con = ibis.duckdb.connect(connection_uri)
+            self.con = _connect_ibis_uri(connection_uri, **connection_kwargs)
 
         # Reconcile and apply the policy only for DuckDB. Other Ibis dialects
         # must not receive a DuckDB-specific SET statement, but callers still
@@ -153,6 +234,11 @@ class IbisBackend:
         self._query_timeout_seconds = resolve_query_timeout_seconds(
             query_timeout_seconds
         )
+        self._allow_soft_timeout = (
+            bool(allow_soft_timeout)
+            if allow_soft_timeout is not None
+            else os.environ.get("PIVOT_ALLOW_SOFT_QUERY_TIMEOUT", "0").strip().lower() in {"1", "true", "yes"}
+        )
         self._duckdb_pool: Optional[ConnectionPool] = None
         self._execution_metrics = {
             "cancellation_attempts": 0,
@@ -167,8 +253,16 @@ class IbisBackend:
                 lambda: self.con.con.cursor(),
                 max_size=10,
             )
+        self.capabilities: BackendCapabilities = resolve_backend_capabilities(
+            self.con,
+            connection_uri=connection_uri,
+            has_cancellable_pool=self._duckdb_pool is not None,
+            allow_remote_ddl=allow_remote_ddl,
+            allow_remote_mutations=allow_remote_mutations,
+            read_only=read_only,
+        )
         if self._query_timeout_seconds is not None:
-            if self._duckdb_pool is None:
+            if self._duckdb_pool is None and not self._allow_soft_timeout:
                 raise CancellationUnavailableError()
 
     def _backend_name(self) -> str:
@@ -366,6 +460,8 @@ class IbisBackend:
         query: Union[Dict[str, Any], str],
         params: Optional[List[Any]],
         return_arrow: bool,
+        *,
+        timeout_seconds: Optional[float] = None,
     ) -> Any:
         """Preserve normal async Ibis execution when no hard deadline is requested."""
         loop = asyncio.get_running_loop()
@@ -374,7 +470,21 @@ class IbisBackend:
         with self._running_queries_lock:
             self._running_queries[query_id] = task
         try:
-            return await asyncio.shield(task)
+            if timeout_seconds is None:
+                return await asyncio.shield(task)
+            done, _pending = await asyncio.wait({task}, timeout=timeout_seconds)
+            if done:
+                return task.result()
+            with self._running_queries_lock:
+                self._execution_metrics["timeouts"] += 1
+            while not task.done():
+                try:
+                    await asyncio.shield(task)
+                except asyncio.CancelledError:
+                    continue
+                except Exception:
+                    break
+            raise QueryTimeoutError()
         except asyncio.CancelledError as exc:
             # The underlying executor future cannot stop the physical query.
             # Keep the runtime reservation owned until that thread actually
@@ -407,12 +517,13 @@ class IbisBackend:
             else getattr(self, "_query_timeout_seconds", None)
         )
         if getattr(self, "_duckdb_pool", None) is None:
-            if requested_timeout is not None:
+            if requested_timeout is not None and not getattr(self, "_allow_soft_timeout", False):
                 raise CancellationUnavailableError()
             return await self._execute_async_without_cancellation(
                 query,
                 params,
                 return_arrow,
+                timeout_seconds=requested_timeout,
             )
 
         execution = DatabaseExecution(f"ibis-query-{next(self._query_id_counter)}")
@@ -528,8 +639,11 @@ class IbisBackend:
         *,
         max_batch_bytes: int = 32 * 1024 * 1024,
         max_batch_rows: int = 10_000,
+        chunk_rows: Optional[int] = None,
     ):
         """Yield native Arrow batches without a full-table execute fallback."""
+        if chunk_rows is not None:
+            max_batch_rows = int(chunk_rows)
         if pa is None:
             raise ImportError("pyarrow is required for bounded export batches")
         if max_batch_bytes <= 0 or max_batch_rows <= 0:
@@ -547,6 +661,26 @@ class IbisBackend:
                         max_batch_rows=max_batch_rows,
                     )
                 return
+            # Cloud Ibis expressions that expose limit() + to_pyarrow() can page
+            # bounded Arrow chunks without materializing the entire table.
+            limit_fn = getattr(expression, "limit", None)
+            to_pyarrow_fn = getattr(expression, "to_pyarrow", None)
+            if callable(limit_fn) and callable(to_pyarrow_fn):
+                offset = 0
+                chunk_rows = int(max_batch_rows)
+                while True:
+                    paged_expr = limit_fn(chunk_rows, offset=offset) if offset else limit_fn(chunk_rows)
+                    page_table = paged_expr.to_pyarrow()
+                    if page_table is None or page_table.num_rows == 0:
+                        return
+                    yield from iter_bounded_record_batches(
+                        page_table,
+                        max_batch_bytes=max_batch_bytes,
+                        max_batch_rows=max_batch_rows,
+                    )
+                    if page_table.num_rows < chunk_rows:
+                        return
+                    offset += int(page_table.num_rows)
 
         # A DuckDB Ibis connection can expose the same cursor-level reader for
         # raw SQL. Other Ibis backends must provide their own native batch API;
@@ -620,6 +754,8 @@ class IbisBackend:
         Create a database index on the specified table and columns.
         This provides a performance boost for large datasets.
         """
+        if not getattr(getattr(self, "capabilities", None), "supports_ddl_materialization", True):
+            return
         if not index_name:
             # Generate a safe index name
             import hashlib

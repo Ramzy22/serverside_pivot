@@ -313,7 +313,7 @@ Keyword arguments:
 
 - paginationConfig (dict; default PropTypes.object)
 
-- performanceConfig (dict; default PropTypes.shape({    cacheBlockSize: PropTypes.number,    maxBlocksInCache: PropTypes.number,    blockLoadDebounceMs: PropTypes.number,    rowOverscan: PropTypes.number,    columnOverscan: PropTypes.number,    prefetchColumns: PropTypes.number  }))
+- performanceConfig (dict; default PropTypes.shape({    cacheBlockSize: PropTypes.number,    maxBlocksInCache: PropTypes.number,    blockLoadDebounceMs: PropTypes.number,    rowOverscan: PropTypes.number,    columnOverscan: PropTypes.number,    prefetchColumns: PropTypes.number,    executionMode: PropTypes.oneOf(['auto', 'client', 'server']),    clientEngine: PropTypes.oneOf(['auto', 'duckdb-wasm', 'memory']),    duckdbWasmThreshold: PropTypes.number,    clientRowThreshold: PropTypes.number,    dataUrl: PropTypes.string,    duckdbWasmCdnUrl: PropTypes.string,    legacyClientTable: PropTypes.bool  }))
 
 - persistence (dict; default PropTypes.oneOfType([PropTypes.bool, PropTypes.string, PropTypes.number]))
 

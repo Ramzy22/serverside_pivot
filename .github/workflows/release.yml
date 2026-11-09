@@ -185,3 +185,14 @@ jobs:
         uses: pypa/gh-action-pypi-publish@release/v1
         with:
           packages-dir: ${{ env.PIVOT_PYPI_DIST }}/
+
+      - name: Publish to npm
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+        run: |
+          if [ -n "$NODE_AUTH_TOKEN" ]; then
+            npm set //registry.npmjs.org/:_authToken="$NODE_AUTH_TOKEN"
+            npm publish "$RUNNER_TEMP/serverside-pivot-npm"/*.tgz --access public
+          else
+            echo "::warning::NPM_TOKEN secret not configured, skipping npm publish."
+          fi
