@@ -1,7 +1,7 @@
 {
   "name": "dash_tanstack_pivot",
   "version": "0.0.91",
-  "description": "A Dash component built with TanStack Table v8",
+  "description": "Enterprise-grade analytical pivot table & virtualized data grid for React. Dual-engine: zero-network in-browser analytics (DuckDB-WASM & in-memory) and scalable server-side pushdown. Built with TanStack Table v8, ECharts 6, and 2D virtualization.",
   "main": "./dist/react/index.mjs",
   "types": "./dist/react/react.d.ts",
   "files": [
@@ -36,7 +36,7 @@
     "typecheck:js": "tsc --project tsconfig.checked-js.json --noEmit && node scripts/verify_checked_js_gate.mjs",
     "generate:runtime-contract-types": "json2ts -i pivot_engine/pivot_engine/runtime/runtime-contract.schema.json -o src/lib/runtime/runtime-contract.generated.ts && json2ts -i pivot_engine/pivot_engine/runtime/runtime-response.schema.json -o src/lib/runtime/runtime-response-contract.generated.ts"
   },
-  "author": "Gemini",
+  "author": "Ramzy <ramzyelawady@gmail.com>",
   "license": "MIT",
   "dependencies": {
     "@tanstack/react-table": "^8.10.7",
