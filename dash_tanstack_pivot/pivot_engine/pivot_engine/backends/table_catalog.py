@@ -13,10 +13,13 @@ local connection so that:
 
 from __future__ import annotations
 
+import logging
 import os
 import threading
 import time
 from typing import Any, Dict, List, Optional, Tuple
+
+_logger = logging.getLogger(__name__)
 
 
 def _default_schema_cache_ttl() -> float:
@@ -144,19 +147,20 @@ class IbisTableCatalog:
                 except TypeError:
                     try:
                         return con.table(name_part, schema=schema_part)
-                    except Exception:
-                        pass
-                except Exception:
-                    pass
+                    except Exception as exc:
+                        _logger.debug("Fallback schema table lookup failed for %s: %s", key, exc)
+                except Exception as exc:
+                    _logger.debug("Qualified table lookup failed for %s: %s", key, exc)
             elif len(parts) == 3:
                 db_part, schema_part, name_part = parts
                 try:
                     return con.table(name_part, database=(db_part, schema_part))
-                except Exception:
+                except Exception as exc:
+                    _logger.debug("Tuple database lookup failed for %s: %s", key, exc)
                     try:
                         return con.table(name_part, database=f"{db_part}.{schema_part}")
-                    except Exception:
-                        pass
+                    except Exception as fallback_exc:
+                        _logger.debug("Dotted database lookup failed for %s: %s", key, fallback_exc)
 
         # Apply configured default database / schema if set
         if self.default_database or self.default_schema:
@@ -167,8 +171,8 @@ class IbisTableCatalog:
                 db_arg = self.default_database or self.default_schema
             try:
                 return con.table(key, database=db_arg)
-            except Exception:
-                pass
+            except Exception as exc:
+                _logger.debug("Default database lookup failed for %s (%s): %s", key, db_arg, exc)
 
         return con.table(key)
 

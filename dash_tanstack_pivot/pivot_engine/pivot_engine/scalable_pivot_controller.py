@@ -13,6 +13,7 @@ from contextvars import ContextVar
 import re
 import json
 import hashlib
+import logging
 from functools import cmp_to_key
 import pyarrow as pa
 import asyncio
@@ -2806,8 +2807,8 @@ class ScalablePivotController(PivotController):
                 _, cols = self.planner.get_table_schema_and_columns(table_name)
                 if cols:
                     return list(cols)
-            except Exception:
-                pass
+            except Exception as exc:
+                logging.getLogger(__name__).debug("Planner schema lookup failed for %s: %s", table_name, exc)
         table_expr = self.resolve_table(table_name)
         return list(getattr(table_expr, "columns", []) or [])
 
