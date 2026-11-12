@@ -7,7 +7,7 @@ import { buildTsvFromRawRows } from '../utils/rawTableTsv';
 import { areStringArraysEqual, collectColumnDefLeafIds, mergeColumnOrderWithIds, reconcilePivotLayoutOrder, pivotLayoutRequestFields } from '../utils/columnOrder';
 import { compareFilterOptionValues } from '../utils/filterOptions';
 import Icons from '../utils/Icons';
-import { MAX_AUTO_SIZE_SAMPLE_ROWS, MAX_PENDING_ROW_TRANSITIONS, GRAND_TOTAL_ROW_ID, resolveTransportRowId, normalizeRowPinningState, getPinnedSideForRow } from '../hooks/usePivotNormalization';
+import { MAX_AUTO_SIZE_SAMPLE_ROWS, MAX_PENDING_ROW_TRANSITIONS, GRAND_TOTAL_ROW_ID, isGrandTotalRow, resolveTransportRowId, normalizeRowPinningState, getPinnedSideForRow } from '../hooks/usePivotNormalization';
 const DEFAULT_SERVER_SIDE_BLOCK_SIZE = 48;
 const EXPAND_ALL_STATE_KEY = '__ALL__';
 const normalizeLayoutModeValue = value => {
@@ -946,16 +946,18 @@ export function useViewportRuntimeStage(input, transport) {
     rowFields: stage.rowFields,
     colFields: stage.colFields,
     valConfigs: stage.valConfigs,
-    customDimensions: stage.customDimensions
-  }), [stage.sorting, stage.filters, stage.rowFields, stage.colFields, stage.valConfigs, stage.customDimensions]);
+    customDimensions: stage.customDimensions,
+    clientRuntimeActive: Boolean(stage.clientRuntimeActive)
+  }), [stage.sorting, stage.filters, stage.rowFields, stage.colFields, stage.valConfigs, stage.customDimensions, stage.clientRuntimeActive]);
   stage.serverSideViewportResetKey = useMemo(() => JSON.stringify({
     sorting: stage.sorting,
     filters: stage.filters,
     rowFields: stage.rowFields,
     colFields: stage.colFields,
     valConfigs: stage.valConfigs,
-    customDimensions: stage.customDimensions
-  }), [stage.sorting, stage.filters, stage.rowFields, stage.colFields, stage.valConfigs, stage.customDimensions]);
+    customDimensions: stage.customDimensions,
+    clientRuntimeActive: Boolean(stage.clientRuntimeActive)
+  }), [stage.sorting, stage.filters, stage.rowFields, stage.colFields, stage.valConfigs, stage.customDimensions, stage.clientRuntimeActive]);
   stage.effectiveRowCount = stage.serverSidePinsGrandTotal && stage.rowCount ? Math.max(stage.rowCount - 1, 0) : stage.rowCount;
   stage.statusRowCount = stage.serverSidePinsGrandTotal && stage.rowCount ? Math.max(stage.rowCount - 1, 0) : stage.rowCount;
   const recordProfilerQueuedRequest = transport && transport.profiling && typeof transport.profiling.recordQueued === 'function'
@@ -1297,7 +1299,7 @@ export function useViewportRuntimeStage(input, transport) {
   for (const [key, value] of Object.entries(colorScalePresentation)) stage[key] = value;
   stage.getRowId = useCallback((row, relativeIndex) => {
     if (!row) return `skeleton_${relativeIndex}`; // Handle skeleton rows
-    if (row._isTotal || row._path === '__grand_total__' || row._id === 'Grand Total') return '__grand_total__';
+    if (isGrandTotalRow(row)) return GRAND_TOTAL_ROW_ID;
     if (stage.serverSide && typeof row.__virtualIndex === 'number') {
       return row._path || (row.id ? row.id : String(row.__virtualIndex));
     }
@@ -1402,17 +1404,40 @@ export function useViewportRuntimeStage(input, transport) {
     }
     return state;
   }, [stage.sorting, stage.expanded, stage.columnPinning, stage.rowPinning, stage.rowFields, stage.viewMode, stage.columnVisibility, stage.effectiveColumnOrder, stage.columnSizing, stage.tableData, stage.effectiveGrandTotalPinState, stage.getStableDataRowId, stage.paginationConfig.enabled, stage.paginationState]);
+  const lastExpandAllActionRef = useRef<{ shouldExpand: boolean; at: number } | null>(null);
   stage.handleExpandAllRows = shouldExpand => {
-    // Guard against rapid double-clicks: second click before server responds
-    // would call clearCache() again but the net expanded state change may be
-    // batched away by React, leaving the cache empty with no request sent.
-    if (stage.expandAllDebounceRef.current) return;
+    // Guard against rapid repeat clicks of the same action: a duplicate click
+    // before the server responds could wipe the cache while React batches away
+    // the identical expanded state, leaving no request queued. Opposite clicks
+    // (e.g. Collapse All -> Expand All) must never be debounced.
+    const nextDirection = Boolean(shouldExpand);
+    const now = Date.now();
+    const prevAction = lastExpandAllActionRef.current;
+    if (stage.expandAllDebounceRef.current && prevAction && prevAction.shouldExpand === nextDirection && (now - prevAction.at) < 800) {
+      return;
+    }
+    lastExpandAllActionRef.current = { shouldExpand: nextDirection, at: now };
     stage.expandAllDebounceRef.current = true;
     setTimeout(() => {
-      stage.expandAllDebounceRef.current = false;
+      if (lastExpandAllActionRef.current && lastExpandAllActionRef.current.at === now) {
+        stage.expandAllDebounceRef.current = false;
+      }
     }, 800);
     if (stage.serverSide) {
       stage.captureExpansionScrollPosition();
+      stage.pendingExpansionRef.current = null;
+      stage.setPendingRowTransitions(prev => (prev && prev.size > 0 ? new Map() : prev));
+      if (!shouldExpand) {
+        if (stage.parentRef.current) stage.parentRef.current.scrollTop = 0;
+        if (stage.latestRequestedViewportRef) stage.latestRequestedViewportRef.current = null;
+        if (stage.latestViewportRef) {
+          stage.latestViewportRef.current = {
+            start: 0,
+            end: Math.max(0, (stage.serverSideBlockSize || 48) - 1),
+            count: stage.serverSideBlockSize || 48
+          };
+        }
+      }
       // Expanding/collapsing ALL rows changes every row index — full cache wipe.
       // (This path bypasses onExpandedChange so invalidateFromBlock won't run.)
       stage.clearCache();
@@ -1528,7 +1553,7 @@ export function useViewportRuntimeStage(input, transport) {
         const allKeys = new Set([...Object.keys(oldExp), ...Object.keys(newExp)]);
         const changedPath = toggledExpandedPath || [...allKeys].find(key => key !== EXPAND_ALL_STATE_KEY && (Object.prototype.hasOwnProperty.call(oldExp, key) !== Object.prototype.hasOwnProperty.call(newExp, key) || !!oldExp[key] !== !!newExp[key]));
         if (changedPath) {
-          const isNowExpanded = !!(newExpanded && newExpanded[changedPath]);
+          const isNowExpanded = usesExpandAllDefault ? !!(rawExpanded && rawExpanded[changedPath]) : !!(newExpanded && newExpanded[changedPath]);
           stage.setPendingRowTransitions(prev => {
             const next = new Map(prev);
             next.set(changedPath, isNowExpanded ? 'expand' : 'collapse');
@@ -1564,7 +1589,8 @@ export function useViewportRuntimeStage(input, transport) {
         stage.pendingExpansionRef.current = {
           anchorBlock,
           expandedRowVirtualIndex,
-          oldRowCount: stage.rowCount
+          oldRowCount: stage.rowCount,
+          baselineDataVersion: Number(stage.dataVersion || 0)
         };
       }
       stage.setExpandedWithHistory(newExpanded, 'layout:expanded');
@@ -2106,13 +2132,37 @@ export function useViewportRuntimeStage(input, transport) {
   // After the anchor block is updated with fresh data, blocks beyond it are
   // deleted so they get re-fetched on next scroll (their row indices shifted).
   useEffect(() => {
-    if (!stage.serverSide || !stage.pendingExpansionRef.current) return;
+    if (!stage.structuralInFlight) return;
+    stage.pendingExpansionRef.current = null;
+    stage.setPendingRowTransitions(prev => (prev && prev.size > 0 ? new Map() : prev));
+  }, [stage.structuralInFlight]);
+
+  useEffect(() => {
+    const pendingExpansion = stage.pendingExpansionRef.current;
+    if (!stage.serverSide) {
+      stage.setPendingRowTransitions(prev => (prev && prev.size > 0 ? new Map() : prev));
+      return;
+    }
+    if (!pendingExpansion) {
+      if (!stage.structuralInFlight && !stage.isRequestPending) {
+        stage.setPendingRowTransitions(prev => (prev && prev.size > 0 ? new Map() : prev));
+      }
+      return;
+    }
+    const currentDataVersion = Number(stage.dataVersion || 0);
+    if (
+      typeof pendingExpansion.expectedVersion === 'number'
+        ? currentDataVersion < pendingExpansion.expectedVersion
+        : (typeof pendingExpansion.baselineDataVersion === 'number' && currentDataVersion <= pendingExpansion.baselineDataVersion)
+    ) {
+      return;
+    }
     const {
       anchorBlock,
       expandedRowVirtualIndex,
       oldRowCount,
       extendedToBlock = -1
-    } = stage.pendingExpansionRef.current;
+    } = pendingExpansion;
     stage.pendingExpansionRef.current = null;
     if (anchorBlock < 0) {
       // The expanded row was not in the viewport when the user toggled it.

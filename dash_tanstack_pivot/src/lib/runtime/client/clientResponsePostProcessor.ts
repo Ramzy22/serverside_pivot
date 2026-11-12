@@ -281,8 +281,10 @@ function compareRowValues(
 }
 
 function isPathExpanded(pathParts: string[], plan: LogicalPivotPlan): boolean {
-    if (plan.expandedAll) return true;
     const target = pathParts.join('|||');
+    if (plan.expandedAll) {
+        return !plan.collapsedPaths.some((p) => p.join('|||') === target);
+    }
     return plan.expandedPaths.some((p) => p.join('|||') === target);
 }
 
@@ -542,14 +544,15 @@ function buildPivotVisibleRows(
     const materializeNodeRecord = (node: HierarchyGroupNode, isSubtotal = false): { [key: string]: unknown } => {
         const metrics = computeAggregatedRecord(node.rows, plan, colCombinations, formulaErrors);
         const hasChildren = node.depth + 1 < plan.rowFields.length && node.children.length > 0;
-        const expanded = hasChildren && isPathExpanded(node.pathParts, plan);
+        const tabularForceExpand = plan.layoutMode === 'tabular';
+        const expanded = hasChildren && (tabularForceExpand || isPathExpanded(node.pathParts, plan));
         const rowObj: { [key: string]: unknown } = {
             ...metrics,
             _id: isSubtotal ? `${node.label} Total` : node.label,
             _path: isSubtotal ? `${node.key}|||__subtotal__` : node.key,
             depth: node.depth,
-            _has_children: isSubtotal ? false : hasChildren,
-            _is_expanded: isSubtotal ? false : expanded,
+            _has_children: (isSubtotal || tabularForceExpand) ? false : hasChildren,
+            _is_expanded: (isSubtotal || tabularForceExpand) ? false : expanded,
         };
         for (let i = 0; i <= node.depth && i < plan.rowFields.length; i += 1) {
             rowObj[plan.rowFields[i]] = node.pathParts[i];
@@ -557,6 +560,9 @@ function buildPivotVisibleRows(
         if (isSubtotal) {
             rowObj._isTotal = true;
             rowObj.__isSubtotal__ = true;
+            if (plan.layoutMode === 'tabular') {
+                rowObj._isTabularSubtotal = true;
+            }
             rowObj[node.field] = `${node.label} Total`;
         }
         return rowObj;
@@ -587,21 +593,24 @@ function buildPivotVisibleRows(
 
         for (const node of nodes) {
             const rec = recordMap.get(node.key)!;
-            const hasChildren = Boolean(rec._has_children);
+            const nodeHasChildren = node.depth + 1 < plan.rowFields.length && node.children.length > 0;
             const expanded = Boolean(rec._is_expanded);
 
-            if (plan.layoutMode === 'tabular' && hasChildren && expanded) {
-                walkNodes(node.children);
-                if (plan.showSubtotalFooters) {
-                    visibleRows.push(materializeNodeRecord(node, true));
-                }
-            } else {
-                visibleRows.push(rec);
-                if (hasChildren && expanded) {
+            if (plan.layoutMode === 'tabular') {
+                if (nodeHasChildren) {
                     walkNodes(node.children);
                     if (plan.showSubtotalFooters) {
                         visibleRows.push(materializeNodeRecord(node, true));
                     }
+                } else {
+                    visibleRows.push(rec);
+                }
+            } else {
+                // Hierarchy and outline are pre-order views: the expandable group row
+                // already carries the aggregate subtotal (matching Python hierarchy_rows.py).
+                visibleRows.push(rec);
+                if (nodeHasChildren && expanded) {
+                    walkNodes(node.children);
                 }
             }
         }
@@ -878,11 +887,10 @@ function buildColumnListAndSchema(
     centerColumns: string[];
     colSchema: {
         total_center_cols: number;
-        layoutRevision: string;
-        columns: Array<{ id: string; layoutId: string; index: number; size: number }>;
+        layoutRevision?: string;
+        columns: Array<{ id: string; layoutId?: string; index: number; size: number }>;
     };
 } {
-    const layoutRev = `client_rev_${plan.stateEpoch}`;
     if (plan.viewMode === 'table') {
         const sample = sampleRows[0] || {};
         const cols = Object.keys(sample).filter((k) => !k.startsWith('_'));
@@ -892,8 +900,7 @@ function buildColumnListAndSchema(
             centerColumns: cols,
             colSchema: {
                 total_center_cols: cols.length,
-                layoutRevision: layoutRev,
-                columns: cols.map((id, index) => ({ id, layoutId: id, index, size: 150 })),
+                columns: cols.map((id, index) => ({ id, index, size: 150 })),
             },
         };
     }
@@ -957,7 +964,6 @@ function buildColumnListAndSchema(
 
     const schemaEntries = centerCols.map((id, index) => ({
         id,
-        layoutId: id,
         index,
         size: 145,
     }));
@@ -980,7 +986,6 @@ function buildColumnListAndSchema(
         centerColumns: centerCols,
         colSchema: {
             total_center_cols: centerCols.length,
-            layoutRevision: layoutRev,
             columns: slicedSchema,
         },
     };
@@ -1118,9 +1123,11 @@ export class ClientResponsePostProcessor {
             columns: allColumnObjects as unknown as JsonObject[],
             colSchema: colSchema as unknown as JsonObject,
             col_schema: colSchema as unknown as JsonObject,
-            layoutRevision: colSchema.layoutRevision,
             dataOffset: plan.start,
             dataVersion: plan.windowSeq || plan.version || 1,
+            version: plan.windowSeq || plan.version || 1,
+            windowSeq: plan.windowSeq || plan.version || 1,
+            stateEpoch: plan.stateEpoch,
             formulaErrors: Object.keys(formulaErrors).length > 0 ? formulaErrors : null,
             colorScaleStats: colorScaleStats as unknown as JsonObject,
             executionMode: 'client',

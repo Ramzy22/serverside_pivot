@@ -14,7 +14,7 @@ import {
     resolveSparklineDeltaValue,
     resolveSparklineMetricValue,
 } from '../utils/sparklines';
-import { formatCustomAwareFieldLabel } from './usePivotNormalization';
+import { formatCustomAwareFieldLabel, isGrandTotalRow } from './usePivotNormalization';
 import {
     isBlankHierarchyValue,
     resolveTabularPathFieldValue,
@@ -612,14 +612,8 @@ export function useColumnDefs({
 
                 // 1. Special handling for grand total - it should always be at the end
                 // Check multiple ways to identify the grand total
-                const aIsGrandTotal = rowA.id === '__grand_total__' ||
-                                     rowA.original.__isGrandTotal__ ||
-                                     rowA.original._path === '__grand_total__' ||
-                                     rowA.original._id === 'Grand Total';
-                const bIsGrandTotal = rowB.id === '__grand_total__' ||
-                                     rowB.original.__isGrandTotal__ ||
-                                     rowB.original._path === '__grand_total__' ||
-                                     rowB.original._id === 'Grand Total';
+                const aIsGrandTotal = isGrandTotalRow(rowA);
+                const bIsGrandTotal = isGrandTotalRow(rowB);
 
                 // If one is grand total and the other is not, grand total goes last
                 if (aIsGrandTotal && !bIsGrandTotal) return 1;
@@ -760,7 +754,7 @@ export function useColumnDefs({
                             }
                         }}
                     >
-                        {(row.original && (row.original._isTotal || row.original._path === '__grand_total__' || row.original._id === 'Grand Total'))
+                        {isGrandTotalRow(row)
                             ? (rowCount != null ? rowCount : '∑')
                             : (row.index + 1 + (serverSide ? (renderedOffset || 0) : 0))}
                     </div>
@@ -993,7 +987,7 @@ export function useColumnDefs({
                             if (i !== depth) showValue = false;
                         } else {
                             // Tabular: suppress non-first columns only on the grand total row
-                            const isGrandTotal = row.original && (row.original._isTotal || row.original._path === '__grand_total__');
+                            const isGrandTotal = isGrandTotalRow(row);
                             if (isGrandTotal && i > 0) showValue = false;
                         }
 

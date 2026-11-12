@@ -251,31 +251,53 @@ function normalizeSorting(rawSorting: unknown, rawSortOptions: unknown): Normali
     return result;
 }
 
-function normalizeExpanded(rawExpanded: unknown): { expandedAll: boolean; expandedPaths: string[][] } {
+function normalizeExpanded(rawExpanded: unknown): { expandedAll: boolean; expandedPaths: string[][]; collapsedPaths: string[][] } {
     if (rawExpanded === true) {
-        return { expandedAll: true, expandedPaths: [] };
+        return { expandedAll: true, expandedPaths: [], collapsedPaths: [] };
     }
     if (Array.isArray(rawExpanded)) {
-        const paths = rawExpanded
-            .map((entry) => (Array.isArray(entry) ? entry.map((v) => String(v)) : String(entry).split('|||').filter(Boolean)))
-            .filter((p) => p.length > 0);
-        return { expandedAll: false, expandedPaths: paths };
-    }
-    if (rawExpanded && typeof rawExpanded === 'object') {
-        const paths: string[][] = [];
-        for (const [key, isExpanded] of Object.entries(rawExpanded as { [key: string]: unknown })) {
-            if (!isExpanded) continue;
-            if (key === '__ALL__' || key === '*') {
-                return { expandedAll: true, expandedPaths: [] };
+        let expandedAll = false;
+        const expandedPaths: string[][] = [];
+        const collapsedPaths: string[][] = [];
+        for (const entry of rawExpanded) {
+            if (entry === '__ALL__' || entry === '*') {
+                expandedAll = true;
+                continue;
             }
-            const parts = key.split('|||').filter((part) => part.length > 0);
-            if (parts.length > 0) {
-                paths.push(parts);
+            const rawParts = Array.isArray(entry)
+                ? entry.map((v) => String(v))
+                : String(entry).split('|||').filter(Boolean);
+            if (rawParts.length === 0) continue;
+            if (rawParts[0] === '__COLLAPSED__') {
+                const collapsedParts = rawParts.slice(1).filter((part) => part.length > 0);
+                if (collapsedParts.length > 0) collapsedPaths.push(collapsedParts);
+            } else {
+                const parts = rawParts.filter((part) => part.length > 0);
+                if (parts.length > 0) expandedPaths.push(parts);
             }
         }
-        return { expandedAll: false, expandedPaths: paths };
+        return { expandedAll, expandedPaths, collapsedPaths };
     }
-    return { expandedAll: false, expandedPaths: [] };
+    if (rawExpanded && typeof rawExpanded === 'object') {
+        let expandedAll = false;
+        const expandedPaths: string[][] = [];
+        const collapsedPaths: string[][] = [];
+        for (const [key, isExpanded] of Object.entries(rawExpanded as { [key: string]: unknown })) {
+            if (key === '__ALL__' || key === '*') {
+                if (isExpanded) expandedAll = true;
+                continue;
+            }
+            const parts = key.split('|||').filter((part) => part.length > 0);
+            if (parts.length === 0) continue;
+            if (isExpanded) {
+                expandedPaths.push(parts);
+            } else {
+                collapsedPaths.push(parts);
+            }
+        }
+        return { expandedAll, expandedPaths, collapsedPaths };
+    }
+    return { expandedAll: false, expandedPaths: [], collapsedPaths: [] };
 }
 
 function buildCustomDimensionSql(dim: NormalizedCustomDimension): string {
@@ -461,7 +483,7 @@ export class ClientSqlPlanner {
                 ? (mergedState.sort_options as { [key: string]: unknown })
                 : {});
         const sorting = normalizeSorting(mergedState.sorting, sortOptionsRaw);
-        const { expandedAll, expandedPaths } = normalizeExpanded(mergedState.expanded);
+        const { expandedAll, expandedPaths, collapsedPaths } = normalizeExpanded(mergedState.expanded);
 
         const rawMeasureAxis = (mergedState.measureAxis && typeof mergedState.measureAxis === 'object')
             ? (mergedState.measureAxis as { [key: string]: unknown })
@@ -545,6 +567,7 @@ export class ClientSqlPlanner {
             },
             expandedAll,
             expandedPaths,
+            collapsedPaths,
             measureAxis,
             treeConfig: (mergedState.treeConfig && typeof mergedState.treeConfig === 'object')
                 ? (mergedState.treeConfig as { [key: string]: unknown })

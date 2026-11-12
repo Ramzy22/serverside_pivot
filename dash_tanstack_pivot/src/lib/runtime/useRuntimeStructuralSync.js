@@ -3,7 +3,7 @@ import { useEffect, useRef } from 'react';
 const DEFAULT_SERVER_SIDE_BLOCK_SIZE = 48;
 const DEFAULT_INITIAL_SYNC_STATE = { layoutMode: 'hierarchy' };
 const UI_ONLY_KEYS = new Set(['detailMode', 'detailConfig', 'columnPinning', 'rowPinning', 'grandTotalPinOverride', 'columnVisibility', 'columnOrder', 'columnSizing']);
-const SCHEMA_SHAPE_CHANGE_KEYS = new Set(['viewMode', 'detailMode', 'treeConfig', 'detailConfig', 'reportDef', 'customDimensions', 'measureAxis', 'rowFields', 'colFields', 'valConfigs', 'showRowTotals', 'showColTotals', 'showSubtotals', 'layoutMode']);
+const SCHEMA_SHAPE_CHANGE_KEYS = new Set(['viewMode', 'detailMode', 'treeConfig', 'detailConfig', 'reportDef', 'customDimensions', 'measureAxis', 'rowFields', 'colFields', 'valConfigs', 'showRowTotals', 'showColTotals', 'showSubtotals', 'layoutMode', 'executionMode', 'clientRuntimeActive', 'clientEngine']);
 
 /**
  * Synchronizes structural grid state with Dash and starts the corresponding
@@ -35,6 +35,8 @@ export function useRuntimeStructuralSync({
     setPropsRef,
   },
   state: {
+    clientEngine,
+    clientRuntimeActive,
     colFields,
     columnOrder,
     columnPinning,
@@ -44,6 +46,7 @@ export function useRuntimeStructuralSync({
     detailConfig,
     detailMode,
     effectiveSortOptions,
+    executionMode,
     expanded,
     filters,
     grandTotalPinOverride,
@@ -77,7 +80,15 @@ export function useRuntimeStructuralSync({
       showRowTotals, showColTotals, showSubtotals, columnPinning, rowPinning,
       columnVisibility, columnOrder, columnSizing,
     };
-    const nextSyncState = { ...nextProps, layoutMode, grandTotalPinOverride, serverSidePinsGrandTotal };
+    const nextSyncState = {
+      ...nextProps,
+      layoutMode,
+      grandTotalPinOverride,
+      serverSidePinsGrandTotal,
+      executionMode,
+      clientRuntimeActive,
+      clientEngine,
+    };
     const colFieldsChanged = JSON.stringify(nextProps.colFields) !== JSON.stringify(lastPropsRef.current.colFields);
     const changedKeys = Object.keys(nextSyncState).filter(key => JSON.stringify(nextSyncState[key]) !== JSON.stringify(lastPropsRef.current[key]));
     if (!setPropsRef.current || changedKeys.length === 0) return;
@@ -121,7 +132,10 @@ export function useRuntimeStructuralSync({
       const extendedEnd = anchorBlockHint >= 0 ? Math.max(viewportSnapshot.end, (anchorBlockHint + 2) * expansionBlockSize - 1) : viewportSnapshot.end;
       const alignedEnd = Math.max(extendedEnd, Math.ceil((Math.max(alignedStart, extendedEnd) + 1) / expansionBlockSize) * expansionBlockSize - 1);
       const extendedCount = alignedEnd - alignedStart + 1;
-      if (pendingExpansionRef.current) pendingExpansionRef.current.extendedToBlock = anchorBlockHint >= 0 ? anchorBlockHint + 1 : -1;
+      if (pendingExpansionRef.current) {
+        pendingExpansionRef.current.extendedToBlock = anchorBlockHint >= 0 ? anchorBlockHint + 1 : -1;
+        pendingExpansionRef.current.expectedVersion = tx.version;
+      }
       markRequestPending({ version: tx.version, reqStart: alignedStart, reqEnd: alignedEnd, colStart: expansionColumnWindow.start, colEnd: expansionColumnWindow.end });
       setPropsRef.current({
         ...nextProps,
@@ -182,6 +196,7 @@ export function useRuntimeStructuralSync({
       setPendingColumnSkeletonCount(0);
     }
     lastPropsRef.current = nextSyncState;
+    if (pendingExpansionRef.current) pendingExpansionRef.current = null;
     const tx = beginStructuralTransaction();
     const structuralViewportSnapshot = latestRequestedViewportRef.current || latestViewportRef.current || {
       start: 0, end: DEFAULT_SERVER_SIDE_BLOCK_SIZE - 1, count: DEFAULT_SERVER_SIDE_BLOCK_SIZE,
@@ -213,5 +228,5 @@ export function useRuntimeStructuralSync({
         },
       },
     });
-  }, [beginExpansionRequest, beginStructuralTransaction, buildLayoutRequestFields, buildRuntimeRequestStateOverride, clientInstanceRef, colFields, columnOrder, columnPinning, columnSizing, columnVisibility, customDimensions, detailConfig, detailMode, effectiveSortOptions, expanded, expansionScrollRestoreRafRef, expansionScrollRestoreRef, filters, grandTotalPinOverride, immersiveMode, lastPropsRef, latestDataVersionRef, latestRequestedViewportRef, latestViewportRef, layoutMode, markRequestPending, needsColSchemaRef, parentRef, pendingExpansionRef, reportDef, resolveStableRequestedColumnWindow, rowFields, rowPinning, runtimeMeasureAxis, serverSide, serverSideBlockSize, serverSidePinsGrandTotal, sessionIdRef, setPendingColumnSkeletonCount, setPropsRef, showColTotals, showRowTotals, showSubtotals, sorting, tableName, treeConfig, valConfigs, viewMode]);
+  }, [beginExpansionRequest, beginStructuralTransaction, buildLayoutRequestFields, buildRuntimeRequestStateOverride, clientEngine, clientInstanceRef, clientRuntimeActive, colFields, columnOrder, columnPinning, columnSizing, columnVisibility, customDimensions, detailConfig, detailMode, effectiveSortOptions, executionMode, expanded, expansionScrollRestoreRafRef, expansionScrollRestoreRef, filters, grandTotalPinOverride, immersiveMode, lastPropsRef, latestDataVersionRef, latestRequestedViewportRef, latestViewportRef, layoutMode, markRequestPending, needsColSchemaRef, parentRef, pendingExpansionRef, reportDef, resolveStableRequestedColumnWindow, rowFields, rowPinning, runtimeMeasureAxis, serverSide, serverSideBlockSize, serverSidePinsGrandTotal, sessionIdRef, setPendingColumnSkeletonCount, setPropsRef, showColTotals, showRowTotals, showSubtotals, sorting, tableName, treeConfig, valConfigs, viewMode]);
 }

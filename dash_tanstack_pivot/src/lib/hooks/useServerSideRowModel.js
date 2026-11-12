@@ -2,9 +2,7 @@ import { useVirtualizer } from '@tanstack/react-virtual';
 import { useEffect, useLayoutEffect, useRef, useMemo, useState, useCallback } from 'react';
 import { useRowCache } from './useRowCache';
 
-const isGrandTotalRow = (row) => (
-    !!row && (row._isTotal || row._path === '__grand_total__' || row._id === 'Grand Total')
-);
+import { isGrandTotalRow } from './usePivotNormalization';
 
 const columnWindowCovers = (availableStart, availableEnd, requiredStart, requiredEnd) => {
     if (requiredEnd === null || requiredEnd === undefined) return true;

@@ -387,4 +387,161 @@ if (process.env.PIVOT_CLIENT_BATCH_INPUT && process.env.PIVOT_CLIENT_BATCH_OUTPU
         assert.match(exportRes.content, /AMER/);
         assert.match(exportRes.content, /3700/);
     });
+
+    test('ClientPivotTransport supports Expand All with single-row collapse overrides (__ALL__ + false and __COLLAPSED__)', async () => {
+        const { ClientPivotTransport } = loadClientModule();
+        const transport = new ClientPivotTransport({
+            executionMode: 'client',
+            data: SAMPLE_DATASET,
+            tableName: 'sales',
+        });
+
+        const expandAllCollapsedAmer = await transport.request({
+            schemaVersion: 1,
+            requestId: 'exp-all-collapse-1',
+            kind: 'data',
+            state: {
+                viewMode: 'pivot',
+                rowFields: ['region', 'country'],
+                colFields: ['year'],
+                valConfigs: [{ field: 'revenue', agg: 'sum' }],
+                expanded: { __ALL__: true, AMER: false },
+                showRowTotals: true,
+                showColTotals: true,
+            },
+            payload: { start: 0, end: 47, version: 7, window_seq: 7, state_epoch: 2 },
+        });
+
+        assert.equal(expandAllCollapsedAmer.status, 'data');
+        assert.equal(expandAllCollapsedAmer.payload.dataVersion, 7);
+        assert.equal(expandAllCollapsedAmer.payload.version, 7);
+        assert.equal(expandAllCollapsedAmer.payload.windowSeq, 7);
+        assert.equal(expandAllCollapsedAmer.payload.stateEpoch, 2);
+
+        const paths = expandAllCollapsedAmer.data.map((r) => r._path);
+        assert.ok(paths.includes('AMER'), 'AMER group row remains visible');
+        assert.ok(!paths.includes('AMER|||USA'), 'AMER child USA is collapsed');
+        assert.ok(!paths.includes('AMER|||Canada'), 'AMER child Canada is collapsed');
+        assert.ok(paths.includes('EMEA'), 'EMEA group row remains visible');
+        assert.ok(paths.includes('EMEA|||UK'), 'EMEA child UK remains expanded');
+        assert.ok(paths.includes('EMEA|||France'), 'EMEA child France remains expanded');
+
+        const amerRec = expandAllCollapsedAmer.data.find((r) => r._path === 'AMER');
+        const emeaRec = expandAllCollapsedAmer.data.find((r) => r._path === 'EMEA');
+        assert.equal(amerRec._is_expanded, false);
+        assert.equal(emeaRec._is_expanded, true);
+
+        const arrayTokenRes = await transport.request({
+            schemaVersion: 1,
+            requestId: 'exp-all-collapse-2',
+            kind: 'data',
+            state: {
+                viewMode: 'pivot',
+                rowFields: ['region', 'country'],
+                colFields: ['year'],
+                valConfigs: [{ field: 'revenue', agg: 'sum' }],
+                expanded: ['__ALL__', ['__COLLAPSED__', 'EMEA']],
+                showRowTotals: true,
+                showColTotals: true,
+            },
+            payload: { start: 0, end: 47, version: 8, window_seq: 8, state_epoch: 2 },
+        });
+
+        const arrayPaths = arrayTokenRes.data.map((r) => r._path);
+        assert.ok(arrayPaths.includes('AMER|||USA'), 'AMER child USA expanded via __ALL__');
+        assert.ok(!arrayPaths.includes('EMEA|||UK'), 'EMEA child UK collapsed via __COLLAPSED__');
+    });
+
+    test('ClientPivotTransport matches server hierarchy/outline vs tabular subtotal parity when show_subtotal_footers is true', async () => {
+        const { ClientPivotTransport } = loadClientModule();
+        const transport = new ClientPivotTransport({
+            executionMode: 'client',
+            data: SAMPLE_DATASET,
+            tableName: 'sales',
+        });
+
+        for (const layoutMode of ['hierarchy', 'outline']) {
+            const res = await transport.request({
+                schemaVersion: 1,
+                requestId: `subtotal-parity-${layoutMode}`,
+                kind: 'data',
+                state: {
+                    viewMode: 'pivot',
+                    rowFields: ['region', 'country'],
+                    colFields: ['year'],
+                    valConfigs: [{ field: 'revenue', agg: 'sum' }],
+                    expanded: { __ALL__: true },
+                    showRowTotals: true,
+                    showColTotals: true,
+                    show_subtotal_footers: true,
+                    layoutMode,
+                },
+                payload: { start: 0, end: 47, version: 1, window_seq: 1, state_epoch: 1 },
+            });
+
+            const nonGrandRows = res.data.filter((r) => r._path !== '__grand_total__' && r._id !== 'Grand Total');
+            assert.equal(nonGrandRows.length, 6, `${layoutMode} should emit 2 parents + 4 leaves without footer copies`);
+            assert.ok(
+                nonGrandRows.every((r) => !r._isTabularSubtotal && !String(r._path || '').includes('__subtotal__')),
+                `${layoutMode} must not emit duplicate __subtotal__ footer rows`
+            );
+        }
+
+        const tabularRes = await transport.request({
+            schemaVersion: 1,
+            requestId: 'subtotal-parity-tabular',
+            kind: 'data',
+            state: {
+                viewMode: 'pivot',
+                rowFields: ['region', 'country'],
+                colFields: ['year'],
+                valConfigs: [{ field: 'revenue', agg: 'sum' }],
+                expanded: {},
+                showRowTotals: true,
+                showColTotals: true,
+                show_subtotal_footers: true,
+                layoutMode: 'tabular',
+            },
+            payload: { start: 0, end: 47, version: 2, window_seq: 2, state_epoch: 1 },
+        });
+
+        const tabularSubtotals = tabularRes.data.filter((r) => r._isTabularSubtotal === true);
+        assert.equal(tabularSubtotals.length, 2, 'tabular with show_subtotal_footers should emit 2 post-order region subtotals');
+        const tabularLeaves = tabularRes.data.filter((r) => !r._isTotal && !r._isTabularSubtotal);
+        assert.equal(tabularLeaves.length, 4, 'tabular should expand all 4 country leaves even when expanded is empty');
+    });
+
+    test('DuckDbWasmExecutor falls back to memory engine when WASM initialization fails', async () => {
+        const { ClientSqlPlanner, DuckDbWasmExecutor } = loadClientModule();
+        const executor = new DuckDbWasmExecutor(SAMPLE_DATASET, {
+            executionMode: 'client',
+            clientEngine: 'duckdb-wasm',
+            tableName: 'sales',
+            duckdbLoader: async () => {
+                throw new Error('WASM initialization timed out after 4500ms.');
+            },
+        });
+
+        const plan = ClientSqlPlanner.compile(
+            {
+                schemaVersion: 1,
+                requestId: 'wasm-fallback-1',
+                kind: 'data',
+                state: {
+                    viewMode: 'pivot',
+                    rowFields: ['region'],
+                    colFields: ['year'],
+                    valConfigs: [{ field: 'revenue', agg: 'sum' }],
+                    expanded: {},
+                },
+                payload: { start: 0, end: 10, version: 1, window_seq: 1, state_epoch: 1 },
+            },
+            'sales'
+        );
+
+        const executed = await executor.execute(plan);
+        assert.equal(executed.engineUsed, 'memory');
+        assert.equal(executor.getTelemetry().activeEngine, 'memory');
+        assert.equal(executor.getTelemetry().wasmReady, false);
+    });
 }

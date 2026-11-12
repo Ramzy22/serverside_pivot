@@ -1,6 +1,6 @@
 import { useCallback, useMemo } from 'react';
 
-const GRAND_TOTAL_ROW_ID = '__grand_total__';
+import { GRAND_TOTAL_ROW_ID, isGrandTotalRow } from '../hooks/usePivotNormalization';
 
 /** Builds the table's rendered rows while preserving server pinning and edit comparison state. */
 export function useRuntimeViewportTableData({
@@ -23,7 +23,7 @@ export function useRuntimeViewportTableData({
 }) {
   const getStableDataRowId = useCallback(row => {
     if (!row) return null;
-    if (row._isTotal || row._path === GRAND_TOTAL_ROW_ID || row._id === 'Grand Total') return GRAND_TOTAL_ROW_ID;
+    if (isGrandTotalRow(row)) return GRAND_TOTAL_ROW_ID;
     if (row._path) return row._path;
     if (row.id) return row.id;
     if (typeof row.__virtualIndex === 'number') return String(row.__virtualIndex);
@@ -32,7 +32,7 @@ export function useRuntimeViewportTableData({
 
   const rawTableData = useMemo(() => {
     if (serverSide) {
-      const centerData = renderedData.filter(row => row && (row._isTotal || row._path === GRAND_TOTAL_ROW_ID || row._id === 'Grand Total' ? !serverSidePinsGrandTotal : !row._isTotal));
+      const centerData = renderedData.filter(row => { if (!row) return false; if (isGrandTotalRow(row)) return !serverSidePinsGrandTotal; return true; });
       const seenIds = new Set(centerData.map(getStableDataRowId).filter(Boolean));
       const pinnedIds = Array.from(new Set([...(rowPinning && rowPinning.top || []), ...(rowPinning && rowPinning.bottom || [])]));
       const pinnedData = pinnedIds.map(rowId => {

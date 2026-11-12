@@ -6,6 +6,7 @@ import { usePivotConfig } from '../../contexts/PivotConfigContext';
 import { buildRowSpanPlan, collectRowSpanColumns } from '../../utils/rowSpanning';
 import { getPivotPerformanceNow, recordPivotMeasure } from '../../utils/pivotProfiler';
 import { usePivotRenderCounter } from '../../hooks/usePivotRenderCounter';
+import { isGrandTotalRow } from '../../hooks/usePivotNormalization';
 
 const LazyInlineDetailPanel = React.lazy(() => import(/* webpackChunkName: "pivot-detail-inline" */ './InlineDetailPanel'));
 
@@ -401,7 +402,7 @@ export const PivotTableBody = React.memo(function PivotTableBody({
         if (serverSide) {
             const cachedData = getRow(virtualIndex);
             if (!cachedData) return null;
-            const rowId = (cachedData._isTotal || cachedData._path === '__grand_total__' || cachedData._id === 'Grand Total')
+            const rowId = isGrandTotalRow(cachedData)
                 ? '__grand_total__'
                 : (cachedData._path || (cachedData.id ? cachedData.id : String(virtualIndex)));
             return centerRowLookup.get(rowId) || null;
@@ -872,7 +873,7 @@ export const PivotTableBody = React.memo(function PivotTableBody({
 
                              if (
                                  serverSidePinsGrandTotal &&
-                                 (cachedData._isTotal || cachedData._path === '__grand_total__' || cachedData._id === 'Grand Total')
+                                 isGrandTotalRow(cachedData)
                              ) {
                                  return null;
                              }
@@ -881,7 +882,7 @@ export const PivotTableBody = React.memo(function PivotTableBody({
                              // We reconstruct the ID exactly as getRowId does, but using the global index directly.
                              // Global Index = virtualRow.index
                              let rowId;
-                             if (cachedData._isTotal || cachedData._path === '__grand_total__' || cachedData._id === 'Grand Total') {
+                             if (isGrandTotalRow(cachedData)) {
                                  rowId = '__grand_total__';
                              } else {
                                  rowId = cachedData._path || (cachedData.id ? cachedData.id : String(virtualRow.index));
@@ -895,9 +896,9 @@ export const PivotTableBody = React.memo(function PivotTableBody({
                               // 3. Synchronization Check
                               // If table hasn't updated yet, table.getRow might return old data or undefined.
                               // We verify the row's data matches our cache.
-                             const cachedPath = cachedData._isTotal ? '__grand_total__' : (cachedData._path || rowId);
+                             const cachedPath = isGrandTotalRow(cachedData) ? '__grand_total__' : (cachedData._path || rowId);
                              const rowPath = row && row.original
-                                 ? (row.original._isTotal ? '__grand_total__' : (row.original._path || row.id))
+                                 ? (isGrandTotalRow(row.original) ? '__grand_total__' : (row.original._path || row.id))
                                  : null;
                              if (row && rowPath !== cachedPath) {
                                  row = undefined; // Stale row object
@@ -925,7 +926,7 @@ export const PivotTableBody = React.memo(function PivotTableBody({
                          }
 
                          // 5. Feature: Hide Totals if requested (Server Side only workaround)
-                         if (serverSide && !showColTotals && row.original._isTotal) {
+                         if (serverSide && !showColTotals && isGrandTotalRow(row.original)) {
                              return null;
                          }
 

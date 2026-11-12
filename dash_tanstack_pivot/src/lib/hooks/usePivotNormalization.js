@@ -47,6 +47,30 @@ export const SOFT_CENTER_COLUMN_WARNING_THRESHOLD = 2000;
 export const HARD_CENTER_COLUMN_WARNING_THRESHOLD = 10000;
 export const SUPPORTED_DEFAULT_NUMBER_FORMATS = new Set(['', 'currency', 'accounting', 'percent', 'scientific']);
 export const GRAND_TOTAL_ROW_ID = '__grand_total__';
+
+export const isGrandTotalRow = (row) => {
+    if (!row || typeof row !== 'object') return false;
+    const target = row.original && typeof row.original === 'object' ? row.original : row;
+    return !!(
+        target.__isGrandTotal__ === true ||
+        target._path === GRAND_TOTAL_ROW_ID ||
+        target._id === 'Grand Total' ||
+        row.id === GRAND_TOTAL_ROW_ID ||
+        (target._isTotal && !target.__isSubtotal__ && !target._isTabularSubtotal && !target._isSubtotalFooter && (!target._path || target._path === GRAND_TOTAL_ROW_ID))
+    );
+};
+
+export const isSubtotalRow = (row) => {
+    if (!row || typeof row !== 'object') return false;
+    const target = row.original && typeof row.original === 'object' ? row.original : row;
+    return !!(
+        target.__isSubtotal__ === true ||
+        target._isTabularSubtotal === true ||
+        target._isSubtotalFooter === true ||
+        (target._path && String(target._path).includes('__subtotal__')) ||
+        (target._isTotal && !isGrandTotalRow(target))
+    );
+};
 export const MISSING_PERSISTED_VALUE = Symbol('missing-persisted-value');
 export const CUSTOM_CATEGORY_FIELD_PREFIX = '__custom_category__';
 export const CUSTOM_DIMENSION_KINDS = new Set(['category', 'date_group', 'number_group']);
@@ -1297,7 +1321,7 @@ export const normalizeRuntimeDataEnvelope = (payload, fallback = {}) => {
 
 export const resolveTransportRowId = (row) => {
     if (!row || typeof row !== 'object') return null;
-    if (row._isTotal || row._path === '__grand_total__' || row._id === 'Grand Total' || row.__isGrandTotal__) {
+    if (isGrandTotalRow(row)) {
         return '__grand_total__';
     }
     if (row._path !== undefined && row._path !== null && row._path !== '') return String(row._path);

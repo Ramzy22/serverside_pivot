@@ -1,6 +1,6 @@
 import { useCallback } from 'react';
 
-import { GRAND_TOTAL_ROW_ID } from '../hooks/usePivotNormalization';
+import { GRAND_TOTAL_ROW_ID, isGrandTotalRow } from '../hooks/usePivotNormalization';
 
 /**
  * Resolves stable edit-overlay cell identities and values. It is intentionally
@@ -42,7 +42,7 @@ export function useRuntimeEditCellIdentity({
 
   const resolveVisibleDataRowId = useCallback(row => {
     if (!row || typeof row !== 'object') return null;
-    if (row._isTotal || row._path === GRAND_TOTAL_ROW_ID || row._id === 'Grand Total') return GRAND_TOTAL_ROW_ID;
+    if (isGrandTotalRow(row)) return GRAND_TOTAL_ROW_ID;
     if (row._path !== undefined && row._path !== null && row._path !== '') return String(row._path);
     if (row.id !== undefined && row.id !== null && row.id !== '') return String(row.id);
     if (row._id !== undefined && row._id !== null && row._id !== '') return String(row._id);

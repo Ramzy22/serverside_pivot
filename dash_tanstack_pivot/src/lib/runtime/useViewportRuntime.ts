@@ -67,6 +67,11 @@ export function useViewportRuntime(
             detailMode: composed.detailMode,
             effectiveSortOptions: composed.effectiveSortOptions,
             expanded: composed.expanded,
+            clientEngine: composed.normalizedPerformanceConfig && composed.normalizedPerformanceConfig.clientEngine
+                ? composed.normalizedPerformanceConfig.clientEngine
+                : 'auto',
+            clientRuntimeActive: Boolean(composed.clientRuntimeActive),
+            executionMode: composed.executionMode,
             filters: composed.filters,
             grandTotalPinOverride: composed.grandTotalPinOverride,
             immersiveMode: composed.immersiveMode,
@@ -88,6 +93,11 @@ export function useViewportRuntime(
             viewMode: composed.viewMode,
         },
         initialState: {
+            clientEngine: composed.normalizedPerformanceConfig && composed.normalizedPerformanceConfig.clientEngine
+                ? composed.normalizedPerformanceConfig.clientEngine
+                : 'auto',
+            clientRuntimeActive: Boolean(composed.clientRuntimeActive),
+            executionMode: composed.executionMode,
             viewMode: composed.normalizedInitialViewMode,
             detailMode: composed.normalizedInitialDetailMode,
             treeConfig: composed.normalizedInitialTreeConfig,

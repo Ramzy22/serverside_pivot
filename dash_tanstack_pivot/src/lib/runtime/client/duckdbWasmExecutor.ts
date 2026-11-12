@@ -10,6 +10,8 @@ import type {
 } from './types';
 
 const DEFAULT_DUCKDB_WASM_CDN = 'https://cdn.jsdelivr.net/npm/@duckdb/duckdb-wasm@1.29.0/+esm';
+const DEFAULT_WASM_INIT_TIMEOUT_MS = 4500;
+const WASM_RETRY_BACKOFF_MS = 30000;
 
 function evaluateCustomDimensionRow(
     row: { [key: string]: unknown },
@@ -219,6 +221,7 @@ export class DuckDbWasmExecutor {
     private config: ClientRuntimeConfig;
     private wasmReady = false;
     private wasmInitializing: Promise<boolean> | null = null;
+    private wasmRetryAfter = 0;
     private dbInstance: DuckDbInstanceLike | null = null;
     private dbConn: DuckDbConnectionLike | null = null;
     private registeredTableSignature = '';
@@ -255,6 +258,9 @@ export class DuckDbWasmExecutor {
     }
 
     public updateConfig(config: Partial<ClientRuntimeConfig>): void {
+        if (config.clientEngine && config.clientEngine !== this.config.clientEngine) {
+            this.wasmRetryAfter = 0;
+        }
         this.config = { ...this.config, ...config };
         this.telemetry.activeEngine = resolveClientEngineKind(this.config, this.rows.length, this.wasmReady);
         this.telemetry.lastUpdatedAt = Date.now();
@@ -267,10 +273,18 @@ export class DuckDbWasmExecutor {
     private async tryInitializeWasm(): Promise<boolean> {
         if (this.wasmReady && this.dbConn) return true;
         if (this.wasmInitializing) return this.wasmInitializing;
+        const injected = this.config.duckdbWasmInstance as DuckDbInstanceLike | undefined;
+        if (!injected && Date.now() < this.wasmRetryAfter) {
+            return false;
+        }
 
-        this.wasmInitializing = (async () => {
+        let createdWorker: Worker | null = null;
+        let createdWorkerUrl: string | null = null;
+        let timeoutHandle: ReturnType<typeof setTimeout> | null = null;
+        let timedOut = false;
+
+        const initPromise = (async () => {
             try {
-                const injected = this.config.duckdbWasmInstance as DuckDbInstanceLike | undefined;
                 if (injected && typeof injected.connect === 'function') {
                     this.dbInstance = injected;
                     this.dbConn = await injected.connect();
@@ -297,6 +311,7 @@ export class DuckDbWasmExecutor {
 
                 const duckdbModule = (globalScope.duckdb as Awaited<ReturnType<typeof dynamicImporter>>) || (await dynamicImporter(cdnUrl));
                 if (
+                    timedOut ||
                     !duckdbModule ||
                     typeof duckdbModule.getJsDelivrBundles !== 'function' ||
                     typeof duckdbModule.selectBundle !== 'function' ||
@@ -308,29 +323,79 @@ export class DuckDbWasmExecutor {
 
                 const bundles = duckdbModule.getJsDelivrBundles();
                 const bundle = await duckdbModule.selectBundle(bundles);
-                if (!bundle || !bundle.mainWorker) {
+                if (timedOut || !bundle || !bundle.mainWorker) {
                     return false;
                 }
-                const workerUrl = URL.createObjectURL(
+                createdWorkerUrl = URL.createObjectURL(
                     new Blob([`importScripts("${bundle.mainWorker}");`], { type: 'text/javascript' })
                 );
-                const worker = new Worker(workerUrl);
+                const worker = new Worker(createdWorkerUrl);
+                createdWorker = worker;
+                const workerFailure = new Promise<never>((_resolve, reject) => {
+                    worker.onerror = (event) => {
+                        reject(new Error(event?.message || 'DuckDB-Wasm worker error'));
+                    };
+                });
                 const logger = duckdbModule.ConsoleLogger ? new duckdbModule.ConsoleLogger() : console;
                 const db = new duckdbModule.AsyncDuckDB(logger, worker);
-                await db.instantiate(bundle.mainModule);
-                URL.revokeObjectURL(workerUrl);
+                await Promise.race([db.instantiate(bundle.mainModule), workerFailure]);
+                if (timedOut) {
+                    return false;
+                }
+                const conn = await Promise.race([db.connect(), workerFailure]);
+                if (timedOut) {
+                    return false;
+                }
+                if (createdWorkerUrl) {
+                    URL.revokeObjectURL(createdWorkerUrl);
+                    createdWorkerUrl = null;
+                }
 
                 this.dbInstance = db;
-                this.dbConn = await db.connect();
+                this.dbConn = conn;
                 this.wasmReady = true;
+                this.wasmRetryAfter = 0;
                 return true;
             } catch (_err) {
                 this.wasmReady = false;
+                this.wasmRetryAfter = Date.now() + WASM_RETRY_BACKOFF_MS;
                 return false;
-            } finally {
-                this.wasmInitializing = null;
             }
         })();
+
+        const boundedPromise = injected
+            ? initPromise
+            : Promise.race([
+                  initPromise,
+                  new Promise<boolean>((resolve) => {
+                      timeoutHandle = setTimeout(() => {
+                          timedOut = true;
+                          this.wasmReady = false;
+                          this.wasmRetryAfter = Date.now() + WASM_RETRY_BACKOFF_MS;
+                          if (createdWorker) {
+                              try {
+                                  createdWorker.terminate();
+                              } catch (_terminateErr) {
+                                  // Ignore worker termination cleanup failures.
+                              }
+                              createdWorker = null;
+                          }
+                          if (createdWorkerUrl) {
+                              URL.revokeObjectURL(createdWorkerUrl);
+                              createdWorkerUrl = null;
+                          }
+                          resolve(false);
+                      }, DEFAULT_WASM_INIT_TIMEOUT_MS);
+                  }),
+              ]);
+
+        this.wasmInitializing = boundedPromise.finally(() => {
+            if (timeoutHandle !== null) {
+                clearTimeout(timeoutHandle);
+                timeoutHandle = null;
+            }
+            this.wasmInitializing = null;
+        });
 
         return this.wasmInitializing;
     }

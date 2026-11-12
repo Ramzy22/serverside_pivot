@@ -102,6 +102,7 @@ export interface LogicalPivotPlan {
     };
     expandedAll: boolean;
     expandedPaths: string[][];
+    collapsedPaths: string[][];
     measureAxis: {
         placement: 'columns' | 'rows';
         position?: number;

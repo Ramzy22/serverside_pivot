@@ -1,6 +1,6 @@
 import { useCallback } from 'react';
 
-import { GRAND_TOTAL_ROW_ID } from '../hooks/usePivotNormalization';
+import { GRAND_TOTAL_ROW_ID, isGrandTotalRow } from '../hooks/usePivotNormalization';
 
 /** Tracks optimistic edit overlays, comparison values, and aggregate markers. */
 export function useRuntimeEditChangeTracking({
@@ -187,7 +187,7 @@ export function useRuntimeEditChangeTracking({
     const rowLookup = new Map();
     responseRows.forEach(row => {
       if (!row || typeof row !== 'object') return;
-      const rowId = row._isTotal || row._path === GRAND_TOTAL_ROW_ID || row._id === 'Grand Total'
+      const rowId = isGrandTotalRow(row)
         ? GRAND_TOTAL_ROW_ID
         : row._path !== undefined && row._path !== null && row._path !== '' ? String(row._path)
           : row.id !== undefined && row.id !== null && row.id !== '' ? String(row.id)

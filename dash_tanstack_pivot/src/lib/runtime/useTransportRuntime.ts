@@ -1,3 +1,4 @@
+import { useEffect, useRef } from 'react';
 import { useRuntimeProfiling } from '../hooks/useRuntimeProfiling';
 import { useRuntimeDataCommit } from '../hooks/useRuntimeDataCommit';
 import { useRuntimeTransport } from '../hooks/useRuntimeTransport';
@@ -112,6 +113,25 @@ export function useTransportRuntime(
     const viewMode = core.configuration.viewMode ?? runtime.viewMode;
     const detailMode = core.configuration.detailMode ?? runtime.detailMode;
     const rawSetProps = core.refs.setProps.current ?? runtime.setProps;
+    const clientDataControllerRef = useRef<AbortController | null>(null);
+    const clientDataRequestSeqRef = useRef(0);
+    const clientRuntimeActiveRef = useRef(Boolean(runtime.clientRuntimeActive));
+    clientRuntimeActiveRef.current = Boolean(runtime.clientRuntimeActive);
+
+    useEffect(() => {
+        if (!runtime.clientRuntimeActive && clientDataControllerRef.current) {
+            clientDataControllerRef.current.abort();
+            clientDataControllerRef.current = null;
+        }
+    }, [runtime.clientRuntimeActive]);
+
+    useEffect(() => () => {
+        if (clientDataControllerRef.current) {
+            clientDataControllerRef.current.abort();
+            clientDataControllerRef.current = null;
+        }
+    }, []);
+
     const setProps = runtime.clientRuntimeActive && runtime.clientTransportRef
         ? (nextProps: unknown) => {
             const candidate = asObject(nextProps);
@@ -132,10 +152,30 @@ export function useTransportRuntime(
                         ...stateObj,
                     },
                 } as unknown as RuntimeRequestV1;
-                void runtime.clientTransportRef.current.request(mergedRequest).then(response => {
+                const isDataRequest = mergedRequest.kind === 'data' || mergedRequest.kind === 'update';
+                let controller: AbortController | null = null;
+                let requestSeq = clientDataRequestSeqRef.current;
+                if (isDataRequest) {
+                    if (clientDataControllerRef.current) {
+                        clientDataControllerRef.current.abort();
+                    }
+                    controller = typeof AbortController === 'function' ? new AbortController() : null;
+                    clientDataControllerRef.current = controller;
+                    requestSeq = ++clientDataRequestSeqRef.current;
+                }
+                void runtime.clientTransportRef.current.request(
+                    mergedRequest,
+                    controller ? { signal: controller.signal } : undefined
+                ).then(response => {
+                    if (controller?.signal.aborted) return;
+                    if (!clientRuntimeActiveRef.current) return;
+                    if (isDataRequest && requestSeq !== clientDataRequestSeqRef.current) return;
                     if (typeof runtime.setLocalRuntimeResponse === 'function') {
                         runtime.setLocalRuntimeResponse(response);
                     }
+                }).catch(error => {
+                    if (controller?.signal.aborted || (error && error.name === 'AbortError')) return;
+                    console.error('Client pivot transport request failed:', error);
                 });
                 const rest = { ...candidate };
                 delete rest.runtimeRequest;
