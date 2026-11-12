@@ -1,20 +1,20 @@
-# ⚡ dash_tanstack_pivot
+# ⚡ serverside_pivot
 
 ### **Turnkey Analytical Pivot Table & Virtualized Data Grid for React**
 #### *Dual-Engine Architecture: Zero-Network In-Browser Analytics (DuckDB-WASM & In-Memory) + Scalable Server-Side Pushdown.*
 
-[![npm version](https://img.shields.io/npm/v/dash_tanstack_pivot.svg?color=cb3837)](https://www.npmjs.com/package/dash_tanstack_pivot)
+[![npm version](https://img.shields.io/npm/v/serverside_pivot.svg?color=cb3837)](https://www.npmjs.com/package/serverside_pivot)
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](https://opensource.org/licenses/MIT)
 [![TypeScript](https://img.shields.io/badge/TypeScript-5.8-blue)](https://www.typescriptlang.org/)
 [![React](https://img.shields.io/badge/React-18%20%7C%2019-61dafb)](https://react.dev/)
 [![DuckDB-WASM](https://img.shields.io/badge/Engine-DuckDB--WASM%20%7C%20In--Memory-yellow)](https://duckdb.org/docs/api/wasm/overview)
 [![ECharts](https://img.shields.io/badge/Charts-ECharts%206%20%2B%20GL%203D-red)](https://echarts.apache.org/)
 
-`dash_tanstack_pivot` is an enterprise-grade, low-code analytical pivot table and 2D virtualized grid for **React**. Built on **TanStack Table v8**, **DuckDB-WASM**, and **Apache ECharts 6**, it bridges the gap between lightweight client tables and heavy server-side BI tools.
+`serverside_pivot` is an enterprise-grade, low-code analytical pivot table and 2D virtualized grid for **React**. Built on **TanStack Table v8**, **DuckDB-WASM**, and **Apache ECharts 6**, it bridges the gap between lightweight client tables and heavy server-side BI tools.
 
 ---
 
-## 🚀 Why `dash_tanstack_pivot`?
+## 🚀 Why `serverside_pivot`?
 
 Unlike traditional grid components that either crash browser memory with large datasets or force you to spend months building custom SQL backends:
 
@@ -29,11 +29,11 @@ Unlike traditional grid components that either crash browser memory with large d
 ## 📦 Installation
 
 ```bash
-npm install dash_tanstack_pivot
+npm install serverside_pivot
 # or
-yarn add dash_tanstack_pivot
+yarn add serverside_pivot
 # or
-pnpm add dash_tanstack_pivot
+pnpm add serverside_pivot
 ```
 
 ### Peer Dependencies
@@ -51,7 +51,7 @@ Feed your JSON records or CSV/Parquet data directly into `PivotWorkspace`. The i
 
 ```tsx
 import React from 'react';
-import { PivotWorkspace, ClientPivotTransport } from 'dash_tanstack_pivot/react';
+import { PivotWorkspace, ClientPivotTransport } from 'serverside_pivot/react';
 
 const salesData = [
   { region: 'North America', country: 'USA', rep: 'Alice', year: '2024', revenue: 150000, cost: 95000 },
@@ -115,8 +115,8 @@ import {
   PivotWorkspace,
   HttpPivotTransport,
   LatestViewportScheduler,
-} from 'dash_tanstack_pivot/react';
-
+} from 'serverside_pivot/react';
+ 
 // Wraps HTTP requests with auto-cancellation (latest-viewport-wins)
 const transport = new LatestViewportScheduler(
   new HttpPivotTransport({
@@ -165,13 +165,15 @@ export function EnterpriseAnalytics() {
 
 ## 🌐 Multi-Framework Ecosystem
 
-`dash_tanstack_pivot` is part of the `serverside-pivot` ecosystem:
-- **Standalone React**: `dash_tanstack_pivot` (this package)
+`serverside_pivot` is part of the `serverside-pivot` ecosystem:
+- **Standalone React**: `serverside_pivot` (this package)
 - **Python Plotly Dash**: `pip install serverside-pivot`
 - **Streamlit**: `pip install "serverside-pivot[streamlit]"`
 - **Backend Pushdown**: Powered by **DuckDB**, **PyArrow**, and **Ibis** (Snowflake, BigQuery, Postgres, ClickHouse, MotherDuck, Databricks, Trino)
 
 For comprehensive documentation, live Python/Dash showcases, and interactive examples, visit the **[GitHub Repository](https://github.com/Ramzy22/serverside_pivot)**.
+
+> Cell editing and edit transactions are not a supported public capability in this release. Legacy edit-related Dash inputs are accepted as no-ops only for layout compatibility.
 
 ---
 
