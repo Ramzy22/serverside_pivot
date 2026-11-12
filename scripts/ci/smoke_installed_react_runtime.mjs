@@ -2,7 +2,7 @@
 
 import assert from 'node:assert/strict';
 import http from 'node:http';
-import { HttpPivotTransport } from 'dash_tanstack_pivot';
+import { HttpPivotTransport } from 'serverside_pivot';
 
 let receivedRequest = null;
 const server = http.createServer(async (request, response) => {
