@@ -1012,7 +1012,9 @@ def test_reference_startup_exposes_live_request_and_visible_groups(reference_run
           return viewport.scrollLeft;
         """)
         right_cells = WebDriverWait(driver, 5).until(lambda browser: (
-            visible if any(item["colId"] == "Total|ventes_€" and item["text"] == "200.00" for item in visible) else False
+            visible if any(item["colId"] == "Total|ventes_€" and item["text"] == "200.00" for item in visible)
+            and all(any(item["colId"] == cid for item in visible) for cid in ("Total|ventes_€", "Total|unités", "Total|écart"))
+            else False
         ) if (visible := browser.execute_script("return window.referenceEvidence.visibleCells()")) else False)
         case.observed = f"Initial pivot rows and grand row visible; total columns after horizontal scroll {scroll} px"
         case.parsed_output = {"initial_cells": cells, "right_cells": right_cells, "request_count": len(trace), "scroll_px": scroll}

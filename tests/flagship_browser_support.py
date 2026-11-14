@@ -157,7 +157,7 @@ def _assert_flat_export(path, fmt, count):
             rows = [list(row) for row in workbook.active.iter_rows(values_only=True)]
         finally:
             workbook.close()
-    assert rows[0] == ["Region", "Sales (Sum)"], rows[0]
+    assert rows[0] == ["Region", "Sales"], rows[0]
     assert len(rows) == count + 1
     assert [(row[0], float(row[1])) for row in rows[1:]] == [
         (f"R{i:04d} \u6771\u4eac", i + .25) for i in range(count)]
