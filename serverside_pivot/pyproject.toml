@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "serverside-pivot"
-version = "0.0.93"
+version = "0.0.94"
 description = "A Dash component library for enterprise-grade pivot tables built with TanStack Table v8"
 readme = "README.md"
 # Keep the table form until the minimum supported setuptools can parse the

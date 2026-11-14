@@ -312,9 +312,18 @@ def _build_from_snapshot(commit: str, snapshot: Path, output: Path, *, build_whe
     react_app = app / "examples" / "flagship_react"
     shutil.copytree(snapshot / "examples" / "flagship_react", react_app, ignore=shutil.ignore_patterns("node_modules", "dist", "release-package.tgz"))
     shutil.copy2(npm_tarball, react_app / "release-package.tgz")
-    # Registry dependencies stay locked. The local tarball is rebuilt for this
-    # commit and bound separately by SHA-256, so its lock entry has no stale
-    # integrity from an earlier release.
+    # Registry dependencies stay locked. Update only the local tarball's
+    # integrity in the copied lockfile to match the tarball built for this commit.
+    lock_path = react_app / "package-lock.json"
+    if lock_path.is_file():
+        lock_data = json.loads(lock_path.read_text(encoding="utf-8"))
+        local_entry = (lock_data.get("packages") or {}).get("node_modules/serverside_pivot")
+        if isinstance(local_entry, dict):
+            tarball_sri = "sha512-" + base64.b64encode(
+                hashlib.sha512(npm_tarball.read_bytes()).digest()
+            ).decode("ascii")
+            local_entry["integrity"] = tarball_sri
+            lock_path.write_text(json.dumps(lock_data, indent=2) + "\n", encoding="utf-8")
     _run([npm, "ci", "--ignore-scripts", "--legacy-peer-deps", "--no-audit", "--no-fund"], react_app)
     installed_package = react_app / "node_modules" / "serverside_pivot" / "dist" / "react" / "index.mjs"
     if not installed_package.is_file() or installed_package.read_bytes() != (package / "dist" / "react" / "index.mjs").read_bytes():

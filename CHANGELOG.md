@@ -6,6 +6,11 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+## [0.0.94] - 2026-11-14
+
+### Fixed
+- Updated `scripts/flagship_artifacts.py` to bind the copied `examples/flagship_react/package-lock.json` tarball integrity to the freshly packed `serverside_pivot` tarball during release qualification.
+
 ## [0.0.93] - 2026-11-14
 
 ### Changed
