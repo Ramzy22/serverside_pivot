@@ -1,6 +1,6 @@
 [project]
 name = "serverside-pivot"
-version = "0.0.91"
+version = "0.0.92"
 
 [[tool.streamlit.component.components]]
 name = "pivot_workspace"
