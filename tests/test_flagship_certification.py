@@ -1379,14 +1379,18 @@ def _switch_to_workspace(driver, host: str, timeout: int = 60):
     wait = WebDriverWait(driver, timeout)
     if host != "streamlit":
         driver._pivot_workspace_shadow = False
+        from selenium.common.exceptions import StaleElementReferenceException
         def ready_or_retry(current):
-            cells = current.find_elements(By.CSS_SELECTOR, '[role="gridcell"]')
-            if cells:
-                return cells[0]
-            for button in current.find_elements(By.TAG_NAME, "button"):
-                if button.is_displayed() and button.text.strip() == "Retry":
-                    button.click()
-                    break
+            try:
+                cells = current.find_elements(By.CSS_SELECTOR, '[role="gridcell"]')
+                if cells:
+                    return cells[0]
+                for button in current.find_elements(By.TAG_NAME, "button"):
+                    if button.is_displayed() and button.text.strip() == "Retry":
+                        button.click()
+                        break
+            except StaleElementReferenceException:
+                return False
             return False
         cell = wait.until(ready_or_retry)
         _verify_release_asset_batch(driver, require_assets=True)
