@@ -1,6 +1,6 @@
 {
   "name": "serverside_pivot",
-  "version": "0.0.94",
+  "version": "0.0.95",
   "description": "Enterprise-grade analytical pivot table & virtualized data grid for React. Dual-engine: zero-network in-browser analytics (DuckDB-WASM & in-memory) and scalable server-side pushdown. Built with TanStack Table v8, ECharts 6, and 2D virtualization.",
   "main": "./dist/react/index.mjs",
   "types": "./dist/react/react.d.ts",

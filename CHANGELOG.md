@@ -6,6 +6,11 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+## [0.0.95] - 2026-11-14
+
+### Fixed
+- Isolated wheel import checks in `scripts/flagship_artifacts.py` (`-I` / stripped `PYTHONPATH`) and removed global `PYTHONPATH` export from `.github/workflows/release.yml` so installed release qualification verifies wheel `site-packages` cleanly.
+
 ## [0.0.94] - 2026-11-14
 
 ### Fixed

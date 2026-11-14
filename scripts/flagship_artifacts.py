@@ -232,7 +232,8 @@ def _installed_module_paths(python: Path, cwd: Path) -> dict[str, str]:
         "print(json.dumps({'dash':serverside_pivot.__file__,"
         "'streamlit':streamlit_pivot.__file__,'engine':pivot_engine.__file__}))"
     )
-    return json.loads(_run([str(python), "-c", probe], cwd))
+    isolated_env = {k: v for k, v in os.environ.items() if k != "PYTHONPATH"}
+    return json.loads(_run([str(python), "-I", "-c", probe], cwd, env=isolated_env))
 
 
 def _copy_flagship_fixtures(snapshot: Path, app: Path) -> dict[str, str]:
