@@ -399,7 +399,7 @@ def qualify_custom_pivot_order(host: str) -> None:
             "hierarchy", "P00_unités_sum", "P00_ventes_€_sum", "P00_écart_sum",
         ]
         assert len(clipboard_rows[0]) == len(copied_request["colIds"])
-        assert clipboard_rows[0][:4] == ["Region > Account", "Unités (Sum)", "Ventes € (Sum)", "Écart (Sum)"]
+        assert clipboard_rows[0][:4] == ["Region > Account", "Unités", "Ventes (€)", "Écart"]
         assert clipboard_rows[1][:4] == ["R000", "1", "0", "0"]
         assert all(len(row) == len(clipboard_rows[0]) for row in clipboard_rows)
 
@@ -411,7 +411,7 @@ def qualify_custom_pivot_order(host: str) -> None:
         workbook_rows = list(sheet.values)
         assert sheet.merged_cells.ranges, "Pivot group headers were not merged in XLSX"
         assert workbook_rows[0][1] == "P00"
-        assert workbook_rows[1][1] == "Unités (Sum)"
+        assert workbook_rows[1][1] == "Unités"
         assert workbook_rows[2][:4] == ("R000", 1, 0.25, 0)
         assert workbook_rows[-1][0] == "Grand Total"
         grand_total_count = sum(row[0] == "Grand Total" for row in workbook_rows)

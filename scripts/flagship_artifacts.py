@@ -576,10 +576,16 @@ def start_installed_hosts(binding: ArtifactBinding, output: Path, *, environment
             if os.name == "nt":
                 listener.setsockopt(socket.SOL_SOCKET, socket.SO_EXCLUSIVEADDRUSE, 1)
             port = 8502 if name == "streamlit" else 0
-            try:
-                listener.bind(("127.0.0.1", port))
-            except OSError as error:
-                raise RuntimeError(f"occupied installed host port: {port}") from error
+            bind_deadline = time.monotonic() + (10.0 if port else 0.0)
+            while True:
+                try:
+                    listener.bind(("127.0.0.1", port))
+                    break
+                except OSError as error:
+                    if port and time.monotonic() < bind_deadline:
+                        time.sleep(0.25)
+                        continue
+                    raise RuntimeError(f"occupied installed host port: {port}") from error
             reservations[name] = listener
             ports[name] = listener.getsockname()[1]
         # Streamlit keeps its configured demo CORS origin; all reservations are

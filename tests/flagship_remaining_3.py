@@ -292,7 +292,9 @@ def _live_chart(driver):
 def _download(driver, directory, format, observation, label):
     from selenium.webdriver.support.ui import WebDriverWait
     before = set(directory.iterdir())
-    _element(driver, '[title="Export chart"]').click()
+    export_button = _element(driver, '[title="Export chart"]')
+    driver.execute_script("arguments[0].scrollIntoView({block:'center'})", export_button)
+    export_button.click()
     _button(driver, {"csv": "CSV data", "svg": "SVG image"}[format], prefix=True).click()
     def new_file(_):
         new = set(directory.iterdir()) - before
