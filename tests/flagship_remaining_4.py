@@ -114,11 +114,11 @@ def assert_part_rows(rows, request):
     # Bound fixture declares tabular: row-field IDs precede measure IDs.
     assert payload['colIds'] == ['region', 'sales_sum']
     assert payload['layout_mode'] == 'tabular'
-    assert payload['style']['headerLabels'] == {'region': 'Region', 'sales_sum': 'Sales (Sum)'}
+    assert payload['style']['headerLabels'] == {'region': 'Region', 'sales_sum': 'Sales'}
     assert state['rowFields'] == ['region'] and state['colFields'] == []
     manifest = json.loads(Path(__file__).with_name('data').joinpath('flagship_parts_manifest.json').read_text(encoding='utf-8'))
     assert state['filters'] == manifest['filters']
-    assert rows[0] == ['Region', 'Sales (Sum)']
+    assert rows[0] == ['Region', 'Sales']
     expected = [[f'R{i:05d}', str(i + .25)] for i in range(5000, 10000)]
     assert rows[1:] == expected
     assert len({row[0] for row in rows[1:]}) == 5000

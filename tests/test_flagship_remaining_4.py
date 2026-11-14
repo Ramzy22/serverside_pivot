@@ -53,10 +53,10 @@ def test_parts_fixture_is_opt_in_and_has_three_real_intervals(monkeypatch):
 
 
 def _part_case():
-    return ([['Region', 'Sales (Sum)']] + [[f'R{i:05d}', str(i + .25)] for i in range(5000, 10000)], {
+    return ([['Region', 'Sales']] + [[f'R{i:05d}', str(i + .25)] for i in range(5000, 10000)], {
         'payload': {'partId': 'r1_c0', 'rowStart': 5000, 'rowEnd': 10000, 'includeHeaders': True,
                     'allRows': False, 'layout_mode': 'tabular', 'colIds': ['region', 'sales_sum'], 'style': {
-                        'headerLabels': {'region': 'Region', 'sales_sum': 'Sales (Sum)'},
+                        'headerLabels': {'region': 'Region', 'sales_sum': 'Sales'},
                         'decimalPlaces': 2, 'numberGroupSeparator': 'none'}},
         'state': {'rowFields': ['region'], 'colFields': [], 'filters': _part_manifest()['filters']},
     })
@@ -115,7 +115,7 @@ def test_parts_runtime_export_queries_real_filtered_interval(monkeypatch):
 
 
 MERGED_HTML = ('<table><thead><tr><th colspan="2">Q1</th><th>Q2</th></tr><tr>'
-               '<th>Ventes € (Sum)</th><th>Écart (Sum)</th><th>Unités (Sum)</th></tr></thead>'
+               '<th>Ventes (€)</th><th>Écart</th><th>Unités</th></tr></thead>'
                '<tbody><tr><td>100.25</td><td>-12.5</td><td>1</td></tr></tbody></table>')
 
 

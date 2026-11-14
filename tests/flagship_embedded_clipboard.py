@@ -166,6 +166,8 @@ def qualify_embedded_clipboard(host, kind):
                 driver.execute_script("arguments[0].scrollIntoView({block:'center'});", chip)
                 chip.send_keys(Keys.ENTER)
                 _wait_for_visible_workspace_element(driver, '[data-sidebar-drop-zone="rows"]').send_keys(Keys.ENTER)
+                _wait_for_visible_workspace_element(driver, f'[data-sidebar-drop-zone="rows"] [aria-label="Move {field}"]')
+                wait.until(support._totals)
                 _wait_for_visible_workspace_element(driver, '[title="Expand all hierarchy levels"]').click()
                 row_id = parent + "|||" + source
                 scenario["selectionReadiness"] = {}

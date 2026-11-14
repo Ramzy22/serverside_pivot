@@ -25,15 +25,16 @@ def write_document(path, kind, *, rows=None, bad_merge=False, strings=False, bad
     if bad_headers:
         headers[1], headers[2] = headers[2], headers[1]
     if kind == "csv":
-        headers = [headers[0], *[label.replace(" (Sum)", "") for label in headers[1:7]],
-                   *[label.removeprefix("Total ") for label in headers[7:]]]
+        headers = [headers[0], *[label.replace(" (\u20ac)", "") for label in headers[1:7]],
+                   *headers[7:]]
         with path.open("w", encoding="utf-8-sig", newline="") as stream:
             csv.writer(stream).writerows([headers, *rows])
     else:
         workbook = Workbook()
         sheet = workbook.active
         measures = ["Unit\u00e9s", "Ventes (\u20ac)", "\u00c9cart"]
-        sheet.append([headers[0], "Q1", None, None, "Q2", None, None, *measures])
+        total_measures = [f"Total {measure}" for measure in measures]
+        sheet.append([headers[0], "Q1", None, None, "Q2", None, None, *total_measures])
         leaf_headers = measures * 2
         if bad_headers:
             leaf_headers[0], leaf_headers[1] = leaf_headers[1], leaf_headers[0]

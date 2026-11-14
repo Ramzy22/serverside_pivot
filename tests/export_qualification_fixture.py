@@ -238,8 +238,8 @@ def assert_exact_flagship_download(path: str | Path, export_format: str) -> dict
         assert len(document) == 6, "CSV must contain one header and five hierarchy rows"
         headers, rows = document[0], document[1:]
         expected_headers = ["Region > Account"] + [f"{period} {measure}"
-            for period in ("Q1", "Q2") for measure in ("Unit\u00e9s", "Ventes (\u20ac)", "\u00c9cart")]
-        expected_headers += ["Unit\u00e9s", "Ventes (\u20ac)", "\u00c9cart"]
+            for period in ("Q1", "Q2") for measure in ("Unit\u00e9s", "Ventes", "\u00c9cart")]
+        expected_headers += ["Total Unit\u00e9s", "Total Ventes (\u20ac)", "Total \u00c9cart"]
         assert headers == expected_headers, "CSV headers must preserve displayed pivot paths and measure order"
     elif export_format == "xlsx":
         from openpyxl import load_workbook
@@ -250,8 +250,9 @@ def assert_exact_flagship_download(path: str | Path, export_format: str) -> dict
             assert sheet.max_row == 7 and sheet.max_column == 10
             document = list(sheet.values)
             measures = ["Unit\u00e9s", "Ventes (\u20ac)", "\u00c9cart"]
+            total_measures = [f"Total {measure}" for measure in measures]
             assert document[:2] == [
-                ("Region > Account", "Q1", None, None, "Q2", None, None, *measures),
+                ("Region > Account", "Q1", None, None, "Q2", None, None, *total_measures),
                 (None, *measures, *measures, None, None, None),
             ], "XLSX must preserve the exact displayed two-row header matrix"
             headers = [document[1][index] or document[0][index] for index in range(10)]
@@ -270,7 +271,7 @@ def assert_exact_flagship_download(path: str | Path, export_format: str) -> dict
     for index, measure in enumerate(("unit\u00e9s", "ventes", "\u00e9cart") * 3, start=1):
         label = str(headers[index]).casefold()
         assert measure in label, f"Wrong measure header at column {index}"
-        if measure == "ventes":
+        if measure == "ventes" and (export_format == "xlsx" or index > 6):
             assert "\u20ac" in label
     assert [str(row[0]).strip() for row in rows] == expected_labels, "Hierarchy rows, ordering or Unicode changed"
     for row, expected in zip(rows, expected_numbers):
