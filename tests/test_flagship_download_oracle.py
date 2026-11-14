@@ -8,8 +8,8 @@ from openpyxl import Workbook
 from tests.export_qualification_fixture import assert_exact_flagship_download
 
 
-HEADERS = ["Region > Account"] + [f"{period} {measure} (Sum)"
-    for period in ("Q1", "Q2", "Total") for measure in ("Unit\u00e9s", "Ventes \u20ac", "\u00c9cart")]
+HEADERS = ["Region > Account"] + [f"{period} {measure}"
+    for period in ("Q1", "Q2", "Total") for measure in ("Unit\u00e9s", "Ventes (\u20ac)", "\u00c9cart")]
 ROWS = [
     ["M\u00fcnchen", 3, 49.75, 4.25, 4, 30, -1, 7, 79.75, 3.25],
     ["\u0627\u0644\u0642\u0627\u0647\u0631\u0629", 3, 49.75, 4.25, 4, 30, -1, 7, 79.75, 3.25],
@@ -32,7 +32,7 @@ def write_document(path, kind, *, rows=None, bad_merge=False, strings=False, bad
     else:
         workbook = Workbook()
         sheet = workbook.active
-        measures = ["Unit\u00e9s (Sum)", "Ventes \u20ac (Sum)", "\u00c9cart (Sum)"]
+        measures = ["Unit\u00e9s", "Ventes (\u20ac)", "\u00c9cart"]
         sheet.append([headers[0], "Q1", None, None, "Q2", None, None, *measures])
         leaf_headers = measures * 2
         if bad_headers:

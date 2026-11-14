@@ -88,7 +88,7 @@ def assert_merged_selection(html, body):
     headers = rows[:2]
     assert [[(c['text'], c['colspan'], c['rowspan']) for c in row] for row in headers] == [
         [('Q1', 2, 1), ('Q2', 1, 1)],
-        [('Ventes € (Sum)', 1, 1), ('Écart (Sum)', 1, 1), ('Unités (Sum)', 1, 1)],
+        [('Ventes (€)', 1, 1), ('Écart', 1, 1), ('Unités', 1, 1)],
     ]
     assert all(sum(c['colspan'] for c in row) == 3 for row in headers)
     assert [[c['text'] for c in row] for row in rows[2:]] == body

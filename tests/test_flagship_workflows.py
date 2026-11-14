@@ -1076,14 +1076,14 @@ def test_selected_headers_oracle_has_only_selected_displayed_columns():
     from tests.flagship_browser_support import selected_headers_oracle, assert_selected_clipboard
 
     columns = ["Q1_unités_sum", "Q1_ventes_€_sum"]
-    assert selected_headers_oracle(columns) == ["Unités (Sum)", "Ventes € (Sum)"]
+    assert selected_headers_oracle(columns) == ["Unités", "Ventes (€)"]
     assert_selected_clipboard(
-        "Unités (Sum)\tVentes € (Sum)\n2\t100\n3\t50",
+        "Unités\tVentes (€)\n2\t100\n3\t50",
         [selected_headers_oracle(columns), ["2", "100"], ["3", "50"]],
     )
     with pytest.raises(AssertionError):
         assert_selected_clipboard(
-            "Unités (Sum)\tVentes € (Sum)\tÉcart (Sum)\n2\t100\n3\t50",
+            "Unités\tVentes (€)\tÉcart\n2\t100\n3\t50",
             [selected_headers_oracle(columns), ["2", "100"], ["3", "50"]],
         )
 

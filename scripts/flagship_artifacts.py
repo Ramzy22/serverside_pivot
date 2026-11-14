@@ -575,8 +575,10 @@ def start_installed_hosts(binding: ArtifactBinding, output: Path, *, environment
             listener = stack.enter_context(socket.socket())
             if os.name == "nt":
                 listener.setsockopt(socket.SOL_SOCKET, socket.SO_EXCLUSIVEADDRUSE, 1)
+            else:
+                listener.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
             port = 8502 if name == "streamlit" else 0
-            bind_deadline = time.monotonic() + (10.0 if port else 0.0)
+            bind_deadline = time.monotonic() + (2.0 if port else 0.0)
             while True:
                 try:
                     listener.bind(("127.0.0.1", port))

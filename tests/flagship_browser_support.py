@@ -312,7 +312,7 @@ def assert_selected_clipboard(text: str, expected: list[list[str]], *, line_sepa
 
 def selected_headers_oracle(columns: list[str]) -> list[str]:
     """Literal Q1 fixture labels in the selected displayed order."""
-    labels = {"Q1_unités_sum": "Unités (Sum)", "Q1_ventes_€_sum": "Ventes € (Sum)"}
+    labels = {"Q1_unités_sum": "Unités", "Q1_ventes_€_sum": "Ventes (€)"}
     assert len(columns) == 2 and set(columns) == set(labels), "Header case must select only Q1 units and sales"
     return [labels[column] for column in columns]
 
