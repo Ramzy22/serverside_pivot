@@ -1,4 +1,4 @@
-import { U as nt, W as rt, X as ot, Y as z, Z as lt, j as n } from "./index-I9cvqvRS.js";
+import { U as nt, W as rt, X as ot, Y as z, Z as lt, j as n } from "./index-C8_65yWw.js";
 import { R as d } from "./charts-DthW1Q8W.js";
 function st({ modal: S, theme: e }) {
   const a = Array.isArray(S && S.points) ? S.points : [], v = S && S.sparklineConfig ? S.sparklineConfig : {}, s = ["line", "area", "column", "bar"].includes(v.type) ? v.type : "line", h = 640, i = 300, o = 46, [R, X] = d.useState(null), [Y, j] = d.useState(null);
@@ -19,25 +19,34 @@ function st({ modal: S, theme: e }) {
   ), I = rt(f), b = d.useMemo(
     () => ot(I, s),
     [I, s]
-  ), m = d.useMemo(() => s === "bar" ? y.bars.map((t, r) => ({
-    ...t,
-    pointIndex: r,
-    fullIndex: x.start + r,
-    markerX: Number(t.value) >= 0 ? t.x + t.width : t.x,
-    markerY: t.y + t.height / 2
-  })) : s === "column" ? y.bars.map((t, r) => ({
-    ...t,
-    pointIndex: r,
-    fullIndex: x.start + r,
-    markerX: t.x + t.width / 2,
-    markerY: Number(t.value) >= 0 ? t.y : t.y + t.height
-  })) : y.points.map((t, r) => ({
-    ...t,
-    pointIndex: r,
-    fullIndex: x.start + r,
-    markerX: t.x,
-    markerY: t.y
-  })), [y.bars, y.points, x.start, s]), B = d.useMemo(() => Array.from({ length: 5 }, (r, c) => {
+  ), m = d.useMemo(() => s === "bar" ? y.bars.map(
+    /** @param {any} [bar] @param {any} [index] @returns {any} */
+    (t, r) => ({
+      ...t,
+      pointIndex: r,
+      fullIndex: x.start + r,
+      markerX: Number(t.value) >= 0 ? t.x + t.width : t.x,
+      markerY: t.y + t.height / 2
+    })
+  ) : s === "column" ? y.bars.map(
+    /** @param {any} [bar] @param {any} [index] @returns {any} */
+    (t, r) => ({
+      ...t,
+      pointIndex: r,
+      fullIndex: x.start + r,
+      markerX: t.x + t.width / 2,
+      markerY: Number(t.value) >= 0 ? t.y : t.y + t.height
+    })
+  ) : y.points.map(
+    /** @param {any} [point] @param {any} [index] @returns {any} */
+    (t, r) => ({
+      ...t,
+      pointIndex: r,
+      fullIndex: x.start + r,
+      markerX: t.x,
+      markerY: t.y
+    })
+  ), [y.bars, y.points, x.start, s]), B = d.useMemo(() => Array.from({ length: 5 }, (r, c) => {
     const u = c / 4;
     return {
       value: b.max - (b.max - b.min) * u,
@@ -52,18 +61,27 @@ function st({ modal: S, theme: e }) {
       Math.floor(t * 0.5),
       Math.floor(t * 0.75),
       t
-    ])).map((c) => {
-      const u = f[c], p = m.find((g) => g.pointIndex === c);
-      return !u || !p ? null : { index: c, label: u.label, x: p.markerX };
-    }).filter(Boolean);
+    ])).map(
+      /** @param {any} [index] @returns {any} */
+      (c) => {
+        const u = f[c], p = m.find(
+          /** @param {any} [candidate] @returns {any} */
+          (g) => g.pointIndex === c
+        );
+        return !u || !p ? null : { index: c, label: u.label, x: p.markerX };
+      }
+    ).filter(Boolean);
   }, [m, f]), A = v.color || e.primary || "#2563EB", U = v.positiveColor || (e.isDark ? "#86EFAC" : "#2F855A"), q = v.negativeColor || (e.isDark ? "#FDA4AF" : "#B91C1C"), J = I.length ? z(Math.min(...I)) : "", K = I.length ? z(Math.max(...I)) : "", T = f[0], V = f[f.length - 1], P = b.min < 0 && b.max > 0 ? lt(0, b.min, b.max, o, i - o) : null, l = R !== null && m[R] ? m[R] : null, Z = 172, E = 54, L = l ? Math.max(10, Math.min(h - Z - 10, l.markerX + (l.markerX > h * 0.66 ? -Z - 14 : 14))) : 0, N = l ? Math.max(10, Math.min(i - E - 10, l.markerY + (l.markerY > i * 0.55 ? -E - 14 : 14))) : 0, Q = d.useCallback((t) => {
     if (!m.length) return;
     const r = t.currentTarget.getBoundingClientRect(), c = (t.clientX - r.left) / Math.max(r.width, 1) * h, u = (t.clientY - r.top) / Math.max(r.height, 1) * i;
     let p = 0, g = Number.POSITIVE_INFINITY;
-    m.forEach((W, C) => {
-      const w = c - W.markerX, F = u - W.markerY, G = s === "bar" ? w * w + F * F : Math.abs(w) + Math.abs(F) * 0.08;
-      G < g && (g = G, p = C);
-    }), X(p);
+    m.forEach(
+      /** @param {any} [mark] @param {any} [index] @returns {any} */
+      (W, C) => {
+        const w = c - W.markerX, F = u - W.markerY, G = s === "bar" ? w * w + F * F : Math.abs(w) + Math.abs(F) * 0.08;
+        G < g && (g = G, p = C);
+      }
+    ), X(p);
   }, [m, i, s, h]), O = d.useCallback((t, r) => {
     if (a.length <= 0) {
       j(null);
@@ -158,50 +176,62 @@ function st({ modal: S, theme: e }) {
             style: { display: "block", width: "100%", height: "320px", cursor: m.length ? "crosshair" : "default" },
             children: [
               /* @__PURE__ */ n.jsx("rect", { x: "0", y: "0", width: h, height: i, fill: e.background || "#fff", opacity: "0.72" }),
-              B.map((t, r) => /* @__PURE__ */ n.jsxs("g", { children: [
-                /* @__PURE__ */ n.jsx("line", { x1: o, y1: t.y, x2: h - o, y2: t.y, stroke: e.border, strokeWidth: "1", opacity: r === B.length - 1 ? 0.9 : 0.45, strokeDasharray: r === B.length - 1 ? "" : "4 6" }),
-                /* @__PURE__ */ n.jsx("text", { x: o - 8, y: t.y + 4, fill: e.textSec, fontSize: "10", textAnchor: "end", children: z(t.value) })
-              ] }, `y-tick-${r}`)),
-              _.map((t) => /* @__PURE__ */ n.jsxs("g", { children: [
-                /* @__PURE__ */ n.jsx("line", { x1: t.x, y1: o, x2: t.x, y2: i - o, stroke: e.border, strokeWidth: "1", opacity: "0.28", strokeDasharray: "3 8" }),
-                /* @__PURE__ */ n.jsx("text", { x: t.x, y: i - 12, fill: e.textSec, fontSize: "10", textAnchor: "middle", children: String(t.label || "").slice(0, 18) })
-              ] }, `x-tick-${t.index}`)),
+              B.map(
+                /** @param {any} [tick] @param {any} [index] @returns {any} */
+                (t, r) => /* @__PURE__ */ n.jsxs("g", { children: [
+                  /* @__PURE__ */ n.jsx("line", { x1: o, y1: t.y, x2: h - o, y2: t.y, stroke: e.border, strokeWidth: "1", opacity: r === B.length - 1 ? 0.9 : 0.45, strokeDasharray: r === B.length - 1 ? "" : "4 6" }),
+                  /* @__PURE__ */ n.jsx("text", { x: o - 8, y: t.y + 4, fill: e.textSec, fontSize: "10", textAnchor: "end", children: z(t.value) })
+                ] }, `y-tick-${r}`)
+              ),
+              _.map(
+                /** @param {any} [tick] @returns {any} */
+                (t) => /* @__PURE__ */ n.jsxs("g", { children: [
+                  /* @__PURE__ */ n.jsx("line", { x1: t.x, y1: o, x2: t.x, y2: i - o, stroke: e.border, strokeWidth: "1", opacity: "0.28", strokeDasharray: "3 8" }),
+                  /* @__PURE__ */ n.jsx("text", { x: t.x, y: i - 12, fill: e.textSec, fontSize: "10", textAnchor: "middle", children: String(t.label || "").slice(0, 18) })
+                ] }, `x-tick-${t.index}`)
+              ),
               P !== null ? /* @__PURE__ */ n.jsx("line", { x1: o, y1: P, x2: h - o, y2: P, stroke: e.textSec, strokeWidth: "1.2", opacity: "0.5" }) : null,
               /* @__PURE__ */ n.jsx("line", { x1: o, y1: i - o, x2: h - o, y2: i - o, stroke: e.border, strokeWidth: "1.2" }),
               /* @__PURE__ */ n.jsx("line", { x1: o, y1: o, x2: o, y2: i - o, stroke: e.border, strokeWidth: "1.2" }),
               s === "area" && y.areaPath ? /* @__PURE__ */ n.jsx("path", { d: y.areaPath, fill: A, opacity: v.areaOpacity || 0.14 }) : null,
               s === "line" || s === "area" ? /* @__PURE__ */ n.jsxs(n.Fragment, { children: [
                 y.linePath ? /* @__PURE__ */ n.jsx("path", { d: y.linePath, fill: "none", stroke: A, strokeWidth: "3", strokeLinecap: "round", strokeLinejoin: "round" }) : null,
-                m.map((t, r) => /* @__PURE__ */ n.jsx(
-                  "circle",
+                m.map(
+                  /** @param {any} [point] @param {any} [index] @returns {any} */
+                  (t, r) => /* @__PURE__ */ n.jsx(
+                    "circle",
+                    {
+                      "data-pivot-sparkline-detail-point": "true",
+                      cx: t.markerX,
+                      cy: t.markerY,
+                      r: l && l.pointIndex === t.pointIndex ? "5.4" : "3.6",
+                      fill: A,
+                      stroke: e.background,
+                      strokeWidth: "1.4",
+                      children: /* @__PURE__ */ n.jsx("title", { children: `${t.label}: ${z(t.value, 6)}` })
+                    },
+                    `${t.label || "point"}-${r}`
+                  )
+                )
+              ] }) : null,
+              s === "column" || s === "bar" ? m.map(
+                /** @param {any} [bar] @param {any} [index] @returns {any} */
+                (t, r) => /* @__PURE__ */ n.jsx(
+                  "rect",
                   {
-                    "data-pivot-sparkline-detail-point": "true",
-                    cx: t.markerX,
-                    cy: t.markerY,
-                    r: l && l.pointIndex === t.pointIndex ? "5.4" : "3.6",
-                    fill: A,
-                    stroke: e.background,
-                    strokeWidth: "1.4",
+                    x: t.x,
+                    y: t.y,
+                    width: t.width,
+                    height: t.height,
+                    rx: "2",
+                    ry: "2",
+                    fill: t.positive ? U : q,
+                    opacity: l && l.fullIndex === t.fullIndex ? 1 : 0.88,
                     children: /* @__PURE__ */ n.jsx("title", { children: `${t.label}: ${z(t.value, 6)}` })
                   },
-                  `${t.label || "point"}-${r}`
-                ))
-              ] }) : null,
-              s === "column" || s === "bar" ? m.map((t, r) => /* @__PURE__ */ n.jsx(
-                "rect",
-                {
-                  x: t.x,
-                  y: t.y,
-                  width: t.width,
-                  height: t.height,
-                  rx: "2",
-                  ry: "2",
-                  fill: t.positive ? U : q,
-                  opacity: l && l.fullIndex === t.fullIndex ? 1 : 0.88,
-                  children: /* @__PURE__ */ n.jsx("title", { children: `${t.label}: ${z(t.value, 6)}` })
-                },
-                `${t.label || "bar"}-${r}`
-              )) : null,
+                  `${t.label || "bar"}-${r}`
+                )
+              ) : null,
               l ? /* @__PURE__ */ n.jsxs("g", { "data-pivot-sparkline-tooltip": "true", pointerEvents: "none", children: [
                 s !== "bar" ? /* @__PURE__ */ n.jsx("line", { x1: l.markerX, y1: o, x2: l.markerX, y2: i - o, stroke: A, strokeWidth: "1", opacity: "0.55", strokeDasharray: "5 5" }) : null,
                 /* @__PURE__ */ n.jsx("circle", { cx: l.markerX, cy: l.markerY, r: "6.4", fill: A, stroke: e.background, strokeWidth: "2" }),

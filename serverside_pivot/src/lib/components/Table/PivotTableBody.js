@@ -356,8 +356,9 @@ export const PivotTableBody = React.memo(/** @param {any} p0 @returns {any} */ f
         if (!el) return undefined;
         /** @returns {any} */
         const measure = () => {
+            // Use offsetHeight (unscaled CSS pixels) so ancestor CSS zoom does not inflate header offsets.
             /** @type {any} */
-            const totalHeight = Math.ceil(el.getBoundingClientRect ? el.getBoundingClientRect().height : (el.offsetHeight || 0));
+            const totalHeight = el.offsetHeight || Math.ceil(el.getBoundingClientRect ? el.getBoundingClientRect().height : 0);
             /** @type {any[]} */
             const levelHeights = [];
             if (typeof el.querySelectorAll === 'function') {
@@ -368,7 +369,7 @@ export const PivotTableBody = React.memo(/** @param {any} p0 @returns {any} */ f
                     const idx = Number(rowEl.getAttribute('data-header-level'));
                     if (!Number.isFinite(idx) || idx < 0) return;
                     /** @type {any} */
-                    const h = Math.ceil(rowEl.getBoundingClientRect ? rowEl.getBoundingClientRect().height : (rowEl.offsetHeight || 0));
+                    const h = rowEl.offsetHeight || Math.ceil(rowEl.getBoundingClientRect ? rowEl.getBoundingClientRect().height : 0);
                     if (h > 0) {
                         levelHeights[idx] = Math.max(levelHeights[idx] || effectiveHeaderHeight, h);
                     }

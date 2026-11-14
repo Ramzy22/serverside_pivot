@@ -1,4 +1,4 @@
-import { j as e, z as v } from "./index-I9cvqvRS.js";
+import { j as e, z as v } from "./index-C8_65yWw.js";
 import { a as B } from "./charts-DthW1Q8W.js";
 function M({
   detailState: s,
@@ -118,29 +118,32 @@ function M({
       color: r.textSec,
       fontSize: "13px"
     }, children: "Loading detail..." }) : /* @__PURE__ */ e.jsxs("table", { style: { width: "100%", borderCollapse: "collapse", fontSize: "12px" }, children: [
-      /* @__PURE__ */ e.jsx("thead", { children: /* @__PURE__ */ e.jsx("tr", { children: u.map((t) => /* @__PURE__ */ e.jsxs(
-        "th",
-        {
-          onClick: () => z(t),
-          style: {
-            position: "sticky",
-            top: 0,
-            zIndex: 1,
-            textAlign: "left",
-            padding: o ? "8px 10px" : "10px 12px",
-            background: r.headerBg,
-            color: r.text,
-            borderBottom: `1px solid ${r.border}`,
-            cursor: n ? "pointer" : "default",
-            whiteSpace: "nowrap"
+      /* @__PURE__ */ e.jsx("thead", { children: /* @__PURE__ */ e.jsx("tr", { children: u.map(
+        /** @param {any} [columnId] @returns {any} */
+        (t) => /* @__PURE__ */ e.jsxs(
+          "th",
+          {
+            onClick: () => z(t),
+            style: {
+              position: "sticky",
+              top: 0,
+              zIndex: 1,
+              textAlign: "left",
+              padding: o ? "8px 10px" : "10px 12px",
+              background: r.headerBg,
+              color: r.text,
+              borderBottom: `1px solid ${r.border}`,
+              cursor: n ? "pointer" : "default",
+              whiteSpace: "nowrap"
+            },
+            children: [
+              t,
+              k === t ? w === "asc" ? " ▲" : " ▼" : ""
+            ]
           },
-          children: [
-            t,
-            k === t ? w === "asc" ? " ▲" : " ▼" : ""
-          ]
-        },
-        t
-      )) }) }),
+          t
+        )
+      ) }) }),
       /* @__PURE__ */ e.jsx("tbody", { children: d.length === 0 ? /* @__PURE__ */ e.jsx("tr", { children: /* @__PURE__ */ e.jsx(
         "td",
         {
@@ -153,21 +156,27 @@ function M({
           },
           children: "No detail rows"
         }
-      ) }) : d.map((t, f) => /* @__PURE__ */ e.jsx("tr", { style: {
-        background: f % 2 === 0 ? r.surfaceBg || r.background : r.headerSubtleBg
-      }, children: u.map((p) => /* @__PURE__ */ e.jsx(
-        "td",
-        {
-          style: {
-            padding: o ? "7px 10px" : "9px 12px",
-            borderBottom: `1px solid ${r.border}`,
-            color: r.text,
-            whiteSpace: "nowrap"
-          },
-          children: t[p] !== void 0 && t[p] !== null ? String(t[p]) : ""
-        },
-        `${p}:${f}`
-      )) }, `${s.rowKey || g || "detail"}:${f}`)) })
+      ) }) : d.map(
+        /** @param {any} [row] @param {any} [index] @returns {any} */
+        (t, f) => /* @__PURE__ */ e.jsx("tr", { style: {
+          background: f % 2 === 0 ? r.surfaceBg || r.background : r.headerSubtleBg
+        }, children: u.map(
+          /** @param {any} [columnId] @returns {any} */
+          (p) => /* @__PURE__ */ e.jsx(
+            "td",
+            {
+              style: {
+                padding: o ? "7px 10px" : "9px 12px",
+                borderBottom: `1px solid ${r.border}`,
+                color: r.text,
+                whiteSpace: "nowrap"
+              },
+              children: t[p] !== void 0 && t[p] !== null ? String(t[p]) : ""
+            },
+            `${p}:${f}`
+          )
+        ) }, `${s.rowKey || g || "detail"}:${f}`)
+      ) })
     ] }) }),
     /* @__PURE__ */ e.jsxs("div", { style: {
       display: "flex",

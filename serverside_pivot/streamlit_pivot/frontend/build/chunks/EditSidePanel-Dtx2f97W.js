@@ -1,4 +1,4 @@
-import { j as e, z as g } from "./index-I9cvqvRS.js";
+import { j as e, z as g } from "./index-C8_65yWw.js";
 import "./charts-DthW1Q8W.js";
 const p = (t, l = 4) => {
   if (t == null || t === "") return "--";
@@ -23,7 +23,10 @@ function C({
   onConfirmPropagation: w,
   onCancelPropagation: z
 }) {
-  const c = j && j.length > 0, a = t && t.length > 0, W = a && t.some((i) => i.direct), B = !c && W && typeof h == "function";
+  const c = j && j.length > 0, a = t && t.length > 0, W = a && t.some(
+    /** @param {any} [c] @returns {any} */
+    (i) => i.direct
+  ), B = !c && W && typeof h == "function";
   if (!a && !c) return null;
   const S = Math.max(260, Math.min(Number($) || 320, 480)), x = r.surfaceBg || r.background, o = r.border, n = r.primary || "#4F46E5";
   return /* @__PURE__ */ e.jsxs(
@@ -204,74 +207,77 @@ function C({
             )
           ] })
         ] }),
-        a && /* @__PURE__ */ e.jsx("div", { style: { flex: 1, overflowY: "auto", padding: "4px 0" }, children: t.map((i) => /* @__PURE__ */ e.jsxs(
-          "div",
-          {
-            style: {
-              padding: "5px 10px",
-              borderBottom: `1px solid ${o}22`,
-              display: "flex",
-              flexDirection: "column",
-              gap: "2px"
-            },
-            children: [
-              /* @__PURE__ */ e.jsxs("div", { style: { display: "flex", alignItems: "center", justifyContent: "space-between" }, children: [
-                /* @__PURE__ */ e.jsx("span", { style: { fontWeight: 600, color: r.text, fontSize: "10px", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", maxWidth: "60%" }, children: i.colId }),
-                /* @__PURE__ */ e.jsxs("div", { style: { display: "flex", gap: "4px", alignItems: "center" }, children: [
-                  i.propagated && /* @__PURE__ */ e.jsx("span", { style: {
-                    fontSize: "9px",
-                    padding: "1px 4px",
-                    borderRadius: "3px",
-                    background: `${n}18`,
-                    color: n,
-                    fontWeight: 600
-                  }, children: "propagated" }),
-                  i.direct && /* @__PURE__ */ e.jsx("span", { style: {
-                    fontSize: "9px",
-                    padding: "1px 4px",
-                    borderRadius: "3px",
-                    background: "rgba(16, 185, 129, 0.12)",
-                    color: "#047857",
-                    fontWeight: 600
-                  }, children: "direct" }),
-                  d && /* @__PURE__ */ e.jsx(
-                    "button",
-                    {
-                      type: "button",
-                      onClick: () => d(i.rowId, i.colId),
-                      title: "Revert this cell to original",
-                      style: {
-                        border: "none",
-                        background: "transparent",
-                        cursor: "pointer",
-                        color: r.textSec,
-                        padding: "1px",
-                        fontSize: "10px",
-                        display: "flex"
-                      },
-                      children: /* @__PURE__ */ e.jsx(g.Close, {})
-                    }
-                  )
-                ] })
-              ] }),
-              /* @__PURE__ */ e.jsx("div", { style: { display: "flex", gap: "8px", fontSize: "10px", color: r.textSec }, children: /* @__PURE__ */ e.jsxs("span", { children: [
-                "Row: ",
-                /* @__PURE__ */ e.jsx("span", { style: { color: r.text, fontWeight: 500 }, children: String(i.rowId).split("|||").pop() })
-              ] }) }),
-              /* @__PURE__ */ e.jsxs("div", { style: { display: "flex", gap: "10px", fontSize: "10px" }, children: [
-                /* @__PURE__ */ e.jsxs("span", { style: { color: r.textSec }, children: [
-                  "Original: ",
-                  /* @__PURE__ */ e.jsx("span", { style: { color: r.text }, children: p(i.originalValue) })
+        a && /* @__PURE__ */ e.jsx("div", { style: { flex: 1, overflowY: "auto", padding: "4px 0" }, children: t.map(
+          /** @param {any} [cell] @returns {any} */
+          (i) => /* @__PURE__ */ e.jsxs(
+            "div",
+            {
+              style: {
+                padding: "5px 10px",
+                borderBottom: `1px solid ${o}22`,
+                display: "flex",
+                flexDirection: "column",
+                gap: "2px"
+              },
+              children: [
+                /* @__PURE__ */ e.jsxs("div", { style: { display: "flex", alignItems: "center", justifyContent: "space-between" }, children: [
+                  /* @__PURE__ */ e.jsx("span", { style: { fontWeight: 600, color: r.text, fontSize: "10px", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", maxWidth: "60%" }, children: i.colId }),
+                  /* @__PURE__ */ e.jsxs("div", { style: { display: "flex", gap: "4px", alignItems: "center" }, children: [
+                    i.propagated && /* @__PURE__ */ e.jsx("span", { style: {
+                      fontSize: "9px",
+                      padding: "1px 4px",
+                      borderRadius: "3px",
+                      background: `${n}18`,
+                      color: n,
+                      fontWeight: 600
+                    }, children: "propagated" }),
+                    i.direct && /* @__PURE__ */ e.jsx("span", { style: {
+                      fontSize: "9px",
+                      padding: "1px 4px",
+                      borderRadius: "3px",
+                      background: "rgba(16, 185, 129, 0.12)",
+                      color: "#047857",
+                      fontWeight: 600
+                    }, children: "direct" }),
+                    d && /* @__PURE__ */ e.jsx(
+                      "button",
+                      {
+                        type: "button",
+                        onClick: () => d(i.rowId, i.colId),
+                        title: "Revert this cell to original",
+                        style: {
+                          border: "none",
+                          background: "transparent",
+                          cursor: "pointer",
+                          color: r.textSec,
+                          padding: "1px",
+                          fontSize: "10px",
+                          display: "flex"
+                        },
+                        children: /* @__PURE__ */ e.jsx(g.Close, {})
+                      }
+                    )
+                  ] })
                 ] }),
-                i.currentValue !== void 0 && /* @__PURE__ */ e.jsxs("span", { style: { color: r.textSec }, children: [
-                  "Now: ",
-                  /* @__PURE__ */ e.jsx("span", { style: { color: n, fontWeight: 600 }, children: p(i.currentValue) })
+                /* @__PURE__ */ e.jsx("div", { style: { display: "flex", gap: "8px", fontSize: "10px", color: r.textSec }, children: /* @__PURE__ */ e.jsxs("span", { children: [
+                  "Row: ",
+                  /* @__PURE__ */ e.jsx("span", { style: { color: r.text, fontWeight: 500 }, children: String(i.rowId).split("|||").pop() })
+                ] }) }),
+                /* @__PURE__ */ e.jsxs("div", { style: { display: "flex", gap: "10px", fontSize: "10px" }, children: [
+                  /* @__PURE__ */ e.jsxs("span", { style: { color: r.textSec }, children: [
+                    "Original: ",
+                    /* @__PURE__ */ e.jsx("span", { style: { color: r.text }, children: p(i.originalValue) })
+                  ] }),
+                  i.currentValue !== void 0 && /* @__PURE__ */ e.jsxs("span", { style: { color: r.textSec }, children: [
+                    "Now: ",
+                    /* @__PURE__ */ e.jsx("span", { style: { color: n, fontWeight: 600 }, children: p(i.currentValue) })
+                  ] })
                 ] })
-              ] })
-            ]
-          },
-          `${i.rowId}:::${i.colId}`
-        )) }),
+              ]
+            },
+            `${i.rowId}:::${i.colId}`
+          )
+        ) }),
         B && /* @__PURE__ */ e.jsxs("div", { style: {
           padding: "6px 10px",
           borderTop: `1px solid ${o}`,
@@ -302,7 +308,10 @@ function C({
                 value: i.value,
                 checked: s === i.value,
                 onChange: () => {
-                  v(i.value), h(t.filter((u) => u.direct), i.value);
+                  v(i.value), h(t.filter(
+                    /** @param {any} [c] @returns {any} */
+                    (u) => u.direct
+                  ), i.value);
                 },
                 style: { margin: 0, accentColor: n }
               }
@@ -330,35 +339,38 @@ function C({
             l.length,
             ")"
           ] }),
-          l.slice().reverse().slice(0, 10).map((i, u) => /* @__PURE__ */ e.jsxs(
-            "div",
-            {
-              style: {
-                padding: "3px 10px",
-                fontSize: "10px",
-                display: "flex",
-                gap: "6px",
-                alignItems: "center",
-                color: r.textSec,
-                borderBottom: `1px solid ${o}11`
+          l.slice().reverse().slice(0, 10).map(
+            /** @param {any} [entry] @param {any} [idx] @returns {any} */
+            (i, u) => /* @__PURE__ */ e.jsxs(
+              "div",
+              {
+                style: {
+                  padding: "3px 10px",
+                  fontSize: "10px",
+                  display: "flex",
+                  gap: "6px",
+                  alignItems: "center",
+                  color: r.textSec,
+                  borderBottom: `1px solid ${o}11`
+                },
+                children: [
+                  /* @__PURE__ */ e.jsx("span", { style: { fontWeight: 600, color: n }, children: i.strategy || "equal" }),
+                  /* @__PURE__ */ e.jsx("span", { children: i.targetColumn || "?" }),
+                  /* @__PURE__ */ e.jsxs("span", { children: [
+                    p(i.fromValue, 2),
+                    " → ",
+                    p(i.toValue, 2)
+                  ] }),
+                  /* @__PURE__ */ e.jsxs("span", { children: [
+                    "(",
+                    i.updatedRowCount || 0,
+                    "r)"
+                  ] })
+                ]
               },
-              children: [
-                /* @__PURE__ */ e.jsx("span", { style: { fontWeight: 600, color: n }, children: i.strategy || "equal" }),
-                /* @__PURE__ */ e.jsx("span", { children: i.targetColumn || "?" }),
-                /* @__PURE__ */ e.jsxs("span", { children: [
-                  p(i.fromValue, 2),
-                  " → ",
-                  p(i.toValue, 2)
-                ] }),
-                /* @__PURE__ */ e.jsxs("span", { children: [
-                  "(",
-                  i.updatedRowCount || 0,
-                  "r)"
-                ] })
-              ]
-            },
-            u
-          ))
+              u
+            )
+          )
         ] })
       ]
     }

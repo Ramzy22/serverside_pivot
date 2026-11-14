@@ -1,4 +1,3 @@
-/** @type {Record<string, any>} */
 export const themes = {
     light: {
         name: 'light',
